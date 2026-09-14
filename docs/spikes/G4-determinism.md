@@ -226,19 +226,19 @@ Recorded in `docs/design/decisions-log.md` §2.7. Items (1)–(4) are contract f
 
 ## 9. Results
 
-> **Verdict: PROVISIONAL.** Measured end to end on **one host, one OS, one
-> architecture** (Windows 10 Pro 10.0.19045 / MSVC / x86-64) on 2026-09-13.
-> **G4-b passes 50/50 in both candidate formats and G4-c passes 20/20 with
-> 10/10 parents unperturbed.** **G4-a is pending CI**: the Windows leg is
-> measured and pinned (trace digest `340a30048a380595` over 10 matches ×
-> 9,600 ticks; three consecutive release runs, a core-pinned run and a debug
-> build all byte-identical), but the Linux and macOS legs have never run,
-> because `.github/workflows/spike-g4.yml` does not exist. A single-OS pass is
-> consistent with *both* the "go" and the fallback ("replays guaranteed on the
-> same binary only"), so neither may be recorded yet. Step 5 of section 3 is
-> the only step of the procedure not run here, and it cannot be: it needs the
-> three-runner matrix, which needs the repository on GitHub with the workflow
-> installed and `Cargo.lock` committed (section 4).
+> **Verdict: GO.** All three assertions pass. **G4-a**: the `spike-g4-determinism`
+> workflow (run 34802164421 on commit `6e7a156`, 2026-09-13) built the spike
+> with `--locked` on `ubuntu-latest`, `windows-latest` and `macos-latest`
+> (the ARM leg) and its `compare` job found the three 96,001-line traces and
+> both per-format snapshot hash lists byte-identical, so the per-tick xxh3 hash
+> **is a cross-OS, cross-architecture contract**. The Windows leg was also
+> measured locally (trace digest `340a30048a380595` over 10 matches × 9,600
+> ticks; three consecutive release runs, a core-pinned run and a debug build all
+> byte-identical). **G4-b passes 50/50 in both candidate formats and G4-c
+> passes 20/20 with 10/10 parents unperturbed** (Windows 10 Pro 10.0.19045 /
+> MSVC / x86-64, and the same binaries on the three runners). No part of the
+> fallback is taken. The four frozen choices are tabulated under "Contract
+> candidates" below and await the owner's approval in the decisions log.
 
 ### Machine and toolchain
 
@@ -334,14 +334,15 @@ the core-pinned run is the meaningful form of that check on this machine.
 
 ### Step 5 — cross-OS
 
-**`pending CI — deferred until the repository is on GitHub`.** This step cannot
-be run on this machine: it compares three runners against each other and there
-is only one here. No comparison exists, so **no first differing `(match, tick)`
-can be reported** — the diagnosis row of the numbers table is
-`n/a (no cross-OS comparison yet)`. Section 4 lists the two preconditions
-(install `.github/workflows/spike-g4.yml`; commit
-`spikes/g4-determinism/Cargo.lock`), both of which are outside the spike
-directory.
+**PASS (2026-09-13).** Workflow `spike-g4-determinism`, run 34802164421 on
+commit `6e7a156`: the `trace` matrix on `ubuntu-latest`, `windows-latest` and
+`macos-latest` each ran the tests, the 10-match trace, both round-trip formats,
+the default build and `forkcheck`; the `compare` job then `cmp`-ed the three
+trace files and the two snapshot hash lists pairwise against ubuntu and found
+**no differing byte**, so there is **no first differing `(match, tick)`** to
+report and the cross-OS snapshot byte-identity row is **yes** for both
+postcard and rkyv. Later pushes (`e8df53d`, `f63a3b0`) re-ran the matrix with
+the same result.
 
 ### Steps 6–7 — save/restore, both formats
 
@@ -372,10 +373,9 @@ a loaded desktop, so the ranges above are the honest form. The *sizes* and the
 size (**36 % smaller** at tick 4800: 4,563 B against 7,160 B) and on having
 nothing target-dependent left in the format. rkyv saves ~10–14 µs faster and
 restores ~10–50 µs slower; at this size neither difference matters. **The
-decision cannot be closed until the cross-OS byte-identity row is filled**,
-which is the whole reason that row exists: rkyv's configuration
-(`little_endian`, `pointer_width_32`, `aligned`) is precisely the thing that has
-not been tested on a second architecture. The caveat from section 5's postcard
+cross-OS byte-identity row is now filled (yes for both formats, including the
+ARM leg)**, so the decision can close: both formats are portable and postcard
+wins on size and simplicity. The caveat from section 5's postcard
 row stands: sequence lengths are LEB128 of the host `usize`, value-identical
 below 2^32 rather than width-independent by type.
 
@@ -456,7 +456,7 @@ encodes them, and choice (2) is explicitly conditional on step 5.
 
 | Item | Where | Why it is not done here |
 |---|---|---|
-| Step 5 — the three-runner matrix (G4-a) | CI | **Running**: workflow `spike-g4-determinism` on commit `6e7a156` (run 34802164421, 2026-09-13). Result to be recorded in section 9. |
+| Step 5 — the three-runner matrix (G4-a) | CI | **Done 2026-09-13**: run 34802164421 on `6e7a156`, all three legs and the compare job green; recorded in section 9. |
 | Install `.github/workflows/spike-g4.yml` | repo root | **Done 2026-09-13** (commit `6e7a156`). |
 | Commit `spikes/g4-determinism/Cargo.lock` | `spikes/.gitignore` | **Done 2026-09-13**: `!*/Cargo.lock` added, lock committed, every CI invocation passes `--locked`. |
 | Section 8's four frozen choices → `docs/design/decisions-log.md` §2.7 | decisions log | Outside the spike directory, and the log is the owner's to edit. The candidates are tabulated above with their literal values: (1), (3) and (4) are ready to approve; **(2), the snapshot format, must not be written down as final until the cross-OS byte-identity row is filled.** The postcard varint caveat from section 5 belongs in that entry. |
