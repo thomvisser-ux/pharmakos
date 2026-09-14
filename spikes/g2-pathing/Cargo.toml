@@ -1,0 +1,54 @@
+# SPDX-FileCopyrightText: 2026 Pharmakos contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# Standalone workspace: the empty [workspace] table detaches this manifest from
+# any parent workspace, so `cargo build` at the repository root never sees it
+# (spikes/README.md rule 1).
+[workspace]
+
+[package]
+name = "g2-pathing"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98.1"
+license = "GPL-3.0-or-later"
+publish = false
+description = "Throwaway HPA* pathing + travel estimator for spike G2+P3. Deleted after week 5."
+
+[lib]
+name = "g2_pathing"
+path = "src/lib.rs"
+
+# NO dependencies, at all (plan §3 step 0: "the spike writes its own A*, its own
+# heap and its own cluster code, because that is what the crate row commits
+# to"). The FNV-1a-64 path hash and the JSON writer are ours too.
+[dependencies]
+
+# Overflow checks stay ON in every profile, release included (plan §2, and
+# AGENTS.md §4.1). Path costs accumulate over thousands of steps; a wrapping
+# difference between platforms is exactly the class of bug this spike is
+# supposed to surface, so a panic on overflow is a result, not a broken test.
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+debug-assertions = false
+overflow-checks = true
+
+[profile.dev]
+overflow-checks = true
+
+[profile.test]
+overflow-checks = true
+
+[profile.bench]
+debug-assertions = false
+overflow-checks = true
+
+[[bin]]
+name = "bench"
+path = "src/bin/bench.rs"
+
+[[bin]]
+name = "accuracy"
+path = "src/bin/accuracy.rs"

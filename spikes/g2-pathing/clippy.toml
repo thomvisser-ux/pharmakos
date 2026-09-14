@@ -1,0 +1,75 @@
+# SPDX-FileCopyrightText: 2026 Pharmakos contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Clippy configuration for the G2 spike ONLY.
+#
+# Why this file exists at all — the same reason as the G1 and G4 spikes' copies:
+# clippy looks for `clippy.toml` in the current directory and then walks up the
+# ancestors, so a run from `spikes/g2-pathing` with no file of its own picks up
+# the *product's* root `clippy.toml`, even though this directory is a standalone
+# cargo workspace the product build never sees. Clippy uses the NEAREST ancestor
+# file and does not merge, so the empty lists below shadow the root file's
+# entries wholesale.
+#
+# WHAT IS DIFFERENT HERE. G1 could shrug the determinism lints off: the mesher
+# is presentation code and is *made of* floats. G2 cannot. Pathing IS sim code
+# (AGENTS.md §4 applies to the library), and the plan's §5 risk table names four
+# of the five determinism rules as live failure modes for this subsystem —
+# floats, `as` casts, `HashMap` iteration order, and wall-clock time. So the
+# discipline has to be enforced *here*, not waived. It could not simply be
+# expressed in this file, because clippy's configuration is crate-wide and has
+# no per-path allow-list, while the plan's §5 explicitly sanctions
+# `std::time::Instant` in `src/bin/` — and only there.
+#
+# THE MECHANISM, in two halves, because one half alone cannot cover it:
+#
+#  1. Floats and `as` casts are denied PER FILE, by a literal
+#
+#         #![deny(clippy::float_arithmetic, clippy::as_conversions)]
+#
+#     inner attribute on the line after the SPDX header of every library
+#     module — `world.rs`, `cost.rs`, `astar.rs`, `clusters.rs`, `hpa.rs`,
+#     `repair.rs`, `estimate.rs` and `lib.rs`. There is no macro and no shared
+#     guard: the attribute is written out per file, the way G1 did it, because
+#     that is the shape of the carve-out the spike has to report back. The two
+#     binaries carry the same two denials, so the whole spike is float-free and
+#     cast-free; the clock is the only thing they are allowed that the library
+#     is not.
+#
+#  2. The clock ban and the `HashMap`/`HashSet` ban are the two clippy would
+#     have to express through `disallowed-types`, which is exactly the knob that
+#     cannot be scoped to a path. They are enforced instead by a source-text
+#     test — `lib.rs`'s `mod wall`, which `include_str!`s all seven library
+#     modules at compile time and fails `cargo test` if any of them contains
+#     `Instant`, `SystemTime`, `Duration`, `HashMap`, `HashSet`, `RandomState`,
+#     `f32` or `f64`. It is a crude check and it is deliberately crude: it
+#     travels with the code rather than with the working directory, it runs in
+#     CI on both operating systems, and unlike a lint configuration it cannot be
+#     silently widened by an `#[allow]`.
+#
+# WHAT TO TAKE FROM THIS FOR HARNESS PART 1. Two findings, both about mechanism
+# rather than about this spike:
+#
+#   * The ancestor walk means `cargo xtask clippy` should pass an explicit
+#     `--config-path`; any out-of-workspace directory a developer runs clippy
+#     from inherits the product's configuration today.
+#   * A per-file `#![deny]` plus a text test is what you are reduced to when the
+#     wall is not a crate boundary — and it is strictly worse than the real
+#     thing, because `wall-guard` cannot see it (AGENTS.md §4.9 says exactly
+#     this). It is defensible inside a throwaway single-crate spike whose
+#     library and binaries must live in one package; it would not be defensible
+#     in `crates/`.
+
+# Match the pinned toolchain in rust-toolchain.toml and `rust-version` in
+# Cargo.toml exactly; the root file says 1.85 (the product MSRV) and produces an
+# "MSRV in clippy.toml and Cargo.toml differ" warning here.
+msrv = "1.98.1"
+
+avoid-breaking-exported-api = false
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+
+# Deliberately empty — see the header. The library's bans live in the source.
+disallowed-types = []
+disallowed-methods = []
+disallowed-macros = []

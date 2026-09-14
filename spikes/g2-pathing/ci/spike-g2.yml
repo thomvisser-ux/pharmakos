@@ -1,0 +1,214 @@
+# SPDX-FileCopyrightText: 2026 Pharmakos contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Plan §4. Lives here rather than in .github/workflows/ so the spike stays
+# self-contained; copy it verbatim to .github/workflows/spike-g2.yml in the
+# spike worktree. Deleted with this directory in week 5 (spikes/README.md
+# rule 6) — except for the `path-identity` job, which plan §4 calls "the one
+# worth keeping past the spike: a cheap, early instance of the cross-OS
+# determinism contract G4 is establishing, applied to the subsystem most likely
+# to break it."
+#
+# Note on paths: `defaults.run.working-directory` puts every `run` step inside
+# `spikes/g2-pathing`, but upload-artifact and download-artifact paths are
+# resolved from the repository root, so those carry the prefix explicitly.
+#
+# NOTE ON THRESHOLDS. `--assert-repath-p99-ms 5` is **the G2-a gate value
+# itself** (section 16: "repath p99 <= 5 ms"), which happens to be about 2.9x the
+# 1.75 ms measured on the developer machine (i7-9800X, Windows 10) at cluster 32.
+# `--assert-estimate-p99-ms 2.5` is NOT the P3-a gate: the gate is 1 ms, and
+# 1 ms is about 1.2x the 0.82 ms dev measurement, which a hosted vCPU would trip
+# on noise alone. 2.5 ms is ~3x the measurement and 2.5x the gate.
+#
+# So: the repath alarm fires at the gate, the estimate alarm fires above it, and
+# neither is the gate being certified — plan §5's last two rows say hosted vCPUs
+# are slow and noisy and that the binding numbers come from the dev machine,
+# recorded in the plan's §9. An earlier version of this file asserted 15 ms and
+# 3 ms while its comment claimed "roughly 3x the dev machine": 15 ms is 8.6x the
+# measurement and three times the *gate*, so a regression that doubled the G2-a
+# budget would have gone green.
+# PLACEHOLDER: owner, at the S3 gate — replace with the budget the sim's own
+# perf gate sets, once G3' has fixed the tick budget these have to fit inside.
+#
+# The accuracy threshold is NOT a placeholder. `--assert-p90-pct 15` is the real
+# gate, copied from the section 16 gate table ("within ±15% (p90) on static
+# terrain"), and it is a ratio of costs — it does not care how fast the runner
+# is, so there is no reason to loosen it.
+
+name: spike-g2-pathing
+
+on: [push, workflow_dispatch]
+
+# A new push cancels the previous run: the only way to stop a hung job without
+# a GitHub login.
+concurrency:
+  group: spike-g2-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: spikes/g2-pathing
+
+jobs:
+  bench:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+        working-directory: spikes/g2-pathing
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.98.1"
+          components: clippy, rustfmt
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      # The spike's own discipline, checked with the spike's own clippy.toml
+      # (see its header for why the file exists and what it does and does not
+      # shadow). `--all-targets` is what puts the two binaries under the same
+      # `#![deny(float_arithmetic, as_conversions)]` as the library.
+      - run: cargo fmt --all --check
+      - run: cargo clippy --release --all-targets -- -D warnings
+
+      # Plan §4: "cargo test --release  # A* vs Dijkstra exactness; tiebreak
+      # totality". `--locked` because the cross-OS path comparison below is only
+      # a controlled experiment if both runners build the same graph; the graph
+      # happens to be empty, which makes the guarantee free.
+      - run: cargo test --release --locked
+
+      # Step 4 + 5 + 8. The gate assertions are inside the binary so that a
+      # failure is one line of stderr rather than a JSON diff.
+      #
+      # `--repeat 3` because a hosted vCPU's p99 wanders: the assertions are made
+      # against the median run, and every run's p99 is published in the JSON's
+      # `repeat` block, so a reader can see the spread instead of being handed
+      # one six-decimal number. It also re-checks that all three runs walked
+      # byte-identical routes, which is a same-machine instance of plan §3
+      # step 9 and costs nothing extra.
+      - name: bench (repath, estimate, dynamic terrain)
+        run: |
+          mkdir -p out
+          cargo run --release --locked --bin bench -- \
+            --units 300 --cluster 32 --repeat 3 --json out/bench.json \
+            --assert-repath-p99-ms 5 --assert-estimate-p99-ms 2.5
+
+      # Steps 2, 3, 6, 7. `--assert-p90-pct 15` is the real P3-b gate.
+      - name: accuracy (exactness, path quality, estimate error, fog)
+        run: |
+          cargo run --release --locked --bin accuracy -- \
+            --pairs 2000 --cluster 32 --json out/accuracy.json \
+            --assert-p90-pct 15
+
+      # Step 9. One FNV-1a-64 per query path, LF endings only, so the
+      # path-identity job below is a plain `cmp`. Each file covers both the
+      # pristine map and the repaired graph — after every crater the file carries
+      # the decomposition's `fingerprint()` and three repaths on the graph that
+      # came out, so the entrance rescan, the CSR rebuild, the union-find relabel
+      # and a scratch reused across a graph that grew are all inside the
+      # cross-OS comparison, not just the static queries.
+      #
+      # All three cluster sizes, because a tiebreak that is total at 32 and not
+      # at 16 is still a broken tiebreak.
+      - name: hash the paths (all three cluster sizes)
+        run: |
+          for c in 16 32 64; do
+            cargo run --release --locked --bin bench -- \
+              --hash-paths --pairs 2000 --cluster "$c" \
+              --out "out/paths-c$c.txt" > /dev/null
+          done
+          cp out/paths-c32.txt out/paths.txt
+
+      # The cluster-size sweep (plan §3's results table, last row). Advisory —
+      # no assertions — because its job is to produce the numbers behind the
+      # cluster-size decision, not to gate a build.
+      - name: cluster size sweep (advisory)
+        run: |
+          for c in 16 32 64; do
+            cargo run --release --locked --bin bench -- \
+              --units 300 --cluster "$c" --repaths 6000 --json "out/bench-c$c.json" \
+              > /dev/null
+            cargo run --release --locked --bin accuracy -- \
+              --pairs 1000 --cluster "$c" --json "out/accuracy-c$c.json" > /dev/null
+          done
+
+      # Job logs and step summaries are both hidden from logged-out viewers;
+      # annotations are not. ci/annotate.py publishes the two JSON summaries and
+      # the paths digest as ::notice:: annotations (and into the step summary for
+      # anyone signed in). `if: always()` so a failed assertion still reports the
+      # numbers that failed.
+      - name: diagnostics as annotations
+        if: always()
+        # `python`, not `python3`: setup-python@v5 (above) guarantees `python` on
+        # both runners; a `python3.exe` alias on windows-latest is the runner
+        # image's business, not something a job should bet on. A failure here
+        # fails the bench job, which skips path-identity through `needs:` —
+        # `if: always()` protects the step, not the job's conclusion.
+        run: python ci/annotate.py
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: g2-${{ matrix.os }}
+          path: spikes/g2-pathing/out/*
+
+  path-identity:
+    needs: bench
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # This job checks out nothing, so it must NOT inherit the workflow-level
+    # `working-directory: spikes/g2-pathing` — that directory does not exist on
+    # this runner and every `run` step would fail before its first command. The
+    # artefact paths below resolve against $GITHUB_WORKSPACE, so the comparison
+    # has to run there too.
+    defaults:
+      run:
+        shell: bash
+        working-directory: .
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: g2-ubuntu-latest
+          path: linux
+      - uses: actions/download-artifact@v4
+        with:
+          name: g2-windows-latest
+          path: windows
+      # Plan §3 step 9: "Pathing output is hashed sim state; a platform-dependent
+      # path would break G4. If paths differ, the tiebreak is not total — fix it
+      # here, where it is cheap."
+      - name: compare the path hashes
+        run: |
+          rc_total=0
+          for f in paths-c16.txt paths-c32.txt paths-c64.txt; do
+            if [ ! -f "linux/$f" ] || [ ! -f "windows/$f" ]; then
+              echo "::error title=path-identity::$f is missing from one of the \
+          two artefacts, so nothing was compared"
+              rc_total=1
+              continue
+            fi
+            set +e
+            cmp "linux/$f" "windows/$f"
+            rc=$?
+            set -e
+            lines=$(wc -l < "linux/$f")
+            digest=$(grep '^digest ' "linux/$f" || echo "digest (missing)")
+            if [ "$rc" -eq 0 ]; then
+              echo "::notice title=path-identity $f::Linux and Windows agree on \
+          all $lines lines. $digest"
+            else
+              echo "::error title=path-identity $f::Linux and Windows DISAGREE \
+          on the path hashes (cmp exit $rc). The tiebreak is not total; this \
+          would break G4. Linux $digest"
+              diff <(head -50 "linux/$f") <(head -50 "windows/$f") | head -40
+              rc_total=1
+            fi
+          done
+          exit "$rc_total"

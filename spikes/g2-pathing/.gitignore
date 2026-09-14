@@ -1,0 +1,15 @@
+# SPDX-FileCopyrightText: 2026 Pharmakos contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Build and measurement artefacts. Read them, put the summary in the Results
+# section of docs/spikes/G2-P3-pathing.md, and let them be deleted
+# (spikes/README.md, "Build outputs are git-ignored").
+#
+# Cargo.lock is NOT ignored: the cross-OS path-identity comparison is only a
+# controlled experiment when both runners build from the same resolved graph
+# (`cargo test --locked`). The graph happens to be empty — this spike has no
+# dependencies — which makes the lock file trivial and committing it free.
+
+target/
+out/
+results/
