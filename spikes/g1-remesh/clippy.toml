@@ -1,0 +1,42 @@
+# SPDX-FileCopyrightText: 2026 Pharmakos contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Clippy configuration for the G1 spike ONLY — same reason as the G4 spike's
+# copy: clippy walks *ancestor* directories looking for `clippy.toml`, so a run
+# from `spikes/g1-remesh` with no file of its own picks up the product's root
+# `clippy.toml`, even though this is a standalone workspace the product build
+# never sees and `spikes/README.md` rule 1 says the determinism lints do not
+# apply here.
+#
+# G1 needs the carve-out more than G4 did: the mesher is presentation code and
+# is *made of* floats (AGENTS.md §4.9), and `meshbench` is a measurement binary
+# built on `std::time::Instant`.
+#
+# The discipline that does apply here travels with the code instead of with the
+# working directory. Five files — and only these five — are the sim side of the
+# wall, and each carries a literal `#![deny(clippy::float_arithmetic)]` inner
+# attribute on the line after its SPDX header:
+#
+#     src/chunk.rs    32^3 voxel storage
+#     src/world.rs    the chunk grid, terrain, light field and dirty set
+#     src/explode.rs  the integer sphere edit — the voxel-edit input path
+#     src/budget.rs   the upload queue and its drain order
+#     src/stats.rs    integer percentiles
+#
+# There is no macro and no shared guard: the attribute is written out per file,
+# because that is the shape of the carve-out the spike has to report back, and a
+# reader copying it into the product should find the real mechanism rather than
+# a name for one. `greedy.rs`, `upload_arraymesh.rs`, `upload_rs.rs` and the
+# `gdext_node` module in `lib.rs` are the walled presentation side and carry no
+# such attribute. In the product this split is a *crate* boundary
+# (AGENTS.md §4.9), which is what makes `cargo xtask wall-guard` able to see it;
+# a per-file attribute is only defensible inside a throwaway single-crate spike.
+
+msrv = "1.98.1"
+avoid-breaking-exported-api = false
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+
+disallowed-types = []
+disallowed-methods = []
+disallowed-macros = []

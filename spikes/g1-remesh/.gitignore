@@ -1,0 +1,25 @@
+# SPDX-FileCopyrightText: 2026 Pharmakos contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Measurement artefacts and build output. Read them, put the summary in the
+# Results section of docs/spikes/G1-destruction-remesh.md, and let them be
+# deleted (spikes/README.md, "Build outputs are git-ignored").
+
+target/
+results/
+meshbench.json
+
+# Godot's per-project import cache and the staged cdylib, both regenerated.
+godot/.godot/
+godot/bin/
+*.import
+*.translation
+
+# The golden vista is NOT a measurement artefact: it is the only assertion the
+# CI `geometry` job has, and a job whose golden is missing cannot check
+# anything. spikes/README.md allows exactly this kind of exception for evidence
+# that has to survive — commit it force-added if a broader ignore ever catches
+# it, and regenerate it only after eyeballing the replacement for cracks,
+# missing faces and inverted winding.
+!ci/golden/
+!ci/golden/*.png

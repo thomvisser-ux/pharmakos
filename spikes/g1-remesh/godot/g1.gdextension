@@ -1,0 +1,19 @@
+; SPDX-FileCopyrightText: 2026 Pharmakos contributors
+; SPDX-License-Identifier: GPL-3.0-or-later
+;
+; The cdylib is copied into godot/bin/ by build.ps1 rather than referenced in
+; the cargo target directory: the user-level cargo config puts target output on
+; D:, and a `res://` path cannot escape the project folder.
+
+[configuration]
+
+entry_symbol = "gdext_rust_init"
+compatibility_minimum = 4.7
+reloadable = false
+
+[libraries]
+
+windows.debug.x86_64 = "res://bin/g1_remesh.dll"
+windows.release.x86_64 = "res://bin/g1_remesh.dll"
+linux.debug.x86_64 = "res://bin/libg1_remesh.so"
+linux.release.x86_64 = "res://bin/libg1_remesh.so"

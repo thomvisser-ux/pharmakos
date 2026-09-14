@@ -1,0 +1,60 @@
+; SPDX-FileCopyrightText: 2026 Pharmakos contributors
+; SPDX-License-Identifier: GPL-3.0-or-later
+;
+; Spike G1 measurement project. Godot 4.7.
+;
+; The four settings that decide whether the measurement means anything:
+;   * vsync_mode = 0  — frame time is measured, not clamped to the refresh
+;     interval (plan §4: "Measuring with vsync on measures the display").
+;   * run/delta_smoothing = false — Godot 4.7 defaults this to TRUE. It only
+;     engages when vsync is enabled, so with vsync off it is already inert here;
+;     it is off anyway so that turning vsync on for some other experiment cannot
+;     silently start rewriting `delta` into a smoothed estimate.
+;
+;     THE THING THAT ACTUALLY QUANTISED OUR FIRST MEASUREMENT was the *physics
+;     jitter fix*, not delta smoothing, and `main.gd` turns that off in `_ready`
+;     (`Engine.physics_jitter_fix = 0`). Measured: with the jitter fix at its
+;     0.5 default, 647 of 1 000 steady frames reported `delta` as exactly
+;     1.3889 ms (= 1/720 s) and 565 consecutive pairs were identical, while the
+;     raw `Instant` delta in the same rows had a p50 of 0.60 ms and 3 identical
+;     consecutive pairs. With it at 0 the two series agree to a few microseconds
+;     (p50 0.598 vs 0.595 ms, p99 2.726 vs 2.726). `analyse.py` still derives
+;     every frame-time figure from the extension's raw delta regardless.
+;   * rendering_method = forward_plus — the renderer the game will ship on.
+;   * threads/thread_model = 1 (Single-Safe) — the main thread owns the
+;     RenderingServer, which is what makes path B's RID calls legal from
+;     `_process` without `call_on_render_thread` (plan §6, render-thread
+;     affinity). Recorded because it constrains the skeleton's mesher design.
+
+config_version=5
+
+[application]
+
+config/name="g1-remesh"
+run/main_scene="res://main.tscn"
+config/features=PackedStringArray("4.7", "Forward Plus")
+config/quit_on_go_back=true
+run/disable_stderr=false
+run/delta_smoothing=false
+
+[debug]
+
+settings/stdout/print_fps=false
+settings/fps/force_fps=0
+
+[display]
+
+window/size/viewport_width=1920
+window/size/viewport_height=1080
+window/size/mode=0
+window/size/resizable=true
+window/vsync/vsync_mode=0
+
+[rendering]
+
+renderer/rendering_method="forward_plus"
+renderer/rendering_method.mobile="forward_plus"
+driver/threads/thread_model=1
+anti_aliasing/quality/msaa_3d=0
+environment/defaults/default_clear_color=Color(0.42, 0.55, 0.72, 1)
+limits/opengl/max_renderable_elements=1048576

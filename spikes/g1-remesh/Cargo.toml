@@ -1,0 +1,56 @@
+# SPDX-FileCopyrightText: 2026 Pharmakos contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# Standalone workspace: the empty [workspace] table detaches this manifest from
+# any parent workspace, so `cargo build` at the repository root never sees it
+# (spikes/README.md rule 1).
+[workspace]
+
+[package]
+name = "g1-remesh"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98.1"
+license = "GPL-3.0-or-later"
+publish = false
+description = "Throwaway greedy mesher + gdext upload paths for spike G1. Deleted after week 5."
+
+[lib]
+# cdylib  -> the GDExtension Godot loads.
+# rlib    -> so `src/bin/meshbench.rs` can `use g1_remesh::greedy`.
+crate-type = ["cdylib", "rlib"]
+
+[features]
+# `gdext` gates EVERY line that touches Godot. The honest CPU bench is built
+# with `--no-default-features`, so `meshbench` genuinely does not link gdext:
+#
+#   cargo build --release --no-default-features --bin meshbench
+#
+# That keeps section 2's file layout (chunk/world/greedy/explode/budget live in
+# src/, next to lib.rs) without a second crate.
+default = ["gdext"]
+gdext = ["dep:godot"]
+
+[dependencies]
+# gdext for Godot 4.7. Exact pin: a version bump must be visible in the diff.
+# 0.5.5 is the current release (2026-08-09); `api-4-7` is the newest API level
+# the crate offers and matches the installed Godot 4.7.2.
+godot = { version = "=0.5.5", optional = true, default-features = false, features = [
+    "api-4-7",
+    "__codegen-full",
+] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "unwind" # a panic must NOT unwind into Godot; gdext catches at #[func].
+debug-assertions = false
+overflow-checks = false
+
+[profile.dev]
+opt-level = 1
+
+[[bin]]
+name = "meshbench"
+path = "src/bin/meshbench.rs"
