@@ -92,6 +92,15 @@ func _ready() -> void:
 	if shot_frame < 0:
 		shot_frame = maxi(1, target_frames - 60)
 
+	# If the GDExtension did not load, $World is a placeholder without the
+	# extension's methods. Every later call would then error and abort the
+	# function — and an aborted _process never reaches _finish, so the run
+	# would spin for ever. Quit loudly instead.
+	if not has_node("World") or not $World.has_method("build") or not $World.has_method("step"):
+		push_error("[g1] World is not the G1World extension class: the GDExtension did not load (check bin/ and the .gdextension paths). Quitting.")
+		finished = true
+		get_tree().quit(3)
+		return
 	world = $World
 	cam = $Camera3D
 
@@ -171,6 +180,11 @@ func _process(delta: float) -> void:
 		return
 	frame_no += 1
 	var st: Dictionary = world.step()
+	if st.is_empty():
+		push_error("[g1] world.step() returned nothing at frame %d; quitting." % frame_no)
+		finished = true
+		get_tree().quit(3)
+		return
 
 	csv.store_line("%d,%.4f,%.4f,%.4f,%d,%d,%.2f,%d,%d,%d,%.4f,%.4f,%d,%d,%d,%d" % [
 		frame_no,

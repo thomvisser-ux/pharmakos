@@ -21,6 +21,12 @@ name: spike-g1-remesh
 
 on: [push, workflow_dispatch]
 
+# A new push cancels the previous run: the only way to stop a hung job
+# without a GitHub login.
+concurrency:
+  group: spike-g1-${{ github.ref }}
+  cancel-in-progress: true
+
 defaults:
   run:
     working-directory: spikes/g1-remesh
@@ -105,6 +111,7 @@ jobs:
 
   geometry: # blocking; correctness, not speed
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -131,22 +138,34 @@ jobs:
           chmod +x /usr/local/bin/godot
           godot --version
 
-      # Windowed under xvfb + lavapipe, so a frame is actually drawn. The run's
-      # TIMINGS ARE MEANINGLESS and main.gd stamps the CSV header accordingly;
-      # only the image matters here.
-      # 1280x720 into a 1920x1080 xvfb screen, NOT 1920x1080: a windowed run is
-      # clamped to the screen's client area (1920x1080 requested on a 1920x1080
-      # desktop yields 1920x1061), and a golden image compare needs the two
-      # sides to be the same size. The golden in ci/golden/ is 1280x720 for the
-      # same reason.
+      # Bounded and self-reporting. `timeout` bounds a parked run — a per-frame
+      # script error never reaches _finish, and a coroutine awaiting a signal
+      # that never fires parks for ever — and --quit-after is Godot's own bound,
+      # independent of the script. 200 frames: the geometry is settled long
+      # before that, and lavapipe renders forward+ at seconds per frame. The
+      # first run of this job (run 34809807473) sat in this step for hours with
+      # no way to read why, because job logs need a GitHub login; the summary
+      # step below is the channel that does not.
       - name: render the fixed vista
         run: |
           mkdir -p out
-          VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json \
-          xvfb-run -a --server-args="-screen 0 1920x1080x24" \
-            godot --path godot --rendering-driver vulkan --resolution 1280x720 -- \
-            --path=b --frames=900 --eps=20 --radius=4 --k=4 --b=524288 \
-            --shot=880 --out=$PWD/out --tag=ci
+          export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+          export VK_DRIVER_FILES=$VK_ICD_FILENAMES
+          vulkaninfo --summary > out/vulkaninfo.txt 2>&1 || true
+          set +e
+          timeout -k 30 900           xvfb-run -a --server-args="-screen 0 1920x1080x24"             godot --verbose --path godot --rendering-driver vulkan --resolution 1280x720 --quit-after 600 --             --path=b --frames=200 --eps=20 --radius=4 --k=4 --b=524288             --shot=180 --out=$PWD/out --tag=ci > out/godot.log 2>&1
+          echo "godot exit code: $?" | tee -a out/godot.log
+
+      # The run summary page is readable without a login; job logs are not.
+      - name: diagnostics into the run summary
+        if: always()
+        run: |
+          {
+            echo '## geometry job diagnostics'
+            echo '### vulkaninfo --summary'; echo '```'; head -n 60 out/vulkaninfo.txt 2>/dev/null; echo '```'
+            echo '### godot.log (tail)'; echo '```'; tail -n 150 out/godot.log 2>/dev/null; echo '```'
+            echo '### out/'; echo '```'; ls -la out 2>/dev/null; echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       # THE ASSERTION. Without it the job cannot fail on cracks, missing faces or
       # inverted winding — exactly the bug class the screenshot exists to catch,
@@ -157,7 +176,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         if: always()
-        with: { name: vista-linux, path: spikes/g1-remesh/out/*.png }
+        with: { name: vista-linux, path: spikes/g1-remesh/out/* }
 
   frame-time: # advisory; no GPU on hosted runners
     if: false # enable only on a self-hosted GPU runner
