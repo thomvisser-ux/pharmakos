@@ -1,0 +1,21 @@
+SPDX-FileCopyrightText: 2026 Pharmakos contributors
+SPDX-License-Identifier: MIT OR Apache-2.0
+
+Everything in proto/ — the gp.v1 and gp.api.v1 Protobuf definitions and the
+JSON Schema generated from them — is licensed under either of
+
+  * MIT License            (../LICENSES/MIT.txt)
+  * Apache License, 2.0    (../LICENSES/Apache-2.0.txt)
+
+at your option. This is the wire format: it is deliberately permissive so that
+anyone can write a client, an SDK, a playbook generator or a verifier against
+it without inheriting the game's copyleft. The game itself, under crates/,
+client/ and xtask/, is GPL-3.0-or-later.
+
+Unless you state otherwise, any contribution you intentionally submit for
+inclusion in this directory shall be dual licensed as above, with no additional
+terms or conditions, and signed off under the Developer Certificate of Origin
+1.1 (../docs/DCO.txt).
+
+The repository-wide scheme is described in ../LICENSE and ../docs/LICENSING.md;
+the machine-readable manifest is ../REUSE.toml.

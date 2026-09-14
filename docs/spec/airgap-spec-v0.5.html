@@ -1,0 +1,817 @@
+<title>AirGap Design Spec</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=Source+Sans+3:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  --ground:#F0F1EE; --surface:#FBFBF9; --ink:#171A19; --muted:#5A625F; --rule:#CBD0CC; --code:#E4E7E3;
+  --accent:#B5400F; --accent-soft:#F6E3D8;
+  --dec:#2D6A43; --dec-soft:#DCEBDF; --road:#3F5A7A; --road-soft:#DFE6EF; --tune:#6A4C93; --tune-soft:#E9E2F2; --risk:#9A2F2F; --risk-soft:#F3DEDC;
+  --display:"Chakra Petch","Bahnschrift","Arial Narrow",system-ui,sans-serif;
+  --body:"Source Sans 3",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --ground:#101312; --surface:#171B1A; --ink:#E3E7E4; --muted:#98A29E; --rule:#2B3230; --code:#0B0E0D;
+  --accent:#F08A4B; --accent-soft:#3A2418;
+  --dec:#7DC895; --dec-soft:#1B3223; --road:#94B3D6; --road-soft:#1D2A38; --tune:#B9A0E0; --tune-soft:#2A2238; --risk:#E58C8C; --risk-soft:#3A1F1F;}}
+:root[data-theme="dark"]{
+  --ground:#101312; --surface:#171B1A; --ink:#E3E7E4; --muted:#98A29E; --rule:#2B3230; --code:#0B0E0D;
+  --accent:#F08A4B; --accent-soft:#3A2418;
+  --dec:#7DC895; --dec-soft:#1B3223; --road:#94B3D6; --road-soft:#1D2A38; --tune:#B9A0E0; --tune-soft:#2A2238; --risk:#E58C8C; --risk-soft:#3A1F1F;}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+body{background:var(--ground);color:var(--ink);font:16px/1.6 var(--body)}
+a{color:var(--accent)}
+a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.shell{display:grid;grid-template-columns:230px minmax(0,1fr);gap:56px;max-width:1200px;margin:0 auto;padding:44px 32px 96px}
+nav.toc{position:sticky;top:24px;align-self:start;max-height:calc(100vh - 48px);overflow:auto;font-size:14px}
+nav.toc .lbl{font:600 11px/1 var(--body);letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin:0 0 10px}
+nav.toc ol{list-style:none;margin:0;padding:0;display:grid;gap:1px}
+nav.toc a{display:grid;grid-template-columns:26px 1fr;padding:3px 0;color:var(--muted);text-decoration:none}
+nav.toc a span{font:500 12px/1.7 var(--mono);color:var(--rule)}
+nav.toc a:hover{color:var(--ink)}
+main{min-width:0;max-width:800px}
+header.sheet{border-top:6px solid var(--ink);padding-top:22px;margin-bottom:6px}
+.eyebrow{font:600 12px/1 var(--body);letter-spacing:.16em;text-transform:uppercase;color:var(--accent)}
+h1{font:700 64px/.95 var(--display);letter-spacing:.01em;margin:12px 0 6px;text-transform:uppercase}
+.tagline{font:500 18px/1.4 var(--display);color:var(--muted);margin:0 0 18px;letter-spacing:.02em}
+.lede{font-size:18.5px;line-height:1.55;max-width:64ch;margin:0 0 22px}
+dl.meta{display:grid;grid-template-columns:repeat(4,minmax(0,auto));justify-content:start;gap:6px 40px;margin:0;padding:14px 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule)}
+dl.meta dt{font:600 10.5px/1.3 var(--body);letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+dl.meta dd{margin:0;font:500 13.5px/1.4 var(--mono)}
+.legend{display:flex;flex-wrap:wrap;gap:8px 18px;margin:14px 0 0;font-size:13px;color:var(--muted);align-items:center}
+section{padding-top:48px;scroll-margin-top:12px}
+h2{font:600 32px/1.1 var(--display);margin:0 0 10px;display:flex;gap:14px;align-items:baseline;text-wrap:balance}
+h2 .n{font:500 14px/1 var(--mono);color:var(--accent);min-width:2ch}
+h3{font:600 20px/1.25 var(--display);margin:28px 0 6px;text-wrap:balance}
+p,ul,ol{max-width:68ch}
+p{margin:0 0 12px}
+ul,ol{padding-left:20px;margin:0 0 14px}
+li{margin:3px 0}
+li::marker{color:var(--muted)}
+strong{font-weight:700}
+code{font:.86em var(--mono);background:var(--code);padding:1px 5px;border-radius:3px;white-space:nowrap}
+pre{font:12.5px/1.55 var(--mono);background:var(--code);padding:14px 16px;border-radius:4px;overflow-x:auto;margin:10px 0 16px}
+pre code{background:none;padding:0;white-space:pre}
+.tag{display:inline-block;font:600 10.5px/1 var(--body);letter-spacing:.08em;text-transform:uppercase;padding:4px 7px 3px;border-radius:3px;vertical-align:2px;white-space:nowrap}
+.t-dec{background:var(--dec-soft);color:var(--dec)}
+.t-road{background:var(--road-soft);color:var(--road)}
+.t-tune{background:var(--tune-soft);color:var(--tune)}
+.t-risk{background:var(--risk-soft);color:var(--risk)}
+.t-new{background:var(--accent-soft);color:var(--accent)}
+.t-open{background:var(--code);color:var(--ink);box-shadow:inset 0 0 0 1px var(--rule)}
+.t-trial{background:var(--surface);color:var(--tune);box-shadow:inset 0 0 0 1px var(--tune)}
+.changes{margin:22px 0 0;padding:16px 20px 6px;background:var(--surface);border:1px solid var(--rule);border-left:3px solid var(--accent);max-width:800px}
+.changes h3{margin:0 0 8px;font-size:17px}
+.changes ul{columns:2;column-gap:32px;max-width:none;font-size:14.5px}
+.changes li{break-inside:avoid}
+@media (max-width:880px){.changes ul{columns:1}}
+.tbl{overflow-x:auto;margin:12px 0 18px;border-top:2px solid var(--ink)}
+table{border-collapse:collapse;width:100%;font-size:14px;line-height:1.45}
+th{font:600 10.5px/1.3 var(--body);letter-spacing:.1em;text-transform:uppercase;color:var(--muted);text-align:left;padding:9px 10px;border-bottom:1px solid var(--rule);white-space:nowrap;vertical-align:bottom}
+td{padding:8px 10px;border-bottom:1px solid var(--rule);vertical-align:top}
+td:first-child{font-weight:600}
+.num{font:500 13px var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+.pillars{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1px;background:var(--rule);border:1px solid var(--rule);margin:14px 0 18px}
+.pillars div{background:var(--surface);padding:14px 16px}
+.pillars b{display:block;font:600 17px/1.2 var(--display);margin-bottom:4px}
+.pillars span{font-size:14.5px;color:var(--muted)}
+.quote{border-left:3px solid var(--accent);padding:2px 0 2px 16px;margin:16px 0;max-width:66ch;font-style:italic}
+.flow{display:flex;flex-wrap:wrap;align-items:stretch;gap:0;margin:14px 0 18px;font-size:14px}
+.flow div{background:var(--surface);border:1px solid var(--rule);padding:10px 14px;flex:1 1 150px}
+.flow div+div{border-left:none}
+.flow b{display:block;font:600 15px/1.2 var(--display)}
+.flow small{color:var(--muted);font-size:13px}
+.stack{display:grid;gap:8px;margin:14px 0 18px;font-size:14px}
+.stack .row{display:grid;grid-template-columns:110px minmax(0,1fr);gap:12px}
+.stack .k{font:600 10.5px/1.3 var(--body);letter-spacing:.1em;text-transform:uppercase;color:var(--muted);padding-top:10px}
+.stack .boxes{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px}
+.stack .box{background:var(--surface);border:1px solid var(--rule);border-radius:3px;padding:8px 11px}
+.stack .box.core{border-color:var(--accent)}
+.stack .box b{display:block;font:600 14.5px/1.2 var(--display)}
+.stack .box span{color:var(--muted);font-size:12.5px;line-height:1.35;display:block}
+.stack .arrow{margin-left:122px;font:500 11.5px var(--mono);color:var(--muted);border-left:2px dashed var(--rule);padding:2px 0 2px 10px}
+.callout{background:var(--accent-soft);padding:14px 18px;border-radius:4px;margin:18px 0;max-width:68ch}
+.callout b{font-family:var(--display);font-size:16px}
+footer{margin-top:60px;padding-top:16px;border-top:1px solid var(--rule);color:var(--muted);font-size:13.5px}
+@media (max-width:880px){
+  .shell{grid-template-columns:1fr;gap:20px;padding:26px 18px 64px}
+  nav.toc{position:static;max-height:none}
+  nav.toc ol{grid-template-columns:repeat(2,minmax(0,1fr))}
+  h1{font-size:46px}
+  dl.meta{grid-template-columns:repeat(2,minmax(0,auto))}
+  .pillars{grid-template-columns:1fr}
+  .stack .row{grid-template-columns:1fr}.stack .k{padding-top:0}.stack .arrow{margin-left:0}
+}
+</style>
+
+<div class="shell">
+<nav class="toc" aria-label="Contents">
+  <p class="lbl">Contents</p>
+  <ol>
+    <li><a href="#vision"><span>1</span>Vision &amp; scope</a></li>
+    <li><a href="#lore"><span>2</span>World &amp; lore</a></li>
+    <li><a href="#match"><span>3</span>Match structure</a></li>
+    <li><a href="#commander"><span>4</span>Commander</a></li>
+    <li><a href="#beacons"><span>5</span>Beacons</a></li>
+    <li><a href="#mandates"><span>6</span>Mandates &amp; operators</a></li>
+    <li><a href="#economy"><span>7</span>Economy</a></li>
+    <li><a href="#caps"><span>8</span>Capabilities &amp; radio</a></li>
+    <li><a href="#kit"><span>9</span>Sandbox kit</a></li>
+    <li><a href="#gameplan"><span>10</span>Gameplans</a></li>
+    <li><a href="#verifier"><span>11</span>Verifier</a></li>
+    <li><a href="#api"><span>12</span>Planning API &amp; MCP</a></li>
+    <li><a href="#editor"><span>13</span>Plan editor</a></li>
+    <li><a href="#planner"><span>14</span>Built-in planner</a></li>
+    <li><a href="#arch"><span>15</span>Architecture</a></li>
+    <li><a href="#phase0"><span>16</span>Spikes &amp; gates</a></li>
+    <li><a href="#milestones"><span>17</span>Build plan</a></li>
+    <li><a href="#roadmap"><span>18</span>Roadmap</a></li>
+    <li><a href="#open"><span>19</span>Open &amp; tuning</a></li>
+  </ol>
+</nav>
+
+<main>
+<header class="sheet">
+  <div class="eyebrow">Design specification · codename</div>
+  <h1>AirGap</h1>
+  <p class="tagline">Nothing that listens can be trusted. Nothing you touch can be taken.</p>
+  <p class="lede">AirGap is an open-source voxel strategy game in which every seat, human or AI, plays in exactly the same way. Players seal orders during a planning pause, then watch the plan play out like a movie. Commanders must physically touch a beacon to change it. Opponents can be LLMs working through a documented local API, the built-in planner, or a person using the in-game plan editor.</p>
+  <dl class="meta">
+    <div><dt>Version</dt><dd>0.5 draft</dd></div>
+    <div><dt>Date</dt><dd>2026-09-13</dd></div>
+    <div><dt>Build plan</dt><dd>71 wk · ~20 months with buffer</dd></div>
+    <div><dt>Ship v1</dt><dd>~75% → ~82% after fun gate</dd></div>
+  </dl>
+  <div class="legend"><span class="tag t-dec">Decided</span> agreed in interview <span class="tag t-new">Draft 5</span> changed in this draft <span class="tag t-trial">Trial</span> direction set, details settled by trials <span class="tag t-open">Open</span> still to decide <span class="tag t-tune">Tuning</span> settled in playtests <span class="tag t-road">Roadmap</span> after v1 <span class="tag t-risk">Risk</span> watch closely</div>
+  <div class="changes">
+    <h3>What changed since draft 4</h3>
+    <ul>
+      <li>New fifth mandate, <strong>Survey</strong>, fields scouts and refreshes sightings before they expire. Defend gets a picket; Build owns repair and reclaim drones.</li>
+      <li>The core is a fortified Stake with its own autocannon, and spawns sit a guaranteed distance apart.</li>
+      <li>Commanders can be hunted: Attack gets an enemy-commander selector, and Defend can guard your commander.</li>
+      <li>Final audit credit for a destroyed asset is split by damage dealt, not given to the killing blow.</li>
+      <li>Each seat has a private notebook that carries across Lulls.</li>
+      <li>LLM seats are interactive Claude Code or Codex sessions. "Your agent" joins your own session; opponent windows are locked down by hooks. Headless runs move to the roadmap.</li>
+      <li>A four-tier AI ladder sets build order: playable without AI → hand-editable sample files → scripting API → live LLM conduit.</li>
+      <li>The skeleton and fun probe no longer need MCP or an LLM. New slices 8 (scripting) and 9 (live conduit).</li>
+      <li>Still open: the shared file format and script language, plus art, audio and three small rules.</li>
+      <li>Build plan grows to 71 weeks. Probe at week 17.5, fun gate still at week 35.5.</li>
+    </ul>
+  </div>
+</header>
+
+<section id="vision">
+  <h2><span class="n">1</span>Vision &amp; scope</h2>
+  <p>AirGap is both a playable game and an AI platform. It has to be fun and spectacular to watch, and it is built so that AI control is part of the design from the start rather than added later. One developer builds it with AI coding agents, so scope discipline is a design constraint in its own right.</p>
+  <div class="pillars">
+    <div><b>Every seat is equal</b><span>Humans, LLM agents and the built-in AI plan with the same schema and pass the same verifier. During play nobody has live control, so every seat is on equal footing.</span></div>
+    <div><b>Sealed orders, then the movie</b><span>Plans are sealed in a timed pause. The world then runs for up to 8 minutes while everyone watches.</span></div>
+    <div><b>Touch to change</b><span>Changing a beacon requires the commander to travel there and interface with it. Commander time is the real currency.</span></div>
+    <div><b>The world is voxels</b><span>Destructible terrain with a height cap. Craters, breaches and growing crystal spires are what spectators come for.</span></div>
+  </div>
+  <h3>v1: the sandbox</h3>
+  <ul>
+    <li><span class="tag t-dec">Decided</span> A local host for up to 3 seats in free-for-all: one human plus up to two AI seats, or all AI. It comes with a basic attack/defend kit and generated maps.</li>
+    <li>Beacons run built-in operators only. The customization in v1 is gameplans, mandates, settings and capability structures, all reachable through the API.</li>
+    <li>A documented local API and MCP server, so coding agents such as Claude Code can plan turns and help players write plans. <span class="tag t-new">Draft 5</span> Built in this order, following the <a href="#arch">AI ladder</a>:
+      <ol>
+        <li><strong>Playable without an external AI:</strong> built-in planner, plan editor, templates, Probation.</li>
+        <li><strong>Hand-editable samples:</strong> templates and sample scripts as local files you copy and edit. <span class="tag t-open">Open</span> format and language.</li>
+        <li><strong>Scripting API:</strong> published docs aimed at AI-assisted script writing, plus an official SDK.</li>
+        <li><strong>Live conduit:</strong> MCP for interactive Claude Code or Codex sessions, either your own agent or AI opponents.</li>
+      </ol>
+    </li>
+    <li>Native Godot client with a plan editor, spectator camera, event timeline and highlight scrub. <span class="tag t-dec">Decided</span> Also a Ledger "Probation" match for newcomers, save and resume at Lull boundaries, and an opt-in playtest mode.</li>
+    <li><span class="tag t-dec">Decided</span> Windows and Linux builds are first-class; macOS is best-effort and unsigned. Distributed through GitHub Releases and itch.io.</li>
+  </ul>
+  <h3>Not in v1</h3>
+  <ul>
+    <li>Custom operator programs, reprogramming, a custom quartermaster, and WASM commanders. These arrive one per version. <span class="tag t-road">Roadmap</span></li>
+    <li>Voting, internet multiplayer, the web spectator, the RL (Gymnasium/PettingZoo) interface, flowing water, and manual commander control. <span class="tag t-road">Roadmap</span></li>
+    <li><span class="tag t-dec">Decided</span> Human-vs-human play, teams, beacon capture, Citations, grid islands and batteries. <span class="tag t-road">Roadmap</span></li>
+    <li><span class="tag t-dec">Decided</span> Planner personalities, the director camera, gate, reinforced wall and shield block, the expert editor view, timed weapons, and accelerated or headless AI-only matches. <span class="tag t-road">Roadmap</span></li>
+    <li><span class="tag t-new">Draft 5</span> Headless LLM seats (API key or subscription, e.g. <code>claude -p</code>, <code>codex exec</code>) as an alternative to interactive sessions. <span class="tag t-road">Roadmap</span></li>
+  </ul>
+  <p><span class="tag t-dec">Decided</span> <strong>Caps rule:</strong> no artificial caps. A limit exists only where it is technically necessary, and each one is explained coherently in the story. Examples:</p>
+  <ul>
+    <li>The unit ceiling is the power a map's vents can supply.</li>
+    <li>Plan size is the Ledger's seal inspection.</li>
+    <li><span class="tag t-dec">Decided</span> A beacon's reach is where it can see or relay orders.</li>
+    <li><span class="tag t-dec">Decided</span> Award payouts come from the Ledger's fixed fund.</li>
+    <li><span class="tag t-dec">Decided</span> A Dispatch's length is the brief transmission window.</li>
+  </ul>
+</section>
+
+<section id="lore">
+  <h2><span class="n">2</span>World &amp; lore</h2>
+  <p><span class="tag t-dec">Decided</span> AirGap is set in the <strong>Handfast</strong> world: grim and near-future, lightened by bureaucratic humour in the Ledger's voice. This is original IP and borrows no franchise names.</p>
+  <p><span class="tag t-dec">Decided</span> <strong>AirGap is a codename only</strong>: no logo, domain or store page. A 2026-09-13 quick search found the Steam game "Interstellar Airgap" (2021), AIRGAP software trademarks held by Airgap Networks/Zscaler and Transcend, and a 2025 board game called "Quorum". A final title and faction names, plus a professional clearance search, come before anything goes public. All world terms live in the table below, so a rename is a find-and-replace.</p>
+  <div class="quote">By 2061 humans and machine minds share every grid, farm and factory. Then the Overwrite shows that any machine that listens can be rewritten by a cleverly shaped signal. Civilisation splits along a line of belief, not species. The war that follows ends in the Pall, a sky of ash and dust that has not lifted in a generation. Solar is a memory, so every cell lives on geothermal heat: the deep bore under a founding Stake, the shallow bore that keeps each key-core's seal lit, and the vents worth fighting over. <strong>The Quorum</strong> is a sovereign mind governed by the votes of millions of human citizens. <strong>The Handfast Line</strong> is made of human cells and the minds sworn to serve them, and it refuses to be ruled by anything it can't unplug. Both sides field humans and AIs. Nobody gives orders over radio any more: a Keybearer carries an air-gapped key-core and presses it to a Stake by hand. The only thing both sides still obey is the Ledger, a pre-war armistice engine that pays every cell, fines the incompetent in deadpan memos, and inspects every set of sealed orders.</div>
+  <p>The frame explains the core mechanics:</p>
+  <ul>
+    <li><strong>Mirror matches.</strong> Each seat picks a banner, which is cosmetic, and feuding cells explain any mix of seats.</li>
+    <li><strong>No live control.</strong> Radio silence during the Push is the reason plans are sealed.</li>
+    <li><strong>Data-only radio.</strong> Stewards may listen, but they have no pathway that lets them obey.</li>
+    <li><strong>Awards and safe plans.</strong> The Ledger gives these out; a safe plan is "a standing order filed on your behalf". Citations return after v1.</li>
+    <li><span class="tag t-dec">Decided</span> <strong>Darkness and power.</strong> The Pall explains why there is no solar, why vents are worth fighting over, and why lit domes and brownouts are so visible on screen.</li>
+    <li><span class="tag t-dec">Decided</span> <strong>Licences.</strong> Capabilities are Ledger licences, earned by meeting its conditions.</li>
+    <li><span class="tag t-dec">Decided</span> <strong>Bores.</strong> Only a seat's founding core sits on a deep bore with spare heat. Other key-cores tap just enough to keep their own seal lit. When a core falls, its bore collapses for good.</li>
+    <li><span class="tag t-dec">Decided</span> <strong>Dispatches.</strong> As the seal closes on the Push, each network gets one open-air transmission. Stewards "speak on the air, never obey it", which is also why a Dispatch is only ever read as data.</li>
+    <li><span class="tag t-dec">Decided</span> <strong>Ruins and the final audit.</strong> When a seat's last seal goes dark, the Ledger voids its licences and its structures become ruins. At the round limit, the Ledger credits what you hold and what you broke.</li>
+  </ul>
+  <div class="tbl"><table>
+    <thead><tr><th>Spec term</th><th>In-world name</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr><td>Commander</td><td>Keybearer</td><td>A human or a mind may pilot one; the key-core only cares that it is physically present</td></tr>
+      <tr><td>Beacon · sphere</td><td>Stake · holding</td><td>Stakes have no command receiver</td></tr>
+      <tr><td>Operator</td><td>Steward</td><td>Listens on the air, never obeys it</td></tr>
+      <tr><td>Radio Mast</td><td>Signal spar</td><td>The structure that enables Messaging</td></tr>
+      <tr><td>Build · Defend · Attack · Mine · Survey</td><td>Raise · Hold · Break · Delve · Watch</td><td>Survey added in draft 5; "Watch" is a working name</td></tr>
+      <tr><td>$ · BMI</td><td>Scrip · the ration</td><td>Shown in UI as $</td></tr>
+      <tr><td>Power (kW) · Generator · vent</td><td>Heat · tap · heat vent</td><td>Shown in UI as kW</td></tr>
+      <tr><td>Perpetual darkness</td><td>the Pall</td><td>Working name</td></tr>
+      <tr><td>Capability unlock</td><td>Ledger licence</td><td></td></tr>
+      <tr><td>Seat-to-seat note</td><td>Dispatch</td><td>Draft 3</td></tr>
+      <tr><td>Round-limit score</td><td>the final audit</td><td>Draft 3</td></tr>
+      <tr><td>Planning pause · play segment</td><td>the Lull · the Push</td><td></td></tr>
+      <tr><td>Awards · shames</td><td>Commendations · Citations</td><td>Citations use HR write-up humour, e.g. "Guarded An Empty Field With Distinction". Citations come after v1</td></tr>
+      <tr><td>Verifier</td><td>Seal inspection</td><td></td></tr>
+    </tbody>
+  </table></div>
+  <p><strong>Names to avoid</strong> (too close to existing franchises): Skynet, Terminator, Judgment Day, Cyberdyne, "the Resistance" as a brand, Legion, Zion, Sentinels, the Oracle/Architect, GAIA, HADES, the Grid, Master Control Program, Cylon, Replicant, Geth, Reapers, Cortana, GLaDOS, SHODAN, the Entity, and earlier rejected names (Whisper, Lodestone, Warden, Courier). In lore, "MCP" refers only to the technical protocol.</p>
+</section>
+
+<section id="match">
+  <h2><span class="n">3</span>Match structure</h2>
+  <div class="flow" role="img" aria-label="Lobby, then repeating planning pause, play segment and recap, until the match ends">
+    <div><b>Lobby</b><small>Up to 3 seats (≤1 human): human, built-in, or your coding agent. Host settings, seat tokens, resume a save</small></div>
+    <div><b>Lull</b><small>Planning pause: host-set, default 5 min, first Lull 10 min. Ends early when all seats are ready</small></div>
+    <div><b>Push</b><small>Play segment, about 3 min early growing to 8 min. No control</small></div>
+    <div><b>Recap</b><small>≤ ~60 s, skippable: awards and 3 highlights. Timer not running</small></div>
+    <div><b>Match end</b><small>One seat left, or the round limit (default 6, about 75 min)</small></div>
+  </div>
+  <ul>
+    <li><span class="tag t-dec">Decided</span> <strong>Seats:</strong> free-for-all with up to 3 seats: one human plus up to two AI seats, or all AI, on localhost. No teams in v1, but a <code>team_id</code> field is reserved. The human alone decides speed-up and skip. <span class="tag t-new">Draft 5</span> A human working with their own coding agent ("Your agent") is still the one human seat. <span class="tag t-dec">Decided</span> An AI-only match uses the normal client flow in realtime, with a spectator camera in place of the human. Pace controls and headless runs are <span class="tag t-road">Roadmap</span>, added when bulk AI testing needs them.</li>
+    <li><span class="tag t-dec">Decided</span> <strong>Match end:</strong> a seat's first beacon is its <strong>core</strong>. A seat is eliminated when it has no beacons left. The match ends when one seat remains, or at the host-set round limit. The round limit defines the match phase used by segment growth. <span class="tag t-dec">Decided</span> <strong>Default length is about 75 min:</strong> round limit 6, 5-min Lulls (first 10), Push growing 3 → 8 min. Licence triggers, awards and segment growth are tuned for 6 rounds.</li>
+    <li><span class="tag t-dec">Decided</span> <strong>Save and resume:</strong> the host can save during any Lull, from the frozen segment-end snapshot, and resume from the lobby. Seat tokens are reissued, and LLM seats simply relaunch. Saves are stamped with the rules hash and verifier version, and won't load on a mismatch. They contain every plan and draft, so they live in the private match cache. No saving mid-Push.</li>
+    <li><span class="tag t-dec">Decided</span> <strong>Probation match:</strong> a lobby preset for newcomers: the human vs one Easy built-in, 3 rounds, untimed Lulls. The Ledger issues contextual memos from deterministic triggers (a dark Stake, first death, a power shortfall, first licence), and the first Lull opens the template wizard with a guided pick. It doubles as the fun-probe setup.</li>
+    <li><span class="tag t-dec">Decided</span> <strong>Round-limit winner, "the final audit":</strong> score = value held at the final tick ($ plus build cost of your beacons, structures and units) + build cost of enemy assets you destroyed. <span class="tag t-new">Draft 5</span> Credit for each destroyed asset is split between seats in proportion to the damage each dealt since it was last at full HP, so a last hit steals nothing. The recap shows "shared kill". It is shown live in the standings. Hoarding alone doesn't win. <span class="tag t-risk">Risk</span> kingmaking and farming the weakest seat in 3-way FFA.</li>
+    <li><span class="tag t-dec">Decided</span> <strong>Elimination:</strong>
+      <ul>
+        <li>When a seat's last beacon falls, its units disband on the spot and its structures become neutral ruins. <span class="tag t-dec">Decided</span> Any seat's reclaim drones can salvage ruins within their beacon's reach for $.</li>
+        <li>An eliminated human becomes a spectator with a full-map view, and can end the match at any time. Standings freeze at that tick and the recording is saved.</li>
+      </ul>
+    </li>
+    <li><span class="tag t-dec">Decided</span> <strong>Planning pause:</strong> all seats share one timer, set by the host from 3 min to untimed. The default is 5 min, and 10 min for the first Lull. Each seat plans only from its own fog-of-war view and sees <strong>who</strong> is ready. AI seats wait by long-polling.</li>
+    <li><span class="tag t-dec">Decided</span> <strong>Segment length:</strong> starts short and grows with the match phase, up to 8 minutes by default. The host can configure it. <span class="tag t-tune">Tuning</span> growth curve.</li>
+    <li><span class="tag t-dec">Decided</span> <strong>During play:</strong> no manual control of anything. The human gets an own-fog camera, a free camera and a follow-commander view, a live event timeline, and 2–4× speed or skip. <span class="tag t-dec">Decided</span> There is no live chat. Seats talk only through <a href="#caps">Dispatches</a>, shown as a ticker when the Push starts. The auto-director camera is <span class="tag t-road">Roadmap</span>.</li>
+    <li><span class="tag t-dec">Decided</span> <strong>Push camera:</strong> while the human's seat is alive, the camera and director show only that seat's vision, the same as the AI seats' <code>get_segment_feed</code>. The full map unlocks when the seat is eliminated or the match ends. The host's <strong>casual</strong> setting gives every seat no-fog during the Push (camera and feed alike); planning knowledge stays fogged, and the match is unranked.</li>
+    <li><span class="tag t-dec">Decided</span> <strong>Recap:</strong> its own phase between the Push and the Lull. The Lull timer starts when the recap ends or is skipped. The planning snapshot is frozen at segment end. During the Lull, a side panel re-plays and scrubs highlights while the timer runs.</li>
+    <li><span class="tag t-dec">Decided</span> <strong>Plan secrecy:</strong> opponents never see your plans. Every round should be completely different, so there is no "reuse last plan" shortcut. Secrecy is enforced by the API and UI; on a local host it cannot be cryptographic.</li>
+    <li><span class="tag t-dec">Decided</span> <strong>Timeout or failed verification:</strong> beacon configurations stay as they are, and the built-in planner files a safe plan for that seat.</li>
+    <li><span class="tag t-risk">Risk</span> Whether up to 8 minutes of play with no control is fun is the biggest unmeasured risk. <span class="tag t-dec">Decided</span> A fun probe tests it at the end of the walking skeleton (<span class="tag t-new">Draft 5</span> week 17.5, human vs built-in opponents only), and the fun gate decides go or pivot after slice 3 (week 35.5). See <a href="#milestones">section 17</a>.</li>
+  </ul>
+</section>
+
+<section id="commander">
+  <h2><span class="n">4</span>Commander</h2>
+  <ul>
+    <li><span class="tag t-dec">Decided</span> The commander is the only unit a seat drives directly, and only through its gameplan. It is weak and killable.</li>
+    <li><span class="tag t-dec">Decided</span> <strong>Mobility:</strong> a hover-walker at a fixed speed that climbs 1-voxel steps. Terrain, walls, craters, ramps and bridges shape its routes.</li>
+    <li><span class="tag t-dec">Decided</span> <strong>Death:</strong> respawns after a delay (for example 30 s, growing with each death) at the core. <span class="tag t-dec">Decided</span> If the core is gone, it respawns at the surviving beacon nearest to where it died. Beacons keep running, but nothing can change them until the commander returns. Death also interrupts any visit in progress. Gameplans must include an <code>on_death</code> block. <span class="tag t-tune">Tuning</span> delay curve.</li>
+    <li><span class="tag t-new">Draft 5</span> <strong>Hunting:</strong> commanders are fair targets and hunting them is a real strategy. Attack can select the enemy commander from its last sighting, and retargets live while any of its units can see it. Defences: routes that avoid known threats, flee rules, <code>on_death</code>, and a Defend beacon guarding "my commander" (<a href="#mandates">section 6</a>). Further counters (armour, decoys, a self-defence weapon) are added only if the nightly league shows hunting dominates. <span class="tag t-risk">Risk</span></li>
+    <li><span class="tag t-dec">Decided</span> <strong>Start:</strong> each seat begins with a pre-placed core beacon (Build mandate) in its spawn zone, the commander, 2 build drones, 1 mining drone and $ equal to 2 rounds of BMI. The core's key-core powers that force with some headroom, and a heat vent sits a short walk away. <span class="tag t-new">Draft 5</span> The core is armistice-hardened: high HP and a built-in autocannon powered by its deep bore, so a single early raid can't eliminate a seat. <span class="tag t-tune">Tuning</span> starting numbers.</li>
+    <li><span class="tag t-dec">Decided</span> <strong>No remote changes:</strong> every change to a beacon happens on site.</li>
+    <li><span class="tag t-road">Roadmap</span> Self-defence weapon, carrying a demolition charge, minimal dig/construct, sensor ping, vehicles with auto-firing defences (earned), and manual control for a full round.</li>
+  </ul>
+</section>
+
+<section id="beacons">
+  <h2><span class="n">5</span>Beacons</h2>
+  <div class="tbl"><table>
+    <thead><tr><th>Rule</th><th>Specification</th></tr></thead>
+    <tbody>
+      <tr><td>Core</td><td><span class="tag t-dec">Decided</span> Pre-placed in the spawn zone at match start. Otherwise an ordinary beacon: losing it doesn't eliminate you, but losing every beacon does. <span class="tag t-dec">Decided</span> The core sits on a deep bore and is the only key-core with spare kW. A destroyed core has no successor: its surplus is lost for good, and brownout distance is measured from its former site. <span class="tag t-new">Draft 5</span> <strong>Fortified:</strong> high HP and a built-in autocannon that draws from the core surplus. There is no time-based protection. <span class="tag t-tune">Tuning</span> HP and turret strength; the nightly league watches for massed rushes and core turtling.</td></tr>
+      <tr><td>Placement</td><td>Each new beacon must be within the commander's range (<span class="tag t-tune">Tuning</span>) and touch or overlap one of your own spheres. Deploying takes 12 s. <span class="tag t-dec">Decided</span> Choosing the mandate type is free. Every other initial setting or target costs its normal interface time after the deploy.</td></tr>
+      <tr><td>Fabricator</td><td><span class="tag t-dec">Decided</span> Every beacon has one built in. It produces units for its mandate (unit mix) and builds licensed capability structures, all through the Quartermaster. There is no separate fabricator structure and no per-beacon unit cap.</td></tr>
+      <tr><td>Enemy overlap</td><td><span class="tag t-dec">Decided</span> Where enemy spheres overlap, neither side can build or dig. Interfacing is still allowed. <strong>No capture in v1.</strong> <span class="tag t-road">Roadmap</span> capture</td></tr>
+      <tr><td>Destroyed</td><td><span class="tag t-dec">Decided</span> Beacons are destroyed by damage. The mandate ends. Bound units retreat, then re-home to the nearest friendly beacon and follow its mandate. Structures become unclaimed until an uncontested beacon of yours covers them, which absorbs them. <span class="tag t-dec">Decided</span> If it was the seat's last beacon, the seat is eliminated: units disband and structures become neutral ruins. <span class="tag t-dec">Decided</span> Ruins behave like wrecks: any seat's reclaim drones salvage them for $ (salvage value is <span class="tag t-tune">Tuning</span>).</td></tr>
+      <tr><td>Dormant</td><td><span class="tag t-dec">Decided</span> An unpowered beacon pauses its operator and fabricator. Structures stay, and it revives automatically once power returns. Brownout order: lowest priority first, then furthest from the core (or its former site), and the core last. <span class="tag t-dec">Decided</span> A key-core always powers its own beacon, so only extra draw (its fabricator, structures and units) can brown it out.</td></tr>
+      <tr><td>Recycle</td><td>A gameplan change made on site. It takes 10 s to interface, and 50% of the build cost is refunded when it commits. Bound units re-home to the nearest beacon of your own.</td></tr>
+      <tr><td>Units</td><td>Every unit is bound to its home beacon (the one whose fabricator produced it) and follows that beacon's mandate, even outside the sphere. Units cost $ to build and draw kW while fielded. Reassigning units comes in a later version.</td></tr>
+      <tr><td>Claims</td><td>No protections in the sandbox: everything can be attacked. Protections will be reconsidered for each future game mode.</td></tr>
+    </tbody>
+  </table></div>
+  <h3>Interfacing</h3>
+  <p><span class="tag t-dec">Decided</span> The commander must stay within range (about 4 voxels) and still. Changes commit <strong>one at a time, in order</strong>, and there is no limit on changes per visit: a long visit is its own risk. <strong>Damage does not interrupt</strong>; the pressure comes from possibly dying. A visit stops only when the commander dies, a rule fires, the beacon is destroyed, or the commander leaves range. Changes already committed always stay.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>Change</th><th>Time</th></tr></thead>
+    <tbody>
+      <tr><td>Visit handshake (once per visit)</td><td class="num">1.5 s</td></tr>
+      <tr><td>Set Quartermaster priority (low / normal / high)</td><td class="num">1.5 s</td></tr>
+      <tr><td>Edit mandate settings</td><td class="num">2 s + 0.5 s per extra field, max 6 s</td></tr>
+      <tr><td>Add or remove a build target</td><td class="num">2.5 s each</td></tr>
+      <tr><td>Queue a licensed capability structure</td><td class="num">5 s, plus fabricator construction time</td></tr>
+      <tr><td>Switch mandate type</td><td class="num">8 s</td></tr>
+      <tr><td>Recycle beacon</td><td class="num">10 s</td></tr>
+      <tr><td>Install operator program <span class="tag t-road">Roadmap</span></td><td class="num">10–30 s by size</td></tr>
+    </tbody>
+  </table></div>
+  <p><span class="tag t-tune">Tuning</span> All values are playtest data, versioned in the rules table.</p>
+</section>
+
+<section id="mandates">
+  <h2><span class="n">6</span>Mandates &amp; built-in operators</h2>
+  <p><span class="tag t-dec">Decided</span> Each beacon has two layers. The <strong>mandate</strong> says what to do and carries its settings. The <strong>operator</strong> decides how, every tick. v1 ships only native Rust built-in operators. The per-beacon Quartermaster priority belongs to the beacon, not the mandate. Budget and override fields are removed.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>Mandate</th><th>Key settings</th><th>Default behaviour</th></tr></thead>
+    <tbody>
+      <tr><td>Common</td><td><code>roe</code> hold / return / engage; <code>retreat_hp_pct</code>; report kinds; <code>accept_broadcasts</code></td><td>Reflexes (retreat, return fire) follow the rules of engagement and are always announced</td></tr>
+      <tr><td>Build</td><td>Targets (blueprint, anchor, rotation, order); repair threshold; rebuild destroyed; terraform none / fill / dig / both; protected areas. <span class="tag t-dec">Decided</span> No fixed counts: targets and areas count toward the plan size budget. <span class="tag t-new">Draft 5</span> Fields repair/reclaim drones.</td><td>Builds the highest-order affordable target that is unbuilt or damaged, using the nearest idle drone. Repair drones fix its structures, then salvage wrecks and ruins within reach</td></tr>
+      <tr><td>Defend</td><td>Protect list; engagement radius %; pursue never / sphere edge / while in reach (<span class="tag t-dec">Decided</span> ends when the target leaves sphere, unit vision, Sensor Spire reveals and relay coverage); auto-fortify; unit mix. <span class="tag t-new">Draft 5</span> <code>picket</code>: scouts patrolling just outside the sphere edge; the protect list accepts <code>my commander</code></td><td>Threat-weighted targeting inside the engagement radius; damaged units fall back to the nearest friendly repair drone. Pickets give early warning. Guards escort the commander and intercept threats near it while it is in this beacon's reach</td></tr>
+      <tr><td>Attack</td><td>Target (fixed or selector) and retarget rule; staging point; launch when any of force size, segment time or broadcast go-code (needs a Radio Mast) holds; retreat conditions; after-action; avoid areas; breach allowed; waves. <span class="tag t-dec">Decided</span> Reach: anything the seat sees or recently saw: its sphere, plus the live vision of its units and structures (scouts, raiders), plus Sensor Spire reveals and Radio Mast relay coverage. A target seen within the last N minutes counts (<span class="tag t-tune">Tuning</span>). Scout first to attack early. <span class="tag t-risk">Risk</span> raids can chain as advancing units see further. <span class="tag t-new">Draft 5</span> Target selector <code>enemy commander</code> (last sighting, retargets live while seen)</td><td>Gathers, launches on its condition, attacks the weak point, then retreats or regroups. If the remembered target is gone on arrival, the after-action or retarget rule decides</td></tr>
+      <tr><td><span class="tag t-new">Draft 5</span> Survey</td><td>Probe areas or directions (fixed or selector); scout count; <code>roe</code>; retreat conditions. In-world: a Ledger survey post ("Watch", working name)</td><td>Scouts scan unexplored cells first, then re-check the sightings closest to leaving the Attack reach window, enemy beacons first. They avoid known threats and report back. Far vision costs a beacon and a visit, which makes it a planning choice rather than a chore</td></tr>
+      <tr><td>Mine</td><td>Seam choice: richest / nearest / safest; max dig depth; pillar spacing; flee on threat. Never digs under structures.</td><td>Drones carry ore to their home beacon. <span class="tag t-dec">Decided</span> Delivered ore is credited to the <strong>seat treasury</strong> immediately</td></tr>
+    </tbody>
+  </table></div>
+  <ul>
+    <li><span class="tag t-dec">Decided</span> <strong>Perception:</strong> an operator sees only its own sphere and units, plus data messages. Messages can never reconfigure a beacon.</li>
+    <li><span class="tag t-new">Draft 5</span> <strong>Vision and sightings:</strong> spheres give passive vision, Defend pickets give local warning, and Survey beacons give far vision. Every sighting carries its age in the UI and API. Precedents: Factorio radar, Screeps observers, Northgard scout camps. <span class="tag t-risk">Risk</span> perfect-intel snowballing, and baiting stale sightings. Jammers and decoys are <span class="tag t-road">Roadmap</span>.</li>
+    <li><span class="tag t-dec">Decided</span> <strong>Messaging:</strong> no radio at all until a Radio Mast exists: beacons neither send nor receive. With a Mast, operators inside its coverage send and receive threat and help messages, and the commander can broadcast go-codes while in coverage. Beacon reports to the seat are always remote and always on. <span class="tag t-dec">Decided</span> Seat-to-seat talk uses <a href="#caps">Dispatches</a>.</li>
+  </ul>
+</section>
+
+<section id="economy">
+  <h2><span class="n">7</span>Economy</h2>
+  <p><span class="tag t-dec">Decided</span> The principle: reward good play while giving trailing players a way to catch up and beginners a hand-up. Keep it simple, because accounting is not fun.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>Element</th><th>Rule</th></tr></thead>
+    <tbody>
+      <tr><td>Two quantities</td><td><span class="tag t-dec">Decided</span> <strong>$</strong> is a stock you spend to build structures, units and beacons. <strong>kW</strong> is a continuous flow that keeps fielded things running. There is no $ upkeep.</td></tr>
+      <tr><td>Income per round</td><td>Basic Minimum Income (BMI) plus awards. Mining and salvage add more.</td></tr>
+      <tr><td>BMI scaling</td><td>A small adjustment by standing, not enough to encourage deliberately losing. Proposed: last place +10%, leader −5%, linear between. <span class="tag t-dec">Decided</span> Confirmed: standing is the rank on the live final-audit score, so one number drives both standings and BMI. Destroyed value never decays, so an early aggressor keeps the leader penalty. <span class="tag t-tune">Tuning</span></td></tr>
+      <tr><td>Awards</td><td>Computed deterministically from sim counters. <span class="tag t-dec">Decided</span> Each audit, the Ledger releases a <strong>fixed award fund</strong> (tuned relative to BMI), split among that segment's winners in proportion to awards won. A rank multiplier weights trailing seats' shares. There is no per-seat award cap.</td></tr>
+      <tr><td>Treasury</td><td><span class="tag t-dec">Decided</span> <strong>One per seat.</strong> Mined $ is credited when ore is delivered, and recycling refunds are paid in. All spending (fabricators, setup charges, licensed structures) draws from it through the Quartermaster. There are no per-beacon pools or sweeps.</td></tr>
+      <tr><td>Power supply</td><td><span class="tag t-dec">Decided</span> <strong>Seal-only key-cores:</strong> a non-core key-core outputs exactly its own beacon's base draw (net zero). Only the core's deep bore gives spare kW. Generators, built for $ by the Build mandate, sit on heat vents, and each map has a finite number of vents. All your spheres form one grid, since the placement rule keeps them connected. No batteries in v1.</td></tr>
+      <tr><td>Power draw</td><td><span class="tag t-dec">Decided</span> Beacons, units, turrets and capability structures all draw kW while they exist.</td></tr>
+      <tr><td>Overdraw</td><td><span class="tag t-dec">Decided</span> Fabricators stop first. Then beacons brown out into dormancy in a fixed order: lowest priority, then furthest from the core, and the core last. Brownouts are visible as domes going dark.</td></tr>
+      <tr><td>Unit ceiling</td><td><span class="tag t-dec">Decided</span> A property of the world, not a rule: a seat can field only what its core surplus and vent Generators can power. Beacon spam adds no power. Map generation keeps total supply within the G3′ segment budget. The engine keeps a hard safety limit far above anything a map can power.</td></tr>
+    </tbody>
+  </table></div>
+  <h3>Quartermaster (spend control)</h3>
+  <ol>
+    <li><span class="tag t-dec">Decided</span> Balances power: when draw exceeds supply, it holds fabricator orders, then applies the brownout order.</li>
+    <li>Fills operator spend requests by urgency: defend under attack, then repair, units, build, mine.</li>
+    <li>Shares funds fairly so no single beacon can hog them. The one player lever is the per-beacon <strong>low / normal / high</strong> priority knob, which is set on site.</li>
+  </ol>
+  <p><span class="tag t-dec">Decided</span> <strong>You only make it worse on purpose.</strong> An existing power shortfall is a warning (W06xx), flagged in plain language in the recap. A plan that <em>adds</em> draw beyond supply (placing a beacon, queuing a structure) is an error unless "allow dormant beacons" is set. Beacons can also be recycled on site for a 50% refund.</p>
+  <p><span class="tag t-tune">Tuning</span> Draft award catalogue: First Blood, Bulwark, Flag Planter, Demolition Artist, Architect, Prospector, Field Medic, Ghost Scout, Switchboard, Diversified, Clockwork. BMI, kW outputs and draws, and vent counts.</p>
+  <p><span class="tag t-road">Roadmap</span> <strong>Citations</strong> return first as free cosmetic Ledger memos (e.g. Tortoise, Statue, Dragon's Hoard), with fees possibly added later. Charging individual units energy for remote operations. Grid islands, where a cut chain splits the grid. Batteries. Custom Quartermaster: pre-installed and verified offline, and can only be switched back to the default during a match.</p>
+</section>
+
+<section id="caps">
+  <h2><span class="n">8</span>Capabilities &amp; radio</h2>
+  <ul>
+    <li><span class="tag t-dec">Decided</span> Every capability is <strong>enabled by building a voxel structure</strong>. There are no abstract stat upgrades.</li>
+    <li><span class="tag t-dec">Decided</span> <strong>Earned as licences.</strong> Meeting a thematic trigger grants a permanent Ledger licence. You then queue the structure on site at any of your beacons. That beacon's built-in fabricator builds it whatever the mandate, for $ plus kW draw.</li>
+    <li><span class="tag t-dec">Decided</span> <strong>No count limits.</strong> $ and kW decide how many you build, with one exception: one Resonance Spire per sphere, because two spires interfere with each other. Destroyed structures are rebuilt without earning the licence again.</li>
+    <li><span class="tag t-dec">Decided</span> Capabilities last the whole match. Timed weapons and combat boosts are not in v1. <span class="tag t-road">Roadmap</span></li>
+    <li><span class="tag t-dec">Decided</span> A destroyed structure suspends its capability until it is rebuilt.</li>
+    <li><span class="tag t-dec">Decided</span> An eliminated seat's licences are voided.</li>
+  </ul>
+  <div class="tbl"><table>
+    <thead><tr><th>v1 structure</th><th>Licence earned by</th><th>Enables</th><th>Spectacle and counterplay</th></tr></thead>
+    <tbody>
+      <tr><td>Radio Mast</td><td>Holding 3+ beacons at the end of a segment ("a network needs nodes")</td><td><strong>Messaging.</strong> Operators in coverage send and receive, and the commander can broadcast while in coverage. Range grows with the mast's height above the ground. Without a mast there is no radio. <span class="tag t-dec">Decided</span> Relay coverage also extends attack reach, and a powered Mast lets the seat send and hear Dispatches.</td><td>A lattice tower with a blinking tip, links drawn to peer masts. Destroying it silences the network.</td></tr>
+      <tr><td>Sensor Spire</td><td>Losing a structure to an attacker you never saw ("blindsided"), which doubles as catch-up</td><td>A timed reveal pulse with a cooldown. Operators receive the data if they are in radio coverage. <span class="tag t-dec">Decided</span> Its sight extends attack reach.</td><td>A vertical light pulse and a ring of revealed voxels in the dark. Can be destroyed or baited.</td></tr>
+      <tr><td>Resonance Spire</td><td>Running Generators on 2 vents at once ("resonance with the deep heat")</td><td>A larger beacon radius, justified because the structure itself is the spectacle. One per sphere.</td><td>A crystal lattice grows over about 60 s, and an aurora tether swells the dome under the Pall. If the spire is destroyed, the dome collapses on camera.</td></tr>
+    </tbody>
+  </table></div>
+  <p><span class="tag t-dec">Decided</span> <strong>Radio model v1 is mast-only:</strong> height-based range, with no line-of-sight checks, relays or jamming. Conditions query coverage rather than mast geometry, so later models change the answers without changing the vocabulary.</p>
+  <h3>Dispatches <span class="tag t-dec">Decided</span></h3>
+  <p>A Dispatch is the one open-air transmission each seat's network makes as the seal closes on the Push. It is the only seat-to-seat talk in v1.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>Aspect</th><th>Rule</th></tr></thead>
+    <tbody>
+      <tr><td>Writing</td><td>Optional <code>dispatch</code> field on a filed plan; a text box in the editor. One note per seat per Lull, about 280 characters (<span class="tag t-tune">Tuning</span>). The limit is the brief transmission window in the story, and a real token cost for every agent's next Lull. No extra LLM calls.</td></tr>
+      <tr><td>Gate</td><td>A powered Radio Mast is needed both to send and to hear. Lose the Mast and you are cut off.</td></tr>
+      <tr><td>Audience</td><td>Open air only: every seat with a Mast hears every Dispatch. No private notes, so there is no secret collusion against the human.</td></tr>
+      <tr><td>Timing</td><td>All Dispatches are delivered together when the Push starts, so replies come a round later.</td></tr>
+      <tr><td>Binding</td><td>Never. The Ledger enforces no promises, and bluffing is allowed.</td></tr>
+      <tr><td>Display</td><td>Push-start ticker, Lull side panel, recap, <code>get_segment_feed</code> <code>dispatches[]</code> (<code>from_seat</code>, <code>round</code>, <code>text</code>). Dispatches are public, so they appear in recordings.</td></tr>
+      <tr><td>Built-in planner</td><td>Sends template flavour lines from its intent and events, sometimes misleading. It never reads incoming text.</td></tr>
+      <tr><td>Security</td><td>Dispatch text is untrusted: plain text with control characters stripped, never rendered as links or markup, and delivered only in labelled data fields, never as instructions. Agent seats run with only the game's MCP tools, so the worst case is a bad move, never a host breach. The host can switch Dispatches off.</td></tr>
+    </tbody>
+  </table></div>
+  <p><span class="tag t-road">Roadmap</span> Directed or encrypted notes, DF Loop interception, jamming, live chat during the Push, and pacts the Ledger enforces.</p>
+  <p><span class="tag t-tune">Tuning</span> Trigger thresholds, anti-gaming for "blindsided" (for example, deliberately losing a cheap wall out of sight), and odds of random awards (deferred). <span class="tag t-road">Roadmap</span> Radio: line of sight and relays ("Horizon"), jammer domes, direction finding, satellite uplink with scheduled passes. Remote reconfiguration is never allowed. Structure catalogue: Relay Pylon, Jammer, Uplink Dish, DF Loop, Vehicle Bay, Excavator Rig, Charge Armory, Transit Rail, Command Bunker, Decoy Beacon, Drone Hangar.</p>
+</section>
+
+<section id="kit">
+  <h2><span class="n">9</span>Sandbox kit</h2>
+  <div class="tbl"><table>
+    <thead><tr><th>Item</th><th>Role</th><th>Counter</th></tr></thead>
+    <tbody>
+      <tr><td>Wall</td><td>Cheap blocking terrain</td><td>Mortar, demolition charge</td></tr>
+      <tr><td>Autocannon</td><td>Fast direct fire; beats raiders and swarms</td><td>Mortar out-ranges it</td></tr>
+      <tr><td>Mortar</td><td>Slow arcing shell that can be dodged; area damage to voxels; beats clumps and walls</td><td>Raiders dive it</td></tr>
+      <tr><td>Raider drone</td><td>Fast and light; hits the nearest structure</td><td>Autocannon</td></tr>
+      <tr><td>Demolition charge</td><td>Timed explosive that destroys a sphere of voxels</td><td>Intercept the carrier</td></tr>
+      <tr><td>Repair / reclaim drone</td><td>Repairs, and salvages wrecks for $. <span class="tag t-new">Draft 5</span> Fielded by Build beacons</td><td>Kill the drones</td></tr>
+      <tr><td>Scout / sensor unit</td><td>Cheap vision. <span class="tag t-new">Draft 5</span> Fielded by Survey beacons (probes) and Defend beacons (pickets)</td><td>Any fire</td></tr>
+      <tr><td>Generator <span class="tag t-dec">Decided</span></td><td>Built on a heat vent; supplies kW to the seat's grid</td><td>Destroy it to brown out the enemy's beacons</td></tr>
+      <tr><td>Build drone · mining drone</td><td>Build and terraform; carry ore to the home beacon, where it is credited to the treasury</td><td>Raiders, autocannon</td></tr>
+    </tbody>
+  </table></div>
+  <p><span class="tag t-dec">Decided</span> Flowing water is out of v1. <span class="tag t-dec">Decided</span> Reinforced wall, gate and shield block move to the <span class="tag t-road">Roadmap</span>; the raider is the mortar's counter. <span class="tag t-dec">Decided</span> Reclaim drones salvage ruins of eliminated seats for $, the same as wrecks. <span class="tag t-tune">Tuning</span> Stats, $ costs and kW draw.</p>
+  <h3>Maps</h3>
+  <p><span class="tag t-dec">Decided</span> A seeded, deterministic generator with <strong>3-way rotational symmetry</strong>: equal spawn zones, a reachable vent near each start, equal nearby ore, and richer contested vents toward the centre. <span class="tag t-new">Draft 5</span> Spawns are at least about 1.5 early Pushes of raider travel apart; fairness tests check this. About 384×384 voxels wide by 64 tall, tuned by G3′. One ore type ("scrap seams") of varying richness, plus salvage from wrecks. Maps are saved as files, so handmade maps can follow. <span class="tag t-road">Roadmap</span> handmade maps. <span class="tag t-risk">Risk</span> Symmetry can look artificial, and the generator needs its own fairness tests.</p>
+</section>
+
+<section id="gameplan">
+  <h2><span class="n">10</span>Gameplans</h2>
+  <p><span class="tag t-dec">Decided</span> A gameplan is <strong>typed declarative data</strong>, not a script: a route of steps, prioritised rules (gambits), a required <code>on_death</code> block, a required <code>fallback</code>, and <span class="tag t-dec">Decided</span> an optional public <code>dispatch</code> note. It drives the commander for one segment. Humans, LLMs and the built-in planner all produce the same format. A WASM commander later uses the same outer envelope.</p>
+  <h3>Execution</h3>
+  <ul>
+    <li><strong>Timing:</strong> plans run inside the deterministic sim at 20 Hz. Decisions (rules, step transitions, selector resolution) are taken every 250 ms of game time. Plan times are game milliseconds, never ticks.</li>
+    <li><strong>Order on each decision:</strong> reflex first (commander HP ≤ 20%, which can't be disabled), then the first enabled rule whose condition is true, then the current step.</li>
+    <li><strong>When a rule fires:</strong> it aborts the remaining changes of any visit in progress (changes already committed stay), runs its body, then resumes as continue, skip step, jump forward, or end route. On continue, the interface step resumes with only the uncommitted changes plus a new handshake.</li>
+    <li><strong>Segment end:</strong> the plan stops. Nothing carries over except the world itself.</li>
+  </ul>
+  <div class="tbl"><table>
+    <thead><tr><th>Step</th><th>Completes</th><th>Fails / notes</th></tr></thead>
+    <tbody>
+      <tr><td><code>move</code></td><td>Within arrive radius</td><td>No path or timeout. Pace: direct, or avoid known threats</td></tr>
+      <tr><td><code>interface</code></td><td>All changes committed</td><td>Beacon destroyed, commander dies, or commander leaves range. Damage does not interrupt</td></tr>
+      <tr><td><code>place_beacon</code></td><td>12 s deploy, then any initial settings at interface rates</td><td>Placement becomes illegal. Mandate type is free</td></tr>
+      <tr><td><code>wait_until</code></td><td>Condition is true</td><td>Timeout is <strong>required</strong></td></tr>
+      <tr><td><code>hold</code></td><td>Duration elapsed</td><td></td></tr>
+      <tr><td><code>broadcast</code></td><td>Sent: mark target, threat at, go-code, rally</td><td>Only with a Radio Mast, and only while the commander is in its coverage</td></tr>
+      <tr><td><code>set_flag</code> · <code>branch</code> · <code>checkpoint</code></td><td>Immediately</td><td>Branch jumps forward only</td></tr>
+      <tr><td><code>repeat</code></td><td>≤8 iterations or an <code>until</code> condition</td><td>Each iteration must consume time</td></tr>
+    </tbody>
+  </table></div>
+  <p>Every step supports the <code>skip_if</code>, <code>timeout_ms</code> and <code>on_fail</code> guards (skip, abort route, or jump forward), plus a label and a note.</p>
+  <h3>Why a plan survives a long segment without a dry run</h3>
+  <ol>
+    <li><strong>Late-bound selectors.</strong> For example "my weakest Defend beacon", or "the nearest known enemy beacon seen within 15 min". These resolve when the step starts, then stay pinned for that step.</li>
+    <li><strong>Rules that interrupt and resume</strong>, with explicit resume semantics.</li>
+    <li><strong>Guards on every step</strong>, so steps degrade instead of blocking.</li>
+    <li><strong>Autonomy on the beacon side, set on site.</strong> For example, an Attack launches at 4:00 <em>or</em> on go-code A, so a dead commander doesn't stall it.</li>
+    <li><strong>A guaranteed tail:</strong> the fallback posture (hold, shadow or patrol), and the self-preservation reflex.</li>
+  </ol>
+  <h3>Conditions</h3>
+  <ul>
+    <li><strong>Structure:</strong> all / any / not trees, depth ≤4 and ≤24 nodes, integer comparisons only.</li>
+    <li><strong>Knowledge:</strong> they read only the seat's knowledge store. Enemy predicates must declare freshness (<code>VISIBLE_NOW</code> or <code>KNOWN_WITHIN ms</code>).</li>
+    <li><strong>Predicate families:</strong> clock; commander (HP, position, deaths, recent damage); own beacon (status, HP, under attack, units by role, mandate, powered or dormant, structures, reports since); aggregates; enemy knowledge (units near, beacon known, structure near); economy (treasury, income forecast, kW supply, draw and headroom); capability licence and structure state; radio coverage; plan state (flags, step reached, rule fired, posture).</li>
+    <li><strong>Deliberately absent:</strong> enemy plans, enemy treasury and mandates, unseen positions, enemy intent, and randomness.</li>
+  </ul>
+  <h3>Termination guarantees</h3>
+  <p>Every plan halts. These limits are technical (bounded cost and guaranteed termination), and in the story they are the Ledger's seal-inspection rules:</p>
+  <ul>
+    <li><strong>Jumps and waits:</strong> jumps only go forward, and every wait has a timeout.</li>
+    <li><strong>Loops:</strong> at most 8 iterations, nesting ≤2, and each iteration consumes time.</li>
+    <li><span class="tag t-dec">Decided</span> <strong>Size:</strong> one <strong>plan size budget</strong> replaces the separate counts. Steps (loops expanded), rules and their bodies, build targets and protected areas all count toward it. It is sized so FULL verification stays under 50 ms and every seat's rules fit the 20 Hz tick. The embedded gates P1 and the per-rule tick cost set the number. The editor and verifier show a size meter. There are no beginner or expert rule tiers.</li>
+    <li><strong>Rule firing:</strong> each rule has a cooldown ≥5 s and fires at most 1–8 times.</li>
+    <li><strong>Hard stop:</strong> the end of the segment.</li>
+  </ul>
+  <p>The per-seat evaluation cost is a constant.</p>
+<pre><code>{ "schema_version": {"major":1,"minor":0},
+  "meta": {"title":"Expand &amp; Mine east"},
+  "declarative": {
+    "route": [
+      {"label":"to_site","move":{"to":{"voxel":{"x":96,"y":11,"z":62}},"pace":"AVOID_KNOWN_THREATS"},"timeout_ms":120000},
+      {"label":"place_east","place_beacon":{"at":{"voxel":{"x":96,"y":11,"z":62}},"tags":["east"],
+        "initial":{"priority":"NORMAL","mandate":{"roe":"RETURN_FIRE","mine":{"dig_max_depth":4,"flee_on_threat":true}}}}},
+      {"label":"back_home","move":{"to":{"beacon_anchor":{"beacon_id":"b_01"}}}}
+    ],
+    "handlers": [
+      {"id":"flee","when":{"all":{"items":[{"cmdr_hp_pct":{"cmp":"LE","pct":40}},{"cmdr_took_damage_within":{"ms":3000}}]}},
+       "body":[{"label":"f1","move":{"to":{"safest":{}}}},{"label":"f2","hold":{"ms":8000}}],
+       "resume":"CONTINUE","cooldown_ms":30000,"max_fires":3}
+    ]},
+  "on_death": {"on_respawn":"CONTINUE","max_deaths_before_fallback":2},
+  "fallback": {"hold":{"at":{"beacon_anchor":{"safest":{}}}}} }</code></pre>
+  <p><strong>Versioning:</strong></p>
+  <ul>
+    <li>The package is <code>gp.v1</code>. Minor versions add optional fields; a major version comes with a converter that is kept forever.</li>
+    <li>Submitted plans with unknown fields are rejected.</li>
+    <li><code>buf breaking</code> runs in WIRE_JSON mode.</li>
+    <li>Field numbers are reserved for a WASM commander body, custom operator references and installs, reassigning units, logistics delivery, radio predicates (link up, jammed, satellite pass), <code>team_id</code>, capture objectives, and grid-island predicates.</li>
+  </ul>
+</section>
+
+<section id="verifier">
+  <h2><span class="n">11</span>Verifier (seal inspection)</h2>
+  <p>A v1 plan <strong>qualifies</strong> when all of the following hold:</p>
+  <ol>
+    <li>It decodes strictly at a supported schema version.</li>
+    <li>It passes every limit and termination rule.</li>
+    <li>Every reference resolves against the seat's frozen knowledge snapshot, or has a none-policy.</li>
+    <li>All changes and settings are within range for the built-in operators. <span class="tag t-dec">Decided</span> Attack targets lie within reach at plan time (sphere, positions seen by the seat's units and structures within the last N minutes, Sensor Spire reveals, relay coverage; <span class="tag t-dec">Decided</span> unit vision added), and the plan fits the size budget.</li>
+    <li>It has zero errors. An existing power shortfall is only a warning. Adding draw beyond supply is an error unless "allow dormant beacons" is set.</li>
+    <li>Its hashes are recorded.</li>
+  </ol>
+  <div class="tbl"><table>
+    <thead><tr><th>Allowed estimates</th><th>Forbidden ("no dry runs")</th></tr></thead>
+    <tbody>
+      <tr><td>Pathfinder travel estimates over known terrain; fogged voxels use last-known state or ×1.5 cost</td><td>Stepping or forking the simulation. <span class="tag t-dec">Decided</span> Fork exists only in the research build, and these crates can't depend on it</td></tr>
+      <tr><td>Interface-time arithmetic</td><td>Running operators, combat, unit AI or construction</td></tr>
+      <tr><td>$ and kW projection (Quartermaster arithmetic)</td><td>Modelling enemy behaviour</td></tr>
+      <tr><td>Placement legality, selector previews ("if resolved now"), radio coverage</td><td>Evaluating rule conditions over a projected future</td></tr>
+    </tbody>
+  </table></div>
+  <ul>
+    <li><strong>Pipeline:</strong> decode → structure → resolve → semantics (together called <strong>QUICK</strong>, under 5 ms, run on every edit) → estimate → lint (<strong>FULL</strong>, under 50 ms, always run on submit).</li>
+    <li><strong>Deterministic:</strong> the result is a pure function of plan bytes, snapshot, rules hash and verifier version, so an LLM's pre-check and the check at submit are byte-identical (<code>report_hash</code>).</li>
+    <li><strong>Diagnostics</strong> are modelled on rustc's JSON output. Each has a code, severity, a JSON Pointer path, related paths, map references, a precise message, a plain-language beginner sentence, and JSON Patch suggestions labelled with how safely they apply.</li>
+    <li><strong>About 40 codes</strong> in these families:
+      <ul>
+        <li>decode and version (E000x)</li>
+        <li>limits and required blocks (E01xx)</li>
+        <li>conditions (E02xx)</li>
+        <li>control flow (E03xx)</li>
+        <li>references and placement (E04xx)</li>
+        <li>settings and recycle (E05xx)</li>
+        <li>economy, power and messaging (E0601 added draw, W06xx shortfall)</li>
+        <li>schedule, conflicts and staleness (W07xx)</li>
+        <li>information (I…)</li>
+      </ul>
+    </li>
+  </ul>
+</section>
+
+<section id="api">
+  <h2><span class="n">12</span>Planning API &amp; MCP</h2>
+  <p><span class="tag t-dec">Decided</span> There is one API with many clients. The Godot editor, the MCP adapter, the <code>gamectl</code> CLI and the built-in planner all call the same Seat Gateway, JSON-RPC over a localhost WebSocket. The editor is simply one more client: it runs no validation or time maths of its own.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>Group</th><th>v1 MCP tools</th></tr></thead>
+    <tbody>
+      <tr><td>Status</td><td><code>get_status</code> · <code>wait_for</code> (long poll on phase change or digest) · <span class="tag t-new">Draft 5</span> <code>await_next_event</code> (heartbeat: always returns within about 240 s, so interactive sessions never time out)</td></tr>
+      <tr><td><span class="tag t-new">Draft 5</span> Memory &amp; talk</td><td><code>save_notes</code> (private seat notebook, returned at the top of <code>get_briefing</code>; size is the briefing token budget, about 2k tokens) · <code>get_dispatches</code> (labelled opponent speech, fetched explicitly)</td></tr>
+      <tr><td>Knowledge</td><td><code>get_briefing</code> (the main one) · <code>get_recap</code> · <code>list_beacons</code> · <code>get_beacon</code> · <code>get_map_summary</code> · <code>query_area</code> · <code>list_known_enemies</code> · <code>get_reports</code> · <code>get_economy_forecast</code> ($ and kW, with what-ifs) · <code>get_capabilities</code> · <code>estimate_route</code></td></tr>
+      <tr><td>Docs</td><td><code>get_schema</code> (sliced to what the seat can use) · <code>list_templates</code></td></tr>
+      <tr><td>Planning</td><td><code>instantiate_template</code> · <code>verify_plan</code> · <code>render_plan</code> · <code>patch_plan</code> · <code>save_draft</code> · <code>list_drafts</code> · <code>get_safe_plan</code></td></tr>
+      <tr><td>Commit</td><td><code>submit_plan</code> · <code>set_ready</code></td></tr>
+      <tr><td>During play</td><td><code>get_segment_feed</code>: fog-filtered events (no-fog for every seat in casual matches) plus a digest for every 60 s of game time. <span class="tag t-dec">Decided</span> Includes <code>dispatches[]</code> when the seat has a powered Mast. Planning is closed during play and the recap.</td></tr>
+      <tr><td><span class="tag t-road">Roadmap</span></td><td><code>get_ballot</code> · <code>cast_vote</code> (voting deferred)</td></tr>
+    </tbody>
+  </table></div>
+  <ul>
+    <li><strong>Budgets:</strong> read tools take a <code>detail</code> of brief (≤1.5k tokens), standard (≤4k) or full (≤10k), truncated in a fixed salience order. Every result carries a <code>_status</code> footer with timer and unread counts, because agents tend not to check state on their own.</li>
+    <li><strong>Output:</strong> each result has structured JSON plus deterministic template prose. Pagination uses opaque cursors tied to the snapshot.</li>
+    <li><strong>Errors:</strong> a closed set of codes (for example <code>PHASE_CLOSED</code>, <code>STALE_SNAPSHOT</code>, <code>NO_QUALIFYING_PLAN</code>, <code>RATE_LIMITED</code>). An invalid plan is <em>not</em> a tool error: it returns a full report with <code>qualifies:false</code>.</li>
+    <li><strong>Security:</strong>
+      <ul>
+        <li>Binds to 127.0.0.1 / ::1 only, with Host and Origin checks; stdio is preferred.</li>
+        <li>Per-seat 256-bit tokens tied to the match and seat, revocable from the lobby.</li>
+        <li>Scopes: observe, plan, plan.submit, docs, spectate.nofog, admin. An "Advisor" preset can draft but not submit.</li>
+        <li><span class="tag t-dec">Decided</span> Seat tokens can never hold <code>spectate.nofog</code>; only separate spectator tokens can. Admin covers lobby and match control and can never read another seat's plans, drafts or knowledge.</li>
+        <li><span class="tag t-dec">Decided</span> Plans never leave the gateway for another seat. The private replay cache is not exposed.</li>
+        <li>Rate limits, an audit log, and no filesystem or network access through plans.</li>
+        <li><span class="tag t-dec">Decided</span> Dispatch text is untrusted opponent speech. It is delivered only in labelled data fields, and llms.txt says so.</li>
+      </ul>
+    </li>
+    <li><span class="tag t-new">Draft 5</span> <strong>LLM seats are interactive sessions.</strong> Headless runs are <span class="tag t-road">Roadmap</span>, because subscription policy for headless use is likely to change. The game never calls an LLM and never holds keys; API-key and subscription logins both work.
+      <ul>
+        <li><strong>Your agent:</strong> <code>gamectl connect</code> adds the game's MCP server and a seat token to the Claude Code or Codex session you already have open. Your agent keeps its normal tools, so it can write its own scripts against the API (the "bridge" pattern), and you supervise it through its own permission prompts. Dispatches reach it only through <code>get_dispatches</code>, labelled as opponent speech, and can be switched off per seat.</li>
+        <li><strong>AI opponents:</strong> the lobby opens a terminal window running an interactive session with the airgap command or skill.
+          <ul>
+            <li>Game tools are pre-approved by allow rules; bypass-permissions mode is never used.</li>
+            <li>A PreToolUse hook denies every non-game tool and reports liveness and tool calls to the game, which serves as the watchdog.</li>
+            <li>The session loops wait → plan → submit on <code>await_next_event</code>. A Stop hook sends it back into the loop if it ends its turn mid-match, with a failure counter.</li>
+            <li>The game enforces deadlines: a missed Lull files the safe plan. The notebook and per-Lull briefing survive context compaction.</li>
+            <li>Codex opponents need their own login folder or an API key, because concurrent logins race when refreshing. Claude channels replace the heartbeat loop once they leave preview.</li>
+          </ul>
+        </li>
+        <li><strong>Without a vendor:</strong> unattended AI-only matches, the nightly league and CI use the built-in planner plus local models (Ollama or LM Studio through an MCP host).</li>
+        <li><span class="tag t-trial">Trial</span> Tool granularity. Precedents (CivBench, Factorio Learning Environment, Anthropic's code execution with MCP) favour a few coarse tools plus code, and a plan-vs-outcome report. The tool list is trimmed after slice 9 trials.</li>
+      </ul>
+    </li>
+    <li><strong>Docs for coding agents:</strong> <code>llms.txt</code>, <code>llms-full.txt</code>, golden example plans, an agent guide ("plan a turn in under 20 tool calls"), and CLI equivalents. All are generated from the schema so they can't drift.</li>
+  </ul>
+<pre><code>get_status → get_briefing{detail:"standard"} → get_beacon{b_04} → list_templates{tag:"attack"}
+→ get_schema{part:"step", for_seat:true} → estimate_route → verify_plan  (2 errors, with fixes)
+→ patch_plan → get_safe_plan → render_plan → submit_plan  (report_hash matches the pre-check)
+→ set_ready → wait_for{phase_change} → wait_for{feed_digest} …     16 calls · ~14k tokens</code></pre>
+</section>
+
+<section id="editor">
+  <h2><span class="n">13</span>Plan editor (Godot native)</h2>
+  <p><span class="tag t-dec">Decided</span> Humans author plans with three tools, built together with the API: a <strong>map timeline</strong>, a <strong>gambit-style rule list</strong>, and <strong>templates</strong>. It draws on Frozen Synapse waypoints, Door Kickers go-codes, FF12 gambits, Gladiabots, Into the Breach telegraphing and Factorio share strings.</p>
+  <ul>
+    <li><strong>Map route:</strong>
+      <ul>
+        <li>Click one of your beacons to choose Visit &amp; change, Go here or Recycle. Click the ground to Go here or Place beacon, with a live legality ghost. Click a known enemy beacon to target it with an Attack beacon.</li>
+        <li>Alt-click turns a fixed target into a selector.</li>
+        <li>Routes draw as polylines with travel estimates; legs through fog are dashed.</li>
+      </ul>
+    </li>
+    <li><strong>Segment clock:</strong> bars for move, interface (with a tick at each change's commit point), placement, wait, fallback and slack. Worst-case rule detours show in a second lane. A "fits" pill turns green, amber or red. Scrubbing moves a ghost commander along the <em>schedule preview</em> only; outcomes are never shown.</li>
+    <li><strong>Rule list:</strong> each rule is a sentence with clickable parameter chips, reordered by dragging. Conditions are picked through family → predicate → parameters. Vocabulary you haven't unlocked shows greyed out with a lock and the reason. Conflicting rules are joined by a connector line.</li>
+    <li><strong>Templates (8):</strong> Hold &amp; Build, Expand &amp; Mine, Fortify Under Threat, Economy Reset, Staged Attack with Go-Time (<span class="tag t-new">Draft 5</span> optional Survey post), Capability Rush, Beacon Chain Push, Safe Plan. Each is a parameter wizard pre-filled with the planner's suggestion and a "why" note.</li>
+    <li><span class="tag t-new">Draft 5</span> <strong>Local-first library:</strong> templates and sample scripts are files in a local folder. You can copy one and edit it by hand, or use Save as template / Load in the editor. The gateway stores none of it: it sees a plan only once it becomes a draft or is submitted. The shipped samples carry description headers so they seed an agent's skill library. <span class="tag t-open">Open</span> file format and script language (<a href="#open">section 19</a>).</li>
+    <li><span class="tag t-new">Draft 5</span> <strong>Notes box:</strong> the human's view of the seat notebook.</li>
+    <li><strong>Validation:</strong> QUICK runs on every edit and FULL after 600 ms idle. Rows show icons and plain sentences; Fix buttons apply machine-applicable patches through <code>patch_plan</code>.</li>
+    <li><strong>Exact round-trip:</strong> the editor's model <em>is</em> the plan JSON. Edits are JSON Patches with inverse-patch undo. The core's canonical form is authoritative, and golden tests byte-compare the output.</li>
+    <li><span class="tag t-dec">Decided</span> <strong>One editor view in v1:</strong> no rule-slot tiers. The beginner template starts with 4 rules, and a size meter shows the plan budget. A Dispatch box sits beside Submit. <span class="tag t-dec">Decided</span> <strong>Selectors stay:</strong> Alt-click turns a fixed target into nearest, weakest, safest or most threatened. Templates may pre-fill selectors, and chips read "resolves when the step starts". The rest of the expert view (flags, branch and repeat, raw JSON, command palette) is <span class="tag t-road">Roadmap</span>. The schema and API keep full power for agents. <span class="tag t-risk">Risk</span> Human plans may be less sophisticated than LLM plans.</li>
+    <li><span class="tag t-dec">Decided</span> <strong>Probation guidance:</strong> in the Probation match, the first Lull opens the template wizard with a guided pick, and Ledger memos explain what just happened in plain language.</li>
+    <li><strong>Accessibility:</strong> accessible names generated from the rendered sentences, icons plus text for severity, 100–200% font scaling, reduced motion.</li>
+  </ul>
+</section>
+
+<section id="planner">
+  <h2><span class="n">14</span>Built-in planner &amp; computer opponents</h2>
+  <p>A computer opponent is the built-in planner plus the built-in operators. The planner uses the same API traits, snapshot and verifier as every other client. It is deterministic: its seed comes from the match, seat and round, and its budget is measured in evaluation units rather than wall time.</p>
+  <ol>
+    <li>Read the briefing, beacons, known enemies, economy and capabilities.</li>
+    <li>Compute integer situation features: threat, power headroom, vent sites, expansion sites, capability and attack opportunities, and commander risk.</li>
+    <li>Fill template parameters with the top-k options, then compose <em>visit goals</em> by greedy insertion by utility per second until the route fills its target share of the segment.</li>
+    <li>Score utility as defence + economy + expansion + capability + attack − risk, weighted by difficulty. <span class="tag t-dec">Decided</span> v1 ships the Balanced weighting only; the Turtle, Raider and Economist personalities are <span class="tag t-road">Roadmap</span>.</li>
+    <li>Add the standard rules, then run verify and repair up to 4 times.</li>
+  </ol>
+  <div class="tbl"><table>
+    <thead><tr><th></th><th>Easy</th><th>Normal</th><th>Hard</th></tr></thead>
+    <tbody>
+      <tr><td>Candidates / top-k</td><td class="num">30 / 3</td><td class="num">100 / 5</td><td class="num">200 / 8</td></tr>
+      <tr><td>Route fill</td><td class="num">70%</td><td class="num">85%</td><td class="num">90%</td></tr>
+      <tr><td>Rules</td><td>Flee</td><td>+ rescue, fix power</td><td>+ retarget, go-time broadcast</td></tr>
+      <tr><td>Selectors</td><td>Fixed only</td><td>Some</td><td>Everywhere useful</td></tr>
+      <tr><td>Lookahead</td><td colspan="3">None at any level. Barred by "no dry runs"; Hard differs only in breadth and rules.</td></tr>
+    </tbody>
+  </table></div>
+  <p><span class="tag t-dec">Decided</span> <strong>Target spread:</strong> in a 3-way free-for-all, the planner scores targets partly by how much pressure the other AI seat is already putting on them, so two AIs don't pile onto the same seat by default.</p>
+  <p><span class="tag t-new">Draft 5</span> <strong>Vision and hunting:</strong> the planner places a Survey post when the enemy sightings it needs are stale or missing. It adds a Defend guard on its commander when the commander has died recently, and scores enemy-commander raids like any other target. It ignores the notebook.</p>
+  <p><span class="tag t-dec">Decided</span> <strong>Dispatches:</strong> with a Mast, the planner sends short template lines from its intent and recent events (for example "Expanding north. Stay clear."), sometimes misleading. It never reads incoming Dispatches, and the lobby labels the seat "built-in".</p>
+  <p><strong>Safe plan:</strong> leave configurations untouched and move to the safest beacon. If power is short, set up to 2 key nearby beacons to high priority so they brown out last. Otherwise shadow the safest beacon, with the flee and rescue rules. It always qualifies, and <code>get_safe_plan</code> shows the cost of a timeout.</p>
+</section>
+
+<section id="arch">
+  <h2><span class="n">15</span>Architecture</h2>
+  <div class="stack" role="img" aria-label="Clients connect to the Seat Gateway, which fronts the deterministic Rust sim">
+    <div class="row"><div class="k">Clients</div><div class="boxes">
+      <div class="box"><b>Godot 4.7 client</b><span>GDScript views and editor; thin gdext crate</span></div>
+      <div class="box"><b>MCP adapter</b><span>rmcp; stdio or localhost HTTP</span></div>
+      <div class="box"><b>gamectl CLI</b><span>verify, schema, docs, connect, seat doctor, scenarios</span></div>
+      <div class="box"><b>Built-in planner</b><span>in process, same traits</span></div>
+    </div></div>
+    <div class="arrow">JSON-RPC over WebSocket · Protobuf canonical · 127.0.0.1</div>
+    <div class="row"><div class="k">Gateway</div><div class="boxes">
+      <div class="box"><b>Seat Gateway</b><span>tokens · scopes · fog filter · rate limits · event bus · snapshots</span></div>
+      <div class="box"><b>Plan core (Rust)</b><span>verify · estimate · render · patch · canonicalise</span></div>
+    </div></div>
+    <div class="arrow">in-process</div>
+    <div class="row"><div class="k">Simulation</div><div class="boxes">
+      <div class="box core"><b>Deterministic sim</b><span>20 Hz fixed tick · integer maths · SoA tables</span></div>
+      <div class="box core"><b>World</b><span>32³ copy-on-write chunks · 64-layer cap · pathing/ETA</span></div>
+      <div class="box core"><b>Runner</b><span>Lull/Push/recap · plan interpreter · operators · Quartermaster · power grid</span></div>
+      <div class="box core"><b>Replay</b><span>private: seed + plans + log · shared: recordings · per-tick xxh3</span></div>
+    </div></div>
+  </div>
+  <div class="tbl"><table>
+    <thead><tr><th>Area</th><th>Decision</th></tr></thead>
+    <tbody>
+      <tr><td>Languages</td><td>Two at launch: Rust (sim, plan core, mesher, gateway, MCP) and GDScript (views only). TypeScript arrives later with the web spectator.</td></tr>
+      <tr><td>Maths</td><td>Integer-first unit newtypes: position Q16.16, squared distance Q32.32 (range checks use r², no square roots), u16 angles with a 4096-entry lookup table, integer HP and $. Floats appear only in a walled presentation/solve module. Lints forbid float arithmetic, <code>as</code> casts, HashMap/HashSet and wall-clock time. Overflow checks stay on.</td></tr>
+      <tr><td>Determinism</td><td>Fixed tick; split seeded RNG streams; ordered collections; per-tick state hash. The verifier and planner are deterministic too. Cross-OS hash equality guards replays and CI. <span class="tag t-dec">Decided</span> Snapshot/restore is in the core. <code>fork</code> exists only behind a compile-time <code>research</code> feature that release builds never enable, and CI builds both. A dependency check in CI bars the plan-core, verifier, planner and gateway crates from depending on it.</td></tr>
+      <tr><td>Rendering</td><td>Our own greedy mesher in Rust feeds Godot RenderingServer RIDs under a per-frame upload budget. Voxel Tools is optional. Movie Maker exports replays to video.</td></tr>
+      <tr><td>Schema</td><td>Protobuf is the single source (<code>gp.v1</code>, <code>gp.api.v1</code>). An in-house descriptor generator produces JSON Schema that LLMs handle well; Buf's plugin is the fallback. <code>buf breaking</code> runs in CI.</td></tr>
+      <tr><td>Hosting</td><td>A local host with up to 3 seats (at most 1 human), localhost only. The server is authoritative and fog is filtered on the server. No lockstep.</td></tr>
+      <tr><td>Replays <span class="tag t-dec">Decided</span></td><td>Two formats. The <strong>deterministic replay</strong> (seed + plans + log) lives in the host's private match cache and serves scrub, recap and bug reports; it is never exposed in v1. Shared <strong>recordings</strong> are keyframes plus state deltas and events, with no plans. Recordings run to a few MB per segment-minute.</td></tr>
+      <tr><td>Map generator <span class="tag t-dec">Decided</span></td><td>Seeded and deterministic, with 3-way rotational symmetry. Output is a map file. Fairness tests check vent and ore parity per spawn.</td></tr>
+      <tr><td>Crates</td><td>prost, buf, rkyv/postcard, xxh3, imbl, rmcp, pathfinding primitives with our own HPA*. Avoid bincode, cordic and hierarchical_pathfinding.</td></tr>
+      <tr><td>Saves <span class="tag t-dec">Decided</span></td><td>Save at Lull boundaries from the frozen segment-end snapshot. Stamped with the rules hash and verifier version; a mismatch refuses to load. Stored in the private match cache (they contain plans).</td></tr>
+      <tr><td>Platforms <span class="tag t-dec">Decided</span></td><td>Windows and Linux first-class (tested and released); macOS builds in CI for determinism, released best-effort and unsigned. GitHub Releases plus itch.io; Steam after name clearance.</td></tr>
+      <tr><td>Playtest mode <span class="tag t-dec">Decided</span></td><td>Opt-in. A 3-question end-of-match survey (including "play another round?"). Local metrics: Push time with the window focused vs unfocused, Lull time used, skips and speed-ups, camera use, verifier errors. "Export playtest bundle" writes survey, metrics, recording and logs to a file the tester sends manually. No network telemetry.</td></tr>
+      <tr><td>Agent seats <span class="tag t-new">Draft 5</span></td><td>Interactive sessions only. <code>gamectl connect</code> for "Your agent"; the lobby launches opponent windows for Claude Code and Codex with pre-approved game tools, a PreToolUse watchdog hook, a Stop-hook guard and the <code>await_next_event</code> heartbeat. Hook and flag profiles are data files pinned to tested CLI versions; <code>gamectl seat doctor</code> checks that a shell command, file read and web request all fail. Local-model driver for league and CI. The game holds no keys.</td></tr>
+      <tr><td>AI ladder <span class="tag t-new">Draft 5</span></td><td>Build order follows the user's priority: (1) no-AI play, (2) hand-editable sample files, (3) scripting API with docs aimed at AI-assisted scripting plus an official SDK, (4) live MCP conduit. Every tier produces the same canonical plan JSON, checked by one verifier. <span class="tag t-trial">Trial</span> checkpoints at the fun gate and after slice 8 compare editor only, hand-edited files, AI-written scripts and live sessions. The API follows minor-version rules so direction can change. <span class="tag t-open">Open</span> shared format and script language (<a href="#open">section 19</a>).</td></tr>
+      <tr><td>Dev harness <span class="tag t-dec">Decided</span></td><td>AGENTS.md / CLAUDE.md; <code>cargo xtask ci</code>; <code>gamectl scenario run</code> (map seed + plans + assertions on events and hashes); golden files; headless Godot screenshots; contract files (.proto, lints, determinism) need owner approval; 2–3 agents in parallel worktrees at most; a nightly built-in-planner league.</td></tr>
+      <tr><td>Licences <span class="tag t-dec">Decided</span></td><td>GPL-3.0-or-later for the game (sim, client, planner, gateway, gamectl). MIT OR Apache-2.0 for schemas (.proto files and generated JSON Schema), SDKs, docs, llms.txt and example plans. CC BY-SA 4.0 for art and audio. Per-directory LICENSE files, SPDX headers, DCO sign-off. Console ports out of scope.</td></tr>
+      <tr><td>Seams kept for later</td><td>An <code>Operator</code> trait (local view, mailbox and mandate in; intents out); an abstract per-tick work counter that becomes fuel later; <code>program_id</code> on each beacon; a kind/version tag on gameplans; a <code>Quartermaster</code> trait. No wasmi in v1.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="phase0">
+  <h2><span class="n">16</span>Stack spikes &amp; embedded gates</h2>
+  <p><span class="tag t-dec">Decided</span> The 11-week Phase 0 becomes <strong>3 weeks of throwaway stack spikes</strong>. They cover only the gates whose failure would change the foundation itself. Every other gate runs on real code at the point where that code first exists. Each embedded gate's fallback is written down before its stage starts, because a late failure costs rework instead of a cheap spike.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>Gate</th><th>When</th><th>Go if</th><th>Fallback</th></tr></thead>
+    <tbody>
+      <tr><td>G4 Determinism</td><td>Spike, wk 1–3</td><td>Identical hashes on 3 operating systems over 10 full matches (toy sim); save/restore round-trips hash-identically; fork equivalence in the research build</td><td>Replays guaranteed on the same binary only</td></tr>
+      <tr><td>G1 Destruction remesh</td><td>Spike, wk 1–3</td><td>Own greedy mesher in Godot 4.7 remeshes within 3 frames at 60 fps with 20 explosions/s</td><td>Coarser destruction; smaller world; reopen the renderer choice</td></tr>
+      <tr><td>P5 MCP session <span class="tag t-new">Draft 5</span></td><td>Slice 9 (MCP smoke test at the fun gate)</td><td>A Claude-class agent in an interactive session: median ≤3 min, ≤25 calls, ≤150k tokens per Lull; ≤10% safe-plan fallback; a 6-round match with no stall the Stop hook fails to recover. Also checked with Codex</td><td>Coarser template tools; fewer, coarser MCP tools</td></tr>
+      <tr><td>G6 Script runtime <span class="tag t-open">Open</span></td><td>Spike, wk 1–3, if an embedded script language is chosen</td><td>The chosen engine builds with gdext on Windows MSVC, Linux and macOS; identical output across operating systems; tick, memory and interrupt limits enforced</td><td>Depends on the choice (e.g. Boa for QuickJS)</td></tr>
+      <tr><td>P1 Verifier</td><td>QUICK in skeleton; FULL in slice 1</td><td>≤50 ms p99 at the size budget; editor re-check ≤16 ms; byte-identical across operating systems; 10k fuzzed plans with no panic. The per-rule tick cost is measured to set the plan size budget</td><td>Smaller budget; debounce</td></tr>
+      <tr><td>G3′ Segment budget</td><td>CI check on every stage</td><td>4 seats (headroom over v1's 3), 300 units, 40 beacons: tick p99 ≤50% of the tick; ≥4× headless speed; scrub ≤1 s. The result sets the per-map power budget</td><td>Lower map power budget; shorter segments</td></tr>
+      <tr><td>G2+P3 Pathing and travel estimates</td><td>Slice 3</td><td>Repath p99 ≤5 ms; travel estimate ≤1 ms and within ±15% (p90) on static terrain</td><td>Show ranges; favour arrival triggers</td></tr>
+      <tr><td>P7 Mast connectivity</td><td>Slice 4</td><td>200 masts and their reach coverage rebuilt in ≤1 ms, deterministically</td><td>Recompute at segment boundaries</td></tr>
+      <tr><td>P2 Planner</td><td>Slice 5</td><td>Safe plan ≤200 ms; Normal ≤2 s; 100% verifier pass rate; beats random plans ≥80% of the time</td><td>Templates only</td></tr>
+      <tr><td>P6 Editor productivity</td><td>Slice 6 (template wizard only for the probe)</td><td>A first-time tester builds a qualifying plan from a template in ≤5 min, and writes a 10-step plan from scratch in ≤10 min</td><td>Move the editor model into Rust; simplify</td></tr>
+    </tbody>
+  </table></div>
+  <p>G5 (WASM operators) is deferred to the version that introduces custom components.</p>
+</section>
+
+<section id="milestones">
+  <h2><span class="n">17</span>Build plan to sandbox v1</h2>
+  <p><span class="tag t-dec">Decided</span> <strong>Capacity:</strong> one developer directing coding agents (Claude Code, Codex) that write most of the code. Stages run in sequence, and review is the bottleneck. <strong>Strategy: skeleton → slices.</strong></p>
+  <ul>
+    <li><strong>Walking skeleton.</strong> Contracts that must never churn are built to full quality: Protobuf envelope with <code>buf breaking</code> from day 1, determinism rules and lints, gateway auth and scopes, plan envelope with kind/version, <code>Operator</code>/<code>Quartermaster</code> traits, snapshot and hash formats. Content stays narrow but runs on the real code paths, so later work adds variants instead of rewriting. It includes one real vista (mesher, destruction, basic camera) for demos.</li>
+    <li><strong>Vertical slices.</strong> Each goes through sim, verifier, API, planner, editor and view, and ends playable. Each has a named depth task for its riskiest layer, and a machine-checkable definition of done: determinism hashes, golden plans, scripted headless scenarios, and (from slice 9) an MCP agent Lull run. Agents iterate until CI is green; the owner reviews the slice demo.</li>
+    <li><strong>Agent harness first:</strong> the first 2 weeks of the skeleton build the dev harness described in <a href="#arch">section 15</a>.</li>
+  </ul>
+  <div class="tbl"><table>
+    <thead><tr><th>Ends</th><th>Stage</th><th>Contents</th><th>Weeks</th></tr></thead>
+    <tbody>
+      <tr><td class="num">wk 3</td><td>Stack spikes</td><td>G4 determinism, save/restore, fork equivalence · G1 mesher and remesh in Godot</td><td class="num">3</td></tr>
+      <tr><td class="num">wk 16.5</td><td>Walking skeleton</td><td>Harness · locked contracts · small seeded map · fortified core + beacon placement · Mine and Defend · Attack-lite (fixed target, launch on force size or time, retreat on losses) · <span class="tag t-new">Draft 5</span> Survey-lite (probe area, scouts) · mining drone, raider, autocannon, scout · reach with unit vision and sighting age · beacon destruction, elimination and ruins · route plan with <code>on_death</code>, <code>fallback</code>, flee · QUICK verifier · gateway (agent-shaped JSON-RPC, no MCP yet) · <span class="tag t-new">Draft 5</span> seat notebook · safe plan + Easy planner · vista client, own-fog camera · 3-template wizard · Lull timer, basic recap · $ with BMI, kW with core surplus and Generators · playtest mode and export bundle</td><td class="num">13.5</td></tr>
+      <tr><td class="num">wk 17.5</td><td><strong>Fun probe</strong></td><td><span class="tag t-new">Draft 5</span> 3–5 testers play a 3-round match against the built-in planner only, so no AI setup friction. Metrics from the playtest bundle: "play another round?" and attention during the Push. Pass/pivot criteria written in advance. Re-estimate from measured velocity.</td><td class="num">1</td></tr>
+      <tr><td class="num">wk 22.5</td><td>Slice 1: mining + power</td><td>Grid and brownouts · Build mandate · Quartermaster and one treasury · <em>depth task:</em> P1 FULL verifier</td><td class="num">5</td></tr>
+      <tr><td class="num">wk 28.5</td><td>Slice 2: combat + destruction</td><td>Full Attack (selectors, waves, go-code hooks) · mortar, wall, demolition charge, repair/reclaim drone and ruin salvage · final audit score · <span class="tag t-new">Draft 5</span> full Survey, Defend picket, commander hunting and bodyguard, damage-split kill credit</td><td class="num">6</td></tr>
+      <tr><td class="num">wk 34.5</td><td>Slice 3: expansion + licences</td><td><em>Depth task:</em> HPA* pathing and travel estimates (G2+P3) · licences and the 3 capability structures · award fund · 3-way symmetric map with fairness tests</td><td class="num">6</td></tr>
+      <tr><td class="num">wk 35.5</td><td><strong>Fun gate</strong></td><td>The real go/pivot decision. If go: naming and professional clearance run in parallel with slice 4, and the repo goes public under the final name around wk 39.5 ("not accepting PRs yet"). Re-estimate.</td><td class="num">1</td></tr>
+      <tr><td class="num">wk 39.5</td><td>Slice 4: radio + Dispatches</td><td>Mast coverage, relay and Sensor Spire reach, go-codes, Dispatches · <em>depth task:</em> P7</td><td class="num">4</td></tr>
+      <tr><td class="num">wk 43.5</td><td>Slice 5: planner depth</td><td>Normal and Hard, target spread, flavour Dispatches · <em>depth task:</em> P2</td><td class="num">4</td></tr>
+      <tr><td class="num">wk 52</td><td>Slice 6: editor depth + samples (AI tier 2)</td><td>Map route with selectors, segment clock, rule list, size meter, all 8 templates · Probation match and Ledger memos · <span class="tag t-new">Draft 5</span> local-first template and sample library, Save as template / Load, notes box · <em>depth task:</em> P6</td><td class="num">8.5</td></tr>
+      <tr><td class="num">wk 57</td><td>Slice 7: recap + recordings</td><td>Highlights, scrub, shareable recordings, casual mode · save and resume at Lull boundaries · <span class="tag t-new">Draft 5</span> plan-vs-outcome report</td><td class="num">5</td></tr>
+      <tr><td class="num">wk 60</td><td><span class="tag t-new">Draft 5</span> Slice 8: scripting API (AI tier 3)</td><td>Published docs site generated from the schema, llms.txt and llms-full.txt, golden plans, "Write a script" guide, official SDK and sample scripts · trial checkpoint</td><td class="num">3</td></tr>
+      <tr><td class="num">wk 65</td><td><span class="tag t-new">Draft 5</span> Slice 9: live conduit (AI tier 4)</td><td>MCP server, <code>gamectl connect</code>, opponent session launcher with hooks and heartbeat, Claude and Codex profiles, <code>seat doctor</code>, local-model driver · <em>depth task:</em> P5 · trial checkpoint</td><td class="num">5</td></tr>
+      <tr><td class="num">wk 71</td><td>Hardening + release</td><td>Perf, balance playtests with built-in, local-model and LLM seats, accessibility basics, Windows and Linux releases on GitHub and itch.io</td><td class="num">6</td></tr>
+    </tbody>
+  </table></div>
+  <p><span class="tag t-new">Draft 5</span> <strong>71 weeks</strong>, up from 62.5. Skeleton −1 (MCP and Claude adapter move to slice 9, offset by +0.5 Survey-lite and +0.5 notebook). Slice 2 +1 (Survey, hunting, kill split). Slice 6 +0.5 (local library). New slice 8 +3 and slice 9 +5. Not yet counted: up to +2 weeks if an embedded script language is chosen (G6 spike plus runtime). The estimate assumes one full-time developer with <em>no</em> agent speed-up. With a 20% buffer, plan for <strong>about 20 months (around May 2028)</strong>. The rest of the plan is re-estimated from measured velocity at the fun probe and again at the fun gate. Ship-v1 estimate: about 75% now (less early AI risk, more scope), about 82% once the fun gate passes.</p>
+</section>
+
+<section id="roadmap">
+  <h2><span class="n">18</span>Roadmap after v1</h2>
+  <ul>
+    <li><strong>Custom components, one per version</strong> (order to be decided):
+      <ul>
+        <li>custom operator programs: WASM on wasmi 2.x, fuel-metered, Rust SDK, installed on site, content-addressed</li>
+        <li>the earned reprogramming capability</li>
+        <li>custom Quartermaster</li>
+        <li>WASM commander under the gameplan envelope</li>
+      </ul>
+      <p>Coding agents help write these through the local API.</p>
+    </li>
+    <li><strong>Voting</strong> between rounds, including pity votes and voted capabilities, first with seats only and spectators later.</li>
+    <li><span class="tag t-dec">Decided</span> <strong>Players:</strong> human-vs-human (LAN, then internet), teams via the reserved <code>team_id</code>, more than 3 seats.</li>
+    <li><span class="tag t-dec">Decided</span> <strong>Conflict and economy:</strong> beacon capture, Citations (cosmetic first, fees later), energy charges on individual units for remote operations, grid islands, batteries.</li>
+    <li><span class="tag t-dec">Decided</span> <strong>Maps:</strong> handmade maps and a map editor.</li>
+    <li><strong>Radio:</strong> line of sight and relays, jammers, direction finding, satellites. <span class="tag t-dec">Decided</span> Directed or encrypted Dispatches, interception, live chat during the Push, and Ledger-enforced pacts.</li>
+    <li><span class="tag t-dec">Decided</span> <strong>Cut from v1:</strong> planner personalities (Turtle, Raider, Economist); director camera; gate, reinforced wall and shield block; the expert editor view except selectors (flags, branch and repeat, raw JSON, command palette); timed weapons and combat boosts; pace controls and headless or accelerated AI-only matches; a nightly LLM-seat league.</li>
+    <li><span class="tag t-dec">Decided</span> <strong>Release and onboarding:</strong> signed and notarised macOS builds, a Steam release, mid-Push saves, scripted tutorial scenarios, and networked opt-in telemetry.</li>
+    <li><strong>Structures:</strong> the full capability structure catalogue.</li>
+    <li><strong>Commander:</strong> abilities, vehicles, and a manual-control round.</li>
+    <li><strong>World:</strong> flowing water, internet multiplayer and dedicated servers, and per-mode claim protections.</li>
+    <li><strong>Watching:</strong> a web spectator and replay viewer (WASM sim and mesher) and more watch-mode features.</li>
+    <li><strong>Research:</strong> an RL interface (Gymnasium/PettingZoo) through custom operators, with batched PyO3 stepping when throughput demands it.</li>
+    <li><span class="tag t-new">Draft 5</span> <strong>AI seats:</strong> headless LLM seats with an API key or subscription (<code>claude -p</code>, <code>codex exec</code>, command-template presets) as an alternative to interactive sessions; Claude channels in place of the heartbeat loop; commander armour, decoys or a self-defence weapon if hunting dominates; jammers and decoy beacons against perfect intel.</li>
+  </ul>
+</section>
+
+<section id="open">
+  <h2><span class="n">19</span>Open questions &amp; tuning</h2>
+  <p><span class="tag t-new">Draft 5</span> Pass 5 reopened four design questions. Everything else is tuning, risks to watch, and pre-public naming.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>Open design item</th><th>Status and current thinking</th></tr></thead>
+    <tbody>
+      <tr><td>Shared file format and script language for AI tiers 2–4. The format must lead into later tiers with no complex conversion, and it sets the build's initial direction</td><td><span class="tag t-open">Open</span> Data files: JSONC (canonical plan JSON plus comments) with typed parameter nodes (<code>{"param":…}</code> / <code>{"literal":…}</code>), edited without losing comments via <code>jsonc-parser</code>. Script language candidates: <strong>TypeScript</strong> (JSONC pastes in unchanged; rquickjs in-game; Deno plus an SDK generated from proto; types help LLMs; fits the TS spectator; risk: rquickjs on Windows MSVC and home-built determinism) vs <strong>Starlark → Python</strong> (hermetic; syntax changes from JSONC; no game precedent; binding coverage gaps) vs deferring the language to a trial. Last recommendation: TypeScript. To be revisited after the compact.</td></tr>
+      <tr><td>Art direction and asset pipeline</td><td><span class="tag t-open">Open</span> Research so far: author in MagicaVoxel or Goxel, load <code>.vox</code> with <code>dot_vox</code> into our greedy mesher. For the Pall: emissive voxels plus glow, a few pooled unshadowed lights, flood-fill voxel light baked into vertex colours.</td></tr>
+      <tr><td>Audio scope</td><td><span class="tag t-open">Open</span> Research so far: Kenney CC0, Freesound CC0 and CC BY, sfxr/ChipTone output. No Sonniss or NC/ND material in the BY-SA repo. Godot 3D players, buses and polyphony caps; a REUSE-style licence manifest.</td></tr>
+      <tr><td>Minor rules: final-audit tie-break; resubmitting a plan during the Lull; English-only UI with externalised strings</td><td><span class="tag t-open">Open</span> Not yet discussed</td></tr>
+    </tbody>
+  </table></div>
+  <div class="tbl"><table>
+    <thead><tr><th>Tuning and risks</th><th>Status</th></tr></thead>
+    <tbody>
+      <tr><td><span class="tag t-new">Draft 5</span> Core HP and turret; spawn travel distance; Survey scan and refresh rules; picket radius; notebook size; heartbeat interval</td><td><span class="tag t-tune">Tuning</span></td></tr>
+      <tr><td><span class="tag t-new">Draft 5</span> Commander hunting dominates; perfect-intel snowball; baiting stale sightings</td><td><span class="tag t-risk">Risk</span> nightly league and fun gate</td></tr>
+      <tr><td><span class="tag t-new">Draft 5</span> Interactive LLM sessions stall, ask the user a question, or drift after compaction; CLI hook and flag changes; plan rate limits over a 75-minute match</td><td><span class="tag t-risk">Risk</span> watchdog hook, Stop hook, safe plan, pinned profiles, P5 in slice 9</td></tr>
+      <tr><td><span class="tag t-new">Draft 5</span> The AI-platform pitch isn't testable until slice 9 (about the last 6 months of the plan)</td><td><span class="tag t-risk">Risk</span> agent-shaped gateway from day 1; MCP smoke test at the fun gate</td></tr>
+      <tr><td>Award catalogue, trigger formulas, award fund size and rank multiplier</td><td><span class="tag t-tune">Tuning</span></td></tr>
+      <tr><td>Capability licence thresholds; "blindsided" anti-gaming; odds of random capabilities</td><td><span class="tag t-tune">Tuning</span> random odds deferred</td></tr>
+      <tr><td>$ values: BMI, structure and unit costs; BMI scaling by standing; starting force</td><td><span class="tag t-tune">Tuning</span></td></tr>
+      <tr><td>kW: core surplus, Generator output, draw per item, vents per map, map power budget from G3′</td><td><span class="tag t-tune">Tuning</span></td></tr>
+      <tr><td>Plan size budget (from P1 and per-rule tick cost); Dispatch length; placement range</td><td><span class="tag t-tune">Tuning</span></td></tr>
+      <tr><td>Segment growth curve (~3 → 8 min over 6 rounds); interface times; respawn delay</td><td><span class="tag t-tune">Tuning</span></td></tr>
+      <tr><td><span class="tag t-dec">Decided</span> Reach memory N (how recently a target must have been seen); ruin salvage value; Probation memo triggers and copy</td><td><span class="tag t-tune">Tuning</span></td></tr>
+      <tr><td><span class="tag t-dec">Decided</span> Raids chaining forward on unit vision; ruin salvage snowballing the eliminating seat</td><td><span class="tag t-risk">Risk</span> fun gate and playtests</td></tr>
+      <tr><td>Final title and faction names (AirGap and Quorum have known clashes); professional clearance search</td><td>After the fun gate, before going public</td></tr>
+      <tr><td>Kingmaking and farming the weakest seat in 3-way free-for-all under the final-audit score</td><td><span class="tag t-risk">Risk</span> fun gate and playtests</td></tr>
+      <tr><td>Is a no-control movie of up to 8 minutes fun?</td><td><span class="tag t-risk">Risk</span> fun probe (wk 17.5), fun gate (wk 35.5)</td></tr>
+      <tr><td>Human plans less sophisticated than LLM plans (selectors kept; branch and repeat cut)</td><td><span class="tag t-risk">Risk</span> fun gate</td></tr>
+      <tr><td>rmcp version (3.1 vs 3.3 reported) and GraphEdit status in 4.7</td><td>Verify during the skeleton (neither is load-bearing)</td></tr>
+    </tbody>
+  </table></div>
+  <div class="callout"><b>Next step:</b> settle the shared file format and script language, which decides whether a G6 runtime spike joins the stack spikes. Then ask the remaining open items (art, audio, minor rules), and start the stack spikes: G4 (cross-OS determinism, save/restore, fork equivalence) and G1 (mesher and remesh in Godot 4.7). In parallel, draft the agent harness layout and write the fun probe's pass/pivot criteria.</div>
+</section>
+
+<footer>AirGap (codename) design specification v0.5 · 2026-09-13. Supporting documents: decisions log and gameplan/verifier/API/editor co-design. Design inspiration only from Mindustry, Zero-K, Minecraft Legends, Timberborn and Dwarf Fortress; no content ported.</footer>
+</main>
+</div>

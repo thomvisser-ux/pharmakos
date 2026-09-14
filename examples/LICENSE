@@ -1,0 +1,21 @@
+SPDX-FileCopyrightText: 2026 Pharmakos contributors
+SPDX-License-Identifier: MIT OR Apache-2.0
+
+Everything in examples/ — the example playbooks (JSONC), the golden canonical
+gp.v1 JSON they serialise to, and any sample gamectl output — is licensed under
+either of
+
+  * MIT License            (../LICENSES/MIT.txt)
+  * Apache License, 2.0    (../LICENSES/Apache-2.0.txt)
+
+at your option. These files are meant to be copied: paste one into the in-game
+editor, fork it, ship it in a tutorial, or feed it to a generator. Nothing you
+build from them is obliged to be GPL.
+
+Unless you state otherwise, any contribution you intentionally submit for
+inclusion in this directory shall be dual licensed as above, with no additional
+terms or conditions, and signed off under the Developer Certificate of Origin
+1.1 (../docs/DCO.txt).
+
+The repository-wide scheme is described in ../LICENSE and ../docs/LICENSING.md;
+the machine-readable manifest is ../REUSE.toml.

@@ -1,0 +1,43 @@
+# SPDX-FileCopyrightText: 2026 Pharmakos contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Workspace cargo configuration. Contract file (spec §15): changes to lints and
+# determinism settings need owner approval.
+
+[alias]
+# The one command developers, agents and CI run (spec §15, Dev harness).
+xtask = "run --package xtask --quiet --"
+ci = "run --package xtask --quiet -- ci"
+
+# Overflow checks stay on in every profile, release included (spec §15, Maths).
+# This mirrors [profile.release] in the workspace Cargo.toml. Cargo config wins over
+# Cargo.toml when both set a key, so keep the two in step; the Cargo.toml copy is the
+# one that survives being built from another directory or vendored into another tree.
+[profile.release]
+overflow-checks = true
+
+[profile.dev]
+overflow-checks = true
+
+# Lint levels are NOT set here as rustflags on purpose: rustflags apply to every crate in
+# the graph, including third-party dependencies we cannot fix, and they invalidate the
+# build cache when they change. The determinism bans — float arithmetic, `as` casts,
+# HashMap/HashSet, wall-clock time — live in [workspace.lints] in the workspace Cargo.toml
+# and reach each member through `[lints] workspace = true`, with the disallowed-type and
+# disallowed-method lists in clippy.toml (harness part 1, weeks 3–5).
+#
+# The only flag we do set globally: warnings are errors in CI. Left commented so a local
+# build is not hostile; `cargo xtask ci` passes -D warnings itself.
+# [build]
+# rustflags = ["-D", "warnings"]
+
+[build]
+# PLACEHOLDER: no target-dir override, no shared cache and no linker choice yet. The G4
+# determinism spike decides whether the build needs pinned codegen flags for cross-OS hash
+# equality; if it does, they belong here with a comment naming the spike result.
+
+[net]
+git-fetch-with-cli = true
+
+[term]
+color = "auto"

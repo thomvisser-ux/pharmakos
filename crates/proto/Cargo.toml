@@ -1,0 +1,34 @@
+# SPDX-FileCopyrightText: 2026 Pharmakos contributors
+# SPDX-License-Identifier: MIT OR Apache-2.0
+
+[package]
+name = "pharmakos-proto"
+description = "Generated Protobuf types for gp.v1 and gp.api.v1 — the single schema source."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+# Deliberately NOT license.workspace: schemas, docs, llms.txt and example playbooks are
+# MIT OR Apache-2.0 so third parties can build against the API without taking on the GPL
+# (spec §15, Licences). The rest of the workspace is GPL-3.0-or-later.
+license = "MIT OR Apache-2.0"
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+# None yet. Expected: prost (generated types) from [workspace.dependencies].
+
+# No [build-dependencies] and no build script, on purpose. The generated types are a
+# CHECKED-IN tree at src/generated/, written by `buf generate proto` from the workspace
+# root through proto/buf.gen.yaml (prost, prost-serde, prost-crate). That is the decision,
+# not build-time codegen with prost-build: a plain `cargo build` then needs neither buf nor
+# protoc, and a schema change arrives as a reviewable diff — which is what a contract file
+# wants. Regenerating and checking the tree against what is committed belongs in
+# `cargo xtask ci` (AGENTS.md section 9, item 8).
+#
+# The .proto files themselves live outside this crate — proto/gp/v1 and proto/gp/api/v1,
+# with proto/buf.yaml and proto/buf.gen.yaml — and are contract files: changes need owner
+# approval.
+
+[lints]
+workspace = true

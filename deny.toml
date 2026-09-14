@@ -1,0 +1,135 @@
+# SPDX-FileCopyrightText: 2026 Pharmakos contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# cargo-deny policy. Run by `cargo xtask ci` and in CI.
+#
+# Two jobs here:
+#   1. Keep every dependency licence compatible with GPL-3.0-or-later, because the game
+#      ships under it (spec §15, Licences).
+#   2. Keep the banned crates out (spec §15, Crates): bincode, cordic and
+#      hierarchical_pathfinding are avoid-listed on technical grounds; rmcp and wasmi are
+#      barred because nothing user-written executes in v1 and no MCP server ships.
+#
+# Written against the current cargo-deny schema and NOT yet executed: cargo-deny is not
+# installed on this machine. Two schema notes, because getting them wrong turns the `deny`
+# step red rather than warning:
+#   * the `version = 2` keys under [licenses] and [advisories] are deliberately ABSENT.
+#     They were removed in current releases, which reject unknown fields outright, and
+#     their behaviour is the default now.
+#   * bans use `crate = "name"`, not the older `name =`/`version =` pair.
+# CI installs cargo-deny through taiki-e/install-action; if the version this file targets
+# ever matters, pin it there (.github/workflows/ci.yml) rather than guessing here.
+
+[graph]
+# Check every OS we ship or test on, so a Windows-only or Linux-only dependency cannot
+# sneak past review (spec §15, Platforms & packaging).
+targets = [
+    { triple = "x86_64-pc-windows-msvc" },
+    { triple = "x86_64-unknown-linux-gnu" },
+    { triple = "aarch64-apple-darwin" },
+]
+all-features = false
+# `research` is a compile-time feature of crates/sim only; release builds never enable it,
+# so it is not part of the shipped dependency graph (spec §15, Determinism).
+
+[output]
+feature-depth = 1
+
+# ---------------------------------------------------------------------------
+# Licences
+# ---------------------------------------------------------------------------
+[licenses]
+confidence-threshold = 0.93
+allow = [
+    # Our own code.
+    "GPL-3.0-or-later",
+    "LGPL-3.0-or-later",
+    # Permissive, one-way compatible into GPLv3.
+    "MIT",
+    "MIT-0",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "CC0-1.0",
+    "Unlicense",
+    "0BSD",
+    # Weak copyleft, file-level, GPL-compatible; common in the Rust ecosystem.
+    "MPL-2.0",
+    # Data/unicode tables shipped by ecosystem crates.
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    # Art and audio live under CC BY-SA 4.0 (one-way compatible into GPLv3); listed so a
+    # crate that vendors such an asset is not a surprise.
+    "CC-BY-SA-4.0",
+    "CC-BY-4.0",
+]
+# Everything not listed is denied, including AGPL (would relicense the whole game),
+# proprietary and custom terms, and the Sonniss GDC audio licence (spec §15, Audio).
+exceptions = [
+    # PLACEHOLDER: per-crate carve-outs go here, each with the crate name and a reason.
+    # Example shape, kept commented so the file parses as-is:
+    # { crate = "ring", allow = ["OpenSSL"], reason = "..." },
+]
+
+# PLACEHOLDER: crates whose licence cannot be read from metadata get a [[licenses.clarify]]
+# entry here, naming the licence file and its hash. None known yet, so the table is left
+# out rather than stubbed — cargo-deny validates the fields.
+#
+# [[licenses.clarify]]
+# crate = "some-crate"
+# expression = "MIT OR Apache-2.0"
+# license-files = [{ path = "LICENSE", hash = 0x00000000 }]
+
+[licenses.private]
+# Workspace members are publish = false; do not audit our own crates as dependencies.
+ignore = true
+
+# ---------------------------------------------------------------------------
+# Bans
+# ---------------------------------------------------------------------------
+[bans]
+multiple-versions = "warn"        # tighten to "deny" once the graph settles
+wildcards = "deny"                # a wildcard version is not a reproducible build
+highlight = "all"
+workspace-default-features = "allow"
+external-default-features = "warn"
+
+deny = [
+    { crate = "bincode", reason = "spec §15: avoided; use postcard or rkyv for snapshots and replays" },
+    { crate = "cordic", reason = "spec §15: avoided; angles are u16 with our own 4096-entry LUT" },
+    { crate = "hierarchical_pathfinding", reason = "spec §15: avoided; HPA* is ours (G2 spike)" },
+    { crate = "rmcp", reason = "spec §15: no MCP server in v1; the gateway stays internal" },
+    { crate = "wasmi", reason = "spec §15: no script engine or script runtime in v1" },
+]
+
+skip = [
+    # PLACEHOLDER: duplicate versions we have consciously accepted, each with a reason.
+]
+
+skip-tree = [
+    # PLACEHOLDER: dev-only subtrees (test harnesses, benchmark tooling) whose duplicate
+    # versions never reach a shipped binary.
+]
+
+# ---------------------------------------------------------------------------
+# Advisories
+# ---------------------------------------------------------------------------
+[advisories]
+db-urls = ["https://github.com/rustsec/advisory-db"]
+yanked = "deny"
+ignore = [
+    # PLACEHOLDER: advisory ids we have assessed and accepted, each with a reason and a
+    # review date. Empty is the intended steady state.
+]
+
+# ---------------------------------------------------------------------------
+# Sources
+# ---------------------------------------------------------------------------
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []                    # no git dependencies: they are not reproducible enough

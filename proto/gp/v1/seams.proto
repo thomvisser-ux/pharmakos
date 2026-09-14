@@ -1,0 +1,133 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: MIT OR Apache-2.0
+//
+// CONTRACT FILE: changes need owner approval.
+//
+// The three reserved script seams.
+//
+// The v1 rule is that everything which executes is Rust and everything the
+// player touches is data (spec section 15). The commander's operator, the
+// mandates on beacons and the programs in units and buildings are all
+// built-in, native Rust, and the player edits none of them.
+//
+// External scripting is deferred, not abandoned. These three oneofs exist
+// from v1 with only the `builtin` arm implemented, so neither v1.1 (the
+// scripting API) nor the in-game script runtime needs a format break:
+//
+//     operator {builtin|script}
+//     mandate  {builtin|script}
+//     program  {builtin|script}
+//
+// Nothing in v1 reads the script arm. The verifier rejects it. Each script
+// arm is an empty message here on purpose: it reserves the oneof tag and the
+// name, and says nothing about the shape of what will fill it. Field numbers
+// 1-15 inside each script message are reserved so the first fifteen fields
+// added in v1.1 stay in the one-byte tag range.
+//
+// The fourth and fifth seams live elsewhere: author_kind SCRIPT and the plan
+// fingerprint are in gp/v1/playbook.proto. In-code seams (the Operator trait,
+// the per-tick work counter that becomes fuel, the Quartermaster trait) are
+// not schema and are not here.
+
+syntax = "proto3";
+
+package gp.v1;
+
+// =============================================================================
+// Commander level
+// =============================================================================
+
+// Who generates and executes a seat's playbook. In v1 this is always the
+// built-in operator: it files the safe playbook on a timeout and plays the
+// opponent seats (spec section 14).
+message Operator {
+  oneof kind {
+    BuiltinOperator builtin = 1;
+
+    // RESERVED — v1.1, the scripting API (spec section 18). A script run
+    // outside the game during the Lull that emits the same canonical gp.v1
+    // JSON the editor emits and goes through the same verifier.
+    ScriptOperator script = 2;
+  }
+}
+
+message BuiltinOperator {
+  // Which built-in operator. v1 ships Easy / Normal / Hard; Turtle, Raider
+  // and Economist weightings are roadmap (spec section 18).
+  //
+  // PLACEHOLDER: a string id rather than an enum, because the operator
+  // catalogue is section 14's contract, not this file's. Swap it for a nested
+  // enum when that contract is written.
+  string builtin_id = 1;
+}
+
+// Empty by design. v1.1 fills it in.
+message ScriptOperator {
+  reserved 1 to 15;
+}
+
+// =============================================================================
+// Beacon level
+// =============================================================================
+
+// A beacon's standing job — one of the five writs. The mandate says what to
+// do and carries its settings; the mandate's program decides how, every tick
+// (spec section 6).
+//
+// Not to be confused with gp.v1.MandateSettings in playbook.proto, which is
+// the settings payload a player edits on site. This message is the seam that
+// says whose code runs the mandate.
+message Mandate {
+  oneof kind {
+    BuiltinMandate builtin = 1;
+
+    // RESERVED — post-v1 in-game script runtime: custom mandates authored by
+    // the player and run inside the sim, fuel-metered, installed on site,
+    // content-addressed (spec section 18). No version fixed.
+    ScriptMandate script = 2;
+  }
+}
+
+message BuiltinMandate {
+  // PLACEHOLDER: a string id rather than an enum, for the same reason as
+  // BuiltinOperator. The five writs are Build, Defend, Attack, Mine and
+  // Survey; naming them is section 6's contract.
+  string builtin_id = 1;
+
+  // The built-in program this mandate runs. Kept as an explicit field because
+  // program_id on each beacon's mandate is itself one of the listed seams
+  // (spec section 15, "Seams kept for later").
+  Program program = 2;
+}
+
+// Empty by design.
+message ScriptMandate {
+  reserved 1 to 15;
+}
+
+// =============================================================================
+// Unit and building level
+// =============================================================================
+
+// What a unit or building actually does each tick, working under the
+// mandate's orders. A separate layer from the mandate, and the player edits
+// none of them in v1 (spec section 6).
+message Program {
+  oneof kind {
+    BuiltinProgram builtin = 1;
+
+    // RESERVED — post-v1 in-game script runtime, alongside ScriptMandate. No
+    // version fixed (spec section 18).
+    ScriptProgram script = 2;
+  }
+}
+
+message BuiltinProgram {
+  // PLACEHOLDER: string id, same reasoning as above.
+  string program_id = 1;
+}
+
+// Empty by design.
+message ScriptProgram {
+  reserved 1 to 15;
+}

@@ -1,0 +1,119 @@
+# SPDX-FileCopyrightText: 2026 Pharmakos contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Pharmakos workspace. Crate boundaries follow spec §15 (Architecture).
+# Nothing here has been compiled yet: no cargo on the machine at the time of writing.
+
+[workspace]
+resolver = "3"
+# The throwaway stack spikes are standalone cargo workspaces of their own (each
+# spikes/*/Cargo.toml carries an empty [workspace] table). Excluded here as well so a
+# glob-added member or a stray manifest can never pull spike code into the product build —
+# spikes/README.md rule 1. The whole directory is deleted from main after harness part 1.
+exclude = ["spikes/*"]
+members = [
+    "crates/sim",
+    "crates/plan-core",
+    "crates/verifier",
+    "crates/operator",
+    "crates/gateway",
+    "crates/gamectl",
+    "crates/client-gdext",
+    "crates/proto",
+    "xtask",
+]
+
+[workspace.package]
+version = "0.0.0"                # pre-spike; v0.1 is the wk-35.5 gate, v1 the wk-63.5 build
+edition = "2024"
+rust-version = "1.85"            # PLACEHOLDER: raise to whatever rust-toolchain.toml pins
+license = "GPL-3.0-or-later"     # crates/proto overrides this with MIT OR Apache-2.0
+authors = ["Pharmakos contributors"]
+repository = "https://example.invalid/pharmakos"  # PLACEHOLDER: GitHub org not registered yet
+publish = false                  # nothing in this workspace goes to crates.io
+
+# Shared dependency versions live here so every crate agrees on one graph, which is part
+# of cross-OS determinism. All commented out until the spikes actually pull them in
+# (spec §15, "Crates"). Versions are PLACEHOLDERS — check the registry when uncommenting.
+[workspace.dependencies]
+# --- schema (single source: gp.v1, gp.api.v1) ---
+# prost        = "0.13"   # generated Protobuf types
+# prost-build  = "0.13"   # build-time codegen, driven by buf-generated descriptors
+# --- determinism-critical ---
+# xxhash-rust  = { version = "0.8", features = ["xxh3"] }  # per-tick state hash
+# imbl         = "3"      # persistent ordered collections (no HashMap/HashSet)
+# postcard     = "1"      # snapshot/replay encoding (candidate)
+# rkyv         = "0.8"    # zero-copy snapshot encoding (candidate; decide in the G4 spike)
+# --- assets and pathing ---
+# dot_vox      = "5"      # .vox models, meshed by our own greedy mesher
+# pathfinding  = "4"      # primitives only; HPA* is ours (hierarchical_pathfinding is banned)
+# --- client ---
+# godot        = "0.3"    # gdext, Godot 4.7; crates/client-gdext only
+# --- workspace-internal ---
+# pharmakos-proto     = { path = "crates/proto" }
+# pharmakos-sim       = { path = "crates/sim", default-features = false }
+# pharmakos-plan-core = { path = "crates/plan-core" }
+# pharmakos-verifier  = { path = "crates/verifier" }
+# pharmakos-operator  = { path = "crates/operator" }
+# pharmakos-gateway   = { path = "crates/gateway" }
+#
+# NOTE on the `research` feature: only crates/sim defines it. Any crate that depends on
+# pharmakos-sim must do so with default-features = false and must never name
+# features = ["research"]. `cargo xtask ci` enforces this for plan-core, verifier,
+# operator and gateway (spec §15, Determinism).
+
+# Lint levels live here rather than in .cargo/config.toml rustflags so they apply to our
+# crates only and never to third-party dependencies. Each member opts in with
+# [lints] workspace = true. Contract file: changes need owner approval.
+[workspace.lints.rust]
+unsafe_code = "deny"             # crates/client-gdext may need a scoped allow once gdext lands
+missing_docs = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+unreachable_pub = "warn"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+# --- the determinism bans (spec §15, Maths) ---
+float_arithmetic = "deny"        # floats only inside the walled presentation/solve module
+float_cmp = "deny"               # float comparison is float maths by another name
+as_conversions = "deny"          # use From/TryFrom; `as` hides truncation
+cast_possible_truncation = "deny"
+cast_precision_loss = "deny"
+cast_sign_loss = "deny"
+disallowed_types = "deny"        # f32/f64, HashMap/HashSet, Instant/SystemTime — see clippy.toml
+disallowed_methods = "deny"      # wall-clock readers and unordered iteration helpers
+disallowed_macros = "deny"       # reserved; the clippy.toml list is empty today
+# --- panics and silent wrapping ---
+indexing_slicing = "deny"
+unwrap_used = "deny"
+expect_used = "warn"
+integer_division = "deny"        # be explicit about rounding; overflow checks stay on
+mod_module_files = "warn"
+#
+# clippy.toml holds the LISTS these lints fire on (disallowed types, methods and macros)
+# and the thresholds; this table holds the LEVELS. It exists, with a full disallowed list —
+# but like everything else here it has never been run, because no toolchain was installed
+# when it was written. The walled presentation/solve layer is not configured here at all:
+# it is a crate boundary enforced by `cargo xtask ci` (WALLED_PACKAGES in xtask/src/main.rs,
+# AGENTS.md §4.9), because clippy has no per-path allow-list.
+
+# Overflow checks stay on in every profile, including release (spec §15, Maths).
+# Mirrored in .cargo/config.toml — keep the two in step.
+[profile.release]
+overflow-checks = true
+debug-assertions = false
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+
+[profile.dev]
+overflow-checks = true
+
+# Determinism CI builds this to compare hashes across operating systems at optimisation
+# levels the release build uses, with debug assertions still on.
+[profile.release-checked]
+inherits = "release"
+debug-assertions = true
+panic = "unwind"                 # so determinism tests can catch and report a divergence

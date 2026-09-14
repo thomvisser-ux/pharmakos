@@ -1,0 +1,35 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: MIT OR Apache-2.0
+//
+// CONTRACT FILE: changes need owner approval.
+//
+// Copied verbatim from spec section 10. This is the golden example the
+// gp.v1 schema is checked against: if a schema change breaks this file, the
+// change is wrong. See examples/README.md for what "verbatim" costs.
+//
+// The durations below are bare JSON numbers ("timeout_ms":120000), as the spec
+// writes them. That is only reproducible by a stock encoder because the five
+// duration fields are typed int32 in proto/gp/v1/playbook.proto: the proto3
+// JSON mapping emits a 64-bit integer as a quoted string. The reasoning is in
+// that file's header; examples/README.md open point 1 tracks the owner's
+// ratification of it in docs/design/decisions-log.md section 2.7.
+//
+// expand_east.jsonc — comments survive a round trip through the editor
+{ "schema_version": {"major":1,"minor":0},
+  "meta": {"title":"Expand & Mine east","author_kind":"HUMAN"},
+  "declarative": {
+    "route": [
+      {"label":"to_site","move":{"to":{"voxel":{"x":96,"y":11,"z":62}},"pace":"AVOID_KNOWN_THREATS"},"timeout_ms":120000},
+      {"label":"place_east","place_beacon":{"at":{"voxel":{"x":96,"y":11,"z":62}},"tags":["east"],
+        // initial settings are interface rows: each one commits on its own
+        "initial":{"priority":"NORMAL","mandate":{"roe":"RETURN_FIRE","mine":{"dig_max_depth":4,"flee_on_threat":true}}}}},
+      {"label":"back_home","move":{"to":{"beacon_anchor":{"beacon_id":"b_01"}}}}
+    ],
+    "handlers": [
+      // bravery is an ordinary rule; the 20% reflex is fixed and always on top of it
+      {"id":"flee","when":{"all":{"items":[{"cmdr_hp_pct":{"cmp":"LE","pct":40}},{"cmdr_took_damage_within":{"ms":3000}}]}},
+       "body":[{"label":"f1","move":{"to":{"safest":{}}}},{"label":"f2","hold":{"ms":8000}}],
+       "resume":"CONTINUE","cooldown_ms":30000,"max_fires":3}
+    ]},
+  "on_death": {"on_respawn":"CONTINUE","max_deaths_before_fallback":2},
+  "fallback": {"hold":{"at":{"beacon_anchor":{"safest":{}}}}} }

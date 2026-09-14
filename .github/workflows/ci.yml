@@ -1,0 +1,279 @@
+# SPDX-FileCopyrightText: 2026 Pharmakos contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# CONTRACT FILE (AGENTS.md section 5): changes to what CI checks need owner approval.
+#
+# One command runs on three operating systems — `cargo xtask ci` — and a final job
+# byte-compares the per-tick hash chains the three produced. That comparison is gate G4
+# in the flesh: "identical hashes on 3 operating systems".
+#
+# Hash chain path convention (also documented in xtask/src/main.rs):
+#
+#     target/determinism/hashes.txt
+#         one line per tick, in tick order from 0
+#         "<tick in decimal>\t<xxh3-64 state hash as 16 lowercase hex digits>"
+#         \n endings, trailing newline, no \r anywhere
+#
+# Each matrix leg uploads that file as the artefact `determinism-hashes-<os>`; the
+# `determinism-cross-os` job downloads all three and compares them byte for byte.
+#
+# PLACEHOLDER: nothing in this repository compiles yet — there are no dependencies, no
+# Cargo.lock and no determinism binary (it arrives with spike G4). Until then the matrix
+# legs pass with most xtask steps reporting "skipped", the hash artefacts are absent, and
+# the cross-OS job says so instead of failing. The three lines to flip when G4 lands are
+# marked "FLIP AT G4": `if-no-files-found`, the `continue-on-error` on the download, and
+# the `exit 0` in the compare step.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  # Incremental compilation buys nothing on a cold CI runner and makes builds less
+  # reproducible; determinism work would rather have the cache be the artefact cache.
+  CARGO_INCREMENTAL: "0"
+  # `cargo xtask ci` skips a step whose external tool is missing. In CI every tool is
+  # installed on purpose, so a missing one is a broken runner, not a reason to go green.
+  PHARMAKOS_REQUIRE_TOOLS: "1"
+
+jobs:
+  ci:
+    name: cargo xtask ci (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The REUSE licence check is platform-independent, so it runs once, on Linux.
+          - os: ubuntu-latest
+            xtask_args: ""
+            reuse: true
+          - os: windows-latest
+            xtask_args: "--skip reuse"
+            reuse: false
+          - os: macos-latest
+            xtask_args: "--skip reuse"
+            reuse: false
+    steps:
+      - name: Check out the full history
+        uses: actions/checkout@v4
+        with:
+          # `buf breaking --against .git#branch=main` reads the base branch out of the
+          # local object store, so the whole history has to be here.
+          fetch-depth: 0
+
+      - name: Make `main` available locally
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$(git rev-parse --abbrev-ref HEAD)" = "main" ]; then
+            echo "already on main; buf breaking compares against the checkout"
+          elif git fetch --no-tags --quiet origin +refs/heads/main:refs/heads/main; then
+            echo "fetched origin/main for the breaking-change comparison"
+          else
+            echo "::notice::no main branch on the remote yet — buf breaking will skip"
+          fi
+
+      - name: Install the Rust toolchain
+        # rust-toolchain.toml pins the channel and the components; this action installs
+        # rustup's stable so that pin resolves. PLACEHOLDER: pin these actions to commit
+        # SHAs before the repository goes public.
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry and target
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.os }}
+
+      - name: Install buf
+        uses: bufbuild/buf-setup-action@v1
+        with:
+          # PLACEHOLDER: pin an exact buf version once the schema settles, so a buf
+          # release cannot change what `buf breaking` accepts between two runs.
+          version: latest
+          github_token: ${{ github.token }}
+
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+
+      - name: Install reuse
+        if: matrix.reuse
+        shell: bash
+        run: |
+          set -euo pipefail
+          pipx install reuse
+          # pipx puts its shims in ~/.local/bin, which is not on PATH for the steps that
+          # follow unless we say so — and PHARMAKOS_REQUIRE_TOOLS turns "not found" into
+          # a failure rather than a skip.
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: cargo xtask ci
+        shell: bash
+        run: cargo xtask ci ${{ matrix.xtask_args }}
+
+      - name: Upload this operating system's hash chain
+        # `always()` so a failure in a later step still hands the cross-OS job what the
+        # determinism step produced.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: determinism-hashes-${{ matrix.os }}
+          path: target/determinism/hashes.txt
+          # FLIP AT G4: make this `error`, so a leg that produces no hash chain fails
+          # here rather than silently reducing the cross-OS comparison to two files.
+          if-no-files-found: warn
+          retention-days: 14
+
+  dco:
+    name: DCO sign-off
+    # Pull requests only: the check is "every commit this PR adds carries a
+    # Signed-off-by trailer", and on a push to main the range would be empty or the
+    # whole history. AGENTS.md section 8 and docs/CONTRIBUTING.md both point here, so
+    # this job is what makes "CI checks it" true.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out the full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Every commit carries a Signed-off-by trailer
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          missing=0
+          # `%(trailers:key=...)` prints nothing when the commit has no such trailer,
+          # so an empty value is the failure. Command substitution rather than a pipe:
+          # a pipe under `pipefail` would make grep's "no match" exit status abort the
+          # loop instead of reporting the commit.
+          for sha in $(git rev-list "$BASE_SHA..$HEAD_SHA"); do
+            signoff=$(git show -s --format='%(trailers:key=Signed-off-by,valueonly)' "$sha")
+            if [ -z "${signoff//[[:space:]]/}" ]; then
+              subject=$(git show -s --format='%s' "$sha")
+              echo "::error::no Signed-off-by on ${sha:0:12} — ${subject}"
+              missing=$((missing + 1))
+            fi
+          done
+
+          if [ "$missing" -ne 0 ]; then
+            {
+              echo "### DCO"
+              echo
+              echo "${missing} commit(s) in this pull request have no \`Signed-off-by\` trailer."
+              echo
+              echo "Contributions are accepted under the Developer Certificate of Origin 1.1"
+              echo "(docs/DCO.txt). Sign new commits with \`git commit -s\`, and fix a branch"
+              echo "that is already written with \`git rebase --signoff <base>\`."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo "every commit in the range is signed off"
+
+  determinism-cross-os:
+    name: cross-OS determinism guard
+    needs: ci
+    # Runs even when a matrix leg failed: an ubuntu-only clippy failure should not hide a
+    # hash divergence that the other two legs did produce.
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Download every hash chain
+        # Before spike G4 no leg produces a hash chain, and download-artifact fails
+        # the step when its pattern matches nothing ("Unable to find any artifacts").
+        # That would go red on the placeholder path, where the compare step below is
+        # written to report the skip and exit 0. The compare step handles zero files
+        # (`shopt -s nullglob`), so tolerating the empty download is safe.
+        # FLIP AT G4: remove `continue-on-error` — after G4 a missing artefact means
+        # a leg did not produce its chain, which must not read as a pass.
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          pattern: determinism-hashes-*
+          path: hashes
+
+      - name: Compare the three hash chains byte for byte
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          files=(hashes/*/hashes.txt)
+          count=${#files[@]}
+
+          if [ "$count" -lt 3 ]; then
+            echo "::notice::${count}/3 hash chains present — the determinism binary arrives with spike G4"
+            {
+              echo "### Cross-OS determinism"
+              echo
+              echo "Skipped: ${count}/3 hash chains present (placeholder until spike G4)."
+            } >> "$GITHUB_STEP_SUMMARY"
+            # FLIP AT G4: `exit 1` here. Three chains are the gate; fewer than three means
+            # the guard did not run, which must not read as a pass.
+            exit 0
+          fi
+
+          reference="${files[0]}"
+          status=0
+          {
+            echo "### Cross-OS determinism"
+            echo
+            echo "Reference: \`${reference}\` ($(wc -l < "$reference") ticks)"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          for file in "${files[@]:1}"; do
+            if cmp -s "$reference" "$file"; then
+              echo "match: $file"
+              echo "- ✅ \`${file}\` matches" >> "$GITHUB_STEP_SUMMARY"
+            else
+              status=1
+              first=$(cmp "$reference" "$file" 2>&1 || true)
+              echo "::error::hash chains differ: $reference vs $file ($first)"
+              {
+                echo "- ❌ \`${file}\` differs — ${first}"
+                echo
+                echo '```diff'
+                # `diff` exits 1 precisely when the files differ, which is the case
+                # we are in — without the `|| true` the pipeline fails, `pipefail`
+                # and `set -e` abort the script here, and the closing fence plus the
+                # whole explanation below never get written. The diagnostic is the
+                # entire point of this branch, so it must not be the thing that dies.
+                { diff -u "$reference" "$file" || true; } | head -n 20
+                echo '```'
+              } >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
+
+          if [ "$status" -ne 0 ]; then
+            echo
+            echo "The same binary produced different per-tick state hashes on different"
+            echo "operating systems. Bisect by tick from the first differing line above;"
+            echo "the usual suspects are unordered iteration, an unchecked cast, a"
+            echo "non-total sort comparator, or usize/isize reaching hashed state."
+            echo "Do not re-baseline the golden chain to make this green."
+          fi
+          exit "$status"

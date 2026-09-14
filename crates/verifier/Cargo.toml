@@ -1,0 +1,25 @@
+# SPDX-FileCopyrightText: 2026 Pharmakos contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[package]
+name = "pharmakos-verifier"
+description = "Seal inspection: the QUICK and FULL playbook pipelines, the diagnostic catalogue and report_hash."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+# No [features] section on purpose: this crate must never define, forward or enable the
+# `research` feature. "No dry runs" is what the verifier promises, so a dependency on
+# sim stepping would contradict its own contract (spec §11, §15). A CI dependency check
+# fails the build if it can reach the feature. Any future dependency on pharmakos-sim
+# must read: pharmakos-sim = { workspace = true, default-features = false }
+
+[dependencies]
+# None yet. Expected: pharmakos-proto (playbook and snapshot types).
+
+[lints]
+workspace = true

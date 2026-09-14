@@ -1,0 +1,71 @@
+# SPDX-FileCopyrightText: 2026 Pharmakos contributors
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# CONTRACT FILE: changes need owner approval.
+#
+# Code generation for the Pharmakos schemas. Protobuf is the single source
+# (spec section 15, "Schema"): Rust types come from prost, and the in-house
+# descriptor generator produces the JSON Schema that the editor and
+# get_schema serve (Buf's protoschema plugin is the fallback).
+#
+# Run from the workspace root, with this directory as the input:
+#   buf generate proto
+#
+# WHICH CRATE OWNS THE GENERATED CODE: crates/proto, package pharmakos-proto —
+# Cargo.toml's `members`, AGENTS.md section 3's crate map and README.md's
+# layout table all name it, and the `out:` paths below match. There is no
+# `gp-schema` crate and none is planned; if that name is ever wanted, this
+# file, crates/proto/Cargo.toml and README.md change in the same PR.
+#
+# HOW GENERATION IS DRIVEN — one answer, not two. `buf generate` writes a
+# CHECKED-IN tree under crates/proto/src/generated, and crates/proto has no
+# build script. The alternative (prost-build regenerating from a descriptor
+# set at build time) is deliberately not taken: a checked-in tree means a plain
+# `cargo build` needs neither buf nor protoc, and a schema change arrives as a
+# reviewable diff — which is what a contract file wants. crates/proto's
+# Cargo.toml says the same thing, and `cargo xtask ci` is where the
+# regenerate-and-compare check belongs once the schema lands (AGENTS.md
+# section 9, item 8: generated output must match what is committed).
+#
+# NOT EXECUTED: no toolchain is installed on the authoring machine (no cargo,
+# no protoc, no buf), so nothing below has been run. The plugin choices and
+# versions are PLACEHOLDERs to be pinned when the schema work lands in the
+# walking skeleton (spec section 17).
+
+version: v2
+
+managed:
+  # Off on purpose. Managed mode rewrites file options, and the JSONC on disk
+  # is canonical proto JSON — the schema must stay exactly what the .proto
+  # files say.
+  enabled: false
+
+plugins:
+  # Rust message types. `local:` means the plugin binary is on PATH; it is
+  # installed by `cargo xtask ci` bootstrap (harness part 1, weeks 3-5).
+  - local: protoc-gen-prost
+    out: ../crates/proto/src/generated
+    opt:
+      - bytes=.
+      - compile_well_known_types
+      - file_descriptor_set
+
+  # Canonical proto JSON <-> Rust. Playbooks are read and written as JSONC, so
+  # the JSON mapping is part of the contract, not a convenience.
+  # PLACEHOLDER: pin the plugin choice (protoc-gen-prost-serde vs an in-house
+  # canonical-JSON codec) before the schema is frozen — round-tripping
+  # comments and field order is an editor requirement (spec section 10).
+  - local: protoc-gen-prost-serde
+    out: ../crates/proto/src/generated
+
+  # `mod.rs` for the generated tree.
+  - local: protoc-gen-prost-crate
+    out: ../crates/proto/src/generated
+    opt:
+      - no_features
+
+# The JSON Schema the editor and `get_schema` serve is NOT generated here.
+# It is produced by the in-house descriptor generator from a descriptor set:
+#   buf build proto -o target/gp-descriptor.binpb --as-file-descriptor-set
+# (from the workspace root) then `cargo xtask schema`. Buf's protoschema-plugins
+# are the fallback if the in-house generator stalls (spec section 15).

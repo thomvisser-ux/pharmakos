@@ -1,0 +1,34 @@
+SPDX-FileCopyrightText: 2026 Pharmakos contributors
+SPDX-License-Identifier: MIT OR Apache-2.0
+
+(That header is about THIS FILE, which is a licence pointer — repository
+metadata, like the other per-directory LICENSE files, so it carries the same
+MIT OR Apache-2.0 as they do and REUSE.toml lists it with them. What it says
+about the directory's contents is below.)
+
+Everything in assets/ that was made for this project — voxel models (.vox),
+textures, sound effects and music — is licensed under
+
+  Creative Commons Attribution-ShareAlike 4.0 International
+  (../LICENSES/CC-BY-SA-4.0.txt)
+
+CC BY-SA 4.0 is one-way compatible with GPLv3: these assets can be shipped
+inside the GPL-3.0-or-later game, but GPL'd material cannot be relicensed back
+into them. To reuse an asset you must give attribution ("Pharmakos
+contributors", CC BY-SA 4.0, with a link to the licence and a note of any
+changes) and share your adaptation under CC BY-SA 4.0 or a compatible licence.
+
+THIRD-PARTY ASSETS ARE NOT COVERED BY THIS FILE. Anything sourced from
+elsewhere keeps its own copyright and licence, recorded in a sidecar file next
+to it — `foo.ogg.license` beside `foo.ogg` — naming the author, the source URL,
+the licence and any changes made. Audio may only come from CC0 or CC-BY
+sources; Sonniss GDC bundles are excluded. See ../docs/LICENSING.md for the
+sourcing rule and the credits-screen requirement.
+
+Unless you state otherwise, any contribution you intentionally submit for
+inclusion in this directory shall be licensed as above, with no additional
+terms or conditions, and signed off under the Developer Certificate of Origin
+1.1 (../docs/DCO.txt).
+
+The repository-wide scheme is described in ../LICENSE; the machine-readable
+manifest is ../REUSE.toml.

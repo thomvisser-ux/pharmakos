@@ -1,0 +1,164 @@
+# SPDX-FileCopyrightText: 2026 Pharmakos contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Clippy configuration for the whole workspace.
+#
+# CONTRACT FILE. This file, the `[workspace.lints]` tables in Cargo.toml, the proto files
+# and the determinism code are the four things that need owner approval to change
+# (spec §15, Dev harness; AGENTS.md §5). Weakening an entry here weakens a determinism
+# guarantee for every crate at once.
+#
+# Two halves make up the lint policy:
+#
+#   * `[workspace.lints]` in Cargo.toml sets the LEVELS (deny float_arithmetic,
+#     as_conversions, disallowed_types, disallowed_methods, …). That is what a plain
+#     `cargo build` obeys.
+#   * this file holds the LISTS those lints fire on, and the small number of thresholds.
+#     `cargo xtask ci` re-states the levels on the command line so CI is right even if
+#     someone edits the manifest.
+#
+# ---------------------------------------------------------------------------------------
+# The wall
+# ---------------------------------------------------------------------------------------
+# Clippy has no per-path allow-list, so the walled presentation/solve module is a CRATE
+# BOUNDARY, enforced by `cargo xtask ci` rather than by this file:
+#
+#   * `cargo xtask clippy` pass 1 lints the whole workspace MINUS the walled crates with
+#     the full deny set;
+#   * pass 2 lints the walled crates with `-D warnings` plus `-A clippy::float_arithmetic`,
+#     `-A clippy::float_cmp`, `-A clippy::as_conversions`,
+#     `-A clippy::cast_possible_truncation`, `-A clippy::cast_precision_loss`,
+#     `-A clippy::cast_sign_loss`, `-A clippy::disallowed_types` and
+#     `-A clippy::disallowed_methods`. The three `cast_*` allowances are there because
+#     converting float vertex data to integers is the reason the wall exists; without them
+#     `[workspace.lints.clippy]` would still deny the conversion and pass 2 could not pass;
+#   * `cargo xtask wall-guard` then fails the build if plan-core, verifier, operator or
+#     gateway depends on a walled crate, transitively included — which is what keeps the
+#     allowance from leaking into hashed state.
+#
+# The allow-list of walled crates lives in one place, `WALLED_PACKAGES` in
+# xtask/src/main.rs. Today it reads:
+#
+#     presentation, solve, client-gdext               (with or without the pharmakos- prefix)
+#
+# That is the spec's own wording — "a walled presentation/solve module" (spec §15, Maths) —
+# plus the one crate that exists. Names are not pre-declared: whether the greedy mesher
+# becomes its own crate is an open owner decision at the walking skeleton (AGENTS.md §3),
+# and until that decision is taken a `mesher` crate would get no allowance. Adding a name
+# to that list widens the float, cast, hash-map and clock allowance for a whole crate, so
+# it is a contract change too.
+#
+# PLACEHOLDER: only `pharmakos-client-gdext` of the three exists so far.
+#
+# Inside a walled crate, keep the float surface at the edge: marshal to and from integer
+# types as early as possible, and never hand a float back to anything the sim hashes.
+
+# Minimum supported Rust version, so clippy does not suggest newer APIs than we compile on.
+# PLACEHOLDER: keep in step with rust-toolchain.toml and [workspace.package] rust-version.
+msrv = "1.85"
+
+# Nothing here is a published crate, so clippy may suggest API-breaking improvements.
+avoid-breaking-exported-api = false
+
+# `unwrap_used` is denied and `expect_used` warns (Cargo.toml). Both are fine in tests,
+# where a panic is the failure report.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+
+# Disallowed macros (clippy::disallowed_macros, denied by cargo xtask ci). Empty on
+# purpose: the lint is enabled so that adding an entry here takes effect without touching
+# xtask or the manifests. Candidates for later, once there is a logging facade and a
+# diagnostics channel: `std::println`, `std::eprintln`, `std::dbg` in library crates.
+# (It sits here, above the first [[table]] header, because a bare key written below one
+# would be parsed as a field of that table.)
+disallowed-macros = []
+
+# Words clippy's doc_markdown lint would otherwise flag as needing backticks.
+# ".." keeps clippy's own default list and extends it.
+doc-valid-idents = [
+    "..",
+    "JSONC",
+    "GDScript",
+    "MagicaVoxel",
+    "MessagePack",
+    "Protobuf",
+    "WebSocket",
+    "gdext",
+    "xxh3",
+    "rkyv",
+    "imbl",
+]
+
+# ---------------------------------------------------------------------------------------
+# Disallowed types (clippy::disallowed_types — denied in [workspace.lints.clippy])
+# ---------------------------------------------------------------------------------------
+# Every entry here is a determinism hazard, not a style preference.
+
+[[disallowed-types]]
+path = "std::collections::HashMap"
+reason = "iteration order is unspecified and randomly seeded per process, so it leaks into the per-tick hash. Use BTreeMap, a sorted Vec, or imbl::OrdMap for copy-on-write tables."
+
+[[disallowed-types]]
+path = "std::collections::HashSet"
+reason = "same as HashMap: unordered iteration. Use BTreeSet, a sorted Vec, or imbl::OrdSet."
+
+[[disallowed-types]]
+path = "std::collections::hash_map::RandomState"
+reason = "the per-process random seed behind HashMap's order. Nothing deterministic may depend on it."
+
+[[disallowed-types]]
+path = "std::collections::hash_map::DefaultHasher"
+reason = "SipHash with an unstable, unspecified output across toolchain versions. State hashing is xxh3 over the canonical encoding, seeded from one named constant."
+
+[[disallowed-types]]
+path = "std::time::Instant"
+reason = "wall-clock time. The sim's clock is the 20 Hz tick counter; time-dependent behaviour is not reproducible from (map seed, playbooks, rules hash). Benchmarks and the presentation layer live behind the wall."
+
+[[disallowed-types]]
+path = "std::time::SystemTime"
+reason = "wall-clock time, and it can move backwards. Timestamps that must be recorded (save files, diagnostics) are taken at the edge, outside hashed state."
+
+# PLACEHOLDER — primitive float types.
+# `f32`/`f64` as disallowed-types entries depend on clippy's support for primitive paths,
+# which we cannot verify on this machine (no toolchain installed). `float_arithmetic` and
+# `float_cmp` already deny the operations, which is the substantive ban; enable these two
+# after checking them against the pinned toolchain, and drop this note when they are on.
+#
+# [[disallowed-types]]
+# path = "f32"
+# reason = "the sim is integer-only: Q16.16 positions, Q32.32 squared distances, u16 angles, integer HP and $. Floats live behind the wall."
+#
+# [[disallowed-types]]
+# path = "f64"
+# reason = "as above."
+
+# ---------------------------------------------------------------------------------------
+# Disallowed methods (clippy::disallowed_methods — denied in [workspace.lints.clippy])
+# ---------------------------------------------------------------------------------------
+
+[[disallowed-methods]]
+path = "std::time::Instant::now"
+reason = "wall-clock read. Use the tick counter; if you are measuring performance, do it behind the wall or in a bench target."
+
+[[disallowed-methods]]
+path = "std::time::SystemTime::now"
+reason = "wall-clock read, and not monotonic. Not permitted inside anything the state hash covers."
+
+[[disallowed-methods]]
+path = "std::fs::read_dir"
+reason = "directory order differs between ext4, NTFS and APFS, so a listing that feeds a golden run or a template list is platform-dependent. Collect, sort, then use — and if you do exactly that, allow the lint locally with a comment saying so."
+
+# PLACEHOLDER — entries held back until their path is known to resolve on the pinned
+# toolchain. An unresolvable path in this file is itself a warning, and warnings are errors
+# in CI, so each of these goes in only once it has been checked (the slice methods) or once
+# the crate that owns it exists (the rest).
+#
+# slice `sort_unstable_by`                — no guarantee for equal elements, so an
+#                                           incomplete comparator reorders silently. The
+#                                           standing rule stays either way: end every sort
+#                                           key with a unique id so the order is total.
+# `Iterator::sum`                         — no overflow story of its own; fold $ and kW
+#                                           with checked arithmetic so an overflow is a
+#                                           result rather than a wrap.
+# rand::random, rand::thread_rng          — unseeded RNG; the sim uses split seeded streams
+# godot::prelude::Time::get_ticks_msec    — engine wall clock reaching the client bridge

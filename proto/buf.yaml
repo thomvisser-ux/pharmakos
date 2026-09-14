@@ -1,0 +1,66 @@
+# SPDX-FileCopyrightText: 2026 Pharmakos contributors
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# CONTRACT FILE: changes need owner approval.
+#
+# Pharmakos schema module. Protobuf is the single source of truth for the
+# gp.v1 (playbook) and gp.api.v1 (Seat Gateway) packages (spec section 15,
+# "Schema"). Playbooks live on disk as JSONC: canonical proto JSON plus
+# comments, which the editor round-trips.
+#
+# Run from the WORKSPACE ROOT, with this directory as the input:
+#   buf lint proto
+#   buf breaking proto --against '.git#branch=main,subdir=proto'
+#   buf build proto -o target/gp-descriptor.binpb --as-file-descriptor-set
+#
+# The root, not this directory, and that is not a style choice: buf resolves the
+# path in a `.git#...` reference relative to the directory it is invoked from,
+# and `.git` lives at the repository root. Run from `proto/` it looks for
+# `proto/.git`, which does not exist, and every breaking check fails with
+# "could not read git repository" — a red CI leg rather than a skip, because
+# .github/workflows/ci.yml sets PHARMAKOS_REQUIRE_TOOLS=1. `cargo xtask ci`'s
+# `buf` step runs the first two of those, from the root
+# (xtask/src/main.rs, `step_buf`); examples/README.md quotes the same form.
+#
+# NOTE: no toolchain is installed on the authoring machine yet — buf, protoc
+# and cargo are absent, so nothing here has been executed. The file is written
+# to be correct once the toolchain exists.
+
+version: v2
+
+modules:
+  - path: .
+    # PLACEHOLDER: no BSR module is published and none is planned for v1
+    # (nothing is published in v1 — spec section 12). Add `name:` here only if
+    # the schemas are ever pushed to a registry.
+
+lint:
+  use:
+    - STANDARD
+  except:
+    # DELIBERATE, and the reason this file needs owner approval:
+    #
+    # Playbooks are hand-edited JSONC. Canonical proto JSON serialises an enum
+    # as its value name verbatim, so ENUM_VALUE_PREFIX would force a player to
+    # type "author_kind": "AUTHOR_KIND_HUMAN" instead of the spec's
+    # "author_kind": "HUMAN" (spec section 10, the expand_east example). The
+    # file format is player-facing text, so the bare names win.
+    #
+    # To keep the bare names unique inside a package, every enum in gp.v1 is
+    # nested inside the message that owns it (proto enum values live in the
+    # parent scope, so two top-level enums could not both spell CONTINUE).
+    # Zero values keep a full prefix — AUTHOR_KIND_UNSPECIFIED — because they
+    # are sentinels that never appear in a valid playbook; that is what
+    # ENUM_ZERO_VALUE_SUFFIX is excepted for.
+    - ENUM_VALUE_PREFIX
+    - ENUM_ZERO_VALUE_SUFFIX
+
+breaking:
+  use:
+    # WIRE_JSON, not WIRE: playbooks on disk are JSON, so a renamed field or a
+    # renamed enum value is a breaking change even though the wire tags are
+    # unchanged (spec section 10, "Versioning and reserved seams").
+    - WIRE_JSON
+  except:
+    # Nothing. Minor versions add optional fields; a major version comes with a
+    # converter that is kept forever.

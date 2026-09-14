@@ -1,0 +1,817 @@
+<title>Pharmakos</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=Source+Sans+3:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  --ground:#F0F1EE; --surface:#FBFBF9; --ink:#171A19; --muted:#5A625F; --rule:#CBD0CC; --code:#E4E7E3;
+  --accent:#B5400F; --accent-soft:#F6E3D8;
+  --dec:#2D6A43; --dec-soft:#DCEBDF; --road:#3F5A7A; --road-soft:#DFE6EF; --tune:#6A4C93; --tune-soft:#E9E2F2; --risk:#9A2F2F; --risk-soft:#F3DEDC;
+  --display:"Chakra Petch","Bahnschrift","Arial Narrow",system-ui,sans-serif;
+  --body:"Source Sans 3",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --ground:#101312; --surface:#171B1A; --ink:#E3E7E4; --muted:#98A29E; --rule:#2B3230; --code:#0B0E0D;
+  --accent:#F08A4B; --accent-soft:#3A2418;
+  --dec:#7DC895; --dec-soft:#1B3223; --road:#94B3D6; --road-soft:#1D2A38; --tune:#B9A0E0; --tune-soft:#2A2238; --risk:#E58C8C; --risk-soft:#3A1F1F;}}
+:root[data-theme="dark"]{
+  --ground:#101312; --surface:#171B1A; --ink:#E3E7E4; --muted:#98A29E; --rule:#2B3230; --code:#0B0E0D;
+  --accent:#F08A4B; --accent-soft:#3A2418;
+  --dec:#7DC895; --dec-soft:#1B3223; --road:#94B3D6; --road-soft:#1D2A38; --tune:#B9A0E0; --tune-soft:#2A2238; --risk:#E58C8C; --risk-soft:#3A1F1F;}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+body{background:var(--ground);color:var(--ink);font:16px/1.6 var(--body)}
+a{color:var(--accent)}
+a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.shell{display:grid;grid-template-columns:230px minmax(0,1fr);gap:56px;max-width:1200px;margin:0 auto;padding:44px 32px 96px}
+nav.toc{position:sticky;top:24px;align-self:start;max-height:calc(100vh - 48px);overflow:auto;font-size:14px}
+nav.toc .lbl{font:600 11px/1 var(--body);letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin:0 0 10px}
+nav.toc ol{list-style:none;margin:0;padding:0;display:grid;gap:1px}
+nav.toc a{display:grid;grid-template-columns:26px 1fr;padding:3px 0;color:var(--muted);text-decoration:none}
+nav.toc a span{font:500 12px/1.7 var(--mono);color:var(--rule)}
+nav.toc a:hover{color:var(--ink)}
+main{min-width:0;max-width:800px}
+header.sheet{border-top:6px solid var(--ink);padding-top:22px;margin-bottom:6px}
+.eyebrow{font:600 12px/1 var(--body);letter-spacing:.16em;text-transform:uppercase;color:var(--accent)}
+h1{font:700 64px/.95 var(--display);letter-spacing:.01em;margin:12px 0 6px;text-transform:uppercase}
+.tagline{font:500 18px/1.4 var(--display);color:var(--muted);margin:0 0 18px;letter-spacing:.02em}
+.lede{font-size:18.5px;line-height:1.55;max-width:64ch;margin:0 0 22px}
+dl.meta{display:grid;grid-template-columns:repeat(4,minmax(0,auto));justify-content:start;gap:6px 40px;margin:0;padding:14px 0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule)}
+dl.meta dt{font:600 10.5px/1.3 var(--body);letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+dl.meta dd{margin:0;font:500 13.5px/1.4 var(--mono)}
+.legend{display:flex;flex-wrap:wrap;gap:8px 18px;margin:14px 0 0;font-size:13px;color:var(--muted);align-items:center}
+section{padding-top:48px;scroll-margin-top:12px}
+h2{font:600 32px/1.1 var(--display);margin:0 0 10px;display:flex;gap:14px;align-items:baseline;text-wrap:balance}
+h2 .n{font:500 14px/1 var(--mono);color:var(--accent);min-width:2ch}
+h3{font:600 20px/1.25 var(--display);margin:28px 0 6px;text-wrap:balance}
+p,ul,ol{max-width:68ch}
+p{margin:0 0 12px}
+ul,ol{padding-left:20px;margin:0 0 14px}
+li{margin:3px 0}
+li::marker{color:var(--muted)}
+strong{font-weight:700}
+code{font:.86em var(--mono);background:var(--code);padding:1px 5px;border-radius:3px;white-space:nowrap}
+pre{font:12.5px/1.55 var(--mono);background:var(--code);padding:14px 16px;border-radius:4px;overflow-x:auto;margin:10px 0 16px}
+pre code{background:none;padding:0;white-space:pre}
+.tag{display:inline-block;font:600 10.5px/1 var(--body);letter-spacing:.08em;text-transform:uppercase;padding:4px 7px 3px;border-radius:3px;vertical-align:2px;white-space:nowrap}
+.t-dec{background:var(--dec-soft);color:var(--dec)}
+.t-road{background:var(--road-soft);color:var(--road)}
+.t-tune{background:var(--tune-soft);color:var(--tune)}
+.t-risk{background:var(--risk-soft);color:var(--risk)}
+.t-new{background:var(--accent-soft);color:var(--accent)}
+.t-open{background:var(--code);color:var(--ink);box-shadow:inset 0 0 0 1px var(--rule)}
+.t-trial{background:var(--surface);color:var(--tune);box-shadow:inset 0 0 0 1px var(--tune)}
+.changes{margin:22px 0 0;padding:16px 20px 6px;background:var(--surface);border:1px solid var(--rule);border-left:3px solid var(--accent);max-width:800px}
+.changes h3{margin:0 0 8px;font-size:17px}
+.changes ul{columns:2;column-gap:32px;max-width:none;font-size:14.5px}
+.changes li{break-inside:avoid}
+@media (max-width:880px){.changes ul{columns:1}}
+.tbl{overflow-x:auto;margin:12px 0 18px;border-top:2px solid var(--ink)}
+table{border-collapse:collapse;width:100%;font-size:14px;line-height:1.45}
+th{font:600 10.5px/1.3 var(--body);letter-spacing:.1em;text-transform:uppercase;color:var(--muted);text-align:left;padding:9px 10px;border-bottom:1px solid var(--rule);white-space:nowrap;vertical-align:bottom}
+td{padding:8px 10px;border-bottom:1px solid var(--rule);vertical-align:top}
+td:first-child{font-weight:600}
+.num{font:500 13px var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+.pillars{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1px;background:var(--rule);border:1px solid var(--rule);margin:14px 0 18px}
+.pillars div{background:var(--surface);padding:14px 16px}
+.pillars b{display:block;font:600 17px/1.2 var(--display);margin-bottom:4px}
+.pillars span{font-size:14.5px;color:var(--muted)}
+.quote{border-left:3px solid var(--accent);padding:2px 0 2px 16px;margin:16px 0;max-width:66ch;font-style:italic}
+.flow{display:flex;flex-wrap:wrap;align-items:stretch;gap:0;margin:14px 0 18px;font-size:14px}
+.flow div{background:var(--surface);border:1px solid var(--rule);padding:10px 14px;flex:1 1 150px}
+.flow div+div{border-left:none}
+.flow b{display:block;font:600 15px/1.2 var(--display)}
+.flow small{color:var(--muted);font-size:13px}
+.stack{display:grid;gap:8px;margin:14px 0 18px;font-size:14px}
+.stack .row{display:grid;grid-template-columns:110px minmax(0,1fr);gap:12px}
+.stack .k{font:600 10.5px/1.3 var(--body);letter-spacing:.1em;text-transform:uppercase;color:var(--muted);padding-top:10px}
+.stack .boxes{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px}
+.stack .box{background:var(--surface);border:1px solid var(--rule);border-radius:3px;padding:8px 11px}
+.stack .box.core{border-color:var(--accent)}
+.stack .box b{display:block;font:600 14.5px/1.2 var(--display)}
+.stack .box span{color:var(--muted);font-size:12.5px;line-height:1.35;display:block}
+.stack .arrow{margin-left:122px;font:500 11.5px var(--mono);color:var(--muted);border-left:2px dashed var(--rule);padding:2px 0 2px 10px}
+.callout{background:var(--accent-soft);padding:14px 18px;border-radius:4px;margin:18px 0;max-width:68ch}
+.callout b{font-family:var(--display);font-size:16px}
+footer{margin-top:60px;padding-top:16px;border-top:1px solid var(--rule);color:var(--muted);font-size:13.5px}
+@media (max-width:880px){
+  .shell{grid-template-columns:1fr;gap:20px;padding:26px 18px 64px}
+  nav.toc{position:static;max-height:none}
+  nav.toc ol{grid-template-columns:repeat(2,minmax(0,1fr))}
+  h1{font-size:46px}
+  dl.meta{grid-template-columns:repeat(2,minmax(0,auto))}
+  .pillars{grid-template-columns:1fr}
+  .stack .row{grid-template-columns:1fr}.stack .k{padding-top:0}.stack .arrow{margin-left:0}
+}
+</style>
+
+<div class="shell">
+<nav class="toc" aria-label="Contents">
+  <p class="lbl">Contents</p>
+  <ol>
+    <li><a href="#vision"><span>1</span>Vision &amp; scope</a></li>
+    <li><a href="#lore"><span>2</span>World &amp; lore</a></li>
+    <li><a href="#match"><span>3</span>Match structure</a></li>
+    <li><a href="#commander"><span>4</span>Commander</a></li>
+    <li><a href="#beacons"><span>5</span>Beacons</a></li>
+    <li><a href="#mandates"><span>6</span>Mandates &amp; programs</a></li>
+    <li><a href="#economy"><span>7</span>Economy</a></li>
+    <li><a href="#caps"><span>8</span>Capabilities &amp; radio</a></li>
+    <li><a href="#kit"><span>9</span>Sandbox kit, locomotion &amp; maps</a></li>
+    <li><a href="#gameplan"><span>10</span>Playbooks</a></li>
+    <li><a href="#verifier"><span>11</span>Verifier (seal inspection)</a></li>
+    <li><a href="#api"><span>12</span>Seat Gateway</a></li>
+    <li><a href="#editor"><span>13</span>Playbook editor</a></li>
+    <li><a href="#planner"><span>14</span>Built-in operator</a></li>
+    <li><a href="#arch"><span>15</span>Architecture</a></li>
+    <li><a href="#phase0"><span>16</span>Stack spikes &amp; gates</a></li>
+    <li><a href="#milestones"><span>17</span>Build plan to v0.1 and v1</a></li>
+    <li><a href="#roadmap"><span>18</span>Roadmap after v1</a></li>
+    <li><a href="#open"><span>19</span>Tuning &amp; risks</a></li>
+  </ol>
+</nav>
+
+<main>
+<header class="sheet">
+  <div class="eyebrow">Design specification · working title</div>
+  <h1>Pharmakos</h1>
+  <p class="tagline">The cure and the poison are the same thing. Nothing arrives over the air.</p>
+  <p class="lede">Pharmakos is an open-source voxel strategy game about orders you cannot take back. Each seat seals a playbook during the planning Lull, then watches the Push play out like a movie: nobody has live control, and a commander must walk to a beacon and interface on site to change anything. In v1 everything that executes is built in — the commander's operator, the mandates on beacons, the programs in units and buildings — and everything you touch is data: playbooks and templates are JSONC files you edit in the in-game editor or by hand. Opponents are the built-in operator; external scripting and live AI seats are the roadmap, not v1.</p>
+  <dl class="meta">
+    <div><dt>Version</dt><dd>0.6 draft</dd></div>
+    <div><dt>Date</dt><dd>2026-09-13</dd></div>
+    <div><dt>Build plan</dt><dd>63.5 wk · ~18 months with buffer</dd></div>
+    <div><dt>Ship v1 confidence</dt><dd>~78% → ~85% after the wk-35.5 gate</dd></div>
+  </dl>
+  <div class="legend"><span class="tag t-dec">Decided</span> agreed in interview <span class="tag t-new">Draft 6</span> changed in this draft <span class="tag t-tune">Tuning</span> settled in playtests <span class="tag t-road">Roadmap</span> after v1 <span class="tag t-risk">Risk</span> watch closely</div>
+  <div class="changes">
+    <h3>What changed since draft 5</h3>
+    <ul>
+      <li>The game is <strong>Pharmakos</strong>, always paired with its subtitle: "Pharmakos: The Sealed Order". The scapegoat shares its root with <em>pharmakon</em>, remedy and poison in one object; AirGap survives as the codename and as the in-world name for the trust model.</li>
+      <li><strong>v1 is simplified.</strong> Everything that executes is Rust at three levels: the commander's built-in <strong>operator</strong>, built-in <strong>mandates</strong> on beacons, built-in <strong>programs</strong> in units and buildings. Everything the player touches is data.</li>
+      <li>Playbooks and templates are <strong>JSONC</strong> files. No SDK, no script language, no script runtime, no published API, no MCP and no AI seats in v1; external scripting (v1.1) and the live conduit (v1.2) are designed for now through reserved proto seams.</li>
+      <li>One checkpoint, not two: the wk-17.5 fun probe is deleted and the single <strong>gate at wk 35.5</strong> is also the <strong>v0.1 public release</strong>. v1 is the hardened build at wk 63.5, about 18 months with buffer.</li>
+      <li>Power: <strong>the beacon is the unit of power</strong>. A dormant beacon powers down everything homed to it; seal, sphere, interfacing and recycling stay powered by the key-core, and the core autocannon runs off the deep bore. One Generator per vent, output set by richness.</li>
+      <li><strong>Sphere</strong> is the only range for physical work; <strong>reach</strong> is only what a seat knows. The enemy-overlap ban is deleted: build, dig and deploy are legal anywhere your own sphere covers, enemy spheres included, and combat decides.</li>
+      <li>Money: value follows condition (build cost × current HP) everywhere value is read; <strong>paid means yours</strong> the moment an order commits; the Ledger — the armistice engine that pays and fines every seat (<a href="#lore">section 2</a>) — <strong>settles at each recap</strong>; one catch-up dial (Basic Minimum Income scaled by rank on held value) and no award-fund rank multiplier; kill credit is clamped to HP removed and dropped on elimination.</li>
+      <li>Match end is a tick rule: conditions are checked every tick, the Push halts at the first tick with fewer than two seats, and there is no draw state. An eliminated human keeps the full map or picks "Abandon match (no winner)".</li>
+      <li>Seams are <strong>finite</strong>, and a fabricator produces only while its mandate has outstanding work its drones cannot cover — headroom is the normal state.</li>
+      <li>Commander package: speed is a world constant; repair drones heal it; the death counter is per-Push and a respawn always completes by segment end; it is not an asset and despawns on elimination.</li>
+      <li>Plan execution contract: one rule body at a time, and only the reflex (commander HP ≤ 20%, fixed) interrupts; interface rows are atomic. The v1 vocabulary is exactly what the editor renders — flags, branch and repeat leave v1 with their field numbers reserved.</li>
+      <li>Player-written <strong>Dispatches</strong> — seat-to-seat notes — are cut from v1; a one-way <strong>chatter</strong> ticker of engine-authored lines takes their place. They return in v1.2.</li>
+      <li>The <strong>watch rig</strong> moves into the skeleton (own-fog camera, event list, 2–4× speed, skip, full map on elimination or match end), and segments run a fixed ladder by round number, 3 min up to 8, which the host can replace with a per-round length list: a single value sets every round, several values are taken round by round, and the last entry repeats.</li>
+      <li>Fog is a per-match server-side policy applied by the gateway's fog filter; live standings show your own score and rank only.</li>
+      <li>Stages are re-cut around the gate, the nightly league becomes <strong>three nightly adversarial scenarios</strong> (Rusher, Turtle, Hunter), and the gate criteria are written down in <a href="#phase0">section 16</a>.</li>
+      <li>Art, audio and packaging are decided: MagicaVoxel or Goxel to <code>.vox</code> through the same greedy mesher, CC0/CC-BY audio, ~1 wk of packaging in the skeleton and ~3 wk of signed installers in hardening.</li>
+    </ul>
+  </div>
+</header>
+
+<section id="vision">
+  <h2><span class="n">1</span>Vision &amp; scope</h2>
+  <p>Pharmakos is a playable game first, and an AI platform by direction: it is built so that AI control fits the design from the start rather than being bolted on later, but v1 ships nothing that executes except the game itself. It has to be fun to play and worth watching. v1 wears a placeholder voxel look; the art pass is roadmap. One developer builds it with AI coding agents, so scope discipline is a design constraint in its own right.</p>
+  <p><span class="tag t-new">Draft 6</span> <strong>The theme.</strong> A <em>pharmakon</em> is remedy and poison in one object, and security tooling has the same duality: the same tool patches and breaks. So the question the game asks is who or what you can trust, and its answer is that trust is engineered, not assumed — orders are sealed, the seal is inspected, nobody has live control, and the game never holds your keys. The air gap is the physical form of that answer; <a href="#lore">section 2</a> tells it as the world's story and <a href="#commander">section 4</a> as the commander's legs.</p>
+  <div class="pillars">
+    <div><b>Every seat is equal</b><span>The human and the built-in operator file the same playbook and pass the same verifier. During play nobody has live control, so every seat is on equal footing.</span></div>
+    <div><b>Sealed orders, then the movie</b><span>Playbooks are sealed in a timed pause. The world then runs for up to 8 minutes while everyone watches.</span></div>
+    <div><b>Touch to change</b><span>Changing a beacon requires the commander to travel there and interface with it. Commander time is the real currency.</span></div>
+    <div><b>The world is voxels</b><span>Destructible terrain with a height cap. Craters, breaches and growing crystal spires are what a Push is made of.</span></div>
+  </div>
+  <h3>v1: the sandbox</h3>
+  <ul>
+    <li><span class="tag t-new">Draft 6</span> A local host for up to 3 seats in free-for-all: one human plus up to two built-in seats, or all built-in. It comes with a basic attack/defend kit and generated maps.</li>
+    <li><span class="tag t-new">Draft 6</span> Everything that executes is ours. The commander follows the <a href="#gameplan">playbook</a>, beacons run built-in <a href="#mandates">mandates</a>, and units and buildings run built-in programs. The customisation in v1 is the playbook, the mandates, their settings and the <a href="#caps">capability structures</a>.</li>
+    <li><span class="tag t-new">Draft 6</span> Playbooks, templates and the sample library are JSONC files. Built in this order, following the AI ladder below; v1 is rungs 1 and 2:
+      <ol>
+        <li><strong>Playable without an external AI:</strong> <a href="#planner">built-in operator</a>, <a href="#editor">playbook editor</a>, templates, <a href="#match">Probation</a>.</li>
+        <li><strong>Hand-editable samples:</strong> playbooks, templates and a sample library as local files you copy and edit. Open format, no language needed.</li>
+        <li><strong>Scripting API:</strong> published docs aimed at AI-assisted script writing, plus an official SDK. <span class="tag t-road">Roadmap</span> v1.1</li>
+        <li><strong>Live conduit:</strong> interactive Claude Code or Codex sessions as seats, either alongside you or as opponents. <span class="tag t-road">Roadmap</span> v1.2</li>
+      </ol>
+    </li>
+    <li><span class="tag t-new">Draft 6</span> Native Godot client with the playbook editor and one watch rig: own-fog camera with free-look and a follow toggle, a live event list, 2–4× speed and skip; highlights, scrub and shareable recordings come later in the plan. <span class="tag t-dec">Decided</span> Also a Ledger "Probation" match for newcomers (<a href="#match">section 3</a>), save and resume at Lull boundaries, and an opt-in playtest mode.</li>
+    <li><span class="tag t-new">Draft 6</span> <strong>v0.1</strong> is the gated build released publicly at week 35.5 as unsigned Windows and Linux zips; <strong>v1</strong> at week 63.5 adds signed installers on Windows, macOS and Linux, macOS as a signed CI artefact. Distributed through GitHub Releases and itch.io.</li>
+  </ul>
+  <h3>Not in v1</h3>
+  <ul>
+    <li><span class="tag t-new">Draft 6</span> External scripting and live AI seats: the v1.1 scripting API, then the v1.2 live conduit with interactive agent sessions, "Your agent" and player Dispatches. v1 reserves the seams for both (see <a href="#roadmap">section 18</a>). <span class="tag t-road">Roadmap</span></li>
+    <li>Custom mandates and programs, an in-game script runtime, reprogramming, a custom <a href="#economy">Quartermaster</a>, and WASM commanders. These arrive one per version. <span class="tag t-road">Roadmap</span></li>
+    <li>Voting, internet multiplayer, the web spectator, the RL (Gymnasium/PettingZoo) interface, flowing water, and manual commander control. <span class="tag t-road">Roadmap</span></li>
+    <li><span class="tag t-dec">Decided</span> Human-vs-human play, teams, beacon capture, Citations, grid islands and batteries. <span class="tag t-road">Roadmap</span></li>
+    <li><span class="tag t-new">Draft 6</span> Operator personalities, the director camera, the reinforced wall, gate and shield block, the expert editor view except selectors (which ship in v1, <a href="#editor">section 13</a>), timed weapons, the art pass, and accelerated AI-only matches. <span class="tag t-road">Roadmap</span></li>
+    <li><span class="tag t-new">Draft 6</span> Over-the-air attacks and their counters: interception, spoofed marks and go-codes, jamming, jammers and decoys. v1 keeps radio data-only and stamped with its sender and Mast of origin so these can be added without changing the playbook format. <span class="tag t-road">Roadmap</span></li>
+  </ul>
+  <p><span class="tag t-dec">Decided</span> <strong>Caps rule:</strong> no artificial caps. A limit exists only where it is technically necessary, and each one is explained coherently in the story. Examples:</p>
+  <ul>
+    <li>The unit ceiling is the power a seat's core surplus and its map vents can supply.</li>
+    <li>Playbook size is limited only by what the Ledger's seal inspection — the verifier (<a href="#verifier">section 11</a>) — can check inside its time budget.</li>
+    <li><span class="tag t-new">Draft 6</span> A seat's reach is what it can see: its own <a href="#beacons">spheres</a>, the live vision of its units and structures, and <a href="#caps">Sensor Spire</a> reveals, within memory.</li>
+    <li><span class="tag t-dec">Decided</span> Award payouts come from the Ledger's fixed award fund (<a href="#economy">section 7</a>).</li>
+  </ul>
+</section>
+<section id="lore">
+  <h2><span class="n">2</span>World &amp; lore</h2>
+  <p><span class="tag t-dec">Decided</span> Pharmakos is set in the <strong>Handfast</strong> world: grim and near-future, lightened by bureaucratic humour in the Ledger's voice. This is original IP and borrows no franchise names.</p>
+  <p><span class="tag t-new">Draft 6</span> <strong>The title is PHARMAKOS</strong>, always shipped as a lockup &mdash; the fixed title-and-subtitle pairing "PHARMAKOS: THE SEALED ORDER" (the subtitle is a working one), never the bare word. <strong>AirGap</strong> survives as the codename and as the in-world term for the trust model. A 2026-09-13 sweep found no PHARMAKOS mark in classes 9, 28 and 41 on TMview, an empty UK register and no Steam result. Live risks: <em>PHARMAKOS – The Lunghouse</em> (Howling Stars, an itch jam build of January 2026, studio Steam-verified, no store page yet), and drift towards "Pharmakon", which is a live Steam puzzle game and a German class 9 mark. Actions: register the pharmakosgame handles and domains now, and a professional clearance search during hardening, before v1 (not legal advice). Exposure: v0.1 ships on these sweeps alone, so a search that fails after v0.1 means renaming a released build along with its domains, handles and early press. Faction names stay provisional; all world terms live in the table below, so a rename is a find-and-replace.</p>
+  <p><span class="tag t-new">Draft 6</span> <strong>The theme, in the world's own terms.</strong> A <em>pharmakos</em> is the scapegoat a city feeds and honours, then drives out so the city stays clean — a role, not a person; it shares its root with <em>pharmakon</em>, the remedy that is also the poison (<a href="#vision">section 1</a>). Here that duality takes a physical form, the <strong>air gap</strong>. The commander is the physical courier of that trust chain: an order reaches a beacon only because a body walks there and interfaces on site — touch to change. Nothing over the air reconfigures anything. Radio exists only once a Mast is earned, and even then it carries data messages that a Steward (a seat's operator) may read and must never obey.</p>
+  <div class="quote">By 2061 humans and machine minds share every grid, farm and factory. Then the Overwrite shows that any machine that listens can be rewritten by a cleverly shaped signal. Civilisation splits along a line of belief, not species. The war that follows ends in the Pall, a sky of ash and dust that has not lifted in a generation. Solar is a memory, so every cell — every settlement — lives on geothermal heat: the deep bore under a founding Stake, the shallow bore that keeps each key-core's seal lit, and the vents worth fighting over. <strong>The Quorum</strong> is a sovereign mind governed by the votes of millions of human citizens. <strong>The Handfast Line</strong> is made of human cells and the minds sworn to serve them, and it refuses to be ruled by anything it can't unplug. Both sides field humans and AIs. Nobody gives orders over radio any more: a Keybearer carries an air-gapped key and presses it to a Stake's key-core by hand. The only thing both sides still obey is the Ledger, a pre-war armistice engine that pays every cell, fines the incompetent in deadpan memos, and inspects every set of sealed orders.</div>
+  <p>The frame explains the core mechanics:</p>
+  <ul>
+    <li><strong>Mirror matches.</strong> Each seat picks a banner, which is cosmetic, and feuding cells explain any mix of seats.</li>
+    <li><strong>No live control.</strong> Radio silence during the Push is the reason playbooks are sealed, and the reason the commander has to travel.</li>
+    <li><span class="tag t-new">Draft 6</span> <strong>Untrusted radio.</strong> Every message on the air carries its sender and its Mast of origin, and is read as data. Stewards may listen, but no pathway lets them obey. Interception, spoofing, jamming and their counters are roadmap (<a href="#roadmap">section 18</a>).</li>
+    <li><strong>Awards and safe playbooks.</strong> The Ledger gives these out; a safe playbook is "a standing order filed on your behalf". Citations come after v1.</li>
+    <li><span class="tag t-dec">Decided</span> <strong>Darkness and power.</strong> The Pall explains why there is no solar, why vents are worth fighting over, and why lit domes and brownouts are so visible on screen.</li>
+    <li><span class="tag t-dec">Decided</span> <strong>Licences.</strong> Capabilities are Ledger licences, earned by meeting its conditions; the conditions are checked at the settlement and announced in the recap.</li>
+    <li><span class="tag t-dec">Decided</span> <strong>Bores.</strong> Only a seat's founding core sits on a deep bore with spare heat. Other key-cores tap just enough to keep their own seal lit. When a core falls, its bore collapses for good.</li>
+    <li><span class="tag t-new">Draft 6</span> <strong>Chatter.</strong> A site is never quiet. Stewards call to their crews in short lines, and you overhear that talk as the seal closes on a Push and again at the recap. It is one-way flavour, written by the engine, and it never carries an order. Player-written Dispatches come back after v1.</li>
+    <li><span class="tag t-new">Draft 6</span> <strong>Ruins, settlement and the final audit.</strong> When a Stake falls — one beacon or a whole seat — everything homed to it becomes neutral ruins: inert, unrepairable, worth nothing to the audit, salvageable by anyone. The Ledger settles at each recap, paying the ration and the award fund. At the round limit the final audit credits what you hold, in the state it stands in, and what you broke.</li>
+  </ul>
+  <div class="tbl"><table>
+    <thead><tr><th>Spec term</th><th>In-world name</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr><td>Commander</td><td>Keybearer</td><td>A human or a mind may pilot one; the key-core only cares that it is physically present</td></tr>
+      <tr><td>Beacon · sphere</td><td>Stake · holding</td><td>Stakes have no command receiver, so a Keybearer must come in person; a Stake's key-core is the sealed heart that keeps its seal lit</td></tr>
+      <tr><td>Key-core seal</td><td>the seal</td><td><span class="tag t-new">Draft 6</span> the lit mark on a Stake's key-core that shows it holds power; it dims in a brownout and only a fallen Stake loses it. Not the seal on sealed orders</td></tr>
+      <tr><td>Playbook</td><td>sealed orders</td><td><span class="tag t-new">Draft 6</span> the seat's orders for the coming Push, filed with the Ledger and inspected before the seal closes</td></tr>
+      <tr><td>Operator</td><td>Steward</td><td>The mind that writes a cell's orders and runs them. Listens on the air, never obeys it</td></tr>
+      <tr><td>Mandate</td><td>writ</td><td><span class="tag t-new">Draft 6</span> a Stake's standing job</td></tr>
+      <tr><td>Program</td><td>rote</td><td><span class="tag t-new">Draft 6</span> the drilled behaviour a unit or structure falls back on</td></tr>
+      <tr><td>Radio Mast</td><td>Signal spar</td><td>The structure that earns messaging; data only, no relaying of orders</td></tr>
+      <tr><td>Build · Defend · Attack · Mine · Survey</td><td>Raise · Hold · Break · Delve · Watch</td><td>The five writs; "Watch" is a working name</td></tr>
+      <tr><td>$ · BMI (Basic Minimum Income)</td><td>Scrip · the ration</td><td>Shown in UI as $; the ration is set by what you hold, not what you broke</td></tr>
+      <tr><td>Power (kW) · Generator · vent</td><td>Heat · tap · heat vent</td><td>Shown in UI as kW; one tap per vent</td></tr>
+      <tr><td>Perpetual darkness</td><td>the Pall</td><td>Working name</td></tr>
+      <tr><td>Capability unlock</td><td>Ledger licence</td><td>Permanent once awarded</td></tr>
+      <tr><td>Engine chatter</td><td>crew talk on site</td><td><span class="tag t-new">Draft 6</span> open-air talk overheard on site, not mast traffic: one-way, needs no Signal spar, never an order</td></tr>
+      <tr><td>Per-recap income and licence check</td><td>the settlement</td><td><span class="tag t-new">Draft 6</span> the Ledger pays and checks its conditions at each recap</td></tr>
+      <tr><td>Round-limit score</td><td>the final audit</td><td>The only audit; the Ledger pays for what stands, in the state it stands in</td></tr>
+      <tr><td>Planning pause · play segment</td><td>the Lull · the Push</td><td></td></tr>
+      <tr><td>Awards · shames</td><td>Commendations · Citations</td><td>Citations use HR write-up humour, e.g. "Guarded An Empty Field With Distinction". Citations come after v1</td></tr>
+      <tr><td>Verifier</td><td>Seal inspection</td><td></td></tr>
+    </tbody>
+  </table></div>
+  <p><strong>Names to avoid</strong> (too close to existing franchises): Skynet, Terminator, Judgment Day, Cyberdyne, "the Resistance" as a brand, Legion, Zion, Sentinels, the Oracle/Architect, GAIA, HADES, the Grid, Master Control Program, Cylon, Replicant, Geth, Reapers, Cortana, GLaDOS, SHODAN, the Entity, and earlier rejected names (Whisper, Lodestone, Warden, Courier).</p>
+</section>
+<section id="match">
+  <h2><span class="n">3</span>Match structure</h2>
+  <div class="flow" role="img" aria-label="Lobby, then repeating planning pause, play segment and recap, until the match ends">
+    <div><b>Lobby</b><small>Up to 3 seats (≤1 human): human or built-in. Host settings, seat tokens, resume a save</small></div>
+    <div><b>Lull</b><small>Planning pause: host-set, default 5 min, first Lull 10 min. Ends early when all seats are ready</small></div>
+    <div><b>Push</b><small>Play segment, 3 min in round 1 growing to 8. No control</small></div>
+    <div><b>Recap</b><small>≤ ~60 s, skippable: settlement, awards and 3 highlights. Timer not running</small></div>
+    <div><b>Match end</b><small>Fewer than two seats left at a tick, or the round limit (default 6, about 75 min)</small></div>
+  </div>
+  <ul>
+    <li><span class="tag t-new">Draft 6</span> <strong>Seats:</strong> free-for-all with up to 3 seats: one human plus up to two built-in seats, or all built-in, on localhost. There are no AI seats in v1. No teams in v1, but a <code>team_id</code> field is reserved. The human alone decides speed-up and skip. <span class="tag t-dec">Decided</span> A built-in-only match uses the normal client flow in realtime, with a spectator camera in place of the human; for those matches an accelerated, player-facing pace mode is <span class="tag t-road">Roadmap</span>, added when bulk testing needs it. The headless sim runner exists from the start as dev harness (<a href="#arch">section 15</a>).</li>
+    <li><span class="tag t-new">Draft 6</span> <strong>Match end, the one-tick rule:</strong> a seat's first beacon is its <strong>core</strong>. A seat is eliminated when it has no beacons left. End conditions are evaluated every tick: the Push halts at the first tick where fewer than two seats remain, standings freeze, the recap plays, and the last seat standing wins. If no seat survives that tick, the final audit at that tick decides. There is no draw <em>state</em>: a tie is resolved by the tie-break order below, and only an exact tie on every term is recorded as a shared win. "The final tick" is the last tick of the last Push, before the recap. The match also ends at the host-set round limit. <span class="tag t-dec">Decided</span> <strong>Default length is about 75 min:</strong> round limit 6, 5-min Lulls (first 10), the segment ladder below. Licence triggers and awards are tuned for 6 rounds.</li>
+    <li><span class="tag t-new">Draft 6</span> <strong>Segment length</strong> is a fixed ladder by round number, independent of the round limit. The host may instead set a per-round length list: one value gives every round that length; several values give round <em>i</em> the <em>i</em>-th entry, and rounds past the end take the last one. The gate’s 3 / 5 / 8 schedule is the list 3, 5, 8. The ladder or the list is shown in the lobby; the coming segment's length is part of the frozen snapshot, so the editor's clock, the fits pill and <code>render_plan</code> all read the same number. <span class="tag t-tune">Tuning</span> the values.</li>
+  </ul>
+  <div class="tbl"><table>
+    <thead><tr><th>Round</th><th>1</th><th>2</th><th>3</th><th>4</th><th>5</th><th>6 and later</th></tr></thead>
+    <tbody>
+      <tr><td>Push length</td><td class="num">3 min</td><td class="num">4 min</td><td class="num">5 min</td><td class="num">6 min</td><td class="num">7 min</td><td class="num">8 min</td></tr>
+    </tbody>
+  </table></div>
+  <ul>
+    <li><span class="tag t-new">Draft 6</span> <strong>Save and resume:</strong> the host can save during any Lull, from the frozen segment-end snapshot, and resume from the lobby. Seat tokens are reissued. Saves are stamped with the rules hash and verifier version, and won't load on a mismatch. They contain every playbook, draft and notebook, so they live in the private match cache. No saving mid-Push.</li>
+    <li><span class="tag t-new">Draft 6</span> <strong>Probation match:</strong> a lobby preset for newcomers and the setup the gate uses: the human vs one Easy built-in operator, 2 seats, 3 rounds, untimed Lulls. The Ledger issues 3–4 contextual memos from deterministic triggers (a dark Stake, first death, a power shortfall, first licence), and the first Lull opens the template wizard with a guided pick. The gate runs the same shape with a per-round length list of 3 / 5 / 8 min (<a href="#phase0">section 16</a>).</li>
+    <li><span class="tag t-new">Draft 6</span> <strong>Recap and settlement:</strong> the recap is its own phase between the Push and the Lull. At each recap the Ledger settles: BMI plus the award fund are credited to the treasury and shown as a recap line; during a Push the only income is mining and salvage. The Lull timer starts when the recap ends or is skipped. The planning snapshot is frozen at segment end. During the Lull, a side panel re-plays and scrubs highlights while the timer runs.</li>
+    <li><span class="tag t-new">Draft 6</span> <strong>Round-limit winner, "the final audit":</strong> score = value held after the final settlement ($ plus the build cost of your beacons, structures and units, each counted at build cost × current HP) + the build cost of enemy assets you destroyed. Credit for a destroyed asset is split between seats in proportion to the damage each dealt since it was last at full HP, clamped to the HP actually removed, so a last hit steals nothing; reaching full HP clears the counters. An asset lost with no enemy damage on the clock — self-inflicted, terrain, disbanded on elimination, ruins — credits nobody, and an eliminated seat's accrued share is dropped rather than redistributed. Shares are apportioned as integers by largest remainder, ties to the lowest seat id. The recap shows "shared kill". <span class="tag t-dec">Decided</span> Tie-break order: unsmoothed net worth at the final audit, then enemy value destroyed, then fewer beacons lost, then a shared win. <span class="tag t-risk">Risk</span> kingmaking, farming the weakest seat and turtling on a hoard in 3-way free-for-all; watched by the three nightly adversarial scenarios and at the gate.</li>
+    <li><span class="tag t-new">Draft 6</span> <strong>Elimination:</strong>
+      <ul>
+        <li>When a seat's last beacon falls, its units disband on the spot and its structures become neutral ruins. <span class="tag t-dec">Decided</span> Any seat's reclaim drones can salvage ruins within their beacon's sphere for $.</li>
+        <li>An eliminated human becomes a spectator with a full-map view; the match runs on until the tick rule or the round limit ends it. The control is <strong>Abandon match (no winner)</strong>: the recording is saved, no result is recorded, and keeping watching is the default.</li>
+      </ul>
+    </li>
+    <li><span class="tag t-dec">Decided</span> <strong>Planning pause:</strong> all seats share one timer, set by the host from 3 min to untimed. The default is 5 min, and 10 min for the first Lull. Each seat plans only from its own fog-of-war view and sees <strong>who</strong> is ready.</li>
+    <li><span class="tag t-new">Draft 6</span> <strong>During play:</strong> no manual control of anything. The human gets one camera rig — an own-fog camera with free-look and a follow-commander toggle — plus a live event list, 2–4× speed, and skip, which jumps to segment end and is free and instant. The full map unlocks on elimination or at match end. <span class="tag t-dec">Decided</span> There is no live chat and no seat-to-seat note in v1. Instead a one-way <strong>chatter</strong> ticker runs when the Push starts: short engine-authored lines drawn from the built-in seats' intent and from events, framed as intercepted open-air chatter (<a href="#caps">section 8</a>). The auto-director camera is <span class="tag t-road">Roadmap</span>.</li>
+    <li><span class="tag t-new">Draft 6</span> <strong>Fog policy:</strong> fog is a per-match, server-side policy applied by the gateway's fog filter — fogged by default, no-fog in casual matches, unlocked on elimination and at match end — so the camera shows exactly what the seat's own feed shows and no token is reissued mid-match. Live standings show a seat its <em>own</em> score and <strong>displayed rank</strong> only — the full audit score, held value plus enemy value destroyed; the separate rank that sets the BMI band is taken on held value alone (<a href="#economy">section 7</a>). Full per-seat detail comes at the recap and at match end. The host's <strong>casual</strong> setting gives every seat no-fog during the Push, camera and feed alike; planning knowledge stays fogged, and the match's save and recording are flagged casual (v1 has no ladder or rating to rank against).</li>
+    <li><span class="tag t-new">Draft 6</span> <strong>Playbook secrecy:</strong> opponents never see your playbooks or your notebook. Secrecy is enforced by the gateway and the UI; on a local host it cannot be cryptographic — the private match cache is plain, unencrypted local state, and anyone with filesystem access can read it directly.</li>
+    <li><span class="tag t-new">Draft 6</span> <strong>Submitting:</strong> a seat may submit as often as it likes until the timer ends, and the latest verified submission replaces the previous one. <strong>If nothing verified was ever submitted when the timer ends:</strong> beacon configurations stay as they are, and the built-in operator files the safe playbook for that seat. A timeout after a verified submission changes nothing: that submission stands.</li>
+    <li><span class="tag t-risk">Risk</span> Whether up to 8 minutes of play with no control is fun is the biggest unmeasured risk. <span class="tag t-new">Draft 6</span> One gate decides go or pivot, on the public v0.1 build at week 35.5: 3–5 testers, one Probation-shaped match of 3 rounds at 3 / 5 / 8 min. Criteria are in <a href="#phase0">section 16</a> and the stage it ends is in <a href="#milestones">section 17</a>.</li>
+  </ul>
+</section>
+<section id="commander">
+  <h2><span class="n">4</span>Commander</h2>
+  <div class="callout"><span class="tag t-new">Draft 6</span> <strong>Touch to change.</strong> The commander is the physical courier of the trust chain. An order reaches a beacon only when a body walks there and interfaces on site; nothing over the air can reconfigure anything. A <a href="#caps">Radio Mast</a>, once earned, carries data messages and go-codes — never orders — and that data is treated as untrusted. The air gap is not a setting: it is the commander's legs.</div>
+  <ul>
+    <li><span class="tag t-dec">Decided</span> <strong>Role:</strong> the commander is the only unit a seat drives directly, and only through its <a href="#gameplan">playbook</a>. It is weak and killable. <span class="tag t-new">Draft 6</span> It has no passive regeneration; repair drones repair it like any other friendly unit.</li>
+    <li><span class="tag t-dec">Decided</span> <strong>Movement:</strong> a hover-walker that uses the same locomotion as everything else in v1 (<a href="#kit">section 9</a>): it walks, climbs 1-voxel steps, and is blocked by walls, craters and trenches, so terrain, ramps and bridges shape its routes. <span class="tag t-new">Draft 6</span> Its speed is a world constant, not a per-seat stat; the starting range is about 1–1.5 voxels per second (<span class="tag t-tune">Tuning</span>). Map scale is quoted in commander travel as well as raider travel: spawns sit at least about 1.5 early Pushes of raider travel apart, which is several minutes of commander walking.</li>
+    <li><span class="tag t-dec">Decided</span> <strong>Death:</strong> respawns after a delay (for example 30 s, growing with each death) at the core; if the core is gone, at the surviving beacon nearest to where it died. Beacons keep running, but nothing can change them until the commander returns. Death also interrupts any visit in progress. Playbooks must include an <code>on_death</code> block. <span class="tag t-new">Draft 6</span> The death counter and its growing delay are per-Push state, reset each segment, and a pending respawn always completes by segment end — so every Lull snapshot has a live commander at a known place. <span class="tag t-tune">Tuning</span> delay curve.</li>
+    <li><span class="tag t-new">Draft 6</span> <strong>Not an asset:</strong> the commander has no build cost and never appears in held value or kill credit. It despawns at the tick its seat is eliminated. Killing one pays only in the victim's lost interface time — which is the whole point of hunting it.</li>
+    <li><span class="tag t-dec">Decided</span> <strong>Hunting:</strong> commanders are fair targets and hunting them is a real strategy. Attack can select the enemy commander from its last sighting (freshness is tested at plan time and the target is pinned at seal, <a href="#mandates">section 6</a>) and retargets live while any of its units can see it. Defences: routes that avoid known threats, flee rules, <code>on_death</code>, the fixed reflex at 20% HP (<a href="#gameplan">section 10</a>), and a Defend beacon guarding "my commander". Further counters (armour, decoys, a self-defence weapon) are added only if the nightly <strong>Hunter</strong> scenario shows hunting dominates. <span class="tag t-risk">Risk</span></li>
+    <li><span class="tag t-dec">Decided</span> <strong>Start:</strong> each seat begins with a pre-placed core beacon (Build mandate) in its spawn zone, the commander, 2 build drones, 1 mining drone and $ equal to 2 rounds of BMI. The core's key-core powers that force with some headroom, and a heat vent sits a short walk away. The core is armistice-hardened: high HP and a built-in autocannon fed by its deep bore, so a single early raid can't eliminate a seat. <span class="tag t-tune">Tuning</span> starting numbers.</li>
+    <li><span class="tag t-road">Roadmap</span> Self-defence weapon, carrying a demolition charge, minimal dig/construct, sensor ping, vehicles with auto-firing defences (earned), and manual control for a full round.</li>
+  </ul>
+</section>
+<section id="beacons">
+  <h2><span class="n">5</span>Beacons</h2>
+  <div class="callout"><b>The beacon is the unit of power.</b> A beacon that goes dark takes everything homed to it down with it, and nothing about a beacon changes except by a commander standing beside it.</div>
+  <div class="tbl"><table>
+    <thead><tr><th>Rule</th><th>Specification</th></tr></thead>
+    <tbody>
+      <tr><td>Sphere</td><td><span class="tag t-new">Draft 6</span> A beacon's sphere is the ball of voxels within its radius (<span class="tag t-tune">Tuning</span>); a Resonance Spire enlarges its own beacon's sphere (<a href="#caps">section 8</a>). The sphere is the only range for physical work: build, dig, salvage, guard escort, and the anchor for placing the next beacon. Movement and combat are not sphere-bound: an Attack crosses the map, and a Defend may pursue past the sphere edge. What a seat <em>knows</em> is its reach, a separate idea defined in <a href="#mandates">section 6</a>.</td></tr>
+      <tr><td>Core</td><td><span class="tag t-dec">Decided</span> Pre-placed in the spawn zone at match start. Otherwise an ordinary beacon: losing it doesn't eliminate you, but losing every beacon does. <span class="tag t-dec">Decided</span> The core sits on a deep bore and is the only key-core with spare kW. A destroyed core has no successor: its surplus is lost for good, and brownout distance is measured from its former site. <span class="tag t-dec">Decided</span> <strong>Fortified:</strong> high HP and a built-in autocannon. <span class="tag t-new">Draft 6</span> The autocannon runs off the deep bore, outside the grid, so it is never shed in a brownout. There is no time-based protection. <span class="tag t-tune">Tuning</span> HP and turret strength; the nightly Rusher and Turtle scenarios watch for massed rushes and core turtling.</td></tr>
+      <tr><td>Placement</td><td><span class="tag t-new">Draft 6</span> The site must lie inside one of your own spheres and within the commander's placement range (<span class="tag t-tune">Tuning</span>, distinct from the roughly 4-voxel interface range). Deploying takes 12 s and the commander must stay for all of it: death, leaving, or an illegal site aborts the deploy and refunds it in full. <span class="tag t-dec">Decided</span> Choosing the mandate type is free. Every other initial setting or target costs its normal interface time after the deploy. <span class="tag t-new">Draft 6</span> Build, dig and deploy are legal anywhere your own sphere covers, enemy spheres included; combat decides who holds the ground.</td></tr>
+      <tr><td>Fabricator</td><td><span class="tag t-dec">Decided</span> Every beacon has one built in. It produces units for its mandate (unit mix) and builds licensed capability structures, all through the Quartermaster. There is no separate fabricator structure and no per-beacon unit cap. <span class="tag t-new">Draft 6</span> It produces a drone only while the mandate has outstanding work its current drones cannot keep up with, and stops once the work is covered (<a href="#economy">section 7</a>); headroom is the normal state.</td></tr>
+      <tr><td>Dormant</td><td><span class="tag t-new">Draft 6</span> An unpowered beacon powers down everything homed to it: its fabricator, its structures, and its bound units, which park where they stand at 0 kW. The seal (the lit mark on the key-core that shows the beacon holds power), the sphere, interfacing and recycling stay powered by the key-core. <span class="tag t-dec">Decided</span> Brownout order: lowest priority first, then furthest from the core (or its former site), and the core last; priority is kW-only (<a href="#economy">section 7</a>). A key-core always powers its own beacon, so only the extra draw can brown it out. <span class="tag t-new">Draft 6</span> A dormant beacon revives only once supply exceeds draw by a margin (<span class="tag t-tune">Tuning</span>), so domes do not flicker.</td></tr>
+      <tr><td>Destroyed</td><td><span class="tag t-dec">Decided</span> Beacons are destroyed by damage. The mandate ends. <span class="tag t-new">Draft 6</span> Its structures become neutral ruins at once, exactly as on elimination: inert, no supply, no draw, no capability, unrepairable, worth nothing at the final audit, and salvageable by any seat's reclaim drones (salvage value is <span class="tag t-tune">Tuning</span>). There is no unclaimed state and no absorption by a covering beacon. Bound units retreat, then re-home to the nearest friendly beacon and keep their role; where the new mandate has no job for them they follow only the common settings (rules of engagement <code>roe</code>, <code>retreat_hp_pct</code>) and idle at the beacon. <span class="tag t-dec">Decided</span> If it was the seat's last beacon, the seat is eliminated: units disband and structures become ruins.</td></tr>
+      <tr><td>Mandate switch</td><td><span class="tag t-new">Draft 6</span> Switching a beacon's mandate clears the old mandate's settings and targets. The Quartermaster priority belongs to the beacon, not the mandate, and survives the switch. A destroyed capability structure is never rebuilt automatically (<a href="#caps">section 8</a>).</td></tr>
+      <tr><td>Recycle</td><td><span class="tag t-new">Draft 6</span> A change made on site. It takes 10 s to interface, and 50% of the beacon's remaining value (build cost × current HP) is refunded when it commits. Removal books destruction credit exactly as destruction does, through the damage split (<a href="#match">section 3</a>). Bound units re-home to the nearest beacon of your own.</td></tr>
+      <tr><td>Units</td><td>Every unit is bound to its home beacon (the one whose fabricator produced it) and follows that beacon's mandate, even outside the sphere. Units cost $ to build and draw kW while fielded. Reassigning units comes in a later version.</td></tr>
+      <tr><td>Claims</td><td>No protections in the sandbox: everything can be attacked. Protections will be reconsidered for each future game mode.</td></tr>
+    </tbody>
+  </table></div>
+  <h3>Interfacing</h3>
+  <p><span class="tag t-dec">Decided</span> The commander must stay within range (about 4 voxels) and still. <span class="tag t-new">Draft 6</span> Each row below is one change, and it commits at the end of its own duration: a multi-field edit is all-or-nothing, so nothing half-applied is ever left on a beacon. There is no limit on changes per visit: a long visit is its own risk. <strong>Damage does not interrupt</strong>; the pressure comes from possibly dying. A visit stops only when the commander dies, the self-preservation reflex fires (<a href="#gameplan">section 10</a>), the beacon is destroyed, or the commander leaves range. Changes already committed always stay, and a resumed visit is a new visit that pays the handshake again.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>Change</th><th>Time</th></tr></thead>
+    <tbody>
+      <tr><td>Visit handshake (once per visit)</td><td class="num">1.5 s</td></tr>
+      <tr><td>Set Quartermaster priority (low / normal / high)</td><td class="num">1.5 s</td></tr>
+      <tr><td>Edit mandate settings</td><td class="num">2 s + 0.5 s per extra field, max 6 s</td></tr>
+      <tr><td>Add or remove a build target</td><td class="num">2.5 s each</td></tr>
+      <tr><td>Queue a licensed capability structure</td><td class="num">5 s, plus fabricator construction time</td></tr>
+      <tr><td>Switch mandate type</td><td class="num">8 s</td></tr>
+      <tr><td>Recycle beacon</td><td class="num">10 s</td></tr>
+    </tbody>
+  </table></div>
+  <p><span class="tag t-tune">Tuning</span> All values are playtest data, versioned in the rules table.</p>
+</section>
+<section id="mandates">
+  <h2><span class="n">6</span>Mandates &amp; programs</h2>
+  <p><span class="tag t-dec">Decided</span> Each beacon has two layers. The <strong>mandate</strong> says what to do and carries its settings; the mandate's <strong>built-in program</strong> decides how, every tick. Units and buildings run built-in programs of their own (below), a separate layer working under the mandate's orders, and the player edits none of them. <span class="tag t-new">Draft 6</span> v1 ships built-in programs only, native Rust; the proto reserves <code>mandate {builtin|script}</code> and <code>program {builtin|script}</code> so externally written versions can arrive later (<a href="#roadmap">section 18</a>). The per-beacon Quartermaster priority belongs to the beacon, not the mandate: switching mandate clears the old settings and targets, and the priority survives. There are no per-mandate budget or override fields; targets and areas count toward the one playbook size budget.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>Mandate</th><th>Key settings</th><th>Default behaviour</th></tr></thead>
+    <tbody>
+      <tr><td>Common</td><td><code>roe</code> hold / return / engage; <code>retreat_hp_pct</code>; report kinds; <code>accept_broadcasts</code></td><td><span class="tag t-new">Draft 6</span> <strong>Return fire</strong> and retreat follow the rules of engagement and are always announced. A unit the mandate has no job for keeps the common settings and idles at its beacon</td></tr>
+      <tr><td>Build</td><td>Targets (blueprint, anchor, rotation, order); repair threshold; rebuild destroyed; terraform none / fill / dig / both; protected areas; repair/reclaim drone fields. <span class="tag t-dec">Decided</span> No fixed counts.</td><td>Builds the highest-order affordable target that is unbuilt or damaged, using the nearest idle drone. <span class="tag t-new">Draft 6</span> Repair drones fix any structure of yours inside this beacon's <strong>sphere</strong>, then salvage wrecks and ruins inside it. A destroyed capability structure is never rebuilt automatically (<a href="#caps">section 8</a>)</td></tr>
+      <tr><td>Defend</td><td>Protect list (accepts <code>my commander</code>); <span class="tag t-new">Draft 6</span> engagement radius as a % of the sphere radius; pursue never / sphere edge / while in reach (<span class="tag t-new">Draft 6</span> ends when the target leaves your reach &mdash; your spheres, the live vision of your own units and structures, and Sensor Spire reveals; v1 has no relays); auto-fortify; unit mix; <code>picket</code>: scouts patrolling just outside the sphere edge</td><td>Threat-weighted targeting inside the engagement radius; damaged units fall back to the nearest friendly repair drone. Pickets give early warning. <span class="tag t-new">Draft 6</span> Guards escort the commander and intercept threats near it while it is inside this beacon's sphere</td></tr>
+      <tr><td>Attack</td><td>Target (fixed or selector, including <code>enemy commander</code>) and retarget rule; staging point; launch when any of force size, segment time or a broadcast go-code (needs a Radio Mast) holds; retreat conditions; after-action; avoid areas; <code>breach_allowed</code>; waves. <span class="tag t-new">Draft 6</span> <strong>Reach</strong> is knowledge only: your spheres, the live vision of your own units and structures, and Sensor Spire reveals, seen within the last N game-minutes (<span class="tag t-tune">Tuning</span>). Freshness is a qualification test at plan time only; the target is pinned at the seal and launch never re-tests it. Scout first to attack early. <span class="tag t-risk">Risk</span> raids can chain as advancing units see further</td><td>Gathers, launches on its condition, attacks the weak point, then retreats or regroups. If the remembered target has moved or died, the after-action or retarget rule decides on arrival; <code>enemy commander</code> retargets live while seen, reading the same reach as plan time. <span class="tag t-new">Draft 6</span> <code>breach_allowed</code> lets the attack spend mortar or charge time digging through instead of stopping; friendly fire is on, so built-in programs avoid your own voxels, units and structures when they aim</td></tr>
+      <tr><td>Survey</td><td>Probe areas or directions (fixed or selector); scout count; <code>roe</code>; retreat conditions. In-world: a Ledger survey post ("Watch", working name)</td><td>Scouts scan unexplored ground first, then re-check the sightings closest to leaving the reach window, enemy beacons first. <span class="tag t-new">Draft 6</span> They refresh those sightings before the next Lull, so the playbook is written on fresh knowledge. They avoid known threats and report back. Far vision costs a beacon and a visit, which makes it a planning choice rather than a chore</td></tr>
+      <tr><td>Mine</td><td>Seam choice: richest / nearest / safest; max dig depth; pillar spacing; flee on threat. Never digs under structures. <span class="tag t-new">Draft 6</span> Seams are finite (<a href="#kit">section 9</a>), so "richest" means richest remaining.</td><td>Drones carry ore to their home beacon. <span class="tag t-dec">Decided</span> Delivered ore is credited to the <strong>seat treasury</strong> immediately</td></tr>
+    </tbody>
+  </table></div>
+  <ul>
+    <li><span class="tag t-new">Draft 6</span> <strong>Programs:</strong> units and buildings run built-in programs of their own — movement, targeting, repair, salvage — under the mandate's orders. v1 ships one built-in program per kind, and the <code>script</code> arm stays reserved (<a href="#roadmap">section 18</a>).</li>
+    <li><span class="tag t-dec">Decided</span> <strong>Perception:</strong> a mandate sees only its own beacon's sphere and units, plus data messages. Messages can never reconfigure a beacon.</li>
+    <li><span class="tag t-new">Draft 6</span> <strong>Fabrication follows the work in hand:</strong> a mandate's fabricator produces to the work in hand, not to a count, so there are no counts or caps and headroom is the normal state. The full rule and its tuning are in <a href="#economy">section 7</a>.</li>
+    <li><span class="tag t-dec">Decided</span> <strong>Vision and sightings:</strong> spheres give passive vision, Defend pickets give local warning, and Survey beacons give far vision. Every sighting carries its age in the UI and the briefing. <span class="tag t-new">Draft 6</span> A sighting's age accrues on match game time and runs across Pushes; the Lull and the recap add nothing to it. Precedents: Factorio radar, Screeps observers, Northgard scout camps. <span class="tag t-risk">Risk</span> perfect-intel snowballing, and baiting stale sightings. Jammers and decoys are <span class="tag t-road">Roadmap</span>.</li>
+    <li><span class="tag t-dec">Decided</span> <strong>Messaging:</strong> no radio at all until a Radio Mast exists: beacons neither send nor receive. With a Mast, beacons inside its coverage send and receive threat and help messages, and the commander can broadcast go-codes while in coverage. <span class="tag t-new">Draft 6</span> A radio message is untrusted data carrying its sender and its Mast of origin; only the on-site interface can change a beacon. Beacon reports to the seat are always remote and always on. There is no seat-to-seat talk in v1: the engine emits one-way <a href="#caps">chatter</a>, and player Dispatches come back with the live conduit (<a href="#roadmap">section 18</a>).</li>
+  </ul>
+</section>
+<section id="economy">
+  <h2><span class="n">7</span>Economy</h2>
+  <p><span class="tag t-dec">Decided</span> The principle: reward good play while giving trailing players a way to catch up and beginners a hand-up. Keep it simple, because accounting is not fun.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>Element</th><th>Rule</th></tr></thead>
+    <tbody>
+      <tr><td>Two quantities</td><td><span class="tag t-dec">Decided</span> <strong>$</strong> is a stock you spend to build structures, units and beacons. <strong>kW</strong> is a continuous flow that keeps fielded things running. There is no $ upkeep.</td></tr>
+      <tr><td>Settlement</td><td><span class="tag t-new">Draft 6</span> At each recap the Ledger <strong>settles</strong>: Basic Minimum Income plus the award fund are credited to the treasury and shown as a recap line. During a Push the only income is mining and salvage.</td></tr>
+      <tr><td>BMI scaling</td><td><span class="tag t-new">Draft 6</span> The one catch-up dial. A small adjustment by standing, not enough to encourage deliberately losing: last place +10%, leader −5%, linear between. The BMI band is the rank on <strong>held value</strong> ($ plus the HP-weighted build cost of your beacons, structures and units) among living seats, tie-break the lower seat index; eliminated seats leave the ladder — a separate ranking from the standing displayed on screen, which uses the full audit score (<a href="#match">section 3</a>). This is the only place rank touches income. <span class="tag t-tune">Tuning</span></td></tr>
+      <tr><td>Awards</td><td><span class="tag t-new">Draft 6</span> Computed deterministically from sim counters. Each settlement the Ledger releases a <strong>fixed award fund</strong> (tuned relative to BMI), split among that round's winners purely in proportion to awards won. No rank multiplier, no per-seat cap.</td></tr>
+      <tr><td>Treasury</td><td><span class="tag t-dec">Decided</span> <strong>One per seat.</strong> Mined $ is credited when ore is delivered, and recycling refunds are paid in. All spending (fabricators, setup charges, licensed structures) draws from it through the Quartermaster. There are no per-beacon pools or sweeps.</td></tr>
+      <tr><td>Spending</td><td><span class="tag t-new">Draft 6</span> <strong>Paid means yours.</strong> $ leaves the treasury the moment an order commits: deploy starts, structure queued, unit ordered. From that instant the asset counts at its full build cost for every purpose, and there is no refund if it dies mid-build. Construction time is HP and spectacle, not accounting. An order the treasury cannot cover fails like any other step (<code>on_fail</code>, <code>skip_if</code>); E0601 and W06xx cover plan time.</td></tr>
+      <tr><td>Value</td><td><span class="tag t-new">Draft 6</span> <strong>Value follows condition.</strong> An asset is worth build cost × current HP wherever value is read: held value at the final audit and in live standings, and the recycle refund (50% of remaining value, on site). Recycling books destruction credit exactly as destruction does, through the damage split. $ stays at par.</td></tr>
+      <tr><td>Mining and salvage</td><td><span class="tag t-new">Draft 6</span> <strong>Seams are finite:</strong> digging consumes ore voxels, richness sets the total yield, a spent seam reads as spent, and "richest" means richest remaining. Any seat's reclaim drones may salvage any wreck, whoever owned it, within their beacon's sphere; salvage value is small. <span class="tag t-tune">Tuning</span></td></tr>
+      <tr><td>Fabrication</td><td><span class="tag t-new">Draft 6</span> A beacon's fabricator produces a drone only while its mandate has <strong>outstanding work its current drones cannot keep up with</strong> — unbuilt or damaged targets, ore in the sphere — and stops when the work is covered. No counts, no cap; headroom is the normal state. <span class="tag t-tune">Tuning</span> backlog threshold.</td></tr>
+      <tr><td>Power supply</td><td><span class="tag t-new">Draft 6</span> <strong>Seal-only key-cores:</strong> a non-core key-core outputs exactly its own beacon's base draw (net zero). Only the core's deep bore gives spare kW, and the core autocannon runs off that bore, outside the grid and never shed. Generators, built for $ by the Build mandate, sit on heat vents: <strong>one Generator per vent</strong>, output set by the vent's richness, because the vent's heat is the limit, not the tap. Each map has a finite number of vents. All your beacons form one grid, since the placement rule keeps your spheres connected. No batteries in v1.</td></tr>
+      <tr><td>Power draw</td><td><span class="tag t-dec">Decided</span> Beacons, units, turrets and capability structures all draw kW while they exist.</td></tr>
+      <tr><td>Brownout</td><td><span class="tag t-new">Draft 6</span> <strong>The beacon is the unit of power.</strong> Fabricators stop first. Then beacons brown out into dormancy in a fixed order: lowest priority, then furthest from the core, and the core last. What dormancy does to a beacon, and the margin it needs before it revives, are in <a href="#beacons">section 5</a>. Brownouts are visible as domes going dark.</td></tr>
+      <tr><td>Unit ceiling</td><td><span class="tag t-dec">Decided</span> A property of the world, not a rule: a seat can field only what its core surplus and vent Generators can power. Beacon spam adds no power. Map generation keeps total supply within the per-map power budget set by G3′. The engine keeps a hard safety limit far above anything a map can power.</td></tr>
+    </tbody>
+  </table></div>
+  <h3>Quartermaster (spend control)</h3>
+  <ol>
+    <li><span class="tag t-dec">Decided</span> Balances power: when draw exceeds supply, it holds fabricator orders, then applies the brownout order.</li>
+    <li><span class="tag t-new">Draft 6</span> Fills the mandates' spend requests by urgency: defend under attack, then repair, units, build, mine — round-robin within a band, so no single beacon can hog the treasury.</li>
+    <li><span class="tag t-new">Draft 6</span> The one player lever is the per-beacon <strong>low / normal / high</strong> priority knob, set on site. Priority is kW-only: it orders brownouts and nothing else, while $ follows the urgency ladder.</li>
+  </ol>
+  <p><span class="tag t-dec">Decided</span> <strong>You only make it worse on purpose.</strong> An existing power shortfall is a warning (W06xx), flagged in plain language in the recap. A playbook that <em>adds</em> draw beyond supply (placing a beacon, queuing a structure) is an error unless "allow dormant beacons" is set.</p>
+  <div class="callout"><b>The Ledger's line:</b> the ration is set by what you hold, not what you broke. It pays for what stands, in the state it stands in.</div>
+  <p><span class="tag t-tune">Tuning</span> Draft award catalogue: First Blood, Bulwark, Flag Planter, Demolition Artist, Architect, Prospector, Field Medic, Ghost Scout, Switchboard, Diversified, Clockwork. BMI, the award fund, kW outputs and draws, vent counts, Generator output per richness, ore yield per richness, and the revive margin.</p>
+  <p><span class="tag t-road">Roadmap</span> <strong>Citations</strong> come back first as free cosmetic Ledger memos (e.g. Tortoise, Statue, Dragon's Hoard), with fees possibly added later. Charging individual units energy for remote operations. Grid islands, where a cut chain splits the grid. Batteries. A custom Quartermaster, written against the in-game script runtime that arrives after v1.2 (<a href="#roadmap">section 18</a>), verified offline and switchable back to the default during a match.</p>
+</section>
+<section id="caps">
+  <h2><span class="n">8</span>Capabilities &amp; radio</h2>
+  <ul>
+    <li><span class="tag t-dec">Decided</span> Every capability is <strong>enabled by building a voxel structure</strong>. There are no abstract stat upgrades.</li>
+    <li><span class="tag t-new">Draft 6</span> <strong>Earned as licences.</strong> All three triggers are evaluated once, at the <strong>settlement</strong> that ends a segment, announced in the recap and held for the next Lull. A licence is permanent. You then queue the structure on site at any of your beacons: the commander stays for the 5 s queue, the $ leaves the treasury the moment it is queued, and the kW draw starts with it. That beacon's built-in fabricator builds it whatever the mandate.</li>
+    <li><span class="tag t-new">Draft 6</span> <strong>No count limits.</strong> $ and kW decide how many you build, with one exception: <strong>one Resonance Spire per beacon</strong>, because two spires interfere with each other. Destroyed structures are rebuilt without earning the licence again.</li>
+    <li><span class="tag t-dec">Decided</span> Capabilities last the whole match. Timed weapons and combat boosts are not in v1. <span class="tag t-road">Roadmap</span></li>
+    <li><span class="tag t-new">Draft 6</span> A destroyed structure suspends its capability until it is rebuilt. Nothing is rebuilt automatically: a replacement needs a fresh 5 s on-site queue. Any of your Build beacons repairs a damaged capability structure within its sphere; a structure left on a dead beacon is a neutral ruin, unpowered and unrepairable.</li>
+    <li><span class="tag t-dec">Decided</span> An eliminated seat's licences are voided.</li>
+  </ul>
+  <div class="tbl"><table>
+    <thead><tr><th>v1 structure</th><th>Licence earned by</th><th>Enables</th><th>Spectacle and counterplay</th></tr></thead>
+    <tbody>
+      <tr><td>Radio Mast</td><td>Holding 3+ beacons at a settlement ("a network needs nodes")</td><td><strong>Messaging, and nothing else.</strong> Beacons under mast coverage send and receive, and the commander can broadcast while in coverage: threat and help messages between your own beacons, and go-codes a route step can wait on. Range grows with the mast's height above the ground. Without a mast there is no radio. <span class="tag t-new">Draft 6</span> A mast extends no reach and carries no reconfiguration; v1 has no relays.</td><td>A lattice tower with a blinking tip, links drawn to peer masts. Destroying it silences the network.</td></tr>
+      <tr><td>Sensor Spire</td><td><span class="tag t-new">Draft 6</span> Being blindsided during the segment: you lose a beacon or a licensed capability structure to an attacking unit you had no sighting of within reach memory N. Losing a wall, a unit or a drone never counts, and this trigger doubles as catch-up</td><td>A timed reveal pulse with a cooldown. What it reveals enters that seat's <strong>reach</strong> like its own vision, and reaches beacons under mast coverage as messages.</td><td>A vertical light pulse and a ring of revealed voxels in the dark. Can be destroyed or baited.</td></tr>
+      <tr><td>Resonance Spire</td><td>Running Generators on 2 vents at a settlement ("resonance with the deep heat")</td><td>A larger sphere for its own beacon, justified because the structure itself is the spectacle. One per beacon.</td><td>A crystal lattice grows over about 60 s, and an aurora tether swells the dome under the Pall. If the spire is destroyed, the dome collapses on camera.</td></tr>
+    </tbody>
+  </table></div>
+  <p><span class="tag t-new">Draft 6</span> <strong>Radio model v1 is mast-only:</strong> height-based range, with no line-of-sight checks, no relays and no jamming. Conditions query mast coverage rather than mast geometry, so later models change the answers without changing the vocabulary.</p>
+  <div class="callout"><strong>Radio carries data, never control.</strong> Every message is untrusted input: it arrives in a labelled field with its sender and its Mast of origin, and a playbook may read it in a guard. Nothing over the air can reconfigure a beacon, retarget a mandate or alter a sealed playbook — the on-site interface is the only trusted path, and the commander is the courier that walks it (<a href="#commander">section 4</a>, <a href="#gameplan">section 10</a>).</div>
+  <h3>Chatter <span class="tag t-new">Draft 6</span></h3>
+  <p>Player-written Dispatches are cut from v1; their proto field number is reserved and they return with the live conduit in v1.2 (<a href="#roadmap">section 18</a>). What stays is one-way <strong>chatter</strong>: built-in seats emit short engine-authored lines from their intent and events, framed as intercepted open-air talk. It is open-air crew talk overheard on site, not mast traffic, so it needs no Radio Mast; it shows in the Push-start ticker, in the recap and in recordings. No seat reads it — the built-in operator never takes chatter as input — so it is spectacle, not a channel, and there is nothing to collude through.</p>
+  <p><span class="tag t-tune">Tuning</span> Trigger thresholds, reach memory N in game-minutes, and odds of random capabilities (deferred). <span class="tag t-road">Roadmap</span> Over-the-air attack and its counters: interception (an enemy Sensor Spire or Mast reads your broadcasts), spoofing (a fake mark or go-code), jamming, rolling go-codes and courier-only doctrine. Also: line of sight and relays ("Horizon"), jammer domes, decoys, direction finding, satellite uplink with scheduled passes, directed or encrypted notes and pacts the Ledger enforces. Remote reconfiguration is never allowed. Structure catalogue: Relay Pylon, Jammer, Uplink Dish, DF Loop, Vehicle Bay, Excavator Rig, Charge Armory, Transit Rail, Command Bunker, Decoy Beacon, Drone Hangar.</p>
+</section>
+<section id="kit">
+  <h2><span class="n">9</span>Sandbox kit, locomotion &amp; maps</h2>
+  <div class="tbl"><table>
+    <thead><tr><th>Item</th><th>Role</th><th>Counter</th></tr></thead>
+    <tbody>
+      <tr><td>Wall</td><td>Cheap blocking terrain; blocks every unit, including your own</td><td>Mortar, demolition charge</td></tr>
+      <tr><td>Autocannon</td><td>Fast direct fire; beats raiders and swarms</td><td>Mortar out-ranges it</td></tr>
+      <tr><td>Mortar</td><td>Slow arcing shell that can be dodged; area damage to voxels; beats clumps and walls</td><td>Raiders dive it</td></tr>
+      <tr><td>Raider drone</td><td>Fast and light; hits the nearest structure</td><td>Autocannon</td></tr>
+      <tr><td>Demolition charge</td><td>Timed explosive that destroys a ball of voxels</td><td>Intercept the carrier</td></tr>
+      <tr><td>Repair / reclaim drone <span class="tag t-new">Draft 6</span></td><td>One unit, both jobs: it repairs, and it salvages wrecks and ruins for $. Fielded by Build beacons; any seat's reclaim drones may salvage any wreck, whoever owned it, within their beacon's sphere</td><td>Kill the drones</td></tr>
+      <tr><td>Scout / sensor unit <span class="tag t-dec">Decided</span></td><td>Cheap vision. Fielded by Survey beacons (probes) and Defend beacons (pickets)</td><td>Any fire</td></tr>
+      <tr><td>Generator <span class="tag t-new">Draft 6</span></td><td>Built on a heat vent; supplies kW to the seat's grid. <strong>One Generator per vent</strong>, its output set by the vent's richness — the vent's heat is the limit, not the tap</td><td>Destroy it to brown out the enemy's beacons</td></tr>
+      <tr><td>Build drone · mining drone</td><td>Build and terraform; carry ore to the home beacon, where it is credited to the treasury</td><td>Raiders, autocannon</td></tr>
+    </tbody>
+  </table></div>
+  <p><span class="tag t-dec">Decided</span> Flowing water is out of v1. <span class="tag t-dec">Decided</span> Reinforced wall, gate and shield block move to the <span class="tag t-road">Roadmap</span>; the raider is the mortar's counter. <span class="tag t-tune">Tuning</span> Stats, $ costs, kW draw, and the (small) value of a salvaged wreck.</p>
+  <h3>Locomotion and friendly fire</h3>
+  <div class="callout"><b>Everything walks.</b> Every unit uses the commander's locomotion — its own fixed speed, climbing steps of one voxel. Nothing flies in v1. Walls, craters and trenches block every unit, yours included: a moat seals you in as well, and Build's fill and dig are what undo it. <code>breach_allowed</code> means an Attack may spend mortar or charge time digging or demolishing a way through instead of stopping. Friendly fire is on: your mortars and charges damage your own voxels, units and structures, and the built-in mandates aim to avoid your own assets. Pathing handles terrain edited during the Push. <span class="tag t-new">Draft 6</span></div>
+  <h3>Maps</h3>
+  <p><span class="tag t-dec">Decided</span> A seeded, deterministic generator with <strong>3-way rotational symmetry</strong>: equal spawn zones, a reachable vent near each start, equal nearby ore, and richer contested vents toward the centre. <span class="tag t-new">Draft 6</span> Spawns are at least about 1.5 early Pushes apart, stated in both raider travel and commander travel; fairness tests check vent and ore parity and that distance across the occupied spawns. <span class="tag t-new">Draft 6</span> With fewer than 3 seats, an unoccupied spawn zone is terrain only: the generator omits its near vent and starting seam and leaves the ground unchanged (in-world, a claim the Ledger never issued). About 384×384 voxels wide by 64 tall, tuned by G3′, whose real measurement also sets the per-map power budget.</p>
+  <p><span class="tag t-new">Draft 6</span> One ore type ("scrap seams") of varying richness, plus salvage from wrecks. <strong>Seams are finite:</strong> digging consumes ore voxels, richness sets a seam's total yield, a spent seam reads as spent, and "richest" means richest remaining. Maps are saved as files, so handmade maps can follow. <span class="tag t-road">Roadmap</span> handmade maps. <span class="tag t-risk">Risk</span> Symmetry can look artificial, and the generator needs its own fairness tests.</p>
+</section>
+<section id="gameplan">
+  <h2><span class="n">10</span>Playbooks</h2>
+  <p><span class="tag t-new">Draft 6</span> A <strong>playbook</strong> is <strong>typed declarative data</strong>, not a script: a route of steps, prioritised rules, a required <code>on_death</code> block and a required <code>fallback</code>. It drives the commander for one segment. The human writes one in the editor and the built-in operator generates one; both produce the same file.</p>
+  <h3>Format and vocabulary</h3>
+  <ul>
+    <li><span class="tag t-new">Draft 6</span> <strong>File:</strong> a playbook is a <strong>JSONC</strong> file — canonical proto JSON for the <code>gp.v1</code> package, plus comments. It is hand-editable in any text editor, and the editor round-trips comments and formatting, so a hand-written file survives being opened and saved. Templates and the sample library are the same format. There is no script language, no SDK and no script runtime in v1; external scripts are <span class="tag t-road">Roadmap</span> (<a href="#roadmap">section 18</a>).</li>
+    <li><strong>Naming:</strong> the schema package is <code>gp.v1</code> and the gateway methods keep the word plan (<code>verify_plan</code>, <code>submit_plan</code>, <code>render_plan</code>). Everywhere else the thing is a playbook.</li>
+    <li><span class="tag t-new">Draft 6</span> <strong>The v1 vocabulary is exactly what the editor renders:</strong> route steps with guards, handlers (rules), selectors, <code>on_death</code>, <code>fallback</code> and options. <code>set_flag</code>, <code>clear_flag</code>, <code>branch</code>, <code>repeat</code> and the flag predicates are not in v1; their field numbers are reserved and they return in v1.1 with the expert editor view (<a href="#roadmap">section 18</a>), as a minor version with no converter.</li>
+    <li><span class="tag t-new">Draft 6</span> <strong>Load never strips:</strong> an out-of-vocabulary construct is rejected with a verifier error carrying a code and a JSON Pointer, so an edited file either loads as written or says why it did not.</li>
+  </ul>
+  <h3>Execution</h3>
+  <ul>
+    <li><strong>Timing:</strong> playbooks run inside the deterministic sim at 20 Hz. Decisions (rules, step transitions, selector resolution) are taken every 250 ms of game time. Times in the file are game milliseconds, never ticks.</li>
+    <li><span class="tag t-new">Draft 6</span> <strong>One body at a time:</strong> on each decision the first enabled rule whose condition is true starts its body. At most one rule body runs at a time and no rule pre-empts another; while none is running, the current route step continues.</li>
+    <li><span class="tag t-new">Draft 6</span> <strong>Only the reflex interrupts.</strong> It fires at commander HP ≤ 20% — fixed, not disableable, and there is no <code>reflex_hp_pct</code> option. It aborts any visit in progress, walks the commander to the safest own beacon, and then the route continues from the step it was on. It re-fires only after new damage. Author-tuned bravery is an ordinary flee rule, not a setting.</li>
+    <li><span class="tag t-new">Draft 6</span> <strong>Interface rows are atomic:</strong> each row is one change that commits at the end of its own duration, so a multi-field edit is all-or-nothing. Committed rows stay; a resumed visit is a new visit and pays the handshake again.</li>
+    <li><span class="tag t-new">Draft 6</span> <strong>Segment end:</strong> the playbook stops, and nothing carries over except the world itself. The coming segment's length in milliseconds is part of the frozen snapshot, so the editor clock, the fits pill and <code>render_plan</code> all read the same number rather than a constant.</li>
+  </ul>
+  <div class="tbl"><table>
+    <thead><tr><th>Step</th><th>Completes</th><th>Fails / notes</th></tr></thead>
+    <tbody>
+      <tr><td><code>move</code></td><td>Within arrive radius</td><td>No path or timeout. Pace: direct, or avoid known threats</td></tr>
+      <tr><td><code>interface</code></td><td>All rows committed</td><td>Beacon destroyed, commander dies, or commander leaves range. Damage does not interrupt</td></tr>
+      <tr><td><code>place_beacon</code></td><td>12 s deploy, then any initial settings at interface rates</td><td>Placement becomes illegal. Mandate type is free</td></tr>
+      <tr><td><code>wait_until</code></td><td>Condition is true</td><td>Timeout is <strong>required</strong></td></tr>
+      <tr><td><code>hold</code></td><td>Duration elapsed</td><td></td></tr>
+      <tr><td><code>broadcast</code></td><td>Sent: mark target, threat at, go-code, rally</td><td>Only with a Radio Mast, and only while the commander is in mast coverage</td></tr>
+    </tbody>
+  </table></div>
+  <p>Every step supports the <code>skip_if</code>, <code>timeout_ms</code> and <code>on_fail</code> guards (skip, abort route, or jump to a later step), plus a label and a note.</p>
+  <h3>Why a playbook survives a long segment without a dry run</h3>
+  <ol>
+    <li><strong>Late-bound selectors.</strong> For example "my weakest Defend beacon", or "the nearest known enemy beacon within the reach window". They resolve when the step starts, then stay pinned for that step.</li>
+    <li><strong>Rules with explicit resume semantics:</strong> a body runs to its end, then continue, skip step, jump forward, or end route.</li>
+    <li><strong>Guards on every step</strong>, so steps degrade instead of blocking.</li>
+    <li><strong>Autonomy on the beacon side, set on site.</strong> For example, an Attack launches at 4:00 <em>or</em> on go-code A, so a dead commander doesn't stall it.</li>
+    <li><strong>A guaranteed tail:</strong> the fallback posture (hold, shadow or patrol), and the self-preservation reflex.</li>
+  </ol>
+  <h3>Conditions</h3>
+  <ul>
+    <li><strong>Structure:</strong> all / any / not trees, depth ≤4 and ≤24 nodes, integer comparisons only.</li>
+    <li><span class="tag t-new">Draft 6</span> <strong>Knowledge:</strong> conditions read only the seat's knowledge store. Enemy predicates must declare freshness (<code>VISIBLE_NOW</code> or <code>KNOWN_WITHIN ms</code>); Attack target selectors take their freshness from the seat's reach memory N (<span class="tag t-tune">Tuning</span>) instead, so there is one reach window and one verifier check.</li>
+    <li><strong>Predicate families:</strong> clock; commander (HP, position, deaths, recent damage); own beacon (status, HP, under attack, units by role, mandate, powered or dormant, structures, reports since); aggregates; enemy knowledge (units near, beacon known, structure near); economy (treasury, income forecast, kW supply, draw and headroom); capability licence and structure state; mast coverage; playbook state (step reached, rule fired, posture).</li>
+    <li><strong>Deliberately absent:</strong> enemy playbooks, enemy treasury and mandates, unseen positions, enemy intent, and randomness.</li>
+  </ul>
+  <h3>Limits and termination</h3>
+  <p>Every playbook halts. These limits are technical (bounded cost and guaranteed termination), and in the story they are the Ledger's seal-inspection rules:</p>
+  <ul>
+    <li><strong>Jumps and waits:</strong> a jump only ever goes forward, and every wait has a timeout.</li>
+    <li><span class="tag t-dec">Decided</span> <strong>Size:</strong> one <strong>playbook size budget</strong> replaces the separate counts. Steps, rules and their bodies, build targets and protected areas all count toward it. It is sized so FULL verification stays under 50 ms and every seat's rules fit the 20 Hz tick. The embedded gate P1 and the per-rule cost on a decision tick set the number. The editor and verifier show a size meter. There are no beginner or expert rule tiers.</li>
+    <li><strong>Rule firing:</strong> each rule has a cooldown ≥5 s and fires at most 1–8 times.</li>
+    <li><strong>Hard stop:</strong> the end of the segment.</li>
+  </ul>
+  <p>The per-seat evaluation cost is a constant.</p>
+<pre><code>// expand_east.jsonc — comments survive a round trip through the editor
+{ "schema_version": {"major":1,"minor":0},
+  "meta": {"title":"Expand &amp; Mine east","author_kind":"HUMAN"},
+  "declarative": {
+    "route": [
+      {"label":"to_site","move":{"to":{"voxel":{"x":96,"y":11,"z":62}},"pace":"AVOID_KNOWN_THREATS"},"timeout_ms":120000},
+      {"label":"place_east","place_beacon":{"at":{"voxel":{"x":96,"y":11,"z":62}},"tags":["east"],
+        // initial settings are interface rows: each one commits on its own
+        "initial":{"priority":"NORMAL","mandate":{"roe":"RETURN_FIRE","mine":{"dig_max_depth":4,"flee_on_threat":true}}}}},
+      {"label":"back_home","move":{"to":{"beacon_anchor":{"beacon_id":"b_01"}}}}
+    ],
+    "handlers": [
+      // bravery is an ordinary rule; the 20% reflex is fixed and always on top of it
+      {"id":"flee","when":{"all":{"items":[{"cmdr_hp_pct":{"cmp":"LE","pct":40}},{"cmdr_took_damage_within":{"ms":3000}}]}},
+       "body":[{"label":"f1","move":{"to":{"safest":{}}}},{"label":"f2","hold":{"ms":8000}}],
+       "resume":"CONTINUE","cooldown_ms":30000,"max_fires":3}
+    ]},
+  "on_death": {"on_respawn":"CONTINUE","max_deaths_before_fallback":2},
+  "fallback": {"hold":{"at":{"beacon_anchor":{"safest":{}}}}} }</code></pre>
+  <p><strong>Versioning and reserved seams:</strong></p>
+  <ul>
+    <li>The package is <code>gp.v1</code>. Minor versions add optional fields; a major version comes with a converter that is kept forever. Submitted playbooks with unknown fields are rejected, and <code>buf breaking</code> runs in WIRE_JSON mode.</li>
+    <li><span class="tag t-new">Draft 6</span> <strong>The script seams exist from v1, with only the <code>builtin</code> arm implemented:</strong> <code>operator {builtin|script}</code>, <code>mandate {builtin|script}</code>, <code>program {builtin|script}</code>, an <code>author_kind</code> that reserves <code>SCRIPT</code>, and a plan fingerprint. The script arms are what v1.1 fills in (<a href="#roadmap">section 18</a>); nothing in v1 reads them.</li>
+    <li><span class="tag t-new">Draft 6</span> <strong>There is no dispatch field.</strong> Chatter is engine-authored and one-way, so a playbook never carries player text; the field number is reserved for the v1.2 return of player Dispatches.</li>
+    <li>Field numbers are also reserved for the vocabulary held back to v1.1 (<code>set_flag</code>, <code>clear_flag</code>, <code>branch</code>, <code>repeat</code>, the flag predicates), reassigning units, logistics delivery, radio predicates (link up, jammed, satellite pass), <code>team_id</code>, capture objectives, and grid-island predicates.</li>
+  </ul>
+  <div class="callout"><span class="tag t-new">Draft 6</span> <strong>Submission.</strong> During the Lull a seat may submit as often as it likes: the latest playbook that passes FULL verification replaces the previous one, any number of times until the timer ends. If nothing verified was ever submitted when the timer ends, the operator files the safe playbook (<a href="#planner">section 14</a>). The editor pre-loads last round's playbook as an editable, re-verified draft, so a resubmission usually starts from what already worked.</div>
+</section>
+<section id="verifier">
+  <h2><span class="n">11</span>Verifier (seal inspection)</h2>
+  <p>A v1 playbook <strong>qualifies</strong> when all of the following hold:</p>
+  <ol>
+    <li>It decodes strictly at a supported schema version.</li>
+    <li><span class="tag t-new">Draft 6</span> It uses only the v1 vocabulary: route steps with guards, handlers, selectors, <code>on_death</code>, fallback and options. Out-of-vocabulary constructs (<code>set_flag</code>, <code>clear_flag</code>, <code>branch</code>, <code>repeat</code>, flag predicates) are rejected with a code and a JSON Pointer, never silently stripped — on Load as well as on submit.</li>
+    <li>It passes every limit and termination rule.</li>
+    <li>Every reference resolves against the seat's frozen knowledge snapshot, or has a none-policy.</li>
+    <li>All changes and settings are within range for the built-in mandates and programs. <span class="tag t-new">Draft 6</span> Attack targets lie within the seat's <strong>reach</strong> at plan time — its own spheres, the live vision of its own units and structures, and Sensor Spire reveals, each seen within memory N game-minutes. Reach is tested once, at plan time; the target is pinned at seal, except an <code>enemy commander</code> target, which may retarget live within that same reach (<a href="#mandates">section 6</a>) — one reach, one verifier check. The playbook fits the size budget.</li>
+    <li>It has zero errors. An existing power shortfall is only a warning. Adding draw beyond supply is an error unless "allow dormant beacons" is set.</li>
+    <li>Its hashes are recorded.</li>
+  </ol>
+  <div class="tbl"><table>
+    <thead><tr><th>Allowed estimates</th><th>Forbidden ("no dry runs")</th></tr></thead>
+    <tbody>
+      <tr><td>Pathfinder travel estimates over known terrain; fogged voxels use last-known state or ×1.5 cost</td><td>Stepping or forking the simulation. <span class="tag t-dec">Decided</span> Fork exists only in the research build, and these crates can't depend on it</td></tr>
+      <tr><td>Interface-time arithmetic</td><td>Running mandates, programs, combat or construction</td></tr>
+      <tr><td>$ and kW projection (Quartermaster arithmetic)</td><td>Modelling enemy behaviour</td></tr>
+      <tr><td>Placement legality, selector previews ("if resolved now"), mast coverage</td><td>Evaluating rule conditions over a projected future</td></tr>
+    </tbody>
+  </table></div>
+  <ul>
+    <li><strong>Pipeline:</strong> decode → structure → resolve → semantics (together called <strong>QUICK</strong>, ≤ 5 ms p99, run on every edit) → estimate → lint (<strong>FULL</strong>, ≤ 50 ms p99 at the size budget, always run on submit).</li>
+    <li><span class="tag t-new">Draft 6</span> <strong>Depth:</strong> <code>verify_plan</code> takes <code>depth: quick | full</code> and defaults to full; submit always runs full.</li>
+    <li><span class="tag t-new">Draft 6</span> <strong>Deterministic:</strong> the result is a pure function of five inputs — playbook bytes, snapshot, rules hash, verifier version and depth — so a pre-check and the check at submit are byte-identical (<code>report_hash</code>). Two reports compare only within one depth.</li>
+    <li><strong>Diagnostics</strong> are modelled on rustc's JSON output. Each has a code, severity, a JSON Pointer path, related paths, map references, a precise message, a plain-language beginner sentence, and JSON Patch suggestions labelled with how safely they apply. <span class="tag t-new">Draft 6</span> Diagnostic codes are language-neutral; every user-facing string in v1 — UI, diagnostic catalogue text and the plain-language playbook rendering — is English and lives in one string table, and translation is <span class="tag t-road">Roadmap</span> (<a href="#roadmap">section 18</a>).</li>
+    <li><strong>About 35 codes</strong> in these families:
+      <ul>
+        <li>decode and version (E000x)</li>
+        <li>limits and required blocks (E01xx)</li>
+        <li>conditions (E02xx)</li>
+        <li><span class="tag t-new">Draft 6</span> control flow (E03xx — a small family in v1: no branch or repeat to check, so it covers step order, handlers and <code>on_death</code>)</li>
+        <li>references and placement (E04xx)</li>
+        <li>settings and recycle (E05xx)</li>
+        <li><span class="tag t-new">Draft 6</span> economy, power and messaging (E0601 added draw, W06xx shortfall). Because $ leaves the treasury the moment an order commits, this family also warns where a playbook's committed spending — deploys, queued structures, ordered units — outruns the projected treasury; at run time an order the treasury cannot cover fails like any other step, through <code>on_fail</code> or <code>skip_if</code></li>
+        <li>schedule, conflicts and staleness (W07xx)</li>
+        <li>information (I…)</li>
+      </ul>
+    </li>
+  </ul>
+</section>
+<section id="api">
+  <h2><span class="n">12</span>Seat Gateway</h2>
+  <p><span class="tag t-new">Draft 6</span> The Seat Gateway is one internal API with several clients. The Godot editor, the <code>gamectl</code> CLI and the built-in operator all call it, JSON-RPC over a localhost WebSocket. The editor is simply one more client: it runs no validation or time maths of its own. Nothing is published in v1 — no MCP server, no SDK, no script runtime — but the gateway is deliberately kept agent-shaped, because it is what the roadmap opens up.</p>
+  <p><span class="tag t-new">Draft 6</span> AI seats and a published API are roadmap, not v1: the scripting API arrives in v1.1 and the live conduit in v1.2 (<a href="#roadmap">section 18</a>).</p>
+  <div class="tbl"><table>
+    <thead><tr><th>Group</th><th>Seat Gateway methods (all clients)</th></tr></thead>
+    <tbody>
+      <tr><td>Status</td><td><code>get_status</code> (phase, timers, and <span class="tag t-new">Draft 6</span> the coming segment's length from the frozen snapshot) · <code>wait_for</code> (long poll on phase change or digest)</td></tr>
+      <tr><td>Memory</td><td><span class="tag t-new">Draft 6</span> <code>save_notes</code> (private seat notebook, 4,000 characters, returned at the top of <code>get_briefing</code>; sits under the plan scope, and the editor's notes box reaches it like any other editor feature)</td></tr>
+      <tr><td>Knowledge</td><td><code>get_briefing</code> (the main one; carries the notebook, the seat's displayed standing and the coming segment's length) · <code>get_recap</code> · <code>list_beacons</code> · <code>get_beacon</code> · <code>get_map_summary</code> · <code>query_area</code> · <code>list_known_enemies</code> · <code>get_reports</code> · <code>get_economy_forecast</code> ($ and kW, with what-ifs) · <code>get_capabilities</code> · <code>estimate_route</code></td></tr>
+      <tr><td>Docs</td><td><code>get_schema</code> (sliced to what the seat can use) · <code>list_templates</code></td></tr>
+      <tr><td>Planning</td><td><code>instantiate_template</code> · <span class="tag t-new">Draft 6</span> <code>verify_plan{depth: quick|full}</code> (default full) · <code>render_plan</code> · <code>patch_plan</code> · <code>save_draft</code> · <code>list_drafts</code> · <code>get_safe_plan</code></td></tr>
+      <tr><td>Commit</td><td><code>submit_plan</code> (always runs FULL; <span class="tag t-new">Draft 6</span> the latest verified submission replaces the previous one, any number of times until the timer ends) · <code>set_ready</code></td></tr>
+      <tr><td>During play</td><td><code>get_segment_feed</code>: fog-filtered events (no-fog for every seat in casual matches) plus a digest for every 60 s of game time. <span class="tag t-new">Draft 6</span> Engine chatter rides the same feed as labelled one-way lines. Planning is closed during play and the recap.</td></tr>
+      <tr><td><span class="tag t-road">Roadmap</span></td><td><code>get_ballot</code> · <code>cast_vote</code> (voting deferred)</td></tr>
+    </tbody>
+  </table></div>
+  <ul>
+    <li><strong>Budgets:</strong> read methods take a <code>detail</code> of brief (≤1.5k model tokens), standard (≤4k) or full (≤10k), truncated in a fixed salience order. Every result carries a <code>_status</code> footer with the phase and timer. No v1 client is a model, so nothing actually spends those tokens; the budgets are kept because they are the shape the v1.1 API needs.</li>
+    <li><strong>Output:</strong> each result has structured JSON plus deterministic template prose. Pagination uses opaque cursors tied to the snapshot.</li>
+    <li><strong>Errors:</strong> a closed set of codes (for example <code>PHASE_CLOSED</code>, <code>STALE_SNAPSHOT</code>, <code>NO_QUALIFYING_PLAN</code>, <code>RATE_LIMITED</code>). An invalid playbook is <em>not</em> a method error: it returns a full report with <code>qualifies:false</code>.</li>
+    <li><strong>Security:</strong>
+      <ul>
+        <li>Binds to 127.0.0.1 / ::1 only, with Host and Origin checks.</li>
+        <li>Per-seat 256-bit tokens tied to the match and seat, revocable from the lobby. Scopes: observe, plan, plan.submit, docs, spectate.nofog, admin.</li>
+        <li><span class="tag t-dec">Decided</span> Seat tokens can never hold <code>spectate.nofog</code>; only separate spectator tokens can. Admin covers lobby and match control and can never read another seat's playbooks, drafts or knowledge.</li>
+        <li><span class="tag t-new">Draft 6</span> <strong>Fog is a per-match policy</strong>, applied server-side by the gateway's fog filter: fogged by default, no-fog in casual matches, unlocked on elimination and at match end. Scopes gate spectator tokens only, so the token invariant holds literally and no token is reissued mid-match. Live standings carry a seat's own score and rank only.</li>
+        <li><span class="tag t-new">Draft 6</span> <strong>Secrecy:</strong> playbooks, drafts, the notebook and the private replay cache never leave the gateway for another seat.</li>
+        <li>Rate limits, an audit log, and no filesystem or network access through playbooks.</li>
+      </ul>
+    </li>
+    <li><strong>Generated docs:</strong> <code>get_schema</code> and the <code>gamectl</code> docs output are generated from the schema so they can't drift. <span class="tag t-road">Roadmap</span> <code>llms.txt</code>, <code>llms-full.txt</code>, golden example playbooks and an agent guide ship with the v1.1 published API.</li>
+  </ul>
+  <div class="callout"><b>gamectl CLI:</b> verify, schema, docs, scenarios, seat doctor. There is no <code>connect</code> in v1 — nothing outside the game attaches to a seat — and <code>gamectl scenario run</code> is what drives the three nightly adversarial scenarios.</div>
+<pre><code>get_status → get_briefing{detail:"standard"} → get_beacon{b_04} → list_templates{tag:"attack"}
+→ get_schema{part:"step"} → estimate_route → verify_plan{depth:"quick"}  (2 errors, with fixes)
+→ patch_plan → verify_plan{depth:"full"} → render_plan → submit_plan  (report_hash matches the FULL pre-check)
+→ set_ready → wait_for{phase_change} → wait_for{feed_digest} …     14 calls</code></pre>
+</section>
+<section id="editor">
+  <h2><span class="n">13</span>Playbook editor</h2>
+  <p><span class="tag t-dec">Decided</span> Humans author playbooks with three tools, built on the same Seat Gateway every other client uses: a <strong>map timeline</strong>, a <strong>gambit-style rule list</strong>, and <strong>templates</strong>. It draws on Frozen Synapse waypoints, Door Kickers go-codes, FF12 gambits, Gladiabots, Into the Breach telegraphing and Factorio share strings.</p>
+  <ul>
+    <li><strong>Map route:</strong>
+      <ul>
+        <li>Click one of your beacons to choose Visit &amp; change, Go here or Recycle. Click the ground to Go here or Place beacon, with a live legality ghost. Click a known enemy beacon to target it with an Attack beacon.</li>
+        <li>Alt-click turns a fixed target into a selector.</li>
+        <li>Routes draw as polylines with travel estimates; legs through fog are dashed.</li>
+      </ul>
+    </li>
+    <li><strong>Segment clock:</strong> bars for move, interface (with a tick at each change's commit point), placement, wait, fallback and slack. Worst-case rule detours show in a second lane. A "fits" pill turns green, amber or red. Scrubbing moves a ghost commander along the <em>schedule preview</em> only; outcomes are never shown. <span class="tag t-new">Draft 6</span> The clock and the pill are scaled to the coming segment's length, taken from the frozen snapshot rather than assumed (the ladder in <a href="#match">section 3</a>).</li>
+    <li><strong>Rule list:</strong> each rule is a sentence with clickable parameter chips, reordered by dragging. Conditions are picked through family → predicate → parameters. Vocabulary you haven't unlocked shows greyed out with a lock and the reason. Conflicting rules are joined by a connector line.</li>
+    <li><strong>Templates (8):</strong> Hold &amp; Build, Expand &amp; Mine, Fortify Under Threat, Economy Reset, Staged Attack with Go-Time (<span class="tag t-dec">Decided</span> optional Survey post), Capability Rush, Beacon Chain Push, Safe Playbook. Each is a parameter wizard pre-filled with the built-in operator's suggestion and a "why" note.</li>
+    <li><span class="tag t-new">Draft 6</span> <strong>Local-first library:</strong> templates and a sample library are JSONC files in a local folder. You can copy one and edit it by hand, or use Save as template / Load in the editor. Nothing in the library executes: these are data files, not scripts. The gateway reads that folder to list and instantiate templates, but stores none of it: your files stay local, and anything you write reaches the gateway only once it becomes a draft or is submitted. The shipped samples carry description headers so a reader can tell at a glance what each one is for.</li>
+    <li><span class="tag t-new">Draft 6</span> <strong>The editor's reach is the schema:</strong> the v1 playbook vocabulary is exactly what this editor renders — route steps with guards, handlers, selectors, <code>on_death</code>, fallback and options. Load rejects any out-of-vocabulary construct with a verifier code and a JSON Pointer to the offending node; it never silently strips what it cannot draw. Flags, branch, repeat and the raw-JSON view return together in v1.1 (<a href="#roadmap">section 18</a>).</li>
+    <li><span class="tag t-new">Draft 6</span> <strong>Draft continuity:</strong> each Lull opens with last round's playbook pre-loaded as an editable draft, re-verified against the new snapshot so anything the round invalidated shows as a diagnostic straight away.</li>
+    <li><span class="tag t-dec">Decided</span> <strong>Notes box:</strong> the human's view of the seat notebook, read and written through the gateway like every other editor feature.</li>
+    <li><strong>Validation:</strong> QUICK runs on every edit and FULL after 600 ms idle. Rows show icons and plain sentences; Fix buttons apply the machine-applicable patches the verifier offers. <span class="tag t-new">Draft 6</span> Typing feel is judged by P6, not by the verifier gate: a template playbook filed in ≤ 2 min and one from scratch in ≤ 5 min (<a href="#phase0">section 16</a>).</li>
+    <li><strong>Exact round-trip:</strong> the editor's model <em>is</em> the playbook JSON. Edits are JSON Patches with inverse-patch undo, and comments survive a load-and-save unchanged. The plan core's canonical form is authoritative, and golden tests byte-compare the output.</li>
+    <li><span class="tag t-dec">Decided</span> <strong>One editor view in v1:</strong> no rule-slot tiers. The beginner template starts with 4 rules, and a size meter shows the playbook budget. <span class="tag t-dec">Decided</span> <strong>Selectors stay:</strong> Alt-click turns a fixed target into nearest, weakest, safest or most threatened. Templates may pre-fill selectors, and chips read "resolves when the step starts". The rest of the expert view (flags, branch and repeat, raw JSON, command palette) is <span class="tag t-road">Roadmap</span>.</li>
+    <li><span class="tag t-dec">Decided</span> <strong>Probation guidance:</strong> in the Probation match, the first Lull opens the template wizard with a guided pick, and Ledger memos explain what just happened in plain language.</li>
+    <li><strong>Accessibility:</strong> accessible names generated from the rendered sentences, icons plus text for severity, 100–200% font scaling, reduced motion.</li>
+  </ul>
+</section>
+<section id="planner">
+  <h2><span class="n">14</span>Built-in operator</h2>
+  <p><span class="tag t-new">Draft 6</span> Every commander is run by the built-in <strong>operator</strong>. It does three jobs: it generates a playbook with the rudimentary tool (templates plus utility scoring), it files the safe playbook when a seat submits nothing verified before the Lull ends, and it executes whatever playbook the seat sealed — the human's edited playbook and its own alike. A computer opponent is that operator with no human editing it, plus the built-in mandates on its beacons and the built-in programs in its units and buildings.</p>
+  <p>The operator is an ordinary client of the Seat Gateway (<a href="#api">section 12</a>): same snapshot, same verifier, same submit path, no privileged reads. It is deterministic — its seed comes from the match, seat and round, and its budget is measured in evaluation units rather than wall time.</p>
+  <ol>
+    <li>Read the briefing, beacons, known enemies, economy and capabilities.</li>
+    <li>Compute integer situation features: threat, power headroom, vent sites, expansion sites, capability and attack opportunities, and commander risk.</li>
+    <li>Fill template parameters with the top-k options, then compose <em>visit goals</em> by greedy insertion by utility per second until the route fills its target share of the segment (the segment's length comes from the snapshot).</li>
+    <li>Score utility as defence + economy + expansion + capability + attack − risk, weighted by difficulty. <span class="tag t-dec">Decided</span> v1 ships the Balanced weighting only; the Turtle, Raider and Economist personalities are <span class="tag t-road">Roadmap</span>.</li>
+    <li>Add the standard rules, then run verify and repair up to 4 times.</li>
+  </ol>
+  <div class="tbl"><table>
+    <thead><tr><th></th><th>Easy</th><th>Normal</th><th>Hard</th></tr></thead>
+    <tbody>
+      <tr><td>Candidates / top-k</td><td class="num">30 / 3</td><td class="num">100 / 5</td><td class="num">200 / 8</td></tr>
+      <tr><td>Route fill</td><td class="num">70%</td><td class="num">85%</td><td class="num">90%</td></tr>
+      <tr><td>Rules</td><td>Flee</td><td>+ rescue, fix power</td><td>+ retarget, go-code broadcast</td></tr>
+      <tr><td>Selectors</td><td>Fixed only</td><td>Some</td><td>Everywhere useful</td></tr>
+      <tr><td>Lookahead</td><td colspan="3">None at any level. Barred by "no dry runs"; Hard differs only in breadth and rules.</td></tr>
+    </tbody>
+  </table></div>
+  <p>Easy arrives with the walking skeleton; Normal and Hard are built in stage S5 (<a href="#milestones">section 17</a>). The three nightly adversarial scenarios — Rusher, Turtle, Hunter — run against the Balanced operator (<a href="#arch">section 15</a>).</p>
+  <p><span class="tag t-new">Draft 6</span> <strong>Target spread:</strong> the operator scores a target lower by how much pressure <em>any other seat</em> is already putting on it, the human included, so two built-in seats do not pile onto the same seat by default. There is no standings term: catch-up lives in BMI scaling alone (<a href="#economy">section 7</a>).</p>
+  <p><span class="tag t-dec">Decided</span> <strong>Vision and hunting:</strong> the operator places a Survey post when the enemy sightings it needs are stale or missing, and its scouts refresh those sightings before the next Lull. It adds a Defend guard on its commander when the commander has died recently, and scores enemy-commander raids like any other target. It ignores the notebook.</p>
+  <p><span class="tag t-new">Draft 6</span> <strong>Chatter:</strong> on a built-in seat the operator emits short engine-authored lines from its intent and recent events (for example "Expanding north. Stay clear."), sometimes misleading. It never reads chatter — chatter is one-way, and nothing over the air changes a beacon. A seat a human is editing emits none: the human's intent never reaches the ticker. The lobby labels the seat "built-in".</p>
+  <p><span class="tag t-new">Draft 6</span> <strong>Safe playbook:</strong> leave configurations untouched and move to the safest beacon. If power is short and up to 2 at-risk beacons are within 60 s travel, raise their Quartermaster priority (nearest first; never recycle, switch mandate, or place) so they brown out last. Otherwise shadow the safest beacon, with the flee and rescue rules. It always qualifies, and the editor renders it so a seat can see the cost of a timeout.</p>
+  <p><span class="tag t-new">Draft 6</span> <strong>Mandates and programs:</strong> below the operator, every beacon mandate runs its built-in program (<a href="#mandates">section 6</a>) and every unit and building runs its built-in program. All three levels are Rust in v1 and the player edits none of them; the playbook is the only thing a seat authors. The proto reserves the seam at each level — <code>operator {builtin|script}</code>, <code>mandate {builtin|script}</code>, <code>program {builtin|script}</code> — with only the <code>builtin</code> arm implemented. <span class="tag t-road">Roadmap</span> The <code>script</code> arm, local models and AI seats belong to v1.1 and v1.2 (<a href="#roadmap">section 18</a>).</p>
+</section>
+<section id="arch">
+  <h2><span class="n">15</span>Architecture</h2>
+  <div class="callout"><span class="tag t-new">Draft 6</span> <strong>The v1 rule:</strong> everything that executes is Rust; everything the player touches is data. No script engine, no script runtime, no MCP server and no published API ship in v1 — only reserved proto seams (<a href="#roadmap">section 18</a>).</div>
+  <div class="stack" role="img" aria-label="Clients connect to the Seat Gateway, which fronts the deterministic Rust sim">
+    <div class="row"><div class="k">Clients</div><div class="boxes">
+      <div class="box"><b>Godot 4.7 client</b><span>GDScript views and playbook editor; thin gdext crate</span></div>
+      <div class="box"><b>gamectl CLI</b><span>verify, schema, docs, scenarios, seat doctor</span></div>
+      <div class="box"><b>Built-in operator</b><span>in process, same traits</span></div>
+    </div></div>
+    <div class="arrow">JSON-RPC over WebSocket · Protobuf canonical, JSONC on disk · 127.0.0.1</div>
+    <div class="row"><div class="k">Gateway</div><div class="boxes">
+      <div class="box"><b>Seat Gateway</b><span>tokens · scopes · fog filter · rate limits · event bus · snapshots</span></div>
+      <div class="box"><b>Plan core (Rust)</b><span>verify · estimate · render · patch · canonicalise</span></div>
+    </div></div>
+    <div class="arrow">in-process</div>
+    <div class="row"><div class="k">Simulation</div><div class="boxes">
+      <div class="box core"><b>Deterministic sim</b><span>20 Hz fixed tick · integer maths · SoA tables</span></div>
+      <div class="box core"><b>World</b><span>32³ copy-on-write chunks · 64-layer cap · pathing/ETA</span></div>
+      <div class="box core"><b>Runner</b><span>Lull/Push/recap · playbook interpreter · mandates · programs · Quartermaster · power grid</span></div>
+      <div class="box core"><b>Replay</b><span>private: seed + playbooks + log · shared: recordings · per-tick xxh3</span></div>
+    </div></div>
+  </div>
+  <div class="tbl"><table>
+    <thead><tr><th>Area</th><th>Decision</th></tr></thead>
+    <tbody>
+      <tr><td>Languages <span class="tag t-new">Draft 6</span></td><td>Two at launch: Rust (sim, plan core, mesher, gateway, <code>gamectl</code>) and GDScript (views and editor only). A TypeScript-family scripting language arrives after v1 with the external API (<a href="#roadmap">section 18</a>); nothing user-written executes in v1.</td></tr>
+      <tr><td>Maths</td><td>Integer-first unit newtypes: position Q16.16, squared distance Q32.32 (range checks use r², no square roots), u16 angles with a 4096-entry lookup table, integer HP and $. Floats appear only in a walled presentation/solve module. Lints forbid float arithmetic, <code>as</code> casts, HashMap/HashSet and wall-clock time. Overflow checks stay on.</td></tr>
+      <tr><td>Determinism <span class="tag t-new">Draft 6</span></td><td>Fixed tick; split seeded RNG streams; ordered collections; per-tick state hash. The verifier and the built-in operator are deterministic too. Cross-OS hash equality guards replays and CI. The per-seat integer kill-credit counters (at most 3 per asset) and their largest-remainder apportionment, ties to the lowest seat id, are hashed state like everything else. Snapshot/restore is in the core. <code>fork</code> exists only behind a compile-time <code>research</code> feature that release builds never enable, and CI builds both. A dependency check in CI bars the plan-core, verifier, operator and gateway crates from depending on it.</td></tr>
+      <tr><td>Rendering</td><td>Our own greedy mesher in Rust feeds Godot RenderingServer RIDs under a per-frame upload budget. Voxel Tools is optional. Movie Maker exports replays to video.</td></tr>
+      <tr><td>Schema <span class="tag t-new">Draft 6</span></td><td>Protobuf is the single source (<code>gp.v1</code>, <code>gp.api.v1</code>). Playbooks and templates live on disk as <strong>JSONC</strong>: canonical proto JSON plus comments, which the editor round-trips. An in-house descriptor generator produces JSON Schema; Buf's plugin is the fallback. <code>buf breaking</code> runs in CI.</td></tr>
+      <tr><td>Hosting <span class="tag t-new">Draft 6</span></td><td>A local host with up to 3 seats (at most 1 human), localhost only. The server is authoritative and fog is filtered on the server by a per-match policy. No lockstep. The Seat Gateway is <strong>internal in v1</strong> — its clients are the editor, <code>gamectl</code> and the built-in operator — but stays agent-shaped, so publishing it later is a documentation and hardening job, not a rewrite.</td></tr>
+      <tr><td>Replays <span class="tag t-dec">Decided</span></td><td>Two formats. The <strong>deterministic replay</strong> (seed + playbooks + log) lives in the host's private match cache and serves scrub, recap and bug reports; it is never exposed in v1. Shared <strong>recordings</strong> are keyframes plus state deltas and events, with no playbooks. Recordings run to a few MB per segment-minute.</td></tr>
+      <tr><td>Map generator <span class="tag t-new">Draft 6</span></td><td>Seeded and deterministic, with 3-way rotational symmetry. Output is a map file. The generation rules, the terrain-only unoccupied zones and the fairness tests are in <a href="#kit">section 9</a>.</td></tr>
+      <tr><td>Crates <span class="tag t-new">Draft 6</span></td><td>prost, buf, rkyv/postcard, xxh3, imbl, <code>dot_vox</code>, pathfinding primitives with our own HPA*. Avoid bincode, cordic and hierarchical_pathfinding. No <code>rmcp</code>, no wasmi and no script engine in v1.</td></tr>
+      <tr><td>Saves <span class="tag t-new">Draft 6</span></td><td>Save at Lull boundaries from the frozen segment-end snapshot. Stamped with the rules hash and verifier version; a mismatch refuses to load. Saves contain playbooks, drafts and notebooks, so they are stored in the private match cache.</td></tr>
+      <tr><td>Platforms &amp; packaging <span class="tag t-new">Draft 6</span></td><td>Windows and Linux first-class (tested and released); macOS is a <strong>signed CI artefact</strong>, built and notarised on GitHub-hosted macOS runners with an Apple Developer ID; Windows signing via SignPath's open-source programme or an OV certificate. No Mac hardware is bought unless CI-only testing proves insufficient. Packaging is budgeted at about 4 wk in total: about 1 wk inside the walking skeleton for the unsigned v0.1 zips, about 3 wk in hardening for signed installers on three operating systems. GitHub Releases plus itch.io; Steam after name clearance.</td></tr>
+      <tr><td>Playtest mode <span class="tag t-new">Draft 6</span></td><td>Opt-in. A 3-question end-of-match survey (including "play another round?"). Local metrics: Push time with the window focused vs unfocused on unskipped Pushes, Lull time used, skips and speed-ups, camera use, verifier errors. "Export playtest bundle" writes <strong>survey, metrics, recording and the diagnostics log only</strong> — playbooks, drafts, the notebook and the private replay are excluded — to a file the tester sends manually. No network telemetry.</td></tr>
+      <tr><td>Dev harness <span class="tag t-new">Draft 6</span></td><td>Split in two. Weeks 3–5: AGENTS.md / CLAUDE.md, <code>cargo xtask ci</code>, lints, golden files, determinism CI. A named half-week at the skeleton's end: <code>gamectl scenario run</code> (map seed + playbooks + assertions on events and hashes) and headless Godot screenshots. Contract files (.proto, lints, determinism) need owner approval; at most 2–3 agents in parallel worktrees. The <strong>headless sim runner</strong> (sim plus playbooks, no client, hash parity with the client path) is v1 dev harness; only the player-facing accelerated AI-only match is roadmap.</td></tr>
+      <tr><td>Adversarial scenarios <span class="tag t-new">Draft 6</span></td><td>Three fixed hand-written playbooks — <strong>Rusher, Turtle, Hunter</strong> — run nightly in CI by <code>gamectl scenario run</code> against the Balanced built-in operator on a fixed seed set, from S2 (destruction and combat) onward. Each has a written alarm band: an arm winning more than about 65% of seeds opens a tuning task.</td></tr>
+      <tr><td>Art pipeline <span class="tag t-new">Draft 6</span></td><td>Author in MagicaVoxel (Goxel on Linux); <code>.vox</code> is loaded in Rust with <code>dot_vox</code> and meshed by the same greedy mesher as the terrain, so no Godot importer addons. Lighting under the Pall: emissive voxels plus glow, a few short-range pooled unshadowed lights (beacons, fire), flood-fill voxel light baked into vertex colours on remesh, SDFGI optional on the High setting; no VoxelGI, no lightmaps. v1 ships placeholder palette models; polish sits in the editor &amp; library stage and the full art pass is roadmap.</td></tr>
+      <tr><td>Audio <span class="tag t-new">Draft 6</span></td><td>CC0 and CC-BY sources only: Kenney, Freesound (CC0 and CC-BY), sfxr / ChipTone output; two or three music tracks from OpenGameArt or ccMixter with a per-track licence check (none in v0.1 is acceptable). Sonniss GDC bundles are excluded. In Godot: <code>AudioStreamPlayer3D</code>, three buses (master, SFX, music), <code>max_polyphony</code>, pooled players. A credits screen carries CC-BY attribution.</td></tr>
+      <tr><td>Licences <span class="tag t-new">Draft 6</span></td><td>GPL-3.0-or-later for the game (sim, client, operator, gateway, <code>gamectl</code>). MIT OR Apache-2.0 for schemas (.proto files and generated JSON Schema), docs, llms.txt and example playbooks. CC BY-SA 4.0 for art and audio, which is one-way compatible into GPLv3. A REUSE-style licence manifest, per-directory LICENSE files, SPDX headers, DCO sign-off. Console ports out of scope.</td></tr>
+      <tr><td>Seams kept for later <span class="tag t-new">Draft 6</span></td><td>Proto oneofs with only the <code>builtin</code> arm implemented: <code>operator {builtin|script}</code>, <code>mandate {builtin|script}</code>, <code>program {builtin|script}</code>, plus <code>author_kind SCRIPT</code> and a plan fingerprint. In code: an <code>Operator</code> trait (local view, mailbox and mandate in; intents out); an abstract per-tick work counter that becomes fuel later; <code>program_id</code> on each beacon's mandate; a kind/version tag on playbooks; a <code>Quartermaster</code> trait. <span class="tag t-road">Roadmap</span> the script arm, the published API and the live conduit are v1.1 and v1.2 (<a href="#roadmap">section 18</a>).</td></tr>
+    </tbody>
+  </table></div>
+</section>
+<section id="phase0">
+  <h2><span class="n">16</span>Stack spikes &amp; gates</h2>
+  <p><span class="tag t-dec">Decided</span> Stack spikes replace a longer up-front hardening phase with <strong>3 weeks of throwaway spikes</strong>. They cover only the gates whose failure would change the foundation itself. Every other gate runs on real code at the point where that code first exists, and each one's fallback is written down before its stage starts, because a late failure costs rework instead of a cheap spike.</p>
+  <div class="callout"><b>One gate decides the project.</b> <span class="tag t-new">Draft 6</span> The fun gate at <strong>wk 35.5</strong>, on the build that also ships publicly as v0.1, is the only go/pivot point. Everything else in this table certifies performance: it can move a number or a stage, but it cannot stop the project.</div>
+  <div class="tbl"><table>
+    <thead><tr><th>Gate</th><th>When</th><th>Go if</th><th>Fallback</th></tr></thead>
+    <tbody>
+      <tr><td>G4 Determinism</td><td>Spike, wk 1–3</td><td>Identical hashes on 3 operating systems over 10 full matches (toy sim); save/restore round-trips hash-identically; fork equivalence in the research build</td><td>Replays guaranteed on the same binary only</td></tr>
+      <tr><td>G1 Destruction remesh</td><td>Spike, wk 1–3</td><td>Own greedy mesher in Godot 4.7 remeshes within 3 frames at 60 fps with 20 explosions/s</td><td>Coarser destruction; smaller world; reopen the renderer choice</td></tr>
+      <tr><td>G2 + P3 Pathing and travel estimates</td><td>HPA* prototype in the spike, wk 1–3; certified in the sim at S3</td><td>Repath p99 ≤5 ms; travel estimate ≤1 ms and within ±15% (p90) on static terrain</td><td>Show ranges; favour arrival triggers</td></tr>
+      <tr><td>G3′ Segment budget <span class="tag t-new">Draft 6</span></td><td>Synthetic tick check in the spike; the real measurement is S2's exit; scrub at S7</td><td>4 seats (headroom over v1's 3), 300 units, 40 beacons: tick p99 ≤50% of the tick; ≥4× speed on the headless sim runner. The measurement sets the per-map power budget for the generator. Scrub ≤1 s is judged at S7</td><td>Lower map power budget; shorter segments</td></tr>
+      <tr><td>P1 Verifier <span class="tag t-new">Draft 6</span></td><td>QUICK at S1; FULL and the size budget are S3's exit criterion</td><td>QUICK ≤5 ms p99; FULL ≤50 ms p99 at the size budget; byte-identical across operating systems; 10k fuzzed playbooks with no panic. The per-rule cost on a decision tick (one per 250 ms of game time) is measured against the 50 ms sim tick to set the playbook size budget</td><td>Smaller budget; debounce</td></tr>
+      <tr><td>P6 Editor productivity <span class="tag t-new">Draft 6</span></td><td>S3, while its fallback is still affordable</td><td>A first-time tester builds a qualifying playbook from a template in ≤2 min, and writes a 10-step playbook from scratch in ≤5 min. Editor typing feel (debounced re-check, redraw) is judged here, not by P1</td><td>Move the editor model into Rust; simplify</td></tr>
+      <tr><td>Fun gate + v0.1 <span class="tag t-new">Draft 6</span></td><td>wk 35.5, on the gated v0.1 build. Owner: the owner alone, criteria frozen before S3 starts</td><td><strong>Setup:</strong> 3–5 testers recruited from the owner's own reach; one Probation-shaped match (2 seats) against one built-in seat; 3 rounds at 3 / 5 / 8 min via the per-round length list. <strong>Metrics</strong> (playtest bundle): "play another round?", Push time focused vs unfocused on unskipped Pushes, Lull time used, skip rate. <strong>Go if</strong> a majority answer yes and Push attention is a stated majority of the segment. A tester who cannot file a playbook is a wizard bug plus the guided first pick, never a fun result</td><td>In order: shorter default Push ladder with more rounds → pull the roadmap manual-control round into v1 → narrow v1 to the Probation-sized match</td></tr>
+      <tr><td>P7 Mast coverage <span class="tag t-new">Draft 6</span></td><td>S4</td><td>200 masts and their mast coverage rebuilt in ≤1 ms, deterministically</td><td>Recompute at segment boundaries</td></tr>
+      <tr><td>P2 Built-in operator</td><td>S5</td><td>Safe playbook ≤200 ms; Normal ≤2 s; 100% verifier pass rate; beats random playbooks ≥80% of the time</td><td>Templates only</td></tr>
+    </tbody>
+  </table></div>
+  <p><span class="tag t-new">Draft 6</span> <strong>Gates that left v1.</strong> G6 (script runtime) is cancelled: v1 ships no script language, so its paste and round-trip checks join the v1.1 scripting trial (<a href="#roadmap">section 18</a>). G5 (WASM operators) is deferred to the version that introduces custom components. P5 (an interactive agent session per Lull) moves to v1.2 with the live conduit, and the smoke test that used to sit at the gate goes with it. P4 is not used in this draft; no gate was ever defined for that number.</p>
+  <p>Balance is not gated here: from S2 onward the three adversarial scenarios (Rusher, Turtle, Hunter) run nightly in CI on a fixed seed set, each with a written alarm band — an arm winning more than about 65% of seeds opens a tuning task (<a href="#arch">section 15</a>).</p>
+</section>
+<section id="milestones">
+  <h2><span class="n">17</span>Build plan to v0.1 and v1</h2>
+  <p><span class="tag t-dec">Decided</span> <strong>Capacity:</strong> one developer directing coding agents (Claude Code, Codex) that write most of the code. Stages run in sequence, and review is the bottleneck. <strong>Strategy: skeleton → stages.</strong></p>
+  <ul>
+    <li><strong>Walking skeleton.</strong> Contracts that must never churn are built to full quality: the Protobuf envelope with <code>buf breaking</code> from day 1, determinism rules and lints, gateway auth and scopes, the playbook envelope with kind/version, the reserved seams (<code>operator {builtin|script}</code>, <code>mandate {builtin|script}</code>, <code>program {builtin|script}</code>, <code>author_kind SCRIPT</code>, the plan fingerprint), <code>Mandate</code>/<code>Quartermaster</code> traits, snapshot and hash formats. Content stays narrow but runs on the real code paths, so later work adds variants instead of rewriting. It includes one real vista (mesher, destruction, the watch rig) for demos.</li>
+    <li><strong>Stages.</strong> Each goes through sim, verifier, gateway, operator, editor and view, and ends playable. Each has a named depth task for its riskiest layer and a machine-checkable definition of done: determinism hashes, golden playbooks, headless scenario runs, and from S2 the three nightly adversarial scenarios (Rusher, Turtle, Hunter). Agents iterate until CI is green; the owner reviews the stage demo.</li>
+    <li><strong>Harness first, in two parts.</strong> <span class="tag t-new">Draft 6</span> Weeks 3–5 build AGENTS.md/CLAUDE.md, <code>cargo xtask ci</code>, lints, golden files and determinism CI; a named half-week at the end of the skeleton adds <code>gamectl scenario run</code> and headless screenshots (<a href="#arch">section 15</a>).</li>
+  </ul>
+  <div class="callout"><span class="tag t-new">Draft 6</span> <strong>One gate, one early release.</strong> The separate fun probe is gone. There is a single go/pivot gate at wk 35.5, and the build it gates <em>is</em> v0.1, released publicly that week. v1 is the hardened build at wk 63.5. The scripting API and the live conduit are no longer stages: they become v1.1 and v1.2 in <a href="#roadmap">section 18</a>. Each later slice ends with a numbered preview (v0.2 at S4, v0.3 at S5, v0.4 at S6, v0.5 at S7): an unsigned zip cut from green CI with a tagged changelog and a two-line note on opening unsigned builds. No packaging or signing work until hardening.</div>
+  <div class="tbl"><table>
+    <thead><tr><th>Ends</th><th>Stage</th><th>Weeks</th><th>Contents</th></tr></thead>
+    <tbody>
+      <tr><td class="num">wk 3</td><td>Stack spikes</td><td class="num">3</td><td>G1 mesher and remesh · G2 pathing (HPA*) · G3′ synthetic tick check · G4 determinism with save/restore, plus fork equivalence in the research build. G5 deferred, G6 cancelled.</td></tr>
+      <tr><td class="num">wk 18.5</td><td>Walking skeleton</td><td class="num">15.5</td><td>Sim and Godot vista · JSONC playbooks · Seat Gateway · verifier QUICK · interpreter at the v1 vocabulary (route steps with guards, handlers, selectors, <code>on_death</code>, <code>fallback</code>, options; no flags, branch or repeat) · editor wizard with 3 templates · built-in operator Easy and the safe playbook · Survey-lite · notebook · minimal Build mandate (Generator blueprint, 2 starting build drones) with a single-treasury Quartermaster stub · $ with BMI, kW with core surplus and Generators · watch rig (own-fog camera with free-look and follow toggle, live event list, 2–4× speed, skip to segment end, full map on elimination or match end) · seeded map with the spawn-distance rule · harness parts 1 and 2 · about 1 wk of packaging (unsigned Windows and Linux zips).</td></tr>
+      <tr><td class="num">wk 23.5</td><td>S1 Economy</td><td class="num">5</td><td>One grid · brownout order with the beacon as the unit of power · full Build settings · finite seams and work-in-hand fabrication · spending ("paid means yours") · settlement at each recap · value follows condition · one catch-up dial · <em>depth task:</em> P1 QUICK plus the per-rule cost per decision tick.</td></tr>
+      <tr><td class="num">wk 29.5</td><td>S2 Destruction &amp; combat</td><td class="num">6</td><td>Mortar, wall, demolition charge, breach, friendly fire · repair/reclaim drones · full Survey · commander hunting and bodyguard · kill-credit split · local-elimination beacon death · match-end tick rule · the three nightly adversarial scenarios start · <em>exit:</em> G3′ real measurement (300 units / 40 beacons), which sets the per-map power budget.</td></tr>
+      <tr><td class="num">wk 34.5</td><td>S3 Authoring</td><td class="num">5</td><td>Rule list, size meter, Probation preset with 3–4 memos and the guided first pick · Resonance Spire with minimal licence plumbing · Save and Load of JSONC files · P6 editor gate (template ≤ 2 min, scratch ≤ 5 min) · <em>depth task:</em> HPA* pathing in the sim and the travel estimator (G2+P3, ±15%) · <em>exit:</em> verifier FULL and the plan-size budget (P1 FULL).</td></tr>
+      <tr><td class="num">wk 35.5</td><td><strong>Gate + v0.1</strong></td><td class="num">1</td><td><span class="tag t-new">Draft 6</span> The fun gate (criteria in <a href="#phase0">section 16</a>) on one Probation-shaped match, 2 seats, 3 rounds at 3 / 5 / 8 min, with 3–5 testers recruited from the owner's own reach. <strong>v0.1 public release</strong> under the name Pharmakos (unsigned zips). The go/pivot decision, and a re-estimate from measured velocity.</td></tr>
+      <tr><td class="num">wk 41.5</td><td>S4 Radio, licences, symmetric map</td><td class="num">6</td><td>Radio Mast (mast coverage, go-codes) · Sensor Spire · licence triggers evaluated at settlement · award fund · 3-way symmetric generator with fairness tests (parity, spawn distance; unoccupied zones are terrain only) · <em>depth task:</em> P7 · <strong>v0.2 preview</strong>.</td></tr>
+      <tr><td class="num">wk 45.5</td><td>S5 Operators</td><td class="num">4</td><td>Normal and Hard built-in operator · seat-blind target spread · the chatter ticker and its flavour lines · safe-playbook polish · <em>depth task:</em> P2 · <strong>v0.3 preview</strong>.</td></tr>
+      <tr><td class="num">wk 53</td><td>S6 Editor &amp; library</td><td class="num">7.5</td><td>Full editor (segment clock, timeline, inline diagnostics) · 8 templates · Save as template / Load · sample library · notes box · art polish and the sound pass (placeholder → coherent look) · Probation polish · <strong>v0.4 preview</strong>.</td></tr>
+      <tr><td class="num">wk 57.5</td><td>S7 Watch &amp; share</td><td class="num">4.5</td><td>Highlights · scrub (≤ 1 s) · shareable recordings · casual mode · <strong>v0.5 preview</strong>.</td></tr>
+      <tr><td class="num">wk 63.5</td><td>Hardening → v1</td><td class="num">6</td><td>Perf, accessibility, balance playtests · signed installers on Windows, macOS and Linux (about 3 wk: macOS via GitHub-hosted runners and an Apple Developer ID, Windows via SignPath or an OV certificate) · docs.</td></tr>
+    </tbody>
+  </table></div>
+  <p><span class="tag t-new">Draft 6</span> <strong>63.5 weeks</strong>, down from draft 5's 71. The scripting API and live conduit stages leave v1 for v1.1 and v1.2 (−8 wk, <a href="#roadmap">section 18</a>) and the standalone probe is deleted (−1); the skeleton grows by 2, taking on its missing dependencies (+1.5), the watch rig (+1) and packaging for the public release (+1) while its combat and interpreter work moves out to later stages; the re-cut around the gate splits draft 5's expansion slice into the authoring stage and the radio stage (+1); Dispatches leave the editor stage (−1) and the plan-vs-outcome report leaves the watch stage (−0.5). The language reserve (2 wk) and the in-game script runtime (1.5 wk) are released, and neither was ever counted in the 71. The estimate assumes one full-time developer with <em>no</em> agent speed-up. With buffer, plan for <strong>about 18 months (around March 2028)</strong>. The rest of the plan is re-estimated from measured velocity at the gate. Ship-v1 confidence estimate: about 78% now, about 85% once the gate passes.</p>
+</section>
+<section id="roadmap">
+  <h2><span class="n">18</span>Roadmap after v1</h2>
+  <p><span class="tag t-new">Draft 6</span> In v1 everything that executes is Rust and everything the player touches is data. External scripting and live AI seats are deferred, not abandoned: the proto reserves their seams now (<code>operator {builtin|script}</code>, <code>mandate {builtin|script}</code>, <code>program {builtin|script}</code>, <code>author_kind SCRIPT</code>, a plan fingerprint), so neither version needs a format break. The first two versions after v1 are sized; everything below them is unordered.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>Version</th><th>Contents</th><th>Weeks</th></tr></thead>
+    <tbody>
+      <tr><td><strong>v1.1 scripting API</strong> <span class="tag t-new">Draft 6</span></td><td>The playbook format grows a second author: a script, run <em>outside</em> the game during the Lull, that emits the same canonical <code>gp.v1</code> JSON the editor emits and goes through the same verifier. TypeScript-family, so v1's JSONC pastes in unchanged. Published schema docs and llms.txt, <code>gamectl</code> JSON output, an official SDK generated from the proto, golden playbooks and a "write a script" guide; the Seat Gateway becomes a published API under minor-version rules. A saved playbook is bound to seat, round, beacon ids and voxels, so cross-match reuse needs a <strong>rebind</strong> step: the gateway stamps the header, the verifier suggests the matching live beacon, <code>extract_template</code> strips the bindings. The cancelled G6 spike's paste and round-trip checks run here as the language trial. The expert editor view lands with it.</td><td class="num">~3</td></tr>
+      <tr><td><strong>v1.2 live conduit</strong> <span class="tag t-new">Draft 6</span></td><td>MCP server over the gateway; interactive Claude Code and Codex sessions as seats, with pre-approved game tools, a PreToolUse watchdog, a Stop-hook guard and the heartbeat wait, which Claude channels replace once they leave preview; <code>gamectl connect</code> for "Your agent" alongside the human, and v1's <code>gamectl seat doctor</code> gains its sandbox canaries — a shell command, a file read and a web request must all fail. Headless seats driven by an API key or a subscription (<code>claude -p</code>, <code>codex exec</code>, command-template presets) are the alternative to interactive sessions; local models drive CI and the nightly scenarios. Player <strong>Dispatches</strong> return here — the reserved proto field, the editor box, the Mast hearing gate, untrusted-text and anti-collusion rules — with the plan-vs-outcome report. The game still holds no keys.</td><td class="num">~5</td></tr>
+    </tbody>
+  </table></div>
+  <ul>
+    <li><span class="tag t-new">Draft 6</span> <strong>In-game script runtime:</strong> custom mandates and programs, authored by the player and run inside the sim — fuel-metered, installed on site, content-addressed. JavaScript/TypeScript-family on QuickJS (rquickjs builds clean on MSVC) with Boa or Luau as the fallbacks; the choice is fixed at a post-v1 trial. Python is ruled out in-game, though it is fine as an external client. Then a custom Quartermaster, a scripted commander under the playbook envelope, and the earned reprogramming capability. This custom-components version is where the deferred G5 gate (WASM operators, <a href="#phase0">section 16</a>) lands.</li>
+    <li><span class="tag t-new">Draft 6</span> <strong>Expert editor view:</strong> flags, branch and repeat (their proto field numbers are reserved in v1), raw JSON and a command palette, arriving with v1.1. Selectors are not on this list; they ship in v1.</li>
+    <li><span class="tag t-new">Draft 6</span> <strong>Radio warfare:</strong> over-the-air traffic is assumed interceptable, so v1's message schema already carries a sender and a Mast of origin. Later: interception (an enemy Sensor Spire or Mast reads broadcasts), spoofing (a fake MARK_TARGET or GO), jamming, and the counters — rolling go-codes, courier-only doctrine. Also jammers, decoy beacons, direction finding, line of sight, relays and satellites; directed or encrypted Dispatches, live chat during the Push, and Ledger-enforced pacts. The on-site interface stays the only trusted path.</li>
+    <li><span class="tag t-new">Draft 6</span> <strong>Commander:</strong> a manual-control round (pulled into v1 only if the gate's fallback ladder calls for it), abilities and vehicles, and armour, decoys or a self-defence weapon if hunting dominates.</li>
+    <li><span class="tag t-new">Draft 6</span> <strong>Presentation:</strong> the art pass beyond placeholder voxel models; translation (v1 is English only, one string table); a director camera; a web spectator and replay viewer (WASM sim and mesher) and deeper watch features; player-facing pace controls and accelerated AI-only matches (the headless sim runner is v1 dev harness, <a href="#arch">section 15</a>).</li>
+    <li><span class="tag t-new">Draft 6</span> <strong>Operator depth:</strong> Turtle, Raider and Economist weightings for the built-in operator, beyond v1's Easy / Normal / Hard.</li>
+    <li><strong>Voting</strong> between rounds, including pity votes and voted capabilities, first with seats only and spectators later.</li>
+    <li><span class="tag t-dec">Decided</span> <strong>Players:</strong> human-vs-human (LAN, then internet), teams via the reserved <code>team_id</code>, more than 3 seats, dedicated servers.</li>
+    <li><span class="tag t-dec">Decided</span> <strong>Conflict and economy:</strong> beacon capture, Citations (cosmetic first, fees later), energy charges on individual units for remote operations, grid islands, batteries, timed weapons and combat boosts, and the gate, reinforced wall and shield block.</li>
+    <li><span class="tag t-dec">Decided</span> <strong>World and maps:</strong> handmade maps and a map editor, the full capability structure catalogue, flowing water, and per-mode claim protections.</li>
+    <li><span class="tag t-dec">Decided</span> <strong>Release and onboarding:</strong> a Steam release, mid-Push saves, scripted tutorial scenarios, and networked opt-in telemetry. Signed builds on all three operating systems are in v1, not here.</li>
+    <li><strong>Research:</strong> an RL interface (Gymnasium/PettingZoo) through scripted operators, with batched PyO3 stepping when throughput demands it.</li>
+  </ul>
+</section>
+<section id="open">
+  <h2><span class="n">19</span>Tuning &amp; risks</h2>
+  <p><span class="tag t-new">Draft 6</span> This draft closes every question that was open in draft 5: the file format is JSONC, the script language is a post-v1 trial, art and audio are decided, and the minor rules (tie-break, resubmission, English-only strings) are settled in their own sections. Nothing is open. What is left is tuning, risks to watch, and the naming work owed before v1.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>Tuning item</th><th>Where it settles</th></tr></thead>
+    <tbody>
+      <tr><td><span class="tag t-new">Draft 6</span> Sphere radius; placement range (distinct from the about 4-voxel interface range)</td><td><span class="tag t-tune">Tuning</span> Skeleton and S3 (authoring); feel before numbers</td></tr>
+      <tr><td><span class="tag t-new">Draft 6</span> Commander speed (a world constant, starting range in <a href="#commander">section 4</a>); respawn delay growth; interface times</td><td><span class="tag t-tune">Tuning</span> Skeleton; touches per Push confirmed at the gate</td></tr>
+      <tr><td><span class="tag t-new">Draft 6</span> Segment ladder values (3 / 4 / 5 / 6 / 7 / 8 min) and the per-round length list</td><td><span class="tag t-tune">Tuning</span> The gate runs 3 rounds at 3 / 5 / 8 min</td></tr>
+      <tr><td><span class="tag t-new">Draft 6</span> kW: core surplus, one Generator per vent with output by vent richness, draw per item, vents per map, the per-map power budget from G3′, and the revive margin that stops domes flickering</td><td><span class="tag t-tune">Tuning</span> S1 for the grid, S2 exit for the budget</td></tr>
+      <tr><td><span class="tag t-new">Draft 6</span> Ore yield per richness; the backlog threshold that keeps a fabricator producing; ruin salvage value</td><td><span class="tag t-tune">Tuning</span> S1, revisited after the gate</td></tr>
+      <tr><td>$ values: BMI, structure and unit costs; BMI scaling by standing; starting force</td><td><span class="tag t-tune">Tuning</span> S1 and balance playtests</td></tr>
+      <tr><td><span class="tag t-new">Draft 6</span> Reach memory N in game-minutes; Survey scan and refresh rules; notebook size (4,000 characters)</td><td><span class="tag t-tune">Tuning</span> S2 and S3</td></tr>
+      <tr><td>Core HP and turret; spawn travel distance (about 1.5 early Pushes, stated in raider and commander travel); engagement radius as a percentage of sphere radius; picket radius</td><td><span class="tag t-tune">Tuning</span> S2 and the fairness tests</td></tr>
+      <tr><td>Capability licence thresholds; odds of random capabilities; award catalogue, trigger formulas and award fund size</td><td><span class="tag t-tune">Tuning</span> S4; random odds deferred</td></tr>
+      <tr><td><span class="tag t-new">Draft 6</span> Playbook size budget, from P1 and the per-rule cost per decision measured against the 50 ms sim tick</td><td><span class="tag t-tune">Tuning</span> S3 exit</td></tr>
+      <tr><td>Probation memo triggers and copy</td><td><span class="tag t-tune">Tuning</span> S3, polished in S6</td></tr>
+      <tr><td><span class="tag t-new">Draft 6</span> Kill credit: nothing to tune. The damage split, the clamp to HP actually removed and the largest-remainder rule are fixed</td><td>Fixed in <a href="#match">section 3</a></td></tr>
+    </tbody>
+  </table></div>
+  <div class="tbl"><table>
+    <thead><tr><th>Risk</th><th>Where it is checked</th></tr></thead>
+    <tbody>
+      <tr><td><span class="tag t-new">Draft 6</span> Is a no-control movie of up to 8 minutes fun?</td><td><span class="tag t-risk">Risk</span> The gate at wk 35.5 and its fallback ladder (<a href="#phase0">section 16</a>)</td></tr>
+      <tr><td><span class="tag t-new">Draft 6</span> Kingmaking and farming the weakest seat in a 3-way free-for-all under the final audit</td><td><span class="tag t-risk">Risk</span> The nightly adversarial scenarios (share of damage aimed at the trailing seat) and playtests</td></tr>
+      <tr><td><span class="tag t-new">Draft 6</span> Commander hunting dominates</td><td><span class="tag t-risk">Risk</span> The Hunter scenario's alarm band; armour, decoys and a self-defence weapon stay roadmap</td></tr>
+      <tr><td><span class="tag t-new">Draft 6</span> Hoarding or turtling wins, now that value follows condition</td><td><span class="tag t-risk">Risk</span> The Turtle scenario and the gate</td></tr>
+      <tr><td><span class="tag t-new">Draft 6</span> An early rush ends matches before authoring matters</td><td><span class="tag t-risk">Risk</span> The Rusher scenario</td></tr>
+      <tr><td>Perfect-intel snowball; baiting stale sightings; raids chaining forward on unit vision; ruin salvage snowballing the eliminating seat</td><td><span class="tag t-risk">Risk</span> The nightly scenarios, the gate and playtests</td></tr>
+      <tr><td><span class="tag t-new">Draft 6</span> Title collision: <em>PHARMAKOS – The Lunghouse</em> (Howling Stars, itch jam build), and drift to the live "Pharmakon" listing</td><td><span class="tag t-risk">Risk</span> Ship the lockup, hold the registered handles, professional clearance search before v1</td></tr>
+      <tr><td><span class="tag t-new">Draft 6</span> Roadmap script engine (rquickjs, Boa or Luau) deferred to the post-v1 trial; GraphEdit status in Godot 4.7 unverified</td><td>Neither is load-bearing for v1; GraphEdit verified during the skeleton</td></tr>
+    </tbody>
+  </table></div>
+  <div class="callout"><b>Next step:</b> start the stack spikes — G4 (cross-OS determinism, save/restore, fork equivalence) and G1 (mesher and remesh in Godot 4.7). In parallel, register the Pharmakos handles (pharmakosgame.com, pharmakos.io and .dev, @pharmakosgame, a GitHub org) and write harness part 1: AGENTS.md/CLAUDE.md, <code>cargo xtask ci</code>, lints, golden files and determinism CI.</div>
+</section>
+
+<footer>Pharmakos (codename AirGap) design specification v0.6 · 2026-09-13. Supporting documents: decisions log and playbook/verifier/API/editor co-design. Design inspiration only from Mindustry, Zero-K, Minecraft Legends, Timberborn and Dwarf Fortress; no content ported.</footer>
+</main>
+</div>

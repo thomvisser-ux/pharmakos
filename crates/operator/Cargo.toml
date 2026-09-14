@@ -1,0 +1,26 @@
+# SPDX-FileCopyrightText: 2026 Pharmakos contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[package]
+name = "pharmakos-operator"
+description = "The built-in operator: generates a playbook, files the safe playbook, and executes whatever a seat sealed."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+# No [features] section on purpose: this crate must never define, forward or enable the
+# `research` feature. The operator has no lookahead at any difficulty — that is barred by
+# "no dry runs" — so it must not be able to reach `fork` (spec §14, §15). A CI dependency
+# check fails the build if it can. Any future dependency on pharmakos-sim must read:
+#     pharmakos-sim = { workspace = true, default-features = false }
+
+[dependencies]
+# None yet. Expected: pharmakos-proto, pharmakos-plan-core; it talks to the gateway as an
+# ordinary client rather than linking privileged sim internals.
+
+[lints]
+workspace = true

@@ -1,0 +1,25 @@
+# SPDX-FileCopyrightText: 2026 Pharmakos contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[package]
+name = "pharmakos-plan-core"
+description = "Playbook core: verify, estimate, render, patch, canonicalise. Runs in process with the Seat Gateway."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+# No [features] section on purpose. This crate must never define, forward or enable the
+# `research` feature — only crates/sim defines it, and a CI dependency check fails the
+# build if plan-core can reach it (spec §15, Determinism). When a dependency on
+# pharmakos-sim is added it must read:
+#     pharmakos-sim = { workspace = true, default-features = false }
+
+[dependencies]
+# None yet. Expected: pharmakos-proto (canonical playbook types), pharmakos-verifier.
+
+[lints]
+workspace = true

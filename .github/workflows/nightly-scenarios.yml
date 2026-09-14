@@ -1,0 +1,152 @@
+# SPDX-FileCopyrightText: 2026 Pharmakos contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Nightly adversarial scenarios — Rusher, Turtle, Hunter.
+#
+# ENABLED FROM S2 (destruction and combat). This file is a stub until then: the job is
+# gated on the repository variable NIGHTLY_SCENARIOS_ENABLED, which stays unset until
+# `gamectl scenario run`, the three playbooks and the seed set all exist. A manual run can
+# force it on with the `force` input.
+#
+# What it does once enabled (spec section 15, "Adversarial scenarios"; AGENTS.md section 9):
+#
+#   * three fixed, hand-written playbooks run against the Balanced built-in operator on a
+#     fixed seed set, one matrix leg each;
+#   * each arm has a written alarm band: an arm winning more than about 65% of seeds opens
+#     a tuning task. The band is an alarm, not a gate — a red nightly means "look at the
+#     balance", and the job says so in its summary rather than blocking a merge;
+#   * results are uploaded as JSON so a tuning task can diff nights.
+#
+# The nightly fuzzer (10 000 generated playbooks, no panic) belongs here too and is added
+# in the authoring stage, when the generator exists.
+
+name: nightly-scenarios
+
+on:
+  schedule:
+    # 03:17 UTC — off the hour, so this does not queue behind everyone else's nightly.
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Run even though the scenarios are not enabled yet"
+        type: boolean
+        default: false
+      seeds:
+        description: "Seed set file to run"
+        type: string
+        default: "scenarios/seeds/nightly.txt"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  CARGO_INCREMENTAL: "0"
+  # Tuning value, spec section 15: an arm winning more than about 65% of seeds opens a
+  # tuning task. Integer percent — no floats anywhere in this project, CI included.
+  ALARM_BAND_PERCENT: "65"
+
+jobs:
+  scenarios:
+    name: ${{ matrix.scenario }} vs Balanced
+    # Enabled from S2: set the repository variable NIGHTLY_SCENARIOS_ENABLED to "true".
+    if: ${{ vars.NIGHTLY_SCENARIOS_ENABLED == 'true' || inputs.force }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario: [rusher, turtle, hunter]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and target
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: nightly-scenarios
+
+      - name: Build gamectl
+        run: cargo build --release --package pharmakos-gamectl --bin gamectl
+
+      - name: Run the scenario over the seed set
+        # PLACEHOLDER — the exact flags are fixed when `gamectl scenario run` is built at
+        # the end of the walking skeleton (harness part 2). What the command must do is
+        # settled: take a scenario file (map seed + playbooks + assertions on events and
+        # hashes), run it against the Balanced built-in operator over a fixed seed set,
+        # and write a machine-readable result.
+        run: |
+          set -euo pipefail
+          mkdir -p target/scenario
+          ./target/release/gamectl scenario run \
+            "scenarios/${{ matrix.scenario }}.jsonc" \
+            --operator balanced \
+            --seeds "${{ inputs.seeds || 'scenarios/seeds/nightly.txt' }}" \
+            --format json \
+            --out "target/scenario/${{ matrix.scenario }}.json"
+
+      - name: Check the alarm band
+        # The scenario run itself fails on a broken assertion (an event that did not
+        # happen, a hash that did not match). This step only reads the win rate and
+        # reports it: a band breach is a tuning task, not a broken build.
+        run: |
+          set -euo pipefail
+          result="target/scenario/${{ matrix.scenario }}.json"
+          # PLACEHOLDER: `win_rate_percent` is an integer field on the scenario result.
+          # Both greps are made non-fatal and `tail` replaces `head`: under `pipefail`
+          # a grep that matches nothing exits 1 and would fail this step with no
+          # message, and `head` closing the pipe early can SIGPIPE the upstream grep
+          # (exit 141) on a large result file. A missing or non-numeric field is a
+          # warning here, not a build failure — this band is an alarm, not a gate.
+          field='"win_rate_percent"[[:space:]]*:[[:space:]]*[0-9][0-9]*'
+          match=$( { grep -o "$field" "$result" || true; } | tail -n 1 )
+          rate=$( { printf '%s' "$match" | grep -o '[0-9][0-9]*$' || true; } | tail -n 1 )
+          if ! [ "${rate:-x}" -ge 0 ] 2>/dev/null; then
+            echo "::warning::no integer win_rate_percent in ${result} — the band was not checked"
+            {
+              echo "### ${{ matrix.scenario }} vs Balanced"
+              echo
+              echo "No \`win_rate_percent\` in the result file, so the alarm band was not checked."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "${{ matrix.scenario }} win rate: ${rate}% (alarm band ${ALARM_BAND_PERCENT}%)"
+          {
+            echo "### ${{ matrix.scenario }} vs Balanced"
+            echo
+            echo "Win rate: **${rate}%** — alarm band ${ALARM_BAND_PERCENT}%."
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$rate" -gt "$ALARM_BAND_PERCENT" ]; then
+            echo "::warning::${{ matrix.scenario }} won ${rate}% of seeds, above the ${ALARM_BAND_PERCENT}% alarm band — open a tuning task"
+            echo >> "$GITHUB_STEP_SUMMARY"
+            echo "⚠️ Above the band. Open a tuning task; do not tune in this PR." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload the scenario result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scenario-${{ matrix.scenario }}
+          path: target/scenario/${{ matrix.scenario }}.json
+          if-no-files-found: warn
+          retention-days: 30
+
+  not-yet-enabled:
+    name: nightly scenarios (not yet enabled)
+    if: ${{ vars.NIGHTLY_SCENARIOS_ENABLED != 'true' && !inputs.force }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Say so, and stop
+        run: |
+          {
+            echo "### Nightly adversarial scenarios"
+            echo
+            echo "Not enabled yet. They start at **S2 (destruction and combat)**, once"
+            echo "\`gamectl scenario run\`, the Rusher/Turtle/Hunter playbooks and the seed"
+            echo "set exist. To enable: set the repository variable"
+            echo "\`NIGHTLY_SCENARIOS_ENABLED\` to \`true\`."
+          } >> "$GITHUB_STEP_SUMMARY"

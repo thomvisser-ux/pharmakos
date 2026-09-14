@@ -1,0 +1,166 @@
+# SPDX-FileCopyrightText: 2026 Pharmakos contributors
+# SPDX-License-Identifier: MIT OR Apache-2.0
+#
+# REUSE 3.2 licence manifest. This file is the machine-readable source of truth
+# for who owns what and under which licence; docs/LICENSING.md is the prose
+# version and LICENSE at the root is the short pointer. Full licence texts live
+# in LICENSES/ under their canonical SPDX file names.
+#
+# Individual files also carry SPDX headers. Precedence is "aggregate"
+# throughout: a header in a file is combined with the entry below, so a file
+# that states its own copyright keeps it, and a file that cannot carry a header
+# (a .vox model, an .ogg, a binary golden file) is covered by this manifest.
+# One block breaks that rule on purpose — docs/DCO.txt, which is somebody
+# else's document and uses precedence = "override".
+#
+# ORDER MATTERS. When two blocks match the same path the LAST one wins, so the
+# narrow blocks (crates/proto/**, the per-directory LICENSE pointers,
+# docs/DCO.txt) sit below the broad ones they carve out of.
+#
+# Check with: `reuse lint` (the `reuse` step of `cargo xtask ci`, run on the
+# Linux leg in CI).
+
+version = 1
+
+SPDX-PackageName = "Pharmakos"
+SPDX-PackageSupplier = "Pharmakos contributors"
+# PLACEHOLDER: no public repository URL has been chosen yet. Replace with the
+# canonical clone URL before the first public release; REUSE accepts the string
+# "NOASSERTION" until then.
+SPDX-PackageDownloadLocation = "NOASSERTION"
+
+# --- The game: everything that executes ------------------------------------
+# The sim, plan-core, verifier, operator, gateway and gamectl crates, the build
+# and CI tooling, and the Godot client with its thin gdext crate.
+[[annotations]]
+path = [
+    "crates/**",
+    "xtask/**",
+    "client/**",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Pharmakos contributors"
+SPDX-License-Identifier = "GPL-3.0-or-later"
+
+# --- Interfaces and words: reusable by anyone ------------------------------
+# The wire format (gp.v1, gp.api.v1), generated JSON Schema, documentation,
+# example playbooks, the harness docs and llms.txt. Permissive so third-party
+# tools, SDKs and playbook generators are not forced to be GPL.
+# NOTE: schemas/ and llms.txt do not exist yet; the entries are here so the
+# manifest is correct the moment they land.
+[[annotations]]
+path = [
+    "proto/**",
+    "schemas/**",
+    "docs/**",
+    "examples/**",
+    "llms.txt",
+    "AGENTS.md",
+    "CLAUDE.md",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Pharmakos contributors"
+SPDX-License-Identifier = "MIT OR Apache-2.0"
+
+# --- The schema crate: permissive, unlike the rest of crates/ --------------
+# crates/proto holds the generated gp.v1 / gp.api.v1 types, which are the same
+# public surface as proto/**: a third party writing a tool against the API must
+# not be forced to take the GPL (spec §15, Licences). crates/proto/Cargo.toml
+# sets `license = "MIT OR Apache-2.0"` deliberately, and the sources carry that
+# header. This block sits AFTER crates/** so it wins for these paths.
+[[annotations]]
+path = ["crates/proto/**"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Pharmakos contributors"
+SPDX-License-Identifier = "MIT OR Apache-2.0"
+
+# --- Art and audio ---------------------------------------------------------
+# Voxel models, textures, sound effects and music. CC BY-SA 4.0 is one-way
+# compatible into GPLv3, so these ship inside the GPL'd game. Third-party
+# assets are NOT covered by this entry: each keeps its own upstream copyright
+# and licence, recorded in its own .license sidecar file and in the credits
+# screen (see docs/LICENSING.md).
+[[annotations]]
+path = ["assets/**"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Pharmakos contributors"
+SPDX-License-Identifier = "CC-BY-SA-4.0"
+
+# --- Build configuration and developer scripts -----------------------------
+# The workspace manifest, the toolchain pin, cargo config, lint and dependency
+# policy, git config, the CI workflows and the developer setup scripts. Same
+# tier as xtask/: this is how the game is built and checked. The files that
+# exist already carry matching SPDX headers; the directories are covered here
+# so a helper without a header still lints clean.
+[[annotations]]
+path = [
+    "Cargo.toml",
+    "Cargo.lock",
+    "rust-toolchain.toml",
+    "clippy.toml",
+    "deny.toml",
+    ".cargo/**",
+    ".github/**",
+    "scripts/**",
+    ".gitignore",
+    ".gitattributes",
+    "README.md",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Pharmakos contributors"
+SPDX-License-Identifier = "GPL-3.0-or-later"
+
+# --- The throwaway stack spikes --------------------------------------------
+# spikes/ is out of the cargo workspace and is deleted from main once harness
+# part 1 is green (spikes/README.md, rule 4). While it exists it still has to
+# lint clean, and rule 5 puts spike code in the game tier: it prototypes game
+# crates, so it carries the licence those crates will carry.
+[[annotations]]
+path = ["spikes/**"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Pharmakos contributors"
+SPDX-License-Identifier = "GPL-3.0-or-later"
+
+# spikes/README.md is a document about the spikes, not spike code, so it keeps
+# the documentation tier. After the block above, so it wins.
+[[annotations]]
+path = ["spikes/README.md"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Pharmakos contributors"
+SPDX-License-Identifier = "MIT OR Apache-2.0"
+
+# --- Repository metadata ---------------------------------------------------
+# Licence pointers and directory placeholders. Documentation-tier, so the
+# manifest itself can be copied into another project without dragging the
+# copyleft along. The per-directory LICENSE files are listed one by one rather
+# than as `*/LICENSE`: assets/LICENSE is also matched by assets/**, and a
+# pointer file that resolved to two different licences at once would be exactly
+# the ambiguity these files exist to remove. This block is last so each listed
+# pointer resolves here.
+[[annotations]]
+path = [
+    "LICENSE",
+    "assets/LICENSE",
+    "docs/LICENSE",
+    "examples/LICENSE",
+    "proto/LICENSE",
+    "REUSE.toml",
+    "**/.gitkeep",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Pharmakos contributors"
+SPDX-License-Identifier = "MIT OR Apache-2.0"
+
+# --- Not ours: the Developer Certificate of Origin -------------------------
+# docs/DCO.txt is the DCO 1.1, reproduced verbatim. It is copyright The Linux
+# Foundation and may be copied verbatim but not changed, so the docs/** block
+# above must not be allowed to put our copyright and our licence on it.
+# `precedence = "override"` says the manifest is the last word for this path,
+# and it is the only override in this file. docs/LICENSE says the same thing in
+# prose; docs/DCO.txt.license repeats it beside the file for anyone who copies
+# the file out of the tree. The terms are in LICENSES/LicenseRef-DCO-1.1.txt.
+[[annotations]]
+path = ["docs/DCO.txt"]
+precedence = "override"
+SPDX-FileCopyrightText = "2004, 2006 The Linux Foundation and its contributors"
+SPDX-License-Identifier = "LicenseRef-DCO-1.1"

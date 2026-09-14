@@ -1,0 +1,33 @@
+# SPDX-FileCopyrightText: 2026 Pharmakos contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[package]
+name = "pharmakos-gamectl"
+description = "gamectl CLI: verify, schema, docs, scenarios, seat doctor."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "gamectl"
+path = "src/main.rs"
+
+# gamectl is a client of the Seat Gateway like any other, so it inherits the same rule:
+# it must never define, forward or enable the `research` feature that gates `fork`.
+# Only crates/sim defines it. (gamectl is not in the CI dependency check's named list —
+# that covers plan-core, verifier, operator and gateway — but a research build shipped
+# inside the CLI would defeat the same guarantee, so keep it out by hand.)
+
+[dependencies]
+# None yet. Expected, and the same list AGENTS.md §3's crate map gives for this crate:
+# pharmakos-proto, pharmakos-plan-core, pharmakos-verifier, pharmakos-gateway, and an
+# argument parser chosen during the walking skeleton. The gateway is on the list because
+# `gamectl scenario run` hosts a headless match; `verify`, `schema` and `docs` need only
+# the first three. Keep the two lists identical — if one changes, change both.
+
+[lints]
+workspace = true

@@ -1,0 +1,22 @@
+Developer Certificate of Origin, Version 1.1 — copying terms
+
+Copyright (C) 2004, 2006 The Linux Foundation and its contributors.
+
+Everyone is permitted to copy and distribute verbatim copies of this
+license document, but changing it is not allowed.
+
+---
+
+These are the terms under which this repository reproduces the Developer
+Certificate of Origin 1.1. The document itself is in docs/DCO.txt, copied
+verbatim and unchanged, and https://developercertificate.org/ is the upstream
+source.
+
+The DCO is not a licence for software: it is the statement each contributor
+makes about their right to submit a contribution (see docs/CONTRIBUTING.md and
+docs/LICENSING.md). This file exists because the DCO document has its own
+copyright and its own copying terms, which are not the repository's
+MIT OR Apache-2.0 documentation tier, and REUSE needs a licence text on disk
+for the `LicenseRef-DCO-1.1` identifier that REUSE.toml assigns to it.
+
+Pharmakos contributors claim no copyright in docs/DCO.txt.

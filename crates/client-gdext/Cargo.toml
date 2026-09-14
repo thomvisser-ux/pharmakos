@@ -1,0 +1,29 @@
+# SPDX-FileCopyrightText: 2026 Pharmakos contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[package]
+name = "pharmakos-client-gdext"
+description = "Thin gdext bridge between the Rust core and the Godot 4.7 client."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lib]
+# cdylib is what Godot loads through the .gdextension file; rlib keeps `cargo test`
+# and workspace-internal use working.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# None yet. Expected: godot (gdext, Godot 4.7) from [workspace.dependencies], plus
+# pharmakos-proto and the mesher's public surface. This crate stays thin: it marshals,
+# it does not decide.
+
+[lints]
+workspace = true
+# NOTE: gdext's macros may generate code that trips `unsafe_code = "deny"` from the
+# workspace lints. If it does, override it HERE with a comment naming the macro, rather
+# than relaxing the workspace-wide setting.

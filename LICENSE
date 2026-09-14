@@ -1,0 +1,49 @@
+Pharmakos — licensing at a glance
+=================================
+
+This repository is not under a single licence. It ships three tiers, and the
+one that applies depends on the directory a file lives in. The machine-readable
+source of truth is REUSE.toml at the repository root; the full texts live in
+LICENSES/ under their canonical SPDX file names. Every source file also carries
+an SPDX header, so a single file taken out of the tree still says what it is.
+
+  Code — the game                       GPL-3.0-or-later
+    crates/**   the sim, plan-core, verifier, operator, gateway, gamectl
+                (crates/proto/** is the one exception — see below)
+    xtask/**    the build and CI tooling
+    client/**   the Godot client and the thin gdext crate
+    spikes/**   the throwaway stack spikes, while they exist
+    Full text:  LICENSES/GPL-3.0-or-later.txt
+
+  Interfaces and words — reusable       MIT OR Apache-2.0
+    proto/**    gp.v1 and gp.api.v1 .proto files and generated JSON Schema
+    crates/proto/**  the generated Rust types for those schemas: the same
+                public surface, so it is permissive like the .proto files
+    schemas/**  published schemas
+    docs/**     documentation
+    examples/** example playbooks
+    llms.txt    the machine-readable overview
+    Full texts: LICENSES/MIT.txt, LICENSES/Apache-2.0.txt
+    "OR" is the SPDX disjunction: you pick either licence, at your option.
+
+  Art and audio                         CC-BY-SA-4.0
+    assets/**   voxel models, textures, sound effects, music
+    Full text:  LICENSES/CC-BY-SA-4.0.txt
+
+Why the split: the game is copyleft, but anything you would need in order to
+talk to it — the wire format, the schemas, the docs, the example playbooks — is
+permissive, so a third-party tool, SDK or playbook generator can be written
+under any licence its author likes. CC BY-SA 4.0 is one-way compatible into
+GPLv3, so the art can be shipped inside the GPL'd game; the reverse direction
+is not permitted, which is why art stays in assets/ rather than being embedded
+in code.
+
+Contributions are accepted under the Developer Certificate of Origin 1.1
+(docs/DCO.txt) with a Signed-off-by line: `git commit -s`. DCO.txt itself is
+not ours: it is copyright The Linux Foundation and may be copied verbatim but
+not changed (LICENSES/LicenseRef-DCO-1.1.txt).
+
+The rationale, the audio sourcing rule and the attribution requirements are in
+docs/LICENSING.md.
+
+Copyright (c) 2026 Pharmakos contributors.

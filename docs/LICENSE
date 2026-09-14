@@ -1,0 +1,28 @@
+SPDX-FileCopyrightText: 2026 Pharmakos contributors
+SPDX-License-Identifier: MIT OR Apache-2.0
+
+Everything in docs/ — the design documents, the specification, the decisions
+log and llms.txt — is licensed under either of
+
+  * MIT License            (../LICENSES/MIT.txt)
+  * Apache License, 2.0    (../LICENSES/Apache-2.0.txt)
+
+at your option, so the documentation can be quoted, translated and rehosted
+alongside third-party tooling.
+
+One file in this directory is quoted verbatim from elsewhere and keeps its own
+terms: DCO.txt is the Developer Certificate of Origin 1.1, copyright (C) 2004,
+2006 The Linux Foundation and its contributors, which may be copied verbatim
+but not changed. It is excluded from the tier above by name — ../REUSE.toml
+carries an overriding annotation for it (SPDX-License-Identifier
+LicenseRef-DCO-1.1), DCO.txt.license repeats that beside the file, and the
+terms are in ../LICENSES/LicenseRef-DCO-1.1.txt. The spec archives under
+spec/ are our own and are covered by the tier above.
+
+Unless you state otherwise, any contribution you intentionally submit for
+inclusion in this directory shall be dual licensed as above, with no additional
+terms or conditions, and signed off under the Developer Certificate of Origin
+1.1 (DCO.txt).
+
+The repository-wide scheme is described in ../LICENSE and in LICENSING.md; the
+machine-readable manifest is ../REUSE.toml.

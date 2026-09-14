@@ -1,0 +1,20 @@
+# SPDX-FileCopyrightText: 2026 Pharmakos contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# One toolchain for every developer, every agent worktree and CI. Cross-OS hash equality
+# is a release gate (spec §15, Determinism), so the toolchain is part of the contract:
+# changing this file is a contract change and needs owner approval.
+
+[toolchain]
+channel = "stable"
+# PLACEHOLDER: pin the exact version (e.g. channel = "1.85.0") the first time the spikes
+# produce a golden determinism hash, so a toolchain bump becomes a deliberate, reviewed
+# step with a hash re-baseline rather than a surprise on someone's machine.
+components = ["rustfmt", "clippy"]
+targets = [
+    "x86_64-pc-windows-msvc",
+    "x86_64-unknown-linux-gnu",
+    # macOS is a signed CI artefact only, built on GitHub-hosted runners (spec §15):
+    "aarch64-apple-darwin",
+]
+profile = "minimal"

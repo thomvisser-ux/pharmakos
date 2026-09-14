@@ -1,0 +1,81 @@
+# SPDX-FileCopyrightText: 2026 Pharmakos contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# --- Rust / Cargo ---
+/target/
+**/target/
+# Cargo.lock IS committed: the workspace ships binaries, and a pinned dependency graph
+# is part of cross-OS determinism. Do not add it here.
+*.rs.bk
+*.pdb
+*.profraw
+
+# --- Godot 4.7 client ---
+.godot/
+/client/.godot/
+# Godot export output and the per-machine editor state
+/export/
+export_presets.cfg
+*.translation
+.import/
+
+# --- Native build output that the gdext client loads ---
+*.dll
+*.so
+*.dylib
+!**/*.gdextension
+
+# --- Private match cache (spec §15: deterministic replays, saves, drafts, notebooks) ---
+# Placeholder paths: the real on-disk location is decided when the host is built.
+# These files are per-seat secrets and must never be committed.
+/match-cache/
+**/match-cache/
+*.replay
+*.pkreplay
+*.save
+
+# --- Playtest bundles and local metrics (opt-in, never networked) ---
+/playtest/
+playtest-bundle-*.zip
+*.playtest.zip
+/metrics/
+
+# --- Local tool state ---
+/.cargo/registry/
+/.cargo/git/
+# Per-developer cargo config overrides; the committed one is .cargo/config.toml
+.cargo/config.local.toml
+/node_modules/
+/.venv/
+
+# --- Scratch ---
+/tmp/
+/scratch/
+*.log
+!docs/**/*.log
+
+# --- OS junk ---
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# --- Editor junk (keep shared settings if we ever add them explicitly) ---
+*.swp
+*~
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.shared.json
+
+# Windows reserved device names accidentally created by shell redirects
+nul
+con
+prn
+aux

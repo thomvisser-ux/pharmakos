@@ -1,0 +1,9 @@
+SPDX-FileCopyrightText: 2004, 2006 The Linux Foundation and its contributors
+SPDX-License-Identifier: LicenseRef-DCO-1.1
+
+DCO.txt is the Developer Certificate of Origin 1.1, reproduced verbatim from
+https://developercertificate.org/. It is not ours and is not covered by the
+MIT OR Apache-2.0 tier that the rest of docs/ carries: everyone may copy and
+distribute verbatim copies of it, but changing it is not allowed. The terms are
+in ../LICENSES/LicenseRef-DCO-1.1.txt, and REUSE.toml states the same thing for
+machines.

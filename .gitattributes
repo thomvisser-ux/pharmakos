@@ -1,0 +1,39 @@
+# SPDX-FileCopyrightText: 2026 Pharmakos contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Line endings are a determinism concern here, not a style one. Git for Windows rewrites
+# LF to CRLF on checkout by default, and a golden file or a per-tick hash chain that comes
+# back with different bytes than it went in with fails a byte comparison on Windows only
+# (docs/spikes/G4-determinism.md, section 5, "Line endings and path handling").
+
+# Normalise text in the repository, check it out with LF everywhere.
+* text=auto eol=lf
+
+# Files that are byte-compared: never touched, on any platform.
+tests/golden/** -text
+*.hashes.txt -text
+# Spike traces, which are byte-compared across operating systems in the same way and are
+# force-added by hand when a mismatch has to be documented (spikes/.gitignore,
+# docs/spikes/G4-determinism.md sections 4 and 5). Without these two patterns the blanket
+# `* text=auto eol=lf` above would normalise exactly the file whose bytes are the finding.
+spikes/**/trace*.txt -text
+*.trace.txt -text
+*.binpb -text -diff
+*.vox -text -diff
+*.png -text -diff
+*.ogg -text -diff
+*.wav -text -diff
+
+# Scripts that must stay executable-shaped with LF endings, including on Windows, because
+# Git Bash and the CI runners execute them directly.
+*.sh text eol=lf
+scripts/* text eol=lf
+
+# Windows-only files keep CRLF.
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Generated or vendored trees that should not clutter a diff or a language breakdown.
+Cargo.lock -diff linguist-generated
+docs/spec/*.html linguist-documentation

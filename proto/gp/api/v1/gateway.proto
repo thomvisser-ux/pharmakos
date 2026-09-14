@@ -1,0 +1,306 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: MIT OR Apache-2.0
+//
+// CONTRACT FILE: changes need owner approval.
+//
+// The Seat Gateway surface (spec section 12).
+//
+// The Seat Gateway is one internal API with several clients: the Godot
+// editor, the gamectl CLI and the built-in operator all call it, JSON-RPC
+// over a localhost WebSocket. The editor is simply one more client — it runs
+// no validation and no time maths of its own.
+//
+// Nothing is published in v1: no MCP server, no SDK, no script runtime. The
+// gateway is kept agent-shaped anyway, because that is what the roadmap opens
+// up (v1.1 publishes it under minor-version rules; v1.2 puts an MCP server
+// over it).
+//
+// WHAT THIS FILE IS. A stub: the method names and the closed error set, as
+// enums, so both are in one machine-readable place from day one and `buf
+// breaking` guards them. It deliberately does NOT define request and response
+// messages — those are the per-method contracts, written as each method's
+// slice lands, and inventing them here would fix shapes the spec does not
+// state. There is no `service` block for the same reason.
+//
+// TRANSPORT NOTES, for whoever writes those messages:
+//   * JSON-RPC 2.0 method strings are the lower_snake_case names in the
+//     comments below ("get_status"), not the enum value spellings.
+//   * PLACEHOLDER: params spelled as enums here (depth, detail) travel as
+//     lowercase strings on the JSON-RPC wire per spec section 12
+//     (`verify_plan{depth:"quick"}`). Whether the boundary lowercases them or
+//     the wire adopts the enum spelling is an owner decision.
+//   * Every result carries a `_status` footer with the phase and the timer.
+//     The leading underscore is not a legal proto identifier, so the footer
+//     is an envelope concern and is not modelled here.
+//   * Pagination uses opaque cursors tied to the snapshot.
+//   * An invalid playbook is NOT a method error. verify_plan and submit_plan
+//     return a full report with qualifies:false; GatewayError.Code is for
+//     transport and phase failures only.
+//   * Times are game milliseconds, never ticks — including the coming
+//     segment's length, which get_status and get_briefing read from the
+//     frozen snapshot rather than from a constant. When these messages are
+//     written out, durations take int32 like gp.v1's, for the same reason:
+//     the proto3 JSON mapping emits a 64-bit integer as a quoted string, and
+//     the on-disk and on-wire JSON here is read by hand
+//     (proto/gp/v1/playbook.proto's header has the full note).
+
+syntax = "proto3";
+
+package gp.api.v1;
+
+// =============================================================================
+// Methods
+// =============================================================================
+
+// Every Seat Gateway method in v1, in the spec's grouping. The enum is the
+// authority for the method list; `buf breaking` in WIRE_JSON mode makes a
+// silent rename or removal impossible.
+//
+// Scope required per method is a separate table owned by the auth contract.
+// The scopes are: observe, plan, plan.submit, docs, spectate.nofog, admin.
+// Seat tokens can never hold spectate.nofog.
+enum Method {
+  METHOD_UNSPECIFIED = 0;
+
+  // --- Status --------------------------------------------------------------
+
+  // "get_status" — phase, timers, and the coming segment's length from the
+  // frozen snapshot.
+  METHOD_GET_STATUS = 1;
+
+  // "wait_for" — long poll on a phase change or a feed digest.
+  METHOD_WAIT_FOR = 2;
+
+  // --- Memory --------------------------------------------------------------
+
+  // "save_notes" — the private seat notebook, 4,000 characters, returned at
+  // the top of get_briefing. Sits under the plan scope; the editor's notes box
+  // reaches it like any other editor feature. Never leaves the gateway for
+  // another seat.
+  METHOD_SAVE_NOTES = 10;
+
+  // --- Knowledge -----------------------------------------------------------
+
+  // "get_briefing" — the main one. Carries the notebook, the seat's displayed
+  // standing and the coming segment's length.
+  METHOD_GET_BRIEFING = 20;
+
+  // "get_recap"
+  METHOD_GET_RECAP = 21;
+
+  // "list_beacons"
+  METHOD_LIST_BEACONS = 22;
+
+  // "get_beacon"
+  METHOD_GET_BEACON = 23;
+
+  // "get_map_summary"
+  METHOD_GET_MAP_SUMMARY = 24;
+
+  // "query_area"
+  METHOD_QUERY_AREA = 25;
+
+  // "list_known_enemies"
+  METHOD_LIST_KNOWN_ENEMIES = 26;
+
+  // "get_reports"
+  METHOD_GET_REPORTS = 27;
+
+  // "get_economy_forecast" — $ and kW, with what-ifs.
+  METHOD_GET_ECONOMY_FORECAST = 28;
+
+  // "get_capabilities"
+  METHOD_GET_CAPABILITIES = 29;
+
+  // "estimate_route"
+  METHOD_ESTIMATE_ROUTE = 30;
+
+  // --- Docs ----------------------------------------------------------------
+
+  // "get_schema" — sliced to what the seat can use. Generated from the
+  // schema, so it cannot drift.
+  METHOD_GET_SCHEMA = 40;
+
+  // "list_templates"
+  METHOD_LIST_TEMPLATES = 41;
+
+  // --- Planning ------------------------------------------------------------
+
+  // "instantiate_template"
+  METHOD_INSTANTIATE_TEMPLATE = 50;
+
+  // "verify_plan" — takes depth: quick | full, defaults to full. See
+  // VerifyPlan.Depth below.
+  METHOD_VERIFY_PLAN = 51;
+
+  // "render_plan" — the plain-language rendering. Reads the coming segment's
+  // length from the frozen snapshot.
+  METHOD_RENDER_PLAN = 52;
+
+  // "patch_plan" — applies the JSON Patch suggestions a report carries.
+  METHOD_PATCH_PLAN = 53;
+
+  // "save_draft"
+  METHOD_SAVE_DRAFT = 54;
+
+  // "list_drafts"
+  METHOD_LIST_DRAFTS = 55;
+
+  // "get_safe_plan" — what the operator would file on a timeout, so a seat
+  // can see the cost of one (spec section 14).
+  METHOD_GET_SAFE_PLAN = 56;
+
+  // --- Commit --------------------------------------------------------------
+
+  // "submit_plan" — always runs FULL. The latest verified submission replaces
+  // the previous one, any number of times until the timer ends.
+  METHOD_SUBMIT_PLAN = 60;
+
+  // "set_ready"
+  METHOD_SET_READY = 61;
+
+  // --- During play ---------------------------------------------------------
+
+  // "get_segment_feed" — fog-filtered events (no-fog for every seat in casual
+  // matches) plus a digest for every 60 s of game time. Engine chatter rides
+  // the same feed as labelled one-way lines. Planning is closed during play
+  // and the recap.
+  METHOD_GET_SEGMENT_FEED = 70;
+
+  // --- Roadmap -------------------------------------------------------------
+
+  // RESERVED — voting between rounds, deferred (spec section 12, "Roadmap";
+  // section 18). No version fixed.
+  //   80 get_ballot
+  //   81 cast_vote
+  reserved 80, 81;
+  reserved "METHOD_GET_BALLOT", "METHOD_CAST_VOTE";
+
+  // RESERVED — "get_dispatches". Player Dispatches are cut from v1 and
+  // return in v1.2 with the live conduit, alongside the reserved dispatch
+  // field in gp.v1.Playbook.
+  reserved 82;
+  reserved "METHOD_GET_DISPATCHES";
+
+  // There is deliberately no "connect" in v1: nothing outside the game
+  // attaches to a seat. gamectl connect arrives in v1.2.
+  reserved 83;
+  reserved "METHOD_CONNECT";
+}
+
+// =============================================================================
+// Shared parameters
+// =============================================================================
+
+// Namespace holder for the verify_plan depth. The verifier pipeline is
+// decode -> structure -> resolve -> semantics (together QUICK, <= 5 ms p99,
+// run on every edit) -> estimate -> lint (FULL, <= 50 ms p99 at the size
+// budget, always run on submit) — spec section 11.
+message VerifyPlan {
+  Depth depth = 1;
+
+  enum Depth {
+    DEPTH_UNSPECIFIED = 0;
+
+    // "quick"
+    QUICK = 1;
+
+    // "full". The default when depth is omitted, and what submit_plan always
+    // runs.
+    FULL = 2;
+  }
+}
+
+// Namespace holder for the read-method budgets. Results are truncated in a
+// fixed salience order. No v1 client is a model, so nothing actually spends
+// these tokens; the budgets are kept because they are the shape the v1.1 API
+// needs (spec section 12, "Budgets").
+message ReadOptions {
+  Detail detail = 1;
+
+  enum Detail {
+    DETAIL_UNSPECIFIED = 0;
+
+    // <= 1.5k model tokens.
+    BRIEF = 1;
+
+    // <= 4k model tokens.
+    STANDARD = 2;
+
+    // <= 10k model tokens.
+    FULL = 3;
+  }
+}
+
+// =============================================================================
+// Errors
+// =============================================================================
+
+// The closed error set (spec section 12, "Errors"). Closed means closed:
+// adding a code is a contract change and needs owner approval, and no client
+// may invent one.
+//
+// Again: an invalid playbook is not a method error. It comes back as a full
+// verifier report with qualifies:false and diagnostics carrying codes from
+// the E/W/I families (spec section 11), which are a different namespace from
+// these.
+message GatewayError {
+  Code code = 1;
+
+  // English. Every user-facing string in v1 lives in one string table;
+  // translation is roadmap. The code is what a client branches on — codes are
+  // language-neutral, messages are not.
+  string message = 2;
+
+  enum Code {
+    ERROR_CODE_UNSPECIFIED = 0;
+
+    // --- Named in the spec -------------------------------------------------
+
+    // The method is not available in the current phase. Planning is closed
+    // during the Push and the recap.
+    PHASE_CLOSED = 1;
+
+    // The request is pinned to a snapshot that is no longer current, or to an
+    // expired pagination cursor. Cursors are opaque and tied to the snapshot.
+    STALE_SNAPSHOT = 2;
+
+    // No verified submission exists where one is required.
+    NO_QUALIFYING_PLAN = 3;
+
+    // Rate limited.
+    RATE_LIMITED = 4;
+
+    // --- PLACEHOLDER: derived from section 12's security paragraph, not
+    // --- named in the spec verbatim. Confirm or cut before the schema is
+    // --- frozen; each one needs a reason to exist that a client can act on.
+
+    // Missing, malformed, expired or revoked token, or a failed Host/Origin
+    // check. Per-seat 256-bit tokens are tied to the match and the seat and
+    // are revocable from the lobby.
+    UNAUTHENTICATED = 10;
+
+    // The token is valid but lacks the scope this method needs. Also the
+    // answer when a seat token asks for anything spectate.nofog gates, and
+    // when an admin token reaches for another seat's playbooks, drafts or
+    // knowledge.
+    FORBIDDEN_SCOPE = 11;
+
+    // A named beacon, draft, template or cursor does not exist, or is not
+    // this seat's.
+    NOT_FOUND = 12;
+
+    // The request itself is malformed: an unknown method, a missing param, a
+    // param out of range.
+    INVALID_ARGUMENT = 13;
+
+    // The playbook decodes at a schema version this build does not support.
+    // Distinct from a verifier E000x, because the gateway cannot produce a
+    // report for a version it cannot decode.
+    UNSUPPORTED_SCHEMA_VERSION = 14;
+
+    // The gateway failed. Never used to report anything the caller could have
+    // avoided.
+    INTERNAL = 15;
+  }
+}

@@ -1,0 +1,28 @@
+# SPDX-FileCopyrightText: 2026 Pharmakos contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[package]
+name = "xtask"
+description = "Repository automation: cargo xtask ci is the one command developers, agents and CI run."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "xtask"
+path = "src/main.rs"
+
+[dependencies]
+# None, and preferably none ever: xtask must build instantly from a cold checkout with no
+# registry access. It shells out to cargo, buf, cargo-deny, reuse and git rather than
+# linking them, and reads `cargo metadata` with a ~200-line JSON reader of its own.
+
+[lints]
+workspace = true
+# xtask is linted by the same set it enforces — no floats, no `as` casts, no
+# HashMap/HashSet, no wall-clock time — which is why `cargo xtask ci` reports no timings.
+# Do not add an exemption here without a comment saying which step needs it and why.
