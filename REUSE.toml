@@ -145,7 +145,7 @@ path = [
     "examples/LICENSE",
     "proto/LICENSE",
     "REUSE.toml",
-    "**/.gitkeep",
+    "examples/.gitkeep",
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 Pharmakos contributors"
