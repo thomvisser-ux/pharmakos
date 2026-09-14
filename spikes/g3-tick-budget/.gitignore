@@ -1,0 +1,16 @@
+# SPDX-FileCopyrightText: 2026 Pharmakos contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Build and measurement artefacts. Read them, put the summary in the Results
+# section of docs/spikes/G3prime-segment-budget.md, and let them be deleted
+# (spikes/README.md, "Build outputs are git-ignored"). The raw 9_600-line hash
+# stream of one run is not something to commit; the digest it reduces to is.
+#
+# Cargo.lock is NOT ignored: `--locked` is what makes the three-OS hash-stream
+# comparison in ci/spike-g3.yml a controlled experiment rather than three
+# unrelated builds.
+
+target/
+out/
+results/
+__pycache__/
