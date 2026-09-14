@@ -190,9 +190,11 @@ const SIM_PACKAGES: &[&str] = &["sim"];
 /// The compile-time feature that gates `fork`. Release builds never enable it.
 const RESEARCH_FEATURE: &str = "research";
 
-/// Where the per-tick state hashes are written. See the module docs for the
-/// format; `.github/workflows/ci.yml` uploads exactly this path.
-const HASH_FILE: &str = "target/determinism/hashes.txt";
+/// Where the per-tick state hashes are written, relative to Cargo's target
+/// directory (`target/` by default, so CI uploads `target/determinism/hashes.txt`;
+/// a user-level `build.target-dir` moves it along with everything else).
+/// See the module docs for the format.
+const HASH_FILE: &str = "determinism/hashes.txt";
 
 /// The committed hash chain, when there is one. Compared byte for byte.
 const HASH_GOLDEN: &str = "tests/golden/determinism/expected.hashes.txt";
@@ -960,6 +962,10 @@ fn step_buf(ctx: &Ctx) -> Result<Outcome, String> {
 /// run.
 fn step_golden(ctx: &Ctx) -> Result<Outcome, String> {
     let golden_root = ctx.root.join("tests").join("golden");
+    let target_dir = match &ctx.workspace {
+        Ok(workspace) => workspace.target_dir.clone(),
+        Err(_) => ctx.root.join("target"),
+    };
     if !golden_root.is_dir() {
         return Ok(Outcome::Skipped(
             "no golden files yet (tests/golden does not exist)".to_owned(),
@@ -989,9 +995,7 @@ fn step_golden(ctx: &Ctx) -> Result<Outcome, String> {
             .map_err(|error| format!("path outside tests/golden: {error}"))?;
         let name = file_name(expected_path);
         let suffix = name.strip_prefix("expected.").unwrap_or("out");
-        let actual_path = ctx
-            .root
-            .join("target")
+        let actual_path = target_dir
             .join("golden")
             .join(relative)
             .with_file_name(format!("actual.{suffix}"));
@@ -1059,7 +1063,7 @@ fn step_determinism(ctx: &Ctx) -> Result<Outcome, String> {
         )));
     };
 
-    let hash_path = ctx.root.join(HASH_FILE);
+    let hash_path = workspace.target_dir.join(HASH_FILE);
     if let Some(parent) = hash_path.parent() {
         fs::create_dir_all(parent)
             .map_err(|error| format!("creating {}: {error}", parent.display()))?;
@@ -1086,7 +1090,7 @@ fn step_determinism(ctx: &Ctx) -> Result<Outcome, String> {
     args.push("--ticks".to_owned());
     args.push(DETERMINISM_TICKS.to_owned());
     args.push("--out".to_owned());
-    args.push(HASH_FILE.to_owned());
+    args.push(hash_path.to_string_lossy().into_owned());
     run(ctx, &ctx.cargo, &args)?;
 
     let ticks = validate_hash_file(&hash_path)?;
@@ -1222,6 +1226,9 @@ fn validate_hash_file(path: &Path) -> Result<usize, String> {
 
 struct Workspace {
     packages: Vec<Package>,
+    /// Cargo's `target_directory` from `cargo metadata`: honours `CARGO_TARGET_DIR`
+    /// and `build.target-dir`, so build products are looked up where Cargo put them.
+    target_dir: PathBuf,
 }
 
 struct Package {
@@ -1323,7 +1330,22 @@ fn parse_workspace(metadata: &str) -> Result<Workspace, String> {
             bins,
         });
     }
-    Ok(Workspace { packages })
+    let target_dir = json
+        .get("target_directory")
+        .and_then(Json::as_str)
+        .map(PathBuf::from)
+        .or_else(|| {
+            json.get("workspace_root")
+                .and_then(Json::as_str)
+                .map(|root| Path::new(root).join("target"))
+        })
+        .ok_or_else(|| {
+            "cargo metadata has neither `target_directory` nor `workspace_root`".to_owned()
+        })?;
+    Ok(Workspace {
+        packages,
+        target_dir,
+    })
 }
 
 /// The `--features` argument that turns the research build on — for example

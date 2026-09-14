@@ -1,0 +1,72 @@
+# SPDX-FileCopyrightText: 2026 Pharmakos contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# Standalone workspace: the empty [workspace] table detaches this manifest from
+# any parent workspace, so `cargo build` at the repository root never sees it.
+[workspace]
+
+[package]
+name = "g4-determinism"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98.1"
+license = "GPL-3.0-or-later"
+publish = false
+description = "Throwaway toy sim for spike G4 (cross-OS determinism). Deleted after week 5."
+
+[features]
+default = []
+# fork() and everything that reaches it. Non-default, module-level cfg.
+research = []
+# The two candidate snapshot formats. Additive; if both are on, rkyv wins.
+snap-rkyv = ["dep:rkyv"]
+snap-postcard = ["dep:postcard", "dep:serde"]
+
+[dependencies]
+# Exact pins: the whole point of the spike is that a version bump is visible.
+xxhash-rust = { version = "=0.8.18", default-features = false, features = ["xxh3"] }
+imbl = { version = "=7.0.2", default-features = false }
+
+# rkyv: explicit little-endian archive and an explicit 32-bit pointer width, so
+# relative pointers and ArchivedUsize lengths are the same bytes on every target.
+# Never archive usize/isize (the Snapshot struct uses fixed-width types only).
+rkyv = { version = "=0.8.18", optional = true, default-features = false, features = [
+    "std",
+    "bytecheck",
+    "little_endian",
+    "pointer_width_32",
+    "aligned",
+] }
+
+postcard = { version = "=1.1.3", optional = true, default-features = false, features = ["use-std"] }
+serde = { version = "=1.0.229", optional = true, default-features = false, features = ["std", "derive"] }
+
+# Overflow checks stay ON in every profile, release included: a wrapping
+# difference between platforms is exactly what this spike hunts, and a panic on
+# overflow is a result, not a bug in the test.
+[profile.dev]
+overflow-checks = true
+
+[profile.release]
+overflow-checks = true
+debug-assertions = false
+
+[profile.test]
+overflow-checks = true
+
+[profile.bench]
+overflow-checks = true
+debug-assertions = false
+
+[[bin]]
+name = "run"
+path = "src/bin/run.rs"
+
+[[bin]]
+name = "roundtrip"
+path = "src/bin/roundtrip.rs"
+
+[[bin]]
+name = "forkcheck"
+path = "src/bin/forkcheck.rs"
+required-features = ["research"]
