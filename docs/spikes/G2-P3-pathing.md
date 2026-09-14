@@ -366,7 +366,7 @@ each (`results/accuracy-c{16,32,64}.json`).
 | Allocations per query, estimate / path | 2 per 10 000 / 1 per 1 000 | **1 per 10 000** / 2 per 1 000 | 1 per 10 000 / 2 per 1 000 | §5 "zero in the steady state" ✅ |
 | A\* vs Dijkstra exactness | 1 000 pairs, **0 mismatches** | 1 000 pairs, **0 mismatches** | 1 000 pairs, **0 mismatches** | step 2 ✅ |
 | Path identity, same machine | yes — digest `04d3a2cf a0f051ce` | yes — digest `360bb858 b87df6e9` | yes — digest `f4f34e2d 55006508` | protects G4 |
-| Path identity, cross-OS | **pending CI** | **pending CI** | **pending CI** | protects G4 |
+| Path identity, cross-OS (run 34861229486) | **yes** — Linux = Windows, 3 203 lines, digest `d98ba777 6dc48e9c` | **yes** — 3 203 lines, digest `ef29afab b1d26148` | **yes** — 3 203 lines, digest `8daf1375 f13e8619` | protects G4 ✅ |
 | Destruction stream: ticks / craters | 3 462 | 2 339 | 2 028 | context |
 
 A caution about the "after the stream" columns: **the three cluster sizes did not
@@ -551,11 +551,19 @@ above does not mean quite what §3 asked for.
    (working set); the ~3.3 MiB difference is code, stacks and CRT. The
    `PLACEHOLDER` in `bench.rs` — whether the sim's own bench harness may take
    that dependency — is still the owner's, at the S3 gate.
-2. **Cross-OS path identity is not measured.** `spikes/g2-pathing/ci/spike-g2.yml`
-   is written but is **not installed** in `.github/workflows/`, so no Linux run
-   exists. Same-machine identity is established four ways over (§9.8, and the two
-   `--hash-paths` runs below); the Linux half reads **pending CI** and is not
-   guessed at.
+2. **Cross-OS path identity was measured after the write-up, by CI.** At the time
+   of measurement `spikes/g2-pathing/ci/spike-g2.yml` was not yet installed, so
+   the Linux half of step 9 was recorded as pending rather than guessed. *Update,
+   2026-09-14:* the workflow was installed verbatim as
+   `.github/workflows/spike-g2.yml` and its first run (34861229486) is green on
+   every job; the `path-identity` job reports that Linux and Windows agree on all
+   3 203 lines of the path-hash file at every cluster size, with the same digests
+   as the same-machine runs (16: `d98ba7776dc48e9c`, 32: `ef29afabb1d26148`, 64:
+   `8daf1375f13e8619`). The hosted runners also reproduced the gate — ubuntu cold
+   repath p99 1.37 ms and estimate p99 0.67 ms, windows 2.21 ms and 0.98 ms — with
+   all three repeats on each OS walking the same routes (`360bb858b87df6e9`).
+   The Windows runner comes within 2 % of the 1 ms estimate budget, which is the
+   noise the 2.5 ms CI alarm exists to absorb.
 3. **Step 9's byte-for-byte check passed.** Two `--hash-paths` runs at cluster 32
    produced files identical under `cmp` — 55 030 bytes, 3 200 hashed lines,
    MD5 `6c369cff69cbbef287fd788c86f87b83`, internal digest `ef29afabb1d26148`.
@@ -758,11 +766,14 @@ determinism contract and needs owner approval alongside G4's.
 - Evidence: `astar::the_tiebreak_is_total_under_neighbour_permutation` passes;
   four whole-bench runs at cluster 32 walked byte-identical routes; two
   `--hash-paths` runs are identical under `cmp`.
-- *Downside / what is still open:* this is **same-machine only**. The cross-OS
-  half is the first CI run of `ci/spike-g2.yml`, which is not installed. The
-  argument that it will hold is structural — dense arrays rather than hash maps,
-  `u32` node ids rather than `usize`, integers throughout, no recursion, a total
-  order with no equal keys — but it is an argument, not a measurement.
+- *Downside / what is still open:* at the time of writing this was same-machine
+  only, and the argument that it would hold was structural — dense arrays rather
+  than hash maps, `u32` node ids rather than `usize`, integers throughout, no
+  recursion, a total order with no equal keys. *Update, 2026-09-14:* it is now a
+  measurement — CI run 34861229486's `path-identity` job found Linux and Windows
+  identical at every cluster size (§9.9 item 2). What remains open is macOS,
+  which the spike's matrix does not include; G4's matrix does, and S3's
+  certification on real code inherits it.
 - *Alternative — order by `(f, node_id)` only.* Downside: still total, still
   deterministic, but it discards the goal-ward preference and expands more nodes
   for the same answer. There is no reason to prefer it.
@@ -864,10 +875,9 @@ Every one is a spike-local constant that S3 must re-fix as a rules-table value
   in the PR, not written by an agent. §9.10 lays out the five items as candidates
   with recommendations so they can be taken one at a time; item (5) is part of
   the determinism contract and needs owner approval alongside G4's.
-- **The cross-OS half of step 9** is the first CI run of `ci/spike-g2.yml`, which
-  is not yet installed in `.github/workflows/`. Until it is green, "path
-  identity" reads *same machine only*, and the Linux column is **pending CI** —
-  not estimated.
+- ~~**The cross-OS half of step 9**~~ — done: `.github/workflows/spike-g2.yml`
+  installed, run 34861229486 green, Linux = Windows at every cluster size
+  (§9.9 item 2). macOS is not in this spike's matrix.
 - **The peak-RSS `PLACEHOLDER` in `bench.rs`** is the owner's at the S3 gate:
   whether the sim's own bench harness may take a `windows-sys` dependency to read
   its own working set, or whether peak live heap plus the structure sizes is the
