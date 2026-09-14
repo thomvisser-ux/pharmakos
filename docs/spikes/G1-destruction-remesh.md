@@ -692,6 +692,17 @@ would cost to take the other one. Nothing here has been written to
   once a second, not per-frame values — an 18 ms "process time" logged on a 1.4 ms frame is
   a stale per-second peak, not a contradiction. The CSV columns are named
   `process_ms_1s_max` / `physics_ms_1s_max` so nobody reads them as per-frame again.
+- **A non-editor Godot run loads GDExtensions only from `res://.godot/extension_list.cfg`.**
+  The editor writes that file when it scans the project, and `.godot/` is git-ignored, so a
+  fresh checkout — every CI runner — instantiates the extension's node classes as
+  placeholders and the script's first call on them fails. Locally this never shows because
+  the editor has opened the project once. `godot --headless --path <project> --import`
+  performs the scan and quits; the skeleton's CI and any packaging step must run it before
+  launching the game. Found by the first `geometry` runs (34822828623).
+- **The lavapipe ICD is not at Debian's path on `ubuntu-latest`**, and pointing
+  `VK_ICD_FILENAMES` at a missing file makes the Vulkan loader find *no* driver, after which
+  Godot silently switches to OpenGL 3 — a different renderer from the golden's. Let the loader
+  enumerate the installed ICDs instead.
 - **`godot --headless` cannot take a screenshot.** It selects the dummy rendering driver,
   `RenderingServer.frame_post_draw` never fires, and a screenshot coroutine awaiting it
   parks for ever — silently, producing no PNG and no error. A CI job that runs Godot

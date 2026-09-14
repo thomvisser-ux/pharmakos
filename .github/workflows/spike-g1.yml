@@ -138,6 +138,17 @@ jobs:
           chmod +x /usr/local/bin/godot
           godot --version
 
+      # Outside the editor, Godot discovers GDExtensions only through
+      # res://.godot/extension_list.cfg, which the editor writes when it scans
+      # the project. .godot/ is git-ignored, so a fresh checkout has no list and
+      # the World node silently becomes a placeholder (run 34822828623: "Cannot
+      # get class 'G1World'"). A headless --import performs that scan and quits.
+      - name: import the project (writes .godot/extension_list.cfg)
+        run: |
+          godot --headless --path godot --import
+          test -f godot/.godot/extension_list.cfg
+          cat godot/.godot/extension_list.cfg
+
       # Bounded and self-reporting. `timeout` bounds a parked run — a per-frame
       # script error never reaches _finish, and a coroutine awaiting a signal
       # that never fires parks for ever — and --quit-after is Godot's own bound,
@@ -149,9 +160,12 @@ jobs:
       - name: render the fixed vista
         run: |
           mkdir -p out
-          export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json
-          export VK_DRIVER_FILES=$VK_ICD_FILENAMES
-          vulkaninfo --summary > out/vulkaninfo.txt 2>&1 || true
+          # Do not hard-code the lavapipe ICD path: on ubuntu-latest it is not
+          # where Debian puts it (run 34822828623: "Failed to open JSON file
+          # /usr/share/vulkan/icd.d/lvp_icd.x86_64.json", then no driver at all
+          # and a silent fallback to OpenGL 3). Let the loader enumerate; on a
+          # GPU-less runner the only device it can find is llvmpipe.
+          { ls -la /usr/share/vulkan/icd.d /etc/vulkan/icd.d 2>&1; vulkaninfo --summary 2>&1; } > out/vulkaninfo.txt || true
           set +e
           timeout -k 30 900 \
           xvfb-run -a --server-args="-screen 0 1920x1080x24" \

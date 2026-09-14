@@ -44,8 +44,14 @@ def emit(title, text):
 
 def main():
     listing = subprocess.run(["ls", "-la", "out"], capture_output=True, text=True).stdout
+    log = read("out/godot.log")
+    renderer = "\n".join(
+        ln for ln in log.splitlines()
+        if any(k in ln for k in ("Vulkan", "OpenGL", "Using Device", "Device:", "GDExtension", "godot-rust", "G1World"))
+    )
     sections = [
         ("compare_vista", read("out/compare.txt")),
+        ("renderer-and-extension", renderer),
         ("out-dir", listing),
         ("vulkaninfo", read("out/vulkaninfo.txt", 40)),
         ("godot.log", read("out/godot.log", 160)),

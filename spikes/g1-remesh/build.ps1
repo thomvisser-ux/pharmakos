@@ -62,6 +62,13 @@ try {
     if (-not $?) { throw "meshbench build failed" }
 
     Write-Host "staged extension into $bin"
+    # Outside the editor Godot only loads extensions listed in
+    # godot/.godot/extension_list.cfg, which the editor writes on import and
+    # which is git-ignored. A headless --import writes it and quits.
+    if (Get-Command godot_console -ErrorAction SilentlyContinue) {
+        & godot_console --headless --path (Join-Path $here "godot") --import | Out-Null
+        Write-Host "imported project (extension_list.cfg written)"
+    }
     Write-Host "meshbench at $(Join-Path $here 'target/bench/release/meshbench.exe')"
 }
 finally { Pop-Location }
