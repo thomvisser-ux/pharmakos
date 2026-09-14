@@ -145,7 +145,10 @@ jobs:
       # get class 'G1World'"). A headless --import performs that scan and quits.
       - name: import the project (writes .godot/extension_list.cfg)
         run: |
-          godot --headless --path godot --import
+          # The exit code is ignored on purpose: on Windows the editor segfaults
+          # while unloading the extension *after* the scan has written the list,
+          # and the list is the only thing this step is for. The test is the check.
+          godot --headless --path godot --import || echo "import exited $? (ignored)"
           test -f godot/.godot/extension_list.cfg
           cat godot/.godot/extension_list.cfg
 
