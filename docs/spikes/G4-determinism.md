@@ -456,8 +456,8 @@ encodes them, and choice (2) is explicitly conditional on step 5.
 
 | Item | Where | Why it is not done here |
 |---|---|---|
-| Step 5 — the three-runner matrix (G4-a) | CI | Needs `ubuntu-latest`, `windows-latest` and `macos-latest`; there is one machine here. **Deferred until the repository is on GitHub and the workflow is installed.** |
-| Install `.github/workflows/spike-g4.yml` | repo root | Written and YAML-validated at `spikes/g4-determinism/ci/spike-g4.yml`; the author was path-restricted out of `.github/`. **This is the only thing standing between the spike and a G4-a verdict.** |
-| Commit `spikes/g4-determinism/Cargo.lock` | `spikes/.gitignore` | Ignored by the bare `Cargo.lock` entry on line 10; needs `!*/Cargo.lock` plus `git add -f`. Outside the spike directory. |
+| Step 5 — the three-runner matrix (G4-a) | CI | **Running**: workflow `spike-g4-determinism` on commit `6e7a156` (run 34802164421, 2026-09-13). Result to be recorded in section 9. |
+| Install `.github/workflows/spike-g4.yml` | repo root | **Done 2026-09-13** (commit `6e7a156`). |
+| Commit `spikes/g4-determinism/Cargo.lock` | `spikes/.gitignore` | **Done 2026-09-13**: `!*/Cargo.lock` added, lock committed, every CI invocation passes `--locked`. |
 | Section 8's four frozen choices → `docs/design/decisions-log.md` §2.7 | decisions log | Outside the spike directory, and the log is the owner's to edit. The candidates are tabulated above with their literal values: (1), (3) and (4) are ready to approve; **(2), the snapshot format, must not be written down as final until the cross-OS byte-identity row is filled.** The postcard varint caveat from section 5 belongs in that entry. |
-| Section 3's own two `PLACEHOLDER`s (step 0's toolchain version, step 1's hash seed) | this file, section 3 | Both values are now known — `1.98.1` and `0x5048_4152_4D4B_4F53` — and are recorded above. Left in place because this pass was scoped to section 9; a one-line edit each when the owner next touches the procedure text. |
+| Section 3's two former `PLACEHOLDER`s (toolchain, hash seed) | this file, section 3 | **Done 2026-09-13**: `1.98.1` and `0x5048_4152_4D4B_4F53` written into steps 0 and 1. |
