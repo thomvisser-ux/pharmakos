@@ -486,6 +486,23 @@ a different rasteriser (lavapipe) will not reproduce a bit-exact image, and whet
 6.0-mean / 2 %-hard tolerances are the right generosity for that case has not been tested
 on any Linux machine.
 
+**Update, 2026-09-14, after the workflow ran for real.** The `geometry` job now passes on
+`ubuntu-latest` under xvfb + lavapipe (Mesa 25.2.8, llvmpipe, Vulkan 1.4, Forward+; run
+34823744065). Against the Windows/Quadro golden — regenerated at the job's current
+arguments, 200 frames with the shot at 180 — the software rasteriser's image differs by a
+**mean of 0.0039/255, 1.14 % of pixels differ at all (worst channel delta 57), and 0.000 %
+differ by more than 32**: `geometry ok`. So the tolerances are not merely generous enough;
+a different rasteriser lands two orders of magnitude inside them, which means the 2 %-hard
+cap really is a geometry test and not a driver-noise absorber. Getting there took four
+runs, and each failure is recorded in §10.12 because the skeleton's CI will meet the same
+things: the first run hung for hours because a non-editor Godot loads no GDExtension
+without `.godot/extension_list.cfg`, the Vulkan loader found no driver when the lavapipe
+ICD path was hard-coded, job logs and step summaries turned out to be invisible without a
+GitHub login (diagnostics now go out as `::notice::` annotations, which are not), and the
+golden had to move because the shot frame moved — both a Quadro render and the lavapipe
+render differed from the old golden by the same 4.278 % over 32, which is how a
+photograph change was told apart from a rendering change.
+
 `compare_vista.py` needs no Pillow and no numpy — it is stdlib plus `zlib` — which is just
 as well, since Pillow is not installed on this machine.
 
@@ -548,6 +565,9 @@ third of its allowance. At 40 explosions/s — twice the gate — latency p99 re
 ### 10.10 Verdict
 
 > **GO — on Windows/Vulkan only. The cross-OS half of the gate is outstanding.**
+>
+> *Update 2026-09-14:* the geometry half of the cross-OS check has since run on Linux
+> (lavapipe) and matches the Windows golden; the Linux frame-time half is still unmeasured.
 
 Plan §3 step 8 requires steps 3–5 repeated on Linux on a real GPU with "the gate judged on
 the worse of the two", and it **was not run**: this machine has no Linux GPU and no Linux
@@ -569,11 +589,11 @@ Not run, or run differently from the plan, in full:
   scanning enabled and no A/B was taken, so the numbers include whatever it costs.
 - **plan §6: an alternative allocator comparison.** Not needed — the mesher allocates
   0.001 times per meshing, so there is nothing for an allocator to be slow at.
-- **The CI workflow has not been run as a workflow, on any machine.** The `mesher-cpu`
-  job's commands have all been executed here (`meshbench --json`, `meshbench --pipeline`),
-  and the `geometry` job's assertion has now been executed *by hand on Windows/Vulkan*
-  (§10.7) rather than under xvfb + lavapipe on Linux, which is the configuration whose
-  tolerances actually need proving. The `frame-time` job is `if: false` by design.
+- **The CI workflow has now run as a workflow** (run 34823744065, green on every job):
+  `mesher-cpu` on ubuntu and windows, and `geometry` on Linux under xvfb + lavapipe with
+  the golden compare passing (§10.7 update). What that covers is the *geometry* half of
+  the cross-OS question; the Linux *frame-time* half is still unmeasured, because the
+  `frame-time` job is `if: false` by design until a GPU runner exists.
 - **Frame time is measured at ~650 fps, not at 60.** The plan asks for vsync off, which
   is what makes the frame time a measurement rather than a display reading; the
   consequence is that the explosion schedule, which is defined in frames, runs ~10.5×
