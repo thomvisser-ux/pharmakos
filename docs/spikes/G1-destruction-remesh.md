@@ -609,6 +609,8 @@ candidates that the measurement actually leaves open, the recommendation, and wh
 would cost to take the other one. Nothing here has been written to
 `docs/design/decisions-log.md` §2.7 — that is the owner's to do.
 
+*Decided 2026-09-14 as decisions-log items 52–56: single-platform GO accepted (52), path B with an A switch (53), K = 4 / B = 512 KiB under the amended "smallest K meeting latency" rule with the ageing term kept (54), 32³ and single-voxel unchanged (55), main-thread mesher in its own walled `mesher` crate (56).*
+
 **(1) How voxel geometry reaches the screen: ArrayMesh or `RenderingServer` RIDs.**
 
 | | path A — `ArrayMesh` + `MeshInstance3D` | path B — `RenderingServer` RIDs |
