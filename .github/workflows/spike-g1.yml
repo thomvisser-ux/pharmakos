@@ -153,26 +153,29 @@ jobs:
           export VK_DRIVER_FILES=$VK_ICD_FILENAMES
           vulkaninfo --summary > out/vulkaninfo.txt 2>&1 || true
           set +e
-          timeout -k 30 900           xvfb-run -a --server-args="-screen 0 1920x1080x24"             godot --verbose --path godot --rendering-driver vulkan --resolution 1280x720 --quit-after 600 --             --path=b --frames=200 --eps=20 --radius=4 --k=4 --b=524288             --shot=180 --out=$PWD/out --tag=ci > out/godot.log 2>&1
+          timeout -k 30 900 \
+          xvfb-run -a --server-args="-screen 0 1920x1080x24" \
+            godot --verbose --path godot --rendering-driver vulkan --resolution 1280x720 --quit-after 600 -- \
+            --path=b --frames=200 --eps=20 --radius=4 --k=4 --b=524288 \
+            --shot=180 --out=$PWD/out --tag=ci > out/godot.log 2>&1
           echo "godot exit code: $?" | tee -a out/godot.log
-
-      # The run summary page is readable without a login; job logs are not.
-      - name: diagnostics into the run summary
-        if: always()
-        run: |
-          {
-            echo '## geometry job diagnostics'
-            echo '### vulkaninfo --summary'; echo '```'; head -n 60 out/vulkaninfo.txt 2>/dev/null; echo '```'
-            echo '### godot.log (tail)'; echo '```'; tail -n 150 out/godot.log 2>/dev/null; echo '```'
-            echo '### out/'; echo '```'; ls -la out 2>/dev/null; echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
 
       # THE ASSERTION. Without it the job cannot fail on cracks, missing faces or
       # inverted winding — exactly the bug class the screenshot exists to catch,
       # and the one this spike actually hit. A missing or blank PNG fails too, so
       # a silently-not-rendered frame cannot read as a pass.
       - name: compare the vista against the golden
-        run: python3 ci/compare_vista.py out/vista_ci.png ci/golden/vista_ci.png 6.0 0.02
+        run: |
+          python3 ci/compare_vista.py out/vista_ci.png ci/golden/vista_ci.png 6.0 0.02 2>&1 | tee out/compare.txt
+          exit ${PIPESTATUS[0]}
+
+      # Job logs and step summaries are both hidden from logged-out viewers;
+      # annotations are not. ci/annotate.py publishes the compare verdict, the
+      # out/ listing, vulkaninfo and the Godot log tail as ::notice:: annotations
+      # (and into the step summary for anyone signed in).
+      - name: diagnostics as annotations
+        if: always()
+        run: python3 ci/annotate.py
 
       - uses: actions/upload-artifact@v4
         if: always()
