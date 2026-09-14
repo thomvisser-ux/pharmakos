@@ -106,9 +106,27 @@ fn xxh3_unseeded_matches_seed_zero() {
 fn project_seed_is_pinned() {
     assert_eq!(STATE_HASH_SEED, 0x5048_4152_4D4B_4F53);
     assert_eq!(STATE_HASH_SEED.to_be_bytes(), *b"PHARMKOS");
-    assert_eq!(digest(b""), xxh3_64_with_seed(b"", STATE_HASH_SEED));
+    // Literals, not `digest(x) == xxh3_64_with_seed(x, SEED)`: `digest` IS that
+    // expression (src/hash.rs), so comparing the two is a tautology that cannot
+    // fail under any edit to the seed, the crate or the function.
+    assert_eq!(digest(b""), 0xFE1A_F732_B028_10AD);
     // Regression pin, recorded at day 1 of the spike.
     assert_eq!(digest(b"pharmakos/g4"), 0xE170_26C8_A5EA_4D30);
+}
+
+/// `Enc::default()` must carry the encoding version byte, like every other
+/// construction path. A derived `Default` would hand back an empty buffer and an
+/// encoder one prefix byte short of canonical — invisible at the call site.
+#[test]
+fn enc_default_carries_the_version_byte() {
+    use g4_determinism::hash::ENCODING_VERSION;
+    let d = Enc::default();
+    assert_eq!(d.bytes(), &[ENCODING_VERSION], "Enc::default lost the version byte");
+    assert_eq!(d.bytes(), Enc::with_capacity(0).bytes());
+    let mut c = Enc::with_capacity(64);
+    c.clear();
+    assert_eq!(c.bytes(), d.bytes(), "clear and default disagree");
+    assert_eq!(d.finish(), Enc::with_capacity(4096).finish());
 }
 
 // ---------------------------------------------------------------------------
@@ -133,6 +151,51 @@ fn fx_division_truncates_toward_zero() {
     assert_eq!(Fx::ONE.div_fx(Fx::from_voxels(2)), Fx(1 << 15));
     assert_eq!(Fx(3).div_fx(Fx::from_voxels(2)), Fx(1));
     assert_eq!(Fx(-3).div_fx(Fx::from_voxels(2)), Fx(-1));
+    // A negative divisor: truncation is still toward zero, so the magnitude is
+    // the same and only the sign flips. `-3 / -2` is `+1`, not `+2`.
+    assert_eq!(Fx(-3).div_fx(Fx::from_voxels(-2)), Fx(1));
+    assert_eq!(Fx(3).div_fx(Fx::from_voxels(-2)), Fx(-1));
+    assert_eq!(Fx::ONE.negate().div_fx(Fx::from_voxels(-2)), Fx(1 << 15));
+    // Dividing by zero is a panic by construction, not a silent infinity.
+    let r = std::panic::catch_unwind(|| Fx::ONE.div_fx(Fx::ZERO));
+    assert!(r.is_err(), "Fx::div_fx by zero must panic");
+}
+
+/// `plus`, `minus`, `negate`, `mul_fx` and `scale` are the arithmetic the sim
+/// actually runs (11 and 5 call sites for the first two alone). Each one has a
+/// documented failure mode — `checked_*` or a `try_from` — and the point of
+/// `overflow-checks = true` in every profile is that the failure is a panic, so
+/// each failure mode is asserted rather than assumed.
+#[test]
+fn fx_add_sub_and_scale_panic_rather_than_wrap() {
+    assert_eq!(Fx::from_voxels(3).plus(Fx::from_voxels(4)), Fx::from_voxels(7));
+    assert_eq!(Fx::from_voxels(3).minus(Fx::from_voxels(4)), Fx::from_voxels(-1));
+    assert_eq!(Fx::from_voxels(3).negate(), Fx::from_voxels(-3));
+    assert_eq!(Fx::from_voxels(3).scale(-4), Fx::from_voxels(-12));
+    assert_eq!(Fx::ZERO.scale(i32::MAX), Fx::ZERO);
+
+    let cases: [(&str, fn()); 5] = [
+        ("plus", || {
+            let _ = Fx(i32::MAX).plus(Fx(1));
+        }),
+        ("minus", || {
+            let _ = Fx(i32::MIN).minus(Fx(1));
+        }),
+        ("negate", || {
+            let _ = Fx(i32::MIN).negate();
+        }),
+        ("mul_fx", || {
+            // (2^24)^2 >> 16 == 2^32, one bit past i32.
+            let _ = Fx(1 << 24).mul_fx(Fx(1 << 24));
+        }),
+        ("scale", || {
+            let _ = Fx(i32::MAX).scale(2);
+        }),
+    ];
+    for (name, f) in cases {
+        let r = std::panic::catch_unwind(f);
+        assert!(r.is_err(), "Fx::{name} must panic on overflow, not wrap");
+    }
 }
 
 #[test]
@@ -287,6 +350,67 @@ fn apportion_breaks_ties_to_the_lowest_seat_id() {
     assert_eq!(apportion(11, &[(0, 5), (1, 5)]), vec![(0, 6), (1, 5)]);
 }
 
+/// `Credits::record` directly, including the branch the sim cannot reach.
+///
+/// With four seats and no friendly fire an asset has exactly three possible
+/// damagers, so a fourth distinct seat never arrives and the eviction branch is
+/// dead code *in the toy* — but the rule graduates into the product, where seat
+/// counts are not fixed at four, so it is pinned here rather than left untested.
+#[test]
+fn credits_record_caps_and_evicts_the_weakest() {
+    use g4_determinism::{Credits, MAX_CREDITS};
+
+    // Accumulation, and the list stays sorted by seat whatever the arrival order.
+    let mut c = Credits::default();
+    c.record(2, 10);
+    c.record(0, 5);
+    c.record(2, 7);
+    assert_eq!(c.entries, vec![(0, 5), (2, 17)]);
+
+    // The cap binds at MAX_CREDITS distinct seats.
+    let mut c = Credits::default();
+    c.record(0, 100);
+    c.record(1, 50);
+    c.record(2, 30);
+    assert_eq!(c.entries.len(), MAX_CREDITS);
+    // A fourth seat weaker than the weakest entry is refused outright.
+    c.record(3, 10);
+    assert_eq!(c.entries, vec![(0, 100), (1, 50), (2, 30)]);
+    // A fourth seat stronger than the weakest displaces exactly that entry.
+    c.record(3, 40);
+    assert_eq!(c.entries, vec![(0, 100), (1, 50), (3, 40)]);
+
+    // The damage tie, which is the part the comment and the code used to
+    // disagree about. Seats 1 and 2 are equally small; "ties to the lowest seat
+    // id" means the lowest seat is FAVOURED, so seat 2 is the one displaced.
+    let mut c = Credits::default();
+    c.record(0, 100);
+    c.record(1, 30);
+    c.record(2, 30);
+    c.record(3, 40);
+    assert_eq!(
+        c.entries,
+        vec![(0, 100), (1, 30), (3, 40)],
+        "a damage tie must evict the highest seat id, leaving the lowest in place"
+    );
+
+    // Equal to the weakest is not "stronger than": no displacement.
+    let mut c = Credits::default();
+    c.record(0, 100);
+    c.record(1, 30);
+    c.record(2, 30);
+    c.record(3, 30);
+    assert_eq!(c.entries, vec![(0, 100), (1, 30), (2, 30)]);
+
+    // An existing seat always accumulates, even when the list is full.
+    let mut c = Credits::default();
+    c.record(0, 1);
+    c.record(1, 1);
+    c.record(2, 1);
+    c.record(1, 99);
+    assert_eq!(c.entries, vec![(0, 1), (1, 100), (2, 1)]);
+}
+
 #[test]
 fn apportion_rejects_degenerate_input() {
     assert!(apportion(0, &[(0, 1)]).is_empty());
@@ -320,6 +444,55 @@ fn streams_are_independent_and_positional() {
     assert_eq!(Stream::Map.id(), 3);
 }
 
+/// Golden pins for the split-RNG construction — frozen choice (3) of the plan's
+/// section 8, and the thing harness part 1 turns into a contract.
+///
+/// Everything else about the RNG is a self-comparison: two generators at the
+/// same position agree, three streams disagree. None of that pins `GOLDEN`, the
+/// two SplitMix64 multipliers, or the multiply-shift in `range_i32`. Editing any
+/// of them would leave every other test green while silently moving every hash
+/// in the project; the only other thing that would catch it is the trace digest,
+/// which lives in a document rather than in an assertion.
+///
+/// Values measured on this build. If one moves, the construction moved, and so
+/// did every golden file that was ever stamped with it.
+#[test]
+fn rng_construction_is_pinned() {
+    use g4_determinism::rng::mix64;
+
+    // The SplitMix64 finaliser, on its own. mix64(0) == 0 is a property of the
+    // construction (every step is a xor-shift or a multiply), not a measurement.
+    assert_eq!(mix64(0), 0);
+    assert_eq!(mix64(1), 0x5692_161D_100B_05E5);
+    // GOLDEN itself, which is the multiplier every position term goes through.
+    assert_eq!(mix64(0x9E37_79B9_7F4A_7C15), 0xE220_A839_7B1D_CDAF);
+
+    // The whole construction: seed, stream, tick, seat, sub -> first two draws.
+    let mut r = StreamRng::new(0x0102_0304_0506_0708, Stream::Combat, 10, 1, 7);
+    assert_eq!(r.next_u64(), 0xCDC6_5EE9_1829_2C78);
+    assert_eq!(r.next_u64(), 0x1005_52F8_977C_9F98);
+
+    // The stream-id mixing: a different stream at the same position.
+    let mut s = StreamRng::new(0x0102_0304_0506_0708, Stream::Spawn, 10, 1, 7);
+    assert_eq!(s.next_u64(), 0x0A84_9AA1_ED23_D46C);
+
+    // Seed 0, position 0, every field zero: the corner the construction is most
+    // likely to collapse at if a term is dropped.
+    let mut z = StreamRng::new(0, Stream::Combat, 0, 0, 0);
+    assert_eq!(z.next_u64(), 0x1957_A760_4E21_5178);
+
+    // `range_i32` is a second contract on top of the stream: the multiply-shift
+    // maps a draw to a bounded value, and the residual bias is part of the
+    // frozen behaviour, not an implementation detail.
+    let mut q = StreamRng::new(0x0102_0304_0506_0708, Stream::Combat, 10, 1, 7);
+    let seq: Vec<i32> = (0..8).map(|_| q.range_i32(-3, 3)).collect();
+    assert_eq!(
+        seq,
+        vec![2, -3, 3, -2, 0, -2, -1, 2],
+        "range_i32(-3, 3) at a fixed position moved"
+    );
+}
+
 #[test]
 fn range_is_inside_its_bounds() {
     let mut r = StreamRng::new(0xDEAD_BEEF, Stream::Combat, 0, 0, 0);
@@ -334,6 +507,21 @@ fn range_is_inside_its_bounds() {
     }
     let mut r3 = StreamRng::new(1, Stream::Map, 0, 0, 0);
     assert_eq!(r3.range_i32(5, 5), 5, "degenerate range");
+    // The full i32 span: `hi - lo + 1` is exactly 2^32, the only value that
+    // stresses the u64 -> u128 widening in range_i32 (a u32 span would wrap to
+    // zero, and the multiply-shift would collapse to lo).
+    let mut r4 = StreamRng::new(0xA5A5_A5A5, Stream::Combat, 7, 2, 9);
+    let mut saw_negative = false;
+    let mut saw_positive = false;
+    for _ in 0..1_000 {
+        let v = r4.range_i32(i32::MIN, i32::MAX);
+        saw_negative |= v < 0;
+        saw_positive |= v > 0;
+    }
+    assert!(
+        saw_negative && saw_positive,
+        "range_i32 over the full i32 span collapsed to one side"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -351,12 +539,26 @@ fn canonical_encoding_is_stable_and_fixed_stride() {
     assert_eq!(e1.finish(), w.state_hash());
 
     // 1 version byte + 8 seed + 4 tick + 4 deaths
-    // + 4 len + 200 * (4+1+12+2+4+5+2)
-    // + 4 len + 12 * (4+1+12+4+8+4)
-    // + 4 len + 3 * (1+8+4+4)
+    // + 4 len + UNIT_COUNT * (4+1+12+2+4+5+2)
+    // + 4 len + BEACON_COUNT * (4+1+12+4+8+4)
+    // + 4 len + SEATS * (1+8+4+4)
     // + 4 len (credits, empty at tick 0)
-    let expected = 1 + 8 + 4 + 4 + 4 + 200 * 30 + 4 + 12 * 33 + 4 + 3 * 17 + 4;
+    let expected = 1
+        + 8
+        + 4
+        + 4
+        + 4
+        + g4_determinism::UNIT_COUNT * 30
+        + 4
+        + g4_determinism::BEACON_COUNT * 33
+        + 4
+        + g4_determinism::SEATS * 17
+        + 4;
     assert_eq!(e1.bytes().len(), expected, "canonical encoding stride moved");
+    // The number that goes into the plan's Results section, spelled out so a
+    // table shape change cannot quietly move it: 6,497 bytes at tick 0 with
+    // 200 units, 12 beacons and 4 seats.
+    assert_eq!(e1.bytes().len(), 6_497, "tick-0 canonical encoding length");
 }
 
 #[test]
@@ -419,24 +621,90 @@ fn the_sim_actually_does_something() {
     // same asset, so assert that the three-way case actually occurs.
     let mut w2 = World::new(g4_determinism::MATCH_SEEDS[1]);
     let mut multi = 0usize;
+    let mut full = 0usize;
+    let mut widest = 0usize;
     for _ in 0..ticks {
         w2.step();
-        multi += w2
-            .credits
-            .iter()
-            .filter(|(_, c)| c.entries.len() >= 2)
-            .count();
+        for (_, c) in w2.credits.iter() {
+            if c.entries.len() >= 2 {
+                multi += 1;
+            }
+            if c.entries.len() >= g4_determinism::MAX_CREDITS {
+                full += 1;
+            }
+            widest = widest.max(c.entries.len());
+        }
     }
     assert!(multi > 0, "no asset was ever damaged by two different seats");
+    // The reason SEATS is 4. With three seats an asset has only two possible
+    // damagers, so the MAX_CREDITS cap could never bind and the three-entry
+    // largest-remainder apportionment — the case the plan calls out by name —
+    // would never run in the trace at all.
+    println!("credit coverage: widest={widest} full_observations={full}");
+    assert_eq!(
+        widest,
+        g4_determinism::MAX_CREDITS,
+        "the MAX_CREDITS cap is not exercised by the toy"
+    );
+}
+
+/// The ten-match trace digest, as an assertion rather than as a number in a
+/// document.
+///
+/// `bin/run` prints this digest, and section 9 of the plan records it — but a
+/// number in a document is not a regression check, and until the cross-OS
+/// workflow is installed the digest is the only thing standing between an
+/// accidental sim change and a silently different project-wide hash. Rendering
+/// is byte-for-byte what `run` writes (binary mode, explicit `\n`), so the two
+/// cannot drift apart.
+///
+/// `#[ignore]`d because it runs the full 96,000 ticks: ~1.4 s in release but
+/// ~30 s in debug. Run it with `cargo test --release -- --ignored`; the CI
+/// workflow does exactly that.
+#[test]
+#[ignore = "full 96,000-tick run; cargo test --release -- --ignored"]
+fn ten_match_trace_digest_is_pinned() {
+    use g4_determinism::hash::hex;
+
+    let mut buf: Vec<u8> = Vec::with_capacity(2_400_000);
+    for (m, &seed) in g4_determinism::MATCH_SEEDS.iter().enumerate() {
+        let trace = g4_determinism::trace_match(seed, g4_determinism::MATCH_TICKS);
+        for (t, h) in trace.iter().enumerate() {
+            buf.extend_from_slice(m.to_string().as_bytes());
+            buf.push(b'\t');
+            buf.extend_from_slice(t.to_string().as_bytes());
+            buf.push(b'\t');
+            buf.extend_from_slice(hex(*h).as_bytes());
+            buf.push(b'\n');
+        }
+    }
+    // The digest covers the 96,000 tick lines only; `run`'s file is 24 bytes
+    // longer because it appends its own `digest<TAB>...<LF>` line afterwards.
+    assert_eq!(buf.len(), 2_292_900, "trace byte length moved");
+    assert_eq!(
+        hex(digest(&buf)),
+        "340a30048a380595",
+        "the ten-match trace digest moved — every golden stamped with it moved too"
+    );
 }
 
 #[test]
 fn snapshot_round_trips_in_process() {
     // The in-process half of G4-b. The cross-process half is `bin/roundtrip`.
+    //
+    // 500 ticks, not 137: the first death lands around tick 313, so at 137 the
+    // credit table is empty for every seed and the round trip never exercises
+    // the c_asset/c_n/c_seat/c_dmg run-length encoding or the `cursor` walk in
+    // `Snapshot::restore` — the one part of the projection that is not a 1:1
+    // field copy, and the likeliest place for a restore to lose state.
     let mut w = World::new(g4_determinism::MATCH_SEEDS[2]);
-    for _ in 0..137 {
+    for _ in 0..500 {
         w.step();
     }
+    assert!(
+        !w.credits.is_empty(),
+        "snapshot test must cover a non-empty credit table; retune the tick count"
+    );
     let snap = g4_determinism::snapshot::Snapshot::capture(&w);
     let back = snap.restore();
     assert_eq!(back.state_hash(), w.state_hash(), "snapshot is not hash-transparent");

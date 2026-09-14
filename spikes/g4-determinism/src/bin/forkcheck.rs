@@ -51,6 +51,16 @@ fn main() {
     let matches: usize =
         arg_value(&args, "--matches").map_or(MATCH_SEEDS.len(), |v| v.parse().expect("--matches"));
 
+    // Same bound `run` asserts. Without it `.take(matches)` clamps to the ten
+    // defined seeds, `parents_unperturbed` reports `10/11`, and the process
+    // exits 1 — a spurious G4-c failure with no diagnostic attached.
+    assert!(
+        matches <= MATCH_SEEDS.len(),
+        "only {} match seeds are defined",
+        MATCH_SEEDS.len()
+    );
+    assert!(ticks > 0, "--ticks must be positive");
+
     println!("# g4-determinism forkcheck (research build)");
     println!("# matches={matches} ticks={ticks} fork_at={FORK_AT:?} child_ticks={CHILD_TICKS}");
 
@@ -60,7 +70,11 @@ fn main() {
     let mut fork_ns_total: u128 = 0;
     let mut child_ns_total: u128 = 0;
     let mut forks = 0usize;
-    let mut fork_size = 0usize;
+    // Fork size varies with how many credit entries are live, so a single
+    // assignment inside the loop would report whichever fork happened last and
+    // present it as "the" fork cost. Every sample is kept and printed with the
+    // (match, tick) it was taken at, and the summary carries min/mean/max.
+    let mut fork_sizes: Vec<(usize, u32, usize)> = Vec::new();
     let mut failures: Vec<String> = Vec::new();
 
     for (m, &seed) in MATCH_SEEDS.iter().enumerate().take(matches) {
@@ -88,7 +102,7 @@ fn main() {
                 let child0 = fork(&w);
                 fork_ns_total += t0.elapsed().as_nanos();
                 forks += 1;
-                fork_size = heap_bytes(&child0);
+                fork_sizes.push((m, t, heap_bytes(&child0)));
                 drop(child0);
 
                 // Stepping the child is a separate cost and is reported
@@ -153,9 +167,36 @@ fn main() {
     // The fork alone, in nanoseconds: microseconds are too coarse a unit for a
     // clone of a 7 kB world, and rounding it to 0 ms would hide the answer.
     println!("fork_ns_mean\t{fork_ns}");
-    println!("fork_ms_mean\t0.{:06}", fork_ns % 1_000_000);
+    // Both halves. Printing only the remainder hard-codes the whole-millisecond
+    // digit as 0, so a 1.5 ms fork would be reported as 0.500000 ms — right only
+    // while the measured fork stays under a millisecond, which is not a property
+    // anyone should have to remember when reading the results table.
+    println!(
+        "fork_ms_mean\t{}.{:06}",
+        fork_ns / 1_000_000,
+        fork_ns % 1_000_000
+    );
     println!("child_{CHILD_TICKS}_ticks_us_mean\t{}", child_ns / 1_000);
-    println!("fork_bytes\t{fork_size}");
+    // One line per fork, each naming the match and tick it was sampled at, then
+    // the summary. heap_bytes varies with the live credit count, so an
+    // unlabelled single sample is not a recordable number.
+    for (m, t, b) in &fork_sizes {
+        println!("fork_bytes\t{m}\t{t}\t{b}");
+    }
+    let (b_min, b_max, b_mean) = if fork_sizes.is_empty() {
+        (0, 0, 0)
+    } else {
+        let mut lo = usize::MAX;
+        let mut hi = 0usize;
+        let mut sum = 0u128;
+        for (_, _, b) in &fork_sizes {
+            lo = lo.min(*b);
+            hi = hi.max(*b);
+            sum += u128::try_from(*b).unwrap();
+        }
+        (lo, hi, sum / u128::try_from(fork_sizes.len()).unwrap())
+    };
+    println!("fork_bytes_min_mean_max\t{b_min}\t{b_mean}\t{b_max}");
     for f in &failures {
         println!("FAIL\t{f}");
     }

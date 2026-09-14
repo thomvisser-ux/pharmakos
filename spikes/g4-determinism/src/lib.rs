@@ -4,9 +4,16 @@
 //! G4 determinism spike — the toy sim.
 //!
 //! Small enough to read in one sitting, large enough that a platform difference
-//! has somewhere to hide: ~200 units and 12 beacons over three seats, a 20 Hz
+//! has somewhere to hide: ~200 units and 12 beacons over four seats, a 20 Hz
 //! fixed tick, integer-only arithmetic, per-seat treasuries, kill-credit
 //! counters apportioned by largest remainder with ties to the lowest seat id.
+//!
+//! Four seats, not three, and deliberately: an asset belongs to one seat and
+//! takes damage only from the others (there is no friendly fire), so with three
+//! seats a kill-credit list could never hold more than two entries and the
+//! `MAX_CREDITS == 3` cap — the thing the plan singles out as "precisely the kind
+//! of thing that goes non-deterministic quietly" — would never be exercised at
+//! all. With four seats the three-entry apportionment happens in the trace.
 //!
 //! Discipline enforced by hand here (and by lints in harness part 1):
 //!
@@ -42,11 +49,12 @@ use rng::{Stream, StreamRng};
 // Tuning. In the product these are rules-table data; in the toy they are const.
 // ---------------------------------------------------------------------------
 
-/// Seats in a match.
-pub const SEATS: usize = 3;
+/// Seats in a match. Four, so that an asset can be damaged by three distinct
+/// enemy seats and the `MAX_CREDITS` cap is reachable — see the module docs.
+pub const SEATS: usize = 4;
 /// Unit slots. Dead units keep their slot and can be rebuilt.
 pub const UNIT_COUNT: usize = 200;
-/// Beacons. Four per seat.
+/// Beacons. Three per seat.
 pub const BEACON_COUNT: usize = 12;
 /// Beacon ids start here so that unit ids and beacon ids share one id space and
 /// a `target: Option<u32>` is unambiguous.
@@ -107,7 +115,16 @@ const REBUILD_COST: i64 = 200;
 const REACQUIRE_PERIOD: u32 = 20;
 
 /// At most three kill-credit counters per asset, exactly as the spec describes.
+///
+/// With [`SEATS`] `== 4` and no friendly fire an asset has exactly three
+/// possible damagers, so a list of three is reachable and [`apportion`] is
+/// exercised with three entries. A *fourth* distinct damager still cannot occur
+/// in the toy, so [`Credits::record`]'s eviction branch is unreachable from the
+/// sim and is covered by a direct unit test instead (`tests/vectors.rs`).
 pub const MAX_CREDITS: usize = 3;
+
+// The eviction branch below is only meaningful while the cap can bind at all.
+const _: () = assert!(MAX_CREDITS < SEATS, "MAX_CREDITS must be reachable");
 
 // ---------------------------------------------------------------------------
 // State. SoA tables, ordered, fixed-width.
@@ -185,7 +202,16 @@ pub struct Credits {
 }
 
 impl Credits {
-    fn record(&mut self, seat: u8, damage: u32) {
+    /// Add `damage` to `seat`'s counter, creating it if there is room.
+    ///
+    /// **Ties to the lowest seat id**, in the same sense as [`apportion`]: the
+    /// lowest seat id is *favoured*. When the list is full and two entries are
+    /// equally small, the one that gets displaced is the one with the **highest**
+    /// seat id, so the lowest seat survives the tie.
+    ///
+    /// `pub` so the eviction branch — unreachable from the toy sim, since four
+    /// seats can only produce three distinct damagers — is directly testable.
+    pub fn record(&mut self, seat: u8, damage: u32) {
         if let Some(slot) = self.entries.iter_mut().find(|e| e.0 == seat) {
             slot.1 = slot.1.saturating_add(damage);
             return;
@@ -197,13 +223,16 @@ impl Credits {
             return;
         }
         // Full: the smallest contributor is displaced only if it is smaller than
-        // the newcomer. Tie to the lowest seat id.
+        // the newcomer. On a damage tie the highest seat id is displaced, which
+        // is what "ties to the lowest seat id" means everywhere else in the toy —
+        // the low seat keeps its slot. `Reverse` on the seat half of the key is
+        // what flips it; without it the tuple comparison would evict the lowest.
         let mut worst = 0usize;
         let mut k = 1usize;
         while k < self.entries.len() {
             let (ws, wd) = self.entries[worst];
             let (cs, cd) = self.entries[k];
-            if (cd, cs) < (wd, ws) {
+            if (cd, core::cmp::Reverse(cs)) < (wd, core::cmp::Reverse(ws)) {
                 worst = k;
             }
             k += 1;
@@ -284,9 +313,9 @@ pub fn apportion(bounty: i64, entries: &[(u8, u32)]) -> Vec<(u8, i64)> {
 // ---------------------------------------------------------------------------
 
 fn seat_centre(seat: u8) -> [Fx; 3] {
-    // Three seats evenly around a circle. 65_536/3 is not exact; the truncation
-    // is deliberate and identical everywhere.
-    let step: u32 = 65_536 / 3;
+    // Seats evenly around a circle. The division truncates when SEATS does not
+    // divide 65_536; the truncation is deliberate and identical everywhere.
+    let step: u32 = 65_536 / u32::try_from(SEATS).expect("seat count");
     let a = Angle(u16::try_from((u32::from(seat) * step) & 0xFFFF).expect("seat angle"));
     let r = Fx::from_voxels(SPAWN_RADIUS_VOXELS);
     [fixed::cos(a).mul_fx(r), fixed::sin(a).mul_fx(r), Fx::ZERO]
@@ -408,7 +437,7 @@ impl World {
                 continue;
             }
             let id = self.units.id[i];
-            let stale = (self.tick + id) % REACQUIRE_PERIOD == 0;
+            let stale = (self.tick + id).is_multiple_of(REACQUIRE_PERIOD);
             let live = match self.units.target[i] {
                 Some(t) => self.asset_pos(t).is_some(),
                 None => false,
@@ -603,7 +632,7 @@ impl World {
     }
 
     fn phase_rebuild(&mut self) {
-        if self.tick % REBUILD_PERIOD != 0 {
+        if !self.tick.is_multiple_of(REBUILD_PERIOD) {
             return;
         }
         let centre = [Fx::ZERO, Fx::ZERO, Fx::ZERO];

@@ -8,6 +8,9 @@
 target/
 **/target/
 Cargo.lock
+# …except each spike's own lock file: the cross-OS comparison is only a controlled
+# experiment when all three runners resolve the same dependency graph (--locked).
+!*/Cargo.lock
 
 # Godot 4.7 (g1-remesh/godot/) — import cache, regenerated on open
 .godot/
@@ -30,6 +33,7 @@ export_presets.cfg
 *.json
 *.png
 trace*.txt
+snapshots-*.txt
 paths*.txt
 bench*.txt
 results/

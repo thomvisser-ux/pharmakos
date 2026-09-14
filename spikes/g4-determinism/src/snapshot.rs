@@ -3,12 +3,24 @@
 
 //! Save / restore, in both candidate formats, behind features.
 //!
-//! [`Snapshot`] is a flat projection of [`World`] built from **fixed-width types
-//! only**. No `usize`, no `isize`, no pointers, no `Option`, no enums: the two
-//! formats then have nothing target-dependent left to disagree about except the
-//! sequence lengths they write themselves, and both write those in a
-//! width-independent way (rkyv at the pinned 32-bit pointer width, postcard as
-//! LEB128 of the same numeric value).
+//! [`Snapshot`] is a flat projection of [`World`] whose **fields** are all
+//! fixed-width. No `usize` or `isize` field, no pointer, no `Option`, no enum.
+//!
+//! The one thing that is *not* a field of ours is the sequence length each
+//! `Vec<T>` hands the serialiser, and it is worth being exact about it rather
+//! than claiming the snapshot contains no `usize` at all — it does, once per
+//! vector, supplied by the format:
+//!
+//! * **rkyv** writes lengths at the pinned 32-bit pointer width
+//!   (`pointer_width_32` in `Cargo.toml`), so they are the same bytes on a
+//!   32- and a 64-bit host.
+//! * **postcard** encodes a sequence length as a canonical LEB128 varint of the
+//!   host's `usize`, with no width padding — so the bytes agree between 32- and
+//!   64-bit hosts for every length below 2^32, which covers every snapshot this
+//!   toy can produce by many orders of magnitude. It is a *value* identity, not
+//!   a type-level one; the 32-bit web build on the roadmap stays inside it, but
+//!   the caveat belongs in the snapshot-format decision rather than being
+//!   waved away here.
 //!
 //! `Option<u32>` in the world becomes [`NO_TARGET`] in the snapshot, so the
 //! encoding has no tag byte whose layout could differ.
@@ -16,6 +28,17 @@
 use crate::fixed::Fx;
 use crate::{Beacons, Credits, Seat, Units, World};
 use imbl::OrdMap;
+
+// The two formats are additive cargo features, which means `--all-features`
+// would quietly enable both and — since rkyv wins the `cfg` race below — measure
+// rkyv twice while reporting that postcard was covered. Step 7 of the plan needs
+// both formats measured separately, so make the ambiguity a compile error rather
+// than a habit of always invoking the two feature builds by hand.
+#[cfg(all(feature = "snap-rkyv", feature = "snap-postcard"))]
+compile_error!(
+    "pick exactly one snapshot format: --features snap-rkyv OR --features snap-postcard. \
+     They are measured separately (G4 plan step 7); enabling both would test one twice."
+);
 
 /// Sentinel for "no target" in the flat encoding.
 pub const NO_TARGET: u32 = u32::MAX;
@@ -120,8 +143,20 @@ impl Snapshot {
     #[must_use]
     pub fn restore(&self) -> World {
         assert_eq!(self.version, SNAPSHOT_VERSION, "snapshot version mismatch");
+
+        // Every parallel vector is checked by name before anything is indexed.
+        // G4-b runs `restore` in a child process, and an index-out-of-bounds
+        // panic there surfaces to the parent as `restore child failed:` plus a
+        // raw backtrace — a named assertion says which field of a truncated or
+        // hand-edited snapshot was short.
         let n = self.u_id.len();
-        assert_eq!(self.u_pos.len(), n * 3, "unit position stride");
+        assert_eq!(self.u_pos.len(), n * 3, "unit position stride (u_pos)");
+        assert_eq!(self.u_seat.len(), n, "unit field length (u_seat)");
+        assert_eq!(self.u_heading.len(), n, "unit field length (u_heading)");
+        assert_eq!(self.u_hp.len(), n, "unit field length (u_hp)");
+        assert_eq!(self.u_target.len(), n, "unit field length (u_target)");
+        assert_eq!(self.u_cooldown.len(), n, "unit field length (u_cooldown)");
+
         let mut units = Units::default();
         for i in 0..n {
             units.id.push(self.u_id[i]);
@@ -142,7 +177,11 @@ impl Snapshot {
         }
 
         let m = self.b_id.len();
-        assert_eq!(self.b_pos.len(), m * 3, "beacon position stride");
+        assert_eq!(self.b_pos.len(), m * 3, "beacon position stride (b_pos)");
+        assert_eq!(self.b_seat.len(), m, "beacon field length (b_seat)");
+        assert_eq!(self.b_hp.len(), m, "beacon field length (b_hp)");
+        assert_eq!(self.b_treasury.len(), m, "beacon field length (b_treasury)");
+        assert_eq!(self.b_kw_draw.len(), m, "beacon field length (b_kw_draw)");
         let mut beacons = Beacons::default();
         for i in 0..m {
             beacons.id.push(self.b_id[i]);
@@ -157,6 +196,10 @@ impl Snapshot {
             beacons.kw_draw.push(self.b_kw_draw[i]);
         }
 
+        let k = self.s_seat.len();
+        assert_eq!(self.s_cash.len(), k, "seat field length (s_cash)");
+        assert_eq!(self.s_kw.len(), k, "seat field length (s_kw)");
+        assert_eq!(self.s_kills.len(), k, "seat field length (s_kills)");
         let mut seats = Vec::with_capacity(self.s_seat.len());
         for i in 0..self.s_seat.len() {
             seats.push(Seat {
@@ -166,6 +209,23 @@ impl Snapshot {
                 kills: self.s_kills[i],
             });
         }
+
+        assert_eq!(
+            self.c_n.len(),
+            self.c_asset.len(),
+            "credit run length (c_n) does not match the asset list (c_asset)"
+        );
+        let runs: usize = self.c_n.iter().map(|&x| usize::from(x)).sum();
+        assert_eq!(
+            self.c_seat.len(),
+            runs,
+            "credit run vector (c_seat) does not match the sum of c_n"
+        );
+        assert_eq!(
+            self.c_dmg.len(),
+            runs,
+            "credit run vector (c_dmg) does not match the sum of c_n"
+        );
 
         let mut credits: OrdMap<u32, Credits> = OrdMap::new();
         let mut cursor = 0usize;

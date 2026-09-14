@@ -27,9 +27,21 @@ pub const STATE_HASH_SEED: u64 = 0x5048_4152_4D4B_4F53;
 pub const ENCODING_VERSION: u8 = 1;
 
 /// Append-only canonical encoder.
-#[derive(Debug, Default)]
+///
+/// Every construction path pushes [`ENCODING_VERSION`] first. `Default` is
+/// written by hand rather than derived for exactly that reason: a derived
+/// `Default` would hand back an empty buffer, and an encoder missing its version
+/// byte hashes the same world to a different value than one built the documented
+/// way — a divergence that is invisible at the call site.
+#[derive(Debug)]
 pub struct Enc {
     buf: Vec<u8>,
+}
+
+impl Default for Enc {
+    fn default() -> Enc {
+        Enc::with_capacity(0)
+    }
 }
 
 impl Enc {

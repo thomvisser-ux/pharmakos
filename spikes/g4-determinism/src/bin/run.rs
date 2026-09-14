@@ -31,6 +31,135 @@ fn arg_value(args: &[String], name: &str) -> Option<String> {
     None
 }
 
+/// Peak resident set size of this process, in bytes, from the platform API.
+///
+/// The plan's numbers table asks for peak RSS next to ticks/s, and a figure
+/// measured by hand outside the harness is one CI can neither reproduce nor
+/// regress on — so the harness prints it itself. Dependency-free on purpose:
+/// the spike pins five crates and adding a sixth for one number would weaken
+/// the point of the pinning.
+///
+/// Returns 0 when the platform is not one of the three the gate names, which is
+/// honest: a 0 in the CI log reads as "not measured here", not as "no memory".
+mod peak_rss {
+    #[cfg(windows)]
+    #[repr(C)]
+    struct ProcessMemoryCounters {
+        cb: u32,
+        page_fault_count: u32,
+        peak_working_set_size: usize,
+        working_set_size: usize,
+        quota_peak_paged_pool_usage: usize,
+        quota_paged_pool_usage: usize,
+        quota_peak_non_paged_pool_usage: usize,
+        quota_non_paged_pool_usage: usize,
+        pagefile_usage: usize,
+        peak_pagefile_usage: usize,
+    }
+
+    // `K32GetProcessMemoryInfo` is exported from kernel32.dll (the psapi.dll
+    // entry point of the same name is a forwarder), and kernel32 is linked into
+    // every MSVC target already, so this needs no `#[link]` and no crate.
+    #[cfg(windows)]
+    unsafe extern "system" {
+        fn GetCurrentProcess() -> *mut core::ffi::c_void;
+        fn K32GetProcessMemoryInfo(
+            process: *mut core::ffi::c_void,
+            counters: *mut ProcessMemoryCounters,
+            cb: u32,
+        ) -> i32;
+    }
+
+    #[cfg(windows)]
+    #[must_use]
+    pub fn bytes() -> u64 {
+        let mut c = ProcessMemoryCounters {
+            cb: 0,
+            page_fault_count: 0,
+            peak_working_set_size: 0,
+            working_set_size: 0,
+            quota_peak_paged_pool_usage: 0,
+            quota_paged_pool_usage: 0,
+            quota_peak_non_paged_pool_usage: 0,
+            quota_non_paged_pool_usage: 0,
+            pagefile_usage: 0,
+            peak_pagefile_usage: 0,
+        };
+        let size = u32::try_from(core::mem::size_of::<ProcessMemoryCounters>())
+            .expect("PROCESS_MEMORY_COUNTERS size");
+        c.cb = size;
+        // SAFETY: `c` is a live, correctly sized PROCESS_MEMORY_COUNTERS and
+        // the pseudo-handle from GetCurrentProcess is always valid.
+        let ok = unsafe { K32GetProcessMemoryInfo(GetCurrentProcess(), &raw mut c, size) };
+        if ok == 0 {
+            0
+        } else {
+            u64::try_from(c.peak_working_set_size).unwrap_or(0)
+        }
+    }
+
+    /// Linux: `VmHWM` in `/proc/self/status`, reported in kB.
+    #[cfg(target_os = "linux")]
+    #[must_use]
+    pub fn bytes() -> u64 {
+        let Ok(s) = std::fs::read_to_string("/proc/self/status") else {
+            return 0;
+        };
+        for line in s.lines() {
+            if let Some(rest) = line.strip_prefix("VmHWM:") {
+                let kb: u64 = rest
+                    .trim()
+                    .trim_end_matches(" kB")
+                    .trim()
+                    .parse()
+                    .unwrap_or(0);
+                return kb.saturating_mul(1024);
+            }
+        }
+        0
+    }
+
+    /// macOS: `getrusage(RUSAGE_SELF).ru_maxrss`, which is bytes on Darwin (it
+    /// is kilobytes on Linux, which is why the two arms differ).
+    #[cfg(target_os = "macos")]
+    #[must_use]
+    pub fn bytes() -> u64 {
+        #[repr(C)]
+        struct TimeVal {
+            sec: i64,
+            usec: i32,
+            _pad: i32,
+        }
+        #[repr(C)]
+        struct RUsage {
+            ru_utime: TimeVal,
+            ru_stime: TimeVal,
+            ru_maxrss: i64,
+            // The remaining 15 `long` counters. Declared so the struct is at
+            // least as large as the kernel's, never smaller.
+            _rest: [i64; 15],
+        }
+        unsafe extern "C" {
+            fn getrusage(who: i32, usage: *mut RUsage) -> i32;
+        }
+        let mut u = RUsage {
+            ru_utime: TimeVal { sec: 0, usec: 0, _pad: 0 },
+            ru_stime: TimeVal { sec: 0, usec: 0, _pad: 0 },
+            ru_maxrss: 0,
+            _rest: [0; 15],
+        };
+        // SAFETY: `u` is live and no smaller than the kernel's struct rusage.
+        let ok = unsafe { getrusage(0, &raw mut u) };
+        if ok == 0 { u64::try_from(u.ru_maxrss).unwrap_or(0) } else { 0 }
+    }
+
+    #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+    #[must_use]
+    pub fn bytes() -> u64 {
+        0
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let matches: usize = arg_value(&args, "--matches")
@@ -100,6 +229,9 @@ fn main() {
     println!("elapsed_ms\t{ms}");
     println!("total_ticks\t{total_ticks}");
     println!("ticks_per_s\t{ticks_per_s}");
+    // Measured after the run and after the trace buffer has been written, so it
+    // is the peak of the whole process, trace buffer included.
+    println!("peak_rss_bytes\t{}", peak_rss::bytes());
 }
 
 fn write_line(buf: &mut Vec<u8>, m: usize, t: u32, h: u64) {

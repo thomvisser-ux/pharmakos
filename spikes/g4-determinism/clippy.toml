@@ -1,0 +1,43 @@
+# SPDX-FileCopyrightText: 2026 Pharmakos contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Clippy configuration for the G4 spike ONLY.
+#
+# Why this file exists at all: clippy looks for `clippy.toml` in the current
+# directory and then walks up the ancestors, so a run from `spikes/g4-determinism`
+# with no file of its own picks up the *product's* root `clippy.toml` — even
+# though this directory is a standalone cargo workspace that the product build
+# never sees, `spikes/README.md` rule 1 says the determinism lints do not apply
+# here, and `docs/spikes/G4-determinism.md` section 2 explicitly sanctions
+# `std::time::Instant` in `src/bin/`. Without this file
+#
+#     cargo clippy --release --all-targets --features research,snap-rkyv -- -D warnings
+#
+# fails with `disallowed_types` / `disallowed_methods` errors on every `Instant`
+# in the three benchmark binaries, plus an MSRV-mismatch warning, and the claim
+# that clippy verified the spike's discipline is not reproducible.
+#
+# Clippy uses the NEAREST ancestor file and does not merge, so these two empty
+# lists shadow the root file's entries wholesale. That is the intended scope: the
+# discipline the spike actually needs (no floats, no `as`, no HashMap) is denied
+# in `src/lib.rs` itself with `#![deny(...)]`, where it travels with the code
+# instead of with the working directory.
+#
+# The leak is worth recording for harness part 1: `cargo xtask clippy` should
+# pass an explicit `--config-path`, because the same ancestor walk hits any
+# out-of-workspace directory a developer happens to run clippy from.
+
+# Match the pinned toolchain in rust-toolchain.toml and `rust-version` in
+# Cargo.toml exactly. The root file says 1.85, which is the product's MSRV and
+# produces an "MSRV in clippy.toml and Cargo.toml differ" warning here.
+msrv = "1.98.1"
+
+avoid-breaking-exported-api = false
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+
+# Deliberately empty — see the header. `Instant` is sanctioned in `src/bin/`, and
+# the sim module's own bans are `#![deny(...)]` attributes in `src/lib.rs`.
+disallowed-types = []
+disallowed-methods = []
+disallowed-macros = []

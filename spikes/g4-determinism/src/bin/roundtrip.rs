@@ -11,6 +11,13 @@
 //! hash to the end of the match, and the parent byte-compares that tail against
 //! the uninterrupted trace.
 //!
+//! Every checkpoint of every match also prints
+//! `snapshot<TAB>match<TAB>tick<TAB>bytes<TAB>file_hash`, and the same lines go
+//! to `--snapshots FILE` (default `snapshots-<format>.txt`) so the CI compare
+//! job can byte-compare snapshot hashes across the three runners exactly the way
+//! it compares traces. That list is the evidence for the plan's "snapshot byte
+//! identity across OSes, per format" row.
+//!
 //! A fresh process is the whole point. Restoring in-process would share the
 //! parent's allocator state, its lazily built tables and its warm caches, and
 //! would prove nothing about a save written on Monday and loaded on Tuesday.
@@ -97,6 +104,15 @@ fn parent(args: &[String]) {
         fmt != "none",
         "build with --features snap-rkyv or --features snap-postcard"
     );
+    // Same bound `run` asserts. `.take(matches)` would otherwise clamp silently
+    // to the ten defined seeds and report a pass over a smaller run than asked
+    // for, which is a worse failure mode than refusing the argument.
+    assert!(
+        matches <= MATCH_SEEDS.len(),
+        "only {} match seeds are defined",
+        MATCH_SEEDS.len()
+    );
+    assert!(ticks > 0, "--ticks must be positive");
 
     let exe = std::env::current_exe().expect("current_exe");
     let dir = std::env::temp_dir().join(format!("g4-roundtrip-{fmt}"));
@@ -107,7 +123,12 @@ fn parent(args: &[String]) {
     let mut save_ns_total: u128 = 0;
     let mut restore_ns_total: u128 = 0;
     let mut saves = 0usize;
-    let mut sizes: Vec<(u32, usize, u64)> = Vec::new(); // (tick, bytes, file hash)
+    // (match, tick, bytes, file hash) for EVERY checkpoint of every match, not
+    // just match 0. These hashes are the only evidence behind step 6's "the
+    // snapshot file's own hash on each OS" and step 7's cross-OS byte identity
+    // row; five values from one seed would let a format whose bytes are stable
+    // for seed 1 and unstable for a seed with more credit entries pass unseen.
+    let mut sizes: Vec<(usize, u32, usize, u64)> = Vec::new();
     let mut first_failure: Option<String> = None;
 
     println!("# g4-determinism roundtrip");
@@ -140,9 +161,7 @@ fn parent(args: &[String]) {
                 let mut f = std::fs::File::create(&p).expect("create snapshot");
                 f.write_all(&bytes).expect("write snapshot");
                 f.sync_all().expect("sync snapshot");
-                if m == 0 {
-                    sizes.push((t, bytes.len(), digest(&bytes)));
-                }
+                sizes.push((m, t, bytes.len(), digest(&bytes)));
                 snap_paths.push((t, p));
             }
         }
@@ -198,9 +217,25 @@ fn parent(args: &[String]) {
         }
     }
 
-    for (t, bytes, h) in &sizes {
-        println!("snapshot\t{t}\t{bytes}\t{}", hex(*h));
+    // One `snapshot` line per checkpoint of every match: 5 x 10 = 50 lines, a
+    // negligible cost, and the whole list is what the CI `compare` job diffs
+    // between the three runners. Written to a file in binary mode with explicit
+    // `\n` for exactly the reason the trace file is — a CRLF would make the
+    // cross-OS byte comparison fail for no snapshot-format reason at all.
+    let snap_out = arg_value(args, "--snapshots")
+        .unwrap_or_else(|| format!("snapshots-{fmt}.txt"));
+    let mut snap_buf: Vec<u8> = Vec::with_capacity(sizes.len() * 48);
+    for (m, t, bytes, h) in &sizes {
+        let line = format!("snapshot\t{m}\t{t}\t{bytes}\t{}", hex(*h));
+        println!("{line}");
+        snap_buf.extend_from_slice(line.as_bytes());
+        snap_buf.push(b'\n');
     }
+    let mut sf = std::fs::File::create(&snap_out).expect("create snapshot hash file");
+    sf.write_all(&snap_buf).expect("write snapshot hash file");
+    sf.sync_all().expect("sync snapshot hash file");
+    println!("snapshots_out\t{snap_out}");
+
     let save_us = if saves == 0 {
         0
     } else {

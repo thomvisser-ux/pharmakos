@@ -15,8 +15,10 @@
 #      coincidental substring.
 #   2. The same build *with* `--features research` does contain it — otherwise
 #      check 1 is vacuous and would pass on a typo.
-#   3. No crate on the deny-list resolves the `research` feature. The deny-list
-#      here stands in for plan-core, verifier, operator and gateway.
+#   3. Nothing resolves the `research` feature in the default graph, and no
+#      crate on the deny-list resolves it in either graph. The deny-list here
+#      stands in for plan-core, verifier, operator and gateway. This check has
+#      its own positive control (3a) for the same reason check 2 exists.
 #
 # Exits non-zero on the first failure.
 
@@ -87,20 +89,71 @@ fi
 echo "   default build produced no forkcheck binary"
 
 echo "== 3. deny-list: no crate below may resolve the research feature"
-TREE="$(cargo tree -e features 2>/dev/null)"
+#
+# `cargo tree -e features` prints dependency feature EDGES only — it never prints
+# the root package's own enabled features — so grepping its output for
+# "research" produces byte-identical output whether or not the feature is on, and
+# the check cannot fail. `-f '{p} [{f}]'` prints the RESOLVED feature set of
+# every package, root included:
+#
+#     g4-determinism v0.1.0 (…) [default]            <- default build
+#     g4-determinism v0.1.0 (…) [default,research]   <- --features research
+#
+# so the grep below has something real to match. Checks 1 and 2 are guarded
+# against vacuity by construction (2 is the positive control for 1); 3 gets the
+# same treatment in 3a.
+TREE_DEFAULT="$(cargo tree -f '{p} [{f}]' 2>/dev/null)"
+TREE_RESEARCH="$(cargo tree -f '{p} [{f}]' --features research 2>/dev/null)"
+
+# The resolved feature list of every line mentioning $1 as a package name.
+features_of() {
+    printf '%s\n' "$2" | sed -n "s/.*${1} v[0-9][^]]*\[\(.*\)\]\$/\1/p"
+}
+
+# POSIX `case` rather than a word-boundary regex: `research` must be a whole
+# element of the comma-separated list, not a substring of `research-extra`.
+lists_research() {
+    while IFS= read -r line; do
+        case ",$line," in
+            *,research,*) return 0 ;;
+            *) ;;
+        esac
+    done
+    return 1
+}
+
 STATUS=0
+
+# 3a. Positive control. If the research build does NOT show the feature on the
+#     root line, the extraction is broken and 3b below proves nothing.
+if features_of "g4-determinism" "$TREE_RESEARCH" | lists_research; then
+    echo "   positive control: --features research resolves \"research\" on the root"
+else
+    echo "FAIL: --features research does not resolve \"research\" — check 3 is vacuous"
+    exit 1
+fi
+
+# 3b. The root package must not resolve it in the default graph.
+if features_of "g4-determinism" "$TREE_DEFAULT" | lists_research; then
+    echo "FAIL: the default build resolves feature \"research\""
+    STATUS=1
+else
+    echo "   ok: g4-determinism (root, default graph)"
+fi
+
+# 3c. Nor may any crate on the deny-list, in either graph. These five stand in
+#     for plan-core, verifier, operator and gateway. None of them currently
+#     *has* a feature named research, so this loop is a guard against a future
+#     dependency that does, not evidence about today's graph — which is why 3a
+#     and 3b carry the weight.
 for pkg in $DENY_LIST; do
-    if printf '%s\n' "$TREE" | grep -E "^[^A-Za-z]*${pkg} feature \"research\"" >/dev/null 2>&1; then
+    if features_of "$pkg" "$TREE_RESEARCH" | lists_research; then
         echo "FAIL: $pkg resolves feature \"research\""
         STATUS=1
     else
         echo "   ok: $pkg"
     fi
 done
-if printf '%s\n' "$TREE" | grep -i research >/dev/null 2>&1; then
-    echo "FAIL: the default feature graph mentions research at all"
-    STATUS=1
-fi
 [ "$STATUS" -eq 0 ] || exit "$STATUS"
 
 echo "PASS: feature isolation holds"
