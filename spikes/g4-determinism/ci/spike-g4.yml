@@ -39,7 +39,15 @@
 
 name: spike-g4-determinism
 
-on: [push, workflow_dispatch]
+# Only this spike's own files trigger a run: every push to main used to re-run
+# every spike workflow, and the concurrency group below then cancelled a
+# measurement run whenever a docs commit followed it (G3' run 34908177661).
+on:
+  push:
+    paths:
+      - "spikes/g4-determinism/**"
+      - ".github/workflows/spike-g4.yml"
+  workflow_dispatch:
 
 permissions:
   contents: read

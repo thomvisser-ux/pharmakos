@@ -410,7 +410,7 @@ and it is not. *(Single samples, `--repeat 1`.)*
 | Allocations per tick | — | **0** | allocator decision |
 | Peak live heap / peak working set | MB / KiB | 10.80 MB / 15 344 KiB (internal), 15 336 KiB (external) | allocator decision |
 | Overflow-checks on vs off | % | **+1.45%** on the quiet tick, **+2.90%** on its non-pathing part | cost of the safety rule |
-| Windows vs Linux on every row | — | **pending CI** — see §9.14 | budget set by the slower |
+| Windows vs Linux on every row | — | **run 34908269505**: tick minus the pathing substitute 0.252 ms windows / 0.231 ms ubuntu / 0.229 ms macos; the totals (10.59 / 10.50 / 11.56 ms mean) agree by construction — see §9.14 | budget set by the slower: Windows, by 9 % on the 2 % of the tick that is measured |
 | Per-seat reading (1 200 units / 160 beacons) | ms | **33.586 mean / 215.863 p99** | the open question in §1 |
 
 **G3′-b is the binding constraint, and it passes with 15% of headroom** (10.620 ms
@@ -786,14 +786,23 @@ than a coincidence. This is the free G4 evidence plan §4 promised.
 
 ### 9.14 Windows versus Linux — plan §3 step 7, and why this row is empty
 
-**Pending CI.** `ci/spike-g3.yml` is written and sitting in the spike directory but
-has not been installed as `.github/workflows/spike-g3.yml`, so no Linux or macOS
-run exists. Those numbers are **not guessed here**: the Linux column of the
-results table, and the Linux and macOS halves of the three-way hash-stream
-comparison, are recorded as *pending CI* and will be filled from the hosted
-runners' own artefacts, with the hosted-runner caveat plan §5's last row already
-states (shared vCPUs; the CI thresholds are loose regression alarms, never the
-gate).
+**Measured by CI after the write-up.** At measurement time `ci/spike-g3.yml` was
+not yet installed, so the Linux and macOS figures were recorded as pending rather
+than guessed. *Update, 2026-09-14:* the workflow was installed verbatim as
+`.github/workflows/spike-g3.yml` and run 34908269505 is green on every job. The
+`hash-identity` job found **all three operating systems — ubuntu, windows and
+macos (aarch64) — agree on all 9 600 per-tick hashes**, digest `44217aea12b1af6a`,
+with the full and incremental modes identical on each. Hosted-runner numbers, with
+plan §5's caveat (shared vCPUs; the CI thresholds are loose regression alarms,
+never the gate): mean tick 10.50 ms ubuntu / 10.59 windows / 11.56 macos, p99
+55.6 / 56.0 / 56.4 ms at an unbounded cap and 16.7 / 16.9 / 15.2 ms at a cap of
+16, provisional budget 172 / 169 / 179 kW. Those totals agree for the reason the
+next paragraph gives; the comparable figure, `tick_minus_pathing_mean_ms`, is
+**0.231 ms ubuntu, 0.252 ms windows, 0.229 ms macos** — so step 7's "budget set by
+the slower first-class OS" reads Windows, by 9 % on the 2 % of the tick that is
+measured. The first run for the spike commit (34908177661) was cancelled by the
+concurrency group when a docs commit followed it a minute later; the spike
+workflows now carry a `paths` filter so only their own files trigger them.
 
 More important than the gap: **the gate-configuration total is the wrong figure to
 compare across platforms, and comparing it would produce a false reassurance.**
@@ -1143,9 +1152,9 @@ Still outstanding:
   PR, not written by an agent. §9.16 lays the six items out as candidates with
   recommendations so they can be taken one at a time; item (3) is part of the
   determinism contract and needs owner approval alongside G4's.
-- **The cross-OS half of plan §3 step 7 and of the hash-identity check** is pending
-  the first run of `ci/spike-g3.yml`, which is not yet installed in
-  `.github/workflows/` (§9.14).
+- ~~**The cross-OS half of plan §3 step 7 and of the hash-identity check**~~ — done:
+  run 34908269505, three OSes identical on all 9 600 hashes, Windows the slower
+  first-class OS by 9 % on the measured 2 % of the tick (§9.14).
 - **The `PLACEHOLDER` CI thresholds in `ci/spike-g3.yml`** (190 ms p99 / 40 ms mean,
   loose regression alarms rather than gates) are replaced at S2 by the budget the
   sim's own perf gate sets.
