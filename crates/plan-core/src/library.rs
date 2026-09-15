@@ -20,8 +20,13 @@
 //!
 //! A `template_id` arrives from a client (`gp.api.v1.InstantiateTemplateRequest`)
 //! and is a **plain file stem**, never a path. [`read`] refuses anything with a
-//! separator, a drive letter or a `..` in it, so a client cannot walk out of
-//! the folder it was pointed at. AGENTS.md section 7 puts this the other way
+//! separator, a drive letter, a `..` or a Win32 device name in it, so a client
+//! cannot walk out of the folder it was pointed at or reach a device instead of
+//! a file. The refusal is decided on characters rather than on
+//! `std::path::Component`, because the host's path rules differ: a backslash is
+//! a separator on Windows and an ordinary filename byte on Linux and macOS, and
+//! the same client bytes must get the same answer on all three.
+//! AGENTS.md section 7 puts this the other way
 //! round — "no filesystem or network access through playbooks" — and this is
 //! the one place in the crate that touches a filesystem at all, so it is the
 //! one place that has to say no.
@@ -119,8 +124,25 @@ pub fn read(folder: &Path, template_id: &str) -> Result<String, Error> {
         .map_err(|error| Error::at("", format!("reading {}: {error}", path.display())))
 }
 
+/// The Win32 device names. `<dir>\CON.jsonc` resolves to the console device on
+/// Windows whatever the directory and whatever the extension, so a client-supplied
+/// id that spells one is refused **on every platform**: the three operating
+/// systems have to answer a hostile id identically or the gateway's behaviour is
+/// host-dependent, which is the same argument the listing order makes above.
+const DEVICE_NAMES: [&str; 22] = [
+    "con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8",
+    "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
+];
+
 /// Turns a `template_id` into a path inside the folder, refusing anything that
 /// is not a plain name.
+///
+/// The decision is made on **characters, never on the host's path rules**.
+/// `std::path::Component` is platform-dependent — on Unix a backslash is an
+/// ordinary filename byte, so `Path::new("a\\b")` is one `Normal` component and
+/// a separator on Windows is a filename on Linux and macOS. A client's bytes
+/// must get the same answer on all three, so the separators are named here and
+/// the `Component` walk is kept only as belt and braces.
 fn resolve(folder: &Path, template_id: &str) -> Result<PathBuf, Error> {
     let refuse = || {
         Error::at(
@@ -128,7 +150,16 @@ fn resolve(folder: &Path, template_id: &str) -> Result<PathBuf, Error> {
             format!("`{template_id}` is not a template name; a template id is a plain file stem"),
         )
     };
-    if template_id.is_empty() {
+    if template_id.is_empty() || template_id == "." || template_id == ".." {
+        return Err(refuse());
+    }
+    if template_id.contains(['/', '\\', ':']) {
+        return Err(refuse());
+    }
+    if DEVICE_NAMES
+        .iter()
+        .any(|device| template_id.eq_ignore_ascii_case(device))
+    {
         return Err(refuse());
     }
     let candidate = Path::new(template_id);
@@ -261,7 +292,21 @@ mod tests {
     fn a_template_id_is_a_plain_name() {
         let folder = Path::new("templates");
         assert!(resolve(folder, "hold_and_build").is_ok());
-        for hostile in ["", ".", "..", "../secrets", "a/b", "a\\b", "C:/x"] {
+        // The answer has to be the same on Windows, Linux and macOS: a
+        // backslash is a separator on one and an ordinary filename byte on the
+        // other two, and `con` is a device on one and a name on the other two.
+        for hostile in [
+            "",
+            ".",
+            "..",
+            "../secrets",
+            "a/b",
+            "a\\b",
+            "C:/x",
+            "con",
+            "CON",
+            "LPT9",
+        ] {
             assert!(
                 resolve(folder, hostile).is_err(),
                 "`{hostile}` walked out of the folder"
