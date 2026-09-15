@@ -15,11 +15,19 @@ publish.workspace = true
 # No [features] section on purpose: this crate must never define, forward or enable the
 # `research` feature. "No dry runs" is what the verifier promises, so a dependency on
 # sim stepping would contradict its own contract (spec §11, §15). A CI dependency check
-# fails the build if it can reach the feature. Any future dependency on pharmakos-sim
+# fails the build if it can reach the feature. Any dependency on pharmakos-sim
 # must read: pharmakos-sim = { workspace = true, default-features = false }
 
 [dependencies]
-# None yet. Expected: pharmakos-proto (playbook and snapshot types).
+# The schema and the canonical JSON codec: the playbook types, the report types,
+# and the plan fingerprint's rule (decisions-log items 74, 77).
+pharmakos-proto = { workspace = true }
+# The public type surface only — the rules table, the snapshot, the seat's
+# knowledge types, and the ONE canonical encoder and hash function that
+# `report_hash` is built from (items 48, 70, 89). `default-features = false` is
+# restated here as well as in [workspace.dependencies], because AGENTS.md §3
+# rule 1 names this exact spelling as the thing a reader checks.
+pharmakos-sim = { workspace = true, default-features = false }
 
 [lints]
 workspace = true
