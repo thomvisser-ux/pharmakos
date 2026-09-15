@@ -102,9 +102,48 @@ impl Position {
     }
 }
 
+/// What a sighting is *of*: the identity of the thing seen.
+///
+/// A sighting list is sorted, and item 62's convention is that a sort key ends
+/// in a **unique id**. Without an identity there is no such key — two of a
+/// seat's units remembered at the same voxel would compare equal, and the order
+/// two machines put them in would be whatever the sort happened to do
+/// (AGENTS.md §4.6). So identity is part of the type, from the first day the
+/// type exists.
+///
+/// PLACEHOLDER: the id space widens with the catalogue that fills it — beacons
+/// and structures at T5, wrecks with them. Until then the only thing a seat can
+/// see is a unit, and an `AssetId` carries that unit's [`UnitId`] (T5).
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Default)]
+pub struct AssetId(u32);
+
+impl AssetId {
+    /// Build from a raw id.
+    #[must_use]
+    pub const fn new(raw: u32) -> AssetId {
+        AssetId(raw)
+    }
+
+    /// The id of a unit, seen.
+    #[must_use]
+    pub const fn of_unit(unit: UnitId) -> AssetId {
+        AssetId(unit.raw())
+    }
+
+    /// The raw id, for sort keys and the canonical encoder.
+    #[must_use]
+    pub const fn raw(self) -> u32 {
+        self.0
+    }
+}
+
 /// One thing a seat has seen, with how stale the sighting is.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Sighting {
+    /// Which thing was seen. Unique within a sighting list: a second sighting
+    /// of the same asset **replaces** the memory of it rather than joining it
+    /// (see [`SeatKnowledge::push_sighting`]).
+    pub id: AssetId,
     /// Which seat owns the thing seen.
     pub owner: SeatId,
     /// What was seen.
@@ -212,21 +251,43 @@ impl SeatKnowledge {
     }
 
     /// Add one of the seat's own units, keeping the list in unit-id order.
+    ///
+    /// A unit already in the list is **replaced**, not joined: a seat holds one
+    /// record per unit, which is what makes the unit id a unique key.
     pub fn push_own_unit(&mut self, unit: OwnUnit) {
-        self.own_units.push(unit);
+        match self.own_units.iter_mut().find(|u| u.id == unit.id) {
+            Some(existing) => *existing = unit,
+            None => self.own_units.push(unit),
+        }
+        // item 62: the key is the unit id, which is unique by the replacement
+        // above, so the order is total and an unstable sort is safe.
         self.own_units.sort_unstable_by_key(|u| u.id.raw());
     }
 
-    /// Everything the seat has seen, in `(owner, kind, x, y, z)` order — a key
-    /// that is total because a sighting list holds no duplicates.
+    /// Everything the seat has seen, in `(owner, kind, x, y, z, id)` order.
+    ///
+    /// The key **ends in the asset id** (item 62): every field before it can
+    /// collide — two of a seat's units remembered at the same voxel is an
+    /// ordinary state — and a key that can collide is a key whose order two
+    /// machines can disagree about.
     #[must_use]
     pub fn sightings(&self) -> &[Sighting] {
         &self.sightings
     }
 
-    /// Add a sighting, keeping the list in its declared order.
+    /// Record a sighting, keeping the list in its declared order.
+    ///
+    /// A sighting of an asset already in the list **replaces** it: a seat
+    /// remembers one place per asset, refreshed as it is seen again (spec
+    /// section 6, Survey). That is also what keeps [`Sighting::id`] unique
+    /// across the list, and therefore what makes the sort key below total.
     pub fn push_sighting(&mut self, sighting: Sighting) {
-        self.sightings.push(sighting);
+        match self.sightings.iter_mut().find(|s| s.id == sighting.id) {
+            Some(existing) => *existing = sighting,
+            None => self.sightings.push(sighting),
+        }
+        // item 62: the key ends in the asset id, which is unique by the
+        // replacement above, so the order is total.
         self.sightings.sort_unstable_by_key(|s| {
             (
                 s.owner.raw(),
@@ -234,8 +295,16 @@ impl SeatKnowledge {
                 s.at.x.raw(),
                 s.at.y.raw(),
                 s.at.z.raw(),
+                s.id.raw(),
             )
         });
+        debug_assert!(
+            self.sightings
+                .windows(2)
+                .all(|w| w.first().map(|s| s.id) != w.get(1).map(|s| s.id)),
+            "a sighting list holds one record per asset; a duplicate id makes the sort key \
+             partial (item 62)"
+        );
     }
 
     /// Forget everything, keeping the allocations.
