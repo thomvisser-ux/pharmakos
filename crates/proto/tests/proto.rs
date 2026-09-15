@@ -16,7 +16,8 @@ use std::path::{Path, PathBuf};
 
 use pharmakos_proto::descriptor::{Message, ScalarKind, schema};
 use pharmakos_proto::gp::api::v1::{Method, Scope};
-use pharmakos_proto::gp::v1::{Playbook, RulesTable, playbook};
+use pharmakos_proto::gp::v1::by_richness::Richness;
+use pharmakos_proto::gp::v1::{ByRichness, Playbook, RulesTable, playbook, rules_table};
 use pharmakos_proto::json::{self, Json};
 use pharmakos_proto::{fingerprint, scope};
 
@@ -645,11 +646,18 @@ fn the_rules_table_is_in_canonical_form() {
     assert_same("rules/rules.v1.json on disk", &text, &canonical);
 }
 
+/// The committed table, decoded. A plain helper rather than an inline read in
+/// each test, because six tests below read the same file.
+fn committed_rules_table() -> RulesTable {
+    let path = workspace_root().join("rules").join("rules.v1.json");
+    let text = fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("reading {}: {error}", path.display()));
+    json::decode(&text).unwrap_or_else(|error| panic!("the rules table decodes: {error:?}"))
+}
+
 #[test]
 fn the_rules_table_carries_the_numbers_the_decisions_log_fixed() {
-    let text = fs::read_to_string(workspace_root().join("rules").join("rules.v1.json"))
-        .expect("reading the rules table");
-    let table: RulesTable = json::decode(&text).expect("the rules table decodes");
+    let table = committed_rules_table();
 
     let locomotion = table.locomotion.expect("the locomotion block");
     assert_eq!(locomotion.step_cost_cardinal, 10, "item 59");
@@ -683,6 +691,304 @@ fn the_rules_table_carries_the_numbers_the_decisions_log_fixed() {
     assert_eq!(interface.switch_mandate_ms, 8_000, "spec section 5");
     assert_eq!(interface.recycle_ms, 10_000, "spec section 5");
     assert_eq!(interface.place_beacon_deploy_ms, 12_000, "spec section 5");
+}
+
+/// One unit kind's four numbers, in the order item 90 writes them:
+/// `$` cost / HP / draw kW / cost per second.
+fn unit(kind: Option<rules_table::UnitKind>, name: &str) -> (u32, u32, u32, u32) {
+    let kind = kind.unwrap_or_else(|| panic!("the {name} row"));
+    (
+        kind.cost_dollars,
+        kind.hp,
+        kind.draw_kw,
+        kind.cost_per_second,
+    )
+}
+
+/// One structure kind's three numbers: `$` cost / HP / draw kW.
+fn structure(kind: Option<rules_table::StructureKind>, name: &str) -> (u32, u32, u32) {
+    let kind = kind.unwrap_or_else(|| panic!("the {name} row"));
+    (kind.cost_dollars, kind.hp, kind.draw_kw)
+}
+
+/// A `ByRichness` row as lean / standard / rich.
+fn by_richness(row: Option<ByRichness>, name: &str) -> (u32, u32, u32) {
+    let row = row.unwrap_or_else(|| panic!("the {name} row"));
+    (row.lean, row.standard, row.rich)
+}
+
+// Item 90's whole point is that "the numbers below are the numbers, so no task
+// writes its own". Neither of the other two guards can tell a typo from a
+// decision: `tests/golden/proto/expected.rules.v1.json` is blessed FROM
+// `rules/rules.v1.json`, and `rules_hash` re-pins whatever that file says. The
+// three tests below are what tie revision 3's rows to the log entries that
+// fixed them, so a value that moves without a decision behind it goes red here
+// first. They are split by block only to stay under clippy's line limit.
+
+#[test]
+fn the_rules_table_carries_item_90s_timing_and_economy_numbers() {
+    let table = committed_rules_table();
+
+    let matched = table.r#match.expect("the match block");
+    assert_eq!(
+        matched.decision_tick_ms, 250,
+        "item 90: five sim ticks at 20 Hz"
+    );
+
+    let locomotion = table.locomotion.expect("the locomotion block");
+    assert_eq!(locomotion.commander_cost_per_second, 10, "item 90");
+    assert_eq!(locomotion.drone_cost_per_second, 10, "item 90");
+    assert_eq!(locomotion.raider_cost_per_second, 12, "item 90");
+    assert_eq!(locomotion.scout_cost_per_second, 20, "item 90");
+
+    let economy = table.economy.expect("the economy block");
+    assert_eq!(economy.bmi_dollars, 100, "item 90");
+    assert_eq!(economy.starting_bmi_multiplier, 2, "item 90");
+    assert_eq!(economy.scaling_last_place_bonus_percent, 10, "item 90");
+    assert_eq!(economy.scaling_leader_malus_percent, 5, "item 90");
+    assert_eq!(economy.award_fund_percent_of_bmi, 50, "item 90");
+    assert_eq!(economy.recycle_refund_percent, 50, "item 90");
+    assert_eq!(economy.salvage_percent, 25, "item 90");
+    assert_eq!(economy.backlog_threshold_per_drone, 2, "item 90");
+    assert_eq!(
+        by_richness(economy.ore_yield_per_voxel_dollars, "ore yield"),
+        (2, 4, 8),
+        "item 90"
+    );
+    assert_eq!(economy.seam_voxels, 150, "item 90");
+    assert_eq!(economy.mining_ms_per_voxel, 2_000, "item 90");
+
+    let power = table.power.expect("the power block");
+    assert_eq!(power.core_surplus_kw, 10, "item 90");
+    assert_eq!(
+        by_richness(power.generator_output_kw, "generator output"),
+        (20, 30, 40),
+        "item 90"
+    );
+    assert_eq!(power.kw_per_unit, 1, "item 91");
+    assert_eq!(power.reserve_percent, 40, "item 91");
+    assert_eq!(power.map_ceiling_kw, 190, "item 91");
+    assert_eq!(power.revive_margin_kw, 2, "item 90");
+    assert_eq!(power.beacon_base_draw_kw, 2, "item 90");
+}
+
+#[test]
+fn the_rules_table_carries_item_90s_commander_beacon_and_map_numbers() {
+    let table = committed_rules_table();
+
+    let commander = table.commander.expect("the commander block");
+    assert_eq!(commander.hp, 300, "item 90");
+    assert_eq!(commander.cost_per_second, 10, "item 90: 1.0 voxels/s");
+    assert_eq!(commander.respawn_base_ms, 30_000, "item 90");
+    assert_eq!(commander.respawn_growth_ms, 15_000, "item 90");
+    assert_eq!(commander.arrive_radius_voxels, 2, "item 90");
+    assert_eq!(commander.placement_range_voxels, 12, "item 90");
+    assert_eq!(commander.interface_range_voxels, 4, "item 90, item 11");
+
+    let beacon = table.beacon.expect("the beacon block");
+    assert_eq!(beacon.sphere_radius_voxels, 24, "item 90, item 11");
+    assert_eq!(beacon.core_hp, 3_000, "item 90");
+
+    let map = table.map.expect("the map block");
+    assert_eq!(
+        (map.size_x, map.size_y, map.size_z),
+        (384, 384, 64),
+        "item 90: twelve chunks square, two high"
+    );
+    assert_eq!(map.spawn_zones, 3, "item 90");
+    assert_eq!(map.spawn_zone_radius_voxels, 24, "item 90");
+    assert_eq!(
+        map.start_vent_richness,
+        i32::from(Richness::Lean),
+        "item 90"
+    );
+    assert_eq!(
+        (map.vent_min_distance_voxels, map.vent_max_distance_voxels),
+        (28, 44),
+        "item 90"
+    );
+    assert_eq!(
+        map.start_seam_richness,
+        i32::from(Richness::Standard),
+        "item 90"
+    );
+    assert_eq!(
+        (map.seam_min_distance_voxels, map.seam_max_distance_voxels),
+        (8, 20),
+        "item 90"
+    );
+    assert_eq!(map.contested_standard_vents, 2, "item 90");
+    assert_eq!(map.contested_rich_vents, 1, "item 90");
+    assert_eq!(map.contested_rich_seams, 3, "item 90");
+    assert_eq!(
+        (
+            map.spawn_separation_pushes_numerator,
+            map.spawn_separation_pushes_denominator
+        ),
+        (3, 2),
+        "item 90: 3/2 early Pushes of raider travel"
+    );
+}
+
+#[test]
+fn the_rules_table_carries_item_90s_unit_structure_and_verifier_numbers() {
+    let table = committed_rules_table();
+
+    let units = table.units.expect("the units block");
+    assert_eq!(
+        unit(units.build_drone, "build drone"),
+        (20, 100, 1, 10),
+        "item 90"
+    );
+    assert_eq!(
+        unit(units.mining_drone, "mining drone"),
+        (20, 100, 1, 10),
+        "item 90"
+    );
+    assert_eq!(
+        unit(units.repair_drone, "repair-reclaim drone"),
+        (25, 100, 1, 10),
+        "item 90"
+    );
+    assert_eq!(unit(units.raider, "raider"), (30, 120, 1, 12), "item 90");
+    assert_eq!(unit(units.scout, "scout"), (10, 60, 1, 20), "item 90");
+
+    let structures = table.structures.expect("the structures block");
+    assert_eq!(
+        structure(structures.beacon, "beacon"),
+        (60, 800, 2),
+        "item 90"
+    );
+    assert_eq!(
+        structure(structures.generator, "generator"),
+        (80, 600, 0),
+        "item 90: the Generator supplies, so it draws nothing"
+    );
+    assert_eq!(
+        structure(structures.autocannon, "autocannon"),
+        (60, 500, 2),
+        "item 90"
+    );
+    assert_eq!(
+        structure(structures.mortar, "mortar"),
+        (90, 400, 3),
+        "item 90"
+    );
+    assert_eq!(
+        structure(structures.survey_post, "survey post"),
+        (30, 200, 1),
+        "item 90"
+    );
+    assert_eq!(
+        structure(structures.resonance_spire, "Resonance Spire"),
+        (120, 500, 3),
+        "item 90"
+    );
+    assert_eq!(structures.wall_cost_per_voxel, 1, "item 90: per voxel");
+    assert_eq!(structures.demolition_charge_cost_dollars, 15, "item 90");
+
+    let verifier = table.verifier.expect("the verifier block");
+    assert_eq!(verifier.size_budget_units, 128, "item 94");
+    assert_eq!(verifier.handler_cooldown_min_ms, 5_000, "item 90");
+    assert_eq!(verifier.max_fires_max, 8, "item 90");
+    assert_eq!(verifier.notebook_max_chars, 4_000, "item 90");
+    assert_eq!(verifier.reach_memory_ms, 180_000, "item 90: S2/S3");
+}
+
+#[test]
+fn the_map_supply_adds_up_to_the_ceiling() {
+    // Item 90 and item 91 state the sum out loud — three seats supply
+    // 3 x 10 + 3 x 20 + 2 x 30 + 40 = 190 kW, exactly `map_ceiling_kw` — and
+    // the map generator is sized against it. The sum is a PROPERTY of six
+    // rows fixed in two different log entries, so a tuning PR that moves one
+    // of them without the others goes red here with the arithmetic in hand.
+    let table = committed_rules_table();
+    let power = table.power.expect("the power block");
+    let map = table.map.expect("the map block");
+    let generator = power.generator_output_kw.expect("the generator output row");
+
+    let cores = map.spawn_zones * power.core_surplus_kw;
+    let start_vents = map.spawn_zones * generator.lean;
+    let contested = map.contested_standard_vents * generator.standard
+        + map.contested_rich_vents * generator.rich;
+
+    assert_eq!(
+        cores + start_vents + contested,
+        power.map_ceiling_kw,
+        "items 90 and 91: total supply at three seats is exactly the ceiling"
+    );
+}
+
+#[test]
+fn the_restated_rows_agree() {
+    // Eleven numbers are stated in two places on purpose, because a reader of
+    // the `units` or `structures` block should see a whole unit or a whole
+    // building without cross-referencing `power` and `locomotion`. Nothing in
+    // the schema makes a pair move together, and the two halves of a pair are
+    // re-derived at DIFFERENT stages (item 90 moves the drone speed at S1 and
+    // the raider's at S2; item 91 moves `kw_per_unit` at S2's exit), so a
+    // tuner editing one side at its own stage is the expected case rather
+    // than a hypothetical. This test is the only thing that catches it.
+    //
+    // rules/README.md names the same three families under "Where the numbers
+    // come from"; keep the two in step.
+    let table = committed_rules_table();
+    let locomotion = table.locomotion.expect("the locomotion block");
+    let power = table.power.expect("the power block");
+    let commander = table.commander.expect("the commander block");
+    let units = table.units.expect("the units block");
+    let structures = table.structures.expect("the structures block");
+
+    // 1. Draw per fielded unit: `power.kw_per_unit` is every kind's `draw_kw`.
+    for (name, kind) in [
+        ("build_drone", units.build_drone),
+        ("mining_drone", units.mining_drone),
+        ("repair_drone", units.repair_drone),
+        ("raider", units.raider),
+        ("scout", units.scout),
+    ] {
+        let kind = kind.unwrap_or_else(|| panic!("the {name} row"));
+        assert_eq!(
+            kind.draw_kw, power.kw_per_unit,
+            "units.{name}.draw_kw restates power.kw_per_unit (item 91): move both or neither"
+        );
+    }
+
+    // 2. A beacon's own draw, in `power` and in `structures`.
+    let beacon = structures.beacon.expect("the beacon structure row");
+    assert_eq!(
+        beacon.draw_kw, power.beacon_base_draw_kw,
+        "structures.beacon.draw_kw restates power.beacon_base_draw_kw (item 90)"
+    );
+
+    // 3. Walking speed, in `locomotion` and per kind. The three drone kinds
+    //    share `drone_cost_per_second`; the commander is not a unit kind, so
+    //    its row is in `commander` rather than in `units`.
+    for (name, kind) in [
+        ("build_drone", units.build_drone),
+        ("mining_drone", units.mining_drone),
+        ("repair_drone", units.repair_drone),
+    ] {
+        let kind = kind.unwrap_or_else(|| panic!("the {name} row"));
+        assert_eq!(
+            kind.cost_per_second, locomotion.drone_cost_per_second,
+            "units.{name}.cost_per_second restates locomotion.drone_cost_per_second (item 90)"
+        );
+    }
+    assert_eq!(
+        units.raider.expect("the raider row").cost_per_second,
+        locomotion.raider_cost_per_second,
+        "units.raider.cost_per_second restates locomotion.raider_cost_per_second (item 90)"
+    );
+    assert_eq!(
+        units.scout.expect("the scout row").cost_per_second,
+        locomotion.scout_cost_per_second,
+        "units.scout.cost_per_second restates locomotion.scout_cost_per_second (item 90)"
+    );
+    assert_eq!(
+        commander.cost_per_second, locomotion.commander_cost_per_second,
+        "commander.cost_per_second restates locomotion.commander_cost_per_second (item 90)"
+    );
 }
 
 // ---------------------------------------------------------------------------
