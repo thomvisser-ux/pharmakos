@@ -64,10 +64,10 @@ gp.v1.Playbook
   names:   dispatch
 
 gp.v1.RulesTable.Economy
-  numbers: 1-15
+  numbers: 12-15
 
 gp.v1.RulesTable.Power
-  numbers: 1-15
+  numbers: 8-15
 
 gp.v1.ScriptMandate
   numbers: 1-15

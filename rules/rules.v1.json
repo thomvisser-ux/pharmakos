@@ -1,13 +1,14 @@
 {
-  "revision": 2,
-  "note": "Walking skeleton. Values from decisions-log items 54, 59, 68 and 69 and spec section 5; everything the log has not fixed is a PLACEHOLDER named in rules/README.md. Revision 2: broadphase.cell_size_voxels 8 -> 16, the edge spike G3' actually measured; still item 67's PLACEHOLDER.",
+  "revision": 3,
+  "note": "Walking skeleton. Values from decisions-log items 54, 59, 68 and 69 and spec section 5; everything the log has not fixed is a PLACEHOLDER named in rules/README.md. Revision 2: broadphase.cell_size_voxels 8 -> 16, the edge spike G3' actually measured; still item 67's PLACEHOLDER. Revision 3: the wave-2 rows, from items 90 (the first tuning seed set), 91 (kW per unit and the reserve inside the 190 kW ceiling) and 94 (the playbook size budget) - the per-kind walking speeds, the decision tick, the whole economy and power blocks, and the new commander, beacon, map, units, structures and verifier blocks. Every one of them is a PLACEHOLDER re-derived at the stage its comment names.",
   "match": {
     "segment_lengths_ms": [
       180000,
       300000,
       480000
     ],
-    "lull_ms": 180000
+    "lull_ms": 180000,
+    "decision_tick_ms": 250
   },
   "locomotion": {
     "step_cost_cardinal": 10,
@@ -17,7 +18,11 @@
     "repath_cap_per_tick": 16,
     "fog_cost_numerator": 3,
     "fog_cost_denominator": 2,
-    "hpa_cluster_voxels": 32
+    "hpa_cluster_voxels": 32,
+    "commander_cost_per_second": 10,
+    "drone_cost_per_second": 10,
+    "raider_cost_per_second": 12,
+    "scout_cost_per_second": 20
   },
   "broadphase": {
     "cell_size_voxels": 16
@@ -41,6 +46,137 @@
     "light_max": 15,
     "light_atten": 1
   },
-  "economy": {},
-  "power": {}
+  "economy": {
+    "bmi_dollars": 100,
+    "starting_bmi_multiplier": 2,
+    "scaling_last_place_bonus_percent": 10,
+    "scaling_leader_malus_percent": 5,
+    "award_fund_percent_of_bmi": 50,
+    "recycle_refund_percent": 50,
+    "salvage_percent": 25,
+    "backlog_threshold_per_drone": 2,
+    "ore_yield_per_voxel_dollars": {
+      "lean": 2,
+      "standard": 4,
+      "rich": 8
+    },
+    "seam_voxels": 150,
+    "mining_ms_per_voxel": 2000
+  },
+  "power": {
+    "core_surplus_kw": 10,
+    "generator_output_kw": {
+      "lean": 20,
+      "standard": 30,
+      "rich": 40
+    },
+    "kw_per_unit": 1,
+    "reserve_percent": 40,
+    "map_ceiling_kw": 190,
+    "revive_margin_kw": 2,
+    "beacon_base_draw_kw": 2
+  },
+  "commander": {
+    "hp": 300,
+    "cost_per_second": 10,
+    "respawn_base_ms": 30000,
+    "respawn_growth_ms": 15000,
+    "arrive_radius_voxels": 2,
+    "placement_range_voxels": 12,
+    "interface_range_voxels": 4
+  },
+  "beacon": {
+    "sphere_radius_voxels": 24,
+    "core_hp": 3000
+  },
+  "map": {
+    "size_x": 384,
+    "size_y": 384,
+    "size_z": 64,
+    "spawn_zones": 3,
+    "spawn_zone_radius_voxels": 24,
+    "start_vent_richness": "LEAN",
+    "vent_min_distance_voxels": 28,
+    "vent_max_distance_voxels": 44,
+    "start_seam_richness": "STANDARD",
+    "seam_min_distance_voxels": 8,
+    "seam_max_distance_voxels": 20,
+    "contested_standard_vents": 2,
+    "contested_rich_vents": 1,
+    "contested_rich_seams": 3,
+    "spawn_separation_pushes_numerator": 3,
+    "spawn_separation_pushes_denominator": 2
+  },
+  "units": {
+    "build_drone": {
+      "cost_dollars": 20,
+      "hp": 100,
+      "draw_kw": 1,
+      "cost_per_second": 10
+    },
+    "mining_drone": {
+      "cost_dollars": 20,
+      "hp": 100,
+      "draw_kw": 1,
+      "cost_per_second": 10
+    },
+    "repair_drone": {
+      "cost_dollars": 25,
+      "hp": 100,
+      "draw_kw": 1,
+      "cost_per_second": 10
+    },
+    "raider": {
+      "cost_dollars": 30,
+      "hp": 120,
+      "draw_kw": 1,
+      "cost_per_second": 12
+    },
+    "scout": {
+      "cost_dollars": 10,
+      "hp": 60,
+      "draw_kw": 1,
+      "cost_per_second": 20
+    }
+  },
+  "structures": {
+    "beacon": {
+      "cost_dollars": 60,
+      "hp": 800,
+      "draw_kw": 2
+    },
+    "generator": {
+      "cost_dollars": 80,
+      "hp": 600
+    },
+    "autocannon": {
+      "cost_dollars": 60,
+      "hp": 500,
+      "draw_kw": 2
+    },
+    "mortar": {
+      "cost_dollars": 90,
+      "hp": 400,
+      "draw_kw": 3
+    },
+    "survey_post": {
+      "cost_dollars": 30,
+      "hp": 200,
+      "draw_kw": 1
+    },
+    "resonance_spire": {
+      "cost_dollars": 120,
+      "hp": 500,
+      "draw_kw": 3
+    },
+    "wall_cost_per_voxel": 1,
+    "demolition_charge_cost_dollars": 15
+  },
+  "verifier": {
+    "size_budget_units": 128,
+    "handler_cooldown_min_ms": 5000,
+    "max_fires_max": 8,
+    "notebook_max_chars": 4000,
+    "reach_memory_ms": 180000
+  }
 }
