@@ -79,19 +79,30 @@ message Playbook {
   reserved 6;
   reserved "dispatch";
 
-  // RESERVED — the `kind` half of the envelope's kind/version tag. Spec
-  // section 15 lists "a kind/version tag on playbooks" among the seams kept
-  // for later, and section 17 names "the playbook envelope with kind/version"
-  // as one of the contracts the walking skeleton builds to full quality.
-  // schema_version above is the version half; this number is the kind half,
-  // and it is held rather than filled because what the tag has to
-  // distinguish — playbook, template, sample, whatever v1.1's published
-  // library adds — is settled at the skeleton, and a tag that is guessed now
-  // and changed later is a WIRE_JSON break in a file format players hand-edit.
-  // Filling it is an owner decision; adding it is additive, which is exactly
-  // why the number is reserved now.
-  reserved 7;
-  reserved "kind";
+  // The `kind` half of the envelope's kind/version tag; schema_version above
+  // is the version half. Item 47 reserved this number at the bootstrap and
+  // deferred the enum to the walking skeleton; decisions-log item 76 settles
+  // it. The verifier rejects KIND_UNSPECIFIED with a code and a JSON Pointer:
+  // an unset tag is an error, never a default (E000x).
+  Kind kind = 7;
+
+  // What this file is. A fourth kind arrives as an additive value, which is
+  // why the enum exists at all rather than a bool.
+  enum Kind {
+    KIND_UNSPECIFIED = 0;
+
+    // A playbook a seat seals for a segment. What submit_plan takes.
+    PLAYBOOK = 1;
+
+    // A parameterised starting point the editor's wizard instantiates
+    // (spec section 13). Not submittable as written: instantiate_template
+    // produces a PLAYBOOK from it.
+    TEMPLATE = 2;
+
+    // A worked example in the local sample library, shipped to be read and
+    // copied (spec section 13). Not submittable as written.
+    SAMPLE = 3;
+  }
 }
 
 // Minor versions add optional fields. A major version comes with a converter
@@ -113,9 +124,23 @@ message Meta {
   // the verifier alongside the rules hash and the report hash (section 11,
   // "Its hashes are recorded").
   //
-  // PLACEHOLDER: the hash function and the canonicalisation it runs over are
-  // fixed by the determinism contract, not here. xxh3 is the per-tick state
-  // hash; whether the fingerprint reuses it is an owner decision.
+  // Settled by decisions-log item 77: the fingerprint is
+  // `xxh3-64( PLAN_FINGERPRINT_DOMAIN || canonical_json_bytes )`,
+  // seeded with item 48's STATE_HASH_SEED = 0x5048_4152_4D4B_4F53, where
+  // canonical_json_bytes is exactly what this package's canonical proto-JSON
+  // encoder writes for this playbook with `fingerprint` itself cleared, and
+  // PLAN_FINGERPRINT_DOMAIN is the domain separator b"gp.v1/fingerprint/1"
+  // (crates/proto, `fingerprint` module). The project has exactly one hash
+  // function, as AGENTS.md section 5 asks.
+  //
+  // Eight bytes, BIG-ENDIAN, so the base64 the JSON mapping emits for a
+  // `bytes` field reads and sorts in digest order. It identifies a plan; it
+  // does not authenticate one — xxh3 is not cryptographic, and a v1.1
+  // tamper-evidence field would be a second, explicitly different field.
+  //
+  // Written by the verifier, not by the author: the editor round-trips
+  // whatever is in the file and the verifier overwrites it. A file whose
+  // fingerprint does not match its bytes is a diagnostic, never a silent fix.
   bytes fingerprint = 3;
 
   // Free text for the author. Round-tripped, never interpreted.
@@ -270,23 +295,37 @@ message InterfaceStep {
   repeated InterfaceRow rows = 2;
 }
 
-// PLACEHOLDER STUB: numbers 1-9 hold the rows the spec names directly; the
-// rest of the catalogue (spec section 5) lands with the mandate-settings
-// contract.
+// The on-site change list of spec section 5, complete. Every row the table
+// names that an author can write is here; the visit handshake (1.5 s, once
+// per visit) is charged by the engine and is not an authored row, and the
+// per-row durations are rules-table data (gp.v1.RulesTable), not schema.
+//
+// Numbers 8 and 9 are free for a further row inside the one-byte tag range.
 message InterfaceRow {
   oneof row {
-    // Switching a beacon's mandate clears the old mandate's settings and
-    // targets. The Quartermaster priority belongs to the beacon and survives.
+    // Switch mandate type — 8 s. Clears the old mandate's settings and
+    // targets; the Quartermaster priority belongs to the beacon and survives.
     MandateSettings set_mandate = 1;
 
-    // Changes settings or targets within the current mandate.
+    // Edit mandate settings — 2 s + 0.5 s per extra field, max 6 s. Changes
+    // settings or targets within the current mandate.
     MandateSettings set_mandate_settings = 2;
 
-    // 1.5 s (spec section 5).
+    // Set Quartermaster priority — 1.5 s.
     QuartermasterPriority set_priority = 3;
 
-    // Recycle the beacon.
+    // Recycle beacon — 10 s.
     RecycleRow recycle = 4;
+
+    // Add a build target — 2.5 s.
+    AddBuildTargetRow add_build_target = 5;
+
+    // Remove a build target — 2.5 s.
+    RemoveBuildTargetRow remove_build_target = 6;
+
+    // Queue a licensed capability structure — 5 s, plus the fabricator's
+    // construction time, which is not interface time.
+    QueueStructureRow queue_structure = 7;
   }
 
   // Belongs to the beacon, not the mandate: it survives a mandate switch (spec
@@ -310,6 +349,60 @@ message InterfaceRow {
 }
 
 message RecycleRow {}
+
+// Adds one target to the beacon's Build mandate. Adding a target to a beacon
+// that is not on Build is a verifier error, not a silent no-op.
+message AddBuildTargetRow {
+  BuildTarget target = 1;
+}
+
+// Removes the Build target anchored here. Named by its anchor rather than by
+// an index because a playbook is sealed before the round runs, and an index
+// into a list the mandate may have changed is not a stable reference.
+message RemoveBuildTargetRow {
+  Location anchor = 1;
+}
+
+// Queues one licensed capability structure on the beacon's fabricator. The
+// licence check is the verifier's (spec section 8).
+message QueueStructureRow {
+  // PLACEHOLDER STUB: the capability catalogue is spec section 8's contract
+  // and its licences land at S4. A string id until then, exactly like
+  // seams.proto's builtin ids — it becomes a nested enum when that contract
+  // is written.
+  string blueprint_id = 1;
+}
+
+// One entry in a Build mandate's target list: blueprint, anchor, rotation,
+// order (spec section 6, the Build row).
+message BuildTarget {
+  // PLACEHOLDER STUB: the blueprint catalogue is spec section 8's contract.
+  // The skeleton's minimal Build mandate ships one blueprint, the Generator.
+  string blueprint_id = 1;
+
+  // Where it goes. Must lie inside one of your own spheres.
+  Location anchor = 2;
+
+  // Quarter turns about the vertical axis, 0-3. An integer because the sim is
+  // integer-only: there are no free rotations and no angles in a playbook
+  // (AGENTS.md section 4.2).
+  uint32 rotation_quarter_turns = 3;
+
+  // Build order. The mandate builds the highest-order affordable target that
+  // is unbuilt or damaged; lowest number first, ties by list position.
+  uint32 order = 4;
+}
+
+// An axis-aligned box of voxels, inclusive at both ends. Protected areas,
+// avoid areas and Survey probe areas are all of this shape.
+//
+// PLACEHOLDER STUB: the spec says "areas" without fixing their shape. A box
+// is what the editor's drag-select produces and what an integer sim can test
+// in three comparisons; a polygon or a sphere would be an owner decision.
+message Area {
+  Voxel min = 1;
+  Voxel max = 2;
+}
 
 message PlaceBeaconStep {
   // The site must lie inside one of your own spheres and within the
@@ -442,27 +535,78 @@ message Handler {
 // deliberately not reserved, because they are never coming: enemy playbooks,
 // enemy treasury and mandates, unseen positions, enemy intent, randomness.
 //
-// PLACEHOLDER STUB. Numbers 20-99 are the predicate catalogue range. Two
-// predicates are pinned here because the spec's worked example uses them; the
-// rest of the catalogue arrives with the predicate contract, which owns these
-// families (spec section 10):
+// Numbers 20-99 are the predicate catalogue range, and the families of spec
+// section 10 each own a block of ten so that adding a predicate is additive
+// and never renumbers a neighbour:
 //
-//   clock; commander (HP, position, deaths, recent damage); own beacon
-//   (status, HP, under attack, units by role, mandate, powered or dormant,
-//   structures, reports since); aggregates; enemy knowledge (units near,
-//   beacon known, structure near); economy (treasury, income forecast, kW
-//   supply, draw and headroom); capability licence and structure state; mast
-//   coverage; playbook state (step reached, rule fired, posture).
+//   20-29 commander        30-39 clock          40-49 own beacon
+//   50-59 aggregates       60-69 enemy knowledge
+//   70-79 economy          80-89 capability licence and mast coverage
+//   90-99 playbook state
+//
+// The families the walking skeleton's three templates and the v1 interpreter
+// need are filled; the rest are RESERVED as whole blocks, each naming the
+// stage that fills it. A construct outside the vocabulary is rejected on Load
+// with a code and a JSON Pointer and is never silently stripped, so a block
+// that is reserved is a block a player cannot half-use.
 message Condition {
   oneof node {
     All all = 1;
     Any any = 2;
     Not not = 3;
 
-    // --- commander family -------------------------------------------------
+    // --- commander (20-29) ------------------------------------------------
     CmdrHpPct cmdr_hp_pct = 20;
     CmdrTookDamageWithin cmdr_took_damage_within = 21;
+    CmdrDeaths cmdr_deaths = 22;
+
+    // --- clock (30-39) ----------------------------------------------------
+    SegmentElapsed segment_elapsed = 30;
+
+    // --- own beacon (40-49) -----------------------------------------------
+    BeaconHpPct beacon_hp_pct = 40;
+    BeaconUnderAttack beacon_under_attack = 41;
+    BeaconPowered beacon_powered = 42;
+
+    // --- economy (70-79) --------------------------------------------------
+    Treasury treasury = 70;
+    KwHeadroom kw_headroom = 71;
+
+    // --- playbook state (90-99) -------------------------------------------
+    StepReached step_reached = 90;
+    RuleFired rule_fired = 91;
   }
+
+  // RESERVED — the rest of the commander family: position, and the "own
+  // beacon" reports-since predicate's commander twin. S3, with the full
+  // predicate catalogue.
+  reserved 23 to 29;
+
+  // RESERVED — the rest of the clock family. S3.
+  reserved 31 to 39;
+
+  // RESERVED — own beacon: units by role, mandate, structures, reports since.
+  // Units by role and structures need S1's fabricator and S2's combat.
+  reserved 43 to 49;
+
+  // RESERVED — aggregates. S3.
+  reserved 50 to 59;
+
+  // RESERVED — enemy knowledge: units near, beacon known, structure near.
+  // Every one of them carries a Freshness, and all of them need S2's combat
+  // and S3's knowledge store to mean anything.
+  reserved 60 to 69;
+
+  // RESERVED — the rest of the economy family: income forecast, kW supply,
+  // kW draw. S1, with the economy.
+  reserved 72 to 79;
+
+  // RESERVED — capability licence and structure state (S4, with licences) and
+  // mast coverage (S4, with radio).
+  reserved 80 to 89;
+
+  // RESERVED — the rest of the playbook-state family: posture. S3.
+  reserved 92 to 99;
 
   // RESERVED — flag predicates, held back to v1.1 with set_flag/clear_flag
   // and the expert editor view (spec section 10, section 18).
@@ -512,6 +656,95 @@ message CmdrHpPct {
 message CmdrTookDamageWithin {
   // Game milliseconds.
   int32 ms = 1;
+}
+
+// One integer comparison, the only kind of comparison a condition may make
+// (spec section 10: "integer comparisons only").
+//
+// CmdrHpPct above carries its own nested Cmp and does not use this message.
+// That is deliberate rather than tidy: CmdrHpPct.Cmp already shipped, and
+// changing an existing field's type is a WIRE_JSON break in a file format
+// players hand-edit. The two enums spell the same six operators and the
+// verifier and the interpreter treat them identically; every predicate added
+// from the walking skeleton onward uses IntCompare.
+message IntCompare {
+  Op op = 1;
+
+  // The right-hand side. Always an integer in the predicate's own unit —
+  // game milliseconds, whole percent, whole $, whole kW, a count.
+  int32 value = 2;
+
+  enum Op {
+    OP_UNSPECIFIED = 0;
+    LT = 1;
+    LE = 2;
+    EQ = 3;
+    NE = 4;
+    GE = 5;
+    GT = 6;
+  }
+}
+
+// How many times the commander has died this match.
+message CmdrDeaths {
+  IntCompare deaths = 1;
+}
+
+// How far into the current segment the Push has run, in game milliseconds.
+// The segment's length is part of the frozen snapshot, so "at 4:00" and "with
+// a minute left" are both expressible without a constant in the file.
+message SegmentElapsed {
+  IntCompare ms = 1;
+}
+
+// A beacon's own HP as a whole percentage of its maximum.
+message BeaconHpPct {
+  BeaconRef beacon = 1;
+  IntCompare pct = 2;
+}
+
+// Whether a beacon has taken damage within a window of game milliseconds.
+message BeaconUnderAttack {
+  BeaconRef beacon = 1;
+
+  // Game milliseconds. The predicate is true while the beacon has taken
+  // damage at any point inside this window.
+  int32 within_ms = 2;
+}
+
+// Whether a beacon is powered or dormant (spec section 7). An unpowered
+// beacon powers down everything homed to it, which is what the safe playbook
+// is watching for.
+message BeaconPowered {
+  BeaconRef beacon = 1;
+
+  // True tests powered, false tests dormant. Both senses are needed and a
+  // `not` wrapper would cost a node against the 24-node budget.
+  bool powered = 2;
+}
+
+// The seat treasury in whole $.
+message Treasury {
+  IntCompare dollars = 1;
+}
+
+// Supply minus draw, in whole kW. Negative means the grid is short and the
+// brownout order is running.
+message KwHeadroom {
+  IntCompare kw = 1;
+}
+
+// Whether the route has reached a step, by label. True from the moment the
+// step starts and stays true for the rest of the segment.
+message StepReached {
+  // Must name a Step.label in this playbook's route.
+  string label = 1;
+}
+
+// Whether a handler has fired. True from its first firing onward.
+message RuleFired {
+  // Must name a Handler.id in this playbook.
+  string handler_id = 1;
 }
 
 // Every enemy predicate must declare its freshness. Attack target selectors
@@ -590,9 +823,16 @@ message FallbackPatrol {
 // A place, fixed or late-bound. Selectors resolve when the step starts, then
 // stay pinned for that step (spec section 10, "Late-bound selectors").
 //
-// PLACEHOLDER STUB: numbers 1-9 hold the forms the spec's example uses; the
-// full selector catalogue ships in v1 (selectors are explicitly NOT deferred
-// to the expert view) and lands with the selector contract in 10-49.
+// The four selector forms — nearest, weakest, safest, most threatened (spec
+// section 13, "Selectors stay": alt-click turns a fixed target into one of
+// them) — live on BeaconRef, and a Location reaches them through
+// beacon_anchor. There is one selector catalogue rather than two: a selector
+// picks a beacon, and a place derived from a beacon is that beacon's anchor.
+// `safest` keeps a Location form of its own because the fixed reflex names it
+// directly and the editor renders it as a place, not as a beacon.
+//
+// Numbers 4-9 are free for a further fixed form; 10-49 stay held for a
+// non-beacon selector catalogue (an area, a seam, a vent) if S3 needs one.
 message Location {
   oneof place {
     Voxel voxel = 1;
@@ -602,6 +842,10 @@ message Location {
     // to. Shorthand for beacon_anchor { safest {} }.
     Safest safest = 3;
   }
+
+  // RESERVED — the non-beacon selector range, held so a later form cannot
+  // land on a number a hand-written file already used.
+  reserved 10 to 49;
 }
 
 // Integer voxel coordinates. Not a position: sim positions are Q16.16 and
@@ -613,12 +857,14 @@ message Voxel {
   int32 z = 3;
 }
 
-// A beacon, fixed or late-bound.
+// A beacon, fixed or late-bound. The selector catalogue: the spec's worked
+// examples are "my weakest Defend beacon" and "the nearest known enemy beacon
+// within the reach window", and the editor's alt-click offers nearest,
+// weakest, safest and most threatened (spec section 13).
 //
-// PLACEHOLDER STUB: the spec's worked examples of selectors are "my weakest
-// Defend beacon" and "the nearest known enemy beacon within the reach
-// window". Only the forms the example file uses are pinned here; 10-49 is the
-// selector catalogue range.
+// A selector resolves at step start over the beacons that pass its filter and
+// stays pinned for that step. Resolving to nothing is a step failure, so
+// on_fail decides what happens next — it is never a silent skip.
 message BeaconRef {
   oneof ref {
     // A beacon id from the seat's frozen snapshot. Bindings are per-match: a
@@ -626,11 +872,84 @@ message BeaconRef {
     // cross-match reuse needs a rebind step (roadmap, v1.1).
     string beacon_id = 1;
 
+    // Safest first. Own beacons only; the one the fixed 20% reflex walks to.
     Safest safest = 2;
+
+    // Least travel from the commander first.
+    Nearest nearest = 10;
+
+    // Lowest HP first (the beacon's own HP, not the structures homed to it).
+    Weakest weakest = 11;
+
+    // Most incoming threat first.
+    MostThreatened most_threatened = 12;
   }
+
+  // RESERVED — the rest of the selector catalogue, if S3 finds the four the
+  // editor offers are not enough.
+  reserved 13 to 49;
 }
 
+// "the safest own beacon". Takes no filter: it is a place as much as a
+// selector, and the reflex's target has to mean one thing everywhere.
 message Safest {}
+
+// "the nearest beacon that ...".
+message Nearest {
+  BeaconFilter filter = 1;
+}
+
+// "my weakest Defend beacon" and its kind.
+message Weakest {
+  BeaconFilter filter = 1;
+}
+
+// "the most threatened beacon that ...".
+message MostThreatened {
+  BeaconFilter filter = 1;
+}
+
+// Which beacons a selector ranks. An empty filter means every own beacon: OWN
+// is the sense of a bare selector in the editor, and an unset `side` reads as
+// OWN rather than as an error, because a selector with no side is the common
+// case and a playbook sees another seat's beacons only through its own
+// knowledge store anyway.
+message BeaconFilter {
+  Side side = 1;
+
+  // Optional. Only beacons on this writ.
+  MandateKind mandate = 2;
+
+  // Optional. Only beacons carrying every one of these author labels
+  // (PlaceBeaconStep.tags). An enemy beacon carries none of your tags, so a
+  // tag filter and ENEMY_KNOWN together select nothing — a verifier warning,
+  // not an error.
+  repeated string tags = 3;
+
+  enum Side {
+    // Reads as OWN. Kept as the zero value because proto3 has no presence on
+    // an enum and OWN is what a bare selector means.
+    SIDE_UNSPECIFIED = 0;
+    OWN = 1;
+
+    // Enemy beacons the seat knows about. Freshness comes from the seat's
+    // reach memory N, not from a per-selector window: one reach window, one
+    // verifier check (spec section 10, "Knowledge").
+    ENEMY_KNOWN = 2;
+  }
+
+  // The five writs (spec section 6). Nested, like every enum in this package,
+  // so the bare names BUILD, DEFEND, ATTACK, SURVEY and MINE do not occupy
+  // the gp.v1 scope.
+  enum MandateKind {
+    MANDATE_KIND_UNSPECIFIED = 0;
+    BUILD = 1;
+    DEFEND = 2;
+    ATTACK = 3;
+    SURVEY = 4;
+    MINE = 5;
+  }
+}
 
 // QuartermasterPriority used to live here, at package scope. It is nested in
 // InterfaceRow now — every enum in gp.v1 is nested inside the message that owns
@@ -653,8 +972,22 @@ message Safest {}
 // There are no per-mandate budget or override fields. Targets and areas count
 // toward the one playbook size budget.
 message MandateSettings {
+  // --- Common settings (spec section 6, the Common row) --------------------
+
   // Rules of engagement. Shared across mandates that field units.
   Roe roe = 1;
+
+  // A unit below this percentage of its HP retreats, following the rules of
+  // engagement, and the retreat is always announced. Integer percent, 0-100.
+  uint32 retreat_hp_pct = 2;
+
+  // RESERVED — the rest of the Common row. `report_kinds` is which beacon
+  // reports reach the seat, which needs the report catalogue (S2, with combat
+  // events); `accept_broadcasts` needs radio, which needs a Radio Mast and
+  // arrives at S4. Both are named in spec section 6 and neither is invented
+  // here.
+  reserved 3, 4;
+  reserved "report_kinds", "accept_broadcasts";
 
   // Which writ. Choosing the type is free at place_beacon time; switching it
   // later clears the old settings and targets.
@@ -674,22 +1007,77 @@ message MandateSettings {
   }
 }
 
-// PLACEHOLDER STUB: targets (blueprint, anchor, rotation, order), repair
-// threshold, rebuild destroyed, terraform, protected areas, drone fields.
-message BuildSettings {}
+// Spec section 6, the Build row. The skeleton's minimal Build mandate reads
+// `targets` and nothing else; the remaining fields are defined here because
+// the section-6 table names them, and they stay inert until S1 fills them in.
+message BuildSettings {
+  // Build the highest-order affordable target that is unbuilt or damaged.
+  repeated BuildTarget targets = 1;
 
-// PLACEHOLDER STUB: protect list, engagement radius, pursue, auto-fortify,
-// unit mix, picket.
-message DefendSettings {}
+  // Repair a structure of yours inside this beacon's sphere once it falls
+  // below this percentage of its HP. Integer percent, 0-100; 0 means never.
+  uint32 repair_threshold_pct = 2;
 
-// PLACEHOLDER STUB: target and retarget rule, staging point, launch
-// condition, retreat conditions, after-action, avoid areas, breach_allowed,
-// waves.
-message AttackSettings {}
+  // Rebuild a destroyed target from the list. A destroyed CAPABILITY
+  // structure is never rebuilt automatically whatever this says (section 8).
+  bool rebuild_destroyed = 3;
 
-// PLACEHOLDER STUB: probe areas or directions, scout count, roe, retreat
-// conditions.
-message SurveySettings {}
+  // Whether the mandate may reshape terrain to place a target.
+  Terraform terraform = 4;
+
+  // Ground the mandate will not dig, fill or build on.
+  repeated Area protected_areas = 5;
+
+  // RESERVED — the repair and reclaim drone fields of section 6's Build row.
+  // Drone fields are the unit-mix half of the mandate and arrive with the
+  // full Build mandate at S1.
+  reserved 6, 7;
+  reserved "repair_drones", "reclaim_drones";
+
+  enum Terraform {
+    TERRAFORM_UNSPECIFIED = 0;
+    NONE = 1;
+    FILL = 2;
+    DIG = 3;
+    BOTH = 4;
+  }
+}
+
+// PLACEHOLDER STUB — S2, with destruction and combat. Spec section 6's Defend
+// row names: protect list (accepts `my commander`), engagement radius as a
+// percentage of the sphere radius, pursue never / sphere edge / while in
+// reach, auto-fortify, unit mix, picket. Numbers 1-15 are held so the first
+// fifteen fields stay in the one-byte tag range.
+message DefendSettings {
+  reserved 1 to 15;
+}
+
+// PLACEHOLDER STUB — S2, with destruction and combat. Spec section 6's Attack
+// row names: target (fixed or selector, including `enemy commander`) and
+// retarget rule, staging point, launch condition (force size, segment time or
+// a broadcast go-code), retreat conditions, after-action, avoid areas,
+// breach_allowed, waves.
+message AttackSettings {
+  reserved 1 to 15;
+}
+
+// Spec section 6, the Survey row. Survey-lite ships at the skeleton, which is
+// why this one is filled and Defend and Attack are not.
+message SurveySettings {
+  // Where to look. Scouts scan unexplored ground inside these first, then
+  // re-check the sightings closest to leaving the reach window.
+  repeated Area probe_areas = 1;
+
+  // How many scouts the mandate fields.
+  uint32 scout_count = 2;
+
+  // RESERVED — probe DIRECTIONS, the other half of section 6's "probe areas
+  // or directions". A direction is a heading, headings are the sim's u16
+  // angle type, and how a playbook spells one is S3's question with the rest
+  // of the selector work. Areas cover the skeleton's templates.
+  reserved 3;
+  reserved "probe_directions";
+}
 
 message MineSettings {
   // Voxels. Never digs under structures.

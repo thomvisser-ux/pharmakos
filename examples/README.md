@@ -18,7 +18,7 @@ machine-readable half.
 
 | File | Purpose |
 | --- | --- |
-| `playbooks/expand_east.jsonc` | The worked example from spec section 10, copied verbatim. The golden file for the `gp.v1` envelope. |
+| `playbooks/expand_east.jsonc` | The worked example from spec section 10, copied verbatim but for one line. The golden file for the `gp.v1` envelope. |
 
 ## What a playbook is
 
@@ -67,32 +67,39 @@ or an enum value breaks files on disk even when the wire tags are untouched.
 
 ## Open points for the owner
 
-Two things in this directory are not yet settled, and both are visible in the
-example file:
+1. **int64 in JSON — SETTLED.** `docs/design/decisions-log.md` item 46 ratifies
+   what the schema had applied provisionally: every duration field in `gp.v1`
+   is `int32`, so canonical proto JSON emits a bare number and the spec's
+   example loads as written; a negative value is rejected by the verifier with
+   a code and a JSON Pointer, not at decode. `crates/proto`'s
+   `no_duration_field_in_gp_v1_is_int64` test walks the descriptor set and
+   fails if anyone ever widens one.
 
-1. **int64 in JSON — answered in the schema, awaiting ratification.** The
-   proto3 JSON mapping *emits* 64-bit integers as quoted strings
-   (`"timeout_ms": "120000"`) while *accepting* both forms. The spec's example
-   writes them as bare numbers, and this file copies it verbatim. Rather than
-   have the canonical writer deviate from the mapping, the five duration fields
-   in `proto/gp/v1/playbook.proto` are typed **`int32`**: an int32 emits a bare
-   number, so schema, mapping and golden file agree, and 2^31 ms (about 24.8
-   days) is ample against an 8-minute maximum segment. The reasoning is written
-   out in that file's header. **Owner:** ratify it with an entry in
-   `docs/design/decisions-log.md` §2.7 before the schema is frozen; the
-   alternative — a canonical writer that deviates from the proto3 mapping for
-   int64 — would have to be recorded in the same place.
-2. **Placeholder stubs.** `MandateSettings` and its five per-writ messages sit
-   in `proto/gp/v1/playbook.proto` only so this example type-checks. They
-   belong to the spec section 6 contract and should move to
-   `proto/gp/v1/mandate.proto` when that contract is written. The same goes
-   for `InterfaceRow` (spec section 5) and the condition predicate catalogue
-   (spec section 10). Each is marked `PLACEHOLDER STUB` in the schema.
+2. **The one line that is not verbatim: `"kind": "PLAYBOOK"`.** Spec section
+   10's example predates the envelope's kind/version tag. Item 47 held
+   `Playbook` field 7 and the name `kind` as a reservation, to be defined with
+   the walking skeleton; item 76 defines it as
+   `KIND_UNSPECIFIED / PLAYBOOK / TEMPLATE / SAMPLE`, with the verifier
+   rejecting `KIND_UNSPECIFIED`. The example therefore has to carry the tag, or
+   the spec's own worked example would not qualify. The deviation is recorded
+   in the file's header as well as here, because "verbatim" is only worth
+   anything if a departure from it is written down.
+
+3. **Placeholder stubs.** The walking skeleton filled several of them: the
+   section-5 interface-row catalogue, the four selector forms, `BuildSettings`,
+   `SurveySettings`, the Common mandate settings, and the condition families
+   the v1 interpreter and the three skeleton templates need. What is still a
+   stub, each naming the stage that fills it: `DefendSettings` and
+   `AttackSettings` (S2, with combat), the broadcast message bodies (S4, with
+   radio), the rest of the predicate catalogue (S3), the blueprint and
+   capability catalogues (spec section 8), and `MineSettings`' `seam_choice`
+   and `pillar_spacing`, which belong to the spec section 6 mandate contract.
+   Whether the mandate messages eventually move to `proto/gp/v1/mandate.proto`
+   is still that contract's call.
 
 ## Checking an example
 
-Nothing here has been executed: there is no `cargo`, no `protoc` and no `buf`
-on the authoring machine yet. Once the toolchain exists:
+All three run from the workspace root:
 
 ```
 buf lint proto
