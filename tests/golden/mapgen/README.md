@@ -23,9 +23,10 @@ TAB-separated fields:
 * **seed** — the match seed, which is also the map seed. Written `0x` + sixteen
   lowercase hex digits, always padded, so the file sorts as it reads.
 * **store digest** — `VoxelStore::store_digest()`: xxh3-64 under the project
-  seed over the map extent followed by every chunk's own digest, in chunk-index
-  order. A digest of digests rather than of 9.4 MB of bytes, for the reason
-  decisions-log item 66 gives for the state hash itself.
+  seed over the map extent (three `u32`s), then the chunk count, then every
+  chunk's own digest in chunk-index order. A digest of digests rather than of
+  9.4 MB of bytes, for the reason decisions-log item 66 gives for the state hash
+  itself.
 * **raider s** — the closest two occupied spawn centres, in octile ground cost
   (10 / 14 per step), divided by `locomotion.raider_cost_per_second` and
   **rounded up**: seconds of raider walking.
@@ -38,14 +39,23 @@ step compares the pair and `cargo xtask golden --bless` accepts a fresh one.
 
 The seed set is eight seeds and **includes `0x00000000ca5caded`**, because
 `scenarios/skeleton/expand-east.scenario.jsonc` names it: the worked example of
-the scenario format asserts on a map, so that map has to exist. The other seven
-span the space a `u64` seed can be wrong in — zero and all-ones, one, the
-determinism harness's own seed, the project's hash seed, the RNG's golden-ratio
-constant, and one arbitrary value.
+the scenario format asserts on a match played on that seed, so the seed belongs
+in the committed set. The other seven span the space a `u64` seed can be wrong
+in — zero and all-ones, one, the determinism harness's own seed, the project's
+hash seed, the RNG's golden-ratio constant, and one arbitrary value.
 
 The digests are generated at **three seats**, a full v1 match, so every zone the
 map carries is occupied and every invariant the tests assert has something to
 check.
+
+**A seed alone does not name a map: `(seed, rules table, occupied seats)` does.**
+An occupied zone stamps a core, a vent and a seam into the store and an
+unoccupied one is terrain, so the same seed at two seats and at three is two
+different stores with two different digests. Every line in this file is the
+three-seat map. `expand-east-3min` declares two seats, so its map is *not* the
+line its seed appears on; what the golden pins for that seed is the generator,
+not that scenario's own store. When T15 asserts on a scenario's map, the honest
+way to commit it is a golden line carrying the seat count as well as the seed.
 
 ## What a diff means
 
