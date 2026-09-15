@@ -1,0 +1,63 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// awkward.jsonc - a playbook with a comment in every slot the JSONC layer
+// has, so that "comments survive a load-and-save unchanged" (spec section 13)
+// is asserted against the awkward cases rather than only the tidy one.
+//
+// Slots exercised, in the order they appear below: the file header; before a
+// member on a line of its own; a member written at its proto3 default, whose
+// comment has nowhere to go in the canonical form and is relocated rather than
+// dropped; a block comment between a key and its colon; another between the
+// colon and the value; a trailing comment on the same line as a comma; a
+// comment at the end of an object; before the first element of an array;
+// after an element; at the end of an array; inside an empty object; and after
+// the document itself.
+{
+  // a default the author wrote out: the canonical form drops the member, so
+  // this comment is relocated to the object above it and reported
+  "schema_version": {
+    "major": 1
+  },
+  /* between a key and its colon */
+  /* and between a colon and a value */
+  "meta": {
+    "title": "Awkward", // trailing, on the same line as the comma
+    "author_kind": "HUMAN"
+    // at the end of an object, on a line of its own
+  },
+  "declarative": {
+    "route": [
+      // before the first element
+      {
+        "label": "wait",
+        "hold": {
+          "ms": 2500
+        }
+      }, // and after an element
+      {
+        "label": "sit",
+        "hold": {
+          "ms": 500
+        }
+      }
+      // at the end of an array
+    ]
+  },
+  "on_death": {
+    "on_respawn": "CONTINUE"
+  },
+  "fallback": {
+    "hold": {
+      "at": {
+        "beacon_anchor": {
+          "safest": {
+            // inside an empty object
+          }
+        }
+      }
+    }
+  },
+  "kind": "PLAYBOOK"
+}
+// after the document

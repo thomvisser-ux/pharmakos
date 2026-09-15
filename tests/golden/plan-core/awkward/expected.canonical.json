@@ -1,0 +1,38 @@
+{
+  "schema_version": {
+    "major": 1
+  },
+  "meta": {
+    "title": "Awkward",
+    "author_kind": "HUMAN"
+  },
+  "declarative": {
+    "route": [
+      {
+        "label": "wait",
+        "hold": {
+          "ms": 2500
+        }
+      },
+      {
+        "label": "sit",
+        "hold": {
+          "ms": 500
+        }
+      }
+    ]
+  },
+  "on_death": {
+    "on_respawn": "CONTINUE"
+  },
+  "fallback": {
+    "hold": {
+      "at": {
+        "beacon_anchor": {
+          "safest": {}
+        }
+      }
+    }
+  },
+  "kind": "PLAYBOOK"
+}

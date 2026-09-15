@@ -24,5 +24,14 @@ publish.workspace = true
 # own beyond the trivia.
 pharmakos-proto = { workspace = true }
 
+# Seal inspection. plan-core drives the pipeline and hands the report back unchanged;
+# it never re-implements a check.
+pharmakos-verifier = { workspace = true }
+
+# Type surface only: the snapshot, the rules table and the integer newtypes. Never the
+# stepping API — `tests/confinement.rs` asserts that over this crate's source text, and
+# `cargo xtask ci`'s research-guard asserts the feature edge.
+pharmakos-sim = { workspace = true, default-features = false }
+
 [lints]
 workspace = true
