@@ -1,0 +1,23 @@
+# SPDX-FileCopyrightText: 2026 Pharmakos contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[package]
+name = "pharmakos-mesher"
+description = "Walled greedy mesher: integer chunk data in, vertex buffers out; links without gdext."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+# None, and that is the point: this crate links without gdext and without the sim, so the
+# headless CPU proxy and the CI geometry check can reuse it (decisions log §2.7 item 56).
+# Expected later, from [workspace.dependencies]: dot_vox, for the .vox models the same
+# mesher meshes. Nothing from crates/sim ever appears here — the input is plain integer
+# chunk data handed across a named boundary.
+
+[lints]
+workspace = true

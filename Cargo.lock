@@ -5,6 +5,9 @@ version = 4
 [[package]]
 name = "pharmakos-client-gdext"
 version = "0.0.0"
+dependencies = [
+ "pharmakos-mesher",
+]
 
 [[package]]
 name = "pharmakos-gamectl"
@@ -12,6 +15,10 @@ version = "0.0.0"
 
 [[package]]
 name = "pharmakos-gateway"
+version = "0.0.0"
+
+[[package]]
+name = "pharmakos-mesher"
 version = "0.0.0"
 
 [[package]]

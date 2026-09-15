@@ -2,15 +2,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # Pharmakos workspace. Crate boundaries follow spec §15 (Architecture).
-# Nothing here has been compiled yet: no cargo on the machine at the time of writing.
 
 [workspace]
 resolver = "3"
-# The throwaway stack spikes are standalone cargo workspaces of their own (each
-# spikes/*/Cargo.toml carries an empty [workspace] table). Excluded here as well so a
-# glob-added member or a stray manifest can never pull spike code into the product build —
-# spikes/README.md rule 1. The whole directory is deleted from main after harness part 1.
-exclude = ["spikes/*"]
 members = [
     "crates/sim",
     "crates/plan-core",
@@ -19,6 +13,7 @@ members = [
     "crates/gateway",
     "crates/gamectl",
     "crates/client-gdext",
+    "crates/mesher",
     "crates/proto",
     "xtask",
 ]
@@ -50,12 +45,22 @@ publish = false                  # nothing in this workspace goes to crates.io
 # --- client ---
 # godot        = "0.3"    # gdext, Godot 4.7; crates/client-gdext only
 # --- workspace-internal ---
-# pharmakos-proto     = { path = "crates/proto" }
-# pharmakos-sim       = { path = "crates/sim", default-features = false }
-# pharmakos-plan-core = { path = "crates/plan-core" }
-# pharmakos-verifier  = { path = "crates/verifier" }
-# pharmakos-operator  = { path = "crates/operator" }
-# pharmakos-gateway   = { path = "crates/gateway" }
+# The walled mesher is uncommented because it has no dependencies of its own and
+# client-gdext takes it today (decisions log §2.7 item 56). The rest stay commented until
+# the crate that needs them exists. Every workspace-internal entry carries `version` as
+# well as `path`: `cargo deny check bans` has `wildcards = "deny"`, and a path-only
+# dependency is a wildcard to it. The requirement is `"0"` — caret `^0`, i.e.
+# `>=0.0.0, <1.0.0` — and NOT the exact `[workspace.package]` version: an exact pin would
+# stop resolving for every internal edge at once the first time that version is bumped
+# (0.1 at the wk-35.5 gate), with an error that does not point at these lines. Widen it to
+# `"1"` when the workspace reaches 1.0, and not before.
+pharmakos-mesher = { path = "crates/mesher", version = "0" }
+# pharmakos-proto     = { path = "crates/proto", version = "0" }
+# pharmakos-sim       = { path = "crates/sim", version = "0", default-features = false }
+# pharmakos-plan-core = { path = "crates/plan-core", version = "0" }
+# pharmakos-verifier  = { path = "crates/verifier", version = "0" }
+# pharmakos-operator  = { path = "crates/operator", version = "0" }
+# pharmakos-gateway   = { path = "crates/gateway", version = "0" }
 #
 # NOTE on the `research` feature: only crates/sim defines it. Any crate that depends on
 # pharmakos-sim must do so with default-features = false and must never name
@@ -93,9 +98,11 @@ integer_division = "deny"        # be explicit about rounding; overflow checks s
 mod_module_files = "warn"
 #
 # clippy.toml holds the LISTS these lints fire on (disallowed types, methods and macros)
-# and the thresholds; this table holds the LEVELS. It exists, with a full disallowed list —
-# but like everything else here it has never been run, because no toolchain was installed
-# when it was written. The walled presentation/solve layer is not configured here at all:
+# and the thresholds; this table holds the LEVELS. Both halves run on every check:
+# `cargo xtask clippy` pass 1 applies this set to the whole workspace minus the walled
+# crates, and pass 2 applies it to the walled crates with WALL_ALLOW's float, cast,
+# hash-map and clock allowances added on the command line.
+# The walled presentation/solve layer is not configured here at all:
 # it is a crate boundary enforced by `cargo xtask ci` (WALLED_PACKAGES in xtask/src/main.rs,
 # AGENTS.md §4.9), because clippy has no per-path allow-list.
 
