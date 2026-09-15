@@ -1,0 +1,24 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0003",
+      "severity": "ERROR",
+      "path": "/declarative/route/0/set_flag",
+      "message": "`set_flag` is held back to a later version and is not part of the v1 vocabulary.",
+      "beginner": "This is a word the game keeps for later. It is refused rather than quietly ignored, so nothing you wrote disappears without you seeing it.",
+      "suggestions": [
+        {
+          "title": "Delete `set_flag`",
+          "json_patch": "[{\"op\":\"remove\",\"path\":\"/declarative/route/0/set_flag\"}]",
+          "applicability": "MAYBE_INCORRECT"
+        }
+      ]
+    }
+  ],
+  "report_hash": "JasaU1grhzk=",
+  "rules_hash": "sx2NB4nrIHw=",
+  "verifier_version": "0.1.0-skeleton",
+  "size_budget": 128
+}
+

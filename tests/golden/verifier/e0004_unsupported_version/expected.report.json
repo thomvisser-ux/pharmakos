@@ -1,0 +1,26 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0004",
+      "severity": "ERROR",
+      "path": "/schema_version",
+      "message": "schema version 2.0 is not supported; this build speaks 1.0.",
+      "beginner": "The file says it was written for a different version of the game.",
+      "suggestions": [
+        {
+          "title": "Set the schema version to 1.0",
+          "json_patch": "[{\"op\":\"replace\",\"path\":\"/schema_version\",\"value\":{\"major\":1}}]",
+          "applicability": "MAYBE_INCORRECT"
+        }
+      ]
+    }
+  ],
+  "report_hash": "qBepFmycou8=",
+  "rules_hash": "sx2NB4nrIHw=",
+  "plan_fingerprint": "d+XMsiXPpw4=",
+  "verifier_version": "0.1.0-skeleton",
+  "size_units": 1,
+  "size_budget": 128
+}
+

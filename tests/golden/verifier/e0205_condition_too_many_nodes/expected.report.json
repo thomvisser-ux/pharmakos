@@ -1,0 +1,19 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0205",
+      "severity": "ERROR",
+      "path": "/declarative/handlers/0/when",
+      "message": "the condition has 25 nodes; the limit is 24.",
+      "beginner": "This condition has too many parts."
+    }
+  ],
+  "report_hash": "gLGLsF79W2c=",
+  "rules_hash": "sx2NB4nrIHw=",
+  "plan_fingerprint": "yZVkQZbwtDE=",
+  "verifier_version": "0.1.0-skeleton",
+  "size_units": 3,
+  "size_budget": 128
+}
+

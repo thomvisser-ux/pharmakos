@@ -1,0 +1,18 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0102",
+      "severity": "ERROR",
+      "path": "/declarative/route",
+      "message": "the route has no steps.",
+      "beginner": "A playbook needs at least one step for the commander to walk."
+    }
+  ],
+  "report_hash": "vlBdptxXFT8=",
+  "rules_hash": "sx2NB4nrIHw=",
+  "plan_fingerprint": "zuF4kT6SYHs=",
+  "verifier_version": "0.1.0-skeleton",
+  "size_budget": 128
+}
+

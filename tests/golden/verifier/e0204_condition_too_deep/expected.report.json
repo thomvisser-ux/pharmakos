@@ -1,0 +1,19 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0204",
+      "severity": "ERROR",
+      "path": "/declarative/handlers/0/when",
+      "message": "the condition is 5 levels deep; the limit is 4.",
+      "beginner": "This condition is nested too deeply to be read at a glance. Flatten it."
+    }
+  ],
+  "report_hash": "FC4zI+GegYI=",
+  "rules_hash": "sx2NB4nrIHw=",
+  "plan_fingerprint": "/sKdUaULGck=",
+  "verifier_version": "0.1.0-skeleton",
+  "size_units": 3,
+  "size_budget": 128
+}
+

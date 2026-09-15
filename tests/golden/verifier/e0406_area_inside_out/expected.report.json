@@ -1,0 +1,31 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0406",
+      "severity": "ERROR",
+      "path": "/declarative/route/0/place_beacon/initial/mandate/build/protected_areas/0",
+      "message": "the area is inside out: min (10, 10, 10) is not at or below max (1, 1, 1) on every axis.",
+      "beginner": "The two corners of this box are the wrong way round, so the box holds nothing.",
+      "map_refs": [
+        {
+          "x": 10,
+          "y": 10,
+          "z": 10
+        },
+        {
+          "x": 1,
+          "y": 1,
+          "z": 1
+        }
+      ]
+    }
+  ],
+  "report_hash": "gX0rR2AxJfw=",
+  "rules_hash": "sx2NB4nrIHw=",
+  "plan_fingerprint": "esngw5AWuiY=",
+  "verifier_version": "0.1.0-skeleton",
+  "size_units": 2,
+  "size_budget": 128
+}
+

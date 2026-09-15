@@ -1,0 +1,22 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0301",
+      "severity": "ERROR",
+      "path": "/declarative/route/0/on_fail/jump_to_label",
+      "related_paths": [
+        "/declarative/route/0"
+      ],
+      "message": "`s1` is at or before this step; a jump only ever goes forward.",
+      "beginner": "A jump can send the commander onward, never back. That is part of why a playbook always finishes."
+    }
+  ],
+  "report_hash": "nT0cUsL3QNc=",
+  "rules_hash": "sx2NB4nrIHw=",
+  "plan_fingerprint": "+Dd1n+wcy44=",
+  "verifier_version": "0.1.0-skeleton",
+  "size_units": 1,
+  "size_budget": 128
+}
+

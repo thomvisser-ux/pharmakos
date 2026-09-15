@@ -1,0 +1,19 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0206",
+      "severity": "ERROR",
+      "path": "/declarative/handlers/0/when",
+      "message": "the condition names no predicate.",
+      "beginner": "This condition is empty."
+    }
+  ],
+  "report_hash": "qh+FJJtVbk8=",
+  "rules_hash": "sx2NB4nrIHw=",
+  "plan_fingerprint": "2RZBg0QgeXo=",
+  "verifier_version": "0.1.0-skeleton",
+  "size_units": 3,
+  "size_budget": 128
+}
+

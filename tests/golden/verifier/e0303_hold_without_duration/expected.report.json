@@ -1,0 +1,26 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0303",
+      "severity": "ERROR",
+      "path": "/declarative/route/0/hold/ms",
+      "message": "`hold` is 0 ms; a hold lasts a positive number of milliseconds.",
+      "beginner": "Say how long to hold for.",
+      "suggestions": [
+        {
+          "title": "Hold for a while",
+          "json_patch": "[{\"op\":\"replace\",\"path\":\"/declarative/route/0/hold/ms\",\"value\":5000}]",
+          "applicability": "HAS_PLACEHOLDERS"
+        }
+      ]
+    }
+  ],
+  "report_hash": "VyonUijuVVs=",
+  "rules_hash": "sx2NB4nrIHw=",
+  "plan_fingerprint": "X4bVyO85X/w=",
+  "verifier_version": "0.1.0-skeleton",
+  "size_units": 1,
+  "size_budget": 128
+}
+

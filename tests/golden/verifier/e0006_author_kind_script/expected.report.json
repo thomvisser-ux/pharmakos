@@ -1,0 +1,26 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0006",
+      "severity": "ERROR",
+      "path": "/meta/author_kind",
+      "message": "`author_kind` is SCRIPT, which is reserved for a later version and is rejected in v1.",
+      "beginner": "Scripts are not part of this version of the game.",
+      "suggestions": [
+        {
+          "title": "Mark the file as written by a HUMAN",
+          "json_patch": "[{\"op\":\"replace\",\"path\":\"/meta/author_kind\",\"value\":\"HUMAN\"}]",
+          "applicability": "MAYBE_INCORRECT"
+        }
+      ]
+    }
+  ],
+  "report_hash": "JJz3lyiSwxo=",
+  "rules_hash": "sx2NB4nrIHw=",
+  "plan_fingerprint": "JpCIcFkUkGM=",
+  "verifier_version": "0.1.0-skeleton",
+  "size_units": 1,
+  "size_budget": 128
+}
+

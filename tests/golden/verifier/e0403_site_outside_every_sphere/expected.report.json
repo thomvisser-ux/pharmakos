@@ -1,0 +1,26 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0403",
+      "severity": "ERROR",
+      "path": "/declarative/route/0/place_beacon/at/voxel",
+      "message": "the site (200, 200, 30) lies outside every one of this seat's spheres.",
+      "beginner": "A beacon goes up inside ground you already hold.",
+      "map_refs": [
+        {
+          "x": 200,
+          "y": 200,
+          "z": 30
+        }
+      ]
+    }
+  ],
+  "report_hash": "8f+AIphR0wk=",
+  "rules_hash": "sx2NB4nrIHw=",
+  "plan_fingerprint": "hjq355K1LX4=",
+  "verifier_version": "0.1.0-skeleton",
+  "size_units": 1,
+  "size_budget": 128
+}
+

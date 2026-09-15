@@ -1,0 +1,19 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0110",
+      "severity": "ERROR",
+      "path": "/declarative",
+      "message": "the playbook is 130 size units; the budget is 128.",
+      "beginner": "This playbook is larger than the seal allows. Take something out of it."
+    }
+  ],
+  "report_hash": "fGDZCeVfkhE=",
+  "rules_hash": "sx2NB4nrIHw=",
+  "plan_fingerprint": "xAoZNh6IAGI=",
+  "verifier_version": "0.1.0-skeleton",
+  "size_units": 130,
+  "size_budget": 128
+}
+

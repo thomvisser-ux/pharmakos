@@ -1,0 +1,26 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0302",
+      "severity": "ERROR",
+      "path": "/declarative/route/0/timeout_ms",
+      "message": "`wait_until` has no timeout, and every wait has one.",
+      "beginner": "A wait needs a time limit, or the commander could stand there all segment.",
+      "suggestions": [
+        {
+          "title": "Add a timeout",
+          "json_patch": "[{\"op\":\"replace\",\"path\":\"/declarative/route/0/timeout_ms\",\"value\":30000}]",
+          "applicability": "HAS_PLACEHOLDERS"
+        }
+      ]
+    }
+  ],
+  "report_hash": "GpTCePxPghk=",
+  "rules_hash": "sx2NB4nrIHw=",
+  "plan_fingerprint": "hUCm6YD8ihY=",
+  "verifier_version": "0.1.0-skeleton",
+  "size_units": 1,
+  "size_budget": 128
+}
+

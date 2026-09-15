@@ -1,0 +1,19 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0401",
+      "severity": "ERROR",
+      "path": "/declarative/route/0/move/to/beacon_anchor/beacon_id",
+      "message": "`b_99` is not a beacon this seat's snapshot holds.",
+      "beginner": "The seat does not know a beacon by that name."
+    }
+  ],
+  "report_hash": "gmrUlkMLkWM=",
+  "rules_hash": "sx2NB4nrIHw=",
+  "plan_fingerprint": "uzFJWnIzy6s=",
+  "verifier_version": "0.1.0-skeleton",
+  "size_units": 1,
+  "size_budget": 128
+}
+

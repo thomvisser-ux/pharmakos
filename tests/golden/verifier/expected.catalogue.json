@@ -1,0 +1,451 @@
+[
+  {
+    "code": "E0001",
+    "family": "decode and version",
+    "severity": "ERROR",
+    "emitter": "decode",
+    "message": "the playbook did not decode: {detail}",
+    "beginner": "This file is not a playbook the game can read. The message says where reading stopped."
+  },
+  {
+    "code": "E0002",
+    "family": "decode and version",
+    "severity": "ERROR",
+    "emitter": "decode",
+    "message": "`{field}` is not a field the schema declares. Unknown fields are rejected, never stripped.",
+    "beginner": "There is a name here that the playbook vocabulary does not have. Nothing is removed for you: correct the name or take the line out yourself."
+  },
+  {
+    "code": "E0003",
+    "family": "decode and version",
+    "severity": "ERROR",
+    "emitter": "decode",
+    "message": "`{field}` is held back to a later version and is not part of the v1 vocabulary.",
+    "beginner": "This is a word the game keeps for later. It is refused rather than quietly ignored, so nothing you wrote disappears without you seeing it."
+  },
+  {
+    "code": "E0004",
+    "family": "decode and version",
+    "severity": "ERROR",
+    "emitter": "decode",
+    "message": "schema version {found} is not supported; this build speaks {supported}.",
+    "beginner": "The file says it was written for a different version of the game."
+  },
+  {
+    "code": "E0005",
+    "family": "decode and version",
+    "severity": "ERROR",
+    "emitter": "decode",
+    "message": "`kind` is unset; a playbook must say whether it is a PLAYBOOK, a TEMPLATE or a SAMPLE.",
+    "beginner": "The file does not say what it is."
+  },
+  {
+    "code": "E0006",
+    "family": "decode and version",
+    "severity": "ERROR",
+    "emitter": "decode",
+    "message": "`author_kind` is SCRIPT, which is reserved for a later version and is rejected in v1.",
+    "beginner": "Scripts are not part of this version of the game."
+  },
+  {
+    "code": "E0007",
+    "family": "decode and version",
+    "severity": "ERROR",
+    "emitter": "decode",
+    "message": "`author_kind` is unset; an unset tag is an error, never a default.",
+    "beginner": "The file does not say who wrote it."
+  },
+  {
+    "code": "E0008",
+    "family": "decode and version",
+    "severity": "WARNING",
+    "emitter": "decode",
+    "message": "the recorded fingerprint does not match these bytes; the verifier has recomputed it.",
+    "beginner": "The stamp on this file was out of date. It has been worked out again for you."
+  },
+  {
+    "code": "E0101",
+    "family": "limits and required blocks",
+    "severity": "ERROR",
+    "emitter": "structure",
+    "message": "{what} is required and is missing.",
+    "beginner": "A part that every playbook must have is not here."
+  },
+  {
+    "code": "E0102",
+    "family": "limits and required blocks",
+    "severity": "ERROR",
+    "emitter": "structure",
+    "message": "the route has no steps.",
+    "beginner": "A playbook needs at least one step for the commander to walk."
+  },
+  {
+    "code": "E0103",
+    "family": "limits and required blocks",
+    "severity": "ERROR",
+    "emitter": "structure",
+    "message": "the step names no action.",
+    "beginner": "This step does not say what to do."
+  },
+  {
+    "code": "E0104",
+    "family": "limits and required blocks",
+    "severity": "ERROR",
+    "emitter": "structure",
+    "message": "{what} has no name.",
+    "beginner": "Give this a name, so the rest of the playbook can refer to it."
+  },
+  {
+    "code": "E0105",
+    "family": "limits and required blocks",
+    "severity": "ERROR",
+    "emitter": "structure",
+    "message": "`{name}` is used twice; a name is unique {scope}.",
+    "beginner": "Two things share a name, so a reference to it would be ambiguous."
+  },
+  {
+    "code": "E0106",
+    "family": "limits and required blocks",
+    "severity": "ERROR",
+    "emitter": "structure",
+    "message": "the handler has no condition.",
+    "beginner": "A rule needs something to watch for."
+  },
+  {
+    "code": "E0107",
+    "family": "limits and required blocks",
+    "severity": "ERROR",
+    "emitter": "structure",
+    "message": "`max_fires` is {found}; it must be between 1 and {max}.",
+    "beginner": "A rule fires between once and a few times in a segment."
+  },
+  {
+    "code": "E0108",
+    "family": "limits and required blocks",
+    "severity": "ERROR",
+    "emitter": "structure",
+    "message": "`cooldown_ms` is {found} ms; the minimum is {min} ms.",
+    "beginner": "A rule waits a while between firings, so put at least the minimum here."
+  },
+  {
+    "code": "E0109",
+    "family": "limits and required blocks",
+    "severity": "ERROR",
+    "emitter": "structure",
+    "message": "`{field}` is {found} ms; a duration is never negative.",
+    "beginner": "Time does not run backwards. Use nothing, or more."
+  },
+  {
+    "code": "E0110",
+    "family": "limits and required blocks",
+    "severity": "ERROR",
+    "emitter": "structure",
+    "message": "the playbook is {found} size units; the budget is {budget}.",
+    "beginner": "This playbook is larger than the seal allows. Take something out of it."
+  },
+  {
+    "code": "E0111",
+    "family": "limits and required blocks",
+    "severity": "ERROR",
+    "emitter": "structure",
+    "message": "`{field}` is unset; an unset choice is an error, never a default.",
+    "beginner": "One of the choices here has been left blank."
+  },
+  {
+    "code": "E0112",
+    "family": "limits and required blocks",
+    "severity": "ERROR",
+    "emitter": "none at the skeleton (T9, the gateway owns the seat notebook)",
+    "message": "the notebook is {found} characters; the maximum is {max}.",
+    "beginner": "The notebook is longer than a seat may keep."
+  },
+  {
+    "code": "E0201",
+    "family": "conditions",
+    "severity": "ERROR",
+    "emitter": "structure",
+    "message": "the comparison names no operator.",
+    "beginner": "Say how to compare: at most, equal to, more than, and so on."
+  },
+  {
+    "code": "E0202",
+    "family": "conditions",
+    "severity": "ERROR",
+    "emitter": "structure",
+    "message": "the percentage is {found}; it must be between 0 and 100.",
+    "beginner": "A percentage runs from none of it to all of it."
+  },
+  {
+    "code": "E0203",
+    "family": "conditions",
+    "severity": "ERROR",
+    "emitter": "structure",
+    "message": "`{node}` has no items.",
+    "beginner": "This condition groups other conditions, and there are none inside it."
+  },
+  {
+    "code": "E0204",
+    "family": "conditions",
+    "severity": "ERROR",
+    "emitter": "structure",
+    "message": "the condition is {found} levels deep; the limit is {max}.",
+    "beginner": "This condition is nested too deeply to be read at a glance. Flatten it."
+  },
+  {
+    "code": "E0205",
+    "family": "conditions",
+    "severity": "ERROR",
+    "emitter": "structure",
+    "message": "the condition has {found} nodes; the limit is {max}.",
+    "beginner": "This condition has too many parts."
+  },
+  {
+    "code": "E0206",
+    "family": "conditions",
+    "severity": "ERROR",
+    "emitter": "structure",
+    "message": "the condition names no predicate.",
+    "beginner": "This condition is empty."
+  },
+  {
+    "code": "E0207",
+    "family": "conditions",
+    "severity": "ERROR",
+    "emitter": "resolve",
+    "message": "`rule_fired` names `{id}`, which this playbook does not declare.",
+    "beginner": "There is no rule by that name in this playbook."
+  },
+  {
+    "code": "E0208",
+    "family": "conditions",
+    "severity": "ERROR",
+    "emitter": "resolve",
+    "message": "`step_reached` names `{label}`, which this playbook's route does not declare.",
+    "beginner": "There is no step by that name on the route."
+  },
+  {
+    "code": "E0209",
+    "family": "conditions",
+    "severity": "ERROR",
+    "emitter": "none at the skeleton (S2/S3, with the enemy-knowledge predicates)",
+    "message": "an enemy predicate must declare its freshness.",
+    "beginner": "Say how recently you must have seen the thing you are asking about."
+  },
+  {
+    "code": "E0301",
+    "family": "control flow",
+    "severity": "ERROR",
+    "emitter": "semantics",
+    "message": "`{label}` is at or before this step; a jump only ever goes forward.",
+    "beginner": "A jump can send the commander onward, never back. That is part of why a playbook always finishes."
+  },
+  {
+    "code": "E0302",
+    "family": "control flow",
+    "severity": "ERROR",
+    "emitter": "semantics",
+    "message": "`wait_until` has no timeout, and every wait has one.",
+    "beginner": "A wait needs a time limit, or the commander could stand there all segment."
+  },
+  {
+    "code": "E0303",
+    "family": "control flow",
+    "severity": "ERROR",
+    "emitter": "semantics",
+    "message": "`hold` is {found} ms; a hold lasts a positive number of milliseconds.",
+    "beginner": "Say how long to hold for."
+  },
+  {
+    "code": "E0304",
+    "family": "control flow",
+    "severity": "ERROR",
+    "emitter": "semantics",
+    "message": "the jump names no target label.",
+    "beginner": "This says to jump, but not where to."
+  },
+  {
+    "code": "E0305",
+    "family": "control flow",
+    "severity": "ERROR",
+    "emitter": "resolve",
+    "message": "`{label}` is not a label this {scope} declares.",
+    "beginner": "There is no step by that name to jump to."
+  },
+  {
+    "code": "E0401",
+    "family": "references and placement",
+    "severity": "ERROR",
+    "emitter": "resolve",
+    "message": "`{id}` is not a beacon this seat's snapshot holds.",
+    "beginner": "The seat does not know a beacon by that name."
+  },
+  {
+    "code": "E0402",
+    "family": "references and placement",
+    "severity": "ERROR",
+    "emitter": "semantics",
+    "message": "the voxel ({x}, {y}, {z}) lies outside the map, which is {sx} by {sy} by {sz}.",
+    "beginner": "That place is off the edge of the world."
+  },
+  {
+    "code": "E0403",
+    "family": "references and placement",
+    "severity": "ERROR",
+    "emitter": "semantics",
+    "message": "the site ({x}, {y}, {z}) lies outside every one of this seat's spheres.",
+    "beginner": "A beacon goes up inside ground you already hold."
+  },
+  {
+    "code": "E0404",
+    "family": "references and placement",
+    "severity": "WARNING",
+    "emitter": "semantics",
+    "message": "an enemy-side filter and a tag filter select nothing together: an enemy beacon carries none of your tags.",
+    "beginner": "Nothing can match both of these at once, so this selector never finds anything."
+  },
+  {
+    "code": "E0405",
+    "family": "references and placement",
+    "severity": "ERROR",
+    "emitter": "semantics",
+    "message": "`{id}` is a beacon this seat does not own.",
+    "beginner": "A commander interfaces with your own beacons."
+  },
+  {
+    "code": "E0406",
+    "family": "references and placement",
+    "severity": "ERROR",
+    "emitter": "semantics",
+    "message": "the area is inside out: min ({minx}, {miny}, {minz}) is not at or below max ({maxx}, {maxy}, {maxz}) on every axis.",
+    "beginner": "The two corners of this box are the wrong way round, so the box holds nothing."
+  },
+  {
+    "code": "E0501",
+    "family": "settings and recycle",
+    "severity": "ERROR",
+    "emitter": "semantics",
+    "message": "`{field}` is {found}; it must be between 0 and 100.",
+    "beginner": "A percentage runs from none of it to all of it."
+  },
+  {
+    "code": "E0502",
+    "family": "settings and recycle",
+    "severity": "ERROR",
+    "emitter": "semantics",
+    "message": "the mandate settings name no mandate.",
+    "beginner": "Say which writ the beacon is on."
+  },
+  {
+    "code": "E0503",
+    "family": "settings and recycle",
+    "severity": "ERROR",
+    "emitter": "semantics",
+    "message": "`{id}` is on the {mandate} writ; a build target is only added to a beacon on BUILD.",
+    "beginner": "Only a beacon told to build takes a build target."
+  },
+  {
+    "code": "E0504",
+    "family": "settings and recycle",
+    "severity": "ERROR",
+    "emitter": "semantics",
+    "message": "`{id}` is the core, and the core cannot be recycled.",
+    "beginner": "The core is where the seat begins, and it cannot be taken apart."
+  },
+  {
+    "code": "E0505",
+    "family": "settings and recycle",
+    "severity": "ERROR",
+    "emitter": "semantics",
+    "message": "`rotation_quarter_turns` is {found}; it must be between 0 and 3.",
+    "beginner": "A building turns in quarter turns: none, one, two or three."
+  },
+  {
+    "code": "E0506",
+    "family": "settings and recycle",
+    "severity": "ERROR",
+    "emitter": "none at the skeleton (S4, with the capability catalogue)",
+    "message": "`{id}` is not a blueprint the catalogue holds.",
+    "beginner": "There is no such thing to build."
+  },
+  {
+    "code": "E0507",
+    "family": "settings and recycle",
+    "severity": "ERROR",
+    "emitter": "none at the skeleton (S4, with licences)",
+    "message": "`{id}` needs a licence this seat does not hold.",
+    "beginner": "The seat has not earned the right to build this yet."
+  },
+  {
+    "code": "E0601",
+    "family": "economy, power and messaging",
+    "severity": "ERROR",
+    "emitter": "none at the skeleton (S1, the estimate stage)",
+    "message": "the playbook adds {found} kW of draw beyond supply; set `allow_dormant_beacons` to accept the shortfall instead.",
+    "beginner": "There is not enough power for everything this playbook switches on."
+  },
+  {
+    "code": "E0602",
+    "family": "economy, power and messaging",
+    "severity": "ERROR",
+    "emitter": "none at the skeleton (S4, with radio)",
+    "message": "a broadcast needs a Radio Mast, and coverage at the place it is sent from.",
+    "beginner": "Nothing can be sent without a mast."
+  },
+  {
+    "code": "W0601",
+    "family": "economy, power and messaging",
+    "severity": "WARNING",
+    "emitter": "none at the skeleton (S1, the estimate stage)",
+    "message": "the grid is already {found} kW short.",
+    "beginner": "The power the seat has is already less than the power it is using."
+  },
+  {
+    "code": "W0602",
+    "family": "economy, power and messaging",
+    "severity": "WARNING",
+    "emitter": "none at the skeleton (S1, the estimate stage)",
+    "message": "committed spending of {found} outruns the projected treasury of {available}.",
+    "beginner": "This playbook spends more than the seat is likely to have."
+  },
+  {
+    "code": "W0701",
+    "family": "schedule, conflicts and staleness",
+    "severity": "WARNING",
+    "emitter": "none at the skeleton (S1, the estimate stage)",
+    "message": "the route needs about {found} ms and the coming segment is {segment} ms.",
+    "beginner": "There may not be time to walk this whole route this round."
+  },
+  {
+    "code": "W0702",
+    "family": "schedule, conflicts and staleness",
+    "severity": "WARNING",
+    "emitter": "none at the skeleton (S3, the lint stage)",
+    "message": "`{id}` can never fire: `{winner}` is earlier and its condition is true first.",
+    "beginner": "An earlier rule always wins, so this one never gets a turn."
+  },
+  {
+    "code": "W0703",
+    "family": "schedule, conflicts and staleness",
+    "severity": "WARNING",
+    "emitter": "none at the skeleton (S2/S3, with the reach window)",
+    "message": "the sighting this rests on is {found} ms old; the reach window is {max} ms.",
+    "beginner": "What the seat remembers here may be too old to act on."
+  },
+  {
+    "code": "I0001",
+    "family": "information",
+    "severity": "INFO",
+    "emitter": "none at the skeleton (T7/S1, the estimate stage)",
+    "message": "the route is about {found} ms of walking.",
+    "beginner": "Roughly how long the walking takes."
+  },
+  {
+    "code": "I0002",
+    "family": "information",
+    "severity": "INFO",
+    "emitter": "none at the skeleton (S3, the lint stage)",
+    "message": "`{selector}` would resolve to `{id}` right now.",
+    "beginner": "What this selector picks if the round started now."
+  }
+]
+

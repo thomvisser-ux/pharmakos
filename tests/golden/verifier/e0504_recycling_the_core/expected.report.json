@@ -1,0 +1,22 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0504",
+      "severity": "ERROR",
+      "path": "/declarative/route/0/interface/rows/0/recycle",
+      "related_paths": [
+        "/declarative/route/0/interface/beacon/beacon_id"
+      ],
+      "message": "`b_01` is the core, and the core cannot be recycled.",
+      "beginner": "The core is where the seat begins, and it cannot be taken apart."
+    }
+  ],
+  "report_hash": "2bLmjNrb8cQ=",
+  "rules_hash": "sx2NB4nrIHw=",
+  "plan_fingerprint": "0aEKIcNQiD8=",
+  "verifier_version": "0.1.0-skeleton",
+  "size_units": 1,
+  "size_budget": 128
+}
+

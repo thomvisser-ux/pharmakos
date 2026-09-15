@@ -1,0 +1,22 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0105",
+      "severity": "ERROR",
+      "path": "/declarative/route/1/label",
+      "related_paths": [
+        "/declarative/route/0/label"
+      ],
+      "message": "`s1` is used twice; a name is unique within the route.",
+      "beginner": "Two things share a name, so a reference to it would be ambiguous."
+    }
+  ],
+  "report_hash": "oAp+cteDY7w=",
+  "rules_hash": "sx2NB4nrIHw=",
+  "plan_fingerprint": "6jup2NoQHHw=",
+  "verifier_version": "0.1.0-skeleton",
+  "size_units": 2,
+  "size_budget": 128
+}
+

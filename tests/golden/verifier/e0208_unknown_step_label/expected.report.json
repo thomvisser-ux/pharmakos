@@ -1,0 +1,19 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0208",
+      "severity": "ERROR",
+      "path": "/declarative/handlers/0/when/step_reached/label",
+      "message": "`step_reached` names `nowhere`, which this playbook's route does not declare.",
+      "beginner": "There is no step by that name on the route."
+    }
+  ],
+  "report_hash": "neA3W8EbfwM=",
+  "rules_hash": "sx2NB4nrIHw=",
+  "plan_fingerprint": "c33W5sGveu4=",
+  "verifier_version": "0.1.0-skeleton",
+  "size_units": 3,
+  "size_budget": 128
+}
+

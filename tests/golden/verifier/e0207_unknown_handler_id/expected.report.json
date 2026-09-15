@@ -1,0 +1,19 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0207",
+      "severity": "ERROR",
+      "path": "/declarative/handlers/0/when/rule_fired/handler_id",
+      "message": "`rule_fired` names `nobody`, which this playbook does not declare.",
+      "beginner": "There is no rule by that name in this playbook."
+    }
+  ],
+  "report_hash": "jI/BBIcYSY4=",
+  "rules_hash": "sx2NB4nrIHw=",
+  "plan_fingerprint": "16keD7vK0Bc=",
+  "verifier_version": "0.1.0-skeleton",
+  "size_units": 3,
+  "size_budget": 128
+}
+

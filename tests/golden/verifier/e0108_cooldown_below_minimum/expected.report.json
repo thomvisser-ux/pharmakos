@@ -1,0 +1,26 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0108",
+      "severity": "ERROR",
+      "path": "/declarative/handlers/0/cooldown_ms",
+      "message": "`cooldown_ms` is 1000 ms; the minimum is 5000 ms.",
+      "beginner": "A rule waits a while between firings, so put at least the minimum here.",
+      "suggestions": [
+        {
+          "title": "Set the cooldown to 5000 ms",
+          "json_patch": "[{\"op\":\"replace\",\"path\":\"/declarative/handlers/0/cooldown_ms\",\"value\":5000}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    }
+  ],
+  "report_hash": "Pbxc1RexjQE=",
+  "rules_hash": "sx2NB4nrIHw=",
+  "plan_fingerprint": "mtTbwevaTss=",
+  "verifier_version": "0.1.0-skeleton",
+  "size_units": 3,
+  "size_budget": 128
+}
+

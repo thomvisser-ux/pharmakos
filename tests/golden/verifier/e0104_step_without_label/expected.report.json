@@ -1,0 +1,19 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0104",
+      "severity": "ERROR",
+      "path": "/declarative/route/0",
+      "message": "the step has no name.",
+      "beginner": "Give this a name, so the rest of the playbook can refer to it."
+    }
+  ],
+  "report_hash": "pKIbhzfFI40=",
+  "rules_hash": "sx2NB4nrIHw=",
+  "plan_fingerprint": "LNbqhPaKQ0s=",
+  "verifier_version": "0.1.0-skeleton",
+  "size_units": 1,
+  "size_budget": 128
+}
+

@@ -1,0 +1,19 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0111",
+      "severity": "ERROR",
+      "path": "/fallback",
+      "message": "`posture` is unset; an unset choice is an error, never a default.",
+      "beginner": "One of the choices here has been left blank."
+    }
+  ],
+  "report_hash": "ixn9Bw/fOaA=",
+  "rules_hash": "sx2NB4nrIHw=",
+  "plan_fingerprint": "9ybv2D3AcNE=",
+  "verifier_version": "0.1.0-skeleton",
+  "size_units": 1,
+  "size_budget": 128
+}
+
