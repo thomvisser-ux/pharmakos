@@ -18,6 +18,9 @@
 //! * no `f32` or `f64`;
 //! * nothing that writes sim state in parallel;
 //! * no `unwrap()` or `expect()` reachable from a tick;
+//! * every sort with a caller-supplied key — in **all** of its spellings, not
+//!   just `sort_by_key` — carries a note at the call site saying its key ends
+//!   in a unique id (item 62);
 //! * every `#[allow]` in the crate names a lint on the audit list below and
 //!   carries a `reason`, and the `as_conversions` family appears **only** under
 //!   `src/math/`, which is the audited-widening-cast rule of AGENTS.md §4.3
@@ -105,11 +108,35 @@ const BANNED: &[(&str, &str)] = &[
         ".expect(",
         "a panic inside a tick is a crash, not a game state",
     ),
-    (
-        "sort_by_key(|",
-        "every sort key must end in a unique id (item 62) — read the call and, if it does, widen this test",
-    ),
 ];
+
+/// Every spelling of a sort or search that takes a caller-supplied key or
+/// comparator.
+///
+/// Item 62's convention is that such a key **ends in a unique id**; a key that
+/// can collide leaves the order of the colliding elements to the sort, and an
+/// unstable sort says out loud that the order is then unspecified (AGENTS.md
+/// §4.6). One spelling on this list is not enough: the hole that let a
+/// non-total sighting key through was a ban on `sort_by_key(|` alone, which the
+/// `sort_unstable_by_key(|` next to it does not contain.
+///
+/// A call site is sanctioned by carrying [`SORT_MARKER`] on the same line —
+/// which is a human writing down that they read the key, rather than a list at
+/// the top of this file that drifts away from the code it names.
+const SORT_SPELLINGS: &[&str] = &[
+    "sort_by_key(|",
+    "sort_unstable_by_key(|",
+    "sort_by_cached_key(|",
+    "sort_by(|",
+    "sort_unstable_by(|",
+    "binary_search_by_key(|",
+    "binary_search_by(|",
+    "max_by_key(|",
+    "min_by_key(|",
+];
+
+/// What a sanctioned sort site writes on its own line.
+const SORT_MARKER: &str = "// item 62:";
 
 /// Every `.rs` file under `crates/sim/src`, in path order.
 ///
@@ -189,6 +216,74 @@ fn no_clock_and_no_hash_map_reach_the_crate() {
         findings.is_empty(),
         "the determinism rule set is broken in the source text:\n{}",
         findings.join("\n")
+    );
+}
+
+#[test]
+fn every_sort_key_has_been_read_by_a_human() {
+    // Item 62 as a test rather than as a habit: every sort with a
+    // caller-supplied key must say, at the call site, that its key ends in a
+    // unique id. The point is not the marker — it is that a new sort cannot be
+    // added without someone writing the sentence.
+    let mut findings: Vec<String> = Vec::new();
+    for path in sources() {
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let lines: Vec<&str> = text.lines().collect();
+        for (index, line) in lines.iter().enumerate() {
+            if line.trim_start().starts_with("//") {
+                continue;
+            }
+            let Some(spelling) = SORT_SPELLINGS.iter().find(|s| line.contains(**s)) else {
+                continue;
+            };
+            // The justification may sit on the call's own line or in the
+            // comment immediately above it.
+            let from = index.saturating_sub(3);
+            let sanctioned = lines
+                .get(from..=index)
+                .unwrap_or_default()
+                .iter()
+                .any(|l| l.contains(SORT_MARKER));
+            if !sanctioned {
+                findings.push(format!(
+                    "{}:{}: `{spelling}` with no `{SORT_MARKER}` note. Read the key: if it ends \
+                     in a unique id, say so there; if it does not, the order is unspecified and \
+                     two machines may disagree (AGENTS.md §4.6).\n    {}",
+                    path.display(),
+                    index.saturating_add(1),
+                    line.trim()
+                ));
+            }
+        }
+    }
+    assert!(
+        findings.is_empty(),
+        "a sort key reached the crate without being read:\n{}",
+        findings.join("\n")
+    );
+}
+
+#[test]
+fn the_sort_check_is_not_looking_at_an_empty_set() {
+    // The check above passes vacuously if the spellings stop matching the
+    // crate's source — which is exactly how the hole it replaces survived.
+    let mut sites = 0_usize;
+    for path in sources() {
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        for (_, line) in code_lines(&text) {
+            if SORT_SPELLINGS.iter().any(|s| line.contains(*s)) {
+                sites = sites.saturating_add(1);
+            }
+        }
+    }
+    assert!(
+        sites >= 2,
+        "the sort-key check found {sites} call sites; the crate has at least the two in \
+         src/knowledge.rs, so the spellings no longer match the source"
     );
 }
 
