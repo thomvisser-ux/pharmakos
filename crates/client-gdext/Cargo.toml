@@ -18,9 +18,13 @@ publish.workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-# None yet. Expected: godot (gdext, Godot 4.7) from [workspace.dependencies], plus
-# pharmakos-proto and the mesher's public surface. This crate stays thin: it marshals,
-# it does not decide.
+# The walled greedy mesher. This crate is its only dependant, which is the shape decisions
+# log §2.7 item 56 fixed: the mesher links without gdext so the headless CPU proxy and the
+# CI geometry check can reuse it, and `cargo xtask wall-guard` keeps it away from the
+# deterministic crates.
+pharmakos-mesher = { workspace = true }
+# Still expected: godot (gdext, Godot 4.7) from [workspace.dependencies], plus
+# pharmakos-proto. This crate stays thin: it marshals, it does not decide.
 
 [lints]
 workspace = true
