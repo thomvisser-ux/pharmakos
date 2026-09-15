@@ -47,6 +47,17 @@ Do not use bypass-permissions mode in this repository, and never against a real 
 contract-file rule depends on approval prompts actually happening; bypass mode removes the
 mechanism rather than speeding it up.
 
+**Owner's delegation for the walking skeleton (decisions-log §2.7 items 85 and 86, 2026-09-14).**
+Two relaxations apply to the owner's own Claude Code session only, for the duration of the
+walking skeleton, and are revoked by the owner's word at any time:
+
+- The main assistant session may **merge** a skeleton PR, contract PRs included, once `cargo xtask
+  ci` is green on the branch and the two adversarial reviews have been applied; the owner reviews
+  the stage demo (AGENTS.md §10 item 8) rather than each PR. Every merge is still a PR whose body
+  names the contract paths it touches. Sub-agents still open a PR and stop.
+- The owner accepts **bypass-permissions mode** in that same session. The ban above stays in force
+  for every sub-agent and for any session that touches a real seat.
+
 ## Commands
 
 ```sh
