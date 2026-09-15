@@ -1230,8 +1230,17 @@ fn step_scenario(ctx: &Ctx) -> Result<Outcome, String> {
     let names: Vec<String> = valid
         .iter()
         .map(|item| {
+            // The rules table is named only when it is not the default one.
+            // A scenario pinned to a different table is the interesting case —
+            // its hash chain is a claim about those values — and printing the
+            // same default path once per scenario would bury it.
+            let rules = if item.rules == scenario::DEFAULT_RULES {
+                String::new()
+            } else {
+                format!(", rules {}", item.rules)
+            };
             format!(
-                "{} ({} seats, {} assertions)",
+                "{} ({} seats, {} assertions{rules})",
                 item.name, item.seats, item.assertions
             )
         })

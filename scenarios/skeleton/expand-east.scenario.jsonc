@@ -23,6 +23,13 @@
     "generator": "skeleton"
   },
 
+  // The third leg of the determinism triple, written out rather than left to
+  // the default so the worked example shows it. `rules/rules.v1.json` is the
+  // canonical JSON of one gp.v1.RulesTable (item 78); the sim hashes it into
+  // `rules_hash`, and the chain asserted on below is a claim about this table's
+  // values as much as about this seed.
+  "rules": "rules/rules.v1.json",
+
   "seats": [
     // Seat 0 seals the spec's own worked example, so this scenario and the
     // proto/plan-core goldens exercise the same bytes.

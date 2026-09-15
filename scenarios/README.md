@@ -8,8 +8,12 @@ owner approval, and the machine-checkable half lives in xtask/src/scenario.rs.
 
 # Scenario files
 
-**A scenario is a headless match written down.** Map seed, one playbook per
-seat, the segment list, and assertions on events **and** on the hash chain.
+**A scenario is a headless match written down.** Map seed, rules table, one
+playbook per seat, the segment list, and assertions on events **and** on the
+hash chain. The first three are AGENTS.md §4's triple — *"the sim is a pure
+function of (map seed, playbooks, rules hash)"* — which is what makes a
+committed hash chain a claim about the sim rather than about whatever happened
+to be checked out that afternoon.
 `gamectl scenario run scenarios/<set>/<name>.scenario.jsonc` replays it and
 fails on the first assertion that does not hold.
 
@@ -55,6 +59,7 @@ and the answer belongs in the file rather than in a commit message.
   "summary": "One sealed playbook walks the commander east and places a beacon.",
 
   "map": { "seed": "0x00000000ca5caded", "generator": "skeleton" },
+  "rules": "rules/rules.v1.json",
 
   "seats": [
     { "seat": 0, "kind": "playbook", "playbook": "examples/playbooks/expand_east.jsonc" },
@@ -80,6 +85,7 @@ and the answer belongs in the file rather than in a commit message.
 | `summary` | no | One sentence for the human reading a red build. |
 | `map.seed` | yes | The 64-bit map seed, as `"0x"` + **16 lowercase hex digits**. |
 | `map.generator` | yes | The generator's name, so a scenario written against one generation rule is not silently replayed against another. |
+| `rules` | no | The rules table, repository-relative. Defaults to `rules/rules.v1.json` — see below. |
 | `seats` | yes | One to three seats (spec §3), `seat` counting from 0 in array order. |
 | `seats[].kind` | yes | `playbook` (seals the named file), `safe` (files the safe playbook), `builtin` (the built-in operator). |
 | `seats[].playbook` | with `playbook` | Repository-relative path, forward slashes, no `..`. |
@@ -90,6 +96,29 @@ and the answer belongs in the file rather than in a commit message.
 **Unknown keys are rejected, never ignored** — the same rule the verifier's Load
 applies to a playbook (AGENTS.md §11). A silently stripped assertion is an
 assertion that passes by not running.
+
+### The rules table
+
+`rules/rules.v1.json` is the canonical JSON of one `gp.v1.RulesTable`
+(decisions-log item 78): K and B, the 10 / 14 / 4 step costs, the move cost per
+tick, the repath cap, the segment ladder, the CSR cell size and every `$` and
+`kW` number. `pharmakos-sim` loads it and hashes it into `rules_hash`, and the
+sim is a pure function of (map seed, playbooks, `rules_hash`). A scenario names
+the first two, so it has to be able to name the third.
+
+The key is **optional and defaults to `rules/rules.v1.json`**, because almost
+every scenario runs against the shipped table and making every file repeat the
+same path is noise that stops being read. The default is checked for existence
+like any named one: a scenario silently running against a table that is not
+there is the quiet pass this harness exists to prevent.
+
+Name a different table when a scenario is deliberately pinned to one — a tuning
+sweep, or a regression that only reproduces at the numbers of the day. Item 78
+is explicit that the table's *shape* is a contract file and its *values* are
+data that ordinary tuning PRs move during S1 and S2, which is exactly why a
+committed hash chain has to record which values produced it. A tuning PR that
+moves every scenario's chain is doing so legitimately; one that moves them
+without saying so is the failure AGENTS.md §4.8 is about.
 
 ### The assertion vocabulary
 
