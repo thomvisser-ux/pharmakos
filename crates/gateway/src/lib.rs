@@ -37,6 +37,7 @@
 //! | [`fog`] | The per-match server-side fog policy and its filter |
 //! | [`feed`] | The event bus, the 60 s digest cadence and the opaque cursors |
 //! | [`cache`] | The private match cache: where it goes, and what is in it |
+//! | [`detail`] | The read-method detail budgets, in the fixed salience order |
 //! | [`time`] | The host's tick reaching the gateway, because the gateway has no clock |
 //! | [`surface`] | Authentication, dispatch, the `_status` footer, the seat's private store |
 //! | [`net`] | The listener, bound to `127.0.0.1` and `::1` and nothing else |
@@ -84,6 +85,7 @@
 pub mod audit;
 pub mod base64;
 pub mod cache;
+pub mod detail;
 pub mod error;
 pub mod feed;
 pub mod fog;

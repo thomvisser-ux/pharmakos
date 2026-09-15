@@ -246,7 +246,10 @@ fn loopback_authority(authority: &str, port: u16) -> bool {
 
     let named = matches!(host.as_str(), "127.0.0.1" | "[::1]" | "localhost");
     let right_port = match host_port {
-        Some(text) => text.parse::<u16>().is_ok_and(|given| given == port),
+        // Compared as text against the port's own spelling rather than parsed:
+        // `u16::from_str` also accepts `09500` and `+9500` for 9500, and "this
+        // listener's port" should mean the digits this listener would write.
+        Some(text) => text == port.to_string(),
         // A `Host` with no port means 80, which this listener never binds.
         None => false,
     };
@@ -475,6 +478,15 @@ mod tests {
         assert!(!loopback_authority("pharmakos.example:9500", PORT));
         assert!(!loopback_authority("127.0.0.1.evil.example:9500", PORT));
         assert!(!loopback_authority("[::1", PORT), "an unterminated literal");
+        // The port is compared as the digits this listener would write, not
+        // parsed: `u16::from_str` also reads `09500` and `+9500` as 9500, and
+        // a `Host` this gateway would never write is not this gateway's host.
+        assert!(
+            !loopback_authority("127.0.0.1:09500", PORT),
+            "a leading zero is not the port's spelling"
+        );
+        assert!(!loopback_authority("127.0.0.1:+9500", PORT));
+        assert!(!loopback_authority("127.0.0.1: 9500", PORT));
     }
 
     #[test]

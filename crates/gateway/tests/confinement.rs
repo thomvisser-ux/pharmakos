@@ -17,8 +17,12 @@
 //! 1. **No clock, no hash container, no float.** The same list as every
 //!    deterministic crate (AGENTS.md sections 4.2, 4.4, 4.5). The gateway is not
 //!    a walled crate, so it gets no allowance at all.
-//! 2. **No wildcard binding.** `0.0.0.0`, `::`, `UNSPECIFIED` -- the half of
-//!    "localhost only" that a type cannot enforce (AGENTS.md section 7).
+//! 2. **No wildcard binding.** `0.0.0.0`, `UNSPECIFIED` and name resolution --
+//!    the half of "localhost only" that a type cannot enforce (AGENTS.md
+//!    section 7). The needles are exactly the three in
+//!    [`NO_WILDCARD_BINDING`]; an unspecified IPv6 address is written
+//!    `Ipv6Addr::UNSPECIFIED` in Rust, which the second needle catches, and its
+//!    textual form cannot be a needle at all.
 //! 3. **No outbound connection.** The gateway accepts; it never dials. "No
 //!    network telemetry" (AGENTS.md section 7) is a rule about the shipped
 //!    binary, and the shipped binary has no client in it.
@@ -458,27 +462,68 @@ fn no_allow_defeats_a_determinism_lint() {
 /// Every lint named by an `#[allow]` or `#![allow]` in `text`, attribute
 /// bodies spanning several lines included -- rustfmt writes one that way as soon
 /// as it carries a `reason`, and a line-at-a-time scan would miss exactly those.
+///
+/// Two things this has to get right, because both are how the hole AGENTS.md
+/// section 4.9 names would actually be dug:
+///
+/// * **every** lint of a multi-lint allow, not just the first. A determinism
+///   lint sitting second in `#[allow(clippy::struct_field_names,
+///   clippy::float_arithmetic)]` would otherwise pass a scan that only read the
+///   first name, while silencing the lint for clippy all the same;
+/// * both spellings in one pass. `#![allow(` does not contain `#[allow(`, so
+///   looking for the second and only falling back to the first would skip an
+///   inner attribute that sits earlier in the file -- and an inner attribute is
+///   precisely the crate- or module-local allowance section 4.9 forbids.
 fn allows(text: &str) -> Vec<String> {
     let mut found: Vec<String> = Vec::new();
     let mut rest = text;
-    while let Some(index) = rest.find("#[allow(").or_else(|| rest.find("#![allow(")) {
+    loop {
+        let outer = rest.find("#[allow(");
+        let inner_attribute = rest.find("#![allow(");
+        let index = match (outer, inner_attribute) {
+            (Some(left), Some(right)) => left.min(right),
+            (Some(only), None) | (None, Some(only)) => only,
+            (None, None) => break,
+        };
         let after = rest.get(index..).unwrap_or_default();
         let body_at = after.find('(').map_or(0, |at| at.saturating_add(1));
         let body = after.get(body_at..).unwrap_or_default();
         let end = body.find(")]").unwrap_or(body.len());
         let inner = body.get(..end).unwrap_or_default();
-        let name = inner
-            .split(',')
-            .next()
-            .unwrap_or_default()
-            .split_whitespace()
-            .collect::<String>();
-        if !name.is_empty() {
+        for piece in inner.split(',') {
+            let name = piece.split_whitespace().collect::<String>();
+            if name.is_empty() {
+                continue;
+            }
+            // `reason = "..."` ends the lint list; its own text may hold commas.
+            if name.starts_with("reason=") {
+                break;
+            }
             found.push(name);
         }
         rest = body.get(end..).unwrap_or_default();
     }
     found
+}
+
+/// The scan above is the test's eyes, so it gets a test of its own: a fixture
+/// holding both of the shapes that would otherwise slip past it.
+#[test]
+fn the_allow_scan_sees_every_lint_and_both_spellings() {
+    let fixture = "#![allow(clippy::float_arithmetic)]\n\
+                   fn f() {}\n\
+                   #[allow(\n    clippy::struct_field_names,\n    clippy::as_conversions,\n    \
+                   reason = \"a reason, with a comma in it\"\n)]\n\
+                   struct S;\n";
+    assert_eq!(
+        allows(fixture),
+        vec![
+            String::from("clippy::float_arithmetic"),
+            String::from("clippy::struct_field_names"),
+            String::from("clippy::as_conversions"),
+        ],
+        "an inner attribute before the first outer one, and every lint of a multi-lint allow"
+    );
 }
 
 /// The manifest half of the research ban, which `cargo xtask ci`'s

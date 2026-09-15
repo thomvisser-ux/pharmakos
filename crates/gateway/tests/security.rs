@@ -528,6 +528,64 @@ fn elimination_lifts_fog_without_reissuing_a_token() {
     assert_eq!(events.len(), 1, "the same token now sees the world");
 }
 
+/// The audit log is one record to a line and one field to a column, and the
+/// method string a client sent is not what goes in the action column.
+///
+/// The attack this refuses is a seat holding nothing but `observe` sending a
+/// method name that carries a newline and five tabs, so that `AuditLog::render`
+/// writes a second, well-formed-looking record saying another seat submitted a
+/// plan. The log's whole value is that it is the record nobody can edit.
+#[test]
+fn a_method_name_can_never_forge_an_audit_line() {
+    let mut surface = surface();
+    let (token, _) = surface
+        .tokens()
+        .mint(
+            Subject::Seat(SeatId::new(0)),
+            MATCH,
+            ScopeSet::of(&[Scope::Observe]),
+            Tick::ZERO,
+        )
+        .expect("minted");
+
+    let forged = "x\\n1\\t0\\tseat.1\\tt2\\tcall submit_plan\\tok";
+    let response = call(&mut surface, &token, forged, "{}");
+    assert_eq!(error_code(&response), "INVALID_ARGUMENT");
+    // And a very long one: the log lives in the private match cache, and a
+    // single authenticated call must not be able to write a quarter of a
+    // megabyte into it.
+    let long = "y".repeat(100_000);
+    let response = call(&mut surface, &token, &long, "{}");
+    assert_eq!(error_code(&response), "INVALID_ARGUMENT");
+
+    let text = surface.audit().render();
+    assert_eq!(
+        text.lines().count(),
+        3,
+        "a header and two records, one per attempt: {text}"
+    );
+    for line in text.lines() {
+        assert_eq!(line.split('\t').count(), 6, "six columns: {line}");
+    }
+    assert!(
+        !text.contains("submit_plan"),
+        "no line a caller wrote: {text}"
+    );
+    assert!(
+        !text.contains('y'),
+        "and no caller-supplied name at all, however long"
+    );
+    assert_eq!(
+        text.matches("call <unknown>").count(),
+        2,
+        "an unknown method is logged as one: {text}"
+    );
+    assert!(
+        text.len() < 1_000,
+        "one call cannot grow the log without bound"
+    );
+}
+
 /// The private cache is enforcement and not cryptography, and the folder says
 /// so before anybody zips it up.
 #[test]

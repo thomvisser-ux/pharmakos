@@ -43,10 +43,12 @@
 //!   replay/                          the private replay, one file per segment      (T17)
 //! ```
 //!
-//! T9 creates the tree, writes `README.txt` and `match.json`, and appends to
-//! `audit.log`. The three directories it does not write into are created empty,
-//! so the layout is visible from the first match rather than appearing a stage
-//! at a time; T13 and T17 fill them.
+//! T9 creates the match folder, writes `README.txt` and `match.json`, and
+//! appends to `audit.log`. `seats/` and `replay/` are created empty at
+//! [`MatchCache::open`] so the layout is visible from the first match rather
+//! than appearing a stage at a time; a seat's own `drafts/` and `sealed/` are
+//! made by [`MatchCache::seat_directory`], when that seat first has state. T13
+//! and T17 fill them.
 //!
 //! # The one place the gateway touches the filesystem
 //!
@@ -208,8 +210,10 @@ impl MatchCache {
     /// Open -- and if necessary create -- the folder for one match under
     /// `data_root`.
     ///
-    /// Writes [`README_TEXT`] and a `match.json` header, and creates the seat,
-    /// draft and replay directories so the layout is visible from the start.
+    /// Writes [`README_TEXT`] and a `match.json` header, and creates `seats/`
+    /// and `replay/` so the layout is visible from the start. The per-seat
+    /// `drafts/` and `sealed/` are made by [`MatchCache::seat_directory`], when
+    /// a seat first has state.
     ///
     /// # Errors
     ///

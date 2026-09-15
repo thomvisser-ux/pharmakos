@@ -36,6 +36,22 @@
 //! 2       0       seat.0      t1      call get_status     ok
 //! 3       2       seat.1      t2      call save_notes     FORBIDDEN_SCOPE
 //! ```
+//!
+//! # No caller writes a line of this file
+//!
+//! Tab-separated and one record per line means a tab or a newline inside a field
+//! is not a formatting wrinkle: it is a forged record. A caller who could put
+//! text in the `action` column could therefore write a line saying another seat
+//! submitted a plan, and the log's whole value is that it is the record nobody
+//! can edit. Two rules keep it:
+//!
+//! * [`crate::surface::Surface`] resolves the method against the schema before
+//!   it logs, so the column holds a name from `gp.api.v1` or the fixed literal
+//!   `call <unknown>` -- never the string the client sent;
+//! * [`AuditLog::record`] passes every action through [`sanitise`] anyway, which
+//!   replaces the separators and every other control character and truncates at
+//!   [`MAX_ACTION_CHARS`]. Belt and braces, because the second caller of this
+//!   module will not have read the first rule.
 
 use crate::error::{Code, Error};
 use crate::token::{Handle, Subject};
@@ -49,6 +65,38 @@ use pharmakos_sim::math::quantity::Tick;
 /// gateway nobody is flushing cannot grow without end. [`AuditLog::dropped`]
 /// counts what fell off, so a reader is never quietly short of entries.
 pub const MAX_RETAINED: usize = 4096;
+
+/// The longest an action may be once it is in the log.
+///
+/// The longest method name in `gp.api.v1` is comfortably inside it, and an
+/// action is one of a fixed handful of shapes (`upgrade`, `call <method>`,
+/// `mint seat.0`, `revoke t2`), so this is a backstop rather than a budget: it
+/// bounds what one line of the file can cost when a caller of this module gets
+/// its action from somewhere it should not have.
+pub const MAX_ACTION_CHARS: usize = 64;
+
+/// What the log will write in a field: printable ASCII, no separators.
+///
+/// A tab, a newline or a carriage return becomes `?`, and so does anything else
+/// outside printable ASCII -- a record is one line, and a field is one column,
+/// and neither is negotiable by whoever supplied the text. Truncation is marked
+/// with a trailing `~` so a reader can tell a shortened action from a short one.
+#[must_use]
+pub fn sanitise(action: &str) -> String {
+    let mut out = String::with_capacity(action.len().min(MAX_ACTION_CHARS));
+    for (index, character) in action.chars().enumerate() {
+        if index >= MAX_ACTION_CHARS {
+            out.push('~');
+            break;
+        }
+        if character.is_ascii_graphic() || character == ' ' {
+            out.push(character);
+        } else {
+            out.push('?');
+        }
+    }
+    out
+}
 
 /// What happened.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -83,6 +131,8 @@ pub struct Entry {
     /// Which token, or `-` for the same reason.
     pub handle: Option<Handle>,
     /// What was asked: `upgrade`, `call get_status`, `mint seat.0`, `revoke t2`.
+    ///
+    /// Always [`sanitise`]d: printable ASCII, no tab, no newline, bounded.
     pub action: String,
     /// What the gateway answered.
     pub outcome: Outcome,
@@ -130,6 +180,9 @@ impl AuditLog {
     }
 
     /// Record an attempt. Returns the sequence number it was given.
+    ///
+    /// The action is [`sanitise`]d on the way in, so no caller of this module
+    /// can write a second line of the file -- see the module docs.
     pub fn record(
         &mut self,
         tick: Tick,
@@ -145,7 +198,7 @@ impl AuditLog {
             tick,
             subject,
             handle,
-            action: action.into(),
+            action: sanitise(&action.into()),
             outcome,
         });
         while self.entries.len() > MAX_RETAINED {
@@ -211,7 +264,7 @@ impl AuditLog {
 
 #[cfg(test)]
 mod tests {
-    use super::{AuditLog, MAX_RETAINED, Outcome};
+    use super::{AuditLog, MAX_ACTION_CHARS, MAX_RETAINED, Outcome};
     use crate::error::{Code, Error};
     use crate::token::{Handle, Subject};
     use pharmakos_sim::math::quantity::Tick;
@@ -272,6 +325,48 @@ mod tests {
         }
         assert_eq!(log.entries().len(), MAX_RETAINED);
         assert_eq!(log.dropped(), 5);
+    }
+
+    /// One record is one line and one field is one column, whatever text
+    /// reaches the action. A tab or a newline here is a forged record, not a
+    /// formatting wrinkle.
+    #[test]
+    fn an_action_can_never_write_a_second_line() {
+        let mut log = AuditLog::new();
+        log.record(
+            Tick::new(10),
+            Some(Subject::Seat(SeatId::new(0))),
+            Some(Handle::from_raw(1)),
+            "call x\n1\t0\tseat.1\tt2\tcall submit_plan\tok",
+            Outcome::Refused(Code::InvalidArgument),
+        );
+        log.record(
+            Tick::new(10),
+            None,
+            None,
+            "call ".to_owned() + &"a".repeat(5_000),
+            Outcome::Ok,
+        );
+        let text = log.render();
+        assert_eq!(
+            text.lines().count(),
+            3,
+            "a header and two records, however many newlines were handed in: {text}"
+        );
+        for line in text.lines() {
+            assert_eq!(
+                line.split('\t').count(),
+                6,
+                "six columns, however many tabs were handed in: {line}"
+            );
+        }
+        let truncated = log.entries().get(1).expect("the second entry");
+        assert_eq!(
+            truncated.action.chars().count(),
+            MAX_ACTION_CHARS.saturating_add(1),
+            "truncated at the cap, plus the `~` that says so"
+        );
+        assert!(truncated.action.ends_with('~'));
     }
 
     #[test]

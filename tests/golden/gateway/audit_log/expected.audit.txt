@@ -5,7 +5,7 @@ seq	tick	subject	handle	action	outcome
 2	10	seat.0	t1	call get_status	ok
 3	10	seat.0	t1	call save_notes	ok
 4	10	seat.1	t2	call save_notes	FORBIDDEN_SCOPE
-5	10	seat.0	t1	call connect	INVALID_ARGUMENT
+5	10	seat.0	t1	call <unknown>	INVALID_ARGUMENT
 6	11	seat.0	t1	call get_briefing	INTERNAL
 7	11	-	-	call get_status	UNAUTHENTICATED
 8	12	seat.0	t1	call save_notes	PHASE_CLOSED

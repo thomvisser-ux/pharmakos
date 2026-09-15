@@ -127,9 +127,11 @@ impl Listener {
     /// Start accepting, one thread per socket.
     ///
     /// The receiver yields connections until every accept thread has stopped,
-    /// which happens when its socket is closed. A peer that is somehow not
-    /// loopback is dropped before it reaches the channel: it cannot happen on a
-    /// loopback bind, and if it ever does, the gateway's answer is to hang up.
+    /// which happens when its socket is closed -- or, failing that, after
+    /// [`MAX_CONSECUTIVE_ACCEPT_ERRORS`] failures in a row with no successful
+    /// accept between them. A peer that is somehow not loopback is dropped
+    /// before it reaches the channel: it cannot happen on a loopback bind, and
+    /// if it ever does, the gateway's answer is to hang up.
     #[must_use]
     pub fn accept(self) -> Accepting {
         let (sender, receiver): (Sender<Connection>, Receiver<Connection>) = channel();
@@ -180,11 +182,25 @@ impl Accepting {
     }
 }
 
+/// How many `accept` calls in a row may fail before the loop gives up.
+///
+/// A transient failure is not a closed socket: a peer that opens a great many
+/// loopback connections can exhaust this process's descriptors or handles, and
+/// `accept` then fails with an error whose `ErrorKind` is not one a match arm
+/// can name portably. Returning on the first such error would take the listener
+/// down for the rest of the match over a condition that clears itself the moment
+/// those sockets close -- a denial of service a peer could trigger on purpose.
+/// So a failure is retried, and only a run of them without a single success is
+/// read as "this socket is gone", which is what stops a dead listener spinning.
+const MAX_CONSECUTIVE_ACCEPT_ERRORS: u32 = 128;
+
 /// Accept until the socket is closed.
 fn accept_loop(socket: &TcpListener, sender: &Sender<Connection>) {
+    let mut consecutive_errors: u32 = 0;
     loop {
         match socket.accept() {
             Ok((stream, peer)) => {
+                consecutive_errors = 0;
                 if !peer.ip().is_loopback() {
                     // Unreachable on a loopback bind. Hanging up is the only
                     // answer that cannot become a foothold.
@@ -195,8 +211,14 @@ fn accept_loop(socket: &TcpListener, sender: &Sender<Connection>) {
                     return;
                 }
             }
+            // An interruption is not a failure at all and does not count.
             Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-            Err(_) => return,
+            Err(_) => {
+                consecutive_errors = consecutive_errors.saturating_add(1);
+                if consecutive_errors >= MAX_CONSECUTIVE_ACCEPT_ERRORS {
+                    return;
+                }
+            }
         }
     }
 }
