@@ -65,6 +65,7 @@ pub mod encoding;
 pub mod knowledge;
 pub mod mapgen;
 pub mod math;
+pub mod pathing;
 pub mod rules;
 pub mod seams;
 pub mod snapshot;
@@ -79,6 +80,9 @@ pub mod research;
 
 pub use encoding::{ENCODING_VERSION, Enc, STATE_HASH_SEED, digest, hex};
 pub use mapgen::{GeneratedMap, MapError, MapFile, MapReport};
+pub use pathing::{
+    Clusters, Estimate, Fog, Node, Router, Scratch, Speed, Surface, WalkState, estimate,
+};
 pub use rules::{RULES_PATH, RulesError, RulesTable};
 pub use snapshot::{SNAPSHOT_VERSION, Snapshot, SnapshotError};
 pub use voxels::{CHUNK_EDGE, CHUNK_VOXELS, Material, Richness, VoxelEdit, VoxelStore};

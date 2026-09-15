@@ -231,6 +231,16 @@ pub enum MapError {
         /// How many units the world holds.
         units: u32,
     },
+    /// The rules table's cluster edge cannot decompose the map.
+    ///
+    /// `locomotion.hpa_cluster_voxels` has to divide the footprint and to stay
+    /// at or below [`crate::pathing::clusters::MAX_CLUSTER_EDGE`], or the HPA\*
+    /// decomposition has no shape. Caught once, here, rather than every tick —
+    /// the same reason [`MapError::Unindexable`] shares this error type.
+    Unclusterable {
+        /// What `locomotion.hpa_cluster_voxels` said.
+        cluster_voxels: i32,
+    },
     /// A map file could not be encoded or decoded.
     Codec(String),
     /// A map file could not be read or written.
@@ -277,6 +287,11 @@ impl fmt::Display for MapError {
             MapError::Unplaceable(what) => {
                 write!(f, "no legal position for {what} on this map")
             }
+            MapError::Unclusterable { cluster_voxels } => write!(
+                f,
+                "locomotion.hpa_cluster_voxels is {cluster_voxels}, which does not divide this \
+                 map's footprint into clusters the pathing graph can index"
+            ),
             MapError::Unindexable { units } => write!(
                 f,
                 "a broadphase grid for {units} units cannot be described by this rules table"

@@ -68,7 +68,10 @@
 //! | [`segment_lengths_ms`](RulesTable::segment_lengths_ms) | `match.segment_lengths_ms` |
 //! | [`map_size_voxels`](RulesTable::map_size_voxels) | `map.size_x` / `size_y` / `size_z` |
 //! | [`commander_cost_per_second`](RulesTable::commander_cost_per_second) | `commander.cost_per_second` |
+//! | [`hpa_cluster_voxels`](RulesTable::hpa_cluster_voxels) | `locomotion.hpa_cluster_voxels` |
+//! | [`fog_cost_numerator`](RulesTable::fog_cost_numerator), [`fog_cost_denominator`](RulesTable::fog_cost_denominator) | `locomotion.fog_cost_numerator` / `_denominator` |
 //! | [`unit_hp`](RulesTable::unit_hp), [`unit_draw_kw`](RulesTable::unit_draw_kw) | `units.<kind>.hp` / `.draw_kw` |
+//! | [`cost_per_second`](RulesTable::cost_per_second) | `commander.cost_per_second`, `units.<kind>.cost_per_second` |
 //!
 //! The map generator ([`crate::mapgen`]) reads a dozen more rows — the whole of
 //! `map`, `beacon`, `power`, `economy` and `units` — and reads them from
@@ -180,6 +183,15 @@ pub struct RulesTable {
     ///
     /// PLACEHOLDER: `tuning, owner, at the walking skeleton's demo` (item 90).
     commander_cost_per_second: i32,
+    /// The HPA\* cluster edge in voxels. `32` — one chunk footprint, a single
+    /// abstract level (item 58). From `locomotion.hpa_cluster_voxels`.
+    hpa_cluster_voxels: i32,
+    /// The fog multiplier's numerator. `3` (item 61). From
+    /// `locomotion.fog_cost_numerator`.
+    fog_cost_numerator: i32,
+    /// The fog multiplier's denominator. `2` (item 61). From
+    /// `locomotion.fog_cost_denominator`.
+    fog_cost_denominator: i32,
 }
 
 impl RulesTable {
@@ -291,6 +303,45 @@ impl RulesTable {
     #[must_use]
     pub const fn commander_cost_per_second(&self) -> i32 {
         self.commander_cost_per_second
+    }
+
+    /// The HPA\* cluster edge in voxels (`locomotion.hpa_cluster_voxels`).
+    ///
+    /// Item 58: 32, one chunk footprint, so a crater's dirty chunk list is its
+    /// dirty cluster list with no translation.
+    #[must_use]
+    pub const fn hpa_cluster_voxels(&self) -> i32 {
+        self.hpa_cluster_voxels
+    }
+
+    /// The fog multiplier's numerator (`locomotion.fog_cost_numerator`).
+    #[must_use]
+    pub const fn fog_cost_numerator(&self) -> i32 {
+        self.fog_cost_numerator
+    }
+
+    /// The fog multiplier's denominator (`locomotion.fog_cost_denominator`).
+    #[must_use]
+    pub const fn fog_cost_denominator(&self) -> i32 {
+        self.fog_cost_denominator
+    }
+
+    /// One kind's walking speed in cost units per second (item 90).
+    ///
+    /// The commander is not a unit kind in the schema — it has a block of its
+    /// own — so its row is `commander.cost_per_second` and every other kind's
+    /// is `units.<kind>.cost_per_second`. One accessor over both, because the
+    /// caller has a [`UnitKind`] and should not have to know which block the
+    /// number lives in.
+    ///
+    /// `None` when the `units` block or that kind's row is absent.
+    #[must_use]
+    pub fn cost_per_second(&self, kind: UnitKind) -> Option<i32> {
+        if matches!(kind, UnitKind::Commander) {
+            return Some(self.commander_cost_per_second);
+        }
+        let row = self.unit_row(kind)?;
+        i32::try_from(row.cost_per_second).ok()
     }
 
     /// One unit kind's hit points (`units.<kind>.hp`), or `None` when the
@@ -436,6 +487,18 @@ impl RulesTable {
             commander_cost_per_second: signed(
                 "commander.cost_per_second",
                 commander.cost_per_second,
+            )?,
+            hpa_cluster_voxels: signed(
+                "locomotion.hpa_cluster_voxels",
+                locomotion.hpa_cluster_voxels,
+            )?,
+            fog_cost_numerator: signed(
+                "locomotion.fog_cost_numerator",
+                locomotion.fog_cost_numerator,
+            )?,
+            fog_cost_denominator: signed(
+                "locomotion.fog_cost_denominator",
+                locomotion.fog_cost_denominator,
             )?,
         })
     }
