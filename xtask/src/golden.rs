@@ -95,6 +95,77 @@ pub(crate) struct Report {
     pub(crate) deferred: usize,
 }
 
+/// Rule 3's machine-checkable half: a text file under `tests/golden/` has LF
+/// endings and a trailing newline.
+///
+/// This exists because **nothing else in the toolchain can catch it.**
+/// `.gitattributes` sets `* text=auto eol=lf` for the repository and then
+/// exempts this tree with `tests/golden/** -text`, deliberately: a golden is
+/// byte-compared across Windows, Linux and macOS, so git must not rewrite one
+/// on checkout. The cost of that exemption is that a CRLF file committed here
+/// stays CRLF, in the one directory where bytes are the whole point, and
+/// neither git nor `reuse` nor rustfmt has an opinion about it. It is an easy
+/// mistake to make from Windows — a helper script that writes with the
+/// platform default is enough — and it surfaces as a golden that is identical
+/// on screen and unequal to the comparison.
+///
+/// Binary goldens are skipped by the only test that is always right about
+/// them: a file whose bytes are not valid UTF-8 is not a text file. A PNG is
+/// full of `\r` bytes and must keep every one.
+///
+/// READMEs are checked alongside the goldens, not exempted. They live under the
+/// same `-text` exemption, and rule 3 is about the tree.
+///
+/// Called by [`compare_tree`] and, separately, by the step *before* the
+/// "nothing to compare yet" skip — a tree whose only goldens are self-compared
+/// still has bytes, and a skip that skipped this check would be the quiet pass
+/// rule 1 is about.
+pub(crate) fn check_endings(golden_root: &Path) -> Result<(), String> {
+    let mut files: Vec<PathBuf> = Vec::new();
+    crate::walk(golden_root, &mut files)
+        .map_err(|error| format!("reading {}: {error}", golden_root.display()))?;
+
+    let mut failures: Vec<String> = Vec::new();
+    for path in &files {
+        let bytes =
+            fs::read(path).map_err(|error| format!("reading {}: {error}", path.display()))?;
+        if bytes.is_empty() || std::str::from_utf8(&bytes).is_err() {
+            continue;
+        }
+        let relative = path.strip_prefix(golden_root).unwrap_or(path);
+        if bytes.contains(&b'\r') {
+            failures.push(format!(
+                "{}: contains a carriage return. Goldens are byte-compared across Windows, Linux \
+                 and macOS, and `.gitattributes` marks tests/golden/** as `-text` so git will not \
+                 rewrite this for you — that is the point. Rewrite the file with LF endings.",
+                relative.display()
+            ));
+        }
+        if bytes.last() != Some(&b'\n') {
+            failures.push(format!(
+                "{}: no trailing newline. A golden is one record per line, so the last record \
+                 needs its ending like every other one.",
+                relative.display()
+            ));
+        }
+    }
+
+    if failures.is_empty() {
+        return Ok(());
+    }
+    let mut report = String::from("golden files are not byte-clean:\n");
+    for failure in &failures {
+        report.push_str("      - ");
+        report.push_str(failure);
+        report.push('\n');
+    }
+    report.push_str(
+        "      tests/golden/README.md rule 3. `--bless` does not fix this: it copies the fresh \
+         output over the golden, so a producer writing CRLF would write it again.",
+    );
+    Err(report)
+}
+
 /// Compares every `tests/golden/**/expected.*` with the `actual.*` beside it
 /// under `actual_root`, and checks the per-area README convention.
 ///
@@ -108,12 +179,15 @@ pub(crate) fn compare_tree(
     let mut files: Vec<PathBuf> = Vec::new();
     crate::walk(golden_root, &mut files)
         .map_err(|error| format!("reading {}: {error}", golden_root.display()))?;
+
+    check_endings(golden_root)?;
+
+    let mut failures: Vec<String> = Vec::new();
     let expected_files: Vec<PathBuf> = files
         .into_iter()
         .filter(|path| crate::file_name(path).starts_with("expected."))
         .collect();
 
-    let mut failures: Vec<String> = Vec::new();
     let mut areas: Vec<String> = Vec::new();
     let mut blessed: usize = 0;
     let mut matched: usize = 0;
@@ -273,6 +347,58 @@ mod tests {
             actual,
         )
         .expect("actual");
+    }
+
+    /// The mistake this catches was made for real while writing the pull
+    /// request that added the check: a helper script wrote three files with the
+    /// platform's default newline, and `tests/golden/** -text` in
+    /// `.gitattributes` handed them to git unchanged. Nothing else in the
+    /// toolchain said a word.
+    #[test]
+    fn a_crlf_golden_is_refused_and_bless_is_not_offered_as_the_fix() {
+        let tree = scratch("crlf");
+        put(&tree, "alpha\r\nbeta\r\n", "alpha\nbeta\n");
+        let report = compare_tree(&tree.golden, &tree.actual, false).expect_err("refused");
+        assert!(report.contains("carriage return"), "{report}");
+        assert!(report.contains("expected.txt"), "{report}");
+        assert!(report.contains("does not fix this"), "{report}");
+    }
+
+    #[test]
+    fn a_crlf_area_readme_is_refused_too() {
+        let tree = scratch("crlf-readme");
+        put(&tree, "alpha\n", "alpha\n");
+        fs::write(tree.golden.join("prose").join("README.md"), "# prose\r\n").expect("readme");
+        let report = compare_tree(&tree.golden, &tree.actual, false).expect_err("refused");
+        assert!(report.contains("carriage return"), "{report}");
+        assert!(report.contains("README.md"), "{report}");
+    }
+
+    #[test]
+    fn a_golden_with_no_trailing_newline_is_refused() {
+        let tree = scratch("no-trailing-newline");
+        put(&tree, "alpha\nbeta", "alpha\nbeta");
+        let report = compare_tree(&tree.golden, &tree.actual, false).expect_err("refused");
+        assert!(report.contains("no trailing newline"), "{report}");
+    }
+
+    /// A PNG is full of `\r` bytes — its signature carries one — and must keep
+    /// every one of them. "Not valid UTF-8" is the test that is always right
+    /// about which files these rules apply to.
+    #[test]
+    fn a_binary_golden_keeps_its_bytes() {
+        let tree = scratch("binary");
+        put(&tree, "alpha\n", "alpha\n");
+        fs::create_dir_all(tree.golden.join("vista")).expect("area");
+        fs::write(tree.golden.join("vista").join("README.md"), "# vista\n").expect("readme");
+        fs::write(
+            tree.golden.join("vista").join("expected.vista.png"),
+            [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0xfe],
+        )
+        .expect("png");
+        let report = compare_tree(&tree.golden, &tree.actual, false).expect("binary is skipped");
+        assert_eq!(report.matched, 1);
+        assert_eq!(report.deferred, 1);
     }
 
     #[test]

@@ -1069,6 +1069,10 @@ fn step_golden(ctx: &Ctx) -> Result<Outcome, String> {
             "no golden files yet (tests/golden does not exist)".to_owned(),
         ));
     }
+    // Before the skip, not after it: a tree whose only goldens belong to the
+    // steps that own them still has bytes, and rule 3 is about the tree.
+    golden::check_endings(&golden_root)?;
+
     if !golden::has_goldens(&golden_root)? {
         return Ok(Outcome::Skipped(format!(
             "the tests/golden area layout is committed but no case this step compares has an \
