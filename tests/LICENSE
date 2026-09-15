@@ -1,0 +1,33 @@
+SPDX-FileCopyrightText: 2026 Pharmakos contributors
+SPDX-License-Identifier: MIT OR Apache-2.0
+
+(That header is about THIS FILE, which is a licence pointer — repository
+metadata, like the other per-directory LICENSE files, so it carries the same
+MIT OR Apache-2.0 as they do and ../REUSE.toml lists it with them. What it says
+about the directory's contents is below.)
+
+Everything in tests/ — the committed half of the harness: per-tick hash chains,
+canonical playbooks, verifier reports, path hashes, geometry digests, feed logs
+and vista PNGs under `tests/golden/<area>/` — is licensed under
+
+  GNU General Public License, version 3 or later
+  (../LICENSES/GPL-3.0-or-later.txt)
+
+These files are produced by the game's own code and read only by it, so they
+take the game's licence, the same as crates/ and xtask/. Most of them cannot
+carry a header at all — a .txt hash chain, a .png — which is what ../REUSE.toml
+is for.
+
+ONE CARVE-OUT, for the same reason crates/proto is one: `tests/golden/proto/**`
+is canonical gp.v1 JSON and views of the schema — the same public surface as
+proto/** — and is `MIT OR Apache-2.0`, so a third party writing a playbook tool
+can use those files as the reference they are. ../REUSE.toml carries that
+carve-out as an annotation below the tests/** one, so it wins for those paths.
+
+Unless you state otherwise, any contribution you intentionally submit for
+inclusion in this directory shall be licensed as above, with no additional
+terms or conditions, and signed off under the Developer Certificate of Origin
+1.1 (../docs/DCO.txt).
+
+The repository-wide scheme is described in ../LICENSE and ../docs/LICENSING.md;
+the machine-readable manifest is ../REUSE.toml.
