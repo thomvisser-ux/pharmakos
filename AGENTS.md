@@ -282,6 +282,12 @@ field that affects behaviour but is not hashed is a latent desync, and CI will o
 two operating systems disagree. That includes the per-seat kill-credit counters (at most three per
 asset) and their largest-remainder apportionment: they are hashed state like everything else.
 
+For the chunk store there is a **fourth** place: a voxel write must *mark its chunk* so that
+`settle` refreshes the chunk's digest. Miss the mark and the bytes change while the digest does
+not — the hash is stale rather than missing, no golden moves, and nothing goes red until a replay
+disagrees. Only `set` and `crater` may reach a chunk after generation, and both mark; a new write
+path joins that pair and never bypasses it.
+
 ### 4.9 The wall is a crate boundary
 
 Floats and wall-clock time are permitted only in the walled presentation/solve layer — rendering,
@@ -296,7 +302,11 @@ per-path allow-list, so the mechanism is this and nothing else:
   header repeats the list for readers.
 - `cargo xtask clippy` pass 1 lints the whole workspace *minus* those crates with the full deny set;
   pass 2 lints those crates with `-D warnings` plus the float, cast, hash-map and clock allowances,
-  **passed on the command line**. Nothing in the source asks for the allowance.
+  **passed on the command line**. Nothing in the source asks for the allowance. The wall lifts
+  exactly the lints in `WALL_ALLOW` (`xtask/src/main.rs`) and nothing else: the panic lints
+  (`indexing_slicing`, `unwrap_used`) and the rounding lint (`integer_division`) stay denied inside a
+  walled crate too, so a walled crate still reads slices through `get` and divides through
+  `checked_div`.
 - `cargo xtask wall-guard` then fails the build if `sim`, `plan-core`, `verifier`, `operator` or
   `gateway` depends on a walled crate, transitively included. That list is `WALL_GUARDED_PACKAGES`
   in `xtask/src/main.rs` — the research guard's four crates plus the sim, which cannot join the
@@ -553,7 +563,9 @@ most of them have a reserved proto seam waiting — filling the seam early is th
 - **Don't invent rules.** If the spec does not state it, do not implement it and do not write it
   into a doc as if it were settled. Raise it, with the options and their downsides.
 - **Tuning values are data**, versioned in the rules table and stamped into the rules hash — not
-  constants sprinkled through the code.
+  constants sprinkled through the code. A tuning value whose row does not exist yet is a named
+  constant carrying a `PLACEHOLDER` that names the owner and the stage; proposing the row is part of
+  that stage, not of the task that first needed the value (the row is a `proto/**` change, §5).
 - Prose and identifiers use British spelling where the design docs do (`licence` the noun,
   `behaviour`, `armour`). Diagnostic codes and user-facing strings are English and live in one
   string table.
