@@ -89,6 +89,20 @@ named fills it.
 | `scenarios/` | Hash chains and event logs the scenario runner asserts on | T11, T15 |
 | `vista/` | The rendered screenshot, compared with a tolerance | T16 |
 
+## Licences
+
+Goldens take the game's licence, GPL-3.0-or-later, because they are records of
+what the game's own code did and are read only by it. `proto/` is the one
+carve-out: its files are canonical `gp.v1` JSON and views of the schema — the
+same public surface as `proto/**` — so REUSE.toml puts that directory in the
+permissive tier and its README carries the permissive header. `plan-core/`,
+`schema/` and `docs/` will raise the same question when they land; the
+PLACEHOLDER in REUSE.toml records it against T8, T13 and T20.
+
+Most of these formats cannot carry an SPDX header at all — a hash chain is
+`<tick>\t<hash>` per line and nothing else, and a PNG has nowhere to put one —
+so REUSE.toml covers them and only the READMEs carry headers of their own.
+
 ## What is not here
 
 Perf numbers. A figure that cannot vary across platforms must not be compared

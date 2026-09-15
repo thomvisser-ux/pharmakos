@@ -1,11 +1,22 @@
 <!--
 SPDX-FileCopyrightText: 2026 Pharmakos contributors
-SPDX-License-Identifier: GPL-3.0-or-later
+SPDX-License-Identifier: MIT OR Apache-2.0
+-->
+
+<!--
+This directory is the one golden area in the permissive tier, because its
+contents are the same public surface as `proto/**`: canonical `gp.v1` JSON and
+views of the schema, which an alternative playbook tool has to be able to read
+as the reference they are. REUSE.toml carves `tests/golden/proto/**` out of the
+`tests/**` block for exactly that reason, so this README takes the permissive
+header its directory takes rather than the GPL header the other areas take.
 -->
 
 # `proto/` — `gp.v1` canonical JSON
 
-**Filled by T1** (`crates/proto`).
+**Filled by T1** (`crates/proto`) — landed. `crates/proto/tests/proto.rs` writes
+the fresh `actual.*` files into `<target>/golden/proto/` and the `golden` step
+byte-compares them with the four `expected.*` files here.
 
 Round trips through the canonical proto3-JSON codec: a committed playbook
 decodes with **zero unknown fields**, re-encodes to bare-number durations, and
