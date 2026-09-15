@@ -21,11 +21,11 @@ So a spike in this stage is:
 
 ## The throwaway rule
 
-All spike code lives in `spikes/` at the repo root, which is **kept out of the cargo workspace** and out of `cargo xtask ci` (see `spikes/README.md`). The rule has three parts:
+All spike code lived in `spikes/` at the repo root, **kept out of the cargo workspace** and out of `cargo xtask ci`; the directory is gone from `main` and survives at the `spike-end` tag (rule 3 below). The rule has three parts:
 
 1. **No spike file is merged into the product.** Nothing under `spikes/` is moved, copied file-for-file, or `include!`d into `crates/`. When the skeleton needs the same algorithm, it is written again against the real types, with the spike open on the other monitor. This is deliberate: spike code has no lints, no error handling, no licence discipline and no tests worth keeping, and importing it would smuggle all of that into the contract layer.
 2. **What survives is written, not compiled.** Each spike produces (a) the measured numbers, recorded in the *Results* section of its own plan file in this directory; (b) one decision, recorded in `docs/design/decisions-log.md` under §2.7; (c) at most a handful of short code excerpts pasted into the plan file where the exact shape of an API or a data layout is the finding.
-3. **The directory is frozen, then deleted.** At the end of wk 3 the repo is tagged `spike-end`. After the walking skeleton's harness part 1 is green (wk 5), `spikes/` is deleted from `main`; the tag keeps it readable forever. Nothing in the shipped build, the licence manifest or the release zips ever references it.
+3. **The directory is frozen, then deleted — done.** The `spike-end` tag was cut on **2026-09-14**, once all four spikes were closed and harness part 1 was green, and `spikes/` and the four `.github/workflows/spike-*.yml` were deleted from `main` in the same harness PR that added `crates/mesher` (decisions-log §2.7 item 71). The tag keeps the code readable and checkable forever: `git worktree add ../pharmakos-spikes spike-end`. An agent re-writing the mesher, HPA\* or the tick against the real types works with that worktree open — and rule 1 holds either way, so spike code is still never copied into `crates/`. Nothing in the shipped build, the licence manifest or the release zips references it.
 
 Two consequences worth stating out loud, because they are easy to get wrong:
 
@@ -40,7 +40,7 @@ One developer directing agents; 15 working days; two parallel worktrees.
 |---|---|---|---|
 | wk 1 | **G4 determinism** (4 d) | **G1 remesh** starts (Godot + gdext + chunk store) | Install the toolchain (day 0), review G4's hash-input decision |
 | wk 2 | **G2+P3 pathing** (4 d) | **G1 remesh** finishes (5 d total) | Review G1's ArrayMesh-vs-RenderingServer decision |
-| wk 3 | **G3′ synthetic tick** (2 d) | Write-ups, results sections, decisions-log entries (2 d) | Decision memo; sign off the four decisions; cut the `spike-end` tag |
+| wk 3 | **G3′ synthetic tick** (2 d) | Write-ups, results sections, decisions-log entries (2 d) | Decision memo; sign off the four decisions; cut the `spike-end` tag — **done 2026-09-14; `spikes/` and the spike workflows deleted with it** |
 
 | Spike | Estimate | Owner-review points |
 |---|---|---|

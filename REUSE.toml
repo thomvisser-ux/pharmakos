@@ -110,24 +110,10 @@ precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 Pharmakos contributors"
 SPDX-License-Identifier = "GPL-3.0-or-later"
 
-# --- The throwaway stack spikes --------------------------------------------
-# spikes/ is out of the cargo workspace and is deleted from main once harness
-# part 1 is green (spikes/README.md, rule 4). While it exists it still has to
-# lint clean, and rule 5 puts spike code in the game tier: it prototypes game
-# crates, so it carries the licence those crates will carry.
-[[annotations]]
-path = ["spikes/**"]
-precedence = "aggregate"
-SPDX-FileCopyrightText = "2026 Pharmakos contributors"
-SPDX-License-Identifier = "GPL-3.0-or-later"
-
-# spikes/README.md is a document about the spikes, not spike code, so it keeps
-# the documentation tier. After the block above, so it wins.
-[[annotations]]
-path = ["spikes/README.md"]
-precedence = "aggregate"
-SPDX-FileCopyrightText = "2026 Pharmakos contributors"
-SPDX-License-Identifier = "MIT OR Apache-2.0"
+# The throwaway stack spikes had their own blocks here (spikes/** in the game
+# tier, spikes/README.md in the documentation tier). The directory was deleted
+# from main at the `spike-end` tag, so the blocks went with it; the tag still
+# carries the manifest that covered them. See docs/spikes/README.md rule 3.
 
 # --- Repository metadata ---------------------------------------------------
 # Licence pointers and directory placeholders. Documentation-tier, so the

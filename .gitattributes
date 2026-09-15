@@ -12,11 +12,10 @@
 # Files that are byte-compared: never touched, on any platform.
 tests/golden/** -text
 *.hashes.txt -text
-# Spike traces, which are byte-compared across operating systems in the same way and are
-# force-added by hand when a mismatch has to be documented (spikes/.gitignore,
-# docs/spikes/G4-determinism.md sections 4 and 5). Without these two patterns the blanket
-# `* text=auto eol=lf` above would normalise exactly the file whose bytes are the finding.
-spikes/**/trace*.txt -text
+# Traces that are byte-compared across operating systems in the same way and are
+# force-added by hand when a mismatch has to be documented (docs/spikes/G4-determinism.md
+# sections 4 and 5). Without this pattern the blanket `* text=auto eol=lf` above would
+# normalise exactly the file whose bytes are the finding.
 *.trace.txt -text
 *.binpb -text -diff
 *.vox -text -diff
