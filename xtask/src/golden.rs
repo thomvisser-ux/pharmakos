@@ -34,6 +34,29 @@
 //!    skeleton plans for is the vista PNG, which is compared by
 //!    [`crate::png`] with a tolerance rather than byte for byte.
 //!
+//! # The two areas this step does not compare
+//!
+//! [`SELF_COMPARED_AREAS`] names them, and it is the only place they are named.
+//! Both own a comparison of their own, and running a second one here would be
+//! wrong rather than redundant:
+//!
+//! * `determinism/` — the `determinism` step runs the sim, writes the fresh
+//!   chain to `<target>/determinism/hashes.txt` and byte-compares it there,
+//!   because it also has to validate the chain's *format* line by line and say
+//!   which tick first diverged. Re-baseline it with
+//!   `cargo xtask determinism --bless`.
+//! * `vista/` — [`crate::png`] compares the render with a tolerance, because the
+//!   two sides may be different rasterisers (spike G1 measured 1.14 % of pixels
+//!   differing at all between a Quadro and lavapipe on identical geometry), and
+//!   because the fresh render exists only on the Linux leg that produced it.
+//!   Byte equality here would be permanently red on every platform.
+//!
+//! Rule 1 is what makes the exemption necessary rather than tidy: a missing
+//! fresh output is a failure, so an area whose producer runs in a later step —
+//! or on one operating system only — must not be compared here at all. Rule 2
+//! still holds for both: each carries its README, and this step still fails an
+//! area that does not.
+//!
 //! # Areas
 //!
 //! The skeleton freezes the area list up front (plan section 5) so that later
@@ -45,12 +68,31 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// Areas whose goldens are compared by a step of their own rather than byte for
+/// byte here. Stated once; the module docs say why each is on the list.
+///
+/// Adding a name silently removes an area from this step's byte comparison, so
+/// it is reviewed like any other golden-format change (AGENTS.md section 5) and
+/// `tests/golden/README.md` names the same two.
+pub(crate) const SELF_COMPARED_AREAS: &[&str] = &["determinism", "vista"];
+
+/// True when `relative`'s first component is one of [`SELF_COMPARED_AREAS`].
+fn self_compared(relative: &Path) -> bool {
+    relative.components().next().is_some_and(|component| {
+        SELF_COMPARED_AREAS
+            .iter()
+            .any(|area| component.as_os_str() == *area)
+    })
+}
+
 /// What the comparison found.
 #[derive(Debug)]
 pub(crate) struct Report {
     pub(crate) matched: usize,
     pub(crate) blessed: usize,
     pub(crate) areas: usize,
+    /// Goldens left to the step that owns them ([`SELF_COMPARED_AREAS`]).
+    pub(crate) deferred: usize,
 }
 
 /// Compares every `tests/golden/**/expected.*` with the `actual.*` beside it
@@ -75,6 +117,7 @@ pub(crate) fn compare_tree(
     let mut areas: Vec<String> = Vec::new();
     let mut blessed: usize = 0;
     let mut matched: usize = 0;
+    let mut deferred: usize = 0;
 
     for expected_path in &expected_files {
         let relative = expected_path
@@ -98,6 +141,16 @@ pub(crate) fn compare_tree(
                     ));
                 }
             }
+        }
+
+        // `determinism/` and `vista/` are compared by the steps that produce
+        // them, and neither has produced anything by the time this step runs.
+        // Comparing here would fail rule 1 ("a missing fresh output is a
+        // failure") on a clean checkout, and in `vista/`'s case would also
+        // replace a deliberate tolerance with byte equality.
+        if self_compared(relative) {
+            deferred += 1;
+            continue;
         }
 
         let name = crate::file_name(expected_path);
@@ -153,18 +206,29 @@ pub(crate) fn compare_tree(
         matched,
         blessed,
         areas: areas.len(),
+        deferred,
     })
 }
 
-/// True when the tree holds at least one committed golden. Used by the step to
-/// tell "nothing to check yet" from "nothing matched".
+/// True when the tree holds at least one committed golden **this step compares**.
+/// Used by the step to tell "nothing to check yet" from "nothing matched".
+///
+/// Goldens in [`SELF_COMPARED_AREAS`] do not count: a tree holding only the
+/// committed hash chain and the vista PNG has nothing for this step to do, and
+/// reporting `ok` for it would be the quiet pass rule 1 exists to prevent.
 pub(crate) fn has_goldens(golden_root: &Path) -> Result<bool, String> {
     let mut files: Vec<PathBuf> = Vec::new();
     crate::walk(golden_root, &mut files)
         .map_err(|error| format!("reading {}: {error}", golden_root.display()))?;
-    Ok(files
-        .iter()
-        .any(|path| crate::file_name(path).starts_with("expected.")))
+    Ok(files.iter().any(|path| {
+        if !crate::file_name(path).starts_with("expected.") {
+            return false;
+        }
+        match path.strip_prefix(golden_root) {
+            Ok(relative) => !self_compared(relative),
+            Err(_) => false,
+        }
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -247,6 +311,76 @@ mod tests {
         .expect("expected");
         let report = compare_tree(&tree.golden, &tree.actual, false).expect_err("no fresh output");
         assert!(report.contains("no fresh output"), "{report}");
+    }
+
+    /// Writes `tests/golden/<area>/<name>` plus that area's README, and returns
+    /// the area directory. Used for the areas the step deliberately leaves to
+    /// somebody else.
+    fn put_area(tree: &Tree, area: &str, name: &str, body: &[u8]) -> PathBuf {
+        let dir = tree.golden.join(area);
+        fs::create_dir_all(&dir).expect("area dir");
+        fs::write(
+            dir.join("README.md"),
+            format!("# {area} goldens\n\nWhat a diff here means.\n"),
+        )
+        .expect("area readme");
+        fs::write(dir.join(name), body).expect("golden");
+        dir
+    }
+
+    #[test]
+    fn a_self_compared_area_is_left_to_the_step_that_owns_it() {
+        // The `determinism` step runs the sim, writes its chain to
+        // <target>/determinism/hashes.txt and compares it there. Nothing ever
+        // lands at <target>/golden/determinism/actual.hashes.txt, so comparing
+        // the committed chain here would fail rule 1 on every operating system
+        // the moment T2 commits it.
+        let tree = scratch("self-compared");
+        put(&tree, "alpha\n", "alpha\n");
+        put_area(&tree, "determinism", "expected.hashes.txt", b"0\t0000\n");
+        let report = compare_tree(&tree.golden, &tree.actual, false)
+            .expect("the determinism chain is not this step's to compare");
+        assert_eq!(report.matched, 1);
+        assert_eq!(report.deferred, 1);
+        assert_eq!(
+            report.areas, 2,
+            "the area is still counted and still needs its README"
+        );
+    }
+
+    #[test]
+    fn a_committed_vista_golden_with_no_render_beside_it_does_not_fail() {
+        // The vista is compared with a tolerance by `crate::png`, from the
+        // `screenshot` step, which runs after this one and only on Linux. A byte
+        // comparison here would be permanently red — and permanently
+        // unsatisfiable on Windows and macOS, where no render is ever produced.
+        let tree = scratch("vista");
+        put(&tree, "alpha\n", "alpha\n");
+        put_area(&tree, "vista", "expected.vista.png", b"\x89PNG\r\n\x1a\n");
+        let report = compare_tree(&tree.golden, &tree.actual, false)
+            .expect("the vista is png.rs's to compare, with a tolerance");
+        assert_eq!(report.deferred, 1);
+    }
+
+    #[test]
+    fn a_tree_of_only_self_compared_goldens_reports_nothing_to_do() {
+        let base = std::env::temp_dir()
+            .join("pharmakos-xtask-tests")
+            .join("golden")
+            .join("only-self-compared");
+        let _ = fs::remove_dir_all(&base);
+        let golden = base.join("tests").join("golden");
+        fs::create_dir_all(&golden).expect("golden dir");
+        let tree = Tree {
+            golden: golden.clone(),
+            actual: base.join("target").join("golden"),
+        };
+        put_area(&tree, "determinism", "expected.hashes.txt", b"0\t0000\n");
+        put_area(&tree, "vista", "expected.vista.png", b"\x89PNG\r\n\x1a\n");
+        assert!(
+            !has_goldens(&golden).expect("readable"),
+            "this step has nothing to compare, and must not report `ok` for work it did not do"
+        );
     }
 
     #[test]

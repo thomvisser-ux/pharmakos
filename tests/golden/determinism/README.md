@@ -25,9 +25,12 @@ by `validate_hash_file` in `xtask/src/main.rs`.
 function of (map seed, playbooks, rules hash), so nothing else moves it.
 
 * **You changed behaviour on purpose.** Say so in the pull request — which rule,
-  which tick the chain first diverges at, and why. Then `cargo xtask golden
-  --bless`. AGENTS.md §5: never re-bless to get a red build to green without
-  that explanation.
+  which tick the chain first diverges at, and why. Then `cargo xtask determinism
+  --bless`, **not** `cargo xtask golden --bless`: this chain is compared by the
+  `determinism` step, which runs the sim and writes the fresh chain to
+  `<target>/determinism/hashes.txt`, so the `golden` step leaves this area alone
+  (`SELF_COMPARED_AREAS` in `xtask/src/golden.rs`). AGENTS.md §5: never re-bless
+  to get a red build to green without that explanation.
 * **You added a field to sim state.** AGENTS.md §4.8: a new field goes into the
   state hash, the snapshot/restore round trip **and** the goldens in the same
   pull request. A field that affects behaviour and is not hashed is a latent
