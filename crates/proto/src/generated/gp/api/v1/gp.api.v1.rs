@@ -10,7 +10,7 @@
 /// budget, always run on submit) — spec section 11.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct VerifyPlan {
-    #[prost(enumeration = "verify_plan::Depth", tag = "1")]
+    #[prost(enumeration="verify_plan::Depth", tag="1")]
     pub depth: i32,
 }
 /// Nested message and enum types in `VerifyPlan`.
@@ -58,7 +58,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.VerifyPlan".into()
 /// needs (spec section 12, "Budgets").
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ReadOptions {
-    #[prost(enumeration = "read_options::Detail", tag = "1")]
+    #[prost(enumeration="read_options::Detail", tag="1")]
     pub detail: i32,
 }
 /// Nested message and enum types in `ReadOptions`.
@@ -117,12 +117,12 @@ fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.ReadOptions".into(
 /// these.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GatewayError {
-    #[prost(enumeration = "gateway_error::Code", tag = "1")]
+    #[prost(enumeration="gateway_error::Code", tag="1")]
     pub code: i32,
     /// English. Every user-facing string in v1 lives in one string table;
     /// translation is roadmap. The code is what a client branches on — codes are
     /// language-neutral, messages are not.
-    #[prost(string, tag = "2")]
+    #[prost(string, tag="2")]
     pub message: ::prost::alloc::string::String,
 }
 /// Nested message and enum types in `GatewayError`.
@@ -246,19 +246,19 @@ fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.GatewayError".into
 /// this message is the footer's SHAPE and never a field of the messages below.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Status {
-    #[prost(enumeration = "status::Phase", tag = "1")]
+    #[prost(enumeration="status::Phase", tag="1")]
     pub phase: i32,
     /// Game milliseconds left in the current phase. The Lull's timer is a host
     /// concern and the Push's is game time; both are reported here in the same
     /// unit so a client needs no arithmetic of its own.
-    #[prost(int32, tag = "2")]
+    #[prost(int32, tag="2")]
     pub phase_remaining_ms: i32,
     /// The coming segment's length, from the frozen snapshot rather than from a
     /// constant (spec section 10, "Segment end").
-    #[prost(int32, tag = "3")]
+    #[prost(int32, tag="3")]
     pub segment_length_ms: i32,
     /// 1-based. The round the match is on.
-    #[prost(uint32, tag = "4")]
+    #[prost(uint32, tag="4")]
     pub round: u32,
 }
 /// Nested message and enum types in `Status`.
@@ -319,7 +319,7 @@ const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.GetStatusRequest".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.GetStatusRequest".into() }}
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetStatusResponse {
-    #[prost(message, optional, tag = "1")]
+    #[prost(message, optional, tag="1")]
     pub status: ::core::option::Option<Status>,
 }
 impl ::prost::Name for GetStatusResponse {
@@ -330,13 +330,13 @@ fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.GetStatusResponse"
 /// is a normal result, not an error.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct WaitForRequest {
-    #[prost(enumeration = "wait_for_request::Trigger", tag = "1")]
+    #[prost(enumeration="wait_for_request::Trigger", tag="1")]
     pub trigger: i32,
     /// Game milliseconds. The gateway caps it.
-    #[prost(int32, tag = "2")]
+    #[prost(int32, tag="2")]
     pub timeout_ms: i32,
     /// Opaque, snapshot-tied. For FEED_DIGEST, where to wait from.
-    #[prost(string, tag = "3")]
+    #[prost(string, tag="3")]
     pub cursor: ::prost::alloc::string::String,
 }
 /// Nested message and enum types in `WaitForRequest`.
@@ -378,12 +378,12 @@ fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.WaitForRequest".in
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct WaitForResponse {
     /// False when the call returned because its timeout elapsed.
-    #[prost(bool, tag = "1")]
+    #[prost(bool, tag="1")]
     pub fired: bool,
-    #[prost(message, optional, tag = "2")]
+    #[prost(message, optional, tag="2")]
     pub status: ::core::option::Option<Status>,
     /// Where to wait from next.
-    #[prost(string, tag = "3")]
+    #[prost(string, tag="3")]
     pub cursor: ::prost::alloc::string::String,
 }
 impl ::prost::Name for WaitForResponse {
@@ -398,7 +398,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.WaitForResponse".i
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SaveNotesRequest {
     /// 4,000 characters. Longer is INVALID_ARGUMENT, never a silent truncation.
-    #[prost(string, tag = "1")]
+    #[prost(string, tag="1")]
     pub notes: ::prost::alloc::string::String,
 }
 impl ::prost::Name for SaveNotesRequest {
@@ -409,7 +409,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.SaveNotesRequest".
 pub struct SaveNotesResponse {
     /// Characters stored, so the editor's counter reads the gateway's number
     /// rather than counting for itself.
-    #[prost(uint32, tag = "1")]
+    #[prost(uint32, tag="1")]
     pub characters: u32,
 }
 impl ::prost::Name for SaveNotesResponse {
@@ -424,7 +424,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.SaveNotesResponse"
 /// coming segment's length (spec section 12).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetBriefingRequest {
-    #[prost(message, optional, tag = "1")]
+    #[prost(message, optional, tag="1")]
     pub read_options: ::core::option::Option<ReadOptions>,
 }
 impl ::prost::Name for GetBriefingRequest {
@@ -434,17 +434,17 @@ fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.GetBriefingRequest
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetBriefingResponse {
     /// The notebook, at the top, as spec section 12 asks.
-    #[prost(string, tag = "1")]
+    #[prost(string, tag="1")]
     pub notes: ::prost::alloc::string::String,
     /// The seat's OWN score and rank only. Live standings never carry another
     /// seat's numbers (spec section 3).
-    #[prost(message, optional, tag = "2")]
+    #[prost(message, optional, tag="2")]
     pub standing: ::core::option::Option<Standing>,
-    #[prost(int32, tag = "3")]
+    #[prost(int32, tag="3")]
     pub segment_length_ms: i32,
     /// Deterministic template prose (spec section 12, "Output": each result has
     /// structured JSON plus prose).
-    #[prost(string, tag = "4")]
+    #[prost(string, tag="4")]
     pub prose: ::prost::alloc::string::String,
 }
 impl ::prost::Name for GetBriefingResponse {
@@ -455,11 +455,11 @@ fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.GetBriefingRespons
 /// spec section 3), not the BMI band.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Standing {
-    #[prost(uint32, tag = "1")]
+    #[prost(uint32, tag="1")]
     pub rank: u32,
-    #[prost(int32, tag = "2")]
+    #[prost(int32, tag="2")]
     pub score: i32,
-    #[prost(uint32, tag = "3")]
+    #[prost(uint32, tag="3")]
     pub living_seats: u32,
 }
 impl ::prost::Name for Standing {
@@ -468,7 +468,7 @@ const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.Standing".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.Standing".into() }}
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetRecapRequest {
-    #[prost(message, optional, tag = "1")]
+    #[prost(message, optional, tag="1")]
     pub read_options: ::core::option::Option<ReadOptions>,
 }
 impl ::prost::Name for GetRecapRequest {
@@ -477,7 +477,7 @@ const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.GetRecapRequest".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.GetRecapRequest".into() }}
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetRecapResponse {
-    #[prost(string, tag = "1")]
+    #[prost(string, tag="1")]
     pub prose: ::prost::alloc::string::String,
 }
 impl ::prost::Name for GetRecapResponse {
@@ -486,10 +486,10 @@ const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.GetRecapResponse".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.GetRecapResponse".into() }}
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ListBeaconsRequest {
-    #[prost(message, optional, tag = "1")]
+    #[prost(message, optional, tag="1")]
     pub read_options: ::core::option::Option<ReadOptions>,
     /// Opaque and snapshot-tied. An expired cursor is STALE_SNAPSHOT.
-    #[prost(string, tag = "2")]
+    #[prost(string, tag="2")]
     pub cursor: ::prost::alloc::string::String,
 }
 impl ::prost::Name for ListBeaconsRequest {
@@ -498,10 +498,10 @@ const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.ListBeaconsRequest".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.ListBeaconsRequest".into() }}
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListBeaconsResponse {
-    #[prost(message, repeated, tag = "1")]
+    #[prost(message, repeated, tag="1")]
     pub beacons: ::prost::alloc::vec::Vec<BeaconSummary>,
     /// Empty when the listing is complete.
-    #[prost(string, tag = "2")]
+    #[prost(string, tag="2")]
     pub next_cursor: ::prost::alloc::string::String,
 }
 impl ::prost::Name for ListBeaconsResponse {
@@ -511,9 +511,9 @@ fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.ListBeaconsRespons
 /// One beacon as the seat knows it.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BeaconSummary {
-    #[prost(string, tag = "1")]
+    #[prost(string, tag="1")]
     pub beacon_id: ::prost::alloc::string::String,
-    #[prost(message, optional, tag = "2")]
+    #[prost(message, optional, tag="2")]
     pub at: ::core::option::Option<super::super::v1::Voxel>,
 }
 impl ::prost::Name for BeaconSummary {
@@ -522,9 +522,9 @@ const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.BeaconSummary".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.BeaconSummary".into() }}
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetBeaconRequest {
-    #[prost(string, tag = "1")]
+    #[prost(string, tag="1")]
     pub beacon_id: ::prost::alloc::string::String,
-    #[prost(message, optional, tag = "2")]
+    #[prost(message, optional, tag="2")]
     pub read_options: ::core::option::Option<ReadOptions>,
 }
 impl ::prost::Name for GetBeaconRequest {
@@ -533,9 +533,9 @@ const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.GetBeaconRequest".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.GetBeaconRequest".into() }}
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetBeaconResponse {
-    #[prost(message, optional, tag = "1")]
+    #[prost(message, optional, tag="1")]
     pub summary: ::core::option::Option<BeaconSummary>,
-    #[prost(string, tag = "2")]
+    #[prost(string, tag="2")]
     pub prose: ::prost::alloc::string::String,
 }
 impl ::prost::Name for GetBeaconResponse {
@@ -544,7 +544,7 @@ const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.GetBeaconResponse".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.GetBeaconResponse".into() }}
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetMapSummaryRequest {
-    #[prost(message, optional, tag = "1")]
+    #[prost(message, optional, tag="1")]
     pub read_options: ::core::option::Option<ReadOptions>,
 }
 impl ::prost::Name for GetMapSummaryRequest {
@@ -554,12 +554,12 @@ fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.GetMapSummaryReque
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetMapSummaryResponse {
     /// Voxels on each axis.
-    #[prost(message, optional, tag = "1")]
+    #[prost(message, optional, tag="1")]
     pub size: ::core::option::Option<super::super::v1::Voxel>,
     /// The seed the map was generated from. Part of the match, not a secret.
-    #[prost(uint32, tag = "2")]
+    #[prost(uint32, tag="2")]
     pub map_seed: u32,
-    #[prost(string, tag = "3")]
+    #[prost(string, tag="3")]
     pub prose: ::prost::alloc::string::String,
 }
 impl ::prost::Name for GetMapSummaryResponse {
@@ -571,10 +571,10 @@ fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.GetMapSummaryRespo
 /// stepping, no modelling of anybody else (spec section 11).
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetEconomyForecastRequest {
-    #[prost(message, optional, tag = "1")]
+    #[prost(message, optional, tag="1")]
     pub read_options: ::core::option::Option<ReadOptions>,
     /// Each one is answered independently against the same frozen snapshot.
-    #[prost(message, repeated, tag = "2")]
+    #[prost(message, repeated, tag="2")]
     pub what_ifs: ::prost::alloc::vec::Vec<WhatIf>,
 }
 impl ::prost::Name for GetEconomyForecastRequest {
@@ -604,7 +604,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.GetEconomyForecast
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EstimateRouteRequest {
     /// Two or more. Legs are estimated in order.
-    #[prost(message, repeated, tag = "1")]
+    #[prost(message, repeated, tag="1")]
     pub waypoints: ::prost::alloc::vec::Vec<super::super::v1::Location>,
 }
 impl ::prost::Name for EstimateRouteRequest {
@@ -615,12 +615,12 @@ fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.EstimateRouteReque
 pub struct EstimateRouteResponse {
     /// False when the connectivity oracle answers "no route" before any search.
     /// The other fields are then unset (spec: `estimate(...) -> Option<...>`).
-    #[prost(bool, tag = "1")]
+    #[prost(bool, tag="1")]
     pub reachable: bool,
     /// Whole-route travel, game milliseconds. Never ticks on the wire.
-    #[prost(int32, tag = "2")]
+    #[prost(int32, tag="2")]
     pub ms: i32,
-    #[prost(message, repeated, tag = "3")]
+    #[prost(message, repeated, tag="3")]
     pub legs: ::prost::alloc::vec::Vec<Leg>,
 }
 impl ::prost::Name for EstimateRouteResponse {
@@ -630,15 +630,15 @@ fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.EstimateRouteRespo
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Leg {
     /// Where this leg ends.
-    #[prost(message, optional, tag = "1")]
+    #[prost(message, optional, tag="1")]
     pub to: ::core::option::Option<super::super::v1::Location>,
     /// Game milliseconds.
-    #[prost(int32, tag = "2")]
+    #[prost(int32, tag="2")]
     pub ms: i32,
     /// True when the leg crosses ground the seat has not seen. Its cost was
     /// priced at 3/2 per abstract edge, and the editor draws it dashed and
     /// labels it as a bound (item 57).
-    #[prost(bool, tag = "3")]
+    #[prost(bool, tag="3")]
     pub fogged: bool,
 }
 impl ::prost::Name for Leg {
@@ -654,7 +654,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.Leg".into() }fn ty
 pub struct GetSchemaRequest {
     /// Which slice. Lower-case, matching the walkthrough's `{part:"step"}`.
     /// Empty means the whole of what the seat can use.
-    #[prost(string, tag = "1")]
+    #[prost(string, tag="1")]
     pub part: ::prost::alloc::string::String,
 }
 impl ::prost::Name for GetSchemaRequest {
@@ -664,7 +664,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.GetSchemaRequest".
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetSchemaResponse {
     /// JSON Schema, as generated text.
-    #[prost(string, tag = "1")]
+    #[prost(string, tag="1")]
     pub json_schema: ::prost::alloc::string::String,
 }
 impl ::prost::Name for GetSchemaResponse {
@@ -674,9 +674,9 @@ fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.GetSchemaResponse"
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ListTemplatesRequest {
     /// Optional filter, matching the walkthrough's `{tag:"attack"}`.
-    #[prost(string, tag = "1")]
+    #[prost(string, tag="1")]
     pub tag: ::prost::alloc::string::String,
-    #[prost(string, tag = "2")]
+    #[prost(string, tag="2")]
     pub cursor: ::prost::alloc::string::String,
 }
 impl ::prost::Name for ListTemplatesRequest {
@@ -685,9 +685,9 @@ const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.ListTemplatesRequest".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.ListTemplatesRequest".into() }}
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListTemplatesResponse {
-    #[prost(message, repeated, tag = "1")]
+    #[prost(message, repeated, tag="1")]
     pub templates: ::prost::alloc::vec::Vec<TemplateSummary>,
-    #[prost(string, tag = "2")]
+    #[prost(string, tag="2")]
     pub next_cursor: ::prost::alloc::string::String,
 }
 impl ::prost::Name for ListTemplatesResponse {
@@ -696,14 +696,14 @@ const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.ListTemplatesResponse".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.ListTemplatesResponse".into() }}
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct TemplateSummary {
-    #[prost(string, tag = "1")]
+    #[prost(string, tag="1")]
     pub template_id: ::prost::alloc::string::String,
-    #[prost(string, tag = "2")]
+    #[prost(string, tag="2")]
     pub title: ::prost::alloc::string::String,
-    #[prost(string, repeated, tag = "3")]
+    #[prost(string, repeated, tag="3")]
     pub tags: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     /// One sentence, from the template file itself.
-    #[prost(string, tag = "4")]
+    #[prost(string, tag="4")]
     pub summary: ::prost::alloc::string::String,
 }
 impl ::prost::Name for TemplateSummary {
@@ -716,9 +716,9 @@ fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.TemplateSummary".i
 
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct InstantiateTemplateRequest {
-    #[prost(string, tag = "1")]
+    #[prost(string, tag="1")]
     pub template_id: ::prost::alloc::string::String,
-    #[prost(message, repeated, tag = "2")]
+    #[prost(message, repeated, tag="2")]
     pub parameters: ::prost::alloc::vec::Vec<Parameter>,
 }
 impl ::prost::Name for InstantiateTemplateRequest {
@@ -731,9 +731,9 @@ fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.InstantiateTemplat
 /// shape does not have to carry the type.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Parameter {
-    #[prost(string, tag = "1")]
+    #[prost(string, tag="1")]
     pub name: ::prost::alloc::string::String,
-    #[prost(string, tag = "2")]
+    #[prost(string, tag="2")]
     pub value: ::prost::alloc::string::String,
 }
 impl ::prost::Name for Parameter {
@@ -743,7 +743,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.Parameter".into() 
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct InstantiateTemplateResponse {
     /// A whole playbook file, JSONC, comments included.
-    #[prost(string, tag = "1")]
+    #[prost(string, tag="1")]
     pub playbook_jsonc: ::prost::alloc::string::String,
 }
 impl ::prost::Name for InstantiateTemplateResponse {
@@ -752,10 +752,10 @@ const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.InstantiateTemplateResponse".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.InstantiateTemplateResponse".into() }}
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct VerifyPlanRequest {
-    #[prost(string, tag = "1")]
+    #[prost(string, tag="1")]
     pub playbook_jsonc: ::prost::alloc::string::String,
     /// Defaults to FULL when omitted (spec section 11).
-    #[prost(enumeration = "verify_plan::Depth", tag = "2")]
+    #[prost(enumeration="verify_plan::Depth", tag="2")]
     pub depth: i32,
 }
 impl ::prost::Name for VerifyPlanRequest {
@@ -764,7 +764,7 @@ const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.VerifyPlanRequest".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.VerifyPlanRequest".into() }}
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct VerifyPlanResponse {
-    #[prost(message, optional, tag = "1")]
+    #[prost(message, optional, tag="1")]
     pub report: ::core::option::Option<VerifyReport>,
 }
 impl ::prost::Name for VerifyPlanResponse {
@@ -777,31 +777,31 @@ fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.VerifyPlanResponse
 /// one depth.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct VerifyReport {
-    #[prost(bool, tag = "1")]
+    #[prost(bool, tag="1")]
     pub qualifies: bool,
     /// Which depth produced this report. Part of the hashed input, so it is part
     /// of the report.
-    #[prost(enumeration = "verify_plan::Depth", tag = "2")]
+    #[prost(enumeration="verify_plan::Depth", tag="2")]
     pub depth: i32,
-    #[prost(message, repeated, tag = "3")]
+    #[prost(message, repeated, tag="3")]
     pub diagnostics: ::prost::alloc::vec::Vec<Diagnostic>,
     /// xxh3-64 over the five inputs, eight bytes big-endian.
-    #[prost(bytes = "vec", tag = "4")]
+    #[prost(bytes="vec", tag="4")]
     pub report_hash: ::prost::alloc::vec::Vec<u8>,
     /// The rules table this report was produced against.
-    #[prost(bytes = "vec", tag = "5")]
+    #[prost(bytes="vec", tag="5")]
     pub rules_hash: ::prost::alloc::vec::Vec<u8>,
     /// gp.v1.Meta.fingerprint for the bytes that were checked.
-    #[prost(bytes = "vec", tag = "6")]
+    #[prost(bytes="vec", tag="6")]
     pub plan_fingerprint: ::prost::alloc::vec::Vec<u8>,
     /// Opaque build identity of the verifier. Changing it moves report_hash.
-    #[prost(string, tag = "7")]
+    #[prost(string, tag="7")]
     pub verifier_version: ::prost::alloc::string::String,
     /// Where the playbook sits against the size budget, so the editor's meter
     /// reads the verifier's number rather than counting for itself.
-    #[prost(uint32, tag = "8")]
+    #[prost(uint32, tag="8")]
     pub size_units: u32,
-    #[prost(uint32, tag = "9")]
+    #[prost(uint32, tag="9")]
     pub size_budget: u32,
 }
 impl ::prost::Name for VerifyReport {
@@ -813,26 +813,26 @@ fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.VerifyReport".into
 pub struct Diagnostic {
     /// Language-neutral. E000x, E01xx, ... W07xx, I... . Append-only from the
     /// day a code ships.
-    #[prost(string, tag = "1")]
+    #[prost(string, tag="1")]
     pub code: ::prost::alloc::string::String,
-    #[prost(enumeration = "diagnostic::Severity", tag = "2")]
+    #[prost(enumeration="diagnostic::Severity", tag="2")]
     pub severity: i32,
     /// RFC 6901 JSON Pointer into the playbook.
-    #[prost(string, tag = "3")]
+    #[prost(string, tag="3")]
     pub path: ::prost::alloc::string::String,
     /// Other places that matter to this diagnostic.
-    #[prost(string, repeated, tag = "4")]
+    #[prost(string, repeated, tag="4")]
     pub related_paths: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     /// Precise, English, from the one string table.
-    #[prost(string, tag = "5")]
+    #[prost(string, tag="5")]
     pub message: ::prost::alloc::string::String,
     /// The plain-language beginner sentence.
-    #[prost(string, tag = "6")]
+    #[prost(string, tag="6")]
     pub beginner: ::prost::alloc::string::String,
-    #[prost(message, repeated, tag = "7")]
+    #[prost(message, repeated, tag="7")]
     pub suggestions: ::prost::alloc::vec::Vec<PatchSuggestion>,
     /// Places on the map the diagnostic refers to.
-    #[prost(message, repeated, tag = "8")]
+    #[prost(message, repeated, tag="8")]
     pub map_refs: ::prost::alloc::vec::Vec<super::super::v1::Voxel>,
 }
 /// Nested message and enum types in `Diagnostic`.
@@ -878,13 +878,13 @@ fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.Diagnostic".into()
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PatchSuggestion {
     /// What the button says.
-    #[prost(string, tag = "1")]
+    #[prost(string, tag="1")]
     pub title: ::prost::alloc::string::String,
     /// RFC 6902 JSON Patch, as text, so it round-trips through the same JSONC
     /// layer the playbook does.
-    #[prost(string, tag = "2")]
+    #[prost(string, tag="2")]
     pub json_patch: ::prost::alloc::string::String,
-    #[prost(enumeration = "patch_suggestion::Applicability", tag = "3")]
+    #[prost(enumeration="patch_suggestion::Applicability", tag="3")]
     pub applicability: i32,
 }
 /// Nested message and enum types in `PatchSuggestion`.
@@ -932,7 +932,7 @@ const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.PatchSuggestion".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.PatchSuggestion".into() }}
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct RenderPlanRequest {
-    #[prost(string, tag = "1")]
+    #[prost(string, tag="1")]
     pub playbook_jsonc: ::prost::alloc::string::String,
 }
 impl ::prost::Name for RenderPlanRequest {
@@ -943,7 +943,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.RenderPlanRequest"
 pub struct RenderPlanResponse {
     /// Deterministic template prose. Reads the coming segment's length from the
     /// frozen snapshot, never from a constant.
-    #[prost(string, tag = "1")]
+    #[prost(string, tag="1")]
     pub prose: ::prost::alloc::string::String,
 }
 impl ::prost::Name for RenderPlanResponse {
@@ -952,10 +952,10 @@ const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.RenderPlanResponse".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.RenderPlanResponse".into() }}
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PatchPlanRequest {
-    #[prost(string, tag = "1")]
+    #[prost(string, tag="1")]
     pub playbook_jsonc: ::prost::alloc::string::String,
     /// RFC 6902 JSON Patch.
-    #[prost(string, tag = "2")]
+    #[prost(string, tag="2")]
     pub json_patch: ::prost::alloc::string::String,
 }
 impl ::prost::Name for PatchPlanRequest {
@@ -965,10 +965,10 @@ fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.PatchPlanRequest".
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PatchPlanResponse {
     /// The patched file, comments and formatting preserved.
-    #[prost(string, tag = "1")]
+    #[prost(string, tag="1")]
     pub playbook_jsonc: ::prost::alloc::string::String,
     /// The patch that undoes this one, for the editor's undo stack.
-    #[prost(string, tag = "2")]
+    #[prost(string, tag="2")]
     pub inverse_json_patch: ::prost::alloc::string::String,
 }
 impl ::prost::Name for PatchPlanResponse {
@@ -977,10 +977,10 @@ const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.PatchPlanResponse".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.PatchPlanResponse".into() }}
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SaveDraftRequest {
-    #[prost(string, tag = "1")]
+    #[prost(string, tag="1")]
     pub playbook_jsonc: ::prost::alloc::string::String,
     /// The author's name for it.
-    #[prost(string, tag = "2")]
+    #[prost(string, tag="2")]
     pub label: ::prost::alloc::string::String,
 }
 impl ::prost::Name for SaveDraftRequest {
@@ -989,7 +989,7 @@ const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.SaveDraftRequest".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.SaveDraftRequest".into() }}
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SaveDraftResponse {
-    #[prost(string, tag = "1")]
+    #[prost(string, tag="1")]
     pub draft_id: ::prost::alloc::string::String,
 }
 impl ::prost::Name for SaveDraftResponse {
@@ -998,7 +998,7 @@ const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.SaveDraftResponse".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.SaveDraftResponse".into() }}
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ListDraftsRequest {
-    #[prost(string, tag = "1")]
+    #[prost(string, tag="1")]
     pub cursor: ::prost::alloc::string::String,
 }
 impl ::prost::Name for ListDraftsRequest {
@@ -1007,9 +1007,9 @@ const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.ListDraftsRequest".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.ListDraftsRequest".into() }}
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListDraftsResponse {
-    #[prost(message, repeated, tag = "1")]
+    #[prost(message, repeated, tag="1")]
     pub drafts: ::prost::alloc::vec::Vec<DraftSummary>,
-    #[prost(string, tag = "2")]
+    #[prost(string, tag="2")]
     pub next_cursor: ::prost::alloc::string::String,
 }
 impl ::prost::Name for ListDraftsResponse {
@@ -1018,12 +1018,12 @@ const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.ListDraftsResponse".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.ListDraftsResponse".into() }}
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DraftSummary {
-    #[prost(string, tag = "1")]
+    #[prost(string, tag="1")]
     pub draft_id: ::prost::alloc::string::String,
-    #[prost(string, tag = "2")]
+    #[prost(string, tag="2")]
     pub label: ::prost::alloc::string::String,
     /// Which round it was saved in. A draft is bound to a match.
-    #[prost(uint32, tag = "3")]
+    #[prost(uint32, tag="3")]
     pub round: u32,
 }
 impl ::prost::Name for DraftSummary {
@@ -1041,7 +1041,7 @@ const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.GetSafePlanRequest".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.GetSafePlanRequest".into() }}
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetSafePlanResponse {
-    #[prost(string, tag = "1")]
+    #[prost(string, tag="1")]
     pub playbook_jsonc: ::prost::alloc::string::String,
 }
 impl ::prost::Name for GetSafePlanResponse {
@@ -1056,7 +1056,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.GetSafePlanRespons
 /// any number of times until the timer ends.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SubmitPlanRequest {
-    #[prost(string, tag = "1")]
+    #[prost(string, tag="1")]
     pub playbook_jsonc: ::prost::alloc::string::String,
 }
 impl ::prost::Name for SubmitPlanRequest {
@@ -1067,10 +1067,10 @@ fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.SubmitPlanRequest"
 pub struct SubmitPlanResponse {
     /// An invalid playbook is NOT a method error: this comes back with
     /// qualifies:false and `accepted` false.
-    #[prost(message, optional, tag = "1")]
+    #[prost(message, optional, tag="1")]
     pub report: ::core::option::Option<VerifyReport>,
     /// True when this submission is now the seat's sealed order.
-    #[prost(bool, tag = "2")]
+    #[prost(bool, tag="2")]
     pub accepted: bool,
 }
 impl ::prost::Name for SubmitPlanResponse {
@@ -1079,7 +1079,7 @@ const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.SubmitPlanResponse".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.SubmitPlanResponse".into() }}
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SetReadyRequest {
-    #[prost(bool, tag = "1")]
+    #[prost(bool, tag="1")]
     pub ready: bool,
 }
 impl ::prost::Name for SetReadyRequest {
@@ -1088,7 +1088,7 @@ const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.SetReadyRequest".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.SetReadyRequest".into() }}
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SetReadyResponse {
-    #[prost(message, optional, tag = "1")]
+    #[prost(message, optional, tag="1")]
     pub status: ::core::option::Option<Status>,
 }
 impl ::prost::Name for SetReadyResponse {
@@ -1105,9 +1105,9 @@ fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.SetReadyResponse".
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetSegmentFeedRequest {
     /// Opaque, snapshot-tied. Empty starts at the beginning of the segment.
-    #[prost(string, tag = "1")]
+    #[prost(string, tag="1")]
     pub cursor: ::prost::alloc::string::String,
-    #[prost(message, optional, tag = "2")]
+    #[prost(message, optional, tag="2")]
     pub read_options: ::core::option::Option<ReadOptions>,
 }
 impl ::prost::Name for GetSegmentFeedRequest {
@@ -1116,11 +1116,11 @@ const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.GetSegmentFeedRequest".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.GetSegmentFeedRequest".into() }}
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetSegmentFeedResponse {
-    #[prost(message, repeated, tag = "1")]
+    #[prost(message, repeated, tag="1")]
     pub events: ::prost::alloc::vec::Vec<Event>,
-    #[prost(message, repeated, tag = "2")]
+    #[prost(message, repeated, tag="2")]
     pub digests: ::prost::alloc::vec::Vec<Digest>,
-    #[prost(string, tag = "3")]
+    #[prost(string, tag="3")]
     pub next_cursor: ::prost::alloc::string::String,
 }
 impl ::prost::Name for GetSegmentFeedResponse {
@@ -1130,20 +1130,20 @@ fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.GetSegmentFeedResp
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Event {
     /// Game milliseconds since the start of the segment.
-    #[prost(int32, tag = "1")]
+    #[prost(int32, tag="1")]
     pub at_ms: i32,
     /// PLACEHOLDER STUB - the event-kind catalogue is T10's event bus and grows
     /// with every stage, so it is a string here rather than an enum that would
     /// have to be re-cut at S1, S2 and S4. It becomes an enum when the catalogue
     /// stops moving; until then the golden feed files are what pin it.
-    #[prost(string, tag = "2")]
+    #[prost(string, tag="2")]
     pub kind: ::prost::alloc::string::String,
     /// English, from the one string table. Engine chatter is a line of this kind
     /// and is labelled as one-way: no seat reads another seat's anything.
-    #[prost(string, tag = "3")]
+    #[prost(string, tag="3")]
     pub text: ::prost::alloc::string::String,
     /// Where it happened, when it happened somewhere.
-    #[prost(message, optional, tag = "4")]
+    #[prost(message, optional, tag="4")]
     pub at: ::core::option::Option<super::super::v1::Voxel>,
 }
 impl ::prost::Name for Event {
@@ -1153,11 +1153,11 @@ fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.Event".into() }fn 
 /// One 60-second digest of game time.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Digest {
-    #[prost(int32, tag = "1")]
+    #[prost(int32, tag="1")]
     pub from_ms: i32,
-    #[prost(int32, tag = "2")]
+    #[prost(int32, tag="2")]
     pub to_ms: i32,
-    #[prost(string, tag = "3")]
+    #[prost(string, tag="3")]
     pub text: ::prost::alloc::string::String,
 }
 impl ::prost::Name for Digest {
