@@ -45,6 +45,20 @@ cargo xtask golden --bless    # accepts the fresh outputs as the new goldens
    byte-compared across Windows, Linux and macOS. The one exception is the vista
    PNG, compared with a tolerance by `xtask/src/png.rs` rather than byte for
    byte, and it says why in its own README.
+
+   The endings half is **enforced**, and it has to be, because nothing else in
+   the toolchain can enforce it. `.gitattributes` normalises the repository with
+   `* text=auto eol=lf` and then exempts this tree with `tests/golden/** -text`,
+   deliberately: git must not rewrite a file whose bytes are the assertion. The
+   price is that a CRLF file committed here stays CRLF, in the one directory
+   where that matters most, and git, `reuse` and rustfmt all have nothing to
+   say about it. So the `golden` step checks every file under `tests/golden/`
+   that is valid UTF-8 — READMEs included — and refuses a `\r` or a missing
+   final newline. A file that is not valid UTF-8 is binary and is left alone; a
+   PNG's signature contains a `\r` and must keep it.
+
+   `--bless` is not the fix for this one: it copies the fresh output over the
+   golden, so a producer writing CRLF writes it again. Fix the producer.
 4. **Never re-bless a golden to turn a red test green** without writing down the
    behaviour change that moved it (AGENTS.md §5). `--bless` prints a reminder;
    the pull request is where it is honoured.
