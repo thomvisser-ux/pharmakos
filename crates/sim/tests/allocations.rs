@@ -12,8 +12,11 @@
 //!
 //! It is here rather than at S1 because it is far cheaper to keep than to
 //! restore: every table below fixes its count at construction, the canonical
-//! encoder reuses one buffer, and the broadphase's counting sort writes into
-//! arrays allocated once. A pull request that adds a `Vec` to a tick phase
+//! encoder reuses one buffer, the broadphase's counting sort writes into arrays
+//! allocated once, and the voxel phase's edit queue, pending set and crater
+//! scratch are all sized to the map at construction. The measured loop craters
+//! on every tick for that last reason: an empty edit queue would leave the
+//! whole voxel phase outside the assertion. A pull request that adds a `Vec` to a tick phase
 //! fails here, in itself, rather than in a budget measurement three stages
 //! later.
 //!
@@ -31,6 +34,7 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use pharmakos_sim::encoding::Enc;
+use pharmakos_sim::voxels::VoxelEdit;
 use pharmakos_sim::{RulesTable, World, WorldConfig};
 
 static ALLOCATIONS: AtomicU64 = AtomicU64::new(0);
@@ -96,13 +100,23 @@ fn a_tick_allocates_nothing() {
     // Warm up: the first tick may still grow the encoder's buffer, and a
     // capacity that is right for tick 1 is right for tick 10 000 because every
     // table's count is fixed at construction.
-    for _ in 0..50 {
+    // The warm-up craters too, so the voxel phase's own scratch — the edit
+    // queue, the store's pending and settled lists, the crater's touched list —
+    // is paid for out here and the measured loop below sees it at its steady
+    // capacity.
+    for step in 0..50 {
+        crater_at(&mut world, step);
         let _ = world.step(&mut enc);
     }
     let capacity_after_warmup = enc.encoded_len();
 
     let before = ALLOCATIONS.load(Ordering::Relaxed);
-    for _ in 0..500 {
+    for step in 0..500 {
+        // Every tick of the measured loop goes through the voxel phase with
+        // work in it: a crater is the edit S2 will file by the thousand, and an
+        // empty queue would leave `settle`, `mark` and `crater` outside the
+        // property this file exists to defend.
+        crater_at(&mut world, step + 50);
         let _ = world.step(&mut enc);
     }
     let during = ALLOCATIONS.load(Ordering::Relaxed) - before;
@@ -117,5 +131,27 @@ fn a_tick_allocates_nothing() {
         capacity_after_warmup,
         "the canonical encoding changed length between ticks, which means the encoder is not \
          fixed-stride after all"
+    );
+}
+
+/// Queue one crater on a fresh patch of ground, so the edit actually changes
+/// voxels and the whole voxel phase runs.
+///
+/// The columns walk a coprime stride across the map, so a later tick never
+/// craters air a former tick already removed; the `z` is the column's own
+/// surface, so the ball always has rock to take.
+fn crater_at(world: &mut World, step: u32) {
+    let size = world.voxels().size();
+    let width = i32::try_from(size[0]).expect("the map fits in an i32");
+    let depth = i32::try_from(size[1]).expect("the map fits in an i32");
+    let x = i32::try_from(step.wrapping_mul(37) % 4096).expect("a column index") % width;
+    let y = i32::try_from(step.wrapping_mul(53) % 4096).expect("a column index") % depth;
+    let z = world.voxels().top_solid_z(x, y).unwrap_or(0);
+    assert!(
+        world.request_voxel_edit(VoxelEdit::Crater {
+            centre: [x, y, z],
+            radius: 3,
+        }),
+        "the edit queue is full at step {step}"
     );
 }
