@@ -18,11 +18,12 @@
 //! | A seat token never holds `spectate.nofog` | [`TokenStore::mint`] |
 //! | Only a spectator token holds `spectate.nofog` | [`TokenStore::mint`] |
 //! | `plan` and `plan.submit` need a seat to plan for | [`TokenStore::mint`] |
+//! | Only an admin token holds `admin` | [`TokenStore::mint`] |
 //! | `admin` never reads another seat's private state | [`crate::surface`] |
 //! | A token is tied to one match | [`TokenStore::authenticate`] |
 //!
-//! The first three are refused at the moment of minting rather than checked at
-//! the moment of use, because a token that cannot exist cannot leak. The fourth
+//! The first four are refused at the moment of minting rather than checked at
+//! the moment of use, because a token that cannot exist cannot leak. The fifth
 //! is a property of every read path and belongs where the reads are.
 //!
 //! # Entropy
@@ -104,8 +105,22 @@ impl Subject {
 /// no `Serialize` and no accessor returning the bytes -- the only ways out are
 /// [`Token::render`], which the lobby calls once to hand the token to its owner,
 /// and a constant-time comparison.
-#[derive(Clone, PartialEq, Eq)]
+///
+/// `PartialEq` is written by hand for the same reason: the derive's `eq` on a
+/// `[u8; 32]` exits at the first differing byte, which is the timing side
+/// channel [`Token::constant_time_eq`] exists to close. `==` on a `Token` is
+/// therefore the constant-time comparison, and a later lane that reaches for the
+/// operator gets the safe one rather than the fast one.
+#[derive(Clone)]
 pub struct Token([u8; TOKEN_BYTES]);
+
+impl PartialEq for Token {
+    fn eq(&self, other: &Token) -> bool {
+        self.constant_time_eq(other)
+    }
+}
+
+impl Eq for Token {}
 
 impl std::fmt::Debug for Token {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -317,7 +332,7 @@ impl TokenStore {
     /// # Errors
     ///
     /// [`crate::error::Code::ForbiddenScope`] when the scope set breaks one of
-    /// the three invariants in the module docs, and
+    /// the four mint-time invariants in the module docs, and
     /// [`crate::error::Code::Internal`] when the operating system will not give
     /// entropy. A refused mint is not a partial mint: nothing is stored.
     pub fn mint(
@@ -416,7 +431,7 @@ impl TokenStore {
     }
 }
 
-/// The three mint-time invariants.
+/// The four mint-time invariants.
 fn check_scopes(subject: Subject, scopes: ScopeSet) -> Result<(), Error> {
     if subject.seat().is_some() {
         for banned in NEVER_ON_A_SEAT {
@@ -438,6 +453,17 @@ fn check_scopes(subject: Subject, scopes: ScopeSet) -> Result<(), Error> {
         return Err(Error::forbidden(
             "`plan` and `plan.submit` author a playbook for a seat, so only a seat token \
              may hold them",
+        ));
+    }
+
+    // `admin` is lobby and match control (spec section 12, and
+    // `crate::scopes`'s note on the two scopes that gate no method). It gates no
+    // JSON-RPC method today, so a spectator holding it could reach nothing --
+    // which is exactly why the rule belongs here, at the mint, before the day a
+    // method is gated by it and the asymmetry has become a hole.
+    if scopes.holds(Scope::Admin) && subject != Subject::Admin {
+        return Err(Error::forbidden(
+            "`admin` is lobby and match control, so only an admin token may hold it",
         ));
     }
     Ok(())
@@ -626,6 +652,32 @@ mod tests {
             )
             .expect_err("refused");
         assert_eq!(error.code, Code::ForbiddenScope);
+    }
+
+    /// `admin` is lobby and match control, and it gates no method today -- which
+    /// is why the rule is at the mint, before the day one is gated by it.
+    #[test]
+    fn only_an_admin_token_holds_admin() {
+        let mut store = store();
+        for subject in [seat(0), Subject::Spectator] {
+            let error = store
+                .mint(
+                    subject,
+                    MATCH,
+                    ScopeSet::of(&[Scope::Observe, Scope::Admin]),
+                    Tick::ZERO,
+                )
+                .expect_err("refused");
+            assert_eq!(error.code, Code::ForbiddenScope, "{subject:?}");
+        }
+        store
+            .mint(
+                Subject::Admin,
+                MATCH,
+                ScopeSet::of(&[Scope::Admin]),
+                Tick::ZERO,
+            )
+            .expect("the lobby may");
     }
 
     #[test]

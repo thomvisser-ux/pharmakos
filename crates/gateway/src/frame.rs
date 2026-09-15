@@ -324,11 +324,14 @@ impl Assembler {
                         u16::from_be_bytes(raw)
                     }
                 };
-                let reason = frame
-                    .payload
-                    .get(2..)
-                    .map(|rest| String::from_utf8_lossy(rest).into_owned())
-                    .unwrap_or_default();
+                // RFC 6455 section 5.5.1: the reason is UTF-8, and section 7.4.1
+                // gives 1007 for text that is not. Decoding it lossily would
+                // answer a protocol violation with 1000 "goodbye", and the rule
+                // reads the same for a close frame as for a text frame.
+                let reason = match frame.payload.get(2..) {
+                    Some(rest) => String::from_utf8(rest.to_vec()).map_err(|_| Error::NotUtf8)?,
+                    None => String::new(),
+                };
                 return Ok(Some(Message::Close(code, reason)));
             }
             Opcode::Text => {
@@ -516,6 +519,37 @@ mod tests {
         assert_eq!(
             assembler.accept(frame).expect_err("refused"),
             Error::NotUtf8
+        );
+    }
+
+    /// RFC 6455 section 5.5.1: the close reason is UTF-8 too, and section 7.4.1
+    /// gives 1007 for text that is not. Answering a protocol violation with
+    /// 1000 "goodbye" would be the one place the rule read differently for a
+    /// close frame than for a text frame.
+    #[test]
+    fn a_close_reason_that_is_not_utf8_is_refused() {
+        let mut assembler = Assembler::new();
+        let frame = Frame {
+            fin: true,
+            opcode: Opcode::Close,
+            payload: vec![0x03, 0xe8, 0xff, 0xfe],
+        };
+        assert_eq!(
+            assembler.accept(frame).expect_err("refused"),
+            Error::NotUtf8
+        );
+        assert_eq!(Error::NotUtf8.close_code(), 1007);
+
+        // A well formed one still reads, reason and all.
+        let mut assembler = Assembler::new();
+        let frame = Frame {
+            fin: true,
+            opcode: Opcode::Close,
+            payload: vec![0x03, 0xe8, b'b', b'y', b'e'],
+        };
+        assert_eq!(
+            assembler.accept(frame).expect("accepted"),
+            Some(Message::Close(1000, String::from("bye")))
         );
     }
 

@@ -38,6 +38,12 @@
 //! | `set_ready` | `plan.submit` | Sets the seat's ready flag |
 //! | `list_templates` | `docs` | An empty listing: the template folder is T13's |
 //!
+//! Read methods take spec section 12's `detail` budget ([`crate::detail`]), and
+//! `get_segment_feed` applies it: the parameter, its three rungs, its wire
+//! spelling and the salience rule are part of the surface T9 freezes, because a
+//! `detail` added after clients exist is a breaking change to all of them. The
+//! per-method salience order for the T13 methods is T13's, with the methods.
+//!
 //! Every other method of the schema answers
 //! [`crate::error::Code::Internal`] naming T13. That is a deliberate reading of
 //! the closed error set and it deserves its sentence: the set has no
@@ -330,7 +336,7 @@ impl Surface {
         request: &Request,
         vision: &V,
     ) -> Json {
-        let action = format!("call {}", request.method);
+        let action = call_action(&request.method);
         let (handle, subject, scopes) = match self.identify(token) {
             Ok(triple) => triple,
             Err(error) => {
@@ -577,10 +583,15 @@ impl Surface {
         };
         let filter = FogFilter::new(&self.fog, vision);
         let cursor = request.string_param("cursor")?;
+        // The detail budget is the ceiling and `limit` asks for no more than it:
+        // a client may always ask for less than its budget, and never for more
+        // (spec section 12, "Budgets"; [`crate::detail`] for the salience rule
+        // that makes the events the part a budget cuts).
+        let budget = crate::detail::events(crate::detail::of(request)?);
         let limit = request
             .integer_param("limit")?
             .and_then(|value| usize::try_from(value).ok())
-            .unwrap_or(crate::feed::MAX_PAGE_EVENTS);
+            .map_or(budget, |asked| asked.min(budget));
         let page = self.feed.page(viewer, &filter, cursor, limit)?;
 
         let events: Vec<Json> = page
@@ -640,6 +651,23 @@ impl Surface {
     }
 }
 
+/// What the audit log records for a call, resolved against the schema.
+///
+/// **The method string a client sent never reaches the log.** The log is
+/// tab-separated and one record to a line, so a method name holding a tab or a
+/// newline would be a forged record -- a seat writing a line that says another
+/// seat submitted a plan -- and a very long one would be a way to fill the
+/// private match cache from a single authenticated call. Neither is a formatting
+/// problem; both are the log failing at the one thing it is for. So an unknown
+/// method is logged as an unknown method, which is what the reader needs to
+/// know, and the name it asked for is in the refusal the caller gets back.
+fn call_action(method: &str) -> String {
+    scopes::method_from_wire(method).map_or_else(
+        || String::from("call <unknown>"),
+        |resolved| format!("call {}", scopes::method_wire_name(resolved)),
+    )
+}
+
 /// True for a scope whose methods are planning methods.
 ///
 /// Derived from the scope rather than from a list of method names, so a method
@@ -650,7 +678,8 @@ const fn planning(scope: Scope) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{Draft, Surface};
+    use super::{Draft, Event, Surface};
+    use crate::detail::Detail;
     use crate::error::Code;
     use crate::fog::{Blind, FogPolicy};
     use crate::rpc;
@@ -760,6 +789,75 @@ mod tests {
         let token = seat_token(&mut surface, 0);
         let response = surface.call(Some(&token), &request("connect", "{}"), &Blind);
         assert_eq!(code(&response), "INVALID_ARGUMENT");
+    }
+
+    /// Spec section 12's `detail` budget, applied to the one read method T9
+    /// serves. The parameter's shape is what v1.1 publishes, so it is frozen
+    /// here rather than added once clients exist ([`crate::detail`]).
+    #[test]
+    fn a_read_method_takes_a_detail_budget_and_the_digest_ignores_it() {
+        let mut surface = surface();
+        let token = seat_token(&mut surface, 0);
+        for index in 0..40_i32 {
+            surface
+                .publish(Event {
+                    at_ms: Ms::new(index.saturating_mul(100)),
+                    kind: crate::feed::Kind::new("commander_moved").expect("a kind"),
+                    text: String::from("."),
+                    audience: crate::fog::Audience::Public,
+                })
+                .expect("published");
+        }
+
+        let events_of = |response: &Json| match result(response).get("events") {
+            Some(Json::Array(events)) => events.len(),
+            _ => panic!("a feed"),
+        };
+        let digest_of = |response: &Json| match result(response).get("digests") {
+            Some(Json::Array(digests)) => digests.clone(),
+            _ => panic!("digests"),
+        };
+
+        let brief = surface.call(
+            Some(&token),
+            &request("get_segment_feed", r#"{"detail":"brief"}"#),
+            &Blind,
+        );
+        let full = surface.call(
+            Some(&token),
+            &request("get_segment_feed", r#"{"detail":"full"}"#),
+            &Blind,
+        );
+        assert_eq!(events_of(&brief), crate::detail::events(Detail::Brief));
+        assert_eq!(events_of(&full), 40, "everything there is");
+        assert_eq!(
+            digest_of(&brief),
+            digest_of(&full),
+            "the digest is the segment's: item 97's counts do not move with a budget"
+        );
+
+        // `limit` asks for less than the budget, never for more.
+        let asked = surface.call(
+            Some(&token),
+            &request("get_segment_feed", r#"{"detail":"brief","limit":4}"#),
+            &Blind,
+        );
+        assert_eq!(events_of(&asked), 4);
+        let over = surface.call(
+            Some(&token),
+            &request("get_segment_feed", r#"{"detail":"brief","limit":1000}"#),
+            &Blind,
+        );
+        assert_eq!(events_of(&over), crate::detail::events(Detail::Brief));
+
+        // And a rung that does not exist is a refusal, not a silent default: a
+        // budget the gateway ignored would be read as a complete answer.
+        let wrong = surface.call(
+            Some(&token),
+            &request("get_segment_feed", r#"{"detail":"verbose"}"#),
+            &Blind,
+        );
+        assert_eq!(code(&wrong), "INVALID_ARGUMENT");
     }
 
     #[test]

@@ -24,6 +24,20 @@
 //! while the host is paused is limited by the per-tick cap alone. That is the
 //! right trade for a local, single-user process -- the limiter is there to keep
 //! a runaway client from starving the host, not to price an API.
+//!
+//! # What it does not count, and why that is written here
+//!
+//! **A call that never authenticated is not counted.** The budget is per token
+//! and [`crate::surface::Surface::call`] identifies the caller before it admits
+//! one, deliberately: a rate-limited call should be logged against the token
+//! that made it, and "somebody went too fast" would be the least useful line in
+//! the audit log. The consequence is that a flood of bad tokens on the loopback
+//! socket is refused one by one, unmetered, each refusal costing one bounded
+//! audit entry. On a localhost-only binding that is a process on this machine
+//! attacking its own user, and the answer to it is a per-connection budget the
+//! session holds -- which needs a place to put per-connection state that T9 does
+//! not have. Written down rather than left to be rediscovered: OWNER, at
+//! hardening, with the numbers.
 
 use crate::error::Error;
 use pharmakos_sim::math::quantity::Tick;

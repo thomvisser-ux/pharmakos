@@ -40,23 +40,31 @@
 //! beginning: a client that pages through a feed it thinks is still current is
 //! the one case where returning something plausible is worse than returning an
 //! error.
+//!
+//! A cursor counts **what its viewer has been shown**, never what happened. An
+//! index over the unfiltered bus would be a number a fogged seat could subtract
+//! from its own page length to learn how many events it was not told about --
+//! including another seat's `Private` ones -- which is a fog leak by arithmetic
+//! and exactly what decisions-log item 26 is about. Two seats paging the same
+//! segment therefore see two different cursor sequences, and that is correct.
 
 use crate::error::Error;
 use crate::fog::{Audience, FogFilter, Viewer, Vision};
 use pharmakos_sim::math::quantity::Ms;
 use std::collections::BTreeMap;
 
-/// The digest cadence, in game milliseconds. Sixty seconds, from spec section
-/// 12; a constant of the design rather than a tuning value, which is why it is
-/// not a rules-table row.
-pub const DIGEST_PERIOD_MS: i32 = 60_000;
+/// The digest cadence, in game time. Sixty seconds, from spec section 12; a
+/// constant of the design rather than a tuning value, which is why it is not a
+/// rules-table row.
+pub const DIGEST_PERIOD: Ms = Ms::new(60_000);
 
-/// The most events one page of the feed carries.
+/// The most events one page of the feed carries, whatever a caller asks for.
+///
+/// The ceiling above the `detail` ladder in [`crate::detail`]: `full` is the
+/// widest budget a client can name and this is the cap a client cannot raise.
 ///
 /// PLACEHOLDER: 256 is a working number. OWNER settles it with the read-method
-/// detail budgets at hardening; the budgets themselves are spec section 12's
-/// `brief`/`standard`/`full` ladder and T13 applies them, so this is only the
-/// hard ceiling that keeps one call from returning a whole segment.
+/// detail budgets at hardening.
 pub const MAX_PAGE_EVENTS: usize = 256;
 
 /// The longest a [`Kind`] may be.
@@ -163,9 +171,16 @@ impl SnapshotId {
 /// A place in the feed, opaque to the client.
 ///
 /// The rendering is 16 hex digits of the snapshot id, 8 of the index and 8 of a
-/// check value over both. The check is not a signature and does not claim to be:
-/// the token is what authenticates a caller, and the check is here so a mangled
-/// cursor is refused as mangled rather than read as a different position.
+/// check value over both, lower case throughout. The check is not a signature
+/// and does not claim to be: the token is what authenticates a caller, and the
+/// check is here so a mangled cursor is refused as mangled rather than read as a
+/// different position.
+///
+/// The index is **how many events this viewer has already been shown**, not how
+/// many happened -- see the module docs. It follows that a cursor is a viewer's
+/// as well as a snapshot's, and handing one seat's cursor to another seat
+/// resumes at the wrong place rather than revealing anything: the position is
+/// counted again over the second seat's own visible events.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Cursor {
     snapshot: SnapshotId,
@@ -185,7 +200,7 @@ impl Cursor {
         self.snapshot
     }
 
-    /// How many events of the segment it is past.
+    /// How many of **this viewer's visible** events it is past.
     #[must_use]
     pub const fn index(self) -> u32 {
         self.index
@@ -206,7 +221,15 @@ impl Cursor {
     /// this gateway wrote, and [`crate::error::Code::StaleSnapshot`] when it is
     /// one but belongs to another snapshot.
     pub fn parse(text: &str, current: SnapshotId) -> Result<Cursor, Error> {
-        if text.len() != 32 {
+        // Exactly 32 lower-case hex digits, because that is exactly what
+        // `render` writes. `from_str_radix` would also take `FFFF` and a leading
+        // `+`, and "a cursor this gateway issued" should mean literally that
+        // rather than "something that parses to the same number".
+        if text.len() != 32
+            || !text
+                .bytes()
+                .all(|digit| matches!(digit, b'0'..=b'9' | b'a'..=b'f'))
+        {
             return Err(Error::invalid("that is not a cursor this gateway issued"));
         }
         let snapshot = text
@@ -278,9 +301,16 @@ impl Digest {
 /// One page of the feed.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Page {
-    /// The events this viewer may see, in order.
+    /// The events this viewer may see, in order, at most one budget's worth.
     pub events: Vec<Event>,
-    /// The digests covering them.
+    /// The digests covering the **whole segment** as this viewer may see it,
+    /// not merely the events on this page.
+    ///
+    /// Item 97 owes T15's `event_count_in_range` a per-kind count it can assert
+    /// on, and a count that shrank when a client asked for a smaller page would
+    /// not be assertable at all. So the page is what `limit` and the `detail`
+    /// budget cut; the digest is the segment's, and two calls with different
+    /// budgets produce the same digests.
     pub digests: Vec<Digest>,
     /// Where to read from next.
     pub next_cursor: Cursor,
@@ -361,8 +391,14 @@ impl SegmentFeed {
     /// One page of the feed as `viewer` may see it.
     ///
     /// `cursor` is `None` to start at the beginning of the segment. At most
-    /// [`MAX_PAGE_EVENTS`] events come back; the returned cursor says where the
-    /// next call resumes, whether or not this one filled the page.
+    /// `limit` events come back, and never more than [`MAX_PAGE_EVENTS`]; the
+    /// returned cursor says where the next call resumes, whether or not this one
+    /// filled the page. The digests cover the whole segment as this viewer sees
+    /// it, and do not move with the page size ([`Page::digests`]).
+    ///
+    /// The fog filter runs **before** the cursor arithmetic, not after: the
+    /// position is a count of this viewer's own visible events, so no number
+    /// that leaves the gateway is derived from an event the viewer may not see.
     ///
     /// # Errors
     ///
@@ -383,19 +419,20 @@ impl SegmentFeed {
         let start = usize::try_from(from.index()).unwrap_or(usize::MAX);
         let limit = limit.clamp(1, MAX_PAGE_EVENTS);
 
-        let mut events: Vec<Event> = Vec::new();
-        let mut index = start;
-        for event in self.events.iter().skip(start) {
-            if events.len() >= limit {
-                break;
-            }
-            index = index.saturating_add(1);
-            if filter.visible(viewer, &event.audience) {
-                events.push(event.clone());
-            }
-        }
+        let visible: Vec<&Event> = self
+            .events
+            .iter()
+            .filter(|event| filter.visible(viewer, &event.audience))
+            .collect();
 
-        let digests = digests(&events);
+        let events: Vec<Event> = visible
+            .iter()
+            .skip(start)
+            .take(limit)
+            .map(|event| (*event).clone())
+            .collect();
+        let digests = digests_of(&visible);
+        let index = start.min(visible.len()).saturating_add(events.len());
         let next = Cursor {
             snapshot: self.snapshot,
             index: u32::try_from(index).unwrap_or(u32::MAX),
@@ -416,6 +453,13 @@ impl SegmentFeed {
 /// timeline needs the gap to be there.
 #[must_use]
 pub fn digests(events: &[Event]) -> Vec<Digest> {
+    let borrowed: Vec<&Event> = events.iter().collect();
+    digests_of(&borrowed)
+}
+
+/// [`digests`] over borrowed events, which is what [`SegmentFeed::page`] has
+/// after the fog filter has run.
+fn digests_of(events: &[&Event]) -> Vec<Digest> {
     let Some(first) = events.first() else {
         return Vec::new();
     };
@@ -428,8 +472,8 @@ pub fn digests(events: &[Event]) -> Vec<Digest> {
     let mut out: Vec<Digest> = Vec::new();
     let mut window = first_window;
     while window <= last_window {
-        let from = Ms::new(window.saturating_mul(DIGEST_PERIOD_MS));
-        let to = Ms::new(window.saturating_add(1).saturating_mul(DIGEST_PERIOD_MS));
+        let from = Ms::new(window.saturating_mul(DIGEST_PERIOD.raw()));
+        let to = Ms::new(window.saturating_add(1).saturating_mul(DIGEST_PERIOD.raw()));
         let mut counts: BTreeMap<Kind, u32> = BTreeMap::new();
         for event in events {
             if event.at_ms >= from && event.at_ms < to {
@@ -452,7 +496,10 @@ pub fn digests(events: &[Event]) -> Vec<Digest> {
 
 /// Which 60-second window a time falls in.
 fn window_of(at: Ms) -> i32 {
-    at.raw().max(0).checked_div(DIGEST_PERIOD_MS).unwrap_or(0)
+    at.raw()
+        .max(0)
+        .checked_div(DIGEST_PERIOD.raw())
+        .unwrap_or(0)
 }
 
 /// The digest's deterministic template prose.
@@ -490,7 +537,7 @@ fn clock(at: Ms) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        Cursor, DIGEST_PERIOD_MS, Event, Kind, MAX_PAGE_EVENTS, SegmentFeed, SnapshotId, digests,
+        Cursor, DIGEST_PERIOD, Event, Kind, MAX_PAGE_EVENTS, SegmentFeed, SnapshotId, digests,
     };
     use crate::error::Code;
     use crate::fog::{Audience, Blind, FogFilter, FogPolicy, Viewer};
@@ -592,7 +639,7 @@ mod tests {
             "0:00-1:00: 3 events. beacon_placed 1, commander_moved 2."
         );
         let second = digests.get(1).expect("second window");
-        assert_eq!(second.from_ms, Ms::new(DIGEST_PERIOD_MS));
+        assert_eq!(second.from_ms, DIGEST_PERIOD);
         assert_eq!(second.text, "1:00-2:00: 1 event. ore_delivered 1.");
     }
 
@@ -647,6 +694,92 @@ mod tests {
             digest.total(),
             2,
             "a count of unseen events would be a leak"
+        );
+    }
+
+    /// The cursor is a count of what the viewer was shown. If it counted the
+    /// bus, a fogged seat could subtract its page length from it and learn how
+    /// many events it was not told about -- including another seat's `Private`
+    /// ones (decisions-log item 26).
+    #[test]
+    fn a_fogged_seats_cursor_does_not_count_events_it_cannot_see() {
+        let mut feed = SegmentFeed::new(snapshot());
+        feed.publish(event(0, "phase_changed", Audience::Public))
+            .expect("published");
+        for index in 0..7_i32 {
+            feed.publish(event(
+                index.saturating_add(1).saturating_mul(100),
+                "ore_delivered",
+                world(1),
+            ))
+            .expect("published");
+            feed.publish(event(
+                index.saturating_add(1).saturating_mul(100),
+                "draft_saved",
+                Audience::Private(SeatId::new(1)),
+            ))
+            .expect("published");
+        }
+
+        let policy = FogPolicy::fogged();
+        let filter = FogFilter::new(&policy, &Blind);
+        let page = feed
+            .page(Viewer::Seat(SeatId::new(0)), &filter, None, 64)
+            .expect("a page");
+        assert_eq!(
+            page.events.len(),
+            1,
+            "seat 0 sees the announcement and nothing of seat 1's"
+        );
+        assert_eq!(
+            page.next_cursor.index(),
+            1,
+            "the cursor counts the one event seat 0 was shown, not the fifteen on the bus"
+        );
+
+        // And a no-fog viewer's cursor counts its own larger view, which is the
+        // same rule rather than a second one.
+        let nofog = FogPolicy::casual();
+        let open = FogFilter::new(&nofog, &Blind);
+        let page = feed
+            .page(Viewer::Seat(SeatId::new(0)), &open, None, 64)
+            .expect("a page");
+        assert_eq!(
+            page.next_cursor.index(),
+            8,
+            "everything but seat 1's drafts"
+        );
+    }
+
+    /// Item 97's counts are what T15's `event_count_in_range` asserts on, so a
+    /// count that moved with the caller's `limit` would not be assertable.
+    #[test]
+    fn a_digest_does_not_move_with_the_page_size() {
+        let mut feed = SegmentFeed::new(snapshot());
+        for index in 0..5_i32 {
+            feed.publish(event(
+                index.saturating_mul(1_000),
+                "phase_changed",
+                Audience::Public,
+            ))
+            .expect("published");
+        }
+        let policy = FogPolicy::casual();
+        let filter = FogFilter::new(&policy, &Blind);
+        let whole = feed
+            .page(Viewer::Seat(SeatId::new(0)), &filter, None, 64)
+            .expect("a page");
+        let narrow = feed
+            .page(Viewer::Seat(SeatId::new(0)), &filter, None, 2)
+            .expect("a page");
+        assert_eq!(narrow.events.len(), 2, "the page is what a limit cuts");
+        assert_eq!(
+            narrow.digests, whole.digests,
+            "the digest is the segment's, not the page's"
+        );
+        assert_eq!(
+            narrow.digests.first().expect("one window").text,
+            "0:00-1:00: 5 events. phase_changed 5."
         );
     }
 
@@ -706,6 +839,20 @@ mod tests {
                 .expect_err("refused")
                 .code,
             Code::InvalidArgument
+        );
+        // A spelling this gateway never issues is not a cursor this gateway
+        // issued, however it would parse.
+        let issued = Cursor::start(current).render();
+        assert_eq!(
+            Cursor::parse(&issued.to_uppercase(), current)
+                .expect_err("refused")
+                .code,
+            Code::InvalidArgument,
+            "upper-case hex is not the rendering"
+        );
+        assert!(
+            Cursor::parse(&issued, current).is_ok(),
+            "and the rendering itself still reads"
         );
     }
 

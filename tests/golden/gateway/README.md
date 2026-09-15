@@ -69,6 +69,12 @@ The empty window (`1:00-2:00: nothing.`) is deliberate and load-bearing: a
 minute in which nothing happened is news, and a client rendering a timeline needs
 the gap to be there.
 
+A digest covers the **whole segment as its viewer may see it**, never one page of
+it: `get_segment_feed`'s `limit` and its `detail` budget cut the events, and the
+counts stay put. A count that moved with the caller's page size would not be a
+count `event_count_in_range` could assert on at T15, which is the whole of what
+item 97 owes.
+
 ### `audit_log/expected.audit.txt`
 
 `seq`, `tick`, `subject`, `handle`, `action`, `outcome` — one line per attempt,
@@ -90,6 +96,16 @@ Read a diff here in two directions.
 The sequence numbers order attempts inside a tick, and they never restart: the
 gateway buffers and the host flushes, and a restarted sequence would make the
 file on disk unreadable.
+
+**No caller writes a line of this file.** The `action` column holds a method
+name resolved against `gp.api.v1`, or the fixed literal `call <unknown>` for a
+name the schema does not have — never the string the client sent. The file is
+tab-separated and one record to a line, so a method name carrying a tab and a
+newline would be a *forged record*: a seat with nothing but `observe` writing a
+line that says another seat submitted a plan. `crates/gateway/src/audit.rs`
+sanitises and bounds every action on top of that. If a row here ever grows a
+column, loses one, or shows text a caller chose, that is the log failing at the
+one thing it is for, not a formatting change.
 
 ### `handshake/expected.handshake.txt`
 
