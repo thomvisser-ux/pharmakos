@@ -55,8 +55,21 @@ step summaries from logged-out viewers.
   configuration error, and the comparator reports it as one rather than as a
   difference.
 
-PLACEHOLDER: the thresholds shipped today are G1's generous gate — mean at most
-6.0/255 and at most 2 % of pixels over 32. Decisions-log item 22 recommends
-tightening them to G1's *measured* shape (mean 0.0039/255, zero pixels over 32)
-once a real vista replaces the fixture. Owner re-ratifies at T16; the numbers are
-two named constants in `xtask/src/png.rs`.
+## Who compares this file
+
+Not the `golden` step. `xtask/src/golden.rs` names `vista/` in
+`SELF_COMPARED_AREAS` and leaves it alone: the fresh render exists only on the
+Linux leg that produced it, the `golden` step runs before `screenshot`, and a
+byte comparison would replace the tolerance below with exactly the equality test
+G1 measured as permanently red. `cargo xtask screenshot` is what compares it, and
+what re-renders it.
+
+PLACEHOLDER: the thresholds shipped today are G1's *measured* shape — mean at
+most 0.004/255 (G1 measured 0.0039, rounded up to the next thousandth) and
+**zero** pixels over 32 — which is what skeleton-plan §7
+decision 22 (recommended, not yet logged) names. The spike's own
+`compare_vista.py` shipped with a gate roughly 1 500× looser (6.0/255, 2 % over
+32); at 2 % of a 1280 x 720 frame a missing chunk covering ~18 000 pixels passes,
+which is a green tick that means nothing. Owner re-ratifies both numbers at T16
+against the first real vista; they are two named constants in
+`xtask/src/png.rs`.
