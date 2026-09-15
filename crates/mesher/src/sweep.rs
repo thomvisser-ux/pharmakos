@@ -90,10 +90,20 @@ pub const FACE_SHADE_256: [u32; 6] = [
 ];
 
 /// The ambient floor, in 256ths: an unlit face is dark, not black.
+///
+/// Spike G1's own split, in integers: its shader-side ramp was `0.25 + 0.75 * (light / 15)`
+/// (`spikes/g1-remesh/src/greedy.rs`), and 0.25 of 256 is exactly 64.
+///
+/// PLACEHOLDER: art, like [`PALETTE`] and [`FACE_SHADE_256`], and not a rules-table row —
+/// `rules/rules.v1.json`'s `mesher` block names `light_max` and `light_atten` and no
+/// ambient term, so this cannot be a parameter the caller fills. Owner replaces it at S6's
+/// art polish; every line of the geometry golden moves when it does.
 const AMBIENT_256: u32 = 64;
 
 /// What the light value is worth above the ambient floor, in 256ths.
 /// `AMBIENT_256 + LIGHT_SPAN_256` is exactly 256, so a fully lit face is unattenuated.
+///
+/// G1's 0.75, and the same PLACEHOLDER as [`AMBIENT_256`]: art, owner at S6's art polish.
 const LIGHT_SPAN_256: u32 = 192;
 
 /// One channel of a quad's colour, quantised.
@@ -746,6 +756,84 @@ mod tests {
             5,
             "the +x cap is interior across the border and must not be emitted"
         );
+    }
+
+    /// The vertices of every quad whose normal is `normal`, in emission order.
+    ///
+    /// Compared by bit pattern: the normals are written from a fixed table of exact small
+    /// integers, and comparing the bits says so without asking clippy to believe a float
+    /// equality.
+    fn vertices_facing(buffers: &MeshBuffers, normal: [f32; 3]) -> Vec<[f32; 3]> {
+        let wanted = normal.map(f32::to_bits);
+        buffers
+            .normals()
+            .iter()
+            .zip(buffers.positions())
+            .filter(|(this, _)| (**this).map(f32::to_bits) == wanted)
+            .map(|(_, position)| *position)
+            .collect()
+    }
+
+    /// A chunk with two voxels on the same face, at swapped coordinates on the two free
+    /// axes, and a border solid at exactly one of the two slots.
+    ///
+    /// The point is asymmetry: the border indexing documented on [`NeighbourBorder`] —
+    /// `z + 32 * y` for a plus-or-minus-x face, `x + 32 * y` for a plus-or-minus-z one —
+    /// cannot be told from its own transpose by a test that caps a voxel at `(5, 5)`, and
+    /// the golden cannot tell either, because [`crate::ChunkBorders::gather`] fills the
+    /// slice with the inverse of the mapping this reads it back with. A caller that builds
+    /// a border by hand from the doc has only the doc.
+    fn border_case(
+        face: Face,
+        first: (usize, usize, usize),
+        second: (usize, usize, usize),
+        capped_slot: usize,
+    ) -> ChunkInput {
+        let base = chunk_with(&[first, second]);
+        let mut borders = ChunkInput::no_borders();
+        let mut materials = vec![AIR; FACE_AREA];
+        if let Some(slot) = materials.get_mut(capped_slot) {
+            *slot = 1;
+        }
+        if let Some(slot) = borders.get_mut(face.index()) {
+            *slot =
+                Some(NeighbourBorder::new(materials, vec![15; FACE_AREA]).expect("FACE_AREA long"));
+        }
+        ChunkInput::new(base.materials().to_vec(), base.light().to_vec(), borders)
+            .expect("both arrays are CHUNK_VOLUME long")
+    }
+
+    #[test]
+    fn the_x_border_index_is_z_plus_32_y() {
+        // Two voxels against the +x wall at (y, z) = (7, 5) and (5, 7); the border is solid
+        // at slot 5 + 32 * 7, which the documented `z + 32 * y` reads as (z, y) = (5, 7).
+        // So the voxel at (31, 7, 5) loses its +x face and the one at (31, 5, 7) keeps it.
+        let input = border_case(Face::PosX, (31, 7, 5), (31, 5, 7), 5 + CHUNK_EDGE * 7);
+        let meshed = mesh_chunk(&input, params()).expect("under the cap");
+        let facing = vertices_facing(&meshed, [1.0, 0.0, 0.0]);
+        assert_eq!(facing.len(), 4, "exactly one +x face survives: {facing:?}");
+        for vertex in &facing {
+            assert!(
+                (5.0..=6.0).contains(&vertex[1]) && (7.0..=8.0).contains(&vertex[2]),
+                "the surviving +x face must be the voxel at (31, 5, 7), got {vertex:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_z_border_index_is_x_plus_32_y() {
+        // The same asymmetry one axis over: a plus-or-minus-z border is `x + 32 * y`, so
+        // slot 5 + 32 * 7 is (x, y) = (5, 7) and caps the voxel at (5, 7, 31).
+        let input = border_case(Face::PosZ, (5, 7, 31), (7, 5, 31), 5 + CHUNK_EDGE * 7);
+        let meshed = mesh_chunk(&input, params()).expect("under the cap");
+        let facing = vertices_facing(&meshed, [0.0, 0.0, 1.0]);
+        assert_eq!(facing.len(), 4, "exactly one +z face survives: {facing:?}");
+        for vertex in &facing {
+            assert!(
+                (7.0..=8.0).contains(&vertex[0]) && (5.0..=6.0).contains(&vertex[1]),
+                "the surviving +z face must be the voxel at (7, 5, 31), got {vertex:?}"
+            );
+        }
     }
 
     #[test]
