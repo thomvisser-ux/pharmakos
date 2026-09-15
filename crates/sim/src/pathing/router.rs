@@ -32,10 +32,14 @@
 //! One walker in the spike was buried by its own destruction, and "no path"
 //! fired on 4.5 % of repaths. So a unit whose route the oracle refuses **parks
 //! and reports** — [`WalkState::Sealed`] — rather than asking again every tick.
-//! It tries again exactly when the graph that refused it has changed: the
-//! repair publishes the clusters it rebuilt, and a sealed unit standing in one
-//! of them, or bound for one, is re-armed. That is the difference between a
-//! state and a repath loop.
+//! It tries again exactly when the graph that refused it has changed: on a tick
+//! whose repair rebuilt the components, the oracle is asked again about every
+//! sealed unit, and one it now calls connected to its destination is re-armed.
+//! The question is the same two array reads that refused the route in the first
+//! place (item 60), and asking it of the whole graph rather than of the
+//! repaired clusters alone is what stops a unit whose moat was opened two
+//! clusters away from parking for the rest of the match. That is the difference
+//! between a state and a repath loop.
 //!
 //! # The speed accumulator (item 90)
 //!
@@ -120,7 +124,12 @@ pub struct ServeReport {
 /// Every unit's route and walk state.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Router {
-    speeds: [i32; 6],
+    /// Walking speed per unit kind, indexed by [`UnitKind::id`], which runs
+    /// `1..=6` — so the array is seven long and slot 0 is the unused id no
+    /// kind carries. Sizing it at six would drop the highest kind's row
+    /// silently and freeze that kind in place for ever, which is what
+    /// `every_unit_kind_walks_at_the_speed_its_rules_row_names` pins.
+    speeds: [i32; 7],
     state: Vec<u8>,
     accumulator: Vec<i32>,
     route_len: Vec<u32>,
@@ -151,7 +160,7 @@ impl Router {
     pub fn new(units: u32, rules: &crate::rules::RulesTable) -> Router {
         let count = usize::try_from(units).unwrap_or(0);
         let stride = usize::try_from(MAX_ROUTE_NODES).unwrap_or(0);
-        let mut speeds = [0_i32; 6];
+        let mut speeds = [0_i32; 7];
         for kind in UnitKind::ALL {
             if let Some(speed) = rules.cost_per_second(kind)
                 && let Some(slot) = speeds.get_mut(usize::from(kind.id()))
@@ -456,9 +465,19 @@ impl Router {
 
     /// Re-arm the sealed units the repair might have freed.
     ///
-    /// A sealed unit standing in a repaired cluster, or bound for one, asks
-    /// again; every other sealed unit stays parked. That is what keeps "sealed
-    /// in" from becoming the repath loop item 60 rules out.
+    /// The repair publishes the clusters it rebuilt; a non-empty list means the
+    /// components were rebuilt with them, so **the oracle is asked again about
+    /// every sealed unit**: one that is now connected to its destination asks
+    /// for a route, and one that is still cut off stays parked. That is two
+    /// array reads per sealed unit (item 60), and it is the whole property
+    /// rather than a local approximation of it — an earlier version re-armed
+    /// only a unit standing in a repaired cluster or bound for one, which left
+    /// a unit behind a moat parked for the rest of the match when the moat was
+    /// opened two clusters away.
+    ///
+    /// What keeps this from being the repath loop item 60 rules out is that it
+    /// runs only on a tick whose repair changed the graph, and only for a unit
+    /// the oracle has changed its mind about.
     pub fn rearm_sealed(
         &mut self,
         surface: &Surface,
@@ -474,14 +493,13 @@ impl Router {
         let mut unit: u32 = 0;
         while unit < self.len() {
             if self.state(unit) == WalkState::Sealed {
-                let here = node_at(surface, positions, unit).map(|node| clusters.cluster_of(node));
-                let there =
-                    node_at(surface, destinations, unit).map(|node| clusters.cluster_of(node));
-                let touched = [here, there]
-                    .into_iter()
-                    .flatten()
-                    .any(|cluster| repaired.binary_search(&cluster).is_ok());
-                if touched {
+                let here = node_at(surface, positions, unit);
+                let there = node_at(surface, destinations, unit);
+                let freed = match (here, there) {
+                    (Some(here), Some(there)) => clusters.connected(surface, here, there),
+                    _ => false,
+                };
+                if freed {
                     self.set_state(unit, WalkState::Waiting);
                     rearmed = rearmed.saturating_add(1);
                 }
@@ -686,8 +704,19 @@ impl Router {
     ///
     /// Returns `false` and changes **nothing** when the columns disagree in
     /// length, when the packed routes are not exactly as long as the lengths
-    /// say, or when one route is longer than [`MAX_ROUTE_NODES`] — which is
-    /// what a truncated or edited file looks like.
+    /// say, when one route is longer than [`MAX_ROUTE_NODES`], or when a
+    /// carried route digest is **not** the digest of the nodes beside it —
+    /// which is what a truncated or edited file looks like.
+    ///
+    /// That last check is the one that makes the claim in
+    /// [`crate::world::World::encode`]'s docs true: the route reaches the state
+    /// hash as a digest, so a file whose `route_nodes` and `unit_route_hash`
+    /// disagree would restore into a world that walks one route and hashes
+    /// another, and nothing would go red until a replay disagreed. It is the
+    /// same argument the chunk store's digests get, and it is checked here for
+    /// the same reason (item 66). [`crate::snapshot::Snapshot`] checks it first
+    /// so that the failure carries a unit number; this is the last line of
+    /// defence for any other caller.
     pub fn restore(&mut self, restored: RestoredRouter) -> bool {
         let units = restored.state.len();
         let stride = usize::try_from(MAX_ROUTE_NODES).unwrap_or(0);
@@ -708,6 +737,9 @@ impl Router {
             total = total.saturating_add(len);
         }
         if total != restored.nodes.len() {
+            return false;
+        }
+        if !route_digests_agree(&restored.route_len, &restored.route_hash, &restored.nodes) {
             return false;
         }
 
@@ -763,6 +795,39 @@ pub struct RestoredRouter {
     pub nodes: Vec<u32>,
     /// The round-robin cursor.
     pub cursor: u32,
+}
+
+/// The first unit whose carried route digest is not the digest of the packed
+/// nodes beside it, or `None` when every one of them agrees.
+///
+/// `route_len` and `route_hash` are the per-unit columns; `nodes` is the packed
+/// concatenation the lengths cut up, in unit order. A caller that has not
+/// already checked that the lengths sum to `nodes.len()` gets a mismatch on the
+/// first unit the packing runs short for, which is the right answer either way.
+#[must_use]
+pub fn first_route_digest_mismatch(
+    route_len: &[u32],
+    route_hash: &[u64],
+    nodes: &[Node],
+) -> Option<u32> {
+    let mut buffer: Vec<u8> = Vec::new();
+    let mut read: usize = 0;
+    for (unit, len) in route_len.iter().enumerate() {
+        let len = usize::try_from(*len).unwrap_or(usize::MAX);
+        let end = read.saturating_add(len);
+        let slice = nodes.get(read..end).unwrap_or(&[]);
+        let carried = route_hash.get(unit).copied().unwrap_or(0);
+        if route_digest(slice, &mut buffer) != carried {
+            return Some(u32::try_from(unit).unwrap_or(u32::MAX));
+        }
+        read = end;
+    }
+    None
+}
+
+/// Whether every carried route digest describes the nodes beside it.
+fn route_digests_agree(route_len: &[u32], route_hash: &[u64], nodes: &[Node]) -> bool {
+    first_route_digest_mismatch(route_len, route_hash, nodes).is_none()
 }
 
 /// The digest of a route: xxh3 over its node sequence, four little-endian
