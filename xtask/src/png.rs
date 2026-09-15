@@ -167,6 +167,10 @@ pub(crate) struct Diff {
 
 impl Diff {
     /// Mean absolute per-channel difference, in thousandths of a 0–255 level.
+    ///
+    /// For the *report* only. [`Diff::check`] cross-multiplies instead, because
+    /// this ratio is truncated: at the vista's own resolution two pixels wrong
+    /// by a full 255 on every channel still render as `0.000`.
     pub(crate) fn mean_thousandths(&self) -> u64 {
         let denominator = self.pixels.saturating_mul(3);
         if denominator == 0 {
@@ -176,6 +180,10 @@ impl Diff {
     }
 
     /// Share of hard differences, in parts per million.
+    ///
+    /// For the *report* only, and truncated like the mean above: at 1920×1080
+    /// one hard pixel is 1 000 000 / 2 073 600 = 0 ppm. [`Diff::check`] never
+    /// reads it, so that `MAX_HARD_PPM = 0` means the zero pixels it says.
     pub(crate) fn hard_ppm(&self) -> u64 {
         if self.pixels == 0 {
             return 0;
@@ -187,19 +195,36 @@ impl Diff {
     /// is not. The report names both statistics and what to look for, because
     /// the first thing anyone does with a red screenshot check is ask whether
     /// it is the renderer or the geometry.
+    ///
+    /// The verdict cross-multiplies rather than comparing the two rendered
+    /// ratios, which are integer divisions and therefore truncate towards a
+    /// pass. Comparing them would make `MAX_HARD_PPM = 0` mean "up to two hard
+    /// pixels at 1920×1080" instead of the none at all it is documented to
+    /// mean — a step reporting ok for an assertion it never made, which is the
+    /// failure this whole module exists to prevent.
     pub(crate) fn check(&self, max_mean_thousandths: u64, max_hard_ppm: u64) -> Result<(), String> {
-        let mean = self.mean_thousandths();
-        let hard = self.hard_ppm();
-        if mean <= max_mean_thousandths && hard <= max_hard_ppm {
+        let mean_ok = self.total.saturating_mul(1_000)
+            <= max_mean_thousandths.saturating_mul(self.pixels.saturating_mul(3));
+        let hard_ok =
+            self.hard.saturating_mul(1_000_000) <= max_hard_ppm.saturating_mul(self.pixels);
+        if mean_ok && hard_ok {
             return Ok(());
         }
+        let mean = self.mean_thousandths();
+        let hard = self.hard_ppm();
         Err(format!(
-            "the vista differs from its golden: mean {} of 255 (limit {}), {} % of pixels over \
-             {HARD_DELTA} (limit {} %), worst channel delta {}.\n      Look for cracks, missing \
-             faces or inverted winding before regenerating the golden — a rasteriser tie-break \
-             moves the mean, not the worst delta.",
+            "the vista differs from its golden: mean {} of 255 (limit {}), {} of {} pixels ({} %, \
+             limit {} %) over {HARD_DELTA}, worst channel delta {}.\n      Look for cracks, \
+             missing faces or inverted winding before regenerating the golden — a rasteriser \
+             tie-break moves the mean, not the worst delta.",
             decimal(mean, 3),
             decimal(max_mean_thousandths, 3),
+            // The counts are printed beside the shares because the shares are
+            // truncated: a single hard pixel in a 1920×1080 vista fails the
+            // gate and renders as "0.0000 % (limit 0.0000 %)", which without
+            // the counts would read as a contradiction.
+            self.hard,
+            self.pixels,
             // Parts per million rendered with four decimal places *is* the
             // percentage: 20 000 ppm renders as "2.0000".
             decimal(hard, 4),
@@ -1042,6 +1067,58 @@ mod tests {
             .check(1_000, 0)
             .expect_err("twenty hard pixels fail a zero-tolerance gate");
         assert!(report.contains("2.0000 %"), "{report}");
+    }
+
+    /// The boundary the shipped thresholds actually stand on, pinned before
+    /// T16 makes the step live.
+    ///
+    /// `hard_ppm()` is a truncating division, so at the vista's own resolution
+    /// (1920×1080 = 2 073 600 pixels) one hard pixel is 0 ppm and two are 0 ppm
+    /// as well — comparing that rendered ratio against a limit of 0 would let
+    /// two pixels wrong by a full 255 on every channel through a gate whose
+    /// documentation, here and in `tests/golden/vista/README.md`, says **zero**.
+    /// One missing face is one pixel before it is three.
+    #[test]
+    fn one_hard_pixel_fails_the_zero_tolerance_gate() {
+        let diff = Diff {
+            // VISTA_RESOLUTION, 1920 × 1080.
+            pixels: 2_073_600,
+            differing: 1,
+            hard: 1,
+            worst: 255,
+            total: 765,
+        };
+        // Both rendered shares truncate to zero: the report cannot be what the
+        // verdict is made of.
+        assert_eq!(diff.hard_ppm(), 0);
+        assert_eq!(diff.mean_thousandths(), 0);
+        let report = diff
+            .check(MAX_MEAN_THOUSANDTHS, MAX_HARD_PPM)
+            .expect_err("one pixel over 32 is news, not a rasteriser tie-break");
+        assert!(
+            report.contains("1 of 2073600 pixels"),
+            "the counts are named, because the shares both render as 0.0000 %: {report}"
+        );
+        // Two of them fail as well — the truncated comparison passed both.
+        let two = Diff {
+            pixels: 2_073_600,
+            differing: 2,
+            hard: 2,
+            worst: 255,
+            total: 1_530,
+        };
+        assert!(two.check(MAX_MEAN_THOUSANDTHS, MAX_HARD_PPM).is_err());
+        // And a clean vista at that resolution still passes.
+        let clean = Diff {
+            pixels: 2_073_600,
+            differing: 0,
+            hard: 0,
+            worst: 0,
+            total: 0,
+        };
+        clean
+            .check(MAX_MEAN_THOUSANDTHS, MAX_HARD_PPM)
+            .expect("an identical vista is within every threshold");
     }
 
     #[test]
