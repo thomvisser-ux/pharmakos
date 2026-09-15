@@ -33,7 +33,10 @@ for every case — one seat, one snapshot, one scope — written out in that fil
 Sharing the fixture is deliberate: a case's job is to isolate **one
 diagnostic**, and a per-case scope would make each report a function of two
 things that changed instead of one. A case is named after the code it isolates,
-except the two that are meant to pass:
+and a code that can be wrong in more than one shape gets more than one case —
+`E0111` has three, because an unset choice on `Fallback.posture`, on
+`Location.place` and on `BeaconRef.ref` are three different things for an author
+to have done. Two cases are meant to pass:
 
 * `expand_east` — spec section 10's worked example, canonicalised. It must
   verify clean and measure **6 size units** (decisions-log item 94's own worked
@@ -44,6 +47,29 @@ except the two that are meant to pass:
   gated" (skeleton plan T6), and wall-clock time is illegal in
   `crates/verifier`, so nothing here times anything: **T20's walled harness
   does**, against this fixture.
+
+## One `path` that is not a node pointer
+
+`gp.api.v1.Diagnostic.path` is an RFC 6901 JSON Pointer into the playbook, and
+every code here carries one — except `E0001` in its **lexical** form. When the
+text is not JSON at all there is no tree to point into, so the codec reports a
+byte offset and spells it `/byte/583`; the verifier forwards that verbatim
+rather than rewriting it to the root, because the offset is the useful answer.
+An editor branches on the shape: a first token of `byte` is an offset into the
+bytes it sent, anything else is a node pointer. `e0001_not_json` is that case.
+
+## Patch suggestions are `add`, not `replace`, wherever the member may be absent
+
+RFC 6902 section 4.3 makes a `replace` fail unless its target already exists,
+and proto3 JSON omits a field sitting at its default — so a playbook whose
+`hold` has no `ms`, whose `wait_until` has no `timeout_ms` or whose handler has
+no `cooldown_ms` has no such member for a `replace` to land on, and those are
+exactly the files the fixes are offered on. Section 4.1's `add` creates the
+member when it is absent and replaces the value when it is not, so it is right
+in both directions. `replace` survives only where the diagnostic itself proves
+the member is there (a `max_fires` of 9, a negative duration, a percent above
+100). A suggestion that flips between the two ops is a behaviour change like any
+other and the pull request says which way and why.
 
 ## Regenerating
 
