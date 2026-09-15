@@ -7,6 +7,10 @@
 //!
 //! # What lives here
 //!
+//! * **The world** — the `SoA` tables (seats, units, beacons, structures,
+//!   wrecks), the 32³ copy-on-write chunk store ([`voxels`]) and the seeded
+//!   deterministic map generator ([`mapgen`]) that fills all of them from
+//!   `(match seed, rules table, occupied seats)`.
 //! * **The determinism core** — the integer newtypes, the split seeded RNG
 //!   streams, the canonical encoding, the per-tick state hash, the
 //!   snapshot/restore round-trip, the `SoA` tables and the CSR broadphase.
@@ -59,11 +63,13 @@
 pub mod chunks;
 pub mod encoding;
 pub mod knowledge;
+pub mod mapgen;
 pub mod math;
 pub mod rules;
 pub mod seams;
 pub mod snapshot;
 pub mod tables;
+pub mod voxels;
 pub mod world;
 
 // `fork` is behind the feature at the *module* level, not just the function, so
@@ -72,8 +78,10 @@ pub mod world;
 pub mod research;
 
 pub use encoding::{ENCODING_VERSION, Enc, STATE_HASH_SEED, digest, hex};
+pub use mapgen::{GeneratedMap, MapError, MapFile, MapReport};
 pub use rules::{RULES_PATH, RulesError, RulesTable};
 pub use snapshot::{SNAPSHOT_VERSION, Snapshot, SnapshotError};
+pub use voxels::{CHUNK_EDGE, CHUNK_VOXELS, Material, Richness, VoxelEdit, VoxelStore};
 pub use world::{PHASE_ORDER, Phase, World, WorldConfig};
 
 /// The match seed the determinism harness runs on.
@@ -113,6 +121,38 @@ pub fn default_rules_path() -> Option<std::path::PathBuf> {
     None
 }
 
+/// What stopped a world being built.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum WorldError {
+    /// The rules table could not be read, or is not one the sim can use.
+    Rules(RulesError),
+    /// The rules table cannot describe a map, or a world on one.
+    Map(MapError),
+}
+
+impl std::fmt::Display for WorldError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            WorldError::Rules(error) => write!(f, "{error}"),
+            WorldError::Map(error) => write!(f, "{error}"),
+        }
+    }
+}
+
+impl std::error::Error for WorldError {}
+
+impl From<RulesError> for WorldError {
+    fn from(error: RulesError) -> WorldError {
+        WorldError::Rules(error)
+    }
+}
+
+impl From<MapError> for WorldError {
+    fn from(error: MapError) -> WorldError {
+        WorldError::Map(error)
+    }
+}
+
 /// Build the world the determinism harness and its goldens run on.
 ///
 /// One constructor, used by the binary and by every test, so a golden can never
@@ -120,14 +160,14 @@ pub fn default_rules_path() -> Option<std::path::PathBuf> {
 ///
 /// # Errors
 ///
-/// Returns [`RulesError`] when the rules table cannot be read from `path`.
-pub fn determinism_world(rules_path: &std::path::Path) -> Result<Option<World>, RulesError> {
+/// Returns [`WorldError`] when the rules table cannot be read from `path` or
+/// cannot describe a map.
+pub fn determinism_world(rules_path: &std::path::Path) -> Result<World, WorldError> {
     let rules = RulesTable::load(rules_path)?;
     Ok(World::new(&WorldConfig {
         match_seed: DETERMINISM_MATCH_SEED,
         seats: DETERMINISM_SEATS,
         units_per_seat: DETERMINISM_UNITS_PER_SEAT,
-        chunk_count: chunks::SKELETON_CHUNK_COUNT,
         rules,
-    }))
+    })?)
 }

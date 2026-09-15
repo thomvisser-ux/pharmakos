@@ -5,14 +5,27 @@
 //!
 //! [`Snapshot`] is a flat projection of [`World`] whose **fields are all
 //! fixed-width**: no `usize` or `isize` field, no pointer, no enum, and every
-//! `Option` reduced to a sentinel so the encoding has no tag byte whose layout
-//! could differ between targets.
+//! `Option` and every `bool` reduced to a sentinel or a byte, so the encoding
+//! has no tag whose layout could differ between targets.
 //!
 //! The format is **postcard 1.1.x** (`default-features = false`, `use-std`)
 //! with serde derives. Measured in G4 at 4 563 B for the toy world at tick
-//! 4 800, 0.04 ms to save and 0.24–0.32 ms to restore, byte-identical across
+//! 4 800, 0.04 ms to save and 0.24-0.32 ms to restore, byte-identical across
 //! ubuntu, windows and macOS. rkyv (7 160 B, a much heavier dependency tree)
 //! and a hand-written codec were both rejected.
+//!
+//! # The chunk store is not in the file, and that is what copy-on-write bought
+//!
+//! A map is a pure function of `(match seed, rules table, occupied seats)`, so
+//! the **pristine** chunks — the generator's own output — are regenerated on
+//! restore rather than carried. What the file holds is the list of chunks an
+//! edit has touched since generation and their 32 768 bytes each, plus the
+//! per-chunk digests exactly as the hash sees them. A match that has destroyed
+//! nothing therefore saves nothing of its 9.4 MB map; a match that has cratered
+//! forty chunks saves 1.3 MB of them. The digests are carried as well as
+//! recomputed-on-restore state deliberately: they are what the hash is over, so
+//! a restore that disagreed with them would be caught by the round-trip test
+//! rather than by a desync three operating systems later.
 //!
 //! # The one bend in the "never serialise `usize`" rule, stated at the encoder
 //!
@@ -33,17 +46,24 @@
 //! to the same check.
 
 use crate::chunks::ChunkDigests;
+use crate::mapgen::{self, MapError};
 use crate::math::fixed::{Angle, Fx};
 use crate::math::quantity::{Hp, Kw, Money, Tick};
-use crate::tables::{SeatTable, UnitTable};
-use crate::world::World;
+use crate::tables::{
+    BeaconColumns, BeaconTable, SeatTable, StructureColumns, StructureTable, UnitColumns,
+    UnitTable, WreckTable,
+};
+use crate::voxels::CHUNK_VOXELS;
+use crate::world::{RestoredTables, World};
 use serde::{Deserialize, Serialize};
 
 /// Snapshot format version. Part of the bytes, checked on restore.
 ///
-/// A bump is a contract change (AGENTS.md §5) and invalidates every committed
-/// save.
-pub const SNAPSHOT_VERSION: u32 = 1;
+/// A bump is a contract change (AGENTS.md section 5) and invalidates every
+/// committed save. **Version 2 is T5's**: it adds the unit kind column, the
+/// beacon, structure and wreck tables, and the modified-chunk half of the
+/// voxel store.
+pub const SNAPSHOT_VERSION: u32 = 2;
 
 /// A flat, fixed-width projection of the world.
 ///
@@ -54,7 +74,9 @@ pub const SNAPSHOT_VERSION: u32 = 1;
 pub struct Snapshot {
     /// [`SNAPSHOT_VERSION`] at the time of writing.
     pub version: u32,
-    /// The match seed.
+    /// The match seed, which is also the map seed
+    /// ([`crate::world::WorldConfig::match_seed`]) — so this one number is what
+    /// the pristine chunks are regenerated from.
     pub match_seed: u64,
     /// The tick the snapshot was taken at.
     pub tick: u32,
@@ -72,6 +94,8 @@ pub struct Snapshot {
     pub unit_id: Vec<u32>,
     /// The seat each unit belongs to.
     pub unit_seat: Vec<u8>,
+    /// Each unit's [`crate::tables::UnitKind::id`].
+    pub unit_kind: Vec<u8>,
     /// Three raw Q16.16 coordinates per unit: x, y, z.
     pub unit_pos: Vec<i32>,
     /// Three raw Q16.16 coordinates per unit's destination.
@@ -80,6 +104,48 @@ pub struct Snapshot {
     pub unit_heading: Vec<u16>,
     /// Hit points per unit.
     pub unit_hp: Vec<i32>,
+
+    /// Beacon ids.
+    pub beacon_id: Vec<u32>,
+    /// The seat each beacon belongs to.
+    pub beacon_seat: Vec<u8>,
+    /// Three raw Q16.16 coordinates per beacon.
+    pub beacon_pos: Vec<i32>,
+    /// Each beacon's [`crate::seams::MandateKind::id`].
+    pub beacon_mandate: Vec<u8>,
+    /// Each beacon's `program_id` seam.
+    pub beacon_program: Vec<u32>,
+    /// Hit points per beacon.
+    pub beacon_hp: Vec<i32>,
+    /// Dormancy per beacon, `0` or `1` — a byte rather than a `bool`, so the
+    /// encoding has no type whose width the format decides.
+    pub beacon_dormant: Vec<u8>,
+
+    /// Structure ids.
+    pub structure_id: Vec<u32>,
+    /// The seat each structure belongs to.
+    pub structure_seat: Vec<u8>,
+    /// Each structure's [`crate::tables::StructureKind::id`].
+    pub structure_kind: Vec<u8>,
+    /// Three raw Q16.16 coordinates per structure.
+    pub structure_pos: Vec<i32>,
+    /// Hit points per structure.
+    pub structure_hp: Vec<i32>,
+    /// Each structure's home beacon, or [`crate::tables::BeaconId::NONE`].
+    pub structure_home: Vec<u32>,
+
+    /// Wreck ids.
+    pub wreck_id: Vec<u32>,
+    /// Three raw Q16.16 coordinates per wreck.
+    pub wreck_pos: Vec<i32>,
+    /// Salvage value per wreck, in `$`.
+    pub wreck_salvage: Vec<i64>,
+
+    /// The chunks an edit has touched since generation, ascending.
+    pub modified_chunk: Vec<u32>,
+    /// Those chunks' material bytes, [`CHUNK_VOXELS`] per entry of
+    /// [`Snapshot::modified_chunk`], concatenated in the same order.
+    pub modified_chunk_bytes: Vec<u8>,
 
     /// One digest per chunk, in chunk-index order.
     pub chunk_digest: Vec<u64>,
@@ -101,6 +167,9 @@ pub enum SnapshotError {
     Encode(String),
     /// The decoded columns disagree in length: a truncated or edited file.
     Ragged(&'static str),
+    /// The map could not be regenerated from the snapshot's seed under the
+    /// receiving world's rules table.
+    Map(MapError),
     /// The restored tables describe a world the receiving world's derived
     /// indexes cannot cover — a snapshot with more units than the broadphase
     /// grid can hold. Refused rather than restored into a world whose every
@@ -123,6 +192,9 @@ impl core::fmt::Display for SnapshotError {
             SnapshotError::Ragged(table) => {
                 write!(f, "the `{table}` columns disagree in length")
             }
+            SnapshotError::Map(error) => {
+                write!(f, "regenerating the map from the snapshot's seed: {error}")
+            }
             SnapshotError::Unindexable { units } => write!(
                 f,
                 "the snapshot's {units} units cannot be indexed by a broadphase grid built from \
@@ -140,38 +212,68 @@ impl Snapshot {
     /// Derived state — the broadphase, the work counter — is deliberately
     /// absent: the grid is sized from the restored tables by
     /// [`Snapshot::restore_into`] and filled at the next tick's first phase, so
-    /// putting it in the file would be a second source of truth.
+    /// putting it in the file would be a second source of truth. The pristine
+    /// voxels are absent for the same reason one level up: the seed is the
+    /// source of truth, and the file carries only what an edit has changed.
     #[must_use]
     pub fn capture(world: &World) -> Snapshot {
         let units = world.units();
         let seats = world.seats();
-        let mut snapshot = Snapshot {
+        let beacons = world.beacons();
+        let structures = world.structures();
+        let wrecks = world.wrecks();
+        let voxels = world.voxels();
+
+        let modified_chunk = voxels.modified_indices();
+        let mut modified_chunk_bytes: Vec<u8> =
+            Vec::with_capacity(modified_chunk.len().saturating_mul(CHUNK_VOXELS));
+        for chunk in &modified_chunk {
+            if let Some(bytes) = voxels.chunk_bytes(*chunk) {
+                modified_chunk_bytes.extend_from_slice(bytes.as_slice());
+            }
+        }
+
+        Snapshot {
             version: SNAPSHOT_VERSION,
             match_seed: world.match_seed(),
             tick: world.tick().raw(),
+
             seat_id: seats.seats().to_vec(),
             seat_treasury: seats.treasuries().iter().map(|m| m.raw()).collect(),
             seat_supply: seats.supplies().iter().map(|k| k.raw()).collect(),
             seat_draw: seats.draws().iter().map(|k| k.raw()).collect(),
+
             unit_id: units.ids().to_vec(),
             unit_seat: units.seats().to_vec(),
-            unit_pos: Vec::with_capacity(units.positions().len().saturating_mul(3)),
-            unit_dest: Vec::with_capacity(units.destinations().len().saturating_mul(3)),
+            unit_kind: units.kinds().to_vec(),
+            unit_pos: axes_from_points(units.positions()),
+            unit_dest: axes_from_points(units.destinations()),
             unit_heading: units.headings().iter().map(|a| a.raw()).collect(),
             unit_hp: units.hit_points().iter().map(|h| h.raw()).collect(),
+
+            beacon_id: beacons.ids().to_vec(),
+            beacon_seat: beacons.seats().to_vec(),
+            beacon_pos: axes_from_points(beacons.positions()),
+            beacon_mandate: beacons.mandates().to_vec(),
+            beacon_program: beacons.programs().to_vec(),
+            beacon_hp: beacons.hit_points().iter().map(|h| h.raw()).collect(),
+            beacon_dormant: beacons.dormant().iter().map(|d| u8::from(*d)).collect(),
+
+            structure_id: structures.ids().to_vec(),
+            structure_seat: structures.seats().to_vec(),
+            structure_kind: structures.kinds().to_vec(),
+            structure_pos: axes_from_points(structures.positions()),
+            structure_hp: structures.hit_points().iter().map(|h| h.raw()).collect(),
+            structure_home: structures.homes().to_vec(),
+
+            wreck_id: wrecks.ids().to_vec(),
+            wreck_pos: axes_from_points(wrecks.positions()),
+            wreck_salvage: wrecks.salvages().iter().map(|m| m.raw()).collect(),
+
+            modified_chunk,
+            modified_chunk_bytes,
             chunk_digest: world.chunks().as_slice().to_vec(),
-        };
-        for point in units.positions() {
-            for axis in point {
-                snapshot.unit_pos.push(axis.raw());
-            }
         }
-        for point in units.destinations() {
-            for axis in point {
-                snapshot.unit_dest.push(axis.raw());
-            }
-        }
-        snapshot
     }
 
     /// Encode to postcard bytes.
@@ -210,14 +312,20 @@ impl Snapshot {
     /// **resized to the restored tables** before anything is written, because a
     /// snapshot may hold more units than the receiving world was built for.
     ///
+    /// The map is regenerated from [`Snapshot::match_seed`] under the receiving
+    /// world's rules and the snapshot's own seat count, and the modified chunks
+    /// are then written over it.
+    ///
     /// # Errors
     ///
     /// Returns [`SnapshotError::Ragged`] when the columns disagree in length,
-    /// or [`SnapshotError::Unindexable`] when the receiving world's rules table
+    /// [`SnapshotError::Map`] when the map cannot be regenerated, or
+    /// [`SnapshotError::Unindexable`] when the receiving world's rules table
     /// cannot describe a grid for the restored unit count. Either way the world
     /// is left exactly as it was.
     pub fn restore_into(&self, world: &mut World) -> Result<(), SnapshotError> {
-        let mut seats = SeatTable::with_capacity(u32::try_from(self.seat_id.len()).unwrap_or(0));
+        let seat_count = u32::try_from(self.seat_id.len()).unwrap_or(0);
+        let mut seats = SeatTable::with_capacity(seat_count);
         if !seats.restore(
             self.seat_id.clone(),
             self.seat_treasury.iter().copied().map(Money::new).collect(),
@@ -227,35 +335,110 @@ impl Snapshot {
             return Err(SnapshotError::Ragged("seat"));
         }
 
-        let positions =
-            points_from_axes(&self.unit_pos).ok_or(SnapshotError::Ragged("unit_pos"))?;
-        let destinations =
-            points_from_axes(&self.unit_dest).ok_or(SnapshotError::Ragged("unit_dest"))?;
         let mut units = UnitTable::with_capacity(u32::try_from(self.unit_id.len()).unwrap_or(0));
-        if !units.restore(
-            self.unit_id.clone(),
-            self.unit_seat.clone(),
-            positions,
-            destinations,
-            self.unit_heading
+        if !units.restore(UnitColumns {
+            id: self.unit_id.clone(),
+            seat: self.unit_seat.clone(),
+            kind: self.unit_kind.clone(),
+            pos: points_from_axes(&self.unit_pos).ok_or(SnapshotError::Ragged("unit_pos"))?,
+            dest: points_from_axes(&self.unit_dest).ok_or(SnapshotError::Ragged("unit_dest"))?,
+            heading: self
+                .unit_heading
                 .iter()
                 .copied()
                 .map(Angle::from_raw)
                 .collect(),
-            self.unit_hp.iter().copied().map(Hp::new).collect(),
-        ) {
+            hp: self.unit_hp.iter().copied().map(Hp::new).collect(),
+        }) {
             return Err(SnapshotError::Ragged("unit"));
+        }
+
+        let mut beacons =
+            BeaconTable::with_capacity(u32::try_from(self.beacon_id.len()).unwrap_or(0));
+        if !beacons.restore(BeaconColumns {
+            id: self.beacon_id.clone(),
+            seat: self.beacon_seat.clone(),
+            pos: points_from_axes(&self.beacon_pos).ok_or(SnapshotError::Ragged("beacon_pos"))?,
+            mandate: self.beacon_mandate.clone(),
+            program: self.beacon_program.clone(),
+            hp: self.beacon_hp.iter().copied().map(Hp::new).collect(),
+            dormant: self.beacon_dormant.iter().map(|d| *d != 0).collect(),
+        }) {
+            return Err(SnapshotError::Ragged("beacon"));
+        }
+
+        let mut structures =
+            StructureTable::with_capacity(u32::try_from(self.structure_id.len()).unwrap_or(0));
+        if !structures.restore(StructureColumns {
+            id: self.structure_id.clone(),
+            seat: self.structure_seat.clone(),
+            kind: self.structure_kind.clone(),
+            pos: points_from_axes(&self.structure_pos)
+                .ok_or(SnapshotError::Ragged("structure_pos"))?,
+            hp: self.structure_hp.iter().copied().map(Hp::new).collect(),
+            home: self.structure_home.clone(),
+        }) {
+            return Err(SnapshotError::Ragged("structure"));
+        }
+
+        let mut wrecks = WreckTable::with_capacity(u32::try_from(self.wreck_id.len()).unwrap_or(0));
+        if !wrecks.restore(
+            self.wreck_id.clone(),
+            points_from_axes(&self.wreck_pos).ok_or(SnapshotError::Ragged("wreck_pos"))?,
+            self.wreck_salvage.iter().copied().map(Money::new).collect(),
+        ) {
+            return Err(SnapshotError::Ragged("wreck"));
+        }
+
+        // The pristine layer, from the seed; then the chunks an edit changed.
+        if self.modified_chunk.len().saturating_mul(CHUNK_VOXELS) != self.modified_chunk_bytes.len()
+        {
+            return Err(SnapshotError::Ragged("modified_chunk"));
+        }
+        let generated = mapgen::generate(self.match_seed, world.rules(), seat_count)
+            .map_err(SnapshotError::Map)?;
+        let mut voxels = generated.voxels;
+        for (slot, chunk) in self.modified_chunk.iter().enumerate() {
+            let from = slot.saturating_mul(CHUNK_VOXELS);
+            let to = from.saturating_add(CHUNK_VOXELS);
+            let Some(bytes) = self.modified_chunk_bytes.get(from..to) else {
+                return Err(SnapshotError::Ragged("modified_chunk_bytes"));
+            };
+            if !voxels.restore_chunk(*chunk, bytes) {
+                return Err(SnapshotError::Ragged("modified_chunk"));
+            }
         }
 
         let mut chunks = ChunkDigests::new(0);
         chunks.restore(self.chunk_digest.clone());
 
         let unit_count = units.len();
-        if !world.restore_tables(self.match_seed, Tick::new(self.tick), seats, units, chunks) {
+        if !world.restore_tables(RestoredTables {
+            match_seed: self.match_seed,
+            tick: Tick::new(self.tick),
+            seats,
+            units,
+            beacons,
+            structures,
+            wrecks,
+            voxels,
+            chunks,
+        }) {
             return Err(SnapshotError::Unindexable { units: unit_count });
         }
         Ok(())
     }
+}
+
+/// Three raw axes per point, in encoder order.
+fn axes_from_points(points: &[[Fx; 3]]) -> Vec<i32> {
+    let mut out: Vec<i32> = Vec::with_capacity(points.len().saturating_mul(3));
+    for point in points {
+        for axis in point {
+            out.push(axis.raw());
+        }
+    }
+    out
 }
 
 /// Three raw axes per point, in encoder order.

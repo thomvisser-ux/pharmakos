@@ -66,12 +66,26 @@
 //! | [`repath_cap_per_tick`](RulesTable::repath_cap_per_tick) | `locomotion.repath_cap_per_tick` |
 //! | [`csr_cell_size_voxels`](RulesTable::csr_cell_size_voxels) | `broadphase.cell_size_voxels` |
 //! | [`segment_lengths_ms`](RulesTable::segment_lengths_ms) | `match.segment_lengths_ms` |
+//! | [`map_size_voxels`](RulesTable::map_size_voxels) | `map.size_x` / `size_y` / `size_z` |
+//! | [`commander_cost_per_second`](RulesTable::commander_cost_per_second) | `commander.cost_per_second` |
+//! | [`unit_hp`](RulesTable::unit_hp), [`unit_draw_kw`](RulesTable::unit_draw_kw) | `units.<kind>.hp` / `.draw_kw` |
+//!
+//! The map generator ([`crate::mapgen`]) reads a dozen more rows — the whole of
+//! `map`, `beacon`, `power`, `economy` and `units` — and reads them from
+//! [`RulesTable::message`] rather than through accessors here. That is
+//! deliberate: those rows are read **once, at generation**, by one module that
+//! already has to report a rules-table mistake as a typed error, and mirroring
+//! them into this flat view would be a second copy of numbers the view's own
+//! rule (read-only accessors, derived from the message and nothing else) exists
+//! to prevent. The rows the *tick* reads are the ones that earn an accessor.
 //!
 //! A row the sim starts reading joins that table and gains an accessor in the
 //! task that first reads it. That is an ordinary change now: it does not move
 //! `rules_hash`, because the hash already covered the row.
 
 use crate::encoding::Enc;
+use crate::math::quantity::{Hp, Kw};
+use crate::tables::UnitKind;
 use pharmakos_proto::gp;
 use std::fmt;
 
@@ -157,6 +171,15 @@ pub struct RulesTable {
     /// minutes). The runner reads the coming segment's length **from the frozen
     /// snapshot**, not from this row (T10). From `match.segment_lengths_ms`.
     segment_lengths_ms: Vec<i32>,
+    /// The map extent in voxels, `[x, y, z]`. From `map.size_*`.
+    ///
+    /// PLACEHOLDER: `tuning, owner, at the walking skeleton's demo` (item 90).
+    map_size_voxels: [i32; 3],
+    /// The commander's walking speed in cost units per second. `10` (item 90).
+    /// From `commander.cost_per_second`.
+    ///
+    /// PLACEHOLDER: `tuning, owner, at the walking skeleton's demo` (item 90).
+    commander_cost_per_second: i32,
 }
 
 impl RulesTable {
@@ -256,6 +279,54 @@ impl RulesTable {
         &self.segment_lengths_ms
     }
 
+    /// The map extent in voxels, `[x, y, z]` (`map.size_x` / `size_y` /
+    /// `size_z`).
+    #[must_use]
+    pub const fn map_size_voxels(&self) -> [i32; 3] {
+        self.map_size_voxels
+    }
+
+    /// The commander's walking speed in cost units per second
+    /// (`commander.cost_per_second`).
+    #[must_use]
+    pub const fn commander_cost_per_second(&self) -> i32 {
+        self.commander_cost_per_second
+    }
+
+    /// One unit kind's hit points (`units.<kind>.hp`), or `None` when the
+    /// `units` block or that kind's row is absent.
+    ///
+    /// Read off the message rather than mirrored into the view above, because
+    /// the sim reads a *kind's* row and there are six of them: six accessors
+    /// would be six chances for one to fall out of step with the schema.
+    #[must_use]
+    pub fn unit_hp(&self, kind: UnitKind) -> Option<Hp> {
+        let row = self.unit_row(kind)?;
+        Some(Hp::new(i32::try_from(row.hp).unwrap_or(i32::MAX)))
+    }
+
+    /// One unit kind's power draw (`units.<kind>.draw_kw`), or `None` when the
+    /// `units` block or that kind's row is absent.
+    #[must_use]
+    pub fn unit_draw_kw(&self, kind: UnitKind) -> Option<Kw> {
+        let row = self.unit_row(kind)?;
+        Some(Kw::new(i32::try_from(row.draw_kw).unwrap_or(i32::MAX)))
+    }
+
+    /// One unit kind's row. The commander is not a unit kind in the schema —
+    /// it has a block of its own — so it has no row here.
+    fn unit_row(&self, kind: UnitKind) -> Option<gp::v1::rules_table::UnitKind> {
+        let units = self.message.units.as_ref()?;
+        match kind {
+            UnitKind::Commander => None,
+            UnitKind::BuildDrone => units.build_drone,
+            UnitKind::MiningDrone => units.mining_drone,
+            UnitKind::RepairDrone => units.repair_drone,
+            UnitKind::Raider => units.raider,
+            UnitKind::Scout => units.scout,
+        }
+    }
+
     /// Read a rules table from canonical proto JSON.
     ///
     /// The decode is `pharmakos-proto`'s and nobody else's (item 74): one
@@ -306,6 +377,14 @@ impl RulesTable {
             .r#match
             .as_ref()
             .ok_or(RulesError::MissingBlock("match"))?;
+        let map = message
+            .map
+            .as_ref()
+            .ok_or(RulesError::MissingBlock("map"))?;
+        let commander = message
+            .commander
+            .as_ref()
+            .ok_or(RulesError::MissingBlock("commander"))?;
 
         if matched.segment_lengths_ms.is_empty() {
             return Err(RulesError::OutOfRange {
@@ -349,6 +428,15 @@ impl RulesTable {
                 broadphase.cell_size_voxels,
             )?,
             segment_lengths_ms: matched.segment_lengths_ms.clone(),
+            map_size_voxels: [
+                signed("map.size_x", map.size_x)?,
+                signed("map.size_y", map.size_y)?,
+                signed("map.size_z", map.size_z)?,
+            ],
+            commander_cost_per_second: signed(
+                "commander.cost_per_second",
+                commander.cost_per_second,
+            )?,
         })
     }
 
