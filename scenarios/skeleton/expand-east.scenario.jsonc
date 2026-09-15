@@ -15,9 +15,14 @@
 
   // The seed is a quoted 0x string, not a number: a JSON number is a double in
   // half the world's parsers and a 64-bit seed loses its low bits in one.
-  // T5 resolved this line: the seed is in the committed set, and its map digest
-  // is the third line of tests/golden/mapgen/expected.digests.txt. The owner
-  // still ratifies the seed set as a whole at the stage demo.
+  // T5 resolved this line: the seed is in the committed set that
+  // tests/golden/mapgen/expected.digests.txt pins, so the generator that makes
+  // this scenario's map is itself under a golden. The digests on that file's
+  // lines are three-seat maps and this scenario declares two seats, so no line
+  // there is *this* map's digest — a map is a function of (seed, rules table,
+  // occupied seats), and T15 commits the two-seat digest when it teaches
+  // `gamectl scenario run` to assert on one. The owner still ratifies the seed
+  // set as a whole at the stage demo.
   "map": {
     "seed": "0x00000000ca5caded",
     "generator": "skeleton"

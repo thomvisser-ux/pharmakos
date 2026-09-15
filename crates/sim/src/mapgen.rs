@@ -7,8 +7,10 @@
 //! A map is a pure function of `(match seed, rules table, occupied seats)`. It
 //! draws from [`Stream::Map`] and from nowhere else, it is integer throughout,
 //! and every number it uses comes from `rules/rules.v1.json` rather than from a
-//! constant here — the two exceptions are named as `PLACEHOLDER` below and are
-//! the terrain's own shape, which is not yet a rules-table row.
+//! constant here — every exception is marked `PLACEHOLDER` below, names who
+//! resolves it and when, and is a shape the rules table has no row for yet
+//! (how lumpy the terrain is, how wide a seam's disc is, which sector a
+//! starting feature is placed in).
 //!
 //! # What it produces
 //!
@@ -20,7 +22,13 @@
 //!    one-voxel steps. That is what makes vent reachability a property of the
 //!    generator rather than a hope, and it is what T7's HPA\* graph is built on.
 //! 2. **Spawn zones.** `map.spawn_zones` of them, `map.spawn_zone_radius_voxels`
-//!    across and flattened, placed so the **spawn-distance rule** holds: the
+//!    across. Each zone's disc is flattened to the height at its centre
+//!    *before* the 1-Lipschitz closure runs, and the closure only ever lowers,
+//!    so a zone is flat in the middle and its rim may be cut into a ramp where
+//!    the ground outside is lower — never into a step of more than one voxel,
+//!    which is the property that matters and the one
+//!    `spawn_zones_are_flat_inside_and_ramped_at_the_rim` pins. Placed so the
+//!    **spawn-distance rule** holds: the
 //!    octile ground distance (10/14 per step, item 59) between any two occupied
 //!    spawn centres is at least
 //!    `raider_cost_per_second * numerator/denominator * segment_lengths_ms[0] / 1000`
@@ -101,9 +109,10 @@ const TERRAIN_FINE_AMPLITUDE: i32 = 3;
 const TERRAIN_SKIN_VOXELS: i32 = 3;
 
 /// PLACEHOLDER: how far a zone centre may be jittered off its layout position,
-/// in voxels. Four, which the separation check below proves is safe at the
-/// committed table with 110 cost units of slack to spare. Owner, with the rest
-/// of map generation at S4.
+/// in voxels. Four, inclusive at both ends, which leaves 30 cost units of slack
+/// against the spawn-distance rule at the committed table — the arithmetic is
+/// written out at [`zone_centres`]. Owner, with the rest of map generation at
+/// S4.
 const ZONE_JITTER_VOXELS: i32 = 4;
 
 /// PLACEHOLDER: a heat vent is a three-by-three patch of surface voxels. The
@@ -116,16 +125,31 @@ const VENT_PATCH_RADIUS: i32 = 1;
 /// fits inside the disc below. Owner, at S1 with the mining rules.
 const SEAM_VOXELS_PER_COLUMN: i32 = 4;
 
-/// The radius of the disc a seam is laid into, in voxels.
+/// PLACEHOLDER: the radius of the disc a seam is laid into, in voxels. Five,
+/// so `economy.seam_voxels` at [`SEAM_VOXELS_PER_COLUMN`] a column fits with
+/// room to spare. It decides the same seam's shape that
+/// [`SEAM_VOXELS_PER_COLUMN`] does, so it is the owner's at S1 with the mining
+/// rules, and it moves every committed seed when it moves.
 const SEAM_DISC_RADIUS: i32 = 5;
 
-/// How many placements a contested feature may try before the generator gives
-/// up and reports a rules table it cannot satisfy.
+/// PLACEHOLDER: how many placements a contested feature may try before the
+/// generator gives up and reports a rules table it cannot satisfy. Sixty-four,
+/// which is far past what the committed table needs and still a bound rather
+/// than a loop. Owner, at S4, with the rest of map generation.
 const CONTESTED_ATTEMPTS: u32 = 64;
 
-/// A sixth of a turn in [`Angle`] units: the half-width of the inward sector a
-/// starting feature is placed in.
+/// PLACEHOLDER: a sixth of a turn in [`Angle`] units — the half-width of the
+/// inward sector a starting feature is placed in. It decides where every
+/// starting vent and seam can land, so it moves every committed seed when it
+/// moves. Owner, at S4's symmetric map.
 const SECTOR_HALF_WIDTH: u16 = 10_922;
+
+/// PLACEHOLDER: how far a contested feature must clear a *starting* vent or
+/// seam, over and above the two features' own radii, in voxels. One, which is
+/// the least that keeps the two discs disjoint so a contested seam can never
+/// overwrite a vent whose power has already been counted. Owner, at S1, with
+/// the mining rules that decide what a seam is worth.
+const STARTING_FEATURE_CLEARANCE: i32 = 1;
 
 /// Which draw of the generator a random number belongs to.
 ///
@@ -290,7 +314,8 @@ pub struct Band {
 pub struct Feature {
     /// Its grade.
     pub richness: Richness,
-    /// Where it is, in whole voxels; `z` is the surface.
+    /// Where it is, in whole voxels; `z` is the **top solid voxel** of the
+    /// column — the voxel the feature is made of, not the air above it.
     pub at: [i32; 3],
     /// How far from the zone's core it is, in whole voxels. Zero for a
     /// contested feature, which belongs to no core.
@@ -305,7 +330,10 @@ pub struct Feature {
 pub struct ZoneReport {
     /// The seat that occupies it, or `None` when it is terrain only.
     pub seat: Option<u8>,
-    /// The zone centre, in whole voxels; `z` is the flattened surface.
+    /// The zone centre, in whole voxels; `z` is the **voxel a unit stands on**,
+    /// one above the column's top solid voxel. (The other convention, the top
+    /// solid voxel itself, is [`Feature::at`]'s: a core is something that
+    /// stands on the map and a vent is something the map is made of.)
     pub centre: [i32; 3],
     /// The zone's heat vent, absent when the zone is unoccupied.
     pub vent: Option<Feature>,
@@ -326,14 +354,20 @@ pub struct MapReport {
     /// The contested features, in placement order.
     pub contested: Vec<Feature>,
     /// The closest two **occupied** spawn centres, in octile ground cost.
+    ///
+    /// **Zero when fewer than two zones are occupied**, because there is no
+    /// pair: a one-seat map has no separation, and the spawn-distance rule is
+    /// vacuous rather than satisfied by an enormous number. The three fields
+    /// below are zero with it.
     pub min_separation_cost: i64,
-    /// What the spawn-distance rule asked for, in the same units.
+    /// What the spawn-distance rule asked for, in the same units. Zero when
+    /// there is no occupied pair for it to ask about.
     pub required_separation_cost: i64,
     /// [`MapReport::min_separation_cost`] as seconds of raider walking,
-    /// rounded up.
+    /// rounded up. Zero when there is no occupied pair.
     pub separation_raider_seconds: i64,
     /// [`MapReport::min_separation_cost`] as seconds of commander walking,
-    /// rounded up.
+    /// rounded up. Zero when there is no occupied pair.
     pub separation_commander_seconds: i64,
     /// What the map would supply if every vent on it carried a Generator, plus
     /// every occupied core's surplus.
@@ -534,15 +568,20 @@ pub fn generate(seed: u64, rules: &RulesTable, seats: u32) -> Result<GeneratedMa
     );
 
     // 5. The spawn-distance rule, over the OCCUPIED centres only.
+    //
+    // `required_separation` is read even when there is no pair to apply it to,
+    // because it is also a check on the rules table's own rows. What a map with
+    // fewer than two occupied zones has is no *pair*: the rule is vacuous, and
+    // the report says zero rather than an enormous number (see `MapReport`).
     let occupied = seats.min(map.spawn_zones);
     let required = numbers.required_separation()?;
-    let min_separation = min_occupied_separation(&centres, occupied, &numbers);
-    if min_separation < required {
-        return Err(MapError::SpawnsTooClose {
-            found: min_separation,
-            required,
-        });
+    let pair = min_occupied_separation(&centres, occupied, &numbers);
+    if let Some(found) = pair {
+        if found < required {
+            return Err(MapError::SpawnsTooClose { found, required });
+        }
     }
+    let min_separation = pair.unwrap_or(0);
 
     // 6. Every occupied zone's core, force, vent and seam.
     let mut placed = realise_zones(&mut voxels, seed, &numbers, &centres, occupied)?;
@@ -563,7 +602,7 @@ pub fn generate(seed: u64, rules: &RulesTable, seats: u32) -> Result<GeneratedMa
         &mut voxels,
         seed,
         &numbers,
-        &centres,
+        &placed.zones,
         radius,
         [width, depth],
         &mut supply_kw,
@@ -593,7 +632,7 @@ pub fn generate(seed: u64, rules: &RulesTable, seats: u32) -> Result<GeneratedMa
         zones,
         contested,
         min_separation_cost: min_separation,
-        required_separation_cost: required,
+        required_separation_cost: pair.map_or(0, |_| required),
         separation_raider_seconds: div_ceil_i64(
             min_separation,
             i64::from(numbers.locomotion.raider_cost_per_second),
@@ -946,6 +985,10 @@ impl<'a> Numbers<'a> {
 
 /// The eight compass offsets a starting unit is placed on, in order, widening
 /// by two voxels every eight units.
+///
+/// PLACEHOLDER: the two-voxel spacing baked into the offsets below is the
+/// starting force's footprint, and nothing reads a unit's footprint yet.
+/// Owner, at S1, with the first rules-table row that gives a unit a size.
 const RING: [[i32; 2]; 8] = [
     [0, -2],
     [2, 0],
@@ -1056,6 +1099,11 @@ fn terrain(seed: u64, width: i32, depth: i32, height_cap: i32) -> Vec<i32> {
     // The mean height is half the map's cap, which is what "a low-lying map"
     // means here: the sky has as much room as the rock.
     let base = height_cap >> 1;
+    // PLACEHOLDER: the terrain's floor and its headroom under the map's cap, in
+    // voxels. Four and eight, so no column is a bare floor and every column has
+    // sky above it for a beacon sphere. Part of the same group as
+    // `TERRAIN_COARSE_SHIFT`: the terrain's own shape, not a rules-table row.
+    // Owner, at S4's symmetric map.
     let floor = 4;
     let ceiling = height_cap.saturating_sub(8).max(floor);
 
@@ -1206,9 +1254,12 @@ fn set_height(heights: &mut [i32], width: i32, depth: i32, x: i32, y: i32, value
 /// inset by the zone radius so no zone hangs off the map. One layout, one
 /// rotation of which zone comes first and a `ZONE_JITTER_VOXELS` jitter per
 /// zone are drawn from [`Phase::Layout`]; the separation the layouts give at the
-/// committed table is 3 350 cost units against a requirement of 3 240, and the
-/// worst jitter can take away 48 of that, so the rule holds by construction —
-/// and [`generate`] checks it anyway.
+/// committed table is 3 350 cost units against a requirement of 3 240. The
+/// worst jitter takes 80 of that — [`StreamRng::range_i32`] is inclusive, so
+/// each of the two zones can move a full `ZONE_JITTER_VOXELS` toward the other
+/// along the axis that separates them, and eight cardinal voxels at
+/// `locomotion.step_cost_cardinal` = 10 is 80 — leaving 30 cost units of slack.
+/// The rule therefore holds by construction, and [`generate`] checks it anyway.
 ///
 /// PLACEHOLDER: a free placement with a separation search, and the three-way
 /// symmetry the spec asks for, belong to S4's symmetric map. Owner, at S4.
@@ -1279,19 +1330,27 @@ fn zone_centres(
     Ok(out)
 }
 
-/// The closest pair of **occupied** spawn centres, in octile ground cost.
+/// The closest pair of **occupied** spawn centres, in octile ground cost, or
+/// `None` when there is no pair.
 ///
-/// A lone occupied zone has no pair, and the rule is then vacuous: the answer
-/// is [`i64::MAX`], which is at least anything the rule can ask for.
-fn min_occupied_separation(centres: &[[i32; 3]], occupied: u32, numbers: &Numbers<'_>) -> i64 {
-    let mut best = i64::MAX;
+/// `None` rather than [`i64::MAX`]: a saturating sentinel passes the rule *and*
+/// divides into a nonsense travel time, and the travel times are two columns of
+/// a committed golden. The caller decides what no pair means — [`generate`]
+/// skips the check and reports zero.
+fn min_occupied_separation(
+    centres: &[[i32; 3]],
+    occupied: u32,
+    numbers: &Numbers<'_>,
+) -> Option<i64> {
+    let mut best: Option<i64> = None;
     let limit = usize::try_from(occupied).unwrap_or(0).min(centres.len());
     let mut a: usize = 0;
     while a < limit {
         let mut b = a.saturating_add(1);
         while b < limit {
             if let (Some(pa), Some(pb)) = (centres.get(a), centres.get(b)) {
-                best = best.min(numbers.octile(*pa, *pb));
+                let cost = numbers.octile(*pa, *pb);
+                best = Some(best.map_or(cost, |b: i64| b.min(cost)));
             }
             b = b.saturating_add(1);
         }
@@ -1529,7 +1588,10 @@ fn disc_offsets(radius: i32) -> Vec<[i32; 2]> {
     out
 }
 
-/// Lay `wanted` voxels of ore under the surface around `at`.
+/// Lay `wanted` voxels of ore around `at`, **from the surface down**: the first
+/// voxel written in a column is the column's own top solid voxel, so a seam is
+/// visible from above, and the next [`SEAM_VOXELS_PER_COLUMN`] - 1 are the
+/// voxels beneath it.
 fn stamp_seam(voxels: &mut VoxelStore, at: [i32; 2], richness: Richness, wanted: u32) -> u32 {
     let ore = richness.ore();
     let mut placed: u32 = 0;
@@ -1607,15 +1669,23 @@ fn place_seam(
 /// The contested vents and seams toward the centre of the map.
 ///
 /// Each is drawn inside the central half of the map and must clear every spawn
-/// zone by one beacon sphere and every earlier contested feature by twice the
-/// seam disc. A placement that cannot be found in [`CONTESTED_ATTEMPTS`] tries
-/// is a rules table this generator cannot satisfy, reported rather than looped
-/// over forever.
+/// zone by one beacon sphere, every earlier contested feature by twice the seam
+/// disc, and **every starting vent and seam by the two features' own radii**.
+/// A placement that cannot be found in [`CONTESTED_ATTEMPTS`] tries is a rules
+/// table this generator cannot satisfy, reported rather than looped over
+/// forever.
+///
+/// The last of the three clearances is not decoration. A starting vent may sit
+/// as far as `map.vent_max_distance_voxels` from its core, which is inside the
+/// zone-plus-sphere ring the first clearance keeps clear, so without it a
+/// contested seam's disc could overwrite a vent whose 20 kW had already been
+/// added to the map's supply total — a power ceiling checked against a vent
+/// that is no longer on the map.
 fn place_contested(
     voxels: &mut VoxelStore,
     seed: u64,
     numbers: &Numbers<'_>,
-    centres: &[[i32; 3]],
+    zones: &[ZoneReport],
     zone_radius: i32,
     extent: [i32; 2],
     supply_kw: &mut i32,
@@ -1647,8 +1717,26 @@ fn place_contested(
         wanted.push((Richness::Rich, false));
     }
 
+    // Every starting feature already on the map, with the radius its own stamp
+    // covers: a vent is a `VENT_PATCH_RADIUS` patch and a seam a
+    // `SEAM_DISC_RADIUS` disc.
+    let mut starting: Vec<([i32; 3], i32)> = Vec::new();
+    for zone in zones {
+        if let Some(vent) = zone.vent {
+            starting.push((vent.at, VENT_PATCH_RADIUS));
+        }
+        if let Some(seam) = zone.seam {
+            starting.push((seam.at, SEAM_DISC_RADIUS));
+        }
+    }
+
     let mut placed: Vec<Feature> = Vec::with_capacity(wanted.len());
     for (index, (richness, is_vent)) in wanted.iter().enumerate() {
+        let own_radius = if *is_vent {
+            VENT_PATCH_RADIUS
+        } else {
+            SEAM_DISC_RADIUS
+        };
         let item = u32::try_from(index).unwrap_or(u32::MAX);
         let mut attempt: u32 = 0;
         let mut site: Option<[i32; 3]> = None;
@@ -1666,13 +1754,24 @@ fn place_contested(
                 continue;
             };
             let candidate = [x, y, z];
-            let clears_zones = centres
+            // Every zone centre, occupied or not: an unoccupied zone is still
+            // a spawn a later match can use, and `ZoneReport::centre` carries
+            // the same column the layout put there.
+            let clears_zones = zones
                 .iter()
-                .all(|c| columns_apart_squared(candidate, *c) >= clear2);
+                .all(|z| columns_apart_squared(candidate, z.centre) >= clear2);
             let clears_others = placed
                 .iter()
                 .all(|f| columns_apart_squared(candidate, f.at) >= apart2);
-            if clears_zones && clears_others {
+            let clears_starting = starting.iter().all(|(at, radius)| {
+                let gap = i64::from(
+                    own_radius
+                        .saturating_add(*radius)
+                        .saturating_add(STARTING_FEATURE_CLEARANCE),
+                );
+                columns_apart_squared(candidate, *at) >= gap.saturating_mul(gap)
+            });
+            if clears_zones && clears_others && clears_starting {
                 site = Some(candidate);
                 break;
             }
