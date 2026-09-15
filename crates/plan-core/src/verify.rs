@@ -13,13 +13,20 @@
 //! comments produce the same `report_hash` — a player can annotate a playbook
 //! without moving its hash, and the pre-check at edit time and the check at
 //! submit compare, which is what spec section 11's "byte-identical" promise is
-//! for.
+//! for. That promise is **conditional on there being a canonical form**: for a
+//! file the paragraph below covers there is none, and adding a comment to such
+//! a file does move its `report_hash`. Such a report never qualifies, and the
+//! pre-check and submit take the same path, so the two still agree with each
+//! other.
 //!
-//! **A file that does not parse is handed over as it stands.** There is no
-//! canonical form of a broken file, and this crate must not invent a
-//! diagnostic of its own: the verifier owns the catalogue. So the raw bytes go
-//! through and come back as `E0001` with a `/byte/<offset>` pointer, which is
-//! the shape decisions-log item 96 (2) settled for exactly this case.
+//! **A file with no canonical form is handed over as it stands.** That is a
+//! file that does not parse, and equally a well-formed file the schema refuses
+//! — an unknown field, two oneof arms set, a value that does not fit its
+//! field. There is no canonical form of either, and this crate must not invent
+//! a diagnostic of its own: the verifier owns the catalogue. So the raw bytes
+//! go through and come back as a diagnostic — `E0001` with a `/byte/<offset>`
+//! pointer for a syntax error, which is the shape decisions-log item 96 (2)
+//! settled for exactly this case.
 
 use pharmakos_proto::gp::api::v1::VerifyReport;
 use pharmakos_proto::gp::api::v1::verify_plan::Depth;
@@ -50,7 +57,10 @@ pub fn verify_jsonc(
     let canonical = canonicalise_text(playbook_jsonc).map(|canonical| canonical.json);
     let bytes: &[u8] = match canonical.as_ref() {
         Ok(json) => json.as_bytes(),
-        Err(_unparseable) => playbook_jsonc.as_bytes(),
+        // Any file with no canonical form, syntax error or schema refusal
+        // alike: see the module doc for why the comment-invariance promise is
+        // conditional on this branch not being taken.
+        Err(_no_canonical_form) => playbook_jsonc.as_bytes(),
     };
     let input = Input::new(bytes, snapshot, scope, rules)
         .map_err(|gap| Error::at("", format!("the rules table is incomplete: {gap}")))?;

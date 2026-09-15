@@ -248,8 +248,12 @@ fn no_determinism_hazard_is_named_in_the_shipped_code() {
 /// inventory that keeps the claim honest: it names the one that is there, in
 /// the module it is in, so a second one has to arrive in a pull request that
 /// also edits this list.
+///
+/// The walk is `src/` only, and the name says so. This file carries a second
+/// `#[allow]` of its own — the same sanctioned `read_dir`, in `sources` above
+/// — and a test walking itself would be counting its own scaffolding.
 #[test]
-fn the_only_allow_in_the_crate_is_the_sanctioned_read_dir() {
+fn the_only_allow_in_src_is_the_sanctioned_read_dir() {
     let mut found: Vec<String> = Vec::new();
     for path in sources() {
         let Ok(text) = std::fs::read_to_string(&path) else {
@@ -264,7 +268,7 @@ fn the_only_allow_in_the_crate_is_the_sanctioned_read_dir() {
     assert_eq!(
         found.len(),
         1,
-        "exactly one `#[allow]`, in library.rs, for the read_dir clippy.toml sanctions: {found:?}"
+        "exactly one `#[allow]` under `src/`, in library.rs, for the read_dir clippy.toml          sanctions: {found:?}"
     );
     assert!(
         found.first().is_some_and(|at| at.contains("library.rs")),
