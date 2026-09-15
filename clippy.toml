@@ -32,23 +32,25 @@
 #     `-A clippy::disallowed_methods`. The three `cast_*` allowances are there because
 #     converting float vertex data to integers is the reason the wall exists; without them
 #     `[workspace.lints.clippy]` would still deny the conversion and pass 2 could not pass;
-#   * `cargo xtask wall-guard` then fails the build if plan-core, verifier, operator or
-#     gateway depends on a walled crate, transitively included — which is what keeps the
-#     allowance from leaking into hashed state.
+#   * `cargo xtask wall-guard` then fails the build if sim, plan-core, verifier, operator
+#     or gateway depends on a walled crate, transitively included — which is what keeps
+#     the allowance from leaking into hashed state. That list is `WALL_GUARDED_PACKAGES`
+#     in xtask/src/main.rs; it is the research guard's list plus `sim`, which cannot join
+#     the research guard because `sim` is the crate that defines the `research` feature.
 #
 # The allow-list of walled crates lives in one place, `WALLED_PACKAGES` in
 # xtask/src/main.rs. Today it reads:
 #
-#     presentation, solve, client-gdext               (with or without the pharmakos- prefix)
+#     presentation, solve, client-gdext, mesher       (with or without the pharmakos- prefix)
 #
-# That is the spec's own wording — "a walled presentation/solve module" (spec §15, Maths) —
-# plus the one crate that exists. Names are not pre-declared: whether the greedy mesher
-# becomes its own crate is an open owner decision at the walking skeleton (AGENTS.md §3),
-# and until that decision is taken a `mesher` crate would get no allowance. Adding a name
-# to that list widens the float, cast, hash-map and clock allowance for a whole crate, so
-# it is a contract change too.
+# The first two are the spec's own wording — "a walled presentation/solve module"
+# (spec §15, Maths). The other two are crates that exist: the thin gdext bridge, and the
+# greedy mesher, which decisions log §2.7 item 56 decided is its own walled crate — integer
+# chunk data in, vertex buffers out, linking without gdext, and depended on by client-gdext
+# alone today. Adding a name to that list widens the float, cast, hash-map and clock
+# allowance for a whole crate, so it is a contract change too.
 #
-# PLACEHOLDER: only `pharmakos-client-gdext` of the three exists so far.
+# PLACEHOLDER: `pharmakos-client-gdext` and `pharmakos-mesher` of the four exist so far.
 #
 # Inside a walled crate, keep the float surface at the edge: marshal to and from integer
 # types as early as possible, and never hand a float back to anything the sim hashes.
@@ -118,19 +120,20 @@ reason = "wall-clock time. The sim's clock is the 20 Hz tick counter; time-depen
 path = "std::time::SystemTime"
 reason = "wall-clock time, and it can move backwards. Timestamps that must be recorded (save files, diagnostics) are taken at the edge, outside hashed state."
 
-# PLACEHOLDER — primitive float types.
-# `f32`/`f64` as disallowed-types entries depend on clippy's support for primitive paths,
-# which we cannot verify on this machine (no toolchain installed). `float_arithmetic` and
-# `float_cmp` already deny the operations, which is the substantive ban; enable these two
-# after checking them against the pinned toolchain, and drop this note when they are on.
-#
-# [[disallowed-types]]
-# path = "f32"
-# reason = "the sim is integer-only: Q16.16 positions, Q32.32 squared distances, u16 angles, integer HP and $. Floats live behind the wall."
-#
-# [[disallowed-types]]
-# path = "f64"
-# reason = "as above."
+# Primitive float types. `float_arithmetic` and `float_cmp` deny float OPERATIONS; these
+# two deny the type itself, so a crate outside the wall cannot hold an `f32` field or put
+# one in a signature and pass it around untouched. Verified to resolve and fire on the
+# pinned toolchain (clippy 1.98.1). The walled crates are linted in pass 2 with
+# `-A clippy::disallowed_types` on the command line, so the mesher's vertex buffers are
+# unaffected.
+
+[[disallowed-types]]
+path = "f32"
+reason = "the sim is integer-only: Q16.16 positions, Q32.32 squared distances, u16 angles, integer HP and $. Floats live behind the wall."
+
+[[disallowed-types]]
+path = "f64"
+reason = "as above."
 
 # ---------------------------------------------------------------------------------------
 # Disallowed methods (clippy::disallowed_methods — denied in [workspace.lints.clippy])

@@ -17,12 +17,13 @@
 # Each matrix leg uploads that file as the artefact `determinism-hashes-<os>`; the
 # `determinism-cross-os` job downloads all three and compares them byte for byte.
 #
-# PLACEHOLDER: nothing in this repository compiles yet — there are no dependencies, no
-# Cargo.lock and no determinism binary (it arrives with spike G4). Until then the matrix
-# legs pass with most xtask steps reporting "skipped", the hash artefacts are absent, and
-# the cross-OS job says so instead of failing. The three lines to flip when G4 lands are
-# marked "FLIP AT G4": `if-no-files-found`, the `continue-on-error` on the download, and
-# the `exit 0` in the compare step.
+# PLACEHOLDER: the workspace compiles and `cargo xtask ci` is green, but there is still no
+# determinism binary — spike G4 is closed and its findings are written up, and the binary
+# itself lands with the walking skeleton's sim. Until it does, the matrix legs pass with
+# the `determinism` and `golden` steps reporting "skipped" with a reason, the hash
+# artefacts are absent, and the cross-OS job says so instead of failing. The three lines to
+# flip when the binary lands are marked "FLIP AT G4": `if-no-files-found`, the
+# `continue-on-error` on the download, and the `exit 0` in the compare step.
 
 name: ci
 

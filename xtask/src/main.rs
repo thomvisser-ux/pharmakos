@@ -24,7 +24,7 @@
 //! | `test`           | `cargo test --workspace` without the `research` feature                      |
 //! | `test-research`  | `cargo test --workspace --features pharmakos-sim/research`                    |
 //! | `research-guard` | plan-core / verifier / operator / gateway must not reach `research`          |
-//! | `wall-guard`     | those same crates must not depend on a walled presentation/solve crate       |
+//! | `wall-guard`     | those crates and `sim` must not depend on a walled presentation/solve crate  |
 //! | `deny`           | `cargo deny check` (licences, advisories, banned crates)                     |
 //! | `buf`            | `buf lint` and `buf breaking --against .git#branch=main`                     |
 //! | `golden`         | `tests/golden/**/expected.*` against the fresh `target/golden/**/actual.*`   |
@@ -64,13 +64,6 @@
 //! Nothing here may use floats, `as` casts, `HashMap`/`HashSet` or wall-clock
 //! time: xtask is linted by the same set it enforces, which is also why `ci`
 //! reports no step timings.
-//!
-//! PLACEHOLDER: no Rust toolchain existed on the machine where this was
-//! written, so this file has never been compiled — and, because there was no
-//! rustfmt either, never formatted. The first action once the toolchain exists
-//! is `cargo fmt --all` over the whole tree, before any `cargo xtask ci` result
-//! is trusted; that pass is mechanical and changes no behaviour. Treat the
-//! first real `cargo xtask ci` as a shakedown run.
 
 // Justified crate-level allowances. The workspace lints (`clippy::pedantic` at
 // warn, and `-D warnings` in the clippy step) are tuned for sim code; a task
@@ -166,23 +159,42 @@ const WALL_ALLOW: &[&str] = &[
 
 /// Packages behind the wall. Matched with and without the `pharmakos-` prefix.
 ///
-/// The list is the spec's own wording — "a walled presentation/solve module"
-/// (spec section 15, Maths) — plus the one crate that exists today. It does not
-/// pre-declare names: whether the greedy mesher becomes its own crate is an
-/// open owner question (AGENTS.md section 3), and a crate that is not on this
-/// list simply gets no float allowance until the decision that creates it adds
-/// it here. Adding a name widens the float, cast, hash-map and clock allowance
-/// for a whole crate, so it is a contract change and needs owner approval —
-/// keep this list, `clippy.toml`'s header comment and AGENTS.md section 4.9 in
-/// step.
+/// Two of the four names are the spec's own wording — "a walled
+/// presentation/solve module" (spec section 15, Maths). The other two are
+/// crates: `client-gdext`, the thin gdext bridge, and `mesher`, the greedy
+/// mesher, which decisions log section 2.7 item 56 made its own walled crate
+/// rather than a module inside the bridge — it takes integer chunk data in and
+/// produces vertex buffers out, links without gdext so the headless CPU proxy
+/// and the CI geometry check can reuse it, and is depended on by `client-gdext`
+/// alone today; `wall-guard` below enforces the half that matters to
+/// determinism — that no crate in [`WALL_GUARDED_PACKAGES`] ever reaches it.
+/// A crate that is not on this list gets no float allowance. Adding a name
+/// widens the float, cast, hash-map and clock allowance for a whole crate, so
+/// it is a contract change and needs owner approval — keep this list,
+/// `clippy.toml`'s header comment and AGENTS.md section 4.9 in step.
 ///
-/// PLACEHOLDER: only `pharmakos-client-gdext` of these exists so far;
+/// PLACEHOLDER: `pharmakos-client-gdext` and `pharmakos-mesher` exist;
 /// `presentation` and `solve` are named by the spec but not yet created.
-const WALLED_PACKAGES: &[&str] = &["presentation", "solve", "client-gdext"];
+const WALLED_PACKAGES: &[&str] = &["presentation", "solve", "client-gdext", "mesher"];
 
-/// Crates that may never reach the `research` feature (which gates `fork`), and
-/// may never depend on a walled crate.
+/// Crates that may never reach the `research` feature, which gates `fork`.
+///
+/// `sim` is deliberately absent: it is the crate that *defines* the feature, so
+/// it is the one package for which reaching `research` is correct. Walled
+/// crates are kept away by the separate [`WALL_GUARDED_PACKAGES`] list below,
+/// which does include `sim`.
 const GUARDED_PACKAGES: &[&str] = &["plan-core", "verifier", "operator", "gateway"];
+
+/// Crates that may never depend on a walled crate, transitively included.
+///
+/// [`GUARDED_PACKAGES`] plus `sim`. The four guarded crates must not reach the
+/// float, cast, hash-map and clock allowance, and neither must the sim — it is
+/// the crate that owns hashed state, so it is the one the wall exists to
+/// protect (AGENTS.md section 4.9). The two lists are separate rather than one
+/// because `sim` defines the `research` feature and so cannot join the research
+/// guard. Keep this list, AGENTS.md section 4.9 and `clippy.toml`'s header in
+/// step; widening it is a contract change like any other.
+const WALL_GUARDED_PACKAGES: &[&str] = &["sim", "plan-core", "verifier", "operator", "gateway"];
 
 /// Candidate names for the one crate that owns the `research` feature.
 const SIM_PACKAGES: &[&str] = &["sim"];
@@ -266,7 +278,7 @@ const STEPS: &[Step] = &[
     },
     Step {
         name: "wall-guard",
-        about: "those crates must not depend on a walled presentation/solve crate",
+        about: "those crates and sim must not depend on a walled crate",
         run: step_wall_guard,
     },
     Step {
@@ -818,8 +830,9 @@ fn step_research_guard(ctx: &Ctx) -> Result<Outcome, String> {
 }
 
 /// The wall is a crate boundary. Floats, `as` casts and hash maps are legal
-/// inside the presentation and solve crates, so nothing deterministic may
-/// depend on them — otherwise the allowance leaks into hashed state.
+/// inside the walled crates, so nothing deterministic may depend on them —
+/// otherwise the allowance leaks into hashed state. "Nothing deterministic" is
+/// [`WALL_GUARDED_PACKAGES`]: the four guarded crates and the sim itself.
 fn step_wall_guard(ctx: &Ctx) -> Result<Outcome, String> {
     let workspace = match &ctx.workspace {
         Ok(workspace) => workspace,
@@ -827,7 +840,7 @@ fn step_wall_guard(ctx: &Ctx) -> Result<Outcome, String> {
     };
 
     let walled = workspace.present(WALLED_PACKAGES);
-    let guarded = workspace.present(GUARDED_PACKAGES);
+    let guarded = workspace.present(WALL_GUARDED_PACKAGES);
     if walled.is_empty() || guarded.is_empty() {
         return Ok(Outcome::Skipped(
             "the walled crates or the guarded crates do not exist yet".to_owned(),

@@ -12,10 +12,18 @@ Read this whole file before your first edit. If a rule here and the design docs 
 the precedence order in `docs/design/README.md` (decisions-log §2.7 > spec v0.6 > co-design doc)
 and say so in your PR rather than guessing.
 
-**Status of this repository:** design is complete, code has not started. The toolchain is not
-installed on the owner's machine yet (no `cargo`, no `protoc`, no Godot 4.7 as of 2026-09-13), so
-nothing here can be compiled today. Write files that will be correct once the toolchain exists, and
-mark any value you had to guess with a `PLACEHOLDER` comment naming who fixes it and when.
+**Status of this repository:** the toolchain is installed — rustc 1.98.1 (MSVC host on Windows),
+`protoc` 36, `buf` 1.73, `cargo-deny`, `reuse`, Godot 4.7.2 — and `cargo xtask ci` is green:
+twelve steps, ten `ok` and two `skipped` with reasons (no goldens, no determinism binary yet),
+verified on Windows. The three-OS matrix runs on every pull request and has no hash chains to
+compare until the determinism binary lands, so §10's "all three operating systems agree on the
+hash chains" is not yet a claim anyone can make. The four stack spikes are closed, frozen at the
+`spike-end` tag and deleted from `main`;
+their measured results and their lessons for the skeleton live under `docs/spikes/`, and reading the
+spike code means `git worktree add ../pharmakos-spikes spike-end`. The walking skeleton is open.
+Most crates are still empty placeholders: write files that will be correct when the crate around
+them exists, and mark any value you had to guess with a `PLACEHOLDER` comment naming who fixes it
+and when.
 
 ---
 
@@ -69,15 +77,25 @@ editor UI. Nothing else executes. Directories are under `crates/`; package names
 | `crates/operator` — `pharmakos-operator` | The built-in operator: templates + utility scoring, the safe playbook, Easy/Normal/Hard. An ordinary gateway client with no privileged reads. | `pharmakos-proto`, `pharmakos-plan-core`, `pharmakos-verifier`, the `gp.api.v1` service traits |
 | `crates/gateway` — `pharmakos-gateway` | Seat Gateway: JSON-RPC over a localhost WebSocket, tokens, scopes, fog filter, rate limits, event bus, snapshots, private match cache, saves. Hosts the match. | `pharmakos-proto`, `pharmakos-plan-core`, `pharmakos-verifier`, `pharmakos-sim` *only* as `default-features = false` |
 | `crates/gamectl` — `pharmakos-gamectl` (bin `gamectl`) | CLI: `verify`, `schema`, `docs`, `scenario run`, `seat doctor`. No `connect` in v1. `scenario run` hosts a headless match, which is why the gateway is on the list. | `pharmakos-proto`, `pharmakos-plan-core`, `pharmakos-verifier`, `pharmakos-gateway` |
-| `crates/client-gdext` — `pharmakos-client-gdext` | **Thin** gdext bridge (`cdylib` + `rlib`): marshals gateway calls and mesh buffers between Godot 4.7 and Rust. It marshals; it does not decide. | `godot` (gdext), `pharmakos-proto`, the mesher's public surface |
+| `crates/mesher` — `pharmakos-mesher` | The **walled** greedy mesher: integer chunk data and `.vox` models in, vertex and index buffers out, under the per-frame upload budget the client applies. Links without gdext, so the headless CPU proxy and the CI geometry check reuse it. | `dot_vox` later; nothing from the sim. Never depended on by `sim`, `plan-core`, `verifier`, `operator` or `gateway` — `cargo xtask wall-guard` fails the build over it (`WALL_GUARDED_PACKAGES`, §4.9) |
+| `crates/client-gdext` — `pharmakos-client-gdext` | **Thin** gdext bridge (`cdylib` + `rlib`): marshals gateway calls and mesh buffers between Godot 4.7 and Rust. It marshals; it does not decide. | `godot` (gdext), `pharmakos-proto`, `pharmakos-mesher` |
 | `xtask` | `cargo xtask ci` and friends. Dev-only, never shipped, std-only, no dependencies. | nothing |
 
-> **PLACEHOLDER — internal boundaries.** The integer newtypes (`Fx` Q16.16, `Sq` Q32.32, `Angle`
-> u16 + LUT, HP, `$`, `kW`, `Tick`, `Ms`), the RNG streams, the state hash, the greedy mesher, HPA\*
-> and the map generator currently live as modules inside `pharmakos-sim`. Whether any of them
-> becomes its own crate (a `math` crate shared with the verifier, a `mesher` crate the client can
-> use without reaching the sim) is an owner decision at the walking skeleton. Raise it; do not split
-> the workspace on your own initiative.
+> **Internal boundaries — decided (decisions-log items 56 and 70).** There is **no `math` crate**:
+> the integer newtypes (`Fx` Q16.16, `Sq` Q32.32, `Angle` u16 + LUT, HP, `$`, `kW`, `Tick`, `Ms`),
+> the RNG streams, the canonical encoding, the state hash, HPA\* and the map generator stay as
+> modules inside `pharmakos-sim`. `plan-core`, `verifier` and `gateway` already depend on the sim
+> with `default-features = false` for exactly the snapshot and knowledge types such a crate would
+> split out, so it would add a crate without removing a dependency edge — and the determinism
+> contract stays in one crate, which is what makes "the determinism code" a nameable contract path
+> for §5 and for `cargo xtask ci`. Recorded honestly: the verifier and plan-core compile the whole
+> sim crate for a handful of types, which costs build time and keeps the sim's stepping API within
+> reach; the research-guard and the "no dry runs" review rule (rule 2 below) are the mitigation, not
+> the type system. Revisit only if the skeleton finds the verifier's build time or its reach into
+> the stepping API to be a real problem — the split is additive then (a `math` crate the sim
+> re-exports) and costs nothing now. **The greedy mesher is the one piece that did move:** it is its
+> own walled crate, `crates/mesher`, because the client must use it without reaching the sim and
+> because it must link without gdext. Do not split the workspace further on your own initiative.
 
 ### Dependency rules that CI enforces
 
@@ -274,14 +292,18 @@ integers before it is used.
 per-path allow-list, so the mechanism is this and nothing else:
 
 - The walled crates are named in one place: `WALLED_PACKAGES` in `xtask/src/main.rs` (today:
-  `presentation`, `solve`, `client-gdext`; only the last exists). `clippy.toml`'s header repeats the
-  list for readers.
+  `presentation`, `solve`, `client-gdext`, `mesher`; only the last two exist). `clippy.toml`'s
+  header repeats the list for readers.
 - `cargo xtask clippy` pass 1 lints the whole workspace *minus* those crates with the full deny set;
   pass 2 lints those crates with `-D warnings` plus the float, cast, hash-map and clock allowances,
   **passed on the command line**. Nothing in the source asks for the allowance.
-- `cargo xtask wall-guard` then fails the build if `plan-core`, `verifier`, `operator` or `gateway`
-  depends on a walled crate, transitively included. That dependency edge is what makes the allowance
-  safe, and it is only visible to CI because the wall is a crate.
+- `cargo xtask wall-guard` then fails the build if `sim`, `plan-core`, `verifier`, `operator` or
+  `gateway` depends on a walled crate, transitively included. That list is `WALL_GUARDED_PACKAGES`
+  in `xtask/src/main.rs` — the research guard's four crates plus the sim, which cannot join the
+  research guard because the sim is the crate that *defines* the `research` feature. The sim is on
+  the wall's list because it is the crate that owns hashed state, so it is the one the wall exists
+  to protect. That dependency edge is what makes the allowance safe, and it is only visible to CI
+  because the wall is a crate.
 - Adding a crate to `WALLED_PACKAGES` widens the allowance for that whole crate, so it is a contract
   change (§5) and needs owner approval.
 
@@ -424,13 +446,12 @@ cargo xtask ci --quick    # fmt, clippy, unit tests — the inner loop
 cargo xtask ci --fix      # rustfmt and the machine-applicable clippy fixes
 ```
 
-> **Status.** `xtask/src/main.rs` is written and its twelve steps cover items 1–9 below, but it has
-> never been compiled or run — there was no toolchain on the authoring machine — so treat the first
-> real `cargo xtask ci` as a shakedown run, after a `cargo fmt --all` pass over the tree. Items 10
-> and 11 are **not** in `xtask` today: scenarios are harness part 2 and currently live only in
-> `.github/workflows/nightly-scenarios.yml`, and the perf budgets arrive with the gates that set
-> them. The owner signs off the final step list, and the numeric budgets are Tuning values that the
-> gates in spec section 16 set.
+> **Status.** `xtask/src/main.rs` has been run and is green: its twelve steps cover items 1–9 below,
+> and the steps whose inputs do not exist yet (goldens, the determinism binary) report `skipped`
+> with a reason rather than `ok`. Items 10 and 11 are **not** in `xtask` today: scenarios are
+> harness part 2 and currently live only in `.github/workflows/nightly-scenarios.yml`, and the perf
+> budgets arrive with the gates that set them. The owner signs off the final step list, and the
+> numeric budgets are Tuning values that the gates in spec section 16 set.
 
 1. **Format** — `cargo fmt --all --check`.
 2. **Lints** — `cargo clippy --workspace --all-targets -- -D warnings`, run once with default
