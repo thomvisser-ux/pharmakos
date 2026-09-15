@@ -1,32 +1,143 @@
 // SPDX-FileCopyrightText: 2026 Pharmakos contributors
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Generated Protobuf types. Role from spec §15 (Architecture), "Schema": **Protobuf is
-//! the single source** — packages `gp.v1` (the game types) and `gp.api.v1` (the Seat
-//! Gateway surface).
+//! Generated Protobuf types for `gp.v1` and `gp.api.v1`, and the canonical
+//! proto-JSON codec that reads and writes them.
 //!
-//! Licensed MIT OR Apache-2.0, unlike the rest of the workspace, so the schema stays
-//! reusable outside the GPL game.
+//! Role from spec section 15 (Architecture), "Schema": **Protobuf is the
+//! single source** — package [`gp::v1`] is the game types (playbooks,
+//! templates, the rules table, the reserved script seams) and [`gp::api::v1`]
+//! is the Seat Gateway surface.
 //!
-//! # How the schema is handled
+//! Licensed `MIT OR Apache-2.0`, unlike the rest of the workspace, so the
+//! schema and the codec stay reusable outside the GPL'd game.
 //!
-//! * Playbooks and templates live on disk as **JSONC**: canonical proto JSON plus
-//!   comments, which the editor round-trips byte-for-byte.
-//! * An in-house descriptor generator produces JSON Schema; Buf's plugin is the fallback.
-//! * `buf breaking` runs in CI from day one. `.proto` files are contract files: changes
-//!   need owner approval.
+//! # What is in here
 //!
-//! # Reserved seams (spec §15, §18)
+//! | Module | What it is |
+//! |---|---|
+//! | [`gp`] | The generated prost types, checked in under `src/generated` |
+//! | [`json`] | Canonical proto3 JSON, encode **and** decode |
+//! | [`descriptor`] | The schema, read back out of the checked-in descriptor set |
+//! | [`scope`] | The method/scope table, and the JSON-RPC wire spellings |
+//! | [`fingerprint`] | The plan fingerprint's rule (the arithmetic is the sim's) |
+//!
+//! # Regenerating the checked-in tree
+//!
+//! `src/generated` is **committed**, so a plain `cargo build` needs neither
+//! `buf` nor `protoc`, and a schema change arrives as a reviewable diff, which
+//! is what a contract file wants. Two commands regenerate it, both run from
+//! the workspace root:
+//!
+//! ```sh
+//! cargo install protoc-gen-prost      # once; a dev tool, not a dependency
+//! buf build proto --exclude-source-info --as-file-descriptor-set \
+//!     -o crates/proto/src/generated/descriptor.binpb
+//! buf generate proto --template proto/buf.gen.yaml -o .
+//! ```
+//!
+//! `tests/generated.rs` runs both into a scratch directory and diffs the
+//! result against what is committed, so the tree cannot drift; it skips with a
+//! named reason when `buf` or the plugin is not installed.
+//!
+//! # The file format, in one paragraph
+//!
+//! A playbook on disk is a **JSONC** file: canonical proto JSON for `gp.v1`
+//! plus comments, which the editor round-trips byte for byte. This crate owns
+//! the canonical JSON half — field names as the `.proto` spells them, enum
+//! values as their bare value names, durations as bare numbers because every
+//! duration field is `int32` (decisions-log item 46), fields written in
+//! field-number order, and an unknown field **rejected** rather than stripped.
+//! The comment-and-formatting layer on top is `plan-core`'s (item 74).
+//!
+//! # Reserved seams (spec sections 15 and 18)
 //!
 //! Oneofs with only the `builtin` arm implemented — `operator {builtin|script}`,
-//! `mandate {builtin|script}`, `program {builtin|script}` — plus `author_kind SCRIPT` and
-//! a plan fingerprint. Alongside them, reserved field numbers: the v1 vocabulary's
-//! absentees (`set_flag`, `clear_flag`, `branch`, `repeat`, the flag predicates), player
-//! Dispatches, and field 7 on `Playbook` for the `kind` half of the envelope's
-//! kind/version tag. `Playbook.schema_version` is the version half and exists today; the
-//! `kind` half is a held field number, not a field, until the walking skeleton settles
-//! what it distinguishes (spec §15, §17 — see the comment on the reservation in
-//! `proto/gp/v1/playbook.proto`). Nothing on the script side executes in v1; the script
+//! `mandate {builtin|script}`, `program {builtin|script}` — plus
+//! `author_kind SCRIPT` and the plan fingerprint. Alongside them, reserved
+//! field numbers: the v1 vocabulary's absentees (`set_flag`, `clear_flag`,
+//! `branch`, `repeat`, the flag predicates), player Dispatches, `team_id`,
+//! capture, logistics and the radio predicates, each naming the version or
+//! stage it returns in. Nothing on the script side executes in v1; the script
 //! arm is v1.1 and the live conduit v1.2.
 //!
-//! Nothing is generated yet — placeholder until the schema work in the walking skeleton.
+//! `Playbook.kind` was the one held field number that this crate's walking-
+//! skeleton pass discharges: item 47 reserved field 7, item 76 defines it.
+
+/// The generated prost types.
+///
+/// Everything under here is written by `protoc-gen-prost` from the `.proto`
+/// files and committed; do not edit it by hand. The `#[allow]` list is the
+/// price of including generated code in a workspace whose lint set is tuned
+/// for code somebody wrote:
+///
+/// * `missing_docs` and friends — prost carries the `.proto` comments across,
+///   but not onto the `mod`s and `oneof` wrappers it synthesises;
+/// * `clippy::pedantic` — the generated names and shapes are protoc's, not
+///   ours, and renaming them would defeat the point of generating them.
+///
+/// **No determinism lint is allowed here**, and none needs to be. Generated
+/// prost code contains no float arithmetic, no `as` cast, no `HashMap` and no
+/// clock; AGENTS.md section 4.9 is explicit that an `#[allow]` on a
+/// determinism lint outside a walled crate is a workaround wearing a disguise,
+/// and `tests/lints.rs` asserts over the generated source text that none of
+/// the four is present.
+pub mod gp {
+    /// `gp.v1` — playbooks, templates, the rules table, the script seams.
+    pub mod v1 {
+        #![allow(
+            missing_docs,
+            unreachable_pub,
+            clippy::pedantic,
+            clippy::all,
+            reason = "generated by protoc-gen-prost; see the module comment on `gp`"
+        )]
+        include!("generated/gp/v1/gp.v1.rs");
+    }
+
+    /// `gp.api.v1` — the Seat Gateway surface.
+    pub mod api {
+        /// `gp.api.v1`.
+        pub mod v1 {
+            #![allow(
+                missing_docs,
+                unreachable_pub,
+                clippy::pedantic,
+                clippy::all,
+                reason = "generated by protoc-gen-prost; see the module comment on `gp`"
+            )]
+            include!("generated/gp/api/v1/gp.api.v1.rs");
+        }
+    }
+}
+
+pub mod descriptor;
+pub mod fingerprint;
+pub mod json;
+pub mod scope;
+
+mod wire;
+
+/// The compiled `FileDescriptorSet` for both packages, written by
+/// `buf build --as-file-descriptor-set` and committed beside the generated
+/// types.
+///
+/// It is the crate's single source for anything that has to agree with the
+/// `.proto` files at run time: the canonical JSON codec's field and enum
+/// tables, the reserved-number table, and the method/scope annotation. Source
+/// info (the comments) is excluded — nothing reads it, and it trebles the
+/// file.
+pub const DESCRIPTOR_SET: &[u8] = include_bytes!("generated/descriptor.binpb");
+
+/// The schema version this build of the crate speaks.
+///
+/// Minor versions add optional fields; a major version comes with a converter
+/// that is kept forever (spec section 10, "Versioning and reserved seams").
+pub const SCHEMA_VERSION: (u32, u32) = (1, 0);
+
+/// The `gp.v1` schema version as the message a playbook carries.
+#[must_use]
+pub fn schema_version() -> gp::v1::SchemaVersion {
+    let (major, minor) = SCHEMA_VERSION;
+    gp::v1::SchemaVersion { major, minor }
+}
