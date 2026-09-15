@@ -1,41 +1,133 @@
 // SPDX-FileCopyrightText: 2026 Pharmakos contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The deterministic simulation: the authoritative world and the only thing that advances
-//! time. Role from spec §15 (Architecture), simulation layer.
+//! The deterministic simulation: the authoritative world and the only thing
+//! that advances time. Role from spec section 15 (Architecture), simulation
+//! layer.
 //!
 //! # What lives here
 //!
-//! * **Deterministic sim** — fixed 20 Hz tick, integer maths, structure-of-arrays tables.
-//! * **World** — 32³ copy-on-write chunks with a 64-layer height cap, plus pathing and ETA
-//!   (our own HPA*, not `hierarchical_pathfinding`).
-//! * **Runner** — the Lull / Push / recap cycle, the playbook interpreter, the built-in
-//!   mandates and programs, the Quartermaster and the power grid.
-//! * **Replay** — the private deterministic replay (seed + playbooks + log) and the
-//!   shareable recording (keyframes plus state deltas and events), with a per-tick xxh3
-//!   state hash. Snapshot and restore are in the core.
+//! * **The determinism core** — the integer newtypes, the split seeded RNG
+//!   streams, the canonical encoding, the per-tick state hash, the
+//!   snapshot/restore round-trip, the `SoA` tables and the CSR broadphase.
+//!   Decisions log item 70 settled that there is **no `math` crate**: the
+//!   determinism contract (items 48–51, 62, 66) lives in one crate, which is
+//!   what makes "the determinism code" a nameable contract path for
+//!   AGENTS.md §5.
+//! * **The tick** — eleven named phases in a fixed order ([`world::PHASE_ORDER`]),
+//!   most of them still empty and each naming the task that fills it.
+//! * **The public type surface** — [`snapshot`], [`knowledge`] and [`rules`],
+//!   which `plan-core`, `verifier`, `gateway` and `operator` compile against
+//!   with `default-features = false`.
+//! * **The seams** spec section 15 keeps for later: [`seams::Operator`], the
+//!   abstract per-tick work counter, and the `program_id` on a beacon's
+//!   mandate.
+//! * **`fork`**, behind `feature = "research"` and nowhere else.
 //!
 //! # Rules this crate is held to
 //!
-//! * Integer-first maths: position `Q16.16`, squared distance `Q32.32` (range checks
-//!   compare r², never a square root), `u16` angles with a 4096-entry lookup table,
-//!   integer HP and $. Floats appear only in a walled presentation/solve module.
-//! * Determinism: split seeded RNG streams, ordered collections, no `HashMap`/`HashSet`,
-//!   no wall-clock time, overflow checks on in every profile. Cross-OS hash equality is a
-//!   CI gate. Per-seat integer kill-credit counters and their largest-remainder
-//!   apportionment (ties to the lowest seat id) are hashed state like everything else.
-//! * **`fork` is `research`-only.** This crate is the sole definer of the `research`
-//!   feature. Release builds never enable it; CI builds both configurations; and the
-//!   plan-core, verifier, operator and gateway crates may never depend on it, so the
-//!   "no dry runs" guarantee holds in every shipped build.
+//! The sim is a pure function of `(map seed, playbooks, rules hash)`. Two
+//! machines running the same binary on Windows, Linux and macOS must produce
+//! the **same per-tick xxh3 hash chain**, and every rule below exists because
+//! breaking it produces a desync that shows up days later as an unreproducible
+//! replay (AGENTS.md §4):
 //!
-//! Nothing is implemented yet — the crate is a placeholder until the G4 (determinism,
-//! save/restore, fork equivalence) and G1 (mesher) spikes land.
+//! * integer newtypes, never bare numbers; no floats; no `as` casts outside the
+//!   audited widening conversions in [`math`];
+//! * no `HashMap`/`HashSet`, no wall-clock time — `tests/confinement.rs`
+//!   asserts both against the crate's own **source text**, which is the one
+//!   lesson G2 and G3′ both wrote down: copy the test, do not merely rely on
+//!   the lint;
+//! * ordered iteration always, and **every sort key ends in a unique id**
+//!   (item 62). The `(f, h, node_id)` binary min-heap that convention was fixed
+//!   for arrives with T7's HPA\*; the convention binds every sort in the crate
+//!   from today;
+//! * split seeded RNG streams, never a global generator;
+//! * overflow checks on in every profile, so a wrap is a panic rather than a
+//!   silent platform difference — and nothing in a tick phase panics, because
+//!   every arithmetic form here says what it does at the limit;
+//! * **any field added to sim state must be added to three places in the same
+//!   pull request**: the state hash, the snapshot/restore round-trip, and the
+//!   golden files.
+//!
+//! # The determinism binary
+//!
+//! `cargo run -p pharmakos-sim --bin determinism -- --ticks N --out FILE` writes
+//! the per-tick chain that `cargo xtask ci`'s `determinism` step compares
+//! against `tests/golden/determinism/expected.hashes.txt`.
 
+pub mod chunks;
+pub mod encoding;
+pub mod knowledge;
+pub mod math;
+pub mod rules;
+pub mod seams;
+pub mod snapshot;
+pub mod tables;
+pub mod world;
+
+// `fork` is behind the feature at the *module* level, not just the function, so
+// a default build does not compile a line of it.
 #[cfg(feature = "research")]
-pub mod research {
-    //! Speculative stepping (`fork`) for the G4 spike and research builds.
-    //!
-    //! Compiled only under the `research` feature, which release builds never enable.
-    //! Nothing outside this module — and no other crate in the workspace — may expose it.
+pub mod research;
+
+pub use encoding::{ENCODING_VERSION, Enc, STATE_HASH_SEED, digest, hex};
+pub use rules::{RULES_PATH, RulesError, RulesTable};
+pub use snapshot::{SNAPSHOT_VERSION, Snapshot, SnapshotError};
+pub use world::{PHASE_ORDER, Phase, World, WorldConfig};
+
+/// The match seed the determinism harness runs on.
+///
+/// Arbitrary and pinned. It is a *harness* seed, not a game constant: T20
+/// replaces the harness run with a real segment and re-baselines the chain,
+/// explaining the movement in that pull request.
+pub const DETERMINISM_MATCH_SEED: u64 = 0x0102_0304_0506_0708;
+
+/// Seats the determinism harness runs.
+///
+/// Four, one more than v1's three, deliberately: the widest table the hash can
+/// be asked to cover is the one worth pinning, and per-seat apportionment with
+/// three possible damagers is what exercises the kill-credit cap when T14 adds
+/// it (G4's own reasoning, and its reason for running four seats).
+pub const DETERMINISM_SEATS: u32 = 4;
+
+/// Units per seat in the determinism harness.
+pub const DETERMINISM_UNITS_PER_SEAT: u32 = 50;
+
+/// Find `rules/rules.v1.json` from wherever the caller happens to stand.
+///
+/// Two probes, both relative: the repository root (where `cargo xtask` and the
+/// determinism binary run) and two levels up from it (where `cargo test` puts a
+/// crate's working directory). Relative rather than `CARGO_MANIFEST_DIR` so
+/// nothing bakes a build machine's absolute path into a shipped binary.
+#[must_use]
+pub fn default_rules_path() -> Option<std::path::PathBuf> {
+    let from_root = std::path::PathBuf::from(RULES_PATH);
+    if from_root.is_file() {
+        return Some(from_root);
+    }
+    let from_crate = std::path::Path::new("..").join("..").join(RULES_PATH);
+    if from_crate.is_file() {
+        return Some(from_crate);
+    }
+    None
+}
+
+/// Build the world the determinism harness and its goldens run on.
+///
+/// One constructor, used by the binary and by every test, so a golden can never
+/// disagree with the run that produced it.
+///
+/// # Errors
+///
+/// Returns [`RulesError`] when the rules table cannot be read from `path`.
+pub fn determinism_world(rules_path: &std::path::Path) -> Result<Option<World>, RulesError> {
+    let rules = RulesTable::load(rules_path)?;
+    Ok(World::new(&WorldConfig {
+        match_seed: DETERMINISM_MATCH_SEED,
+        seats: DETERMINISM_SEATS,
+        units_per_seat: DETERMINISM_UNITS_PER_SEAT,
+        chunk_count: chunks::SKELETON_CHUNK_COUNT,
+        rules,
+    }))
 }
