@@ -408,6 +408,14 @@
     "beginner": "This playbook spends more than the seat is likely to have."
   },
   {
+    "code": "W0603",
+    "family": "economy, power and messaging",
+    "severity": "WARNING",
+    "emitter": "none at the skeleton (S1, the estimate stage)",
+    "message": "the playbook adds {found} kW of draw beyond supply; `allow_dormant_beacons`                   accepts it, and the beacons past the supply stay dormant.",
+    "beginner": "Some of what this playbook switches on will have no power and will sit idle."
+  },
+  {
     "code": "W0701",
     "family": "schedule, conflicts and staleness",
     "severity": "WARNING",

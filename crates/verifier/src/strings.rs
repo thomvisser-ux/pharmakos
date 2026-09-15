@@ -323,6 +323,11 @@ pub const VERIFIER_STRINGS: &[Text] = &[
         message: "committed spending of {found} outruns the projected treasury of {available}.",
         beginner: "This playbook spends more than the seat is likely to have.",
     },
+    Text {
+        code: "W0603",
+        message: "the playbook adds {found} kW of draw beyond supply; `allow_dormant_beacons`                   accepts it, and the beacons past the supply stay dormant.",
+        beginner: "Some of what this playbook switches on will have no power and will sit idle.",
+    },
     // --- W07xx: schedule, conflicts and staleness ----------------------------
     Text {
         code: "W0701",
