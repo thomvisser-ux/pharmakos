@@ -92,9 +92,15 @@ pub const NO_COMP: u16 = u16::MAX;
 
 /// The largest cluster edge the decomposition indexes.
 ///
-/// A transition slot is a `u8`, so a cluster may hold at most 255 of them, and
-/// a cluster of edge `n` holds at most `2 * n`. 64 is also the top of the
-/// cluster sweep G2 measured, and 32 is the decided value (item 58).
+/// A cluster of edge `n` holds at most `4 * n` transitions (the derivation is
+/// in the module docs above) and at most `4n * (4n - 1)` directed intra edges.
+/// The intra rows index those edges with `u16` offsets, and `4n(4n - 1)` is
+/// 65 280 at `n = 64` against 65 792 at `n = 65`: one step past this ceiling,
+/// `set_intra_row` would start dropping writes it cannot convert
+/// and the graph would quietly lose edges. 64 is also the top of the cluster
+/// sweep G2 measured, and 32 is the decided value (item 58).
+/// `the_cluster_edge_ceiling_is_what_the_row_offsets_can_index` pins the
+/// arithmetic so a widened cap cannot truncate a row unnoticed.
 pub const MAX_CLUSTER_EDGE: i32 = 64;
 
 /// One border crossing: `a` in this cluster, `b` in the neighbouring one.
@@ -155,8 +161,13 @@ impl Clusters {
     /// Build the decomposition over `surface` at a cluster edge of `size`.
     ///
     /// `None` when `size` does not divide the map's footprint, is not positive,
-    /// or is above [`MAX_CLUSTER_EDGE`] — all three of which are rules-table
-    /// mistakes caught once, here, rather than every tick.
+    /// is above [`MAX_CLUSTER_EDGE`], or decomposes the map into more clusters
+    /// than the `u16` tags the decomposition indexes with can name — all four
+    /// of which are rules-table mistakes caught once, here, rather than every
+    /// tick. The fourth matters because the conversions that write those tags
+    /// are fallible and silent: a cluster above `u16::MAX` would leave every
+    /// column in it at `of_node = 0` and `local_comp = NO_COMP`, so the oracle
+    /// would answer confidently and wrongly rather than refusing to build.
     #[must_use]
     pub fn new(surface: &Surface, size: i32, scratch: &mut Scratch) -> Option<Clusters> {
         let extent = surface.size();
@@ -168,6 +179,9 @@ impl Clusters {
         let nx = sx.checked_div(size)?;
         let ny = sy.checked_div(size)?;
         let clusters = usize::try_from(nx.checked_mul(ny)?).ok()?;
+        if clusters > usize::from(u16::MAX).saturating_add(1) {
+            return None;
+        }
         let nodes = usize::try_from(surface.node_count()).ok()?;
         let per_border = usize::try_from(size).ok()?;
         let max_trans = per_border.checked_mul(4)?;
@@ -714,8 +728,12 @@ impl Clusters {
     ///
     /// The plan's wording is "a bounded A\* between each pair"; the sweep
     /// computes the **same edge set with the same costs** for a fifth of the
-    /// work, and `both_intra_methods_agree` in `tests/pathing.rs` is the check
-    /// rather than the argument.
+    /// work. `an_intra_edge_is_the_cost_of_the_path_it_stands_for` in
+    /// `tests/pathing.rs` is the check on the costs half, and it is a
+    /// **sampled** one — the first two targets of every transition slot on
+    /// every seventh cluster, each re-walked with a bounded A\* inside the
+    /// cluster. Nothing compares the edge *sets* exhaustively; that is the half
+    /// of the claim the argument still carries.
     pub fn rebuild_intra(&mut self, surface: &Surface, scratch: &mut Scratch, cluster: usize) {
         let Ok(tag) = u16::try_from(cluster) else {
             return;

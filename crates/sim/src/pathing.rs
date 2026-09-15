@@ -48,9 +48,12 @@
 //! # Nothing here allocates inside a tick
 //!
 //! Every structure below fixes its size at construction from the map extent and
-//! the cluster edge, and the bounds are arithmetic rather than hope: a border
-//! of `n` cells holds at most `n / 2` maximal runs, so a cluster carries at
-//! most `2 * cluster_edge` transition nodes and at most
+//! the cluster edge, and the bounds are arithmetic rather than hope. The
+//! derivation lives once, in [`clusters`]'s module docs, and the short form is:
+//! a border of `n` cells holds at most `n` maximal runs — `n`, not `n / 2`,
+//! because two adjacent border cells can each be crossable without being
+//! steppable to each other along the border — so a cluster carries at most
+//! `4 * cluster_edge` transition nodes and at most
 //! `max_trans * (max_trans - 1)` directed intra edges. `tests/allocations.rs`
 //! is the check, and it craters on every measured tick.
 //!

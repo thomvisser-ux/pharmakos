@@ -434,7 +434,7 @@ impl World {
     /// second set of dense arrays.
     ///
     /// Nothing in it is state: a query leaves the scratch different and the
-    /// world identical, which `a_query_does_not_change_the_world` asserts.
+    /// world identical, which `a_query_leaves_the_graph_alone` asserts.
     pub const fn scratch_mut(&mut self) -> &mut Scratch {
         &mut self.scratch
     }
@@ -461,6 +461,10 @@ impl World {
     ///
     /// The report half of item 60's "park and report": the seat learns through
     /// this until T10's event bus exists to carry it as an event.
+    ///
+    /// PLACEHOLDER: the report half of "park and report" is a count read by a
+    /// caller, not an event pushed to the seat, because there is no event bus
+    /// to push it onto — owner, at T10.
     #[must_use]
     pub fn sealed_units(&self) -> u32 {
         let mut count: u32 = 0;
@@ -792,7 +796,11 @@ impl World {
     ///    it through per-chunk digests (item 66): a column that grows with the
     ///    map does not belong in a per-tick encoding. The nodes themselves
     ///    travel in the snapshot, and a restore that produced a different route
-    ///    would show up here as a moved digest.
+    ///    shows up as a moved digest — which is a claim only because
+    ///    [`crate::snapshot::Snapshot`] recomputes every carried digest from the
+    ///    restored nodes and refuses the file with
+    ///    [`crate::snapshot::SnapshotError::RouteDigest`] when the two
+    ///    disagree, exactly as it does for the chunk store.
     ///
     /// The rules table, the voxel bytes, the broadphase and the work counter
     /// are **not** here. The first, third and fourth are inputs or derived
@@ -1063,11 +1071,14 @@ fn fill_unit_table(
 fn build_graph(surface: &Surface, cluster_voxels: i32) -> Option<(Clusters, Scratch)> {
     let mut scratch = Scratch::for_map(surface, cluster_voxels)?;
     let clusters = Clusters::new(surface, cluster_voxels, &mut scratch)?;
-    debug_assert_eq!(
-        clusters.abstract_capacity(),
-        Scratch::abstract_capacity_for(surface, cluster_voxels).unwrap_or(0),
-        "the scratch was sized for a different abstract numbering than the decomposition uses"
-    );
+    // A real check rather than a `debug_assert!`: this is the only thing tying
+    // the scratch's independent derivation of the abstract numbering to the
+    // decomposition's, and a release build is exactly where a scratch sized for
+    // a different numbering would go unnoticed — the arrays would be short and
+    // a query would read a slot that is not there.
+    if clusters.abstract_capacity() != Scratch::abstract_capacity_for(surface, cluster_voxels)? {
+        return None;
+    }
     Some((clusters, scratch))
 }
 

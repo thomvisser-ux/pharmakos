@@ -216,7 +216,12 @@ impl Scratch {
             abstract_heap: Heap::with_capacity(a.saturating_mul(4)),
             start_edges: Vec::with_capacity(a.min(1024)),
             goal_edges: Vec::with_capacity(a.min(1024)),
-            abstract_path: Vec::with_capacity(1024),
+            // A reconstructed abstract path visits each abstract node at most
+            // once and the two temporary endpoint nodes besides, and the
+            // reconstruction's own guard is that same `a`, so this is a bound
+            // and not a measurement — unlike `abstract_heap` above, which is a
+            // measured capacity and says so.
+            abstract_path: Vec::with_capacity(a.saturating_add(2)),
             raw: Vec::with_capacity(usize::try_from(crate::pathing::MAX_ROUTE_NODES).unwrap_or(0)),
             leg: Vec::with_capacity(usize::try_from(cluster_cells).unwrap_or(0)),
             line: Vec::with_capacity(usize::try_from(cluster_cells).unwrap_or(0)),
@@ -250,8 +255,10 @@ impl Scratch {
     }
 
     /// How many abstract node slots a decomposition of `surface` at this
-    /// cluster edge spans: `clusters * 4 * (cluster_edge / 2)`, the bound the
-    /// module docs derive.
+    /// cluster edge spans: `clusters * 4 * cluster_edge`, the bound
+    /// [`crate::pathing::clusters`]'s module docs derive — four borders of
+    /// `cluster_edge` cells each, and a border of `n` cells can hold `n`
+    /// maximal runs rather than `n / 2`.
     ///
     /// `None` when the cluster edge cannot decompose the map.
     #[must_use]
