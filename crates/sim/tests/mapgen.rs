@@ -401,6 +401,75 @@ fn the_terrain_has_no_overhangs_and_no_cliffs() {
 }
 
 #[test]
+fn spawn_zones_are_flat_inside_and_ramped_at_the_rim() {
+    // What a zone actually promises, said exactly. `flatten_zones` levels the
+    // whole disc to the height at its centre, and *then* the 1-Lipschitz
+    // closure runs and only ever lowers, so where the ground outside the zone
+    // is lower the closure cuts the zone's outer ring into a ramp — one voxel
+    // per voxel, never a step. The inner disc is untouched by that, because the
+    // closure can only reach `d` voxels in from the rim if the outside is `d`
+    // voxels down.
+    //
+    // Pinned at both ends so neither claim can drift: the inner half is exactly
+    // level, and the rim's ramp is at most RIM_DROP voxels deep across the whole
+    // committed seed set. A change that widens the ramp moves this number, and
+    // moving it is a statement about what a seat can build on.
+    const RIM_DROP: i32 = 6;
+
+    let radius = i32::try_from(
+        rules()
+            .message()
+            .map
+            .expect("the map block")
+            .spawn_zone_radius_voxels,
+    )
+    .unwrap();
+    // Half the radius, as a shift: `clippy::integer_division` is denied and a
+    // shift's floor is this crate's documented rounding.
+    let inner2 = (radius >> 1) * (radius >> 1);
+    let mut worst = 0;
+    for seed in SEEDS {
+        let map = generate(seed);
+        for zone in &map.report.zones {
+            let (cx, cy) = (zone.centre[0], zone.centre[1]);
+            let level = map.voxels.top_solid_z(cx, cy).unwrap();
+            let mut dy = -radius;
+            while dy <= radius {
+                let mut dx = -radius;
+                while dx <= radius {
+                    let d2 = dx * dx + dy * dy;
+                    if d2 <= radius * radius {
+                        let top = map.voxels.top_solid_z(cx + dx, cy + dy).unwrap();
+                        let drop = level - top;
+                        assert!(
+                            drop >= 0,
+                            "seed {}: a column inside the zone at ({dx}, {dy}) is above the flattened level",
+                            hex(seed)
+                        );
+                        if d2 <= inner2 {
+                            assert_eq!(
+                                drop,
+                                0,
+                                "seed {}: the inner half of a zone is not level: ({dx}, {dy}) is {drop} down",
+                                hex(seed)
+                            );
+                        }
+                        worst = worst.max(drop);
+                    }
+                    dx += 1;
+                }
+                dy += 1;
+            }
+        }
+    }
+    assert!(
+        worst <= RIM_DROP,
+        "the zone rim now ramps {worst} voxels down, past the {RIM_DROP} this test pins: either \
+         the terrain got lumpier or the flattening changed, and the pull request owes which"
+    );
+}
+
+#[test]
 fn an_unoccupied_zone_is_terrain_and_nothing_else() {
     // Item 90: only OCCUPIED zones are realised. One seat on a three-zone map
     // leaves two zones with no core, no vent and no seam.
@@ -609,9 +678,11 @@ fn the_world_takes_its_map_from_the_generator() {
 fn the_per_seed_digests_match_their_golden() {
     let mut fresh = String::new();
     for seed in SEEDS {
-        let report = generate(seed).report;
-        let digest = generate(seed).voxels.store_digest();
-        fresh.push_str(&line(seed, digest, &report));
+        // One generation per seed, not two: a `GeneratedMap` carries both halves
+        // of the line, and this is the slowest test in the crate.
+        let map = generate(seed);
+        let digest = map.voxels.store_digest();
+        fresh.push_str(&line(seed, digest, &map.report));
     }
 
     if let Some(target) = target_dir() {

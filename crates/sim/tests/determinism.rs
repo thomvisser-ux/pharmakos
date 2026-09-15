@@ -26,7 +26,7 @@ use pharmakos_sim::math::fixed::{Fx, Sq};
 use pharmakos_sim::math::quantity::{Ms, Tick};
 use pharmakos_sim::snapshot::{SNAPSHOT_VERSION, Snapshot, SnapshotError};
 use pharmakos_sim::tables::SeatId;
-use pharmakos_sim::voxels::{Material, VoxelEdit};
+use pharmakos_sim::voxels::{Material, VoxelEdit, VoxelStore};
 use pharmakos_sim::world::{PHASE_ORDER, Phase};
 use pharmakos_sim::{RulesError, RulesTable, World, WorldConfig};
 
@@ -839,7 +839,11 @@ fn the_default_rules_path_is_relative() {
 /// Every chunk's bytes, copied, so a test can say exactly which ones an edit
 /// changed rather than trusting the store's own account of it.
 fn snapshot_chunks(world: &World) -> Vec<Vec<u8>> {
-    let voxels = world.voxels();
+    store_chunks(world.voxels())
+}
+
+/// Every chunk's bytes, in chunk-index order, copied out of a bare store.
+fn store_chunks(voxels: &VoxelStore) -> Vec<Vec<u8>> {
     let mut out: Vec<Vec<u8>> = Vec::with_capacity(usize::try_from(voxels.chunk_count()).unwrap());
     let mut chunk: u32 = 0;
     while chunk < voxels.chunk_count() {
@@ -979,6 +983,115 @@ fn a_craters_touched_chunks_are_ordered_and_complete() {
             "chunk {chunk}'s digest is not the digest of its bytes"
         );
     }
+}
+
+#[test]
+fn the_crater_primitive_reports_the_chunks_it_changed() {
+    // The `pub` contract of `VoxelStore::crater` itself, which the phase above
+    // does not exercise: the phase throws the report away and settles from the
+    // store's own pending set instead. S2 is the first caller that will read
+    // the report, and a report that is short by one chunk is a chunk whose
+    // digest is never refreshed — a desync with nothing in the tick to catch it.
+    let mut voxels = pharmakos_sim::mapgen::generate(
+        pharmakos_sim::DETERMINISM_MATCH_SEED,
+        &rules(),
+        pharmakos_sim::DETERMINISM_SEATS,
+    )
+    .expect("the committed rules table makes a map")
+    .voxels;
+    let mut touched: Vec<u32> = Vec::new();
+
+    // On a chunk corner, so the ball spans chunks in all three axes.
+    let (x, y) = (128, 128);
+    let z = voxels.top_solid_z(x, y).expect("a column with a floor");
+    let before = store_chunks(&voxels);
+    let removed = voxels.crater([x, y, z], 6, &mut touched);
+    let after = store_chunks(&voxels);
+    assert!(removed > 0, "the crater removed nothing");
+    assert!(
+        touched.len() >= 2,
+        "the crater was meant to span chunks; it reported {touched:?}"
+    );
+    assert!(
+        touched.windows(2).all(|w| w[0] < w[1]),
+        "the report is not strictly ascending: {touched:?}"
+    );
+    assert_eq!(
+        touched,
+        changed_chunks(&before, &after),
+        "the report is not exactly the chunks whose bytes changed"
+    );
+
+    // A second, overlapping ball. This is the assertion that matters: it is
+    // only complete if the first call reset every `touch_flag` it set, and a
+    // stale flag would silently drop a chunk from this report.
+    let before = store_chunks(&voxels);
+    let removed = voxels.crater([x + 3, y + 3, z], 6, &mut touched);
+    let after = store_chunks(&voxels);
+    assert!(removed > 0, "the overlapping crater removed nothing");
+    assert_eq!(
+        touched,
+        changed_chunks(&before, &after),
+        "the second, overlapping report is not exactly what changed"
+    );
+
+    // A ball entirely inside what is already air changes nothing and reports
+    // nothing — the same rule `VoxelStore::set` follows, one level up.
+    let removed = voxels.crater([x, y, z], 2, &mut touched);
+    assert_eq!(removed, 0);
+    assert!(
+        touched.is_empty(),
+        "a crater that changed nothing reported {touched:?}"
+    );
+}
+
+#[test]
+fn a_restore_refuses_a_digest_column_that_does_not_describe_its_store() {
+    // The digests are hashed state, so a file whose digest column disagrees with
+    // the store the restore rebuilt describes a world that hashes something its
+    // own voxels do not say. Every other column is ragged-checked; this one is
+    // checked in length *and* in value, because a digest of the right length and
+    // the wrong value is the case a length check misses.
+    let mut world = world_with(rules());
+    let mut enc = Enc::with_capacity(64 * 1024);
+    let (at, _) = a_solid_voxel(&world, 96, 96);
+    assert!(world.request_voxel_edit(VoxelEdit::Crater {
+        centre: at,
+        radius: 5
+    }));
+    let _ = world.step(&mut enc);
+
+    let good = Snapshot::capture(&world);
+    let mut fresh = world_with(rules());
+    good.restore_into(&mut fresh)
+        .expect("the unedited snapshot restores");
+
+    // One digest short.
+    let mut short = good.clone();
+    short.chunk_digest.pop();
+    let mut into = world_with(rules());
+    assert_eq!(
+        short.restore_into(&mut into),
+        Err(SnapshotError::Ragged("chunk_digest"))
+    );
+
+    // One digest too many.
+    let mut long = good.clone();
+    long.chunk_digest.push(0);
+    let mut into = world_with(rules());
+    assert_eq!(
+        long.restore_into(&mut into),
+        Err(SnapshotError::Ragged("chunk_digest"))
+    );
+
+    // The right length, one bit wrong.
+    let mut flipped = good.clone();
+    flipped.chunk_digest[7] ^= 1;
+    let mut into = world_with(rules());
+    assert_eq!(
+        flipped.restore_into(&mut into),
+        Err(SnapshotError::ChunkDigest { chunk: 7 })
+    );
 }
 
 #[test]
