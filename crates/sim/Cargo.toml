@@ -28,16 +28,22 @@ default = []
 research = []
 
 [dependencies]
-# Three, all from [workspace.dependencies] with exact `=` pins, all decided by spike G4:
+# Four, all from [workspace.dependencies]. Three carry exact `=` pins and were decided by
+# spike G4:
 #   * xxhash-rust — the per-tick state hash (item 48). No second hash function exists.
 #   * postcard    — the snapshot/replay encoding (item 49). rkyv was measured and rejected.
 #   * serde       — postcard's companion, for the derives on `Snapshot`. Nothing else uses it.
+# The fourth is the schema, which AGENTS.md §3's crate map has always had the sim taking:
+#   * pharmakos-proto — gp.v1, and the canonical proto-JSON codec that reads
+#     rules/rules.v1.json into `gp.v1.RulesTable` (items 74 and 78). It is the ONLY JSON
+#     reader in the sim: src/rules.rs's stand-in parser was deleted when T1 merged, so one
+#     codec answers for the sim, the verifier and the editor alike.
 # Still expected later: imbl (ordered persistent collections) and pathfinding primitives
-# under our own HPA* (T7). `pharmakos-proto` joins when T1's gp.v1.RulesTable lands and
-# src/rules.rs's placeholder JSON reader is deleted.
+# under our own HPA* (T7).
 xxhash-rust = { workspace = true }
 postcard = { workspace = true }
 serde = { workspace = true }
+pharmakos-proto = { workspace = true }
 
 [lints]
 workspace = true
