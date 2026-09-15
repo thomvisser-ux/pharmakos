@@ -53,7 +53,7 @@ use crate::encoding::digest;
 use crate::mapgen::{self, MapError};
 use crate::math::fixed::{Angle, Fx};
 use crate::math::quantity::{Hp, Kw, Money, Tick};
-use crate::pathing::router::RestoredRouter;
+use crate::pathing::router::{RestoredRouter, first_route_digest_mismatch};
 use crate::tables::{
     BeaconColumns, BeaconTable, SeatTable, StructureColumns, StructureTable, UnitColumns,
     UnitTable, WreckTable,
@@ -220,6 +220,15 @@ pub enum SnapshotError {
         /// The chunk the digests disagree at, the lowest one.
         chunk: u32,
     },
+    /// A carried route digest is not the digest of the route nodes beside it.
+    /// The route reaches the state hash as a digest, so a world restored from
+    /// such a file would walk one route and hash another until that unit's next
+    /// repath — a desync with nothing red in front of it. Refused for the same
+    /// reason [`SnapshotError::ChunkDigest`] is.
+    RouteDigest {
+        /// The unit the digests disagree at, the lowest one.
+        unit: u32,
+    },
 }
 
 impl core::fmt::Display for SnapshotError {
@@ -246,6 +255,11 @@ impl core::fmt::Display for SnapshotError {
                 f,
                 "the snapshot's digest for chunk {chunk} is not the digest of the chunk this \
                  build rebuilt from the same seed"
+            ),
+            SnapshotError::RouteDigest { unit } => write!(
+                f,
+                "the snapshot's route digest for unit {unit} is not the digest of the route \
+                 nodes it carries"
             ),
         }
     }
@@ -483,7 +497,12 @@ impl Snapshot {
     ///
     /// Returns [`SnapshotError::Ragged`] when the per-unit columns disagree in
     /// length, or when the packed routes are not exactly as long as the lengths
-    /// say.
+    /// say, and [`SnapshotError::RouteDigest`] when a carried digest is not the
+    /// digest of the nodes beside it — the claim in
+    /// [`crate::world::World::encode`]'s docs, that a restore producing a
+    /// different route shows up as a moved digest, is only true because it is
+    /// checked here (the chunk store's digests get the same argument and the
+    /// same check).
     fn restore_router(&self) -> Result<RestoredRouter, SnapshotError> {
         let walkers = self.unit_id.len();
         if self.unit_walk_state.len() != walkers
@@ -501,6 +520,13 @@ impl Snapshot {
         }
         if packed != self.route_nodes.len() {
             return Err(SnapshotError::Ragged("route_nodes"));
+        }
+        if let Some(unit) = first_route_digest_mismatch(
+            &self.unit_route_len,
+            &self.unit_route_hash,
+            &self.route_nodes,
+        ) {
+            return Err(SnapshotError::RouteDigest { unit });
         }
         Ok(RestoredRouter {
             state: self.unit_walk_state.clone(),
