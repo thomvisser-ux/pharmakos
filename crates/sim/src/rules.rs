@@ -62,7 +62,7 @@
 //! | [`step_cardinal`](RulesTable::step_cardinal) | `locomotion.step_cost_cardinal` |
 //! | [`step_diagonal`](RulesTable::step_diagonal) | `locomotion.step_cost_diagonal` |
 //! | [`climb_surcharge`](RulesTable::climb_surcharge) | `locomotion.climb_surcharge` |
-//! | [`move_cost_per_tick`](RulesTable::move_cost_per_tick) | `locomotion.move_cost_per_tick` |
+//! | [`move_cost_per_tick`](RulesTable::move_cost_per_tick) | `locomotion.move_cost_per_tick` (superseded by item 90's per-kind rows; unread) |
 //! | [`repath_cap_per_tick`](RulesTable::repath_cap_per_tick) | `locomotion.repath_cap_per_tick` |
 //! | [`csr_cell_size_voxels`](RulesTable::csr_cell_size_voxels) | `broadphase.cell_size_voxels` |
 //! | [`segment_lengths_ms`](RulesTable::segment_lengths_ms) | `match.segment_lengths_ms` |
@@ -127,9 +127,17 @@ pub struct RulesTable {
     ///
     /// PLACEHOLDER: `no gameplay evidence behind it` (item 59) — owner, at S3.
     climb_surcharge: i32,
-    /// Path cost a unit covers per tick. `3` (item 59). Cost to ticks rounds by
-    /// **ceiling**, which is T7's to implement and item 59's to fix. From
+    /// Path cost a unit covers per tick. `3` (item 59). From
     /// `locomotion.move_cost_per_tick`.
+    ///
+    /// **SUPERSEDED** by item 90's per-kind `locomotion.*_cost_per_second`
+    /// rows, which express the same model in cost units per second: T7
+    /// integrates those with an accumulator (add `cost_per_second` per tick,
+    /// spend one cost unit per 20 accumulated) and estimates with
+    /// `ceil(cost * 20 / cost_per_second)` ticks, which is where item 59's
+    /// **ceiling** rule now lives. Nothing reads this row; it stays in the
+    /// schema because deleting a field is a `buf breaking` failure in
+    /// `WIRE_JSON` mode.
     move_cost_per_tick: i32,
     /// Repaths served per tick, round-robin by `(seat, beacon, unit)`. `16`
     /// (item 69). From `locomotion.repath_cap_per_tick`.
@@ -221,6 +229,10 @@ impl RulesTable {
     }
 
     /// Path cost a unit covers per tick (`locomotion.move_cost_per_tick`).
+    ///
+    /// **Superseded** by item 90's per-kind `locomotion.*_cost_per_second`
+    /// rows; see the field's documentation. Nothing reads this, and T7 should
+    /// reach for the per-kind rows instead.
     #[must_use]
     pub const fn move_cost_per_tick(&self) -> i32 {
         self.move_cost_per_tick
