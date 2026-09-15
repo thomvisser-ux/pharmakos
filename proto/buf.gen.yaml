@@ -8,8 +8,24 @@
 # descriptor generator produces the JSON Schema that the editor and
 # get_schema serve (Buf's protoschema plugin is the fallback).
 #
-# Run from the workspace root, with this directory as the input:
-#   buf generate proto
+# Regenerating the checked-in tree - both commands, from the WORKSPACE ROOT:
+#
+#   buf build proto --exclude-source-info --as-file-descriptor-set -o crates/proto/src/generated/descriptor.binpb
+#   buf generate proto --template proto/buf.gen.yaml -o .
+#
+# The first is the descriptor set the canonical JSON codec, the reserved-number
+# table and the method/scope table are all driven from, so none of the three can
+# drift from the .proto files. Source info (the comments) is excluded: nothing
+# reads it at run time and it trebles the file. The second writes the prost
+# types. `--template` is needed because `buf generate` looks for a buf.gen.yaml
+# in the directory it is invoked from, and this one lives beside the schemas.
+#
+# The `-o .` is why the `out:` path below is workspace-relative rather than
+# `../crates/...`: the same template can then be generated into a scratch
+# directory (`-o <tmp>`) and diffed against what is committed, which is exactly
+# what crates/proto's `the_checked_in_tree_matches_a_fresh_generation` test
+# does. Running from the root is also what proto/buf.yaml's header and
+# `cargo xtask ci` do, for the `.git#branch=main` reason recorded there.
 #
 # WHICH CRATE OWNS THE GENERATED CODE: crates/proto, package pharmakos-proto —
 # Cargo.toml's `members`, AGENTS.md section 3's crate map and README.md's
@@ -23,14 +39,16 @@
 # set at build time) is deliberately not taken: a checked-in tree means a plain
 # `cargo build` needs neither buf nor protoc, and a schema change arrives as a
 # reviewable diff — which is what a contract file wants. crates/proto's
-# Cargo.toml says the same thing, and `cargo xtask ci` is where the
-# regenerate-and-compare check belongs once the schema lands (AGENTS.md
+# Cargo.toml says the same thing, and the regenerate-and-compare check lives in
+# that crate's own test suite as well as in `cargo xtask ci` (AGENTS.md
 # section 9, item 8: generated output must match what is committed).
 #
-# NOT EXECUTED: no toolchain is installed on the authoring machine (no cargo,
-# no protoc, no buf), so nothing below has been run. The plugin choices and
-# versions are PLACEHOLDERs to be pinned when the schema work lands in the
-# walking skeleton (spec section 17).
+# The one plugin is installed with
+#
+#   cargo install protoc-gen-prost
+#
+# which is a dev tool, not a dependency of anything that ships. `buf` carries
+# its own compiler, so `protoc` itself is not needed to regenerate.
 
 version: v2
 
@@ -41,31 +59,41 @@ managed:
   enabled: false
 
 plugins:
-  # Rust message types. `local:` means the plugin binary is on PATH; it is
-  # installed by `cargo xtask ci` bootstrap (harness part 1, weeks 3-5).
+  # Rust message types.
+  #
+  #   enable_type_names  - `impl prost::Name`, so a message knows its own
+  #                        fully-qualified name and the canonical JSON codec
+  #                        can find it in the descriptor set without the
+  #                        caller spelling the name out.
+  #
+  # There is deliberately no protoc-gen-prost-crate here. It wants to own a
+  # `mod.rs` per package and drops one of the two when both are generated at
+  # once; the module wiring is four lines, so crates/proto/src/lib.rs writes
+  # them by hand and `generated/` stays a tree nothing but a generator ever
+  # writes.
+  #
+  # There is also no `file_descriptor_set` option. That option embeds one
+  # descriptor set PER PACKAGE as a Rust byte literal, which is two copies of
+  # overlapping data and about half a megabyte of unreviewable source. The
+  # descriptor set is produced once instead, by the buf build above, and
+  # `include_bytes!` puts it where the codec needs it.
   - local: protoc-gen-prost
-    out: ../crates/proto/src/generated
+    out: crates/proto/src/generated
     opt:
-      - bytes=.
-      - compile_well_known_types
-      - file_descriptor_set
+      - enable_type_names
 
-  # Canonical proto JSON <-> Rust. Playbooks are read and written as JSONC, so
-  # the JSON mapping is part of the contract, not a convenience.
-  # PLACEHOLDER: pin the plugin choice (protoc-gen-prost-serde vs an in-house
-  # canonical-JSON codec) before the schema is frozen — round-tripping
-  # comments and field order is an editor requirement (spec section 10).
-  - local: protoc-gen-prost-serde
-    out: ../crates/proto/src/generated
-
-  # `mod.rs` for the generated tree.
-  - local: protoc-gen-prost-crate
-    out: ../crates/proto/src/generated
-    opt:
-      - no_features
+# DECIDED (decisions-log item 74): there is no JSON plugin here, and there will
+# not be one. The canonical proto3-JSON codec is HAND-WRITTEN in crates/proto
+# (`pharmakos_proto::json`), driven by the descriptor set above; the JSONC
+# comment-and-formatting layer sits on top of it in plan-core. Neither
+# protoc-gen-prost-serde nor pbjson is added: both are unapproved dependencies
+# (AGENTS.md section 3 rule 5), both would give the project two JSON paths that
+# can drift, and neither solves the byte-exact comment round-trip that spec
+# section 13 requires. This resolves the prost-serde PLACEHOLDER that stood
+# here. The price is that the project owns a codec which must track the proto3
+# JSON mapping by hand; the round-trip goldens hold it honest.
 
 # The JSON Schema the editor and `get_schema` serve is NOT generated here.
-# It is produced by the in-house descriptor generator from a descriptor set:
-#   buf build proto -o target/gp-descriptor.binpb --as-file-descriptor-set
-# (from the workspace root) then `cargo xtask schema`. Buf's protoschema-plugins
-# are the fallback if the in-house generator stalls (spec section 15).
+# It is produced by the in-house descriptor generator from the descriptor set
+# this template already emits, by `cargo xtask schema`. Buf's protoschema
+# plugins are the fallback if the in-house generator stalls (spec section 15).
