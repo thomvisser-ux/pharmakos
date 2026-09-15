@@ -110,6 +110,22 @@ jobs:
           version: latest
           github_token: ${{ github.token }}
 
+      - name: Install protoc-gen-prost
+        shell: bash
+        # crates/proto's `the_checked_in_tree_matches_a_fresh_generation` regenerates
+        # src/generated with `buf generate` and diffs it against what is committed, which
+        # needs buf's prost plugin as well as buf itself. Without this step the test
+        # skipped on every runner and the committed tree — a checked-in artefact of the
+        # .proto contract files — could drift from proto/** with CI green; the test now
+        # honours PHARMAKOS_REQUIRE_TOOLS and fails instead, so the install is what keeps
+        # the leg green honestly.
+        #
+        # The version is PINNED, not `latest`: the check is a byte-for-byte comparison of
+        # generated source, so a new plugin release that changes its output by a line
+        # would fail every PR until someone regenerated. 0.5.0 is the version the tree was
+        # generated with. Raising it means regenerating the tree in the same commit.
+        run: cargo install protoc-gen-prost --version 0.5.0 --locked
+
       - name: Install cargo-deny
         uses: taiki-e/install-action@v2
         with:
