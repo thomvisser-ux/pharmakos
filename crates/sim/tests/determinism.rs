@@ -528,7 +528,7 @@ fn the_repath_cap_is_a_rule_not_a_knob() {
     assert_ne!(
         chain(&mut world_with(altered), 200),
         reference,
-        "the repath cap left the hash chain alone; it decides which unit repaths on which          tick (items 60 and 69), so it is a rule and it has to move the chain"
+        "the repath cap left the hash chain alone; it decides which unit repaths on which tick (items 60 and 69), so it is a rule and it has to move the chain"
     );
 }
 
@@ -1069,6 +1069,65 @@ fn the_crater_primitive_reports_the_chunks_it_changed() {
     assert!(
         touched.is_empty(),
         "a crater that changed nothing reported {touched:?}"
+    );
+}
+
+#[test]
+fn a_restore_refuses_a_route_digest_that_does_not_describe_its_nodes() {
+    // The same argument as the chunk digests one line below, for the other
+    // thing that reaches the state hash as a digest over bytes the encoding
+    // does not carry. A route's nodes travel in the snapshot beside its digest,
+    // and `World::encode`'s docs claim that a restore producing a different
+    // route shows up as a moved digest. That claim is only true if the restore
+    // recomputes the digest: a file whose `route_nodes` and `unit_route_hash`
+    // disagree would otherwise restore into a world that walks one route and
+    // hashes another, with nothing red in front of it until a replay
+    // disagreed.
+    let mut world = world_with(rules());
+    let mut enc = Enc::with_capacity(64 * 1024);
+    let mut tick = 0;
+    while tick < 8 {
+        let _ = world.step(&mut enc);
+        tick += 1;
+    }
+
+    let good = Snapshot::capture(&world);
+    let walker = good
+        .unit_route_len
+        .iter()
+        .position(|len| *len > 1)
+        .expect("some unit is walking a route by tick 8");
+    let mut fresh = world_with(rules());
+    good.restore_into(&mut fresh)
+        .expect("the unedited snapshot restores");
+
+    // The digest of the right width and the wrong value.
+    let mut flipped = good.clone();
+    flipped.unit_route_hash[walker] ^= 1;
+    let mut into = world_with(rules());
+    let before = into.state_hash();
+    assert_eq!(
+        flipped.restore_into(&mut into),
+        Err(SnapshotError::RouteDigest {
+            unit: u32::try_from(walker).expect("a unit index fits a u32")
+        })
+    );
+    assert_eq!(into.state_hash(), before, "a refused restore changed state");
+
+    // The nodes edited under a digest that still describes the old ones: the
+    // case a length check cannot see at all.
+    let mut edited = good.clone();
+    let first: usize = good.unit_route_len[..walker]
+        .iter()
+        .map(|len| usize::try_from(*len).expect("a route length fits a usize"))
+        .sum();
+    edited.route_nodes[first] ^= 1;
+    let mut into = world_with(rules());
+    assert_eq!(
+        edited.restore_into(&mut into),
+        Err(SnapshotError::RouteDigest {
+            unit: u32::try_from(walker).expect("a unit index fits a u32")
+        })
     );
 }
 

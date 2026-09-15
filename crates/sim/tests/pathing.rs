@@ -35,6 +35,7 @@ use std::path::PathBuf;
 
 use pharmakos_sim::chunks::ChunkDigests;
 use pharmakos_sim::encoding::hex;
+use pharmakos_sim::math::fixed::Fx;
 use pharmakos_sim::math::quantity::TICK_HZ;
 use pharmakos_sim::pathing::MAX_ROUTE_NODES;
 use pharmakos_sim::pathing::clusters::Clusters;
@@ -727,11 +728,15 @@ fn fog_never_makes_a_route_look_cheaper() {
         );
         assert!(!clear.fogged, "a clear route must not claim to be fogged");
         // Item 61 caps the fogged estimate at +50 % over the clear one, because
-        // the multiplier is applied per edge and every edge is priced at most
-        // once.
+        // the multiplier is applied per edge, every edge is priced at most
+        // once, and the integer division truncates rather than rounding up.
+        // The cap is exact: no per-leg slack is allowed for here, and a
+        // rounding term reintroduced in `fog_price` would fail this line.
         assert!(
-            i64::from(fogged.cost) * 2 <= i64::from(clear.cost) * 3 + 2 * i64::from(clear.legs),
-            "the fogged estimate is more than 3/2 of the clear one"
+            i64::from(fogged.cost) * 2 <= i64::from(clear.cost) * 3,
+            "the fogged estimate is more than 3/2 of the clear one: {} against {}",
+            fogged.cost,
+            clear.cost
         );
     }
 }
@@ -983,9 +988,83 @@ fn a_query_leaves_the_graph_alone() {
     );
 }
 
+#[test]
+fn the_cluster_edge_ceiling_is_what_the_row_offsets_can_index() {
+    // A cluster of edge `n` holds at most `4 * n` transitions and at most
+    // `4n * (4n - 1)` directed intra edges, and `Clusters` stores each row's
+    // offset into that edge array as a `u16`. So the ceiling on the cluster
+    // edge is arithmetic, not taste: one step past it a row offset stops
+    // converting and the graph loses edges with nothing red in front of it.
+    let edge = i64::from(pharmakos_sim::pathing::clusters::MAX_CLUSTER_EDGE);
+    let trans = edge * 4;
+    let intra = trans * (trans - 1);
+    assert!(
+        intra <= i64::from(u16::MAX),
+        "MAX_CLUSTER_EDGE {edge} needs {intra} intra-edge slots, which a u16 row offset cannot \
+         index"
+    );
+    let over = (edge + 1) * 4;
+    assert!(
+        over * (over - 1) > i64::from(u16::MAX),
+        "MAX_CLUSTER_EDGE is below the arithmetic ceiling: edge {} still fits, so the doc's \
+         justification is not the real bound",
+        edge + 1
+    );
+}
+
+#[test]
+fn an_undecomposable_cluster_edge_is_refused_rather_than_mistagged() {
+    // The decomposition tags every column with a u16 cluster id, and the
+    // conversion that writes the tag is fallible and silent. A cluster edge
+    // that produces more than 65 536 clusters therefore has to be refused at
+    // construction, or the oracle answers confidently and wrongly for every
+    // column above the 65 536th.
+    let mut fixture = Fixture::build(SEED, CLUSTER);
+    let surface = &fixture.surface;
+    let scratch = &mut fixture.scratch;
+    assert!(
+        Clusters::new(surface, 1, scratch).is_none(),
+        "a cluster edge of 1 decomposes the 384-voxel map into 147 456 clusters, which the u16 \
+         tags cannot name, and it was accepted"
+    );
+    assert!(
+        Clusters::new(surface, 0, scratch).is_none(),
+        "a cluster edge of zero was accepted"
+    );
+    assert!(
+        Clusters::new(surface, 4, scratch).is_some(),
+        "a cluster edge of 4 gives 9 216 clusters, well inside the u16 tags, and it was refused"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // The cap, the router and the world (items 60, 69, 90)
 // ---------------------------------------------------------------------------
+
+#[test]
+fn every_unit_kind_walks_at_the_speed_its_rules_row_names() {
+    // The router indexes its speed table by `UnitKind::id()`, which runs 1..=6
+    // rather than 0..6. An array sized at six therefore drops the highest kind
+    // silently: `advance` sees speed 0, skips the unit, and it stands in
+    // `Walking` for ever while the estimator quotes it the rules row's speed.
+    // Estimator and walker disagreeing permanently is the exact failure item
+    // 61's never-optimistic contract exists to prevent, so it is pinned here
+    // for every kind rather than for the one the harness happens to spawn.
+    let rules = rules();
+    let router = pharmakos_sim::pathing::router::Router::new(4, &rules);
+    for kind in UnitKind::ALL {
+        let row = rules
+            .cost_per_second(kind)
+            .unwrap_or_else(|| panic!("{kind:?} has no cost_per_second row"));
+        assert_eq!(
+            router.speed_of(kind),
+            row,
+            "the router walks {kind:?} at {} where its rules row says {row}",
+            router.speed_of(kind)
+        );
+        assert!(row > 0, "{kind:?} cannot walk at all");
+    }
+}
 
 #[test]
 fn the_repath_cap_is_served_round_robin_and_never_exceeded() {
@@ -1131,6 +1210,99 @@ fn a_sealed_in_walker_parks_and_is_re_armed_when_the_graph_changes() {
         0,
         "the walker is still parked after its way out was opened"
     );
+}
+
+#[test]
+fn a_sealed_in_walker_is_re_armed_by_a_repair_nowhere_near_it() {
+    // The narrow rule — re-arm only a unit standing in a repaired cluster or
+    // bound for one — leaves a unit behind a moat parked for the rest of the
+    // match when the moat is opened more than a cluster away. The rule is the
+    // oracle's answer instead: on a tick whose repair rebuilt the components,
+    // a sealed unit the oracle now calls connected asks again, wherever the
+    // repair happened. This test hands `rearm_sealed` a repaired list holding
+    // neither the unit's cluster nor its destination's, which is exactly the
+    // case the narrow rule misses.
+    let mut fixture = Fixture::build(SEED, CLUSTER);
+    let rules = rules();
+    let mut router = pharmakos_sim::pathing::router::Router::new(1, &rules);
+
+    let (start, goal) = pairs(&fixture, 1, 0x5EED_0007)[0];
+    let (sx, sy) = fixture.surface.coord_of(start);
+    let (gx, gy) = fixture.surface.coord_of(goal);
+    let point = |x: i32, y: i32, z: i32| {
+        [
+            Fx::from_voxels(i16::try_from(x).expect("a map coordinate fits an i16")),
+            Fx::from_voxels(i16::try_from(y).expect("a map coordinate fits an i16")),
+            Fx::from_voxels(i16::try_from(z).expect("a map height fits an i16")),
+        ]
+    };
+    let positions = vec![point(sx, sy, fixture.surface.standing_z(start))];
+    let destinations = vec![point(gx, gy, fixture.surface.standing_z(goal))];
+
+    // Wall the start in: a solid voxel five above each of its eight
+    // neighbours, so every step out is a five-voxel climb the one-voxel rule
+    // refuses. The columns stay walkable, so the seal is in the step rule.
+    let mut wall: Vec<[i32; 3]> = Vec::new();
+    for dy in -1..=1_i32 {
+        for dx in -1..=1_i32 {
+            if dx == 0 && dy == 0 {
+                continue;
+            }
+            let top = fixture
+                .store
+                .top_solid_z(sx + dx, sy + dy)
+                .expect("a column with a floor");
+            wall.push([sx + dx, sy + dy, top + 5]);
+        }
+    }
+    for at in &wall {
+        fixture.store.set(*at, Material::STONE);
+    }
+    fixture.settle_and_mark();
+    fixture.repair();
+
+    router.request(0);
+    let report = router.serve(
+        &fixture.surface,
+        &fixture.clusters,
+        &mut fixture.scratch,
+        &positions,
+        &destinations,
+        1,
+    );
+    assert_eq!(report.sealed, 1, "the walled-in walker did not seal");
+    assert_eq!(router.state(0), WalkState::Sealed);
+
+    // Open the way out again, then publish a repaired list that deliberately
+    // names neither end of the unit's journey.
+    for at in &wall {
+        fixture.store.set(*at, Material::AIR);
+    }
+    fixture.settle_and_mark();
+    fixture.repair();
+
+    let here = fixture.clusters.cluster_of(start);
+    let there = fixture.clusters.cluster_of(goal);
+    let elsewhere: Vec<u16> = (0..u16::try_from(fixture.clusters.cluster_count()).expect("fits"))
+        .filter(|cluster| *cluster != here && *cluster != there)
+        .take(3)
+        .collect();
+    assert!(
+        !elsewhere.is_empty(),
+        "the map has no cluster that is neither end of the journey"
+    );
+    let rearmed = router.rearm_sealed(
+        &fixture.surface,
+        &fixture.clusters,
+        &elsewhere,
+        &positions,
+        &destinations,
+    );
+    assert_eq!(
+        rearmed, 1,
+        "a repair that reconnected the walker left it parked because it happened elsewhere"
+    );
+    assert_eq!(router.state(0), WalkState::Waiting);
 }
 
 #[test]

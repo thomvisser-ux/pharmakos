@@ -17,7 +17,7 @@ desync waiting for a match long enough to find it.
 
 Tab-separated, one record per line, written by
 `crates/sim/tests/pathing.rs`'s `the_path_hashes_match_their_golden`. Five kinds
-of line, in this order:
+of line:
 
 ```text
 seed     <the match seed, hex>
@@ -26,6 +26,12 @@ graph    <phase>  <graph fingerprint>  <transition nodes>  <directed abstract ed
 <phase>  <case>   <start>  <goal>  <cost>  <ticks>  <legs>  <walked cost>  <route nodes>  <route digest>
 craters  <how many>  <columns edited>  store  <the chunk store's digest>
 ```
+
+The layout is `seed`, then `cluster`, then one phase at a time: the phase's
+`graph` line followed by its 48 `record` lines. The `craters` line sits
+**between** the two phases — it is what turned the pristine graph into the
+repaired one — so the file reads seed, cluster, `graph pristine`, 48 pristine
+records, `craters`, `graph repaired`, 48 repaired records: 101 lines.
 
 `<phase>` is `pristine` or `repaired`; `<start>` and `<goal>` are column ids
 (`x + y * size_x`); `cost`, `ticks` and `legs` are what
