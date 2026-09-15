@@ -118,6 +118,17 @@ pub(crate) fn run(playbook: &Playbook, scope: &Scope, out: &mut Builder) -> Symb
 
     // `resume_at_label` hangs off the handler rather than off a step, so the
     // shared walk does not reach it.
+    //
+    // Only its EXISTENCE is checked, and that is a decision rather than an
+    // omission. `gp.v1.Handler` says the label must name a step "later in the
+    // route", but later than *what* is the step the route happened to be on
+    // when the handler fired, and a sealed playbook does not say which step
+    // that is — a handler can fire at any decision tick. Forwardness is
+    // therefore a run-time property here, unlike a step's own `on_fail` jump,
+    // where both positions are in the file and `E0301` compares them. What the
+    // interpreter does when the named step is already behind is T11's to
+    // specify and is not decided here; this stage refuses to reject a playbook
+    // for a jump that may never be backwards.
     if let Some(declarative) = playbook.declarative.as_ref() {
         for (index, handler) in declarative.handlers.iter().enumerate() {
             if handler.resume_at_label.is_empty() {
