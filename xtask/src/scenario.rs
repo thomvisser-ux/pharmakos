@@ -4,13 +4,18 @@
 //! The scenario file format, and the checks `cargo xtask ci`'s `scenario` step
 //! can make before a runner exists.
 //!
-//! A scenario is a headless match written down: **a map seed, one playbook per
-//! seat, the segment list, and assertions on events *and* on the hash chain**
-//! (AGENTS.md section 9 item 10, section 10 item 4). `gamectl scenario run`
-//! executes one; it arrives at T15. This module is the format, frozen first, so
-//! that every later task delivers *into* a format rather than inventing one —
-//! which is the whole reason harness part 2's formats are pulled into wave 1
-//! (decisions-log item 75).
+//! A scenario is a headless match written down: **a map seed, the rules table,
+//! one playbook per seat, the segment list, and assertions on events *and* on
+//! the hash chain** (AGENTS.md section 9 item 10, section 10 item 4). The first
+//! three are exactly AGENTS.md section 4's triple — "the sim is a pure function
+//! of (map seed, playbooks, rules hash)" — which is what makes a committed hash
+//! chain a claim about the sim rather than about whatever was on disk that
+//! afternoon.
+//!
+//! `gamectl scenario run` executes one; it arrives at T15. This module is the
+//! format, frozen first, so that every later task delivers *into* a format
+//! rather than inventing one — which is the whole reason harness part 2's
+//! formats are pulled into wave 1 (decisions-log item 75).
 //!
 //! `scenarios/README.md` is the prose specification and is the file to read
 //! first. The rules enforced here are its machine-checkable half; where the two
@@ -80,10 +85,21 @@ const TOP_LEVEL_KEYS: &[&str] = &[
     "name",
     "summary",
     "map",
+    "rules",
     "seats",
     "segments",
     "assertions",
 ];
+
+/// The rules table a scenario runs against when it does not name one.
+///
+/// `rules/rules.v1.json` is the canonical JSON of one `gp.v1.RulesTable`
+/// (decisions-log item 78), loaded by `pharmakos-sim` and hashed into
+/// `rules_hash`. Its *shape* is a contract file and its *values* are data that
+/// ordinary tuning PRs move during S1 and S2 — which is precisely why a
+/// scenario has to name it. A tuning PR moves every committed hash chain, and
+/// the chain has to be able to say which table produced it.
+pub(crate) const DEFAULT_RULES: &str = "rules/rules.v1.json";
 const MAP_KEYS: &[&str] = &["seed", "generator"];
 /// No `operator` key. A `builtin` seat will one day name the difficulty it runs
 /// at, but nothing validates that today and `scenarios/README.md`'s key table
@@ -108,6 +124,10 @@ pub(crate) struct Scenario {
     pub(crate) relative: PathBuf,
     /// The `name` key.
     pub(crate) name: String,
+    /// The rules table this scenario runs against, relative to the workspace
+    /// root: the `rules` key when it names one, [`DEFAULT_RULES`] otherwise.
+    /// The runner passes it on T15's command line.
+    pub(crate) rules: String,
     /// Seat count.
     pub(crate) seats: usize,
     /// Assertion count.
@@ -163,6 +183,7 @@ pub(crate) fn validate(root: &Path, path: &Path) -> Result<Scenario, String> {
     })?;
 
     let mut name = String::new();
+    let mut rules = DEFAULT_RULES.to_owned();
     let mut seats = 0;
     let mut assertions = 0;
 
@@ -171,6 +192,7 @@ pub(crate) fn validate(root: &Path, path: &Path) -> Result<Scenario, String> {
         require_exact_string(&json, "/format", "format", FORMAT, &mut problems);
         name = require_string(&json, "/name", "name", &mut problems);
         check_map(&json, &mut problems);
+        rules = check_rules(root, &json, &mut problems);
         seats = check_seats(root, &json, &mut problems);
         check_segments(&json, &mut problems);
         assertions = check_assertions(root, &json, &mut problems);
@@ -182,6 +204,7 @@ pub(crate) fn validate(root: &Path, path: &Path) -> Result<Scenario, String> {
         return Ok(Scenario {
             relative,
             name,
+            rules,
             seats,
             assertions,
         });
@@ -224,6 +247,42 @@ fn check_bytes(bytes: &[u8], problems: &mut Vec<Problem>) {
     if bytes.last() != Some(&b'\n') {
         problems.push(Problem::new("", "the file must end with a newline"));
     }
+}
+
+/// The third leg of the determinism triple.
+///
+/// AGENTS.md section 4 says the sim is a pure function of (map seed, playbooks,
+/// rules hash). `map.seed` and `seats[].playbook` name the first two; without
+/// this key the third is whatever happens to be checked out, so a hash chain
+/// committed in one PR and compared in another would be comparing two different
+/// claims and calling the difference a desync.
+///
+/// Optional, defaulting to [`DEFAULT_RULES`] — almost every scenario runs
+/// against the shipped table, and making every file repeat the same path would
+/// be noise that stops being read. The default is checked for existence too: a
+/// scenario that silently ran against a table that is not there is the quiet
+/// pass this harness exists to prevent.
+fn check_rules(root: &Path, json: &Json, problems: &mut Vec<Problem>) -> String {
+    let Some(value) = json.get("rules") else {
+        if !root.join(DEFAULT_RULES).is_file() {
+            problems.push(Problem::new(
+                "/rules",
+                format!(
+                    "no `rules` key, and the default `{DEFAULT_RULES}` is not in the repository —                      name the table this scenario runs against"
+                ),
+            ));
+        }
+        return DEFAULT_RULES.to_owned();
+    };
+    let Some(relative) = value.as_str() else {
+        problems.push(Problem::new(
+            "/rules",
+            "must be a string: the repository-relative path of the rules table this scenario runs              against",
+        ));
+        return DEFAULT_RULES.to_owned();
+    };
+    check_repository_path(root, "/rules", relative, true, problems);
+    relative.to_owned()
 }
 
 fn check_map(json: &Json, problems: &mut Vec<Problem>) {
@@ -746,6 +805,10 @@ mod tests {
             "{}\n",
         )
         .expect("playbook fixture");
+        // The default rules table. Every scenario runs against one, named or
+        // not, so the scratch tree carries it as the real tree does.
+        fs::create_dir_all(dir.join("rules")).expect("temp dir");
+        fs::write(dir.join("rules").join("rules.v1.json"), "{}\n").expect("rules fixture");
         dir
     }
 
@@ -909,6 +972,65 @@ mod tests {
         assert!(report.contains("decision 16"), "{report}");
         assert!(report.contains("not yet logged"), "{report}");
         assert!(report.contains("T15"), "{report}");
+    }
+
+    /// Inserts a `rules` key into [`GOOD`], which has none.
+    fn with_rules(value: &str) -> String {
+        GOOD.replace(
+            "  \"name\": \"smoke\",\n",
+            &format!("  \"name\": \"smoke\",\n  \"rules\": \"{value}\",\n"),
+        )
+    }
+
+    #[test]
+    fn a_scenario_that_names_no_rules_table_runs_against_the_default() {
+        let dir = scratch("rules-default");
+        let path = write(&dir, GOOD);
+        let scenario = validate(&dir, &path).expect("valid");
+        assert_eq!(scenario.rules, DEFAULT_RULES);
+    }
+
+    #[test]
+    fn a_named_rules_table_is_carried_through_to_the_runner() {
+        let dir = scratch("rules-named");
+        fs::write(dir.join("rules").join("rules.tuning.json"), "{}\n").expect("rules fixture");
+        let path = write(&dir, &with_rules("rules/rules.tuning.json"));
+        let scenario = validate(&dir, &path).expect("valid");
+        assert_eq!(scenario.rules, "rules/rules.tuning.json");
+    }
+
+    #[test]
+    fn a_rules_table_that_is_not_in_the_repository_is_named() {
+        let dir = scratch("rules-missing");
+        let path = write(&dir, &with_rules("rules/nowhere.json"));
+        let report = validate(&dir, &path).expect_err("rejected");
+        assert!(report.contains("/rules"), "{report}");
+        assert!(report.contains("does not exist"), "{report}");
+    }
+
+    /// A scenario that names no table still runs against one, so a tree without
+    /// the default is a scenario asserting on a hash chain nothing produced.
+    #[test]
+    fn a_missing_default_rules_table_is_not_a_silent_pass() {
+        let dir = scratch("rules-default-missing");
+        fs::remove_file(dir.join("rules").join("rules.v1.json")).expect("rules fixture");
+        let path = write(&dir, GOOD);
+        let report = validate(&dir, &path).expect_err("rejected");
+        assert!(report.contains("/rules"), "{report}");
+        assert!(report.contains(DEFAULT_RULES), "{report}");
+    }
+
+    #[test]
+    fn a_rules_key_that_is_not_a_string_is_refused() {
+        let dir = scratch("rules-not-a-string");
+        let body = GOOD.replace(
+            "  \"name\": \"smoke\",\n",
+            "  \"name\": \"smoke\",\n  \"rules\": 1,\n",
+        );
+        let path = write(&dir, &body);
+        let report = validate(&dir, &path).expect_err("rejected");
+        assert!(report.contains("/rules"), "{report}");
+        assert!(report.contains("must be a string"), "{report}");
     }
 
     #[test]
