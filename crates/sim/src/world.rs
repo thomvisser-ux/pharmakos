@@ -39,16 +39,21 @@
 use crate::chunks::ChunkDigests;
 use crate::encoding::Enc;
 use crate::mapgen::{self, MapError};
-use crate::math::fixed::{Angle, Fx, Sq, cos, sin};
-use crate::math::quantity::{Hp, Kw, Money, TICK_HZ, Tick};
+use crate::math::fixed::{Angle, Fx};
+use crate::math::quantity::{Hp, Kw, Money, Tick};
 use crate::math::random::{Stream, StreamRng};
+use crate::pathing::clusters::Clusters;
+use crate::pathing::repair::{RepairReport, Repairer, repair};
+use crate::pathing::router::{Router, ServeReport, WalkState};
+use crate::pathing::search::Scratch;
+use crate::pathing::surface::{StepCosts, Surface};
 use crate::rules::RulesTable;
 use crate::seams::WorkCounter;
 use crate::tables::{
     BeaconTable, Csr, MovementColumns, SeatId, SeatTable, StructureTable, UnitId, UnitKind,
     UnitTable, WreckTable,
 };
-use crate::voxels::{VoxelEdit, VoxelStore};
+use crate::voxels::{CHUNK_EDGE, VoxelEdit, VoxelStore};
 
 /// The eleven named phases of a tick, in the order they run.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
@@ -96,11 +101,6 @@ pub const PHASE_ORDER: [Phase; 11] = [
     Phase::Hash,
 ];
 
-/// PLACEHOLDER (harness): turn rate in [`Angle`] units per tick.
-/// `512/65 536` of a turn is about 2.8 degrees per tick. T7 deletes it with the
-/// rest of the harness walk.
-const HARNESS_TURN_RATE: u16 = 512;
-
 /// PLACEHOLDER (harness): the per-tick work budget the seam starts with. The
 /// number becomes meaningful at S5, when the operator's budget is measured in
 /// evaluation units (owner).
@@ -125,39 +125,6 @@ const HARNESS_EDIT_QUEUE: usize = 64;
 /// query radius so a query touches at most 3 x 3 cells, and 16 voxels is the
 /// cell edge `rules/rules.v1.json` currently carries.
 pub const BROADPHASE_QUERY_RADIUS_VOXELS: Fx = Fx::from_voxels(16);
-
-/// The harness walker's step, in Q16.16 voxels per tick, derived from
-/// `commander.cost_per_second`.
-///
-/// **The rounding, written out, because a golden file rests on it.** Item 90
-/// expresses a walking speed in *cost units per second*, and item 59 prices a
-/// cardinal voxel at `locomotion.step_cost_cardinal`. So
-///
-/// ```text
-/// voxels per second = cost_per_second / step_cost_cardinal
-/// voxels per tick   = voxels per second / TICK_HZ
-/// raw Q16.16        = cost_per_second * 65536 / (step_cost_cardinal * TICK_HZ)
-/// ```
-///
-/// and the division is a **floor**: a harness walker is never faster than the
-/// rule, which is the same direction item 59's ceiling rounds the estimator.
-/// At the committed table that is `10 * 65536 / (10 * 20) = 3276` raw, or
-/// 0.04999 voxels a tick — one voxel a second, which is item 90's commander.
-///
-/// PLACEHOLDER (harness): T7 replaces this with the real integer accumulator
-/// item 90 describes (add `cost_per_second` per tick, spend a cost unit per 20
-/// accumulated, so nothing rounds down at all).
-#[allow(
-    clippy::integer_division,
-    reason = "the floor is the rule: a harness walker must never be faster than `cost_per_second` says, and the doc comment above is the rounding's justification"
-)]
-fn harness_step_per_tick(rules: &RulesTable) -> Fx {
-    let per_second = i64::from(rules.commander_cost_per_second());
-    let per_voxel = i64::from(rules.step_cardinal()).max(1);
-    let divisor = per_voxel.saturating_mul(i64::from(TICK_HZ));
-    let raw = per_second.saturating_mul(i64::from(Fx::ONE.raw())) / divisor.max(1);
-    Fx::from_raw(i32::try_from(raw).unwrap_or(0))
-}
 
 /// How to build a world.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -201,13 +168,33 @@ pub struct World {
     wrecks: WreckTable,
     chunks: ChunkDigests,
 
+    // --- hashed state, continued: the router (item 62's routes) ---
+    router: Router,
+
     // --- the voxels themselves: hashed only through `chunks` (item 66) ---
     voxels: VoxelStore,
 
     // --- inputs and derived state: never encoded, never hashed ---
     rules: RulesTable,
     broadphase: Csr,
+    /// The HPA\* surface graph. Derived from the chunk store and the cost rows,
+    /// rebuilt on a restore rather than carried in a snapshot.
+    surface: Surface,
+    /// The HPA\* decomposition. Derived, as above.
+    clusters: Clusters,
+    /// The search's buffers, reused across every query of every tick.
+    scratch: Scratch,
+    /// The repair's working sets, and the dirty-cluster list the voxel phase
+    /// fills.
+    repairer: Repairer,
     work: WorkCounter,
+    /// What the last tick's repair did. Diagnostic; never hashed.
+    repair_report: RepairReport,
+    /// What the last tick's serving did. Diagnostic; never hashed.
+    serve_report: ServeReport,
+    /// Scratch for the arrived-unit list, so a tick's destination draws
+    /// allocate nothing.
+    arrivals: Vec<u32>,
     /// This tick's voxel edits, drained by [`Phase::Voxels`].
     edits: Vec<VoxelEdit>,
     /// Scratch for a crater's touched-chunk list, so an edit allocates nothing.
@@ -232,6 +219,7 @@ pub(crate) struct RestoredTables {
     pub(crate) wrecks: WreckTable,
     pub(crate) voxels: VoxelStore,
     pub(crate) chunks: ChunkDigests,
+    pub(crate) router: crate::pathing::router::RestoredRouter,
 }
 
 impl World {
@@ -295,6 +283,26 @@ impl World {
             return Err(MapError::Unindexable { units: unit_count });
         };
 
+        let cluster_voxels = config.rules.hpa_cluster_voxels();
+        let Some(surface) = Surface::new(&voxels, StepCosts::from_rules(&config.rules)) else {
+            return Err(MapError::BadExtent {
+                size: voxels.size(),
+            });
+        };
+        let Some((clusters, scratch)) = build_graph(&surface, cluster_voxels) else {
+            return Err(MapError::Unclusterable { cluster_voxels });
+        };
+        let mut router = Router::new(unit_count, &config.rules);
+        let mut unit = 0;
+        while unit < unit_count {
+            // Every unit starts by asking for a route: the harness's walkers
+            // have a destination drawn on the map, and a starting unit's
+            // destination is where it already stands, which the router answers
+            // with "arrived" and the tick answers with a fresh destination.
+            router.request(unit);
+            unit = unit.saturating_add(1);
+        }
+
         Ok(World {
             match_seed: config.match_seed,
             tick: Tick::ZERO,
@@ -304,10 +312,18 @@ impl World {
             structures: StructureTable::with_capacity(0),
             wrecks: WreckTable::with_capacity(0),
             chunks,
+            router,
             voxels,
             rules: config.rules.clone(),
             broadphase,
+            repairer: Repairer::new(clusters.cluster_count()),
+            surface,
+            clusters,
+            scratch,
             work: WorkCounter::with_budget(HARNESS_WORK_BUDGET),
+            repair_report: RepairReport::default(),
+            serve_report: ServeReport::default(),
+            arrivals: Vec::with_capacity(usize::try_from(unit_count).unwrap_or(0)),
             edits: Vec::with_capacity(HARNESS_EDIT_QUEUE),
             // Sized to the whole map rather than to the queue: one crater can
             // touch more chunks than the queue holds edits, and a scratch
@@ -393,6 +409,69 @@ impl World {
     #[must_use]
     pub const fn broadphase(&self) -> &Csr {
         &self.broadphase
+    }
+
+    /// The pathing graph's surface. Derived from the chunk store.
+    #[must_use]
+    pub const fn surface(&self) -> &Surface {
+        &self.surface
+    }
+
+    /// The HPA\* decomposition. Derived from the surface.
+    #[must_use]
+    pub const fn clusters(&self) -> &Clusters {
+        &self.clusters
+    }
+
+    /// The router: routes, walk states and the repath queue.
+    #[must_use]
+    pub const fn router(&self) -> &Router {
+        &self.router
+    }
+
+    /// The search scratch, so a caller outside the tick — the gateway asking
+    /// for an estimate, a test, a bench — can run a query without allocating a
+    /// second set of dense arrays.
+    ///
+    /// Nothing in it is state: a query leaves the scratch different and the
+    /// world identical, which `a_query_does_not_change_the_world` asserts.
+    pub const fn scratch_mut(&mut self) -> &mut Scratch {
+        &mut self.scratch
+    }
+
+    /// What the last tick's graph repair did.
+    #[must_use]
+    pub const fn repair_report(&self) -> RepairReport {
+        self.repair_report
+    }
+
+    /// What the last tick's repath serving did.
+    #[must_use]
+    pub const fn serve_report(&self) -> ServeReport {
+        self.serve_report
+    }
+
+    /// How many units are waiting for a repath right now.
+    #[must_use]
+    pub fn repath_backlog(&self) -> u32 {
+        self.router.backlog()
+    }
+
+    /// How many units are parked as sealed in right now.
+    ///
+    /// The report half of item 60's "park and report": the seat learns through
+    /// this until T10's event bus exists to carry it as an event.
+    #[must_use]
+    pub fn sealed_units(&self) -> u32 {
+        let mut count: u32 = 0;
+        let mut unit: u32 = 0;
+        while unit < self.router.len() {
+            if self.router.state(unit) == WalkState::Sealed {
+                count = count.saturating_add(1);
+            }
+            unit = unit.saturating_add(1);
+        }
+        count
     }
 
     /// This tick's work counter. Not hashed today; see [`WorkCounter`].
@@ -489,97 +568,32 @@ impl World {
     )]
     const fn phase_programs(&mut self) {}
 
-    /// Advance every mover.
+    /// Advance every mover along the route it is following.
     ///
-    /// The harness rule, in full: turn at most [`HARNESS_TURN_RATE`] toward the
-    /// destination, step [`harness_step_per_tick`] along the new heading, clamp
-    /// inside the map, drop to the surface of whatever column the step landed
-    /// on, and on arrival draw a fresh destination from [`Stream::Spawn`] at
-    /// `(tick, seat, unit id)`. Arrival is a **squared** comparison; nothing in
-    /// this crate takes a square root (AGENTS.md section 4.2).
+    /// Item 90's accumulator, in one sentence: a walker adds its kind's
+    /// `cost_per_second` to an integer accumulator each tick and spends one
+    /// cost unit per 20 accumulated, so it arrives on
+    /// `ceil(cost * 20 / cost_per_second)` — the tick the estimator promised.
+    /// No float, no division that rounds a speed down, and no wandering: a unit
+    /// walks the route [`Phase::Pathing`] gave it, one legal step at a time,
+    /// and asks for another the moment a step stops being legal.
     ///
-    /// Reading the store's surface every tick is deliberate: it is what puts
-    /// the map inside the hash chain's causal path rather than merely beside it,
-    /// so a generator that changed would show up as a moved chain and not only
-    /// as a moved map digest.
-    ///
-    /// T7 replaces this with path following over HPA\*'s route, and the
-    /// commander and the drones stop wandering.
+    /// What is *not* here is where a unit decides to go. The harness still
+    /// draws a destination at random from [`Stream::Spawn`] when a unit arrives
+    /// (see [`World::draw_new_destinations`]); T11's interpreter replaces that
+    /// with the playbook, and the walking below does not change when it does.
     fn phase_movement(&mut self) {
-        let match_seed = self.match_seed;
-        let tick = self.tick.raw();
-        let extent = self.rules.map_size_voxels();
-        let max_x = i16::try_from(extent.first().copied().unwrap_or(0).saturating_sub(1))
-            .unwrap_or(i16::MAX);
-        let max_y = i16::try_from(extent.get(1).copied().unwrap_or(0).saturating_sub(1))
-            .unwrap_or(i16::MAX);
-        let lo = Fx::ZERO;
-        let hi_x = Fx::from_voxels(max_x);
-        let hi_y = Fx::from_voxels(max_y);
-        let speed = harness_step_per_tick(&self.rules);
-        // Arrival inside two steps, so a heading quantised to one table entry
-        // cannot orbit a destination forever.
-        let arrival = Sq::of_radius(speed.saturating_scale(2));
-        let voxels = &self.voxels;
-
         let MovementColumns {
-            ids,
-            seats,
+            ids: _,
+            seats: _,
+            kinds,
             hit_points,
             positions,
-            destinations,
+            destinations: _,
             headings,
         } = self.units.movement_columns();
-
-        for (index, position) in positions.iter_mut().enumerate() {
-            let Some(hp) = hit_points.get(index) else {
-                continue;
-            };
-            if !hp.is_alive() {
-                continue;
-            }
-            let Some(destination) = destinations.get_mut(index) else {
-                continue;
-            };
-            let Some(heading) = headings.get_mut(index) else {
-                continue;
-            };
-
-            if flat_distance(*position, *destination) <= arrival {
-                let seat = seats.get(index).copied().unwrap_or(0);
-                let id = ids.get(index).copied().unwrap_or(0);
-                let mut rng = StreamRng::new(match_seed, Stream::Spawn, tick, seat, id);
-                *destination = ground_point(voxels, &mut rng, max_x, max_y);
-            }
-
-            let dx = destination
-                .first()
-                .copied()
-                .unwrap_or(Fx::ZERO)
-                .saturating_sub(position.first().copied().unwrap_or(Fx::ZERO));
-            let dy = destination
-                .get(1)
-                .copied()
-                .unwrap_or(Fx::ZERO)
-                .saturating_sub(position.get(1).copied().unwrap_or(Fx::ZERO));
-            let want = Angle::from_delta(dx, dy);
-            *heading = heading.turn_toward(want, HARNESS_TURN_RATE);
-
-            let step_x = cos(*heading).saturating_mul_fx(speed);
-            let step_y = sin(*heading).saturating_mul_fx(speed);
-            if let Some(x) = position.first_mut() {
-                *x = x.saturating_add(step_x).clamp_to(lo, hi_x);
-            }
-            if let Some(y) = position.get_mut(1) {
-                *y = y.saturating_add(step_y).clamp_to(lo, hi_y);
-            }
-            let column_x = position.first().copied().unwrap_or(Fx::ZERO).floor_voxels();
-            let column_y = position.get(1).copied().unwrap_or(Fx::ZERO).floor_voxels();
-            let surface = voxels.standing_z(column_x, column_y);
-            if let Some(z) = position.get_mut(2) {
-                *z = Fx::from_voxels(i16::try_from(surface).unwrap_or(0));
-            }
-        }
+        self.router
+            .advance(&self.surface, kinds, hit_points, positions, headings);
     }
 
     /// Fire and damage. **Empty: S2 fills it.** `Stream::Combat` is reserved
@@ -626,14 +640,81 @@ impl World {
     )]
     const fn phase_decision(&mut self) {}
 
-    /// Serve the repath cap round-robin by `(seat, beacon, unit)` and repair
-    /// the abstract graph. **Empty: T7 fills it**, with the connectivity oracle
-    /// from day one and "sealed in" as a designed state.
-    #[allow(
-        clippy::unused_self,
-        reason = "an empty phase stub keeps the tick's shape visible; T7 fills the body"
-    )]
-    const fn phase_pathing(&mut self) {}
+    /// Repair the abstract graph, re-arm the units it may have freed, and serve
+    /// the repath cap round-robin by `(seat, beacon, unit)`.
+    ///
+    /// The order is item 60's, and it is the reason a route is never planned
+    /// over terrain that has moved: the repair runs **before** any repath this
+    /// tick, and the columns the search reads were refreshed in the same tick
+    /// the voxels changed (see [`World::phase_voxels`]). The one lag that does
+    /// exist is a cluster's *entrances*, which are repaired here on the tick
+    /// after the edit because [`PHASE_ORDER`] puts `Pathing` before `Voxels` —
+    /// and that lag can only withhold routes, never invent one, because every
+    /// step of a route is validated against the live columns as it is walked.
+    fn phase_pathing(&mut self) {
+        let report = repair(
+            &self.surface,
+            &mut self.clusters,
+            &mut self.scratch,
+            &mut self.repairer,
+        );
+        if report.dirty > 0 {
+            self.router.rearm_sealed(
+                &self.surface,
+                &self.clusters,
+                self.repairer.repaired(),
+                self.units.positions(),
+                self.units.destinations(),
+            );
+        }
+        self.serve_report = self.router.serve(
+            &self.surface,
+            &self.clusters,
+            &mut self.scratch,
+            self.units.positions(),
+            self.units.destinations(),
+            self.rules.repath_cap_per_tick(),
+        );
+        self.repair_report = report;
+        self.draw_new_destinations();
+    }
+
+    /// Give every unit that reached the end of a route somewhere new to be.
+    ///
+    /// PLACEHOLDER (harness): the destination is drawn from [`Stream::Spawn`] at
+    /// `(tick, seat, unit id)`, which is the wandering T2 introduced so that the
+    /// hash chain covers a moving table. T11's playbook interpreter is what
+    /// replaces it with a destination somebody chose (owner, at T11).
+    fn draw_new_destinations(&mut self) {
+        if self.router.arrived().is_empty() {
+            return;
+        }
+        self.arrivals.clear();
+        self.arrivals.extend_from_slice(self.router.arrived());
+        let match_seed = self.match_seed;
+        let tick = self.tick.raw();
+        let extent = self.rules.map_size_voxels();
+        let max_x = i16::try_from(extent.first().copied().unwrap_or(0).saturating_sub(1))
+            .unwrap_or(i16::MAX);
+        let max_y = i16::try_from(extent.get(1).copied().unwrap_or(0).saturating_sub(1))
+            .unwrap_or(i16::MAX);
+        let mut at = 0;
+        while at < self.arrivals.len() {
+            let Some(unit) = self.arrivals.get(at).copied() else {
+                break;
+            };
+            at = at.saturating_add(1);
+            let index = usize::try_from(unit).unwrap_or(usize::MAX);
+            let seat = self.units.seats().get(index).copied().unwrap_or(0);
+            let id = self.units.ids().get(index).copied().unwrap_or(0);
+            let mut rng = StreamRng::new(match_seed, Stream::Spawn, tick, seat, id);
+            let point = ground_point(&self.voxels, &mut rng, max_x, max_y);
+            if let Some(slot) = self.units.destinations_mut().get_mut(index) {
+                *slot = point;
+            }
+            self.router.request(unit);
+        }
+    }
 
     /// Apply this tick's voxel edits, then refresh the digest of every chunk
     /// they touched, in ascending chunk index.
@@ -665,6 +746,20 @@ impl World {
             }
         }
         self.voxels.settle(&mut self.chunks);
+        // The pathing graph's columns are refreshed in the same phase that
+        // changed the bytes, so a walker's next step is validated against the
+        // terrain as it is; the *clusters* the edit dirtied are repaired at the
+        // next tick's `Pathing` phase, which is where the entrance rescan and
+        // the one connectivity rebuild live (item 60).
+        let mut at = 0;
+        while at < self.voxels.settled().len() {
+            let Some(chunk) = self.voxels.settled().get(at).copied() else {
+                break;
+            };
+            at = at.saturating_add(1);
+            self.surface.refresh_chunk(&self.voxels, chunk);
+            mark_chunk_clusters(&self.voxels, &self.clusters, &mut self.repairer, chunk);
+        }
         touched.clear();
         self.touched = touched;
         self.edits = edits;
@@ -690,6 +785,14 @@ impl World {
     /// 5. structures
     /// 6. wrecks
     /// 7. chunk digests
+    /// 8. the router — per unit: walk state, speed accumulator, route length,
+    ///    route cursor, whether the route is partial, and the **route's
+    ///    digest**; then the round-robin cursor. The route's nodes reach the
+    ///    hash through that digest for the reason the chunk store's bytes reach
+    ///    it through per-chunk digests (item 66): a column that grows with the
+    ///    map does not belong in a per-tick encoding. The nodes themselves
+    ///    travel in the snapshot, and a restore that produced a different route
+    ///    would show up here as a moved digest.
     ///
     /// The rules table, the voxel bytes, the broadphase and the work counter
     /// are **not** here. The first, third and fourth are inputs or derived
@@ -786,6 +889,7 @@ impl World {
         }
 
         self.chunks.encode(enc);
+        self.router.encode(enc);
     }
 
     /// The per-tick state hash, allocating its own encoder.
@@ -843,6 +947,12 @@ impl World {
         ) else {
             return false;
         };
+        // The router is restored before anything is written, for the same
+        // reason the grid is built first: a file whose route columns disagree
+        // must leave the world exactly as it was.
+        if !self.router.restore(restored.router) {
+            return false;
+        }
 
         self.match_seed = restored.match_seed;
         self.tick = restored.tick;
@@ -854,6 +964,16 @@ impl World {
         self.voxels = restored.voxels;
         self.chunks = restored.chunks;
         self.broadphase = broadphase;
+        // The pathing graph is derived, so it is rebuilt from the restored
+        // store rather than carried in the file — and `tests/pathing.rs`'s
+        // `a_restored_world_rebuilds_the_graph_it_was_saved_with` is what makes
+        // "derived" a checked claim rather than a convenient one.
+        self.surface.refresh_all(&self.voxels);
+        self.clusters.rebuild_all(&self.surface, &mut self.scratch);
+        self.repairer = Repairer::new(self.clusters.cluster_count());
+        self.arrivals = Vec::with_capacity(usize::try_from(unit_count).unwrap_or(0));
+        self.repair_report = RepairReport::default();
+        self.serve_report = ServeReport::default();
         self.edits.clear();
         self.touched = Vec::with_capacity(usize::try_from(self.voxels.chunk_count()).unwrap_or(0));
         // The query scratch is sized the same way, and for the same reason: a
@@ -931,32 +1051,66 @@ fn fill_unit_table(
     units
 }
 
+/// Build the pathing graph and the scratch it is searched with.
+///
+/// The scratch has to be sized before the decomposition exists — building the
+/// intra edges is itself a search — so [`Scratch::for_map`] does that
+/// arithmetic from the map and the cluster edge, and the decomposition is
+/// checked against it below.
+///
+/// `None` when the cluster edge cannot decompose this map, which the caller
+/// reports as [`MapError::Unclusterable`].
+fn build_graph(surface: &Surface, cluster_voxels: i32) -> Option<(Clusters, Scratch)> {
+    let mut scratch = Scratch::for_map(surface, cluster_voxels)?;
+    let clusters = Clusters::new(surface, cluster_voxels, &mut scratch)?;
+    debug_assert_eq!(
+        clusters.abstract_capacity(),
+        Scratch::abstract_capacity_for(surface, cluster_voxels).unwrap_or(0),
+        "the scratch was sized for a different abstract numbering than the decomposition uses"
+    );
+    Some((clusters, scratch))
+}
+
+/// Mark every cluster a settled chunk's footprint overlaps.
+///
+/// At the decided cluster edge of 32 a chunk footprint *is* a cluster (item 58),
+/// and this loop is one iteration. It is written as a loop anyway because the
+/// cluster edge is a rules-table row and the cluster-size sweep in
+/// `tests/pathing.rs` runs the decomposition at 16 and 64, where a chunk covers
+/// four clusters or a quarter of one.
+fn mark_chunk_clusters(
+    voxels: &VoxelStore,
+    clusters: &Clusters,
+    repairer: &mut Repairer,
+    chunk: u32,
+) {
+    let Some(origin) = voxels.chunk_origin(chunk) else {
+        return;
+    };
+    let edge = i32::try_from(CHUNK_EDGE).unwrap_or(32);
+    let size = clusters.size().max(1);
+    let x0 = origin.first().copied().unwrap_or(0);
+    let y0 = origin.get(1).copied().unwrap_or(0);
+    let mut cy = y0.div_euclid(size);
+    while cy <= y0.saturating_add(edge.saturating_sub(1)).div_euclid(size) {
+        let mut cx = x0.div_euclid(size);
+        while cx <= x0.saturating_add(edge.saturating_sub(1)).div_euclid(size) {
+            if let Some(cluster) = clusters.cluster_index(cx, cy)
+                && let Ok(tag) = u16::try_from(cluster)
+            {
+                repairer.mark(tag);
+            }
+            cx = cx.saturating_add(1);
+        }
+        cy = cy.saturating_add(1);
+    }
+}
+
 fn encode_point(enc: &mut Enc, point: Option<&[Fx; 3]>) {
     let p = point.copied().unwrap_or([Fx::ZERO; 3]);
     for axis in p {
         enc.i32(axis.raw());
     }
-}
-
-/// The squared distance between two points, ignoring `z`.
-///
-/// The harness walk is a ground walk: a unit sits on the surface of its column,
-/// so its `z` is whatever the terrain says and comparing it against a
-/// destination's `z` would make arrival depend on the hill in between. T7's
-/// path following replaces this with a route, and the route is on the ground
-/// too.
-fn flat_distance(a: [Fx; 3], b: [Fx; 3]) -> Sq {
-    let flat_a = [
-        a.first().copied().unwrap_or(Fx::ZERO),
-        a.get(1).copied().unwrap_or(Fx::ZERO),
-        Fx::ZERO,
-    ];
-    let flat_b = [
-        b.first().copied().unwrap_or(Fx::ZERO),
-        b.get(1).copied().unwrap_or(Fx::ZERO),
-        Fx::ZERO,
-    ];
-    Sq::between(flat_a, flat_b)
 }
 
 /// A point drawn uniformly over the map footprint, standing on the surface of
