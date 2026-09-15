@@ -205,11 +205,21 @@ impl UnitTable {
         MovementColumns {
             ids: &self.id,
             seats: &self.seat,
+            kinds: &self.kind,
             hit_points: &self.hp,
             positions: &mut self.pos,
             destinations: &mut self.dest,
             headings: &mut self.heading,
         }
+    }
+
+    /// The destination column, to write into.
+    ///
+    /// The one column a phase outside movement changes: the tick draws a unit a
+    /// new place to be when it arrives, and T11's interpreter will do the same
+    /// from a playbook.
+    pub fn destinations_mut(&mut self) -> &mut [[Fx; 3]] {
+        &mut self.dest
     }
 
     /// Replace the whole table from the columns of a restored snapshot.
@@ -272,6 +282,9 @@ pub struct MovementColumns<'a> {
     pub ids: &'a [u32],
     /// The seat column, read-only.
     pub seats: &'a [u8],
+    /// The kind column, read-only: movement reads it for the walking speed
+    /// item 90 gives each kind.
+    pub kinds: &'a [u8],
     /// The hit-point column, read-only: movement reads it to skip the dead.
     pub hit_points: &'a [Hp],
     /// The position column.

@@ -477,17 +477,22 @@ fn a_ragged_snapshot_is_refused_rather_than_half_applied() {
 #[test]
 fn a_performance_knob_is_not_hashed_state() {
     // G3′ §9.17: keep the calibration constant outside hashed state, and *test*
-    // that it is. The cell size, the repath cap and the mesher's drain budget
-    // are performance knobs; changing one must leave the chain byte-identical.
+    // that it is. The broadphase cell size and the mesher's drain budget are
+    // performance knobs; changing one must leave the chain byte-identical.
+    //
+    // **The repath cap is not on that list, and T7 took it off.** T2 wrote this
+    // test with `locomotion.repath_cap_per_tick` among the knobs, at a stage
+    // where nothing read it. It is a rule: item 60 serves the cap round-robin
+    // by `(seat, beacon, unit)`, so the cap decides *which* unit repaths on
+    // *which* tick, and `proto/gp/v1/rules.proto` says so at the row — "hashed
+    // state, not a calibration constant". The assertion that it moves the chain
+    // is `the_repath_cap_is_a_rule_not_a_knob` below.
     let base = rules();
     let reference = chain(&mut world_with(base.clone()), 200);
 
     for cell_size in [4_u32, 8, 16, 32, 64] {
         let altered = rules_edited(|message| {
             message.broadphase.get_or_insert_default().cell_size_voxels = cell_size;
-            let locomotion = message.locomotion.get_or_insert_default();
-            locomotion.repath_cap_per_tick =
-                locomotion.repath_cap_per_tick.saturating_add(cell_size);
             let mesher = message.mesher.get_or_insert_default();
             mesher.surfaces_per_frame = mesher.surfaces_per_frame.saturating_add(4);
             mesher.bytes_per_frame = mesher.bytes_per_frame.saturating_sub(1);
@@ -503,6 +508,28 @@ fn a_performance_knob_is_not_hashed_state() {
             "the hash chain moved when only a performance knob changed (cell size {cell_size})"
         );
     }
+}
+
+#[test]
+fn the_repath_cap_is_a_rule_not_a_knob() {
+    // The other half of the test above, and the reason the cap had to leave its
+    // knob list: at a cap of 1 a busy tick defers fifteen repaths it would
+    // otherwise have served, so the units walk different routes at different
+    // ticks and the chain says so. A cap that left the chain alone would mean
+    // the round robin of item 60 was not being served in a fixed order.
+    let base = rules();
+    let reference = chain(&mut world_with(base.clone()), 200);
+    let altered = rules_edited(|message| {
+        message
+            .locomotion
+            .get_or_insert_default()
+            .repath_cap_per_tick = 1;
+    });
+    assert_ne!(
+        chain(&mut world_with(altered), 200),
+        reference,
+        "the repath cap left the hash chain alone; it decides which unit repaths on which          tick (items 60 and 69), so it is a rule and it has to move the chain"
+    );
 }
 
 #[test]

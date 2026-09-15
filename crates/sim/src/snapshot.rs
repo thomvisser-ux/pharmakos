@@ -53,6 +53,7 @@ use crate::encoding::digest;
 use crate::mapgen::{self, MapError};
 use crate::math::fixed::{Angle, Fx};
 use crate::math::quantity::{Hp, Kw, Money, Tick};
+use crate::pathing::router::RestoredRouter;
 use crate::tables::{
     BeaconColumns, BeaconTable, SeatTable, StructureColumns, StructureTable, UnitColumns,
     UnitTable, WreckTable,
@@ -66,8 +67,15 @@ use serde::{Deserialize, Serialize};
 /// A bump is a contract change (AGENTS.md section 5) and invalidates every
 /// committed save. **Version 2 is T5's**: it adds the unit kind column, the
 /// beacon, structure and wreck tables, and the modified-chunk half of the
-/// voxel store.
-pub const SNAPSHOT_VERSION: u32 = 2;
+/// voxel store. **Version 3 is T7's**: it adds the router — each unit's walk
+/// state, speed accumulator, route length, route cursor, partial flag and
+/// route digest, the packed route nodes, and the repath queue's round-robin
+/// cursor.
+///
+/// The pathing *graph* is deliberately not in the file: it is a pure function
+/// of the chunk store and the cost rows, so a restore rebuilds it. The routes
+/// are not, because a route is a decision a unit already made.
+pub const SNAPSHOT_VERSION: u32 = 3;
 
 /// A flat, fixed-width projection of the world.
 ///
@@ -155,6 +163,25 @@ pub struct Snapshot {
     /// the restore rebuilds, both in length and value: see
     /// [`SnapshotError::ChunkDigest`].
     pub chunk_digest: Vec<u64>,
+
+    /// Each unit's [`crate::pathing::router::WalkState::id`].
+    pub unit_walk_state: Vec<u8>,
+    /// Each unit's speed accumulator, in twentieths of a cost unit.
+    pub unit_accumulator: Vec<i32>,
+    /// How many nodes each unit's route holds.
+    pub unit_route_len: Vec<u32>,
+    /// How far along its route each unit is.
+    pub unit_route_cursor: Vec<u32>,
+    /// Each unit's route digest — the form the state hash sees.
+    pub unit_route_hash: Vec<u64>,
+    /// Whether each route stops short of its goal, `0` or `1`.
+    pub unit_route_partial: Vec<u8>,
+    /// Every live route's nodes, packed: one unit's `unit_route_len` nodes
+    /// after another's, in unit order. Packed rather than strided because the
+    /// stride is 1 024 nodes a unit and almost all of it is empty.
+    pub route_nodes: Vec<u32>,
+    /// The repath queue's round-robin cursor.
+    pub repath_cursor: u32,
 }
 
 /// What went wrong saving or restoring.
@@ -293,6 +320,20 @@ impl Snapshot {
             modified_chunk,
             modified_chunk_bytes,
             chunk_digest: world.chunks().as_slice().to_vec(),
+
+            unit_walk_state: world.router().states().to_vec(),
+            unit_accumulator: world.router().accumulators().to_vec(),
+            unit_route_len: world.router().route_lengths().to_vec(),
+            unit_route_cursor: world.router().route_cursors().to_vec(),
+            unit_route_hash: world.router().route_hashes().to_vec(),
+            unit_route_partial: world
+                .router()
+                .route_partials()
+                .iter()
+                .map(|partial| u8::from(*partial))
+                .collect(),
+            route_nodes: world.router().packed_routes(),
+            repath_cursor: world.router().queue_cursor(),
         }
     }
 
@@ -413,6 +454,7 @@ impl Snapshot {
         let (voxels, chunks) = self.restore_store(world, seat_count)?;
 
         let unit_count = units.len();
+        let router = self.restore_router()?;
         if !world.restore_tables(RestoredTables {
             match_seed: self.match_seed,
             tick: Tick::new(self.tick),
@@ -423,10 +465,57 @@ impl Snapshot {
             wrecks,
             voxels,
             chunks,
+            router,
         }) {
             return Err(SnapshotError::Unindexable { units: unit_count });
         }
         Ok(())
+    }
+
+    /// The router's columns, checked against each other before anything is
+    /// written.
+    ///
+    /// Split out of [`Snapshot::restore_into`] for the reason every other check
+    /// there is: a restore either applies in full or changes nothing, so every
+    /// raggedness check has to run before the first assignment.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SnapshotError::Ragged`] when the per-unit columns disagree in
+    /// length, or when the packed routes are not exactly as long as the lengths
+    /// say.
+    fn restore_router(&self) -> Result<RestoredRouter, SnapshotError> {
+        let walkers = self.unit_id.len();
+        if self.unit_walk_state.len() != walkers
+            || self.unit_accumulator.len() != walkers
+            || self.unit_route_len.len() != walkers
+            || self.unit_route_cursor.len() != walkers
+            || self.unit_route_hash.len() != walkers
+            || self.unit_route_partial.len() != walkers
+        {
+            return Err(SnapshotError::Ragged("router"));
+        }
+        let mut packed: usize = 0;
+        for len in &self.unit_route_len {
+            packed = packed.saturating_add(usize::try_from(*len).unwrap_or(usize::MAX));
+        }
+        if packed != self.route_nodes.len() {
+            return Err(SnapshotError::Ragged("route_nodes"));
+        }
+        Ok(RestoredRouter {
+            state: self.unit_walk_state.clone(),
+            accumulator: self.unit_accumulator.clone(),
+            route_len: self.unit_route_len.clone(),
+            route_cursor: self.unit_route_cursor.clone(),
+            route_hash: self.unit_route_hash.clone(),
+            route_partial: self
+                .unit_route_partial
+                .iter()
+                .map(|partial| *partial != 0)
+                .collect(),
+            nodes: self.route_nodes.clone(),
+            cursor: self.repath_cursor,
+        })
     }
 
     /// Rebuild the chunk store: the pristine layer from the seed, then the
