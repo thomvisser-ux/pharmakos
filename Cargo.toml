@@ -28,8 +28,9 @@ repository = "https://example.invalid/pharmakos"  # PLACEHOLDER: GitHub org not 
 publish = false                  # nothing in this workspace goes to crates.io
 
 # Shared dependency versions live here so every crate agrees on one graph, which is part
-# of cross-OS determinism. All commented out until the spikes actually pull them in
-# (spec §15, "Crates"). Versions are PLACEHOLDERS — check the registry when uncommenting.
+# of cross-OS determinism (spec §15, "Crates"). An entry is uncommented by the task that
+# first needs it, with an exact `=` pin; the still-commented lines carry PLACEHOLDER
+# versions and must be checked against the registry when they are uncommented.
 [workspace.dependencies]
 # --- schema (single source: gp.v1, gp.api.v1) ---
 prost          = { version = "0.14", default-features = false, features = ["std", "derive"] }
@@ -40,10 +41,14 @@ prost          = { version = "0.14", default-features = false, features = ["std"
 # because prost drops unknown fields and the gateway's method/scope annotation is
 # a custom option, which is an unknown field to a generated EnumValueOptions.
 # --- determinism-critical ---
-# xxhash-rust  = { version = "0.8", features = ["xxh3"] }  # per-tick state hash
+# Exact `=` pins, not caret ranges: a patch bump to any of these can move a hash
+# chain, and a moved hash chain must be a reviewed change rather than a surprise
+# on someone's machine (G4, "the lock must be committed before the matrix runs").
+xxhash-rust  = { version = "=0.8.18", default-features = false, features = ["xxh3"] }  # per-tick state hash
+postcard     = { version = "=1.1.3", default-features = false, features = ["use-std"] }  # snapshot/replay encoding (item 49)
+serde        = { version = "=1.0.229", default-features = false, features = ["std", "derive"] }  # postcard's companion; nothing else uses serde
 # imbl         = "3"      # persistent ordered collections (no HashMap/HashSet)
-# postcard     = "1"      # snapshot/replay encoding (candidate)
-# rkyv         = "0.8"    # zero-copy snapshot encoding (candidate; decide in the G4 spike)
+# rkyv         = "0.8"    # zero-copy snapshot encoding (rejected in G4; item 49)
 # --- assets and pathing ---
 # dot_vox      = "5"      # .vox models, meshed by our own greedy mesher
 # pathfinding  = "4"      # primitives only; HPA* is ours (hierarchical_pathfinding is banned)
@@ -61,7 +66,7 @@ prost          = { version = "0.14", default-features = false, features = ["std"
 # `"1"` when the workspace reaches 1.0, and not before.
 pharmakos-mesher = { path = "crates/mesher", version = "0" }
 pharmakos-proto  = { path = "crates/proto", version = "0" }
-# pharmakos-sim       = { path = "crates/sim", version = "0", default-features = false }
+pharmakos-sim       = { path = "crates/sim", version = "0", default-features = false }
 # pharmakos-plan-core = { path = "crates/plan-core", version = "0" }
 # pharmakos-verifier  = { path = "crates/verifier", version = "0" }
 # pharmakos-operator  = { path = "crates/operator", version = "0" }
