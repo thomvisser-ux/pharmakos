@@ -144,6 +144,38 @@ precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 Pharmakos contributors"
 SPDX-License-Identifier = "GPL-3.0-or-later"
 
+# --- Golden files and scenarios --------------------------------------------
+# Harness part 2's committed outputs: hash chains, digests, reports, prose,
+# geometry digests and the vista PNG (tests/golden/**), and the headless
+# matches that assert on them (scenarios/**). Same tier as the code that
+# produces them — these are records of what the game did, and most of them are
+# read only by GPL'd checkers.
+#
+# They need a manifest entry rather than a header because several of the
+# formats CANNOT carry one. A hash chain is `<tick>\t<16 hex digits>` per line
+# and nothing else — it is byte-compared across three operating systems, so a
+# comment at the top of it is a format violation, not a licence header — and a
+# PNG cannot carry a text header at all. tests/golden/README.md and
+# scenarios/README.md do carry their own headers and are unaffected.
+#
+# PLACEHOLDER: four of the golden areas will hold byte-for-byte reproductions
+# of material that is MIT OR Apache-2.0 where it lives today —
+# tests/golden/proto/ and tests/golden/plan-core/ (example playbooks from
+# examples/, re-encoded), tests/golden/schema/ (generated JSON Schema) and
+# tests/golden/docs/ (generated documentation). docs/LICENSING.md puts all four
+# sources in the permissive tier, so those goldens arguably belong there too,
+# with the per-directory LICENSE pointers that tier uses. None of them exists
+# yet. Owner decides at T1, which commits the first one; until then this broad
+# block covers them and the question is recorded rather than answered.
+[[annotations]]
+path = [
+    "tests/**",
+    "scenarios/**",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Pharmakos contributors"
+SPDX-License-Identifier = "GPL-3.0-or-later"
+
 # The throwaway stack spikes had their own blocks here (spikes/** in the game
 # tier, spikes/README.md in the documentation tier). The directory was deleted
 # from main at the `spike-end` tag, so the blocks went with it; the tag still
