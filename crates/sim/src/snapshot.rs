@@ -22,10 +22,13 @@
 //! edit has touched since generation and their 32 768 bytes each, plus the
 //! per-chunk digests exactly as the hash sees them. A match that has destroyed
 //! nothing therefore saves nothing of its 9.4 MB map; a match that has cratered
-//! forty chunks saves 1.3 MB of them. The digests are carried as well as
-//! recomputed-on-restore state deliberately: they are what the hash is over, so
-//! a restore that disagreed with them would be caught by the round-trip test
-//! rather than by a desync three operating systems later.
+//! forty chunks saves 1.3 MB of them. The digests are carried deliberately:
+//! they are what the hash is over, so [`Snapshot::restore_into`] checks the
+//! column's length **and** every digest against the store it has just rebuilt
+//! and refuses the file with [`SnapshotError::ChunkDigest`] when the two
+//! disagree. A file written by another generator, another rules table or an
+//! editor is caught at the door rather than by a desync three operating systems
+//! later.
 //!
 //! # The one bend in the "never serialise `usize`" rule, stated at the encoder
 //!
@@ -46,6 +49,7 @@
 //! to the same check.
 
 use crate::chunks::ChunkDigests;
+use crate::encoding::digest;
 use crate::mapgen::{self, MapError};
 use crate::math::fixed::{Angle, Fx};
 use crate::math::quantity::{Hp, Kw, Money, Tick};
@@ -53,7 +57,7 @@ use crate::tables::{
     BeaconColumns, BeaconTable, SeatTable, StructureColumns, StructureTable, UnitColumns,
     UnitTable, WreckTable,
 };
-use crate::voxels::CHUNK_VOXELS;
+use crate::voxels::{CHUNK_VOXELS, VoxelStore};
 use crate::world::{RestoredTables, World};
 use serde::{Deserialize, Serialize};
 
@@ -147,7 +151,9 @@ pub struct Snapshot {
     /// [`Snapshot::modified_chunk`], concatenated in the same order.
     pub modified_chunk_bytes: Vec<u8>,
 
-    /// One digest per chunk, in chunk-index order.
+    /// One digest per chunk, in chunk-index order. Checked against the store
+    /// the restore rebuilds, both in length and value: see
+    /// [`SnapshotError::ChunkDigest`].
     pub chunk_digest: Vec<u64>,
 }
 
@@ -178,6 +184,15 @@ pub enum SnapshotError {
         /// How many units the snapshot holds.
         units: u32,
     },
+    /// A carried chunk digest is not the digest of the chunk the restore
+    /// rebuilt. The file describes a store this build does not produce — a
+    /// different generator, a different rules table, or edited bytes — and a
+    /// world restored from it would hash something its own voxels disagree
+    /// with. Refused at the door rather than three operating systems later.
+    ChunkDigest {
+        /// The chunk the digests disagree at, the lowest one.
+        chunk: u32,
+    },
 }
 
 impl core::fmt::Display for SnapshotError {
@@ -199,6 +214,11 @@ impl core::fmt::Display for SnapshotError {
                 f,
                 "the snapshot's {units} units cannot be indexed by a broadphase grid built from \
                  this world's rules table"
+            ),
+            SnapshotError::ChunkDigest { chunk } => write!(
+                f,
+                "the snapshot's digest for chunk {chunk} is not the digest of the chunk this \
+                 build rebuilt from the same seed"
             ),
         }
     }
@@ -390,7 +410,37 @@ impl Snapshot {
             return Err(SnapshotError::Ragged("wreck"));
         }
 
-        // The pristine layer, from the seed; then the chunks an edit changed.
+        let (voxels, chunks) = self.restore_store(world, seat_count)?;
+
+        let unit_count = units.len();
+        if !world.restore_tables(RestoredTables {
+            match_seed: self.match_seed,
+            tick: Tick::new(self.tick),
+            seats,
+            units,
+            beacons,
+            structures,
+            wrecks,
+            voxels,
+            chunks,
+        }) {
+            return Err(SnapshotError::Unindexable { units: unit_count });
+        }
+        Ok(())
+    }
+
+    /// Rebuild the chunk store: the pristine layer from the seed, then the
+    /// chunks an edit changed, then the digest column checked against both.
+    ///
+    /// Separate from [`Snapshot::restore_into`] because it is the half of a
+    /// restore that is about the *map* rather than about the tables, and
+    /// because a restore is the one place the digests — hashed state — are
+    /// taken on a file's word unless somebody checks them.
+    fn restore_store(
+        &self,
+        world: &World,
+        seat_count: u32,
+    ) -> Result<(VoxelStore, ChunkDigests), SnapshotError> {
         if self.modified_chunk.len().saturating_mul(CHUNK_VOXELS) != self.modified_chunk_bytes.len()
         {
             return Err(SnapshotError::Ragged("modified_chunk"));
@@ -409,24 +459,27 @@ impl Snapshot {
             }
         }
 
+        // The digests are hashed state, so a file whose digest column does not
+        // describe the store just rebuilt is refused rather than loaded (see the
+        // module docs: the claim there is only true if it is checked here). The
+        // cost is one pass of xxh3 over 9.4 MB at a restore, a fraction of
+        // regenerating the map above, and it is never paid inside a tick.
+        if self.chunk_digest.len() != usize::try_from(voxels.chunk_count()).unwrap_or(usize::MAX) {
+            return Err(SnapshotError::Ragged("chunk_digest"));
+        }
         let mut chunks = ChunkDigests::new(0);
         chunks.restore(self.chunk_digest.clone());
-
-        let unit_count = units.len();
-        if !world.restore_tables(RestoredTables {
-            match_seed: self.match_seed,
-            tick: Tick::new(self.tick),
-            seats,
-            units,
-            beacons,
-            structures,
-            wrecks,
-            voxels,
-            chunks,
-        }) {
-            return Err(SnapshotError::Unindexable { units: unit_count });
+        let mut chunk: u32 = 0;
+        while chunk < voxels.chunk_count() {
+            let Some(bytes) = voxels.chunk_bytes(chunk) else {
+                return Err(SnapshotError::Ragged("chunk_digest"));
+            };
+            if chunks.get(chunk) != Some(digest(bytes.as_slice())) {
+                return Err(SnapshotError::ChunkDigest { chunk });
+            }
+            chunk = chunk.saturating_add(1);
         }
-        Ok(())
+        Ok((voxels, chunks))
     }
 }
 
