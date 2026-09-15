@@ -7,6 +7,14 @@
 // gp.v1 schema is checked against: if a schema change breaks this file, the
 // change is wrong. See examples/README.md for what "verbatim" costs.
 //
+// One line is NOT verbatim, and it is the only one: "kind": "PLAYBOOK".
+// Spec section 10's example predates the envelope's kind tag, which
+// decisions-log item 47 held as a reserved field number and item 76 defines;
+// the verifier rejects KIND_UNSPECIFIED with a code and a JSON Pointer, so the
+// example has to carry it or the spec's own worked example would not qualify.
+// Recorded here rather than quietly: examples/README.md's "verbatim" rule is
+// what makes a deviation worth writing down.
+//
 // The durations below are bare JSON numbers ("timeout_ms":120000), as the spec
 // writes them. That is only reproducible by a stock encoder because the five
 // duration fields are typed int32 in proto/gp/v1/playbook.proto: the proto3
@@ -17,6 +25,7 @@
 // expand_east.jsonc — comments survive a round trip through the editor
 { "schema_version": {"major":1,"minor":0},
   "meta": {"title":"Expand & Mine east","author_kind":"HUMAN"},
+  "kind": "PLAYBOOK",
   "declarative": {
     "route": [
       {"label":"to_site","move":{"to":{"voxel":{"x":96,"y":11,"z":62}},"pace":"AVOID_KNOWN_THREATS"},"timeout_ms":120000},

@@ -1,0 +1,46 @@
+{
+  "revision": 1,
+  "note": "Walking skeleton. Values from decisions-log items 54, 59, 68 and 69 and spec section 5; everything the log has not fixed is a PLACEHOLDER named in rules/README.md.",
+  "match": {
+    "segment_lengths_ms": [
+      180000,
+      300000,
+      480000
+    ],
+    "lull_ms": 180000
+  },
+  "locomotion": {
+    "step_cost_cardinal": 10,
+    "step_cost_diagonal": 14,
+    "climb_surcharge": 4,
+    "move_cost_per_tick": 3,
+    "repath_cap_per_tick": 16,
+    "fog_cost_numerator": 3,
+    "fog_cost_denominator": 2,
+    "hpa_cluster_voxels": 32
+  },
+  "broadphase": {
+    "cell_size_voxels": 8
+  },
+  "interface_times": {
+    "visit_handshake_ms": 1500,
+    "set_priority_ms": 1500,
+    "edit_settings_base_ms": 2000,
+    "edit_settings_per_field_ms": 500,
+    "edit_settings_max_ms": 6000,
+    "build_target_ms": 2500,
+    "queue_structure_ms": 5000,
+    "switch_mandate_ms": 8000,
+    "recycle_ms": 10000,
+    "place_beacon_deploy_ms": 12000
+  },
+  "mesher": {
+    "surfaces_per_frame": 4,
+    "bytes_per_frame": 524288,
+    "age_frames": 2,
+    "light_max": 15,
+    "light_atten": 1
+  },
+  "economy": {},
+  "power": {}
+}

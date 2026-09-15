@@ -1,0 +1,182 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: MIT OR Apache-2.0
+//
+// CONTRACT FILE: changes need owner approval.
+//
+// The rules table (decisions-log item 78). Every tuning value the sim, the
+// verifier, the estimator and the mesher read lives in one reviewable file
+// whose canonical JSON is `rules/rules.v1.json`, loaded by `pharmakos-sim`
+// and hashed with item 48's encoder so `rules_hash` is one of the verifier's
+// five inputs by construction.
+//
+// The split that makes this work, and the reason the table is a schema at
+// all: the SHAPE is the contract and `buf breaking` guards it; the VALUES are
+// data in the JSON, and a tuning change during S1 or S2 is an ordinary PR.
+// AGENTS.md section 12 — "Tuning values are data, versioned in the rules
+// table and stamped into the rules hash — not constants sprinkled through the
+// code" — is enforced by this file existing.
+//
+// What is NOT in here: anything that varies with the machine rather than with
+// the game. Item 67's caveat and G3''s calibration-constant lesson both point
+// the same way, and a performance knob inside hashed state is a desync
+// waiting for a slower laptop. Two values sit right on that line and are
+// called out where they are declared: the mesher's K and B (a per-frame
+// presentation budget, but item 54 makes the drain ORDER a rule, so the whole
+// block is data the mesher reads rather than constants it holds) and the
+// per-tick repath cap (item 60 makes the cap part of the sim's behaviour, so
+// it is hashed like any other rule). Neither is a calibration constant: both
+// are the same number on every machine, which is exactly the test.
+//
+// Every duration is int32 game milliseconds, for the reason
+// proto/gp/v1/playbook.proto's header gives at length.
+
+syntax = "proto3";
+
+package gp.v1;
+
+// The whole table. One file, one match, one `rules_hash`.
+message RulesTable {
+  // Bumped whenever a VALUE changes, so a save or a replay that refuses to
+  // load can say which table it was recorded against. The shape's version is
+  // the package version, `gp.v1`.
+  uint32 revision = 1;
+
+  // Free text: what changed in this revision and why.
+  string note = 2;
+
+  Match match = 10;
+  Locomotion locomotion = 11;
+  Broadphase broadphase = 12;
+  InterfaceTimes interface_times = 13;
+  Mesher mesher = 14;
+  Economy economy = 15;
+  Power power = 16;
+
+  // Match structure (spec section 3; item 68).
+  message Match {
+    // The per-round length list, in game milliseconds, in the order the
+    // rounds are played. Item 68 measured the 3 / 5 / 8 ladder affordable and
+    // kept it. The runner reads the coming segment's length from the frozen
+    // snapshot, never from a constant — this list is where the snapshot's
+    // value comes from.
+    repeated int32 segment_lengths_ms = 1;
+
+    // The Lull's planning timer, in game milliseconds. Read by the host and
+    // the editor, never by the sim: the Lull timer is a UI and host concern
+    // (AGENTS.md section 4.5).
+    //
+    // PLACEHOLDER: value is Tuning — owner, at the walking skeleton's demo.
+    int32 lull_ms = 2;
+  }
+
+  // Locomotion and pathing (item 59, item 69).
+  message Locomotion {
+    // Integer move costs. Cost converts to ticks by CEILING, never by
+    // truncation, so an estimate is never optimistic (item 61).
+    uint32 step_cost_cardinal = 1;   // item 59: 10
+    uint32 step_cost_diagonal = 2;   // item 59: 14
+    uint32 climb_surcharge = 3;      // item 59: 4, one-voxel climbs
+    uint32 move_cost_per_tick = 4;   // item 59: 3
+
+    // Per-tick repath cap, served round-robin in (seat, beacon, unit) order
+    // (item 60). Hashed state, not a calibration constant: the cap changes
+    // which unit repaths on which tick, so it has to be the same number
+    // everywhere.
+    //
+    // PLACEHOLDER: 16 is item 69's value, to be re-derived at S2's exit once
+    // the burst frequency is a measurement rather than a spike's estimate —
+    // owner, at S2 exit.
+    uint32 repath_cap_per_tick = 5;
+
+    // Fog multiplier on an abstract edge, as a fraction: an unseen edge costs
+    // `cost * numerator / denominator`, rounded up (item 61: cost * 3 / 2).
+    // A fraction rather than a percentage because the arithmetic is integer
+    // and the rounding has to be stated.
+    uint32 fog_cost_numerator = 6;
+    uint32 fog_cost_denominator = 7;
+
+    // Cluster edge in voxels. Item 58: 32, one chunk footprint, a single
+    // abstract level.
+    uint32 hpa_cluster_voxels = 8;
+  }
+
+  // The CSR uniform grid the broadphase rebuilds by counting sort (item 67).
+  message Broadphase {
+    // Cell edge in voxels.
+    //
+    // PLACEHOLDER: Tuning, tied to unit density — owner, at S2's exit. Item
+    // 67's caveat: the broadphase is super-linear in density, so this number
+    // is a real tuning value and not a constant anybody may guess.
+    uint32 cell_size_voxels = 1;
+  }
+
+  // On-site interface times (spec section 5). All game milliseconds.
+  message InterfaceTimes {
+    int32 visit_handshake_ms = 1;          // 1500
+    int32 set_priority_ms = 2;             // 1500
+    int32 edit_settings_base_ms = 3;       // 2000
+    int32 edit_settings_per_field_ms = 4;  // 500
+    int32 edit_settings_max_ms = 5;        // 6000
+    int32 build_target_ms = 6;             // 2500, add or remove, each
+    int32 queue_structure_ms = 7;          // 5000, plus construction time
+    int32 switch_mandate_ms = 8;           // 8000
+    int32 recycle_ms = 9;                  // 10000
+    int32 place_beacon_deploy_ms = 10;     // 12000 (spec section 5)
+  }
+
+  // The mesher's per-frame drain budget and its drain order (item 54). Read
+  // by `pharmakos-mesher`, which is a walled crate: these values cross the
+  // wall as integers, which is the only direction anything crosses it.
+  message Mesher {
+    // K: surfaces uploaded per frame.
+    //
+    // PLACEHOLDER: Tuning — no measured frame-time reason separates K = 4
+    // from K = 8 on the spike machine (item 54). Owner, at S6's art pass.
+    uint32 surfaces_per_frame = 1;
+
+    // B: bytes uploaded per frame. Item 54: 512 KiB.
+    //
+    // PLACEHOLDER: Tuning, same note as K — owner, at S6's art pass.
+    uint32 bytes_per_frame = 2;
+
+    // The ageing term of the drain order: a queued surface older than this
+    // many frames drains before the nearest-camera rule applies. Item 54's
+    // "older than 2 frames".
+    //
+    // PLACEHOLDER: ships untested by measurement and is labelled insurance
+    // (item 54) — owner, at S6's art pass.
+    uint32 age_frames = 3;
+
+    // Light bake. LIGHT_MAX is the brightest sky value, LIGHT_ATTEN the fall
+    // per voxel; the mesher derives its dirty pad from them as light reach
+    // plus one rather than asserting a number (G1 section 10.12).
+    //
+    // PLACEHOLDER: Tuning — owner, at S6's art polish.
+    uint32 light_max = 4;
+    uint32 light_atten = 5;
+  }
+
+  // PLACEHOLDER STUB — every `$` row. Filled by T14 (crates/sim part 6,
+  // economy) with the numbers decision 14 settles; each one is Tuning and
+  // none of them may become a constant in code. Spec section 7 names them:
+  // BMI and its by-standing scaling, starting `$`, beacon / structure / unit
+  // costs, ruin salvage value, the recycle refund share, and the audit's
+  // held-value weighting.
+  //
+  // Field numbers 1-15 are held so T14's first fifteen rows stay in the
+  // one-byte tag range. The message exists now, empty, so that `rules_hash`
+  // covers a table of the final shape from the first golden.
+  message Economy {
+    reserved 1 to 15;
+  }
+
+  // PLACEHOLDER STUB — every `kW` row. Filled by T14. Spec section 7 names
+  // them: the core's deep-bore surplus, Generator output per vent richness,
+  // draw per fielded item, the dormancy revive margin, and the brownout
+  // order's tie-breaks. Item 65's provisional per-map ceiling of 190 kW at
+  // 20 craters/s, with 1 kW per unit and the 40% reserve inside it, is the
+  // shape T5's map generator checks itself against.
+  message Power {
+    reserved 1 to 15;
+  }
+}
