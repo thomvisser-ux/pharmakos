@@ -120,7 +120,7 @@ editor UI. Nothing else executes. Directories are under `crates/`; package names
    arithmetic, no validation, no gameplay decisions. The editor "runs no validation or time maths of
    its own" — it asks the gateway. GDScript is views and editor UI only.
 5. **Banned dependencies.** `bincode` (unmaintained), `cordic`, `hierarchical_pathfinding` (stale),
-   `rmcp`, `wasmi`, any scripting engine. Approved: `prost`, `buf` (tooling), `rkyv`/`postcard`,
+   `rmcp`, `wasmi`, any scripting engine. Approved: `prost`, `buf` (tooling), `rkyv`/`postcard` (with `serde` as postcard's derive companion only — decisions-log item 88),
    `xxh3`, `imbl`, `dot_vox`, pathfinding primitives under our own HPA\*. Adding a dependency that
    is not on the approved list is an owner decision — open a PR and stop (§5).
 
