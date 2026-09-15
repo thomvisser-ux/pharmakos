@@ -19,5 +19,14 @@ publish.workspace = true
 # mesher meshes. Nothing from crates/sim ever appears here — the input is plain integer
 # chunk data handed across a named boundary.
 
+[dev-dependencies]
+# The geometry golden's digests. `xxhash-rust` and no other hash function: AGENTS.md §3's
+# approved list names it, the sim already pins the same exact version for the state hash,
+# and "never add a second hash function" (AGENTS.md §5) holds for a golden as much as for
+# hashed state. It is a DEV dependency on purpose — the shipped mesher still has none, so
+# `cargo tree -p pharmakos-mesher` stays a single line and the "links without gdext"
+# property is visible rather than argued.
+xxhash-rust = { workspace = true }
+
 [lints]
 workspace = true
