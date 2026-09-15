@@ -298,7 +298,7 @@ pub enum VoxelEdit {
 /// Not hashed directly: [`VoxelStore::settle`] writes this store's contribution
 /// into the [`ChunkDigests`] table, and *that* is what the canonical encoder
 /// walks (item 66).
-#[derive(Clone, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
 pub struct VoxelStore {
     size: [u32; 3],
     chunks_per_axis: [u32; 3],
@@ -317,6 +317,33 @@ pub struct VoxelStore {
     /// Scratch for [`VoxelStore::crater`]'s touched set, reset through the
     /// caller's own list so a crater allocates nothing.
     touch_flag: Vec<bool>,
+}
+
+// Written out rather than derived for one reason: a derived `Clone` copies the
+// scratch vectors' *lengths* and not their capacities, so a cloned store — a
+// save, a `world.clone()`, a `research` fork — would allocate on its first
+// settling tick and break the zero-allocations-per-tick property
+// (`crates/sim/tests/allocations.rs`, G3' section 9.17) in the clone rather
+// than in the original, which is exactly where nobody looks. The values are
+// cloned faithfully; only the spare capacity is restored.
+impl Clone for VoxelStore {
+    fn clone(&self) -> VoxelStore {
+        let n = self.chunks.len();
+        let mut pending = Vec::with_capacity(n);
+        pending.extend_from_slice(&self.pending);
+        let mut settled = Vec::with_capacity(n);
+        settled.extend_from_slice(&self.settled);
+        VoxelStore {
+            size: self.size,
+            chunks_per_axis: self.chunks_per_axis,
+            chunks: self.chunks.clone(),
+            modified: self.modified.clone(),
+            pending,
+            pending_flag: self.pending_flag.clone(),
+            settled,
+            touch_flag: self.touch_flag.clone(),
+        }
+    }
 }
 
 // `[u8; 32768]` has a `Debug`, and printing 288 of them into an assertion
