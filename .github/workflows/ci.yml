@@ -298,3 +298,94 @@ jobs:
             echo "Do not re-baseline the golden chain to make this green."
           fi
           exit "$status"
+
+  screenshot:
+    name: vista screenshot (linux)
+    # Linux only, and deliberately so. The golden is rendered under xvfb with
+    # the lavapipe software rasteriser; comparing a second platform's rasteriser
+    # against it would be permanently red and would say nothing about the
+    # geometry (decisions-log item 22 — G1 measured 1.14 % of pixels differing
+    # between a Quadro and lavapipe on identical geometry). The stronger of the
+    # two geometry checks is the mesher's digests, which need no GPU and do run
+    # on every leg.
+    #
+    # WIRED BUT SKIPPING. `godot/` does not exist and no vista golden is
+    # committed, so `cargo xtask screenshot` reports itself skipped, with the
+    # reason and the task that fills it. The heavy install steps below are
+    # gated on the Godot project appearing, so today this leg costs a checkout
+    # and a cargo build. T16 lands the project and the first golden; T20
+    # promotes the step from skipping to required and decides then whether the
+    # ubuntu `ci` leg should pass `--skip screenshot` so the render is not done
+    # twice.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Install the Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and target
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: screenshot-ubuntu
+
+      - name: Install a virtual display and the software rasteriser
+        # `godot --headless` CANNOT take a screenshot: it selects the dummy
+        # rendering driver, `RenderingServer.frame_post_draw` never fires, and a
+        # screenshot coroutine awaiting it parks for ever — silently, producing
+        # no PNG and no error (G1 §10.12). The render runs windowed under xvfb
+        # with lavapipe instead.
+        #
+        # Note what is NOT here: `VK_ICD_FILENAMES`. Pointing it at a path that
+        # does not exist on this image makes the Vulkan loader find *no* driver,
+        # after which Godot silently falls back to OpenGL 3 — a different
+        # renderer from the golden's. Let the loader enumerate the installed
+        # ICDs.
+        if: hashFiles('godot/project.godot') != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xvfb mesa-vulkan-drivers vulkan-tools
+          vulkaninfo --summary || echo "::notice::vulkaninfo failed; the render step will report what it selected"
+
+      - name: Install Godot
+        # PLACEHOLDER: the pinned Godot 4.7.2 build (decisions-log item 73) is
+        # downloaded here. T16 writes this step with the project it needs;
+        # leaving it empty today would make the step below look installed when
+        # it is not.
+        if: hashFiles('godot/project.godot') != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "::error::the Godot install step is a PLACEHOLDER — T16 fills it with the pinned 4.7.2 build"
+          exit 1
+
+      - name: cargo xtask screenshot
+        # The step runs `godot --headless --path godot --import` itself before
+        # rendering. That pre-step is not optional: a non-editor Godot run loads
+        # GDExtensions only from `res://.godot/extension_list.cfg`, which the
+        # editor writes when it scans the project and which is git-ignored — so
+        # on a fresh checkout the extension's classes instantiate as
+        # placeholders and the first call on them fails. G1 lost four runs to
+        # this.
+        #
+        # The comparison's verdict goes out as `::notice::` annotations as well
+        # as to the step summary, because GitHub hides job logs and step
+        # summaries from logged-out viewers.
+        shell: bash
+        run: cargo xtask screenshot
+
+      - name: Upload the render
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vista-screenshot
+          path: target/golden/vista/actual.vista.png
+          # Nothing produces this yet, so a missing file is expected.
+          # FLIP AT T16: make this `error` — once the vista exists, a leg that
+          # produced no PNG rendered nothing, and that must not read as a pass.
+          if-no-files-found: ignore
+          retention-days: 14
