@@ -16,13 +16,16 @@
 //!    artefact directory.
 //! 2. **Not blank.** A single-colour frame is a failed render, not a passed
 //!    test, so the red channel's variance has to clear a floor.
-//! 3. **Golden compare**, with a generous tolerance: mean absolute difference
-//!    per channel plus the fraction of pixels differing by more than a hard
-//!    threshold. Generous because the two sides may be different rasterisers —
-//!    G1 measured 1.14 % of pixels differing *at all* between a Quadro and
-//!    lavapipe on identical geometry — while a back-face-culled hole or a
-//!    missing chunk moves both statistics by far more than a rasteriser
-//!    tie-break does.
+//! 3. **Golden compare**, with a tolerance rather than byte equality: mean
+//!    absolute difference per channel plus the fraction of pixels differing by
+//!    more than a hard threshold. A tolerance because the two sides may be
+//!    different rasterisers — G1 measured 1.14 % of pixels differing *at all*
+//!    between a Quadro and lavapipe on identical geometry — while a
+//!    back-face-culled hole or a missing chunk moves both statistics by far more
+//!    than a rasteriser tie-break does. The tolerance is nonetheless tight: the
+//!    two thresholds below are G1's *measured* shape, not the loose gate its
+//!    script shipped with, because a gate wide enough to admit a missing chunk
+//!    is a green tick that means nothing.
 //!
 //! # Why this is Rust and not the spike's Python
 //!
@@ -52,19 +55,24 @@ use std::fmt::Write as _;
 
 /// Mean absolute per-channel difference, in thousandths of one 0–255 level.
 ///
-/// 6 000 = 6.0/255, the tolerance `compare_vista.py` shipped with and the one
-/// spike G1 ran its geometry job at.
+/// 4 = 0.004/255: G1 measured 0.0039/255 between two rasterisers on identical
+/// geometry, and this is that figure rounded up to the next thousandth.
+/// `spikes/g1-remesh/ci/compare_vista.py` shipped with 6.0/255, which is roughly
+/// 1 500× looser: at that gate a missing chunk passes, and a gate a missing
+/// chunk passes is a green tick that means nothing.
 ///
-/// PLACEHOLDER: decisions-log item 22 (plan section 7) recommends tightening
-/// this to G1's *measured* shape — mean 0.0039/255 with **zero** pixels over 32
-/// — once a real vista replaces the fixture. Owner re-ratifies at T16, and T20
-/// promotes this step from skipping to required. Keep both numbers in one place
-/// so the change is one line and one PR.
-pub(crate) const MAX_MEAN_THOUSANDTHS: u64 = 6_000;
+/// PLACEHOLDER: skeleton-plan section 7 decision 22 (recommended, not yet
+/// logged) names these two numbers; the owner re-ratifies them at T16 against
+/// the first real vista, and T20 promotes this step from skipping to required.
+/// Keep both in one place so the change is one line and one PR.
+pub(crate) const MAX_MEAN_THOUSANDTHS: u64 = 4;
 
 /// Share of pixels allowed to differ by more than [`HARD_DELTA`] on any
-/// channel, in parts per million. 20 000 ppm = 2 %.
-pub(crate) const MAX_HARD_PPM: u64 = 20_000;
+/// channel, in parts per million. Zero: G1 measured 1.14 % of pixels differing
+/// *at all* between a Quadro and lavapipe, and **none at all** by more than 32.
+/// A rasteriser tie-break does not move a channel by 33 levels, so one pixel
+/// that does is news. Re-ratified with the mean above at T16.
+pub(crate) const MAX_HARD_PPM: u64 = 0;
 
 /// A per-channel difference above this counts as a *hard* difference: a
 /// rasteriser tie-break does not move a channel by 33 levels, a missing face
@@ -73,6 +81,12 @@ pub(crate) const HARD_DELTA: u8 = 32;
 
 /// Floor on the red channel's variance. Below it the frame is blank or
 /// near-uniform and nothing was drawn.
+///
+/// PLACEHOLDER: owner/T16 re-ratifies this floor against the first real render.
+/// 200 is chosen only so that the committed blank fixture (variance 0) fails and
+/// the committed gradient fixture passes; the world is destructible voxels under
+/// a permanent ash sky, so a legitimately low-contrast vista is not far-fetched
+/// and a floor set too high fails a good render.
 pub(crate) const MIN_VARIANCE: u64 = 200;
 
 // ---------------------------------------------------------------------------
@@ -186,8 +200,10 @@ impl Diff {
              moves the mean, not the worst delta.",
             decimal(mean, 3),
             decimal(max_mean_thousandths, 3),
-            decimal(hard.div_euclid(100), 4),
-            decimal(max_hard_ppm.div_euclid(100), 4),
+            // Parts per million rendered with four decimal places *is* the
+            // percentage: 20 000 ppm renders as "2.0000".
+            decimal(hard, 4),
+            decimal(max_hard_ppm, 4),
             self.worst,
         ))
     }
@@ -208,8 +224,8 @@ impl Diff {
             self.differing,
             self.pixels,
             self.hard,
-            decimal(self.hard_ppm().div_euclid(100), 4),
-            decimal(MAX_HARD_PPM.div_euclid(100), 4)
+            decimal(self.hard_ppm(), 4),
+            decimal(MAX_HARD_PPM, 4)
         );
         let _ = write!(text, "worst single-channel delta {}", self.worst);
         text
@@ -911,6 +927,37 @@ mod tests {
             report.contains("inverted winding"),
             "the report says what to look for: {report}"
         );
+
+        // The share is pinned by value, not only by substring. Rendering parts
+        // per million as a percentage is one division, and getting it wrong by a
+        // factor of a hundred produces a report that reads as
+        // self-contradictory — "0.0833 % (limit 0.0200 %)" — and invites
+        // loosening a threshold that is already looser than it looks. This is
+        // the diagnostic that carries the `::notice::` annotation, the only
+        // channel a logged-out viewer can read (G1 section 10.12).
+        assert_eq!(diff.pixels, 14_400);
+        assert_eq!(diff.hard, 1_200);
+        assert_eq!(diff.hard_ppm(), 83_333);
+        assert!(
+            report.contains("8.3333 %"),
+            "1 200 of 14 400 pixels is 8.3333 %, not 0.0833 %: {report}"
+        );
+        assert!(
+            diff.describe().contains("8.3333 %"),
+            "the annotation carries the same number: {}",
+            diff.describe()
+        );
+
+        // And the limit is rendered on the same scale. Checked against the loose
+        // gate the spike script shipped with, so that the two numbers in one
+        // sentence are comparable.
+        let loose = diff
+            .check(6_000, 20_000)
+            .expect_err("the doctored vista fails even the spike's generous gate");
+        assert!(
+            loose.contains("limit 2.0000 %"),
+            "20 000 ppm is 2 %, not 0.02 %: {loose}"
+        );
     }
 
     #[test]
@@ -974,24 +1021,47 @@ mod tests {
         assert_eq!(diff.mean_thousandths(), 1_000);
         // 20 of 1000 pixels = 2 %.
         assert_eq!(diff.hard_ppm(), 20_000);
+        // The limits are passed in rather than taken from the constants, so that
+        // re-ratifying the shipped thresholds at T16 does not quietly change
+        // what this test is asserting.
         assert!(
-            diff.check(MAX_MEAN_THOUSANDTHS, MAX_HARD_PPM).is_ok(),
+            diff.check(1_000, 20_000).is_ok(),
             "exactly at the limit still passes"
         );
         assert!(
-            diff.check(999, MAX_HARD_PPM).is_err(),
+            diff.check(999, 20_000).is_err(),
             "one thousandth over the mean limit fails"
         );
         assert!(
-            diff.check(MAX_MEAN_THOUSANDTHS, 19_999).is_err(),
+            diff.check(1_000, 19_999).is_err(),
             "one part per million over the hard limit fails"
         );
+        // 2 %, not 0.02 %: the failure report and the limit beside it are on the
+        // same scale.
+        let report = diff
+            .check(1_000, 0)
+            .expect_err("twenty hard pixels fail a zero-tolerance gate");
+        assert!(report.contains("2.0000 %"), "{report}");
+    }
+
+    #[test]
+    fn the_shipped_thresholds_are_g1s_measured_shape() {
+        // skeleton-plan section 7 decision 22 (recommended, not yet logged):
+        // mean 0.004 of 255 and zero pixels over 32. A guard so that loosening
+        // them is a deliberate edit to this test as well as to the constants.
+        assert_eq!(MAX_MEAN_THOUSANDTHS, 4);
+        assert_eq!(MAX_HARD_PPM, 0);
+        assert_eq!(decimal(MAX_MEAN_THOUSANDTHS, 3), "0.004");
+        assert_eq!(decimal(MAX_HARD_PPM, 4), "0.0000");
     }
 
     #[test]
     fn decimals_render_without_floats() {
         assert_eq!(decimal(6_000, 3), "6.000");
         assert_eq!(decimal(4, 3), "0.004");
+        // Parts per million rendered with four places is the percentage.
+        assert_eq!(decimal(20_000, 4), "2.0000");
+        assert_eq!(decimal(83_333, 4), "8.3333");
         assert_eq!(decimal(200, 4), "0.0200");
     }
 }
