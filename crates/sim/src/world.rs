@@ -202,7 +202,7 @@ impl World {
         let broadphase = Csr::new(
             [0, 0],
             extent,
-            config.rules.csr_cell_size_voxels,
+            config.rules.csr_cell_size_voxels(),
             unit_count,
         )?;
 
@@ -593,7 +593,7 @@ impl World {
         let Some(broadphase) = Csr::new(
             [0, 0],
             HARNESS_MAP_EXTENT_VOXELS,
-            self.rules.csr_cell_size_voxels,
+            self.rules.csr_cell_size_voxels(),
             unit_count,
         ) else {
             return false;

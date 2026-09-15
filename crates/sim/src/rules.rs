@@ -8,8 +8,8 @@
 //! one reviewable file — `rules/rules.v1.json`, the canonical JSON of one
 //! [`gp::v1::RulesTable`] — rather than as constants sprinkled through the
 //! code. The sim decodes that file with `pharmakos-proto`'s canonical JSON
-//! codec and hashes the values it reads with the canonical encoder of item 48,
-//! so `rules_hash` is one of the verifier's five inputs **by construction**
+//! codec and hashes it with the canonical encoder of item 48, so `rules_hash`
+//! is one of the verifier's five `report_hash` inputs **by construction**
 //! rather than by agreement.
 //!
 //! The sim is a pure function of `(map seed, playbooks, rules hash)`. That
@@ -17,16 +17,45 @@
 //! module enters the state hash, and `tests/determinism.rs` asserts it twice —
 //! once over the canonical encoding and once over the chain itself.
 //!
+//! # `rules_hash` covers the whole table, not the rows the sim reads
+//!
+//! [`RulesTable::encode`] hashes the **canonical JSON of the whole decoded
+//! message**: every row, including the ones this crate never looks at, plus
+//! `revision` and `note`.
+//!
+//! It is deliberately not a walk over the sim's own fields, because the rows
+//! the sim does not read are exactly the ones the *verifier* and *plan-core*
+//! will: `interface_times.*` is T10's and T11's interface arithmetic,
+//! `locomotion.fog_cost_*` and `hpa_cluster_voxels` are T7's estimator (item
+//! 61), `match.lull_ms` is the host's. A hash over nine hand-picked fields
+//! would let a tuning pull request change
+//! `interface_times.place_beacon_deploy_ms` — changing what the verifier
+//! reports — while leaving `report_hash`, and every report cached under it,
+//! exactly where it was. Hashing the message closes that by construction, and
+//! it cannot be reopened by forgetting to mirror a new row here.
+//!
+//! Two consequences, both intended:
+//!
+//! * Editing `note` moves `rules_hash`. The hash identifies the *table*, and
+//!   `revision` is meant to move whenever a value does, so an edit that moves
+//!   neither is an edit that changed nothing.
+//! * The canonical form is the codec's, so a reformatted file hashes the same
+//!   as the file it was reformatted from. `crates/proto`'s
+//!   `the_rules_table_is_in_canonical_form` keeps the committed file identical
+//!   to that form anyway.
+//!
 //! # The two shapes, and why there are two
 //!
 //! [`gp::v1::RulesTable`] is the **contract shape**: nested blocks, every row
 //! the project will need, guarded by `buf breaking` (item 78). [`RulesTable`]
-//! here is the **sim's view**: the flat subset the tick actually reads, in the
-//! order [`RulesTable::encode`] walks it. The second is derived from the first
+//! here is the **sim's view**: the flat subset the tick actually reads, derived
 //! by [`RulesTable::from_message`] and by nothing else, so a row cannot reach
-//! the sim without passing through the schema.
+//! the sim without passing through the schema. The view is read-only accessors
+//! rather than public fields, because a field that could be mutated after
+//! construction could disagree with the message the hash is over — which is
+//! the same bug in a smaller box.
 //!
-//! | This struct | `gp.v1.RulesTable` |
+//! | Accessor | `gp.v1.RulesTable` |
 //! |---|---|
 //! | [`mesher_drain_surfaces`](RulesTable::mesher_drain_surfaces) | `mesher.surfaces_per_frame` |
 //! | [`mesher_drain_bytes`](RulesTable::mesher_drain_bytes) | `mesher.bytes_per_frame` |
@@ -38,13 +67,9 @@
 //! | [`csr_cell_size_voxels`](RulesTable::csr_cell_size_voxels) | `broadphase.cell_size_voxels` |
 //! | [`segment_lengths_ms`](RulesTable::segment_lengths_ms) | `match.segment_lengths_ms` |
 //!
-//! The rows the schema carries and the sim does not yet read — the interface
-//! times (T10, T11), the fog fraction and the cluster edge (T7), `lull_ms` (a
-//! host and editor concern the sim never reads, AGENTS.md §4.5), and the
-//! `economy` and `power` stubs (T14) — are decoded and then discarded here.
-//! Each of them joins this struct and the **end** of [`RulesTable::encode`] in
-//! the task that first reads it, which moves `rules_hash` once, additively,
-//! with the movement explained in that pull request.
+//! A row the sim starts reading joins that table and gains an accessor in the
+//! task that first reads it. That is an ordinary change now: it does not move
+//! `rules_hash`, because the hash already covered the row.
 
 use crate::encoding::Enc;
 use pharmakos_proto::gp;
@@ -68,79 +93,77 @@ pub const RULES_VERSION: u32 = 1;
 /// encoding has a bound; the skeleton's ladder is 3 / 5 / 8 minutes (item 68).
 pub const MAX_SEGMENT_LENGTHS: usize = 8;
 
-/// Every tuning value the sim reads, in the order the canonical encoder walks
-/// them.
+/// One rules table: the decoded message, its canonical bytes, and the flat
+/// view the tick reads.
 ///
-/// Adding a field is additive: append it, read it out of the schema in
-/// [`RulesTable::from_message`], append its encoding at the **end** of
-/// [`RulesTable::encode`], and say in the pull request that `rules_hash` moved
-/// and why. Reordering is a contract change (AGENTS.md §5).
+/// Built only by [`RulesTable::from_message`] and the two loaders above it, so
+/// the view and the bytes can never describe two different tables.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct RulesTable {
+    /// The whole decoded table, kept so `rules_hash` can cover all of it.
+    message: gp::v1::RulesTable,
+    /// `message` rendered back through the canonical JSON codec, once, at
+    /// construction. These are the bytes [`RulesTable::encode`] hashes.
+    canonical: String,
     /// Surfaces the mesher may drain per frame. `K = 4` (item 54). From
     /// `mesher.surfaces_per_frame`.
     ///
     /// PLACEHOLDER: `tuning, owner — no measured frame-time reason separates
     /// K = 4 from K = 8 on the spike machine (item 54)`.
-    pub mesher_drain_surfaces: u32,
+    mesher_drain_surfaces: u32,
     /// Bytes the mesher may drain per frame. `B = 512 KiB` (item 54). From
     /// `mesher.bytes_per_frame`.
     ///
     /// PLACEHOLDER: as above.
-    pub mesher_drain_bytes: u32,
+    mesher_drain_bytes: u32,
     /// Cost of a cardinal step. `10` (item 59). From
     /// `locomotion.step_cost_cardinal`.
-    pub step_cardinal: i32,
+    step_cardinal: i32,
     /// Cost of a diagonal step. `14` (item 59). From
     /// `locomotion.step_cost_diagonal`.
-    pub step_diagonal: i32,
+    step_diagonal: i32,
     /// Surcharge for a one-voxel climb. `4` (item 59). From
     /// `locomotion.climb_surcharge`.
     ///
     /// PLACEHOLDER: `no gameplay evidence behind it` (item 59) — owner, at S3.
-    pub climb_surcharge: i32,
+    climb_surcharge: i32,
     /// Path cost a unit covers per tick. `3` (item 59). Cost to ticks rounds by
     /// **ceiling**, which is T7's to implement and item 59's to fix. From
     /// `locomotion.move_cost_per_tick`.
-    pub move_cost_per_tick: i32,
+    move_cost_per_tick: i32,
     /// Repaths served per tick, round-robin by `(seat, beacon, unit)`. `16`
     /// (item 69). From `locomotion.repath_cap_per_tick`.
     ///
     /// PLACEHOLDER: re-derived at S2's exit once the burst frequency is a
     /// measurement (item 69) — owner.
-    pub repath_cap_per_tick: u32,
+    repath_cap_per_tick: u32,
     /// The broadphase's cell edge, in whole voxels. From
     /// `broadphase.cell_size_voxels`.
     ///
     /// PLACEHOLDER: `tuning, owner, S2 exit — tied to unit density` (item 67's
     /// caveat). A performance knob, so it must never reach hashed state; the
-    /// broadphase returns candidates sorted by id precisely so that it cannot.
-    pub csr_cell_size_voxels: i32,
+    /// broadphase takes its query radius in voxels and filters it exactly,
+    /// precisely so that it cannot.
+    csr_cell_size_voxels: i32,
     /// The per-round segment ladder, in game milliseconds (item 68: 3 / 5 / 8
     /// minutes). The runner reads the coming segment's length **from the frozen
     /// snapshot**, not from this row (T10). From `match.segment_lengths_ms`.
-    pub segment_lengths_ms: Vec<i32>,
+    segment_lengths_ms: Vec<i32>,
 }
 
 impl RulesTable {
-    /// Append the table to the canonical encoding, in declared order.
+    /// Append the table to the canonical encoding: the encoding version, then
+    /// the canonical JSON of the whole decoded message, length-prefixed.
     ///
     /// This is the function `rules_hash` is, and it is determinism code: a
     /// change to it moves every `report_hash` the verifier has ever produced.
+    /// It covers every row of the table rather than the subset the sim reads —
+    /// see this module's header for why that is the load-bearing part.
     pub fn encode(&self, enc: &mut Enc) {
         enc.u32(RULES_VERSION);
-        enc.u32(self.mesher_drain_surfaces);
-        enc.u32(self.mesher_drain_bytes);
-        enc.i32(self.step_cardinal);
-        enc.i32(self.step_diagonal);
-        enc.i32(self.climb_surcharge);
-        enc.i32(self.move_cost_per_tick);
-        enc.u32(self.repath_cap_per_tick);
-        enc.i32(self.csr_cell_size_voxels);
-        enc.len(u32::try_from(self.segment_lengths_ms.len()).unwrap_or(u32::MAX));
-        for ms in &self.segment_lengths_ms {
-            enc.i32(*ms);
-        }
+        let bytes = self.canonical.as_bytes();
+        enc.len(u32::try_from(bytes.len()).unwrap_or(u32::MAX));
+        enc.bytes(bytes);
     }
 
     /// The rules hash: xxh3-64 over the canonical encoding at the project seed.
@@ -149,9 +172,76 @@ impl RulesTable {
     /// save so a save made under different rules refuses to load (T17).
     #[must_use]
     pub fn rules_hash(&self) -> u64 {
-        let mut enc = Enc::with_capacity(128);
+        let mut enc = Enc::with_capacity(self.canonical.len().saturating_add(16));
         self.encode(&mut enc);
         enc.finish()
+    }
+
+    /// The whole decoded table, for a caller that needs a row the sim's own
+    /// view does not carry.
+    #[must_use]
+    pub const fn message(&self) -> &gp::v1::RulesTable {
+        &self.message
+    }
+
+    /// The canonical JSON `rules_hash` is taken over.
+    #[must_use]
+    pub fn canonical_json(&self) -> &str {
+        &self.canonical
+    }
+
+    /// Surfaces the mesher may drain per frame (`mesher.surfaces_per_frame`).
+    #[must_use]
+    pub const fn mesher_drain_surfaces(&self) -> u32 {
+        self.mesher_drain_surfaces
+    }
+
+    /// Bytes the mesher may drain per frame (`mesher.bytes_per_frame`).
+    #[must_use]
+    pub const fn mesher_drain_bytes(&self) -> u32 {
+        self.mesher_drain_bytes
+    }
+
+    /// Cost of a cardinal step (`locomotion.step_cost_cardinal`).
+    #[must_use]
+    pub const fn step_cardinal(&self) -> i32 {
+        self.step_cardinal
+    }
+
+    /// Cost of a diagonal step (`locomotion.step_cost_diagonal`).
+    #[must_use]
+    pub const fn step_diagonal(&self) -> i32 {
+        self.step_diagonal
+    }
+
+    /// Surcharge for a one-voxel climb (`locomotion.climb_surcharge`).
+    #[must_use]
+    pub const fn climb_surcharge(&self) -> i32 {
+        self.climb_surcharge
+    }
+
+    /// Path cost a unit covers per tick (`locomotion.move_cost_per_tick`).
+    #[must_use]
+    pub const fn move_cost_per_tick(&self) -> i32 {
+        self.move_cost_per_tick
+    }
+
+    /// Repaths served per tick (`locomotion.repath_cap_per_tick`).
+    #[must_use]
+    pub const fn repath_cap_per_tick(&self) -> u32 {
+        self.repath_cap_per_tick
+    }
+
+    /// The broadphase's cell edge in voxels (`broadphase.cell_size_voxels`).
+    #[must_use]
+    pub const fn csr_cell_size_voxels(&self) -> i32 {
+        self.csr_cell_size_voxels
+    }
+
+    /// The per-round segment ladder (`match.segment_lengths_ms`).
+    #[must_use]
+    pub fn segment_lengths_ms(&self) -> &[i32] {
+        &self.segment_lengths_ms
     }
 
     /// Read a rules table from canonical proto JSON.
@@ -182,8 +272,11 @@ impl RulesTable {
     /// # Errors
     ///
     /// Returns [`RulesError::MissingBlock`] when a block the sim reads is
-    /// absent, or [`RulesError::OutOfRange`] when a value does not fit the
-    /// sim's own type for it.
+    /// absent, [`RulesError::OutOfRange`] when a value does not fit the sim's
+    /// own type for it, or [`RulesError::Json`] when the message will not
+    /// render back to canonical JSON — which is what `rules_hash` is over, so
+    /// a table that cannot be rendered is a table that cannot be hashed and
+    /// must not become a [`RulesTable`].
     pub fn from_message(message: &gp::v1::RulesTable) -> Result<RulesTable, RulesError> {
         let locomotion = message
             .locomotion
@@ -218,7 +311,11 @@ impl RulesTable {
             });
         }
 
+        let canonical = pharmakos_proto::json::encode(message).map_err(RulesError::Json)?;
+
         Ok(RulesTable {
+            message: message.clone(),
+            canonical,
             mesher_drain_surfaces: mesher.surfaces_per_frame,
             mesher_drain_bytes: mesher.bytes_per_frame,
             step_cardinal: signed(
@@ -277,8 +374,9 @@ pub enum RulesError {
         /// The operating system's message.
         message: String,
     },
-    /// The text is not canonical `gp.v1.RulesTable` JSON. Carries the codec's
-    /// own JSON Pointer, so a diagnostic can point at the byte that caused it.
+    /// The text is not canonical `gp.v1.RulesTable` JSON, or a decoded table
+    /// will not render back to it. Carries the codec's own JSON Pointer, so a
+    /// diagnostic can point at the byte that caused it.
     Json(pharmakos_proto::json::Error),
     /// A block the sim reads is absent. Proto3 cannot tell that from a block of
     /// zeroes, so the sim refuses rather than guesses.

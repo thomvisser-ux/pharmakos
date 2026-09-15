@@ -24,6 +24,30 @@ This is what AGENTS.md §12 asks for in so many words: *tuning values are data,
 versioned in the rules table and stamped into the rules hash — not constants
 sprinkled through the code.*
 
+## What `rules_hash` covers
+
+**The whole file, not the rows the sim happens to read.** `pharmakos-sim`
+decodes the file with the one canonical codec and hashes the canonical JSON the
+codec re-emits, so every row is in the hash: the interface times the verifier
+will read, the fog price and the cluster edge the estimator will read,
+`match.lull_ms` that only the host reads, and `revision` and `note` as well.
+
+That is a decision, and the alternative is the bug it avoids. If the hash
+covered only the nine rows the tick reads today, a tuning pull request could
+change `interface_times.place_beacon_deploy_ms` — changing what the verifier
+reports — and leave `report_hash`, and every report cached under it, sitting
+exactly where it was.
+
+Two things follow:
+
+- **Editing `note` moves `rules_hash`.** Intended: the hash identifies the
+  table, and `revision` is supposed to move whenever a value does, so an edit
+  that moves neither is an edit that changed nothing.
+- **Reformatting does not.** The hash is over the codec's canonical form, not
+  over the file's bytes, so whitespace cannot move it. `crates/proto`'s
+  `the_rules_table_is_in_canonical_form` keeps the committed file in that form
+  regardless.
+
 ## What is NOT in here
 
 Anything that varies with the machine rather than with the game. G3′'s

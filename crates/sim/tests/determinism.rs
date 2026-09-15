@@ -56,6 +56,21 @@ fn rules() -> RulesTable {
         .expect("the committed rules table loads")
 }
 
+/// The committed table with one edit made to the **message**.
+///
+/// A `RulesTable` has no public fields, because a field mutated after
+/// construction could disagree with the message `rules_hash` is taken over. So
+/// a test that wants a different value edits the schema message and re-derives
+/// the view, which is the same path a tuning pull request takes.
+fn rules_edited(edit: impl FnOnce(&mut gp::v1::RulesTable)) -> RulesTable {
+    let text = std::fs::read_to_string(repo_root().join("rules").join("rules.v1.json"))
+        .expect("the committed rules table exists");
+    let mut message: gp::v1::RulesTable =
+        pharmakos_proto::json::decode(&text).expect("the committed table is canonical gp.v1 JSON");
+    edit(&mut message);
+    RulesTable::from_message(&message).expect("the edited table is still a table")
+}
+
 fn world_with(rules: RulesTable) -> World {
     world_of(rules, pharmakos_sim::DETERMINISM_UNITS_PER_SEAT)
 }
@@ -467,11 +482,15 @@ fn a_performance_knob_is_not_hashed_state() {
     let reference = chain(&mut world_with(base.clone()), 200);
 
     for cell_size in [4_u32, 8, 16, 32, 64] {
-        let mut altered = base.clone();
-        altered.csr_cell_size_voxels = i32::try_from(cell_size).unwrap_or(16);
-        altered.repath_cap_per_tick = base.repath_cap_per_tick.saturating_add(cell_size);
-        altered.mesher_drain_surfaces = base.mesher_drain_surfaces + 4;
-        altered.mesher_drain_bytes = base.mesher_drain_bytes.saturating_sub(1);
+        let altered = rules_edited(|message| {
+            message.broadphase.get_or_insert_default().cell_size_voxels = cell_size;
+            let locomotion = message.locomotion.get_or_insert_default();
+            locomotion.repath_cap_per_tick =
+                locomotion.repath_cap_per_tick.saturating_add(cell_size);
+            let mesher = message.mesher.get_or_insert_default();
+            mesher.surfaces_per_frame = mesher.surfaces_per_frame.saturating_add(4);
+            mesher.bytes_per_frame = mesher.bytes_per_frame.saturating_sub(1);
+        });
         assert_ne!(
             altered.rules_hash(),
             base.rules_hash(),
@@ -488,9 +507,25 @@ fn a_performance_knob_is_not_hashed_state() {
 #[test]
 fn the_rules_table_is_not_in_the_state_encoding() {
     let base = rules();
-    let mut altered = base.clone();
-    altered.csr_cell_size_voxels = 64;
-    altered.repath_cap_per_tick = 99;
+    let altered = rules_edited(|message| {
+        message.broadphase.get_or_insert_default().cell_size_voxels = 64;
+        message
+            .locomotion
+            .get_or_insert_default()
+            .repath_cap_per_tick = 99;
+        // A row the sim never reads, to show the encoding is blind to those
+        // too: `rules_hash` moves, the state encoding does not.
+        message
+            .interface_times
+            .get_or_insert_default()
+            .place_beacon_deploy_ms = 999;
+    });
+    assert_ne!(
+        altered.rules_hash(),
+        base.rules_hash(),
+        "a row the sim does not read must still move `rules_hash` (it is one of \
+         the verifier's `report_hash` inputs)"
+    );
 
     let mut a = Enc::with_capacity(64 * 1024);
     world_with(base).encode(&mut a);
@@ -506,9 +541,10 @@ fn the_rules_table_is_not_in_the_state_encoding() {
 #[test]
 fn the_broadphase_answer_does_not_depend_on_the_cell_size() {
     let mut answers: Vec<Vec<u32>> = Vec::new();
-    for cell_size in [4, 16, 64] {
-        let mut altered = rules();
-        altered.csr_cell_size_voxels = cell_size;
+    for cell_size in [4_u32, 16, 64] {
+        let altered = rules_edited(|message| {
+            message.broadphase.get_or_insert_default().cell_size_voxels = cell_size;
+        });
         let mut world = world_with(altered);
         let mut enc = Enc::with_capacity(64 * 1024);
         for _ in 0..20 {
@@ -588,11 +624,11 @@ fn the_chunk_digests_are_in_the_hash() {
 #[test]
 fn the_rules_hash_is_pinned_to_the_committed_table() {
     // One of the verifier's five `report_hash` inputs, and stamped into every
-    // save. If this moves, `rules/rules.v1.json` moved, and the pull request
-    // owes the explanation.
+    // save. If this moves, either `rules/rules.v1.json` moved or
+    // `RulesTable::encode` did, and the pull request owes the explanation.
     assert_eq!(
         hex(rules().rules_hash()),
-        "100cdd56bdea38b6",
+        "2b9f1bd9f5a54425",
         "the rules hash moved; say in the pull request which row changed and why"
     );
 }
@@ -660,30 +696,33 @@ fn the_sim_reads_the_rows_the_schema_puts_them_in() {
     let mesher = message.mesher.expect("the mesher block");
     let matched = message.r#match.expect("the match block");
 
-    assert_eq!(view.mesher_drain_surfaces, mesher.surfaces_per_frame);
-    assert_eq!(view.mesher_drain_bytes, mesher.bytes_per_frame);
+    assert_eq!(view.mesher_drain_surfaces(), mesher.surfaces_per_frame);
+    assert_eq!(view.mesher_drain_bytes(), mesher.bytes_per_frame);
     assert_eq!(
-        u32::try_from(view.step_cardinal).unwrap(),
+        u32::try_from(view.step_cardinal()).unwrap(),
         locomotion.step_cost_cardinal
     );
     assert_eq!(
-        u32::try_from(view.step_diagonal).unwrap(),
+        u32::try_from(view.step_diagonal()).unwrap(),
         locomotion.step_cost_diagonal
     );
     assert_eq!(
-        u32::try_from(view.climb_surcharge).unwrap(),
+        u32::try_from(view.climb_surcharge()).unwrap(),
         locomotion.climb_surcharge
     );
     assert_eq!(
-        u32::try_from(view.move_cost_per_tick).unwrap(),
+        u32::try_from(view.move_cost_per_tick()).unwrap(),
         locomotion.move_cost_per_tick
     );
-    assert_eq!(view.repath_cap_per_tick, locomotion.repath_cap_per_tick);
+    assert_eq!(view.repath_cap_per_tick(), locomotion.repath_cap_per_tick);
     assert_eq!(
-        u32::try_from(view.csr_cell_size_voxels).unwrap(),
+        u32::try_from(view.csr_cell_size_voxels()).unwrap(),
         broadphase.cell_size_voxels
     );
-    assert_eq!(view.segment_lengths_ms, matched.segment_lengths_ms);
+    assert_eq!(
+        view.segment_lengths_ms(),
+        matched.segment_lengths_ms.as_slice()
+    );
 
     // And the table `load` returns is the same table, so the file reader and
     // the codec cannot drift apart.
@@ -693,20 +732,21 @@ fn the_sim_reads_the_rows_the_schema_puts_them_in() {
 #[test]
 fn the_committed_rules_table_carries_the_decided_values() {
     let table = rules();
-    assert_eq!(table.step_cardinal, 10, "item 59");
-    assert_eq!(table.step_diagonal, 14, "item 59");
-    assert_eq!(table.climb_surcharge, 4, "item 59");
-    assert_eq!(table.move_cost_per_tick, 3, "item 59");
-    assert_eq!(table.repath_cap_per_tick, 16, "item 69");
+    assert_eq!(table.step_cardinal(), 10, "item 59");
+    assert_eq!(table.step_diagonal(), 14, "item 59");
+    assert_eq!(table.climb_surcharge(), 4, "item 59");
+    assert_eq!(table.move_cost_per_tick(), 3, "item 59");
+    assert_eq!(table.repath_cap_per_tick(), 16, "item 69");
     assert_eq!(
-        table.csr_cell_size_voxels, 16,
+        table.csr_cell_size_voxels(),
+        16,
         "item 67: the cell edge spike G3′ measured with; still a PLACEHOLDER"
     );
-    assert_eq!(table.mesher_drain_surfaces, 4, "item 54, K");
-    assert_eq!(table.mesher_drain_bytes, 512 * 1024, "item 54, B");
+    assert_eq!(table.mesher_drain_surfaces(), 4, "item 54, K");
+    assert_eq!(table.mesher_drain_bytes(), 512 * 1024, "item 54, B");
     assert_eq!(
-        table.segment_lengths_ms,
-        vec![180_000, 300_000, 480_000],
+        table.segment_lengths_ms(),
+        [180_000, 300_000, 480_000],
         "item 68: the 3 / 5 / 8 ladder"
     );
 }
