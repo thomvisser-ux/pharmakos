@@ -19,14 +19,19 @@ touches is data.** Playbooks and templates are JSONC files, edited in the in-gam
 or by hand. Opponents are the built-in operator. External scripting (v1.1) and live AI
 seats (v1.2) are roadmap, reserved now only as proto seams.
 
-**Status: pre-spike.** No toolchain is installed and **nothing here has ever been compiled,
-formatted or executed.** This repository holds the specification, the design record, the
-workspace skeleton below, and a first cut of harness part 1 written ahead of the toolchain:
-`AGENTS.md` / `CLAUDE.md`, `cargo xtask ci` (`xtask/src/main.rs`), the lint configuration
-(`clippy.toml`, `deny.toml`, `[workspace.lints]`), the CI workflows and the golden-file and
-determinism conventions. Treat the first `cargo fmt --all` and the first `cargo xtask ci` as
-a shakedown. The next steps are the stack spikes (G4 cross-OS determinism with save/restore
-and fork equivalence, G1 mesher and remesh in Godot 4.7), then the walking skeleton.
+**Status: the walking skeleton is open.** The toolchain is installed — rustc 1.98.1, `protoc` 36,
+`buf` 1.73, `cargo-deny`, `reuse`, Godot 4.7.2 — the tree is formatted, and `cargo xtask ci` is
+green: twelve steps, ten `ok` and two `skipped` with reasons, because the goldens and the
+determinism binary do not exist yet. All four stack spikes (G4 cross-OS determinism with
+save/restore and fork equivalence, G1 mesher and remesh in Godot 4.7, G2+P3 pathing, G3′ synthetic
+tick) are closed: their measured results and lessons are written up in
+[`docs/spikes/`](docs/spikes/), their decisions are in the decisions log, and the throwaway spike
+code is frozen at the `spike-end` tag and deleted from `main` — read it with
+`git worktree add ../pharmakos-spikes spike-end`. What this repository holds today is the
+specification, the design record, harness part 1 (`AGENTS.md` / `CLAUDE.md`, `cargo xtask ci` in
+`xtask/src/main.rs`, the lint configuration, the CI workflows, the golden-file and determinism
+conventions) and the workspace skeleton below — in which most crates are still empty placeholders.
+The next step is the walking skeleton.
 
 ## Repository layout
 
@@ -39,6 +44,8 @@ crates/verifier/       seal inspection: QUICK and FULL pipelines, diagnostics, r
 crates/operator/       the built-in operator: generate, file the safe playbook, execute
 crates/gateway/        Seat Gateway: tokens · scopes · fog filter · rate limits · event bus · snapshots
 crates/gamectl/        CLI: verify, schema, docs, scenarios, seat doctor
+crates/mesher/         walled greedy mesher: integer chunk data and .vox in, vertex buffers out;
+                       links without gdext, so CI and the headless proxy reuse the real thing
 crates/client-gdext/   thin gdext crate; the Godot 4.7 client's GDScript side is views and editor only
 crates/proto/          gp.v1 and gp.api.v1 generated types — the single schema source
 xtask/                 cargo xtask ci: the one command CI and contributors run

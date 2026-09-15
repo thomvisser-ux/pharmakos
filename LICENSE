@@ -8,12 +8,15 @@ LICENSES/ under their canonical SPDX file names. Every source file also carries
 an SPDX header, so a single file taken out of the tree still says what it is.
 
   Code — the game                       GPL-3.0-or-later
-    crates/**   the sim, plan-core, verifier, operator, gateway, gamectl
+    crates/**   the sim, plan-core, verifier, operator, gateway, gamectl,
+                the walled mesher and the thin gdext bridge
                 (crates/proto/** is the one exception — see below)
     xtask/**    the build and CI tooling
-    client/**   the Godot client and the thin gdext crate
-    spikes/**   the throwaway stack spikes, while they exist
     Full text:  LICENSES/GPL-3.0-or-later.txt
+
+                The Godot project (GDScript views and editor UI) is GPL too and
+                gets its own row here when the directory exists.
+
 
   Interfaces and words — reusable       MIT OR Apache-2.0
     proto/**    gp.v1 and gp.api.v1 .proto files and generated JSON Schema
