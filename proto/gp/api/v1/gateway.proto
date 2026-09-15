@@ -15,38 +15,105 @@
 // up (v1.1 publishes it under minor-version rules; v1.2 puts an MCP server
 // over it).
 //
-// WHAT THIS FILE IS. A stub: the method names and the closed error set, as
-// enums, so both are in one machine-readable place from day one and `buf
-// breaking` guards them. It deliberately does NOT define request and response
-// messages — those are the per-method contracts, written as each method's
-// slice lands, and inventing them here would fix shapes the spec does not
-// state. There is no `service` block for the same reason.
+// WHAT THIS FILE IS. The method names, the closed error set, the scope each
+// method needs, and a request/response pair for every method the walking
+// skeleton's clients call (skeleton plan T13). `buf breaking` guards all four.
 //
-// TRANSPORT NOTES, for whoever writes those messages:
+// A payload the spec enumerates is written out. A payload the spec names but
+// does not enumerate — most of the knowledge results, whose contents are
+// section 12's salience-ordered budgets rather than a field list — is a
+// message with its first fifteen numbers RESERVED and a PLACEHOLDER naming
+// the task that fills it. The pair and its name are the contract; the payload
+// is that method's slice. This is the shape that makes the plan's rule work:
+// "if a method needs a gp.api.v1 change, the change goes back to T1 as a
+// proto PR rather than being made in the gateway".
+//
+// There is still no `service` block: the transport is JSON-RPC 2.0 over a
+// WebSocket, not gRPC, and a service block would imply a gRPC surface v1 does
+// not have and v1.1 has not chosen.
+//
+// TRANSPORT NOTES:
 //   * JSON-RPC 2.0 method strings are the lower_snake_case names in the
 //     comments below ("get_status"), not the enum value spellings.
-//   * PLACEHOLDER: params spelled as enums here (depth, detail) travel as
-//     lowercase strings on the JSON-RPC wire per spec section 12
-//     (`verify_plan{depth:"quick"}`). Whether the boundary lowercases them or
-//     the wire adopts the enum spelling is an owner decision.
+//   * Params spelled as enums here (depth, detail, part) travel as LOWER-CASE
+//     STRINGS on the JSON-RPC wire — `verify_plan{depth:"quick"}`, spec
+//     section 12's own worked example — and the gateway translates at the
+//     boundary (decisions-log item 80, which resolves this file's earlier
+//     casing PLACEHOLDER). The wire and the schema therefore spell the same
+//     value two ways, and the one conversion function is tested in both
+//     directions. gp.v1 is the other way round: a playbook on disk carries
+//     the enum value name verbatim, because the file is canonical proto JSON
+//     and the player hand-edits it.
 //   * Every result carries a `_status` footer with the phase and the timer.
 //     The leading underscore is not a legal proto identifier, so the footer
-//     is an envelope concern and is not modelled here.
+//     is an envelope concern: `Status` below is its shape, and the gateway
+//     writes it under the key `_status` on every result.
 //   * Pagination uses opaque cursors tied to the snapshot.
 //   * An invalid playbook is NOT a method error. verify_plan and submit_plan
 //     return a full report with qualifies:false; GatewayError.Code is for
 //     transport and phase failures only.
 //   * Times are game milliseconds, never ticks — including the coming
 //     segment's length, which get_status and get_briefing read from the
-//     frozen snapshot rather than from a constant. When these messages are
-//     written out, durations take int32 like gp.v1's, for the same reason:
-//     the proto3 JSON mapping emits a 64-bit integer as a quoted string, and
-//     the on-disk and on-wire JSON here is read by hand
-//     (proto/gp/v1/playbook.proto's header has the full note).
+//     frozen snapshot rather than from a constant. Durations here take int32
+//     like gp.v1's, for the same reason: the proto3 JSON mapping emits a
+//     64-bit integer as a quoted string, and the on-wire JSON here is read by
+//     hand (proto/gp/v1/playbook.proto's header has the full note).
 
 syntax = "proto3";
 
 package gp.api.v1;
+
+import "google/protobuf/descriptor.proto";
+import "gp/v1/playbook.proto";
+
+// =============================================================================
+// Scopes
+// =============================================================================
+
+// The six scopes of spec section 12. A per-seat 256-bit token carries a set of
+// them; the gateway checks the one `required_scope` names before the method
+// runs.
+//
+// Two invariants are asserted in the gateway's code and are not expressible
+// here: a SEAT token can never hold SCOPE_SPECTATE_NOFOG (only a separate
+// spectator token can), and SCOPE_ADMIN can never read another seat's
+// playbooks, drafts or knowledge. Fog itself is a per-match server-side
+// policy, so no token is reissued mid-match.
+enum Scope {
+  SCOPE_UNSPECIFIED = 0;
+
+  // Read the seat's own knowledge, status and feed.
+  SCOPE_OBSERVE = 1;
+
+  // Author: drafts, the notebook, verification, rendering, patching,
+  // templates and the safe playbook. Reads and writes the seat's own private
+  // state and nobody else's.
+  SCOPE_PLAN = 2;
+
+  // Seal: submit_plan and set_ready. Separate from SCOPE_PLAN because filing
+  // an order is the irrevocable act the whole game is about.
+  SCOPE_PLAN_SUBMIT = 3;
+
+  // Generated schema and template listings. Carries no match state at all,
+  // which is why it is its own scope.
+  SCOPE_DOCS = 4;
+
+  // Spectator only. A seat token can never hold it.
+  SCOPE_SPECTATE_NOFOG = 5;
+
+  // Lobby and match control. Never another seat's secrets.
+  SCOPE_ADMIN = 6;
+}
+
+// The scope a token must hold to call a method, attached to the method itself
+// so the table cannot drift from the list. `buf breaking` guards it, and
+// crates/proto reads it back out of the checked-in descriptor set to check the
+// Rust table against this file (`pharmakos_proto::scope`).
+extend google.protobuf.EnumValueOptions {
+  // 50001: inside the 50000-99999 range Protobuf sets aside for extensions
+  // that are never published to a registry.
+  Scope required_scope = 50001;
+}
 
 // =============================================================================
 // Methods
@@ -66,10 +133,10 @@ enum Method {
 
   // "get_status" — phase, timers, and the coming segment's length from the
   // frozen snapshot.
-  METHOD_GET_STATUS = 1;
+  METHOD_GET_STATUS = 1 [(required_scope) = SCOPE_OBSERVE];
 
   // "wait_for" — long poll on a phase change or a feed digest.
-  METHOD_WAIT_FOR = 2;
+  METHOD_WAIT_FOR = 2 [(required_scope) = SCOPE_OBSERVE];
 
   // --- Memory --------------------------------------------------------------
 
@@ -77,87 +144,87 @@ enum Method {
   // the top of get_briefing. Sits under the plan scope; the editor's notes box
   // reaches it like any other editor feature. Never leaves the gateway for
   // another seat.
-  METHOD_SAVE_NOTES = 10;
+  METHOD_SAVE_NOTES = 10 [(required_scope) = SCOPE_PLAN];
 
   // --- Knowledge -----------------------------------------------------------
 
   // "get_briefing" — the main one. Carries the notebook, the seat's displayed
   // standing and the coming segment's length.
-  METHOD_GET_BRIEFING = 20;
+  METHOD_GET_BRIEFING = 20 [(required_scope) = SCOPE_OBSERVE];
 
   // "get_recap"
-  METHOD_GET_RECAP = 21;
+  METHOD_GET_RECAP = 21 [(required_scope) = SCOPE_OBSERVE];
 
   // "list_beacons"
-  METHOD_LIST_BEACONS = 22;
+  METHOD_LIST_BEACONS = 22 [(required_scope) = SCOPE_OBSERVE];
 
   // "get_beacon"
-  METHOD_GET_BEACON = 23;
+  METHOD_GET_BEACON = 23 [(required_scope) = SCOPE_OBSERVE];
 
   // "get_map_summary"
-  METHOD_GET_MAP_SUMMARY = 24;
+  METHOD_GET_MAP_SUMMARY = 24 [(required_scope) = SCOPE_OBSERVE];
 
   // "query_area"
-  METHOD_QUERY_AREA = 25;
+  METHOD_QUERY_AREA = 25 [(required_scope) = SCOPE_OBSERVE];
 
   // "list_known_enemies"
-  METHOD_LIST_KNOWN_ENEMIES = 26;
+  METHOD_LIST_KNOWN_ENEMIES = 26 [(required_scope) = SCOPE_OBSERVE];
 
   // "get_reports"
-  METHOD_GET_REPORTS = 27;
+  METHOD_GET_REPORTS = 27 [(required_scope) = SCOPE_OBSERVE];
 
   // "get_economy_forecast" — $ and kW, with what-ifs.
-  METHOD_GET_ECONOMY_FORECAST = 28;
+  METHOD_GET_ECONOMY_FORECAST = 28 [(required_scope) = SCOPE_OBSERVE];
 
   // "get_capabilities"
-  METHOD_GET_CAPABILITIES = 29;
+  METHOD_GET_CAPABILITIES = 29 [(required_scope) = SCOPE_OBSERVE];
 
   // "estimate_route"
-  METHOD_ESTIMATE_ROUTE = 30;
+  METHOD_ESTIMATE_ROUTE = 30 [(required_scope) = SCOPE_OBSERVE];
 
   // --- Docs ----------------------------------------------------------------
 
   // "get_schema" — sliced to what the seat can use. Generated from the
   // schema, so it cannot drift.
-  METHOD_GET_SCHEMA = 40;
+  METHOD_GET_SCHEMA = 40 [(required_scope) = SCOPE_DOCS];
 
   // "list_templates"
-  METHOD_LIST_TEMPLATES = 41;
+  METHOD_LIST_TEMPLATES = 41 [(required_scope) = SCOPE_DOCS];
 
   // --- Planning ------------------------------------------------------------
 
   // "instantiate_template"
-  METHOD_INSTANTIATE_TEMPLATE = 50;
+  METHOD_INSTANTIATE_TEMPLATE = 50 [(required_scope) = SCOPE_PLAN];
 
   // "verify_plan" — takes depth: quick | full, defaults to full. See
   // VerifyPlan.Depth below.
-  METHOD_VERIFY_PLAN = 51;
+  METHOD_VERIFY_PLAN = 51 [(required_scope) = SCOPE_PLAN];
 
   // "render_plan" — the plain-language rendering. Reads the coming segment's
   // length from the frozen snapshot.
-  METHOD_RENDER_PLAN = 52;
+  METHOD_RENDER_PLAN = 52 [(required_scope) = SCOPE_PLAN];
 
   // "patch_plan" — applies the JSON Patch suggestions a report carries.
-  METHOD_PATCH_PLAN = 53;
+  METHOD_PATCH_PLAN = 53 [(required_scope) = SCOPE_PLAN];
 
   // "save_draft"
-  METHOD_SAVE_DRAFT = 54;
+  METHOD_SAVE_DRAFT = 54 [(required_scope) = SCOPE_PLAN];
 
   // "list_drafts"
-  METHOD_LIST_DRAFTS = 55;
+  METHOD_LIST_DRAFTS = 55 [(required_scope) = SCOPE_PLAN];
 
   // "get_safe_plan" — what the operator would file on a timeout, so a seat
   // can see the cost of one (spec section 14).
-  METHOD_GET_SAFE_PLAN = 56;
+  METHOD_GET_SAFE_PLAN = 56 [(required_scope) = SCOPE_PLAN];
 
   // --- Commit --------------------------------------------------------------
 
   // "submit_plan" — always runs FULL. The latest verified submission replaces
   // the previous one, any number of times until the timer ends.
-  METHOD_SUBMIT_PLAN = 60;
+  METHOD_SUBMIT_PLAN = 60 [(required_scope) = SCOPE_PLAN_SUBMIT];
 
   // "set_ready"
-  METHOD_SET_READY = 61;
+  METHOD_SET_READY = 61 [(required_scope) = SCOPE_PLAN_SUBMIT];
 
   // --- During play ---------------------------------------------------------
 
@@ -165,7 +232,7 @@ enum Method {
   // matches) plus a digest for every 60 s of game time. Engine chatter rides
   // the same feed as labelled one-way lines. Planning is closed during play
   // and the recap.
-  METHOD_GET_SEGMENT_FEED = 70;
+  METHOD_GET_SEGMENT_FEED = 70 [(required_scope) = SCOPE_OBSERVE];
 
   // --- Roadmap -------------------------------------------------------------
 
@@ -303,4 +370,550 @@ message GatewayError {
     // avoided.
     INTERNAL = 15;
   }
+}
+
+// =============================================================================
+// The result envelope
+// =============================================================================
+
+// The `_status` footer every result carries (spec section 12, "Budgets").
+// Written under the key `_status`, which is not a legal proto identifier, so
+// this message is the footer's SHAPE and never a field of the messages below.
+message Status {
+  Phase phase = 1;
+
+  // Game milliseconds left in the current phase. The Lull's timer is a host
+  // concern and the Push's is game time; both are reported here in the same
+  // unit so a client needs no arithmetic of its own.
+  int32 phase_remaining_ms = 2;
+
+  // The coming segment's length, from the frozen snapshot rather than from a
+  // constant (spec section 10, "Segment end").
+  int32 segment_length_ms = 3;
+
+  // 1-based. The round the match is on.
+  uint32 round = 4;
+
+  enum Phase {
+    PHASE_UNSPECIFIED = 0;
+    LOBBY = 1;
+    LULL = 2;
+    PUSH = 3;
+    RECAP = 4;
+    ENDED = 5;
+  }
+}
+
+// =============================================================================
+// Status
+// =============================================================================
+
+message GetStatusRequest {}
+
+message GetStatusResponse {
+  Status status = 1;
+}
+
+// Long poll. Returns when the trigger fires or the timeout elapses; a timeout
+// is a normal result, not an error.
+message WaitForRequest {
+  Trigger trigger = 1;
+
+  // Game milliseconds. The gateway caps it.
+  int32 timeout_ms = 2;
+
+  // Opaque, snapshot-tied. For FEED_DIGEST, where to wait from.
+  string cursor = 3;
+
+  enum Trigger {
+    TRIGGER_UNSPECIFIED = 0;
+    PHASE_CHANGE = 1;
+    FEED_DIGEST = 2;
+  }
+}
+
+message WaitForResponse {
+  // False when the call returned because its timeout elapsed.
+  bool fired = 1;
+
+  Status status = 2;
+
+  // Where to wait from next.
+  string cursor = 3;
+}
+
+// =============================================================================
+// Memory
+// =============================================================================
+
+// The private seat notebook. Never leaves the gateway for another seat.
+message SaveNotesRequest {
+  // 4,000 characters. Longer is INVALID_ARGUMENT, never a silent truncation.
+  string notes = 1;
+}
+
+message SaveNotesResponse {
+  // Characters stored, so the editor's counter reads the gateway's number
+  // rather than counting for itself.
+  uint32 characters = 1;
+}
+
+// =============================================================================
+// Knowledge
+// =============================================================================
+
+// The main read. Carries the notebook, the seat's displayed standing and the
+// coming segment's length (spec section 12).
+message GetBriefingRequest {
+  ReadOptions read_options = 1;
+}
+
+message GetBriefingResponse {
+  // The notebook, at the top, as spec section 12 asks.
+  string notes = 1;
+
+  // The seat's OWN score and rank only. Live standings never carry another
+  // seat's numbers (spec section 3).
+  Standing standing = 2;
+
+  int32 segment_length_ms = 3;
+
+  // Deterministic template prose (spec section 12, "Output": each result has
+  // structured JSON plus prose).
+  string prose = 4;
+
+  // PLACEHOLDER STUB - the structured knowledge payload, truncated in the
+  // fixed salience order the detail budget sets. Filled by T13 (the gateway's
+  // method slice) against the seat's frozen snapshot; 5-15 are held so its
+  // first fields stay in the one-byte tag range.
+  reserved 5 to 15;
+}
+
+// The seat's own place on the displayed standing (the full audit score of
+// spec section 3), not the BMI band.
+message Standing {
+  uint32 rank = 1;
+  int32 score = 2;
+  uint32 living_seats = 3;
+}
+
+message GetRecapRequest {
+  ReadOptions read_options = 1;
+}
+
+message GetRecapResponse {
+  string prose = 1;
+
+  // PLACEHOLDER STUB - the settlement lines of spec section 7. Filled by T13
+  // once T14's economy produces them.
+  reserved 2 to 15;
+}
+
+message ListBeaconsRequest {
+  ReadOptions read_options = 1;
+
+  // Opaque and snapshot-tied. An expired cursor is STALE_SNAPSHOT.
+  string cursor = 2;
+}
+
+message ListBeaconsResponse {
+  repeated BeaconSummary beacons = 1;
+
+  // Empty when the listing is complete.
+  string next_cursor = 2;
+}
+
+// One beacon as the seat knows it.
+message BeaconSummary {
+  string beacon_id = 1;
+  gp.v1.Voxel at = 2;
+
+  // PLACEHOLDER STUB - mandate, HP, power state, units by role, tags, and the
+  // sighting age for a beacon that is not the seat's own. Filled by T13; the
+  // fields that exist here are the two a beacon has before any other system
+  // does.
+  reserved 3 to 15;
+}
+
+message GetBeaconRequest {
+  string beacon_id = 1;
+  ReadOptions read_options = 2;
+}
+
+message GetBeaconResponse {
+  BeaconSummary summary = 1;
+  string prose = 2;
+
+  // PLACEHOLDER STUB - the per-beacon detail. Filled by T13.
+  reserved 3 to 15;
+}
+
+message GetMapSummaryRequest {
+  ReadOptions read_options = 1;
+}
+
+message GetMapSummaryResponse {
+  // Voxels on each axis.
+  gp.v1.Voxel size = 1;
+
+  // The seed the map was generated from. Part of the match, not a secret.
+  uint32 map_seed = 2;
+
+  string prose = 3;
+
+  // PLACEHOLDER STUB - vents, seams and terrain summary, fog-filtered. Filled
+  // by T13 over T5's generated map.
+  reserved 4 to 15;
+}
+
+// `$` and kW, with what-ifs (spec section 12). The arithmetic is the
+// Quartermaster's projection, which is an ALLOWED estimate: no dry run, no
+// stepping, no modelling of anybody else (spec section 11).
+message GetEconomyForecastRequest {
+  ReadOptions read_options = 1;
+
+  // Each one is answered independently against the same frozen snapshot.
+  repeated WhatIf what_ifs = 2;
+}
+
+// PLACEHOLDER STUB - the what-if vocabulary (place a beacon here, queue this
+// structure, field these units). Filled by T13 with T14's economy; 1-15 are
+// held.
+message WhatIf {
+  reserved 1 to 15;
+}
+
+message GetEconomyForecastResponse {
+  // PLACEHOLDER STUB - treasury, projected income, kW supply, draw and
+  // headroom, plus one answer per what-if. Filled by T13 with T14's economy.
+  reserved 1 to 15;
+}
+
+// The travel estimate of item 61, exposed. Abstract search only; it never
+// refines, steps or forks. Never optimistic: the answer is a bound the editor
+// may round up, and a fogged leg is labelled as a bound rather than an ETA.
+message EstimateRouteRequest {
+  // Two or more. Legs are estimated in order.
+  repeated gp.v1.Location waypoints = 1;
+}
+
+message EstimateRouteResponse {
+  // False when the connectivity oracle answers "no route" before any search.
+  // The other fields are then unset (spec: `estimate(...) -> Option<...>`).
+  bool reachable = 1;
+
+  // Whole-route travel, game milliseconds. Never ticks on the wire.
+  int32 ms = 2;
+
+  repeated Leg legs = 3;
+}
+
+message Leg {
+  // Where this leg ends.
+  gp.v1.Location to = 1;
+
+  // Game milliseconds.
+  int32 ms = 2;
+
+  // True when the leg crosses ground the seat has not seen. Its cost was
+  // priced at 3/2 per abstract edge, and the editor draws it dashed and
+  // labels it as a bound (item 57).
+  bool fogged = 3;
+}
+
+// =============================================================================
+// Docs
+// =============================================================================
+
+// Generated from the schema, so it cannot drift (spec section 12).
+message GetSchemaRequest {
+  // Which slice. Lower-case, matching the walkthrough's `{part:"step"}`.
+  // Empty means the whole of what the seat can use.
+  string part = 1;
+}
+
+message GetSchemaResponse {
+  // JSON Schema, as generated text.
+  string json_schema = 1;
+}
+
+message ListTemplatesRequest {
+  // Optional filter, matching the walkthrough's `{tag:"attack"}`.
+  string tag = 1;
+
+  string cursor = 2;
+}
+
+message ListTemplatesResponse {
+  repeated TemplateSummary templates = 1;
+  string next_cursor = 2;
+}
+
+message TemplateSummary {
+  string template_id = 1;
+  string title = 2;
+  repeated string tags = 3;
+
+  // One sentence, from the template file itself.
+  string summary = 4;
+}
+
+// =============================================================================
+// Planning
+// =============================================================================
+
+message InstantiateTemplateRequest {
+  string template_id = 1;
+  repeated Parameter parameters = 2;
+}
+
+// PLACEHOLDER STUB - a typed parameter catalogue is S6's, with the editor and
+// the template library. Name and text value until then: the template declares
+// what it accepts and the verifier rejects what does not fit, so the wire
+// shape does not have to carry the type.
+message Parameter {
+  string name = 1;
+  string value = 2;
+}
+
+message InstantiateTemplateResponse {
+  // A whole playbook file, JSONC, comments included.
+  string playbook_jsonc = 1;
+}
+
+message VerifyPlanRequest {
+  string playbook_jsonc = 1;
+
+  // Defaults to FULL when omitted (spec section 11).
+  VerifyPlan.Depth depth = 2;
+}
+
+message VerifyPlanResponse {
+  VerifyReport report = 1;
+}
+
+// Spec section 11. The result is a pure function of five inputs - playbook
+// bytes, snapshot, rules hash, verifier version and depth - so a pre-check and
+// the check at submit are byte-identical, and two reports compare only within
+// one depth.
+message VerifyReport {
+  bool qualifies = 1;
+
+  // Which depth produced this report. Part of the hashed input, so it is part
+  // of the report.
+  VerifyPlan.Depth depth = 2;
+
+  repeated Diagnostic diagnostics = 3;
+
+  // xxh3-64 over the five inputs, eight bytes big-endian.
+  bytes report_hash = 4;
+
+  // The rules table this report was produced against.
+  bytes rules_hash = 5;
+
+  // gp.v1.Meta.fingerprint for the bytes that were checked.
+  bytes plan_fingerprint = 6;
+
+  // Opaque build identity of the verifier. Changing it moves report_hash.
+  string verifier_version = 7;
+
+  // Where the playbook sits against the size budget, so the editor's meter
+  // reads the verifier's number rather than counting for itself.
+  uint32 size_units = 8;
+  uint32 size_budget = 9;
+}
+
+// Modelled on rustc's JSON output (spec section 11).
+message Diagnostic {
+  // Language-neutral. E000x, E01xx, ... W07xx, I... . Append-only from the
+  // day a code ships.
+  string code = 1;
+
+  Severity severity = 2;
+
+  // RFC 6901 JSON Pointer into the playbook.
+  string path = 3;
+
+  // Other places that matter to this diagnostic.
+  repeated string related_paths = 4;
+
+  // Precise, English, from the one string table.
+  string message = 5;
+
+  // The plain-language beginner sentence.
+  string beginner = 6;
+
+  repeated PatchSuggestion suggestions = 7;
+
+  // Places on the map the diagnostic refers to.
+  repeated gp.v1.Voxel map_refs = 8;
+
+  enum Severity {
+    SEVERITY_UNSPECIFIED = 0;
+    ERROR = 1;
+    WARNING = 2;
+    INFO = 3;
+  }
+}
+
+// A fix the editor can offer. `patch_plan` applies one.
+message PatchSuggestion {
+  // What the button says.
+  string title = 1;
+
+  // RFC 6902 JSON Patch, as text, so it round-trips through the same JSONC
+  // layer the playbook does.
+  string json_patch = 2;
+
+  Applicability applicability = 3;
+
+  // rustc's four, minus the one that has no meaning here.
+  enum Applicability {
+    APPLICABILITY_UNSPECIFIED = 0;
+
+    // Safe to apply without review. These are the editor's Fix buttons.
+    MACHINE_APPLICABLE = 1;
+
+    // Probably right; the author should look.
+    MAYBE_INCORRECT = 2;
+
+    // Contains something the author must fill in.
+    HAS_PLACEHOLDERS = 3;
+  }
+}
+
+message RenderPlanRequest {
+  string playbook_jsonc = 1;
+}
+
+message RenderPlanResponse {
+  // Deterministic template prose. Reads the coming segment's length from the
+  // frozen snapshot, never from a constant.
+  string prose = 1;
+}
+
+message PatchPlanRequest {
+  string playbook_jsonc = 1;
+
+  // RFC 6902 JSON Patch.
+  string json_patch = 2;
+}
+
+message PatchPlanResponse {
+  // The patched file, comments and formatting preserved.
+  string playbook_jsonc = 1;
+
+  // The patch that undoes this one, for the editor's undo stack.
+  string inverse_json_patch = 2;
+}
+
+message SaveDraftRequest {
+  string playbook_jsonc = 1;
+
+  // The author's name for it.
+  string label = 2;
+}
+
+message SaveDraftResponse {
+  string draft_id = 1;
+}
+
+message ListDraftsRequest {
+  string cursor = 1;
+}
+
+message ListDraftsResponse {
+  repeated DraftSummary drafts = 1;
+  string next_cursor = 2;
+}
+
+message DraftSummary {
+  string draft_id = 1;
+  string label = 2;
+
+  // Which round it was saved in. A draft is bound to a match.
+  uint32 round = 3;
+}
+
+// What the operator would file on a timeout, so a seat can see the cost of one
+// (spec section 14). Always qualifies.
+message GetSafePlanRequest {}
+
+message GetSafePlanResponse {
+  string playbook_jsonc = 1;
+}
+
+// =============================================================================
+// Commit
+// =============================================================================
+
+// Always runs FULL. The latest verified submission replaces the previous one,
+// any number of times until the timer ends.
+message SubmitPlanRequest {
+  string playbook_jsonc = 1;
+}
+
+message SubmitPlanResponse {
+  // An invalid playbook is NOT a method error: this comes back with
+  // qualifies:false and `accepted` false.
+  VerifyReport report = 1;
+
+  // True when this submission is now the seat's sealed order.
+  bool accepted = 2;
+}
+
+message SetReadyRequest {
+  bool ready = 1;
+}
+
+message SetReadyResponse {
+  Status status = 1;
+}
+
+// =============================================================================
+// During play
+// =============================================================================
+
+// Fog-filtered events plus a digest for every 60 s of game time. Engine
+// chatter rides the same feed as labelled one-way lines. Planning is closed
+// during play and the recap.
+message GetSegmentFeedRequest {
+  // Opaque, snapshot-tied. Empty starts at the beginning of the segment.
+  string cursor = 1;
+
+  ReadOptions read_options = 2;
+}
+
+message GetSegmentFeedResponse {
+  repeated Event events = 1;
+  repeated Digest digests = 2;
+  string next_cursor = 3;
+}
+
+message Event {
+  // Game milliseconds since the start of the segment.
+  int32 at_ms = 1;
+
+  // PLACEHOLDER STUB - the event-kind catalogue is T10's event bus and grows
+  // with every stage, so it is a string here rather than an enum that would
+  // have to be re-cut at S1, S2 and S4. It becomes an enum when the catalogue
+  // stops moving; until then the golden feed files are what pin it.
+  string kind = 2;
+
+  // English, from the one string table. Engine chatter is a line of this kind
+  // and is labelled as one-way: no seat reads another seat's anything.
+  string text = 3;
+
+  // Where it happened, when it happened somewhere.
+  gp.v1.Voxel at = 4;
+
+  // PLACEHOLDER STUB - the per-kind structured payload. Filled by T13.
+  reserved 5 to 15;
+}
+
+// One 60-second digest of game time.
+message Digest {
+  int32 from_ms = 1;
+  int32 to_ms = 2;
+  string text = 3;
 }

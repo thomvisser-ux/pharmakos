@@ -64,3 +64,25 @@ breaking:
   except:
     # Nothing. Minor versions add optional fields; a major version comes with a
     # converter that is kept forever.
+  ignore_only:
+    # PLACEHOLDER - DELETE THIS BLOCK in the first proto change after the
+    # walking skeleton's T1 lands on main. OWNER: it exists for exactly one
+    # merge and nothing else.
+    #
+    # Why it is here. decisions-log item 47 held `Playbook` field 7 and the
+    # name `kind` as a RESERVATION, with the field itself "defined with the
+    # skeleton"; item 76 defines it. Discharging a held number is the one
+    # move buf cannot tell apart from a genuine un-reservation, so
+    # RESERVED_MESSAGE_NO_DELETE fires on the two lines that go away - the
+    # range [7] and the name "kind" - even though the field that replaces
+    # them has the same number and the same name, which is the safest
+    # possible outcome and the one the reservation was made for.
+    #
+    # It is scoped to one rule and one file, and it is inert the moment this
+    # change is on main: from then on the comparison sees `Kind kind = 7;` on
+    # both sides. Leaving it in place after that would let a LATER
+    # un-reservation in this file through unnoticed - DefendSettings and
+    # AttackSettings both hold 1-15 for S2 - which is why it is written as a
+    # deletion task rather than as configuration.
+    RESERVED_MESSAGE_NO_DELETE:
+      - gp/v1/playbook.proto
