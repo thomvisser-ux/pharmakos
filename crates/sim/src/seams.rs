@@ -33,8 +33,9 @@ use crate::tables::{SeatId, UnitId};
 ///
 /// PLACEHOLDER: whether the counter becomes hashed state is settled by the
 /// stage that gives it teeth (owner, at S5 with the operator's budget). It is
-/// **not** hashed today, and a test asserts that, because a counter that
-/// affects nothing must not move a golden file.
+/// **not** hashed today, and `tests/determinism.rs`'s
+/// `the_work_counter_is_not_in_the_state_encoding` asserts that, because a
+/// counter that affects nothing must not move a golden file.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct WorkCounter {
     spent: u32,

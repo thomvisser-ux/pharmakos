@@ -113,6 +113,12 @@ const HARNESS_MAP_EXTENT_VOXELS: [i32; 2] = [384, 384];
 /// what that means.
 pub const BROADPHASE_QUERY_RADIUS_CELLS: u32 = 1;
 
+/// PLACEHOLDER (harness): what a harness unit is built with, in hit points.
+/// Nothing damages it — combat is S2 — so the number only has to be alive and
+/// in the hash. T14 replaces it with a rules-table row per unit kind
+/// (decision 14).
+const HARNESS_UNIT_HP: Hp = Hp::new(150);
+
 /// PLACEHOLDER (harness): the per-tick work budget the seam starts with. The
 /// number becomes meaningful at S5, when the operator's budget is measured in
 /// evaluation units (owner).
@@ -186,7 +192,7 @@ impl World {
                 );
                 let pos = draw_point(&mut rng, max_x, max_y);
                 let dest = draw_point(&mut rng, max_x, max_y);
-                units.push(UnitId::new(next_id), seat, pos, dest, Hp::new(150));
+                units.push(UnitId::new(next_id), seat, pos, dest, HARNESS_UNIT_HP);
                 next_id = next_id.checked_add(1)?;
                 n = n.checked_add(1)?;
             }
@@ -266,6 +272,16 @@ impl World {
         self.work
     }
 
+    /// This tick's work counter, to charge against.
+    ///
+    /// Nothing in the tick charges it yet — the phases that will are T11's and
+    /// S5's. It is reachable now so that
+    /// `tests/determinism.rs`'s `the_work_counter_is_not_in_the_state_encoding`
+    /// can prove the counter stays out of the hash.
+    pub const fn work_mut(&mut self) -> &mut WorkCounter {
+        &mut self.work
+    }
+
     /// Advance one tick and return the tick's state hash.
     ///
     /// `enc` is the caller's buffer, reused across ticks: that is what makes a
@@ -293,8 +309,21 @@ impl World {
     }
 
     /// Rebuild the CSR uniform grid by counting sort (item 67).
+    ///
+    /// [`Csr::rebuild`] answers `false` when the unit table is larger than the
+    /// grid it was built for, and leaves the grid **empty** — so swallowing
+    /// that answer buys a world that hashes correctly and then queries an empty
+    /// index for the rest of the match. [`World::new`] and
+    /// [`World::restore_tables`] are the only two ways to get a grid, and both
+    /// size it to the unit table, so a `false` here is a construction bug and
+    /// the assertion is how it surfaces at the tick that caused it.
     fn phase_broadphase(&mut self) {
-        let _rebuilt = self.broadphase.rebuild(self.units.positions());
+        let rebuilt = self.broadphase.rebuild(self.units.positions());
+        debug_assert!(
+            rebuilt,
+            "the unit table outgrew the broadphase grid; every query from here on would come \
+             back empty"
+        );
     }
 
     /// Units' and buildings' built-in programs. **Empty: T14 fills it** (move,
@@ -537,7 +566,18 @@ impl World {
         &self.candidates
     }
 
-    /// Replace the hashed tables from a restored snapshot.
+    /// Replace the hashed tables from a restored snapshot, and **resize the
+    /// derived index to match them**.
+    ///
+    /// The broadphase is sized for a unit count at construction. A snapshot
+    /// holding more units than the receiving world was built for would
+    /// otherwise restore cleanly, hash correctly, and leave every later
+    /// broadphase query empty — see [`World::phase_broadphase`]. So the grid is
+    /// rebuilt here, for the restored count, before anything is written.
+    ///
+    /// Returns `false` and changes **nothing** when the grid cannot be built
+    /// for the restored world, the same answer [`World::new`] gives for the
+    /// same reason. A half-applied restore is not a state this sim has.
     ///
     /// Crate-internal: [`crate::snapshot`] is the only caller, so a restore
     /// cannot skip the version check.
@@ -548,12 +588,27 @@ impl World {
         seats: SeatTable,
         units: UnitTable,
         chunks: ChunkDigests,
-    ) {
+    ) -> bool {
+        let unit_count = units.len();
+        let Some(broadphase) = Csr::new(
+            [0, 0],
+            HARNESS_MAP_EXTENT_VOXELS,
+            self.rules.csr_cell_size_voxels,
+            unit_count,
+        ) else {
+            return false;
+        };
+
         self.match_seed = match_seed;
         self.tick = tick;
         self.seats = seats;
         self.units = units;
         self.chunks = chunks;
+        self.broadphase = broadphase;
+        // The query scratch is sized the same way, and for the same reason: a
+        // query that has to grow its buffer is an allocation inside a tick.
+        self.candidates = Vec::with_capacity(usize::try_from(unit_count).unwrap_or(0));
+        true
     }
 }
 

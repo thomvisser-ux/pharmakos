@@ -101,6 +101,14 @@ pub enum SnapshotError {
     Encode(String),
     /// The decoded columns disagree in length: a truncated or edited file.
     Ragged(&'static str),
+    /// The restored tables describe a world the receiving world's derived
+    /// indexes cannot cover — a snapshot with more units than the broadphase
+    /// grid can hold. Refused rather than restored into a world whose every
+    /// later query would come back empty.
+    Unindexable {
+        /// How many units the snapshot holds.
+        units: u32,
+    },
 }
 
 impl core::fmt::Display for SnapshotError {
@@ -115,6 +123,11 @@ impl core::fmt::Display for SnapshotError {
             SnapshotError::Ragged(table) => {
                 write!(f, "the `{table}` columns disagree in length")
             }
+            SnapshotError::Unindexable { units } => write!(
+                f,
+                "the snapshot's {units} units cannot be indexed by a broadphase grid built from \
+                 this world's rules table"
+            ),
         }
     }
 }
@@ -125,7 +138,8 @@ impl Snapshot {
     /// Project a world into the flat form. Lossless over hashed state.
     ///
     /// Derived state — the broadphase, the work counter — is deliberately
-    /// absent: it is rebuilt from the tables at the next tick's first phase, so
+    /// absent: the grid is sized from the restored tables by
+    /// [`Snapshot::restore_into`] and filled at the next tick's first phase, so
     /// putting it in the file would be a second source of truth.
     #[must_use]
     pub fn capture(world: &World) -> Snapshot {
@@ -190,14 +204,18 @@ impl Snapshot {
 
     /// Write the snapshot back into `world`.
     ///
-    /// The world keeps its rules table and rebuilds its broadphase on the next
-    /// tick, so restoring into a world built under different rules is caught by
-    /// the rules hash at the save's own level (T17) rather than silently
-    /// half-applied here.
+    /// The world keeps its rules table, so restoring into a world built under
+    /// different rules is caught by the rules hash at the save's own level
+    /// (T17) rather than silently half-applied here. Its derived indexes are
+    /// **resized to the restored tables** before anything is written, because a
+    /// snapshot may hold more units than the receiving world was built for.
     ///
     /// # Errors
     ///
-    /// Returns [`SnapshotError::Ragged`] when the columns disagree in length.
+    /// Returns [`SnapshotError::Ragged`] when the columns disagree in length,
+    /// or [`SnapshotError::Unindexable`] when the receiving world's rules table
+    /// cannot describe a grid for the restored unit count. Either way the world
+    /// is left exactly as it was.
     pub fn restore_into(&self, world: &mut World) -> Result<(), SnapshotError> {
         let mut seats = SeatTable::with_capacity(u32::try_from(self.seat_id.len()).unwrap_or(0));
         if !seats.restore(
@@ -232,7 +250,10 @@ impl Snapshot {
         let mut chunks = ChunkDigests::new(0);
         chunks.restore(self.chunk_digest.clone());
 
-        world.restore_tables(self.match_seed, Tick::new(self.tick), seats, units, chunks);
+        let unit_count = units.len();
+        if !world.restore_tables(self.match_seed, Tick::new(self.tick), seats, units, chunks) {
+            return Err(SnapshotError::Unindexable { units: unit_count });
+        }
         Ok(())
     }
 }
