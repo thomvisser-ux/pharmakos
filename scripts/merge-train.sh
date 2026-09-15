@@ -56,8 +56,16 @@ checks_green() {
 }
 
 wait_for_checks() {
-  local pr="$1"
+  local pr="$1" tries=0
   printf '== #%s: waiting for checks\n' "$pr"
+  # Right after a push GitHub lists no checks for a few seconds, and `--watch` returns at
+  # once with nothing to watch; an empty list is "not yet", not "not green". Wait for the
+  # first check to appear (up to ten minutes) before watching.
+  until [ -n "$(gh pr checks "$pr" 2>/dev/null | awk -F'\t' 'NF >= 2')" ]; do
+    tries=$((tries + 1))
+    [ "$tries" -le 40 ] || fail "no checks appeared on #$pr within ten minutes"
+    sleep 15
+  done
   # --watch returns 0 when every check passed and non-zero otherwise; the verdict is taken
   # from a fresh listing rather than from that exit code.
   gh pr checks "$pr" --watch --interval 30 >/dev/null 2>&1 || true
