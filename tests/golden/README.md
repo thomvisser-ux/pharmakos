@@ -94,6 +94,7 @@ named fills it.
 | `proto/` | `gp.v1` canonical-JSON round trips | T1 |
 | `plan-core/` | Canonical form, byte-exact JSONC round trip, `render_plan` prose | T8 |
 | `verifier/` | Reports, `report_hash`, the diagnostic catalogue | T6 |
+| `gateway/` | The fog filter, the segment digest, the audit log and the handshake | T9 |
 | `interpreter/` | Decision, step-transition and commit-point transcripts | T11 |
 | `economy/` | `$` and `kW` ledgers and the BMI settlement | T14 |
 | `mapgen/` | Per-seed map digests | T5 |
