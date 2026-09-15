@@ -76,10 +76,34 @@ exactly (three seats: 3 × 10 + 3 × 20 + 2 × 30 + 40 = 190 kW). Item 90 record
 the honest version: a number people plan against tends to stick, and the
 rules-table home plus the loud label are the mitigation, not a proof.
 
-Two rows are stated twice on purpose, and the pair must move together:
-`structures.beacon.draw_kw` and `power.beacon_base_draw_kw` are the same 2 kW,
-and `commander.cost_per_second` repeats the unit of
-`locomotion.*_cost_per_second` because the commander is not a unit kind.
+**Eleven numbers are stated twice on purpose, and each pair must move
+together.** A reader of the `units` or `structures` block should see a whole
+unit or a whole building without cross-referencing two other blocks, so three
+families are restated — and the `locomotion` and `power` side is the
+authoritative one in each, because that is where the rule lives:
+
+- **draw per fielded unit.** `power.kw_per_unit` (item 91) is restated as all
+  five `units.*.draw_kw`.
+- **a beacon's own draw.** `power.beacon_base_draw_kw` is restated as
+  `structures.beacon.draw_kw` (both 2 kW).
+- **walking speed.** `locomotion.drone_cost_per_second` is restated as
+  `units.build_drone`, `units.mining_drone` and `units.repair_drone`'s
+  `cost_per_second`; `locomotion.raider_cost_per_second` and
+  `locomotion.scout_cost_per_second` likewise; and
+  `commander.cost_per_second` repeats the same unit because the commander is
+  not a unit kind.
+
+Nothing in the schema makes a pair move together, and the two halves are often
+re-derived at different stages (item 90 moves the drone speed at S1 and the
+raider's at S2; item 91 moves `kw_per_unit` at S2's exit). `crates/proto`'s
+**`the_restated_rows_agree`** test is what catches a half-edit; if you add a
+restated row, add it there too.
+
+One row reads short in the file: `structures.generator.draw_kw` is **0** — the
+Generator supplies rather than draws — and canonical proto3 JSON omits a
+default-valued scalar, so the generator shows two numbers rather than three.
+The decoded row is still 80 / 600 / 0. It is the table's first zero-valued row,
+so it is the first place the omission is visible.
 
 | Row | Source | Settled? |
 |---|---|---|
@@ -108,12 +132,12 @@ and `commander.cost_per_second` repeats the unit of
 | `commander.hp` 300, `respawn_base_ms` 30000, `respawn_growth_ms` 15000 | item 90 | **PLACEHOLDER** — tuning, owner, S2 |
 | `beacon.sphere_radius_voxels` 24 | item 90, item 11, spec §5 | **PLACEHOLDER** — tuning, owner, at the skeleton's demo |
 | `beacon.core_hp` 3000 | item 90 | **PLACEHOLDER** — tuning, owner, S2 |
-| `map.size_*` 384/384/64, `spawn_zones` 3, `spawn_zone_radius_voxels` 24, `vent_*_distance_voxels` 28/44, `seam_*_distance_voxels` 8/20, `spawn_separation_pushes_*` 3/2 | item 90, spec §§3, 9, 15 | **PLACEHOLDER** — tuning, owner, at the skeleton's demo. The separation is a **fraction of one early Push of raider travel**, not a distance, because the distance that matters changes with the raider's speed and the segment length |
+| `map.size_*` 384/384/64, `spawn_zones` 3, `spawn_zone_radius_voxels` 24, `vent_*_distance_voxels` 28/44, `seam_*_distance_voxels` 8/20, `spawn_separation_pushes_*` 3/2 | item 90, spec §§3, 9, 15 | **PLACEHOLDER** — tuning, owner, at the skeleton's demo. The separation is a **fraction of one early Push of raider travel**, not a distance, because the distance that matters changes with the raider's speed and the segment length: one Push is 2 160 cost units, so 3/2 is 3 240, about 324 cardinal voxels. The vent band's upper end (44) is **outside** the reach item 90's gloss claims for it (placement range 12 + sphere 24 = 36); the rows stand, the gloss is raised for the owner in T5a's PR |
 | `map.start_vent_richness` LEAN, `start_seam_richness` STANDARD, `contested_standard_vents` 2, `contested_rich_vents` 1, `contested_rich_seams` 3 | item 90 | **PLACEHOLDER** — tuning, owner, S1 |
 | `units.build_drone`, `units.mining_drone` 20/100/1/10 | item 90, spec §§7, 9 | **PLACEHOLDER** — tuning, owner, S1 |
-| `units.repair_drone` 25/100/1/10, `units.raider` 30/120/1/12, `units.scout` 10/60/1/20 | item 90 | **PLACEHOLDER** — tuning, owner, S2 |
+| `units.repair_drone` 25/100/1/10, `units.raider` 30/120/1/12, `units.scout` 10/60/1/20 | item 90 | **PLACEHOLDER** — tuning, owner, S2. `repair_drone` is item 90's *repair-reclaim drone* under its short name; there is no sixth unit kind |
 | `structures.beacon` 60/800/2 | item 90, spec §5 | **PLACEHOLDER** — tuning, owner, at the skeleton's demo |
-| `structures.generator` 80/600/0, `structures.survey_post` 30/200/1 | item 90 | **PLACEHOLDER** — tuning, owner, S1 |
+| `structures.generator` 80/600/0, `structures.survey_post` 30/200/1 | item 90 | **PLACEHOLDER** — tuning, owner, S1. The generator's `draw_kw` of 0 is omitted from the canonical JSON; see above |
 | `structures.autocannon` 60/500/2, `structures.mortar` 90/400/3, `wall_cost_per_voxel` 1, `demolition_charge_cost_dollars` 15 | item 90 | **PLACEHOLDER** — tuning, owner, S2 |
 | `structures.resonance_spire` 120/500/3 | item 90 | **PLACEHOLDER** — tuning, owner, S3 |
 | `verifier.size_budget_units` 128 | item 94 | **PLACEHOLDER** — tuning, owner, at **S3's exit**; P1 sets the real number from the measured per-rule cost per decision tick. A unit is one route step, one handler, one step in a handler body, one build target, one protected area or one patrol waypoint; conditions and settings count nothing |

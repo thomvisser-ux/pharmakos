@@ -1766,9 +1766,23 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.MineSettings".into() }
 /// request than a map whose canonical JSON key order nobody should have to
 /// reason about.
 ///
-/// Top level in the file rather than nested in one block, because two blocks
-/// read it: `Power.generator_output_kw` (output per vent richness) and
-/// `Economy.ore_yield_per_voxel_dollars` (yield per seam richness).
+/// Top level in `gp.v1` rather than nested in `RulesTable`, unlike `UnitKind`
+/// and `StructureKind` further down, and the rule that separates them is what
+/// the message MEANS rather than how many fields read it. `ByRichness` is a
+/// QUANTITY type — "this number varies with a grade" — and its nested
+/// `Richness` enum is the grade itself, which `RulesTable.Map`'s rows name
+/// directly; both describe the world rather than this table, and a later
+/// message that has to say "by richness" should be able to say
+/// `gp.v1.ByRichness` without reaching inside a table. `UnitKind` and
+/// `StructureKind` are the shape of one block's ROWS and mean nothing outside
+/// it, so they are nested where they are read.
+///
+/// Two blocks read this one: `Power.generator_output_kw` (output per vent
+/// richness) and `Economy.ore_yield_per_voxel_dollars` (yield per seam
+/// richness); `Map` reads the enum. A message's fully-qualified name is part
+/// of the schema, so relocating it later is a `buf breaking` failure in
+/// `WIRE_JSON` mode — which is why the choice is stated here rather than left
+/// to the next reader to infer.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ByRichness {
     #[prost(uint32, tag="1")]
@@ -2375,10 +2389,22 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Beacon".int
         #[prost(uint32, tag="5")]
         pub spawn_zone_radius_voxels: u32,
         /// The one heat vent in an occupied spawn zone: its grade, and how far
-        /// from the core it is placed. The distance band puts it OUTSIDE the
-        /// core's own sphere but inside the sphere of a beacon placed at
-        /// `commander.placement_range_voxels`, so the first Generator costs a walk
-        /// and a beacon rather than neither.
+        /// from the core it is placed. The band starts OUTSIDE the core's own
+        /// sphere (`beacon.sphere_radius_voxels` = 24), so the first Generator
+        /// always costs a walk and a beacon rather than neither, and it ends
+        /// within one beacon's sphere of a spot the commander can reach on that
+        /// first walk.
+        ///
+        /// Item 90 glosses the upper end as "inside the sphere of a beacon placed
+        /// at the placement range", which does not hold arithmetically for the top
+        /// third of the band: a beacon placed at
+        /// `commander.placement_range_voxels` = 12 covers to 12 + 24 = 36, and the
+        /// band runs to 44. The design intent — one walk, one beacon — survives
+        /// either way, because the commander walks TOWARD the vent rather than
+        /// stopping at the placement range. The rows are the contract and the
+        /// sentence was the gloss; T5a's pull request raises the mismatch for the
+        /// owner (narrow the band to 36, widen the placement range, or amend the
+        /// gloss), and T5 must not assert item 90's sentence as written.
         ///
         /// PLACEHOLDER: tuning, owner, S1.
         ///
@@ -2439,9 +2465,13 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Beacon".int
         ///
         /// T5 asserts it on the octile ground distance (10/14 per step), which is
         /// a lower bound on any walked path and so conservative in the right
-        /// direction until T7 measures real routes. At raider 12 cost/s over a
-        /// 180 000 ms first segment that is 3 240 cost units, about 324 voxels —
-        /// and 324 seconds of commander walking.
+        /// direction until T7 measures real routes. ONE early Push of raider
+        /// travel is 12 cost/s over a 180 000 ms first segment = 2 160 cost units,
+        /// so 3/2 of it is 3 240 cost units — about 324 cardinal voxels at item
+        /// 59's 10 cost per step, and 324 seconds of commander walking at
+        /// `commander.cost_per_second` = 10. (Item 90 attributes the 3 240 to the
+        /// segment rather than to 3/2 of it; 3 240 is the separation's number, not
+        /// one segment's.)
         ///
         /// PLACEHOLDER: tuning, owner, at the walking skeleton's demo.
         ///
@@ -2478,8 +2508,15 @@ impl ::prost::Name for UnitKind {
 const NAME: &'static str = "UnitKind";
 const PACKAGE: &'static str = "gp.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.UnitKind".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.RulesTable.UnitKind".into() }}
-    /// The five unit kinds. Starting force is the spec's: the core on Build, the
-    /// commander, two build drones and one mining drone.
+    /// The five unit kinds.
+    ///
+    /// Starting force — the core on Build, the commander, two build drones and
+    /// one mining drone — is NOT a row here. Item 90 quotes it from the spec
+    /// ("starting force as the spec") rather than fixing it as a tuning value,
+    /// and adding a field is permanent under `buf breaking`, so T5a left it a
+    /// spec fact and raised the question in its pull request. If the owner rules
+    /// it tuning, the rows land in this block at the next free numbers; until
+    /// then T5 reads the spec for the two counts.
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct Units {
         /// PLACEHOLDER: tuning, owner, S1.
@@ -2492,6 +2529,10 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.UnitKind".i
         /// item 90: 20 / 100 / 1 / 10
         #[prost(message, optional, tag="2")]
         pub mining_drone: ::core::option::Option<UnitKind>,
+        /// Item 90's "repair-reclaim drone" under its short name. There is no
+        /// sixth unit kind; the field name is the JSON key and `buf breaking`
+        /// makes it permanent, so the equivalence is stated rather than inferred.
+        ///
         /// PLACEHOLDER: tuning, owner, S2.
         ///
         /// item 90: 25 / 100 / 1 / 10
@@ -2540,6 +2581,12 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.StructureKi
         /// item 90: 60 / 800 / 2
         #[prost(message, optional, tag="1")]
         pub beacon: ::core::option::Option<StructureKind>,
+        /// The Generator draws nothing: it is the thing that supplies. Its
+        /// `draw_kw` of 0 is the proto3 default, so canonical JSON OMITS the key
+        /// and `rules/rules.v1.json` shows the generator with two numbers rather
+        /// than three — the decoded row is still 80 / 600 / 0. First zero-valued
+        /// row in the table, so it is said once here and once in rules/README.md.
+        ///
         /// PLACEHOLDER: tuning, owner, S1.
         ///
         /// item 90: 80 / 600 / 0

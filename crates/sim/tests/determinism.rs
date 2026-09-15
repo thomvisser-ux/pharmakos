@@ -796,7 +796,13 @@ fn the_committed_rules_table_carries_the_decided_values() {
     assert_eq!(table.step_cardinal(), 10, "item 59");
     assert_eq!(table.step_diagonal(), 14, "item 59");
     assert_eq!(table.climb_surcharge(), 4, "item 59");
-    assert_eq!(table.move_cost_per_tick(), 3, "item 59");
+    assert_eq!(
+        table.move_cost_per_tick(),
+        3,
+        "item 59, SUPERSEDED by item 90's per-kind `*_cost_per_second` rows: \
+         the row and this accessor stay because deleting a proto field is a \
+         `buf breaking` failure, and nothing reads either"
+    );
     assert_eq!(table.repath_cap_per_tick(), 16, "item 69");
     assert_eq!(
         table.csr_cell_size_voxels(),
