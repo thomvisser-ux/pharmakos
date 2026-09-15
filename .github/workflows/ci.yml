@@ -105,9 +105,13 @@ jobs:
       - name: Install buf
         uses: bufbuild/buf-setup-action@v1
         with:
-          # PLACEHOLDER: pin an exact buf version once the schema settles, so a buf
-          # release cannot change what `buf breaking` accepts between two runs.
-          version: latest
+          # PINNED, for the same reason protoc-gen-prost is pinned below: crates/proto's
+          # generated-tree check is a byte-for-byte comparison, and buf's own release
+          # changes what `buf generate` emits (1.73.0 produced the committed tree;
+          # `latest` on 2026-09-15 produced 470 bytes less and failed all three legs).
+          # Keep this in step with the buf the tree was regenerated with; raising it
+          # means regenerating the tree in the same commit.
+          version: 1.73.0
           github_token: ${{ github.token }}
 
       - name: Install protoc-gen-prost
