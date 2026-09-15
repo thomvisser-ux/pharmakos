@@ -13,10 +13,13 @@ Read that file before your first edit. What follows is only the Claude Code-spec
 
 ## Before you touch anything
 
-1. **Nothing compiles on the owner's machine yet.** As of 2026-09-13 there is no `cargo`, no
-   `protoc` and no Godot 4.7 installed (git, gh and node are present). Do not run `cargo build` and
-   report the failure as a finding; write code that will be right once the toolchain exists, and
-   mark every guessed value `// PLACEHOLDER: <what, who decides, when>`.
+1. **The toolchain is installed and `cargo xtask ci` is green.** rustc 1.98.1 (MSVC host), `protoc`
+   36, `buf` 1.73, `cargo-deny`, `reuse` and Godot 4.7.2 are all present, so compile your work and
+   run `cargo xtask ci --quick` as the inner loop and the full `cargo xtask ci` before you open a
+   PR. Most crates are still empty placeholders, so a step whose input does not exist yet reports
+   `skipped` with a reason — that is the harness working, not a failure to work around. The
+   `PLACEHOLDER` rule is unchanged: mark every guessed value
+   `// PLACEHOLDER: <what, who decides, when>` and list it in your PR.
 2. **Check the design precedence before implementing a rule**: `docs/design/decisions-log.md` §2.7 >
    the spec (`docs/spec/pharmakos-spec-v0.6.html`) > `docs/design/co-design-gameplan-api.md`. See
    `docs/design/README.md`. The co-design doc predates the v1 simplification and still describes
@@ -61,8 +64,8 @@ walking skeleton, and are revoked by the owner's word at any time:
 ## Commands
 
 ```sh
-cargo fmt --all           # do this FIRST, once a toolchain exists: nothing has been formatted
-cargo xtask ci            # the whole check suite — what CI runs   (written, never yet executed)
+cargo fmt --all           # rustfmt defaults for edition 2024; the tree is formatted
+cargo xtask ci            # the whole check suite — what CI runs, and it is green
 cargo xtask ci --quick    # fmt, clippy, unit tests — the inner loop
 cargo xtask ci --fix      # rustfmt plus machine-applicable clippy fixes
 git commit -s             # DCO sign-off is mandatory on every commit
@@ -70,10 +73,10 @@ git worktree add ../pharmakos-<task> -b feat/<crate>-<task>
 ```
 
 `cargo xtask ci` is the single entry point. If something is green locally and red in CI, that is an
-`xtask` bug worth fixing, not a reason to run a different command. It is written and complete for
-harness part 1 (`xtask/src/main.rs`, twelve steps, covering AGENTS.md §9 items 1–9) but has never
-been compiled — so the first run is a shakedown, and a failure in it is a bug to fix rather than a
-reason to reach for another command.
+`xtask` bug worth fixing, not a reason to run a different command. It is complete for harness part 1
+(`xtask/src/main.rs`, twelve steps, covering AGENTS.md §9 items 1–9) and green — ten `ok`, two
+`skipped` with reasons; a failure in it is a bug to fix rather than a reason to reach for another
+command.
 
 ## When you finish
 
