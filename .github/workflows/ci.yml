@@ -60,8 +60,17 @@ jobs:
       matrix:
         include:
           # The REUSE licence check is platform-independent, so it runs once, on Linux.
+          #
+          # `--skip screenshot` on the ubuntu leg is REQUIRED, not an optimisation. The
+          # `screenshot` step's preconditions are project → golden → Linux → godot →
+          # xvfb-run, and the last two go through `skip_or_fail`, which is a hard failure
+          # under PHARMAKOS_REQUIRE_TOOLS. godot and xvfb are installed only in the
+          # `screenshot` job below, so the moment T16 commits `godot/project.godot` and
+          # the first vista golden, this leg would pass the first three preconditions and
+          # then fail on a tool it was never given. The render belongs to that job, which
+          # installs what it needs; this leg would also be doing it twice.
           - os: ubuntu-latest
-            xtask_args: ""
+            xtask_args: "--skip screenshot"
             reuse: true
           - os: windows-latest
             xtask_args: "--skip reuse"
@@ -304,19 +313,21 @@ jobs:
     # Linux only, and deliberately so. The golden is rendered under xvfb with
     # the lavapipe software rasteriser; comparing a second platform's rasteriser
     # against it would be permanently red and would say nothing about the
-    # geometry (decisions-log item 22 — G1 measured 1.14 % of pixels differing
-    # between a Quadro and lavapipe on identical geometry). The stronger of the
-    # two geometry checks is the mesher's digests, which need no GPU and do run
-    # on every leg.
+    # geometry (skeleton-plan §7 decision 22, recommended and not yet logged —
+    # G1 measured 1.14 % of pixels differing between a Quadro and lavapipe on
+    # identical geometry). The stronger of the two geometry checks is the
+    # mesher's digests, which need no GPU and do run on every leg.
+    #
+    # This job is the ONLY place the vista is rendered: godot and xvfb are
+    # installed here and nowhere else, which is why the ubuntu `ci` leg above
+    # passes `--skip screenshot`.
     #
     # WIRED BUT SKIPPING. `godot/` does not exist and no vista golden is
     # committed, so `cargo xtask screenshot` reports itself skipped, with the
     # reason and the task that fills it. The heavy install steps below are
     # gated on the Godot project appearing, so today this leg costs a checkout
     # and a cargo build. T16 lands the project and the first golden; T20
-    # promotes the step from skipping to required and decides then whether the
-    # ubuntu `ci` leg should pass `--skip screenshot` so the render is not done
-    # twice.
+    # promotes the step from skipping to required.
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
