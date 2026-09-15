@@ -155,8 +155,10 @@ SPDX-License-Identifier = "GPL-3.0-or-later"
 # copyleft along. The per-directory LICENSE files are listed one by one rather
 # than as `*/LICENSE`: assets/LICENSE is also matched by assets/**, and a
 # pointer file that resolved to two different licences at once would be exactly
-# the ambiguity these files exist to remove. This block is last so each listed
-# pointer resolves here.
+# the ambiguity these files exist to remove. tests/LICENSE is the sharpest case:
+# tests/** is the game tier, so without this line the pointer for the GPL
+# directory would itself be GPL. This block is last so each listed pointer
+# resolves here.
 [[annotations]]
 path = [
     "LICENSE",
@@ -164,6 +166,8 @@ path = [
     "docs/LICENSE",
     "examples/LICENSE",
     "proto/LICENSE",
+    "rules/LICENSE",
+    "tests/LICENSE",
     "REUSE.toml",
     "examples/.gitkeep",
 ]

@@ -1,0 +1,26 @@
+SPDX-FileCopyrightText: 2026 Pharmakos contributors
+SPDX-License-Identifier: MIT OR Apache-2.0
+
+Everything in rules/ — `rules.v1.json`, the canonical gp.v1 JSON of one
+`RulesTable`, and the notes that go with it — is licensed under either of
+
+  * MIT License            (../LICENSES/MIT.txt)
+  * Apache License, 2.0    (../LICENSES/Apache-2.0.txt)
+
+at your option. The shape of this file is schema and its values are data
+(decisions log section 2.7 item 78): the numbers here are what an estimate is
+made of, so an alternative verifier, planner or playbook generator has to be
+able to read the same table to reach the same answer the game reaches. That is
+the same reason proto/ is permissive, and it is why this directory does not
+take the game's copyleft even though the sim is the thing that consumes it.
+
+`rules.v1.json` cannot carry a comment, so it has a `rules.v1.json.license`
+sidecar beside it as well; ../REUSE.toml covers the directory either way.
+
+Unless you state otherwise, any contribution you intentionally submit for
+inclusion in this directory shall be dual licensed as above, with no additional
+terms or conditions, and signed off under the Developer Certificate of Origin
+1.1 (../docs/DCO.txt).
+
+The repository-wide scheme is described in ../LICENSE and ../docs/LICENSING.md;
+the machine-readable manifest is ../REUSE.toml.

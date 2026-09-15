@@ -13,8 +13,8 @@ and the full texts live in `LICENSES/` under their canonical SPDX file names.
 
 | Tier | Paths | Licence | Full text |
 | --- | --- | --- | --- |
-| The game | `crates/**` (except `crates/proto/**`), `xtask/**`, `client/**` | `GPL-3.0-or-later` | `LICENSES/GPL-3.0-or-later.txt` |
-| Interfaces and words | `proto/**`, **`crates/proto/**`**, `schemas/**`, `docs/**`, `examples/**`, `llms.txt`, `AGENTS.md`, `CLAUDE.md` | `MIT OR Apache-2.0` | `LICENSES/MIT.txt`, `LICENSES/Apache-2.0.txt` |
+| The game | `crates/**` (except `crates/proto/**`), `xtask/**`, `client/**`, `tests/**` (except `tests/golden/proto/**`) | `GPL-3.0-or-later` | `LICENSES/GPL-3.0-or-later.txt` |
+| Interfaces and words | `proto/**`, **`crates/proto/**`**, `schemas/**`, `docs/**`, `examples/**`, `rules/**`, **`tests/golden/proto/**`**, `llms.txt`, `AGENTS.md`, `CLAUDE.md` | `MIT OR Apache-2.0` | `LICENSES/MIT.txt`, `LICENSES/Apache-2.0.txt` |
 | Art and audio | `assets/**` | `CC-BY-SA-4.0` | `LICENSES/CC-BY-SA-4.0.txt` |
 
 **The one carve-out inside `crates/`:** `crates/proto` holds the generated
@@ -23,6 +23,22 @@ files themselves, so it is `MIT OR Apache-2.0` — set deliberately in
 `crates/proto/Cargo.toml`, stated in that crate's SPDX headers, and carved out
 of `crates/**` by a later annotation in `REUSE.toml`. Nothing else under
 `crates/` is permissive.
+
+**The same carve-out inside `tests/`:** `tests/golden/<area>/expected.*` is the
+committed half of the harness — hash chains, canonical playbooks, verifier
+reports, path hashes, geometry digests, feed logs and vista PNGs — produced by
+the game's own code and read only by it, so it takes the game's licence.
+`tests/golden/proto/**` is the exception: those files are canonical `gp.v1`
+JSON and views of the schema, the same public surface as `proto/**`, so a third
+party writing a playbook tool can use them as the reference they are.
+`REUSE.toml` carves them out with a later annotation, and `tests/LICENSE` says
+so in prose.
+
+**`rules/`** is `MIT OR Apache-2.0` for the reason `proto/` is: `rules.v1.json`
+is the canonical JSON of one `gp.v1.RulesTable` (decisions log §2.7 item 78) —
+the shape is schema and the values are data — and an alternative verifier or
+planner has to read the same table to reach the same estimates. The JSON cannot
+carry a header, so `rules.v1.json.license` sits beside it.
 
 Two paths are **not** covered by any tier: `docs/DCO.txt`, which is the Linux
 Foundation's document and keeps its own verbatim-copy terms (see
