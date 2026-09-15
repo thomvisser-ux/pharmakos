@@ -25,7 +25,7 @@
 //!
 //! # Reach and pad are derived, never asserted
 //!
-//! [`LightParams::reach`] is `light_max / light_atten - 1` and [`LightParams::pad`] is
+//! [`LightParams::reach`] is `(light_max - 1) / light_atten` and [`LightParams::pad`] is
 //! `reach + 1`. The two terms compose rather than compete: the light around an edit changes
 //! out to `reach` voxels, and the mesher reads the *neighbour* cell one voxel outside the
 //! chunk, so a light change at the edge of its reach still alters a face one voxel further
@@ -139,17 +139,31 @@ impl LightParams {
         self.light_atten
     }
 
-    /// How far light travels from a fully lit cell, in voxels: `light_max / light_atten - 1`.
+    /// How far light travels from a fully lit cell, in voxels: `(light_max - 1) /
+    /// light_atten`.
     ///
-    /// Derived, never asserted. Propagation is terminal at or below the attenuation — a
-    /// cell with `light <= light_atten` lifts nothing — so a cell at `light_max` changes
-    /// cells up to this many voxels away and no further.
+    /// Derived from the flood's own rule, never asserted. [`LightField`]'s propagation
+    /// writes a neighbour only when the value it would take is above zero, so the cell `d`
+    /// steps from a cell at `light_max` is lit exactly while `light_max` exceeds
+    /// `d * light_atten` — that is, while `d <= (light_max - 1) / light_atten`. The
+    /// terminal condition (a cell at `light <= light_atten` lifts nothing) is the same
+    /// inequality read from the other end and adds no further step.
+    ///
+    /// **Not `light_max / light_atten - 1`**, which is what this said first and is one
+    /// voxel short whenever the attenuation does not divide the maximum: at `light_max` 15
+    /// and `light_atten` 2 the flood reaches 7 voxels and that formula says 6, so the pad
+    /// built on it leaves a chunk whose faces did change colour off the dirty set. The
+    /// committed pair divides exactly, which is why nothing fired — exactly the shape of
+    /// failure G1 warns about, one row of the rules table away.
+    /// `the_reach_is_the_floods_own_measured_reach` walks the non-dividing pairs against a
+    /// real flood rather than against a written-down number.
     #[must_use]
     pub fn reach(self) -> i32 {
         let steps = u32::from(self.light_max)
+            .saturating_sub(1)
             .checked_div(u32::from(self.light_atten))
-            .unwrap_or(1);
-        i32::try_from(steps.saturating_sub(1)).unwrap_or(0)
+            .unwrap_or(0);
+        i32::try_from(steps).unwrap_or(0)
     }
 
     /// How far outside an edit the dirty set must reach, in voxels: [`reach`] plus one.
@@ -271,9 +285,12 @@ impl LightField {
     /// Re-bakes the inclusive box `lo..=hi` after an edit, joining up with the light
     /// outside it.
     ///
-    /// The caller passes the **edited** box; this widens it by nothing, because the caller
-    /// is the one that knows how far the edit reached. Pass the box padded by
-    /// [`LightParams::pad`] if what you have is the edit rather than its consequences.
+    /// The caller passes the **edited** box — the voxels it changed — and this widens it by
+    /// [`LightParams::pad`] itself, which is the same box [`LightField::dirty_chunks`]
+    /// takes and pads. The two are deliberately symmetric: a caller handing the same edit
+    /// to both used to get a dirty set that named chunks this call had not re-lit, so the
+    /// remesh uploaded stale light. Passing an already-padded box is still correct, merely
+    /// wider than it needs to be.
     ///
     /// # Errors
     ///
@@ -286,11 +303,17 @@ impl LightField {
     ) -> Result<(), LightError> {
         self.check(materials)?;
         let [voxels_x, voxels_y, voxels_z] = self.grid.voxels();
-        let lo = [lo[0].max(0), lo[1].max(0), lo[2].max(0)];
+        // The pad is this call's, not the caller's — see the doc comment.
+        let pad = self.params.pad();
+        let lo = [
+            lo[0].saturating_sub(pad).max(0),
+            lo[1].saturating_sub(pad).max(0),
+            lo[2].saturating_sub(pad).max(0),
+        ];
         let hi = [
-            hi[0].min(voxels_x - 1),
-            hi[1].min(voxels_y - 1),
-            hi[2].min(voxels_z - 1),
+            hi[0].saturating_add(pad).min(voxels_x - 1),
+            hi[1].saturating_add(pad).min(voxels_y - 1),
+            hi[2].saturating_add(pad).min(voxels_z - 1),
         ];
         if lo[0] > hi[0] || lo[1] > hi[1] || lo[2] > hi[2] {
             return Ok(());
@@ -375,8 +398,20 @@ impl LightField {
 
     /// The light value at a map voxel, or the sky's value outside the map.
     ///
-    /// Outside is sky because there is nothing there to cast a shadow, and a rim of black
-    /// faces around the map is the one thing this cannot be mistaken for.
+    /// Outside reads as sky because there is nothing there to cast a shadow, and a rim of
+    /// black faces around the map is the one thing this cannot be mistaken for.
+    ///
+    /// **That value is a shading convention for the border read, not a light source.** The
+    /// flood seeds only sky columns *inside* the map, so light never enters across the
+    /// map's outer face: a sealed cavity that opens onto the rim renders dark behind a rim
+    /// face shaded at `light_max`. The two rules agree everywhere the map's edge is solid,
+    /// which is every map the generator makes today.
+    ///
+    /// PLACEHOLDER: whether the outside of the map lights its interior — seeding the six
+    /// outer faces in [`LightField::bake_all`] — is a lighting rule nothing in the spec or
+    /// the decisions log states, so it is not invented here. Owner decides if a map is ever
+    /// open at its rim; S4's symmetric map is the first place that could arise, and the
+    /// geometry golden moves if the answer is yes.
     #[must_use]
     pub fn light_at(&self, x: i32, y: i32, z: i32) -> u8 {
         match self.voxel_offset(x, y, z) {
@@ -574,7 +609,10 @@ pub fn map_offset(grid: ChunkGrid, x: i32, y: i32, z: i32) -> Option<usize> {
 /// **A neighbour outside the map is synthesised as open sky** — air at `light_max` — rather
 /// than left absent, so the map's outer rim is lit rather than a band of black faces. A
 /// [`ChunkView`] with an absent border treats it as air at light 0, which is the right
-/// answer for a caller with no light field and the wrong one here.
+/// answer for a caller with no light field and the wrong one here. This is the same
+/// convention [`LightField::light_at`] applies outside the map, and it has the same limit:
+/// it shades the rim, it does not light the interior — the flood never propagates inward
+/// from outside the map.
 #[derive(Clone, Debug)]
 pub struct ChunkBorders {
     materials: Vec<u8>,
@@ -741,6 +779,78 @@ mod tests {
         let spike = LightParams::new(15, 3).expect("G1's pair");
         assert_eq!(spike.reach(), 4);
         assert_eq!(spike.pad(), 5);
+        // A pair the attenuation does not divide: the flood reaches 7, not 6.
+        let uneven = LightParams::new(15, 2).expect("a legal pair");
+        assert_eq!(uneven.reach(), 7);
+        assert_eq!(uneven.pad(), 8);
+    }
+
+    /// A one-chunk map that is solid except for a roofed corridor at `y = 10, z = 16`
+    /// running from `x = 1` to the far wall, lit only through an open shaft at `x = 0`.
+    ///
+    /// The shaft column's floor is `y = 10`, so every cell above it is a sky seed; every
+    /// other way into the corridor is solid. The furthest lit `x` is therefore the flood's
+    /// own reach, measured rather than asserted.
+    fn corridor_map(grid: ChunkGrid) -> Vec<u8> {
+        let [voxels_x, voxels_y, voxels_z] = grid.voxels();
+        let mut materials = vec![AIR; grid.voxel_count()];
+        for z in 0..voxels_z {
+            for x in 0..voxels_x {
+                let top = if x == 0 { 10 } else { 21 };
+                for y in 0..top.min(voxels_y) {
+                    if let Some(at) = map_offset(grid, x, y, z) {
+                        if let Some(slot) = materials.get_mut(at) {
+                            *slot = 1;
+                        }
+                    }
+                }
+            }
+        }
+        for x in 1..voxels_x {
+            if let Some(at) = map_offset(grid, x, 10, 16) {
+                if let Some(slot) = materials.get_mut(at) {
+                    *slot = AIR;
+                }
+            }
+        }
+        materials
+    }
+
+    #[test]
+    fn the_reach_is_the_floods_own_measured_reach() {
+        let grid = ChunkGrid::new(1, 1, 1).expect("a one-chunk grid is legal");
+        let materials = corridor_map(grid);
+        // The dividing pairs and, the point of the test, the ones that do not divide.
+        for [light_max, light_atten] in [
+            [15_u8, 1_u8],
+            [15, 2],
+            [15, 3],
+            [15, 4],
+            [15, 5],
+            [15, 7],
+            [10, 3],
+            [16, 3],
+            [8, 2],
+        ] {
+            let params = LightParams::new(light_max, light_atten).expect("a legal pair");
+            let mut field = LightField::new(grid, params);
+            field
+                .bake_all(&materials)
+                .expect("the map is the right size");
+            let [voxels_x, _, _] = grid.voxels();
+            let mut furthest = 0_i32;
+            for x in 0..voxels_x {
+                if field.light_at(x, 10, 16) > 0 {
+                    furthest = furthest.max(x);
+                }
+            }
+            assert_eq!(
+                params.reach(),
+                furthest,
+                "light_max {light_max} / light_atten {light_atten}: the derived reach must \
+                 be the flood's own"
+            );
+        }
     }
 
     #[test]
@@ -823,13 +933,10 @@ mod tests {
                 }
             }
         }
-        let pad = params.pad();
+        // The **edited** box, unpadded: the call pads it itself, exactly as
+        // `dirty_chunks` does, and the two must take the same argument.
         incremental
-            .rebake_box(
-                &materials,
-                [20 - pad, 0 - pad, 20 - pad],
-                [23 + pad, 3 + pad, 23 + pad],
-            )
+            .rebake_box(&materials, [20, 0, 20], [23, 3, 23])
             .expect("the right size");
 
         let mut fresh = LightField::new(grid, params);
@@ -839,6 +946,107 @@ mod tests {
             fresh.all(),
             "an incremental re-bake must equal a bake from scratch"
         );
+    }
+
+    #[test]
+    fn the_dirty_set_covers_every_chunk_whose_light_moved() {
+        // The whole point of deriving the reach: a caller hands the **edited** box to
+        // `rebake_box` and to `dirty_chunks`, and no chunk whose faces changed colour may
+        // be left off the second. The pair is chosen so the attenuation does not divide
+        // the maximum, which is where the old `light_max / light_atten - 1` was one short.
+        let grid = ChunkGrid::new(3, 1, 1).expect("a 3 x 1 x 1 grid is legal");
+        let params = LightParams::new(15, 2).expect("a legal, non-dividing pair");
+        let [voxels_x, voxels_y, voxels_z] = grid.voxels();
+
+        // Solid to y = 20 everywhere, with a roofed corridor at y = 10, z = 16 that ends
+        // exactly at the first chunk boundary: chunk 1's solid voxel at x = 32 reads the
+        // corridor cell at x = 31 when its -x face is shaded.
+        let mut materials = vec![AIR; grid.voxel_count()];
+        for z in 0..voxels_z {
+            for x in 0..voxels_x {
+                for y in 0..21.min(voxels_y) {
+                    if let Some(at) = map_offset(grid, x, y, z) {
+                        if let Some(slot) = materials.get_mut(at) {
+                            *slot = 1;
+                        }
+                    }
+                }
+            }
+        }
+        for x in 0..CHUNK_EDGE {
+            let x = i32::try_from(x).expect("32 fits in an i32");
+            if let Some(at) = map_offset(grid, x, 10, 16) {
+                if let Some(slot) = materials.get_mut(at) {
+                    *slot = AIR;
+                }
+            }
+        }
+
+        let mut field = LightField::new(grid, params);
+        field.bake_all(&materials).expect("the right size");
+        let before = field.all().to_vec();
+        assert_eq!(field.light_at(31, 10, 16), 0, "the corridor starts dark");
+
+        // The edit: a sky shaft down column x = 24, seven voxels from the boundary.
+        let (lo, hi) = ([24, 11, 16], [24, 20, 16]);
+        for y in lo[1]..=hi[1] {
+            if let Some(at) = map_offset(grid, lo[0], y, lo[2]) {
+                if let Some(slot) = materials.get_mut(at) {
+                    *slot = AIR;
+                }
+            }
+        }
+        field
+            .rebake_box(&materials, lo, hi)
+            .expect("the right size");
+        let mut fresh = LightField::new(grid, params);
+        fresh.bake_all(&materials).expect("the right size");
+        assert_eq!(
+            field.all(),
+            fresh.all(),
+            "an unpadded, edited-box re-bake must equal a bake from scratch"
+        );
+        assert_eq!(
+            field.light_at(31, 10, 16),
+            1,
+            "the corridor is lit out to the boundary: reach 7 from x = 24"
+        );
+
+        // Every chunk whose padded read region changed — the 34-cubed region the mesher
+        // reads, so one voxel outside the chunk counts.
+        let edge = i32::try_from(CHUNK_EDGE).expect("32 fits in an i32");
+        let mut changed = Vec::new();
+        for index in 0..grid.chunk_count() {
+            let coords = grid.chunk_coords(index).expect("inside the grid");
+            let origin = [coords[0] * edge, coords[1] * edge, coords[2] * edge];
+            let moved = (-1..=edge).any(|dy| {
+                (-1..=edge).any(|dz| {
+                    (-1..=edge).any(|dx| {
+                        let (x, y, z) = (origin[0] + dx, origin[1] + dy, origin[2] + dz);
+                        match map_offset(grid, x, y, z) {
+                            Some(at) => before.get(at).copied() != field.all().get(at).copied(),
+                            None => false,
+                        }
+                    })
+                })
+            });
+            if moved {
+                changed.push(index);
+            }
+        }
+        assert!(
+            changed.contains(&1),
+            "chunk 1 reads the corridor cell at x = 31, whose light moved"
+        );
+
+        let mut dirty = Vec::new();
+        field.dirty_chunks(lo, hi, &mut dirty);
+        for index in changed {
+            assert!(
+                dirty.contains(&index),
+                "chunk {index} changed but the dirty set is {dirty:?}"
+            );
+        }
     }
 
     #[test]
