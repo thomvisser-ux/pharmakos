@@ -32,8 +32,13 @@ publish = false                  # nothing in this workspace goes to crates.io
 # (spec §15, "Crates"). Versions are PLACEHOLDERS — check the registry when uncommenting.
 [workspace.dependencies]
 # --- schema (single source: gp.v1, gp.api.v1) ---
-# prost        = "0.13"   # generated Protobuf types
-# prost-build  = "0.13"   # build-time codegen, driven by buf-generated descriptors
+prost          = { version = "0.14", default-features = false, features = ["std", "derive"] }
+# prost-build is NOT here and will not be: the generated tree is checked in and
+# written by `buf generate` with protoc-gen-prost, so nothing in this workspace
+# runs codegen at build time (crates/proto/Cargo.toml has the reasoning).
+# prost-types is NOT here either: crates/proto parses the descriptor set by hand,
+# because prost drops unknown fields and the gateway's method/scope annotation is
+# a custom option, which is an unknown field to a generated EnumValueOptions.
 # --- determinism-critical ---
 # xxhash-rust  = { version = "0.8", features = ["xxh3"] }  # per-tick state hash
 # imbl         = "3"      # persistent ordered collections (no HashMap/HashSet)
@@ -55,7 +60,7 @@ publish = false                  # nothing in this workspace goes to crates.io
 # (0.1 at the wk-35.5 gate), with an error that does not point at these lines. Widen it to
 # `"1"` when the workspace reaches 1.0, and not before.
 pharmakos-mesher = { path = "crates/mesher", version = "0" }
-# pharmakos-proto     = { path = "crates/proto", version = "0" }
+pharmakos-proto  = { path = "crates/proto", version = "0" }
 # pharmakos-sim       = { path = "crates/sim", version = "0", default-features = false }
 # pharmakos-plan-core = { path = "crates/plan-core", version = "0" }
 # pharmakos-verifier  = { path = "crates/verifier", version = "0" }
