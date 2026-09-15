@@ -143,9 +143,33 @@ pub mod gateway_error {
         NoQualifyingPlan = 3,
         /// Rate limited.
         RateLimited = 4,
-        // --- PLACEHOLDER: derived from section 12's security paragraph, not
-        // --- named in the spec verbatim. Confirm or cut before the schema is
-        // --- frozen; each one needs a reason to exist that a client can act on.
+        // Numbers 5-9 are free for a further code the spec names.
+
+        // --- Derived from section 12's security paragraph, not named there
+        // --- verbatim ----------------------------------------------------------
+        //
+        // KEPT, all six, and the test is the one the block below asks of itself:
+        // a code earns its place only if a client can act on it differently from
+        // every other code. UNAUTHENTICATED means get a token; FORBIDDEN_SCOPE
+        // means this token will never work for this method, so stop asking;
+        // NOT_FOUND means the name is wrong or is not yours; INVALID_ARGUMENT
+        // means the request is wrong and retrying it unchanged cannot help;
+        // UNSUPPORTED_SCHEMA_VERSION means the file needs converting, and is
+        // distinct from a verifier diagnostic because no report can be produced
+        // for a version that will not decode; INTERNAL means retry is reasonable
+        // and nothing the caller did caused it. Collapsing any of them into
+        // INVALID_ARGUMENT would make a closed error set that cannot tell a
+        // client whether to fix the request, fix the token or try again — and the
+        // set is closed, so a client has nothing else to read.
+        //
+        // PLACEHOLDER: the six are the schema's proposal, not a ratified
+        // decision. OWNER ratifies or cuts them with an entry in
+        // docs/design/decisions-log.md section 2.7, at the latest when T13 fills
+        // the gateway payloads and becomes the first code that raises one — that
+        // is the first point at which the choice is testable rather than
+        // theoretical. Cutting one afterwards is a contract change and its number
+        // stays reserved either way; nothing in the schema depends on the six, so
+        // the cost of holding the question open to T13 is a comment.
 
         /// Missing, malformed, expired or revoked token, or a failed Host/Origin
         /// check. Per-seat 256-bit tokens are tied to the match and the seat and
@@ -1246,15 +1270,21 @@ pub enum Method {
     GetBeacon = 23,
     /// "get_map_summary"
     GetMapSummary = 24,
-    /// "query_area"
+    /// "query_area" — NO REQUEST/RESPONSE PAIR YET, and that is deliberate: no
+    /// skeleton client calls it. Its pair arrives with S3's knowledge store,
+    /// which is what defines the area query's own salience budget.
     QueryArea = 25,
-    /// "list_known_enemies"
+    /// "list_known_enemies" — no pair yet; arrives with S3's knowledge store,
+    /// which is where "known" gets its reach-memory definition.
     ListKnownEnemies = 26,
-    /// "get_reports"
+    /// "get_reports" — no pair yet; arrives with S3's knowledge store, alongside
+    /// the report kinds it returns.
     GetReports = 27,
     /// "get_economy_forecast" — $ and kW, with what-ifs.
     GetEconomyForecast = 28,
-    /// "get_capabilities"
+    /// "get_capabilities" — no pair yet; arrives with S4, which is the stage
+    /// that introduces licences and therefore gives the method something to
+    /// report.
     GetCapabilities = 29,
     /// "estimate_route"
     EstimateRoute = 30,

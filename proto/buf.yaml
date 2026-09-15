@@ -66,23 +66,39 @@ breaking:
     # converter that is kept forever.
   ignore_only:
     # PLACEHOLDER - DELETE THIS BLOCK in the first proto change after the
-    # walking skeleton's T1 lands on main. OWNER: it exists for exactly one
-    # merge and nothing else.
+    # walking skeleton's T1 lands on main, and RE-ADD it, scoped to the files
+    # it is needed for and with the same kind of justification written out,
+    # in any later change that discharges a held field number. OWNER: this is
+    # a per-change waiver, not standing configuration.
     #
-    # Why it is here. decisions-log item 47 held `Playbook` field 7 and the
-    # name `kind` as a RESERVATION, with the field itself "defined with the
-    # skeleton"; item 76 defines it. Discharging a held number is the one
-    # move buf cannot tell apart from a genuine un-reservation, so
-    # RESERVED_MESSAGE_NO_DELETE fires on the two lines that go away - the
-    # range [7] and the name "kind" - even though the field that replaces
-    # them has the same number and the same name, which is the safest
-    # possible outcome and the one the reservation was made for.
+    # Why it is here. Holding a future field number as a RESERVATION is how
+    # this schema stops a number being reused for something else before the
+    # stage that fills it arrives: decisions-log item 47 held `Playbook`
+    # field 7 and the name `kind` that way, and this change's own stubs hold
+    # DefendSettings 1-15, AttackSettings 1-15, Location 10-49, BeaconRef
+    # 13-49, Condition's eight gaps and every gateway payload stub the same
+    # way. Discharging a held number - item 76 defining `Kind kind = 7;`,
+    # this change filling MineSettings 3 and 4 from spec section 6's Mine row
+    # - is the one move buf cannot tell apart from a genuine un-reservation,
+    # so RESERVED_MESSAGE_NO_DELETE fires on the lines that go away even
+    # though the field that replaces each one has the same number and the
+    # same name, which is the safest possible outcome and the one the
+    # reservation was made for.
     #
-    # It is scoped to one rule and one file, and it is inert the moment this
-    # change is on main: from then on the comparison sees `Kind kind = 7;` on
-    # both sides. Leaving it in place after that would let a LATER
-    # un-reservation in this file through unnoticed - DefendSettings and
-    # AttackSettings both hold 1-15 for S2 - which is why it is written as a
-    # deletion task rather than as configuration.
+    # So the rule fires again at S1, S2, S3 and S4, once per PR that fills a
+    # held stub, and each of those PRs re-adds this block for its own files
+    # (gp/api/v1/gateway.proto is NOT listed today because nothing in this
+    # change discharges a reservation there). It is written as a delete-and-
+    # re-add task rather than as permanent configuration because a standing
+    # ignore would let an un-reservation nobody intended through unnoticed -
+    # and an un-reservation nobody intended is exactly the reuse of a retired
+    # number that WIRE_JSON exists to catch.
+    #
+    # The alternative - holding never-used numbers with a plain comment
+    # ("Numbers 8 and 9 are free for a further row", as this schema does in
+    # the places where a gap is genuinely open rather than earmarked) - was
+    # considered and not taken: a comment does not stop protoc accepting a
+    # reuse, and the whole point of the held ranges is that the stub messages
+    # are filled later by somebody who was not here for this conversation.
     RESERVED_MESSAGE_NO_DELETE:
       - gp/v1/playbook.proto

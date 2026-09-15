@@ -28,6 +28,15 @@
 // "if a method needs a gp.api.v1 change, the change goes back to T1 as a
 // proto PR rather than being made in the gateway".
 //
+// FOUR METHODS HAVE NO PAIR AT ALL: query_area, list_known_enemies,
+// get_reports and get_capabilities. That is the third case, not an oversight.
+// A stub pair is written when the skeleton names the method as one its
+// clients call and only the payload is open; these four are not called by any
+// skeleton client, and the stage that introduces the thing each one reports
+// on (S3's knowledge store, S4's licences) is the stage that will know what
+// the request even takes. Writing an empty pair now would freeze a shape
+// chosen by nobody. Each of the four carries its stage on its enum value.
+//
 // There is still no `service` block: the transport is JSON-RPC 2.0 over a
 // WebSocket, not gRPC, and a service block would imply a gRPC surface v1 does
 // not have and v1.1 has not chosen.
@@ -164,19 +173,25 @@ enum Method {
   // "get_map_summary"
   METHOD_GET_MAP_SUMMARY = 24 [(required_scope) = SCOPE_OBSERVE];
 
-  // "query_area"
+  // "query_area" — NO REQUEST/RESPONSE PAIR YET, and that is deliberate: no
+  // skeleton client calls it. Its pair arrives with S3's knowledge store,
+  // which is what defines the area query's own salience budget.
   METHOD_QUERY_AREA = 25 [(required_scope) = SCOPE_OBSERVE];
 
-  // "list_known_enemies"
+  // "list_known_enemies" — no pair yet; arrives with S3's knowledge store,
+  // which is where "known" gets its reach-memory definition.
   METHOD_LIST_KNOWN_ENEMIES = 26 [(required_scope) = SCOPE_OBSERVE];
 
-  // "get_reports"
+  // "get_reports" — no pair yet; arrives with S3's knowledge store, alongside
+  // the report kinds it returns.
   METHOD_GET_REPORTS = 27 [(required_scope) = SCOPE_OBSERVE];
 
   // "get_economy_forecast" — $ and kW, with what-ifs.
   METHOD_GET_ECONOMY_FORECAST = 28 [(required_scope) = SCOPE_OBSERVE];
 
-  // "get_capabilities"
+  // "get_capabilities" — no pair yet; arrives with S4, which is the stage
+  // that introduces licences and therefore gives the method something to
+  // report.
   METHOD_GET_CAPABILITIES = 29 [(required_scope) = SCOPE_OBSERVE];
 
   // "estimate_route"
@@ -338,9 +353,33 @@ message GatewayError {
     // Rate limited.
     RATE_LIMITED = 4;
 
-    // --- PLACEHOLDER: derived from section 12's security paragraph, not
-    // --- named in the spec verbatim. Confirm or cut before the schema is
-    // --- frozen; each one needs a reason to exist that a client can act on.
+    // Numbers 5-9 are free for a further code the spec names.
+
+    // --- Derived from section 12's security paragraph, not named there
+    // --- verbatim ----------------------------------------------------------
+    //
+    // KEPT, all six, and the test is the one the block below asks of itself:
+    // a code earns its place only if a client can act on it differently from
+    // every other code. UNAUTHENTICATED means get a token; FORBIDDEN_SCOPE
+    // means this token will never work for this method, so stop asking;
+    // NOT_FOUND means the name is wrong or is not yours; INVALID_ARGUMENT
+    // means the request is wrong and retrying it unchanged cannot help;
+    // UNSUPPORTED_SCHEMA_VERSION means the file needs converting, and is
+    // distinct from a verifier diagnostic because no report can be produced
+    // for a version that will not decode; INTERNAL means retry is reasonable
+    // and nothing the caller did caused it. Collapsing any of them into
+    // INVALID_ARGUMENT would make a closed error set that cannot tell a
+    // client whether to fix the request, fix the token or try again — and the
+    // set is closed, so a client has nothing else to read.
+    //
+    // PLACEHOLDER: the six are the schema's proposal, not a ratified
+    // decision. OWNER ratifies or cuts them with an entry in
+    // docs/design/decisions-log.md section 2.7, at the latest when T13 fills
+    // the gateway payloads and becomes the first code that raises one — that
+    // is the first point at which the choice is testable rather than
+    // theoretical. Cutting one afterwards is a contract change and its number
+    // stays reserved either way; nothing in the schema depends on the six, so
+    // the cost of holding the question open to T13 is a comment.
 
     // Missing, malformed, expired or revoked token, or a failed Host/Origin
     // check. Per-seat 256-bit tokens are tied to the match and the seat and

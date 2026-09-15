@@ -22,6 +22,24 @@
 //     buf lint exceptions this needs are recorded in proto/buf.yaml.
 //   * Zero values keep a full prefix (AUTHOR_KIND_UNSPECIFIED). They are
 //     sentinels; an unset enum is a verifier error (E000x), never a default.
+//     ONE MESSAGE IS EXCEPTED, BY NAME: BeaconFilter. Both of its enums are
+//     FILTER TERMS rather than settings — the message's whole job is to say
+//     which beacons a selector ranks, and the editor's bare selector ("the
+//     nearest beacon") filters on nothing at all. So an unset
+//     BeaconFilter.mandate means "any writ" and an unset BeaconFilter.side
+//     reads as OWN, which is the sense of a bare selector and the only side a
+//     playbook can rank without the knowledge store. The alternative is
+//     making a player write {"nearest":{"filter":{"side":"OWN"}}} for the
+//     commonest construct in the vocabulary, in a file format they hand-edit.
+//     Recorded here rather than only at the message, because the verifier
+//     (T6) implements this list and needs one rule per enum, not two
+//     readings. No other message in gp.v1 may join this exception without an
+//     owner decision: it is the difference between "unset is a default" and
+//     "unset is an error", and the rest of the schema is the second.
+//     ONE CASE IS OPEN rather than excepted: MineSettings.seam_choice, where
+//     section 10's worked example omits the field, so neither reading can be
+//     asserted here without either failing that example or inventing a
+//     default. The PLACEHOLDER at that message names the owner and the stage.
 //   * Every duration is game milliseconds, never ticks. The sim runs at
 //     20 Hz and takes decisions every 250 ms of game time, but no number in a
 //     playbook is expressed in ticks (spec section 10, "Execution").
@@ -36,11 +54,12 @@
 //     schema, the mapping and the golden file agree without anyone having to
 //     deviate from the mapping. Range is not the constraint: 2^31 ms is about
 //     24.8 days, against an 8-minute maximum segment.
-//     OWNER: this resolves examples/README.md's open point 1 in the schema.
-//     Ratify it with an entry in docs/design/decisions-log.md section 2.7
-//     before the schema is frozen; the other way out — a canonical writer that
-//     deviates from the proto3 mapping for int64 — would have to be written
-//     down here instead.
+//     SETTLED: docs/design/decisions-log.md section 2.7 item 46 ratifies
+//     int32, and crates/proto's no_duration_field_in_gp_v1_is_int64 test walks
+//     the descriptor set and fails if anyone widens one. The other way out —
+//     a canonical writer that deviates from the proto3 mapping for int64 —
+//     was rejected there, not here. examples/README.md open point 1 records
+//     the same.
 //   * proto3 has no required fields. "Required" below means the verifier
 //     rejects the playbook without it (E01xx, limits and required blocks) —
 //     nothing is ever silently defaulted, and nothing is silently stripped.
@@ -662,11 +681,15 @@ message CmdrTookDamageWithin {
 // (spec section 10: "integer comparisons only").
 //
 // CmdrHpPct above carries its own nested Cmp and does not use this message.
-// That is deliberate rather than tidy: CmdrHpPct.Cmp already shipped, and
-// changing an existing field's type is a WIRE_JSON break in a file format
-// players hand-edit. The two enums spell the same six operators and the
-// verifier and the interpreter treat them identically; every predicate added
-// from the walking skeleton onward uses IntCompare.
+// That is deliberate rather than tidy. Spec section 10's worked example — the
+// one examples/playbooks/expand_east.jsonc copies verbatim and this schema is
+// checked against — writes the predicate as
+// {"cmdr_hp_pct":{"cmp":"LE","pct":40}}, so `cmp` and `pct` are fixed spellings
+// on a fixed shape; folding CmdrHpPct into IntCompare would rename them to
+// `op` and `value` and stop that file loading as written. The two enums spell
+// the same six operators and the verifier and the interpreter treat them
+// identically; every predicate added from the walking skeleton onward uses
+// IntCompare.
 message IntCompare {
   Op op = 1;
 
@@ -928,7 +951,10 @@ message BeaconFilter {
 
   enum Side {
     // Reads as OWN. Kept as the zero value because proto3 has no presence on
-    // an enum and OWN is what a bare selector means.
+    // an enum and OWN is what a bare selector means. This message is the one
+    // named exception to "an unset enum is a verifier error" — the header at
+    // the top of this file carries the exception and the reason, so the
+    // verifier has a single list to implement.
     SIDE_UNSPECIFIED = 0;
     OWN = 1;
 
@@ -1079,14 +1105,44 @@ message SurveySettings {
   reserved "probe_directions";
 }
 
+// Spec section 6, the Mine row, which names all four fields with their values:
+// "Seam choice: richest / nearest / safest; max dig depth; pillar spacing;
+// flee on threat. Never digs under structures." The skeleton fields a mining
+// drone and ships the "Expand & Mine" template, so this one is filled like
+// Build and Survey rather than held.
 message MineSettings {
   // Voxels. Never digs under structures.
   uint32 dig_max_depth = 1;
 
   bool flee_on_threat = 2;
 
-  // PLACEHOLDER: seam choice (richest / nearest / safest) and pillar spacing
-  // belong here too; they are section 6's to name.
-  reserved 3, 4;
-  reserved "seam_choice", "pillar_spacing";
+  // Which seam of the ones the mandate can reach.
+  SeamChoice seam_choice = 3;
+
+  // Voxels between the pillars the mandate leaves standing to hold the roof
+  // up.
+  uint32 pillar_spacing = 4;
+
+  // PLACEHOLDER — how an OMITTED mine setting reads. Spec section 6 names all
+  // four fields and their values but does not say what a mandate does when
+  // one is left out, and section 10's worked example leaves two of them out:
+  // it writes {"mine":{"dig_max_depth":4,"flee_on_threat":true}}. So this
+  // message cannot take the package's "an unset enum is a verifier error"
+  // rule without making the spec's own example fail to verify, and it cannot
+  // take a default without inventing one. Both readings are the section 6
+  // mandate contract's to choose — the same contract that decides whether
+  // these messages move to gp/v1/mandate.proto — and they are a pair: an
+  // omitted seam_choice and an omitted pillar_spacing get the same treatment
+  // or the row is inconsistent. OWNER decides at S1 (economy), which is when
+  // mining first has numbers to be wrong about; T6 (verifier) implements
+  // whichever it is. Nothing before S1 depends on the answer: the skeleton's
+  // "Expand & Mine" template writes the same two fields the spec's example
+  // does.
+
+  enum SeamChoice {
+    SEAM_CHOICE_UNSPECIFIED = 0;
+    RICHEST = 1;
+    NEAREST = 2;
+    SAFEST = 3;
+  }
 }

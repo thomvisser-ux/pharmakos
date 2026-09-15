@@ -55,10 +55,6 @@ gp.v1.Meta
   numbers: 5
   names:   team_id
 
-gp.v1.MineSettings
-  numbers: 3, 4
-  names:   pillar_spacing, seam_choice
-
 gp.v1.Options
   numbers: 2
   names:   reflex_hp_pct
