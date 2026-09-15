@@ -12,8 +12,9 @@
 
 #![allow(
     clippy::expect_used,
+    clippy::indexing_slicing,
     clippy::unwrap_used,
-    reason = "clippy.toml sets allow-expect-in-tests and allow-unwrap-in-tests, but that configuration only recognises #[test] functions and #[cfg(test)] modules — not an integration test's helper functions. A panic is this file's failure report (clippy.toml's own wording)."
+    reason = "clippy.toml sets allow-expect-in-tests and allow-unwrap-in-tests, but that configuration only recognises #[test] functions and #[cfg(test)] modules — not an integration test's helper functions. A panic is this file's failure report (clippy.toml's own wording), and that covers an out-of-bounds index in an assertion for the same reason: these are panic lints, not determinism lints, and AGENTS.md §5's ban is on the latter."
 )]
 
 use std::path::{Path, PathBuf};
@@ -25,6 +26,7 @@ use pharmakos_sim::math::fixed::{Fx, Sq};
 use pharmakos_sim::math::quantity::{Ms, Tick};
 use pharmakos_sim::snapshot::{SNAPSHOT_VERSION, Snapshot, SnapshotError};
 use pharmakos_sim::tables::SeatId;
+use pharmakos_sim::voxels::{Material, VoxelEdit};
 use pharmakos_sim::world::{PHASE_ORDER, Phase};
 use pharmakos_sim::{RulesError, RulesTable, World, WorldConfig};
 
@@ -82,10 +84,9 @@ fn world_of(rules: RulesTable, units_per_seat: u32) -> World {
         match_seed: pharmakos_sim::DETERMINISM_MATCH_SEED,
         seats: pharmakos_sim::DETERMINISM_SEATS,
         units_per_seat,
-        chunk_count: pharmakos_sim::chunks::SKELETON_CHUNK_COUNT,
         rules,
     })
-    .expect("the rules table describes a broadphase grid")
+    .expect("the rules table describes a map and a broadphase grid")
 }
 
 /// The chain, in the file format `xtask` validates: `tick<TAB>hash\n`.
@@ -829,4 +830,398 @@ fn the_default_rules_path_is_relative() {
         "the rules path must not be absolute: nothing may bake a build machine's path in"
     );
     assert!(Path::new(&found).is_file());
+}
+
+// ---------------------------------------------------------------------------
+// The chunk store (T5)
+// ---------------------------------------------------------------------------
+
+/// Every chunk's bytes, copied, so a test can say exactly which ones an edit
+/// changed rather than trusting the store's own account of it.
+fn snapshot_chunks(world: &World) -> Vec<Vec<u8>> {
+    let voxels = world.voxels();
+    let mut out: Vec<Vec<u8>> = Vec::with_capacity(usize::try_from(voxels.chunk_count()).unwrap());
+    let mut chunk: u32 = 0;
+    while chunk < voxels.chunk_count() {
+        out.push(
+            voxels
+                .chunk_bytes(chunk)
+                .map(|b| b.to_vec())
+                .unwrap_or_default(),
+        );
+        chunk = chunk.saturating_add(1);
+    }
+    out
+}
+
+/// The chunks whose bytes differ between two `snapshot_chunks` readings,
+/// ascending.
+fn changed_chunks(before: &[Vec<u8>], after: &[Vec<u8>]) -> Vec<u32> {
+    let mut out: Vec<u32> = Vec::new();
+    for (index, (a, b)) in before.iter().zip(after).enumerate() {
+        if a != b {
+            out.push(u32::try_from(index).unwrap());
+        }
+    }
+    out
+}
+
+/// A voxel the generated map has solid ground at, and the chunk it lives in.
+fn a_solid_voxel(world: &World, x: i32, y: i32) -> ([i32; 3], u32) {
+    let z = world
+        .voxels()
+        .top_solid_z(x, y)
+        .expect("the generated map has a floor under every column");
+    let at = [x, y, z];
+    let (chunk, _) = world.voxels().address(at).expect("an on-map voxel");
+    (at, chunk)
+}
+
+#[test]
+fn an_edit_moves_only_its_own_chunk_digest() {
+    // The whole of item 66's bargain: a digest is refreshed only for a chunk an
+    // edit touched, and every other chunk contributes the eight bytes it
+    // contributed last tick. If a second digest moved, the store is not what the
+    // hash thinks it is.
+    let mut world = world_with(rules());
+    let mut enc = Enc::with_capacity(64 * 1024);
+    let before_digests: Vec<u64> = world.chunks().as_slice().to_vec();
+    let before_hash = world.state_hash();
+
+    let (at, chunk) = a_solid_voxel(&world, 100, 100);
+    assert!(world.request_voxel_edit(VoxelEdit::Set {
+        at,
+        material: Material::AIR
+    }));
+    let _ = world.step(&mut enc);
+
+    let after_digests = world.chunks().as_slice().to_vec();
+    let moved: Vec<u32> = before_digests
+        .iter()
+        .zip(&after_digests)
+        .enumerate()
+        .filter(|(_, (a, b))| a != b)
+        .map(|(index, _)| u32::try_from(index).unwrap())
+        .collect();
+    assert_eq!(
+        moved,
+        vec![chunk],
+        "an edit in chunk {chunk} moved these digests instead"
+    );
+    assert_eq!(
+        world.voxels().settled(),
+        [chunk].as_slice(),
+        "the settled set is what the presentation side drains"
+    );
+    assert_ne!(
+        world.state_hash(),
+        before_hash,
+        "the edit left the hash alone"
+    );
+    assert_eq!(
+        world.voxels().get(at),
+        Some(Material::AIR),
+        "the edit did not land"
+    );
+
+    // An edit that changes nothing marks nothing: a no-op must not grow a
+    // snapshot or move a digest.
+    let steady = world.chunks().as_slice().to_vec();
+    assert!(world.request_voxel_edit(VoxelEdit::Set {
+        at,
+        material: Material::AIR
+    }));
+    let _ = world.step(&mut enc);
+    assert_eq!(world.chunks().as_slice(), steady.as_slice());
+    assert!(world.voxels().settled().is_empty());
+}
+
+#[test]
+fn a_craters_touched_chunks_are_ordered_and_complete() {
+    // Ordered: ascending chunk index, which is the order the digests are encoded
+    // in and the only order the hash can see. Complete: exactly the chunks whose
+    // bytes changed — no more, and crucially no fewer, because a chunk that
+    // changed without its digest being refreshed is a desync.
+    let mut world = world_with(rules());
+    let mut enc = Enc::with_capacity(64 * 1024);
+    let before = snapshot_chunks(&world);
+
+    // On a chunk corner, so the ball spans several chunks in all three axes.
+    let (at, _) = a_solid_voxel(&world, 128, 128);
+    assert!(world.request_voxel_edit(VoxelEdit::Crater {
+        centre: at,
+        radius: 6
+    }));
+    let _ = world.step(&mut enc);
+
+    let after = snapshot_chunks(&world);
+    let expected = changed_chunks(&before, &after);
+    assert!(
+        expected.len() >= 2,
+        "the crater was meant to span chunks; it touched {expected:?}"
+    );
+    assert_eq!(
+        world.voxels().settled(),
+        expected.as_slice(),
+        "the settled set is not exactly the chunks whose bytes changed"
+    );
+    assert!(
+        world.voxels().settled().windows(2).all(|w| w[0] < w[1]),
+        "the settled set is not ascending"
+    );
+    for chunk in &expected {
+        assert!(world.voxels().is_modified(*chunk));
+        assert_eq!(
+            world.chunks().get(*chunk),
+            Some(pharmakos_sim::digest(
+                world.voxels().chunk_bytes(*chunk).unwrap().as_slice()
+            )),
+            "chunk {chunk}'s digest is not the digest of its bytes"
+        );
+    }
+}
+
+#[test]
+fn save_and_restore_round_trips_with_modified_chunks() {
+    // The half of the snapshot format T5 added: the pristine chunks are
+    // regenerated from the seed and only the modified ones travel. A restore has
+    // to hash identically, keep hashing identically on the next tick, and hold
+    // across two captures.
+    let mut world = world_with(rules());
+    let mut enc = Enc::with_capacity(64 * 1024);
+
+    let mut craters: u32 = 0;
+    for step in 0..6 {
+        let (at, _) = a_solid_voxel(&world, 40 + step * 37, 60 + step * 29);
+        assert!(world.request_voxel_edit(VoxelEdit::Crater {
+            centre: at,
+            radius: 5
+        }));
+        let _ = world.step(&mut enc);
+        craters = craters.saturating_add(1);
+    }
+    assert_eq!(craters, 6);
+    let modified = world.voxels().modified_indices();
+    assert!(
+        modified.len() >= 6,
+        "six craters should have modified at least six chunks, not {}",
+        modified.len()
+    );
+    assert!(
+        modified.windows(2).all(|w| w[0] < w[1]),
+        "the modified list is not ascending"
+    );
+
+    let before = world.state_hash();
+    let bytes = Snapshot::capture(&world)
+        .to_bytes()
+        .expect("encoding a snapshot");
+    let decoded = Snapshot::from_bytes(&bytes).expect("decoding a snapshot");
+    assert_eq!(
+        decoded.modified_chunk, modified,
+        "the snapshot carries exactly the modified chunks"
+    );
+    assert_eq!(
+        decoded.modified_chunk_bytes.len(),
+        modified.len() * pharmakos_sim::CHUNK_VOXELS
+    );
+
+    let mut restored = world_with(rules());
+    decoded
+        .restore_into(&mut restored)
+        .expect("restoring a cratered world");
+    assert_eq!(
+        restored.state_hash(),
+        before,
+        "the restored world does not hash to the saved one"
+    );
+    // The voxels themselves, not merely their digests: a restore that agreed on
+    // the digests and not on the bytes would pass a hash check and then diverge
+    // the first time anything read the map.
+    let mut chunk: u32 = 0;
+    while chunk < world.voxels().chunk_count() {
+        assert_eq!(
+            restored.voxels().chunk_bytes(chunk),
+            world.voxels().chunk_bytes(chunk),
+            "chunk {chunk} came back different"
+        );
+        chunk = chunk.saturating_add(1);
+    }
+    // Re-capturing the restored world reproduces the file byte for byte, which
+    // is what says the modified flags themselves round-tripped: a restore that
+    // brought the voxels back but forgot which chunks were modified would hash
+    // correctly and then save a map the next restore could not rebuild.
+    assert_eq!(
+        Snapshot::capture(&restored)
+            .to_bytes()
+            .expect("re-encoding the restored world"),
+        bytes,
+        "the restored world does not save as the world it was restored from"
+    );
+
+    let mut continued = world.clone();
+    assert_eq!(
+        restored.step(&mut enc),
+        continued.step(&mut enc),
+        "the restored world diverges on the next tick"
+    );
+
+    // A snapshot with no edits carries no chunk bytes at all — which is the
+    // whole point of regenerating the pristine layer from the seed.
+    let fresh = Snapshot::capture(&world_with(rules()));
+    assert!(fresh.modified_chunk.is_empty());
+    assert!(fresh.modified_chunk_bytes.is_empty());
+}
+
+#[test]
+fn the_voxel_edit_queue_is_bounded_and_says_so() {
+    // Nothing in a tick allocates, so the queue is fixed at construction and a
+    // full queue reports rather than growing or dropping silently.
+    let mut world = world_with(rules());
+    let mut accepted: u32 = 0;
+    for _ in 0..1_000 {
+        if world.request_voxel_edit(VoxelEdit::Crater {
+            centre: [1, 1, 1],
+            radius: 0,
+        }) {
+            accepted = accepted.saturating_add(1);
+        }
+    }
+    assert!(
+        accepted > 0 && accepted < 1_000,
+        "the queue must be bounded"
+    );
+    assert_eq!(
+        usize::try_from(accepted).unwrap(),
+        world.queued_voxel_edits()
+    );
+
+    // And the queue is emptied by the phase that drains it.
+    let mut enc = Enc::with_capacity(64 * 1024);
+    let _ = world.step(&mut enc);
+    assert_eq!(world.queued_voxel_edits(), 0);
+}
+
+#[test]
+fn the_map_is_inside_the_hash_and_not_merely_beside_it() {
+    // Two worlds on two seeds differ in the chain from tick zero, because the
+    // map reaches hashed state through the per-chunk digests AND through where
+    // every unit is standing.
+    let alternative = World::new(&WorldConfig {
+        match_seed: pharmakos_sim::DETERMINISM_MATCH_SEED ^ 1,
+        seats: pharmakos_sim::DETERMINISM_SEATS,
+        units_per_seat: pharmakos_sim::DETERMINISM_UNITS_PER_SEAT,
+        rules: rules(),
+    })
+    .expect("a world on another seed");
+    let mut base = world_with(rules());
+    assert_ne!(base.state_hash(), alternative.state_hash());
+
+    // And the digests are the digests of the bytes, at tick zero, for every
+    // chunk — so the hash covers the generator's whole output rather than the
+    // handful of chunks a test happened to look at.
+    let mut chunk: u32 = 0;
+    while chunk < base.voxels().chunk_count() {
+        assert_eq!(
+            base.chunks().get(chunk),
+            Some(pharmakos_sim::digest(
+                base.voxels().chunk_bytes(chunk).unwrap().as_slice()
+            )),
+            "chunk {chunk}'s digest is not the digest of its bytes at tick zero"
+        );
+        chunk = chunk.saturating_add(1);
+    }
+
+    // Walking keeps every unit on the surface of its column: the movement phase
+    // reads the store every tick, which is what puts the map in the chain's
+    // causal path.
+    let mut enc = Enc::with_capacity(64 * 1024);
+    for _ in 0..25 {
+        let _ = base.step(&mut enc);
+    }
+    for (index, position) in base.units().positions().iter().enumerate() {
+        let x = position[0].floor_voxels();
+        let y = position[1].floor_voxels();
+        assert_eq!(
+            position[2].floor_voxels(),
+            base.voxels().standing_z(x, y),
+            "unit {index} left the ground"
+        );
+    }
+}
+
+#[test]
+fn the_asset_id_space_widened_without_renumbering_a_unit() {
+    // T5 resolved knowledge.rs's PLACEHOLDER by putting a four-bit kind tag in
+    // the high bits. Units keep tag zero, so every id `of_unit` has ever
+    // produced still means the same thing: the widening is additive.
+    use pharmakos_sim::knowledge::AssetId;
+    use pharmakos_sim::tables::{BeaconId, StructureId, UnitId, WreckId};
+
+    assert_eq!(AssetId::of_unit(UnitId::new(7)).raw(), 7);
+    assert_eq!(AssetId::of_unit(UnitId::new(7)).tag(), AssetId::TAG_UNIT);
+    for (id, tag) in [
+        (AssetId::of_beacon(BeaconId::new(7)), AssetId::TAG_BEACON),
+        (
+            AssetId::of_structure(StructureId::new(7)),
+            AssetId::TAG_STRUCTURE,
+        ),
+        (AssetId::of_wreck(WreckId::new(7)), AssetId::TAG_WRECK),
+    ] {
+        assert_eq!(id.tag(), tag);
+        assert_eq!(id.index(), 7);
+        assert_ne!(id, AssetId::of_unit(UnitId::new(7)));
+    }
+}
+
+#[test]
+fn the_wire_ids_of_the_new_enums_are_dense_and_unique() {
+    // Material ids reach the per-chunk digests and unit, structure and mandate
+    // ids reach the canonical encoding, so all four are wire values with the
+    // same rule as `Stream::id`: written out rather than taken from the enum's
+    // order, additive only, never renumbered. This is the test that makes
+    // "never renumbered" something a pull request trips over.
+    use pharmakos_sim::seams::MandateKind;
+    use pharmakos_sim::tables::{StructureKind, UnitKind};
+    use pharmakos_sim::voxels::{Material, Richness};
+
+    let materials: Vec<u8> = Material::ALL.iter().map(|m| m.raw()).collect();
+    assert_eq!(
+        materials,
+        (0..9).collect::<Vec<u8>>(),
+        "material ids are dense from air at zero"
+    );
+    assert!(Material::AIR.is_air() && !Material::AIR.is_solid());
+    for material in Material::ALL.iter().skip(1) {
+        assert!(material.is_solid(), "{} must be solid", material.name());
+    }
+    for richness in Richness::ALL {
+        assert_eq!(richness.ore().ore_richness(), Some(richness));
+        assert_eq!(richness.vent().vent_richness(), Some(richness));
+        assert_eq!(richness.ore().vent_richness(), None);
+        assert_eq!(richness.vent().ore_richness(), None);
+        assert_eq!(
+            Richness::from_proto(i32::from(richness.id())),
+            Some(richness)
+        );
+    }
+    assert_eq!(Richness::from_proto(0), None, "RICHNESS_UNSPECIFIED");
+
+    let units: Vec<u8> = UnitKind::ALL.iter().map(|k| k.id()).collect();
+    assert_eq!(units, (1..=6).collect::<Vec<u8>>());
+    for kind in UnitKind::ALL {
+        assert_eq!(UnitKind::from_id(kind.id()), Some(kind));
+    }
+    let structures: Vec<u8> = StructureKind::ALL.iter().map(|k| k.id()).collect();
+    assert_eq!(structures, (1..=6).collect::<Vec<u8>>());
+    for kind in StructureKind::ALL {
+        assert_eq!(StructureKind::from_id(kind.id()), Some(kind));
+    }
+    // The core beacon the generator places is on Build, and Build is 1.
+    assert_eq!(MandateKind::Build.id(), 1);
+    assert_eq!(
+        world_with(rules()).beacons().mandates(),
+        vec![MandateKind::Build.id(); 3].as_slice(),
+        "every pre-placed core is on a Build mandate"
+    );
 }

@@ -15,9 +15,9 @@
 
   // The seed is a quoted 0x string, not a number: a JSON number is a double in
   // half the world's parsers and a 64-bit seed loses its low bits in one.
-  // PLACEHOLDER: this is not yet a seed the map generator has produced a map
-  // for. T5 writes the generator and picks the committed seed set; owner
-  // ratifies it there.
+  // T5 resolved this line: the seed is in the committed set, and its map digest
+  // is the third line of tests/golden/mapgen/expected.digests.txt. The owner
+  // still ratifies the seed set as a whole at the stage demo.
   "map": {
     "seed": "0x00000000ca5caded",
     "generator": "skeleton"

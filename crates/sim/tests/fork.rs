@@ -36,10 +36,9 @@ fn world() -> World {
         match_seed: pharmakos_sim::DETERMINISM_MATCH_SEED,
         seats: pharmakos_sim::DETERMINISM_SEATS,
         units_per_seat: pharmakos_sim::DETERMINISM_UNITS_PER_SEAT,
-        chunk_count: pharmakos_sim::chunks::SKELETON_CHUNK_COUNT,
         rules,
     })
-    .expect("the rules table describes a broadphase grid")
+    .expect("the rules table describes a map and a broadphase grid")
 }
 
 #[test]
