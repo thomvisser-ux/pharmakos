@@ -1045,6 +1045,14 @@ fn step_buf(ctx: &Ctx) -> Result<Outcome, String> {
 /// fixture produces a readable first-difference report all live in
 /// [`golden`]; this function is the step wrapper around them.
 ///
+/// Two areas are not this step's to compare —
+/// [`golden::SELF_COMPARED_AREAS`]. `determinism/` is compared by
+/// [`step_determinism`], which runs the sim and validates the chain's format
+/// line by line; `vista/` is compared with a tolerance by [`png`] from
+/// [`step_screenshot`], which runs after this step and only on Linux. Both would
+/// otherwise fail this step's "a missing fresh output is a failure" rule on a
+/// clean checkout, on every operating system.
+///
 /// PLACEHOLDER: the area layout and its READMEs are committed, but no case has
 /// a golden yet, so this skips. The producing side (plan-core's canonical form,
 /// the JSONC round-trip, verifier `report_hash`, `render_plan` prose, the
@@ -1062,22 +1070,32 @@ fn step_golden(ctx: &Ctx) -> Result<Outcome, String> {
         ));
     }
     if !golden::has_goldens(&golden_root)? {
-        return Ok(Outcome::Skipped(
-            "the tests/golden area layout is committed but no case has an expected.* file yet \
-             (the producing tasks fill them; see tests/golden/README.md)"
-                .to_owned(),
-        ));
+        return Ok(Outcome::Skipped(format!(
+            "the tests/golden area layout is committed but no case this step compares has an \
+             expected.* file yet (the producing tasks fill them; see tests/golden/README.md). \
+             {} are compared by the steps that own them",
+            golden::SELF_COMPARED_AREAS.join(" and ")
+        )));
     }
 
     let report = golden::compare_tree(&golden_root, &target_dir.join("golden"), ctx.bless)?;
+    let deferred = if report.deferred == 0 {
+        String::new()
+    } else {
+        format!(
+            "; {} left to the step that owns it ({})",
+            report.deferred,
+            golden::SELF_COMPARED_AREAS.join(", ")
+        )
+    };
     if report.blessed > 0 {
         return Ok(Outcome::Done(format!(
-            "{} golden file(s) rewritten, {} already matched across {} area(s) — explain the move in the PR",
+            "{} golden file(s) rewritten, {} already matched across {} area(s){deferred} — explain the move in the PR",
             report.blessed, report.matched, report.areas
         )));
     }
     Ok(Outcome::Done(format!(
-        "{} golden file(s) match across {} area(s)",
+        "{} golden file(s) match across {} area(s){deferred}",
         report.matched, report.areas
     )))
 }
@@ -1278,8 +1296,9 @@ fn step_scenario(ctx: &Ctx) -> Result<Outcome, String> {
 ///   for cracks, missing faces and inverted winding);
 /// * the platform is Linux — the golden is rendered under **xvfb + lavapipe**,
 ///   and a second rasteriser's output would make the alarm permanently red
-///   (decisions-log item 22; G1 measured 1.14 % of pixels differing between a
-///   Quadro and lavapipe on identical geometry);
+///   (skeleton-plan section 7 decision 22, recommended and not yet logged; G1
+///   measured 1.14 % of pixels differing between a Quadro and lavapipe on
+///   identical geometry);
 /// * `godot` and `xvfb-run` are installed.
 ///
 /// And one pre-step that is not optional: `godot --headless --path godot
@@ -1310,9 +1329,10 @@ fn step_screenshot(ctx: &Ctx) -> Result<Outcome, String> {
     }
     if !cfg!(target_os = "linux") {
         return Ok(Outcome::Skipped(
-            "the vista golden is rendered under xvfb + lavapipe on Linux only (decisions-log \
-             item 22); comparing a second platform's rasteriser against it would be permanently \
-             red and would say nothing about the geometry"
+            "the vista golden is rendered under xvfb + lavapipe on Linux only (skeleton-plan \
+             section 7 decision 22, recommended and not yet logged); comparing a second \
+             platform's rasteriser against it would be permanently red and would say nothing \
+             about the geometry"
                 .to_owned(),
         ));
     }
