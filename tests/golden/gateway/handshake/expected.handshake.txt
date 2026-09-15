@@ -1,0 +1,27 @@
+# Every opening handshake the gateway will and will not accept
+# (RFC 6455 section 4.2.1; spec section 12's Host and Origin checks).
+# The key is RFC 6455 section 1.3's worked example, so the accept value is the
+# standard's own: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=
+# case	status	result
+conforming	101	s3pPLMBiTxaQ9kYGzzhZRbK+xOo=
+ipv6-loopback	101	s3pPLMBiTxaQ9kYGzzhZRbK+xOo=
+localhost-name	101	s3pPLMBiTxaQ9kYGzzhZRbK+xOo=
+connection-list	101	s3pPLMBiTxaQ9kYGzzhZRbK+xOo=
+foreign-host	403	Host is not this loopback listener
+other-port	403	Host is not this loopback listener
+no-host	400	no Host header
+browser-origin	403	Origin is not allowed to open a seat
+loopback-origin	403	Origin is not allowed to open a seat
+no-upgrade	400	no Upgrade: websocket
+no-connection-upgrade	400	no Connection: Upgrade
+short-key	400	Sec-WebSocket-Key is not sixteen base64 bytes
+no-key	400	no Sec-WebSocket-Key
+version-8	426	only Sec-WebSocket-Version 13 is spoken
+no-version	426	only Sec-WebSocket-Version 13 is spoken
+no-authorization	401	no Authorization: Bearer seat token
+basic-authorization	401	no Authorization: Bearer seat token
+short-token	401	the bearer token is not 64 hex digits
+duplicate-key	400	a header was sent twice
+smuggled-header	400	not an HTTP request
+post	400	the upgrade is a GET
+http-1.0	400	HTTP/1.1 or better is required

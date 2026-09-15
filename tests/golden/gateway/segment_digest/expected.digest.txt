@@ -1,0 +1,6 @@
+# get_segment_feed's digests: one per 60 s of game time (spec section 12),
+# each carrying a per-kind count a scenario file can assert on (item 97).
+# from_ms	to_ms	total	counts	prose
+0	60000	7	beacon_placed=1 commander_moved=3 ore_delivered=1 phase_changed=1 power_settled=1	0:00-1:00: 7 events. beacon_placed 1, commander_moved 3, ore_delivered 1, phase_changed 1, power_settled 1.
+60000	120000	0	-	1:00-2:00: nothing.
+120000	180000	2	phase_changed=1 structure_built=1	2:00-3:00: 2 events. phase_changed 1, structure_built 1.

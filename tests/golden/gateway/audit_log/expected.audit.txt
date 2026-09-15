@@ -1,0 +1,15 @@
+# One scripted session through the gateway surface.
+# Handles name tokens; no token, no params and no result ever reach this log.
+seq	tick	subject	handle	action	outcome
+1	10	seat.0	t1	upgrade	ok
+2	10	seat.0	t1	call get_status	ok
+3	10	seat.0	t1	call save_notes	ok
+4	10	seat.1	t2	call save_notes	FORBIDDEN_SCOPE
+5	10	seat.0	t1	call connect	INVALID_ARGUMENT
+6	11	seat.0	t1	call get_briefing	INTERNAL
+7	11	-	-	call get_status	UNAUTHENTICATED
+8	12	seat.0	t1	call save_notes	PHASE_CLOSED
+9	12	seat.1	t2	call get_status	ok
+10	12	seat.1	t2	call get_status	ok
+11	12	seat.1	t2	call get_status	ok
+12	12	seat.1	t2	call get_status	RATE_LIMITED
