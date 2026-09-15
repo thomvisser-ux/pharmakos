@@ -3,8 +3,9 @@
 
 //! The chunk store's seam into the state hash (decisions log item 66).
 //!
-//! The chunk store itself is T5's. What lives here is the *encoder* it plugs
-//! into, defined now so that T5 adds voxels without touching the hash contract.
+//! The chunk store itself is [`crate::voxels`]. What lives here is the table it
+//! enters the hash through — the shape T2 defined and T5 filled without
+//! touching the hash contract.
 //!
 //! **The chunk store enters the hash as per-chunk digests, never as bytes.**
 //! G3′ measured the alternative: hashing the store's 9.4 MB would cost 0.83 ms,
@@ -14,25 +15,22 @@
 //! dirty-flag scheme — it is the encoding itself, which is why item 66 keeps it
 //! while rejecting incremental hashing everywhere else.
 //!
-//! # How T5 plugs in
+//! # How the store plugs in
 //!
-//! 1. Build [`ChunkDigests`] with the chunk count the map generator produced.
-//! 2. After every voxel edit settles, call [`ChunkDigests::refresh`] with
-//!    `digest(chunk_bytes)` from [`crate::encoding::digest`].
-//! 3. Nothing else changes: the hash phase already walks the digests in chunk
-//!    index order.
+//! 1. [`crate::world::World::new`] builds [`ChunkDigests`] with the chunk count
+//!    the map generator produced — 384 × 384 × 64 voxels in 32³ chunks is
+//!    12 × 12 × 2 = 288, which is also the configuration item 66's measurements
+//!    were taken at, and it comes from the rules table's `map` block rather
+//!    than from a constant here.
+//! 2. [`crate::voxels::VoxelStore::settle_all`] fills every digest once, at
+//!    construction, before the first hash is taken.
+//! 3. The voxel phase calls [`crate::voxels::VoxelStore::settle`], which calls
+//!    [`ChunkDigests::refresh`] for each chunk an edit touched, in ascending
+//!    chunk index.
+//! 4. Nothing else changes: the hash phase walks the digests in chunk-index
+//!    order, as it always did.
 
 use crate::encoding::Enc;
-
-/// Chunks in the skeleton's provisional map.
-///
-/// `384 × 384 × 64` voxels in 32³ chunks is `12 × 12 × 2 = 288`, which is also
-/// the configuration item 66's measurements were taken at.
-///
-/// PLACEHOLDER: map dimensions are Tuning and belong to the owner at T5
-/// (skeleton plan decision 14). This constant is the shape the seam was sized
-/// against, not a promise about the map.
-pub const SKELETON_CHUNK_COUNT: u32 = 288;
 
 /// One xxh3-64 digest per chunk, in chunk-index order.
 ///
@@ -47,9 +45,9 @@ pub struct ChunkDigests {
 impl ChunkDigests {
     /// A store of `count` chunks, every digest at the empty-chunk value zero.
     ///
-    /// Zero is a legitimate digest for "nothing has ever been written here";
-    /// T5 sets the real value for every chunk the generator fills, at
-    /// construction, before the first hash is taken.
+    /// Zero is a placeholder, not a digest any chunk really has:
+    /// [`crate::voxels::VoxelStore::settle_all`] sets the real value for every
+    /// chunk at construction, before the first hash is taken.
     #[must_use]
     pub fn new(count: u32) -> ChunkDigests {
         ChunkDigests {

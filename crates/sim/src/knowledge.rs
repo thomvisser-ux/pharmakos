@@ -27,14 +27,16 @@
 //! condition over a projected future (AGENTS.md §3 rule 2). Nothing in this
 //! module exposes a step.
 //!
-//! PLACEHOLDER: the sighting catalogue grows with the stages that produce it —
-//! beacons and structures at T5, kill credit and the economy at T14, radio at
-//! S4. Each addition is an ordinary extension of [`SeatKnowledge`]; none of it
-//! changes the shape a client compiles against.
+//! PLACEHOLDER: the sighting catalogue grows with the stages that produce it.
+//! T5 resolved the first half of it — beacons, structures and wrecks exist as
+//! tables and [`AssetId`] carries a kind tag for them — and what is still open
+//! is kill credit and the economy at T14 and radio at S4. Each addition is an
+//! ordinary extension of [`SeatKnowledge`]; none of it changes the shape a
+//! client compiles against.
 
 use crate::math::fixed::Fx;
 use crate::math::quantity::{Kw, Money, Ms, Tick};
-use crate::tables::{SeatId, UnitId};
+use crate::tables::{BeaconId, SeatId, StructureId, UnitId, WreckId};
 
 /// What kind of thing was seen.
 ///
@@ -111,23 +113,97 @@ impl Position {
 /// (AGENTS.md §4.6). So identity is part of the type, from the first day the
 /// type exists.
 ///
-/// PLACEHOLDER: the id space widens with the catalogue that fills it — beacons
-/// and structures at T5, wrecks with them. Until then the only thing a seat can
-/// see is a unit, and an `AssetId` carries that unit's [`UnitId`] (T5).
+/// # The id space, widened additively at T5
+///
+/// The world now holds four kinds of thing a seat can see, and their ids are
+/// four independent dense sequences: a unit `7`, a beacon `7`, a structure `7`
+/// and a wreck `7` all exist at once. So an `AssetId` is a **kind tag in the
+/// top four bits and an index in the low 28**:
+///
+/// | Tag | Range | What |
+/// |---|---|---|
+/// | 0 | `0x0000_0000 ..= 0x0FFF_FFFF` | a unit |
+/// | 1 | `0x1000_0000 ..= 0x1FFF_FFFF` | a beacon |
+/// | 2 | `0x2000_0000 ..= 0x2FFF_FFFF` | a structure |
+/// | 3 | `0x3000_0000 ..= 0x3FFF_FFFF` | a wreck |
+///
+/// Units keep tag zero on purpose: [`AssetId::of_unit`] is the same function it
+/// was before T5 and every id it has ever produced still means the same thing,
+/// so the widening is additive rather than a renumbering. Tags 4 to 15 are
+/// unallocated and take the next kinds. The world total is 300 units and 40
+/// beacons (item 63), so 2^28 per kind is not a limit anybody will meet; it is
+/// chosen because four bits is the smallest tag that leaves the index
+/// comfortably wide.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Default)]
 pub struct AssetId(u32);
 
 impl AssetId {
+    /// How far the kind tag is shifted.
+    const TAG_SHIFT: u32 = 28;
+
+    /// The low bits an index occupies.
+    const INDEX_MASK: u32 = (1 << AssetId::TAG_SHIFT) - 1;
+
+    /// The tag of a unit — zero, so [`AssetId::of_unit`] is unchanged.
+    pub const TAG_UNIT: u8 = 0;
+    /// The tag of a beacon.
+    pub const TAG_BEACON: u8 = 1;
+    /// The tag of a structure.
+    pub const TAG_STRUCTURE: u8 = 2;
+    /// The tag of a wreck.
+    pub const TAG_WRECK: u8 = 3;
+
     /// Build from a raw id.
     #[must_use]
     pub const fn new(raw: u32) -> AssetId {
         AssetId(raw)
     }
 
+    /// Build from a kind tag and an index within that kind.
+    ///
+    /// An index that does not fit the low 28 bits is truncated to them, which
+    /// cannot happen at any world size v1 allows and is a deterministic answer
+    /// rather than a panic inside a tick if it ever does.
+    #[must_use]
+    pub fn tagged(tag: u8, index: u32) -> AssetId {
+        AssetId((u32::from(tag) << AssetId::TAG_SHIFT) | (index & AssetId::INDEX_MASK))
+    }
+
     /// The id of a unit, seen.
     #[must_use]
-    pub const fn of_unit(unit: UnitId) -> AssetId {
-        AssetId(unit.raw())
+    pub fn of_unit(unit: UnitId) -> AssetId {
+        AssetId::tagged(AssetId::TAG_UNIT, unit.raw())
+    }
+
+    /// The id of a beacon, seen.
+    #[must_use]
+    pub fn of_beacon(beacon: BeaconId) -> AssetId {
+        AssetId::tagged(AssetId::TAG_BEACON, beacon.raw())
+    }
+
+    /// The id of a structure, seen.
+    #[must_use]
+    pub fn of_structure(structure: StructureId) -> AssetId {
+        AssetId::tagged(AssetId::TAG_STRUCTURE, structure.raw())
+    }
+
+    /// The id of a wreck, seen.
+    #[must_use]
+    pub fn of_wreck(wreck: WreckId) -> AssetId {
+        AssetId::tagged(AssetId::TAG_WRECK, wreck.raw())
+    }
+
+    /// Which kind this id belongs to.
+    #[must_use]
+    pub fn tag(self) -> u8 {
+        // The shift leaves four bits, so the narrowing cannot truncate.
+        u8::try_from(self.0 >> AssetId::TAG_SHIFT).unwrap_or(0)
+    }
+
+    /// The index within the kind.
+    #[must_use]
+    pub const fn index(self) -> u32 {
+        self.0 & AssetId::INDEX_MASK
     }
 
     /// The raw id, for sort keys and the canonical encoder.

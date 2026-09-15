@@ -42,6 +42,7 @@
 
 use crate::math::fixed::{Angle, Fx, Sq};
 use crate::math::quantity::{Hp, Kw, Money};
+use crate::seams::BeaconMandate;
 
 /// A unit's identity. Dense, assigned at construction, stable for the match.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
@@ -95,6 +96,7 @@ pub struct UnitTable {
     count: u32,
     id: Vec<u32>,
     seat: Vec<u8>,
+    kind: Vec<u8>,
     pos: Vec<[Fx; 3]>,
     dest: Vec<[Fx; 3]>,
     heading: Vec<Angle>,
@@ -110,6 +112,7 @@ impl UnitTable {
             count: 0,
             id: Vec::with_capacity(n),
             seat: Vec::with_capacity(n),
+            kind: Vec::with_capacity(n),
             pos: Vec::with_capacity(n),
             dest: Vec::with_capacity(n),
             heading: Vec::with_capacity(n),
@@ -118,9 +121,18 @@ impl UnitTable {
     }
 
     /// Append one unit. Construction only — never called inside a tick.
-    pub fn push(&mut self, id: UnitId, seat: SeatId, pos: [Fx; 3], dest: [Fx; 3], hp: Hp) {
+    pub fn push(
+        &mut self,
+        id: UnitId,
+        seat: SeatId,
+        kind: UnitKind,
+        pos: [Fx; 3],
+        dest: [Fx; 3],
+        hp: Hp,
+    ) {
         self.id.push(id.raw());
         self.seat.push(seat.raw());
+        self.kind.push(kind.id());
         self.pos.push(pos);
         self.dest.push(dest);
         self.heading.push(Angle::ZERO);
@@ -150,6 +162,12 @@ impl UnitTable {
     #[must_use]
     pub fn seats(&self) -> &[u8] {
         &self.seat
+    }
+
+    /// The kind column, as [`UnitKind::id`] wire values.
+    #[must_use]
+    pub fn kinds(&self) -> &[u8] {
+        &self.kind
     }
 
     /// The position column.
@@ -198,21 +216,14 @@ impl UnitTable {
     ///
     /// Returns `false` and changes nothing when the columns disagree in
     /// length, which is what a corrupt or truncated snapshot looks like.
-    pub fn restore(
-        &mut self,
-        id: Vec<u32>,
-        seat: Vec<u8>,
-        pos: Vec<[Fx; 3]>,
-        dest: Vec<[Fx; 3]>,
-        heading: Vec<Angle>,
-        hp: Vec<Hp>,
-    ) -> bool {
-        let n = id.len();
-        if seat.len() != n
-            || pos.len() != n
-            || dest.len() != n
-            || heading.len() != n
-            || hp.len() != n
+    pub fn restore(&mut self, columns: UnitColumns) -> bool {
+        let n = columns.id.len();
+        if columns.seat.len() != n
+            || columns.kind.len() != n
+            || columns.pos.len() != n
+            || columns.dest.len() != n
+            || columns.heading.len() != n
+            || columns.hp.len() != n
         {
             return false;
         }
@@ -220,14 +231,38 @@ impl UnitTable {
             return false;
         };
         self.count = count;
-        self.id = id;
-        self.seat = seat;
-        self.pos = pos;
-        self.dest = dest;
-        self.heading = heading;
-        self.hp = hp;
+        self.id = columns.id;
+        self.seat = columns.seat;
+        self.kind = columns.kind;
+        self.pos = columns.pos;
+        self.dest = columns.dest;
+        self.heading = columns.heading;
+        self.hp = columns.hp;
         true
     }
+}
+
+/// Every column of a restored [`UnitTable`], handed over in one piece.
+///
+/// A struct rather than a parameter list because a table with seven columns has
+/// seven chances to pass two of them the wrong way round, and a named field
+/// cannot be swapped by accident.
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct UnitColumns {
+    /// Unit ids.
+    pub id: Vec<u32>,
+    /// The seat each unit belongs to.
+    pub seat: Vec<u8>,
+    /// Each unit's [`UnitKind::id`].
+    pub kind: Vec<u8>,
+    /// Positions.
+    pub pos: Vec<[Fx; 3]>,
+    /// Destinations.
+    pub dest: Vec<[Fx; 3]>,
+    /// Headings.
+    pub heading: Vec<Angle>,
+    /// Hit points.
+    pub hp: Vec<Hp>,
 }
 
 /// The columns [`UnitTable::movement_columns`] hands out, borrowed together.
@@ -596,4 +631,601 @@ fn cells_across(extent_voxels: i32, cell_size_voxels: i32) -> Option<u32> {
     // the rounding comment above is about anyway.
     let cells = extent_voxels.checked_add(cell_size_voxels.checked_sub(1)?)? / cell_size_voxels;
     u32::try_from(cells).ok()
+}
+
+// ---------------------------------------------------------------------------
+// The world's tables beyond units and seats (T5)
+// ---------------------------------------------------------------------------
+
+/// What a unit is (spec sections 4, 7 and 9; item 90's per-kind rows).
+///
+/// The discriminants are written out in [`UnitKind::id`] rather than taken from
+/// the enum's order, for the same reason [`crate::math::random::Stream::id`]'s
+/// are: the id reaches the canonical encoding, so a reordering must not be able
+/// to change a wire value by accident. Ids are additive only.
+///
+/// `RepairDrone` is item 90's "repair-reclaim drone" under the short name the
+/// rules table's row already uses.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub enum UnitKind {
+    /// The commander: one per occupied seat, the only thing that can change a
+    /// sealed order.
+    Commander,
+    /// A build drone.
+    BuildDrone,
+    /// A mining drone.
+    MiningDrone,
+    /// A repair-reclaim drone (S2).
+    RepairDrone,
+    /// A raider (S2).
+    Raider,
+    /// A scout (S2).
+    Scout,
+}
+
+impl UnitKind {
+    /// Every kind, in ascending id order.
+    pub const ALL: [UnitKind; 6] = [
+        UnitKind::Commander,
+        UnitKind::BuildDrone,
+        UnitKind::MiningDrone,
+        UnitKind::RepairDrone,
+        UnitKind::Raider,
+        UnitKind::Scout,
+    ];
+
+    /// The wire id. Additive only: never reuse, never renumber.
+    #[must_use]
+    pub const fn id(self) -> u8 {
+        match self {
+            UnitKind::Commander => 1,
+            UnitKind::BuildDrone => 2,
+            UnitKind::MiningDrone => 3,
+            UnitKind::RepairDrone => 4,
+            UnitKind::Raider => 5,
+            UnitKind::Scout => 6,
+        }
+    }
+
+    /// The kind an id names, or `None` for an id this build does not define.
+    #[must_use]
+    pub const fn from_id(id: u8) -> Option<UnitKind> {
+        match id {
+            1 => Some(UnitKind::Commander),
+            2 => Some(UnitKind::BuildDrone),
+            3 => Some(UnitKind::MiningDrone),
+            4 => Some(UnitKind::RepairDrone),
+            5 => Some(UnitKind::Raider),
+            6 => Some(UnitKind::Scout),
+            _ => None,
+        }
+    }
+}
+
+/// What a structure is (spec sections 7 and 9; item 90's `structures` rows).
+///
+/// A beacon is **not** here: beacons carry mandates and are their own table.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub enum StructureKind {
+    /// A Generator, standing on a heat vent.
+    Generator,
+    /// An autocannon (S2).
+    Autocannon,
+    /// A mortar (S2).
+    Mortar,
+    /// A Survey post.
+    SurveyPost,
+    /// A Resonance Spire (S3).
+    ResonanceSpire,
+    /// A wall segment (S2), priced per voxel rather than per building.
+    Wall,
+}
+
+impl StructureKind {
+    /// Every kind, in ascending id order.
+    pub const ALL: [StructureKind; 6] = [
+        StructureKind::Generator,
+        StructureKind::Autocannon,
+        StructureKind::Mortar,
+        StructureKind::SurveyPost,
+        StructureKind::ResonanceSpire,
+        StructureKind::Wall,
+    ];
+
+    /// The wire id. Additive only: never reuse, never renumber.
+    #[must_use]
+    pub const fn id(self) -> u8 {
+        match self {
+            StructureKind::Generator => 1,
+            StructureKind::Autocannon => 2,
+            StructureKind::Mortar => 3,
+            StructureKind::SurveyPost => 4,
+            StructureKind::ResonanceSpire => 5,
+            StructureKind::Wall => 6,
+        }
+    }
+
+    /// The kind an id names, or `None` for an id this build does not define.
+    #[must_use]
+    pub const fn from_id(id: u8) -> Option<StructureKind> {
+        match id {
+            1 => Some(StructureKind::Generator),
+            2 => Some(StructureKind::Autocannon),
+            3 => Some(StructureKind::Mortar),
+            4 => Some(StructureKind::SurveyPost),
+            5 => Some(StructureKind::ResonanceSpire),
+            6 => Some(StructureKind::Wall),
+            _ => None,
+        }
+    }
+}
+
+/// A beacon's identity. Dense, assigned at construction, stable for the match.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct BeaconId(u32);
+
+impl BeaconId {
+    /// "No beacon" — the sentinel a structure with no home carries.
+    ///
+    /// A sentinel rather than an `Option` because the column is snapshotted and
+    /// hashed, and the snapshot's rule is that every field is fixed-width with
+    /// no tag byte whose layout could differ between targets
+    /// ([`crate::snapshot`]).
+    pub const NONE: BeaconId = BeaconId(u32::MAX);
+
+    /// Build from a raw id.
+    #[must_use]
+    pub const fn new(raw: u32) -> BeaconId {
+        BeaconId(raw)
+    }
+
+    /// The raw id, for the canonical encoder and for sort keys.
+    #[must_use]
+    pub const fn raw(self) -> u32 {
+        self.0
+    }
+
+    /// Whether this is a real beacon rather than [`BeaconId::NONE`].
+    #[must_use]
+    pub const fn is_some(self) -> bool {
+        self.0 != BeaconId::NONE.0
+    }
+
+    /// The string a playbook's `beacon_id` names this beacon by: `b_` followed
+    /// by the id in decimal, zero-padded to two digits — `b_00`, `b_01`,
+    /// `b_42`, and `b_100` once a match ever holds more than a hundred beacons.
+    ///
+    /// The verifier resolves a playbook's beacon references against a list of
+    /// these strings, and the gateway builds that list from this table, so the
+    /// spelling is a contract between three crates and belongs next to the id
+    /// rather than inside any one of them. Two digits because the world total
+    /// is 40 beacons (item 63) and a fixed width sorts and reads well; the
+    /// padding is a minimum, never a truncation.
+    #[must_use]
+    pub fn playbook_id(self) -> String {
+        format!("b_{:02}", self.0)
+    }
+}
+
+/// A structure's identity.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct StructureId(u32);
+
+impl StructureId {
+    /// Build from a raw id.
+    #[must_use]
+    pub const fn new(raw: u32) -> StructureId {
+        StructureId(raw)
+    }
+
+    /// The raw id.
+    #[must_use]
+    pub const fn raw(self) -> u32 {
+        self.0
+    }
+}
+
+/// A wreck's identity.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct WreckId(u32);
+
+impl WreckId {
+    /// Build from a raw id.
+    #[must_use]
+    pub const fn new(raw: u32) -> WreckId {
+        WreckId(raw)
+    }
+
+    /// The raw id.
+    #[must_use]
+    pub const fn raw(self) -> u32 {
+        self.0
+    }
+}
+
+/// Every column of a restored [`BeaconTable`]. Same reasoning as
+/// [`UnitColumns`].
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct BeaconColumns {
+    /// Beacon ids.
+    pub id: Vec<u32>,
+    /// The seat each beacon belongs to.
+    pub seat: Vec<u8>,
+    /// Positions.
+    pub pos: Vec<[Fx; 3]>,
+    /// Each beacon's [`crate::seams::MandateKind::id`].
+    pub mandate: Vec<u8>,
+    /// Each beacon's `program_id` seam.
+    pub program: Vec<u32>,
+    /// Hit points.
+    pub hp: Vec<Hp>,
+    /// Dormancy.
+    pub dormant: Vec<bool>,
+}
+
+/// Every column of a restored [`StructureTable`]. Same reasoning as
+/// [`UnitColumns`].
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct StructureColumns {
+    /// Structure ids.
+    pub id: Vec<u32>,
+    /// The seat each structure belongs to.
+    pub seat: Vec<u8>,
+    /// Each structure's [`StructureKind::id`].
+    pub kind: Vec<u8>,
+    /// Positions.
+    pub pos: Vec<[Fx; 3]>,
+    /// Hit points.
+    pub hp: Vec<Hp>,
+    /// Home beacons, or [`BeaconId::NONE`].
+    pub home: Vec<u32>,
+}
+
+/// Beacons, structure-of-arrays.
+///
+/// The unit of power (AGENTS.md section 1): every beacon carries a mandate and
+/// a sphere of authority, and the pre-placed core is an ordinary row of this
+/// table with `beacon.core_hp` hit points. `dormant` is the power grid's flag
+/// (T14's brownout order); it is hashed from the day the column exists, because
+/// a field that affects behaviour and is not hashed is a latent desync
+/// (AGENTS.md section 4.8).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct BeaconTable {
+    count: u32,
+    id: Vec<u32>,
+    seat: Vec<u8>,
+    pos: Vec<[Fx; 3]>,
+    mandate: Vec<u8>,
+    program: Vec<u32>,
+    hp: Vec<Hp>,
+    dormant: Vec<bool>,
+}
+
+impl BeaconTable {
+    /// An empty table sized for `count` beacons. Nothing allocates after this.
+    #[must_use]
+    pub fn with_capacity(count: u32) -> BeaconTable {
+        let n = usize::try_from(count).unwrap_or(0);
+        BeaconTable {
+            count: 0,
+            id: Vec::with_capacity(n),
+            seat: Vec::with_capacity(n),
+            pos: Vec::with_capacity(n),
+            mandate: Vec::with_capacity(n),
+            program: Vec::with_capacity(n),
+            hp: Vec::with_capacity(n),
+            dormant: Vec::with_capacity(n),
+        }
+    }
+
+    /// Append one beacon. Construction only — never called inside a tick.
+    pub fn push(
+        &mut self,
+        id: BeaconId,
+        seat: SeatId,
+        pos: [Fx; 3],
+        mandate: BeaconMandate,
+        hp: Hp,
+        dormant: bool,
+    ) {
+        self.id.push(id.raw());
+        self.seat.push(seat.raw());
+        self.pos.push(pos);
+        self.mandate.push(mandate.kind.id());
+        self.program.push(mandate.program_id.raw());
+        self.hp.push(hp);
+        self.dormant.push(dormant);
+        self.count = self.count.saturating_add(1);
+    }
+
+    /// How many beacons the table holds.
+    #[must_use]
+    pub const fn len(&self) -> u32 {
+        self.count
+    }
+
+    /// Whether the table is empty.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.count == 0
+    }
+
+    /// The id column.
+    #[must_use]
+    pub fn ids(&self) -> &[u32] {
+        &self.id
+    }
+
+    /// The seat column.
+    #[must_use]
+    pub fn seats(&self) -> &[u8] {
+        &self.seat
+    }
+
+    /// The position column.
+    #[must_use]
+    pub fn positions(&self) -> &[[Fx; 3]] {
+        &self.pos
+    }
+
+    /// The mandate column, as [`crate::seams::MandateKind::id`] wire values.
+    #[must_use]
+    pub fn mandates(&self) -> &[u8] {
+        &self.mandate
+    }
+
+    /// The `program_id` column — the reserved seam, read by nothing
+    /// ([`crate::seams::ProgramId`]).
+    #[must_use]
+    pub fn programs(&self) -> &[u32] {
+        &self.program
+    }
+
+    /// The hit-point column.
+    #[must_use]
+    pub fn hit_points(&self) -> &[Hp] {
+        &self.hp
+    }
+
+    /// The dormancy column.
+    #[must_use]
+    pub fn dormant(&self) -> &[bool] {
+        &self.dormant
+    }
+
+    /// Replace the whole table from a restored snapshot. Same contract as
+    /// [`UnitTable::restore`].
+    pub fn restore(&mut self, columns: BeaconColumns) -> bool {
+        let n = columns.id.len();
+        if columns.seat.len() != n
+            || columns.pos.len() != n
+            || columns.mandate.len() != n
+            || columns.program.len() != n
+            || columns.hp.len() != n
+            || columns.dormant.len() != n
+        {
+            return false;
+        }
+        let Ok(count) = u32::try_from(n) else {
+            return false;
+        };
+        self.count = count;
+        self.id = columns.id;
+        self.seat = columns.seat;
+        self.pos = columns.pos;
+        self.mandate = columns.mandate;
+        self.program = columns.program;
+        self.hp = columns.hp;
+        self.dormant = columns.dormant;
+        true
+    }
+}
+
+/// Structures, structure-of-arrays.
+///
+/// Empty at the skeleton: the generator pre-places a core **beacon** per
+/// occupied zone and nothing else, and the first Generator is built during a
+/// Push (T14). The table exists now because adding a hashed table later is a
+/// bigger change than filling one.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct StructureTable {
+    count: u32,
+    id: Vec<u32>,
+    seat: Vec<u8>,
+    kind: Vec<u8>,
+    pos: Vec<[Fx; 3]>,
+    hp: Vec<Hp>,
+    home: Vec<u32>,
+}
+
+impl StructureTable {
+    /// An empty table sized for `count` structures.
+    #[must_use]
+    pub fn with_capacity(count: u32) -> StructureTable {
+        let n = usize::try_from(count).unwrap_or(0);
+        StructureTable {
+            count: 0,
+            id: Vec::with_capacity(n),
+            seat: Vec::with_capacity(n),
+            kind: Vec::with_capacity(n),
+            pos: Vec::with_capacity(n),
+            hp: Vec::with_capacity(n),
+            home: Vec::with_capacity(n),
+        }
+    }
+
+    /// Append one structure. Construction only.
+    pub fn push(
+        &mut self,
+        id: StructureId,
+        seat: SeatId,
+        kind: StructureKind,
+        pos: [Fx; 3],
+        hp: Hp,
+        home: BeaconId,
+    ) {
+        self.id.push(id.raw());
+        self.seat.push(seat.raw());
+        self.kind.push(kind.id());
+        self.pos.push(pos);
+        self.hp.push(hp);
+        self.home.push(home.raw());
+        self.count = self.count.saturating_add(1);
+    }
+
+    /// How many structures the table holds.
+    #[must_use]
+    pub const fn len(&self) -> u32 {
+        self.count
+    }
+
+    /// Whether the table is empty.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.count == 0
+    }
+
+    /// The id column.
+    #[must_use]
+    pub fn ids(&self) -> &[u32] {
+        &self.id
+    }
+
+    /// The seat column.
+    #[must_use]
+    pub fn seats(&self) -> &[u8] {
+        &self.seat
+    }
+
+    /// The kind column, as [`StructureKind::id`] wire values.
+    #[must_use]
+    pub fn kinds(&self) -> &[u8] {
+        &self.kind
+    }
+
+    /// The position column.
+    #[must_use]
+    pub fn positions(&self) -> &[[Fx; 3]] {
+        &self.pos
+    }
+
+    /// The hit-point column.
+    #[must_use]
+    pub fn hit_points(&self) -> &[Hp] {
+        &self.hp
+    }
+
+    /// The home-beacon column, as raw [`BeaconId`]s. [`BeaconId::NONE`] means
+    /// the structure has no home beacon.
+    #[must_use]
+    pub fn homes(&self) -> &[u32] {
+        &self.home
+    }
+
+    /// Replace the whole table from a restored snapshot. Same contract as
+    /// [`UnitTable::restore`].
+    pub fn restore(&mut self, columns: StructureColumns) -> bool {
+        let n = columns.id.len();
+        if columns.seat.len() != n
+            || columns.kind.len() != n
+            || columns.pos.len() != n
+            || columns.hp.len() != n
+            || columns.home.len() != n
+        {
+            return false;
+        }
+        let Ok(count) = u32::try_from(n) else {
+            return false;
+        };
+        self.count = count;
+        self.id = columns.id;
+        self.seat = columns.seat;
+        self.kind = columns.kind;
+        self.pos = columns.pos;
+        self.hp = columns.hp;
+        self.home = columns.home;
+        true
+    }
+}
+
+/// Wrecks, structure-of-arrays.
+///
+/// What a destroyed unit or structure leaves behind: a place and a salvage
+/// value in `$`, which a reclaim drone converts at `economy.salvage_percent` of
+/// build cost (S2). Empty at the skeleton, hashed from today.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct WreckTable {
+    count: u32,
+    id: Vec<u32>,
+    pos: Vec<[Fx; 3]>,
+    salvage: Vec<Money>,
+}
+
+impl WreckTable {
+    /// An empty table sized for `count` wrecks.
+    #[must_use]
+    pub fn with_capacity(count: u32) -> WreckTable {
+        let n = usize::try_from(count).unwrap_or(0);
+        WreckTable {
+            count: 0,
+            id: Vec::with_capacity(n),
+            pos: Vec::with_capacity(n),
+            salvage: Vec::with_capacity(n),
+        }
+    }
+
+    /// Append one wreck. Construction only.
+    pub fn push(&mut self, id: WreckId, pos: [Fx; 3], salvage: Money) {
+        self.id.push(id.raw());
+        self.pos.push(pos);
+        self.salvage.push(salvage);
+        self.count = self.count.saturating_add(1);
+    }
+
+    /// How many wrecks the table holds.
+    #[must_use]
+    pub const fn len(&self) -> u32 {
+        self.count
+    }
+
+    /// Whether the table is empty.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.count == 0
+    }
+
+    /// The id column.
+    #[must_use]
+    pub fn ids(&self) -> &[u32] {
+        &self.id
+    }
+
+    /// The position column.
+    #[must_use]
+    pub fn positions(&self) -> &[[Fx; 3]] {
+        &self.pos
+    }
+
+    /// The salvage-value column, in `$`.
+    #[must_use]
+    pub fn salvages(&self) -> &[Money] {
+        &self.salvage
+    }
+
+    /// Replace the whole table from a restored snapshot. Same contract as
+    /// [`UnitTable::restore`].
+    pub fn restore(&mut self, id: Vec<u32>, pos: Vec<[Fx; 3]>, salvage: Vec<Money>) -> bool {
+        let n = id.len();
+        if pos.len() != n || salvage.len() != n {
+            return false;
+        }
+        let Ok(count) = u32::try_from(n) else {
+            return false;
+        };
+        self.count = count;
+        self.id = id;
+        self.pos = pos;
+        self.salvage = salvage;
+        true
+    }
 }

@@ -163,9 +163,9 @@ fn parse(args: &[String]) -> Result<Cli, String> {
 /// The world the run starts from: a fresh one, or a restored snapshot.
 fn build_world(cli: &Cli) -> Result<pharmakos_sim::World, String> {
     let mut world = match cli.seed {
-        None => pharmakos_sim::determinism_world(&cli.rules_path)
-            .map_err(|error| error.to_string())?
-            .ok_or_else(|| "the rules table cannot describe a broadphase grid".to_owned())?,
+        None => {
+            pharmakos_sim::determinism_world(&cli.rules_path).map_err(|error| error.to_string())?
+        }
         Some(seed) => {
             let rules = pharmakos_sim::RulesTable::load(&cli.rules_path)
                 .map_err(|error| error.to_string())?;
@@ -173,10 +173,9 @@ fn build_world(cli: &Cli) -> Result<pharmakos_sim::World, String> {
                 match_seed: seed,
                 seats: pharmakos_sim::DETERMINISM_SEATS,
                 units_per_seat: pharmakos_sim::DETERMINISM_UNITS_PER_SEAT,
-                chunk_count: pharmakos_sim::chunks::SKELETON_CHUNK_COUNT,
                 rules,
             })
-            .ok_or_else(|| "the rules table cannot describe a broadphase grid".to_owned())?
+            .map_err(|error| error.to_string())?
         }
     };
 
