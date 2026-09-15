@@ -18,6 +18,7 @@
 
 use std::path::{Path, PathBuf};
 
+use pharmakos_proto::gp;
 use pharmakos_sim::encoding::{Enc, hex};
 use pharmakos_sim::knowledge::{AssetId, AssetKind, Position, SeatKnowledge, Sighting};
 use pharmakos_sim::math::fixed::Fx;
@@ -25,7 +26,7 @@ use pharmakos_sim::math::quantity::{Ms, Tick};
 use pharmakos_sim::snapshot::{SNAPSHOT_VERSION, Snapshot, SnapshotError};
 use pharmakos_sim::tables::SeatId;
 use pharmakos_sim::world::{PHASE_ORDER, Phase};
-use pharmakos_sim::{RulesTable, World, WorldConfig};
+use pharmakos_sim::{RulesError, RulesTable, World, WorldConfig};
 
 /// The tick count `cargo xtask ci` runs the determinism binary at.
 ///
@@ -598,25 +599,95 @@ fn the_rules_hash_is_pinned_to_the_committed_table() {
 
 #[test]
 fn the_rules_reader_rejects_what_it_should() {
+    // The reader is `pharmakos-proto`'s canonical JSON codec (item 74), not a
+    // parser of the sim's own. What is checked here is that the sim inherits
+    // the codec's strictness rather than softening it on the way through.
     let good = std::fs::read_to_string(repo_root().join("rules").join("rules.v1.json"))
         .expect("the committed rules table exists");
     assert!(RulesTable::from_canonical_json(&good).is_ok());
 
     // An unknown field is rejected, never ignored.
-    let with_unknown = good.replace("\"stepCardinal\"", "\"stepCardinalish\"");
+    let with_unknown = good.replace("\"step_cost_cardinal\"", "\"step_cost_cardinalish\"");
     assert!(
-        RulesTable::from_canonical_json(&with_unknown).is_err(),
+        matches!(
+            RulesTable::from_canonical_json(&with_unknown),
+            Err(RulesError::Json(_))
+        ),
         "an unknown field was accepted"
     );
-    // A float is not an int32, and the sim has no floats.
-    let with_float = good.replace("\"stepCardinal\": 10", "\"stepCardinal\": 10.5");
+    // A float is not a uint32, and the sim has no floats.
+    let with_float = good.replace("\"step_cost_cardinal\": 10", "\"step_cost_cardinal\": 10.5");
     assert!(RulesTable::from_canonical_json(&with_float).is_err());
-    // A missing field is a missing field.
-    let truncated = good.replace("  \"climbSurcharge\": 4,\n", "");
-    assert!(RulesTable::from_canonical_json(&truncated).is_err());
     // Trailing content is not canonical JSON.
     let trailing = format!("{good}{{}}");
     assert!(RulesTable::from_canonical_json(&trailing).is_err());
+
+    // A block the sim reads is required. Proto3 cannot tell an absent message
+    // from an empty one, so a table with no `locomotion` has to be refused:
+    // accepting it would hand the sim a locomotion table of zeroes and a unit
+    // that never moves.
+    assert_eq!(
+        RulesTable::from_canonical_json("{}"),
+        Err(RulesError::MissingBlock("locomotion")),
+        "a table with no locomotion block was accepted"
+    );
+
+    // A value the schema allows but the sim's own type does not.
+    let too_wide = good.replace(
+        "\"step_cost_cardinal\": 10",
+        "\"step_cost_cardinal\": 4000000000",
+    );
+    assert!(matches!(
+        RulesTable::from_canonical_json(&too_wide),
+        Err(RulesError::OutOfRange { .. })
+    ));
+}
+
+#[test]
+fn the_sim_reads_the_rows_the_schema_puts_them_in() {
+    // The reconciliation this module's doc comment promised for T1's merge:
+    // one `gp.v1.RulesTable`, decoded once by the one codec, with the sim's
+    // flat view derived from it and from nothing else. If a row moves in the
+    // schema this fails here, rather than quietly reading a zero.
+    let text = std::fs::read_to_string(repo_root().join("rules").join("rules.v1.json"))
+        .expect("the committed rules table exists");
+    let message: gp::v1::RulesTable =
+        pharmakos_proto::json::decode(&text).expect("the committed table is canonical gp.v1 JSON");
+    let view = RulesTable::from_message(&message).expect("the sim's view of it");
+
+    let locomotion = message.locomotion.expect("the locomotion block");
+    let broadphase = message.broadphase.expect("the broadphase block");
+    let mesher = message.mesher.expect("the mesher block");
+    let matched = message.r#match.expect("the match block");
+
+    assert_eq!(view.mesher_drain_surfaces, mesher.surfaces_per_frame);
+    assert_eq!(view.mesher_drain_bytes, mesher.bytes_per_frame);
+    assert_eq!(
+        u32::try_from(view.step_cardinal).unwrap(),
+        locomotion.step_cost_cardinal
+    );
+    assert_eq!(
+        u32::try_from(view.step_diagonal).unwrap(),
+        locomotion.step_cost_diagonal
+    );
+    assert_eq!(
+        u32::try_from(view.climb_surcharge).unwrap(),
+        locomotion.climb_surcharge
+    );
+    assert_eq!(
+        u32::try_from(view.move_cost_per_tick).unwrap(),
+        locomotion.move_cost_per_tick
+    );
+    assert_eq!(view.repath_cap_per_tick, locomotion.repath_cap_per_tick);
+    assert_eq!(
+        u32::try_from(view.csr_cell_size_voxels).unwrap(),
+        broadphase.cell_size_voxels
+    );
+    assert_eq!(view.segment_lengths_ms, matched.segment_lengths_ms);
+
+    // And the table `load` returns is the same table, so the file reader and
+    // the codec cannot drift apart.
+    assert_eq!(view, rules());
 }
 
 #[test]
@@ -627,6 +698,10 @@ fn the_committed_rules_table_carries_the_decided_values() {
     assert_eq!(table.climb_surcharge, 4, "item 59");
     assert_eq!(table.move_cost_per_tick, 3, "item 59");
     assert_eq!(table.repath_cap_per_tick, 16, "item 69");
+    assert_eq!(
+        table.csr_cell_size_voxels, 16,
+        "item 67: the cell edge spike G3′ measured with; still a PLACEHOLDER"
+    );
     assert_eq!(table.mesher_drain_surfaces, 4, "item 54, K");
     assert_eq!(table.mesher_drain_bytes, 512 * 1024, "item 54, B");
     assert_eq!(

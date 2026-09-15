@@ -1,6 +1,6 @@
 {
-  "revision": 1,
-  "note": "Walking skeleton. Values from decisions-log items 54, 59, 68 and 69 and spec section 5; everything the log has not fixed is a PLACEHOLDER named in rules/README.md.",
+  "revision": 2,
+  "note": "Walking skeleton. Values from decisions-log items 54, 59, 68 and 69 and spec section 5; everything the log has not fixed is a PLACEHOLDER named in rules/README.md. Revision 2: broadphase.cell_size_voxels 8 -> 16, the edge spike G3' actually measured; still item 67's PLACEHOLDER.",
   "match": {
     "segment_lengths_ms": [
       180000,
@@ -20,7 +20,7 @@
     "hpa_cluster_voxels": 32
   },
   "broadphase": {
-    "cell_size_voxels": 8
+    "cell_size_voxels": 16
   },
   "interface_times": {
     "visit_handshake_ms": 1500,

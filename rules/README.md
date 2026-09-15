@@ -51,7 +51,7 @@ is the same number on every machine.
 | `locomotion.repath_cap_per_tick` | item 69 | **PLACEHOLDER** — 16 is provisional, re-derived at S2's exit once the burst frequency is a measurement |
 | `locomotion.fog_cost_*` 3 / 2 | item 61 | yes |
 | `locomotion.hpa_cluster_voxels` 32 | item 58 | yes |
-| `broadphase.cell_size_voxels` | item 67's caveat | **PLACEHOLDER** — Tuning, tied to unit density, owner at S2's exit. 8 is a starting value nobody has measured |
+| `broadphase.cell_size_voxels` | item 67's caveat | **PLACEHOLDER** — Tuning, tied to unit density, owner at S2's exit. 16 is the cell edge spike G3′ actually measured with, and no more than that |
 | `interface_times.*` | spec section 5's table | values are the spec's; all of section 5 is marked Tuning |
 | `mesher.surfaces_per_frame` (K), `bytes_per_frame` (B) | item 54 | **PLACEHOLDER** — no measured frame-time reason separates K = 4 from K = 8 on the spike machine; owner, S6 art pass |
 | `mesher.age_frames` | item 54 | **PLACEHOLDER** — ships untested by measurement and is labelled insurance |

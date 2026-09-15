@@ -5,38 +5,63 @@
 //!
 //! **Tuning values are data** (AGENTS.md §12): K and B, 10/14/4, the move cost
 //! per tick, the repath cap, the segment ladder and the CSR cell size sit in
-//! one reviewable file — `rules/rules.v1.json`, canonical JSON — rather than as
-//! constants sprinkled through the code. The sim loads that file and hashes it
-//! with the canonical encoder of item 48, so `rules_hash` is one of the
-//! verifier's five inputs **by construction** rather than by agreement.
+//! one reviewable file — `rules/rules.v1.json`, the canonical JSON of one
+//! [`gp::v1::RulesTable`] — rather than as constants sprinkled through the
+//! code. The sim decodes that file with `pharmakos-proto`'s canonical JSON
+//! codec and hashes the values it reads with the canonical encoder of item 48,
+//! so `rules_hash` is one of the verifier's five inputs **by construction**
+//! rather than by agreement.
 //!
 //! The sim is a pure function of `(map seed, playbooks, rules hash)`. That
 //! sentence is only true if the rules table is an *input*: nothing in this
-//! module enters the state hash, and `tests/determinism.rs` asserts it.
+//! module enters the state hash, and `tests/determinism.rs` asserts it twice —
+//! once over the canonical encoding and once over the chain itself.
 //!
-//! # PLACEHOLDER — this struct is a stand-in for `gp.v1.RulesTable`
+//! # The two shapes, and why there are two
 //!
-//! Item 78 puts the table's *shape* in the proto, where `buf breaking` guards
-//! it, and its *values* in the JSON, where a tuning change is an ordinary pull
-//! request. T1 defines `gp.v1.RulesTable` in parallel with this task. Until it
-//! merges, [`RulesTable`] is a local Rust struct **with the same field names**
-//! and [`RulesTable::from_canonical_json`] is a minimal reader for exactly that
-//! shape.
+//! [`gp::v1::RulesTable`] is the **contract shape**: nested blocks, every row
+//! the project will need, guarded by `buf breaking` (item 78). [`RulesTable`]
+//! here is the **sim's view**: the flat subset the tick actually reads, in the
+//! order [`RulesTable::encode`] walks it. The second is derived from the first
+//! by [`RulesTable::from_message`] and by nothing else, so a row cannot reach
+//! the sim without passing through the schema.
 //!
-//! When T1 merges, three things happen in one pull request and nothing else
-//! changes: `pharmakos-proto` becomes a dependency, [`json`] is deleted, and
-//! [`RulesTable::from_canonical_json`] becomes a thin call into the proto
-//! crate's canonical JSON codec. [`RulesTable::encode`] — the part that decides
-//! `rules_hash` — does not move. *(who resolves: T1's author, at T1's merge.)*
+//! | This struct | `gp.v1.RulesTable` |
+//! |---|---|
+//! | [`mesher_drain_surfaces`](RulesTable::mesher_drain_surfaces) | `mesher.surfaces_per_frame` |
+//! | [`mesher_drain_bytes`](RulesTable::mesher_drain_bytes) | `mesher.bytes_per_frame` |
+//! | [`step_cardinal`](RulesTable::step_cardinal) | `locomotion.step_cost_cardinal` |
+//! | [`step_diagonal`](RulesTable::step_diagonal) | `locomotion.step_cost_diagonal` |
+//! | [`climb_surcharge`](RulesTable::climb_surcharge) | `locomotion.climb_surcharge` |
+//! | [`move_cost_per_tick`](RulesTable::move_cost_per_tick) | `locomotion.move_cost_per_tick` |
+//! | [`repath_cap_per_tick`](RulesTable::repath_cap_per_tick) | `locomotion.repath_cap_per_tick` |
+//! | [`csr_cell_size_voxels`](RulesTable::csr_cell_size_voxels) | `broadphase.cell_size_voxels` |
+//! | [`segment_lengths_ms`](RulesTable::segment_lengths_ms) | `match.segment_lengths_ms` |
+//!
+//! The rows the schema carries and the sim does not yet read — the interface
+//! times (T10, T11), the fog fraction and the cluster edge (T7), `lull_ms` (a
+//! host and editor concern the sim never reads, AGENTS.md §4.5), and the
+//! `economy` and `power` stubs (T14) — are decoded and then discarded here.
+//! Each of them joins this struct and the **end** of [`RulesTable::encode`] in
+//! the task that first reads it, which moves `rules_hash` once, additively,
+//! with the movement explained in that pull request.
 
 use crate::encoding::Enc;
+use pharmakos_proto::gp;
 use std::fmt;
 
 /// The disk location of the canonical rules table, relative to the repository
 /// root.
 pub const RULES_PATH: &str = "rules/rules.v1.json";
 
-/// The rules table's own version, part of the hashed encoding.
+/// The message the file on disk holds exactly one of.
+pub const RULES_MESSAGE: &str = "gp.v1.RulesTable";
+
+/// The rules *encoding's* version, part of the hashed bytes below.
+///
+/// Not the table's `revision`, which counts value changes and is the file's to
+/// carry: this counts changes to [`RulesTable::encode`], and moving it is a
+/// determinism change (AGENTS.md §5).
 pub const RULES_VERSION: u32 = 1;
 
 /// How many segment lengths the ladder may carry. Fixed so the table's
@@ -46,38 +71,46 @@ pub const MAX_SEGMENT_LENGTHS: usize = 8;
 /// Every tuning value the sim reads, in the order the canonical encoder walks
 /// them.
 ///
-/// Adding a field is additive: append it, append its encoding at the end of
+/// Adding a field is additive: append it, read it out of the schema in
+/// [`RulesTable::from_message`], append its encoding at the **end** of
 /// [`RulesTable::encode`], and say in the pull request that `rules_hash` moved
-/// and why. Reordering or renumbering is a contract change (AGENTS.md §5).
+/// and why. Reordering is a contract change (AGENTS.md §5).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct RulesTable {
-    /// Surfaces the mesher may drain per frame. `K = 4` (item 54).
+    /// Surfaces the mesher may drain per frame. `K = 4` (item 54). From
+    /// `mesher.surfaces_per_frame`.
     ///
     /// PLACEHOLDER: `tuning, owner — no measured frame-time reason separates
     /// K = 4 from K = 8 on the spike machine (item 54)`.
     pub mesher_drain_surfaces: u32,
-    /// Bytes the mesher may drain per frame. `B = 512 KiB` (item 54).
+    /// Bytes the mesher may drain per frame. `B = 512 KiB` (item 54). From
+    /// `mesher.bytes_per_frame`.
     ///
     /// PLACEHOLDER: as above.
     pub mesher_drain_bytes: u32,
-    /// Cost of a cardinal step. `10` (item 59).
+    /// Cost of a cardinal step. `10` (item 59). From
+    /// `locomotion.step_cost_cardinal`.
     pub step_cardinal: i32,
-    /// Cost of a diagonal step. `14` (item 59).
+    /// Cost of a diagonal step. `14` (item 59). From
+    /// `locomotion.step_cost_diagonal`.
     pub step_diagonal: i32,
-    /// Surcharge for a one-voxel climb. `4` (item 59).
+    /// Surcharge for a one-voxel climb. `4` (item 59). From
+    /// `locomotion.climb_surcharge`.
     ///
     /// PLACEHOLDER: `no gameplay evidence behind it` (item 59) — owner, at S3.
     pub climb_surcharge: i32,
     /// Path cost a unit covers per tick. `3` (item 59). Cost to ticks rounds by
-    /// **ceiling**, which is T7's to implement and item 59's to fix.
+    /// **ceiling**, which is T7's to implement and item 59's to fix. From
+    /// `locomotion.move_cost_per_tick`.
     pub move_cost_per_tick: i32,
     /// Repaths served per tick, round-robin by `(seat, beacon, unit)`. `16`
-    /// (item 69).
+    /// (item 69). From `locomotion.repath_cap_per_tick`.
     ///
     /// PLACEHOLDER: re-derived at S2's exit once the burst frequency is a
     /// measurement (item 69) — owner.
     pub repath_cap_per_tick: u32,
-    /// The broadphase's cell edge, in whole voxels.
+    /// The broadphase's cell edge, in whole voxels. From
+    /// `broadphase.cell_size_voxels`.
     ///
     /// PLACEHOLDER: `tuning, owner, S2 exit — tied to unit density` (item 67's
     /// caveat). A performance knob, so it must never reach hashed state; the
@@ -85,7 +118,7 @@ pub struct RulesTable {
     pub csr_cell_size_voxels: i32,
     /// The per-round segment ladder, in game milliseconds (item 68: 3 / 5 / 8
     /// minutes). The runner reads the coming segment's length **from the frozen
-    /// snapshot**, not from this row (T10).
+    /// snapshot**, not from this row (T10). From `match.segment_lengths_ms`.
     pub segment_lengths_ms: Vec<i32>,
 }
 
@@ -123,14 +156,91 @@ impl RulesTable {
 
     /// Read a rules table from canonical proto JSON.
     ///
-    /// Unknown fields are **rejected**, not ignored — the same rule submitted
-    /// playbooks are held to (AGENTS.md §5).
+    /// The decode is `pharmakos-proto`'s and nobody else's (item 74): one
+    /// codec, driven by the checked-in descriptor set, so the sim cannot read a
+    /// file the verifier would reject. An unknown field is therefore
+    /// **rejected** with a JSON Pointer, never ignored and never stripped (spec
+    /// section 10, "Load never strips").
     ///
     /// # Errors
     ///
-    /// Returns [`RulesError`] naming the field and what was wrong with it.
+    /// Returns [`RulesError::Json`] carrying the codec's own pointer, or
+    /// whatever [`RulesTable::from_message`] finds wrong with the values.
     pub fn from_canonical_json(text: &str) -> Result<RulesTable, RulesError> {
-        json::parse(text)
+        let message: gp::v1::RulesTable =
+            pharmakos_proto::json::decode(text).map_err(RulesError::Json)?;
+        RulesTable::from_message(&message)
+    }
+
+    /// Take the sim's view of a decoded [`gp::v1::RulesTable`].
+    ///
+    /// Every block the sim reads is **required**. Proto3 cannot tell an absent
+    /// message from an empty one, so a missing `locomotion` would otherwise
+    /// arrive as a table of zeroes and a unit that never moves — a silent wrong
+    /// answer, which is the failure mode the rules table exists to prevent.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RulesError::MissingBlock`] when a block the sim reads is
+    /// absent, or [`RulesError::OutOfRange`] when a value does not fit the
+    /// sim's own type for it.
+    pub fn from_message(message: &gp::v1::RulesTable) -> Result<RulesTable, RulesError> {
+        let locomotion = message
+            .locomotion
+            .as_ref()
+            .ok_or(RulesError::MissingBlock("locomotion"))?;
+        let broadphase = message
+            .broadphase
+            .as_ref()
+            .ok_or(RulesError::MissingBlock("broadphase"))?;
+        let mesher = message
+            .mesher
+            .as_ref()
+            .ok_or(RulesError::MissingBlock("mesher"))?;
+        let matched = message
+            .r#match
+            .as_ref()
+            .ok_or(RulesError::MissingBlock("match"))?;
+
+        if matched.segment_lengths_ms.is_empty() {
+            return Err(RulesError::OutOfRange {
+                field: "match.segment_lengths_ms".to_owned(),
+                value: "an empty ladder; a match plays at least one segment".to_owned(),
+            });
+        }
+        if matched.segment_lengths_ms.len() > MAX_SEGMENT_LENGTHS {
+            return Err(RulesError::OutOfRange {
+                field: "match.segment_lengths_ms".to_owned(),
+                value: format!(
+                    "{} entries; the encoding is bounded at {MAX_SEGMENT_LENGTHS}",
+                    matched.segment_lengths_ms.len()
+                ),
+            });
+        }
+
+        Ok(RulesTable {
+            mesher_drain_surfaces: mesher.surfaces_per_frame,
+            mesher_drain_bytes: mesher.bytes_per_frame,
+            step_cardinal: signed(
+                "locomotion.step_cost_cardinal",
+                locomotion.step_cost_cardinal,
+            )?,
+            step_diagonal: signed(
+                "locomotion.step_cost_diagonal",
+                locomotion.step_cost_diagonal,
+            )?,
+            climb_surcharge: signed("locomotion.climb_surcharge", locomotion.climb_surcharge)?,
+            move_cost_per_tick: signed(
+                "locomotion.move_cost_per_tick",
+                locomotion.move_cost_per_tick,
+            )?,
+            repath_cap_per_tick: locomotion.repath_cap_per_tick,
+            csr_cell_size_voxels: signed(
+                "broadphase.cell_size_voxels",
+                broadphase.cell_size_voxels,
+            )?,
+            segment_lengths_ms: matched.segment_lengths_ms.clone(),
+        })
     }
 
     /// Read the rules table from a file.
@@ -148,6 +258,15 @@ impl RulesTable {
     }
 }
 
+/// The schema spells the move costs `uint32`; the sim's path arithmetic is
+/// signed, so the narrowing is a decision and gets one (AGENTS.md §4.3).
+fn signed(field: &'static str, value: u32) -> Result<i32, RulesError> {
+    i32::try_from(value).map_err(|_| RulesError::OutOfRange {
+        field: field.to_owned(),
+        value: value.to_string(),
+    })
+}
+
 /// What went wrong reading a rules table.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum RulesError {
@@ -158,24 +277,17 @@ pub enum RulesError {
         /// The operating system's message.
         message: String,
     },
-    /// The text is not the JSON object the table's shape calls for.
-    Syntax {
-        /// Byte offset into the text.
-        offset: usize,
-        /// What was expected there.
-        expected: &'static str,
-    },
-    /// A field the table requires is missing.
-    MissingField(&'static str),
-    /// A field appears twice.
-    DuplicateField(String),
-    /// A field the table does not define appears.
-    UnknownField(String),
-    /// A value is out of the range its field allows.
+    /// The text is not canonical `gp.v1.RulesTable` JSON. Carries the codec's
+    /// own JSON Pointer, so a diagnostic can point at the byte that caused it.
+    Json(pharmakos_proto::json::Error),
+    /// A block the sim reads is absent. Proto3 cannot tell that from a block of
+    /// zeroes, so the sim refuses rather than guesses.
+    MissingBlock(&'static str),
+    /// A value is out of the range the sim's own type for it allows.
     OutOfRange {
-        /// The field's canonical JSON name.
+        /// The field's path in the message.
         field: String,
-        /// What the text said.
+        /// What the table said.
         value: String,
     },
 }
@@ -184,14 +296,11 @@ impl fmt::Display for RulesError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             RulesError::Io { path, message } => write!(f, "reading {path}: {message}"),
-            RulesError::Syntax { offset, expected } => {
-                write!(f, "at byte {offset}: expected {expected}")
-            }
-            RulesError::MissingField(name) => write!(f, "missing field `{name}`"),
-            RulesError::DuplicateField(name) => write!(f, "field `{name}` appears twice"),
-            RulesError::UnknownField(name) => write!(
+            RulesError::Json(error) => write!(f, "{RULES_MESSAGE}: {error}"),
+            RulesError::MissingBlock(name) => write!(
                 f,
-                "unknown field `{name}`; an unknown field is rejected, never ignored"
+                "the `{name}` block is missing; the sim reads it and will not \
+                 substitute zeroes for it"
             ),
             RulesError::OutOfRange { field, value } => {
                 write!(f, "field `{field}`: `{value}` is out of range")
@@ -201,268 +310,3 @@ impl fmt::Display for RulesError {
 }
 
 impl std::error::Error for RulesError {}
-
-/// PLACEHOLDER — the temporary canonical-JSON reader.
-///
-/// Item 78 rejected "a plain JSONC file with a hand-written schema (a second
-/// parser in the sim)" and chose `gp.v1.RulesTable` read through the proto
-/// crate's canonical JSON codec. This module is the scaffold that lets T1 and
-/// T2 merge in either order, and it is **deleted** when T1 lands. It is
-/// deliberately narrow: a flat object of `int32` scalars and one flat array of
-/// `int32`, no nesting, no floats, no strings, no comments — which is exactly
-/// what canonical proto JSON emits for the shape above (item 46: durations are
-/// `int32`, so they are bare numbers).
-mod json {
-    use super::{MAX_SEGMENT_LENGTHS, RulesError, RulesTable};
-
-    /// Every field the table defines, in canonical JSON (lowerCamelCase) form.
-    const FIELDS: [&str; 9] = [
-        "mesherDrainSurfaces",
-        "mesherDrainBytes",
-        "stepCardinal",
-        "stepDiagonal",
-        "climbSurcharge",
-        "moveCostPerTick",
-        "repathCapPerTick",
-        "csrCellSizeVoxels",
-        "segmentLengthsMs",
-    ];
-
-    struct Scanner<'a> {
-        text: &'a [u8],
-        at: usize,
-    }
-
-    impl<'a> Scanner<'a> {
-        fn new(text: &'a str) -> Scanner<'a> {
-            Scanner {
-                text: text.as_bytes(),
-                at: 0,
-            }
-        }
-
-        fn peek(&self) -> Option<u8> {
-            self.text.get(self.at).copied()
-        }
-
-        fn bump(&mut self) {
-            self.at = self.at.saturating_add(1);
-        }
-
-        fn skip_space(&mut self) {
-            while let Some(b) = self.peek() {
-                if b == b' ' || b == b'\t' || b == b'\n' || b == b'\r' {
-                    self.bump();
-                } else {
-                    break;
-                }
-            }
-        }
-
-        fn require(&mut self, byte: u8, expected: &'static str) -> Result<(), RulesError> {
-            self.skip_space();
-            if self.peek() == Some(byte) {
-                self.bump();
-                Ok(())
-            } else {
-                Err(RulesError::Syntax {
-                    offset: self.at,
-                    expected,
-                })
-            }
-        }
-
-        fn string(&mut self) -> Result<String, RulesError> {
-            self.require(b'"', "a field name in double quotes")?;
-            let start = self.at;
-            while let Some(b) = self.peek() {
-                if b == b'"' {
-                    let bytes = self.text.get(start..self.at).unwrap_or(&[]);
-                    let name =
-                        String::from_utf8(bytes.to_vec()).map_err(|_| RulesError::Syntax {
-                            offset: start,
-                            expected: "a field name in UTF-8",
-                        })?;
-                    self.bump();
-                    return Ok(name);
-                }
-                if b == b'\\' {
-                    // No field name in this shape needs an escape, and
-                    // accepting one would mean a second unescaping path.
-                    return Err(RulesError::Syntax {
-                        offset: self.at,
-                        expected: "a field name without escapes",
-                    });
-                }
-                self.bump();
-            }
-            Err(RulesError::Syntax {
-                offset: self.at,
-                expected: "a closing quote",
-            })
-        }
-
-        fn integer(&mut self) -> Result<i64, RulesError> {
-            self.skip_space();
-            let start = self.at;
-            if self.peek() == Some(b'-') {
-                self.bump();
-            }
-            let digits_from = self.at;
-            while let Some(b) = self.peek() {
-                if b.is_ascii_digit() {
-                    self.bump();
-                } else {
-                    break;
-                }
-            }
-            if self.at == digits_from {
-                return Err(RulesError::Syntax {
-                    offset: start,
-                    expected: "a whole number",
-                });
-            }
-            // Canonical JSON for an int32 is a bare integer. A decimal point or
-            // an exponent is a float, and the sim has no floats.
-            if matches!(self.peek(), Some(b'.' | b'e' | b'E')) {
-                return Err(RulesError::Syntax {
-                    offset: self.at,
-                    expected: "a whole number (the rules table holds no floats)",
-                });
-            }
-            let bytes = self.text.get(start..self.at).unwrap_or(&[]);
-            let text = core::str::from_utf8(bytes).map_err(|_| RulesError::Syntax {
-                offset: start,
-                expected: "a whole number in UTF-8",
-            })?;
-            text.parse::<i64>().map_err(|_| RulesError::Syntax {
-                offset: start,
-                expected: "a whole number that fits in 64 bits",
-            })
-        }
-    }
-
-    fn as_i32(field: &str, value: i64) -> Result<i32, RulesError> {
-        i32::try_from(value).map_err(|_| RulesError::OutOfRange {
-            field: field.to_owned(),
-            value: value.to_string(),
-        })
-    }
-
-    fn as_u32(field: &str, value: i64) -> Result<u32, RulesError> {
-        u32::try_from(value).map_err(|_| RulesError::OutOfRange {
-            field: field.to_owned(),
-            value: value.to_string(),
-        })
-    }
-
-    /// Parse the whole document. Flat by construction, so there is no recursion
-    /// (item 51).
-    pub(super) fn parse(text: &str) -> Result<RulesTable, RulesError> {
-        let mut scanner = Scanner::new(text);
-        let mut seen: Vec<String> = Vec::with_capacity(FIELDS.len());
-        let mut scalars: [Option<i64>; 8] = [None; 8];
-        let mut segments: Option<Vec<i32>> = None;
-
-        scanner.require(b'{', "an object")?;
-        scanner.skip_space();
-        if scanner.peek() != Some(b'}') {
-            loop {
-                let name = scanner.string()?;
-                if seen.contains(&name) {
-                    return Err(RulesError::DuplicateField(name));
-                }
-                let Some(index) = FIELDS.iter().position(|f| *f == name) else {
-                    return Err(RulesError::UnknownField(name));
-                };
-                seen.push(name.clone());
-                scanner.require(b':', "`:` after a field name")?;
-
-                if index == 8 {
-                    segments = Some(parse_segment_array(&mut scanner, &name)?);
-                } else {
-                    let value = scanner.integer()?;
-                    if let Some(slot) = scalars.get_mut(index) {
-                        *slot = Some(value);
-                    }
-                }
-
-                scanner.skip_space();
-                match scanner.peek() {
-                    Some(b',') => scanner.bump(),
-                    Some(b'}') => break,
-                    _ => {
-                        return Err(RulesError::Syntax {
-                            offset: scanner.at,
-                            expected: "`,` or `}`",
-                        });
-                    }
-                }
-            }
-        }
-        scanner.require(b'}', "`}`")?;
-        scanner.skip_space();
-        if scanner.peek().is_some() {
-            return Err(RulesError::Syntax {
-                offset: scanner.at,
-                expected: "end of document",
-            });
-        }
-
-        let get = |index: usize| -> Result<i64, RulesError> {
-            scalars
-                .get(index)
-                .copied()
-                .flatten()
-                .ok_or(RulesError::MissingField(
-                    FIELDS.get(index).copied().unwrap_or("?"),
-                ))
-        };
-
-        Ok(RulesTable {
-            mesher_drain_surfaces: as_u32(FIELDS[0], get(0)?)?,
-            mesher_drain_bytes: as_u32(FIELDS[1], get(1)?)?,
-            step_cardinal: as_i32(FIELDS[2], get(2)?)?,
-            step_diagonal: as_i32(FIELDS[3], get(3)?)?,
-            climb_surcharge: as_i32(FIELDS[4], get(4)?)?,
-            move_cost_per_tick: as_i32(FIELDS[5], get(5)?)?,
-            repath_cap_per_tick: as_u32(FIELDS[6], get(6)?)?,
-            csr_cell_size_voxels: as_i32(FIELDS[7], get(7)?)?,
-            segment_lengths_ms: segments.ok_or(RulesError::MissingField(FIELDS[8]))?,
-        })
-    }
-
-    fn parse_segment_array(scanner: &mut Scanner<'_>, field: &str) -> Result<Vec<i32>, RulesError> {
-        scanner.require(b'[', "an array of whole numbers")?;
-        let mut out: Vec<i32> = Vec::with_capacity(MAX_SEGMENT_LENGTHS);
-        scanner.skip_space();
-        if scanner.peek() == Some(b']') {
-            scanner.bump();
-            return Ok(out);
-        }
-        loop {
-            let value = scanner.integer()?;
-            if out.len() >= MAX_SEGMENT_LENGTHS {
-                return Err(RulesError::OutOfRange {
-                    field: field.to_owned(),
-                    value: format!("more than {MAX_SEGMENT_LENGTHS} entries"),
-                });
-            }
-            out.push(as_i32(field, value)?);
-            scanner.skip_space();
-            match scanner.peek() {
-                Some(b',') => scanner.bump(),
-                Some(b']') => {
-                    scanner.bump();
-                    return Ok(out);
-                }
-                _ => {
-                    return Err(RulesError::Syntax {
-                        offset: scanner.at,
-                        expected: "`,` or `]`",
-                    });
-                }
-            }
-        }
-    }
-}
