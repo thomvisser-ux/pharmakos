@@ -67,11 +67,30 @@ is the same number on every machine.
 
 ## Where the numbers come from, and which are still guesses
 
+Revision 3 fills the table out: decisions-log **items 90, 91 and 94** fix every
+value the walking skeleton's three lanes need, in one sitting, so that no task
+writes a number of its own. Almost every row below is therefore a **labelled
+guess** — sized so the plan's §1.1 demo is affordable (`$` 200 buys the beacon
+and the Generator with `$` 60 over) and so the map's supply fits the ceiling
+exactly (three seats: 3 × 10 + 3 × 20 + 2 × 30 + 40 = 190 kW). Item 90 records
+the honest version: a number people plan against tends to stick, and the
+rules-table home plus the loud label are the mitigation, not a proof.
+
+Two rows are stated twice on purpose, and the pair must move together:
+`structures.beacon.draw_kw` and `power.beacon_base_draw_kw` are the same 2 kW,
+and `commander.cost_per_second` repeats the unit of
+`locomotion.*_cost_per_second` because the commander is not a unit kind.
+
 | Row | Source | Settled? |
 |---|---|---|
 | `match.segment_lengths_ms` 3 / 5 / 8 min | item 68 | yes |
 | `match.lull_ms` | — | **PLACEHOLDER** — Tuning, owner, at the skeleton's demo |
-| `locomotion.step_cost_*`, `climb_surcharge`, `move_cost_per_tick` | item 59 | 10 / 14 / 3 yes; `climb_surcharge = 4` has **no gameplay evidence behind it** (item 59) — owner, S3 |
+| `match.decision_tick_ms` 250 | item 90, spec §11 | **PLACEHOLDER** — tuning, owner, S3. Five sim ticks at 20 Hz |
+| `locomotion.step_cost_*`, `climb_surcharge`, `move_cost_per_tick` | item 59 | 10 / 14 / 3 yes; `climb_surcharge = 4` has **no gameplay evidence behind it** (item 59) — owner, S3. `move_cost_per_tick` is **superseded** by the per-kind rows below (item 90) and nothing reads it; it stays because deleting a field is a `buf breaking` failure |
+| `locomotion.commander_cost_per_second` 10 | item 90, spec §4 | **PLACEHOLDER** — tuning, owner, at the skeleton's demo. 1.0 voxels/s, the low end of the spec's range |
+| `locomotion.drone_cost_per_second` 10 | item 90 | **PLACEHOLDER** — tuning, owner, S1 |
+| `locomotion.raider_cost_per_second` 12 | item 90 | **PLACEHOLDER** — tuning, owner, S2 |
+| `locomotion.scout_cost_per_second` 20 | item 90 | **PLACEHOLDER** — tuning, owner, S2 |
 | `locomotion.repath_cap_per_tick` | item 69 | **PLACEHOLDER** — 16 is provisional, re-derived at S2's exit once the burst frequency is a measurement |
 | `locomotion.fog_cost_*` 3 / 2 | item 61 | yes |
 | `locomotion.hpa_cluster_voxels` 32 | item 58 | yes |
@@ -80,7 +99,26 @@ is the same number on every machine.
 | `mesher.surfaces_per_frame` (K), `bytes_per_frame` (B) | item 54 | **PLACEHOLDER** — no measured frame-time reason separates K = 4 from K = 8 on the spike machine; owner, S6 art pass |
 | `mesher.age_frames` | item 54 | **PLACEHOLDER** — ships untested by measurement and is labelled insurance |
 | `mesher.light_max`, `light_atten` | — | **PLACEHOLDER** — Tuning, owner at S6's art polish |
-| `economy`, `power` | — | **PLACEHOLDER STUB** — empty. Every `$` and `kW` row is T14's, with the numbers decision 14 settles |
+| `economy.bmi_dollars` 100, `starting_bmi_multiplier` 2, `scaling_last_place_bonus_percent` 10, `scaling_leader_malus_percent` 5, `recycle_refund_percent` 50, `backlog_threshold_per_drone` 2, `ore_yield_per_voxel_dollars` 2/4/8, `seam_voxels` 150, `mining_ms_per_voxel` 2000 | item 90, spec §7 | **PLACEHOLDER** — tuning, owner, S1 |
+| `economy.salvage_percent` 25 | item 90 | **PLACEHOLDER** — tuning, owner, S2 |
+| `economy.award_fund_percent_of_bmi` 50 | item 90 | **PLACEHOLDER** — tuning, owner, S4 |
+| `power.core_surplus_kw` 10, `generator_output_kw` 20/30/40, `revive_margin_kw` 2, `beacon_base_draw_kw` 2 | item 90, spec §7 | **PLACEHOLDER** — tuning, owner, S1 |
+| `power.kw_per_unit` 1, `reserve_percent` 40, `map_ceiling_kw` 190 | item 91, inside item 65's budget | **PLACEHOLDER** — tuning, owner, at S2's exit. The three move **together**, and `map_ceiling_kw` is a *derived* number that is a row anyway, because two of its three inputs are measurements of the code rather than rules |
+| `commander.cost_per_second` 10, `arrive_radius_voxels` 2, `placement_range_voxels` 12, `interface_range_voxels` 4 | item 90, items 11 and 21, spec §4 | **PLACEHOLDER** — tuning, owner, at the skeleton's demo |
+| `commander.hp` 300, `respawn_base_ms` 30000, `respawn_growth_ms` 15000 | item 90 | **PLACEHOLDER** — tuning, owner, S2 |
+| `beacon.sphere_radius_voxels` 24 | item 90, item 11, spec §5 | **PLACEHOLDER** — tuning, owner, at the skeleton's demo |
+| `beacon.core_hp` 3000 | item 90 | **PLACEHOLDER** — tuning, owner, S2 |
+| `map.size_*` 384/384/64, `spawn_zones` 3, `spawn_zone_radius_voxels` 24, `vent_*_distance_voxels` 28/44, `seam_*_distance_voxels` 8/20, `spawn_separation_pushes_*` 3/2 | item 90, spec §§3, 9, 15 | **PLACEHOLDER** — tuning, owner, at the skeleton's demo. The separation is a **fraction of one early Push of raider travel**, not a distance, because the distance that matters changes with the raider's speed and the segment length |
+| `map.start_vent_richness` LEAN, `start_seam_richness` STANDARD, `contested_standard_vents` 2, `contested_rich_vents` 1, `contested_rich_seams` 3 | item 90 | **PLACEHOLDER** — tuning, owner, S1 |
+| `units.build_drone`, `units.mining_drone` 20/100/1/10 | item 90, spec §§7, 9 | **PLACEHOLDER** — tuning, owner, S1 |
+| `units.repair_drone` 25/100/1/10, `units.raider` 30/120/1/12, `units.scout` 10/60/1/20 | item 90 | **PLACEHOLDER** — tuning, owner, S2 |
+| `structures.beacon` 60/800/2 | item 90, spec §5 | **PLACEHOLDER** — tuning, owner, at the skeleton's demo |
+| `structures.generator` 80/600/0, `structures.survey_post` 30/200/1 | item 90 | **PLACEHOLDER** — tuning, owner, S1 |
+| `structures.autocannon` 60/500/2, `structures.mortar` 90/400/3, `wall_cost_per_voxel` 1, `demolition_charge_cost_dollars` 15 | item 90 | **PLACEHOLDER** — tuning, owner, S2 |
+| `structures.resonance_spire` 120/500/3 | item 90 | **PLACEHOLDER** — tuning, owner, S3 |
+| `verifier.size_budget_units` 128 | item 94 | **PLACEHOLDER** — tuning, owner, at **S3's exit**; P1 sets the real number from the measured per-rule cost per decision tick. A unit is one route step, one handler, one step in a handler body, one build target, one protected area or one patrol waypoint; conditions and settings count nothing |
+| `verifier.handler_cooldown_min_ms` 5000, `max_fires_max` 8, `notebook_max_chars` 4000 | item 90, spec §§10, 11 | **PLACEHOLDER** — tuning, owner, S3 |
+| `verifier.reach_memory_ms` 180000 | item 90 | **PLACEHOLDER** — tuning, owner, S3 (item 90 marks it S2/S3) |
 
 ## Editing it
 

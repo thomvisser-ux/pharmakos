@@ -65,34 +65,41 @@ breaking:
     # Nothing. Minor versions add optional fields; a major version comes with a
     # converter that is kept forever.
   ignore_only:
-    # PLACEHOLDER - DELETE THIS BLOCK in the first proto change after the
-    # walking skeleton's T1 lands on main, and RE-ADD it, scoped to the files
-    # it is needed for and with the same kind of justification written out,
-    # in any later change that discharges a held field number. OWNER: this is
-    # a per-change waiver, not standing configuration.
+    # PER-CHANGE WAIVER, not standing configuration. DELETE THIS BLOCK in the
+    # next proto change that does NOT discharge a held field number, and
+    # RE-ADD it, scoped to the files it is needed for and with the
+    # justification written out, in any later change that does. OWNER: the
+    # same rule the block it replaces was written under - the previous
+    # occupant was scoped to gp/v1/playbook.proto for T1's own stub filling
+    # and is deleted here because T1 is on main and that waiver is spent.
     #
-    # Why it is here. Holding a future field number as a RESERVATION is how
-    # this schema stops a number being reused for something else before the
-    # stage that fills it arrives: decisions-log item 47 held `Playbook`
-    # field 7 and the name `kind` that way, and this change's own stubs hold
-    # DefendSettings 1-15, AttackSettings 1-15, Location 10-49, BeaconRef
-    # 13-49, Condition's eight gaps and every gateway payload stub the same
-    # way. Discharging a held number - item 76 defining `Kind kind = 7;`,
-    # this change filling MineSettings 3 and 4 from spec section 6's Mine row
-    # - is the one move buf cannot tell apart from a genuine un-reservation,
-    # so RESERVED_MESSAGE_NO_DELETE fires on the lines that go away even
-    # though the field that replaces each one has the same number and the
-    # same name, which is the safest possible outcome and the one the
-    # reservation was made for.
+    # Why it is here THIS time. Holding a future field number as a
+    # RESERVATION is how this schema stops a number being reused for
+    # something else before the stage that fills it arrives: rules.proto's
+    # `Economy` and `Power` were committed as empty stubs holding 1 to 15 so
+    # that `rules_hash` covered a table of the final shape from the first
+    # golden, and so that nobody filled those blocks with a number of their
+    # own choosing in the meantime. Decisions-log items 90, 91 and 94 now fix
+    # the values, so this change DISCHARGES the held numbers: `Economy` 1-11
+    # and `Power` 1-7 become the rows the items name, and 12-15 and 8-15 stay
+    # reserved for the next stage's.
     #
-    # So the rule fires again at S1, S2, S3 and S4, once per PR that fills a
-    # held stub, and each of those PRs re-adds this block for its own files
-    # (gp/api/v1/gateway.proto is NOT listed today because nothing in this
-    # change discharges a reservation there). It is written as a delete-and-
-    # re-add task rather than as permanent configuration because a standing
-    # ignore would let an un-reservation nobody intended through unnoticed -
-    # and an un-reservation nobody intended is exactly the reuse of a retired
-    # number that WIRE_JSON exists to catch.
+    # Discharging a held number is the one move buf cannot tell apart from a
+    # genuine un-reservation, so RESERVED_MESSAGE_NO_DELETE fires on the
+    # reserved lines that shrink even though every number that leaves the
+    # range arrives back the same tick as a named field with the same number
+    # - which is the safest possible outcome and the one the reservation was
+    # made for. gp/v1/playbook.proto and gp/api/v1/gateway.proto are NOT
+    # listed today because nothing in this change discharges a reservation in
+    # either.
+    #
+    # The rule fires again at S1, S2, S3 and S4, once per PR that fills a
+    # held stub, and each of those PRs re-adds this block for its own files.
+    # It is written as a delete-and-re-add task rather than as permanent
+    # configuration because a standing ignore would let an un-reservation
+    # nobody intended through unnoticed - and an un-reservation nobody
+    # intended is exactly the reuse of a retired number that WIRE_JSON exists
+    # to catch.
     #
     # The alternative - holding never-used numbers with a plain comment
     # ("Numbers 8 and 9 are free for a further row", as this schema does in
@@ -101,4 +108,4 @@ breaking:
     # reuse, and the whole point of the held ranges is that the stub messages
     # are filled later by somebody who was not here for this conversation.
     RESERVED_MESSAGE_NO_DELETE:
-      - gp/v1/playbook.proto
+      - gp/v1/rules.proto

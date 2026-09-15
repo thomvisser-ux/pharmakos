@@ -1759,6 +1759,75 @@ impl ::prost::Name for MineSettings {
 const NAME: &'static str = "MineSettings";
 const PACKAGE: &'static str = "gp.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.v1.MineSettings".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.MineSettings".into() }}
+/// A value that varies with the richness of the feature it is read off
+/// (decisions-log item 90). Three rows rather than a proto map: lean, standard
+/// and rich are the whole domain — spec sections 7 and 9 name those three
+/// grades and no others — and three named rows diff better in a tuning pull
+/// request than a map whose canonical JSON key order nobody should have to
+/// reason about.
+///
+/// Top level in the file rather than nested in one block, because two blocks
+/// read it: `Power.generator_output_kw` (output per vent richness) and
+/// `Economy.ore_yield_per_voxel_dollars` (yield per seam richness).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ByRichness {
+    #[prost(uint32, tag="1")]
+    pub lean: u32,
+    #[prost(uint32, tag="2")]
+    pub standard: u32,
+    #[prost(uint32, tag="3")]
+    pub rich: u32,
+}
+/// Nested message and enum types in `ByRichness`.
+pub mod by_richness {
+    /// Which grade the map generator places a feature at (item 90's map rows).
+    ///
+    /// Nested, like every enum in `gp.v1` without exception, because proto enum
+    /// values live in the PARENT scope: a top-level enum here would put the bare
+    /// names LEAN, STANDARD and RICH into `gp.v1` itself, where canonical JSON
+    /// needs them to stay unique, and no other enum in the package could ever
+    /// spell them (proto/buf.yaml's `ENUM_VALUE_PREFIX` exception says why the
+    /// names are bare; playbook.proto's header says why every enum is nested).
+    ///
+    /// The zero value keeps its full prefix because it is a sentinel: an unset
+    /// richness is a map-generator error, never a default.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum Richness {
+        Unspecified = 0,
+        Lean = 1,
+        Standard = 2,
+        Rich = 3,
+    }
+    impl Richness {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "RICHNESS_UNSPECIFIED",
+                Self::Lean => "LEAN",
+                Self::Standard => "STANDARD",
+                Self::Rich => "RICH",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "RICHNESS_UNSPECIFIED" => Some(Self::Unspecified),
+                "LEAN" => Some(Self::Lean),
+                "STANDARD" => Some(Self::Standard),
+                "RICH" => Some(Self::Rich),
+                _ => None,
+            }
+        }
+    }
+}
+impl ::prost::Name for ByRichness {
+const NAME: &'static str = "ByRichness";
+const PACKAGE: &'static str = "gp.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.v1.ByRichness".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.ByRichness".into() }}
 /// The whole table. One file, one match, one `rules_hash`.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct RulesTable {
@@ -1784,6 +1853,18 @@ pub struct RulesTable {
     pub economy: ::core::option::Option<rules_table::Economy>,
     #[prost(message, optional, tag="16")]
     pub power: ::core::option::Option<rules_table::Power>,
+    #[prost(message, optional, tag="17")]
+    pub commander: ::core::option::Option<rules_table::Commander>,
+    #[prost(message, optional, tag="18")]
+    pub beacon: ::core::option::Option<rules_table::Beacon>,
+    #[prost(message, optional, tag="19")]
+    pub map: ::core::option::Option<rules_table::Map>,
+    #[prost(message, optional, tag="20")]
+    pub units: ::core::option::Option<rules_table::Units>,
+    #[prost(message, optional, tag="21")]
+    pub structures: ::core::option::Option<rules_table::Structures>,
+    #[prost(message, optional, tag="22")]
+    pub verifier: ::core::option::Option<rules_table::Verifier>,
 }
 /// Nested message and enum types in `RulesTable`.
 pub mod rules_table {
@@ -1804,6 +1885,14 @@ pub mod rules_table {
         /// PLACEHOLDER: value is Tuning — owner, at the walking skeleton's demo.
         #[prost(int32, tag="2")]
         pub lull_ms: i32,
+        /// The interpreter's decision tick, in game milliseconds: how often a
+        /// sealed playbook is re-evaluated during a Push (spec section 11; item
+        /// 90). 250 ms is exactly five sim ticks at 20 Hz, so it divides the tick
+        /// rate and no decision lands between ticks.
+        ///
+        /// PLACEHOLDER: tuning, owner, S3.
+        #[prost(int32, tag="3")]
+        pub decision_tick_ms: i32,
     }
 impl ::prost::Name for Match {
 const NAME: &'static str = "Match";
@@ -1824,7 +1913,18 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Match".into
         /// item 59: 4, one-voxel climbs
         #[prost(uint32, tag="3")]
         pub climb_surcharge: u32,
-        /// item 59: 3
+        /// SUPERSEDED by the per-kind `*_cost_per_second` rows below (item 90).
+        ///
+        /// Item 59's value of 3 cost units per tick is 6 voxels/s at 20 Hz — an
+        /// order of magnitude above the spec's stated commander range of 1 to 1.5
+        /// voxels/s on a 384-voxel map, so item 90 amends the REPRESENTATION while
+        /// keeping item 59's model in full (10 / 14 / 4, and cost converts to ticks
+        /// by ceiling, never optimistically). The row stays in the schema because
+        /// deleting a field is a `buf breaking` failure in WIRE_JSON mode and it
+        /// costs nothing to carry until the schema's first allowed break. Nothing
+        /// reads it.
+        ///
+        /// item 59: 3, superseded
         #[prost(uint32, tag="4")]
         pub move_cost_per_tick: u32,
         /// Per-tick repath cap, served round-robin in (seat, beacon, unit) order
@@ -1849,6 +1949,41 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Match".into
         /// abstract level.
         #[prost(uint32, tag="8")]
         pub hpa_cluster_voxels: u32,
+        /// Walking speed per kind, in COST UNITS PER SECOND (item 90, spec section
+        /// 4). At item 59's 10 cost per cardinal voxel that is decivoxels per
+        /// second, so commander 10 is 1.0 voxels/s — the low end of the spec's
+        /// range, which is what makes "several minutes of commander walking" true
+        /// on a 384-voxel map.
+        ///
+        /// The accumulator rule, so that no division rounds a speed down: each tick
+        /// a walker adds `cost_per_second` to an integer accumulator and spends one
+        /// cost unit per 20 accumulated (20 being the tick rate). An ESTIMATE of
+        /// the same journey is `ceil(cost * 20 / cost_per_second)` ticks, which
+        /// keeps item 59's ceiling property — an estimate is never optimistic
+        /// (item 61).
+        ///
+        /// PLACEHOLDER: tuning, owner, at the walking skeleton's demo.
+        ///
+        /// item 90: 10 — 1.0 voxels/s
+        #[prost(uint32, tag="9")]
+        pub commander_cost_per_second: u32,
+        /// Build, mining and repair-reclaim drones all walk at the same speed.
+        ///
+        /// PLACEHOLDER: tuning, owner, S1.
+        ///
+        /// item 90: 10
+        #[prost(uint32, tag="10")]
+        pub drone_cost_per_second: u32,
+        /// PLACEHOLDER: tuning, owner, S2.
+        ///
+        /// item 90: 12
+        #[prost(uint32, tag="11")]
+        pub raider_cost_per_second: u32,
+        /// PLACEHOLDER: tuning, owner, S2.
+        ///
+        /// item 90: 20 — 2.0 voxels/s
+        #[prost(uint32, tag="12")]
+        pub scout_cost_per_second: u32,
     }
 impl ::prost::Name for Locomotion {
 const NAME: &'static str = "Locomotion";
@@ -1945,36 +2080,565 @@ impl ::prost::Name for Mesher {
 const NAME: &'static str = "Mesher";
 const PACKAGE: &'static str = "gp.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Mesher".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.RulesTable.Mesher".into() }}
-    /// PLACEHOLDER STUB — every `$` row. Filled by T14 (crates/sim part 6,
-    /// economy) with the numbers decision 14 settles; each one is Tuning and
-    /// none of them may become a constant in code. Spec section 7 names them:
-    /// BMI and its by-standing scaling, starting `$`, beacon / structure / unit
-    /// costs, ruin salvage value, the recycle refund share, and the audit's
-    /// held-value weighting.
+    /// Every `$` row that is not a per-item price (those are in `Units` and
+    /// `Structures`). Spec section 7; the numbers are item 90's. Each one is
+    /// Tuning and none of them may become a constant in code.
     ///
-    /// Field numbers 1-15 are held so T14's first fifteen rows stay in the
-    /// one-byte tag range. The message exists now, empty, so that `rules_hash`
-    /// covers a table of the final shape from the first golden.
+    /// Field numbers 12-15 stay held so the next four rows keep the one-byte tag
+    /// range, the reason the stub reserved 1 to 15 in the first place.
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct Economy {
+        /// Base Maintenance Indemnity: the `$` a seat is paid per settlement
+        /// (spec section 7).
+        ///
+        /// PLACEHOLDER: tuning, owner, S1.
+        ///
+        /// item 90: 100
+        #[prost(uint32, tag="1")]
+        pub bmi_dollars: u32,
+        /// Starting `$` as a MULTIPLE of the BMI, so the spec's rule — "starting
+        /// money is two indemnities" — stays a rule rather than being flattened
+        /// into a second number that can drift away from the first.
+        ///
+        /// PLACEHOLDER: tuning, owner, S1.
+        ///
+        /// item 90: 2, so $ 200
+        #[prost(uint32, tag="2")]
+        pub starting_bmi_multiplier: u32,
+        /// Settlement scaling by standing (spec section 7): last place is paid
+        /// this many percent more, the leader this many percent less, linear
+        /// between.
+        ///
+        /// PLACEHOLDER: tuning, owner, S1.
+        ///
+        /// item 90: 10
+        #[prost(uint32, tag="3")]
+        pub scaling_last_place_bonus_percent: u32,
+        /// PLACEHOLDER: tuning, owner, S1.
+        ///
+        /// item 90: 5
+        #[prost(uint32, tag="4")]
+        pub scaling_leader_malus_percent: u32,
+        /// The award fund, as a percentage of one BMI per settlement (S4's
+        /// licences and awards).
+        ///
+        /// PLACEHOLDER: tuning, owner, S4.
+        ///
+        /// item 90: 50
+        #[prost(uint32, tag="5")]
+        pub award_fund_percent_of_bmi: u32,
+        /// Recycling a standing asset refunds this percentage of its REMAINING
+        /// value (spec section 7).
+        ///
+        /// PLACEHOLDER: tuning, owner, S1.
+        ///
+        /// item 90: 50
+        #[prost(uint32, tag="6")]
+        pub recycle_refund_percent: u32,
+        /// A wreck or a ruin salvages this percentage of the thing's build cost
+        /// (S2's destruction).
+        ///
+        /// PLACEHOLDER: tuning, owner, S2.
+        ///
+        /// item 90: 25
+        #[prost(uint32, tag="7")]
+        pub salvage_percent: u32,
+        /// The fabricator's backlog warning: outstanding work items per available
+        /// drone, above which the Quartermaster reports a backlog.
+        ///
+        /// PLACEHOLDER: tuning, owner, S1.
+        ///
+        /// item 90: 2
+        #[prost(uint32, tag="8")]
+        pub backlog_threshold_per_drone: u32,
+        /// Ore yield in `$` per mined voxel, by the richness of the seam it came
+        /// out of (item 90). With `seam_voxels` below, a seam is worth 300 / 600 /
+        /// 1 200 `$`.
+        ///
+        /// PLACEHOLDER: tuning, owner, S1.
+        ///
+        /// item 90: 2 / 4 / 8
+        #[prost(message, optional, tag="9")]
+        pub ore_yield_per_voxel_dollars: ::core::option::Option<super::ByRichness>,
+        /// Ore voxels in one scrap seam, whatever its richness.
+        ///
+        /// PLACEHOLDER: tuning, owner, S1.
+        ///
+        /// item 90: 150
+        #[prost(uint32, tag="10")]
+        pub seam_voxels: u32,
+        /// Game milliseconds one mining drone spends per ore voxel.
+        ///
+        /// PLACEHOLDER: tuning, owner, S1.
+        ///
+        /// item 90: 2000
+        #[prost(int32, tag="11")]
+        pub mining_ms_per_voxel: i32,
     }
 impl ::prost::Name for Economy {
 const NAME: &'static str = "Economy";
 const PACKAGE: &'static str = "gp.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Economy".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.RulesTable.Economy".into() }}
-    /// PLACEHOLDER STUB — every `kW` row. Filled by T14. Spec section 7 names
-    /// them: the core's deep-bore surplus, Generator output per vent richness,
-    /// draw per fielded item, the dormancy revive margin, and the brownout
-    /// order's tie-breaks. Item 65's provisional per-map ceiling of 190 kW at
-    /// 20 craters/s, with 1 kW per unit and the 40% reserve inside it, is the
-    /// shape T5's map generator checks itself against.
+    /// Every `kW` row (spec section 7; items 65, 90 and 91). Per-item draw is in
+    /// `Units` and `Structures`; what is here is the supply side and the two
+    /// numbers the brownout and the map generator are sized against.
+    ///
+    /// Field numbers 8-15 stay held for S1's dormancy and S2's brownout
+    /// tie-breaks, so those rows keep the one-byte tag range.
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct Power {
+        /// The pre-placed key core's deep-bore surplus: supply a seat has before
+        /// it builds anything.
+        ///
+        /// PLACEHOLDER: tuning, owner, S1.
+        ///
+        /// item 90: 10
+        #[prost(uint32, tag="1")]
+        pub core_surplus_kw: u32,
+        /// A Generator's output, by the richness of the heat vent it sits on.
+        ///
+        /// PLACEHOLDER: tuning, owner, S1.
+        ///
+        /// item 90: 20 / 30 / 40
+        #[prost(message, optional, tag="2")]
+        pub generator_output_kw: ::core::option::Option<super::ByRichness>,
+        /// Draw per fielded unit, every kind (item 91). Every per-kind `draw_kw`
+        /// row in `Units` is this same 1, so item 65's average and the per-kind
+        /// draws agree at the skeleton.
+        ///
+        /// PLACEHOLDER: tuning, owner, at S2's exit (item 91 moves all three of
+        /// this, `reserve_percent` and `map_ceiling_kw` together).
+        ///
+        /// item 91: 1
+        #[prost(uint32, tag="3")]
+        pub kw_per_unit: u32,
+        /// The headroom item 65 keeps free inside the ceiling, as a percentage.
+        ///
+        /// PLACEHOLDER: tuning, owner, at S2's exit (item 91).
+        ///
+        /// item 91: 40
+        #[prost(uint32, tag="4")]
+        pub reserve_percent: u32,
+        /// The per-map supply ceiling, in kW.
+        ///
+        /// DERIVED, and a row anyway (item 91). It is the result of item 65's
+        /// budget at 20 craters/s, but two of that budget's three inputs — the
+        /// tick's fixed cost and the crater cost — are measurements of the code
+        /// rather than rules, so there is nowhere else the RESULT can live where
+        /// the map generator and a reviewer can both read it. T5 checks its own
+        /// total against this row: three seats supply 3 x 10 + 3 x 20 + 2 x 30 +
+        /// 40 = 190 kW, exactly the ceiling; two seats, 160.
+        ///
+        /// PLACEHOLDER: tuning, owner, at S2's exit (item 91).
+        ///
+        /// item 91: 190
+        #[prost(uint32, tag="5")]
+        pub map_ceiling_kw: u32,
+        /// Headroom a dormant asset needs before it may revive, so a grid on the
+        /// edge does not oscillate.
+        ///
+        /// PLACEHOLDER: tuning, owner, S1.
+        ///
+        /// item 90: 2
+        #[prost(uint32, tag="6")]
+        pub revive_margin_kw: u32,
+        /// A beacon's own draw. Net zero through its own key-core, which is why it
+        /// is stated rather than assumed (item 90, spec section 5).
+        ///
+        /// PLACEHOLDER: tuning, owner, S1.
+        ///
+        /// item 90: 2
+        #[prost(uint32, tag="7")]
+        pub beacon_base_draw_kw: u32,
     }
 impl ::prost::Name for Power {
 const NAME: &'static str = "Power";
 const PACKAGE: &'static str = "gp.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Power".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.RulesTable.Power".into() }}
+    /// The commander (spec section 4; items 11, 21 and 90). One per seat, the
+    /// only thing that can change a sealed order, and so the only thing whose
+    /// walking speed is felt directly by the player.
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+    pub struct Commander {
+        /// PLACEHOLDER: tuning, owner, S2.
+        ///
+        /// item 90: 300
+        #[prost(uint32, tag="1")]
+        pub hp: u32,
+        /// Cost units per second, the same unit as `locomotion.*_cost_per_second`
+        /// and repeated here because the commander is not a unit kind.
+        ///
+        /// PLACEHOLDER: tuning, owner, at the walking skeleton's demo.
+        ///
+        /// item 90: 10
+        #[prost(uint32, tag="2")]
+        pub cost_per_second: u32,
+        /// Respawn after a death: `respawn_base_ms` plus `respawn_growth_ms` per
+        /// earlier death in the same Push, always completing by segment end (the
+        /// spec's "for example 30 s, growing with each death").
+        ///
+        /// PLACEHOLDER: tuning, owner, S2.
+        ///
+        /// item 90: 30000
+        #[prost(int32, tag="3")]
+        pub respawn_base_ms: i32,
+        /// PLACEHOLDER: tuning, owner, S2.
+        ///
+        /// item 90: 15000
+        #[prost(int32, tag="4")]
+        pub respawn_growth_ms: i32,
+        /// How close a walked route has to get before it counts as arrived.
+        ///
+        /// PLACEHOLDER: tuning, owner, at the walking skeleton's demo.
+        ///
+        /// item 90: 2
+        #[prost(uint32, tag="5")]
+        pub arrive_radius_voxels: u32,
+        /// How far from the commander a new beacon may be placed.
+        ///
+        /// PLACEHOLDER: tuning, owner, at the walking skeleton's demo.
+        ///
+        /// item 90: 12
+        #[prost(uint32, tag="6")]
+        pub placement_range_voxels: u32,
+        /// Item 11's "roughly 4-voxel" interface range: touch to change.
+        ///
+        /// PLACEHOLDER: tuning, owner, at the walking skeleton's demo.
+        ///
+        /// item 90: 4
+        #[prost(uint32, tag="7")]
+        pub interface_range_voxels: u32,
+    }
+impl ::prost::Name for Commander {
+const NAME: &'static str = "Commander";
+const PACKAGE: &'static str = "gp.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Commander".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.RulesTable.Commander".into() }}
+    /// Beacons (spec section 5; items 11 and 90). A placed beacon's `$` cost, HP
+    /// and draw are rows in `Structures` and `Power`; what is here is the two
+    /// numbers that are not per-structure prices. Deploy time is
+    /// `interface_times.place_beacon_deploy_ms`, already in the table.
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+    pub struct Beacon {
+        /// The sphere of authority around a beacon, in voxels.
+        ///
+        /// PLACEHOLDER: tuning, owner, at the walking skeleton's demo.
+        ///
+        /// item 90: 24
+        #[prost(uint32, tag="1")]
+        pub sphere_radius_voxels: u32,
+        /// The pre-placed key core's HP. Not purchasable, so it is not a
+        /// `Structures` row.
+        ///
+        /// PLACEHOLDER: tuning, owner, S2.
+        ///
+        /// item 90: 3000
+        #[prost(uint32, tag="2")]
+        pub core_hp: u32,
+    }
+impl ::prost::Name for Beacon {
+const NAME: &'static str = "Beacon";
+const PACKAGE: &'static str = "gp.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Beacon".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.RulesTable.Beacon".into() }}
+    /// The map generator (spec sections 3, 9 and 15; item 90). Chunk edge is
+    /// item 55's 32 and is not a row: it is the snapshot and state-hash layout,
+    /// not a tuning value.
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+    pub struct Map {
+        /// Map extent in voxels. 384 x 384 x 64 — twelve chunks square, two high.
+        ///
+        /// PLACEHOLDER: tuning, owner, at the walking skeleton's demo.
+        ///
+        /// item 90: 384
+        #[prost(uint32, tag="1")]
+        pub size_x: u32,
+        /// PLACEHOLDER: tuning, owner, at the walking skeleton's demo.
+        ///
+        /// item 90: 384
+        #[prost(uint32, tag="2")]
+        pub size_y: u32,
+        /// PLACEHOLDER: tuning, owner, at the walking skeleton's demo.
+        ///
+        /// item 90: 64
+        #[prost(uint32, tag="3")]
+        pub size_z: u32,
+        /// Spawn zones generated, and their radius. Only OCCUPIED zones are
+        /// realised — an unoccupied zone is terrain and nothing else.
+        ///
+        /// PLACEHOLDER: tuning, owner, at the walking skeleton's demo.
+        ///
+        /// item 90: 3
+        #[prost(uint32, tag="4")]
+        pub spawn_zones: u32,
+        /// PLACEHOLDER: tuning, owner, at the walking skeleton's demo.
+        ///
+        /// item 90: 24
+        #[prost(uint32, tag="5")]
+        pub spawn_zone_radius_voxels: u32,
+        /// The one heat vent in an occupied spawn zone: its grade, and how far
+        /// from the core it is placed. The distance band puts it OUTSIDE the
+        /// core's own sphere but inside the sphere of a beacon placed at
+        /// `commander.placement_range_voxels`, so the first Generator costs a walk
+        /// and a beacon rather than neither.
+        ///
+        /// PLACEHOLDER: tuning, owner, S1.
+        ///
+        /// item 90: LEAN
+        #[prost(enumeration="super::by_richness::Richness", tag="6")]
+        pub start_vent_richness: i32,
+        /// PLACEHOLDER: tuning, owner, at the walking skeleton's demo.
+        ///
+        /// item 90: 28
+        #[prost(uint32, tag="7")]
+        pub vent_min_distance_voxels: u32,
+        /// PLACEHOLDER: tuning, owner, at the walking skeleton's demo.
+        ///
+        /// item 90: 44
+        #[prost(uint32, tag="8")]
+        pub vent_max_distance_voxels: u32,
+        /// The one starting scrap seam in an occupied spawn zone. Inside the
+        /// core's sphere, so the starting mining drone digs from tick one.
+        ///
+        /// PLACEHOLDER: tuning, owner, S1.
+        ///
+        /// item 90: STANDARD
+        #[prost(enumeration="super::by_richness::Richness", tag="9")]
+        pub start_seam_richness: i32,
+        /// PLACEHOLDER: tuning, owner, at the walking skeleton's demo.
+        ///
+        /// item 90: 8
+        #[prost(uint32, tag="10")]
+        pub seam_min_distance_voxels: u32,
+        /// PLACEHOLDER: tuning, owner, at the walking skeleton's demo.
+        ///
+        /// item 90: 20
+        #[prost(uint32, tag="11")]
+        pub seam_max_distance_voxels: u32,
+        /// Contested features, toward the centre of the map: what expansion is
+        /// for.
+        ///
+        /// PLACEHOLDER: tuning, owner, S1.
+        ///
+        /// item 90: 2
+        #[prost(uint32, tag="12")]
+        pub contested_standard_vents: u32,
+        /// PLACEHOLDER: tuning, owner, S1.
+        ///
+        /// item 90: 1
+        #[prost(uint32, tag="13")]
+        pub contested_rich_vents: u32,
+        /// PLACEHOLDER: tuning, owner, S1.
+        ///
+        /// item 90: 3
+        #[prost(uint32, tag="14")]
+        pub contested_rich_seams: u32,
+        /// Minimum separation between any two occupied spawn centres, as a
+        /// FRACTION of one early Push of raider travel: 3/2 Pushes. A fraction
+        /// rather than a distance in voxels because the distance that matters is
+        /// the one a raider can walk, and that changes whenever
+        /// `locomotion.raider_cost_per_second` or the first segment length does.
+        ///
+        /// T5 asserts it on the octile ground distance (10/14 per step), which is
+        /// a lower bound on any walked path and so conservative in the right
+        /// direction until T7 measures real routes. At raider 12 cost/s over a
+        /// 180 000 ms first segment that is 3 240 cost units, about 324 voxels —
+        /// and 324 seconds of commander walking.
+        ///
+        /// PLACEHOLDER: tuning, owner, at the walking skeleton's demo.
+        ///
+        /// item 90: 3
+        #[prost(uint32, tag="15")]
+        pub spawn_separation_pushes_numerator: u32,
+        /// PLACEHOLDER: tuning, owner, at the walking skeleton's demo.
+        ///
+        /// item 90: 2
+        #[prost(uint32, tag="16")]
+        pub spawn_separation_pushes_denominator: u32,
+    }
+impl ::prost::Name for Map {
+const NAME: &'static str = "Map";
+const PACKAGE: &'static str = "gp.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Map".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.RulesTable.Map".into() }}
+    /// One unit kind's four numbers (spec sections 7 and 9; item 90).
+    /// `cost_per_second` is the walking speed in the unit of
+    /// `locomotion.*_cost_per_second`, repeated per kind so a reader of the
+    /// block sees the whole unit; the `locomotion` rows are where the three
+    /// drone kinds share one value.
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+    pub struct UnitKind {
+        #[prost(uint32, tag="1")]
+        pub cost_dollars: u32,
+        #[prost(uint32, tag="2")]
+        pub hp: u32,
+        #[prost(uint32, tag="3")]
+        pub draw_kw: u32,
+        #[prost(uint32, tag="4")]
+        pub cost_per_second: u32,
+    }
+impl ::prost::Name for UnitKind {
+const NAME: &'static str = "UnitKind";
+const PACKAGE: &'static str = "gp.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.UnitKind".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.RulesTable.UnitKind".into() }}
+    /// The five unit kinds. Starting force is the spec's: the core on Build, the
+    /// commander, two build drones and one mining drone.
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+    pub struct Units {
+        /// PLACEHOLDER: tuning, owner, S1.
+        ///
+        /// item 90: 20 / 100 / 1 / 10
+        #[prost(message, optional, tag="1")]
+        pub build_drone: ::core::option::Option<UnitKind>,
+        /// PLACEHOLDER: tuning, owner, S1.
+        ///
+        /// item 90: 20 / 100 / 1 / 10
+        #[prost(message, optional, tag="2")]
+        pub mining_drone: ::core::option::Option<UnitKind>,
+        /// PLACEHOLDER: tuning, owner, S2.
+        ///
+        /// item 90: 25 / 100 / 1 / 10
+        #[prost(message, optional, tag="3")]
+        pub repair_drone: ::core::option::Option<UnitKind>,
+        /// PLACEHOLDER: tuning, owner, S2.
+        ///
+        /// item 90: 30 / 120 / 1 / 12
+        #[prost(message, optional, tag="4")]
+        pub raider: ::core::option::Option<UnitKind>,
+        /// PLACEHOLDER: tuning, owner, S2.
+        ///
+        /// item 90: 10 / 60 / 1 / 20
+        #[prost(message, optional, tag="5")]
+        pub scout: ::core::option::Option<UnitKind>,
+    }
+impl ::prost::Name for Units {
+const NAME: &'static str = "Units";
+const PACKAGE: &'static str = "gp.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Units".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.RulesTable.Units".into() }}
+    /// One structure kind's three numbers (spec sections 7 and 9; item 90).
+    /// Structures do not walk, so there is no `cost_per_second`.
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+    pub struct StructureKind {
+        #[prost(uint32, tag="1")]
+        pub cost_dollars: u32,
+        #[prost(uint32, tag="2")]
+        pub hp: u32,
+        #[prost(uint32, tag="3")]
+        pub draw_kw: u32,
+    }
+impl ::prost::Name for StructureKind {
+const NAME: &'static str = "StructureKind";
+const PACKAGE: &'static str = "gp.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.StructureKind".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.RulesTable.StructureKind".into() }}
+    /// The buildable structures, plus the two things priced per voxel or per
+    /// charge rather than per building.
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+    pub struct Structures {
+        /// A placed beacon. Its draw is `power.beacon_base_draw_kw` restated here
+        /// so the block reads as one structure; the two are the same number and
+        /// move together.
+        ///
+        /// PLACEHOLDER: tuning, owner, at the walking skeleton's demo.
+        ///
+        /// item 90: 60 / 800 / 2
+        #[prost(message, optional, tag="1")]
+        pub beacon: ::core::option::Option<StructureKind>,
+        /// PLACEHOLDER: tuning, owner, S1.
+        ///
+        /// item 90: 80 / 600 / 0
+        #[prost(message, optional, tag="2")]
+        pub generator: ::core::option::Option<StructureKind>,
+        /// PLACEHOLDER: tuning, owner, S2.
+        ///
+        /// item 90: 60 / 500 / 2
+        #[prost(message, optional, tag="3")]
+        pub autocannon: ::core::option::Option<StructureKind>,
+        /// PLACEHOLDER: tuning, owner, S2.
+        ///
+        /// item 90: 90 / 400 / 3
+        #[prost(message, optional, tag="4")]
+        pub mortar: ::core::option::Option<StructureKind>,
+        /// PLACEHOLDER: tuning, owner, S1.
+        ///
+        /// item 90: 30 / 200 / 1
+        #[prost(message, optional, tag="5")]
+        pub survey_post: ::core::option::Option<StructureKind>,
+        /// PLACEHOLDER: tuning, owner, S3.
+        ///
+        /// item 90: 120 / 500 / 3
+        #[prost(message, optional, tag="6")]
+        pub resonance_spire: ::core::option::Option<StructureKind>,
+        /// Wall, priced per voxel; HP is by material rather than by structure,
+        /// which is why a wall is not a `StructureKind`.
+        ///
+        /// PLACEHOLDER: tuning, owner, S2.
+        ///
+        /// item 90: 1
+        #[prost(uint32, tag="7")]
+        pub wall_cost_per_voxel: u32,
+        /// One demolition charge.
+        ///
+        /// PLACEHOLDER: tuning, owner, S2.
+        ///
+        /// item 90: 15
+        #[prost(uint32, tag="8")]
+        pub demolition_charge_cost_dollars: u32,
+    }
+impl ::prost::Name for Structures {
+const NAME: &'static str = "Structures";
+const PACKAGE: &'static str = "gp.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Structures".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.RulesTable.Structures".into() }}
+    /// The verifier's and the interpreter's limits (spec sections 10 and 11;
+    /// items 90 and 94).
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+    pub struct Verifier {
+        /// The playbook size budget, in SIZE UNITS (item 94). What a unit counts,
+        /// so that the editor's meter and the verifier count the same thing: one
+        /// unit per route step, per handler, per step in a handler body, per build
+        /// target, per protected area and per patrol waypoint — the things spec
+        /// section 10 says count toward the one budget. Conditions and settings
+        /// count NOTHING, because their cost is bounded by the node they hang off.
+        /// The worked example (`expand_east`) is 6 units and the three templates
+        /// are of that order, so 128 is roomy on purpose.
+        ///
+        /// PLACEHOLDER: tuning, owner, at S3's exit — P1 sets the real number from
+        /// the measured per-rule cost per decision tick (item 94).
+        ///
+        /// item 94: 128
+        #[prost(uint32, tag="1")]
+        pub size_budget_units: u32,
+        /// The floor under a handler's cooldown: a playbook asking for less is
+        /// rejected.
+        ///
+        /// PLACEHOLDER: tuning, owner, S3.
+        ///
+        /// item 90: 5000
+        #[prost(int32, tag="2")]
+        pub handler_cooldown_min_ms: i32,
+        /// The ceiling on a handler's `max_fires`.
+        ///
+        /// PLACEHOLDER: tuning, owner, S3.
+        ///
+        /// item 90: 8
+        #[prost(uint32, tag="3")]
+        pub max_fires_max: u32,
+        /// The seat notebook's size, in characters.
+        ///
+        /// PLACEHOLDER: tuning, owner, S3.
+        ///
+        /// item 90: 4000
+        #[prost(uint32, tag="4")]
+        pub notebook_max_chars: u32,
+        /// How long a seat remembers a reached place or a seen thing, in game
+        /// milliseconds.
+        ///
+        /// PLACEHOLDER: tuning, owner, S3 — item 90 marks this one S2/S3.
+        ///
+        /// item 90: 180000
+        #[prost(int32, tag="5")]
+        pub reach_memory_ms: i32,
+    }
+impl ::prost::Name for Verifier {
+const NAME: &'static str = "Verifier";
+const PACKAGE: &'static str = "gp.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Verifier".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.RulesTable.Verifier".into() }}
 }
 impl ::prost::Name for RulesTable {
 const NAME: &'static str = "RulesTable";

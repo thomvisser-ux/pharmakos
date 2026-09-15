@@ -678,9 +678,18 @@ fn the_rules_hash_is_pinned_to_the_committed_table() {
     // One of the verifier's five `report_hash` inputs, and stamped into every
     // save. If this moves, either `rules/rules.v1.json` moved or
     // `RulesTable::encode` did, and the pull request owes the explanation.
+    //
+    // It moved once, from 2b9f1bd9f5a54425, when revision 3 of the table
+    // landed decisions-log items 90, 91 and 94: the per-kind walking speeds,
+    // the decision tick, the whole economy and power blocks, and the new
+    // commander, beacon, map, units, structures and verifier blocks. The table
+    // is an INPUT, never hashed state, so the per-tick chain in
+    // tests/golden/determinism did not move with it — and
+    // `the_rules_table_is_not_in_the_state_encoding` below is what makes that
+    // a fact rather than a hope.
     assert_eq!(
         hex(rules().rules_hash()),
-        "2b9f1bd9f5a54425",
+        "34c3f2152cb440e5",
         "the rules hash moved; say in the pull request which row changed and why"
     );
 }
