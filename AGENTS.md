@@ -227,10 +227,12 @@ Lint: `clippy::disallowed_types` covers `Instant`, `SystemTime`, and `std::time:
 `clippy::disallowed_methods` covers the readers (`Instant::now`, `SystemTime::now`). Wall time is
 legal in one place only: a crate on the wall's list (§4.9), where the allowance is passed on the
 command line by `cargo xtask clippy`. The Lull timer is a UI/host concern the sim never reads, so it
-belongs on that side of the wall like any other clock; performance measurement goes in a bench
-target or behind the wall (see `clippy.toml`'s reason strings). There is no `perf` feature and no
-per-module escape hatch — if you think you need one, that is a contract change, and §5 says how to
-raise it.
+belongs on that side of the wall like any other clock. Performance measurement in wall-clock time
+goes behind the wall too: `cargo xtask clippy` lints a bench target like the crate that owns it, so a
+bench inside a deterministic crate reports *counted work* — steps, nodes, components — and a
+millisecond figure comes from a walled crate driving the sim from outside (see `clippy.toml`'s
+reason strings). There is no `perf` feature and no per-module escape hatch — if you think you need
+one, that is a contract change, and §5 says how to raise it.
 
 ### 4.6 Ordered iteration, always
 

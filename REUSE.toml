@@ -96,6 +96,17 @@ precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 Pharmakos contributors"
 SPDX-License-Identifier = "MIT OR Apache-2.0"
 
+# tests/golden/plan-core/** is the canonical form of the example playbooks and of
+# the crate's own fixtures, re-encoded: the file format an alternative tool has to
+# reproduce, and expand_east's golden carries the example's own permissive header
+# through the round trip it exists to prove. Permissive, as proto/ is (decisions
+# log item 100, taken at T8). AFTER the tests/** block, so it wins.
+[[annotations]]
+path = ["tests/golden/plan-core/**"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Pharmakos contributors"
+SPDX-License-Identifier = "MIT OR Apache-2.0"
+
 # --- The rules table -------------------------------------------------------
 # rules/rules.v1.json is the canonical JSON of one gp.v1.RulesTable
 # (decisions-log item 78): the shape is schema and the values are data. It is
@@ -163,17 +174,16 @@ SPDX-License-Identifier = "GPL-3.0-or-later"
 # tests/golden/README.md and scenarios/README.md carry their own headers and
 # are unaffected, and so do the JSONC scenario files, which have comments.
 #
-# PLACEHOLDER: three golden areas still to come will hold byte-for-byte
+# PLACEHOLDER: two golden areas still to come will hold byte-for-byte
 # reproductions of material that is MIT OR Apache-2.0 where it lives today —
-# tests/golden/plan-core/ (example playbooks from examples/, re-encoded),
 # tests/golden/schema/ (generated JSON Schema) and tests/golden/docs/
-# (generated documentation). docs/LICENSING.md puts all three sources in the
+# (generated documentation). docs/LICENSING.md puts both sources in the
 # permissive tier, so those goldens arguably belong there too, with the
-# per-directory LICENSE pointers that tier uses. The fourth case is already
+# per-directory LICENSE pointers that tier uses. Two cases are already
 # answered: T1 committed tests/golden/proto/ and gave it its own permissive
-# block above, which is the precedent the other three should follow. Owner
-# decides at T8, T13 and T20 — each commits the first golden in its area —
-# and until then the broad tests/** block covers them.
+# block above, and T8's tests/golden/plan-core/ followed it (decisions-log
+# item 100). Owner decides at T13 and T20 — each commits the first golden in
+# its area — and until then the broad tests/** block covers them.
 [[annotations]]
 path = ["scenarios/**"]
 precedence = "aggregate"

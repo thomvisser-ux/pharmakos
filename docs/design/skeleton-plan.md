@@ -541,7 +541,9 @@ definition of `ci`.
 **The golden formats this stage freezes,** all under `tests/golden/`, every one human-diffable
 (AGENTS.md §9 item 7): `determinism/expected.hashes.txt` (already wired at `xtask/src/main.rs`),
 `pathing/expected.path-hashes.txt`, `proto/`, `plan-core/` (canonical form, JSONC round-trip,
-`render_plan` prose), `verifier/` (reports, `report_hash`, the catalogue), `interpreter/`,
+`render_plan` prose), `verifier/` (reports, `report_hash`, the catalogue), `gateway/` (the fog
+filter, the segment digest, the audit log and the handshake — added by T9 in wave 3, decisions-log
+item 100), `interpreter/`,
 `economy/`, `mapgen/`, `mesher/` (geometry digests), `schema/` and `docs/`, `scenarios/*` with their
 event logs, and the vista PNGs. Later stages add *files*, never formats.
 
