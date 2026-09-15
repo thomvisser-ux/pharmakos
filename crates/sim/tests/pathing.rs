@@ -1031,8 +1031,9 @@ fn an_undecomposable_cluster_edge_is_refused_rather_than_mistagged() {
         Clusters::new(surface, 0, scratch).is_none(),
         "a cluster edge of zero was accepted"
     );
+    let mut four = Scratch::for_map(surface, 4).expect("a scratch for a cluster edge of 4");
     assert!(
-        Clusters::new(surface, 4, scratch).is_some(),
+        Clusters::new(surface, 4, &mut four).is_some(),
         "a cluster edge of 4 gives 9 216 clusters, well inside the u16 tags, and it was refused"
     );
 }
