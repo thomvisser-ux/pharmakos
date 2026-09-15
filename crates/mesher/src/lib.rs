@@ -17,12 +17,16 @@
 //! * **floats begin at the first vertex coordinate**, which is here;
 //! * nothing a float touches is ever read back by the sim.
 //!
-//! The dirty set and the drain queue are two different things, and item 92 put them on
-//! opposite sides of that line. *Which chunks changed, in order* is the sim's: it is a
+//! The dirty set and the drain queue are two different things, and they fall on opposite
+//! sides of that line. *Which chunks changed, in order* is the sim's: it is a
 //! consequence of the voxel edit and is integer throughout. *When each of them is uploaded*
 //! is this crate's [`DrainQueue`]: it is ordered by age, by distance from the **camera**
 //! and by the per-frame surface and byte budget, and the camera is presentation. The sim
-//! hands over chunk indices; the queue decides the frame each one is meshed on.
+//! hands over chunk indices; the queue decides the frame each one is meshed on. The split
+//! is nobody's single decision: **item 56** draws the wall at the dirty set, **item 54**
+//! defines the drain order the queue implements, and **item 92** fixes the boundary types
+//! and gives the light bake to this crate. The camera argues it on its own — an order that
+//! depends on where the player is looking cannot be hashed state.
 //!
 //! The mechanism, not the intention, is what enforces that:
 //!
@@ -994,6 +998,21 @@ mod tests {
         assert_eq!(grid.chunk_index([1, 0, 0]), Some(1));
         assert_eq!(grid.chunk_index([0, 0, 1]), Some(3));
         assert_eq!(grid.chunk_index([0, 1, 0]), Some(15));
+    }
+
+    #[test]
+    fn the_grids_own_widths_agree_with_the_chunk_edge() {
+        // `CHUNK_EDGE_U32` and `CHUNK_VOLUME_U64` restate the edge for the grid's
+        // arithmetic, and a grid that disagreed with the mesher about the chunk size would
+        // give a wrong map extent rather than a failure. Pin the three together.
+        assert_eq!(
+            usize::try_from(super::CHUNK_EDGE_U32),
+            Ok(super::CHUNK_EDGE)
+        );
+        assert_eq!(
+            super::CHUNK_VOLUME_U64,
+            u64::try_from(CHUNK_VOLUME).expect("a chunk's volume fits in a u64")
+        );
     }
 
     #[test]
