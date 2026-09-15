@@ -12,10 +12,17 @@
 //! This crate is the presentation side of the wall, and the line is the one spike G1
 //! found and decisions log section 2.7 item 56 fixed:
 //!
-//! * everything up to and including the voxel edit, the dirty set and the drain order is
-//!   **integer** and lives in `pharmakos-sim`;
+//! * everything up to and including the voxel edit and the **dirty set** is **integer**
+//!   and lives in `pharmakos-sim`;
 //! * **floats begin at the first vertex coordinate**, which is here;
 //! * nothing a float touches is ever read back by the sim.
+//!
+//! The dirty set and the drain queue are two different things, and item 92 put them on
+//! opposite sides of that line. *Which chunks changed, in order* is the sim's: it is a
+//! consequence of the voxel edit and is integer throughout. *When each of them is uploaded*
+//! is this crate's [`DrainQueue`]: it is ordered by age, by distance from the **camera**
+//! and by the per-frame surface and byte budget, and the camera is presentation. The sim
+//! hands over chunk indices; the queue decides the frame each one is meshed on.
 //!
 //! The mechanism, not the intention, is what enforces that:
 //!
@@ -31,23 +38,36 @@
 //!   one is checked on every run;
 //! * it **links without gdext**, which is why the headless CPU proxy and the CI geometry
 //!   check can reuse the real mesher instead of a copy of it. Keep it that way: a `godot`
-//!   dependency here would put the engine between CI and the geometry it checks.
+//!   dependency here would put the engine between CI and the geometry it checks, and
+//!   `tests/no_gdext.rs` fails the build if one appears.
 //!
 //! Anything crossing back towards the sim crosses as an integer newtype at a named
 //! boundary function (AGENTS.md section 4.9). Today nothing crosses back at all.
 //!
+//! # No constants that belong to the rules table
+//!
+//! The mesher cannot read `rules/rules.v1.json`: doing so would need
+//! `pharmakos_sim::rules::RulesTable` and that is a dependency edge `wall-guard` exists to
+//! forbid. So every value the rules table owns is a **parameter the caller passes in** —
+//! `surfaces_per_frame`, `bytes_per_frame` and `age_frames` as [`DrainBudget`],
+//! `light_max` and `light_atten` as [`LightParams`]. `pharmakos-client-gdext` (T12) reads
+//! the table and fills them. Nothing in this crate hard-codes one, and the tests that need
+//! numbers state them at the call site.
+//!
+//! What this crate *does* own as constants is the art: the material palette and the
+//! per-face shading factors. Those are not rules-table rows and never were.
+//!
 //! # What the real mesher must honour (spike G1, section 10)
 //!
-//! These are measured findings, not preferences. The implementation that fills
-//! [`mesh_chunk`] in is written against the real types with the spike open beside it, and
-//! it has to come out on the right side of every one of them:
+//! These are measured findings, not preferences, and the implementation below is on the
+//! right side of every one of them:
 //!
 //! * **Winding: Godot's front face for triangle primitives is CLOCKWISE under
 //!   `CULL_BACK`**, which is what Godot's own `Mesh` documentation says. The quad walk is
 //!   emitted reversed to achieve it. G1 section 10.7 records this as a correction: the
 //!   spike's code had the geometry right and the stated fact inverted, so the constant
 //!   name is worth reading twice, and the vista screenshot — not a timing number — is what
-//!   catches a mistake here.
+//!   catches a mistake here. [`Mesher::mesh_chunk_into`] carries the diagram.
 //! * **An in-place surface update must compare the index array, not the vertex and index
 //!   counts.** Each quad emits `v0, v0+1, v0+2, v0, v0+2, v0+3` or the reversed pattern
 //!   depending on its face sign, so two remeshes with identical counts can still need
@@ -59,30 +79,46 @@
 //! * **16-bit indices are sufficient, with about 10x headroom.** G1 measured a maximum of
 //!   6 660 vertices on a cratered 32-cubed chunk against the 65 536 cap, so a chunk never
 //!   needs a split surface or a 32-bit index buffer. [`MeshBuffers`] therefore carries
-//!   `u16` indices. The corollary G1 also found: Godot stores the surface's indices as
-//!   16-bit below that cap, which is why an in-place patch of the index region cannot
-//!   hand it 32-bit ones.
+//!   `u16` indices, and a chunk that would exceed [`MAX_VERTICES`] is an **error**
+//!   ([`MeshError::TooManyVertices`]), never a truncation. The corollary G1 also found:
+//!   Godot stores the surface's indices as 16-bit below that cap, which is why an in-place
+//!   patch of the index region cannot hand it 32-bit ones.
 //! * **Vertex colours carry the material and a flood-fill light value.** The face mask is
 //!   keyed by `(material, light)`, so light-driven fragmentation is part of the quad
 //!   merge, and the per-face shading factor plus the baked light fold into the colour
 //!   (spec section 15's art-pipeline row). The flood fill that produces that light must
 //!   seed **every** sky cell, not the lowest one per column, or anything under an overhang
-//!   renders black and the mask key degenerates (G1 section 10.12).
+//!   renders black and the mask key degenerates (G1 section 10.12) — [`LightField`] does.
 //! * **Chunk borders and the light pad.** A chunk is meshed from a copy padded with one
 //!   voxel of each of its six neighbours, so a face that is interior across a chunk
 //!   boundary is never emitted — which is why one explosion straddling a border dirties
 //!   more chunks than it visually touches. The dirty pad is `light reach + 1`, derived
-//!   from the light maximum and attenuation rather than asserted, because the mesher reads
-//!   the neighbour cell one voxel outside the chunk and a light change at the edge of its
-//!   reach still alters a face one voxel further out. The padded copy does **not**
-//!   eliminate T-junctions; greedy meshing produces those by construction, and G1 saw none
-//!   only because every vertex coordinate is a small exact integer in `f32` with MSAA off.
+//!   from the light maximum and attenuation rather than asserted ([`LightParams::pad`]),
+//!   because the mesher reads the neighbour cell one voxel outside the chunk and a light
+//!   change at the edge of its reach still alters a face one voxel further out. The padded
+//!   copy does **not** eliminate T-junctions; greedy meshing produces those by
+//!   construction, and G1 saw none only because every vertex coordinate is a small exact
+//!   integer in `f32` with MSAA off.
 //!
 //! # What lives here
 //!
-//! Today: the boundary types only — [`ChunkInput`] in, [`MeshBuffers`] out, and
-//! [`mesh_chunk`] between them. The algorithm itself lands at the walking skeleton's vista
-//! task; see the `PLACEHOLDER` on [`mesh_chunk`].
+//! * the boundary types — [`ChunkView`] (borrowed, the meshing entry point fixed by item
+//!   92) and [`ChunkInput`] (owned, the test and golden form), [`MeshBuffers`] out;
+//! * [`Mesher`], the six-direction greedy sweep, allocation-free after warm-up;
+//! * [`LightField`], the flood-fill light bake over a whole map, and [`ChunkBorders`],
+//!   which gathers the six neighbour boundary slices a [`ChunkView`] wants;
+//! * [`DrainQueue`], item 54's per-frame upload budget and drain order.
+
+mod bake;
+mod sweep;
+mod upload;
+
+pub use crate::bake::{ChunkBorders, LightError, LightField, LightParams, chunk_view, map_offset};
+pub use crate::sweep::{
+    FACE_SHADE_256, MAX_VERTICES, MeshError, Mesher, PALETTE, gpu_surface_bytes, mesh_chunk,
+    quantise_channel,
+};
+pub use crate::upload::{DrainBudget, DrainQueue};
 
 use std::fmt;
 
@@ -110,9 +146,13 @@ pub const AIR: u8 = 0;
 /// The result is meaningful only for coordinates below [`CHUNK_EDGE`]; the function does
 /// not range-check, because it sits in the inner loop of the mask sweep.
 ///
-/// PLACEHOLDER: the sim's chunk store must adopt this same order, so that the boundary
-/// hands over a slice rather than a transposition — owner decides when the contract layer
-/// writes the chunk store at the walking skeleton.
+/// **Decided by decisions log section 2.7 item 92, and no longer a `PLACEHOLDER`:** the
+/// sim does *not* adopt this order. `pharmakos-sim`'s chunk store keeps its own — x east
+/// fastest, y north, z up, `index = x + 32 * y + 1024 * z`, the order its per-chunk
+/// digests are taken over — because a presentation concern must not decide the layout of
+/// hashed state. `pharmakos-client-gdext` transposes sim order into this one as it
+/// marshals, a 32 KiB copy per remeshed chunk, trivial at four surfaces a frame and the
+/// price of neither crate knowing the other's axes.
 #[must_use]
 pub const fn voxel_index(x: usize, y: usize, z: usize) -> usize {
     (y * CHUNK_EDGE + z) * CHUNK_EDGE + x
@@ -159,6 +199,35 @@ impl Face {
         }
     }
 
+    /// Which axis this face is perpendicular to: 0 for x, 1 for y, 2 for z.
+    #[must_use]
+    pub const fn axis(self) -> usize {
+        match self {
+            Self::NegX | Self::PosX => 0,
+            Self::NegY | Self::PosY => 1,
+            Self::NegZ | Self::PosZ => 2,
+        }
+    }
+
+    /// True for the three faces pointing along the positive axis direction.
+    #[must_use]
+    pub const fn is_positive(self) -> bool {
+        matches!(self, Self::PosX | Self::PosY | Self::PosZ)
+    }
+
+    /// The step, in chunk coordinates, from a chunk to the neighbour across this face.
+    #[must_use]
+    pub const fn step(self) -> [i32; 3] {
+        match self {
+            Self::NegX => [-1, 0, 0],
+            Self::PosX => [1, 0, 0],
+            Self::NegY => [0, -1, 0],
+            Self::PosY => [0, 1, 0],
+            Self::NegZ => [0, 0, -1],
+            Self::PosZ => [0, 0, 1],
+        }
+    }
+
     /// A short name for diagnostics.
     #[must_use]
     pub const fn name(self) -> &'static str {
@@ -179,7 +248,7 @@ impl fmt::Display for Face {
     }
 }
 
-/// Why a [`ChunkInput`] or a [`NeighbourBorder`] was refused.
+/// Why a [`ChunkInput`], a [`NeighbourBorder`] or a [`ChunkView`] was refused.
 ///
 /// Length is the only thing checked: material ids and light values are bytes, and every
 /// byte is a legal one at this boundary.
@@ -226,9 +295,9 @@ impl fmt::Display for ChunkInputError {
 
 impl std::error::Error for ChunkInputError {}
 
-/// One neighbour's boundary slice: the 32-by-32 layer of voxels immediately outside a
-/// chunk face, which is what keeps the mesher from emitting a face that is interior across
-/// the boundary.
+/// One neighbour's boundary slice, owned: the 32-by-32 layer of voxels immediately outside
+/// a chunk face, which is what keeps the mesher from emitting a face that is interior
+/// across the boundary.
 ///
 /// Both slices are [`FACE_AREA`] long and are indexed by the two axes the face direction
 /// leaves free, taken in the volume order's own precedence — **x fastest, then z, then
@@ -273,15 +342,78 @@ impl NeighbourBorder {
     pub fn light(&self) -> &[u8] {
         &self.light
     }
+
+    /// The borrowed form of this border.
+    #[must_use]
+    pub fn as_view(&self) -> BorderView<'_> {
+        BorderView {
+            materials: &self.materials,
+            light: &self.light,
+        }
+    }
+}
+
+/// One neighbour's boundary slice, borrowed. The [`ChunkView`] half of
+/// [`NeighbourBorder`], with the same indexing.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct BorderView<'a> {
+    materials: &'a [u8],
+    light: &'a [u8],
+}
+
+impl<'a> BorderView<'a> {
+    /// Borrows one neighbour's boundary slice, checking both lengths.
+    ///
+    /// # Errors
+    ///
+    /// [`ChunkInputError::BorderMaterials`] or [`ChunkInputError::BorderLight`] when the
+    /// slice offered is not [`FACE_AREA`] bytes long.
+    pub fn new(materials: &'a [u8], light: &'a [u8]) -> Result<Self, ChunkInputError> {
+        if materials.len() != FACE_AREA {
+            return Err(ChunkInputError::BorderMaterials {
+                len: materials.len(),
+            });
+        }
+        if light.len() != FACE_AREA {
+            return Err(ChunkInputError::BorderLight { len: light.len() });
+        }
+        Ok(Self { materials, light })
+    }
+
+    /// The neighbour's material ids across the shared face.
+    #[must_use]
+    pub const fn materials(self) -> &'a [u8] {
+        self.materials
+    }
+
+    /// The neighbour's baked light values across the shared face.
+    #[must_use]
+    pub const fn light(self) -> &'a [u8] {
+        self.light
+    }
+}
+
+impl fmt::Debug for BorderView<'_> {
+    /// Lengths, not 2 048 bytes of voxel data: this type appears in assertion messages.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BorderView")
+            .field("materials", &self.materials.len())
+            .field("light", &self.light.len())
+            .finish()
+    }
 }
 
 /// One chunk, as the mesher takes it: integer material ids, integer light, and whatever is
-/// known of the six neighbours.
+/// known of the six neighbours. **Owned** — the test and golden form.
 ///
 /// Both arrays are [`CHUNK_VOLUME`] bytes in the order [`voxel_index`] defines. A border
-/// that is [`None`] means "no neighbour data" — the chunk sits at the edge of the world,
-/// or the caller has not loaded it — and the mesher treats that face as open sky rather
-/// than guessing.
+/// that is [`None`] means "no neighbour data" — see [`ChunkView`] for what the mesher does
+/// with that.
+///
+/// The meshing entry point is [`ChunkView`], not this type (item 92): the client marshals
+/// borrowed slices out of the sim and has nowhere to put an owned copy. [`ChunkInput`]
+/// stays because a test that builds a chunk needs somewhere to keep it, and
+/// [`ChunkInput::as_view`] is the bridge.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct ChunkInput {
     materials: Box<[u8]>,
@@ -352,7 +484,262 @@ impl ChunkInput {
     pub fn border(&self, face: Face) -> Option<&NeighbourBorder> {
         self.borders.get(face.index()).and_then(Option::as_ref)
     }
+
+    /// The borrowed view of this chunk — what [`Mesher::mesh_chunk_into`] takes.
+    ///
+    /// Cannot fail: every length was checked when the [`ChunkInput`] was built.
+    #[must_use]
+    pub fn as_view(&self) -> ChunkView<'_> {
+        let mut borders: [Option<BorderView<'_>>; 6] = [None; 6];
+        for face in Face::ALL {
+            if let (Some(slot), Some(border)) = (borders.get_mut(face.index()), self.border(face)) {
+                *slot = Some(border.as_view());
+            }
+        }
+        ChunkView {
+            materials: &self.materials,
+            light: &self.light,
+            borders,
+        }
+    }
 }
+
+/// One chunk, **borrowed**: the meshing entry point, fixed by decisions log section 2.7
+/// item 92.
+///
+/// The mesher owns this type and takes nothing else. `pharmakos-sim` exposes a borrowable
+/// chunk view of its own in the sim's axis order; `pharmakos-client-gdext` transposes into
+/// this one as it marshals, which is inside the thin-client rule. Neither crate depends on
+/// the other in either direction, and `wall-guard` keeps it that way.
+///
+/// * `materials` and `light` are [`CHUNK_VOLUME`] bytes each, in [`voxel_index`] order.
+/// * `borders` is indexed by [`Face::index`]; each entry is [`FACE_AREA`] of the
+///   neighbour's material ids and light, indexed as [`NeighbourBorder`] documents.
+///
+/// **A border that is [`None`] is treated as open sky:** the neighbour voxel is air, so
+/// every face on that side is emitted, and the neighbour's light is 0, so those faces are
+/// shaded unlit. The mesher has no light field of its own and must not invent a value.
+/// A caller that wants the map's outer rim lit hands in a synthesised border instead, which
+/// is what [`ChunkBorders::gather`] does.
+#[derive(Clone, Copy)]
+pub struct ChunkView<'a> {
+    materials: &'a [u8],
+    light: &'a [u8],
+    borders: [Option<BorderView<'a>>; 6],
+}
+
+impl<'a> ChunkView<'a> {
+    /// Borrows one chunk's integer data, checking every length before anything is kept.
+    ///
+    /// # Errors
+    ///
+    /// [`ChunkInputError::Materials`] or [`ChunkInputError::Light`] when an array is not
+    /// [`CHUNK_VOLUME`] bytes long. Borders were checked by [`BorderView::new`].
+    pub fn new(
+        materials: &'a [u8],
+        light: &'a [u8],
+        borders: [Option<BorderView<'a>>; 6],
+    ) -> Result<Self, ChunkInputError> {
+        if materials.len() != CHUNK_VOLUME {
+            return Err(ChunkInputError::Materials {
+                len: materials.len(),
+            });
+        }
+        if light.len() != CHUNK_VOLUME {
+            return Err(ChunkInputError::Light { len: light.len() });
+        }
+        Ok(Self {
+            materials,
+            light,
+            borders,
+        })
+    }
+
+    /// Six empty border slots, for a caller that has no neighbour data to hand.
+    #[must_use]
+    pub const fn no_borders() -> [Option<BorderView<'a>>; 6] {
+        [None, None, None, None, None, None]
+    }
+
+    /// The chunk's material ids, in [`voxel_index`] order.
+    #[must_use]
+    pub const fn materials(self) -> &'a [u8] {
+        self.materials
+    }
+
+    /// The chunk's baked flood-fill light, in [`voxel_index`] order.
+    #[must_use]
+    pub const fn light(self) -> &'a [u8] {
+        self.light
+    }
+
+    /// The neighbour data for one face, when the caller had any.
+    #[must_use]
+    pub fn border(self, face: Face) -> Option<BorderView<'a>> {
+        self.borders.get(face.index()).copied().flatten()
+    }
+}
+
+impl fmt::Debug for ChunkView<'_> {
+    /// Lengths and which borders are present, not 64 KiB of voxel data.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let present: Vec<&'static str> = Face::ALL
+            .into_iter()
+            .filter(|face| self.border(*face).is_some())
+            .map(Face::name)
+            .collect();
+        f.debug_struct("ChunkView")
+            .field("materials", &self.materials.len())
+            .field("light", &self.light.len())
+            .field("borders", &present)
+            .finish()
+    }
+}
+
+/// The chunk grid of one map: how many chunks it is across, up and deep.
+///
+/// Both [`LightField`] and [`DrainQueue`] need it — one to walk a map-wide flood fill, the
+/// other to turn a chunk index into a chunk coordinate for the camera distance — so it is
+/// stated once. A chunk index is **x fastest, then z, then y**, the same precedence as
+/// [`voxel_index`]: `ci = cx + chunks_x * cz + chunks_x * chunks_z * cy`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct ChunkGrid {
+    x: u32,
+    y: u32,
+    z: u32,
+}
+
+/// Why a [`ChunkGrid`] was refused.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct GridError {
+    /// The dimensions that were offered.
+    pub dims: [u32; 3],
+}
+
+impl fmt::Display for GridError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let [x, y, z] = self.dims;
+        write!(
+            f,
+            "a chunk grid must be at least 1 chunk in each direction and hold fewer than \
+             2^32 voxels, got {x} x {y} x {z}"
+        )
+    }
+}
+
+impl std::error::Error for GridError {}
+
+impl ChunkGrid {
+    /// A grid of `chunks_x` by `chunks_y` by `chunks_z` chunks.
+    ///
+    /// # Errors
+    ///
+    /// [`GridError`] when a dimension is zero, or when the whole map would hold more than
+    /// `u32::MAX` voxels — the point past which a chunk index or a voxel index would stop
+    /// fitting the types the boundary uses.
+    pub fn new(chunks_x: u32, chunks_y: u32, chunks_z: u32) -> Result<Self, GridError> {
+        let dims = [chunks_x, chunks_y, chunks_z];
+        let volume = u64::from(chunks_x)
+            .saturating_mul(u64::from(chunks_y))
+            .saturating_mul(u64::from(chunks_z))
+            .saturating_mul(CHUNK_VOLUME_U64);
+        if chunks_x == 0 || chunks_y == 0 || chunks_z == 0 || volume > u64::from(u32::MAX) {
+            return Err(GridError { dims });
+        }
+        Ok(Self {
+            x: chunks_x,
+            y: chunks_y,
+            z: chunks_z,
+        })
+    }
+
+    /// Chunks across, in x.
+    #[must_use]
+    pub const fn chunks_x(self) -> u32 {
+        self.x
+    }
+
+    /// Chunks up, in y.
+    #[must_use]
+    pub const fn chunks_y(self) -> u32 {
+        self.y
+    }
+
+    /// Chunks deep, in z.
+    #[must_use]
+    pub const fn chunks_z(self) -> u32 {
+        self.z
+    }
+
+    /// How many chunks the map holds.
+    #[must_use]
+    pub const fn chunk_count(self) -> u32 {
+        self.x * self.y * self.z
+    }
+
+    /// The map's extent in voxels, `[x, y, z]`.
+    ///
+    /// The constructor's volume check is what makes every one of these fit an `i32`.
+    #[must_use]
+    pub fn voxels(self) -> [i32; 3] {
+        [
+            voxels_along(self.x),
+            voxels_along(self.y),
+            voxels_along(self.z),
+        ]
+    }
+
+    /// How many voxels the map holds: `chunk_count * CHUNK_VOLUME`.
+    #[must_use]
+    pub fn voxel_count(self) -> usize {
+        usize::try_from(self.chunk_count())
+            .unwrap_or(0)
+            .saturating_mul(CHUNK_VOLUME)
+    }
+
+    /// The index of chunk `(cx, cy, cz)`, or [`None`] when it is outside the grid.
+    #[must_use]
+    pub fn chunk_index(self, coords: [i32; 3]) -> Option<u32> {
+        let [cx, cy, cz] = coords;
+        let (x, y, z) = (
+            u32::try_from(cx).ok()?,
+            u32::try_from(cy).ok()?,
+            u32::try_from(cz).ok()?,
+        );
+        if x >= self.x || y >= self.y || z >= self.z {
+            return None;
+        }
+        Some(x + self.x * z + self.x * self.z * y)
+    }
+
+    /// The chunk coordinates of chunk `index`, or [`None`] when it is outside the grid.
+    #[must_use]
+    pub fn chunk_coords(self, index: u32) -> Option<[i32; 3]> {
+        if index >= self.chunk_count() {
+            return None;
+        }
+        let layer = self.x.checked_mul(self.z)?;
+        let cy = index.checked_div(layer)?;
+        let within = index.checked_rem(layer)?;
+        let cz = within.checked_div(self.x)?;
+        let cx = within.checked_rem(self.x)?;
+        Some([
+            i32::try_from(cx).ok()?,
+            i32::try_from(cy).ok()?,
+            i32::try_from(cz).ok()?,
+        ])
+    }
+}
+
+/// One grid dimension, in voxels.
+fn voxels_along(chunks: u32) -> i32 {
+    i32::try_from(chunks.saturating_mul(CHUNK_EDGE_U32)).unwrap_or(i32::MAX)
+}
+
+/// [`CHUNK_EDGE`] as a `u32`, for the grid's own arithmetic.
+const CHUNK_EDGE_U32: u32 = 32;
+/// [`CHUNK_VOLUME`] as a `u64`, for the grid's overflow check.
+const CHUNK_VOLUME_U64: u64 = 32 * 32 * 32;
 
 /// One drawable surface inside a [`MeshBuffers`]: a half-open run of vertices and a
 /// half-open run of indices.
@@ -381,19 +768,23 @@ pub struct Surface {
 /// (12 bytes of position and 4 of colour per vertex on the wire), and the indices are
 /// `u16` because G1 measured 6 660 vertices at worst against the 65 536 cap.
 ///
+/// Reuse one of these across meshings: [`Mesher::mesh_chunk_into`] clears it and keeps its
+/// capacity, which is what makes a steady-state meshing allocate nothing.
+///
 /// PLACEHOLDER: `normals` is carried here because the boundary was specified with it, but
 /// G1's measured path-B surface format was position plus colour plus index only — the
 /// per-face shading factor is folded into the vertex colour and the material is unshaded,
 /// which is both the look the game wants and what keeps path B's buffers unambiguous.
-/// Whether normals are uploaded at all is the vista task's decision; owner signs it off
-/// when the mesher is written.
+/// Whether normals are uploaded at all is T12's decision when the bridge meets the real
+/// `RenderingServer`; owner signs it off then. They are filled in meanwhile, and they are
+/// in the geometry digest, so dropping them later is a golden move with a reason.
 #[derive(Clone, Debug, Default)]
 pub struct MeshBuffers {
-    positions: Vec<[f32; 3]>,
-    normals: Vec<[f32; 3]>,
-    colours: Vec<[u8; 4]>,
-    indices: Vec<u16>,
-    surfaces: Vec<Surface>,
+    pub(crate) positions: Vec<[f32; 3]>,
+    pub(crate) normals: Vec<[f32; 3]>,
+    pub(crate) colours: Vec<[u8; 4]>,
+    pub(crate) indices: Vec<u16>,
+    pub(crate) surfaces: Vec<Surface>,
 }
 
 impl MeshBuffers {
@@ -411,6 +802,16 @@ impl MeshBuffers {
             indices: Vec::new(),
             surfaces: Vec::new(),
         }
+    }
+
+    /// Empties every array, keeping the capacity. The reason a warm mesher allocates
+    /// nothing.
+    pub fn clear(&mut self) {
+        self.positions.clear();
+        self.normals.clear();
+        self.colours.clear();
+        self.indices.clear();
+        self.surfaces.clear();
     }
 
     /// Vertex positions in chunk-local voxels.
@@ -450,6 +851,15 @@ impl MeshBuffers {
         self.surfaces.len()
     }
 
+    /// How many quads these buffers hold — six indices each, so the division is exact.
+    ///
+    /// The number the greedy merge is judged by: a chunk that meshes to more quads than it
+    /// used to has stopped merging something it used to merge.
+    #[must_use]
+    pub fn quad_count(&self) -> usize {
+        self.indices.len().checked_div(6).unwrap_or(0)
+    }
+
     /// True when there is nothing to upload.
     #[must_use]
     pub fn is_empty(&self) -> bool {
@@ -457,24 +867,17 @@ impl MeshBuffers {
     }
 }
 
-/// Meshes one chunk.
-///
-/// PLACEHOLDER: the greedy mesher is written against these types at the skeleton's vista
-/// task (owner schedules it); `spikes/g1-remesh/src/greedy.rs` at tag `spike-end` is the
-/// reference, never copied. Until then this returns empty buffers, so a caller wired up
-/// early uploads nothing rather than uploading wrong geometry.
-#[must_use]
-pub fn mesh_chunk(input: &ChunkInput) -> MeshBuffers {
-    let _ = input;
-    MeshBuffers::empty()
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
-        AIR, CHUNK_VOLUME, ChunkInput, ChunkInputError, FACE_AREA, Face, MeshBuffers,
-        NeighbourBorder, mesh_chunk, voxel_index,
+        AIR, CHUNK_VOLUME, ChunkGrid, ChunkInput, ChunkInputError, FACE_AREA, Face, LightParams,
+        MeshBuffers, NeighbourBorder, mesh_chunk, voxel_index,
     };
+
+    /// The committed rules table's pair.
+    fn params() -> LightParams {
+        LightParams::new(15, 1).expect("light_max 15 and light_atten 1 are the committed rows")
+    }
 
     #[test]
     fn materials_of_the_wrong_length_are_refused() {
@@ -538,11 +941,17 @@ mod tests {
         assert_eq!(chunk.light().len(), CHUNK_VOLUME);
         assert!(chunk.border(Face::PosY).is_some());
         assert!(chunk.border(Face::NegY).is_none());
+
+        let view = chunk.as_view();
+        assert!(view.border(Face::PosY).is_some());
+        assert!(view.border(Face::NegY).is_none());
+        assert_eq!(view.materials().len(), CHUNK_VOLUME);
     }
 
     #[test]
     fn an_empty_chunk_meshes_to_zero_surfaces() {
-        let buffers = mesh_chunk(&ChunkInput::empty());
+        let buffers =
+            mesh_chunk(&ChunkInput::empty(), params()).expect("an empty chunk cannot overflow");
 
         assert_eq!(buffers.surface_count(), 0);
         assert!(buffers.is_empty());
@@ -567,5 +976,32 @@ mod tests {
         for (slot, face) in Face::ALL.iter().enumerate() {
             assert_eq!(face.index(), slot);
         }
+    }
+
+    #[test]
+    fn the_chunk_grid_round_trips_every_index() {
+        let grid = ChunkGrid::new(3, 2, 5).expect("a 3 x 2 x 5 grid is legal");
+        assert_eq!(grid.chunk_count(), 30);
+        assert_eq!(grid.voxels(), [96, 64, 160]);
+        for index in 0..grid.chunk_count() {
+            let coords = grid.chunk_coords(index).expect("index is inside the grid");
+            assert_eq!(grid.chunk_index(coords), Some(index));
+        }
+        assert_eq!(grid.chunk_coords(30), None);
+        assert_eq!(grid.chunk_index([3, 0, 0]), None);
+        assert_eq!(grid.chunk_index([-1, 0, 0]), None);
+        // x fastest, then z, then y.
+        assert_eq!(grid.chunk_index([1, 0, 0]), Some(1));
+        assert_eq!(grid.chunk_index([0, 0, 1]), Some(3));
+        assert_eq!(grid.chunk_index([0, 1, 0]), Some(15));
+    }
+
+    #[test]
+    fn a_degenerate_chunk_grid_is_refused() {
+        assert!(ChunkGrid::new(0, 1, 1).is_err());
+        assert!(ChunkGrid::new(1, 0, 1).is_err());
+        assert!(ChunkGrid::new(1, 1, 0).is_err());
+        // 2^32 voxels is one too many for the boundary's types.
+        assert!(ChunkGrid::new(1 << 16, 1 << 16, 1).is_err());
     }
 }
