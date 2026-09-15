@@ -197,3 +197,43 @@ pub const ALLOW_DORMANT: &str =
 pub const AT_MOST: &str = "at most";
 /// The connectivity oracle's answer.
 pub const NO_ROUTE: &str = "no route the seat knows of";
+
+// --- Mandates ---------------------------------------------------------------
+//
+// The five mandate names, written once. They are proper nouns in the design
+// docs and in the spec's section 6, so they are capitalised here and nowhere
+// else, and the beacon selector and the mandate-settings row read the same
+// five words rather than spelling their own.
+
+/// `gp.v1.MandateSettings.build` and `gp.v1.BeaconFilter.mandate = BUILD`.
+pub const MANDATE_BUILD: &str = "Build";
+/// `DEFEND`.
+pub const MANDATE_DEFEND: &str = "Defend";
+/// `ATTACK`.
+pub const MANDATE_ATTACK: &str = "Attack";
+/// `SURVEY`.
+pub const MANDATE_SURVEY: &str = "Survey";
+/// `MINE`.
+pub const MANDATE_MINE: &str = "Mine";
+/// A `mandate_settings` with no arm set, which the verifier rejects.
+pub const MANDATE_NONE: &str = "no mandate the file names";
+
+// --- Quartermaster priority -------------------------------------------------
+
+/// `QUARTERMASTER_PRIORITY_LOW`.
+pub const PRIORITY_LOW: &str = "low";
+/// `QUARTERMASTER_PRIORITY_NORMAL`.
+pub const PRIORITY_NORMAL: &str = "normal";
+/// `QUARTERMASTER_PRIORITY_HIGH`.
+pub const PRIORITY_HIGH: &str = "high";
+/// The priority left unspecified, which the verifier rejects.
+pub const PRIORITY_UNSET: &str = "unset";
+
+// --- Conditions -------------------------------------------------------------
+
+/// The unit `cmdr_deaths` counts in.
+pub const DEATHS_UNIT: &str = "times";
+/// `beacon_powered` true.
+pub const POWERED: &str = "powered";
+/// `beacon_powered` false.
+pub const DORMANT: &str = "dormant";
