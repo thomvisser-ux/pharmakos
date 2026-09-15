@@ -42,6 +42,21 @@
 //! | `E06xx`, `W06xx` | economy, power and messaging |
 //! | `W07xx` | schedule, conflicts and staleness |
 //! | `I...` | information |
+//!
+//! ## The letter is part of the identity, not a copy of the severity
+//!
+//! Read the prefix as spelling, not as data. It follows the spec's own usage —
+//! the spec writes the families it introduces as warnings with a `W` and the
+//! rest with an `E` — and that usage is a good guide but not a law: `E0008` (a
+//! stale fingerprint) and `E0404` (a filter whose tags can never match an enemy
+//! beacon) are both **warnings**, because the proto says so in as many words,
+//! and both keep the `E` they were numbered with.
+//!
+//! A client branches on [`Entry::severity`], which `gp.api.v1.Diagnostic`
+//! carries on every diagnostic, never on the first letter of the code. The
+//! letter cannot be corrected later — codes are append-only from the day they
+//! ship, and that includes their spelling — so this is written down here rather
+//! than left for the next reader to infer.
 
 use pharmakos_proto::gp::api::v1::diagnostic::Severity;
 use pharmakos_proto::json::Json;
@@ -524,6 +539,18 @@ pub const CATALOGUE: &[Entry] = &[
     },
     Entry {
         code: "W0602",
+        family: Family::EconomyPowerAndMessaging,
+        severity: Severity::Warning,
+        emitter: Emitter::NoneYet("S1, the estimate stage"),
+    },
+    // `proto/gp/v1/playbook.proto` names this warning by hand and leaves it
+    // unnumbered: "When false, a playbook that adds draw beyond supply is an
+    // error (E0601). When true it is allowed, and the shortfall is a warning
+    // (W06xx)." It is a different sentence to `W0601`, which is the shortfall
+    // the grid is *already* carrying before this playbook runs, so it gets a row
+    // of its own rather than being folded in.
+    Entry {
+        code: "W0603",
         family: Family::EconomyPowerAndMessaging,
         severity: Severity::Warning,
         emitter: Emitter::NoneYet("S1, the estimate stage"),
