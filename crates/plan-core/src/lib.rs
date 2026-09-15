@@ -11,6 +11,15 @@
 //! |---|---|
 //! | [`jsonc`] | The lossless JSONC reader and writer: comments and formatting survive byte for byte |
 //! | [`canonical`] | The canonical form, **authoritative for the file format** |
+//! | [`patch`] | RFC 6902 JSON Patch with inverse-patch undo |
+//! | [`render`] | `render_plan`'s deterministic English prose |
+//! | [`interface`] | Interface-time arithmetic at spec section 5's rates |
+//! | [`projection`] | The `$` and `kW` projection the Quartermaster's rules imply |
+//! | [`travel`] | The pass-through to the sim's estimator, and the two rendering rules |
+//! | [`library`] | The local template folder the gateway reads and stores nothing from |
+//! | [`context`] | What the seat's frozen snapshot says |
+//! | [`verify`] | JSONC in, `pharmakos-verifier`'s report out |
+//! | [`strings`] | This crate's section of the one English string table |
 //!
 //! # The one property everything else rests on
 //!
@@ -48,7 +57,9 @@
 //!   arithmetic, Quartermaster projection and placement legality. They may
 //!   never step or fork the simulation, run mandates, programs, combat or
 //!   construction, model an opponent, or evaluate rule conditions over a
-//!   projected future (AGENTS.md section 3 rule 2).
+//!   projected future (AGENTS.md section 3 rule 2). `tests/confinement.rs`
+//!   asserts it over this crate's own source text, because a lint can be
+//!   switched off by an `#[allow]` somebody adds in a hurry and a test cannot.
 //! * Consequently this crate **may never reach the `research` feature** of
 //!   `pharmakos-sim`, which is what gates `fork`. It depends on the sim with
 //!   `default-features = false`, for its snapshot, rules-table and integer
@@ -65,9 +76,25 @@
 //!   determinism hole in the editor rather than a wording change.
 
 pub mod canonical;
+pub mod context;
 pub mod error;
+pub mod interface;
 pub mod jsonc;
+pub mod library;
+pub mod patch;
+pub mod projection;
+pub mod render;
+pub mod strings;
+pub mod travel;
+pub mod verify;
 
 pub use canonical::{Canonical, canonicalise, canonicalise_text};
+pub use context::PlanContext;
 pub use error::Error;
 pub use jsonc::Document;
+pub use library::instantiate_template;
+pub use patch::{Patch, patch_text};
+pub use projection::{Projection, project};
+pub use render::render_plan;
+pub use travel::{Estimate, TravelEstimator};
+pub use verify::verify_jsonc;

@@ -79,6 +79,11 @@ version = "0.0.0"
 [[package]]
 name = "pharmakos-plan-core"
 version = "0.0.0"
+dependencies = [
+ "pharmakos-proto",
+ "pharmakos-sim",
+ "pharmakos-verifier",
+]
 
 [[package]]
 name = "pharmakos-proto"

@@ -1,0 +1,26 @@
+Expand & Mine east
+Written by hand.
+
+Route
+  1. to_site: walk to voxel 96, 11, 62, avoiding known threats.
+    Give up after 2:00.
+  2. place_east: place a beacon at voxel 96, 11, 62, tagged "east", on a Mine mandate, at normal Quartermaster priority (16.5 s on site).
+  3. back_home: walk to beacon "b_01".
+
+Rules
+  1. "flee", when the commander is at or below 40% HP and the commander took damage in the last 3 s:
+    1. f1: walk to the safest own beacon.
+    2. f2: hold for 8 s.
+    Then carry on with the route.
+    Fires at most 3 times, and no sooner than every 30 s.
+
+If the commander dies
+  On respawn, carry on from the step the route was on.
+  After 2 deaths the fallback takes over.
+
+Fallback
+  Hold at the safest own beacon.
+
+Budget
+  6 of 128 size units.
+  16.5 s standing at a beacon along the route.
