@@ -22,7 +22,8 @@
 //! `cargo xtask ci` shows exactly what CI would publish.
 //!
 //! This module is deliberately generic: T16's vista job and T20's perf alarms
-//! (decisions-log item 23 — annotations with no threshold at this stage) both
+//! (skeleton-plan section 7 decision 23, recommended and not yet logged —
+//! annotations with no threshold at this stage) both
 //! publish through it rather than each inventing an escaping routine.
 
 use std::fs::OpenOptions;
