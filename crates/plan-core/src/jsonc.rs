@@ -883,10 +883,20 @@ impl Reader<'_> {
         if self.pos == digits_from {
             return Err(self.error("a number needs at least one digit"));
         }
+        // RFC 8259's grammar wants at least one digit after the point and at
+        // least one after the exponent's optional sign. Accepting `1.` or `1e`
+        // would not stay inside this crate: the number is kept as its source
+        // lexeme and written straight back out, so a malformed one reaches
+        // `gp.api.v1.PatchPlanResponse.inverse_json_patch` as text that is not
+        // JSON at all, and whoever reads it there is not this reader.
         if self.peek() == Some(b'.') {
             self.pos = self.pos.saturating_add(1);
+            let fraction_from = self.pos;
             while self.peek().is_some_and(|byte| byte.is_ascii_digit()) {
                 self.pos = self.pos.saturating_add(1);
+            }
+            if self.pos == fraction_from {
+                return Err(self.error("a number needs at least one digit after the point"));
             }
         }
         if matches!(self.peek(), Some(b'e' | b'E')) {
@@ -894,8 +904,12 @@ impl Reader<'_> {
             if matches!(self.peek(), Some(b'+' | b'-')) {
                 self.pos = self.pos.saturating_add(1);
             }
+            let exponent_from = self.pos;
             while self.peek().is_some_and(|byte| byte.is_ascii_digit()) {
                 self.pos = self.pos.saturating_add(1);
+            }
+            if self.pos == exponent_from {
+                return Err(self.error("a number needs at least one digit in its exponent"));
             }
         }
         Ok(self.slice(start, self.pos)?.to_owned())
@@ -976,6 +990,11 @@ impl Reader<'_> {
             .text
             .get(self.pos..end)
             .ok_or_else(|| self.error("`\\u` needs four hex digits"))?;
+        // `from_str_radix` accepts a leading `+` or `-`, so `\u+041` would
+        // parse as `\u41` and the reader would take a lexeme RFC 8259 rejects.
+        if !digits.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(self.error("`\\u` needs four hex digits"));
+        }
         let value = u32::from_str_radix(digits, 16)
             .map_err(|_ignored| self.error("`\\u` needs four hex digits"))?;
         self.pos = end;
@@ -1182,6 +1201,38 @@ mod tests {
     #[test]
     fn an_unclosed_block_comment_is_refused() {
         assert!(Document::parse("{} /* forever").is_err());
+    }
+
+    /// Comments are the only extension over RFC 8259, and the module doc says
+    /// so, so a lexeme RFC 8259 rejects has to be refused here too. It matters
+    /// beyond pedantry: a number is kept as its source lexeme and written
+    /// straight back out, including into an inverse patch's wire form, so a
+    /// reader that accepted `1e` would emit text that is not JSON.
+    #[test]
+    fn a_lexeme_rfc_8259_rejects_is_refused_at_its_byte() {
+        for source in [
+            "{\"a\":1.}",
+            "{\"a\":1e}",
+            "{\"a\":1e+}",
+            "{\"a\":1E-}",
+            "{\"a\":\"\\u+041\"}",
+            "{\"a\":\"\\u 041\"}",
+        ] {
+            let error = Document::parse(source)
+                .map(|document| document.to_text())
+                .expect_err(source);
+            assert!(error.is_syntax(), "{source}: {}", error.pointer);
+        }
+        // The well-formed spellings next to them still parse, so the rule is
+        // the grammar's and not a blanket refusal of exponents.
+        for source in [
+            "{\"a\":1.0}",
+            "{\"a\":1e5}",
+            "{\"a\":1E-5}",
+            "{\"a\":-0.5e+2}",
+        ] {
+            assert!(Document::parse(source).is_ok(), "{source}");
+        }
     }
 
     #[test]
