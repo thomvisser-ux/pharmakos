@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use pharmakos_proto::gp;
 use pharmakos_sim::encoding::{Enc, hex};
 use pharmakos_sim::knowledge::{AssetId, AssetKind, Position, SeatKnowledge, Sighting};
-use pharmakos_sim::math::fixed::Fx;
+use pharmakos_sim::math::fixed::{Fx, Sq};
 use pharmakos_sim::math::quantity::{Ms, Tick};
 use pharmakos_sim::snapshot::{SNAPSHOT_VERSION, Snapshot, SnapshotError};
 use pharmakos_sim::tables::SeatId;
@@ -325,7 +325,7 @@ fn a_restore_resizes_the_derived_index_to_the_restored_world() {
     // resized answers with nothing at all.
     assert_eq!(small.step(&mut enc), big.step(&mut enc));
     let centre = [Fx::from_voxels(192), Fx::from_voxels(192), Fx::ZERO];
-    let found = small.candidates_near(centre, 64).len();
+    let found = small.candidates_near(centre, Fx::from_voxels(1_024)).len();
     assert_eq!(
         u32::try_from(found).unwrap_or(0),
         expected_units,
@@ -540,7 +540,22 @@ fn the_rules_table_is_not_in_the_state_encoding() {
 
 #[test]
 fn the_broadphase_answer_does_not_depend_on_the_cell_size() {
+    // The radius is in voxels and the range test is exact, so three grids of
+    // different cell edge have to agree on the answer's *membership*, not only
+    // on its order.
+    //
+    // The radius is deliberately SMALL. An earlier version of this test asked
+    // for 64 cells, which covers the whole 384 x 384 map at every cell size, so
+    // all three runs returned every unit and the test passed without touching
+    // the property it is named for. This radius is smaller than the largest
+    // cell edge under test, which is exactly the query a radius-in-cells
+    // broadphase gets wrong.
+    let radius = Fx::from_voxels(48);
+    let whole_map = Fx::from_voxels(1_024);
+    let centre = [Fx::from_voxels(192), Fx::from_voxels(192), Fx::ZERO];
+
     let mut answers: Vec<Vec<u32>> = Vec::new();
+    let mut everything: Vec<usize> = Vec::new();
     for cell_size in [4_u32, 16, 64] {
         let altered = rules_edited(|message| {
             message.broadphase.get_or_insert_default().cell_size_voxels = cell_size;
@@ -550,23 +565,60 @@ fn the_broadphase_answer_does_not_depend_on_the_cell_size() {
         for _ in 0..20 {
             let _ = world.step(&mut enc);
         }
-        // A radius that covers the whole map at every cell size, so the three
-        // answers are comparable: what is being tested is the *order*, which is
-        // what a caller would otherwise inherit from the grid's geometry.
-        let centre = [Fx::from_voxels(192), Fx::from_voxels(192), Fx::ZERO];
-        answers.push(world.candidates_near(centre, 64).to_vec());
+        answers.push(world.candidates_near(centre, radius).to_vec());
+        everything.push(world.candidates_near(centre, whole_map).len());
     }
+
     let first = answers.first().cloned().unwrap_or_default();
-    assert!(!first.is_empty(), "the broadphase found nothing at all");
+    assert!(
+        !first.is_empty(),
+        "the broadphase found nothing at all within {} voxels of the middle of \
+         the map; the test cannot see the property it is checking",
+        radius.floor_voxels()
+    );
+    let all = everything.first().copied().unwrap_or(0);
+    assert!(
+        first.len() < all,
+        "the small query returned every unit ({} of {}), so it is not a small \
+         query and this test is vacuous",
+        first.len(),
+        all
+    );
     for (index, answer) in answers.iter().enumerate() {
         assert_eq!(
             answer, &first,
             "the broadphase's answer changed with the cell size (run {index})"
         );
     }
+    for (index, count) in everything.iter().enumerate() {
+        assert_eq!(
+            *count, all,
+            "a map-wide query changed with the cell size (run {index})"
+        );
+    }
+
     let mut sorted = first.clone();
     sorted.sort_unstable();
     assert_eq!(first, sorted, "candidates must come back in id order");
+
+    // And the exact test is the thing doing the work: every id in the answer is
+    // genuinely within the radius, and every id outside it is genuinely not.
+    let mut world = world_with(rules());
+    let mut enc = Enc::with_capacity(64 * 1024);
+    for _ in 0..20 {
+        let _ = world.step(&mut enc);
+    }
+    let near = world.candidates_near(centre, radius).to_vec();
+    let positions: Vec<[Fx; 3]> = world.units().positions().to_vec();
+    let limit = Sq::of_radius(radius);
+    for (id, pos) in positions.iter().enumerate() {
+        let id = u32::try_from(id).unwrap();
+        assert_eq!(
+            near.binary_search(&id).is_ok(),
+            Sq::between(*pos, centre) <= limit,
+            "unit {id} is on the wrong side of the radius"
+        );
+    }
 }
 
 #[test]

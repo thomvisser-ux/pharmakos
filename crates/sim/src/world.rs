@@ -108,10 +108,16 @@ const HARNESS_TURN_RATE: u16 = 512;
 const HARNESS_MAP_EXTENT_VOXELS: [i32; 2] = [384, 384];
 
 /// PLACEHOLDER (harness): the largest radius a broadphase query asks for, in
-/// cells. Item 67 sizes the cell edge to the largest query radius so a query
-/// touches at most 3 × 3 cells; until S2 has a real query radius, one cell is
-/// what that means.
-pub const BROADPHASE_QUERY_RADIUS_CELLS: u32 = 1;
+/// **voxels**. S2's combat phase replaces it with a weapon's range out of the
+/// rules table (owner, at S2).
+///
+/// In voxels because a query radius in cells would make the answer's membership
+/// depend on the cell edge, which the rules table declares a non-hashed tuning
+/// knob — see [`Csr::collect_in_radius`]. Item 67's sizing rule is the other
+/// direction of the same relation: the cell edge is chosen ⩾ the largest query
+/// radius so a query touches at most 3 × 3 cells, and 16 voxels is the cell edge
+/// `rules/rules.v1.json` currently carries.
+pub const BROADPHASE_QUERY_RADIUS_VOXELS: Fx = Fx::from_voxels(16);
 
 /// PLACEHOLDER (harness): what a harness unit is built with, in hit points.
 /// Nothing damages it — combat is S2 — so the number only has to be alive and
@@ -553,15 +559,17 @@ impl World {
         enc.finish()
     }
 
-    /// Candidate ids near `centre`, sorted ascending, into the world's own
-    /// scratch buffer.
+    /// The ids within `radius` **voxels** of `centre`, sorted ascending, in the
+    /// world's own scratch buffer.
     ///
     /// Allocation-free after construction, and independent of the broadphase's
-    /// cell size — see [`Csr::collect_in_radius`].
-    pub fn candidates_near(&mut self, centre: [Fx; 3], radius_cells: u32) -> &[u32] {
+    /// cell size in both membership and order — see
+    /// [`Csr::collect_in_radius`], which does the exact range test the grid
+    /// itself cannot.
+    pub fn candidates_near(&mut self, centre: [Fx; 3], radius: Fx) -> &[u32] {
         let mut scratch = core::mem::take(&mut self.candidates);
         self.broadphase
-            .collect_in_radius(centre, radius_cells, &mut scratch);
+            .collect_in_radius(self.units.positions(), centre, radius, &mut scratch);
         self.candidates = scratch;
         &self.candidates
     }
