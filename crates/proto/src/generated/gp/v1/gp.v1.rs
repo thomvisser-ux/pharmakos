@@ -924,11 +924,15 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.CmdrTookDamageWithin".
 /// (spec section 10: "integer comparisons only").
 ///
 /// CmdrHpPct above carries its own nested Cmp and does not use this message.
-/// That is deliberate rather than tidy: CmdrHpPct.Cmp already shipped, and
-/// changing an existing field's type is a WIRE_JSON break in a file format
-/// players hand-edit. The two enums spell the same six operators and the
-/// verifier and the interpreter treat them identically; every predicate added
-/// from the walking skeleton onward uses IntCompare.
+/// That is deliberate rather than tidy. Spec section 10's worked example — the
+/// one examples/playbooks/expand_east.jsonc copies verbatim and this schema is
+/// checked against — writes the predicate as
+/// {"cmdr_hp_pct":{"cmp":"LE","pct":40}}, so `cmp` and `pct` are fixed spellings
+/// on a fixed shape; folding CmdrHpPct into IntCompare would rename them to
+/// `op` and `value` and stop that file loading as written. The two enums spell
+/// the same six operators and the verifier and the interpreter treat them
+/// identically; every predicate added from the walking skeleton onward uses
+/// IntCompare.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct IntCompare {
     #[prost(enumeration = "int_compare::Op", tag = "1")]
@@ -1406,7 +1410,10 @@ pub mod beacon_filter {
     #[repr(i32)]
     pub enum Side {
         /// Reads as OWN. Kept as the zero value because proto3 has no presence on
-        /// an enum and OWN is what a bare selector means.
+        /// an enum and OWN is what a bare selector means. This message is the one
+        /// named exception to "an unset enum is a verifier error" — the header at
+        /// the top of this file carries the exception and the reason, so the
+        /// verifier has a single list to implement.
         Unspecified = 0,
         Own = 1,
         /// Enemy beacons the seat knows about. Freshness comes from the seat's
@@ -1677,6 +1684,11 @@ impl ::prost::Name for SurveySettings {
 const NAME: &'static str = "SurveySettings";
 const PACKAGE: &'static str = "gp.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.v1.SurveySettings".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.SurveySettings".into() }}
+/// Spec section 6, the Mine row, which names all four fields with their values:
+/// "Seam choice: richest / nearest / safest; max dig depth; pillar spacing;
+/// flee on threat. Never digs under structures." The skeleton fields a mining
+/// drone and ships the "Expand & Mine" template, so this one is filled like
+/// Build and Survey rather than held.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct MineSettings {
     /// Voxels. Never digs under structures.
@@ -1684,6 +1696,64 @@ pub struct MineSettings {
     pub dig_max_depth: u32,
     #[prost(bool, tag = "2")]
     pub flee_on_threat: bool,
+    /// Which seam of the ones the mandate can reach.
+    #[prost(enumeration = "mine_settings::SeamChoice", tag = "3")]
+    pub seam_choice: i32,
+    /// Voxels between the pillars the mandate leaves standing to hold the roof
+    /// up.
+    #[prost(uint32, tag = "4")]
+    pub pillar_spacing: u32,
+}
+/// Nested message and enum types in `MineSettings`.
+pub mod mine_settings {
+    // PLACEHOLDER — how an OMITTED mine setting reads. Spec section 6 names all
+    // four fields and their values but does not say what a mandate does when
+    // one is left out, and section 10's worked example leaves two of them out:
+    // it writes {"mine":{"dig_max_depth":4,"flee_on_threat":true}}. So this
+    // message cannot take the package's "an unset enum is a verifier error"
+    // rule without making the spec's own example fail to verify, and it cannot
+    // take a default without inventing one. Both readings are the section 6
+    // mandate contract's to choose — the same contract that decides whether
+    // these messages move to gp/v1/mandate.proto — and they are a pair: an
+    // omitted seam_choice and an omitted pillar_spacing get the same treatment
+    // or the row is inconsistent. OWNER decides at S1 (economy), which is when
+    // mining first has numbers to be wrong about; T6 (verifier) implements
+    // whichever it is. Nothing before S1 depends on the answer: the skeleton's
+    // "Expand & Mine" template writes the same two fields the spec's example
+    // does.
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum SeamChoice {
+        Unspecified = 0,
+        Richest = 1,
+        Nearest = 2,
+        Safest = 3,
+    }
+    impl SeamChoice {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "SEAM_CHOICE_UNSPECIFIED",
+                Self::Richest => "RICHEST",
+                Self::Nearest => "NEAREST",
+                Self::Safest => "SAFEST",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "SEAM_CHOICE_UNSPECIFIED" => Some(Self::Unspecified),
+                "RICHEST" => Some(Self::Richest),
+                "NEAREST" => Some(Self::Nearest),
+                "SAFEST" => Some(Self::Safest),
+                _ => None,
+            }
+        }
+    }
 }
 impl ::prost::Name for MineSettings {
 const NAME: &'static str = "MineSettings";
