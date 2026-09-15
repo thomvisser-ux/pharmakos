@@ -28,9 +28,11 @@ Three kinds of golden live here, and they fail for different reasons:
   `verifier/` did not, one of the two is wrong.
 * **The prose moved.** Either a template string changed (say so; it is the one
   the player reads) or the plan itself renders differently, which is a semantic
-  change wearing a typographic disguise. `render_plan` reads the coming
-  segment's length from the frozen snapshot, so a prose diff after a segment
-  ladder change is expected and should be stated.
+  change wearing a typographic disguise. The prose says **nothing** about the
+  coming segment's length today: `Snapshot` does not carry one yet, and
+  `crates/plan-core/src/context.rs` says so in a PLACEHOLDER against T10. From
+  T10 onwards, when that field exists and `render_plan` reads it, a prose diff
+  after a segment ladder change becomes expected and should be stated.
 
 ## The cases
 
@@ -60,11 +62,20 @@ pins both halves.
 
 ## Licensing
 
-`expand_east/expected.jsonc` is a byte reproduction of
-`examples/playbooks/expand_east.jsonc`, whose own SPDX header reads
-`MIT OR Apache-2.0`, so the reproduction carries that header too and `reuse`
-reads it from the file. `REUSE.toml`'s PLACEHOLDER against T8 — whether this
+`expand_east/expected.jsonc` is **not** a byte reproduction of
+`examples/playbooks/expand_east.jsonc` — it is the canonical re-encoding of it,
+and only the 25-line header comment block is byte-identical, carried through
+verbatim by the round trip because that is what the round trip promises. That
+header's own SPDX line reads `MIT OR Apache-2.0`, so the golden asserts the
+permissive licence **in its own bytes**, and `REUSE.toml`'s `tests/**` block
+carries `precedence = "aggregate"`, under which a file's own header wins.
+
+So one of this area's four files is already in the permissive tier and three are
+`GPL-3.0-or-later`. That split is a side effect of the round-trip property, not
+a decision this area took: `REUSE.toml`'s PLACEHOLDER against T8 — whether this
 whole area joins the permissive tier as `tests/golden/proto/` did — is the
-**owner's**, and nothing here presumes it: `REUSE.toml` is a contract file
-(AGENTS.md §5) and T8 did not touch it, so the broad `tests/**` block still
-covers `expected.prose.txt` and both `awkward/` files as `GPL-3.0-or-later`.
+**owner's**, `REUSE.toml` is a contract file (AGENTS.md §5) and T8 did not touch
+it. The owner ratifies the split, moves the whole area across, or annotates the
+single file; `reuse` is green either way. Note also that the carried-through
+header says "CONTRACT FILE: changes need owner approval" — that line is true of
+the example it came from and not of this golden.

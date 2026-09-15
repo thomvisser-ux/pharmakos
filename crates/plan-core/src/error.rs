@@ -138,6 +138,23 @@ mod tests {
         );
     }
 
+    /// The guard the doc on [`push_pointer`] promises. This crate's escaping
+    /// and the codec's are two copies of the same three lines, and a pointer
+    /// this crate builds is compared against one the codec built — a verifier
+    /// diagnostic's pointer against a patch's path, say — so the two have to
+    /// agree character for character. The codec keeps its copy private, so the
+    /// only way to see one is to make it report an error on a key that needs
+    /// both escapes.
+    #[test]
+    fn a_pointer_agrees_with_the_codecs() {
+        let error =
+            pharmakos_proto::json::decode::<pharmakos_proto::gp::v1::Playbook>("{\"a/b~c\":1}")
+                .map(|_decoded| ())
+                .expect_err("`a/b~c` is not a field of gp.v1.Playbook");
+        assert_eq!(error.pointer, push_pointer("", "a/b~c"));
+        assert_eq!(error.pointer, "/a~1b~0c");
+    }
+
     #[test]
     fn the_root_pointer_has_no_tokens() {
         assert!(
