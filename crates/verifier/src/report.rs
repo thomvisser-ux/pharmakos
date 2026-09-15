@@ -150,12 +150,41 @@ impl Builder {
 // JSON Patch suggestions (RFC 6902)
 // ---------------------------------------------------------------------------
 
-/// `[{"op":"add","path":…,"value":…}]`.
+// # `add` or `replace`: the rule, once, here
+//
+// RFC 6902 section 4.3 says a `replace` **fails** unless its target already
+// exists, and section 4.1 says an `add` whose target is an object member
+// replaces the value when the member is there and creates it when it is not. So
+// `add` is right in both directions and `replace` is right in only one.
+//
+// That matters more here than it would elsewhere, because proto3 JSON omits a
+// field sitting at its default: a playbook whose `hold` has no `ms`, whose
+// `wait_until` has no `timeout_ms`, whose handler has no `cooldown_ms`, or whose
+// `kind` is unset has **no such member in the file at all** — and those are
+// exactly the files the diagnostics fire on. A `replace` there is a suggestion a
+// conformant applier must refuse, which for a `MACHINE_APPLICABLE` fix is the
+// editor's Fix button doing nothing.
+//
+// The rule this crate follows:
+//
+// * [`patch_add`] whenever the diagnostic is *about the member being absent or
+//   at its default* — a missing tag, a zero duration, an unset enum;
+// * [`patch_replace`] only where the diagnostic itself proves the member is
+//   present, which for a proto3 field means its value is not the default: a
+//   `max_fires` of 9, a negative `cooldown_ms`, a percent above 100, a rotation
+//   above 3, an `author_kind` of `SCRIPT`;
+// * [`patch_remove`] for a member the author must delete, which is always
+//   present by construction.
+
+/// `[{"op":"add","path":…,"value":…}]` — creates the member, or replaces its
+/// value if it is already there (RFC 6902 section 4.1). The right op wherever
+/// the file may not carry the member at all.
 pub(crate) fn patch_add(path: &str, value: &Json) -> String {
     patch("add", path, Some(value))
 }
 
-/// `[{"op":"replace","path":…,"value":…}]`.
+/// `[{"op":"replace","path":…,"value":…}]` — only where the member is known to
+/// be present (RFC 6902 section 4.3 makes it fail otherwise).
 pub(crate) fn patch_replace(path: &str, value: &Json) -> String {
     patch("replace", path, Some(value))
 }

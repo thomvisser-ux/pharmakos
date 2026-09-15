@@ -10,7 +10,7 @@
       "suggestions": [
         {
           "title": "Set max_fires to 8",
-          "json_patch": "[{\"op\":\"replace\",\"path\":\"/declarative/handlers/0/max_fires\",\"value\":8}]",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/handlers/0/max_fires\",\"value\":8}]",
           "applicability": "MAYBE_INCORRECT"
         }
       ]

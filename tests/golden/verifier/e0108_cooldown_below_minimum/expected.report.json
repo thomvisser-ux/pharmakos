@@ -10,7 +10,7 @@
       "suggestions": [
         {
           "title": "Set the cooldown to 5000 ms",
-          "json_patch": "[{\"op\":\"replace\",\"path\":\"/declarative/handlers/0/cooldown_ms\",\"value\":5000}]",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/handlers/0/cooldown_ms\",\"value\":5000}]",
           "applicability": "MACHINE_APPLICABLE"
         }
       ]

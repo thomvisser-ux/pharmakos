@@ -29,7 +29,7 @@ use pharmakos_proto::gp::api::v1::VerifyReport;
 use pharmakos_proto::gp::api::v1::diagnostic::Severity;
 use pharmakos_proto::gp::api::v1::verify_plan::Depth;
 use pharmakos_proto::gp::v1::Voxel;
-use pharmakos_proto::gp::v1::beacon_filter::{MandateKind, Side};
+use pharmakos_proto::gp::v1::beacon_filter::MandateKind;
 use pharmakos_proto::json;
 use pharmakos_sim::knowledge::SeatEconomy;
 use pharmakos_sim::math::quantity::{Kw, Money};
@@ -37,7 +37,7 @@ use pharmakos_sim::rules::RulesTable;
 use pharmakos_sim::snapshot::{SNAPSHOT_VERSION, Snapshot};
 use pharmakos_sim::tables::SeatId;
 use pharmakos_verifier::catalogue::{CATALOGUE, Emitter, catalogue_json};
-use pharmakos_verifier::{Input, KnownBeacon, Scope, VERIFIER_VERSION, hash, verify};
+use pharmakos_verifier::{Input, KnownBeacon, Ownership, Scope, VERIFIER_VERSION, hash, verify};
 
 // ---------------------------------------------------------------------------
 // Paths
@@ -162,7 +162,7 @@ fn fixture_snapshot() -> Vec<u8> {
 
 fn beacon(
     id: &str,
-    side: Side,
+    side: Ownership,
     mandate: MandateKind,
     at: (i32, i32, i32),
     is_core: bool,
@@ -170,7 +170,7 @@ fn beacon(
 ) -> KnownBeacon {
     KnownBeacon {
         beacon_id: id.to_owned(),
-        owner: if side == Side::EnemyKnown {
+        owner: if side == Ownership::EnemyKnown {
             SeatId::new(1)
         } else {
             SeatId::new(0)
@@ -199,7 +199,7 @@ fn fixture_scope() -> Scope {
     )
     .with_beacon(beacon(
         "b_01",
-        Side::Own,
+        Ownership::Own,
         MandateKind::Build,
         (80, 11, 55),
         true,
@@ -207,7 +207,7 @@ fn fixture_scope() -> Scope {
     ))
     .with_beacon(beacon(
         "b_02",
-        Side::Own,
+        Ownership::Own,
         MandateKind::Mine,
         (100, 20, 58),
         false,
@@ -215,7 +215,7 @@ fn fixture_scope() -> Scope {
     ))
     .with_beacon(beacon(
         "e_01",
-        Side::EnemyKnown,
+        Ownership::EnemyKnown,
         MandateKind::Unspecified,
         (300, 300, 40),
         false,
@@ -480,7 +480,7 @@ fn report_hash_moves_with_the_playbook_the_snapshot_and_the_scope() {
     // 2b. the seat's view of that snapshot.
     let other_scope = fixture_scope().with_beacon(beacon(
         "b_03",
-        Side::Own,
+        Ownership::Own,
         MandateKind::Defend,
         (90, 15, 56),
         false,
@@ -738,6 +738,59 @@ fn the_codec_still_says_what_this_crate_reads() {
     let first = report.diagnostics.first().expect("one diagnostic");
     assert_eq!(first.code, "E0002");
     assert_eq!(first.path, "/nonsense");
+}
+
+#[test]
+fn author_text_cannot_talk_the_decoder_into_the_wrong_code() {
+    // The codec quotes author text back: an enum value it does not know is
+    // reported as "`{value}` is not a value of `{enum}`". A file whose value
+    // *is* the unknown-field marker must still come back as `E0001` — anything
+    // else names `author_kind`, a real and declared field, as unknown, and
+    // offers a patch that deletes it.
+    let text = "{\"schema_version\":{\"major\":1},\"kind\":\"PLAYBOOK\",                \"meta\":{\"title\":\"case\",\"author_kind\":\"is not a field\"}}";
+    let rules = rules();
+    let scope = fixture_scope();
+    let snapshot = fixture_snapshot();
+    let input = Input::new(text.as_bytes(), &snapshot, &scope, &rules).expect("input");
+    let report = verify(&input, Depth::Full);
+    let first = report.diagnostics.first().expect("one diagnostic");
+    assert_eq!(
+        first.code, "E0001",
+        "a bad enum value is a value error, not an unknown field: {}",
+        first.message
+    );
+    assert!(
+        report.diagnostics.iter().all(|found| found.code != "E0002"),
+        "nothing here is an unknown field"
+    );
+    assert!(
+        report.diagnostics.iter().all(|found| found
+            .suggestions
+            .iter()
+            .all(|fix| !fix.json_patch.contains("author_kind"))),
+        "no suggestion offers to delete a field the schema declares"
+    );
+}
+
+#[test]
+fn the_worked_example_case_is_the_canonical_bytes_crates_proto_pins() {
+    // `tests/golden/verifier/README.md` says this case is "spec section 10's
+    // worked example, canonicalised", and every claim it makes about the case
+    // rests on those being the same bytes `crates/proto`'s own golden holds. An
+    // assertion is cheaper than a promise.
+    let ours = fs::read(cases_dir().join("expand_east.json")).expect("the case");
+    let theirs = fs::read(
+        workspace_root()
+            .join("tests")
+            .join("golden")
+            .join("proto")
+            .join("expected.expand_east.json"),
+    )
+    .expect("crates/proto's canonical golden");
+    assert!(
+        ours == theirs,
+        "crates/verifier/tests/cases/expand_east.json has drifted from          tests/golden/proto/expected.expand_east.json; the verifier's clean case must be exactly          the canonical form the proto lane pins"
+    );
 }
 
 // ---------------------------------------------------------------------------

@@ -25,6 +25,23 @@
 //! offending member as a *suggestion* — the author's decision, in the editor,
 //! rather than something the verifier did quietly on the way past.
 //!
+//! # One `path` that is not a node pointer
+//!
+//! `gp.api.v1.Diagnostic.path` is documented as "RFC 6901 JSON Pointer into the
+//! playbook", and every diagnostic this crate raises after the document parses
+//! is exactly that. `E0001` is the exception, and only in its **lexical** form:
+//! when the text is not JSON at all there is no tree to point into, so
+//! `crates/proto`'s reader reports the failure at a byte offset and spells it
+//! `/byte/583`. That locator is forwarded verbatim rather than rewritten to the
+//! root, because "column 583" is the useful answer and the root is not.
+//!
+//! An editor therefore branches on the shape: a `path` whose first token is
+//! `byte` is an offset into the bytes it sent, and anything else is a node
+//! pointer. `E0001` raised *after* the parse — a value that does not fit its
+//! field, two arms of one choice set — carries an ordinary pointer like every
+//! other code. `tests/golden/verifier/README.md` says the same thing for the
+//! reader of the goldens.
+//!
 //! # The bytes are the bytes
 //!
 //! This stage decodes exactly the bytes `report_hash` is taken over. JSONC
@@ -41,7 +58,7 @@ use pharmakos_proto::{SCHEMA_VERSION, schema_version};
 
 use crate::hash;
 use crate::pointer;
-use crate::report::{Builder, Diag, patch_remove, patch_replace};
+use crate::report::{Builder, Diag, patch_add, patch_remove, patch_replace};
 
 /// Field names `gp.v1` reserves, in the order the `.proto` files reserve them.
 ///
@@ -86,12 +103,24 @@ const RESERVED_NAMES: &[&str] = &[
     "probe_directions",
 ];
 
-/// What the codec says when a member names a field the message does not have.
+/// What the codec says when a member names a field the message does not have,
+/// with the member's own name in front of it: ``"`{name}` is not a field of
+/// `{message}`. …"``.
 ///
 /// The classification below is coupled to this wording on purpose and the
 /// coupling is asserted by `the_codec_still_says_what_this_crate_reads` in
 /// `tests/verifier.rs`: if `crates/proto` rewords it, that test goes red in the
 /// pull request that reworded it, rather than `E0002` quietly becoming `E0001`.
+///
+/// The match is **anchored to the pointer** rather than searched for anywhere in
+/// the text, and that is not fussiness. The codec's other messages quote author
+/// text back: an enum value it does not know is reported as ``"`{value}` is not
+/// a value of `{enum}`"``, so a file carrying `"author_kind": "is not a field"`
+/// would match a floating substring and be reported as an unknown field named
+/// `author_kind` — a real, declared field, with a patch offering to delete it.
+/// Requiring the codec's sentence to *begin* with the pointer's own last token
+/// cannot be provoked that way: the only string that still matches is a field
+/// literally called `is not a field`, which no `.proto` can declare.
 const UNKNOWN_FIELD_MARKER: &str = "is not a field";
 
 /// Decode, or say why not.
@@ -138,8 +167,8 @@ pub(crate) fn run(bytes: &[u8], out: &mut Builder) -> Option<Playbook> {
     let playbook: Playbook = match json::decode_json(&value) {
         Ok(playbook) => playbook,
         Err(error) => {
-            if error.message.contains(UNKNOWN_FIELD_MARKER) {
-                let name = pointer::last_token(&error.pointer).unwrap_or_default();
+            let name = pointer::last_token(&error.pointer).unwrap_or_default();
+            if names_an_unknown_field(&error.message, &name) {
                 out.emit(
                     Diag::new("E0002", error.pointer.clone())
                         .arg("field", &name)
@@ -161,6 +190,20 @@ pub(crate) fn run(bytes: &[u8], out: &mut Builder) -> Option<Playbook> {
     check_author(&playbook, out);
     check_fingerprint(&playbook, out);
     Some(playbook)
+}
+
+/// Whether the codec's message is the "no such field" one, for the member the
+/// error's pointer names.
+///
+/// See [`UNKNOWN_FIELD_MARKER`] for why this is anchored rather than searched.
+fn names_an_unknown_field(message: &str, name: &str) -> bool {
+    let mut opening = String::with_capacity(name.len().saturating_add(32));
+    opening.push('`');
+    opening.push_str(name);
+    opening.push_str("` ");
+    opening.push_str(UNKNOWN_FIELD_MARKER);
+    opening.push_str(" of `");
+    message.starts_with(&opening)
 }
 
 /// Every reserved name anywhere in the document, with the pointer to it.
@@ -205,7 +248,7 @@ fn check_version(playbook: &Playbook, out: &mut Builder) {
             .arg("supported", format!("{major}.{minor}"))
             .fix(
                 format!("Set the schema version to {major}.{minor}"),
-                patch_replace("/schema_version", &schema_version_json(schema_version())),
+                patch_add("/schema_version", &schema_version_json(schema_version())),
                 Applicability::MaybeIncorrect,
             ),
     );
@@ -219,7 +262,9 @@ fn check_kind(playbook: &Playbook, out: &mut Builder) {
     }
     out.emit(Diag::new("E0005", "/kind").fix(
         "Mark the file as a PLAYBOOK",
-        patch_replace("/kind", &Json::String("PLAYBOOK".to_owned())),
+        // `add`, not `replace`: an unset `kind` is written by omitting the
+        // member, so there is usually nothing at `/kind` to replace.
+        patch_add("/kind", &Json::String("PLAYBOOK".to_owned())),
         Applicability::MaybeIncorrect,
     ));
 }
@@ -240,7 +285,9 @@ fn check_author(playbook: &Playbook, out: &mut Builder) {
         )),
         AuthorKind::Unspecified => out.emit(Diag::new("E0007", "/meta/author_kind").fix(
             "Mark the file as written by a HUMAN",
-            patch_replace("/meta/author_kind", &Json::String("HUMAN".to_owned())),
+            // `add`: unset means the member is absent. `E0006` above keeps
+            // `replace`, because `SCRIPT` proves it is there.
+            patch_add("/meta/author_kind", &Json::String("HUMAN".to_owned())),
             Applicability::MaybeIncorrect,
         )),
         AuthorKind::Human | AuthorKind::Builtin => {}
@@ -260,8 +307,12 @@ fn check_fingerprint(playbook: &Playbook, out: &mut Builder) {
     if meta.fingerprint.is_empty() {
         return;
     }
-    let matches = hash::plan_fingerprint(playbook)
-        .is_some_and(|digest| meta.fingerprint == digest.to_be_bytes());
+    // `from_field` rather than a comparison of our own: `crates/proto` owns the
+    // byte order (item 77), so the rule has one home, and a field of the wrong
+    // length comes back as `None` there rather than needing a length check here.
+    let matches = pharmakos_proto::fingerprint::from_field(&meta.fingerprint)
+        .zip(hash::plan_fingerprint(playbook))
+        .is_some_and(|(found, computed)| found == computed);
     if matches {
         return;
     }
@@ -285,4 +336,85 @@ fn schema_version_json(version: SchemaVersion) -> Json {
         entries.push(("minor".to_owned(), crate::report::number(version.minor)));
     }
     Json::Object(entries)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{RESERVED_NAMES, names_an_unknown_field};
+
+    /// Every field name `gp.v1` reserves, read out of the committed `.proto`
+    /// text.
+    ///
+    /// Field names are `lower_snake_case` and enum values are
+    /// `UPPER_SNAKE_CASE` — `buf lint`'s own rule, which CI runs — so the two
+    /// kinds of reservation are told apart by case. Only field names can appear
+    /// as a member of a hand-written playbook, which is what the scan in this
+    /// module is for.
+    fn reserved_in_the_schema() -> Vec<String> {
+        let mut found: Vec<String> = Vec::new();
+        for file in ["playbook.proto", "rules.proto", "seams.proto"] {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("..")
+                .join("..")
+                .join("proto")
+                .join("gp")
+                .join("v1")
+                .join(file);
+            let text = std::fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("reading {}: {error}", path.display()));
+            for line in text.lines() {
+                let trimmed = line.trim_start();
+                let Some(rest) = trimmed.strip_prefix("reserved ") else {
+                    continue;
+                };
+                for piece in rest.split('"').skip(1).step_by(2) {
+                    if piece.chars().all(|c| c.is_ascii_lowercase() || c == '_') {
+                        found.push(piece.to_owned());
+                    }
+                }
+            }
+        }
+        found.sort();
+        found.dedup();
+        found
+    }
+
+    #[test]
+    fn the_held_back_list_is_every_name_the_schema_reserves() {
+        // The list in this module is hand-ordered, so that `E0003`'s reasons
+        // read in schema order. What must hold is that it is the *same set* the
+        // `.proto` files reserve: a reservation added by a later schema pull
+        // request would otherwise fall through to `E0002` — "there is no such
+        // word" — when the true answer is "that word comes back in v1.1".
+        let mut ours: Vec<String> = RESERVED_NAMES.iter().map(|&name| name.to_owned()).collect();
+        ours.sort();
+        ours.dedup();
+        assert_eq!(
+            ours,
+            reserved_in_the_schema(),
+            "`RESERVED_NAMES` and the reservations in `proto/gp/v1/**` have drifted apart; add \
+             the new name here, with the comment saying which version brings it back"
+        );
+    }
+
+    #[test]
+    fn an_enum_value_that_quotes_the_marker_is_not_read_as_an_unknown_field() {
+        // `crates/proto` reports an unknown enum value as "`{value}` is not a
+        // value of `{enum}`", quoting author text. A file carrying
+        // `"author_kind": "is not a field"` therefore produces a message with
+        // this module's marker inside it — and must still be `E0001`, not an
+        // `E0002` naming a real, declared field as unknown.
+        assert!(names_an_unknown_field(
+            "`wombat` is not a field of `gp.v1.Meta`. Unknown fields are rejected, never stripped.",
+            "wombat",
+        ));
+        assert!(!names_an_unknown_field(
+            "`is not a field` is not a value of `gp.v1.Meta.AuthorKind`",
+            "author_kind",
+        ));
+        assert!(!names_an_unknown_field(
+            "`WOMBAT` is not a value of `gp.v1.Meta.AuthorKind`",
+            "author_kind",
+        ));
+    }
 }

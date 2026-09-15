@@ -37,13 +37,16 @@ use pharmakos_proto::gp::api::v1::patch_suggestion::Applicability;
 use pharmakos_proto::gp::v1::handler::Resume;
 use pharmakos_proto::gp::v1::on_death::OnRespawn;
 use pharmakos_proto::gp::v1::{
-    Condition, Handler, IntCompare, Playbook, Step, condition, int_compare, interface_row, step,
+    BeaconRef, Condition, Handler, IntCompare, Location, Playbook, Step, condition, fallback,
+    int_compare, interface_row, location, step,
 };
 
 use crate::limits::{CONDITION_MAX_DEPTH, CONDITION_MAX_NODES, Limits};
 use crate::pointer;
 use crate::report::{Builder, Diag, number, patch_add, patch_replace};
 use crate::size;
+
+use std::collections::BTreeMap;
 
 /// Run the stage.
 pub(crate) fn run(playbook: &Playbook, limits: &Limits, out: &mut Builder) {
@@ -91,7 +94,9 @@ pub(crate) fn run(playbook: &Playbook, limits: &Limits, out: &mut Builder) {
                     .arg("field", "on_respawn")
                     .fix(
                         "Continue the route after a respawn",
-                        patch_replace(
+                        // `add`: an unset enum is written by omitting the
+                        // member, so a `replace` would have nothing to land on.
+                        patch_add(
                             "/on_death/on_respawn",
                             &pharmakos_proto::json::Json::String("CONTINUE".to_owned()),
                         ),
@@ -102,8 +107,27 @@ pub(crate) fn run(playbook: &Playbook, limits: &Limits, out: &mut Builder) {
     }
 
     if let Some(tail) = playbook.fallback.as_ref() {
-        if tail.posture.is_none() {
-            out.emit(Diag::new("E0111", "/fallback").arg("field", "posture"));
+        // The guaranteed tail runs for the rest of the Push once the route is
+        // done, so its places are checked exactly as a step's are: a fallback
+        // that holds nowhere is the same bug as a move that walks nowhere, and
+        // it lasts longer.
+        match tail.posture.as_ref() {
+            None => out.emit(Diag::new("E0111", "/fallback").arg("field", "posture")),
+            Some(fallback::Posture::Hold(hold)) => {
+                check_location(hold.at.as_ref(), "/fallback/hold/at", "`at`", out);
+            }
+            Some(fallback::Posture::Shadow(shadow)) => match shadow.beacon.as_ref() {
+                None => {
+                    out.emit(Diag::new("E0101", "/fallback/shadow/beacon").arg("what", "`beacon`"));
+                }
+                Some(target) => check_beacon_ref(target, "/fallback/shadow/beacon", out),
+            },
+            Some(fallback::Posture::Patrol(patrol)) => {
+                let at = "/fallback/patrol/waypoints";
+                for (index, waypoint) in patrol.waypoints.iter().enumerate() {
+                    check_location(Some(waypoint), &pointer::at(at, index), "`waypoint`", out);
+                }
+            }
         }
     }
 }
@@ -223,13 +247,24 @@ fn walk_route_entry(entry: &Step, at: &str, out: &mut Builder) {
 /// checked at decode, because item 76 settles them by name.
 fn walk_action(kind: &step::Kind, at: &str, out: &mut Builder) {
     match kind {
-        step::Kind::Move(_) => {}
+        step::Kind::Move(walk_to) => {
+            let here = pointer::child(at, "move");
+            check_location(
+                walk_to.to.as_ref(),
+                &pointer::child(&here, "to"),
+                "`to`",
+                out,
+            );
+        }
         step::Kind::Interface(interface) => {
             let here = pointer::child(at, "interface");
-            if interface.beacon.is_none() {
-                out.emit(
+            match interface.beacon.as_ref() {
+                None => out.emit(
                     Diag::new("E0101", pointer::child(&here, "beacon")).arg("what", "`beacon`"),
-                );
+                ),
+                Some(target) => {
+                    check_beacon_ref(target, &pointer::child(&here, "beacon"), out);
+                }
             }
             for (index, row) in interface.rows.iter().enumerate() {
                 let row_at = pointer::at(&pointer::child(&here, "rows"), index);
@@ -249,9 +284,7 @@ fn walk_action(kind: &step::Kind, at: &str, out: &mut Builder) {
         }
         step::Kind::PlaceBeacon(place) => {
             let here = pointer::child(at, "place_beacon");
-            if place.at.is_none() {
-                out.emit(Diag::new("E0101", pointer::child(&here, "at")).arg("what", "`at`"));
-            }
+            check_location(place.at.as_ref(), &pointer::child(&here, "at"), "`at`", out);
         }
         step::Kind::WaitUntil(wait) => {
             let here = pointer::child(at, "wait_until");
@@ -280,6 +313,45 @@ fn walk_action(kind: &step::Kind, at: &str, out: &mut Builder) {
     }
 }
 
+/// A place a step names: present at all, and naming a place.
+///
+/// `Location.place` is a choice set exactly like `Step.kind`, `Fallback.posture`
+/// and `Handler.resume`, and this stage's rule for all of them is the schema's:
+/// an unset choice is an error, never a default. It is easy to miss on a
+/// `Location` because the message can be *written* — `"to": {}` is valid JSON
+/// and decodes without complaint — and a step that walks nowhere would otherwise
+/// seal clean and then do nothing for a whole Push, which is the most expensive
+/// way for a playbook to be wrong.
+///
+/// `what` names the field for `E0101` when the whole message is absent; the
+/// unset-choice case is `E0111`, pointed at the `Location` itself, because there
+/// is no member under it to point at.
+fn check_location(place: Option<&Location>, at: &str, what: &str, out: &mut Builder) {
+    let Some(place) = place else {
+        out.emit(Diag::new("E0101", at.to_owned()).arg("what", what));
+        return;
+    };
+    match place.place.as_ref() {
+        None => out.emit(Diag::new("E0111", at.to_owned()).arg("field", "place")),
+        Some(location::Place::BeaconAnchor(target)) => {
+            check_beacon_ref(target, &pointer::child(at, "beacon_anchor"), out);
+        }
+        Some(location::Place::Voxel(_) | location::Place::Safest(_)) => {}
+    }
+}
+
+/// A beacon reference that names a beacon: a fixed id or one of the four
+/// selectors, never nothing.
+///
+/// The same rule as [`check_location`], one level down. Which arm is set is not
+/// this stage's business — a fixed id is resolved by [`crate::resolve`] and a
+/// selector is late-bound and resolves at step start — but *that* one is set is.
+fn check_beacon_ref(target: &BeaconRef, at: &str, out: &mut Builder) {
+    if target.r#ref.is_none() {
+        out.emit(Diag::new("E0111", at.to_owned()).arg("field", "ref"));
+    }
+}
+
 /// One handler: its name, its condition, its firing limits and its body.
 fn walk_handler(handler: &Handler, at: &str, limits: &Limits, out: &mut Builder) {
     if handler.id.is_empty() {
@@ -296,7 +368,8 @@ fn walk_handler(handler: &Handler, at: &str, limits: &Limits, out: &mut Builder)
                 .arg("field", "resume")
                 .fix(
                     "Continue the route after the body",
-                    patch_replace(
+                    // `add`, for the same reason `on_respawn` uses it.
+                    patch_add(
                         &pointer::child(at, "resume"),
                         &pharmakos_proto::json::Json::String("CONTINUE".to_owned()),
                     ),
@@ -329,7 +402,10 @@ fn firing_limits(handler: &Handler, at: &str, limits: &Limits, out: &mut Builder
                 .arg("max", ceiling)
                 .fix(
                     format!("Set max_fires to {clamped}"),
-                    patch_replace(&pointer::child(at, "max_fires"), &number(clamped)),
+                    // `add`: the out-of-range value may be the *absent* one — a
+                    // handler that never wrote `max_fires` reads as zero, which
+                    // is below the floor of one and is what fires this.
+                    patch_add(&pointer::child(at, "max_fires"), &number(clamped)),
                     Applicability::MaybeIncorrect,
                 ),
         );
@@ -344,7 +420,12 @@ fn firing_limits(handler: &Handler, at: &str, limits: &Limits, out: &mut Builder
                 .arg("min", floor)
                 .fix(
                     format!("Set the cooldown to {floor} ms"),
-                    patch_replace(&pointer::child(at, "cooldown_ms"), &number(floor)),
+                    // `add`, and here it matters most: this is the one
+                    // `MACHINE_APPLICABLE` fix in the stage, so the editor
+                    // applies it unattended — and a handler with no
+                    // `cooldown_ms` at all is the ordinary way to be below the
+                    // floor.
+                    patch_add(&pointer::child(at, "cooldown_ms"), &number(floor)),
                     Applicability::MachineApplicable,
                 ),
         );
@@ -379,19 +460,30 @@ fn unique_names<'a>(
     field: &'static str,
     out: &mut Builder,
 ) {
-    let mut seen: Vec<(&str, usize)> = Vec::new();
+    // An ordered map rather than a linear scan, and the choice is load-bearing
+    // twice over. `BTreeMap` keeps iteration order a function of the keys
+    // (AGENTS.md section 4.6) where a `HashMap` would not; and the lookup is
+    // logarithmic where the scan it replaces was linear, which over a list this
+    // walks once made the whole check quadratic in the number of steps. This is
+    // the one crate that reads hand-written files and the gateway calls QUICK on
+    // every edit (spec section 11 budgets it at 5 ms p99), so the cost of a
+    // large playbook is not hypothetical. Diagnostics are still emitted in index
+    // order, so nothing about the report moves.
+    let mut seen: BTreeMap<&str, usize> = BTreeMap::new();
     for (index, name) in names.enumerate() {
         if name.is_empty() {
             continue;
         }
-        match seen.iter().find(|(earlier, _)| *earlier == name) {
-            Some((_, first)) => out.emit(
+        match seen.get(name) {
+            Some(first) => out.emit(
                 Diag::new("E0105", pointer::child(&pointer::at(at, index), field))
                     .arg("name", name)
                     .arg("scope", scope)
                     .related(pointer::child(&pointer::at(at, *first), field)),
             ),
-            None => seen.push((name, index)),
+            None => {
+                seen.insert(name, index);
+            }
         }
     }
 }

@@ -10,7 +10,7 @@
       "suggestions": [
         {
           "title": "Set the schema version to 1.0",
-          "json_patch": "[{\"op\":\"replace\",\"path\":\"/schema_version\",\"value\":{\"major\":1}}]",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/schema_version\",\"value\":{\"major\":1}}]",
           "applicability": "MAYBE_INCORRECT"
         }
       ]

@@ -112,7 +112,7 @@ use pharmakos_sim::snapshot::{Snapshot, SnapshotError};
 
 pub use hash::REPORT_HASH_DOMAIN;
 pub use limits::{CONDITION_MAX_DEPTH, CONDITION_MAX_NODES, Limits, RulesGap};
-pub use scope::{KnownBeacon, Scope};
+pub use scope::{KnownBeacon, Ownership, Scope};
 pub use size::size_units;
 
 /// This build of the verifier, opaque and hashed.
@@ -257,7 +257,10 @@ pub fn verify(input: &Input<'_>, depth: Depth) -> VerifyReport {
     if let Some(playbook) = decode::run(input.playbook, &mut out) {
         units = size::size_units(&playbook);
         if let Some(digest) = hash::plan_fingerprint(&playbook) {
-            fingerprint = digest.to_be_bytes().to_vec();
+            // `to_field` rather than `to_be_bytes` here: `crates/proto`'s
+            // `fingerprint` module owns "eight big-endian bytes" (item 77), and
+            // a rule with one home cannot drift between its callers.
+            fingerprint = pharmakos_proto::fingerprint::to_field(digest);
         }
         structure::run(&playbook, limits, &mut out);
         let symbols = resolve::run(&playbook, input.scope, &mut out);
