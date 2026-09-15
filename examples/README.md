@@ -87,15 +87,31 @@ or an enum value breaks files on disk even when the wire tags are untouched.
 
 3. **Placeholder stubs.** The walking skeleton filled several of them: the
    section-5 interface-row catalogue, the four selector forms, `BuildSettings`,
-   `SurveySettings`, the Common mandate settings, and the condition families
-   the v1 interpreter and the three skeleton templates need. What is still a
-   stub, each naming the stage that fills it: `DefendSettings` and
-   `AttackSettings` (S2, with combat), the broadcast message bodies (S4, with
-   radio), the rest of the predicate catalogue (S3), the blueprint and
-   capability catalogues (spec section 8), and `MineSettings`' `seam_choice`
-   and `pillar_spacing`, which belong to the spec section 6 mandate contract.
-   Whether the mandate messages eventually move to `proto/gp/v1/mandate.proto`
-   is still that contract's call.
+   `SurveySettings`, `MineSettings` (all four fields of spec section 6's Mine
+   row, `seam_choice` and `pillar_spacing` included), the Common mandate
+   settings, and the condition families the v1 interpreter and the three
+   skeleton templates need. What is still a stub, each naming the stage that
+   fills it: `DefendSettings` and `AttackSettings` (S2, with combat), the
+   broadcast message bodies (S4, with radio), the rest of the predicate
+   catalogue (S3), and the blueprint and capability catalogues (spec section
+   8). Whether the mandate messages eventually move to
+   `proto/gp/v1/mandate.proto` is still the section-6 contract's call.
+
+4. **A written-out default does not survive the canonical encoder.** Line 26
+   of `expand_east.jsonc` writes `"schema_version": {"major":1,"minor":0}`;
+   `tests/golden/proto/expected.expand_east.json` reads `{"major": 1}`, because
+   canonical proto3 JSON omits a field at its default and proto3 has no
+   presence on a scalar to distinguish the two. So "verbatim" here means the
+   bytes the **author's file** keeps, not the bytes the canonical form emits:
+   the two are different documents, and the round-trip the spec requires
+   (section 13, "comments survive a load-and-save unchanged") is the JSONC
+   layer's, which preserves the author's text and uses the canonical form only
+   to compare and verify. `crates/proto/src/json/codec.rs` lists this beside
+   its other mapping notes. **PLACEHOLDER:** T8 (plan-core) owns the
+   text-preserving layer and is where the byte-for-byte claim is tested
+   (decisions-log item 74). If T8 concludes the canonical encoder has to emit
+   a written default after all, that is a change to the canonical form and an
+   owner decision.
 
 ## Checking an example
 

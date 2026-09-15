@@ -29,6 +29,31 @@
 //!   that cannot express a float cannot be the way one arrives.
 //! * **An unknown field name is an error**, never ignored. Spec section 10:
 //!   "Load never strips".
+//!
+//! And one place where it follows the mapping, which is worth writing down
+//! because it looks like a deviation when you diff a golden file:
+//!
+//! * **A field at its proto3 default is not written**, as the mapping says.
+//!   The consequence is that a default somebody *wrote out* does not come
+//!   back: `examples/playbooks/expand_east.jsonc` opens with
+//!   `"schema_version": {"major":1,"minor":0}` and
+//!   `tests/golden/proto/expected.expand_east.json` reads `{"major": 1}`.
+//!   Nothing is lost semantically — proto3 has no presence on a scalar, so
+//!   `minor: 0` and an absent `minor` are the same message, and the canonical
+//!   form is canonical precisely because it picks one spelling. But "the
+//!   player's file round-trips byte for byte" (spec section 13) is a claim
+//!   about the **JSONC layer**, not about this one: that layer preserves the
+//!   author's text — comments, key order, spacing and a written-out default
+//!   alike — and uses this codec for the canonical form it compares and
+//!   verifies against. This codec has no `emit_defaults` mode and does not
+//!   need one; adding one would give the canonical form two spellings, which
+//!   is the one thing it may not have.
+//!
+//!   PLACEHOLDER: T8 (plan-core) owns that text-preserving layer and is where
+//!   the byte-for-byte claim is actually tested, per decisions-log item 74.
+//!   If T8 finds it needs the canonical encoder to emit a written default
+//!   instead, that is a change to the canonical form and therefore an owner
+//!   decision (AGENTS.md section 5) — raise it, do not add the flag here.
 
 use std::collections::BTreeMap;
 
