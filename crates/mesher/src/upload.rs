@@ -14,13 +14,23 @@
 //!
 //! # Item 54's order, exactly
 //!
-//! 1. **Anything older than `age_frames` first.** Distance alone has unbounded worst-case
-//!    latency by construction: a far chunk can be deferred for ever while nearer ones keep
-//!    being re-dirtied. G1 never saw it bite (max queue depth 4 at K = 4, latency max 1
-//!    frame), so the ageing term ships as **insurance with no measurement behind it** —
-//!    labelled as such by item 54 and repeated here so nobody reads the code as evidence.
+//! 1. **Anything `age_frames` frames old or older first.** Distance alone has unbounded
+//!    worst-case latency by construction: a far chunk can be deferred for ever while nearer
+//!    ones keep being re-dirtied. G1 never saw it bite (max queue depth 4 at K = 4, latency
+//!    max 1 frame), so the ageing term ships as **insurance with no measurement behind
+//!    it** — labelled as such by item 54 and repeated here so nobody reads the code as
+//!    evidence.
 //! 2. **Then nearest to the camera**, by integer squared chunk distance.
 //! 3. **Then by chunk index**, so the order is total and reproducible.
+//!
+//! **One reading, raised rather than assumed.** Item 54's own words are "anything older
+//! than 2 frames first", which read strictly is `age > age_frames`; this implements
+//! `age >= age_frames`, so a chunk issued on frame 10 jumps the distance order on frame 12
+//! rather than 13. The inclusive reading is what makes the row's name mean what it says
+//! (`age_frames = 2` is the age at which the term fires) and it is the safer of the two for
+//! the starvation mode the term exists to bound. The difference is one frame of queue
+//! priority and no chunk is ever dropped either way; the owner settles the wording, and
+//! [`DrainBudget::age_frames`] says the same thing at the field.
 //!
 //! A chunk re-dirtied while queued is **coalesced** and keeps its **earliest** issue frame,
 //! so the age measured is the age of the oldest edit the upload finally makes visible —
@@ -58,7 +68,10 @@ pub struct DrainBudget {
     pub surfaces_per_frame: u32,
     /// B: how many bytes may be uploaded in one frame.
     pub bytes_per_frame: u64,
-    /// A queued chunk this many frames old or older jumps the distance ordering.
+    /// A queued chunk this many frames old **or older** jumps the distance ordering.
+    ///
+    /// The inclusive reading of item 54's "older than 2 frames"; the module docs raise the
+    /// difference (one frame of priority) for the owner rather than assume it away.
     pub age_frames: u64,
 }
 
