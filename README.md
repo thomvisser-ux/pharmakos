@@ -47,9 +47,15 @@ crates/gamectl/        CLI: verify, schema, docs, scenarios, seat doctor
 crates/mesher/         walled greedy mesher: integer chunk data and .vox in, vertex buffers out;
                        links without gdext, so CI and the headless proxy reuse the real thing
 crates/client-gdext/   thin gdext crate; the Godot 4.7 client's GDScript side is views and editor only
-crates/proto/          gp.v1 and gp.api.v1 generated types — the single schema source
+crates/proto/          gp.v1 and gp.api.v1 generated types and the canonical proto-JSON
+                       codec — the single schema source. src/generated is CHECKED IN, so a
+                       plain cargo build needs neither buf nor protoc
 xtask/                 cargo xtask ci: the one command CI and contributors run
 proto/                 gp.v1 and gp.api.v1 .proto files, buf config — contract files
+rules/                 rules.v1.json: the tuning table, canonical JSON of one gp.v1.RulesTable,
+                       stamped into rules_hash — shape is contract, values are data
+tests/golden/          the committed half of the harness: hash chains, canonical playbooks,
+                       verifier reports, reserved-number and method/scope tables
 examples/playbooks/    example playbooks (JSONC), MIT OR Apache-2.0
 assets/                art and audio, CC BY-SA 4.0
 docs/spec/             the design specification (current: v0.6)
