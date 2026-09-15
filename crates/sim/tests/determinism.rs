@@ -686,10 +686,12 @@ fn the_rules_hash_is_pinned_to_the_committed_table() {
     // is an INPUT, never hashed state, so the per-tick chain in
     // tests/golden/determinism did not move with it — and
     // `the_rules_table_is_not_in_the_state_encoding` below is what makes that
-    // a fact rather than a hope.
+    // a fact rather than a hope. It moved again within the same revision, from
+    // 34c3f2152cb440e5, when item 95 added the two starting-force rows to
+    // `units` before that revision reached `main`.
     assert_eq!(
         hex(rules().rules_hash()),
-        "34c3f2152cb440e5",
+        "b31d8d0789eb207c",
         "the rules hash moved; say in the pull request which row changed and why"
     );
 }

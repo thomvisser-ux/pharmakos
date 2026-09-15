@@ -137,7 +137,9 @@
       "hp": 60,
       "draw_kw": 1,
       "cost_per_second": 20
-    }
+    },
+    "starting_build_drones": 2,
+    "starting_mining_drones": 1
   },
   "structures": {
     "beacon": {
