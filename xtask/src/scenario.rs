@@ -268,7 +268,8 @@ fn check_rules(root: &Path, json: &Json, problems: &mut Vec<Problem>) -> String 
             problems.push(Problem::new(
                 "/rules",
                 format!(
-                    "no `rules` key, and the default `{DEFAULT_RULES}` is not in the repository —                      name the table this scenario runs against"
+                    "no `rules` key, and the default `{DEFAULT_RULES}` is not in the repository \
+                     — name the table this scenario runs against"
                 ),
             ));
         }
@@ -277,7 +278,8 @@ fn check_rules(root: &Path, json: &Json, problems: &mut Vec<Problem>) -> String 
     let Some(relative) = value.as_str() else {
         problems.push(Problem::new(
             "/rules",
-            "must be a string: the repository-relative path of the rules table this scenario runs              against",
+            "must be a string: the repository-relative path of the rules table this scenario \
+             runs against",
         ));
         return DEFAULT_RULES.to_owned();
     };
