@@ -160,20 +160,26 @@ pub fn ticks_for_cost(cost: i32, cost_per_second: i32) -> Option<i32> {
     i32::try_from(rounded / i64::from(cost_per_second)).ok()
 }
 
-/// Price one abstract edge under fog: `cost * numerator / denominator`, rounded
-/// up, when either endpoint cell is unknown.
+/// Price one abstract edge under fog: integer `cost * numerator / denominator`,
+/// when either endpoint cell is unknown.
+///
+/// Item 61 spells the rule as integer `cost * 3 / 2` and bounds the result at
+/// **+50 % over the clear estimate**. Integer division in Rust truncates, so
+/// that is the arithmetic written here and no rounding term is added: a ceiling
+/// would price a one-unit edge at two, which is +100 % and outside the cap the
+/// same sentence sets. The fogged total is therefore at most `3/2` of the clear
+/// total exactly, which is what `fog_never_makes_a_route_look_cheaper`
+/// asserts.
 #[must_use]
 #[allow(
     clippy::integer_division,
-    reason = "the rounding is the rule: item 61 prices a fogged edge at cost * 3 / 2 rounded up, so the numerator carries the +(denominator - 1)"
+    reason = "item 61 spells the fog multiplier as integer cost * 3 / 2, so the truncation is the rule rather than an accident of the type"
 )]
 pub fn fog_price(cost: i32, numerator: i32, denominator: i32) -> i32 {
     if denominator <= 0 || numerator <= 0 {
         return cost;
     }
-    let scaled = i64::from(cost)
-        .saturating_mul(i64::from(numerator))
-        .saturating_add(i64::from(denominator).saturating_sub(1));
+    let scaled = i64::from(cost).saturating_mul(i64::from(numerator));
     i32::try_from(scaled / i64::from(denominator)).unwrap_or(i32::MAX)
 }
 
@@ -181,13 +187,26 @@ pub fn fog_price(cost: i32, numerator: i32, denominator: i32) -> i32 {
 /// cheap answer: the connectivity oracle decides it before any search runs (a
 /// crater seals you in as well as a moat does).
 ///
-/// Item 61 spells the parameters `(world, clusters, scratch, start, goal,
-/// fog)`. The seventh is item 90's amendment and nothing else moved: the
-/// walker's speed became a per-kind rules row in cost units per second, and
-/// `ticks` is the one number of the three that depends on it. Everything else
-/// item 61 fixes is unchanged — `None` from the oracle before any search,
-/// `legs` as the abstract-edge count, fog at ×3/2 per abstract edge, and no
-/// cache.
+/// Item 61 spells the parameters `(world, clusters, scratch, start, goal, fog)`
+/// and the result `Estimate { cost, ticks, legs }`. Three things differ, all of
+/// them stated in T7's PR body rather than left to be discovered at the call
+/// site:
+///
+/// 1. **A seventh parameter**, [`Speed`]. Item 90 made the walker's speed a
+///    per-kind rules row in cost units per second, and `ticks` is the one
+///    number of the three that depends on it.
+/// 2. **The first parameter is [`Surface`], not `World`.** The estimator needs
+///    the columns and the step rule and nothing else, and taking the surface is
+///    what makes it structurally unable to reach the stepping API that
+///    AGENTS.md §3 rule 2 forbids it. A caller holding a `World` reaches it
+///    through `World::surface()`.
+/// 3. **[`Estimate`] carries a fourth field**, `fogged`, which is additive and
+///    is not one of item 61's three numbers — it is how the caller knows to
+///    render the leg as a bound rather than an ETA.
+///
+/// Everything else item 61 fixes is unchanged: `None` from the oracle before
+/// any search, `legs` as the abstract-edge count, fog at ×3/2 per abstract edge
+/// as integer `cost * 3 / 2`, never optimistic, and no cache.
 ///
 /// `fog_numerator` and `fog_denominator` come from the rules table, so the
 /// multiplier is data rather than a constant here (AGENTS.md §12).
