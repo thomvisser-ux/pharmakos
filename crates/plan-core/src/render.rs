@@ -26,6 +26,14 @@
 //!
 //! 1. **What the file says** — the steps, the guards, the rules, the blocks.
 //!    A scenario asserting on a playbook's content asserts the same words.
+//!    One narrowing, stated rather than left to be noticed: a
+//!    `set_mandate_settings` row is rendered as *that* — the row is named, its
+//!    individual settings are not listed. Each setting's player-facing wording
+//!    belongs to the mandate contract, which is T14's and S1's, and inventing
+//!    five vocabularies here would be exactly the "don't invent rules" AGENTS.md
+//!    section 12 forbids. The interface time the row costs *is* stated, because
+//!    that is arithmetic over the rate card. The settings themselves arrive
+//!    with the mandates.
 //! 2. **Interface-time arithmetic** — exact, from `gp.v1.RulesTable`'s
 //!    section-5 rate card. A scenario asserting how long a visit took asserts
 //!    the same number, because it is the same row.
@@ -285,21 +293,21 @@ fn row_sentence(row: &InterfaceRow) -> String {
 
 fn writ(settings: &MandateSettings) -> &'static str {
     match settings.mandate.as_ref() {
-        Some(mandate_settings::Mandate::Build(_)) => "Build",
-        Some(mandate_settings::Mandate::Defend(_)) => "Defend",
-        Some(mandate_settings::Mandate::Attack(_)) => "Attack",
-        Some(mandate_settings::Mandate::Survey(_)) => "Survey",
-        Some(mandate_settings::Mandate::Mine(_)) => "Mine",
-        None => "writless",
+        Some(mandate_settings::Mandate::Build(_)) => s::MANDATE_BUILD,
+        Some(mandate_settings::Mandate::Defend(_)) => s::MANDATE_DEFEND,
+        Some(mandate_settings::Mandate::Attack(_)) => s::MANDATE_ATTACK,
+        Some(mandate_settings::Mandate::Survey(_)) => s::MANDATE_SURVEY,
+        Some(mandate_settings::Mandate::Mine(_)) => s::MANDATE_MINE,
+        None => s::MANDATE_NONE,
     }
 }
 
 fn priority(value: i32) -> &'static str {
     match interface_row::QuartermasterPriority::try_from(value) {
-        Ok(interface_row::QuartermasterPriority::Low) => "low",
-        Ok(interface_row::QuartermasterPriority::Normal) => "normal",
-        Ok(interface_row::QuartermasterPriority::High) => "high",
-        Ok(interface_row::QuartermasterPriority::Unspecified) | Err(_) => "unset",
+        Ok(interface_row::QuartermasterPriority::Low) => s::PRIORITY_LOW,
+        Ok(interface_row::QuartermasterPriority::Normal) => s::PRIORITY_NORMAL,
+        Ok(interface_row::QuartermasterPriority::High) => s::PRIORITY_HIGH,
+        Ok(interface_row::QuartermasterPriority::Unspecified) | Err(_) => s::PRIORITY_UNSET,
     }
 }
 
@@ -346,11 +354,11 @@ fn selector(superlative: &str, filter: Option<&BeaconFilter>) -> String {
         if writ != beacon_filter::MandateKind::Unspecified {
             sentence.push(' ');
             sentence.push_str(match writ {
-                beacon_filter::MandateKind::Build => "Build",
-                beacon_filter::MandateKind::Defend => "Defend",
-                beacon_filter::MandateKind::Attack => "Attack",
-                beacon_filter::MandateKind::Survey => "Survey",
-                beacon_filter::MandateKind::Mine => "Mine",
+                beacon_filter::MandateKind::Build => s::MANDATE_BUILD,
+                beacon_filter::MandateKind::Defend => s::MANDATE_DEFEND,
+                beacon_filter::MandateKind::Attack => s::MANDATE_ATTACK,
+                beacon_filter::MandateKind::Survey => s::MANDATE_SURVEY,
+                beacon_filter::MandateKind::Mine => s::MANDATE_MINE,
                 beacon_filter::MandateKind::Unspecified => "",
             });
         }
@@ -389,7 +397,7 @@ fn condition(node: Option<&Condition>) -> String {
         ),
         condition::Node::CmdrDeaths(test) => format!(
             "the commander has died {}",
-            compare(test.deaths.as_ref(), "times")
+            compare(test.deaths.as_ref(), s::DEATHS_UNIT)
         ),
         condition::Node::SegmentElapsed(test) => {
             format!("the segment has run {}", compare_ms(test.ms.as_ref()))
@@ -407,7 +415,7 @@ fn condition(node: Option<&Condition>) -> String {
         condition::Node::BeaconPowered(test) => format!(
             "{} is {}",
             beacon(test.beacon.as_ref()),
-            if test.powered { "powered" } else { "dormant" }
+            if test.powered { s::POWERED } else { s::DORMANT }
         ),
         condition::Node::Treasury(test) => {
             format!("the treasury is {}", compare_money(test.dollars.as_ref()))
@@ -686,7 +694,7 @@ pub fn duration(ms: Ms) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{duration, join, render_plan};
+    use super::{Limits, duration, join, render_plan};
     use crate::canonical::canonicalise_text;
     use crate::context::PlanContext;
     use pharmakos_sim::math::quantity::Ms;
@@ -719,8 +727,12 @@ mod tests {
     }
 
     fn prose(text: &str) -> String {
+        prose_with(text, &rules())
+    }
+
+    fn prose_with(text: &str, rules: &RulesTable) -> String {
         let canonical = canonicalise_text(text).expect("a playbook");
-        render_plan(&canonical.playbook, &context(), &rules()).expect("the rules table is complete")
+        render_plan(&canonical.playbook, &context(), rules).expect("the rules table is complete")
     }
 
     #[test]
@@ -761,17 +773,45 @@ mod tests {
         assert!(text.contains("Hold at the safest own beacon."), "{text}");
     }
 
+    /// The number in the meter has to **follow the row**, not happen to equal
+    /// it: item 94 put the budget in the rules table and says P1 moves it at
+    /// S3's exit, so a rendering that had baked today's 128 in would read
+    /// correctly today and lie the day the row changes. Rendering twice, once
+    /// against the committed table and once against a table whose row has been
+    /// edited, is the only assertion a constant cannot pass.
     #[test]
     fn the_size_meter_reads_the_rules_table_budget() {
-        let text = prose(MINIMAL);
-        assert!(text.contains("1 of 128 size units."), "{text}");
+        let committed = rules();
+        let row = Limits::from_rules(&committed)
+            .expect("the committed table carries the verifier block")
+            .size_budget_units();
+        let text = prose_with(MINIMAL, &committed);
+        assert!(text.contains(&format!("of {row} size units.")), "{text}");
+
+        let mut edited = committed.message().clone();
+        let verifier = edited
+            .verifier
+            .as_mut()
+            .expect("the committed table carries a verifier block");
+        verifier.size_budget_units = row.saturating_add(7);
+        let moved = RulesTable::from_message(&edited).expect("the edited table still decodes");
+        let text = prose_with(MINIMAL, &moved);
+        assert!(
+            text.contains(&format!("of {} size units.", row.saturating_add(7))),
+            "the meter printed the old number after the row moved:\n{text}"
+        );
     }
 
+    /// Item 97: claim nothing a scenario assertion would later have to state
+    /// differently. The snapshot does not carry the coming segment's length,
+    /// so the prose must not mention a segment **at all** — not in any
+    /// wording, which is why this looks for the word rather than for one
+    /// sentence built from it.
     #[test]
     fn nothing_is_claimed_about_the_segments_length() {
-        let text = prose(MINIMAL);
+        let text = prose(MINIMAL).to_lowercase();
         assert!(
-            !text.contains("segment is"),
+            !text.contains("segment"),
             "the snapshot does not carry the segment length yet:\n{text}"
         );
     }
