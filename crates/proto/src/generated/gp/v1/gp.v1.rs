@@ -2395,16 +2395,16 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Beacon".int
         /// within one beacon's sphere of a spot the commander can reach on that
         /// first walk.
         ///
-        /// Item 90 glosses the upper end as "inside the sphere of a beacon placed
-        /// at the placement range", which does not hold arithmetically for the top
-        /// third of the band: a beacon placed at
-        /// `commander.placement_range_voxels` = 12 covers to 12 + 24 = 36, and the
-        /// band runs to 44. The design intent — one walk, one beacon — survives
-        /// either way, because the commander walks TOWARD the vent rather than
-        /// stopping at the placement range. The rows are the contract and the
-        /// sentence was the gloss; T5a's pull request raises the mismatch for the
-        /// owner (narrow the band to 36, widen the placement range, or amend the
-        /// gloss), and T5 must not assert item 90's sentence as written.
+        /// The arithmetic behind the upper end, stated so nobody re-derives it
+        /// wrongly: the placement range is measured from the COMMANDER to the
+        /// site, not from the core, and the site must lie inside one of the seat's
+        /// own spheres — so the commander walks to the edge of the core's sphere
+        /// and places a beacon up to `beacon.sphere_radius_voxels` = 24 from the
+        /// core, whose own sphere then reaches 24 + 24 = 48. Every vent in 28..=44
+        /// is inside that reach with 4 voxels to spare (decisions-log item 95,
+        /// which corrects item 90's shorter gloss of the same rule). T5 asserts
+        /// the band against 2 x sphere_radius_voxels, not against the placement
+        /// range.
         ///
         /// PLACEHOLDER: tuning, owner, S1.
         ///
@@ -2508,15 +2508,15 @@ impl ::prost::Name for UnitKind {
 const NAME: &'static str = "UnitKind";
 const PACKAGE: &'static str = "gp.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.UnitKind".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.RulesTable.UnitKind".into() }}
-    /// The five unit kinds.
+    /// The five unit kinds, and the starting force.
     ///
-    /// Starting force — the core on Build, the commander, two build drones and
-    /// one mining drone — is NOT a row here. Item 90 quotes it from the spec
-    /// ("starting force as the spec") rather than fixing it as a tuning value,
-    /// and adding a field is permanent under `buf breaking`, so T5a left it a
-    /// spec fact and raised the question in its pull request. If the owner rules
-    /// it tuning, the rows land in this block at the next free numbers; until
-    /// then T5 reads the spec for the two counts.
+    /// The starting force — the core on Build, the commander, two build drones
+    /// and one mining drone (spec section 9, whose row says "Tuning starting
+    /// numbers") — is two rows here so that no task writes the counts as
+    /// constants (item 90's opening rule; decisions-log item 95 settles that
+    /// they are tuning). The core and the commander are not counted: every
+    /// occupied seat has exactly one of each by the spec's design, not by
+    /// tuning.
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct Units {
         /// PLACEHOLDER: tuning, owner, S1.
@@ -2548,6 +2548,16 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.UnitKind".i
         /// item 90: 10 / 60 / 1 / 20
         #[prost(message, optional, tag="5")]
         pub scout: ::core::option::Option<UnitKind>,
+        /// Build drones each occupied seat starts with (item 95: 2).
+        ///
+        /// PLACEHOLDER: tuning, owner, S1.
+        #[prost(uint32, tag="6")]
+        pub starting_build_drones: u32,
+        /// Mining drones each occupied seat starts with (item 95: 1).
+        ///
+        /// PLACEHOLDER: tuning, owner, S1.
+        #[prost(uint32, tag="7")]
+        pub starting_mining_drones: u32,
     }
 impl ::prost::Name for Units {
 const NAME: &'static str = "Units";

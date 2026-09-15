@@ -852,6 +852,14 @@ fn the_rules_table_carries_item_90s_unit_structure_and_verifier_numbers() {
     );
     assert_eq!(unit(units.raider, "raider"), (30, 120, 1, 12), "item 90");
     assert_eq!(unit(units.scout, "scout"), (10, 60, 1, 20), "item 90");
+    assert_eq!(
+        units.starting_build_drones, 2,
+        "item 95: two starting build drones"
+    );
+    assert_eq!(
+        units.starting_mining_drones, 1,
+        "item 95: one starting mining drone"
+    );
 
     let structures = table.structures.expect("the structures block");
     assert_eq!(
