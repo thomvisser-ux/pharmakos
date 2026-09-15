@@ -15,12 +15,20 @@ publish.workspace = true
 # No [features] section on purpose: this crate must never define, forward or enable the
 # `research` feature. A seat reaches the world only through this API, so if the gateway
 # could reach `fork` then "no dry runs" would be reachable from a seat (spec §15). A CI
-# dependency check fails the build if it can. Any future dependency on pharmakos-sim must
+# dependency check fails the build if it can. Any dependency on pharmakos-sim must
 # read: pharmakos-sim = { workspace = true, default-features = false }
 
 [dependencies]
-# None yet. Expected: pharmakos-proto, pharmakos-plan-core, pharmakos-verifier, and a
-# WebSocket/JSON-RPC stack chosen during the walking skeleton (bound to loopback only).
+# The schema: the method list, the scope annotation, the closed error set, the Json
+# value and the canonical codec. The gateway invents none of those four.
+pharmakos-proto = { workspace = true }
+# Type surface only, `default-features = false`: SeatId, Tick, Ms. The gateway never
+# steps the sim and never reaches the `research` feature.
+pharmakos-sim = { workspace = true, default-features = false }
+# OS entropy for the 256-bit seat tokens, and for nothing else (decisions-log item 99).
+# The only off-list dependency in the crate; everything else in the transport -- RFC 6455,
+# SHA-1, base64, JSON-RPC 2.0 -- is hand-written over `std`.
+getrandom = { workspace = true }
 
 [lints]
 workspace = true
