@@ -35,6 +35,21 @@
 //! not exist — reports `skipped` with the reason. A step never reports `ok` for
 //! work it did not do.
 //!
+//! Two further steps are **harness part 2's**, landed here before the things
+//! they check exist (decisions-log item 75, plan section 5). Both skip with a
+//! named reason and self-activate the moment their producer lands, which is how
+//! `step_determinism` already behaves:
+//!
+//! | step         | what it does                                                             |
+//! |--------------|--------------------------------------------------------------------------|
+//! | `scenario`   | validates `scenarios/**` today; shells `gamectl scenario run` from T15    |
+//! | `screenshot` | renders the vista under xvfb + lavapipe and compares it to a golden PNG   |
+//!
+//! Their formats — the scenario file ([`scenario`]), the golden-file convention
+//! ([`golden`]) and the screenshot comparison ([`png`]) — are frozen now so
+//! that every later task delivers *into* a format rather than inventing one,
+//! and no golden's shape is renegotiated under deadline.
+//!
 //! Usage:
 //!
 //! ```text
@@ -78,6 +93,13 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, ExitStatus, Stdio};
+
+// Harness part 2's formats, each in its own file so that the step table above
+// stays readable and so that a task working on one of them touches one file.
+mod annotate;
+mod golden;
+mod png;
+mod scenario;
 
 // ---------------------------------------------------------------------------
 // Policy constants. These are the knobs; everything below them is machinery.
@@ -226,6 +248,42 @@ const DETERMINISM_PROFILE: &str = "release-checked";
 /// The inner-loop subset, as documented in AGENTS.md and CLAUDE.md.
 const QUICK_STEPS: &[&str] = &["fmt", "clippy", "test"];
 
+// --- harness part 2 (AGENTS.md section 9 items 10 and 11) ------------------
+//
+// These constants are the *formats* the skeleton freezes in wave 1. The
+// producers arrive later: `gamectl scenario run` at T15, the Godot vista at
+// T16, and T20 promotes both steps from skipping to required. Keep each
+// constant's comment naming the task that fills it, so a skip is never
+// mistaken for a pass that happens to be quiet.
+
+/// The binary that runs a scenario, and the subcommand it must carry.
+const SCENARIO_BIN: &str = "gamectl";
+const SCENARIO_SUBCOMMAND: &str = "scenario";
+
+/// Where the Godot project lives (decisions-log item 72: `godot/` at the
+/// repository root, one ownable unit with `crates/client-gdext`).
+const GODOT_PROJECT_DIR: &str = "godot";
+
+/// The vista golden the `screenshot` step compares against, and where the fresh
+/// render is written. The golden is committed by T16; until it exists the step
+/// skips with that reason.
+const VISTA_GOLDEN: &str = "tests/golden/vista/expected.vista.png";
+const VISTA_ACTUAL: &str = "golden/vista/actual.vista.png";
+
+/// The render the screenshot step asks Godot for, and the xvfb screen it runs
+/// on. 1280 × 720 is G1's geometry resolution. The two must agree: a windowed
+/// run is clamped by the screen size — G1 asked for 1920 × 1080 on a
+/// 1920 × 1080 screen and got 1920 × 1061 — and a differently sized image fails
+/// the comparison for the wrong reason.
+const VISTA_RESOLUTION: &str = "1280x720";
+const VISTA_SCREEN: &str = "-screen 0 1280x720x24";
+
+/// PLACEHOLDER: the scene the vista job loads and the flag that makes it take
+/// one shot and quit are T16's to name — the Godot project does not exist yet.
+/// When it does, this becomes the scene path passed to `godot --path godot`.
+/// Owner/T16.
+const VISTA_SCENE: &str = "res://scenes/vista_shot.tscn";
+
 // ---------------------------------------------------------------------------
 // Step table
 // ---------------------------------------------------------------------------
@@ -305,6 +363,18 @@ const STEPS: &[Step] = &[
         name: "reuse",
         about: "REUSE licence-manifest check",
         run: step_reuse,
+    },
+    // Harness part 2. Both skip with a named reason until their producer
+    // exists, and both self-activate the moment it does.
+    Step {
+        name: "scenario",
+        about: "validate scenarios/**, then run them once gamectl can",
+        run: step_scenario,
+    },
+    Step {
+        name: "screenshot",
+        about: "render the vista headless and compare it to its golden PNG",
+        run: step_screenshot,
     },
 ];
 
@@ -964,15 +1034,22 @@ fn step_buf(ctx: &Ctx) -> Result<Outcome, String> {
     ))
 }
 
-/// Golden files: `tests/golden/<case>/expected.<ext>` is byte-compared with the
-/// fresh output the producing test leaves at `target/golden/<case>/actual.<ext>`.
-/// `cargo xtask golden --bless` copies actual over expected — and a blessed
-/// golden has to be explained in the pull request that moves it.
+/// Golden files: `tests/golden/<area>/<case>/expected.<ext>` is byte-compared
+/// with the fresh output the producing test leaves at
+/// `<target>/golden/<area>/<case>/actual.<ext>`, and every area carries a
+/// `README.md` saying what a diff in it means. `cargo xtask golden --bless`
+/// copies actual over expected — and a blessed golden has to be explained in
+/// the pull request that moves it.
 ///
-/// PLACEHOLDER: there are no golden cases yet, so this reports and passes. The
-/// producing side (plan-core's canonical form, the JSONC round-trip, verifier
-/// `report_hash`, `render_plan` prose) writes the `actual.*` files as its tests
-/// run.
+/// The convention, the per-area README rule and the self-test that a mismatched
+/// fixture produces a readable first-difference report all live in
+/// [`golden`]; this function is the step wrapper around them.
+///
+/// PLACEHOLDER: the area layout and its READMEs are committed, but no case has
+/// a golden yet, so this skips. The producing side (plan-core's canonical form,
+/// the JSONC round-trip, verifier `report_hash`, `render_plan` prose, the
+/// mapgen and mesher digests) writes the `actual.*` files as its tests run, and
+/// the step self-activates the moment one is committed.
 fn step_golden(ctx: &Ctx) -> Result<Outcome, String> {
     let golden_root = ctx.root.join("tests").join("golden");
     let target_dir = match &ctx.workspace {
@@ -984,79 +1061,25 @@ fn step_golden(ctx: &Ctx) -> Result<Outcome, String> {
             "no golden files yet (tests/golden does not exist)".to_owned(),
         ));
     }
-
-    let mut files: Vec<PathBuf> = Vec::new();
-    walk(&golden_root, &mut files)
-        .map_err(|error| format!("reading {}: {error}", golden_root.display()))?;
-    let expected_files: Vec<PathBuf> = files
-        .into_iter()
-        .filter(|path| file_name(path).starts_with("expected."))
-        .collect();
-    if expected_files.is_empty() {
+    if !golden::has_goldens(&golden_root)? {
         return Ok(Outcome::Skipped(
-            "no golden files yet (tests/golden/**/expected.* matched nothing)".to_owned(),
+            "the tests/golden area layout is committed but no case has an expected.* file yet \
+             (the producing tasks fill them; see tests/golden/README.md)"
+                .to_owned(),
         ));
     }
 
-    let mut failures: Vec<String> = Vec::new();
-    let mut blessed: usize = 0;
-    let mut matched: usize = 0;
-
-    for expected_path in &expected_files {
-        let relative = expected_path
-            .strip_prefix(&golden_root)
-            .map_err(|error| format!("path outside tests/golden: {error}"))?;
-        let name = file_name(expected_path);
-        let suffix = name.strip_prefix("expected.").unwrap_or("out");
-        let actual_path = target_dir
-            .join("golden")
-            .join(relative)
-            .with_file_name(format!("actual.{suffix}"));
-
-        let Ok(actual) = fs::read(&actual_path) else {
-            failures.push(format!(
-                "{}: no fresh output at {} — run the test that produces it first",
-                relative.display(),
-                actual_path.display()
-            ));
-            continue;
-        };
-        let expected = fs::read(expected_path)
-            .map_err(|error| format!("reading {}: {error}", expected_path.display()))?;
-
-        if expected == actual {
-            matched += 1;
-        } else if ctx.bless {
-            fs::write(expected_path, &actual)
-                .map_err(|error| format!("writing {}: {error}", expected_path.display()))?;
-            blessed += 1;
-        } else {
-            failures.push(format!(
-                "{} differs from {}\n{}",
-                relative.display(),
-                actual_path.display(),
-                first_difference(&expected, &actual)
-            ));
-        }
-    }
-
-    if !failures.is_empty() {
-        let mut report = String::from(
-            "golden files do not match (`cargo xtask golden --bless` accepts them):\n",
-        );
-        for failure in &failures {
-            report.push_str("      - ");
-            report.push_str(failure);
-            report.push('\n');
-        }
-        return Err(report);
-    }
-    if blessed > 0 {
+    let report = golden::compare_tree(&golden_root, &target_dir.join("golden"), ctx.bless)?;
+    if report.blessed > 0 {
         return Ok(Outcome::Done(format!(
-            "{blessed} golden file(s) rewritten, {matched} already matched — explain the move in the PR"
+            "{} golden file(s) rewritten, {} already matched across {} area(s) — explain the move in the PR",
+            report.blessed, report.matched, report.areas
         )));
     }
-    Ok(Outcome::Done(format!("{matched} golden file(s) match")))
+    Ok(Outcome::Done(format!(
+        "{} golden file(s) match across {} area(s)",
+        report.matched, report.areas
+    )))
 }
 
 /// Runs the sim's determinism binary, validates the per-tick hash chain it
@@ -1156,6 +1179,278 @@ fn step_reuse(ctx: &Ctx) -> Result<Outcome, String> {
     Ok(Outcome::Done(
         "every file carries an SPDX header and the manifest is complete".to_owned(),
     ))
+}
+
+/// Harness part 2, half one: the scenario files.
+///
+/// A scenario is a headless match written down — map seed, one playbook per
+/// seat, the segment list, and assertions on events **and** on the hash chain
+/// (AGENTS.md section 9 item 10, section 10 item 4). `gamectl scenario run`
+/// executes one and arrives at T15; T20 promotes this step from skipping to
+/// required.
+///
+/// Until then the step is not idle. Every committed scenario file is parsed and
+/// validated against the frozen format — unknown keys rejected, seeds and
+/// durations checked, playbook paths resolved, the assertion vocabulary
+/// enforced — so a malformed scenario is a red build today rather than a
+/// surprise at T15. A file that fails validation is an **error**; the absence
+/// of a runner is a **skip**, with the reason and the task named.
+fn step_scenario(ctx: &Ctx) -> Result<Outcome, String> {
+    let files = scenario::collect(&ctx.root)?;
+    if files.is_empty() {
+        return Ok(Outcome::Skipped(
+            "no scenario files yet (scenarios/**/*.scenario.jsonc matched nothing); \
+             scenarios/README.md documents the format"
+                .to_owned(),
+        ));
+    }
+
+    let mut valid: Vec<scenario::Scenario> = Vec::new();
+    for file in &files {
+        valid.push(scenario::validate(&ctx.root, file)?);
+    }
+    let names: Vec<String> = valid
+        .iter()
+        .map(|item| {
+            format!(
+                "{} ({} seats, {} assertions)",
+                item.name, item.seats, item.assertions
+            )
+        })
+        .collect();
+    let checked = format!(
+        "{} scenario file(s) valid against {}: {}",
+        valid.len(),
+        scenario::FORMAT,
+        names.join(", ")
+    );
+
+    let workspace = match &ctx.workspace {
+        Ok(workspace) => workspace,
+        Err(reason) => {
+            return Ok(Outcome::Skipped(format!(
+                "{checked}; no metadata: {reason}"
+            )));
+        }
+    };
+    let Some(owner) = workspace.package_with_bin(SCENARIO_BIN) else {
+        return Ok(Outcome::Skipped(format!(
+            "{checked}; there is no `{SCENARIO_BIN}` binary in the workspace yet — \
+             `{SCENARIO_BIN} {SCENARIO_SUBCOMMAND} run` arrives with T15, and this step turns \
+             itself on when it does"
+        )));
+    };
+
+    let probe = cargo_run_args(ctx, &owner, &[SCENARIO_SUBCOMMAND, "--help"]);
+    if !command_succeeds(&ctx.root, &ctx.cargo, &probe) {
+        return Ok(Outcome::Skipped(format!(
+            "{checked}; `{SCENARIO_BIN}` exists but has no `{SCENARIO_SUBCOMMAND}` subcommand yet \
+             — T15 fills it"
+        )));
+    }
+
+    for item in &valid {
+        // Forward slashes: the path goes on a command line that is quoted in
+        // workflow files and in scenario logs on three operating systems.
+        let relative = item.relative.to_string_lossy().replace('\\', "/");
+        let args = cargo_run_args(ctx, &owner, &[SCENARIO_SUBCOMMAND, "run", &relative]);
+        run(ctx, &ctx.cargo, &args)
+            .map_err(|error| format!("scenario `{}` failed: {error}", item.name))?;
+    }
+
+    Ok(Outcome::Done(format!(
+        "{} scenario(s) pass on their event and hash assertions",
+        valid.len()
+    )))
+}
+
+/// Harness part 2, half two: the vista screenshot.
+///
+/// The obvious shape of this step — run Godot, upload the PNG — asserts
+/// nothing; the comparison in [`png`] is the assertion, and its report goes out
+/// through [`annotate`] because GitHub hides logs and step summaries from
+/// logged-out viewers (G1 section 10.12).
+///
+/// Four preconditions, each a named skip rather than a quiet pass:
+///
+/// * the Godot project exists (T16 builds it);
+/// * a golden PNG is committed (T16 commits the first one, after eyeballing it
+///   for cracks, missing faces and inverted winding);
+/// * the platform is Linux — the golden is rendered under **xvfb + lavapipe**,
+///   and a second rasteriser's output would make the alarm permanently red
+///   (decisions-log item 22; G1 measured 1.14 % of pixels differing between a
+///   Quadro and lavapipe on identical geometry);
+/// * `godot` and `xvfb-run` are installed.
+///
+/// And one pre-step that is not optional: `godot --headless --path godot
+/// --import`. A non-editor Godot run loads GDExtensions only from
+/// `res://.godot/extension_list.cfg`, which the editor writes when it scans the
+/// project and which is git-ignored — so on a fresh checkout, every CI runner,
+/// the extension's classes instantiate as placeholders and the first call on
+/// them fails. G1 lost four runs to this.
+///
+/// Note that `--headless` is used **only** for the import. It selects the dummy
+/// rendering driver, under which `frame_post_draw` never fires and a screenshot
+/// coroutine parks for ever — silently, producing no PNG and no error. The
+/// render itself runs windowed under xvfb.
+fn step_screenshot(ctx: &Ctx) -> Result<Outcome, String> {
+    let project = ctx.root.join(GODOT_PROJECT_DIR);
+    if !project.join("project.godot").is_file() {
+        return Ok(Outcome::Skipped(format!(
+            "no {GODOT_PROJECT_DIR}/project.godot yet — the Godot project and the vista arrive \
+             with T16, and this step turns itself on when they do"
+        )));
+    }
+    let golden_path = ctx.root.join(VISTA_GOLDEN);
+    if !golden_path.is_file() {
+        return Ok(Outcome::Skipped(format!(
+            "no committed vista golden at {VISTA_GOLDEN} yet — T16 commits the first one after \
+             eyeballing it for cracks, missing faces and inverted winding"
+        )));
+    }
+    if !cfg!(target_os = "linux") {
+        return Ok(Outcome::Skipped(
+            "the vista golden is rendered under xvfb + lavapipe on Linux only (decisions-log \
+             item 22); comparing a second platform's rasteriser against it would be permanently \
+             red and would say nothing about the geometry"
+                .to_owned(),
+        ));
+    }
+    if !tool_available("godot") {
+        return skip_or_fail(
+            ctx,
+            "godot is not installed (the CI job installs the pinned 4.7.2 build)",
+        );
+    }
+    if !tool_available("xvfb-run") {
+        return skip_or_fail(
+            ctx,
+            "xvfb-run is not installed (`apt-get install xvfb`); `godot --headless` is not a \
+             substitute — it selects the dummy driver and cannot take a screenshot",
+        );
+    }
+
+    // The pre-step every fresh checkout needs. Without it the extension's
+    // classes are placeholders and the scene fails on its first call.
+    run(
+        ctx,
+        "godot",
+        &[
+            "--headless".to_owned(),
+            "--path".to_owned(),
+            GODOT_PROJECT_DIR.to_owned(),
+            "--import".to_owned(),
+        ],
+    )?;
+
+    let target_dir = match &ctx.workspace {
+        Ok(workspace) => workspace.target_dir.clone(),
+        Err(_) => ctx.root.join("target"),
+    };
+    let actual_path = target_dir.join(VISTA_ACTUAL);
+    if let Some(parent) = actual_path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("creating {}: {error}", parent.display()))?;
+    }
+    // A stale PNG from a previous run must not be able to pass for this one.
+    if actual_path.exists() {
+        fs::remove_file(&actual_path)
+            .map_err(|error| format!("removing {}: {error}", actual_path.display()))?;
+    }
+
+    // PLACEHOLDER: the scene name and the "take one shot and quit" flag are
+    // T16's — the project does not exist yet, so this command line has never
+    // run. Owner/T16 ratifies it with the first real vista.
+    run(
+        ctx,
+        "xvfb-run",
+        &[
+            "-a".to_owned(),
+            "-s".to_owned(),
+            VISTA_SCREEN.to_owned(),
+            "godot".to_owned(),
+            "--path".to_owned(),
+            GODOT_PROJECT_DIR.to_owned(),
+            "--resolution".to_owned(),
+            VISTA_RESOLUTION.to_owned(),
+            "--".to_owned(),
+            format!("--scene={VISTA_SCENE}"),
+            format!("--shot={}", actual_path.to_string_lossy()),
+        ],
+    )?;
+
+    let shot_bytes = fs::read(&actual_path).map_err(|error| {
+        format!(
+            "{} was not produced ({error}). Godot rendered nothing — check that the run was \
+             windowed under xvfb rather than `--headless`, which selects the dummy driver and \
+             parks a screenshot coroutine for ever",
+            actual_path.display()
+        )
+    })?;
+    let shot =
+        png::decode(&shot_bytes).map_err(|error| format!("{}: {error}", actual_path.display()))?;
+    let variance = shot.red_variance()?;
+    if variance < png::MIN_VARIANCE {
+        return Err(format!(
+            "the vista is blank or near-uniform (red-channel variance {variance}, floor {}); \
+             nothing was drawn",
+            png::MIN_VARIANCE
+        ));
+    }
+
+    let golden_bytes = fs::read(&golden_path)
+        .map_err(|error| format!("reading {}: {error}", golden_path.display()))?;
+    let golden_image =
+        png::decode(&golden_bytes).map_err(|error| format!("{VISTA_GOLDEN}: {error}"))?;
+    let diff = png::compare(&shot, &golden_image)?;
+
+    let report = format!(
+        "{} ({}x{}, red-channel variance {variance})\nvs {VISTA_GOLDEN}\n{}",
+        actual_path.display(),
+        shot.width,
+        shot.height,
+        diff.describe()
+    );
+    annotate::notice("vista-screenshot", &report);
+    diff.check(png::MAX_MEAN_THOUSANDTHS, png::MAX_HARD_PPM)?;
+
+    Ok(Outcome::Done(format!(
+        "the vista matches {VISTA_GOLDEN} ({} of {} pixels differ at all)",
+        diff.differing, diff.pixels
+    )))
+}
+
+/// The `cargo run` argument list for one of the workspace's own binaries.
+fn cargo_run_args(ctx: &Ctx, package: &str, tail: &[&str]) -> Vec<String> {
+    let mut args: Vec<String> = vec![
+        "run".to_owned(),
+        "--quiet".to_owned(),
+        "--package".to_owned(),
+        package.to_owned(),
+        "--bin".to_owned(),
+        SCENARIO_BIN.to_owned(),
+    ];
+    if ctx.locked {
+        args.push("--locked".to_owned());
+    }
+    args.push("--".to_owned());
+    for argument in tail {
+        args.push((*argument).to_owned());
+    }
+    args
+}
+
+/// Runs a command for its exit status alone, swallowing its output. Used to ask
+/// "does this subcommand exist yet", where a non-zero status is an answer and
+/// not a failure.
+fn command_succeeds(cwd: &Path, program: &str, args: &[String]) -> bool {
+    Command::new(program)
+        .args(args)
+        .current_dir(cwd)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
 }
 
 /// A missing external tool is a skip locally and a failure in CI, where
