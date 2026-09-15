@@ -1053,11 +1053,13 @@ fn step_buf(ctx: &Ctx) -> Result<Outcome, String> {
 /// otherwise fail this step's "a missing fresh output is a failure" rule on a
 /// clean checkout, on every operating system.
 ///
-/// PLACEHOLDER: the area layout and its READMEs are committed, but no case has
-/// a golden yet, so this skips. The producing side (plan-core's canonical form,
-/// the JSONC round-trip, verifier `report_hash`, `render_plan` prose, the
-/// mapgen and mesher digests) writes the `actual.*` files as its tests run, and
-/// the step self-activates the moment one is committed.
+/// The step self-activates as areas fill: it skips while nothing it compares is
+/// committed, and compares whatever is. T1 turned it on — `crates/proto`'s
+/// tests write four `actual.*` files into `<target>/golden/proto/` as they run.
+/// The other producing sides (plan-core's canonical form and JSONC round-trip,
+/// verifier `report_hash`, `render_plan` prose, the mapgen and mesher digests)
+/// join it the same way, by writing their fresh output where this step looks
+/// and committing the `expected.*` beside the area's README.
 fn step_golden(ctx: &Ctx) -> Result<Outcome, String> {
     let golden_root = ctx.root.join("tests").join("golden");
     let target_dir = match &ctx.workspace {
