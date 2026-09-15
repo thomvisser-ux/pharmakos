@@ -22,14 +22,25 @@
 //!
 //! # The cell size is a performance knob, not game state
 //!
-//! [`Csr::collect_in_radius`] returns candidate ids **sorted ascending**, so
-//! the answer is a function of the world and not of the cell size. That is what
-//! lets `tests/determinism.rs` assert that changing the cell size leaves the
-//! hash chain byte-identical (G3′ §9.17: keep the calibration constant outside
-//! hashed state, and *test* that it is). Nothing in this module is encoded into
-//! the state hash.
+//! [`Csr::collect_in_radius`] takes its radius **in voxels**, widens it to
+//! whole cells itself, and filters the superset the grid hands back by the
+//! exact test `Sq::between(pos, centre) <= Sq::of_radius(radius)` before
+//! sorting the survivors by id. So the *membership* of the answer is a function
+//! of the world and the radius, and its *order* is a function of the ids: the
+//! cell size can reach neither. That is what lets `tests/determinism.rs` assert
+//! that changing the cell size leaves both the answer and the hash chain
+//! byte-identical (G3′ §9.17: keep the calibration constant outside hashed
+//! state, and *test* that it is). Nothing in this module is encoded into the
+//! state hash.
+//!
+//! Sorting alone would not have bought that, and the earlier
+//! radius-in-**cells** signature is the reason this paragraph exists: one cell
+//! of radius is a 24-voxel box at a cell edge of 8 and a 48-voxel one at 16, so
+//! the first tick phase to query the grid would have turned a knob the rules
+//! table declares non-hashed into behaviour, and into the hash chain with it.
+//! The exact filter is what makes the declaration true rather than vacuous.
 
-use crate::math::fixed::{Angle, Fx};
+use crate::math::fixed::{Angle, Fx, Sq};
 use crate::math::quantity::{Hp, Kw, Money};
 
 /// A unit's identity. Dense, assigned at construction, stable for the match.
@@ -475,19 +486,40 @@ impl Csr {
         true
     }
 
-    /// Collect every item id whose cell is within `radius_cells` cells of
-    /// `centre`, **sorted ascending**, into `out`.
+    /// Collect every item within `radius` **voxels** of `centre`, sorted
+    /// ascending by id, into `out`.
+    ///
+    /// `positions` must be the slice the grid was last [rebuilt](Csr::rebuild)
+    /// from: the grid stores ids, and an id is that slice's index. An id the
+    /// slice no longer covers is dropped rather than guessed at.
+    ///
+    /// The radius is in voxels and not in cells **on purpose** (see the module
+    /// docs). The grid is only asked for a superset — every cell within
+    /// [`Csr::radius_in_cells`] of the centre's — and the exact
+    /// `Sq::between(pos, centre) <= Sq::of_radius(radius)` test decides
+    /// membership, so the cell edge changes how much work this does and not
+    /// what it answers.
     ///
     /// `out` is cleared first and is the caller's buffer, so a tick phase that
-    /// keeps one around allocates nothing. The sort is what makes the answer a
-    /// function of the world rather than of the cell size — see the module
-    /// docs.
+    /// keeps one around allocates nothing: the answer can never be longer than
+    /// the item count the grid was built for.
     #[allow(
         clippy::integer_division,
         reason = "recovering the grid row from a cell index; both operands are non-negative and the divisor is the row stride, so the rounding is exact"
     )]
-    pub fn collect_in_radius(&self, centre: [Fx; 3], radius_cells: u32, out: &mut Vec<u32>) {
+    pub fn collect_in_radius(
+        &self,
+        positions: &[[Fx; 3]],
+        centre: [Fx; 3],
+        radius: Fx,
+        out: &mut Vec<u32>,
+    ) {
         out.clear();
+        if radius < Fx::ZERO {
+            return;
+        }
+        let limit = Sq::of_radius(radius);
+        let radius_cells = self.radius_in_cells(radius);
         let cell = self.cell_of(centre);
         let cx = cell % self.cells_x.max(1);
         let cy = cell / self.cells_x.max(1);
@@ -509,7 +541,15 @@ impl Csr {
                 let to = self.starts.get(c.saturating_add(1)).copied().unwrap_or(0);
                 let range = usize::try_from(from).unwrap_or(0)..usize::try_from(to).unwrap_or(0);
                 if let Some(slice) = self.items.get(range) {
-                    out.extend_from_slice(slice);
+                    for id in slice {
+                        let Some(pos) = positions.get(usize::try_from(*id).unwrap_or(usize::MAX))
+                        else {
+                            continue;
+                        };
+                        if Sq::between(*pos, centre) <= limit {
+                            out.push(*id);
+                        }
+                    }
                 }
                 x = x.saturating_add(1);
             }
@@ -518,6 +558,29 @@ impl Csr {
         // Ids are unique, so an unstable sort is a total order (item 62's
         // convention: every sort key ends in a unique id).
         out.sort_unstable();
+    }
+
+    /// How many cells of grid a `radius`-voxel query has to touch for the
+    /// superset to be complete.
+    ///
+    /// Two roundings, both upward, both deliberate. The radius rounds up to a
+    /// whole voxel and gains one more, because [`Csr::cell_of`] floors a
+    /// position to a voxel first and `floor(a) - floor(b) <= floor(a - b) + 1`;
+    /// then the voxels round up into cells, because
+    /// `floor(a / c) - floor(b / c) <= ceil((a - b) / c)` for non-negative
+    /// operands. Over-collecting costs candidates the exact test then throws
+    /// away; under-collecting would silently lose a unit.
+    #[must_use]
+    pub fn radius_in_cells(&self, radius: Fx) -> u32 {
+        if radius < Fx::ZERO {
+            return 0;
+        }
+        let almost_one = Fx::from_raw(Fx::ONE.raw().saturating_sub(1));
+        let voxels = radius
+            .saturating_add(almost_one)
+            .floor_voxels()
+            .saturating_add(1);
+        cells_across(voxels, self.cell_size_voxels).unwrap_or(0)
     }
 }
 
