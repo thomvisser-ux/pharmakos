@@ -78,13 +78,19 @@ fn sentinel() -> Fragment {
 }
 
 /// Applies one patch and its inverse, and asserts the file came back.
-fn round_trip(name: &str, text: &str, what: &str, patch: &Patch) {
+///
+/// Returns whether the patch actually applied. Every property test below
+/// counts those and asserts a floor, because a `return` on a refusal would
+/// otherwise let the whole file pass green if `apply` regressed to refusing
+/// everything: the property would be asserted zero times and say `ok`.
+#[must_use]
+fn round_trip(name: &str, text: &str, what: &str, patch: &Patch) -> bool {
     let document = Document::parse(text).unwrap_or_else(|error| panic!("{name}: {error}"));
     let Ok((patched, inverse)) = apply(&document, patch) else {
         // An operation the document's shape does not allow is not a failure of
         // the property: it is the patch layer refusing, which is what it is
         // for. What must never happen is applying and then failing to undo.
-        return;
+        return false;
     };
     let (back, _again) = apply(&patched, &inverse)
         .unwrap_or_else(|error| panic!("{name}: {what}: the inverse did not apply: {error}"));
@@ -92,6 +98,20 @@ fn round_trip(name: &str, text: &str, what: &str, patch: &Patch) {
         back.to_text(),
         text,
         "{name}: {what}: undo was not byte-exact"
+    );
+    true
+}
+
+/// The floor a property test asserts. Each fixture has more than twenty
+/// pointers, so most of the tests below clear twenty comfortably; the
+/// two-operation test filters its pairs hard and carries its own smaller
+/// number. The point of the floor is not its size but that it is above zero:
+/// a run that applied nothing would otherwise report `ok`.
+fn assert_applied(name: &str, what: &str, applied: usize, floor: usize) {
+    assert!(
+        applied >= floor,
+        "{name}: only {applied} {what} round trips applied; the property is being asserted \
+         vacuously"
     );
 }
 
@@ -113,6 +133,7 @@ fn every_fixture_parses_and_has_pointers_to_patch() {
 fn replace_then_undo_is_the_identity_at_every_pointer() {
     for (name, text) in fixtures() {
         let document = Document::parse(&text).unwrap_or_else(|error| panic!("{name}: {error}"));
+        let mut applied = 0;
         for pointer in all_pointers(&document) {
             if pointer.is_empty() {
                 continue;
@@ -122,8 +143,14 @@ fn replace_then_undo_is_the_identity_at_every_pointer() {
                 pointer.clone(),
                 sentinel(),
             )]);
-            round_trip(name, &text, &format!("replace {pointer}"), &patch);
+            applied += usize::from(round_trip(
+                name,
+                &text,
+                &format!("replace {pointer}"),
+                &patch,
+            ));
         }
+        assert_applied(name, "replace", applied, 20);
     }
 }
 
@@ -131,13 +158,20 @@ fn replace_then_undo_is_the_identity_at_every_pointer() {
 fn remove_then_undo_is_the_identity_at_every_pointer() {
     for (name, text) in fixtures() {
         let document = Document::parse(&text).unwrap_or_else(|error| panic!("{name}: {error}"));
+        let mut applied = 0;
         for pointer in all_pointers(&document) {
             if pointer.is_empty() {
                 continue;
             }
             let patch = Patch::new(vec![Operation::plain(Op::Remove, pointer.clone())]);
-            round_trip(name, &text, &format!("remove {pointer}"), &patch);
+            applied += usize::from(round_trip(
+                name,
+                &text,
+                &format!("remove {pointer}"),
+                &patch,
+            ));
         }
+        assert_applied(name, "remove", applied, 20);
     }
 }
 
@@ -145,6 +179,7 @@ fn remove_then_undo_is_the_identity_at_every_pointer() {
 fn add_then_undo_is_the_identity_under_every_container() {
     for (name, text) in fixtures() {
         let document = Document::parse(&text).unwrap_or_else(|error| panic!("{name}: {error}"));
+        let mut applied = 0;
         for pointer in all_pointers(&document) {
             for token in ["added", "0", "-"] {
                 let patch = Patch::new(vec![Operation::with_value(
@@ -152,9 +187,34 @@ fn add_then_undo_is_the_identity_under_every_container() {
                     push_pointer(&pointer, token),
                     sentinel(),
                 )]);
-                round_trip(name, &text, &format!("add {pointer}/{token}"), &patch);
+                applied += usize::from(round_trip(
+                    name,
+                    &text,
+                    &format!("add {pointer}/{token}"),
+                    &patch,
+                ));
+            }
+            // RFC 6902 section 4.1: `add` at a pointer that already names
+            // something is a **replace**, and it is the branch the three
+            // tokens above can never reach, because none of them names an
+            // existing member. It is also the branch an ordinary editor field
+            // edit takes, and the one where taking the member out and putting
+            // a wire fragment back would drop the comment above it.
+            if !pointer.is_empty() {
+                let patch = Patch::new(vec![Operation::with_value(
+                    Op::Add,
+                    pointer.clone(),
+                    sentinel(),
+                )]);
+                applied += usize::from(round_trip(
+                    name,
+                    &text,
+                    &format!("add over the existing {pointer}"),
+                    &patch,
+                ));
             }
         }
+        assert_applied(name, "add", applied, 20);
     }
 }
 
@@ -162,21 +222,37 @@ fn add_then_undo_is_the_identity_under_every_container() {
 fn move_and_copy_then_undo_are_the_identity() {
     for (name, text) in fixtures() {
         let document = Document::parse(&text).unwrap_or_else(|error| panic!("{name}: {error}"));
+        let mut applied = 0;
         for pointer in all_pointers(&document) {
             if pointer.is_empty() {
                 continue;
             }
-            for op in [Op::Move, Op::Copy] {
-                let patch = Patch::new(vec![Operation {
-                    op,
-                    path: "/moved".to_owned(),
-                    from: Some(pointer.clone()),
-                    value: None,
-                    position: None,
-                }]);
-                round_trip(name, &text, &format!("{} {pointer}", op.name()), &patch);
+            // `/moved` is a slot that does not exist, `/kind` is a top-level
+            // member both fixtures have. The second target is the one that
+            // goes through `add`'s replace branch, so a `move` onto a member
+            // that is already there has to give the file back as it was too.
+            for target in ["/moved", "/kind"] {
+                if pointer == target || pointer.starts_with(&format!("{target}/")) {
+                    continue;
+                }
+                for op in [Op::Move, Op::Copy] {
+                    let patch = Patch::new(vec![Operation {
+                        op,
+                        path: target.to_owned(),
+                        from: Some(pointer.clone()),
+                        value: None,
+                        position: None,
+                    }]);
+                    applied += usize::from(round_trip(
+                        name,
+                        &text,
+                        &format!("{} {pointer} to {target}", op.name()),
+                        &patch,
+                    ));
+                }
             }
         }
+        assert_applied(name, "move and copy", applied, 20);
     }
 }
 
@@ -185,6 +261,7 @@ fn a_multi_operation_patch_undoes_in_reverse_order() {
     for (name, text) in fixtures() {
         let document = Document::parse(&text).unwrap_or_else(|error| panic!("{name}: {error}"));
         let pointers = all_pointers(&document);
+        let mut applied = 0;
         // Two edits at once, the second at a pointer the first did not touch.
         for pair in pointers.windows(2) {
             let (Some(first), Some(second)) = (pair.first(), pair.get(1)) else {
@@ -197,13 +274,14 @@ fn a_multi_operation_patch_undoes_in_reverse_order() {
                 Operation::with_value(Op::Replace, first.clone(), sentinel()),
                 Operation::plain(Op::Remove, second.clone()),
             ]);
-            round_trip(
+            applied += usize::from(round_trip(
                 name,
                 &text,
                 &format!("replace {first}, remove {second}"),
                 &patch,
-            );
+            ));
         }
+        assert_applied(name, "two-operation", applied, 8);
     }
 }
 
@@ -241,6 +319,33 @@ fn the_wire_form_survives_a_round_trip_through_its_own_text() {
                 .unwrap_or_else(|error| panic!("{name}: {pointer}: {error}"));
             assert_eq!(patch, again, "{name}: {pointer}");
         }
+    }
+}
+
+/// The editor's ordinary field edit, spelled the way RFC 6902 lets a client
+/// spell it. `add` at a member that is already there is a replace (RFC 6902
+/// section 4.1), and `gp.api.v1.PatchPlanResponse` takes arbitrary RFC 6902,
+/// so this is the spelling the crate has to survive as well as `replace`.
+#[test]
+fn add_over_an_existing_member_keeps_its_comment_and_its_spacing() {
+    let text = "{\n  // why a is 1\n  \"a\": 1,\n  \"b\": 2\n}\n";
+    let document = Document::parse(text).expect("a document");
+    for wire in [
+        r#"[{"op":"add","path":"/a","value":9}]"#,
+        r#"[{"op":"move","from":"/b","path":"/a"}]"#,
+        r#"[{"op":"copy","from":"/b","path":"/a"}]"#,
+    ] {
+        let patch = Patch::from_text(wire).unwrap_or_else(|error| panic!("{wire}: {error}"));
+        let (patched, inverse) =
+            apply(&document, &patch).unwrap_or_else(|error| panic!("{wire}: {error}"));
+        assert!(
+            patched.to_text().contains("// why a is 1"),
+            "{wire}: the comment above the member went with the edit: {}",
+            patched.to_text()
+        );
+        let (back, _again) =
+            apply(&patched, &inverse).unwrap_or_else(|error| panic!("{wire}: undo: {error}"));
+        assert_eq!(back.to_text(), text, "{wire}: undo was not byte-exact");
     }
 }
 

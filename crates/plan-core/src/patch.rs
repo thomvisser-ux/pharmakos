@@ -455,18 +455,27 @@ fn add(
         let settled = push_pointer(&parent, &index.to_string());
         return Ok(vec![Operation::plain(Op::Remove, settled)]);
     }
+    if resolve(document, &parent)?.position_of(&last).is_some() {
+        // RFC 6902 section 4.1 makes `add` over an existing member a replace,
+        // so take the replace route rather than take-then-put: taking the
+        // member out carries its `before` comment, its spacing and its key
+        // spelling away with it, and the incoming fragment — which came off
+        // the wire with no trivia at all — would be written in their place.
+        // The file's bytes would change around an edit that only changed a
+        // value, and the inverse would not put them back. `set` swaps the
+        // value inside the member and leaves the member alone.
+        let target = resolve_mut(document, pointer)?;
+        let old = target.set(fragment.into_node());
+        return Ok(vec![Operation::with_value(
+            Op::Replace,
+            pointer.to_owned(),
+            Fragment::from_node(old),
+        )]);
+    }
+    let at = position.unwrap_or(len).min(len);
     let container = resolve_mut(document, &parent)?;
-    let at = container
-        .position_of(&last)
-        .or(position)
-        .unwrap_or(len)
-        .min(len);
-    let existing = container.take_member(&last);
     container.put_member(&last, fragment, at)?;
-    Ok(match existing {
-        Some(old) => vec![Operation::with_value(Op::Replace, pointer.to_owned(), old)],
-        None => vec![Operation::plain(Op::Remove, pointer.to_owned())],
-    })
+    Ok(vec![Operation::plain(Op::Remove, pointer.to_owned())])
 }
 
 /// An RFC 6902 array index. `-` means "one past the end", and only `add`
