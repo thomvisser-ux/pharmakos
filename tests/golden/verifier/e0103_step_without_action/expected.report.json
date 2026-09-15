@@ -1,0 +1,19 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0103",
+      "severity": "ERROR",
+      "path": "/declarative/route/0",
+      "message": "the step names no action.",
+      "beginner": "This step does not say what to do."
+    }
+  ],
+  "report_hash": "c6FJP79dcFk=",
+  "rules_hash": "sx2NB4nrIHw=",
+  "plan_fingerprint": "jR5OFr9Vm7M=",
+  "verifier_version": "0.1.0-skeleton",
+  "size_units": 1,
+  "size_budget": 128
+}
+

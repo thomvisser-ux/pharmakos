@@ -1,0 +1,26 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0501",
+      "severity": "ERROR",
+      "path": "/declarative/route/0/place_beacon/initial/mandate/retreat_hp_pct",
+      "message": "`retreat_hp_pct` is 150; it must be between 0 and 100.",
+      "beginner": "A percentage runs from none of it to all of it.",
+      "suggestions": [
+        {
+          "title": "Clamp it to 100",
+          "json_patch": "[{\"op\":\"replace\",\"path\":\"/declarative/route/0/place_beacon/initial/mandate/retreat_hp_pct\",\"value\":100}]",
+          "applicability": "MAYBE_INCORRECT"
+        }
+      ]
+    }
+  ],
+  "report_hash": "lWTBNGSUtbs=",
+  "rules_hash": "sx2NB4nrIHw=",
+  "plan_fingerprint": "yLd+P9kns1s=",
+  "verifier_version": "0.1.0-skeleton",
+  "size_units": 1,
+  "size_budget": 128
+}
+

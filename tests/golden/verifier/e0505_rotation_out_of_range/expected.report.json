@@ -1,0 +1,26 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0505",
+      "severity": "ERROR",
+      "path": "/declarative/route/0/place_beacon/initial/mandate/build/targets/0/rotation_quarter_turns",
+      "message": "`rotation_quarter_turns` is 7; it must be between 0 and 3.",
+      "beginner": "A building turns in quarter turns: none, one, two or three.",
+      "suggestions": [
+        {
+          "title": "Bring the rotation into range",
+          "json_patch": "[{\"op\":\"replace\",\"path\":\"/declarative/route/0/place_beacon/initial/mandate/build/targets/0/rotation_quarter_turns\",\"value\":3}]",
+          "applicability": "MAYBE_INCORRECT"
+        }
+      ]
+    }
+  ],
+  "report_hash": "zFfX3tIWsVs=",
+  "rules_hash": "sx2NB4nrIHw=",
+  "plan_fingerprint": "uFrYKCk3aNs=",
+  "verifier_version": "0.1.0-skeleton",
+  "size_units": 2,
+  "size_budget": 128
+}
+

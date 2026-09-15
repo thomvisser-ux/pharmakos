@@ -1,0 +1,26 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0107",
+      "severity": "ERROR",
+      "path": "/declarative/handlers/0/max_fires",
+      "message": "`max_fires` is 9; it must be between 1 and 8.",
+      "beginner": "A rule fires between once and a few times in a segment.",
+      "suggestions": [
+        {
+          "title": "Set max_fires to 8",
+          "json_patch": "[{\"op\":\"replace\",\"path\":\"/declarative/handlers/0/max_fires\",\"value\":8}]",
+          "applicability": "MAYBE_INCORRECT"
+        }
+      ]
+    }
+  ],
+  "report_hash": "+z1Q2qwFNTA=",
+  "rules_hash": "sx2NB4nrIHw=",
+  "plan_fingerprint": "lVLjz1myYk8=",
+  "verifier_version": "0.1.0-skeleton",
+  "size_units": 3,
+  "size_budget": 128
+}
+

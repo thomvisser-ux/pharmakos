@@ -1,0 +1,19 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0106",
+      "severity": "ERROR",
+      "path": "/declarative/handlers/0",
+      "message": "the handler has no condition.",
+      "beginner": "A rule needs something to watch for."
+    }
+  ],
+  "report_hash": "4NoQeVlPrSQ=",
+  "rules_hash": "sx2NB4nrIHw=",
+  "plan_fingerprint": "9Y4phmUXbvw=",
+  "verifier_version": "0.1.0-skeleton",
+  "size_units": 3,
+  "size_budget": 128
+}
+

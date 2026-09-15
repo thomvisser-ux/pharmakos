@@ -1,0 +1,19 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0305",
+      "severity": "ERROR",
+      "path": "/declarative/route/0/on_fail/jump_to_label",
+      "message": "`nowhere` is not a label this route declares.",
+      "beginner": "There is no step by that name to jump to."
+    }
+  ],
+  "report_hash": "sYM5B4bOHQQ=",
+  "rules_hash": "sx2NB4nrIHw=",
+  "plan_fingerprint": "m5iTbsvA2YY=",
+  "verifier_version": "0.1.0-skeleton",
+  "size_units": 1,
+  "size_budget": 128
+}
+

@@ -1,0 +1,26 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0202",
+      "severity": "ERROR",
+      "path": "/declarative/handlers/0/when/cmdr_hp_pct/pct",
+      "message": "the percentage is 140; it must be between 0 and 100.",
+      "beginner": "A percentage runs from none of it to all of it.",
+      "suggestions": [
+        {
+          "title": "Clamp it to 100",
+          "json_patch": "[{\"op\":\"replace\",\"path\":\"/declarative/handlers/0/when/cmdr_hp_pct/pct\",\"value\":100}]",
+          "applicability": "MAYBE_INCORRECT"
+        }
+      ]
+    }
+  ],
+  "report_hash": "28wIRu3fHNI=",
+  "rules_hash": "sx2NB4nrIHw=",
+  "plan_fingerprint": "K6WE3I3wUeU=",
+  "verifier_version": "0.1.0-skeleton",
+  "size_units": 3,
+  "size_budget": 128
+}
+

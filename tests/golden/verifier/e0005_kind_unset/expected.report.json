@@ -1,0 +1,26 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0005",
+      "severity": "ERROR",
+      "path": "/kind",
+      "message": "`kind` is unset; a playbook must say whether it is a PLAYBOOK, a TEMPLATE or a SAMPLE.",
+      "beginner": "The file does not say what it is.",
+      "suggestions": [
+        {
+          "title": "Mark the file as a PLAYBOOK",
+          "json_patch": "[{\"op\":\"replace\",\"path\":\"/kind\",\"value\":\"PLAYBOOK\"}]",
+          "applicability": "MAYBE_INCORRECT"
+        }
+      ]
+    }
+  ],
+  "report_hash": "D4uUmhEeCfU=",
+  "rules_hash": "sx2NB4nrIHw=",
+  "plan_fingerprint": "NlnPW1TZZqU=",
+  "verifier_version": "0.1.0-skeleton",
+  "size_units": 1,
+  "size_budget": 128
+}
+

@@ -1,0 +1,1725 @@
+{
+  "schema_version": {
+    "major": 1
+  },
+  "meta": {
+    "title": "the size-budget fixture",
+    "author_kind": "HUMAN"
+  },
+  "kind": "PLAYBOOK",
+  "declarative": {
+    "route": [
+      {
+        "label": "r00",
+        "timeout_ms": 60000,
+        "move": {
+          "to": {
+            "voxel": {
+              "x": 100,
+              "y": 100,
+              "z": 30
+            }
+          }
+        }
+      },
+      {
+        "label": "r01",
+        "skip_if": {
+          "treasury": {
+            "dollars": {
+              "op": "LT",
+              "value": 50
+            }
+          }
+        },
+        "hold": {
+          "ms": 1000
+        }
+      },
+      {
+        "label": "r02",
+        "timeout_ms": 60000,
+        "move": {
+          "to": {
+            "voxel": {
+              "x": 102,
+              "y": 100,
+              "z": 30
+            }
+          }
+        }
+      },
+      {
+        "label": "r03",
+        "skip_if": {
+          "treasury": {
+            "dollars": {
+              "op": "LT",
+              "value": 50
+            }
+          }
+        },
+        "hold": {
+          "ms": 1000
+        }
+      },
+      {
+        "label": "r04",
+        "timeout_ms": 60000,
+        "move": {
+          "to": {
+            "voxel": {
+              "x": 104,
+              "y": 100,
+              "z": 30
+            }
+          }
+        }
+      },
+      {
+        "label": "r05",
+        "skip_if": {
+          "treasury": {
+            "dollars": {
+              "op": "LT",
+              "value": 50
+            }
+          }
+        },
+        "hold": {
+          "ms": 1000
+        }
+      },
+      {
+        "label": "r06",
+        "timeout_ms": 60000,
+        "move": {
+          "to": {
+            "voxel": {
+              "x": 106,
+              "y": 100,
+              "z": 30
+            }
+          }
+        }
+      },
+      {
+        "label": "r07",
+        "skip_if": {
+          "treasury": {
+            "dollars": {
+              "op": "LT",
+              "value": 50
+            }
+          }
+        },
+        "hold": {
+          "ms": 1000
+        }
+      },
+      {
+        "label": "r08",
+        "timeout_ms": 60000,
+        "move": {
+          "to": {
+            "voxel": {
+              "x": 108,
+              "y": 100,
+              "z": 30
+            }
+          }
+        }
+      },
+      {
+        "label": "r09",
+        "skip_if": {
+          "treasury": {
+            "dollars": {
+              "op": "LT",
+              "value": 50
+            }
+          }
+        },
+        "hold": {
+          "ms": 1000
+        }
+      },
+      {
+        "label": "r10",
+        "timeout_ms": 60000,
+        "move": {
+          "to": {
+            "voxel": {
+              "x": 110,
+              "y": 100,
+              "z": 30
+            }
+          }
+        }
+      },
+      {
+        "label": "r11",
+        "skip_if": {
+          "treasury": {
+            "dollars": {
+              "op": "LT",
+              "value": 50
+            }
+          }
+        },
+        "hold": {
+          "ms": 1000
+        }
+      },
+      {
+        "label": "r12",
+        "timeout_ms": 60000,
+        "move": {
+          "to": {
+            "voxel": {
+              "x": 112,
+              "y": 100,
+              "z": 30
+            }
+          }
+        }
+      },
+      {
+        "label": "r13",
+        "skip_if": {
+          "treasury": {
+            "dollars": {
+              "op": "LT",
+              "value": 50
+            }
+          }
+        },
+        "hold": {
+          "ms": 1000
+        }
+      },
+      {
+        "label": "r14",
+        "timeout_ms": 60000,
+        "move": {
+          "to": {
+            "voxel": {
+              "x": 114,
+              "y": 100,
+              "z": 30
+            }
+          }
+        }
+      },
+      {
+        "label": "r15",
+        "skip_if": {
+          "treasury": {
+            "dollars": {
+              "op": "LT",
+              "value": 50
+            }
+          }
+        },
+        "hold": {
+          "ms": 1000
+        }
+      },
+      {
+        "label": "r16",
+        "timeout_ms": 60000,
+        "move": {
+          "to": {
+            "voxel": {
+              "x": 116,
+              "y": 100,
+              "z": 30
+            }
+          }
+        }
+      },
+      {
+        "label": "r17",
+        "skip_if": {
+          "treasury": {
+            "dollars": {
+              "op": "LT",
+              "value": 50
+            }
+          }
+        },
+        "hold": {
+          "ms": 1000
+        }
+      },
+      {
+        "label": "r18",
+        "timeout_ms": 60000,
+        "move": {
+          "to": {
+            "voxel": {
+              "x": 118,
+              "y": 100,
+              "z": 30
+            }
+          }
+        }
+      },
+      {
+        "label": "r19",
+        "skip_if": {
+          "treasury": {
+            "dollars": {
+              "op": "LT",
+              "value": 50
+            }
+          }
+        },
+        "hold": {
+          "ms": 1000
+        }
+      },
+      {
+        "label": "r20",
+        "timeout_ms": 60000,
+        "move": {
+          "to": {
+            "voxel": {
+              "x": 120,
+              "y": 100,
+              "z": 30
+            }
+          }
+        }
+      },
+      {
+        "label": "r21",
+        "skip_if": {
+          "treasury": {
+            "dollars": {
+              "op": "LT",
+              "value": 50
+            }
+          }
+        },
+        "hold": {
+          "ms": 1000
+        }
+      },
+      {
+        "label": "r22",
+        "timeout_ms": 60000,
+        "move": {
+          "to": {
+            "voxel": {
+              "x": 122,
+              "y": 100,
+              "z": 30
+            }
+          }
+        }
+      },
+      {
+        "label": "r23",
+        "skip_if": {
+          "treasury": {
+            "dollars": {
+              "op": "LT",
+              "value": 50
+            }
+          }
+        },
+        "hold": {
+          "ms": 1000
+        }
+      },
+      {
+        "label": "r24",
+        "timeout_ms": 60000,
+        "move": {
+          "to": {
+            "voxel": {
+              "x": 124,
+              "y": 100,
+              "z": 30
+            }
+          }
+        }
+      },
+      {
+        "label": "r25",
+        "skip_if": {
+          "treasury": {
+            "dollars": {
+              "op": "LT",
+              "value": 50
+            }
+          }
+        },
+        "hold": {
+          "ms": 1000
+        }
+      },
+      {
+        "label": "r26",
+        "timeout_ms": 60000,
+        "move": {
+          "to": {
+            "voxel": {
+              "x": 126,
+              "y": 100,
+              "z": 30
+            }
+          }
+        }
+      },
+      {
+        "label": "r27",
+        "skip_if": {
+          "treasury": {
+            "dollars": {
+              "op": "LT",
+              "value": 50
+            }
+          }
+        },
+        "hold": {
+          "ms": 1000
+        }
+      },
+      {
+        "label": "r28",
+        "timeout_ms": 60000,
+        "move": {
+          "to": {
+            "voxel": {
+              "x": 128,
+              "y": 100,
+              "z": 30
+            }
+          }
+        }
+      },
+      {
+        "label": "r29",
+        "skip_if": {
+          "treasury": {
+            "dollars": {
+              "op": "LT",
+              "value": 50
+            }
+          }
+        },
+        "hold": {
+          "ms": 1000
+        }
+      },
+      {
+        "label": "r30",
+        "timeout_ms": 60000,
+        "move": {
+          "to": {
+            "voxel": {
+              "x": 130,
+              "y": 100,
+              "z": 30
+            }
+          }
+        }
+      },
+      {
+        "label": "r31",
+        "skip_if": {
+          "treasury": {
+            "dollars": {
+              "op": "LT",
+              "value": 50
+            }
+          }
+        },
+        "hold": {
+          "ms": 1000
+        }
+      },
+      {
+        "label": "r32",
+        "timeout_ms": 60000,
+        "move": {
+          "to": {
+            "voxel": {
+              "x": 132,
+              "y": 100,
+              "z": 30
+            }
+          }
+        }
+      },
+      {
+        "label": "r33",
+        "skip_if": {
+          "treasury": {
+            "dollars": {
+              "op": "LT",
+              "value": 50
+            }
+          }
+        },
+        "hold": {
+          "ms": 1000
+        }
+      },
+      {
+        "label": "r34",
+        "timeout_ms": 60000,
+        "move": {
+          "to": {
+            "voxel": {
+              "x": 134,
+              "y": 100,
+              "z": 30
+            }
+          }
+        }
+      },
+      {
+        "label": "r35",
+        "skip_if": {
+          "treasury": {
+            "dollars": {
+              "op": "LT",
+              "value": 50
+            }
+          }
+        },
+        "hold": {
+          "ms": 1000
+        }
+      },
+      {
+        "label": "r36",
+        "timeout_ms": 60000,
+        "move": {
+          "to": {
+            "voxel": {
+              "x": 136,
+              "y": 100,
+              "z": 30
+            }
+          }
+        }
+      },
+      {
+        "label": "r37",
+        "skip_if": {
+          "treasury": {
+            "dollars": {
+              "op": "LT",
+              "value": 50
+            }
+          }
+        },
+        "hold": {
+          "ms": 1000
+        }
+      },
+      {
+        "label": "r38",
+        "timeout_ms": 60000,
+        "move": {
+          "to": {
+            "voxel": {
+              "x": 138,
+              "y": 100,
+              "z": 30
+            }
+          }
+        }
+      },
+      {
+        "label": "r39",
+        "skip_if": {
+          "treasury": {
+            "dollars": {
+              "op": "LT",
+              "value": 50
+            }
+          }
+        },
+        "hold": {
+          "ms": 1000
+        }
+      },
+      {
+        "label": "r40",
+        "timeout_ms": 60000,
+        "move": {
+          "to": {
+            "voxel": {
+              "x": 140,
+              "y": 100,
+              "z": 30
+            }
+          }
+        }
+      },
+      {
+        "label": "r41",
+        "skip_if": {
+          "treasury": {
+            "dollars": {
+              "op": "LT",
+              "value": 50
+            }
+          }
+        },
+        "hold": {
+          "ms": 1000
+        }
+      },
+      {
+        "label": "r42",
+        "timeout_ms": 60000,
+        "move": {
+          "to": {
+            "voxel": {
+              "x": 142,
+              "y": 100,
+              "z": 30
+            }
+          }
+        }
+      },
+      {
+        "label": "r43",
+        "skip_if": {
+          "treasury": {
+            "dollars": {
+              "op": "LT",
+              "value": 50
+            }
+          }
+        },
+        "hold": {
+          "ms": 1000
+        }
+      },
+      {
+        "label": "r44",
+        "timeout_ms": 60000,
+        "move": {
+          "to": {
+            "voxel": {
+              "x": 144,
+              "y": 100,
+              "z": 30
+            }
+          }
+        }
+      },
+      {
+        "label": "r45",
+        "skip_if": {
+          "treasury": {
+            "dollars": {
+              "op": "LT",
+              "value": 50
+            }
+          }
+        },
+        "hold": {
+          "ms": 1000
+        }
+      },
+      {
+        "label": "r46",
+        "timeout_ms": 60000,
+        "move": {
+          "to": {
+            "voxel": {
+              "x": 146,
+              "y": 100,
+              "z": 30
+            }
+          }
+        }
+      },
+      {
+        "label": "r47",
+        "skip_if": {
+          "treasury": {
+            "dollars": {
+              "op": "LT",
+              "value": 50
+            }
+          }
+        },
+        "hold": {
+          "ms": 1000
+        }
+      },
+      {
+        "label": "r48",
+        "timeout_ms": 60000,
+        "move": {
+          "to": {
+            "voxel": {
+              "x": 148,
+              "y": 100,
+              "z": 30
+            }
+          }
+        }
+      },
+      {
+        "label": "r49",
+        "skip_if": {
+          "treasury": {
+            "dollars": {
+              "op": "LT",
+              "value": 50
+            }
+          }
+        },
+        "hold": {
+          "ms": 1000
+        }
+      },
+      {
+        "label": "r50",
+        "timeout_ms": 60000,
+        "move": {
+          "to": {
+            "voxel": {
+              "x": 150,
+              "y": 100,
+              "z": 30
+            }
+          }
+        }
+      },
+      {
+        "label": "r51",
+        "skip_if": {
+          "treasury": {
+            "dollars": {
+              "op": "LT",
+              "value": 50
+            }
+          }
+        },
+        "hold": {
+          "ms": 1000
+        }
+      },
+      {
+        "label": "r52",
+        "timeout_ms": 60000,
+        "move": {
+          "to": {
+            "voxel": {
+              "x": 152,
+              "y": 100,
+              "z": 30
+            }
+          }
+        }
+      },
+      {
+        "label": "r53",
+        "skip_if": {
+          "treasury": {
+            "dollars": {
+              "op": "LT",
+              "value": 50
+            }
+          }
+        },
+        "hold": {
+          "ms": 1000
+        }
+      },
+      {
+        "label": "r54",
+        "timeout_ms": 60000,
+        "move": {
+          "to": {
+            "voxel": {
+              "x": 154,
+              "y": 100,
+              "z": 30
+            }
+          }
+        }
+      },
+      {
+        "label": "r55",
+        "skip_if": {
+          "treasury": {
+            "dollars": {
+              "op": "LT",
+              "value": 50
+            }
+          }
+        },
+        "hold": {
+          "ms": 1000
+        }
+      },
+      {
+        "label": "r56",
+        "timeout_ms": 60000,
+        "move": {
+          "to": {
+            "voxel": {
+              "x": 156,
+              "y": 100,
+              "z": 30
+            }
+          }
+        }
+      },
+      {
+        "label": "r57",
+        "skip_if": {
+          "treasury": {
+            "dollars": {
+              "op": "LT",
+              "value": 50
+            }
+          }
+        },
+        "hold": {
+          "ms": 1000
+        }
+      },
+      {
+        "label": "r58",
+        "timeout_ms": 60000,
+        "move": {
+          "to": {
+            "voxel": {
+              "x": 158,
+              "y": 100,
+              "z": 30
+            }
+          }
+        }
+      },
+      {
+        "label": "r59",
+        "skip_if": {
+          "treasury": {
+            "dollars": {
+              "op": "LT",
+              "value": 50
+            }
+          }
+        },
+        "hold": {
+          "ms": 1000
+        }
+      },
+      {
+        "label": "r60",
+        "timeout_ms": 60000,
+        "move": {
+          "to": {
+            "voxel": {
+              "x": 160,
+              "y": 100,
+              "z": 30
+            }
+          }
+        }
+      },
+      {
+        "label": "r61",
+        "skip_if": {
+          "treasury": {
+            "dollars": {
+              "op": "LT",
+              "value": 50
+            }
+          }
+        },
+        "hold": {
+          "ms": 1000
+        }
+      },
+      {
+        "label": "r62",
+        "timeout_ms": 60000,
+        "move": {
+          "to": {
+            "voxel": {
+              "x": 162,
+              "y": 100,
+              "z": 30
+            }
+          }
+        }
+      },
+      {
+        "label": "r63",
+        "skip_if": {
+          "treasury": {
+            "dollars": {
+              "op": "LT",
+              "value": 50
+            }
+          }
+        },
+        "hold": {
+          "ms": 1000
+        }
+      }
+    ],
+    "handlers": [
+      {
+        "id": "h00",
+        "when": {
+          "all": {
+            "items": [
+              {
+                "cmdr_hp_pct": {
+                  "cmp": "LE",
+                  "pct": 40
+                }
+              },
+              {
+                "segment_elapsed": {
+                  "ms": {
+                    "op": "GE",
+                    "value": 60000
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "body": [
+          {
+            "label": "h00_a",
+            "move": {
+              "to": {
+                "safest": {}
+              }
+            }
+          },
+          {
+            "label": "h00_b",
+            "hold": {
+              "ms": 2000
+            }
+          },
+          {
+            "label": "h00_c",
+            "move": {
+              "to": {
+                "beacon_anchor": {
+                  "beacon_id": "b_01"
+                }
+              }
+            }
+          }
+        ],
+        "resume": "CONTINUE",
+        "cooldown_ms": 5000,
+        "max_fires": 2
+      },
+      {
+        "id": "h01",
+        "when": {
+          "all": {
+            "items": [
+              {
+                "cmdr_hp_pct": {
+                  "cmp": "LE",
+                  "pct": 40
+                }
+              },
+              {
+                "segment_elapsed": {
+                  "ms": {
+                    "op": "GE",
+                    "value": 60000
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "body": [
+          {
+            "label": "h01_a",
+            "move": {
+              "to": {
+                "safest": {}
+              }
+            }
+          },
+          {
+            "label": "h01_b",
+            "hold": {
+              "ms": 2000
+            }
+          },
+          {
+            "label": "h01_c",
+            "move": {
+              "to": {
+                "beacon_anchor": {
+                  "beacon_id": "b_01"
+                }
+              }
+            }
+          }
+        ],
+        "resume": "CONTINUE",
+        "cooldown_ms": 5000,
+        "max_fires": 2
+      },
+      {
+        "id": "h02",
+        "when": {
+          "all": {
+            "items": [
+              {
+                "cmdr_hp_pct": {
+                  "cmp": "LE",
+                  "pct": 40
+                }
+              },
+              {
+                "segment_elapsed": {
+                  "ms": {
+                    "op": "GE",
+                    "value": 60000
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "body": [
+          {
+            "label": "h02_a",
+            "move": {
+              "to": {
+                "safest": {}
+              }
+            }
+          },
+          {
+            "label": "h02_b",
+            "hold": {
+              "ms": 2000
+            }
+          },
+          {
+            "label": "h02_c",
+            "move": {
+              "to": {
+                "beacon_anchor": {
+                  "beacon_id": "b_01"
+                }
+              }
+            }
+          }
+        ],
+        "resume": "CONTINUE",
+        "cooldown_ms": 5000,
+        "max_fires": 2
+      },
+      {
+        "id": "h03",
+        "when": {
+          "all": {
+            "items": [
+              {
+                "cmdr_hp_pct": {
+                  "cmp": "LE",
+                  "pct": 40
+                }
+              },
+              {
+                "segment_elapsed": {
+                  "ms": {
+                    "op": "GE",
+                    "value": 60000
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "body": [
+          {
+            "label": "h03_a",
+            "move": {
+              "to": {
+                "safest": {}
+              }
+            }
+          },
+          {
+            "label": "h03_b",
+            "hold": {
+              "ms": 2000
+            }
+          },
+          {
+            "label": "h03_c",
+            "move": {
+              "to": {
+                "beacon_anchor": {
+                  "beacon_id": "b_01"
+                }
+              }
+            }
+          }
+        ],
+        "resume": "CONTINUE",
+        "cooldown_ms": 5000,
+        "max_fires": 2
+      },
+      {
+        "id": "h04",
+        "when": {
+          "all": {
+            "items": [
+              {
+                "cmdr_hp_pct": {
+                  "cmp": "LE",
+                  "pct": 40
+                }
+              },
+              {
+                "segment_elapsed": {
+                  "ms": {
+                    "op": "GE",
+                    "value": 60000
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "body": [
+          {
+            "label": "h04_a",
+            "move": {
+              "to": {
+                "safest": {}
+              }
+            }
+          },
+          {
+            "label": "h04_b",
+            "hold": {
+              "ms": 2000
+            }
+          },
+          {
+            "label": "h04_c",
+            "move": {
+              "to": {
+                "beacon_anchor": {
+                  "beacon_id": "b_01"
+                }
+              }
+            }
+          }
+        ],
+        "resume": "CONTINUE",
+        "cooldown_ms": 5000,
+        "max_fires": 2
+      },
+      {
+        "id": "h05",
+        "when": {
+          "all": {
+            "items": [
+              {
+                "cmdr_hp_pct": {
+                  "cmp": "LE",
+                  "pct": 40
+                }
+              },
+              {
+                "segment_elapsed": {
+                  "ms": {
+                    "op": "GE",
+                    "value": 60000
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "body": [
+          {
+            "label": "h05_a",
+            "move": {
+              "to": {
+                "safest": {}
+              }
+            }
+          },
+          {
+            "label": "h05_b",
+            "hold": {
+              "ms": 2000
+            }
+          },
+          {
+            "label": "h05_c",
+            "move": {
+              "to": {
+                "beacon_anchor": {
+                  "beacon_id": "b_01"
+                }
+              }
+            }
+          }
+        ],
+        "resume": "CONTINUE",
+        "cooldown_ms": 5000,
+        "max_fires": 2
+      },
+      {
+        "id": "h06",
+        "when": {
+          "all": {
+            "items": [
+              {
+                "cmdr_hp_pct": {
+                  "cmp": "LE",
+                  "pct": 40
+                }
+              },
+              {
+                "segment_elapsed": {
+                  "ms": {
+                    "op": "GE",
+                    "value": 60000
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "body": [
+          {
+            "label": "h06_a",
+            "move": {
+              "to": {
+                "safest": {}
+              }
+            }
+          },
+          {
+            "label": "h06_b",
+            "hold": {
+              "ms": 2000
+            }
+          },
+          {
+            "label": "h06_c",
+            "move": {
+              "to": {
+                "beacon_anchor": {
+                  "beacon_id": "b_01"
+                }
+              }
+            }
+          }
+        ],
+        "resume": "CONTINUE",
+        "cooldown_ms": 5000,
+        "max_fires": 2
+      },
+      {
+        "id": "h07",
+        "when": {
+          "all": {
+            "items": [
+              {
+                "cmdr_hp_pct": {
+                  "cmp": "LE",
+                  "pct": 40
+                }
+              },
+              {
+                "segment_elapsed": {
+                  "ms": {
+                    "op": "GE",
+                    "value": 60000
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "body": [
+          {
+            "label": "h07_a",
+            "move": {
+              "to": {
+                "safest": {}
+              }
+            }
+          },
+          {
+            "label": "h07_b",
+            "hold": {
+              "ms": 2000
+            }
+          },
+          {
+            "label": "h07_c",
+            "move": {
+              "to": {
+                "beacon_anchor": {
+                  "beacon_id": "b_01"
+                }
+              }
+            }
+          }
+        ],
+        "resume": "CONTINUE",
+        "cooldown_ms": 5000,
+        "max_fires": 2
+      },
+      {
+        "id": "h08",
+        "when": {
+          "all": {
+            "items": [
+              {
+                "cmdr_hp_pct": {
+                  "cmp": "LE",
+                  "pct": 40
+                }
+              },
+              {
+                "segment_elapsed": {
+                  "ms": {
+                    "op": "GE",
+                    "value": 60000
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "body": [
+          {
+            "label": "h08_a",
+            "move": {
+              "to": {
+                "safest": {}
+              }
+            }
+          },
+          {
+            "label": "h08_b",
+            "hold": {
+              "ms": 2000
+            }
+          },
+          {
+            "label": "h08_c",
+            "move": {
+              "to": {
+                "beacon_anchor": {
+                  "beacon_id": "b_01"
+                }
+              }
+            }
+          }
+        ],
+        "resume": "CONTINUE",
+        "cooldown_ms": 5000,
+        "max_fires": 2
+      },
+      {
+        "id": "h09",
+        "when": {
+          "all": {
+            "items": [
+              {
+                "cmdr_hp_pct": {
+                  "cmp": "LE",
+                  "pct": 40
+                }
+              },
+              {
+                "segment_elapsed": {
+                  "ms": {
+                    "op": "GE",
+                    "value": 60000
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "body": [
+          {
+            "label": "h09_a",
+            "move": {
+              "to": {
+                "safest": {}
+              }
+            }
+          },
+          {
+            "label": "h09_b",
+            "hold": {
+              "ms": 2000
+            }
+          },
+          {
+            "label": "h09_c",
+            "move": {
+              "to": {
+                "beacon_anchor": {
+                  "beacon_id": "b_01"
+                }
+              }
+            }
+          }
+        ],
+        "resume": "CONTINUE",
+        "cooldown_ms": 5000,
+        "max_fires": 2
+      },
+      {
+        "id": "h10",
+        "when": {
+          "all": {
+            "items": [
+              {
+                "cmdr_hp_pct": {
+                  "cmp": "LE",
+                  "pct": 40
+                }
+              },
+              {
+                "segment_elapsed": {
+                  "ms": {
+                    "op": "GE",
+                    "value": 60000
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "body": [
+          {
+            "label": "h10_a",
+            "move": {
+              "to": {
+                "safest": {}
+              }
+            }
+          },
+          {
+            "label": "h10_b",
+            "hold": {
+              "ms": 2000
+            }
+          },
+          {
+            "label": "h10_c",
+            "move": {
+              "to": {
+                "beacon_anchor": {
+                  "beacon_id": "b_01"
+                }
+              }
+            }
+          }
+        ],
+        "resume": "CONTINUE",
+        "cooldown_ms": 5000,
+        "max_fires": 2
+      },
+      {
+        "id": "h11",
+        "when": {
+          "all": {
+            "items": [
+              {
+                "cmdr_hp_pct": {
+                  "cmp": "LE",
+                  "pct": 40
+                }
+              },
+              {
+                "segment_elapsed": {
+                  "ms": {
+                    "op": "GE",
+                    "value": 60000
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "body": [
+          {
+            "label": "h11_a",
+            "move": {
+              "to": {
+                "safest": {}
+              }
+            }
+          },
+          {
+            "label": "h11_b",
+            "hold": {
+              "ms": 2000
+            }
+          },
+          {
+            "label": "h11_c",
+            "move": {
+              "to": {
+                "beacon_anchor": {
+                  "beacon_id": "b_01"
+                }
+              }
+            }
+          }
+        ],
+        "resume": "CONTINUE",
+        "cooldown_ms": 5000,
+        "max_fires": 2
+      },
+      {
+        "id": "h12",
+        "when": {
+          "all": {
+            "items": [
+              {
+                "cmdr_hp_pct": {
+                  "cmp": "LE",
+                  "pct": 40
+                }
+              },
+              {
+                "segment_elapsed": {
+                  "ms": {
+                    "op": "GE",
+                    "value": 60000
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "body": [
+          {
+            "label": "h12_a",
+            "move": {
+              "to": {
+                "safest": {}
+              }
+            }
+          },
+          {
+            "label": "h12_b",
+            "hold": {
+              "ms": 2000
+            }
+          },
+          {
+            "label": "h12_c",
+            "move": {
+              "to": {
+                "beacon_anchor": {
+                  "beacon_id": "b_01"
+                }
+              }
+            }
+          }
+        ],
+        "resume": "CONTINUE",
+        "cooldown_ms": 5000,
+        "max_fires": 2
+      },
+      {
+        "id": "h13",
+        "when": {
+          "all": {
+            "items": [
+              {
+                "cmdr_hp_pct": {
+                  "cmp": "LE",
+                  "pct": 40
+                }
+              },
+              {
+                "segment_elapsed": {
+                  "ms": {
+                    "op": "GE",
+                    "value": 60000
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "body": [
+          {
+            "label": "h13_a",
+            "move": {
+              "to": {
+                "safest": {}
+              }
+            }
+          },
+          {
+            "label": "h13_b",
+            "hold": {
+              "ms": 2000
+            }
+          },
+          {
+            "label": "h13_c",
+            "move": {
+              "to": {
+                "beacon_anchor": {
+                  "beacon_id": "b_01"
+                }
+              }
+            }
+          }
+        ],
+        "resume": "CONTINUE",
+        "cooldown_ms": 5000,
+        "max_fires": 2
+      },
+      {
+        "id": "h14",
+        "when": {
+          "all": {
+            "items": [
+              {
+                "cmdr_hp_pct": {
+                  "cmp": "LE",
+                  "pct": 40
+                }
+              },
+              {
+                "segment_elapsed": {
+                  "ms": {
+                    "op": "GE",
+                    "value": 60000
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "body": [
+          {
+            "label": "h14_a",
+            "move": {
+              "to": {
+                "safest": {}
+              }
+            }
+          },
+          {
+            "label": "h14_b",
+            "hold": {
+              "ms": 2000
+            }
+          },
+          {
+            "label": "h14_c",
+            "move": {
+              "to": {
+                "beacon_anchor": {
+                  "beacon_id": "b_01"
+                }
+              }
+            }
+          }
+        ],
+        "resume": "CONTINUE",
+        "cooldown_ms": 5000,
+        "max_fires": 2
+      },
+      {
+        "id": "h15",
+        "when": {
+          "all": {
+            "items": [
+              {
+                "cmdr_hp_pct": {
+                  "cmp": "LE",
+                  "pct": 40
+                }
+              },
+              {
+                "segment_elapsed": {
+                  "ms": {
+                    "op": "GE",
+                    "value": 60000
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "body": [
+          {
+            "label": "h15_a",
+            "move": {
+              "to": {
+                "safest": {}
+              }
+            }
+          },
+          {
+            "label": "h15_b",
+            "hold": {
+              "ms": 2000
+            }
+          },
+          {
+            "label": "h15_c",
+            "move": {
+              "to": {
+                "beacon_anchor": {
+                  "beacon_id": "b_01"
+                }
+              }
+            }
+          }
+        ],
+        "resume": "CONTINUE",
+        "cooldown_ms": 5000,
+        "max_fires": 2
+      }
+    ]
+  },
+  "on_death": {
+    "on_respawn": "CONTINUE",
+    "max_deaths_before_fallback": 1
+  },
+  "fallback": {
+    "hold": {
+      "at": {
+        "beacon_anchor": {
+          "safest": {}
+        }
+      }
+    }
+  }
+}

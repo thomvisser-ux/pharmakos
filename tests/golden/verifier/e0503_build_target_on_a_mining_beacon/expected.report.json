@@ -1,0 +1,22 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0503",
+      "severity": "ERROR",
+      "path": "/declarative/route/0/interface/rows/0/add_build_target",
+      "related_paths": [
+        "/declarative/route/0/interface/beacon/beacon_id"
+      ],
+      "message": "`b_02` is on the MINE writ; a build target is only added to a beacon on BUILD.",
+      "beginner": "Only a beacon told to build takes a build target."
+    }
+  ],
+  "report_hash": "ZLcujjTT2IE=",
+  "rules_hash": "sx2NB4nrIHw=",
+  "plan_fingerprint": "153tQY0o/Lw=",
+  "verifier_version": "0.1.0-skeleton",
+  "size_units": 2,
+  "size_budget": 128
+}
+

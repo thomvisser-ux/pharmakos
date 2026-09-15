@@ -1,0 +1,33 @@
+{
+  "schema_version": {
+    "major": 2
+  },
+  "meta": {
+    "title": "case",
+    "author_kind": "HUMAN"
+  },
+  "kind": "PLAYBOOK",
+  "declarative": {
+    "route": [
+      {
+        "label": "s1",
+        "hold": {
+          "ms": 1000
+        }
+      }
+    ]
+  },
+  "on_death": {
+    "on_respawn": "CONTINUE",
+    "max_deaths_before_fallback": 1
+  },
+  "fallback": {
+    "hold": {
+      "at": {
+        "beacon_anchor": {
+          "safest": {}
+        }
+      }
+    }
+  }
+}

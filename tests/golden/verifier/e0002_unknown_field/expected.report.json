@@ -1,0 +1,24 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0002",
+      "severity": "ERROR",
+      "path": "/nonsense",
+      "message": "`nonsense` is not a field the schema declares. Unknown fields are rejected, never stripped.",
+      "beginner": "There is a name here that the playbook vocabulary does not have. Nothing is removed for you: correct the name or take the line out yourself.",
+      "suggestions": [
+        {
+          "title": "Delete `nonsense`",
+          "json_patch": "[{\"op\":\"remove\",\"path\":\"/nonsense\"}]",
+          "applicability": "MAYBE_INCORRECT"
+        }
+      ]
+    }
+  ],
+  "report_hash": "jd4Yjw+/Fyw=",
+  "rules_hash": "sx2NB4nrIHw=",
+  "verifier_version": "0.1.0-skeleton",
+  "size_budget": 128
+}
+

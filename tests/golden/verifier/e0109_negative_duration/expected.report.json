@@ -1,0 +1,26 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0109",
+      "severity": "ERROR",
+      "path": "/declarative/route/0/timeout_ms",
+      "message": "`timeout_ms` is -5 ms; a duration is never negative.",
+      "beginner": "Time does not run backwards. Use nothing, or more.",
+      "suggestions": [
+        {
+          "title": "Set timeout_ms to 0",
+          "json_patch": "[{\"op\":\"replace\",\"path\":\"/declarative/route/0/timeout_ms\",\"value\":0}]",
+          "applicability": "MAYBE_INCORRECT"
+        }
+      ]
+    }
+  ],
+  "report_hash": "sY14tDq7oTw=",
+  "rules_hash": "sx2NB4nrIHw=",
+  "plan_fingerprint": "ub842y1p2ko=",
+  "verifier_version": "0.1.0-skeleton",
+  "size_units": 1,
+  "size_budget": 128
+}
+

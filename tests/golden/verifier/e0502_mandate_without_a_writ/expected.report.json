@@ -1,0 +1,19 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0502",
+      "severity": "ERROR",
+      "path": "/declarative/route/0/place_beacon/initial/mandate",
+      "message": "the mandate settings name no mandate.",
+      "beginner": "Say which writ the beacon is on."
+    }
+  ],
+  "report_hash": "GECGyf7P39w=",
+  "rules_hash": "sx2NB4nrIHw=",
+  "plan_fingerprint": "ka4O0qFw7LI=",
+  "verifier_version": "0.1.0-skeleton",
+  "size_units": 1,
+  "size_budget": 128
+}
+

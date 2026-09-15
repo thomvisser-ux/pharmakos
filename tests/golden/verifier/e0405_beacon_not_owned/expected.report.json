@@ -1,0 +1,19 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0405",
+      "severity": "ERROR",
+      "path": "/declarative/route/0/interface/beacon/beacon_id",
+      "message": "`e_01` is a beacon this seat does not own.",
+      "beginner": "A commander interfaces with your own beacons."
+    }
+  ],
+  "report_hash": "qKzR0F3LkIU=",
+  "rules_hash": "sx2NB4nrIHw=",
+  "plan_fingerprint": "nrlmpyl5Hns=",
+  "verifier_version": "0.1.0-skeleton",
+  "size_units": 1,
+  "size_budget": 128
+}
+

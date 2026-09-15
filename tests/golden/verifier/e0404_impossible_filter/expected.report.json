@@ -1,0 +1,30 @@
+{
+  "qualifies": true,
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0404",
+      "severity": "WARNING",
+      "path": "/declarative/route/0/move/to/beacon_anchor/nearest/filter",
+      "related_paths": [
+        "/declarative/route/0/move/to/beacon_anchor/nearest/filter/tags"
+      ],
+      "message": "an enemy-side filter and a tag filter select nothing together: an enemy beacon carries none of your tags.",
+      "beginner": "Nothing can match both of these at once, so this selector never finds anything.",
+      "suggestions": [
+        {
+          "title": "Drop the tag filter",
+          "json_patch": "[{\"op\":\"remove\",\"path\":\"/declarative/route/0/move/to/beacon_anchor/nearest/filter/tags\"}]",
+          "applicability": "MAYBE_INCORRECT"
+        }
+      ]
+    }
+  ],
+  "report_hash": "QhxmOcj/jRw=",
+  "rules_hash": "sx2NB4nrIHw=",
+  "plan_fingerprint": "xVJqfV5ZLUk=",
+  "verifier_version": "0.1.0-skeleton",
+  "size_units": 1,
+  "size_budget": 128
+}
+

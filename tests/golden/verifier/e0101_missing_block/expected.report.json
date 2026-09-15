@@ -1,0 +1,26 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0101",
+      "severity": "ERROR",
+      "path": "/fallback",
+      "message": "the `fallback` block is required and is missing.",
+      "beginner": "A part that every playbook must have is not here.",
+      "suggestions": [
+        {
+          "title": "Add a fallback that holds at the safest beacon",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/fallback\",\"value\":{\"hold\":{\"at\":{\"beacon_anchor\":{\"safest\":{}}}}}}]",
+          "applicability": "HAS_PLACEHOLDERS"
+        }
+      ]
+    }
+  ],
+  "report_hash": "vFF1qo+OZvU=",
+  "rules_hash": "sx2NB4nrIHw=",
+  "plan_fingerprint": "wqchnc6679k=",
+  "verifier_version": "0.1.0-skeleton",
+  "size_units": 1,
+  "size_budget": 128
+}
+

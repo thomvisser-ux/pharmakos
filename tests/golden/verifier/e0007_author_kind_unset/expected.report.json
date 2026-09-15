@@ -1,0 +1,26 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0007",
+      "severity": "ERROR",
+      "path": "/meta/author_kind",
+      "message": "`author_kind` is unset; an unset tag is an error, never a default.",
+      "beginner": "The file does not say who wrote it.",
+      "suggestions": [
+        {
+          "title": "Mark the file as written by a HUMAN",
+          "json_patch": "[{\"op\":\"replace\",\"path\":\"/meta/author_kind\",\"value\":\"HUMAN\"}]",
+          "applicability": "MAYBE_INCORRECT"
+        }
+      ]
+    }
+  ],
+  "report_hash": "pHKzSpxriRw=",
+  "rules_hash": "sx2NB4nrIHw=",
+  "plan_fingerprint": "RGLYAEwy5PU=",
+  "verifier_version": "0.1.0-skeleton",
+  "size_units": 1,
+  "size_budget": 128
+}
+

@@ -1,0 +1,199 @@
+{
+  "schema_version": {
+    "major": 1
+  },
+  "meta": {
+    "title": "case",
+    "author_kind": "HUMAN"
+  },
+  "kind": "PLAYBOOK",
+  "declarative": {
+    "route": [
+      {
+        "label": "s1",
+        "hold": {
+          "ms": 1000
+        }
+      }
+    ],
+    "handlers": [
+      {
+        "id": "h1",
+        "when": {
+          "all": {
+            "items": [
+              {
+                "cmdr_hp_pct": {
+                  "cmp": "LE",
+                  "pct": 0
+                }
+              },
+              {
+                "cmdr_hp_pct": {
+                  "cmp": "LE",
+                  "pct": 1
+                }
+              },
+              {
+                "cmdr_hp_pct": {
+                  "cmp": "LE",
+                  "pct": 2
+                }
+              },
+              {
+                "cmdr_hp_pct": {
+                  "cmp": "LE",
+                  "pct": 3
+                }
+              },
+              {
+                "cmdr_hp_pct": {
+                  "cmp": "LE",
+                  "pct": 4
+                }
+              },
+              {
+                "cmdr_hp_pct": {
+                  "cmp": "LE",
+                  "pct": 5
+                }
+              },
+              {
+                "cmdr_hp_pct": {
+                  "cmp": "LE",
+                  "pct": 6
+                }
+              },
+              {
+                "cmdr_hp_pct": {
+                  "cmp": "LE",
+                  "pct": 7
+                }
+              },
+              {
+                "cmdr_hp_pct": {
+                  "cmp": "LE",
+                  "pct": 8
+                }
+              },
+              {
+                "cmdr_hp_pct": {
+                  "cmp": "LE",
+                  "pct": 9
+                }
+              },
+              {
+                "cmdr_hp_pct": {
+                  "cmp": "LE",
+                  "pct": 10
+                }
+              },
+              {
+                "cmdr_hp_pct": {
+                  "cmp": "LE",
+                  "pct": 11
+                }
+              },
+              {
+                "cmdr_hp_pct": {
+                  "cmp": "LE",
+                  "pct": 12
+                }
+              },
+              {
+                "cmdr_hp_pct": {
+                  "cmp": "LE",
+                  "pct": 13
+                }
+              },
+              {
+                "cmdr_hp_pct": {
+                  "cmp": "LE",
+                  "pct": 14
+                }
+              },
+              {
+                "cmdr_hp_pct": {
+                  "cmp": "LE",
+                  "pct": 15
+                }
+              },
+              {
+                "cmdr_hp_pct": {
+                  "cmp": "LE",
+                  "pct": 16
+                }
+              },
+              {
+                "cmdr_hp_pct": {
+                  "cmp": "LE",
+                  "pct": 17
+                }
+              },
+              {
+                "cmdr_hp_pct": {
+                  "cmp": "LE",
+                  "pct": 18
+                }
+              },
+              {
+                "cmdr_hp_pct": {
+                  "cmp": "LE",
+                  "pct": 19
+                }
+              },
+              {
+                "cmdr_hp_pct": {
+                  "cmp": "LE",
+                  "pct": 20
+                }
+              },
+              {
+                "cmdr_hp_pct": {
+                  "cmp": "LE",
+                  "pct": 21
+                }
+              },
+              {
+                "cmdr_hp_pct": {
+                  "cmp": "LE",
+                  "pct": 22
+                }
+              },
+              {
+                "cmdr_hp_pct": {
+                  "cmp": "LE",
+                  "pct": 23
+                }
+              }
+            ]
+          }
+        },
+        "body": [
+          {
+            "label": "b1",
+            "hold": {
+              "ms": 1000
+            }
+          }
+        ],
+        "resume": "CONTINUE",
+        "cooldown_ms": 5000,
+        "max_fires": 2
+      }
+    ]
+  },
+  "on_death": {
+    "on_respawn": "CONTINUE",
+    "max_deaths_before_fallback": 1
+  },
+  "fallback": {
+    "hold": {
+      "at": {
+        "beacon_anchor": {
+          "safest": {}
+        }
+      }
+    }
+  }
+}

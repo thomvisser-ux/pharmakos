@@ -1,0 +1,27 @@
+{
+  "qualifies": true,
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0008",
+      "severity": "WARNING",
+      "path": "/meta/fingerprint",
+      "message": "the recorded fingerprint does not match these bytes; the verifier has recomputed it.",
+      "beginner": "The stamp on this file was out of date. It has been worked out again for you.",
+      "suggestions": [
+        {
+          "title": "Remove the stale fingerprint",
+          "json_patch": "[{\"op\":\"remove\",\"path\":\"/meta/fingerprint\"}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    }
+  ],
+  "report_hash": "OO/aofIDMMQ=",
+  "rules_hash": "sx2NB4nrIHw=",
+  "plan_fingerprint": "9Y5p5OPom34=",
+  "verifier_version": "0.1.0-skeleton",
+  "size_units": 1,
+  "size_budget": 128
+}
+
