@@ -103,13 +103,19 @@ assertion that passes by not running.
 `by_tick` is **required**. An assertion with no deadline is satisfied by the end
 of the match, which is not an assertion.
 
+`golden` is a repository-relative path under `tests/golden/`, ending
+`.hashes.txt`, with forward slashes and no `..` — the same path rule as
+`seats[].playbook`. It need not exist yet: the task that first drives the run
+commits the chain.
+
 **Every scenario asserts on events AND on the hash chain.** Events alone prove
 the match did something; hashes alone prove it did the same thing twice; only
 the pair proves it did the right thing reproducibly. The `scenario` step
 enforces this.
 
-Three names are **reserved** for the one extension decisions-log item 16
-schedules for T15, when the runner meets real events: `event_count_in_range`,
+Three names are **reserved** for the one extension skeleton-plan §7 decision 16
+(recommended, not yet logged) schedules for T15, when the runner meets real
+events: `event_count_in_range`,
 `state_hash_at_tick`, `terminal_hash`. Using one today is an error naming the
 task that adds it. The vocabulary is *data inside* the format, so adding to it
 is not a format break; removing one would be.

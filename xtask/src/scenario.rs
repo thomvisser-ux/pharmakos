@@ -59,15 +59,16 @@ pub(crate) const FORMAT: &str = "pharmakos.scenario.v1";
 
 /// The assertion vocabulary, in full.
 ///
-/// PLACEHOLDER: decisions-log item 16 (plan section 7) extends this **once**,
-/// at T15, when the runner meets real events — the named candidates are
-/// `event_count_in_range`, `state_hash_at_tick` and `terminal_hash`. Owner
-/// decides at T15. The vocabulary is data inside the format, not the format, so
-/// adding to it is not a format break; removing one would be.
+/// PLACEHOLDER: skeleton-plan section 7 decision 16 (recommended, not yet
+/// logged) extends this **once**, at T15, when the runner meets real events —
+/// the named candidates are `event_count_in_range`, `state_hash_at_tick` and
+/// `terminal_hash`. Owner decides at T15. The vocabulary is data inside the
+/// format, not the format, so adding to it is not a format break; removing one
+/// would be.
 pub(crate) const ASSERTIONS: &[&str] = &["event_fired", "hash_chain_equals"];
 
-/// Names held for item 16's extension. Naming one today is an error that says
-/// which task adds it, rather than "unknown assertion".
+/// Names held for decision 16's extension. Naming one today is an error that
+/// says which task adds it, rather than "unknown assertion".
 const RESERVED_ASSERTIONS: &[&str] = &[
     "event_count_in_range",
     "state_hash_at_tick",
@@ -84,7 +85,14 @@ const TOP_LEVEL_KEYS: &[&str] = &[
     "assertions",
 ];
 const MAP_KEYS: &[&str] = &["seed", "generator"];
-const SEAT_KEYS: &[&str] = &["seat", "kind", "playbook", "operator"];
+/// No `operator` key. A `builtin` seat will one day name the difficulty it runs
+/// at, but nothing validates that today and `scenarios/README.md`'s key table
+/// does not document it — and a key that is accepted, undocumented and unchecked
+/// is the same failure as a silently stripped one in miniature: a scenario could
+/// carry `"operator": "whatever"` and have it neither honoured nor refused.
+/// T18 adds it with the operator that reads it; adding a key is additive, so
+/// that is not a format break.
+const SEAT_KEYS: &[&str] = &["seat", "kind", "playbook"];
 const SEGMENT_KEYS: &[&str] = &["index", "length_ms", "note"];
 const SEAT_KINDS: &[&str] = &["playbook", "safe", "builtin"];
 
@@ -165,7 +173,7 @@ pub(crate) fn validate(root: &Path, path: &Path) -> Result<Scenario, String> {
         check_map(&json, &mut problems);
         seats = check_seats(root, &json, &mut problems);
         check_segments(&json, &mut problems);
-        assertions = check_assertions(&json, &mut problems);
+        assertions = check_assertions(root, &json, &mut problems);
     } else {
         problems.push(Problem::new("", "a scenario file is a JSON object"));
     }
@@ -387,7 +395,7 @@ fn check_segments(json: &Json, problems: &mut Vec<Problem>) {
     }
 }
 
-fn check_assertions(json: &Json, problems: &mut Vec<Problem>) -> usize {
+fn check_assertions(root: &Path, json: &Json, problems: &mut Vec<Problem>) -> usize {
     let Some(Json::Array(assertions)) = json.get("assertions") else {
         problems.push(Problem::new(
             "/assertions",
@@ -417,9 +425,9 @@ fn check_assertions(json: &Json, problems: &mut Vec<Problem>) -> usize {
             problems.push(Problem::new(
                 &format!("{base}/assert"),
                 format!(
-                    "`{kind}` is reserved for the vocabulary extension decisions-log item 16 \
-                     schedules for T15, when the runner meets real events; it is not in \
-                     {FORMAT} yet"
+                    "`{kind}` is reserved for the vocabulary extension skeleton-plan section 7 \
+                     decision 16 (recommended, not yet logged) schedules for T15, when the \
+                     runner meets real events; it is not in {FORMAT} yet"
                 ),
             ));
             continue;
@@ -431,7 +439,7 @@ fn check_assertions(json: &Json, problems: &mut Vec<Problem>) -> usize {
             }
             "hash_chain_equals" => {
                 on_hashes = true;
-                check_hash_chain_equals(assertion, &base, problems);
+                check_hash_chain_equals(root, assertion, &base, problems);
             }
             other => problems.push(Problem::new(
                 &format!("{base}/assert"),
@@ -487,13 +495,19 @@ fn check_event_fired(assertion: &Json, base: &str, problems: &mut Vec<Problem>) 
     }
 }
 
-fn check_hash_chain_equals(assertion: &Json, base: &str, problems: &mut Vec<Problem>) {
+fn check_hash_chain_equals(root: &Path, assertion: &Json, base: &str, problems: &mut Vec<Problem>) {
     const KEYS: &[&str] = &["assert", "golden", "note"];
     if let Json::Object(members) = assertion {
         unknown_keys(base, members, KEYS, problems);
     }
     match assertion.get("golden").and_then(Json::as_str) {
         Some(path) => {
+            // Every other path in the format goes through this, and this one
+            // must too: without it `tests/golden/../../../etc/x.hashes.txt`
+            // satisfies the prefix and the suffix and names a file outside the
+            // tree. `must_exist` is false because the chain is committed by the
+            // task that produces it, which may not have run yet.
+            check_repository_path(root, &format!("{base}/golden"), path, false, problems);
             if !path.starts_with("tests/golden/") {
                 problems.push(Problem::new(
                     &format!("{base}/golden"),
@@ -622,6 +636,29 @@ fn strip_comments(text: &str) -> String {
     while index < bytes.len() {
         let byte = *bytes.get(index).unwrap_or(&b' ');
         if in_string {
+            // Inside a string literal the same rule applies as outside it: a
+            // byte at or above 0x80 is part of a multi-byte UTF-8 sequence, and
+            // `char::from` on one would mean Latin-1 — an em dash in a `note` or
+            // a `summary` would come back as mojibake, in the step's summary
+            // line and in every diagnostic that quotes the scenario's `name`.
+            // Copying the whole character also keeps the stripped text the same
+            // byte length as the original, which is why comments become spaces
+            // rather than disappearing.
+            if byte >= 0x80 {
+                let rest = text.get(index..).unwrap_or("");
+                match rest.chars().next() {
+                    Some(character) => {
+                        out.push(character);
+                        index += character.len_utf8();
+                    }
+                    None => index += 1,
+                }
+                // A whole character was consumed literally, so it closes any
+                // pending escape. (JSON only ever escapes ASCII, so this is
+                // malformed input either way; the parser reports it.)
+                escaped = false;
+                continue;
+            }
             out.push(char::from(byte));
             if escaped {
                 escaped = false;
@@ -766,6 +803,63 @@ mod tests {
     }
 
     #[test]
+    fn non_ascii_text_survives_the_comment_stripper() {
+        // The committed example's `summary` carries an em dash, and a `note` or
+        // a `name` may carry anything. Re-encoding a UTF-8 continuation byte as
+        // Latin-1 turns it into mojibake in the step's summary line and in every
+        // diagnostic that quotes the file.
+        let source = "{\"s\":\"east \u{2014} ash\"} // gone";
+        let stripped = strip_comments(source);
+        assert_eq!(stripped, "{\"s\":\"east \u{2014} ash\"}        ");
+        assert_eq!(
+            stripped.len(),
+            source.len(),
+            "comments become spaces rather than vanishing so that a parse error's byte offset \
+             still points at the right place"
+        );
+
+        let dir = scratch("non-ascii");
+        let path = write(
+            &dir,
+            &GOOD.replace("\"smoke\"", "\"smoke \u{2014} \u{e9}tape\""),
+        );
+        let scenario = validate(&dir, &path).expect("valid");
+        assert_eq!(scenario.name, "smoke \u{2014} \u{e9}tape");
+    }
+
+    #[test]
+    fn a_golden_path_that_escapes_the_tree_is_rejected() {
+        // The prefix and the suffix alone would accept this: the `..` rule is
+        // what keeps a scenario naming files in the tree and nothing outside it.
+        let dir = scratch("golden-escape");
+        let path = write(
+            &dir,
+            &GOOD.replace(
+                "tests/golden/scenarios/smoke/expected.hashes.txt",
+                "tests/golden/../../../etc/passwd.hashes.txt",
+            ),
+        );
+        let report = validate(&dir, &path).expect_err("rejected");
+        assert!(report.contains("/assertions/1/golden"), "{report}");
+        assert!(report.contains("`..`"), "{report}");
+    }
+
+    #[test]
+    fn an_undocumented_seat_key_is_rejected() {
+        let dir = scratch("operator-key");
+        let path = write(
+            &dir,
+            &GOOD.replace(
+                "{ \"seat\": 1, \"kind\": \"safe\" }",
+                "{ \"seat\": 1, \"kind\": \"safe\", \"operator\": \"whatever\" }",
+            ),
+        );
+        let report = validate(&dir, &path).expect_err("rejected");
+        assert!(report.contains("/seats/1/operator"), "{report}");
+        assert!(report.contains("unknown key"), "{report}");
+    }
+
+    #[test]
     fn an_unknown_key_is_rejected_rather_than_ignored() {
         let dir = scratch("unknown");
         let path = write(&dir, &GOOD.replace("\"name\":", "\"nmae\":"));
@@ -812,7 +906,8 @@ mod tests {
         let dir = scratch("reserved");
         let path = write(&dir, &GOOD.replace("\"event_fired\"", "\"terminal_hash\""));
         let report = validate(&dir, &path).expect_err("rejected");
-        assert!(report.contains("item 16"), "{report}");
+        assert!(report.contains("decision 16"), "{report}");
+        assert!(report.contains("not yet logged"), "{report}");
         assert!(report.contains("T15"), "{report}");
     }
 
