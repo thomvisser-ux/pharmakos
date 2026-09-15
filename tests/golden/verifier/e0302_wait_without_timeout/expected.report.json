@@ -10,7 +10,7 @@
       "suggestions": [
         {
           "title": "Add a timeout",
-          "json_patch": "[{\"op\":\"replace\",\"path\":\"/declarative/route/0/timeout_ms\",\"value\":30000}]",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/0/timeout_ms\",\"value\":30000}]",
           "applicability": "HAS_PLACEHOLDERS"
         }
       ]

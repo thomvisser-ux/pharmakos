@@ -31,10 +31,48 @@
 //! power.
 
 use pharmakos_proto::gp::v1::Voxel;
-use pharmakos_proto::gp::v1::beacon_filter::{MandateKind, Side};
+use pharmakos_proto::gp::v1::beacon_filter::MandateKind;
 use pharmakos_sim::encoding::Enc;
 use pharmakos_sim::knowledge::SeatEconomy;
 use pharmakos_sim::tables::SeatId;
+
+/// Whose a beacon is, from this seat's point of view.
+///
+/// Two values, and no third. `gp.v1.BeaconFilter.Side` would fit the shape and
+/// is deliberately **not** used here: its zero value is documented to read as
+/// `OWN`, and `proto/gp/v1/playbook.proto`'s header scopes that exception to
+/// `BeaconFilter` by name because "both of its enums are filter terms rather
+/// than settings". A [`Scope`] is the gateway's *view*, not a filter, so the
+/// filter enum's reading has no business leaking into it — a gateway that
+/// forgot to set the field would otherwise have every enemy beacon counted as
+/// the seat's own, silently, which is exactly the default the schema's "an
+/// unset enum is a verifier error" rule exists to prevent.
+///
+/// The encoding in [`Scope::encode`] deliberately writes the same numbers
+/// `BeaconFilter.Side` uses — `OWN = 1`, `ENEMY_KNOWN = 2` — so the view's
+/// canonical bytes, and therefore every `report_hash`, are unchanged by holding
+/// the distinction in a type of our own.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub enum Ownership {
+    /// The seat's own beacon. It can be interfaced with and it anchors a
+    /// placement sphere.
+    Own = 1,
+    /// An enemy beacon the seat has seen. Seen is not readable: the seat may
+    /// name it in a filter, and may not walk up and change it.
+    EnemyKnown = 2,
+}
+
+impl Ownership {
+    /// The number [`Scope::encode`] writes, which is the one
+    /// `gp.v1.BeaconFilter.Side` uses for the same word.
+    #[must_use]
+    pub const fn as_i32(self) -> i32 {
+        match self {
+            Ownership::Own => 1,
+            Ownership::EnemyKnown => 2,
+        }
+    }
+}
 
 /// One beacon the seat knows about, as the seat knows it.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -45,9 +83,9 @@ pub struct KnownBeacon {
     pub beacon_id: String,
     /// Which seat owns it.
     pub owner: SeatId,
-    /// Which side it is on from this seat's point of view. `ENEMY_KNOWN` means
-    /// the seat has seen it, not that the seat can read it.
-    pub side: Side,
+    /// Which side it is on from this seat's point of view. There is no third
+    /// reading: see [`Ownership`] for why this is not the schema's filter enum.
+    pub side: Ownership,
     /// The writ it is on. `MANDATE_KIND_UNSPECIFIED` where the seat cannot see
     /// one, which is the ordinary case for an enemy beacon.
     pub mandate: MandateKind,
@@ -139,7 +177,7 @@ impl Scope {
     pub fn own_beacons(&self) -> impl Iterator<Item = &KnownBeacon> {
         self.beacons
             .iter()
-            .filter(|beacon| matches!(beacon.side, Side::Own | Side::Unspecified))
+            .filter(|beacon| beacon.side == Ownership::Own)
     }
 
     /// Append the view to the canonical encoding.
@@ -156,7 +194,7 @@ impl Scope {
         for beacon in &self.beacons {
             encode_str(enc, &beacon.beacon_id);
             enc.u8(beacon.owner.raw());
-            enc.i32(i32::from(beacon.side));
+            enc.i32(beacon.side.as_i32());
             enc.i32(i32::from(beacon.mandate));
             enc.len(count(beacon.tags.len()));
             for tag in &beacon.tags {
@@ -189,7 +227,7 @@ fn encode_str(enc: &mut Enc, text: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::{KnownBeacon, Scope};
+    use super::{KnownBeacon, Ownership, Scope};
     use pharmakos_proto::gp::v1::Voxel;
     use pharmakos_proto::gp::v1::beacon_filter::{MandateKind, Side};
     use pharmakos_sim::encoding::Enc;
@@ -200,7 +238,7 @@ mod tests {
         KnownBeacon {
             beacon_id: id.to_owned(),
             owner: SeatId::new(0),
-            side: Side::Own,
+            side: Ownership::Own,
             mandate: MandateKind::Build,
             tags: Vec::new(),
             at: Voxel { x: 1, y: 2, z: 3 },
@@ -235,6 +273,29 @@ mod tests {
         scope.push_beacon(second);
         assert_eq!(scope.beacons().len(), 1);
         assert_eq!(scope.beacon("b_01").map(|found| found.is_core), Some(true));
+    }
+
+    #[test]
+    fn the_view_writes_the_filter_enum_s_own_numbers() {
+        // Holding ownership in a type of this crate's own must not move a single
+        // `report_hash`, and this is what proves it: the bytes are the numbers
+        // `gp.v1.BeaconFilter.Side` uses for the same two words.
+        assert_eq!(Ownership::Own.as_i32(), i32::from(Side::Own));
+        assert_eq!(Ownership::EnemyKnown.as_i32(), i32::from(Side::EnemyKnown));
+    }
+
+    #[test]
+    fn an_enemy_beacon_is_never_counted_among_the_seat_s_own() {
+        let mut enemy = beacon("e_01");
+        enemy.side = Ownership::EnemyKnown;
+        let scope = Scope::new(SeatId::new(0), SeatEconomy::default())
+            .with_beacon(beacon("b_01"))
+            .with_beacon(enemy);
+        let own: Vec<&str> = scope
+            .own_beacons()
+            .map(|found| found.beacon_id.as_str())
+            .collect();
+        assert_eq!(own, ["b_01"]);
     }
 
     #[test]

@@ -42,9 +42,9 @@ use pharmakos_proto::gp::v1::{
 
 use crate::limits::Limits;
 use crate::pointer;
-use crate::report::{Builder, Diag, number, patch_replace};
+use crate::report::{Builder, Diag, number, patch_add, patch_replace};
 use crate::resolve::Symbols;
-use crate::scope::Scope;
+use crate::scope::{Ownership, Scope};
 use crate::walk::{self, List, Visit};
 
 /// Run the stage.
@@ -103,7 +103,7 @@ impl Visit for Semantics<'_> {
             // so, and saying it twice helps nobody.
             return;
         };
-        if known.side == Side::EnemyKnown {
+        if known.side == Ownership::EnemyKnown {
             self.out.emit(
                 Diag::new(
                     "E0405",
@@ -291,7 +291,11 @@ impl Semantics<'_> {
                 self.out
                     .emit(Diag::new("E0302", pointer::child(at, "timeout_ms")).fix(
                         "Add a timeout",
-                        patch_replace(&pointer::child(at, "timeout_ms"), &number(30_000)),
+                        // `add`, and the label says why: a wait with no timeout
+                        // is a step with **no `timeout_ms` member at all**, so
+                        // an RFC 6902 `replace` would be refused by a
+                        // conformant applier (see `crate::report`).
+                        patch_add(&pointer::child(at, "timeout_ms"), &number(30_000)),
                         Applicability::HasPlaceholders,
                     ));
             }
@@ -300,7 +304,10 @@ impl Semantics<'_> {
                 self.out
                     .emit(Diag::new("E0303", field.clone()).arg("found", hold.ms).fix(
                         "Hold for a while",
-                        patch_replace(&field, &number(5_000)),
+                        // `add`: `"hold": {}` is the ordinary way to write a
+                        // hold with no duration, and there is nothing at
+                        // `/hold/ms` for a `replace` to target.
+                        patch_add(&field, &number(5_000)),
                         Applicability::HasPlaceholders,
                     ));
             }

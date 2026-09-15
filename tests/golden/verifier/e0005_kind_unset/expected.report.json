@@ -10,7 +10,7 @@
       "suggestions": [
         {
           "title": "Mark the file as a PLAYBOOK",
-          "json_patch": "[{\"op\":\"replace\",\"path\":\"/kind\",\"value\":\"PLAYBOOK\"}]",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/kind\",\"value\":\"PLAYBOOK\"}]",
           "applicability": "MAYBE_INCORRECT"
         }
       ]

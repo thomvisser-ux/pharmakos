@@ -10,7 +10,7 @@
       "suggestions": [
         {
           "title": "Hold for a while",
-          "json_patch": "[{\"op\":\"replace\",\"path\":\"/declarative/route/0/hold/ms\",\"value\":5000}]",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/0/hold/ms\",\"value\":5000}]",
           "applicability": "HAS_PLACEHOLDERS"
         }
       ]

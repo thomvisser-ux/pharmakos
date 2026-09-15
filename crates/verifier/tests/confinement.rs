@@ -141,8 +141,23 @@ fn code_lines(text: &str) -> Vec<(usize, String)> {
         Some(index) => text.get(..index).unwrap_or(text),
         None => text,
     };
-    shipped
-        .lines()
+    numbered(shipped)
+}
+
+/// Every line of the file's code, unit-test modules **included**: comment-only
+/// lines removed and nothing else.
+///
+/// The `#[cfg(test)]` truncation in [`code_lines`] is load-bearing for the panic
+/// needles and misleading for anything else. An `#[allow]` inside a `mod tests`
+/// in `src/` is still an `#[allow]` in this crate's sources, and a scan that
+/// stopped short of it would let the claim "this crate carries no `#[allow]` at
+/// all" go on being made after it stopped being true.
+fn all_lines(text: &str) -> Vec<(usize, String)> {
+    numbered(text)
+}
+
+fn numbered(text: &str) -> Vec<(usize, String)> {
+    text.lines()
         .enumerate()
         .filter(|(_, line)| !line.trim_start().starts_with("//"))
         .map(|(number, line)| (number + 1, (*line).to_owned()))
@@ -263,7 +278,7 @@ fn every_allow_is_audited_and_carries_a_reason() {
         let Ok(text) = std::fs::read_to_string(&path) else {
             continue;
         };
-        for (number, line) in code_lines(&text) {
+        for (number, line) in all_lines(&text) {
             if line.contains("#[allow(") || line.contains("#![allow(") {
                 findings.push(format!("{}:{number}: {}", path.display(), line.trim()));
             }

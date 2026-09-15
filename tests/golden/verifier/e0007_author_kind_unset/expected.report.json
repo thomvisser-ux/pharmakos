@@ -10,7 +10,7 @@
       "suggestions": [
         {
           "title": "Mark the file as written by a HUMAN",
-          "json_patch": "[{\"op\":\"replace\",\"path\":\"/meta/author_kind\",\"value\":\"HUMAN\"}]",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/meta/author_kind\",\"value\":\"HUMAN\"}]",
           "applicability": "MAYBE_INCORRECT"
         }
       ]

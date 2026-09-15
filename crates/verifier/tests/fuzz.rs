@@ -50,10 +50,10 @@ use pharmakos_sim::rules::RulesTable;
 use pharmakos_sim::snapshot::{SNAPSHOT_VERSION, Snapshot};
 use pharmakos_sim::tables::SeatId;
 use pharmakos_verifier::catalogue::CATALOGUE;
-use pharmakos_verifier::{Input, KnownBeacon, Scope, VERIFIER_VERSION, verify};
+use pharmakos_verifier::{Input, KnownBeacon, Ownership, Scope, VERIFIER_VERSION, verify};
 
 use pharmakos_proto::gp::v1::Voxel;
-use pharmakos_proto::gp::v1::beacon_filter::{MandateKind, Side};
+use pharmakos_proto::gp::v1::beacon_filter::MandateKind;
 
 /// How many playbooks the nightly run generates.
 const RUNS: u32 = 10_000;
@@ -537,7 +537,7 @@ fn scope() -> Scope {
     Scope::new(SeatId::new(0), SeatEconomy::default()).with_beacon(KnownBeacon {
         beacon_id: "b_01".to_owned(),
         owner: SeatId::new(0),
-        side: Side::Own,
+        side: Ownership::Own,
         mandate: MandateKind::Build,
         tags: Vec::new(),
         at: Voxel {
