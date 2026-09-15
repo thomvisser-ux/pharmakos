@@ -1,0 +1,32 @@
+# Seat Gateway methods and the scope each one needs.
+# Generated from the [(required_scope)] annotations in
+# proto/gp/api/v1/gateway.proto: this file is a view of the schema,
+# never a second table to keep in step.
+# Both columns are the JSON-RPC wire spelling (decisions-log item 80).
+
+get_status               observe
+wait_for                 observe
+save_notes               plan
+get_briefing             observe
+get_recap                observe
+list_beacons             observe
+get_beacon               observe
+get_map_summary          observe
+query_area               observe
+list_known_enemies       observe
+get_reports              observe
+get_economy_forecast     observe
+get_capabilities         observe
+estimate_route           observe
+get_schema               docs
+list_templates           docs
+instantiate_template     plan
+verify_plan              plan
+render_plan              plan
+patch_plan               plan
+save_draft               plan
+list_drafts              plan
+get_safe_plan            plan
+submit_plan              plan.submit
+set_ready                plan.submit
+get_segment_feed         observe

@@ -1,0 +1,98 @@
+# Reserved field numbers and names in gp.v1 and gp.api.v1.
+# Generated from crates/proto/src/generated/descriptor.binpb.
+# Ranges are inclusive at both ends. A reservation is a promise:
+# dropping one from this file is a WIRE_JSON break (AGENTS.md section 5).
+
+gp.api.v1.BeaconSummary
+  numbers: 3-15
+
+gp.api.v1.Event
+  numbers: 5-15
+
+gp.api.v1.GetBeaconResponse
+  numbers: 3-15
+
+gp.api.v1.GetBriefingResponse
+  numbers: 5-15
+
+gp.api.v1.GetEconomyForecastResponse
+  numbers: 1-15
+
+gp.api.v1.GetMapSummaryResponse
+  numbers: 4-15
+
+gp.api.v1.GetRecapResponse
+  numbers: 2-15
+
+gp.api.v1.WhatIf
+  numbers: 1-15
+
+gp.v1.AttackSettings
+  numbers: 1-15
+
+gp.v1.BeaconRef
+  numbers: 13-49
+
+gp.v1.BuildSettings
+  numbers: 6, 7
+  names:   reclaim_drones, repair_drones
+
+gp.v1.Condition
+  numbers: 23-29, 31-39, 43-49, 50-59, 60-69, 72-79, 80-89, 92-99, 100, 101, 110, 111, 112, 120
+  names:   flag_clear, flag_set, grid_island, jammed, link_up, satellite_pass
+
+gp.v1.DefendSettings
+  numbers: 1-15
+
+gp.v1.Location
+  numbers: 10-49
+
+gp.v1.MandateSettings
+  numbers: 3, 4
+  names:   accept_broadcasts, report_kinds
+
+gp.v1.Meta
+  numbers: 5
+  names:   team_id
+
+gp.v1.MineSettings
+  numbers: 3, 4
+  names:   pillar_spacing, seam_choice
+
+gp.v1.Options
+  numbers: 2
+  names:   reflex_hp_pct
+
+gp.v1.Playbook
+  numbers: 6
+  names:   dispatch
+
+gp.v1.RulesTable.Economy
+  numbers: 1-15
+
+gp.v1.RulesTable.Power
+  numbers: 1-15
+
+gp.v1.ScriptMandate
+  numbers: 1-15
+
+gp.v1.ScriptOperator
+  numbers: 1-15
+
+gp.v1.ScriptProgram
+  numbers: 1-15
+
+gp.v1.Step
+  numbers: 16, 17, 18, 19, 20, 21, 22
+  names:   branch, capture, clear_flag, logistics, reassign, repeat, set_flag
+
+gp.v1.SurveySettings
+  numbers: 3
+  names:   probe_directions
+
+gp.api.v1.Method
+  numbers: 80, 81, 82, 83
+  names:   METHOD_CAST_VOTE, METHOD_CONNECT, METHOD_GET_BALLOT, METHOD_GET_DISPATCHES
+
+gp.v1.OnDeath.OnRespawn
+  numbers: 2-9

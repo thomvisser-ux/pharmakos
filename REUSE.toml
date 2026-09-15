@@ -74,6 +74,40 @@ precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 Pharmakos contributors"
 SPDX-License-Identifier = "MIT OR Apache-2.0"
 
+# --- Golden files and other test data --------------------------------------
+# tests/golden/<area>/expected.* is the committed half of the harness: hash
+# chains, canonical playbooks, verifier reports, path hashes, geometry digests,
+# feed logs and vista PNGs. They are produced by the game's own code and are
+# read only by it, so they take the game's licence. Most of them cannot carry a
+# header (a .txt hash chain, a .png), which is what this manifest is for.
+[[annotations]]
+path = ["tests/**"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Pharmakos contributors"
+SPDX-License-Identifier = "GPL-3.0-or-later"
+
+# The proto area is the one carve-out, for the same reason crates/proto is one:
+# these files are canonical gp.v1 JSON and views of the schema — the same public
+# surface as proto/** — so a third party writing a playbook tool must be able to
+# use them as the reference they are. AFTER the block above, so it wins.
+[[annotations]]
+path = ["tests/golden/proto/**"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Pharmakos contributors"
+SPDX-License-Identifier = "MIT OR Apache-2.0"
+
+# --- The rules table -------------------------------------------------------
+# rules/rules.v1.json is the canonical JSON of one gp.v1.RulesTable
+# (decisions-log item 78): the shape is schema and the values are data. It is
+# permissive for the same reason proto/** is — an alternative verifier or
+# planner has to read the same rules to reach the same estimates. The JSON
+# itself cannot carry a comment, so it has a .license sidecar as well.
+[[annotations]]
+path = ["rules/**"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Pharmakos contributors"
+SPDX-License-Identifier = "MIT OR Apache-2.0"
+
 # --- Art and audio ---------------------------------------------------------
 # Voxel models, textures, sound effects and music. CC BY-SA 4.0 is one-way
 # compatible into GPLv3, so these ship inside the GPL'd game. Third-party

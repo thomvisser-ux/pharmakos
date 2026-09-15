@@ -1,0 +1,117 @@
+{
+  "schema_version": {
+    "major": 1
+  },
+  "meta": {
+    "title": "Expand & Mine east",
+    "author_kind": "HUMAN"
+  },
+  "declarative": {
+    "route": [
+      {
+        "label": "to_site",
+        "timeout_ms": 120000,
+        "move": {
+          "to": {
+            "voxel": {
+              "x": 96,
+              "y": 11,
+              "z": 62
+            }
+          },
+          "pace": "AVOID_KNOWN_THREATS"
+        }
+      },
+      {
+        "label": "place_east",
+        "place_beacon": {
+          "at": {
+            "voxel": {
+              "x": 96,
+              "y": 11,
+              "z": 62
+            }
+          },
+          "tags": [
+            "east"
+          ],
+          "initial": {
+            "priority": "NORMAL",
+            "mandate": {
+              "roe": "RETURN_FIRE",
+              "mine": {
+                "dig_max_depth": 4,
+                "flee_on_threat": true
+              }
+            }
+          }
+        }
+      },
+      {
+        "label": "back_home",
+        "move": {
+          "to": {
+            "beacon_anchor": {
+              "beacon_id": "b_01"
+            }
+          }
+        }
+      }
+    ],
+    "handlers": [
+      {
+        "id": "flee",
+        "when": {
+          "all": {
+            "items": [
+              {
+                "cmdr_hp_pct": {
+                  "cmp": "LE",
+                  "pct": 40
+                }
+              },
+              {
+                "cmdr_took_damage_within": {
+                  "ms": 3000
+                }
+              }
+            ]
+          }
+        },
+        "body": [
+          {
+            "label": "f1",
+            "move": {
+              "to": {
+                "safest": {}
+              }
+            }
+          },
+          {
+            "label": "f2",
+            "hold": {
+              "ms": 8000
+            }
+          }
+        ],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 3
+      }
+    ]
+  },
+  "on_death": {
+    "on_respawn": "CONTINUE",
+    "max_deaths_before_fallback": 2
+  },
+  "fallback": {
+    "hold": {
+      "at": {
+        "beacon_anchor": {
+          "safest": {}
+        }
+      }
+    }
+  },
+  "kind": "PLAYBOOK"
+}
