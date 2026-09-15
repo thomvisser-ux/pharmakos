@@ -8,27 +8,27 @@
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Playbook {
     /// Required. Rejected if unsupported (E000x).
-    #[prost(message, optional, tag = "1")]
+    #[prost(message, optional, tag="1")]
     pub schema_version: ::core::option::Option<SchemaVersion>,
     /// Required.
-    #[prost(message, optional, tag = "2")]
+    #[prost(message, optional, tag="2")]
     pub meta: ::core::option::Option<Meta>,
     /// Required. The route and the handlers.
-    #[prost(message, optional, tag = "3")]
+    #[prost(message, optional, tag="3")]
     pub declarative: ::core::option::Option<Declarative>,
     /// Required block (spec section 4: "Playbooks must include an on_death
     /// block").
-    #[prost(message, optional, tag = "4")]
+    #[prost(message, optional, tag="4")]
     pub on_death: ::core::option::Option<OnDeath>,
     /// Required block. The guaranteed tail.
-    #[prost(message, optional, tag = "5")]
+    #[prost(message, optional, tag="5")]
     pub fallback: ::core::option::Option<Fallback>,
     /// The `kind` half of the envelope's kind/version tag; schema_version above
     /// is the version half. Item 47 reserved this number at the bootstrap and
     /// deferred the enum to the walking skeleton; decisions-log item 76 settles
     /// it. The verifier rejects KIND_UNSPECIFIED with a code and a JSON Pointer:
     /// an unset tag is an error, never a default (E000x).
-    #[prost(enumeration = "playbook::Kind", tag = "7")]
+    #[prost(enumeration="playbook::Kind", tag="7")]
     pub kind: i32,
 }
 /// Nested message and enum types in `Playbook`.
@@ -82,9 +82,9 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.Playbook".into() }fn t
 /// that is kept forever. Submitted playbooks with unknown fields are rejected.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SchemaVersion {
-    #[prost(uint32, tag = "1")]
+    #[prost(uint32, tag="1")]
     pub major: u32,
-    #[prost(uint32, tag = "2")]
+    #[prost(uint32, tag="2")]
     pub minor: u32,
 }
 impl ::prost::Name for SchemaVersion {
@@ -94,10 +94,10 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.SchemaVersion".into() 
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Meta {
     /// Free text, shown in the editor and the recap.
-    #[prost(string, tag = "1")]
+    #[prost(string, tag="1")]
     pub title: ::prost::alloc::string::String,
     /// Who wrote this file.
-    #[prost(enumeration = "meta::AuthorKind", tag = "2")]
+    #[prost(enumeration="meta::AuthorKind", tag="2")]
     pub author_kind: i32,
     /// The plan fingerprint: one of the reserved seams (spec section 15, "Seams
     /// kept for later"). Content hash of the canonicalised playbook, recorded by
@@ -121,10 +121,10 @@ pub struct Meta {
     /// Written by the verifier, not by the author: the editor round-trips
     /// whatever is in the file and the verifier overwrites it. A file whose
     /// fingerprint does not match its bytes is a diagnostic, never a silent fix.
-    #[prost(bytes = "vec", tag = "3")]
+    #[prost(bytes="vec", tag="3")]
     pub fingerprint: ::prost::alloc::vec::Vec<u8>,
     /// Free text for the author. Round-tripped, never interpreted.
-    #[prost(string, tag = "4")]
+    #[prost(string, tag="4")]
     pub note: ::prost::alloc::string::String,
 }
 /// Nested message and enum types in `Meta`.
@@ -179,15 +179,15 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.Meta".into() }fn type_
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Declarative {
     /// Ordered. The commander walks it from the top.
-    #[prost(message, repeated, tag = "1")]
+    #[prost(message, repeated, tag="1")]
     pub route: ::prost::alloc::vec::Vec<Step>,
     /// Prioritised rules. On each decision the first enabled handler whose
     /// condition is true starts its body; at most one body runs at a time and no
     /// handler pre-empts another.
-    #[prost(message, repeated, tag = "2")]
+    #[prost(message, repeated, tag="2")]
     pub handlers: ::prost::alloc::vec::Vec<Handler>,
     /// Per-playbook switches.
-    #[prost(message, optional, tag = "3")]
+    #[prost(message, optional, tag="3")]
     pub options: ::core::option::Option<Options>,
 }
 impl ::prost::Name for Declarative {
@@ -202,7 +202,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.Declarative".into() }f
 pub struct Options {
     /// When false, a playbook that adds draw beyond supply is an error (E0601).
     /// When true it is allowed, and the shortfall is a warning (W06xx).
-    #[prost(bool, tag = "1")]
+    #[prost(bool, tag="1")]
     pub allow_dormant_beacons: bool,
 }
 impl ::prost::Name for Options {
@@ -219,26 +219,26 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.Options".into() }fn ty
 pub struct Step {
     /// Author's name for this step. Jump targets refer to it, and it is what the
     /// editor and the plain-language rendering show.
-    #[prost(string, tag = "1")]
+    #[prost(string, tag="1")]
     pub label: ::prost::alloc::string::String,
     /// Free text. Round-tripped, never interpreted.
-    #[prost(string, tag = "2")]
+    #[prost(string, tag="2")]
     pub note: ::prost::alloc::string::String,
     /// Guard: if true when the step would start, the step is skipped.
-    #[prost(message, optional, tag = "3")]
+    #[prost(message, optional, tag="3")]
     pub skip_if: ::core::option::Option<Condition>,
     /// Guard: game milliseconds. Required on wait_until, optional elsewhere
     /// (spec section 10: "Timeout is required"). A step that times out fails,
     /// and on_fail decides what happens next.
-    #[prost(int32, tag = "4")]
+    #[prost(int32, tag="4")]
     pub timeout_ms: i32,
     /// Guard: what to do when the step fails.
-    #[prost(message, optional, tag = "5")]
+    #[prost(message, optional, tag="5")]
     pub on_fail: ::core::option::Option<OnFail>,
     // 6-9 are free for further guards.
 
     /// The step itself. Exactly one, required.
-    #[prost(oneof = "step::Kind", tags = "10, 11, 12, 13, 14, 15")]
+    #[prost(oneof="step::Kind", tags="10, 11, 12, 13, 14, 15")]
     pub kind: ::core::option::Option<step::Kind>,
 }
 /// Nested message and enum types in `Step`.
@@ -249,26 +249,26 @@ pub mod step {
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Kind {
         /// Completes within the arrive radius. Fails on no path or timeout.
-        #[prost(message, tag = "10")]
+        #[prost(message, tag="10")]
         Move(super::MoveStep),
         /// Completes when all rows are committed. Fails if the beacon is
         /// destroyed, the commander dies, or the commander leaves range. Damage
         /// does not interrupt.
-        #[prost(message, tag = "11")]
+        #[prost(message, tag="11")]
         Interface(super::InterfaceStep),
         /// 12 s deploy, then any initial settings at interface rates. Fails if
         /// placement becomes illegal. Choosing the mandate type is free.
-        #[prost(message, tag = "12")]
+        #[prost(message, tag="12")]
         PlaceBeacon(super::PlaceBeaconStep),
         /// Completes when the condition is true. timeout_ms is required.
-        #[prost(message, tag = "13")]
+        #[prost(message, tag="13")]
         WaitUntil(super::WaitUntilStep),
         /// Completes when the duration elapses.
-        #[prost(message, tag = "14")]
+        #[prost(message, tag="14")]
         Hold(super::HoldStep),
         /// Only with a Radio Mast, and only while the commander is in mast
         /// coverage.
-        #[prost(message, tag = "15")]
+        #[prost(message, tag="15")]
         Broadcast(super::BroadcastStep),
     }
 }
@@ -280,9 +280,9 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.Step".into() }fn type_
 pub struct MoveStep {
     /// Fixed point or late-bound selector. Resolves when the step starts, then
     /// stays pinned for that step.
-    #[prost(message, optional, tag = "1")]
+    #[prost(message, optional, tag="1")]
     pub to: ::core::option::Option<Location>,
-    #[prost(enumeration = "move_step::Pace", tag = "2")]
+    #[prost(enumeration="move_step::Pace", tag="2")]
     pub pace: i32,
 }
 /// Nested message and enum types in `MoveStep`.
@@ -329,10 +329,10 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.MoveStep".into() }fn t
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct InterfaceStep {
     /// Which beacon to visit. Fixed id or selector.
-    #[prost(message, optional, tag = "1")]
+    #[prost(message, optional, tag="1")]
     pub beacon: ::core::option::Option<BeaconRef>,
     /// Applied in order. Each commits on its own.
-    #[prost(message, repeated, tag = "2")]
+    #[prost(message, repeated, tag="2")]
     pub rows: ::prost::alloc::vec::Vec<InterfaceRow>,
 }
 impl ::prost::Name for InterfaceStep {
@@ -347,7 +347,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.InterfaceStep".into() 
 /// Numbers 8 and 9 are free for a further row inside the one-byte tag range.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct InterfaceRow {
-    #[prost(oneof = "interface_row::Row", tags = "1, 2, 3, 4, 5, 6, 7")]
+    #[prost(oneof="interface_row::Row", tags="1, 2, 3, 4, 5, 6, 7")]
     pub row: ::core::option::Option<interface_row::Row>,
 }
 /// Nested message and enum types in `InterfaceRow`.
@@ -400,27 +400,27 @@ pub mod interface_row {
     pub enum Row {
         /// Switch mandate type — 8 s. Clears the old mandate's settings and
         /// targets; the Quartermaster priority belongs to the beacon and survives.
-        #[prost(message, tag = "1")]
+        #[prost(message, tag="1")]
         SetMandate(super::MandateSettings),
         /// Edit mandate settings — 2 s + 0.5 s per extra field, max 6 s. Changes
         /// settings or targets within the current mandate.
-        #[prost(message, tag = "2")]
+        #[prost(message, tag="2")]
         SetMandateSettings(super::MandateSettings),
         /// Set Quartermaster priority — 1.5 s.
-        #[prost(enumeration = "QuartermasterPriority", tag = "3")]
+        #[prost(enumeration="QuartermasterPriority", tag="3")]
         SetPriority(i32),
         /// Recycle beacon — 10 s.
-        #[prost(message, tag = "4")]
+        #[prost(message, tag="4")]
         Recycle(super::RecycleRow),
         /// Add a build target — 2.5 s.
-        #[prost(message, tag = "5")]
+        #[prost(message, tag="5")]
         AddBuildTarget(super::AddBuildTargetRow),
         /// Remove a build target — 2.5 s.
-        #[prost(message, tag = "6")]
+        #[prost(message, tag="6")]
         RemoveBuildTarget(super::RemoveBuildTargetRow),
         /// Queue a licensed capability structure — 5 s, plus the fabricator's
         /// construction time, which is not interface time.
-        #[prost(message, tag = "7")]
+        #[prost(message, tag="7")]
         QueueStructure(super::QueueStructureRow),
     }
 }
@@ -439,7 +439,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RecycleRow".into() }fn
 /// that is not on Build is a verifier error, not a silent no-op.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AddBuildTargetRow {
-    #[prost(message, optional, tag = "1")]
+    #[prost(message, optional, tag="1")]
     pub target: ::core::option::Option<BuildTarget>,
 }
 impl ::prost::Name for AddBuildTargetRow {
@@ -451,7 +451,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.AddBuildTargetRow".int
 /// into a list the mandate may have changed is not a stable reference.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct RemoveBuildTargetRow {
-    #[prost(message, optional, tag = "1")]
+    #[prost(message, optional, tag="1")]
     pub anchor: ::core::option::Option<Location>,
 }
 impl ::prost::Name for RemoveBuildTargetRow {
@@ -466,7 +466,7 @@ pub struct QueueStructureRow {
     /// and its licences land at S4. A string id until then, exactly like
     /// seams.proto's builtin ids — it becomes a nested enum when that contract
     /// is written.
-    #[prost(string, tag = "1")]
+    #[prost(string, tag="1")]
     pub blueprint_id: ::prost::alloc::string::String,
 }
 impl ::prost::Name for QueueStructureRow {
@@ -479,19 +479,19 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.QueueStructureRow".int
 pub struct BuildTarget {
     /// PLACEHOLDER STUB: the blueprint catalogue is spec section 8's contract.
     /// The skeleton's minimal Build mandate ships one blueprint, the Generator.
-    #[prost(string, tag = "1")]
+    #[prost(string, tag="1")]
     pub blueprint_id: ::prost::alloc::string::String,
     /// Where it goes. Must lie inside one of your own spheres.
-    #[prost(message, optional, tag = "2")]
+    #[prost(message, optional, tag="2")]
     pub anchor: ::core::option::Option<Location>,
     /// Quarter turns about the vertical axis, 0-3. An integer because the sim is
     /// integer-only: there are no free rotations and no angles in a playbook
     /// (AGENTS.md section 4.2).
-    #[prost(uint32, tag = "3")]
+    #[prost(uint32, tag="3")]
     pub rotation_quarter_turns: u32,
     /// Build order. The mandate builds the highest-order affordable target that
     /// is unbuilt or damaged; lowest number first, ties by list position.
-    #[prost(uint32, tag = "4")]
+    #[prost(uint32, tag="4")]
     pub order: u32,
 }
 impl ::prost::Name for BuildTarget {
@@ -506,9 +506,9 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.BuildTarget".into() }f
 /// in three comparisons; a polygon or a sphere would be an owner decision.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Area {
-    #[prost(message, optional, tag = "1")]
+    #[prost(message, optional, tag="1")]
     pub min: ::core::option::Option<Voxel>,
-    #[prost(message, optional, tag = "2")]
+    #[prost(message, optional, tag="2")]
     pub max: ::core::option::Option<Voxel>,
 }
 impl ::prost::Name for Area {
@@ -519,13 +519,13 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.Area".into() }fn type_
 pub struct PlaceBeaconStep {
     /// The site must lie inside one of your own spheres and within the
     /// commander's placement range.
-    #[prost(message, optional, tag = "1")]
+    #[prost(message, optional, tag="1")]
     pub at: ::core::option::Option<Location>,
     /// Author's labels. Selectors may match on them.
-    #[prost(string, repeated, tag = "2")]
+    #[prost(string, repeated, tag="2")]
     pub tags: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     /// Applied after the 12 s deploy, at interface rates.
-    #[prost(message, optional, tag = "3")]
+    #[prost(message, optional, tag="3")]
     pub initial: ::core::option::Option<InitialSettings>,
 }
 impl ::prost::Name for PlaceBeaconStep {
@@ -534,11 +534,11 @@ const PACKAGE: &'static str = "gp.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.v1.PlaceBeaconStep".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.PlaceBeaconStep".into() }}
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct InitialSettings {
-    #[prost(enumeration = "interface_row::QuartermasterPriority", tag = "1")]
+    #[prost(enumeration="interface_row::QuartermasterPriority", tag="1")]
     pub priority: i32,
     /// Choosing the mandate type is free; every other initial setting costs its
     /// normal interface time after the deploy.
-    #[prost(message, optional, tag = "2")]
+    #[prost(message, optional, tag="2")]
     pub mandate: ::core::option::Option<MandateSettings>,
 }
 impl ::prost::Name for InitialSettings {
@@ -548,7 +548,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.InitialSettings".into(
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct WaitUntilStep {
     /// Required.
-    #[prost(message, optional, tag = "1")]
+    #[prost(message, optional, tag="1")]
     pub condition: ::core::option::Option<Condition>,
 }
 impl ::prost::Name for WaitUntilStep {
@@ -558,7 +558,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.WaitUntilStep".into() 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct HoldStep {
     /// Game milliseconds.
-    #[prost(int32, tag = "1")]
+    #[prost(int32, tag="1")]
     pub ms: i32,
 }
 impl ::prost::Name for HoldStep {
@@ -572,20 +572,20 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.HoldStep".into() }fn t
 /// nothing over the air can reconfigure a beacon.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BroadcastStep {
-    #[prost(oneof = "broadcast_step::Payload", tags = "1, 2, 3, 4")]
+    #[prost(oneof="broadcast_step::Payload", tags="1, 2, 3, 4")]
     pub payload: ::core::option::Option<broadcast_step::Payload>,
 }
 /// Nested message and enum types in `BroadcastStep`.
 pub mod broadcast_step {
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
     pub enum Payload {
-        #[prost(message, tag = "1")]
+        #[prost(message, tag="1")]
         MarkTarget(super::MarkTarget),
-        #[prost(message, tag = "2")]
+        #[prost(message, tag="2")]
         ThreatAt(super::ThreatAt),
-        #[prost(message, tag = "3")]
+        #[prost(message, tag="3")]
         GoCode(super::GoCode),
-        #[prost(message, tag = "4")]
+        #[prost(message, tag="4")]
         Rally(super::Rally),
     }
 }
@@ -595,7 +595,7 @@ const PACKAGE: &'static str = "gp.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.v1.BroadcastStep".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.BroadcastStep".into() }}
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct MarkTarget {
-    #[prost(message, optional, tag = "1")]
+    #[prost(message, optional, tag="1")]
     pub at: ::core::option::Option<Location>,
 }
 impl ::prost::Name for MarkTarget {
@@ -604,7 +604,7 @@ const PACKAGE: &'static str = "gp.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.v1.MarkTarget".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.MarkTarget".into() }}
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ThreatAt {
-    #[prost(message, optional, tag = "1")]
+    #[prost(message, optional, tag="1")]
     pub at: ::core::option::Option<Location>,
 }
 impl ::prost::Name for ThreatAt {
@@ -614,7 +614,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.ThreatAt".into() }fn t
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GoCode {
     /// The code an Attack mandate's launch condition waits on, e.g. "A".
-    #[prost(string, tag = "1")]
+    #[prost(string, tag="1")]
     pub code: ::prost::alloc::string::String,
 }
 impl ::prost::Name for GoCode {
@@ -623,7 +623,7 @@ const PACKAGE: &'static str = "gp.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.v1.GoCode".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.GoCode".into() }}
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Rally {
-    #[prost(message, optional, tag = "1")]
+    #[prost(message, optional, tag="1")]
     pub at: ::core::option::Option<Location>,
 }
 impl ::prost::Name for Rally {
@@ -635,10 +635,10 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.Rally".into() }fn type
 /// other half of why every playbook halts.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct OnFail {
-    #[prost(enumeration = "on_fail::Action", tag = "1")]
+    #[prost(enumeration="on_fail::Action", tag="1")]
     pub action: i32,
     /// Only with JUMP_FORWARD. Must name a Step.label later in the same route.
-    #[prost(string, tag = "2")]
+    #[prost(string, tag="2")]
     pub jump_to_label: ::prost::alloc::string::String,
 }
 /// Nested message and enum types in `OnFail`.
@@ -688,28 +688,28 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.OnFail".into() }fn typ
 pub struct Handler {
     /// Unique within the playbook. Referenced by diagnostics and by the
     /// "rule fired" playbook-state predicate.
-    #[prost(string, tag = "1")]
+    #[prost(string, tag="1")]
     pub id: ::prost::alloc::string::String,
     /// Required.
-    #[prost(message, optional, tag = "2")]
+    #[prost(message, optional, tag="2")]
     pub when: ::core::option::Option<Condition>,
     /// Runs to its end; no handler pre-empts another.
-    #[prost(message, repeated, tag = "3")]
+    #[prost(message, repeated, tag="3")]
     pub body: ::prost::alloc::vec::Vec<Step>,
     /// What the route does once the body ends.
-    #[prost(enumeration = "handler::Resume", tag = "4")]
+    #[prost(enumeration="handler::Resume", tag="4")]
     pub resume: i32,
     /// Game milliseconds. >= 5000 (spec section 10, "Rule firing").
-    #[prost(int32, tag = "5")]
+    #[prost(int32, tag="5")]
     pub cooldown_ms: i32,
     /// 1-8 (spec section 10, "Rule firing").
-    #[prost(uint32, tag = "6")]
+    #[prost(uint32, tag="6")]
     pub max_fires: u32,
     /// Only with JUMP_FORWARD. Must name a Step.label later in the route.
-    #[prost(string, tag = "7")]
+    #[prost(string, tag="7")]
     pub resume_at_label: ::prost::alloc::string::String,
     /// Free text. Round-tripped, never interpreted.
-    #[prost(string, tag = "8")]
+    #[prost(string, tag="8")]
     pub note: ::prost::alloc::string::String,
 }
 /// Nested message and enum types in `Handler`.
@@ -781,45 +781,45 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.Handler".into() }fn ty
 /// that is reserved is a block a player cannot half-use.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Condition {
-    #[prost(oneof = "condition::Node", tags = "1, 2, 3, 20, 21, 22, 30, 40, 41, 42, 70, 71, 90, 91")]
+    #[prost(oneof="condition::Node", tags="1, 2, 3, 20, 21, 22, 30, 40, 41, 42, 70, 71, 90, 91")]
     pub node: ::core::option::Option<condition::Node>,
 }
 /// Nested message and enum types in `Condition`.
 pub mod condition {
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Node {
-        #[prost(message, tag = "1")]
+        #[prost(message, tag="1")]
         All(super::All),
-        #[prost(message, tag = "2")]
+        #[prost(message, tag="2")]
         Any(super::Any),
-        #[prost(message, tag = "3")]
+        #[prost(message, tag="3")]
         Not(::prost::alloc::boxed::Box<super::Not>),
         /// --- commander (20-29) ------------------------------------------------
-        #[prost(message, tag = "20")]
+        #[prost(message, tag="20")]
         CmdrHpPct(super::CmdrHpPct),
-        #[prost(message, tag = "21")]
+        #[prost(message, tag="21")]
         CmdrTookDamageWithin(super::CmdrTookDamageWithin),
-        #[prost(message, tag = "22")]
+        #[prost(message, tag="22")]
         CmdrDeaths(super::CmdrDeaths),
         /// --- clock (30-39) ----------------------------------------------------
-        #[prost(message, tag = "30")]
+        #[prost(message, tag="30")]
         SegmentElapsed(super::SegmentElapsed),
         /// --- own beacon (40-49) -----------------------------------------------
-        #[prost(message, tag = "40")]
+        #[prost(message, tag="40")]
         BeaconHpPct(super::BeaconHpPct),
-        #[prost(message, tag = "41")]
+        #[prost(message, tag="41")]
         BeaconUnderAttack(super::BeaconUnderAttack),
-        #[prost(message, tag = "42")]
+        #[prost(message, tag="42")]
         BeaconPowered(super::BeaconPowered),
         /// --- economy (70-79) --------------------------------------------------
-        #[prost(message, tag = "70")]
+        #[prost(message, tag="70")]
         Treasury(super::Treasury),
-        #[prost(message, tag = "71")]
+        #[prost(message, tag="71")]
         KwHeadroom(super::KwHeadroom),
         /// --- playbook state (90-99) -------------------------------------------
-        #[prost(message, tag = "90")]
+        #[prost(message, tag="90")]
         StepReached(super::StepReached),
-        #[prost(message, tag = "91")]
+        #[prost(message, tag="91")]
         RuleFired(super::RuleFired),
     }
 }
@@ -829,7 +829,7 @@ const PACKAGE: &'static str = "gp.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.v1.Condition".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.Condition".into() }}
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct All {
-    #[prost(message, repeated, tag = "1")]
+    #[prost(message, repeated, tag="1")]
     pub items: ::prost::alloc::vec::Vec<Condition>,
 }
 impl ::prost::Name for All {
@@ -838,7 +838,7 @@ const PACKAGE: &'static str = "gp.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.v1.All".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.All".into() }}
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Any {
-    #[prost(message, repeated, tag = "1")]
+    #[prost(message, repeated, tag="1")]
     pub items: ::prost::alloc::vec::Vec<Condition>,
 }
 impl ::prost::Name for Any {
@@ -847,7 +847,7 @@ const PACKAGE: &'static str = "gp.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.v1.Any".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.Any".into() }}
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Not {
-    #[prost(message, optional, boxed, tag = "1")]
+    #[prost(message, optional, boxed, tag="1")]
     pub item: ::core::option::Option<::prost::alloc::boxed::Box<Condition>>,
 }
 impl ::prost::Name for Not {
@@ -856,10 +856,10 @@ const PACKAGE: &'static str = "gp.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.v1.Not".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.Not".into() }}
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CmdrHpPct {
-    #[prost(enumeration = "cmdr_hp_pct::Cmp", tag = "1")]
+    #[prost(enumeration="cmdr_hp_pct::Cmp", tag="1")]
     pub cmp: i32,
     /// Percent, integer. 0-100.
-    #[prost(uint32, tag = "2")]
+    #[prost(uint32, tag="2")]
     pub pct: u32,
 }
 /// Nested message and enum types in `CmdrHpPct`.
@@ -913,7 +913,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.CmdrHpPct".into() }fn 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CmdrTookDamageWithin {
     /// Game milliseconds.
-    #[prost(int32, tag = "1")]
+    #[prost(int32, tag="1")]
     pub ms: i32,
 }
 impl ::prost::Name for CmdrTookDamageWithin {
@@ -935,11 +935,11 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.CmdrTookDamageWithin".
 /// IntCompare.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct IntCompare {
-    #[prost(enumeration = "int_compare::Op", tag = "1")]
+    #[prost(enumeration="int_compare::Op", tag="1")]
     pub op: i32,
     /// The right-hand side. Always an integer in the predicate's own unit —
     /// game milliseconds, whole percent, whole $, whole kW, a count.
-    #[prost(int32, tag = "2")]
+    #[prost(int32, tag="2")]
     pub value: i32,
 }
 /// Nested message and enum types in `IntCompare`.
@@ -993,7 +993,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.IntCompare".into() }fn
 /// How many times the commander has died this match.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CmdrDeaths {
-    #[prost(message, optional, tag = "1")]
+    #[prost(message, optional, tag="1")]
     pub deaths: ::core::option::Option<IntCompare>,
 }
 impl ::prost::Name for CmdrDeaths {
@@ -1005,7 +1005,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.CmdrDeaths".into() }fn
 /// a minute left" are both expressible without a constant in the file.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SegmentElapsed {
-    #[prost(message, optional, tag = "1")]
+    #[prost(message, optional, tag="1")]
     pub ms: ::core::option::Option<IntCompare>,
 }
 impl ::prost::Name for SegmentElapsed {
@@ -1015,9 +1015,9 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.SegmentElapsed".into()
 /// A beacon's own HP as a whole percentage of its maximum.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BeaconHpPct {
-    #[prost(message, optional, tag = "1")]
+    #[prost(message, optional, tag="1")]
     pub beacon: ::core::option::Option<BeaconRef>,
-    #[prost(message, optional, tag = "2")]
+    #[prost(message, optional, tag="2")]
     pub pct: ::core::option::Option<IntCompare>,
 }
 impl ::prost::Name for BeaconHpPct {
@@ -1027,11 +1027,11 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.BeaconHpPct".into() }f
 /// Whether a beacon has taken damage within a window of game milliseconds.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BeaconUnderAttack {
-    #[prost(message, optional, tag = "1")]
+    #[prost(message, optional, tag="1")]
     pub beacon: ::core::option::Option<BeaconRef>,
     /// Game milliseconds. The predicate is true while the beacon has taken
     /// damage at any point inside this window.
-    #[prost(int32, tag = "2")]
+    #[prost(int32, tag="2")]
     pub within_ms: i32,
 }
 impl ::prost::Name for BeaconUnderAttack {
@@ -1043,11 +1043,11 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.BeaconUnderAttack".int
 /// is watching for.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BeaconPowered {
-    #[prost(message, optional, tag = "1")]
+    #[prost(message, optional, tag="1")]
     pub beacon: ::core::option::Option<BeaconRef>,
     /// True tests powered, false tests dormant. Both senses are needed and a
     /// `not` wrapper would cost a node against the 24-node budget.
-    #[prost(bool, tag = "2")]
+    #[prost(bool, tag="2")]
     pub powered: bool,
 }
 impl ::prost::Name for BeaconPowered {
@@ -1057,7 +1057,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.BeaconPowered".into() 
 /// The seat treasury in whole $.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Treasury {
-    #[prost(message, optional, tag = "1")]
+    #[prost(message, optional, tag="1")]
     pub dollars: ::core::option::Option<IntCompare>,
 }
 impl ::prost::Name for Treasury {
@@ -1068,7 +1068,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.Treasury".into() }fn t
 /// brownout order is running.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct KwHeadroom {
-    #[prost(message, optional, tag = "1")]
+    #[prost(message, optional, tag="1")]
     pub kw: ::core::option::Option<IntCompare>,
 }
 impl ::prost::Name for KwHeadroom {
@@ -1080,7 +1080,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.KwHeadroom".into() }fn
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct StepReached {
     /// Must name a Step.label in this playbook's route.
-    #[prost(string, tag = "1")]
+    #[prost(string, tag="1")]
     pub label: ::prost::alloc::string::String,
 }
 impl ::prost::Name for StepReached {
@@ -1091,7 +1091,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.StepReached".into() }f
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct RuleFired {
     /// Must name a Handler.id in this playbook.
-    #[prost(string, tag = "1")]
+    #[prost(string, tag="1")]
     pub handler_id: ::prost::alloc::string::String,
 }
 impl ::prost::Name for RuleFired {
@@ -1104,10 +1104,10 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RuleFired".into() }fn 
 /// "Knowledge").
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Freshness {
-    #[prost(enumeration = "freshness::Kind", tag = "1")]
+    #[prost(enumeration="freshness::Kind", tag="1")]
     pub kind: i32,
     /// Game milliseconds. Only with KNOWN_WITHIN.
-    #[prost(int32, tag = "2")]
+    #[prost(int32, tag="2")]
     pub known_within_ms: i32,
 }
 /// Nested message and enum types in `Freshness`.
@@ -1155,10 +1155,10 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.Freshness".into() }fn 
 /// where it died (spec section 4).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct OnDeath {
-    #[prost(enumeration = "on_death::OnRespawn", tag = "1")]
+    #[prost(enumeration="on_death::OnRespawn", tag="1")]
     pub on_respawn: i32,
     /// After this many deaths the playbook stops and the fallback takes over.
-    #[prost(uint32, tag = "2")]
+    #[prost(uint32, tag="2")]
     pub max_deaths_before_fallback: u32,
 }
 /// Nested message and enum types in `OnDeath`.
@@ -1200,18 +1200,18 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.OnDeath".into() }fn ty
 /// 10, "A guaranteed tail").
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Fallback {
-    #[prost(oneof = "fallback::Posture", tags = "1, 2, 3")]
+    #[prost(oneof="fallback::Posture", tags="1, 2, 3")]
     pub posture: ::core::option::Option<fallback::Posture>,
 }
 /// Nested message and enum types in `Fallback`.
 pub mod fallback {
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Posture {
-        #[prost(message, tag = "1")]
+        #[prost(message, tag="1")]
         Hold(super::FallbackHold),
-        #[prost(message, tag = "2")]
+        #[prost(message, tag="2")]
         Shadow(super::FallbackShadow),
-        #[prost(message, tag = "3")]
+        #[prost(message, tag="3")]
         Patrol(super::FallbackPatrol),
     }
 }
@@ -1221,7 +1221,7 @@ const PACKAGE: &'static str = "gp.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.v1.Fallback".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.Fallback".into() }}
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct FallbackHold {
-    #[prost(message, optional, tag = "1")]
+    #[prost(message, optional, tag="1")]
     pub at: ::core::option::Option<Location>,
 }
 impl ::prost::Name for FallbackHold {
@@ -1231,7 +1231,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.FallbackHold".into() }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct FallbackShadow {
     /// Stay with this beacon.
-    #[prost(message, optional, tag = "1")]
+    #[prost(message, optional, tag="1")]
     pub beacon: ::core::option::Option<BeaconRef>,
 }
 impl ::prost::Name for FallbackShadow {
@@ -1243,7 +1243,7 @@ pub struct FallbackPatrol {
     /// PLACEHOLDER STUB: the patrol route shape is not specified. A list of
     /// locations is the obvious reading of "patrol" and is what the editor's map
     /// route would produce.
-    #[prost(message, repeated, tag = "1")]
+    #[prost(message, repeated, tag="1")]
     pub waypoints: ::prost::alloc::vec::Vec<Location>,
 }
 impl ::prost::Name for FallbackPatrol {
@@ -1269,20 +1269,20 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.FallbackPatrol".into()
 /// non-beacon selector catalogue (an area, a seam, a vent) if S3 needs one.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Location {
-    #[prost(oneof = "location::Place", tags = "1, 2, 3")]
+    #[prost(oneof="location::Place", tags="1, 2, 3")]
     pub place: ::core::option::Option<location::Place>,
 }
 /// Nested message and enum types in `Location`.
 pub mod location {
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
     pub enum Place {
-        #[prost(message, tag = "1")]
+        #[prost(message, tag="1")]
         Voxel(super::Voxel),
-        #[prost(message, tag = "2")]
+        #[prost(message, tag="2")]
         BeaconAnchor(super::BeaconRef),
         /// "the safest own beacon" — the same target the fixed 20% reflex walks
         /// to. Shorthand for beacon_anchor { safest {} }.
-        #[prost(message, tag = "3")]
+        #[prost(message, tag="3")]
         Safest(super::Safest),
     }
 }
@@ -1295,11 +1295,11 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.Location".into() }fn t
 /// numbers (spec section 15, "Maths").
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Voxel {
-    #[prost(int32, tag = "1")]
+    #[prost(int32, tag="1")]
     pub x: i32,
-    #[prost(int32, tag = "2")]
+    #[prost(int32, tag="2")]
     pub y: i32,
-    #[prost(int32, tag = "3")]
+    #[prost(int32, tag="3")]
     pub z: i32,
 }
 impl ::prost::Name for Voxel {
@@ -1316,7 +1316,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.Voxel".into() }fn type
 /// on_fail decides what happens next — it is never a silent skip.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BeaconRef {
-    #[prost(oneof = "beacon_ref::Ref", tags = "1, 2, 10, 11, 12")]
+    #[prost(oneof="beacon_ref::Ref", tags="1, 2, 10, 11, 12")]
     pub r#ref: ::core::option::Option<beacon_ref::Ref>,
 }
 /// Nested message and enum types in `BeaconRef`.
@@ -1326,19 +1326,19 @@ pub mod beacon_ref {
         /// A beacon id from the seat's frozen snapshot. Bindings are per-match: a
         /// saved playbook is bound to seat, round, beacon ids and voxels, so
         /// cross-match reuse needs a rebind step (roadmap, v1.1).
-        #[prost(string, tag = "1")]
+        #[prost(string, tag="1")]
         BeaconId(::prost::alloc::string::String),
         /// Safest first. Own beacons only; the one the fixed 20% reflex walks to.
-        #[prost(message, tag = "2")]
+        #[prost(message, tag="2")]
         Safest(super::Safest),
         /// Least travel from the commander first.
-        #[prost(message, tag = "10")]
+        #[prost(message, tag="10")]
         Nearest(super::Nearest),
         /// Lowest HP first (the beacon's own HP, not the structures homed to it).
-        #[prost(message, tag = "11")]
+        #[prost(message, tag="11")]
         Weakest(super::Weakest),
         /// Most incoming threat first.
-        #[prost(message, tag = "12")]
+        #[prost(message, tag="12")]
         MostThreatened(super::MostThreatened),
     }
 }
@@ -1358,7 +1358,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.Safest".into() }fn typ
 /// "the nearest beacon that ...".
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Nearest {
-    #[prost(message, optional, tag = "1")]
+    #[prost(message, optional, tag="1")]
     pub filter: ::core::option::Option<BeaconFilter>,
 }
 impl ::prost::Name for Nearest {
@@ -1368,7 +1368,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.Nearest".into() }fn ty
 /// "my weakest Defend beacon" and its kind.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Weakest {
-    #[prost(message, optional, tag = "1")]
+    #[prost(message, optional, tag="1")]
     pub filter: ::core::option::Option<BeaconFilter>,
 }
 impl ::prost::Name for Weakest {
@@ -1378,7 +1378,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.Weakest".into() }fn ty
 /// "the most threatened beacon that ...".
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct MostThreatened {
-    #[prost(message, optional, tag = "1")]
+    #[prost(message, optional, tag="1")]
     pub filter: ::core::option::Option<BeaconFilter>,
 }
 impl ::prost::Name for MostThreatened {
@@ -1392,16 +1392,16 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.MostThreatened".into()
 /// knowledge store anyway.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BeaconFilter {
-    #[prost(enumeration = "beacon_filter::Side", tag = "1")]
+    #[prost(enumeration="beacon_filter::Side", tag="1")]
     pub side: i32,
     /// Optional. Only beacons on this writ.
-    #[prost(enumeration = "beacon_filter::MandateKind", tag = "2")]
+    #[prost(enumeration="beacon_filter::MandateKind", tag="2")]
     pub mandate: i32,
     /// Optional. Only beacons carrying every one of these author labels
     /// (PlaceBeaconStep.tags). An enemy beacon carries none of your tags, so a
     /// tag filter and ENEMY_KNOWN together select nothing — a verifier warning,
     /// not an error.
-    #[prost(string, repeated, tag = "3")]
+    #[prost(string, repeated, tag="3")]
     pub tags: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
 /// Nested message and enum types in `BeaconFilter`.
@@ -1514,15 +1514,15 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.BeaconFilter".into() }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct MandateSettings {
     /// Rules of engagement. Shared across mandates that field units.
-    #[prost(enumeration = "mandate_settings::Roe", tag = "1")]
+    #[prost(enumeration="mandate_settings::Roe", tag="1")]
     pub roe: i32,
     /// A unit below this percentage of its HP retreats, following the rules of
     /// engagement, and the retreat is always announced. Integer percent, 0-100.
-    #[prost(uint32, tag = "2")]
+    #[prost(uint32, tag="2")]
     pub retreat_hp_pct: u32,
     /// Which writ. Choosing the type is free at place_beacon time; switching it
     /// later clears the old settings and targets.
-    #[prost(oneof = "mandate_settings::Mandate", tags = "10, 11, 12, 13, 14")]
+    #[prost(oneof="mandate_settings::Mandate", tags="10, 11, 12, 13, 14")]
     pub mandate: ::core::option::Option<mandate_settings::Mandate>,
 }
 /// Nested message and enum types in `MandateSettings`.
@@ -1563,15 +1563,15 @@ pub mod mandate_settings {
     /// later clears the old settings and targets.
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Mandate {
-        #[prost(message, tag = "10")]
+        #[prost(message, tag="10")]
         Build(super::BuildSettings),
-        #[prost(message, tag = "11")]
+        #[prost(message, tag="11")]
         Defend(super::DefendSettings),
-        #[prost(message, tag = "12")]
+        #[prost(message, tag="12")]
         Attack(super::AttackSettings),
-        #[prost(message, tag = "13")]
+        #[prost(message, tag="13")]
         Survey(super::SurveySettings),
-        #[prost(message, tag = "14")]
+        #[prost(message, tag="14")]
         Mine(super::MineSettings),
     }
 }
@@ -1585,21 +1585,21 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.MandateSettings".into(
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BuildSettings {
     /// Build the highest-order affordable target that is unbuilt or damaged.
-    #[prost(message, repeated, tag = "1")]
+    #[prost(message, repeated, tag="1")]
     pub targets: ::prost::alloc::vec::Vec<BuildTarget>,
     /// Repair a structure of yours inside this beacon's sphere once it falls
     /// below this percentage of its HP. Integer percent, 0-100; 0 means never.
-    #[prost(uint32, tag = "2")]
+    #[prost(uint32, tag="2")]
     pub repair_threshold_pct: u32,
     /// Rebuild a destroyed target from the list. A destroyed CAPABILITY
     /// structure is never rebuilt automatically whatever this says (section 8).
-    #[prost(bool, tag = "3")]
+    #[prost(bool, tag="3")]
     pub rebuild_destroyed: bool,
     /// Whether the mandate may reshape terrain to place a target.
-    #[prost(enumeration = "build_settings::Terraform", tag = "4")]
+    #[prost(enumeration="build_settings::Terraform", tag="4")]
     pub terraform: i32,
     /// Ground the mandate will not dig, fill or build on.
-    #[prost(message, repeated, tag = "5")]
+    #[prost(message, repeated, tag="5")]
     pub protected_areas: ::prost::alloc::vec::Vec<Area>,
 }
 /// Nested message and enum types in `BuildSettings`.
@@ -1674,10 +1674,10 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.AttackSettings".into()
 pub struct SurveySettings {
     /// Where to look. Scouts scan unexplored ground inside these first, then
     /// re-check the sightings closest to leaving the reach window.
-    #[prost(message, repeated, tag = "1")]
+    #[prost(message, repeated, tag="1")]
     pub probe_areas: ::prost::alloc::vec::Vec<Area>,
     /// How many scouts the mandate fields.
-    #[prost(uint32, tag = "2")]
+    #[prost(uint32, tag="2")]
     pub scout_count: u32,
 }
 impl ::prost::Name for SurveySettings {
@@ -1692,16 +1692,16 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.SurveySettings".into()
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct MineSettings {
     /// Voxels. Never digs under structures.
-    #[prost(uint32, tag = "1")]
+    #[prost(uint32, tag="1")]
     pub dig_max_depth: u32,
-    #[prost(bool, tag = "2")]
+    #[prost(bool, tag="2")]
     pub flee_on_threat: bool,
     /// Which seam of the ones the mandate can reach.
-    #[prost(enumeration = "mine_settings::SeamChoice", tag = "3")]
+    #[prost(enumeration="mine_settings::SeamChoice", tag="3")]
     pub seam_choice: i32,
     /// Voxels between the pillars the mandate leaves standing to hold the roof
     /// up.
-    #[prost(uint32, tag = "4")]
+    #[prost(uint32, tag="4")]
     pub pillar_spacing: u32,
 }
 /// Nested message and enum types in `MineSettings`.
@@ -1765,24 +1765,24 @@ pub struct RulesTable {
     /// Bumped whenever a VALUE changes, so a save or a replay that refuses to
     /// load can say which table it was recorded against. The shape's version is
     /// the package version, `gp.v1`.
-    #[prost(uint32, tag = "1")]
+    #[prost(uint32, tag="1")]
     pub revision: u32,
     /// Free text: what changed in this revision and why.
-    #[prost(string, tag = "2")]
+    #[prost(string, tag="2")]
     pub note: ::prost::alloc::string::String,
-    #[prost(message, optional, tag = "10")]
+    #[prost(message, optional, tag="10")]
     pub r#match: ::core::option::Option<rules_table::Match>,
-    #[prost(message, optional, tag = "11")]
+    #[prost(message, optional, tag="11")]
     pub locomotion: ::core::option::Option<rules_table::Locomotion>,
-    #[prost(message, optional, tag = "12")]
+    #[prost(message, optional, tag="12")]
     pub broadphase: ::core::option::Option<rules_table::Broadphase>,
-    #[prost(message, optional, tag = "13")]
+    #[prost(message, optional, tag="13")]
     pub interface_times: ::core::option::Option<rules_table::InterfaceTimes>,
-    #[prost(message, optional, tag = "14")]
+    #[prost(message, optional, tag="14")]
     pub mesher: ::core::option::Option<rules_table::Mesher>,
-    #[prost(message, optional, tag = "15")]
+    #[prost(message, optional, tag="15")]
     pub economy: ::core::option::Option<rules_table::Economy>,
-    #[prost(message, optional, tag = "16")]
+    #[prost(message, optional, tag="16")]
     pub power: ::core::option::Option<rules_table::Power>,
 }
 /// Nested message and enum types in `RulesTable`.
@@ -1795,14 +1795,14 @@ pub mod rules_table {
         /// kept it. The runner reads the coming segment's length from the frozen
         /// snapshot, never from a constant — this list is where the snapshot's
         /// value comes from.
-        #[prost(int32, repeated, tag = "1")]
+        #[prost(int32, repeated, tag="1")]
         pub segment_lengths_ms: ::prost::alloc::vec::Vec<i32>,
         /// The Lull's planning timer, in game milliseconds. Read by the host and
         /// the editor, never by the sim: the Lull timer is a UI and host concern
         /// (AGENTS.md section 4.5).
         ///
         /// PLACEHOLDER: value is Tuning — owner, at the walking skeleton's demo.
-        #[prost(int32, tag = "2")]
+        #[prost(int32, tag="2")]
         pub lull_ms: i32,
     }
 impl ::prost::Name for Match {
@@ -1816,16 +1816,16 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Match".into
         /// truncation, so an estimate is never optimistic (item 61).
         ///
         /// item 59: 10
-        #[prost(uint32, tag = "1")]
+        #[prost(uint32, tag="1")]
         pub step_cost_cardinal: u32,
         /// item 59: 14
-        #[prost(uint32, tag = "2")]
+        #[prost(uint32, tag="2")]
         pub step_cost_diagonal: u32,
         /// item 59: 4, one-voxel climbs
-        #[prost(uint32, tag = "3")]
+        #[prost(uint32, tag="3")]
         pub climb_surcharge: u32,
         /// item 59: 3
-        #[prost(uint32, tag = "4")]
+        #[prost(uint32, tag="4")]
         pub move_cost_per_tick: u32,
         /// Per-tick repath cap, served round-robin in (seat, beacon, unit) order
         /// (item 60). Hashed state, not a calibration constant: the cap changes
@@ -1835,19 +1835,19 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Match".into
         /// PLACEHOLDER: 16 is item 69's value, to be re-derived at S2's exit once
         /// the burst frequency is a measurement rather than a spike's estimate —
         /// owner, at S2 exit.
-        #[prost(uint32, tag = "5")]
+        #[prost(uint32, tag="5")]
         pub repath_cap_per_tick: u32,
         /// Fog multiplier on an abstract edge, as a fraction: an unseen edge costs
         /// `cost * numerator / denominator`, rounded up (item 61: cost * 3 / 2).
         /// A fraction rather than a percentage because the arithmetic is integer
         /// and the rounding has to be stated.
-        #[prost(uint32, tag = "6")]
+        #[prost(uint32, tag="6")]
         pub fog_cost_numerator: u32,
-        #[prost(uint32, tag = "7")]
+        #[prost(uint32, tag="7")]
         pub fog_cost_denominator: u32,
         /// Cluster edge in voxels. Item 58: 32, one chunk footprint, a single
         /// abstract level.
-        #[prost(uint32, tag = "8")]
+        #[prost(uint32, tag="8")]
         pub hpa_cluster_voxels: u32,
     }
 impl ::prost::Name for Locomotion {
@@ -1862,7 +1862,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Locomotion"
         /// PLACEHOLDER: Tuning, tied to unit density — owner, at S2's exit. Item
         /// 67's caveat: the broadphase is super-linear in density, so this number
         /// is a real tuning value and not a constant anybody may guess.
-        #[prost(uint32, tag = "1")]
+        #[prost(uint32, tag="1")]
         pub cell_size_voxels: u32,
     }
 impl ::prost::Name for Broadphase {
@@ -1873,34 +1873,34 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Broadphase"
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct InterfaceTimes {
         /// 1500
-        #[prost(int32, tag = "1")]
+        #[prost(int32, tag="1")]
         pub visit_handshake_ms: i32,
         /// 1500
-        #[prost(int32, tag = "2")]
+        #[prost(int32, tag="2")]
         pub set_priority_ms: i32,
         /// 2000
-        #[prost(int32, tag = "3")]
+        #[prost(int32, tag="3")]
         pub edit_settings_base_ms: i32,
         /// 500
-        #[prost(int32, tag = "4")]
+        #[prost(int32, tag="4")]
         pub edit_settings_per_field_ms: i32,
         /// 6000
-        #[prost(int32, tag = "5")]
+        #[prost(int32, tag="5")]
         pub edit_settings_max_ms: i32,
         /// 2500, add or remove, each
-        #[prost(int32, tag = "6")]
+        #[prost(int32, tag="6")]
         pub build_target_ms: i32,
         /// 5000, plus construction time
-        #[prost(int32, tag = "7")]
+        #[prost(int32, tag="7")]
         pub queue_structure_ms: i32,
         /// 8000
-        #[prost(int32, tag = "8")]
+        #[prost(int32, tag="8")]
         pub switch_mandate_ms: i32,
         /// 10000
-        #[prost(int32, tag = "9")]
+        #[prost(int32, tag="9")]
         pub recycle_ms: i32,
         /// 12000 (spec section 5)
-        #[prost(int32, tag = "10")]
+        #[prost(int32, tag="10")]
         pub place_beacon_deploy_ms: i32,
     }
 impl ::prost::Name for InterfaceTimes {
@@ -1916,12 +1916,12 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.InterfaceTi
         ///
         /// PLACEHOLDER: Tuning — no measured frame-time reason separates K = 4
         /// from K = 8 on the spike machine (item 54). Owner, at S6's art pass.
-        #[prost(uint32, tag = "1")]
+        #[prost(uint32, tag="1")]
         pub surfaces_per_frame: u32,
         /// B: bytes uploaded per frame. Item 54: 512 KiB.
         ///
         /// PLACEHOLDER: Tuning, same note as K — owner, at S6's art pass.
-        #[prost(uint32, tag = "2")]
+        #[prost(uint32, tag="2")]
         pub bytes_per_frame: u32,
         /// The ageing term of the drain order: a queued surface older than this
         /// many frames drains before the nearest-camera rule applies. Item 54's
@@ -1929,16 +1929,16 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.InterfaceTi
         ///
         /// PLACEHOLDER: ships untested by measurement and is labelled insurance
         /// (item 54) — owner, at S6's art pass.
-        #[prost(uint32, tag = "3")]
+        #[prost(uint32, tag="3")]
         pub age_frames: u32,
         /// Light bake. LIGHT_MAX is the brightest sky value, LIGHT_ATTEN the fall
         /// per voxel; the mesher derives its dirty pad from them as light reach
         /// plus one rather than asserting a number (G1 section 10.12).
         ///
         /// PLACEHOLDER: Tuning — owner, at S6's art polish.
-        #[prost(uint32, tag = "4")]
+        #[prost(uint32, tag="4")]
         pub light_max: u32,
-        #[prost(uint32, tag = "5")]
+        #[prost(uint32, tag="5")]
         pub light_atten: u32,
     }
 impl ::prost::Name for Mesher {
@@ -1989,19 +1989,19 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable".into() }fn
 /// opponent seats (spec section 14).
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Operator {
-    #[prost(oneof = "operator::Kind", tags = "1, 2")]
+    #[prost(oneof="operator::Kind", tags="1, 2")]
     pub kind: ::core::option::Option<operator::Kind>,
 }
 /// Nested message and enum types in `Operator`.
 pub mod operator {
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
     pub enum Kind {
-        #[prost(message, tag = "1")]
+        #[prost(message, tag="1")]
         Builtin(super::BuiltinOperator),
         /// RESERVED — v1.1, the scripting API (spec section 18). A script run
         /// outside the game during the Lull that emits the same canonical gp.v1
         /// JSON the editor emits and goes through the same verifier.
-        #[prost(message, tag = "2")]
+        #[prost(message, tag="2")]
         Script(super::ScriptOperator),
     }
 }
@@ -2017,7 +2017,7 @@ pub struct BuiltinOperator {
     /// PLACEHOLDER: a string id rather than an enum, because the operator
     /// catalogue is section 14's contract, not this file's. Swap it for a nested
     /// enum when that contract is written.
-    #[prost(string, tag = "1")]
+    #[prost(string, tag="1")]
     pub builtin_id: ::prost::alloc::string::String,
 }
 impl ::prost::Name for BuiltinOperator {
@@ -2045,19 +2045,19 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.ScriptOperator".into()
 /// says whose code runs the mandate.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Mandate {
-    #[prost(oneof = "mandate::Kind", tags = "1, 2")]
+    #[prost(oneof="mandate::Kind", tags="1, 2")]
     pub kind: ::core::option::Option<mandate::Kind>,
 }
 /// Nested message and enum types in `Mandate`.
 pub mod mandate {
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
     pub enum Kind {
-        #[prost(message, tag = "1")]
+        #[prost(message, tag="1")]
         Builtin(super::BuiltinMandate),
         /// RESERVED — post-v1 in-game script runtime: custom mandates authored by
         /// the player and run inside the sim, fuel-metered, installed on site,
         /// content-addressed (spec section 18). No version fixed.
-        #[prost(message, tag = "2")]
+        #[prost(message, tag="2")]
         Script(super::ScriptMandate),
     }
 }
@@ -2070,12 +2070,12 @@ pub struct BuiltinMandate {
     /// PLACEHOLDER: a string id rather than an enum, for the same reason as
     /// BuiltinOperator. The five writs are Build, Defend, Attack, Mine and
     /// Survey; naming them is section 6's contract.
-    #[prost(string, tag = "1")]
+    #[prost(string, tag="1")]
     pub builtin_id: ::prost::alloc::string::String,
     /// The built-in program this mandate runs. Kept as an explicit field because
     /// program_id on each beacon's mandate is itself one of the listed seams
     /// (spec section 15, "Seams kept for later").
-    #[prost(message, optional, tag = "2")]
+    #[prost(message, optional, tag="2")]
     pub program: ::core::option::Option<Program>,
 }
 impl ::prost::Name for BuiltinMandate {
@@ -2099,18 +2099,18 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.ScriptMandate".into() 
 /// none of them in v1 (spec section 6).
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Program {
-    #[prost(oneof = "program::Kind", tags = "1, 2")]
+    #[prost(oneof="program::Kind", tags="1, 2")]
     pub kind: ::core::option::Option<program::Kind>,
 }
 /// Nested message and enum types in `Program`.
 pub mod program {
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
     pub enum Kind {
-        #[prost(message, tag = "1")]
+        #[prost(message, tag="1")]
         Builtin(super::BuiltinProgram),
         /// RESERVED — post-v1 in-game script runtime, alongside ScriptMandate. No
         /// version fixed (spec section 18).
-        #[prost(message, tag = "2")]
+        #[prost(message, tag="2")]
         Script(super::ScriptProgram),
     }
 }
@@ -2121,7 +2121,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.Program".into() }fn ty
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BuiltinProgram {
     /// PLACEHOLDER: string id, same reasoning as above.
-    #[prost(string, tag = "1")]
+    #[prost(string, tag="1")]
     pub program_id: ::prost::alloc::string::String,
 }
 impl ::prost::Name for BuiltinProgram {
