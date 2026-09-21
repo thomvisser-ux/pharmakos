@@ -1642,20 +1642,36 @@ fn the_gateways_tick_never_goes_backwards_across_a_phase_boundary() {
     );
 }
 
-/// A seat that makes one call per tick of the Push is never rate-limited.
+/// A seat that plans through the Lull and then calls once a tick of the Push is
+/// never rate-limited.
 ///
 /// The property the boundary bug broke, stated as a client would notice it: a
-/// watch rig polling the feed as fast as the caps allow gets answers, for the
-/// whole segment, after a Lull that ran its full length.
+/// seat that used its planning phase and then watched its Push gets answers all
+/// the way through, and a watch rig polling as fast as the caps allow is not
+/// starved by a Lull that already happened.
+///
+/// **The Lull half is what makes this a test.** A limiter is made on a token's
+/// first call and its high-water tick is raised by the calls it admits, so a
+/// seat that made *no* call during the Lull would find the limiter at tick zero
+/// when the Push began and would notice nothing, whichever way the gateway's
+/// tick had jumped. This seat plans first, exactly as a real one does.
 #[test]
 fn a_seat_calling_once_a_tick_through_a_push_is_never_rate_limited() {
     // Twenty seconds of Push: 400 ticks, which is two whole rate-limiter
     // windows and far more than the per-tick cap could cover on its own.
     let mut surface = hosted_with(20_000);
     let token = seat_token(&mut surface, 0);
-    // The client counts its Lull all the way down, which is what put the
-    // gateway's tick a Lull ahead of the runner's.
+
+    // The Lull, counted down by the client and used by it: a handful of
+    // planning calls, the last of them with the timer at zero.
+    let mut left = LULL_MS;
+    for _ in 0..4 {
+        let response = call(&mut surface, &token, &mut left, "get_status", "{}");
+        let _ = result(&response, "a planning call in the Lull");
+    }
     surface.set_phase_remaining_ms(Ms::ZERO);
+    let response = surface.call(Some(&token), &request("get_status", "{}"), &Blind);
+    let _ = result(&response, "the last call of the Lull");
     surface.begin_push().expect("the Push begins");
 
     let mut calls = 0_u32;
