@@ -11,8 +11,8 @@
 //! by an `#[allow]` somebody adds in a hurry; a test that greps the source
 //! cannot be, and it fails in the pull request that tries.
 //!
-//! Four rules, and the gateway's list differs from the verifier's in two ways
-//! that are worth stating rather than quietly leaving out:
+//! Six rules, and the gateway's list differs from the verifier's in ways that
+//! are worth stating rather than quietly leaving out:
 //!
 //! 1. **No clock, no hash container, no float.** The same list as every
 //!    deterministic crate (AGENTS.md sections 4.2, 4.4, 4.5). The gateway is not
@@ -29,6 +29,16 @@
 //! 4. **The filesystem lives in one module.** `std::fs` appears in
 //!    `src/cache.rs` and nowhere else, so "no filesystem access through
 //!    playbooks" is checkable rather than asserted.
+//! 5. **No research build, anywhere.** [`NO_DRY_RUNS`]: no file of this crate
+//!    names `fork` or the sim's `research` feature, so no seat can reach either.
+//! 6. **The match is stepped in one module.** [`STEPPING`] and
+//!    [`the_match_is_stepped_in_one_module`]. T9's version of this said
+//!    "never", and T13 changed the fact rather than the rule: the gateway
+//!    *hosts* the match now, so something here has to build a world and drive a
+//!    runner. What "no dry runs" is actually about is that **no method handler
+//!    may** -- so `src/host.rs` is the one module that names a stepping call,
+//!    `src/surface.rs` may reach one only through `host_mut()`, and the handler
+//!    modules may not name one at all.
 //!
 //! And then the rule that is about the *schema* rather than the source: a
 //! playbook is data with a closed vocabulary, and no field of that vocabulary
