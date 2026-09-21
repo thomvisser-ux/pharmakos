@@ -32,11 +32,25 @@ SPDX-PackageDownloadLocation = "NOASSERTION"
 # --- The game: everything that executes ------------------------------------
 # The sim, plan-core, verifier, operator, gateway and gamectl crates, the build
 # and CI tooling, and the Godot client with its thin gdext crate.
+#
+# `godot/**` is the Godot project itself (decisions-log item 72: `godot/` at the
+# repository root, one ownable unit with crates/client-gdext). It is listed here
+# because several of its formats CANNOT carry a header: a `.tscn` is a Godot
+# text resource with no comment syntax, and a `.uid` file is a single line the
+# editor rewrites. The files that can carry one — `project.godot`, the
+# `.gdextension` and every `.gd` — do, and precedence stays "aggregate" so those
+# headers are combined with this entry rather than replaced by it. The staged
+# library and Godot's `.godot/` import cache are build output and are
+# git-ignored, so neither needs covering.
+#
+# `client/**` was the pre-decision placeholder path for the same thing and is
+# kept so that a tree still holding it lints clean; item 72 chose `godot/`.
 [[annotations]]
 path = [
     "crates/**",
     "xtask/**",
     "client/**",
+    "godot/**",
 ]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 Pharmakos contributors"

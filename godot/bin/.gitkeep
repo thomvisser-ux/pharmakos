@@ -1,0 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Pharmakos contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# The staging target for `cargo xtask stage-client`. The built library lands here and is
+# never committed: the repository .gitignore already excludes *.dll, *.so and *.dylib, and
+# this file keeps the directory itself in git so that `res://bin/...` in
+# pharmakos.gdextension resolves on a fresh checkout.
