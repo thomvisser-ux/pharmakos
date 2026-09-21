@@ -81,6 +81,12 @@ fn rules() -> RulesTable {
 
 /// A two-seat match, hosted, sitting in its opening Lull.
 fn hosted() -> Surface {
+    hosted_with(SEGMENT_MS)
+}
+
+/// The same, with a segment of a stated length: a test about what a client may
+/// do *during* a Push needs a Push long enough to do it in.
+fn hosted_with(segment_ms: i32) -> Surface {
     let mut surface = Surface::new(
         MATCH,
         SEED,
@@ -96,7 +102,7 @@ fn hosted() -> Surface {
             units_per_seat: 0,
             rules: rules(),
             match_settings: MatchSettings {
-                segment_lengths_ms: vec![SEGMENT_MS],
+                segment_lengths_ms: vec![segment_ms],
                 round_limit: 3,
             },
         },
@@ -262,7 +268,10 @@ const FIX: &str = concat!(
 #[test]
 #[allow(
     clippy::too_many_lines,
-    reason = "fourteen calls, in the order spec section 12 prints them. Splitting the               session into helpers would hide the one property the test exists for -- that               this is ONE session against ONE gateway, in this order -- and a reader               checking it against the spec would have to reassemble it."
+    reason = "fourteen calls, in the order spec section 12 prints them. Splitting the session \
+              into helpers would hide the one property the test exists for -- that this is ONE \
+              session against ONE gateway, in this order -- and a reader checking it against \
+              the spec would have to reassemble it."
 )]
 fn the_specs_fourteen_call_walkthrough_runs_end_to_end() {
     let mut surface = hosted();
@@ -890,6 +899,102 @@ fn a_seat_that_seals_nothing_has_the_safe_playbook_filed_for_it() {
             pharmakos_gateway::host::SAFE_PLAYBOOK
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// The gateway's own tick is monotonic
+// ---------------------------------------------------------------------------
+
+/// `MatchTime::tick` never goes backwards, in any phase or across any boundary.
+///
+/// A Lull consumes no sim tick, so the gateway derives the Lull's elapsed ticks
+/// from `rules.match.lull_ms` and what the client says is left. The trap is the
+/// boundary: a derivation that only applied *inside* the Lull would drop the
+/// reported tick by a whole Lull the instant the Push began -- and
+/// `limit::RateLimiter::admit` refuses to refill a budget from a tick that went
+/// backwards, so a seat would have one tick's worth of calls for the whole
+/// Push. So the Lull's ticks are carried, and this walks a whole round to say
+/// so.
+#[test]
+fn the_gateways_tick_never_goes_backwards_across_a_phase_boundary() {
+    let mut surface = hosted();
+    let mut seen: Vec<(String, u32)> = Vec::new();
+    let mut note = |what: &str, surface: &Surface| {
+        seen.push((what.to_owned(), surface.time().tick.raw()));
+    };
+
+    note("the opening Lull", &surface);
+    for left in [LULL_MS / 2, 0] {
+        surface.set_phase_remaining_ms(Ms::new(left));
+        note("the Lull, counting down", &surface);
+    }
+    surface.begin_push().expect("the Push begins");
+    note("the Push begins", &surface);
+    while let Some(report) = surface.step().expect("a tick") {
+        note("a tick of the Push", &surface);
+        if report.segment_ended {
+            break;
+        }
+    }
+    // A client reporting the recap's own timer, which is not the Lull's.
+    surface.set_phase_remaining_ms(Ms::new(8_000));
+    note("the recap", &surface);
+    surface.end_recap().expect("the recap ends");
+    surface.open_lull().expect("the next Lull");
+    note("round 2's Lull", &surface);
+    surface.set_phase_remaining_ms(Ms::new(LULL_MS));
+    note("round 2's Lull, freshly started", &surface);
+
+    let mut highest = 0;
+    for (what, tick) in &seen {
+        assert!(
+            *tick >= highest,
+            "the tick went backwards at `{what}`: {tick} after {highest}. The whole walk: \
+             {seen:?}"
+        );
+        highest = *tick;
+    }
+    let opening = seen.first().map(|(_, tick)| *tick).unwrap_or_default();
+    assert!(
+        highest > opening,
+        "a round went by and the tick did not move: {seen:?}"
+    );
+}
+
+/// A seat that makes one call per tick of the Push is never rate-limited.
+///
+/// The property the boundary bug broke, stated as a client would notice it: a
+/// watch rig polling the feed as fast as the caps allow gets answers, for the
+/// whole segment, after a Lull that ran its full length.
+#[test]
+fn a_seat_calling_once_a_tick_through_a_push_is_never_rate_limited() {
+    // Twenty seconds of Push: 400 ticks, which is two whole rate-limiter
+    // windows and far more than the per-tick cap could cover on its own.
+    let mut surface = hosted_with(20_000);
+    let token = seat_token(&mut surface, 0);
+    // The client counts its Lull all the way down, which is what put the
+    // gateway's tick a Lull ahead of the runner's.
+    surface.set_phase_remaining_ms(Ms::ZERO);
+    surface.begin_push().expect("the Push begins");
+
+    let mut calls = 0_u32;
+    while let Some(report) = surface.step().expect("a tick") {
+        let response = surface.call(Some(&token), &request("get_status", "{}"), &Blind);
+        calls = calls.saturating_add(1);
+        assert!(
+            response.get("result").is_some(),
+            "call {calls}, at sim tick {}, was refused: {:?}",
+            report.tick.raw(),
+            response.get("error")
+        );
+        if report.segment_ended {
+            break;
+        }
+    }
+    assert!(
+        calls > 300,
+        "the Push was meant to be 400 ticks, and {calls}"
+    );
 }
 
 // ---------------------------------------------------------------------------
