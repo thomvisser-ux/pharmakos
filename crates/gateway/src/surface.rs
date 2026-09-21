@@ -28,9 +28,23 @@
 //! T9 built the security surface with no match behind it; T13 puts one there
 //! and hangs every method the skeleton's clients call off the same seven steps.
 //! The handlers live in two submodules, and **neither of them may step the
-//! match** -- that is [`crate::host`]'s, in three calls, and
+//! match** -- that is [`crate::host`]'s, in four calls, and
 //! `tests/confinement.rs` asserts it over this crate's own source text
-//! (AGENTS.md section 3 rule 2, "no dry runs").
+//! (AGENTS.md section 3 rule 2, "no dry runs"). A handler may **compile** a
+//! playbook, which is a pure function of the playbook and the rules table
+//! ([`planning::compile_playbook`]); sealing the result into the match is the
+//! host's.
+//!
+//! # A sealed playbook reaches the match
+//!
+//! T13 stopped at [`Sealed`]: a verified submission went into the seat's own
+//! private store and the hosted world never heard of it, so a Push played out
+//! with every commander standing still. T13b closes that (decisions-log item
+//! 103 (1)). `submit_plan` compiles the playbook at the door and holds the
+//! compiled [`Plan`] with the seal; [`Surface::begin_push`] files the safe
+//! playbook for any seat that sealed nothing and then seals **every** seat's
+//! plan into the runner, in ascending seat id, while the match is still in its
+//! Lull.
 //!
 //! | Module | Methods |
 //! |---|---|
@@ -80,6 +94,7 @@ use pharmakos_proto::gp::api::v1::status::Phase;
 use pharmakos_proto::gp::api::v1::verify_plan::Depth;
 use pharmakos_proto::gp::api::v1::{Method, VerifyReport};
 use pharmakos_proto::json::Json;
+use pharmakos_sim::interpreter::Plan;
 use pharmakos_sim::math::quantity::{Ms, Tick};
 use pharmakos_sim::rules::RulesTable;
 use pharmakos_sim::runner::{MatchPhase, TickReport};
@@ -118,6 +133,13 @@ pub struct Draft {
 /// one, any number of times until the timer ends", so there is one of these per
 /// seat and never a history. The safe playbook is filed only if nothing
 /// verified was ever submitted.
+///
+/// It carries the **compiled** [`Plan`] as well as the text, because the text
+/// is what a seat reads back and the plan is what the match plays. The compile
+/// happens once, at the door that can still tell somebody it failed
+/// ([`crate::surface::planning::compile_playbook`]); by the time
+/// [`Surface::begin_push`] seals this into the runner there is nothing left
+/// that can go wrong with it.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Sealed {
     /// The playbook, as submitted.
@@ -131,6 +153,8 @@ pub struct Sealed {
     /// True when the gateway filed this itself because the Lull ended with
     /// nothing sealed (spec section 14).
     pub filed_by_the_gateway: bool,
+    /// The playbook as the interpreter runs it.
+    pub plan: Plan,
 }
 
 /// Last round's playbook, pre-loaded as a draft and **re-verified against the
@@ -480,18 +504,40 @@ impl Surface {
     }
 
     /// Begin the Push: file the safe playbook for a seat that sealed nothing,
-    /// open a fresh segment feed, and step the runner into the Push.
+    /// **seal every seat's plan into the match**, open a fresh segment feed,
+    /// and step the runner into the Push.
     ///
     /// Returns false when the runner was not in a Lull.
     ///
+    /// # The order of these five steps is the whole of the method
+    ///
+    /// 1. **Drain** whatever the last phase left on the bus, onto the feed it
+    ///    belongs to.
+    /// 2. **File the safe playbook** for every seat whose seal is not this
+    ///    round's (spec section 14). After this every seat of the match has a
+    ///    [`Sealed`], so step 4 is unconditional.
+    /// 3. **Open the segment's feed**, so that the `plan_sealed` lines land on
+    ///    the segment they are the opening of rather than on the one that has
+    ///    just closed.
+    /// 4. **Seal**, in ascending seat id, while the runner is still in its Lull
+    ///    — which is the only phase [`pharmakos_sim::runner::Runner::seal_playbook`]
+    ///    accepts. The plans were compiled at submit, so nothing here can fail
+    ///    for a reason a seat could have fixed: a refusal at this point is the
+    ///    gateway's own bug and is [`crate::error::Code::Internal`]
+    ///    (decisions-log item 103 (1)).
+    /// 5. **Open the Push.**
+    ///
     /// # Errors
     ///
-    /// As [`Surface::host`].
+    /// As [`Surface::host`], plus [`crate::error::Code::Internal`] when a
+    /// filed safe playbook will not compile or the runner refuses a seal.
     pub fn begin_push(&mut self) -> Result<bool, Error> {
         self.absorb_events()?;
         let round = self.host()?.runner().round();
-        self.file_safe_playbooks(round);
+        self.file_safe_playbooks(round)?;
         self.begin_segment(round, 0);
+        let plans = self.plans_for_round();
+        self.host_mut()?.seal_plans(plans)?;
         let started = self.host_mut()?.begin_push();
         if started {
             self.close_lull();
@@ -499,6 +545,46 @@ impl Surface {
         self.sync_time();
         self.absorb_events()?;
         Ok(started)
+    }
+
+    /// Every seat's sealed plan, in ascending seat id.
+    ///
+    /// Ascending because the order a match is given its orders in is part of
+    /// what makes a match reproducible (AGENTS.md section 4.6): the seals emit
+    /// events and reset per-seat state, and "ties to the lowest seat id" is the
+    /// project's standing convention. `self.seats` is held sorted by
+    /// [`Surface::new`], and this sorts again rather than relying on that from
+    /// a distance.
+    ///
+    /// A seat with nothing sealed is skipped rather than defaulted, which after
+    /// [`Surface::file_safe_playbooks`] means no seat at all — but this is also
+    /// what a caller gets before a match has a Lull behind it, and a `None`
+    /// there is "nothing to file", not "file nothing".
+    ///
+    /// PLACEHOLDER: **this is also what a restore has to call.** A plan is an
+    /// *input* and is not in a snapshot (T11: "the sim is a pure function of
+    /// (map seed, playbooks, rules hash) and an input is not state"), so a
+    /// runner restored from a save file has the interpreter's *state* back and
+    /// no plans behind it — and would play the rest of the segment with every
+    /// commander standing still, which is exactly the bug this task removes.
+    /// The gateway is where the plans still are: this store. Saves and restores
+    /// are **T17**'s and there is no restore path in this crate today, so there
+    /// is nothing here to wire; when T17 adds one it re-seals from this
+    /// function, after the restore and before the first tick, and the plan
+    /// fingerprint T11's `Interpreter::restore` PLACEHOLDER asks for is what
+    /// tells it the save and the store agree. **T17.**
+    fn plans_for_round(&self) -> Vec<(SeatId, Plan)> {
+        let mut plans: Vec<(SeatId, Plan)> = self
+            .seats
+            .iter()
+            .filter_map(|seat| {
+                seat.sealed
+                    .as_ref()
+                    .map(|sealed| (seat.seat, sealed.plan.clone()))
+            })
+            .collect();
+        plans.sort_by_key(|(seat, _)| seat.raw());
+        plans
     }
 
     /// One tick of the Push, with the events it produced on the feed.
@@ -803,12 +889,42 @@ impl Surface {
     /// Spec section 14 and decisions-log item 5: the safe playbook is filed
     /// **only** if nothing verified was ever submitted. A seat that sealed
     /// something keeps it, and one that sealed something in an earlier round
-    /// does not: a seal is a round's.
-    fn file_safe_playbooks(&mut self, round: u32) {
+    /// does not: a seal is a round's, so a seat that planned in round 1 and
+    /// submitted nothing in round 2 plays round 2 on the safe playbook — in the
+    /// world as well as in this store, because [`Surface::begin_push`] seals
+    /// whatever is here.
+    ///
+    /// The safe playbook is **compiled here**, and a failure is
+    /// [`crate::error::Code::Internal`] and loud. It is the gateway's own
+    /// constant ([`crate::host::SAFE_PLAYBOOK`], T18's to replace): if it will
+    /// not compile then the one playbook that is supposed to be safe in every
+    /// situation is not runnable in any, and filing it silently would hand the
+    /// seat a Push in which its commander stands still for the reason this
+    /// whole task exists to remove.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::Internal`] when the safe playbook will not
+    /// compile.
+    fn file_safe_playbooks(&mut self, round: u32) -> Result<(), Error> {
         let Some(host) = self.host.as_ref() else {
-            return;
+            return Ok(());
         };
         let safe = host.safe_playbook().to_owned();
+        let needed = self
+            .seats
+            .iter()
+            .any(|seat| seat.sealed.as_ref().is_none_or(|held| held.round != round));
+        if !needed {
+            return Ok(());
+        }
+        let plan =
+            crate::surface::planning::compile_playbook(&safe, host.rules()).map_err(|error| {
+                Error::internal(format!(
+                    "the safe playbook this gateway files will not compile: {}",
+                    error.message
+                ))
+            })?;
         for seat in &mut self.seats {
             let stale = seat.sealed.as_ref().is_none_or(|held| held.round != round);
             if stale {
@@ -821,9 +937,11 @@ impl Surface {
                     report_hash: Vec::new(),
                     round,
                     filed_by_the_gateway: true,
+                    plan: plan.clone(),
                 });
             }
         }
+        Ok(())
     }
 
     /// Pre-load last round's playbook as an editable draft and re-verify it.

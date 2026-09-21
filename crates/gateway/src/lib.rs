@@ -23,15 +23,24 @@
 //!
 //! **T13 hung them there, and put a match behind them.** The gateway now hosts the match
 //! (AGENTS.md section 3's crate map, spec section 15): [`host`] owns the runner and is the
-//! **only** place in this crate that steps it, [`surface`] serves every method the
+//! **only** place in this crate that drives it, [`surface`] serves every method the
 //! skeleton's clients call, and `tests/confinement.rs` asserts over this crate's own source
 //! text that no handler can reach a stepping call -- which is what "no dry runs" means for
 //! a crate that has a world in the same process (AGENTS.md section 3 rule 2).
 //!
+//! **T13b gave the match its orders.** T13 was built against a sim that had only the
+//! interpreter seam, so a verified submission was sealed in the seat's own private store
+//! and the hosted world never heard of it: every commander stood still for the whole Push
+//! (decisions-log item 103 (1)). `submit_plan` now compiles the playbook at the door --
+//! the sim's `Plan::compile` is a second question from the verifier's, "can this build
+//! execute it" rather than "may this be sealed", and a refusal is a method error naming
+//! the construct -- and [`surface::Surface::begin_push`] seals every seat's compiled plan
+//! into the runner before the Lull ends.
+//!
 //! | Module | What it is |
 //! |---|---|
 //! | [`sha1`] | SHA-1, for `Sec-WebSocket-Accept` and nothing else |
-//! | [`host`] | The match host: the one place this crate steps a `Runner` |
+//! | [`host`] | The match host: the one place this crate seals into or steps a `Runner` |
 //! | [`routes`] | plan-core's `TravelEstimator`, over the sim's estimator (item 100 (1)) |
 //! | [`schema`] | `get_schema`, generated from the checked-in descriptor set |
 //! | [`strings`] | This crate's section of the one English string table |
@@ -84,12 +93,14 @@
 //! * **No `research` feature.** Only `crates/sim` defines it; the gateway may never enable
 //!   or transitively reach it, so no seat can reach `fork` and "no dry runs" holds.
 //!   `cargo xtask ci` enforces this.
-//! * **No dry runs.** The gateway hosts the match, so it does step one -- in [`host`], in
-//!   three calls, and nowhere else. No method handler may: `verify_plan`, `estimate_route`,
+//! * **No dry runs.** The gateway hosts the match, so it does drive one -- in [`host`], in
+//!   four calls, and nowhere else. No method handler may: `verify_plan`, `estimate_route`,
 //!   `render_plan`, `patch_plan`, `get_economy_forecast` and `instantiate_template` all
 //!   answer from the frozen snapshot and the rules table, and `estimate_route` goes through
 //!   [`routes::RouteAdapter`], which owns its own search graph and never has a `World` in
-//!   its hand at all.
+//!   its hand at all. `submit_plan` **compiles** a playbook, which is a pure function of
+//!   the playbook and the rules table and steps nothing; sealing the result into the match
+//!   is the host's call and not a handler's.
 //! * **No clock.** The gateway is not a walled crate (AGENTS.md section 4.5), so it reads
 //!   no wall clock at all: time enters as the host's tick through [`time::MatchTime`], the
 //!   rate limiter counts per tick and per window of ticks, and the audit log stamps a tick
