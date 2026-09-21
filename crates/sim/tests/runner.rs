@@ -967,6 +967,37 @@ fn a_playbook_is_sealed_during_a_lull_and_refused_in_every_other_phase() {
     runner
         .seal_playbook(SeatId::new(1), a_plan())
         .expect("round two's Lull");
+
+    // The fourth phase, which the doc names and the walk above never reached:
+    // a one-round match, played out to `Ended`. An ended match has nobody left
+    // to give orders to, and the refusal says which phase it is in rather than
+    // pretending the seal landed.
+    let mut last = Runner::new(
+        World::new(&WorldConfig {
+            match_seed: pharmakos_sim::DETERMINISM_MATCH_SEED,
+            seats: 2,
+            units_per_seat: 0,
+            rules: rules(),
+            match_settings: MatchSettings {
+                segment_lengths_ms: vec![SHORT_MS],
+                round_limit: 1,
+            },
+        })
+        .expect("a one-round match"),
+    );
+    assert!(last.begin_push());
+    while let Some(report) = last.step() {
+        if report.segment_ended {
+            break;
+        }
+    }
+    assert!(last.end_recap());
+    assert_eq!(last.phase(), MatchPhase::Ended);
+    assert_eq!(
+        last.seal_playbook(SeatId::new(0), a_plan()),
+        Err(SealRefused::NotInLull(MatchPhase::Ended)),
+        "an ended match takes no orders either"
+    );
 }
 
 #[test]

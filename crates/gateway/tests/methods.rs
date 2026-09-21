@@ -2270,17 +2270,68 @@ enum Door {
 /// A playbook whose only oddity is the fragment given, wrapped in the smallest
 /// legal playbook around it.
 fn one_step(step: &str) -> String {
+    with_handlers(step, "")
+}
+
+/// [`one_step`], plus a `handlers` block written out verbatim.
+fn with_handlers(step: &str, handlers: &str) -> String {
     format!(
         concat!(
             "{{\"schema_version\": {{\"major\": 1}},\n",
             " \"meta\": {{\"title\": \"Gap\", \"author_kind\": \"HUMAN\"}},\n",
-            " \"declarative\": {{\"route\": [{step}]}},\n",
+            " \"declarative\": {{\"route\": [{step}]{handlers}}},\n",
             " \"on_death\": {{\"on_respawn\": \"CONTINUE\"}},\n",
             " \"fallback\": {{\"hold\": {{\"at\": {{\"beacon_anchor\": {{\"safest\": {{}}}}}}}}}},\n",
             " \"kind\": \"PLAYBOOK\"}}\n"
         ),
-        step = step
+        step = step,
+        handlers = handlers
     )
+}
+
+/// A playbook carrying `count` handlers, each with an **empty body**.
+///
+/// The review's second finding, and the reason it is a case rather than a
+/// paragraph. The size meter charges a handler one unit plus one per step of
+/// its body (`crates/verifier/src/size.rs`), so a handler that does nothing
+/// costs exactly one, and nothing in the structure walk diagnoses an empty
+/// body. `rules.verifier.size_budget_units` is 128 and
+/// `pharmakos_sim::interpreter::MAX_HANDLERS` is 64, so the two ceilings are
+/// reachable in the wrong order: a playbook can be well inside the budget the
+/// editor's meter shows and still hold more rules than this build will compile.
+/// The first draft of this table reasoned that ceiling unreachable; it is not,
+/// and the difference between a reasoned claim and a measured one is this
+/// function.
+fn many_handlers(count: usize) -> String {
+    let mut handlers = String::from(", \"handlers\": [");
+    for index in 0..count {
+        if index > 0 {
+            handlers.push_str(", ");
+        }
+        handlers.push_str("{\"id\": \"h");
+        handlers.push_str(&index.to_string());
+        handlers.push_str(
+            "\", \"when\": {\"cmdr_hp_pct\": {\"cmp\": \"LE\", \"pct\": 40}}, \"body\": [], \
+             \"resume\": \"CONTINUE\", \"cooldown_ms\": 30000, \"max_fires\": 1}",
+        );
+    }
+    handlers.push(']');
+    with_handlers("{\"label\": \"h\", \"hold\": {\"ms\": 1000}}", &handlers)
+}
+
+/// One row of the two-door table.
+struct Case {
+    /// What the playbook is, for the assertion messages.
+    what: &'static str,
+    /// The playbook itself.
+    playbook: String,
+    /// Which door turns it away.
+    door: Door,
+    /// A fragment of the refusal that names **what** was written. Empty for a
+    /// [`Door::Verifier`] row, which never produces a method error.
+    names: &'static str,
+    /// A fragment that names the **stage** that closes the gap.
+    stage: &'static str,
 }
 
 /// Every construct this lane could find that the **verifier accepts** and the
@@ -2293,17 +2344,58 @@ fn one_step(step: &str) -> String {
 /// closes it. A `Door::Verifier` row is the same construct already closed, and
 /// it is here so that a later stage moving one from `Sim` to `Verifier` shows
 /// up as a test that has to be edited.
-fn two_door_cases() -> Vec<(&'static str, String, Door)> {
+///
+/// **Every gap is measured here and none is reasoned from a neighbour.** The
+/// first draft of this table listed three constructs in the pull request as
+/// covered by "the same arm" as a row that *was* measured -- and two of the
+/// three are separate match arms of the interpreter with separate `construct`
+/// strings, so "the same arm" was not true and a change to either would not
+/// have been caught. They have rows now.
+///
+/// Each `Door::Sim` row also carries the two fragments its refusal must
+/// contain: **what** was written, and the **stage** that gives it an effect.
+/// Decisions-log item 103 (1) asks the method error to name the construct, and
+/// asserting only the gateway's own wrapper words would have left
+/// `PlanError`'s `Display` free to stop naming it.
+fn two_door_cases() -> Vec<Case> {
+    let mut cases = sim_door_cases();
+    cases.append(&mut verifier_door_cases());
+    cases
+}
+
+/// One gap, with the two fragments its refusal has to name.
+fn sim(what: &'static str, playbook: String, names: &'static str, stage: &'static str) -> Case {
+    Case {
+        what,
+        playbook,
+        door: Door::Sim,
+        names,
+        stage,
+    }
+}
+
+/// The gaps: what the seal inspection lets through and the interpreter will
+/// not run.
+fn sim_door_cases() -> Vec<Case> {
+    let mut cases = interface_row_gaps();
+    cases.append(&mut mandate_and_rule_gaps());
+    cases
+}
+
+/// The gaps an **interface row** opens: four rows of spec section 5's table
+/// that the v1 vocabulary spells and this build does not carry out.
+fn interface_row_gaps() -> Vec<Case> {
     vec![
-        (
+        sim(
             "an interface row whose effect waits for the Quartermaster",
             one_step(
                 "{\"label\": \"r\", \"interface\": {\"beacon\": {\"safest\": {}}, \"rows\": \
                  [{\"recycle\": {}}]}, \"timeout_ms\": 30000}",
             ),
-            Door::Sim,
+            "interface row `recycle`",
+            "T14",
         ),
-        (
+        sim(
             "an interface row that adds a build target",
             one_step(
                 "{\"label\": \"b\", \"interface\": {\"beacon\": {\"safest\": {}}, \"rows\": \
@@ -2311,27 +2403,62 @@ fn two_door_cases() -> Vec<(&'static str, String, Door)> {
                  \"anchor\": {\"voxel\": {\"x\": 40, \"y\": 40, \"z\": 30}}, \
                  \"rotation_quarter_turns\": 0, \"order\": 1}}}]}, \"timeout_ms\": 30000}",
             ),
-            Door::Sim,
+            "interface row `add_build_target`",
+            "T14",
         ),
-        (
+        sim(
+            "an interface row that removes a build target",
+            one_step(
+                "{\"label\": \"rb\", \"interface\": {\"beacon\": {\"safest\": {}}, \"rows\": \
+                 [{\"remove_build_target\": {\"anchor\": {\"voxel\": {\"x\": 40, \"y\": 40, \
+                 \"z\": 30}}}}]}, \"timeout_ms\": 30000}",
+            ),
+            "interface row `remove_build_target`",
+            "T14",
+        ),
+        sim(
             "an interface row that queues a licensed capability structure",
             one_step(
                 "{\"label\": \"q\", \"interface\": {\"beacon\": {\"safest\": {}}, \"rows\": \
                  [{\"queue_structure\": {\"blueprint_id\": \"radio_mast\"}}]}, \"timeout_ms\": \
                  30000}",
             ),
-            Door::Sim,
+            "interface row `queue_structure`",
+            "S4",
         ),
-        (
+    ]
+}
+
+/// The gaps a **mandate's settings block** or a **rule** opens.
+///
+/// Four settings blocks and two rule-shaped cases. The settings ones are four
+/// separate match arms of `interpreter::mandate_fields` with four separate
+/// `construct` strings, which is why there are four rows and not one with the
+/// other three reasoned from it -- the first draft of this table did the
+/// second thing and the review was right that it does not hold.
+fn mandate_and_rule_gaps() -> Vec<Case> {
+    vec![
+        sim(
             "an interface row that edits a Defend beacon's settings",
             one_step(
                 "{\"label\": \"d\", \"interface\": {\"beacon\": {\"safest\": {}}, \"rows\": \
                  [{\"set_mandate_settings\": {\"roe\": \"RETURN_FIRE\", \"defend\": {}}}]}, \
                  \"timeout_ms\": 30000}",
             ),
-            Door::Sim,
+            "Defend mandate settings",
+            "S2",
         ),
-        (
+        sim(
+            "an interface row that edits an Attack beacon's settings",
+            one_step(
+                "{\"label\": \"a\", \"interface\": {\"beacon\": {\"safest\": {}}, \"rows\": \
+                 [{\"set_mandate_settings\": {\"roe\": \"FREE_FIRE\", \"attack\": {}}}]}, \
+                 \"timeout_ms\": 30000}",
+            ),
+            "Attack mandate settings",
+            "S2",
+        ),
+        sim(
             "a Survey beacon given somewhere to probe",
             one_step(
                 "{\"label\": \"s\", \"interface\": {\"beacon\": {\"safest\": {}}, \"rows\": \
@@ -2340,51 +2467,125 @@ fn two_door_cases() -> Vec<(&'static str, String, Door)> {
                  \"z\": 10}, \"max\": {\"x\": 20, \"y\": 20, \"z\": 20}}]}}}]}, \
                  \"timeout_ms\": 30000}",
             ),
-            Door::Sim,
+            "Survey probe areas",
+            "T14",
         ),
-        (
+        sim(
+            "a Build beacon given a target list",
+            one_step(
+                "{\"label\": \"bt\", \"interface\": {\"beacon\": {\"safest\": {}}, \"rows\": \
+                 [{\"set_mandate_settings\": {\"roe\": \"HOLD_FIRE\", \"build\": {\"targets\": \
+                 [{\"blueprint_id\": \"generator\", \"anchor\": {\"voxel\": {\"x\": 40, \
+                 \"y\": 40, \"z\": 30}}, \"rotation_quarter_turns\": 0, \"order\": 1}]}}}]}, \
+                 \"timeout_ms\": 30000}",
+            ),
+            "Build mandate targets and protected areas",
+            "T14",
+        ),
+        sim(
+            "a predicate that asks whether a beacon is under attack",
+            one_step(
+                "{\"label\": \"w\", \"wait_until\": {\"condition\": {\"beacon_under_attack\": \
+                 {\"beacon\": {\"safest\": {}}, \"within_ms\": 5000}}}, \"timeout_ms\": 5000}",
+            ),
+            "predicate `beacon_under_attack`",
+            "S2",
+        ),
+        sim(
+            "more rules than this build compiles, and well inside the size budget",
+            many_handlers(65),
+            "65 handlers",
+            "ceiling is 64",
+        ),
+    ]
+}
+
+/// The same constructs already closed at the first door: a report with
+/// `qualifies: false` and never a method error.
+///
+/// They are in the table so that a later stage moving one of the rows above
+/// down into this list shows up as a test somebody has to edit.
+fn verifier_door_cases() -> Vec<Case> {
+    let verifier = |what, playbook| Case {
+        what,
+        playbook,
+        door: Door::Verifier,
+        names: "",
+        stage: "",
+    };
+    vec![
+        verifier(
             "a selector filter that matches on the author's own tags",
             one_step(
                 "{\"label\": \"m\", \"move\": {\"to\": {\"beacon_anchor\": {\"nearest\": {}, \
                  \"filter\": {\"side\": \"OWN\", \"tags\": [\"east\"]}}}, \"pace\": \"DIRECT\"}, \
                  \"timeout_ms\": 30000}",
             ),
-            Door::Verifier,
         ),
-        (
+        verifier(
             "a selector that ranks by incoming threat, which needs combat",
             one_step(
                 "{\"label\": \"m\", \"move\": {\"to\": {\"most_threatened\": {}}, \"pace\": \
                  \"DIRECT\"}, \"timeout_ms\": 30000}",
             ),
-            Door::Verifier,
         ),
-        (
-            "a predicate that asks whether a beacon is under attack",
-            one_step(
-                "{\"label\": \"w\", \"wait_until\": {\"condition\": {\"beacon_under_attack\": \
-                 {\"beacon\": {\"safest\": {}}, \"within_ms\": 5000}}}, \"timeout_ms\": 5000}",
-            ),
-            Door::Sim,
-        ),
-        (
+        verifier(
             "a selector filter naming an enemy the knowledge store has not got",
             one_step(
                 "{\"label\": \"m\", \"move\": {\"to\": {\"beacon_anchor\": {\"nearest\": {}, \
                  \"filter\": {\"side\": \"ENEMY_KNOWN\"}}}, \"pace\": \"DIRECT\"}, \
                  \"timeout_ms\": 30000}",
             ),
-            Door::Verifier,
         ),
-        (
+        verifier(
             "a voxel a long way outside the map",
             one_step(
                 "{\"label\": \"m\", \"move\": {\"to\": {\"voxel\": {\"x\": 40000, \"y\": 10, \
                  \"z\": 10}}, \"pace\": \"DIRECT\"}, \"timeout_ms\": 30000}",
             ),
-            Door::Verifier,
         ),
     ]
+}
+
+/// The second door's refusal, read from the wire.
+///
+/// Four assertions, and the last two are the ones the review asked for. The
+/// code and the gateway's own two words (`qualifies`, `cannot execute`) say
+/// **which door** turned the playbook away; `names` and `stage` come from
+/// `PlanError`'s own `Display` and say **what** was written and **when** it
+/// starts working. Decisions-log item 103 (1) asks for the second pair, and a
+/// test that checked only the first would have stayed green while the message
+/// stopped naming anything at all.
+fn assert_sim_refusal(response: &Json, what: &str, names: &str, stage: &str) {
+    assert_eq!(
+        code(response, what),
+        "INVALID_ARGUMENT",
+        "{what}: the sim's refusal reaches the caller"
+    );
+    let message = response
+        .get("error")
+        .and_then(|error| error.get("message"))
+        .map_or_else(
+            || panic!("{what}: a refusal carries a message"),
+            |value| match value {
+                Json::String(text) => text.clone(),
+                other => panic!("a message is a string, and it is {other:?}"),
+            },
+        );
+    assert!(
+        message.contains("qualifies") && message.contains("cannot execute"),
+        "{what}: the message has to say which of the two doors refused it, and it says `{message}`"
+    );
+    assert!(
+        message.contains(names),
+        "{what}: item 103 (1) asks the error to name the construct. It should say `{names}` and \
+         it says `{message}`"
+    );
+    assert!(
+        message.contains(stage),
+        "{what}: and the stage that closes the gap. It should say `{stage}` and it says \
+         `{message}`"
+    );
 }
 
 /// A playbook the verifier qualifies and this build cannot execute is a
@@ -2418,7 +2619,14 @@ fn a_playbook_this_build_cannot_execute_is_a_method_error_and_keeps_the_old_seal
         .clone();
 
     let mut gaps = 0_usize;
-    for (what, playbook, door) in two_door_cases() {
+    for case in two_door_cases() {
+        let Case {
+            what,
+            playbook,
+            door,
+            names,
+            stage,
+        } = case;
         let response = call(
             &mut surface,
             &token,
@@ -2459,26 +2667,7 @@ fn a_playbook_this_build_cannot_execute_is_a_method_error_and_keeps_the_old_seal
             }
             Door::Sim => {
                 gaps = gaps.saturating_add(1);
-                assert_eq!(
-                    code(&response, what),
-                    "INVALID_ARGUMENT",
-                    "{what}: the sim's refusal reaches the caller"
-                );
-                let message = response
-                    .get("error")
-                    .and_then(|error| error.get("message"))
-                    .map_or_else(
-                        || panic!("{what}: a refusal carries a message"),
-                        |value| match value {
-                            Json::String(text) => text.clone(),
-                            other => panic!("a message is a string, and it is {other:?}"),
-                        },
-                    );
-                assert!(
-                    message.contains("qualifies") && message.contains("cannot execute"),
-                    "{what}: the message has to say which of the two doors refused it, and it \
-                     says `{message}`"
-                );
+                assert_sim_refusal(&response, what, names, stage);
             }
         }
 
@@ -2491,8 +2680,8 @@ fn a_playbook_this_build_cannot_execute_is_a_method_error_and_keeps_the_old_seal
         );
     }
     assert_eq!(
-        gaps, 6,
-        "the pull request lists six gaps between the two doors, each with the stage that closes \
+        gaps, 10,
+        "the pull request lists ten gaps between the two doors, each with the stage that closes \
          it. A different number here means the list is out of date -- in either direction"
     );
 
