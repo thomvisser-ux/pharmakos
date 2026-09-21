@@ -1,0 +1,39 @@
+; SPDX-FileCopyrightText: 2026 Pharmakos contributors
+; SPDX-License-Identifier: GPL-3.0-or-later
+;
+; The single GDExtension file, in the shape decisions log section 2.7 item 73 fixed.
+; Every line below is that decision rather than a preference:
+;
+;   * entry_symbol — gdext's own, and what `cargo xtask stage-client` byte-scans the
+;     staged library for. A library built without gdext makes Godot say "Can't resolve
+;     symbol gdext_rust_init, error 127", which reads like an ABI failure and is not one
+;     (G1 section 10.12, "Two builds, two target directories").
+;   * compatibility_minimum = 4.7 — the engine the pin is taken against, 4.7.2 exactly.
+;     The crate names the matching gdext API level, `api-4-7`, so the claim is one the
+;     compiler shares.
+;   * reloadable = false — hot-reloading a GDExtension re-enters static state; the client
+;     is restarted instead.
+;   * explicit per-target paths, debug and release, for windows.x86_64 and linux.x86_64 —
+;     the two platforms the client ships on (spec section 15). There is deliberately no
+;     macOS entry: macOS is a signed CI artefact of the headless crates, and
+;     `cargo xtask stage-client` skips on it with that reason rather than staging a
+;     library nothing would load.
+;
+; The libraries live under `res://bin/` rather than in the cargo target directory, and
+; that is not tidiness: a `res://` path cannot escape the project folder, and the target
+; directory is per-checkout and per-machine (a user-level cargo config can move it to
+; another drive entirely). `cargo xtask stage-client` reads the real target directory from
+; `cargo metadata` and copies the library here.
+
+[configuration]
+
+entry_symbol = "gdext_rust_init"
+compatibility_minimum = 4.7
+reloadable = false
+
+[libraries]
+
+windows.debug.x86_64 = "res://bin/pharmakos_client_gdext.dll"
+windows.release.x86_64 = "res://bin/pharmakos_client_gdext.dll"
+linux.debug.x86_64 = "res://bin/libpharmakos_client_gdext.so"
+linux.release.x86_64 = "res://bin/libpharmakos_client_gdext.so"

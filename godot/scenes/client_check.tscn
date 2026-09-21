@@ -1,0 +1,8 @@
+[gd_scene load_steps=2 format=3 uid="uid://c0pharmakosclientchk"]
+
+[ext_resource type="Script" path="res://scripts/client_check.gd" id="1_check"]
+
+[node name="ClientCheck" type="Node3D"]
+script = ExtResource("1_check")
+
+[node name="Bridge" type="PharmakosBridge" parent="."]
