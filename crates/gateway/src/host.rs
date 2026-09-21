@@ -5,16 +5,27 @@
 //!
 //! Spec section 15 puts the match in the gateway layer, and the crate map says
 //! the gateway "hosts the match". T9 built the surface with no match behind it;
-//! T13 puts one there. The whole of the stepping lives here, in three calls
-//! ([`Host::begin_push`], [`Host::step`], [`Host::end_recap`]), and **no method
-//! handler may reach any of them** — `verify_plan`, `estimate_route`,
-//! `get_economy_forecast`, `render_plan`, `patch_plan` and
-//! `instantiate_template` never step a runner and never clone one to step the
-//! copy. That is AGENTS.md section 3 rule 2's principle, "no dry runs", applied
-//! here: the rule names `plan-core` and the verifier and does not mention the
-//! gateway at all, which is a gap the pull request raises rather than a rule
-//! this crate is breaking. `tests/confinement.rs` asserts it over this crate's
-//! own source text.
+//! T13 puts one there. The whole of the driving lives here, in four calls
+//! ([`Host::seal_plans`], [`Host::begin_push`], [`Host::step`],
+//! [`Host::end_recap`]), and **no method handler may reach any of them** —
+//! `verify_plan`, `estimate_route`, `get_economy_forecast`, `render_plan`,
+//! `patch_plan` and `instantiate_template` never step a runner and never clone
+//! one to step the copy. That is AGENTS.md section 3 rule 2's principle, "no
+//! dry runs", applied here: the rule names `plan-core` and the verifier and
+//! does not mention the gateway at all, which is a gap the pull request raises
+//! rather than a rule this crate is breaking. `tests/confinement.rs` asserts it
+//! over this crate's own source text.
+//!
+//! # The seal is the fourth call, and it is new
+//!
+//! T13 shipped with three: the gateway sealed a verified submission in its own
+//! private store ([`crate::surface::Sealed`]) and the hosted world never heard
+//! of it, because the sim it was built against had only the interpreter seam.
+//! T11 then landed `Plan::compile` and `World::seal_playbook`, and T13b wires
+//! the two together (decisions-log item 103 (1)): a playbook is compiled at
+//! `submit_plan`, held with the seal, and filed into the runner by
+//! [`Host::seal_plans`] while the match is still in its Lull. Before that a
+//! hosted match played out with every commander standing still.
 //!
 //! # The Lull and the recap end on the host's word, not on a clock
 //!
@@ -38,9 +49,11 @@
 
 use std::path::{Path, PathBuf};
 
+use pharmakos_sim::interpreter::Plan;
 use pharmakos_sim::math::quantity::MS_PER_TICK;
 use pharmakos_sim::rules::RulesTable;
 use pharmakos_sim::runner::{MatchSettings, Runner, TickReport};
+use pharmakos_sim::tables::SeatId;
 use pharmakos_sim::world::{World, WorldConfig};
 
 use crate::error::Error;
@@ -225,6 +238,43 @@ impl Host {
         self.routes.refresh(&voxels, &rules)
     }
 
+    /// Seal each seat's compiled plan into the match, in the order given.
+    ///
+    /// **The fourth of this crate's four ways into the runner**, and the one
+    /// that gives the Push anything to play: before it existed the gateway
+    /// sealed a submission in its own private store and the hosted world never
+    /// heard of it, so every commander stood still (decisions-log item
+    /// 103 (1)).
+    ///
+    /// It belongs here for the same reason the other three do: the runner is
+    /// this module's, and a handler that could seal could rewrite a seat's
+    /// orders from inside a read. `tests/confinement.rs` asserts that
+    /// `seal_playbook` is named in this file and in no other.
+    ///
+    /// The caller orders the list — [`crate::surface::Surface::begin_push`]
+    /// sorts it by seat id — and this preserves that order rather than choosing
+    /// one of its own, because the order is the caller's claim to make and the
+    /// events come out in it.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::Internal`], always. Every refusal
+    /// [`pharmakos_sim::runner::Runner::seal_playbook`] can give — the match is
+    /// not in a Lull, the seat is not a seat of this match — is a mistake by
+    /// whoever drove the host, and nothing a caller of a gateway method did
+    /// could have caused or avoided it.
+    pub fn seal_plans(&mut self, plans: Vec<(SeatId, Plan)>) -> Result<(), Error> {
+        for (seat, plan) in plans {
+            self.runner.seal_playbook(seat, plan).map_err(|refused| {
+                Error::internal(format!(
+                    "this match would not take seat {}'s sealed playbook: {refused}",
+                    seat.raw()
+                ))
+            })?;
+        }
+        Ok(())
+    }
+
     /// Open the Push. Returns false when the runner was not in a Lull.
     ///
     /// **One of the three places this crate steps a match**, and the only one
@@ -265,6 +315,7 @@ mod tests {
     use crate::error::Code;
     use pharmakos_sim::rules::RulesTable;
     use pharmakos_sim::runner::{MatchPhase, MatchSettings};
+    use pharmakos_sim::tables::SeatId;
     use pharmakos_sim::world::WorldConfig;
 
     fn rules() -> RulesTable {
@@ -356,6 +407,57 @@ mod tests {
         assert!(host.routes().columns() > 0);
         assert_eq!(host.safe_playbook(), SAFE_PLAYBOOK);
         assert_eq!(host.library(), None);
+    }
+
+    /// The safe playbook is what a seat that sealed nothing plays, so "safe"
+    /// has to mean runnable as well as harmless. It never goes through
+    /// `submit_plan`'s door, so nothing else would catch a constant this crate
+    /// broke — and a playbook that will not compile is a Push the seat spends
+    /// standing still.
+    #[test]
+    fn the_safe_playbook_this_gateway_files_compiles() {
+        let plan = crate::surface::planning::compile_playbook(SAFE_PLAYBOOK, &rules())
+            .expect("the safe playbook is runnable");
+        assert_eq!(plan.route().len(), 1, "one step, and it is stand still");
+        assert_eq!(
+            plan.max_deaths_before_fallback(),
+            0,
+            "and it names no death limit of its own"
+        );
+    }
+
+    /// The fourth call, and the one T13 did not have. A match that is given no
+    /// plans plays a Push in which nothing was ordered.
+    #[test]
+    fn a_plan_is_sealed_into_the_match_during_the_lull_and_refused_after_it() {
+        let mut host = Host::open(
+            &config(MatchSettings {
+                segment_lengths_ms: vec![1_000],
+                round_limit: 2,
+            }),
+            None,
+        )
+        .expect("a match");
+        let plan = crate::surface::planning::compile_playbook(SAFE_PLAYBOOK, &rules())
+            .expect("the safe playbook");
+        host.seal_plans(vec![
+            (SeatId::new(0), plan.clone()),
+            (SeatId::new(1), plan.clone()),
+        ])
+        .expect("a Lull takes a seal");
+        assert!(host.world().interpreter().plan(0).is_some());
+        assert!(host.world().interpreter().plan(1).is_some());
+
+        assert!(host.begin_push());
+        let error = host
+            .seal_plans(vec![(SeatId::new(0), plan)])
+            .expect_err("a Push does not");
+        assert_eq!(
+            error.code,
+            Code::Internal,
+            "a host that seals late is a bug"
+        );
+        assert!(error.message.contains("seat 0"), "{}", error.message);
     }
 
     #[test]

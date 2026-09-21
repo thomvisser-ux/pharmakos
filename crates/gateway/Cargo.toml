@@ -24,14 +24,19 @@ publish.workspace = true
 pharmakos-proto = { workspace = true }
 # `default-features = false`, so the `research` feature is unreachable and `fork` with
 # it. The gateway HOSTS the match (crate map, spec §15), so it takes the runner, the
-# world and the travel estimator as well as the integer newtypes -- and stepping the
-# runner happens in `src/host.rs` and nowhere else, because a handler that stepped one
-# would be the dry run AGENTS.md §3 rule 2 forbids. `tests/confinement.rs` asserts that
-# over this crate's own source text.
+# world, the travel estimator and the interpreter's `Plan` as well as the integer
+# newtypes -- and sealing into or stepping the runner happens in `src/host.rs` and
+# nowhere else, because a handler that did either would be the dry run AGENTS.md §3
+# rule 2 forbids. A handler may COMPILE a playbook (`Plan::compile` is a pure function
+# of the playbook and the rules table and steps nothing), which is how a playbook the
+# sim cannot execute is refused while the caller is still on the line.
+# `tests/confinement.rs` asserts both halves over this crate's own source text.
 pharmakos-sim = { workspace = true, default-features = false }
 # Everything done TO a playbook that is not simulating it: the canonical form, the JSONC
 # round trip, JSON Patch, `render_plan`'s prose, the template library and the travel
-# estimator's seam. In process with the gateway (crate map).
+# estimator's seam. Its canonical form is also the decode `Plan::compile` reads, so a
+# submission is decoded once and the report and the plan are taken over the same bytes.
+# In process with the gateway (crate map).
 pharmakos-plan-core = { workspace = true }
 # Seal inspection. `verify_plan` and `submit_plan` hand its report back unchanged; an
 # invalid playbook is a report with `qualifies: false` and never a method error.

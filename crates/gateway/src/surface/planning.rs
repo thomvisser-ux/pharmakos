@@ -31,10 +31,37 @@
 //! `accepted: false`, never as a method error: "a gateway error means the call
 //! could not be made; a report means the call was made and the answer is no"
 //! ([`crate::error`]).
+//!
+//! # There are two doors, and `submit_plan` opens both of them here
+//!
+//! The verifier answers *"may this be sealed"*; the sim's
+//! [`pharmakos_sim::interpreter::Plan::compile`] answers *"can this build
+//! execute it"*, and the two are deliberately not the same check (T11). A
+//! playbook can pass the first and fail the second — a construct in the v1
+//! vocabulary whose effect waits for a later stage, an enum value newer than
+//! this build, a voxel the verifier's resolve stage does not yet bound.
+//!
+//! [`compile_playbook`] is where the second door is, and it is **at submit**
+//! rather than at `begin_push` (decisions-log item 103 (1)): a refusal
+//! discovered when the Lull ends is a refusal nobody is listening for, and the
+//! seat would find out by watching a commander stand still. So the compile
+//! happens while the caller is still on the line, its refusal is a method error
+//! naming the construct, and the seat's previous seal is left exactly where it
+//! was.
+//!
+//! Compiling is **not a dry run.** `Plan::compile` is a pure function of the
+//! playbook and the rules table: it resolves labels, checks the two halting
+//! properties and prices nothing against the world. It has no [`Runner`] and no
+//! `World` in its hand, it steps nothing, and `tests/confinement.rs` asserts
+//! that this module names no stepping call at all.
+//!
+//! [`Runner`]: pharmakos_sim::runner::Runner
 
 use pharmakos_proto::gp::api::v1::VerifyReport;
 use pharmakos_proto::gp::api::v1::verify_plan::Depth;
 use pharmakos_proto::json::Json;
+use pharmakos_sim::interpreter::Plan;
+use pharmakos_sim::rules::RulesTable;
 
 use crate::error::Error;
 use crate::rpc::Request;
@@ -395,11 +422,19 @@ impl Surface {
         let report = self.verify_for(seat, &playbook, Depth::Full)?;
         let accepted = report.qualifies;
         if accepted {
+            // The second door. A refusal here leaves the previous seal exactly
+            // where it is -- `self.seat_state_mut` is not reached at all -- and
+            // comes back as a method error rather than as a report, because the
+            // verifier has already said this playbook may be sealed and saying
+            // `qualifies: false` on the same breath would be the gateway
+            // contradicting a hash it has just handed out.
+            let plan = compile_playbook(&playbook, self.host()?.rules())?;
             let sealed = Sealed {
                 playbook_jsonc: playbook,
                 report_hash: report.report_hash.clone(),
                 round,
                 filed_by_the_gateway: false,
+                plan,
             };
             self.seat_state_mut(subject, seat)?.sealed = Some(sealed);
         }
@@ -428,6 +463,65 @@ impl Surface {
             .find(|number| state.draft(&format!("d{round}-{number}")).is_none())
             .unwrap_or(1)
     }
+}
+
+/// The sim's door: a JSONC playbook to a compiled [`Plan`], or the refusal a
+/// caller is told.
+///
+/// The one path from a submitted file to something the interpreter can run, so
+/// `submit_plan` and [`crate::surface::Surface`]'s filing of the safe playbook
+/// cannot compile it two different ways. The decode is `plan-core`'s canonical
+/// form, which is the same decode the verifier's report was taken over.
+///
+/// # The code, and why it is this one
+///
+/// [`crate::error::Code::InvalidArgument`]. The closed set
+/// (`gp.api.v1.GatewayError.Code`) has no word for "valid and not executable by
+/// this build", and AGENTS.md section 5 says adding one is a contract change,
+/// so the question is which of the ten existing codes is least wrong:
+///
+/// * `INTERNAL` is defined as "the gateway failed; never used to report
+///   anything the caller could have avoided", and the caller **could** have
+///   avoided this one by writing a different playbook;
+/// * `NO_QUALIFYING_PLAN` already means "this seat has sealed nothing"
+///   ([`crate::surface::Surface::sealed_plan`]) and answering a submission with
+///   it would say something true of the seat's *store* rather than of the file
+///   it just sent;
+/// * `UNSUPPORTED_SCHEMA_VERSION` fits [`PlanError::UnknownEnum`] and nothing
+///   else here, and one door answering with two codes is a door a client has to
+///   learn twice;
+/// * `INVALID_ARGUMENT` is "a param out of range" — the `playbook_jsonc`
+///   parameter carries something this build cannot run — and its JSON-RPC
+///   number is -32602, "invalid params", which tells a generic client the truth:
+///   the request, not the server.
+///
+/// The message is the whole of the value here, and it names the construct and
+/// the stage that gives it an effect ([`PlanError`]'s `Display`). A client that
+/// branches on the code learns "fix the file"; a person reading the message
+/// learns which line to fix.
+///
+/// [`PlanError`]: pharmakos_sim::interpreter::PlanError
+/// [`PlanError::UnknownEnum`]: pharmakos_sim::interpreter::PlanError::UnknownEnum
+///
+/// # Errors
+///
+/// [`crate::error::Code::InvalidArgument`] for a [`PlanError`], and
+/// [`crate::error::Code::Internal`] when the text has no canonical form at all
+/// — which for a submission cannot happen, because the report that qualified it
+/// was taken over that same canonical form, and so would mean the two had
+/// drifted apart.
+pub(crate) fn compile_playbook(playbook_jsonc: &str, rules: &RulesTable) -> Result<Plan, Error> {
+    let canonical = pharmakos_plan_core::canonicalise_text(playbook_jsonc).map_err(|error| {
+        Error::internal(format!(
+            "a playbook the verifier read has no canonical form: {}",
+            error.message
+        ))
+    })?;
+    Plan::compile(&canonical.playbook, rules).map_err(|error| {
+        Error::invalid(format!(
+            "this playbook qualifies and this build cannot execute it: {error}"
+        ))
+    })
 }
 
 /// The `playbook_jsonc` parameter, bounded.

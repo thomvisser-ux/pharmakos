@@ -175,7 +175,24 @@ const STEPPING: &[(&str, &str)] = &[
     ),
     ("begin_push", "starting a Push belongs to the match host"),
     ("end_recap", "ending a recap belongs to the match host"),
+    (
+        "seal_playbook",
+        "filing a seat's orders into the match belongs to the match host: a handler that could \
+         seal could rewrite a seat's orders from inside a read (decisions-log item 103 (1))",
+    ),
 ];
+
+/// The two modules every method handler lives in.
+///
+/// Neither may name any of [`STEPPING`] — but both may name `Plan::compile`,
+/// and `surface/planning.rs` does. That pairing is the whole of T13b's addition
+/// to this file, so it is written down rather than inferred: compiling a
+/// playbook is a pure function of the playbook and the rules table, and
+/// **sealing it** is what belongs to the host. A rule that banned both would
+/// have put the second door at `begin_push`, where nobody is listening for its
+/// refusal; a rule that allowed both would have let a handler rewrite the
+/// match.
+const HANDLER_MODULES: &[&str] = &["knowledge.rs", "planning.rs"];
 
 /// The module that may name [`STEPPING`]'s needles outright.
 const HOST_MODULE: &str = "host.rs";
@@ -444,6 +461,61 @@ fn the_match_is_stepped_in_one_module() {
              exemption is guarding nothing"
         );
     }
+}
+
+/// A handler may **compile** a playbook and may not **seal** or step one.
+///
+/// The two halves of T13b's door. `Plan::compile` is a pure function of the
+/// playbook and the rules table — it resolves labels, checks that every wait
+/// has a timeout and every jump goes forward, and prices nothing against the
+/// world — so `submit_plan` may run it while the caller is still on the line
+/// and report its refusal as a method error. Sealing the result into the match
+/// is the host's, in `host.rs`, and this test is what says so about the files
+/// where the handlers actually live.
+///
+/// Both halves are asserted, because each without the other passes vacuously: a
+/// handler module that named neither would satisfy the ban while the door it is
+/// about sat somewhere else entirely.
+#[test]
+fn a_handler_may_compile_a_playbook_and_may_never_seal_or_step_one() {
+    let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut findings: Vec<String> = Vec::new();
+    let mut compiles = 0_usize;
+    for module in HANDLER_MODULES {
+        let path = source.join("surface").join(module);
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|_| panic!("{module} is where the handlers live"));
+        let lines = code_lines(&text);
+        assert!(
+            lines.len() > 50,
+            "{module} read as {} lines of code; the scan is looking at the wrong file",
+            lines.len()
+        );
+        for (number, line) in lines {
+            if line.contains("Plan::compile") {
+                compiles = compiles.saturating_add(1);
+            }
+            for (needle, why) in STEPPING {
+                if uses(&line, needle) {
+                    findings.push(format!(
+                        "{module}:{number}: `{needle}` -- {why}\n    {}",
+                        line.trim()
+                    ));
+                }
+            }
+        }
+    }
+    assert!(
+        findings.is_empty(),
+        "a method handler reaches the match itself:\n{}",
+        findings.join("\n")
+    );
+    assert_eq!(
+        compiles, 1,
+        "`Plan::compile` is called once, in `surface/planning.rs`'s `compile_playbook`, which is \
+         the one door a submitted playbook goes through into the sim. If this is 0 the ban above \
+         is guarding an empty room; if it is more than 1 there are two doors and they can drift"
+    );
 }
 
 /// AGENTS.md section 7: "No filesystem or network access through playbooks."
