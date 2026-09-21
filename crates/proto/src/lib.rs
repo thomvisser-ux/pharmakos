@@ -18,6 +18,7 @@
 //! |---|---|
 //! | [`gp`] | The generated prost types, checked in under `src/generated` |
 //! | [`json`] | Canonical proto3 JSON, encode **and** decode |
+//! | [`chunk_rle`] | The voxel run-length codec `gp.api.v1.ViewChunk` carries |
 //! | [`descriptor`] | The schema, read back out of the checked-in descriptor set |
 //! | [`scope`] | The method/scope table, and the JSON-RPC wire spellings |
 //! | [`fingerprint`] | The plan fingerprint's rule (the arithmetic is the sim's) |
@@ -151,6 +152,7 @@ pub mod gp {
     }
 }
 
+pub mod chunk_rle;
 pub mod descriptor;
 pub mod fingerprint;
 pub mod json;
