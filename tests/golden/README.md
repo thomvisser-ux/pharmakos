@@ -99,7 +99,7 @@ named fills it.
 | `economy/` | `$` and `kW` ledgers and the BMI settlement | T14 |
 | `mapgen/` | Per-seed map digests | T5 |
 | `mesher/` | Per-chunk vertex and index digests | T4 |
-| `schema/` | Generated JSON Schema and `get_schema` output | T1, T13 |
+| `schema/` | Generated JSON Schema and `get_schema` output | T13 |
 | `docs/` | Generated documentation output | T13 |
 | `scenarios/` | Hash chains and event logs the scenario runner asserts on | T11, T15 |
 | `vista/` | The rendered screenshot, compared with a tolerance | T16 |
@@ -107,12 +107,13 @@ named fills it.
 ## Licences
 
 Goldens take the game's licence, GPL-3.0-or-later, because they are records of
-what the game's own code did and are read only by it. `proto/` is the one
+what the game's own code did and are read only by it. `proto/` was the first
 carve-out: its files are canonical `gp.v1` JSON and views of the schema — the
 same public surface as `proto/**` — so REUSE.toml puts that directory in the
-permissive tier and its README carries the permissive header. `plan-core/`,
-`schema/` and `docs/` will raise the same question when they land; the
-PLACEHOLDER in REUSE.toml records it against T8, T13 and T20.
+permissive tier and its README carries the permissive header. `plan-core/` and
+`schema/` have since joined it on the same argument (decisions-log item
+100 (11)); `docs/` will raise the question again when it lands, and the
+PLACEHOLDER in REUSE.toml records it against T20.
 
 Most of these formats cannot carry an SPDX header at all — a hash chain is
 `<tick>\t<hash>` per line and nothing else, and a PNG has nowhere to put one —

@@ -12,8 +12,8 @@
 //! > from the frozen snapshot rather than assumed
 //!
 //! — and the reason [`segment_length_ms`] returns an `Option` rather than a
-//! number today: the field does not exist yet, and a constant would be exactly
-//! the thing the rule forbids.
+//! number: a snapshot taken before a match opened carries none, and a constant
+//! would be exactly the thing the rule forbids.
 
 use pharmakos_sim::knowledge::SeatEconomy;
 use pharmakos_sim::math::quantity::{Kw, Money, Ms, Tick};
@@ -23,19 +23,29 @@ use crate::error::Error;
 
 /// The coming segment's length, out of the frozen snapshot.
 ///
-/// **PLACEHOLDER — `pharmakos_sim::snapshot::Snapshot` does not carry it yet.**
-/// T10 (the runner, the phases and the segment ladder) adds the field, and its
-/// own acceptance test is named
-/// `the_coming_segments_length_comes_from_the_snapshot_not_a_constant`. Until
-/// that lands this reads `None`, and everything downstream leaves the claim
-/// out rather than substituting `rules.match.segment_lengths_ms` — the ladder
-/// is 3 / 5 / 8 minutes by round and a table lookup here would be an assumption
-/// about which round it is. Resolved by **T10**; nothing in the skeleton is
-/// blocked on it, because a rendering that says nothing about the segment is
-/// correct and one that guesses is not.
+/// **The PLACEHOLDER that stood here is discharged.** It named T10, which has
+/// landed: `Snapshot::coming_segment_ms` is the field, and the sim's own
+/// acceptance test `the_coming_segments_length_comes_from_the_snapshot_not_a_constant`
+/// restores a frozen snapshot into a world built under a *different* ladder to
+/// prove the carried number is the one that decides.
+///
+/// So this reads that field and nothing else. It is never
+/// `rules.match.segment_lengths_ms`: the ladder is the host's setting and the
+/// snapshot is the fact, and a table lookup here would be an assumption about
+/// which round it is — the constant spec section 13 forbids.
+///
+/// `None` for a snapshot that carries no positive length, which is a default
+/// snapshot or one taken before a match opened. A caller that wants to say
+/// something about the segment still says nothing rather than guessing: a
+/// rendering with no segment claim is correct, and one with a claim of zero is
+/// not.
 #[must_use]
-pub const fn segment_length_ms(_snapshot: &Snapshot) -> Option<Ms> {
-    None
+pub const fn segment_length_ms(snapshot: &Snapshot) -> Option<Ms> {
+    if snapshot.coming_segment_ms > 0 {
+        Some(Ms::new(snapshot.coming_segment_ms))
+    } else {
+        None
+    }
 }
 
 /// The facts one planning session is against.
@@ -151,9 +161,8 @@ impl PlanContext {
 
     /// The coming segment's length, when the snapshot carries it.
     ///
-    /// See [`segment_length_ms`]: `None` at the skeleton, and a caller that
-    /// wants to say something about the segment says nothing instead of
-    /// guessing.
+    /// See [`segment_length_ms`]: read from the snapshot's own
+    /// `coming_segment_ms`, never from the rules table's ladder.
     #[must_use]
     pub const fn segment_ms(&self) -> Option<Ms> {
         self.segment_ms
@@ -201,10 +210,37 @@ mod tests {
         assert!(PlanContext::from_snapshot(&ragged, 0).is_err());
     }
 
+    /// T10's field, read and not guessed: a snapshot carrying a length gives
+    /// that length, and one carrying none gives nothing rather than the rules
+    /// table's ladder.
     #[test]
-    fn the_segment_length_is_not_yet_in_the_snapshot_and_is_not_guessed() {
-        assert_eq!(segment_length_ms(&snapshot()), None);
-        let context = PlanContext::from_snapshot(&snapshot(), 0).expect("seat 0");
-        assert_eq!(context.segment_ms(), None);
+    fn the_segment_length_comes_from_the_snapshot_and_is_never_guessed() {
+        assert_eq!(segment_length_ms(&snapshot()), None, "a default snapshot");
+
+        let carried = Snapshot {
+            coming_segment_ms: 9_000,
+            ..snapshot()
+        };
+        assert_eq!(
+            segment_length_ms(&carried),
+            Some(pharmakos_sim::math::quantity::Ms::new(9_000))
+        );
+        let context = PlanContext::from_snapshot(&carried, 0).expect("seat 0");
+        assert_eq!(
+            context.segment_ms(),
+            Some(pharmakos_sim::math::quantity::Ms::new(9_000)),
+            "9 s is no entry of the 3/5/8 ladder, so this number can only have \
+             come from the snapshot"
+        );
+
+        let negative = Snapshot {
+            coming_segment_ms: -1,
+            ..snapshot()
+        };
+        assert_eq!(
+            segment_length_ms(&negative),
+            None,
+            "never a claim of nonsense"
+        );
     }
 }

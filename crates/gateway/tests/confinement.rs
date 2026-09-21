@@ -115,22 +115,14 @@ const NO_OUTBOUND: &[(&str, &str)] = &[
     ("reqwest", "no HTTP client reaches a shipped crate"),
 ];
 
-/// "No dry runs": the gateway is a client of the sim's *types*, never of its
-/// stepping API (AGENTS.md section 3 rules 1 and 2).
+/// "No dry runs": no module of this crate may reach the research build, in any
+/// file, ever (AGENTS.md section 3 rules 1 and 2).
 ///
 /// `phase_` is deliberately **not** on this list, unlike `crates/verifier`'s:
 /// `phase_remaining_ms` is spec section 12's own field name for the `_status`
 /// footer's timer, and a needle that fired on it would be a needle somebody
 /// deletes rather than a rule somebody keeps.
 const NO_DRY_RUNS: &[(&str, &str)] = &[
-    (
-        "World::new",
-        "the gateway reads a snapshot; it does not build a world to run",
-    ),
-    (
-        ".step(",
-        "stepping the sim is a dry run (AGENTS.md section 3 rule 2)",
-    ),
     (
         "fork",
         "fork exists only in the research build and no seat may reach it",
@@ -141,13 +133,49 @@ const NO_DRY_RUNS: &[(&str, &str)] = &[
     ),
 ];
 
+/// Building and stepping a match.
+///
+/// **T9's version of this list said "never", and T13 changed the fact it was
+/// describing rather than the rule.** The gateway now *hosts* the match
+/// (AGENTS.md section 3's crate map, spec section 15), so something in this
+/// crate has to build a world and drive a runner. What has not changed, and is
+/// what "no dry runs" is actually about, is that **no method handler may**: a
+/// handler that stepped, or cloned and stepped, a runner would be answering
+/// "what would happen" by making it happen, which is the thing AGENTS.md
+/// section 3 rule 2 forbids.
+///
+/// So the rule is a *place* rather than a prohibition, and
+/// [`the_match_is_stepped_in_one_module`] is where it is enforced.
+const STEPPING: &[(&str, &str)] = &[
+    (
+        "World::new",
+        "a world is built by the match host and by nothing else",
+    ),
+    (
+        "Runner::new",
+        "a runner is made by the match host and by nothing else",
+    ),
+    (
+        ".step(",
+        "stepping the sim belongs to the match host (AGENTS.md section 3 rule 2)",
+    ),
+    ("begin_push", "starting a Push belongs to the match host"),
+    ("end_recap", "ending a recap belongs to the match host"),
+];
+
+/// The module that may name [`STEPPING`]'s needles outright.
+const HOST_MODULE: &str = "host.rs";
+
+/// The module that may *reach* them, and only through the host.
+const HOST_DRIVER_MODULE: &str = "surface.rs";
+
 /// The `#[allow]`s this crate is permitted, each with the reason it is not a
 /// determinism allowance.
 ///
 /// A determinism lint is never on this list and never will be: AGENTS.md section
 /// 5 says an `#[allow]` that defeats one is a contract change wearing a
 /// disguise.
-const PERMITTED_ALLOWS: &[&str] = &["clippy::struct_field_names"];
+const PERMITTED_ALLOWS: &[&str] = &["clippy::struct_field_names", "clippy::unused_self"];
 
 /// Every `.rs` file under `crates/gateway/src`, in path order.
 ///
@@ -199,15 +227,59 @@ fn code_lines(text: &str) -> Vec<(usize, String)> {
         .collect()
 }
 
+/// True when `line` uses `needle` as a name rather than merely spelling its
+/// letters inside a longer one.
+///
+/// The hole this closes was real and `InstantiateTemplate` found it: the word
+/// contains `Instant`, so a plain substring scan reported a wall clock in the
+/// method table. A scan that fires on the wrong thing gets deleted, and a scan
+/// that fires on nothing at all is worse. So a needle that begins and ends with
+/// an identifier character has to sit on identifier boundaries, and a needle
+/// with punctuation in it (`.step(`, `World::new`) is matched as written,
+/// because its punctuation is the boundary.
+fn uses(line: &str, needle: &str) -> bool {
+    let is_word = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_';
+    let bounded = needle.bytes().next().is_some_and(is_word)
+        && needle.bytes().next_back().is_some_and(is_word);
+    if !bounded {
+        return line.contains(needle);
+    }
+    let haystack = line.as_bytes();
+    let mut from = 0_usize;
+    while let Some(offset) = line.get(from..).and_then(|rest| rest.find(needle)) {
+        let start = from.saturating_add(offset);
+        let end = start.saturating_add(needle.len());
+        let before_is_word = start
+            .checked_sub(1)
+            .and_then(|index| haystack.get(index))
+            .copied()
+            .is_some_and(is_word);
+        let after_is_word = haystack.get(end).copied().is_some_and(is_word);
+        if !before_is_word && !after_is_word {
+            return true;
+        }
+        from = start.saturating_add(1);
+    }
+    false
+}
+
 fn scan(needles: &[(&str, &str)]) -> Vec<String> {
+    scan_except(needles, &[])
+}
+
+/// [`scan`], skipping files whose name is on `exempt`.
+fn scan_except(needles: &[(&str, &str)], exempt: &[&str]) -> Vec<String> {
     let mut findings: Vec<String> = Vec::new();
     for path in sources() {
+        if exempt.iter().any(|name| path.ends_with(name)) {
+            continue;
+        }
         let Ok(text) = std::fs::read_to_string(&path) else {
             continue;
         };
         for (number, line) in code_lines(&text) {
             for (needle, why) in needles {
-                if line.contains(needle) {
+                if uses(&line, needle) {
                     findings.push(format!(
                         "{}:{number}: `{needle}` -- {why}\n    {}",
                         path.display(),
@@ -290,13 +362,74 @@ fn the_gateway_never_dials_out() {
 }
 
 #[test]
-fn no_stepping_api_is_named_anywhere_in_the_crate() {
+fn no_research_build_is_named_anywhere_in_the_crate() {
     let findings = scan(NO_DRY_RUNS);
     assert!(
         findings.is_empty(),
         "the no-dry-runs rule is broken in the source text:\n{}",
         findings.join("\n")
     );
+}
+
+/// The match is built and stepped in `host.rs`, reached only through the host
+/// from `surface.rs`, and named nowhere else.
+///
+/// Three assertions, and the middle one is the one that matters. A method
+/// handler lives in `surface/knowledge.rs` or `surface/planning.rs`; neither
+/// file may name a stepping call at all, so `verify_plan`, `estimate_route`,
+/// `render_plan`, `patch_plan`, `get_economy_forecast` and
+/// `instantiate_template` cannot answer "what would happen" by making it
+/// happen. `surface.rs` drives the match, and every line of it that reaches a
+/// stepping call has to go through `host_mut()` -- so there is no second path
+/// to the runner for a handler in that file to reach for either.
+#[test]
+fn the_match_is_stepped_in_one_module() {
+    let findings = scan_except(STEPPING, &[HOST_MODULE, HOST_DRIVER_MODULE]);
+    assert!(
+        findings.is_empty(),
+        "the match is stepped outside {HOST_MODULE}:\n{}",
+        findings.join("\n")
+    );
+
+    let driver = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join(HOST_DRIVER_MODULE);
+    let text = std::fs::read_to_string(&driver).expect("the surface is where it always was");
+    let mut direct: Vec<String> = Vec::new();
+    for (number, line) in code_lines(&text) {
+        // A `fn begin_push(...)` of the surface's own is a name, not a call:
+        // the surface has host-driving methods and they are allowed to be
+        // called what they drive. What the rule is about is the body.
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("fn ") || trimmed.starts_with("pub fn ") {
+            continue;
+        }
+        for (needle, _) in STEPPING {
+            if uses(&line, needle) && !line.contains("host_mut()") {
+                direct.push(format!("{HOST_DRIVER_MODULE}:{number}: {}", line.trim()));
+            }
+        }
+    }
+    assert!(
+        direct.is_empty(),
+        "{HOST_DRIVER_MODULE} reaches the runner other than through the host:\n{}",
+        direct.join("\n")
+    );
+
+    // And the exemption is not guarding an empty room: the host really does
+    // build and step the match.
+    let host = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join(HOST_MODULE);
+    let host_text = std::fs::read_to_string(&host).expect("the host is where it was written");
+    let host_lines = code_lines(&host_text);
+    for (needle, _) in STEPPING {
+        assert!(
+            host_lines.iter().any(|(_, line)| uses(line, needle)),
+            "`{needle}` is on the stepping list and nothing in {HOST_MODULE} does it, so the \
+             exemption is guarding nothing"
+        );
+    }
 }
 
 /// AGENTS.md section 7: "No filesystem or network access through playbooks."
@@ -454,7 +587,10 @@ fn no_allow_defeats_a_determinism_lint() {
     .expect("surface.rs");
     assert_eq!(
         allows(&surface),
-        vec![String::from("clippy::struct_field_names")],
+        vec![
+            String::from("clippy::struct_field_names"),
+            String::from("clippy::unused_self"),
+        ],
         "if this list is empty the test above passes vacuously"
     );
 }

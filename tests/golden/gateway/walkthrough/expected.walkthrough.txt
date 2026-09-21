@@ -1,0 +1,17 @@
+# Spec section 12's 14-call walkthrough, replayed against a live gateway.
+# Seed 0x00000000ca5caded, two seats, a 1 000 ms segment.
+# call	method	what came back
+1	get_status	phase=lull
+2	get_briefing	segment_length_ms=1000
+3	get_beacon	the seat's own core
+4	list_templates	0 templates (no folder configured)
+5	get_schema	part=step
+6	estimate_route	reachable, 1 leg, not fogged
+7	verify_plan{depth=quick}	qualifies=false
+8	patch_plan	comments survive; an inverse patch comes back
+9	verify_plan{depth=full}	qualifies=true
+10	render_plan	prose returned
+11	submit_plan	accepted=true; report_hash matches call 9
+12	set_ready	ready=true
+13	wait_for{phase_change}	fired=false; a mark returned
+14	wait_for{feed_digest}	fired=true after one segment

@@ -23,37 +23,36 @@
 //! 6. **Answer**, with a `_status` footer on every result.
 //! 7. **Log** the attempt, whatever the answer was ([`crate::audit`]).
 //!
-//! # The method slice at T9, and why it is this small
+//! # The method slice
 //!
-//! T9 is the security surface; T13 is the method slice. What is implemented
-//! here is the smallest set that exercises every step above under every scope
-//! that gates a method:
+//! T9 built the security surface with no match behind it; T13 puts one there
+//! and hangs every method the skeleton's clients call off the same seven steps.
+//! The handlers live in two submodules, and **neither of them may step the
+//! match** -- that is [`crate::host`]'s, in three calls, and
+//! `tests/confinement.rs` asserts it over this crate's own source text
+//! (AGENTS.md section 3 rule 2, "no dry runs").
 //!
-//! | Method | Scope | What it does at T9 |
-//! |---|---|---|
-//! | `get_status` | `observe` | Answers the `_status` footer, which is the whole message |
-//! | `get_segment_feed` | `observe` | The real feed: fog-filtered, digested, cursored ([`crate::feed`]) |
-//! | `save_notes` | `plan` | Stores the seat's own notebook, at the rules table's size |
-//! | `list_drafts` | `plan` | Lists the seat's own drafts |
-//! | `set_ready` | `plan.submit` | Sets the seat's ready flag |
-//! | `list_templates` | `docs` | An empty listing: the template folder is T13's |
+//! | Module | Methods |
+//! |---|---|
+//! | here | `get_status`, `wait_for`, `save_notes`, `set_ready`, `get_segment_feed` |
+//! | [`knowledge`] | `get_briefing`, `get_recap`, `list_beacons`, `get_beacon`, `get_map_summary`, `get_economy_forecast`, `estimate_route` |
+//! | [`planning`] | `get_schema`, `list_templates`, `instantiate_template`, `verify_plan`, `render_plan`, `patch_plan`, `save_draft`, `list_drafts`, `get_safe_plan`, `submit_plan` |
 //!
-//! Read methods take spec section 12's `detail` budget ([`crate::detail`]), and
-//! `get_segment_feed` applies it: the parameter, its three rungs, its wire
-//! spelling and the salience rule are part of the surface T9 freezes, because a
-//! `detail` added after clients exist is a breaking change to all of them. The
-//! per-method salience order for the T13 methods is T13's, with the methods.
+//! Read methods take spec section 12's `detail` budget ([`crate::detail`]). The
+//! parameter, its three rungs, its wire spelling and the two salience rules are
+//! T9's; the per-method order is each method's own and is stated at the method.
 //!
-//! Every other method of the schema answers
-//! [`crate::error::Code::Internal`] naming T13. That is a deliberate reading of
-//! the closed error set and it deserves its sentence: the set has no
+//! Four methods of the schema still answer [`crate::error::Code::Internal`] --
+//! `query_area`, `list_known_enemies`, `get_reports` and `get_capabilities` --
+//! and that is not an omission: `gateway.proto` says they have no
+//! request/response pair at all, because no skeleton client calls them and the
+//! stage that introduces what each reports on (S3's knowledge store, S4's
+//! licences) is the stage that will know what the request takes. The reading of
+//! the closed error set is T9's and is unchanged: the set has no
 //! `NOT_IMPLEMENTED`, `INVALID_ARGUMENT` would tell a client to fix a request
 //! that is perfectly well formed, and `INTERNAL` is the one code whose
 //! definition -- "the gateway failed; never used to report anything the caller
-//! could have avoided" -- is actually true of a method this build does not serve
-//! yet. The pull request records it as a question for the owner, who is holding
-//! the six derived codes open until T13 anyway (`gateway.proto`, the
-//! `GatewayError.Code` PLACEHOLDER).
+//! could have avoided" -- is true of a method this build does not serve.
 //!
 //! # Secrecy
 //!
@@ -64,27 +63,38 @@
 //! spectator. There is no second path to the private store for a handler to
 //! reach for.
 
+pub mod knowledge;
+pub mod planning;
+
 use crate::audit::{AuditLog, Outcome};
 use crate::error::Error;
-use crate::feed::{Event, SegmentFeed, SnapshotId};
-use crate::fog::{FogFilter, FogPolicy, Viewer, Vision};
+use crate::feed::{Event, Kind, SegmentFeed, SnapshotId};
+use crate::fog::{Audience, FogFilter, FogPolicy, Viewer, Vision};
+use crate::host::Host;
 use crate::limit::{Limits, RateLimiter};
 use crate::rpc::{self, Request};
 use crate::scopes::{self, Scope};
 use crate::time::MatchTime;
 use crate::token::{Grant, Handle, Subject, Token, TokenStore};
-use pharmakos_proto::gp::api::v1::Method;
+use pharmakos_proto::gp::api::v1::status::Phase;
+use pharmakos_proto::gp::api::v1::verify_plan::Depth;
+use pharmakos_proto::gp::api::v1::{Method, VerifyReport};
 use pharmakos_proto::json::Json;
+use pharmakos_sim::math::quantity::{Ms, Tick};
 use pharmakos_sim::rules::RulesTable;
+use pharmakos_sim::runner::{MatchPhase, TickReport};
 use pharmakos_sim::tables::SeatId;
+use pharmakos_verifier::Scope as VerifierScope;
 
-/// One saved draft, as [`crate::feed`] is to events: the shape, not the
-/// contents. T13 fills the body in with a playbook.
+/// One saved draft: the summary `gp.api.v1.DraftSummary` carries, and the
+/// playbook it is a draft of.
 ///
-/// The field names are `gp.api.v1.DraftSummary`'s, verbatim, which is what the
+/// The three summary fields are the schema's names verbatim, which is what the
 /// `struct_field_names` allowance below is for: the schema is the contract and
 /// renaming a field here to please a lint would put a translation table between
-/// this struct and the JSON it becomes.
+/// this struct and the JSON it becomes. `playbook_jsonc` is **not** in that
+/// message and never travels in a listing -- a draft's body leaves the gateway
+/// only for the seat that saved it, and only when that seat asks for it.
 #[derive(Clone, PartialEq, Eq, Debug)]
 #[allow(
     clippy::struct_field_names,
@@ -97,7 +107,74 @@ pub struct Draft {
     pub label: String,
     /// Which round it was saved in. A draft is bound to a match.
     pub round: u32,
+    /// The playbook, as the author wrote it: JSONC, comments and all.
+    pub playbook_jsonc: String,
 }
+
+/// What a seat has sealed: the latest verified submission, and the report that
+/// verified it.
+///
+/// Decisions-log item 5: "the latest verified submission replaces the previous
+/// one, any number of times until the timer ends", so there is one of these per
+/// seat and never a history. The safe playbook is filed only if nothing
+/// verified was ever submitted.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Sealed {
+    /// The playbook, as submitted.
+    pub playbook_jsonc: String,
+    /// `report_hash` of the FULL report that accepted it. Eight big-endian
+    /// bytes; the same value the pre-check returned, which is what spec
+    /// section 11's "byte-identical" promise means.
+    pub report_hash: Vec<u8>,
+    /// Which round it was sealed in.
+    pub round: u32,
+    /// True when the gateway filed this itself because the Lull ended with
+    /// nothing sealed (spec section 14).
+    pub filed_by_the_gateway: bool,
+}
+
+/// Last round's playbook, pre-loaded as a draft and **re-verified against the
+/// new snapshot**.
+///
+/// Spec section 13, "Draft continuity": "each Lull opens with last round's
+/// playbook pre-loaded as an editable draft, re-verified against the new
+/// snapshot so anything the round invalidated shows as a diagnostic straight
+/// away". The re-verification happens when the Lull opens, not when the editor
+/// asks, which is what "straight away" means.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Continuity {
+    /// The draft the playbook was pre-loaded as.
+    pub draft_id: String,
+    /// Whether it still qualifies against the new snapshot.
+    pub qualifies: bool,
+    /// How many diagnostics the re-verification produced.
+    pub diagnostics: u32,
+    /// `report_hash` of that re-verification.
+    pub report_hash: Vec<u8>,
+}
+
+/// The longest `wait_for` timeout a caller may name, in game milliseconds.
+///
+/// `gateway.proto` says "the gateway caps it", so it does -- and the cap is a
+/// refusal rather than a silent clamp, because a client that asked to wait ten
+/// minutes and was told "fine" would then read a `fired: false` at ten seconds
+/// as the answer to a ten-minute question.
+///
+/// Sixty seconds is one digest window ([`crate::feed::DIGEST_PERIOD`]), which
+/// is the longest a `feed_digest` wait can sensibly be, and well over a Lull's
+/// longest useful poll.
+///
+/// PLACEHOLDER: 60 000 is a working number. OWNER settles it at hardening with
+/// the rate limits, which is where the question of how often a client may poll
+/// actually lives.
+pub const MAX_WAIT_MS: i32 = 60_000;
+
+/// The draft id last round's playbook is pre-loaded under.
+///
+/// A fixed name rather than a counter: there is exactly one carried draft per
+/// Lull and a seat that saved its own draft called `carried` in the round
+/// before would otherwise find two.
+pub const CARRIED_DRAFT_ID: &str = "carried";
 
 /// One seat's private state.
 ///
@@ -113,6 +190,10 @@ pub struct SeatState {
     pub drafts: Vec<Draft>,
     /// Whether the seat has said it is ready.
     pub ready: bool,
+    /// The latest verified submission, if there is one.
+    pub sealed: Option<Sealed>,
+    /// What the carried draft's re-verification found, if there is one.
+    pub continuity: Option<Continuity>,
 }
 
 impl SeatState {
@@ -124,7 +205,15 @@ impl SeatState {
             notebook: String::new(),
             drafts: Vec::new(),
             ready: false,
+            sealed: None,
+            continuity: None,
         }
+    }
+
+    /// The draft with this id, if the seat saved one.
+    #[must_use]
+    pub fn draft(&self, draft_id: &str) -> Option<&Draft> {
+        self.drafts.iter().find(|draft| draft.draft_id == draft_id)
     }
 }
 
@@ -142,6 +231,21 @@ pub struct Surface {
     limits: Limits,
     limiters: Vec<(Handle, RateLimiter)>,
     seats: Vec<SeatState>,
+    /// The match, when one is hosted. `None` in the lobby, and in the tests
+    /// that exercise the security surface without a world behind it.
+    host: Option<Host>,
+    /// The tick the current segment's feed was opened at. An event's `at_ms`
+    /// is game milliseconds since this, which is what `gp.api.v1.Event.at_ms`
+    /// means.
+    feed_anchor: Tick,
+    /// What the client last said was left of the Lull, in game milliseconds.
+    /// The gateway never counts it down (decisions-log item 99).
+    ///
+    /// `None` until a client says: a host that has reported nothing is not the
+    /// same as one reporting a Lull that has run out, and treating it as the
+    /// second would put the gateway's tick a whole Lull ahead of the runner's
+    /// before anybody had planned anything.
+    lull_remaining_ms: Option<Ms>,
 }
 
 impl Surface {
@@ -180,6 +284,9 @@ impl Surface {
             limits: Limits::default(),
             limiters: Vec::new(),
             seats: slots,
+            host: None,
+            feed_anchor: Tick::ZERO,
+            lull_remaining_ms: None,
         })
     }
 
@@ -237,6 +344,519 @@ impl Surface {
     /// the old segment now stale.
     pub fn begin_segment(&mut self, round: u32, segment: u32) {
         self.feed = SegmentFeed::new(SnapshotId::of(self.match_seed, round, segment));
+        // The anchor is the SIM's tick, never [`MatchTime::tick`]: an event's
+        // `at_ms` is game milliseconds since the segment began, and the sim
+        // stamps its events with sim ticks. `MatchTime::tick` also counts the
+        // Lull (see [`Surface::sync_time`]), and subtracting one from the other
+        // would date every line of the feed by however long the Lull ran.
+        self.feed_anchor = self
+            .host
+            .as_ref()
+            .map_or(self.time.tick, |host| host.runner().tick());
+    }
+
+    // ---------------------------------------------------------------------
+    // The match host
+    // ---------------------------------------------------------------------
+
+    /// Host a match on this surface.
+    ///
+    /// The opening events -- `match_started` and `lull_opened` -- are drained
+    /// onto the first segment's feed here, so a client that connects before the
+    /// first Push still reads how the match began.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::InvalidArgument`] when a match is already hosted:
+    /// a surface hosts one match, and replacing it would leave every cursor,
+    /// every draft and every sealed playbook pointing at a world that is gone.
+    pub fn attach(&mut self, host: Host) -> Result<(), Error> {
+        if self.host.is_some() {
+            return Err(Error::invalid(
+                "this surface already hosts a match; a second one is a second surface",
+            ));
+        }
+        let round = host.runner().round();
+        self.host = Some(host);
+        self.sync_time();
+        self.begin_segment(round, 0);
+        self.absorb_events()
+    }
+
+    /// True when a match is hosted.
+    #[must_use]
+    pub const fn has_host(&self) -> bool {
+        self.host.is_some()
+    }
+
+    /// The hosted match, to read.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::Internal`] when no match is hosted. `INTERNAL`
+    /// rather than `PHASE_CLOSED`: a lobby that let a seat call a match method
+    /// before starting a match is a host that went wrong, and nothing the
+    /// caller did could have avoided it.
+    pub fn host(&self) -> Result<&Host, Error> {
+        self.host
+            .as_ref()
+            .ok_or_else(|| Error::internal("this gateway is not hosting a match"))
+    }
+
+    /// The hosted match, to drive.
+    ///
+    /// # Errors
+    ///
+    /// As [`Surface::host`].
+    pub fn host_mut(&mut self) -> Result<&mut Host, Error> {
+        self.host
+            .as_mut()
+            .ok_or_else(|| Error::internal("this gateway is not hosting a match"))
+    }
+
+    /// The client's answer to "how long is left in this Lull".
+    ///
+    /// The gateway reads no clock (AGENTS.md section 4.5, decisions-log item
+    /// 99), so the Lull's timer lives on the walled side of the wall and
+    /// reaches this crate as a call. During a Push the number is **not** this
+    /// one: game time decides, and [`Surface::sync_time`] computes it from the
+    /// segment's own ticks.
+    pub fn set_phase_remaining_ms(&mut self, remaining: Ms) {
+        self.lull_remaining_ms = Some(remaining);
+        self.sync_time();
+    }
+
+    /// True when every seat of the match has said it is ready.
+    ///
+    /// What the host polls to decide whether to end the Lull early. The other
+    /// way a Lull ends is the client's timer, which is why this is a question
+    /// rather than an action.
+    #[must_use]
+    pub fn all_ready(&self) -> bool {
+        !self.seats.is_empty() && self.seats.iter().all(|seat| seat.ready)
+    }
+
+    /// Open a Lull: carry last round's playbook forward, re-verify it against
+    /// the new snapshot, and clear every ready flag.
+    ///
+    /// Spec section 13, "Draft continuity". The re-verification happens **here**
+    /// rather than when the editor asks, because "straight away" is the whole
+    /// promise: a player opening the editor should already be looking at what
+    /// last round invalidated.
+    ///
+    /// Called by the host after [`Surface::end_recap`], and after
+    /// [`Surface::attach`] for the opening Lull -- where it carries nothing,
+    /// because there is no last round.
+    ///
+    /// # Errors
+    ///
+    /// As [`Surface::host`], and [`crate::error::Code::Internal`] when the
+    /// frozen snapshot will not encode.
+    pub fn open_lull(&mut self) -> Result<(), Error> {
+        self.absorb_events()?;
+        self.host_mut()?.refresh_routes()?;
+        self.sync_time();
+        let round = self.host()?.runner().round();
+        let seats: Vec<SeatId> = self.seats.iter().map(|seat| seat.seat).collect();
+        for seat in seats {
+            self.carry_draft_forward(seat, round)?;
+        }
+        for seat in &mut self.seats {
+            seat.ready = false;
+        }
+        Ok(())
+    }
+
+    /// Begin the Push: file the safe playbook for a seat that sealed nothing,
+    /// open a fresh segment feed, and step the runner into the Push.
+    ///
+    /// Returns false when the runner was not in a Lull.
+    ///
+    /// # Errors
+    ///
+    /// As [`Surface::host`].
+    pub fn begin_push(&mut self) -> Result<bool, Error> {
+        self.absorb_events()?;
+        let round = self.host()?.runner().round();
+        self.file_safe_playbooks(round);
+        self.begin_segment(round, 0);
+        let started = self.host_mut()?.begin_push();
+        self.sync_time();
+        self.absorb_events()?;
+        Ok(started)
+    }
+
+    /// One tick of the Push, with the events it produced on the feed.
+    ///
+    /// # Errors
+    ///
+    /// As [`Surface::host`].
+    pub fn step(&mut self) -> Result<Option<TickReport>, Error> {
+        let report = self.host_mut()?.step();
+        self.sync_time();
+        self.absorb_events()?;
+        if let Some(report) = report {
+            if report.match_ended {
+                // Spec section 12: the fog is unlocked at match end, and no
+                // token is reissued for it.
+                self.fog.end_match();
+            }
+        }
+        Ok(report)
+    }
+
+    /// End the recap. Returns false when the runner was not in a recap.
+    ///
+    /// # Errors
+    ///
+    /// As [`Surface::host`].
+    pub fn end_recap(&mut self) -> Result<bool, Error> {
+        let ended = self.host_mut()?.end_recap();
+        self.sync_time();
+        self.absorb_events()?;
+        Ok(ended)
+    }
+
+    /// The frozen planning snapshot's bytes, which are a hashed input of every
+    /// verifier report (spec section 11).
+    ///
+    /// # Errors
+    ///
+    /// As [`Surface::host`], and [`crate::error::Code::Internal`] when the
+    /// snapshot will not encode.
+    pub fn snapshot_bytes(&self) -> Result<Vec<u8>, Error> {
+        self.host()?
+            .runner()
+            .frozen()
+            .snapshot()
+            .to_bytes()
+            .map_err(|error| {
+                Error::internal(format!("the frozen snapshot would not encode: {error}"))
+            })
+    }
+
+    /// One seat's sealed order.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::NoQualifyingPlan`] when the seat has sealed
+    /// nothing -- the one code spec section 12 names for exactly this -- and
+    /// [`crate::error::Code::ForbiddenScope`] when the subject is anybody but
+    /// that seat.
+    pub fn sealed_plan(&self, subject: Subject, seat: SeatId) -> Result<&Sealed, Error> {
+        self.seat_state(subject, seat)?
+            .sealed
+            .as_ref()
+            .ok_or_else(|| {
+                Error::new(
+                    crate::error::Code::NoQualifyingPlan,
+                    format!("seat {} has sealed nothing this round", seat.raw()),
+                )
+            })
+    }
+
+    /// Read the match's own clock off the runner.
+    ///
+    /// Phase, round and the coming segment's length are facts of the match.
+    /// `phase_remaining_ms` is two different things and is treated as two: in a
+    /// **Push** it is game time, computed from the segment's own ticks; in a
+    /// **Lull** or a recap it is the client's timer, because the gateway has no
+    /// clock to count one with.
+    ///
+    /// # The tick counts the Lull too, and that is not a clock read
+    ///
+    /// A Lull consumes **no sim tick** (T10: the Lull and the recap end on the
+    /// host's word), so a gateway whose tick were the runner's alone would sit
+    /// at one tick for a whole three-minute Lull -- and everything this crate
+    /// counts in ticks would sit with it. The rate limiter would give a seat
+    /// [`crate::limit::CALLS_PER_TICK`] calls for the entire planning phase, to
+    /// an editor that verifies on every edit (spec section 13); the audit log
+    /// would stamp every call of the Lull with the same tick; a token's expiry
+    /// would not move.
+    ///
+    /// So the tick here is the runner's **plus however much of this Lull has
+    /// run**, derived from two numbers the gateway is given rather than from a
+    /// clock it read: `rules.match.lull_ms`, which is the Lull's length, and
+    /// the client's own answer to how much of it is left
+    /// ([`Surface::set_phase_remaining_ms`]). That is decisions-log item 99's
+    /// arrangement exactly -- "the Lull's timer stays on the client side of the
+    /// wall" and what reaches the gateway is the host's answer, in ticks of
+    /// host time it is given.
+    ///
+    /// Two consequences, both deliberate. [`MatchTime::tick`] is **not** the
+    /// sim's tick during a Lull, so anything that has to be in sim-tick space
+    /// reads `host.runner().tick()` instead -- [`Surface::begin_segment`] is
+    /// the one place that does. And a client that reports a *larger* remaining
+    /// than before walks the tick backwards; the limiter and the audit log both
+    /// survive that (a window restarts, a sequence number does not), and a
+    /// client that lies to itself about its own timer is not a threat model the
+    /// closed error set has a code for.
+    fn sync_time(&mut self) {
+        let Some(host) = self.host.as_ref() else {
+            return;
+        };
+        let runner = host.runner();
+        let state = runner.world().match_state();
+        let phase = match runner.phase() {
+            MatchPhase::Lull => Phase::Lull,
+            MatchPhase::Push => Phase::Push,
+            MatchPhase::Recap => Phase::Recap,
+            MatchPhase::Ended => Phase::Ended,
+        };
+        let in_push = runner.phase() == MatchPhase::Push;
+        let reported = self.lull_remaining_ms;
+        let remaining = if in_push {
+            let elapsed = runner.tick().since(state.segment_started());
+            Ms::from_ticks(state.segment_ticks().saturating_sub(elapsed))
+        } else {
+            reported.unwrap_or(Ms::ZERO)
+        };
+        let lull_ms = host
+            .rules()
+            .message()
+            .r#match
+            .as_ref()
+            .map_or(0, |settings| settings.lull_ms);
+        let elapsed_in_lull = match (in_push, reported) {
+            (false, Some(left)) => {
+                Ms::new(lull_ms.saturating_sub(left.raw()).max(0)).to_ticks_floor()
+            }
+            // In a Push the sim's own tick is the clock, and before a client
+            // has said anything there is nothing to derive from.
+            _ => 0,
+        };
+        self.time = MatchTime {
+            // The sim's tick, plus however much of this Lull has run. See the
+            // method's own doc for why that is not a clock read.
+            tick: Tick::new(runner.tick().raw().saturating_add(elapsed_in_lull)),
+            phase,
+            phase_remaining_ms: remaining,
+            segment_length_ms: runner.frozen().coming_segment_ms(),
+            round: runner.round(),
+        };
+    }
+
+    /// Drain the sim's event bus onto the segment feed.
+    ///
+    /// The translation is the fog filter's input: a match-wide line is
+    /// [`Audience::Public`] and everything else is [`Audience::World`], owned
+    /// by the seat it happened to and placed where it happened. An event that
+    /// belongs to a seat and carries **no** place is placed at the origin,
+    /// which under a fogged policy means its own seat sees it and nobody else
+    /// does -- the conservative answer, and the right one for a line about
+    /// somebody's commander.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::Internal`] when the sim emits a kind this crate's
+    /// [`Kind`] rule refuses, which would mean the two spellings of item 97's
+    /// rule had drifted apart.
+    fn absorb_events(&mut self) -> Result<(), Error> {
+        let Some(host) = self.host.as_mut() else {
+            return Ok(());
+        };
+        let drained = host.drain_events();
+        let anchor = self.feed_anchor;
+        for event in drained {
+            let kind = Kind::new(event.kind.name()).map_err(|error| {
+                Error::internal(format!(
+                    "the sim emitted `{}`, which this feed will not carry: {}",
+                    event.kind.name(),
+                    error.message
+                ))
+            })?;
+            let audience = if matches!(
+                event.kind,
+                pharmakos_sim::events::EventKind::MatchStarted
+                    | pharmakos_sim::events::EventKind::LullOpened
+                    | pharmakos_sim::events::EventKind::PushStarted
+                    | pharmakos_sim::events::EventKind::SegmentEnded
+                    | pharmakos_sim::events::EventKind::RecapOpened
+                    | pharmakos_sim::events::EventKind::MatchEnded
+                    | pharmakos_sim::events::EventKind::SeatEliminated
+            ) {
+                Audience::Public
+            } else {
+                Audience::World {
+                    owner: event.seat,
+                    at: event
+                        .at
+                        .map(crate::view::voxel_of_position)
+                        .unwrap_or_default(),
+                }
+            };
+            let at_ms = Ms::from_ticks(event.tick.since(anchor));
+            self.feed.publish(Event {
+                at_ms,
+                kind,
+                text: crate::strings::event_text(&event),
+                audience,
+            })?;
+        }
+        Ok(())
+    }
+
+    /// File the safe playbook for every seat that sealed nothing.
+    ///
+    /// Spec section 14 and decisions-log item 5: the safe playbook is filed
+    /// **only** if nothing verified was ever submitted. A seat that sealed
+    /// something keeps it, and one that sealed something in an earlier round
+    /// does not: a seal is a round's.
+    fn file_safe_playbooks(&mut self, round: u32) {
+        let Some(host) = self.host.as_ref() else {
+            return;
+        };
+        let safe = host.safe_playbook().to_owned();
+        for seat in &mut self.seats {
+            let stale = seat.sealed.as_ref().is_none_or(|held| held.round != round);
+            if stale {
+                seat.sealed = Some(Sealed {
+                    playbook_jsonc: safe.clone(),
+                    // No report: this playbook did not come from a seat and
+                    // was not pre-checked by one. The Push's own verification
+                    // is what accepts it, and an invented hash here would be a
+                    // hash nothing produced.
+                    report_hash: Vec::new(),
+                    round,
+                    filed_by_the_gateway: true,
+                });
+            }
+        }
+    }
+
+    /// Pre-load last round's playbook as an editable draft and re-verify it.
+    ///
+    /// Nothing is carried for a seat that sealed nothing, and nothing is
+    /// carried for a playbook the **gateway** filed: the safe playbook is not
+    /// the player's work, and offering it back as "your draft" would be the
+    /// gateway putting words in a seat's mouth. `get_safe_plan` is how a seat
+    /// asks for that one.
+    fn carry_draft_forward(&mut self, seat: SeatId, round: u32) -> Result<(), Error> {
+        let carried = self
+            .seat_state(Subject::Seat(seat), seat)?
+            .sealed
+            .as_ref()
+            .filter(|sealed| !sealed.filed_by_the_gateway)
+            .map(|sealed| sealed.playbook_jsonc.clone());
+        let Some(playbook) = carried else {
+            return Ok(());
+        };
+        let report = self.verify_for(seat, &playbook, Depth::Full)?;
+        let continuity = Continuity {
+            draft_id: String::from(CARRIED_DRAFT_ID),
+            qualifies: report.qualifies,
+            diagnostics: u32::try_from(report.diagnostics.len()).unwrap_or(u32::MAX),
+            report_hash: report.report_hash.clone(),
+        };
+        let state = self.seat_state_mut(Subject::Seat(seat), seat)?;
+        state
+            .drafts
+            .retain(|draft| draft.draft_id != CARRIED_DRAFT_ID);
+        state.drafts.push(Draft {
+            draft_id: String::from(CARRIED_DRAFT_ID),
+            label: format!("carried from round {}", round.saturating_sub(1)),
+            round,
+            playbook_jsonc: playbook,
+        });
+        state.continuity = Some(continuity);
+        Ok(())
+    }
+
+    /// Verify one seat's playbook against the frozen snapshot.
+    ///
+    /// The one path from a JSONC file to a report: `verify_plan`, `submit_plan`
+    /// and draft continuity all come through here, which is what makes spec
+    /// section 11's promise -- "a pre-check and the check at submit are
+    /// byte-identical" -- a property of the code rather than of somebody's
+    /// care. Nothing here steps or forks anything (AGENTS.md section 3 rule 2).
+    ///
+    /// # Errors
+    ///
+    /// As [`Surface::host`], plus [`crate::error::Code::Internal`] when the
+    /// rules table does not carry a block the checks read. **Never** for a
+    /// playbook that is wrong: that is a report with `qualifies: false`.
+    pub(crate) fn verify_for(
+        &self,
+        seat: SeatId,
+        playbook_jsonc: &str,
+        depth: Depth,
+    ) -> Result<VerifyReport, Error> {
+        let snapshot = self.snapshot_bytes()?;
+        let scope = self.verifier_scope(seat)?;
+        pharmakos_plan_core::verify::verify_jsonc(
+            playbook_jsonc,
+            &snapshot,
+            &scope,
+            self.host()?.rules(),
+            depth,
+        )
+        .map_err(|error| {
+            Error::internal(format!(
+                "this build cannot verify a playbook: {}",
+                error.message
+            ))
+        })
+    }
+
+    /// The seat's view of the frozen snapshot, as the verifier reads it.
+    ///
+    /// **Its own beacons and nothing else.** A seat's knowledge of another
+    /// seat's beacons is the knowledge store's, which is S3's, and a verifier
+    /// scope that carried beacons a seat has not seen would let a playbook
+    /// reference one it cannot know about -- the same fog leak
+    /// [`crate::fog`] exists to prevent, arriving through the back door.
+    ///
+    /// PLACEHOLDER: a seat's **sighted** enemy beacons join this scope with the
+    /// knowledge store at **S3**; `is_core` is decided here by "the seat's
+    /// lowest-numbered beacon", which is true of every map the generator makes
+    /// because it pre-places the core first, and becomes a column the day a
+    /// beacon has a kind (owner, at T14 with the Build mandate).
+    ///
+    /// # Errors
+    ///
+    /// As [`Surface::host`].
+    pub(crate) fn verifier_scope(&self, seat: SeatId) -> Result<VerifierScope, Error> {
+        let world = self.host()?.world();
+        let seats = world.seats();
+        let row = seats
+            .seats()
+            .iter()
+            .position(|held| *held == seat.raw())
+            .ok_or_else(|| Error::not_found(format!("this match has no seat {}", seat.raw())))?;
+        let economy = pharmakos_sim::knowledge::SeatEconomy {
+            treasury: seats.treasuries().get(row).copied().unwrap_or_default(),
+            supply: seats.supplies().get(row).copied().unwrap_or_default(),
+            draw: seats.draws().get(row).copied().unwrap_or_default(),
+        };
+        let mut scope = VerifierScope::new(seat, economy);
+
+        let beacons = world.beacons();
+        let mut own: Vec<usize> = (0..beacons.ids().len())
+            .filter(|index| beacons.seats().get(*index).copied() == Some(seat.raw()))
+            .collect();
+        own.sort_by_key(|index| beacons.ids().get(*index).copied().unwrap_or(u32::MAX));
+        for (rank, index) in own.into_iter().enumerate() {
+            let id = beacons.ids().get(index).copied().unwrap_or_default();
+            scope.push_beacon(pharmakos_verifier::KnownBeacon {
+                beacon_id: crate::view::beacon_id(pharmakos_sim::tables::BeaconId::new(id)),
+                owner: seat,
+                side: pharmakos_verifier::Ownership::Own,
+                mandate: crate::view::mandate_of(crate::view::mandate_from_id(
+                    beacons.mandates().get(index).copied().unwrap_or_default(),
+                )),
+                // No tag column exists in the sim, and inventing one here would
+                // be a proto change wearing a disguise (AGENTS.md section 5).
+                tags: Vec::new(),
+                at: beacons
+                    .positions()
+                    .get(index)
+                    .copied()
+                    .map(crate::view::voxel_of)
+                    .unwrap_or_default(),
+                is_core: rank == 0,
+            });
+        }
+        Ok(scope)
     }
 
     /// Put an event on the segment's bus.
@@ -253,6 +873,14 @@ impl Surface {
     #[must_use]
     pub const fn feed(&self) -> &SegmentFeed {
         &self.feed
+    }
+
+    /// The match's fog policy, to read. The handlers build a
+    /// [`crate::fog::FogFilter`] from it and the host's vision; none of them
+    /// may change it.
+    #[must_use]
+    pub(crate) const fn fog_policy(&self) -> &FogPolicy {
+        &self.fog
     }
 
     /// One seat's private state, if `subject` is that seat.
@@ -461,7 +1089,11 @@ impl Surface {
         Ok(result)
     }
 
-    /// Step 6: the method slice T9 needs to exercise the surface.
+    /// Step 6: the method slice.
+    ///
+    /// One arm per method of the schema, so a method T1 adds fails to compile
+    /// here rather than falling into the catch-all and answering `INTERNAL` to
+    /// a client that had every right to call it.
     fn dispatch<V: Vision>(
         &mut self,
         method: Method,
@@ -475,20 +1107,147 @@ impl Surface {
                 String::from("status"),
                 self.time.footer(),
             )])),
+            Method::WaitFor => self.wait_for(subject, held, request, vision),
             Method::GetSegmentFeed => self.segment_feed(subject, held, request, vision),
             Method::SaveNotes => self.save_notes(subject, request),
-            Method::ListDrafts => self.list_drafts(subject),
             Method::SetReady => self.set_ready(subject, request),
-            Method::ListTemplates => Ok(Json::Object(vec![
-                (String::from("templates"), Json::Array(Vec::new())),
-                (String::from("next_cursor"), Json::String(String::new())),
-            ])),
+
+            // Knowledge.
+            Method::GetBriefing => self.get_briefing(subject, request),
+            Method::GetRecap => self.get_recap(request),
+            Method::ListBeacons => self.list_beacons(subject, held, request, vision),
+            Method::GetBeacon => self.get_beacon(subject, held, request, vision),
+            Method::GetMapSummary => self.get_map_summary(request),
+            Method::GetEconomyForecast => self.get_economy_forecast(request),
+            Method::EstimateRoute => self.estimate_route(subject, request),
+
+            // Docs and planning.
+            Method::GetSchema => Surface::get_schema(request),
+            Method::ListTemplates => self.list_templates(request),
+            Method::InstantiateTemplate => self.instantiate_template(request),
+            Method::VerifyPlan => self.verify_plan(subject, request),
+            Method::RenderPlan => self.render_plan(subject, request),
+            Method::PatchPlan => Surface::patch_plan(request),
+            Method::SaveDraft => self.save_draft(subject, request),
+            Method::ListDrafts => self.list_drafts(subject),
+            Method::GetSafePlan => self.get_safe_plan(),
+            Method::SubmitPlan => self.submit_plan(subject, request),
+
+            // The four `gateway.proto` gives no request/response pair at all,
+            // plus `METHOD_UNSPECIFIED`, which `method_from_wire` already
+            // refuses before a handler is reached.
             other => Err(Error::internal(format!(
-                "`{}` is in the schema and this build does not serve it yet: the method slice \
-                 is T13's, on the surface T9 froze",
+                "`{}` is in the schema and this build does not serve it: `gateway.proto` gives it \
+                 no request/response pair, because no skeleton client calls it and the stage that \
+                 introduces what it reports on is the stage that will know what it takes",
                 scopes::method_wire_name(other)
             ))),
         }
+    }
+
+    /// `wait_for`: has the trigger fired since the caller's mark?
+    ///
+    /// **It polls; it does not block, and it must not.** A long poll waits on a
+    /// clock, and the gateway reads none (AGENTS.md section 4.5, decisions-log
+    /// item 99's closing note). Blocking on a condition instead would be worse
+    /// rather than better: the surface answers one call at a time and the host
+    /// steps the match between calls, so a handler that waited for the phase to
+    /// change would be waiting for something only its own caller's return can
+    /// cause. So `timeout_ms` is validated and capped -- the shape v1.1
+    /// publishes -- and the answer comes back at once, with `fired: false`
+    /// where a blocking implementation would have waited. `gateway.proto`
+    /// already says a timeout is a normal result and not an error. The cap is
+    /// [`MAX_WAIT_MS`], and a timeout over it is refused rather than clamped:
+    /// see that constant.
+    ///
+    /// The two triggers use two marks, and the difference is not cosmetic:
+    ///
+    /// * `phase_change` carries a **phase mark** ([`crate::time::PhaseMark`]),
+    ///   which is tied to the match rather than to the segment. A
+    ///   snapshot-tied cursor would go stale at the exact moment the phase
+    ///   changed, which is the one moment this trigger exists for.
+    /// * `feed_digest` carries the feed's own opaque cursor, and fires when
+    ///   this viewer has an event it has not been shown.
+    fn wait_for<V: Vision>(
+        &self,
+        subject: Subject,
+        held: scopes::ScopeSet,
+        request: &Request,
+        vision: &V,
+    ) -> Result<Json, Error> {
+        let trigger = request
+            .string_param("trigger")?
+            .ok_or_else(|| Error::invalid("`trigger` is `phase_change` or `feed_digest`"))?;
+        if let Some(timeout) = request.integer_param("timeout_ms")? {
+            if timeout < 0 {
+                return Err(Error::invalid(
+                    "`timeout_ms` is game milliseconds and is never negative",
+                ));
+            }
+            if timeout > i64::from(MAX_WAIT_MS) {
+                return Err(Error::invalid(format!(
+                    "`timeout_ms` is at most {MAX_WAIT_MS} game milliseconds and this is                      {timeout}"
+                )));
+            }
+        }
+        let cursor = request.string_param("cursor")?.unwrap_or_default();
+        let (fired, next) = match trigger {
+            "phase_change" => {
+                let mark = crate::time::PhaseMark::of(self.match_seed, self.time);
+                let fired = !cursor.is_empty()
+                    && crate::time::PhaseMark::parse(cursor, self.match_seed)? != mark;
+                (fired, mark.render())
+            }
+            "feed_digest" => {
+                let viewer = self.viewer_of(subject, held);
+                let filter = FogFilter::new(&self.fog, vision);
+                let page = self.feed.page(
+                    viewer,
+                    &filter,
+                    Some(cursor).filter(|text| !text.is_empty()),
+                    crate::feed::MAX_PAGE_EVENTS,
+                )?;
+                (!page.events.is_empty(), page.next_cursor.render())
+            }
+            other => {
+                return Err(Error::invalid(format!(
+                    "`trigger` is `phase_change` or `feed_digest`, and this is `{other}`"
+                )));
+            }
+        };
+        Ok(Json::Object(vec![
+            (String::from("fired"), Json::Bool(fired)),
+            (String::from("status"), self.time.footer()),
+            (String::from("cursor"), Json::String(next)),
+        ]))
+    }
+
+    /// Who a subject is, to the fog filter.
+    #[allow(
+        clippy::unused_self,
+        reason = "a method, not a free function: who a subject is to the fog                   filter is the surface's answer, and the day a match carries a                   spectator policy of its own this reads it"
+    )]
+    fn viewer_of(&self, subject: Subject, held: scopes::ScopeSet) -> Viewer {
+        match subject {
+            Subject::Seat(seat) => Viewer::Seat(seat),
+            Subject::Spectator => Viewer::Spectator {
+                nofog: held.holds(Scope::SpectateNofog),
+            },
+            Subject::Admin => Viewer::Admin,
+        }
+    }
+
+    /// The seat a subject is, or a refusal.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::ForbiddenScope`] for a spectator or the lobby:
+    /// neither has a briefing, a draft or a plan, and `admin` "can never read
+    /// another seat's playbooks, drafts or knowledge" (spec section 12).
+    pub(crate) fn seat_of(subject: Subject, what: &str) -> Result<SeatId, Error> {
+        subject
+            .seat()
+            .ok_or_else(|| Error::forbidden(format!("only a seat has {what}")))
     }
 
     /// `save_notes`: the private seat notebook, at the rules table's size.
@@ -527,32 +1286,6 @@ impl Surface {
         )]))
     }
 
-    /// `list_drafts`: the seat's own, and nobody else's.
-    fn list_drafts(&self, subject: Subject) -> Result<Json, Error> {
-        let seat = subject
-            .seat()
-            .ok_or_else(|| Error::forbidden("only a seat has drafts"))?;
-        let state = self.seat_state(subject, seat)?;
-        let drafts: Vec<Json> = state
-            .drafts
-            .iter()
-            .map(|draft| {
-                Json::Object(vec![
-                    (
-                        String::from("draft_id"),
-                        Json::String(draft.draft_id.clone()),
-                    ),
-                    (String::from("label"), Json::String(draft.label.clone())),
-                    (String::from("round"), Json::Number(draft.round.to_string())),
-                ])
-            })
-            .collect();
-        Ok(Json::Object(vec![
-            (String::from("drafts"), Json::Array(drafts)),
-            (String::from("next_cursor"), Json::String(String::new())),
-        ]))
-    }
-
     /// `set_ready`: the seat says the Lull may end.
     fn set_ready(&mut self, subject: Subject, request: &Request) -> Result<Json, Error> {
         let seat = subject
@@ -574,13 +1307,7 @@ impl Surface {
         request: &Request,
         vision: &V,
     ) -> Result<Json, Error> {
-        let viewer = match subject {
-            Subject::Seat(seat) => Viewer::Seat(seat),
-            Subject::Spectator => Viewer::Spectator {
-                nofog: held.holds(Scope::SpectateNofog),
-            },
-            Subject::Admin => Viewer::Admin,
-        };
+        let viewer = self.viewer_of(subject, held);
         let filter = FogFilter::new(&self.fog, vision);
         let cursor = request.string_param("cursor")?;
         // The detail budget is the ceiling and `limit` asks for no more than it:
@@ -953,6 +1680,7 @@ mod tests {
                     draft_id: String::from("d1"),
                     label: String::from("east push"),
                     round: 1,
+                    playbook_jsonc: String::from("{}"),
                 },
             )
             .expect("its own");

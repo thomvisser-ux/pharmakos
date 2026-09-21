@@ -21,7 +21,7 @@
 //! 6455 server side rather than take ten crates onto the surface v1.1 publishes.
 //! The price of owning it is that it must be pinned to somebody else's numbers,
 //! so it is: the unit tests below check the three FIPS 180-4 vectors *and* RFC
-//! 6455 section 1.3's worked example, end to end through [`crate::base64`].
+//! 6455 section 1.3's worked example, end to end through the proto crate's `json::base64`.
 //!
 //! Integer discipline is the project's (AGENTS.md section 4): no `as` casts, no
 //! indexing, no floats. The message schedule is read through `get`, which cannot

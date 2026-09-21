@@ -11,21 +11,31 @@
 //! kept agent-shaped, because publishing it later should be a documentation and hardening
 //! job rather than a rewrite.
 //!
-//! # What this crate is, at T9
+//! # What this crate is
 //!
-//! **The security surface, built once and before any method hangs off it** (skeleton plan
+//! **The security surface was built once and before any method hung off it** (skeleton plan
 //! T9). That sequencing is the point: the surface is what the whole roadmap inherits, and
 //! a surface grown outwards from a method slice is the most expensive avoidable rework in
 //! the stage (plan section 8, risk R8). So the transport, the tokens, the scope check, the
 //! fog policy, the rate limiter, the audit log, the event feed and the private match cache
-//! are all here and all tested, and the gameplay methods are not: [`surface`] answers
-//! exactly the handful of methods the surface itself needs to be exercised end to end, and
-//! every other method of the schema answers "T13 fills this".
+//! were finished first, and the gameplay methods came afterwards, onto a surface that did
+//! not move to receive them.
+//!
+//! **T13 hung them there, and put a match behind them.** The gateway now hosts the match
+//! (AGENTS.md section 3's crate map, spec section 15): [`host`] owns the runner and is the
+//! **only** place in this crate that steps it, [`surface`] serves every method the
+//! skeleton's clients call, and `tests/confinement.rs` asserts over this crate's own source
+//! text that no handler can reach a stepping call -- which is what "no dry runs" means for
+//! a crate that has a world in the same process (AGENTS.md section 3 rule 2).
 //!
 //! | Module | What it is |
 //! |---|---|
 //! | [`sha1`] | SHA-1, for `Sec-WebSocket-Accept` and nothing else |
-//! | [`base64`] | Standard base64, for the same handshake |
+//! | [`host`] | The match host: the one place this crate steps a `Runner` |
+//! | [`routes`] | plan-core's `TravelEstimator`, over the sim's estimator (item 100 (1)) |
+//! | [`schema`] | `get_schema`, generated from the checked-in descriptor set |
+//! | [`strings`] | This crate's section of the one English string table |
+//! | [`view`] | The world's types as the wire's: voxels, beacon ids, mandates |
 //! | [`handshake`] | The RFC 6455 upgrade, with the `Host` and `Origin` checks |
 //! | [`frame`] | RFC 6455 framing: masked client frames, text/close/ping/pong |
 //! | [`rpc`] | JSON-RPC 2.0 requests and responses over [`pharmakos_proto::json`] |
@@ -66,24 +76,34 @@
 //!   are data with a closed vocabulary, and `tests/confinement.rs` asserts that the
 //!   vocabulary contains no path, no URL and no socket.
 //! * Errors are the closed set of [`error::Code`]. An invalid playbook is not a method
-//!   error: it returns a full report with `qualifies: false` (T13).
+//!   error: it returns a full report with `qualifies: false`, which
+//!   `tests/methods.rs` asserts on three shapes of wrong.
 //!
 //! # Rules this crate is held to
 //!
 //! * **No `research` feature.** Only `crates/sim` defines it; the gateway may never enable
 //!   or transitively reach it, so no seat can reach `fork` and "no dry runs" holds.
 //!   `cargo xtask ci` enforces this.
+//! * **No dry runs.** The gateway hosts the match, so it does step one -- in [`host`], in
+//!   three calls, and nowhere else. No method handler may: `verify_plan`, `estimate_route`,
+//!   `render_plan`, `patch_plan`, `get_economy_forecast` and `instantiate_template` all
+//!   answer from the frozen snapshot and the rules table, and `estimate_route` goes through
+//!   [`routes::RouteAdapter`], which owns its own search graph and never has a `World` in
+//!   its hand at all.
 //! * **No clock.** The gateway is not a walled crate (AGENTS.md section 4.5), so it reads
 //!   no wall clock at all: time enters as the host's tick through [`time::MatchTime`], the
 //!   rate limiter counts per tick and per window of ticks, and the audit log stamps a tick
-//!   and a sequence number. A [`std::time::Duration`] on a socket timeout is a socket
-//!   option rather than a clock read, and is the one place a duration appears.
+//!   and a sequence number. A Lull consumes no sim tick, so the gateway's own tick counts
+//!   it from two numbers it is *given* -- the Lull's length from the rules table and how
+//!   much of it the client says is left ([`surface::Surface::set_phase_remaining_ms`]) --
+//!   which is host time given to the gateway rather than a clock it read. A
+//!   [`std::time::Duration`] on a socket timeout is a socket option rather than a clock
+//!   read, and is the one place a duration appears.
 //! * Deterministic behaviour on deterministic inputs: read results are structured JSON
 //!   plus deterministic template prose, pagination uses opaque cursors tied to the
 //!   snapshot, and every result carries a `_status` footer with the phase and timer.
 
 pub mod audit;
-pub mod base64;
 pub mod cache;
 pub mod detail;
 pub mod error;
@@ -91,15 +111,20 @@ pub mod feed;
 pub mod fog;
 pub mod frame;
 pub mod handshake;
+pub mod host;
 pub mod limit;
 pub mod net;
+pub mod routes;
 pub mod rpc;
+pub mod schema;
 pub mod scopes;
 pub mod session;
 pub mod sha1;
+pub mod strings;
 pub mod surface;
 pub mod time;
 pub mod token;
+pub mod view;
 
 pub use error::{Code, Error};
 pub use surface::Surface;

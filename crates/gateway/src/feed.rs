@@ -194,6 +194,19 @@ impl Cursor {
         Cursor { snapshot, index: 0 }
     }
 
+    /// A cursor at a place in a snapshot-tied listing.
+    ///
+    /// The feed is not the only listing a seat pages through -- `list_beacons`
+    /// is another -- and both want the same properties: opaque, tied to the
+    /// snapshot so a stale one is refused rather than silently restarted, and
+    /// counting **what this viewer has been shown** rather than what exists.
+    /// One rendering and one parser for both, rather than a second cursor
+    /// format that would have to be got right twice.
+    #[must_use]
+    pub const fn at(snapshot: SnapshotId, index: u32) -> Cursor {
+        Cursor { snapshot, index }
+    }
+
     /// Which snapshot it belongs to.
     #[must_use]
     pub const fn snapshot(self) -> SnapshotId {

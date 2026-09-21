@@ -312,6 +312,7 @@ fn admin_cannot_read_another_seats_draft() {
             Subject::Seat(SeatId::new(0)),
             SeatId::new(0),
             Draft {
+                playbook_jsonc: String::from("{}"),
                 draft_id: String::from("d1"),
                 label: String::from("east push"),
                 round: 1,

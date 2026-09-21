@@ -101,6 +101,95 @@ impl MatchTime {
     }
 }
 
+/// An opaque mark on where the match is, for `wait_for{trigger:"phase_change"}`.
+///
+/// **Tied to the match, never to the segment**, and that is the whole reason it
+/// is not a [`crate::feed::Cursor`]. A feed cursor is snapshot-tied and a new
+/// segment makes every one of them stale — which is correct for a feed, and
+/// exactly wrong here: the moment the phase changes from Lull to Push is the
+/// moment a new segment opens, so a snapshot-tied mark would answer
+/// `STALE_SNAPSHOT` at the one moment this trigger exists to report.
+///
+/// Sixteen lower-case hex digits: eight of the mark and eight of a check over
+/// the mark and the match seed. Half the length of a feed cursor, so a client
+/// that hands one where the other belongs is told rather than resumed at a
+/// place nobody meant. The check is not a signature and does not claim to be —
+/// the token authenticates a caller, and this says a mangled mark is mangled.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct PhaseMark {
+    mark: u32,
+    match_seed: u64,
+}
+
+impl PhaseMark {
+    /// How many characters a rendered mark has.
+    pub const CHARS: usize = 16;
+
+    /// The mark for where a match is now.
+    ///
+    /// The phase and the round, and nothing else: those are the two things a
+    /// `phase_change` trigger is about, and a mark carrying the tick would fire
+    /// twenty times a second.
+    #[must_use]
+    pub fn of(match_seed: u64, time: MatchTime) -> PhaseMark {
+        let phase = u32::try_from(i32::from(time.phase)).unwrap_or(0);
+        let round = time.round & 0x00ff_ffff;
+        PhaseMark {
+            mark: (phase << 24) | round,
+            match_seed,
+        }
+    }
+
+    /// The opaque text a client receives and hands back.
+    #[must_use]
+    pub fn render(self) -> String {
+        format!("{:08x}{:08x}", self.mark, self.check())
+    }
+
+    /// Read a mark a client handed back.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::InvalidArgument`] when the text is not a mark this
+    /// gateway wrote. There is no stale case: a mark is a match's, and a match
+    /// is what the token is tied to.
+    pub fn parse(text: &str, match_seed: u64) -> Result<PhaseMark, crate::error::Error> {
+        let refuse =
+            || crate::error::Error::invalid("that is not a phase mark this gateway issued");
+        if text.len() != PhaseMark::CHARS
+            || !text
+                .bytes()
+                .all(|digit| matches!(digit, b'0'..=b'9' | b'a'..=b'f'))
+        {
+            return Err(refuse());
+        }
+        let mark = text
+            .get(..8)
+            .and_then(|digits| u32::from_str_radix(digits, 16).ok())
+            .ok_or_else(refuse)?;
+        let check = text
+            .get(8..16)
+            .and_then(|digits| u32::from_str_radix(digits, 16).ok())
+            .ok_or_else(refuse)?;
+        let parsed = PhaseMark { mark, match_seed };
+        if parsed.check() != check {
+            return Err(crate::error::Error::invalid("that phase mark is damaged"));
+        }
+        Ok(parsed)
+    }
+
+    /// The check value: the low 32 bits of the project's one hash function over
+    /// the mark **and the match seed**, so a mark from another match is refused
+    /// as damaged rather than read as this match's opening Lull.
+    fn check(self) -> u32 {
+        let mut bytes: Vec<u8> = Vec::with_capacity(12);
+        bytes.extend_from_slice(&self.mark.to_le_bytes());
+        bytes.extend_from_slice(&self.match_seed.to_le_bytes());
+        let hash = pharmakos_sim::digest(&bytes);
+        u32::try_from(hash & 0xffff_ffff).unwrap_or(0)
+    }
+}
+
 /// A phase's spelling on the wire: `lull`, `push`, `recap`.
 ///
 /// Lower case, by decisions-log item 80's rule for every enum-valued parameter

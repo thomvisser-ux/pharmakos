@@ -1,0 +1,2350 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "pharmakos:gp.v1.Playbook",
+  "title": "gp.v1.Playbook",
+  "description": "Canonical proto3 JSON for the Pharmakos playbook vocabulary, generated from the checked-in descriptor set. Property names are the .proto spelling, which is what the canonical form writes and what a player hand-edits; a reader also accepts the lowerCamelCase alternates the proto3 JSON mapping defines. An unknown field is rejected and never stripped.",
+  "$ref": "#/$defs/Playbook",
+  "$defs": {
+    "Action": {
+      "type": "string",
+      "description": "`gp.v1.OnFail.Action`. A playbook on disk carries the value name verbatim.",
+      "enum": [
+        "ON_FAIL_UNSPECIFIED",
+        "SKIP",
+        "ABORT_ROUTE",
+        "JUMP_FORWARD"
+      ]
+    },
+    "AddBuildTargetRow": {
+      "type": "object",
+      "description": "gp.v1.AddBuildTargetRow",
+      "additionalProperties": false,
+      "properties": {
+        "target": {
+          "$ref": "#/$defs/BuildTarget"
+        }
+      }
+    },
+    "All": {
+      "type": "object",
+      "description": "gp.v1.All",
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Condition"
+          }
+        }
+      }
+    },
+    "Any": {
+      "type": "object",
+      "description": "gp.v1.Any",
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Condition"
+          }
+        }
+      }
+    },
+    "Area": {
+      "type": "object",
+      "description": "gp.v1.Area",
+      "additionalProperties": false,
+      "properties": {
+        "min": {
+          "$ref": "#/$defs/Voxel"
+        },
+        "max": {
+          "$ref": "#/$defs/Voxel"
+        }
+      }
+    },
+    "AttackSettings": {
+      "type": "object",
+      "description": "gp.v1.AttackSettings",
+      "additionalProperties": false,
+      "properties": {}
+    },
+    "AuthorKind": {
+      "type": "string",
+      "description": "`gp.v1.Meta.AuthorKind`. A playbook on disk carries the value name verbatim.",
+      "enum": [
+        "AUTHOR_KIND_UNSPECIFIED",
+        "HUMAN",
+        "BUILTIN",
+        "SCRIPT"
+      ]
+    },
+    "BeaconFilter": {
+      "type": "object",
+      "description": "gp.v1.BeaconFilter",
+      "additionalProperties": false,
+      "properties": {
+        "side": {
+          "$ref": "#/$defs/Side"
+        },
+        "mandate": {
+          "$ref": "#/$defs/MandateKind"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "BeaconHpPct": {
+      "type": "object",
+      "description": "gp.v1.BeaconHpPct",
+      "additionalProperties": false,
+      "properties": {
+        "beacon": {
+          "$ref": "#/$defs/BeaconRef"
+        },
+        "pct": {
+          "$ref": "#/$defs/IntCompare"
+        }
+      }
+    },
+    "BeaconPowered": {
+      "type": "object",
+      "description": "gp.v1.BeaconPowered",
+      "additionalProperties": false,
+      "properties": {
+        "beacon": {
+          "$ref": "#/$defs/BeaconRef"
+        },
+        "powered": {
+          "type": "boolean"
+        }
+      }
+    },
+    "BeaconRef": {
+      "type": "object",
+      "description": "gp.v1.BeaconRef",
+      "additionalProperties": false,
+      "properties": {
+        "beacon_id": {
+          "type": "string"
+        },
+        "safest": {
+          "$ref": "#/$defs/Safest"
+        },
+        "nearest": {
+          "$ref": "#/$defs/Nearest"
+        },
+        "weakest": {
+          "$ref": "#/$defs/Weakest"
+        },
+        "most_threatened": {
+          "$ref": "#/$defs/MostThreatened"
+        }
+      },
+      "allOf": [
+        {
+          "not": {
+            "required": [
+              "beacon_id",
+              "safest"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_id",
+              "nearest"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_id",
+              "weakest"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_id",
+              "most_threatened"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "safest",
+              "nearest"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "safest",
+              "weakest"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "safest",
+              "most_threatened"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "nearest",
+              "weakest"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "nearest",
+              "most_threatened"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "weakest",
+              "most_threatened"
+            ]
+          }
+        }
+      ]
+    },
+    "BeaconUnderAttack": {
+      "type": "object",
+      "description": "gp.v1.BeaconUnderAttack",
+      "additionalProperties": false,
+      "properties": {
+        "beacon": {
+          "$ref": "#/$defs/BeaconRef"
+        },
+        "within_ms": {
+          "type": "integer"
+        }
+      }
+    },
+    "BroadcastStep": {
+      "type": "object",
+      "description": "gp.v1.BroadcastStep",
+      "additionalProperties": false,
+      "properties": {
+        "mark_target": {
+          "$ref": "#/$defs/MarkTarget"
+        },
+        "threat_at": {
+          "$ref": "#/$defs/ThreatAt"
+        },
+        "go_code": {
+          "$ref": "#/$defs/GoCode"
+        },
+        "rally": {
+          "$ref": "#/$defs/Rally"
+        }
+      },
+      "allOf": [
+        {
+          "not": {
+            "required": [
+              "mark_target",
+              "threat_at"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "mark_target",
+              "go_code"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "mark_target",
+              "rally"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "threat_at",
+              "go_code"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "threat_at",
+              "rally"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "go_code",
+              "rally"
+            ]
+          }
+        }
+      ]
+    },
+    "BuildSettings": {
+      "type": "object",
+      "description": "gp.v1.BuildSettings",
+      "additionalProperties": false,
+      "properties": {
+        "targets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/BuildTarget"
+          }
+        },
+        "repair_threshold_pct": {
+          "type": "integer"
+        },
+        "rebuild_destroyed": {
+          "type": "boolean"
+        },
+        "terraform": {
+          "$ref": "#/$defs/Terraform"
+        },
+        "protected_areas": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Area"
+          }
+        }
+      }
+    },
+    "BuildTarget": {
+      "type": "object",
+      "description": "gp.v1.BuildTarget",
+      "additionalProperties": false,
+      "properties": {
+        "blueprint_id": {
+          "type": "string"
+        },
+        "anchor": {
+          "$ref": "#/$defs/Location"
+        },
+        "rotation_quarter_turns": {
+          "type": "integer"
+        },
+        "order": {
+          "type": "integer"
+        }
+      }
+    },
+    "CmdrDeaths": {
+      "type": "object",
+      "description": "gp.v1.CmdrDeaths",
+      "additionalProperties": false,
+      "properties": {
+        "deaths": {
+          "$ref": "#/$defs/IntCompare"
+        }
+      }
+    },
+    "CmdrHpPct": {
+      "type": "object",
+      "description": "gp.v1.CmdrHpPct",
+      "additionalProperties": false,
+      "properties": {
+        "cmp": {
+          "$ref": "#/$defs/Cmp"
+        },
+        "pct": {
+          "type": "integer"
+        }
+      }
+    },
+    "CmdrTookDamageWithin": {
+      "type": "object",
+      "description": "gp.v1.CmdrTookDamageWithin",
+      "additionalProperties": false,
+      "properties": {
+        "ms": {
+          "type": "integer"
+        }
+      }
+    },
+    "Cmp": {
+      "type": "string",
+      "description": "`gp.v1.CmdrHpPct.Cmp`. A playbook on disk carries the value name verbatim.",
+      "enum": [
+        "CMP_UNSPECIFIED",
+        "LT",
+        "LE",
+        "EQ",
+        "NE",
+        "GE",
+        "GT"
+      ]
+    },
+    "Condition": {
+      "type": "object",
+      "description": "gp.v1.Condition",
+      "additionalProperties": false,
+      "properties": {
+        "all": {
+          "$ref": "#/$defs/All"
+        },
+        "any": {
+          "$ref": "#/$defs/Any"
+        },
+        "not": {
+          "$ref": "#/$defs/Not"
+        },
+        "cmdr_hp_pct": {
+          "$ref": "#/$defs/CmdrHpPct"
+        },
+        "cmdr_took_damage_within": {
+          "$ref": "#/$defs/CmdrTookDamageWithin"
+        },
+        "cmdr_deaths": {
+          "$ref": "#/$defs/CmdrDeaths"
+        },
+        "segment_elapsed": {
+          "$ref": "#/$defs/SegmentElapsed"
+        },
+        "beacon_hp_pct": {
+          "$ref": "#/$defs/BeaconHpPct"
+        },
+        "beacon_under_attack": {
+          "$ref": "#/$defs/BeaconUnderAttack"
+        },
+        "beacon_powered": {
+          "$ref": "#/$defs/BeaconPowered"
+        },
+        "treasury": {
+          "$ref": "#/$defs/Treasury"
+        },
+        "kw_headroom": {
+          "$ref": "#/$defs/KwHeadroom"
+        },
+        "step_reached": {
+          "$ref": "#/$defs/StepReached"
+        },
+        "rule_fired": {
+          "$ref": "#/$defs/RuleFired"
+        }
+      },
+      "allOf": [
+        {
+          "not": {
+            "required": [
+              "all",
+              "any"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "all",
+              "not"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "all",
+              "cmdr_hp_pct"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "all",
+              "cmdr_took_damage_within"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "all",
+              "cmdr_deaths"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "all",
+              "segment_elapsed"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "all",
+              "beacon_hp_pct"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "all",
+              "beacon_under_attack"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "all",
+              "beacon_powered"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "all",
+              "treasury"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "all",
+              "kw_headroom"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "all",
+              "step_reached"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "all",
+              "rule_fired"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "any",
+              "not"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "any",
+              "cmdr_hp_pct"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "any",
+              "cmdr_took_damage_within"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "any",
+              "cmdr_deaths"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "any",
+              "segment_elapsed"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "any",
+              "beacon_hp_pct"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "any",
+              "beacon_under_attack"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "any",
+              "beacon_powered"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "any",
+              "treasury"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "any",
+              "kw_headroom"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "any",
+              "step_reached"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "any",
+              "rule_fired"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "not",
+              "cmdr_hp_pct"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "not",
+              "cmdr_took_damage_within"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "not",
+              "cmdr_deaths"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "not",
+              "segment_elapsed"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "not",
+              "beacon_hp_pct"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "not",
+              "beacon_under_attack"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "not",
+              "beacon_powered"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "not",
+              "treasury"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "not",
+              "kw_headroom"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "not",
+              "step_reached"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "not",
+              "rule_fired"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "cmdr_hp_pct",
+              "cmdr_took_damage_within"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "cmdr_hp_pct",
+              "cmdr_deaths"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "cmdr_hp_pct",
+              "segment_elapsed"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "cmdr_hp_pct",
+              "beacon_hp_pct"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "cmdr_hp_pct",
+              "beacon_under_attack"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "cmdr_hp_pct",
+              "beacon_powered"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "cmdr_hp_pct",
+              "treasury"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "cmdr_hp_pct",
+              "kw_headroom"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "cmdr_hp_pct",
+              "step_reached"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "cmdr_hp_pct",
+              "rule_fired"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "cmdr_took_damage_within",
+              "cmdr_deaths"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "cmdr_took_damage_within",
+              "segment_elapsed"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "cmdr_took_damage_within",
+              "beacon_hp_pct"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "cmdr_took_damage_within",
+              "beacon_under_attack"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "cmdr_took_damage_within",
+              "beacon_powered"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "cmdr_took_damage_within",
+              "treasury"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "cmdr_took_damage_within",
+              "kw_headroom"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "cmdr_took_damage_within",
+              "step_reached"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "cmdr_took_damage_within",
+              "rule_fired"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "cmdr_deaths",
+              "segment_elapsed"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "cmdr_deaths",
+              "beacon_hp_pct"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "cmdr_deaths",
+              "beacon_under_attack"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "cmdr_deaths",
+              "beacon_powered"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "cmdr_deaths",
+              "treasury"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "cmdr_deaths",
+              "kw_headroom"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "cmdr_deaths",
+              "step_reached"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "cmdr_deaths",
+              "rule_fired"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "segment_elapsed",
+              "beacon_hp_pct"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "segment_elapsed",
+              "beacon_under_attack"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "segment_elapsed",
+              "beacon_powered"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "segment_elapsed",
+              "treasury"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "segment_elapsed",
+              "kw_headroom"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "segment_elapsed",
+              "step_reached"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "segment_elapsed",
+              "rule_fired"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_hp_pct",
+              "beacon_under_attack"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_hp_pct",
+              "beacon_powered"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_hp_pct",
+              "treasury"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_hp_pct",
+              "kw_headroom"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_hp_pct",
+              "step_reached"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_hp_pct",
+              "rule_fired"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_under_attack",
+              "beacon_powered"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_under_attack",
+              "treasury"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_under_attack",
+              "kw_headroom"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_under_attack",
+              "step_reached"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_under_attack",
+              "rule_fired"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_powered",
+              "treasury"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_powered",
+              "kw_headroom"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_powered",
+              "step_reached"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_powered",
+              "rule_fired"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "treasury",
+              "kw_headroom"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "treasury",
+              "step_reached"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "treasury",
+              "rule_fired"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "kw_headroom",
+              "step_reached"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "kw_headroom",
+              "rule_fired"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "step_reached",
+              "rule_fired"
+            ]
+          }
+        }
+      ]
+    },
+    "Declarative": {
+      "type": "object",
+      "description": "gp.v1.Declarative",
+      "additionalProperties": false,
+      "properties": {
+        "route": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Step"
+          }
+        },
+        "handlers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Handler"
+          }
+        },
+        "options": {
+          "$ref": "#/$defs/Options"
+        }
+      }
+    },
+    "DefendSettings": {
+      "type": "object",
+      "description": "gp.v1.DefendSettings",
+      "additionalProperties": false,
+      "properties": {}
+    },
+    "Fallback": {
+      "type": "object",
+      "description": "gp.v1.Fallback",
+      "additionalProperties": false,
+      "properties": {
+        "hold": {
+          "$ref": "#/$defs/FallbackHold"
+        },
+        "shadow": {
+          "$ref": "#/$defs/FallbackShadow"
+        },
+        "patrol": {
+          "$ref": "#/$defs/FallbackPatrol"
+        }
+      },
+      "allOf": [
+        {
+          "not": {
+            "required": [
+              "hold",
+              "shadow"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "hold",
+              "patrol"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "shadow",
+              "patrol"
+            ]
+          }
+        }
+      ]
+    },
+    "FallbackHold": {
+      "type": "object",
+      "description": "gp.v1.FallbackHold",
+      "additionalProperties": false,
+      "properties": {
+        "at": {
+          "$ref": "#/$defs/Location"
+        }
+      }
+    },
+    "FallbackPatrol": {
+      "type": "object",
+      "description": "gp.v1.FallbackPatrol",
+      "additionalProperties": false,
+      "properties": {
+        "waypoints": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Location"
+          }
+        }
+      }
+    },
+    "FallbackShadow": {
+      "type": "object",
+      "description": "gp.v1.FallbackShadow",
+      "additionalProperties": false,
+      "properties": {
+        "beacon": {
+          "$ref": "#/$defs/BeaconRef"
+        }
+      }
+    },
+    "GoCode": {
+      "type": "object",
+      "description": "gp.v1.GoCode",
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "type": "string"
+        }
+      }
+    },
+    "Handler": {
+      "type": "object",
+      "description": "gp.v1.Handler",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "when": {
+          "$ref": "#/$defs/Condition"
+        },
+        "body": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Step"
+          }
+        },
+        "resume": {
+          "$ref": "#/$defs/Resume"
+        },
+        "cooldown_ms": {
+          "type": "integer"
+        },
+        "max_fires": {
+          "type": "integer"
+        },
+        "resume_at_label": {
+          "type": "string"
+        },
+        "note": {
+          "type": "string"
+        }
+      }
+    },
+    "HoldStep": {
+      "type": "object",
+      "description": "gp.v1.HoldStep",
+      "additionalProperties": false,
+      "properties": {
+        "ms": {
+          "type": "integer"
+        }
+      }
+    },
+    "InitialSettings": {
+      "type": "object",
+      "description": "gp.v1.InitialSettings",
+      "additionalProperties": false,
+      "properties": {
+        "priority": {
+          "$ref": "#/$defs/QuartermasterPriority"
+        },
+        "mandate": {
+          "$ref": "#/$defs/MandateSettings"
+        }
+      }
+    },
+    "IntCompare": {
+      "type": "object",
+      "description": "gp.v1.IntCompare",
+      "additionalProperties": false,
+      "properties": {
+        "op": {
+          "$ref": "#/$defs/Op"
+        },
+        "value": {
+          "type": "integer"
+        }
+      }
+    },
+    "InterfaceRow": {
+      "type": "object",
+      "description": "gp.v1.InterfaceRow",
+      "additionalProperties": false,
+      "properties": {
+        "set_mandate": {
+          "$ref": "#/$defs/MandateSettings"
+        },
+        "set_mandate_settings": {
+          "$ref": "#/$defs/MandateSettings"
+        },
+        "set_priority": {
+          "$ref": "#/$defs/QuartermasterPriority"
+        },
+        "recycle": {
+          "$ref": "#/$defs/RecycleRow"
+        },
+        "add_build_target": {
+          "$ref": "#/$defs/AddBuildTargetRow"
+        },
+        "remove_build_target": {
+          "$ref": "#/$defs/RemoveBuildTargetRow"
+        },
+        "queue_structure": {
+          "$ref": "#/$defs/QueueStructureRow"
+        }
+      },
+      "allOf": [
+        {
+          "not": {
+            "required": [
+              "set_mandate",
+              "set_mandate_settings"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "set_mandate",
+              "set_priority"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "set_mandate",
+              "recycle"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "set_mandate",
+              "add_build_target"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "set_mandate",
+              "remove_build_target"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "set_mandate",
+              "queue_structure"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "set_mandate_settings",
+              "set_priority"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "set_mandate_settings",
+              "recycle"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "set_mandate_settings",
+              "add_build_target"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "set_mandate_settings",
+              "remove_build_target"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "set_mandate_settings",
+              "queue_structure"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "set_priority",
+              "recycle"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "set_priority",
+              "add_build_target"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "set_priority",
+              "remove_build_target"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "set_priority",
+              "queue_structure"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "recycle",
+              "add_build_target"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "recycle",
+              "remove_build_target"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "recycle",
+              "queue_structure"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "add_build_target",
+              "remove_build_target"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "add_build_target",
+              "queue_structure"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "remove_build_target",
+              "queue_structure"
+            ]
+          }
+        }
+      ]
+    },
+    "InterfaceStep": {
+      "type": "object",
+      "description": "gp.v1.InterfaceStep",
+      "additionalProperties": false,
+      "properties": {
+        "beacon": {
+          "$ref": "#/$defs/BeaconRef"
+        },
+        "rows": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/InterfaceRow"
+          }
+        }
+      }
+    },
+    "Kind": {
+      "type": "string",
+      "description": "`gp.v1.Playbook.Kind`. A playbook on disk carries the value name verbatim.",
+      "enum": [
+        "KIND_UNSPECIFIED",
+        "PLAYBOOK",
+        "TEMPLATE",
+        "SAMPLE"
+      ]
+    },
+    "KwHeadroom": {
+      "type": "object",
+      "description": "gp.v1.KwHeadroom",
+      "additionalProperties": false,
+      "properties": {
+        "kw": {
+          "$ref": "#/$defs/IntCompare"
+        }
+      }
+    },
+    "Location": {
+      "type": "object",
+      "description": "gp.v1.Location",
+      "additionalProperties": false,
+      "properties": {
+        "voxel": {
+          "$ref": "#/$defs/Voxel"
+        },
+        "beacon_anchor": {
+          "$ref": "#/$defs/BeaconRef"
+        },
+        "safest": {
+          "$ref": "#/$defs/Safest"
+        }
+      },
+      "allOf": [
+        {
+          "not": {
+            "required": [
+              "voxel",
+              "beacon_anchor"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "voxel",
+              "safest"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_anchor",
+              "safest"
+            ]
+          }
+        }
+      ]
+    },
+    "MandateKind": {
+      "type": "string",
+      "description": "`gp.v1.BeaconFilter.MandateKind`. A playbook on disk carries the value name verbatim.",
+      "enum": [
+        "MANDATE_KIND_UNSPECIFIED",
+        "BUILD",
+        "DEFEND",
+        "ATTACK",
+        "SURVEY",
+        "MINE"
+      ]
+    },
+    "MandateSettings": {
+      "type": "object",
+      "description": "gp.v1.MandateSettings",
+      "additionalProperties": false,
+      "properties": {
+        "roe": {
+          "$ref": "#/$defs/Roe"
+        },
+        "retreat_hp_pct": {
+          "type": "integer"
+        },
+        "build": {
+          "$ref": "#/$defs/BuildSettings"
+        },
+        "defend": {
+          "$ref": "#/$defs/DefendSettings"
+        },
+        "attack": {
+          "$ref": "#/$defs/AttackSettings"
+        },
+        "survey": {
+          "$ref": "#/$defs/SurveySettings"
+        },
+        "mine": {
+          "$ref": "#/$defs/MineSettings"
+        }
+      },
+      "allOf": [
+        {
+          "not": {
+            "required": [
+              "build",
+              "defend"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "build",
+              "attack"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "build",
+              "survey"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "build",
+              "mine"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "defend",
+              "attack"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "defend",
+              "survey"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "defend",
+              "mine"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "attack",
+              "survey"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "attack",
+              "mine"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "survey",
+              "mine"
+            ]
+          }
+        }
+      ]
+    },
+    "MarkTarget": {
+      "type": "object",
+      "description": "gp.v1.MarkTarget",
+      "additionalProperties": false,
+      "properties": {
+        "at": {
+          "$ref": "#/$defs/Location"
+        }
+      }
+    },
+    "Meta": {
+      "type": "object",
+      "description": "gp.v1.Meta",
+      "additionalProperties": false,
+      "properties": {
+        "title": {
+          "type": "string"
+        },
+        "author_kind": {
+          "$ref": "#/$defs/AuthorKind"
+        },
+        "fingerprint": {
+          "type": "string",
+          "contentEncoding": "base64"
+        },
+        "note": {
+          "type": "string"
+        }
+      }
+    },
+    "MineSettings": {
+      "type": "object",
+      "description": "gp.v1.MineSettings",
+      "additionalProperties": false,
+      "properties": {
+        "dig_max_depth": {
+          "type": "integer"
+        },
+        "flee_on_threat": {
+          "type": "boolean"
+        },
+        "seam_choice": {
+          "$ref": "#/$defs/SeamChoice"
+        },
+        "pillar_spacing": {
+          "type": "integer"
+        }
+      }
+    },
+    "MostThreatened": {
+      "type": "object",
+      "description": "gp.v1.MostThreatened",
+      "additionalProperties": false,
+      "properties": {
+        "filter": {
+          "$ref": "#/$defs/BeaconFilter"
+        }
+      }
+    },
+    "MoveStep": {
+      "type": "object",
+      "description": "gp.v1.MoveStep",
+      "additionalProperties": false,
+      "properties": {
+        "to": {
+          "$ref": "#/$defs/Location"
+        },
+        "pace": {
+          "$ref": "#/$defs/Pace"
+        }
+      }
+    },
+    "Nearest": {
+      "type": "object",
+      "description": "gp.v1.Nearest",
+      "additionalProperties": false,
+      "properties": {
+        "filter": {
+          "$ref": "#/$defs/BeaconFilter"
+        }
+      }
+    },
+    "Not": {
+      "type": "object",
+      "description": "gp.v1.Not",
+      "additionalProperties": false,
+      "properties": {
+        "item": {
+          "$ref": "#/$defs/Condition"
+        }
+      }
+    },
+    "OnDeath": {
+      "type": "object",
+      "description": "gp.v1.OnDeath",
+      "additionalProperties": false,
+      "properties": {
+        "on_respawn": {
+          "$ref": "#/$defs/OnRespawn"
+        },
+        "max_deaths_before_fallback": {
+          "type": "integer"
+        }
+      }
+    },
+    "OnFail": {
+      "type": "object",
+      "description": "gp.v1.OnFail",
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/Action"
+        },
+        "jump_to_label": {
+          "type": "string"
+        }
+      }
+    },
+    "OnRespawn": {
+      "type": "string",
+      "description": "`gp.v1.OnDeath.OnRespawn`. A playbook on disk carries the value name verbatim.",
+      "enum": [
+        "ON_RESPAWN_UNSPECIFIED",
+        "CONTINUE"
+      ]
+    },
+    "Op": {
+      "type": "string",
+      "description": "`gp.v1.IntCompare.Op`. A playbook on disk carries the value name verbatim.",
+      "enum": [
+        "OP_UNSPECIFIED",
+        "LT",
+        "LE",
+        "EQ",
+        "NE",
+        "GE",
+        "GT"
+      ]
+    },
+    "Options": {
+      "type": "object",
+      "description": "gp.v1.Options",
+      "additionalProperties": false,
+      "properties": {
+        "allow_dormant_beacons": {
+          "type": "boolean"
+        }
+      }
+    },
+    "Pace": {
+      "type": "string",
+      "description": "`gp.v1.MoveStep.Pace`. A playbook on disk carries the value name verbatim.",
+      "enum": [
+        "PACE_UNSPECIFIED",
+        "DIRECT",
+        "AVOID_KNOWN_THREATS"
+      ]
+    },
+    "PlaceBeaconStep": {
+      "type": "object",
+      "description": "gp.v1.PlaceBeaconStep",
+      "additionalProperties": false,
+      "properties": {
+        "at": {
+          "$ref": "#/$defs/Location"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "initial": {
+          "$ref": "#/$defs/InitialSettings"
+        }
+      }
+    },
+    "Playbook": {
+      "type": "object",
+      "description": "gp.v1.Playbook",
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "$ref": "#/$defs/SchemaVersion"
+        },
+        "meta": {
+          "$ref": "#/$defs/Meta"
+        },
+        "declarative": {
+          "$ref": "#/$defs/Declarative"
+        },
+        "on_death": {
+          "$ref": "#/$defs/OnDeath"
+        },
+        "fallback": {
+          "$ref": "#/$defs/Fallback"
+        },
+        "kind": {
+          "$ref": "#/$defs/Kind"
+        }
+      }
+    },
+    "QuartermasterPriority": {
+      "type": "string",
+      "description": "`gp.v1.InterfaceRow.QuartermasterPriority`. A playbook on disk carries the value name verbatim.",
+      "enum": [
+        "QUARTERMASTER_PRIORITY_UNSPECIFIED",
+        "LOW",
+        "NORMAL",
+        "HIGH"
+      ]
+    },
+    "QueueStructureRow": {
+      "type": "object",
+      "description": "gp.v1.QueueStructureRow",
+      "additionalProperties": false,
+      "properties": {
+        "blueprint_id": {
+          "type": "string"
+        }
+      }
+    },
+    "Rally": {
+      "type": "object",
+      "description": "gp.v1.Rally",
+      "additionalProperties": false,
+      "properties": {
+        "at": {
+          "$ref": "#/$defs/Location"
+        }
+      }
+    },
+    "RecycleRow": {
+      "type": "object",
+      "description": "gp.v1.RecycleRow",
+      "additionalProperties": false,
+      "properties": {}
+    },
+    "RemoveBuildTargetRow": {
+      "type": "object",
+      "description": "gp.v1.RemoveBuildTargetRow",
+      "additionalProperties": false,
+      "properties": {
+        "anchor": {
+          "$ref": "#/$defs/Location"
+        }
+      }
+    },
+    "Resume": {
+      "type": "string",
+      "description": "`gp.v1.Handler.Resume`. A playbook on disk carries the value name verbatim.",
+      "enum": [
+        "RESUME_UNSPECIFIED",
+        "CONTINUE",
+        "SKIP_STEP",
+        "JUMP_FORWARD",
+        "END_ROUTE"
+      ]
+    },
+    "Roe": {
+      "type": "string",
+      "description": "`gp.v1.MandateSettings.Roe`. A playbook on disk carries the value name verbatim.",
+      "enum": [
+        "ROE_UNSPECIFIED",
+        "HOLD_FIRE",
+        "RETURN_FIRE",
+        "FREE_FIRE"
+      ]
+    },
+    "RuleFired": {
+      "type": "object",
+      "description": "gp.v1.RuleFired",
+      "additionalProperties": false,
+      "properties": {
+        "handler_id": {
+          "type": "string"
+        }
+      }
+    },
+    "Safest": {
+      "type": "object",
+      "description": "gp.v1.Safest",
+      "additionalProperties": false,
+      "properties": {}
+    },
+    "SchemaVersion": {
+      "type": "object",
+      "description": "gp.v1.SchemaVersion",
+      "additionalProperties": false,
+      "properties": {
+        "major": {
+          "type": "integer"
+        },
+        "minor": {
+          "type": "integer"
+        }
+      }
+    },
+    "SeamChoice": {
+      "type": "string",
+      "description": "`gp.v1.MineSettings.SeamChoice`. A playbook on disk carries the value name verbatim.",
+      "enum": [
+        "SEAM_CHOICE_UNSPECIFIED",
+        "RICHEST",
+        "NEAREST",
+        "SAFEST"
+      ]
+    },
+    "SegmentElapsed": {
+      "type": "object",
+      "description": "gp.v1.SegmentElapsed",
+      "additionalProperties": false,
+      "properties": {
+        "ms": {
+          "$ref": "#/$defs/IntCompare"
+        }
+      }
+    },
+    "Side": {
+      "type": "string",
+      "description": "`gp.v1.BeaconFilter.Side`. A playbook on disk carries the value name verbatim.",
+      "enum": [
+        "SIDE_UNSPECIFIED",
+        "OWN",
+        "ENEMY_KNOWN"
+      ]
+    },
+    "Step": {
+      "type": "object",
+      "description": "gp.v1.Step",
+      "additionalProperties": false,
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "note": {
+          "type": "string"
+        },
+        "skip_if": {
+          "$ref": "#/$defs/Condition"
+        },
+        "timeout_ms": {
+          "type": "integer"
+        },
+        "on_fail": {
+          "$ref": "#/$defs/OnFail"
+        },
+        "move": {
+          "$ref": "#/$defs/MoveStep"
+        },
+        "interface": {
+          "$ref": "#/$defs/InterfaceStep"
+        },
+        "place_beacon": {
+          "$ref": "#/$defs/PlaceBeaconStep"
+        },
+        "wait_until": {
+          "$ref": "#/$defs/WaitUntilStep"
+        },
+        "hold": {
+          "$ref": "#/$defs/HoldStep"
+        },
+        "broadcast": {
+          "$ref": "#/$defs/BroadcastStep"
+        }
+      },
+      "allOf": [
+        {
+          "not": {
+            "required": [
+              "move",
+              "interface"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "move",
+              "place_beacon"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "move",
+              "wait_until"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "move",
+              "hold"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "move",
+              "broadcast"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "interface",
+              "place_beacon"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "interface",
+              "wait_until"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "interface",
+              "hold"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "interface",
+              "broadcast"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "place_beacon",
+              "wait_until"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "place_beacon",
+              "hold"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "place_beacon",
+              "broadcast"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "wait_until",
+              "hold"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "wait_until",
+              "broadcast"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "hold",
+              "broadcast"
+            ]
+          }
+        }
+      ]
+    },
+    "StepReached": {
+      "type": "object",
+      "description": "gp.v1.StepReached",
+      "additionalProperties": false,
+      "properties": {
+        "label": {
+          "type": "string"
+        }
+      }
+    },
+    "SurveySettings": {
+      "type": "object",
+      "description": "gp.v1.SurveySettings",
+      "additionalProperties": false,
+      "properties": {
+        "probe_areas": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Area"
+          }
+        },
+        "scout_count": {
+          "type": "integer"
+        }
+      }
+    },
+    "Terraform": {
+      "type": "string",
+      "description": "`gp.v1.BuildSettings.Terraform`. A playbook on disk carries the value name verbatim.",
+      "enum": [
+        "TERRAFORM_UNSPECIFIED",
+        "NONE",
+        "FILL",
+        "DIG",
+        "BOTH"
+      ]
+    },
+    "ThreatAt": {
+      "type": "object",
+      "description": "gp.v1.ThreatAt",
+      "additionalProperties": false,
+      "properties": {
+        "at": {
+          "$ref": "#/$defs/Location"
+        }
+      }
+    },
+    "Treasury": {
+      "type": "object",
+      "description": "gp.v1.Treasury",
+      "additionalProperties": false,
+      "properties": {
+        "dollars": {
+          "$ref": "#/$defs/IntCompare"
+        }
+      }
+    },
+    "Voxel": {
+      "type": "object",
+      "description": "gp.v1.Voxel",
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "type": "integer"
+        },
+        "y": {
+          "type": "integer"
+        },
+        "z": {
+          "type": "integer"
+        }
+      }
+    },
+    "WaitUntilStep": {
+      "type": "object",
+      "description": "gp.v1.WaitUntilStep",
+      "additionalProperties": false,
+      "properties": {
+        "condition": {
+          "$ref": "#/$defs/Condition"
+        }
+      }
+    },
+    "Weakest": {
+      "type": "object",
+      "description": "gp.v1.Weakest",
+      "additionalProperties": false,
+      "properties": {
+        "filter": {
+          "$ref": "#/$defs/BeaconFilter"
+        }
+      }
+    }
+  }
+}
