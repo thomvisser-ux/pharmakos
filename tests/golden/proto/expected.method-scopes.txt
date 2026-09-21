@@ -30,3 +30,8 @@ get_safe_plan            plan
 submit_plan              plan.submit
 set_ready                plan.submit
 get_segment_feed         observe
+get_view                 observe
+end_lull                 admin
+advance_push             admin
+end_recap                admin
+report_host_clock        admin
