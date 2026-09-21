@@ -26,6 +26,7 @@ use pharmakos_sim::math::fixed::Fx;
 use pharmakos_sim::math::quantity::{Hp, MS_PER_TICK, Ms, Tick};
 use pharmakos_sim::runner::{
     DEFAULT_ROUND_LIMIT, MatchEndReason, MatchPhase, MatchSettings, PHASE_CYCLE, Runner,
+    SealRefused,
 };
 use pharmakos_sim::snapshot::{SNAPSHOT_VERSION, Snapshot, SnapshotError};
 use pharmakos_sim::tables::{BeaconId, NO_RESPAWN, NOT_ELIMINATED, SeatId, StructureKind};
@@ -897,4 +898,127 @@ fn a_position_rides_with_an_event_that_happened_somewhere() {
         destroyed.at.map(Position::to_array),
         Some([at[0], at[1], Fx::from_raw(at[2].raw())])
     );
+}
+
+// ---------------------------------------------------------------------------
+// Sealing a playbook (T13b, decisions-log item 103 (1))
+// ---------------------------------------------------------------------------
+
+/// The smallest playbook that compiles: one hold, a `CONTINUE` respawn and a
+/// fallback. Deliberately not a golden case — this file is about the runner's
+/// door, not about what the interpreter does once through it.
+const A_PLAYBOOK: &str = concat!(
+    "{\"schema_version\":{\"major\":1},",
+    "\"meta\":{\"title\":\"t\",\"author_kind\":\"HUMAN\"},",
+    "\"declarative\":{\"route\":[{\"label\":\"a\",\"hold\":{\"ms\":1000}}]},",
+    "\"on_death\":{\"on_respawn\":\"CONTINUE\"},",
+    "\"fallback\":{\"hold\":{\"at\":{\"beacon_anchor\":{\"safest\":{}}}}},",
+    "\"kind\":\"PLAYBOOK\"}"
+);
+
+fn a_plan() -> pharmakos_sim::interpreter::Plan {
+    let playbook: gp::v1::Playbook =
+        pharmakos_proto::json::decode(A_PLAYBOOK).expect("canonical gp.v1 JSON");
+    pharmakos_sim::interpreter::Plan::compile(&playbook, &rules()).expect("it compiles")
+}
+
+#[test]
+fn a_playbook_is_sealed_during_a_lull_and_refused_in_every_other_phase() {
+    let mut runner = runner(2, &[SHORT_MS]);
+    assert_eq!(runner.phase(), MatchPhase::Lull);
+    let before = runner.tick();
+    runner
+        .seal_playbook(SeatId::new(0), a_plan())
+        .expect("a Lull is where a playbook is sealed");
+    assert_eq!(runner.tick(), before, "sealing consumes no tick");
+    assert!(
+        runner.world().interpreter().plan(0).is_some(),
+        "and the world is holding it"
+    );
+
+    // Item 5: the latest verified submission replaces the previous one, any
+    // number of times, and the second seal is as legal as the first.
+    runner
+        .seal_playbook(SeatId::new(0), a_plan())
+        .expect("replacing this Lull's seal");
+
+    assert!(runner.begin_push());
+    assert_eq!(
+        runner.seal_playbook(SeatId::new(0), a_plan()),
+        Err(SealRefused::NotInLull(MatchPhase::Push)),
+        "nobody is in control during a Push"
+    );
+
+    while let Some(report) = runner.step() {
+        if report.segment_ended {
+            break;
+        }
+    }
+    assert_eq!(runner.phase(), MatchPhase::Recap);
+    assert_eq!(
+        runner.seal_playbook(SeatId::new(0), a_plan()),
+        Err(SealRefused::NotInLull(MatchPhase::Recap)),
+        "a recap has no orders left to give"
+    );
+
+    // And the next Lull opens the door again.
+    assert!(runner.end_recap());
+    assert_eq!(runner.phase(), MatchPhase::Lull);
+    runner
+        .seal_playbook(SeatId::new(1), a_plan())
+        .expect("round two's Lull");
+}
+
+#[test]
+fn a_seal_for_a_seat_this_match_has_not_got_is_refused_by_name() {
+    let mut runner = runner(2, &[SHORT_MS]);
+    assert_eq!(
+        runner.seal_playbook(SeatId::new(7), a_plan()),
+        Err(SealRefused::NoSuchSeat(SeatId::new(7)))
+    );
+    assert!(
+        runner.world().interpreter().plan(0).is_none(),
+        "and nothing was filed for anybody else"
+    );
+}
+
+/// The frozen snapshot is what the Lull plans *against*, and the verifier
+/// hashes its bytes into every `report_hash` (spec section 11). A seal that
+/// moved it would make a seat's pre-check and the check at submit disagree
+/// about a world nothing had changed.
+#[test]
+fn a_seal_leaves_the_frozen_planning_snapshot_alone() {
+    let mut runner = runner(2, &[SHORT_MS]);
+    let before = runner.frozen().clone();
+    let live = runner.world().state_hash();
+    runner
+        .seal_playbook(SeatId::new(0), a_plan())
+        .expect("sealed");
+    assert_eq!(
+        runner.frozen(),
+        &before,
+        "the snapshot the seat planned against, and its identity hash, both stand"
+    );
+    assert_ne!(
+        runner.world().state_hash(),
+        live,
+        "while the live world did move: the interpreter's state is hashed state (T11)"
+    );
+}
+
+#[test]
+fn a_seal_reports_itself_on_the_event_bus() {
+    let mut runner = runner(2, &[SHORT_MS]);
+    runner.clear_events();
+    runner
+        .seal_playbook(SeatId::new(1), a_plan())
+        .expect("sealed");
+    let sealed: Vec<&Event> = runner
+        .events()
+        .iter()
+        .filter(|event| event.kind == EventKind::PlanSealed)
+        .collect();
+    assert_eq!(sealed.len(), 1);
+    assert_eq!(sealed[0].seat, Some(SeatId::new(1)));
+    assert_eq!(sealed[0].value, 1, "one route step");
 }

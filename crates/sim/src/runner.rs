@@ -21,6 +21,11 @@
 //!   world only while the phase is a Push, and it takes the frozen snapshot at
 //!   segment end. It carries no rule of its own that the world does not.
 //!
+//! A host reaches the match through four calls and no others:
+//! [`Runner::seal_playbook`] during a Lull, [`Runner::begin_push`],
+//! [`Runner::step`] and [`Runner::end_recap`]. Three of them consume no tick;
+//! only `step` does.
+//!
 //! `World::step` is the tick and runs whatever phase it is in; `Runner` is what
 //! decides whether a tick happens at all. That split is what lets a test, a
 //! bench or `fork` drive the world directly without walking into the match
@@ -72,6 +77,7 @@
 
 use crate::encoding::Enc;
 use crate::events::{Emission, Event, EventKind};
+use crate::interpreter::Plan;
 use crate::math::quantity::{MS_PER_TICK, Ms, Tick};
 use crate::rules::RulesTable;
 use crate::snapshot::{Snapshot, SnapshotError};
@@ -646,6 +652,42 @@ pub struct TickReport {
     pub match_ended: bool,
 }
 
+/// Why [`Runner::seal_playbook`] refused.
+///
+/// A typed answer rather than a panic or a silent no-op: a host that sealed
+/// into a Push would be changing a seat's orders while they were being carried
+/// out, and one that sealed for a seat this match has not got would be filing a
+/// playbook nobody executes. Both are host mistakes, and a host that is told
+/// which one it made can say so to whoever caused it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SealRefused {
+    /// The match was not in a Lull. Carries the phase it was actually in.
+    ///
+    /// Sealing is the Lull's own act: a playbook is planned against the frozen
+    /// snapshot, the Push is the phase in which "nobody is in control", and a
+    /// recap and an ended match have no orders left to give.
+    NotInLull(MatchPhase),
+    /// The seat is not a seat of this match.
+    NoSuchSeat(SeatId),
+}
+
+impl core::fmt::Display for SealRefused {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            SealRefused::NotInLull(phase) => write!(
+                f,
+                "a playbook is sealed during a Lull and this match is in its {}",
+                phase.name()
+            ),
+            SealRefused::NoSuchSeat(seat) => {
+                write!(f, "this match has no seat {}", seat.raw())
+            }
+        }
+    }
+}
+
+impl std::error::Error for SealRefused {}
+
 /// The match host's driver: phases in, ticks and events out.
 ///
 /// The shape the gateway's match host (T13) and the scenario runner (T15) both
@@ -748,6 +790,56 @@ impl Runner {
     /// Drain the event bus. A host that reads the feed calls this every tick.
     pub fn clear_events(&mut self) {
         self.world.clear_events();
+    }
+
+    /// Seal a seat's compiled playbook. **The Lull's own act, and refused
+    /// anywhere else.**
+    ///
+    /// The third thing a host does to a match, beside opening a Push and
+    /// closing a recap, and the one that gives the Push anything to play:
+    /// [`crate::interpreter::Plan::compile`] turns a submitted playbook into a
+    /// [`Plan`], and this files it. Without it every commander stands still,
+    /// which is what the gateway's match host shipped doing (decisions-log item
+    /// 103 (1)).
+    ///
+    /// Three properties, each of which a caller is entitled to rely on:
+    ///
+    /// * **It consumes no tick.** Like [`Runner::begin_push`] and
+    ///   [`Runner::end_recap`] it moves no game time, so the per-tick hash
+    ///   chain is untouched by when — or whether — a host calls it. It does
+    ///   move the world's state hash, because the interpreter's per-seat state
+    ///   is hashed state and sealing resets it (T11), and it emits
+    ///   `plan_sealed` at the tick the world stands at.
+    /// * **It leaves the frozen snapshot exactly as it was.** [`Runner::frozen`]
+    ///   is the planning snapshot the Lull is planning *against*, and a seal
+    ///   taken against it must not move it: the verifier hashes those bytes
+    ///   into every `report_hash` (spec section 11), so a re-freeze here would
+    ///   make a seat's pre-check and the check at submit disagree for no reason
+    ///   the seat could see. Nothing in this method touches `frozen`, and
+    ///   `a_seal_leaves_the_frozen_planning_snapshot_alone` asserts it.
+    /// * **A refusal is typed, and neither a panic nor a silent no-op.** A host
+    ///   that seals into a Push is a host with a bug, and the worst answer is
+    ///   the one that looks like success.
+    ///
+    /// Item 5's "the latest verified submission replaces the previous one, any
+    /// number of times" is [`crate::world::World::seal_playbook`]'s: sealing
+    /// twice in one Lull keeps the second plan and no history of the first.
+    ///
+    /// # Errors
+    ///
+    /// [`SealRefused::NotInLull`] outside a Lull — a Push, a recap or an ended
+    /// match — and [`SealRefused::NoSuchSeat`] for a seat this match has not
+    /// got.
+    pub fn seal_playbook(&mut self, seat: SeatId, plan: Plan) -> Result<(), SealRefused> {
+        let phase = self.phase();
+        if phase != MatchPhase::Lull {
+            return Err(SealRefused::NotInLull(phase));
+        }
+        if self.world.seal_playbook(seat, plan) {
+            Ok(())
+        } else {
+            Err(SealRefused::NoSuchSeat(seat))
+        }
     }
 
     /// Open the Push: every seat is ready, or the Lull's timer ran out.
