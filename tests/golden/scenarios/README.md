@@ -31,3 +31,19 @@ documents the scenario files themselves.
 * **A scenario passed after an assertion was loosened.** The pull request must
   say so out loud. A weakened check reads exactly like a fixed bug in the
   summary line and nowhere else.
+
+## What `expand-east-segment` does *not* cover
+
+Read its `summary` key before reading its chain. The spec's worked playbook does
+not get far on this map at these tuning values: the first step walks east for
+the whole of its 120 s timeout without arriving, the eastern site is out of
+placement range, and the tail names another seat's beacon. So the log holds no
+`beacon_placed`, no `visit_started`, no `row_committed` and no `rule_fired` —
+the segment pins the interpreter **refusing** loudly, not the interpreter
+working. The interpreter working is pinned by `interpreter/`'s five transcripts
+and by the determinism chain, whose harness playbook completes a visit and a
+deploy. A second scenario whose playbook finishes its route is worth having and
+is not this task's to add (one scenario file per lane).
+
+**This line format is a contract**, like `interpreter/`'s: it is the same
+tab-separated event line, and a scenario file asserts on the `kind` names in it.
