@@ -24,6 +24,12 @@ gp.api.v1.GetMapSummaryResponse
 gp.api.v1.GetRecapResponse
   numbers: 2-15
 
+gp.api.v1.ViewChunk
+  numbers: 3-15
+
+gp.api.v1.ViewEntity
+  numbers: 6-15
+
 gp.api.v1.WhatIf
   numbers: 1-15
 

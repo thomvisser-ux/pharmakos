@@ -1217,6 +1217,302 @@ const NAME: &'static str = "KindCount";
 const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.KindCount".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.KindCount".into() }}
 // =============================================================================
+// The view
+// =============================================================================
+
+/// What a camera asks for. One read method, cursor-driven.
+///
+/// An EMPTY cursor asks for a keyframe: every chunk of the map and every entity
+/// this viewer may see. Any other cursor asks "what changed since the view this
+/// cursor came from", and a cursor issued before the match was attached is
+/// STALE_SNAPSHOT — the client's answer to which is to ask for a keyframe
+/// again.
+///
+/// The answer is PAGED: follow `next_cursor` until `complete` is true. A page
+/// is cut on encoded bytes, never on a chunk count, and the first chunk always
+/// goes through, so a chunk larger than the page budget is delivered rather
+/// than being a hole nothing can fill.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetViewRequest {
+    /// Opaque and match-tied. Empty asks for a keyframe.
+    #[prost(string, tag="1")]
+    pub cursor: ::prost::alloc::string::String,
+}
+impl ::prost::Name for GetViewRequest {
+const NAME: &'static str = "GetViewRequest";
+const PACKAGE: &'static str = "gp.api.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.GetViewRequest".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.GetViewRequest".into() }}
+/// One page of the view.
+///
+/// BUILT BY INCLUSION. What a viewer may not see is simply absent: there is no
+/// total, no count of what was withheld and no "hidden" marker anywhere in this
+/// message, because a count of what a seat cannot see is a fog leak by
+/// arithmetic (decisions-log item 26). Nothing here carries a destination, a
+/// route, a step or rule index, a mandate, a treasury, a score, a hit point or
+/// a power state.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetViewResponse {
+    /// Game milliseconds since the start of the current segment — the same epoch
+    /// Event.at_ms has, so a recording can interleave view frames and feed events
+    /// on one clock. Zero in a Lull. The round is in the `_status` footer.
+    #[prost(int32, tag="1")]
+    pub at_ms: i32,
+    /// The chunks this page carries, in ascending chunk order. On a keyframe that
+    /// is the whole map; on a delta it is the chunks whose bytes FOR THIS VIEWER
+    /// changed since the cursor.
+    #[prost(message, repeated, tag="2")]
+    pub chunks: ::prost::alloc::vec::Vec<ViewChunk>,
+    /// The complete visible entity list, on the page where `complete` is true and
+    /// on no other. An id absent from it is an entity that is gone or is no
+    /// longer visible; a client holds no list of its own past that.
+    ///
+    /// A delta mode for entities is deliberately NOT here. It arrives, if it
+    /// arrives, as a new field of GetViewRequest that a client opts into, so that
+    /// the meaning of this field never changes under a client that did not ask.
+    #[prost(message, repeated, tag="3")]
+    pub entities: ::prost::alloc::vec::Vec<ViewEntity>,
+    /// Where to read from next. Opaque.
+    #[prost(string, tag="4")]
+    pub next_cursor: ::prost::alloc::string::String,
+    /// False while more pages of this view are waiting.
+    #[prost(bool, tag="5")]
+    pub complete: bool,
+}
+impl ::prost::Name for GetViewResponse {
+const NAME: &'static str = "GetViewResponse";
+const PACKAGE: &'static str = "gp.api.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.GetViewResponse".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.GetViewResponse".into() }}
+/// One 32x32x32 chunk of terrain, as materials.
+///
+/// THE PAYLOAD FREEZES TWO FACTS OF THE SIM, so both are written out here and a
+/// gateway test pins each of them to the sim's own value
+/// (`the_wire_material_table_is_the_sims`).
+///
+/// 1. THE VOXEL ORDER inside a chunk is x east fastest, then y north, then z
+///     up: `index = x + 32*y + 1024*z` (decisions-log item 92). The chunk's
+///     extent is implied by the run lengths summing to exactly 32 768; there is
+///     no length field and no index field, because `origin` is the chunk's key
+///     and an index would freeze an addressing formula into this API.
+///
+/// 2. THE MATERIAL BYTE VALUES:
+///
+///       0  air                    5  scrap seam, rich
+///       1  dirt                   6  heat vent, lean
+///       2  stone                  7  heat vent, standard
+///       3  scrap seam, lean       8  heat vent, rich
+///       4  scrap seam, standard
+///
+///     ADDITIVE ONLY: a new material takes the next free value and nothing is
+///     ever renumbered. A DECODER DRAWS NOTHING FOR A VALUE IT DOES NOT KNOW —
+///     which is what lets a material be added without breaking a client built
+///     against this list, and what leaves room for a future "not seen" value if
+///     the owner ever fogs generated terrain.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ViewChunk {
+    /// The chunk's lowest voxel on each axis. This is the chunk's key: a client
+    /// stores chunks by origin and replaces one when it is sent again.
+    #[prost(message, optional, tag="1")]
+    pub origin: ::core::option::Option<super::super::v1::Voxel>,
+    /// Run-length encoded materials, 3 bytes a run: the material byte, then the
+    /// run length as a LITTLE-ENDIAN uint16, 1 to 32 768. Runs cross rows and
+    /// layers freely, and the lengths must sum to exactly 32 768 or the chunk is
+    /// refused rather than drawn short.
+    #[prost(bytes="vec", tag="2")]
+    pub voxels_rle: ::prost::alloc::vec::Vec<u8>,
+}
+impl ::prost::Name for ViewChunk {
+const NAME: &'static str = "ViewChunk";
+const PACKAGE: &'static str = "gp.api.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.ViewChunk".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.ViewChunk".into() }}
+/// One thing standing on the terrain, as this viewer may see it.
+///
+/// WHERE IT IS AND WHAT IT IS, and nothing else. What a seat may know about an
+/// ENEMY asset beyond its position is a rule the spec does not state (it lists
+/// HP, power state and "under attack" for a seat's OWN beacons, and only "units
+/// near, beacon known, structure near" as enemy knowledge), so hit points,
+/// power state, heading and build progress are held at 6 to 15 for the stage
+/// that makes them matter rather than being guessed at here. Facing is derived
+/// from successive positions by whoever draws it.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ViewEntity {
+    /// OPAQUE, and scoped to the viewer this answer was built for. A beacon is
+    /// `b_NN`, which is already public through list_beacons and is what a
+    /// playbook names; a unit or a structure is a handle this viewer was given in
+    /// the order it first saw the thing, because a dense table row id would be a
+    /// count of everything the match has ever made.
+    ///
+    /// It is stable for one viewer for as long as the match is attached, and it
+    /// means nothing to any other viewer or to any other method — except a `b_NN`
+    /// id, which get_beacon takes.
+    #[prost(string, tag="1")]
+    pub id: ::prost::alloc::string::String,
+    #[prost(enumeration="view_entity::Kind", tag="2")]
+    pub kind: i32,
+    /// What kind of thing within its Kind: `commander`, `drone`, `generator`.
+    /// Lower_snake_case, from the sim's own catalogue, and empty when this build
+    /// has no name for it.
+    #[prost(string, tag="3")]
+    pub subtype: ::prost::alloc::string::String,
+    /// The seat that owns it, spelt as this project spells a seat everywhere
+    /// else: `seat.0`. Empty for a thing nobody owns.
+    #[prost(string, tag="4")]
+    pub owner: ::prost::alloc::string::String,
+    /// Where it stands, in WHOLE voxels, floored on every axis. Finer-than-voxel
+    /// positions are a recording's concern and are held at 6 to 15 with the rest.
+    #[prost(message, optional, tag="5")]
+    pub at: ::core::option::Option<super::super::v1::Voxel>,
+}
+/// Nested message and enum types in `ViewEntity`.
+pub mod view_entity {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum Kind {
+        Unspecified = 0,
+        Unit = 1,
+        Beacon = 2,
+        Structure = 3,
+    }
+    impl Kind {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "KIND_UNSPECIFIED",
+                Self::Unit => "UNIT",
+                Self::Beacon => "BEACON",
+                Self::Structure => "STRUCTURE",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "KIND_UNSPECIFIED" => Some(Self::Unspecified),
+                "UNIT" => Some(Self::Unit),
+                "BEACON" => Some(Self::Beacon),
+                "STRUCTURE" => Some(Self::Structure),
+                _ => None,
+            }
+        }
+    }
+}
+impl ::prost::Name for ViewEntity {
+const NAME: &'static str = "ViewEntity";
+const PACKAGE: &'static str = "gp.api.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.ViewEntity".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.ViewEntity".into() }}
+// =============================================================================
+// Match control
+// =============================================================================
+
+/// Seal every seat's orders and open the Push.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct EndLullRequest {
+}
+impl ::prost::Name for EndLullRequest {
+const NAME: &'static str = "EndLullRequest";
+const PACKAGE: &'static str = "gp.api.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.EndLullRequest".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.EndLullRequest".into() }}
+/// Nothing but the `_status` footer, which is where the phase is. A field
+/// here would be a second place to read what the footer already says.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct EndLullResponse {
+}
+impl ::prost::Name for EndLullResponse {
+const NAME: &'static str = "EndLullResponse";
+const PACKAGE: &'static str = "gp.api.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.EndLullResponse".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.EndLullResponse".into() }}
+/// Run the Push for a stretch of GAME time.
+///
+/// The client decides the pace: speed is how much game time it asks for per
+/// wall millisecond, and a skip is this call repeated with the largest step it
+/// allows until the `_status` footer leaves PUSH. The gateway converts to whole
+/// ticks by FLOORING, stops at segment end, and answers what it actually ran.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AdvancePushRequest {
+    /// Game milliseconds, 1 to 60 000. Outside that range the call is
+    /// INVALID_ARGUMENT and is refused rather than clamped: a client that asked
+    /// for ten minutes and was told "fine" would read the answer as ten minutes
+    /// of match.
+    #[prost(int32, tag="1")]
+    pub ms: i32,
+}
+impl ::prost::Name for AdvancePushRequest {
+const NAME: &'static str = "AdvancePushRequest";
+const PACKAGE: &'static str = "gp.api.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.AdvancePushRequest".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.AdvancePushRequest".into() }}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AdvancePushResponse {
+    /// Game milliseconds actually run, which is a whole number of ticks and may
+    /// be less than was asked for — at segment end, or when the request was too
+    /// small to fill one tick. Zero is a normal answer and not an error; the
+    /// client carries `ms - advanced_ms` as its remainder.
+    #[prost(int32, tag="1")]
+    pub advanced_ms: i32,
+}
+impl ::prost::Name for AdvancePushResponse {
+const NAME: &'static str = "AdvancePushResponse";
+const PACKAGE: &'static str = "gp.api.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.AdvancePushResponse".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.AdvancePushResponse".into() }}
+/// Close the recap and open the next Lull.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct EndRecapRequest {
+}
+impl ::prost::Name for EndRecapRequest {
+const NAME: &'static str = "EndRecapRequest";
+const PACKAGE: &'static str = "gp.api.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.EndRecapRequest".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.EndRecapRequest".into() }}
+/// As EndLullResponse: the phase is the footer's.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct EndRecapResponse {
+}
+impl ::prost::Name for EndRecapResponse {
+const NAME: &'static str = "EndRecapResponse";
+const PACKAGE: &'static str = "gp.api.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.EndRecapResponse".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.EndRecapResponse".into() }}
+/// The host's own clock, reported to a gateway that has none.
+///
+/// THE GATEWAY READS NO CLOCK (AGENTS.md section 4.5). Its tick is the sim's,
+/// and a Lull, a recap and an ended match consume no sim tick at all — so
+/// without this call every token would hold one tick's worth of calls for a
+/// whole recap and for ever after the match ended, which is exactly where the
+/// full-map unlock lands. `elapsed_ms` is what moves the gateway's tick in
+/// every phase that spends none.
+///
+/// PHASE_CLOSED during a Push, where the sim's own tick is the clock.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ReportHostClockRequest {
+    /// Host time spent in the CURRENT phase, in game milliseconds. Monotone
+    /// within a phase and at most 60 000 ms further on than the last report;
+    /// anything else is INVALID_ARGUMENT, refused and audited. After a long stall
+    /// the client reports in steps.
+    #[prost(int32, tag="1")]
+    pub elapsed_ms: i32,
+    /// What the `_status` footer should show as left in a Lull. Zero in every
+    /// other phase, because no other phase has a declared length to count down.
+    #[prost(int32, tag="2")]
+    pub remaining_ms: i32,
+}
+impl ::prost::Name for ReportHostClockRequest {
+const NAME: &'static str = "ReportHostClockRequest";
+const PACKAGE: &'static str = "gp.api.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.ReportHostClockRequest".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.ReportHostClockRequest".into() }}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ReportHostClockResponse {
+    /// True when every seat of the match has said it is ready — the one bit the
+    /// lobby needs to let "Ready" end the Lull.
+    ///
+    /// An AGGREGATE, deliberately: it names no seat and says nothing about any
+    /// seat's plan, draft or notebook, so it does not breach "admin can never
+    /// read another seat's playbooks, drafts or knowledge".
+    #[prost(bool, tag="1")]
+    pub all_ready: bool,
+}
+impl ::prost::Name for ReportHostClockResponse {
+const NAME: &'static str = "ReportHostClockResponse";
+const PACKAGE: &'static str = "gp.api.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.ReportHostClockResponse".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.ReportHostClockResponse".into() }}
+// =============================================================================
 // Scopes
 // =============================================================================
 
@@ -1380,6 +1676,36 @@ pub enum Method {
     /// the same feed as labelled one-way lines. Planning is closed during play
     /// and the recap.
     GetSegmentFeed = 70,
+    /// "get_view" — the one read a camera needs: terrain chunks and the entities
+    /// standing on them, as THIS viewer may see them. Cursor-driven: an empty
+    /// cursor is a keyframe, any other cursor is "what changed since the view it
+    /// came from". Every phase, because a Lull is watched as well as played.
+    GetView = 71,
+    // --- Match control -------------------------------------------------------
+    //
+    // The four methods the local lobby drives the match with. `admin` covers
+    // lobby and match control (spec section 12) and can never read another
+    // seat's playbooks, drafts or knowledge, so none of these four reports
+    // anything about a seat beyond the one aggregate bit `report_host_clock`
+    // answers.
+    //
+    // GAME MILLISECONDS ONLY. No tick and no state hash reaches the wire, here
+    // or anywhere else: this file's transport note has said "times are game
+    // milliseconds, never ticks" since T1, and a state hash handed to the human
+    // seat's own process would be the whole world in eight bytes.
+
+    /// "end_lull" — seal every seat's orders and open the Push. PHASE_CLOSED
+    /// outside a Lull.
+    EndLull = 90,
+    /// "advance_push" — run the Push for a stretch of GAME time. PHASE_CLOSED
+    /// outside a Push.
+    AdvancePush = 91,
+    /// "end_recap" — close the recap and open the next Lull. PHASE_CLOSED
+    /// outside a recap.
+    EndRecap = 92,
+    /// "report_host_clock" — the host's own clock, reported to a gateway that
+    /// has none. Valid in every phase that consumes no sim tick.
+    ReportHostClock = 93,
 }
 impl Method {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -1415,6 +1741,11 @@ impl Method {
             Self::SubmitPlan => "METHOD_SUBMIT_PLAN",
             Self::SetReady => "METHOD_SET_READY",
             Self::GetSegmentFeed => "METHOD_GET_SEGMENT_FEED",
+            Self::GetView => "METHOD_GET_VIEW",
+            Self::EndLull => "METHOD_END_LULL",
+            Self::AdvancePush => "METHOD_ADVANCE_PUSH",
+            Self::EndRecap => "METHOD_END_RECAP",
+            Self::ReportHostClock => "METHOD_REPORT_HOST_CLOCK",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1447,6 +1778,11 @@ impl Method {
             "METHOD_SUBMIT_PLAN" => Some(Self::SubmitPlan),
             "METHOD_SET_READY" => Some(Self::SetReady),
             "METHOD_GET_SEGMENT_FEED" => Some(Self::GetSegmentFeed),
+            "METHOD_GET_VIEW" => Some(Self::GetView),
+            "METHOD_END_LULL" => Some(Self::EndLull),
+            "METHOD_ADVANCE_PUSH" => Some(Self::AdvancePush),
+            "METHOD_END_RECAP" => Some(Self::EndRecap),
+            "METHOD_REPORT_HOST_CLOCK" => Some(Self::ReportHostClock),
             _ => None,
         }
     }
