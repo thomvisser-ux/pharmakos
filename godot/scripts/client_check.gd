@@ -28,8 +28,13 @@ extends Node3D
 ##
 ## Inline rather than read from `rules/rules.v1.json`, because a `res://` path cannot
 ## escape the project folder and the rules table lives at the repository root. The bridge
-## still parses it through the schema, which is the half being checked here; the committed
-## table is checked against the same code by `crates/client-gdext`'s own tests.
+## still parses it through the schema, which is the half being checked here.
+##
+## Being a COPY of a tuning row, it is pinned:
+## `godot_project.rs::the_check_scripts_inline_rules_table_is_the_committed_one` parses this
+## very literal and compares the mesher row with `rules/rules.v1.json`, so the copy cannot
+## drift in silence (AGENTS.md section 12). `revision` is deliberately not compared — it is
+## the whole table's version and moves whenever any lane adds a row anywhere in it.
 const RULES_JSON := '{"revision":1,"mesher":{"surfacesPerFrame":4,"bytesPerFrame":524288,"ageFrames":2,"lightMax":15,"lightAtten":1}}'
 
 ## One chunk edge and one chunk's voxel count, as the mesher defines them.
@@ -55,8 +60,10 @@ const FULL_LIGHT := 15
 
 func _ready() -> void:
 	# G1 section 10.12: the physics jitter fix rewrites `delta` into a quantised estimate.
-	# Nothing here is timed, but the setting belongs with every scene that runs the
-	# extension so that no measurement taken later inherits a smoothed clock.
+	# Nothing here is timed, but no measurement taken later may inherit a smoothed clock.
+	# The authority is `project.godot`'s `[physics] common/physics_jitter_fix=0.0`, which
+	# applies before any scene loads and which `godot_project.rs` asserts; this line is
+	# belt and braces for a scene run with a project setting someone has edited.
 	Engine.physics_jitter_fix = 0
 
 	var failures: Array[String] = []
