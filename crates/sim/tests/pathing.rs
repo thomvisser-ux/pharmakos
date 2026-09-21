@@ -35,6 +35,8 @@ use std::path::PathBuf;
 
 use pharmakos_sim::chunks::ChunkDigests;
 use pharmakos_sim::encoding::hex;
+use pharmakos_sim::events::EventKind;
+use pharmakos_sim::knowledge::{AssetId, Position};
 use pharmakos_sim::math::fixed::Fx;
 use pharmakos_sim::math::quantity::TICK_HZ;
 use pharmakos_sim::pathing::MAX_ROUTE_NODES;
@@ -45,7 +47,7 @@ use pharmakos_sim::pathing::route::route;
 use pharmakos_sim::pathing::router::WalkState;
 use pharmakos_sim::pathing::search::{Bound, Scratch, astar, astar_with_order, dijkstra_bounded};
 use pharmakos_sim::pathing::surface::{DEFAULT_ORDER, Node, StepCosts, Surface};
-use pharmakos_sim::tables::UnitKind;
+use pharmakos_sim::tables::{UnitId, UnitKind};
 use pharmakos_sim::voxels::{Material, VoxelEdit, VoxelStore};
 use pharmakos_sim::{MatchSettings, RulesTable, World, WorldConfig, mapgen};
 
@@ -170,6 +172,26 @@ impl Fixture {
     fn commander_speed(&self) -> Speed {
         Speed::commander(&self.rules)
     }
+}
+
+/// Every `unit_sealed_in` line the world has emitted since the last drain, as
+/// `(tick, subject, where it stopped)`.
+///
+/// Item 60's *report* half, which T10's match phase puts on the event bus.
+/// Nothing in these tests drains the bus, so this is the whole history.
+fn sealed_in_lines(world: &World) -> Vec<(u32, AssetId, Option<[Fx; 3]>)> {
+    world
+        .events()
+        .iter()
+        .filter(|event| event.kind == EventKind::UnitSealedIn)
+        .map(|event| {
+            (
+                event.tick.raw(),
+                event.subject.unwrap_or(AssetId::of_unit(UnitId::NONE)),
+                event.at.map(Position::to_array),
+            )
+        })
+        .collect()
 }
 
 /// Every cluster a chunk's footprint overlaps.
@@ -1176,6 +1198,23 @@ fn a_sealed_in_walker_parks_and_is_re_armed_when_the_graph_changes() {
     );
     assert_eq!(world.sealed_units(), 1, "exactly one walker is sealed in");
 
+    // The count above is the standing state. The *report* half of item 60's
+    // "park and report" is the `unit_sealed_in` event T10's match phase emits
+    // on the tick the unit parked — which is what discharges the PLACEHOLDER T7
+    // left on `World::sealed_units`.
+    let reported = sealed_in_lines(&world);
+    assert_eq!(reported.len(), 1, "one walker parked, so one line was sent");
+    assert_eq!(
+        (reported[0].1, reported[0].2),
+        (
+            AssetId::of_unit(UnitId::new(unit)),
+            Some(world.units().positions()[0])
+        ),
+        "the line names the unit that parked and where it stopped — which is what the gateway's \
+         fog filter decides on"
+    );
+    let parked_at = reported[0].0;
+
     let parked = world.router().served_total();
     let mut tick = 0;
     while tick < 25 {
@@ -1187,6 +1226,16 @@ fn a_sealed_in_walker_parks_and_is_re_armed_when_the_graph_changes() {
         parked,
         "a sealed-in walker asked again while nothing changed; that is the repath loop item 60 \
          rules out"
+    );
+    let still: Vec<u32> = sealed_in_lines(&world)
+        .into_iter()
+        .map(|line| line.0)
+        .collect();
+    assert_eq!(
+        still,
+        vec![parked_at],
+        "the report is the edge, not the state: it fires on the tick the walker parked and not \
+         on the twenty-five after it"
     );
 
     // Take the wall down again: the repair publishes the clusters it rebuilt,
