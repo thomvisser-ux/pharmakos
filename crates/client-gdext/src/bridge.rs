@@ -4,10 +4,20 @@
 //! `PharmakosBridge`, the one class GDScript talks to, and the self-check CI runs.
 //!
 //! Every `#[func]` below does the same three things and nothing else: take Godot's types
-//! apart, call a module that knows how to marshal, put Godot's types back together. Each
-//! one goes through [`PanicCounter::guard`], because gdext's own catch at this boundary is
-//! silent and a default return value that nobody flagged is the failure mode the count
-//! exists to make visible (G1 section 10.12).
+//! apart, call a module that knows how to marshal, put Godot's types back together. Every
+//! one that reaches a marshalling module or the renderer goes through
+//! [`PanicCounter::guard`], because gdext's own catch at this boundary is silent and a
+//! default return value that nobody flagged is the failure mode the count exists to make
+//! visible (G1 section 10.12).
+//!
+//! Three do not, and the list is short on purpose: [`PharmakosBridge::caught_panics`],
+//! [`PharmakosBridge::panic_report`] and [`PharmakosBridge::upload_path`]. Each reads a
+//! value this struct already holds — a `u64`, a `String` the counter owns, a build-time
+//! constant — and calls nothing. Guarding them would be guarding the instrument with
+//! itself. Everything that does real work, the two counter dictionaries included, is
+//! guarded: `upload_counters` formats the surface probe's description and
+//! `upload_budget` reads rows `configure` parsed, and a panic in either used to come back
+//! as an empty dictionary that looked like "not configured yet".
 //!
 //! # The self-check
 //!
@@ -242,6 +252,18 @@ impl PharmakosBridge {
     /// runs them through `transpose_chunk` first. The returned dictionary reports what the
     /// surface cost and how the uploads have gone; an empty dictionary means the reason is
     /// in the log.
+    ///
+    /// # The six neighbour borders are written but not wired
+    ///
+    /// This call passes [`ChunkView::no_borders`], so every chunk is meshed **as if
+    /// surrounded by air** and the full set of chunk-boundary faces is emitted. That is
+    /// correct for the single-chunk self-check and wrong for any real world.
+    /// [`chunks::sim_to_mesher_border`](crate::chunks::sim_to_mesher_border) is the
+    /// transposition for them — written, documented and unit-tested — and no `#[func]`
+    /// takes a border slice yet, because nothing in the client has a neighbour to pass:
+    /// the chunk set arrives with the watch rig at T16, and wiring the six arrays into
+    /// this signature belongs there rather than here. Said out loud so the next author
+    /// does not assume the bridge already carries them.
     #[func]
     fn upload_chunk(
         &mut self,
@@ -303,26 +325,43 @@ impl PharmakosBridge {
     /// Item 54's per-frame upload budget, as `configure` read it out of the rules
     /// table: K surfaces, B bytes, and the ageing term.
     ///
-    /// The three numbers the mesher's own `DrainQueue` is built from. They are reported
-    /// rather than acted on here: which chunks are queued is the sim's, and which frame
-    /// each one drains on is the queue's — the bridge only carries the rows across the
-    /// wall, because the mesher cannot read the rules table itself (item 92).
+    /// The three numbers the mesher's own `DrainQueue` is built from.
+    ///
+    /// **They are reported here and applied nowhere.** No `DrainQueue` is constructed in
+    /// this crate, and `upload_chunk` is a per-chunk call with no per-frame accounting in
+    /// it, so the bound item 54 exists to impose is not imposed by the client today: the
+    /// caller decides how many surfaces and how many bytes a frame carries. That is
+    /// deliberate and it is T16's to close. A queue needs a DIRTY SET to drain — which
+    /// chunks changed, and how long ago — and nothing in the client has one until the
+    /// watch rig exists; a queue built now would be a queue over a set of one, which
+    /// would prove nothing and would have to be rebuilt around the real one anyway.
+    /// What this lane owes item 54 is that the rows reach the client unaltered and can be
+    /// read back, which is what this call and `configure` are, plus the test that pins
+    /// them to the committed table. T16 builds the queue from exactly these three
+    /// numbers.
+    ///
+    /// Carrying them is the bridge's job either way, because the mesher cannot read the
+    /// rules table itself (item 92).
     #[func]
-    fn upload_budget(&self) -> VarDictionary {
-        let mut report = VarDictionary::new();
+    fn upload_budget(&mut self) -> VarDictionary {
         let Some(budget) = self.budget else {
-            return report;
+            return VarDictionary::new();
         };
-        report.set(
-            &"surfaces_per_frame".to_variant(),
-            &i64::from(budget.surfaces_per_frame).to_variant(),
-        );
-        report.set(
-            &"bytes_per_frame".to_variant(),
-            &counter(budget.bytes_per_frame),
-        );
-        report.set(&"age_frames".to_variant(), &counter(budget.age_frames));
-        report
+        self.panics
+            .guard("upload_budget", || {
+                let mut report = VarDictionary::new();
+                report.set(
+                    &"surfaces_per_frame".to_variant(),
+                    &i64::from(budget.surfaces_per_frame).to_variant(),
+                );
+                report.set(
+                    &"bytes_per_frame".to_variant(),
+                    &counter(budget.bytes_per_frame),
+                );
+                report.set(&"age_frames".to_variant(), &counter(budget.age_frames));
+                report
+            })
+            .unwrap_or_default()
     }
 
     /// The upload counters: how often each of item 53's guards fired.
@@ -330,38 +369,13 @@ impl PharmakosBridge {
     /// Counts, never rates. A caller that wants "the in-place ratio" divides two of these
     /// itself, because the division would be arithmetic the bridge has no business doing.
     #[func]
-    fn upload_counters(&self) -> VarDictionary {
-        let mut report = VarDictionary::new();
+    fn upload_counters(&mut self) -> VarDictionary {
         let Some(renderer) = self.renderer.as_ref() else {
-            return report;
+            return VarDictionary::new();
         };
-        let counters = renderer.uploader().counters();
-        report.set(&"creates".to_variant(), &counter(counters.creates));
-        report.set(&"patches".to_variant(), &counter(counters.patches));
-        report.set(&"rebuilds".to_variant(), &counter(counters.rebuilds));
-        report.set(
-            &"rebuilds_index_changed".to_variant(),
-            &counter(counters.rebuilds_index_changed),
-        );
-        report.set(
-            &"rebuilds_vertex_count".to_variant(),
-            &counter(counters.rebuilds_vertex_count),
-        );
-        report.set(
-            &"rebuilds_layout".to_variant(),
-            &counter(counters.rebuilds_layout),
-        );
-        report.set(&"hides".to_variant(), &counter(counters.hides));
-        report.set(&"bytes".to_variant(), &counter(counters.bytes));
-        report.set(
-            &"resources_created".to_variant(),
-            &counter(renderer.resources_created()),
-        );
-        report.set(
-            &"surface_probe".to_variant(),
-            &renderer.uploader().probe().describe().to_variant(),
-        );
-        report
+        self.panics
+            .guard("upload_counters", || counters_of(renderer))
+            .unwrap_or_default()
     }
 
     /// Rewrites one chunk's bytes from the sim's voxel order into the mesher's.
@@ -461,6 +475,41 @@ impl PharmakosBridge {
     }
 }
 
+/// One renderer's counters as a dictionary GDScript can read.
+///
+/// A free function rather than a method, so that `upload_counters` can run it inside
+/// [`PanicCounter::guard`] while the guard holds `self.panics`.
+fn counters_of(renderer: &ChunkRenderer) -> VarDictionary {
+    let counters = renderer.uploader().counters();
+    let mut report = VarDictionary::new();
+    report.set(&"creates".to_variant(), &counter(counters.creates));
+    report.set(&"patches".to_variant(), &counter(counters.patches));
+    report.set(&"rebuilds".to_variant(), &counter(counters.rebuilds));
+    report.set(
+        &"rebuilds_index_changed".to_variant(),
+        &counter(counters.rebuilds_index_changed),
+    );
+    report.set(
+        &"rebuilds_vertex_count".to_variant(),
+        &counter(counters.rebuilds_vertex_count),
+    );
+    report.set(
+        &"rebuilds_layout".to_variant(),
+        &counter(counters.rebuilds_layout),
+    );
+    report.set(&"hides".to_variant(), &counter(counters.hides));
+    report.set(&"bytes".to_variant(), &counter(counters.bytes));
+    report.set(
+        &"resources_created".to_variant(),
+        &counter(renderer.resources_created()),
+    );
+    report.set(
+        &"surface_probe".to_variant(),
+        &renderer.uploader().probe().describe().to_variant(),
+    );
+    report
+}
+
 /// One counter as the `Variant` a dictionary holds.
 fn counter(value: u64) -> Variant {
     i64::try_from(value).unwrap_or(i64::MAX).to_variant()
@@ -543,7 +592,15 @@ impl SelfCheck {
     pub fn lines(&self) -> Vec<String> {
         let mut lines = vec![
             format!("upload path: {}", DEFAULT_UPLOAD_PATH.name()),
-            format!("rules revision: {}", self.rules_revision),
+            // Labelled, because it is the check's OWN fixture's revision and not the
+            // committed table's — the two differ whenever a lane adds a row elsewhere in
+            // rules/rules.v1.json, and a bare "rules revision: 1" reads like a claim
+            // about the shipped table. The five values that matter are pinned to the
+            // committed file by `the_self_checks_table_is_the_committed_one`.
+            format!(
+                "rules revision (this check's fixture): {}",
+                self.rules_revision
+            ),
             format!(
                 "chunks: {} ({} vertices, {} indices)",
                 self.chunks, self.vertices, self.indices
@@ -730,6 +787,12 @@ fn patchable_probe() -> SurfaceProbe {
 }
 
 /// A rules table, encoded to canonical JSON and read back through the schema.
+///
+/// The five values are item 54's, written out because the self-check has to run inside a
+/// Godot whose `res://` cannot reach `rules/rules.v1.json` at the repository root. That
+/// makes them a COPY of a tuning row, which is the shape AGENTS.md section 12 warns
+/// about — so `the_self_checks_table_is_the_committed_one` below reads the committed file
+/// and fails if the two ever disagree. The copy is loud rather than silent.
 fn round_trip_rules() -> Result<MesherRules, BridgeError> {
     let table = RulesTable {
         revision: 1,
@@ -849,6 +912,49 @@ fn apply(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The self-check's inline rules table is the committed one, value for value.
+    ///
+    /// [`round_trip_rules`] writes item 54's five numbers out, because a `res://` path
+    /// inside Godot cannot reach `rules/rules.v1.json` at the repository root. A copied
+    /// tuning row that nothing compares is the failure AGENTS.md section 12 describes:
+    /// the row moves, both copies keep the old values, every check stays green and the
+    /// self-check reports "rules revision: 1" over a table that no longer exists. This
+    /// reads the committed file and fails when they part.
+    #[test]
+    fn the_self_checks_table_is_the_committed_one() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("rules")
+            .join("rules.v1.json");
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("reading {}: {error}", path.display()));
+        let committed = rules::mesher_rules(
+            &rules::table_from_json(&text).expect("the committed table is canonical gp.v1 JSON"),
+        )
+        .expect("the committed table has a mesher row");
+        let inline = round_trip_rules().expect("the inline table round-trips");
+
+        // The MESHER ROW, not the whole table. `revision` is the committed table's own
+        // version and it moves whenever any lane adds a row anywhere in it — it was 1
+        // when this fixture was written and is 3 today, with the five values below
+        // unchanged. Pinning the revision as well would turn every unrelated row into a
+        // failure in this crate, which is how a check gets a `#[allow]` on it.
+        assert_eq!(
+            inline.budget, committed.budget,
+            "the self-check's inline drain budget has drifted from rules/rules.v1.json. \
+             Update `round_trip_rules` and `godot/scripts/client_check.gd`'s RULES_JSON \
+             together, and say in the pull request which row moved."
+        );
+        assert_eq!(
+            inline.light, committed.light,
+            "the self-check's inline light parameters have drifted from \
+             rules/rules.v1.json. Update `round_trip_rules` and \
+             `godot/scripts/client_check.gd`'s RULES_JSON together, and say in the pull \
+             request which row moved."
+        );
+    }
 
     /// The same function the headless Godot run calls, run under `cargo test`. If this
     /// passes and the CI client leg does not, the difference is the engine — which is the

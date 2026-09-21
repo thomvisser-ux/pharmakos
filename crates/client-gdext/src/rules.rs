@@ -183,6 +183,8 @@ mod tests {
         assert_eq!(rules.budget.surfaces_per_frame, 4, "K (item 54)");
         assert_eq!(rules.budget.bytes_per_frame, 512 * 1024, "B (item 54)");
         assert_eq!(rules.budget.age_frames, 2, "the ageing term (item 54)");
+        assert_eq!(rules.light.light_max(), 15, "the light ceiling (item 54)");
+        assert_eq!(rules.light.light_atten(), 1, "the fall per voxel (item 54)");
     }
 
     #[test]

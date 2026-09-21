@@ -20,10 +20,14 @@
 ;   * run/delta_smoothing = false — Godot 4.7 defaults this to TRUE. It only engages with
 ;     vsync on, so it is inert here; it is off anyway so that turning vsync on for some
 ;     other experiment cannot silently start rewriting `delta` into a smoothed estimate.
-;     (The thing that actually quantised G1's first measurement was the PHYSICS JITTER
-;     FIX, not delta smoothing: with it at its 0.5 default, 647 of 1 000 steady frames
-;     reported `delta` as exactly 1.3889 ms. `Engine.physics_jitter_fix = 0` is set in
-;     `scripts/client_check.gd`'s `_ready`, and T16's vista scene must set it too.)
+;   * physics/common/physics_jitter_fix = 0.0 — the thing that actually quantised G1's
+;     first measurement. At its 0.5 default, 647 of 1 000 steady frames reported `delta`
+;     as exactly 1.3889 ms. It is a PROJECT setting here and not only a line in one
+;     scene's `_ready`, because a project setting applies before any scene loads: a scene
+;     added later — T16's vista, T19's watch rig — cannot lose it by forgetting to ask.
+;     `scripts/client_check.gd` sets `Engine.physics_jitter_fix = 0` as well, belt and
+;     braces, and `crates/client-gdext/tests/godot_project.rs` asserts the project
+;     setting so a future edit cannot drop it quietly.
 ;   * rendering_method = forward_plus — the renderer the game ships on.
 ;   * threads/thread_model = 1, Single-Safe — the main thread owns the RenderingServer,
 ;     which is what makes path B's RID calls legal from `_process`. Item 56 rests on it.
@@ -55,6 +59,10 @@ window/size/viewport_height=720
 window/size/mode=0
 window/size/resizable=true
 window/vsync/vsync_mode=0
+
+[physics]
+
+common/physics_jitter_fix=0.0
 
 [rendering]
 
