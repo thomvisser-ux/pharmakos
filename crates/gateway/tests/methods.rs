@@ -20,6 +20,15 @@
 //! resolve, scope, phase, answer, log. Nothing reaches a handler by the back
 //! door, because there is no back door to reach it by.
 //!
+//! T13b adds a fifth, which is the other end of the same wire (decisions-log
+//! item 103 (1)): **a playbook a seat submits is executed**. Four tests at the
+//! end of this file drive a real hosted Push and read the *world* as well as
+//! the feed -- a commander that has moved, the compiled plan the match is
+//! holding, the safe playbook filed into the world for a seat that submitted
+//! nothing, and round two's submission replacing round one's. Two more sit
+//! beside them: the sim's own door refusing a playbook the verifier qualified,
+//! and item 103 (10)'s secrecy rule under both fog policies.
+//!
 //! What that is **not** is the transport. `Surface::call` is where a decoded
 //! JSON-RPC request arrives; the RFC 6455 upgrade, the framing and the masking
 //! in front of it are `tests/websocket.rs`'s, which replays the same fourteen
@@ -203,9 +212,16 @@ fn own_beacon(surface: &Surface) -> (String, i32, i32, i32) {
 
 /// Where seat 0's commander stands.
 fn commander_at(surface: &Surface) -> (i32, i32, i32) {
+    commander_voxel(surface, 0)
+}
+
+/// Where a seat's commander stands, read from the **world** rather than from
+/// the feed: an event says what the sim reported, and a position says what the
+/// sim did.
+fn commander_voxel(surface: &Surface, seat: u8) -> (i32, i32, i32) {
     let host = surface.host().expect("a hosted match");
     let world = host.world();
-    let commander = world.commander_of(SeatId::new(0));
+    let commander = world.commander_of(SeatId::new(seat));
     let row = world
         .units()
         .ids()
@@ -1778,5 +1794,713 @@ fn write_and_compare(
         contents,
         "the golden at {} moved; the pull request has to say which behaviour changed.",
         golden.display()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The orders reach the match (T13b, decisions-log item 103 (1))
+// ---------------------------------------------------------------------------
+//
+// T13 sealed a verified submission in the gateway's own private store and the
+// hosted world never heard of it, so a Push played out with every commander
+// standing still. These tests are the other end of the wire: a playbook a seat
+// submits is compiled at the door, sealed into the runner before the Lull ends,
+// and executed. A test that read only the feed would pass on a gateway that
+// reported orders it never filed, so each one reads the world as well.
+
+/// A segment long enough for a commander to walk somewhere.
+///
+/// A cardinal voxel costs `locomotion.step_cost_cardinal` (10) and the
+/// commander earns `commander.cost_per_second` (10) a second, so it walks one
+/// voxel a second -- twenty ticks. [`WALK_VOXELS`] of them plus the
+/// interpreter's 250 ms decision cadence fit inside this with room to spare.
+const WALK_MS: i32 = 12_000;
+
+/// How far east the test playbooks send a commander.
+const WALK_VOXELS: i32 = 6;
+
+/// The compiled plan a playbook makes, built the way the gateway builds it:
+/// `plan-core`'s canonical form, then the sim's own door.
+///
+/// The test compiles it a second time rather than reaching into the gateway's
+/// private store, so "the world is holding the plan this seat submitted" is
+/// checked against the playbook and not against the gateway's own opinion of
+/// it.
+fn plan_of(playbook_jsonc: &str) -> pharmakos_sim::interpreter::Plan {
+    let canonical = pharmakos_plan_core::canonicalise_text(playbook_jsonc)
+        .expect("a test playbook is a playbook");
+    pharmakos_sim::interpreter::Plan::compile(&canonical.playbook, &rules())
+        .expect("and this build can execute it")
+}
+
+/// The plan the match is holding for a seat, or `None` if it is holding none.
+fn sealed_in_world(surface: &Surface, seat: u8) -> Option<pharmakos_sim::interpreter::Plan> {
+    surface
+        .host()
+        .expect("a hosted match")
+        .world()
+        .interpreter()
+        .plan(usize::from(seat))
+        .cloned()
+}
+
+/// A playbook that walks this seat's commander `east` voxels east of where it
+/// stands and then holds, with `holds` leading no-op holds so that two seats'
+/// playbooks are visibly different plans.
+fn walk_east(surface: &Surface, seat: u8, east: i32, holds: usize) -> String {
+    let (x, y, z) = commander_voxel(surface, seat);
+    let mut steps: Vec<String> = Vec::new();
+    for index in 0..holds {
+        steps.push(format!(
+            "{{\"label\": \"wait{index}\", \"hold\": {{\"ms\": 250}}}}"
+        ));
+    }
+    steps.push(format!(
+        "{{\"label\": \"east\", \"move\": {{\"to\": {{\"voxel\": {{\"x\": {}, \"y\": {y}, \"z\": \
+         {z}}}}}, \"pace\": \"DIRECT\"}}, \"timeout_ms\": 60000, \"on_fail\": {{\"action\": \
+         \"SKIP\"}}}}",
+        x.saturating_add(east)
+    ));
+    format!(
+        concat!(
+            "// Walk east, then stand.\n",
+            "{{\"schema_version\": {{\"major\": 1}},\n",
+            " \"meta\": {{\"title\": \"East\", \"author_kind\": \"HUMAN\"}},\n",
+            " \"declarative\": {{\"route\": [{}]}},\n",
+            " \"on_death\": {{\"on_respawn\": \"CONTINUE\"}},\n",
+            " \"fallback\": {{\"hold\": {{\"at\": {{\"beacon_anchor\": {{\"safest\": {{}}}}}}}}}},\n",
+            " \"kind\": \"PLAYBOOK\"}}\n"
+        ),
+        steps.join(", ")
+    )
+}
+
+/// Submit a playbook for a seat, and insist it was accepted.
+fn submit(surface: &mut Surface, token: &Token, left: &mut i32, playbook: &str) {
+    let response = call(
+        surface,
+        token,
+        left,
+        "submit_plan",
+        &format!("{{\"playbook_jsonc\":{}}}", quote(playbook)),
+    );
+    let submitted = result(&response, "submit_plan");
+    assert_eq!(
+        submitted.get("accepted"),
+        Some(&Json::Bool(true)),
+        "the playbook was refused: {:?}",
+        submitted.get("report")
+    );
+}
+
+/// Every event kind on one viewer's page of the feed, in order, with the
+/// per-kind digest counts beside them.
+fn feed_of(
+    surface: &mut Surface,
+    token: &Token,
+    left: &mut i32,
+) -> (Vec<String>, Vec<(String, u32)>) {
+    let response = call(
+        surface,
+        token,
+        left,
+        "get_segment_feed",
+        "{\"detail\":\"full\",\"limit\":256}",
+    );
+    let page = result(&response, "get_segment_feed");
+    let Some(Json::Array(events)) = page.get("events") else {
+        panic!("a page carries events");
+    };
+    let kinds: Vec<String> = events.iter().map(|event| text_of(event, "kind")).collect();
+    let Some(Json::Array(digests)) = page.get("digests") else {
+        panic!("a page carries digests");
+    };
+    let mut counts: Vec<(String, u32)> = Vec::new();
+    for digest in digests {
+        let Some(Json::Array(rows)) = digest.get("counts") else {
+            panic!("a digest carries per-kind counts (item 97)");
+        };
+        for row in rows {
+            let count = match row.get("count") {
+                Some(Json::Number(text)) => text.parse::<u32>().expect("a count is a number"),
+                other => panic!("a count is a number, and it is {other:?}"),
+            };
+            counts.push((text_of(row, "kind"), count));
+        }
+    }
+    (kinds, counts)
+}
+
+/// The kinds the interpreter emits about one seat's own orders. `beacon_placed`
+/// is deliberately **not** here: a beacon standing in the world is a thing an
+/// opponent with eyes on the place can see, and it is the one interpreter kind
+/// fog decides rather than secrecy (decisions-log item 103 (10)).
+const PRIVATE_KINDS: &[&str] = &[
+    "plan_sealed",
+    "step_started",
+    "step_completed",
+    "step_skipped",
+    "step_failed",
+    "rule_fired",
+    "rule_ended",
+    "reflex_fired",
+    "reflex_cleared",
+    "visit_started",
+    "row_committed",
+    "visit_ended",
+    "fallback_engaged",
+];
+
+/// Two seats submit different playbooks, the host plays the Push, and each
+/// commander walks its own route.
+///
+/// The acceptance line item 103 (1) asks for, in four assertions: each seat's
+/// own feed carries its `plan_sealed` line and its step lines; a commander has
+/// **moved**, read from the world rather than from the feed; the two seats
+/// sealed two different plans; and the match was told nothing until the Lull
+/// ended.
+#[test]
+fn two_seats_submit_different_playbooks_and_the_push_executes_both() {
+    let mut surface = hosted_with(WALK_MS);
+    let zero = seat_token(&mut surface, 0);
+    let one = seat_token(&mut surface, 1);
+    let mut left_zero = LULL_MS;
+    let mut left_one = LULL_MS;
+
+    let from_zero = commander_voxel(&surface, 0);
+    let from_one = commander_voxel(&surface, 1);
+    let playbook_zero = walk_east(&surface, 0, WALK_VOXELS, 0);
+    let playbook_one = walk_east(&surface, 1, WALK_VOXELS, 2);
+    assert_ne!(playbook_zero, playbook_one, "two different orders");
+
+    submit(&mut surface, &zero, &mut left_zero, &playbook_zero);
+    submit(&mut surface, &one, &mut left_one, &playbook_one);
+
+    assert_eq!(
+        sealed_in_world(&surface, 0),
+        None,
+        "a submission is the seat's; the match is not told until the Lull ends"
+    );
+
+    surface.begin_push().expect("the Push begins");
+    assert_eq!(
+        sealed_in_world(&surface, 0).as_ref(),
+        Some(&plan_of(&playbook_zero)),
+        "seat 0's own playbook, compiled, is what the match is playing"
+    );
+    assert_eq!(
+        sealed_in_world(&surface, 1).as_ref(),
+        Some(&plan_of(&playbook_one))
+    );
+
+    // The whole Push, watching where seat 0's commander gets to. **The farthest
+    // east it reaches is the assertion and its position at segment end is
+    // not**: the route ends, `fallback` takes over, and the fallback holds *at*
+    // the safest beacon the seat owns -- so the commander walks east as ordered
+    // and is then walked back towards its core. A test that looked only at the
+    // last tick would read that return journey as the order having been
+    // ignored, which is how this one was written wrong the first time.
+    let mut farthest_east = from_zero.0;
+    while let Some(report) = surface.step().expect("a tick") {
+        farthest_east = farthest_east.max(commander_voxel(&surface, 0).0);
+        if report.segment_ended {
+            break;
+        }
+    }
+
+    // A commander has actually moved, read from the world rather than the feed.
+    let to_zero = commander_voxel(&surface, 0);
+    let to_one = commander_voxel(&surface, 1);
+    assert_ne!(
+        to_zero, from_zero,
+        "seat 0's commander stood still for the whole Push, which is the bug this task exists \
+         to remove"
+    );
+    assert_ne!(to_one, from_one, "and so did seat 1's");
+    // `commander.arrive_radius_voxels` off the target, because arriving is a
+    // radius and not an equality -- read from the rules table rather than
+    // written here, for the reason AGENTS.md section 12 gives.
+    let arrive = i32::try_from(
+        rules()
+            .message()
+            .commander
+            .as_ref()
+            .map_or(0, |commander| commander.arrive_radius_voxels),
+    )
+    .expect("a radius in voxels");
+    assert!(
+        farthest_east
+            >= from_zero
+                .0
+                .saturating_add(WALK_VOXELS)
+                .saturating_sub(arrive),
+        "seat 0's commander was told to walk {WALK_VOXELS} voxels east of x={} and got no \
+         farther than x={farthest_east}",
+        from_zero.0
+    );
+
+    // Each seat's own feed carries its seal and its steps.
+    let (kinds_zero, _) = feed_of(&mut surface, &zero, &mut left_zero);
+    let (kinds_one, _) = feed_of(&mut surface, &one, &mut left_one);
+    for (seat, kinds) in [(0_u8, &kinds_zero), (1, &kinds_one)] {
+        assert!(
+            kinds.iter().any(|kind| kind == "plan_sealed"),
+            "seat {seat} was never told its own plan was sealed: {kinds:?}"
+        );
+        assert!(
+            kinds.iter().any(|kind| kind == "step_started"),
+            "seat {seat} was never told its route had started: {kinds:?}"
+        );
+    }
+    // Both seats seal and both walk, so the two feeds hold the same *kinds*.
+    // The point is that each holds only its own instances of them, which the
+    // next test counts.
+    assert_eq!(
+        kinds_zero
+            .iter()
+            .filter(|kind| *kind == "plan_sealed")
+            .count(),
+        1,
+        "one seal, and it is this seat's: {kinds_zero:?}"
+    );
+    assert_eq!(
+        kinds_one
+            .iter()
+            .filter(|kind| *kind == "plan_sealed")
+            .count(),
+        1
+    );
+}
+
+/// Item 103 (10), pinned against a real hosted Push under **both** fog
+/// policies: the interpreter's lines are one seat's business and no policy
+/// lifts that.
+///
+/// The digest counts are checked as well as the events, and that is the half a
+/// test of this shape usually misses: `gp.api.v1.Digest.counts` is a per-kind
+/// count, so a count taken over the whole bus would tell seat 0 exactly how
+/// many times seat 1's rules fired without showing it one of them. The feed
+/// filters before it counts (`SegmentFeed::page`), and this is what says so
+/// from outside.
+#[test]
+fn no_fog_policy_shows_one_seat_the_other_seats_orders() {
+    for fog in [FogPolicy::fogged(), FogPolicy::casual()] {
+        let mut surface = hosted_as(WALK_MS, fog, None);
+        let zero = seat_token(&mut surface, 0);
+        let one = seat_token(&mut surface, 1);
+        let mut left_zero = LULL_MS;
+        let mut left_one = LULL_MS;
+
+        let playbook_zero = walk_east(&surface, 0, WALK_VOXELS, 0);
+        let playbook_one = walk_east(&surface, 1, WALK_VOXELS, 2);
+        submit(&mut surface, &zero, &mut left_zero, &playbook_zero);
+        submit(&mut surface, &one, &mut left_one, &playbook_one);
+        surface.begin_push().expect("the Push begins");
+        while let Some(report) = surface.step().expect("a tick") {
+            if report.segment_ended {
+                break;
+            }
+        }
+
+        let (kinds_zero, counts_zero) = feed_of(&mut surface, &zero, &mut left_zero);
+        let (kinds_one, counts_one) = feed_of(&mut surface, &one, &mut left_one);
+
+        // The unfiltered bus is the control: both seats' lines are on it, so
+        // the split below is a filter doing work rather than a quiet match.
+        let bus = surface.feed().events().len();
+        assert!(
+            bus > kinds_zero.len(),
+            "the bus holds no more than one seat may see, so this test is comparing nothing"
+        );
+
+        let mut checked = 0_usize;
+        for kind in PRIVATE_KINDS {
+            let on_bus = surface
+                .feed()
+                .events()
+                .iter()
+                .filter(|event| event.kind.name() == *kind)
+                .count();
+            if on_bus == 0 {
+                continue;
+            }
+            checked = checked.saturating_add(1);
+            let seen_zero = kinds_zero.iter().filter(|seen| *seen == kind).count();
+            let seen_one = kinds_one.iter().filter(|seen| *seen == kind).count();
+            assert_eq!(
+                seen_zero.saturating_add(seen_one),
+                on_bus,
+                "`{kind}`: the two seats between them see every one of their own lines, and \
+                 neither sees one of the other's"
+            );
+
+            // And the digest counts say the number the page says. A count over
+            // the bus would be `on_bus` for both seats.
+            let counted_zero: u32 = counts_zero
+                .iter()
+                .filter(|(named, _)| named == kind)
+                .fold(0, |sum, (_, count)| sum.saturating_add(*count));
+            assert_eq!(
+                usize::try_from(counted_zero).unwrap_or(usize::MAX),
+                seen_zero,
+                "`{kind}`: seat 0's digest counts {counted_zero} of them and its page shows \
+                 {seen_zero}; a count of lines a seat may not see is a fog leak by arithmetic \
+                 (decisions-log item 26)"
+            );
+            let counted_one: u32 = counts_one
+                .iter()
+                .filter(|(named, _)| named == kind)
+                .fold(0, |sum, (_, count)| sum.saturating_add(*count));
+            assert_eq!(
+                usize::try_from(counted_one).unwrap_or(usize::MAX),
+                seen_one,
+                "`{kind}`: and seat 1's digest agrees with seat 1's page"
+            );
+        }
+        assert!(
+            checked >= 3,
+            "only {checked} of the interpreter's kinds were on the bus at all, so this Push \
+             exercised almost nothing"
+        );
+        assert!(
+            kinds_zero.iter().any(|kind| kind == "step_started"),
+            "seat 0 saw none of its own orders either, so the test above is vacuous"
+        );
+        assert!(kinds_one.iter().any(|kind| kind == "step_started"));
+    }
+}
+
+/// Spec section 14: a seat that sealed nothing plays the safe playbook -- and
+/// plays it **in the world**, not merely in the gateway's store.
+#[test]
+fn a_seat_that_submitted_nothing_has_the_safe_playbook_sealed_into_the_world() {
+    let mut surface = hosted_with(WALK_MS);
+    let zero = seat_token(&mut surface, 0);
+    let mut left = LULL_MS;
+    let playbook = walk_east(&surface, 0, WALK_VOXELS, 0);
+    submit(&mut surface, &zero, &mut left, &playbook);
+
+    surface.begin_push().expect("the Push begins");
+    let safe = plan_of(pharmakos_gateway::host::SAFE_PLAYBOOK);
+    assert_eq!(
+        sealed_in_world(&surface, 1).as_ref(),
+        Some(&safe),
+        "seat 1 submitted nothing, so the match is playing the filed safe playbook"
+    );
+    assert_ne!(
+        sealed_in_world(&surface, 0).as_ref(),
+        Some(&safe),
+        "and seat 0, which did submit, is playing its own"
+    );
+}
+
+/// "A seal is a round's" (spec section 14, decisions-log item 5), and the world
+/// is where that has to be true: round 2's submission replaces round 1's, and a
+/// seat that planned in round 1 and submitted nothing in round 2 plays round 2
+/// on the safe playbook rather than on last round's orders.
+#[test]
+fn round_twos_submission_replaces_round_ones_in_the_world() {
+    let mut surface = hosted_with(WALK_MS);
+    let zero = seat_token(&mut surface, 0);
+    let one = seat_token(&mut surface, 1);
+    let mut left_zero = LULL_MS;
+    let mut left_one = LULL_MS;
+
+    let round_one = walk_east(&surface, 0, WALK_VOXELS, 0);
+    submit(&mut surface, &zero, &mut left_zero, &round_one);
+    submit(&mut surface, &one, &mut left_one, &round_one);
+    surface.begin_push().expect("round one's Push");
+    assert_eq!(
+        sealed_in_world(&surface, 0).as_ref(),
+        Some(&plan_of(&round_one))
+    );
+    while let Some(report) = surface.step().expect("a tick") {
+        if report.segment_ended {
+            break;
+        }
+    }
+    surface.end_recap().expect("the recap ends");
+    surface.set_phase_remaining_ms(Ms::new(LULL_MS));
+    surface.open_lull().expect("round two's Lull");
+    left_zero = LULL_MS;
+
+    // Seat 0 plans again; seat 1 does not.
+    let round_two = walk_east(&surface, 0, WALK_VOXELS, 3);
+    assert_ne!(
+        round_two, round_one,
+        "a different plan, not the same one twice"
+    );
+    submit(&mut surface, &zero, &mut left_zero, &round_two);
+
+    surface.begin_push().expect("round two's Push");
+    assert_eq!(
+        sealed_in_world(&surface, 0).as_ref(),
+        Some(&plan_of(&round_two)),
+        "round two's submission is what the match is playing"
+    );
+    assert_ne!(
+        sealed_in_world(&surface, 0).as_ref(),
+        Some(&plan_of(&round_one)),
+        "and round one's is gone from the world, not merely shadowed in the store"
+    );
+    assert_eq!(
+        sealed_in_world(&surface, 1).as_ref(),
+        Some(&plan_of(pharmakos_gateway::host::SAFE_PLAYBOOK)),
+        "seat 1 sealed in round one and submitted nothing in round two, and a seal is a round's"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The gap between the two doors
+// ---------------------------------------------------------------------------
+
+/// Which door turns a playbook away.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Door {
+    /// The verifier: a report with `qualifies: false`, and never a method
+    /// error. Nothing has to change for this one -- the seal inspection is
+    /// where a playbook is supposed to be refused.
+    Verifier,
+    /// The sim: the verifier qualified it and `Plan::compile` will not run it.
+    /// **This is the gap**, and every one of them is listed in the pull
+    /// request with the stage that closes it.
+    Sim,
+}
+
+/// A playbook whose only oddity is the fragment given, wrapped in the smallest
+/// legal playbook around it.
+fn one_step(step: &str) -> String {
+    format!(
+        concat!(
+            "{{\"schema_version\": {{\"major\": 1}},\n",
+            " \"meta\": {{\"title\": \"Gap\", \"author_kind\": \"HUMAN\"}},\n",
+            " \"declarative\": {{\"route\": [{step}]}},\n",
+            " \"on_death\": {{\"on_respawn\": \"CONTINUE\"}},\n",
+            " \"fallback\": {{\"hold\": {{\"at\": {{\"beacon_anchor\": {{\"safest\": {{}}}}}}}}}},\n",
+            " \"kind\": \"PLAYBOOK\"}}\n"
+        ),
+        step = step
+    )
+}
+
+/// Every construct this lane could find that the **verifier accepts** and the
+/// **sim cannot execute**, with the door each one is actually turned away at.
+///
+/// The table is the deliverable as much as the assertion is: a `Door::Sim` row
+/// is a gap between the seal inspection and the interpreter, visible to a
+/// client as a method error on a playbook the editor has just shown a green
+/// tick for, and each one is named in the pull request with the stage that
+/// closes it. A `Door::Verifier` row is the same construct already closed, and
+/// it is here so that a later stage moving one from `Sim` to `Verifier` shows
+/// up as a test that has to be edited.
+fn two_door_cases() -> Vec<(&'static str, String, Door)> {
+    vec![
+        (
+            "an interface row whose effect waits for the Quartermaster",
+            one_step(
+                "{\"label\": \"r\", \"interface\": {\"beacon\": {\"safest\": {}}, \"rows\": \
+                 [{\"recycle\": {}}]}, \"timeout_ms\": 30000}",
+            ),
+            Door::Sim,
+        ),
+        (
+            "an interface row that adds a build target",
+            one_step(
+                "{\"label\": \"b\", \"interface\": {\"beacon\": {\"safest\": {}}, \"rows\": \
+                 [{\"add_build_target\": {\"target\": {\"blueprint_id\": \"generator\", \
+                 \"anchor\": {\"voxel\": {\"x\": 40, \"y\": 40, \"z\": 30}}, \
+                 \"rotation_quarter_turns\": 0, \"order\": 1}}}]}, \"timeout_ms\": 30000}",
+            ),
+            Door::Sim,
+        ),
+        (
+            "an interface row that queues a licensed capability structure",
+            one_step(
+                "{\"label\": \"q\", \"interface\": {\"beacon\": {\"safest\": {}}, \"rows\": \
+                 [{\"queue_structure\": {\"blueprint_id\": \"radio_mast\"}}]}, \"timeout_ms\": \
+                 30000}",
+            ),
+            Door::Sim,
+        ),
+        (
+            "an interface row that edits a Defend beacon's settings",
+            one_step(
+                "{\"label\": \"d\", \"interface\": {\"beacon\": {\"safest\": {}}, \"rows\": \
+                 [{\"set_mandate_settings\": {\"roe\": \"RETURN_FIRE\", \"defend\": {}}}]}, \
+                 \"timeout_ms\": 30000}",
+            ),
+            Door::Sim,
+        ),
+        (
+            "a Survey beacon given somewhere to probe",
+            one_step(
+                "{\"label\": \"s\", \"interface\": {\"beacon\": {\"safest\": {}}, \"rows\": \
+                 [{\"set_mandate_settings\": {\"roe\": \"HOLD_FIRE\", \"survey\": \
+                 {\"scout_count\": 1, \"probe_areas\": [{\"min\": {\"x\": 10, \"y\": 10, \
+                 \"z\": 10}, \"max\": {\"x\": 20, \"y\": 20, \"z\": 20}}]}}}]}, \
+                 \"timeout_ms\": 30000}",
+            ),
+            Door::Sim,
+        ),
+        (
+            "a selector filter that matches on the author's own tags",
+            one_step(
+                "{\"label\": \"m\", \"move\": {\"to\": {\"beacon_anchor\": {\"nearest\": {}, \
+                 \"filter\": {\"side\": \"OWN\", \"tags\": [\"east\"]}}}, \"pace\": \"DIRECT\"}, \
+                 \"timeout_ms\": 30000}",
+            ),
+            Door::Verifier,
+        ),
+        (
+            "a selector that ranks by incoming threat, which needs combat",
+            one_step(
+                "{\"label\": \"m\", \"move\": {\"to\": {\"most_threatened\": {}}, \"pace\": \
+                 \"DIRECT\"}, \"timeout_ms\": 30000}",
+            ),
+            Door::Verifier,
+        ),
+        (
+            "a predicate that asks whether a beacon is under attack",
+            one_step(
+                "{\"label\": \"w\", \"wait_until\": {\"condition\": {\"beacon_under_attack\": \
+                 {\"beacon\": {\"safest\": {}}, \"within_ms\": 5000}}}, \"timeout_ms\": 5000}",
+            ),
+            Door::Sim,
+        ),
+        (
+            "a selector filter naming an enemy the knowledge store has not got",
+            one_step(
+                "{\"label\": \"m\", \"move\": {\"to\": {\"beacon_anchor\": {\"nearest\": {}, \
+                 \"filter\": {\"side\": \"ENEMY_KNOWN\"}}}, \"pace\": \"DIRECT\"}, \
+                 \"timeout_ms\": 30000}",
+            ),
+            Door::Verifier,
+        ),
+        (
+            "a voxel a long way outside the map",
+            one_step(
+                "{\"label\": \"m\", \"move\": {\"to\": {\"voxel\": {\"x\": 40000, \"y\": 10, \
+                 \"z\": 10}}, \"pace\": \"DIRECT\"}, \"timeout_ms\": 30000}",
+            ),
+            Door::Verifier,
+        ),
+    ]
+}
+
+/// A playbook the verifier qualifies and this build cannot execute is a
+/// **method error**, not a `qualifies: false` report -- and it leaves the
+/// seat's previous seal exactly where it was.
+///
+/// Decisions-log item 103 (1). The two doors are deliberately different: the
+/// verifier answers "may this be sealed" and the sim answers "can this build
+/// execute it", and the second answer is discovered at `submit_plan`, while
+/// the caller is still on the line, rather than at `begin_push`, where nobody
+/// is listening for it and the seat would find out by watching its commander
+/// stand still.
+///
+/// The code is `INVALID_ARGUMENT` and the message names the construct and the
+/// stage: the closed set has no word for "valid and not executable by this
+/// build", adding one is a contract change, and of the ten codes it has this is
+/// the one that means "the request, and you can fix it"
+/// (`surface::planning::compile_playbook` gives the whole argument).
+#[test]
+fn a_playbook_this_build_cannot_execute_is_a_method_error_and_keeps_the_old_seal() {
+    let mut surface = hosted();
+    let token = seat_token(&mut surface, 0);
+    let mut left = LULL_MS;
+
+    // A seal to protect, made first.
+    let good = pharmakos_gateway::host::SAFE_PLAYBOOK;
+    submit(&mut surface, &token, &mut left, good);
+    let held = surface
+        .sealed_plan(Subject::Seat(SeatId::new(0)), SeatId::new(0))
+        .expect("a seal")
+        .clone();
+
+    let mut gaps = 0_usize;
+    for (what, playbook, door) in two_door_cases() {
+        let response = call(
+            &mut surface,
+            &token,
+            &mut left,
+            "verify_plan",
+            &format!(
+                "{{\"depth\":\"full\",\"playbook_jsonc\":{}}}",
+                quote(&playbook)
+            ),
+        );
+        let report = result(&response, "verify_plan")
+            .get("report")
+            .cloned()
+            .unwrap_or_else(|| panic!("verify_plan answers a report"));
+        let qualifies = report.get("qualifies") == Some(&Json::Bool(true));
+        assert_eq!(
+            qualifies,
+            door == Door::Sim,
+            "{what}: the verifier's answer moved. A construct that used to reach the sim's door \
+             and no longer does is a gap closed -- good news, and an edit to this table"
+        );
+
+        let response = call(
+            &mut surface,
+            &token,
+            &mut left,
+            "submit_plan",
+            &format!("{{\"playbook_jsonc\":{}}}", quote(&playbook)),
+        );
+        match door {
+            Door::Verifier => {
+                let submitted = result(&response, "submit_plan");
+                assert_eq!(
+                    submitted.get("accepted"),
+                    Some(&Json::Bool(false)),
+                    "{what}: an invalid playbook is a report and never a method error"
+                );
+            }
+            Door::Sim => {
+                gaps = gaps.saturating_add(1);
+                assert_eq!(
+                    code(&response, what),
+                    "INVALID_ARGUMENT",
+                    "{what}: the sim's refusal reaches the caller"
+                );
+                let message = response
+                    .get("error")
+                    .and_then(|error| error.get("message"))
+                    .map_or_else(
+                        || panic!("{what}: a refusal carries a message"),
+                        |value| match value {
+                            Json::String(text) => text.clone(),
+                            other => panic!("a message is a string, and it is {other:?}"),
+                        },
+                    );
+                assert!(
+                    message.contains("qualifies") && message.contains("cannot execute"),
+                    "{what}: the message has to say which of the two doors refused it, and it \
+                     says `{message}`"
+                );
+            }
+        }
+
+        assert_eq!(
+            surface
+                .sealed_plan(Subject::Seat(SeatId::new(0)), SeatId::new(0))
+                .expect("still a seal"),
+            &held,
+            "{what}: a refused submission left the seat's previous seal alone"
+        );
+    }
+    assert_eq!(
+        gaps, 6,
+        "the pull request lists six gaps between the two doors, each with the stage that closes \
+         it. A different number here means the list is out of date -- in either direction"
+    );
+
+    // And the seal that survived all of that is still the one the match plays.
+    surface.begin_push().expect("the Push begins");
+    assert_eq!(
+        sealed_in_world(&surface, 0).as_ref(),
+        Some(&plan_of(good)),
+        "the refusals changed nothing about what seat 0 had sealed"
     );
 }
