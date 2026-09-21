@@ -152,7 +152,11 @@ const NO_DRY_RUNS: &[(&str, &str)] = &[
 /// what "no dry runs" is actually about, is that **no method handler may**: a
 /// handler that stepped, or cloned and stepped, a runner would be answering
 /// "what would happen" by making it happen, which is the thing AGENTS.md
-/// section 3 rule 2 forbids.
+/// section 3 rule 2 is for. Read exactly, that rule names `plan-core` and the
+/// verifier and never mentions the gateway; the pull request asks for a
+/// sentence that names the match host the way section 4.9 names
+/// `WALLED_PACKAGES`, and until there is one this test is the only thing
+/// holding the line.
 ///
 /// So the rule is a *place* rather than a prohibition, and
 /// [`the_match_is_stepped_in_one_module`] is where it is enforced.

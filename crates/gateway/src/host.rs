@@ -10,8 +10,11 @@
 //! handler may reach any of them** — `verify_plan`, `estimate_route`,
 //! `get_economy_forecast`, `render_plan`, `patch_plan` and
 //! `instantiate_template` never step a runner and never clone one to step the
-//! copy (AGENTS.md section 3 rule 2, "no dry runs";
-//! `tests/confinement.rs` asserts it over this crate's own source text).
+//! copy. That is AGENTS.md section 3 rule 2's principle, "no dry runs", applied
+//! here: the rule names `plan-core` and the verifier and does not mention the
+//! gateway at all, which is a gap the pull request raises rather than a rule
+//! this crate is breaking. `tests/confinement.rs` asserts it over this crate's
+//! own source text.
 //!
 //! # The Lull and the recap end on the host's word, not on a clock
 //!
