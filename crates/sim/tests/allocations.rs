@@ -34,6 +34,7 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use pharmakos_sim::encoding::Enc;
+use pharmakos_sim::runner::{DEFAULT_ROUND_LIMIT, Runner};
 use pharmakos_sim::voxels::VoxelEdit;
 use pharmakos_sim::{MatchSettings, RulesTable, World, WorldConfig};
 
@@ -88,14 +89,29 @@ fn a_tick_allocates_nothing() {
             .join("rules.v1.json"),
     )
     .expect("the committed rules table loads");
-    let mut world = World::new(&WorldConfig {
+    let world = World::new(&WorldConfig {
         match_seed: pharmakos_sim::DETERMINISM_MATCH_SEED,
         seats: pharmakos_sim::DETERMINISM_SEATS,
         units_per_seat: pharmakos_sim::DETERMINISM_UNITS_PER_SEAT,
         rules,
-        match_settings: MatchSettings::default(),
+        match_settings: MatchSettings {
+            // Long enough that the measured loop never reaches the segment's
+            // end: the segment-end freeze allocates by design (it captures a
+            // whole world) and belongs outside the assertion, exactly like
+            // `Runner::new` below.
+            segment_lengths_ms: vec![600_000],
+            round_limit: DEFAULT_ROUND_LIMIT,
+        },
     })
     .expect("the rules table describes a map and a broadphase grid");
+    // Driven through the `Runner`, and **in a Push**, because `World::phase_match`
+    // returns at its first gate outside one: a world stepped by hand stays in
+    // its opening Lull, and everything T10 put in that phase — the beacon
+    // deaths, elimination, the respawns, the one-tick match-end rule, the
+    // segment's end and every event they emit — would sit outside the counted
+    // loop.
+    let mut runner = Runner::new(world);
+    assert!(runner.begin_push(), "a match opens in a Lull");
     let mut enc = Enc::with_capacity(64 * 1024);
 
     // Warm up: the first tick may still grow the encoder's buffer, and a
@@ -106,8 +122,10 @@ fn a_tick_allocates_nothing() {
     // is paid for out here and the measured loop below sees it at its steady
     // capacity.
     for step in 0..50 {
-        crater_at(&mut world, step);
-        let _ = world.step(&mut enc);
+        crater_at(runner.world_mut(), step);
+        runner.step().expect("the segment outlasts this test");
+        runner.clear_events();
+        runner.world().encode(&mut enc);
     }
     let capacity_after_warmup = enc.encoded_len();
 
@@ -117,8 +135,13 @@ fn a_tick_allocates_nothing() {
         // work in it: a crater is the edit S2 will file by the thousand, and an
         // empty queue would leave `settle`, `mark` and `crater` outside the
         // property this file exists to defend.
-        crater_at(&mut world, step + 50);
-        let _ = world.step(&mut enc);
+        crater_at(runner.world_mut(), step + 50);
+        runner.step().expect("the segment outlasts this test");
+        // A host drains every tick, and the bus is fixed-capacity: draining it
+        // is what keeps an event emission inside the assertion instead of
+        // silently overflowing past it.
+        runner.clear_events();
+        runner.world().encode(&mut enc);
     }
     let during = ALLOCATIONS.load(Ordering::Relaxed) - before;
 

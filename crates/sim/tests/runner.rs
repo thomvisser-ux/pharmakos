@@ -23,7 +23,7 @@ use pharmakos_sim::encoding::Enc;
 use pharmakos_sim::events::{Event, EventKind};
 use pharmakos_sim::knowledge::Position;
 use pharmakos_sim::math::fixed::Fx;
-use pharmakos_sim::math::quantity::{Hp, Ms, Tick};
+use pharmakos_sim::math::quantity::{Hp, MS_PER_TICK, Ms, Tick};
 use pharmakos_sim::runner::{
     DEFAULT_ROUND_LIMIT, MatchEndReason, MatchPhase, MatchSettings, PHASE_CYCLE, Runner,
 };
@@ -205,6 +205,41 @@ fn an_empty_host_list_plays_the_rules_tables_ladder() {
 }
 
 #[test]
+fn a_degenerate_ladder_is_clamped_rather_than_trusted() {
+    // A lobby setting is not trusted. `round_limit` was already clamped to a
+    // round; every ladder entry is clamped to a tick for the same reason, so a
+    // zero or a negative cannot describe a round that closes before anything in
+    // it runs while the editor's clock shows nothing.
+    let world = world(2, &[0, -5_000, 1]);
+    let state = world.match_state();
+    assert_eq!(
+        state.segment_lengths_ms(),
+        [MS_PER_TICK, MS_PER_TICK, MS_PER_TICK],
+        "every entry is floored at one tick"
+    );
+    assert_eq!(state.coming_segment_ms(), Ms::new(MS_PER_TICK));
+
+    // And the same on the way back from a file. Structure is refused at the
+    // door (an undefined phase is), but a length is a value and takes the same
+    // clamp — refusing it would make `Snapshot::default()`, which carries no
+    // ladder at all, unrestorable.
+    let mut runner = runner(2, &[SHORT_MS]);
+    let mut saved = runner.capture();
+    saved.match_segment_lengths_ms.clear();
+    saved.coming_segment_ms = i32::MIN;
+    runner
+        .restore(&saved)
+        .expect("a length is normalised, not refused");
+    assert!(runner.begin_push());
+    assert_eq!(
+        runner.world().match_state().segment_ticks(),
+        1,
+        "a Push runs at least one tick, whatever the file said"
+    );
+    assert!(runner.step().is_some(), "and that tick runs");
+}
+
+#[test]
 fn the_match_state_is_in_the_state_hash() {
     // AGENTS.md §4.8: a field that decides what a tick does is hashed. Every
     // field of the match state does, so every one of them moves the chain.
@@ -246,12 +281,19 @@ fn the_coming_segments_length_comes_from_the_snapshot_not_a_constant() {
         Ms::new(15_000),
         "the segment-end snapshot carries the coming segment's length (item 30)"
     );
-    let carried = frozen.snapshot().clone();
+    let mut carried = frozen.snapshot().clone();
     assert_eq!(carried.coming_segment_ms, 15_000, "and so do its bytes");
 
-    // Now restore it into a world built under a **different** ladder. If the
-    // coming segment's length were re-derived from `rules.match`, round 2 would
-    // run this table's 1 s; it must run the frozen 15 s instead.
+    // Edit the carried number to something **the restored ladder cannot
+    // produce**. The file still says the ladder is [5 s, 15 s], so a Push that
+    // re-derived its length — from the rules table, or from the ladder and the
+    // round number — would run 15 s. Only a Push that consumes
+    // `coming_segment_ms` itself runs 9 s. Inconsistent on purpose: the point
+    // is which of the two fields the Push reads.
+    carried.coming_segment_ms = 9_000;
+
+    // And restore it into a world built under a **different** ladder again, so
+    // the rules table's own answer (1 s) is a third distinguishable number.
     let other = rules_edited(|message| {
         if let Some(block) = message.r#match.as_mut() {
             block.segment_lengths_ms = vec![1_000];
@@ -264,16 +306,23 @@ fn the_coming_segments_length_comes_from_the_snapshot_not_a_constant() {
 
     assert_eq!(second.phase(), MatchPhase::Recap);
     assert_eq!(
+        second.world().match_state().segment_lengths_ms(),
+        [SHORT_MS, 15_000],
+        "the ladder travelled in the file, so re-deriving would have 15 s to hand"
+    );
+    assert_eq!(
         second.frozen().coming_segment_ms(),
-        Ms::new(15_000),
+        Ms::new(9_000),
         "a restore carries the number rather than re-deriving it"
     );
     assert!(second.end_recap());
+    assert_eq!(second.round(), 2);
     assert!(second.begin_push());
     assert_eq!(
         second.world().match_state().segment_ticks(),
-        300,
-        "round 2 runs the 15 s the snapshot carried, not the 1 s this rules table would give"
+        180,
+        "round 2 runs the 9 s the snapshot carried — not the 15 s its own ladder would give for \
+         round 2, and not the 1 s this rules table would give"
     );
 }
 
@@ -696,6 +745,51 @@ fn the_event_bus_is_not_in_the_state_encoding() {
 }
 
 #[test]
+fn a_restore_re_anchors_the_feed_so_two_resumes_agree() {
+    // The bus is derived output, so a resumed match starts with an empty feed —
+    // that price is written down in `crate::events`. What must **not** also be
+    // true is that the receiving runner's history leaks into the resumed feed:
+    // `seq` is anchored to a tick, a drain deliberately does not reset it, and
+    // a restore therefore has to. Without the re-anchor the two receivers below
+    // emit the same `lull_opened` under different `seq` values, because one of
+    // them happens to be anchored on the very tick the file was saved at.
+    let mut source = runner(2, &[SHORT_MS, 15_000]);
+    assert!(source.begin_push());
+    assert_eq!(play(&mut source, SHORT_TICKS), SHORT_TICKS);
+    let saved = source.capture();
+
+    let mut fresh = Runner::new(world(2, &[SHORT_MS, 15_000]));
+    let mut used = Runner::new(world(2, &[SHORT_MS, 15_000]));
+    assert!(used.begin_push());
+    assert_eq!(play(&mut used, SHORT_TICKS), SHORT_TICKS);
+    used.clear_events();
+    assert_eq!(
+        used.tick(),
+        Tick::new(SHORT_TICKS),
+        "the second receiver's bus is anchored on the tick the file was saved at"
+    );
+
+    let resume = |runner: &mut Runner| -> Vec<(u32, u32, &'static str)> {
+        runner.restore(&saved).expect("the snapshot restores");
+        assert!(runner.events().is_empty(), "a restore empties the feed");
+        assert!(runner.end_recap());
+        assert!(runner.begin_push());
+        runner.step().expect("the next segment runs");
+        runner
+            .events()
+            .iter()
+            .map(|event| (event.tick.raw(), event.seq, event.kind.name()))
+            .collect()
+    };
+    assert_eq!(
+        resume(&mut fresh),
+        resume(&mut used),
+        "the feed after a restore is a function of the restored state, never of what the \
+         receiving runner had been doing"
+    );
+}
+
+#[test]
 fn the_same_seed_produces_the_same_events() {
     let collect = || {
         let mut runner = runner(2, &[SHORT_MS]);
@@ -729,22 +823,53 @@ fn the_same_seed_produces_the_same_events() {
 fn a_host_that_drains_never_meets_a_full_bus() {
     // The overflow behaviour itself — drop, count, never grow — is unit-tested
     // in `src/events.rs`, where the emitter is reachable. What belongs here is
-    // the claim about the skeleton's event rate: a host draining once a tick
-    // stays far below the capacity it was given.
-    let mut runner = runner(3, &[SHORT_MS]);
+    // the claim `EVENT_BUS_CAPACITY`'s own doc makes: at the skeleton's world
+    // size, a host draining once a tick stays under the capacity **including on
+    // the tick the capacity was sized against**, which is a seat's elimination
+    // — one line per beacon of that seat plus one per structure homed to it.
+    // So this runs at the determinism harness's units per seat and kills a
+    // seat's core inside the measured loop rather than measuring a handful of
+    // phase transitions.
+    let mut runner = Runner::new(
+        World::new(&WorldConfig {
+            match_seed: pharmakos_sim::DETERMINISM_MATCH_SEED,
+            seats: 3,
+            units_per_seat: pharmakos_sim::DETERMINISM_UNITS_PER_SEAT,
+            rules: rules(),
+            match_settings: MatchSettings {
+                segment_lengths_ms: vec![SHORT_MS],
+                round_limit: DEFAULT_ROUND_LIMIT,
+            },
+        })
+        .expect("a three-seat world at the harness's size"),
+    );
     let capacity = runner.world().event_bus().capacity();
     assert!(runner.begin_push());
+
+    let core = core_of(runner.world(), 2);
     let mut peak = 0;
-    for _ in 0..SHORT_TICKS {
+    let mut elimination_peak = 0;
+    for tick in 0..SHORT_TICKS {
+        if tick == 10 {
+            destroy(&mut runner, DamageTarget::Beacon(core));
+        }
         if runner.step().is_none() {
             break;
         }
-        peak = peak.max(runner.events().len());
+        let waiting = runner.events().len();
+        peak = peak.max(waiting);
+        if has(runner.events(), EventKind::SeatEliminated) {
+            elimination_peak = waiting;
+        }
         runner.clear_events();
     }
     assert!(
+        elimination_peak > 0,
+        "the elimination tick the capacity is sized against ran inside the measured loop"
+    );
+    assert!(
         peak < capacity,
-        "a drained bus stayed under its capacity ({peak} of {capacity})"
+        "a drained bus stayed under its capacity ({peak} of {capacity}), elimination included"
     );
     assert_eq!(runner.world().event_bus().dropped(), 0);
 }

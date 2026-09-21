@@ -131,7 +131,13 @@ pub const DETERMINISM_UNITS_PER_SEAT: u32 = 50;
 /// the committed chain covers `push → recap → lull → push` three times over.
 ///
 /// Deleted when `DETERMINISM_TICKS` is raised from 1 200 to a real segment
-/// (owner, at T20 — the same PLACEHOLDER T2 left in `xtask`).
+/// (owner, at T20 — the same PLACEHOLDER T2 left in `xtask`). Whoever raises it
+/// should know what is waiting on it: the plan's T10 acceptance line asks for
+/// "a golden hash chain over a full segment", and the committed chain covers
+/// three whole segments of *this* list rather than one of item 68's real
+/// ladder, whose first round alone is 3 600 ticks. Raising `DETERMINISM_TICKS`
+/// and deleting this constant is what turns that substitution into the real
+/// thing.
 pub const DETERMINISM_SEGMENT_LENGTHS_MS: [i32; 2] = [20_000, 15_000];
 
 /// Find `rules/rules.v1.json` from wherever the caller happens to stand.
