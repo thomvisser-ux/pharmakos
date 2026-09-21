@@ -208,11 +208,12 @@ pub fn accept_key(key: &str) -> String {
 /// proto3 JSON mapping's reader (decisions-log item 100 (10) deleted this
 /// crate's forty-line copy in favour of it), and the mapping *requires* a
 /// reader to be lenient: it accepts the URL-safe alphabet and unpadded text as
-/// well. That is correct for a `bytes` field and wrong here. `q83vASNFZ4mrze8`
-/// and `q83vASNFZ4mrze8BI0VniavN7w` both decode to sixteen bytes and neither
-/// is a key a conforming client sends, so the only thing that turns them away
-/// is this check. The server side of the handshake is allowed to be strict
-/// (section 4.2.1), and a security surface should be.
+/// well. That is correct for a `bytes` field and wrong here.
+/// `NGC+MSAeaf7aoO7ouZl/XA` (the padding dropped) and
+/// `NGC-MSAeaf7aoO7ouZl_XA==` (the URL-safe alphabet) both decode to the same
+/// sixteen bytes and neither is a key a conforming client sends, so the only
+/// thing that turns them away is this check. The server side of the handshake
+/// is allowed to be strict (section 4.2.1), and a security surface should be.
 fn is_sixteen_base64_bytes(key: &str) -> bool {
     // 16 bytes is five whole quanta plus one byte: 22 symbols and "==".
     let Some(symbols) = key.strip_suffix("==") else {
@@ -545,6 +546,27 @@ mod tests {
         *lines.get_mut(3).expect("key line") = "Sec-WebSocket-Key: Zm9v";
         let refusal = review(&request(&lines), &Policy::loopback(PORT)).expect_err("refused");
         assert_eq!(refusal, Refusal::MalformedKey);
+    }
+
+    #[test]
+    fn a_key_the_lenient_decoder_would_take_is_still_refused() {
+        // Both decode to sixteen bytes -- the proto3 JSON mapping's reader is
+        // *required* to accept unpadded text and the URL-safe alphabet -- and
+        // neither is a key RFC 6455 section 4.1 lets a client send. The shape
+        // check in `is_sixteen_base64_bytes` is the only thing that turns them
+        // away, which is what its own doc claims and what this asserts.
+        for key in ["NGC+MSAeaf7aoO7ouZl/XA", "NGC-MSAeaf7aoO7ouZl_XA=="] {
+            assert_eq!(
+                pharmakos_proto::json::base64::decode(key).map(|bytes| bytes.len()),
+                Some(16),
+                "`{key}` is meant to be one the lenient decoder takes"
+            );
+            let line = format!("Sec-WebSocket-Key: {key}");
+            let mut lines = good();
+            *lines.get_mut(3).expect("key line") = &line;
+            let refusal = review(&request(&lines), &Policy::loopback(PORT)).expect_err("refused");
+            assert_eq!(refusal, Refusal::MalformedKey, "`{key}`");
+        }
     }
 
     #[test]

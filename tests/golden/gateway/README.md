@@ -129,7 +129,14 @@ takes; **every other row in the file is a refusal, and a refusal that became a
   `Origin` at all means a web page;
 * `no-authorization`, `basic-authorization` and `short-token` are 401 because the
   seat token rides the upgrade — an unauthenticated connection would be a
-  connection the rate limiter cannot count.
+  connection the rate limiter cannot count;
+* `unpadded-key` and `url-safe-key` are 400 for a reason the file would not
+  otherwise show: both **decode** to sixteen bytes, because the base64 reader
+  this crate shares with the proto3 JSON mapping is required to accept unpadded
+  text and the URL-safe alphabet. RFC 6455 §4.1 lets a client send neither, so
+  the shape check in `handshake::is_sixteen_base64_bytes` is the only thing that
+  turns them away. A 400 that became a 101 there means the strictness was
+  dropped.
 
 The accept value `s3pPLMBiTxaQ9kYGzzhZRbK+xOo=` is RFC 6455 §1.3's own worked
 example, reached through a SHA-1 this project owns (decisions-log item 99). **If

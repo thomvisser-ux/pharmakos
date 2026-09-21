@@ -488,6 +488,20 @@ fn handshake_cases() -> Vec<(&'static str, Vec<String>)> {
         ("no-upgrade", without(1)),
         ("no-connection-upgrade", without(2)),
         ("short-key", replaced(3, "Sec-WebSocket-Key: Zm9v")),
+        // Two keys that DECODE to sixteen bytes and are still not keys a
+        // conforming client sends: the proto3 JSON mapping's reader is
+        // required to be lenient about padding and the URL-safe alphabet, and
+        // the server side of the handshake is allowed to be strict. The golden
+        // says "every handshake the gateway will and will not accept", so the
+        // two cases that require the strictness belong in it.
+        (
+            "unpadded-key",
+            replaced(3, "Sec-WebSocket-Key: NGC+MSAeaf7aoO7ouZl/XA"),
+        ),
+        (
+            "url-safe-key",
+            replaced(3, "Sec-WebSocket-Key: NGC-MSAeaf7aoO7ouZl_XA=="),
+        ),
         ("no-key", without(3)),
         ("version-8", replaced(4, "Sec-WebSocket-Version: 8")),
         ("no-version", without(4)),

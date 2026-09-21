@@ -25,12 +25,18 @@
 //!
 //! # A note on the schema
 //!
-//! `gp.api.v1.Digest` has `from_ms`, `to_ms` and `text` and no count field
-//! today. T9 makes no `gp.api.v1` change (skeleton plan T9: a method that needs
-//! one goes back to the proto lane), so the per-kind counts live in this crate's
-//! own [`Digest`] and are rendered into the digest's deterministic prose, where
-//! a scenario and a person both read the same numbers. The pull request records
-//! the field the schema is owed.
+//! T9 left `gp.api.v1.Digest` with `from_ms`, `to_ms` and `text` and no count
+//! field, because T9 makes no `gp.api.v1` change, and recorded in its pull
+//! request the field the schema was owed. **T13's proto bundle paid it**
+//! (decisions-log item 100 (10)): `Digest` now carries
+//! `repeated KindCount counts = 4`, this crate's own [`Digest::counts`] maps
+//! straight onto it, and `crate::surface::Surface::segment_feed` writes it.
+//!
+//! The counts are still rendered into the digest's deterministic prose as well,
+//! and that is not duplication for its own sake: the prose is what a person
+//! reads and what a `render`-style golden pins, the field is what a client
+//! sums without parsing English, and both come from the same [`Digest`] so
+//! they cannot say different things.
 //!
 //! # Cursors
 //!
@@ -168,13 +174,47 @@ impl SnapshotId {
     }
 }
 
+/// Which listing a cursor is a place in.
+///
+/// Part of a cursor's checked bytes, so a cursor issued by one listing is
+/// refused by the other rather than read as an offset into it. The feed's
+/// index counts events and `list_beacons`'s counts beacons; the two are the
+/// same shape and mean entirely different things, which is exactly the
+/// confusion [`crate::time::PhaseMark`] is a separate type to avoid.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Listing {
+    /// The segment feed: `get_segment_feed` and `wait_for{feed_digest}`.
+    Feed,
+    /// `list_beacons`.
+    Beacons,
+}
+
+impl Listing {
+    /// The byte the check is taken over.
+    const fn tag(self) -> u8 {
+        match self {
+            Listing::Feed => 0,
+            Listing::Beacons => 1,
+        }
+    }
+
+    /// What a client is told it handed in.
+    const fn name(self) -> &'static str {
+        match self {
+            Listing::Feed => "the segment feed",
+            Listing::Beacons => "the beacon listing",
+        }
+    }
+}
+
 /// A place in the feed, opaque to the client.
 ///
 /// The rendering is 16 hex digits of the snapshot id, 8 of the index and 8 of a
-/// check value over both, lower case throughout. The check is not a signature
-/// and does not claim to be: the token is what authenticates a caller, and the
-/// check is here so a mangled cursor is refused as mangled rather than read as a
-/// different position.
+/// check value over both **and the listing**, lower case throughout. The check
+/// is not a signature and does not claim to be: the token is what authenticates
+/// a caller, and the check is here so a mangled cursor is refused as mangled
+/// rather than read as a different position -- and so a cursor from the wrong
+/// listing is refused rather than read as a place in this one.
 ///
 /// The index is **how many events this viewer has already been shown**, not how
 /// many happened -- see the module docs. It follows that a cursor is a viewer's
@@ -184,6 +224,7 @@ impl SnapshotId {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Cursor {
     snapshot: SnapshotId,
+    listing: Listing,
     index: u32,
 }
 
@@ -191,7 +232,11 @@ impl Cursor {
     /// The cursor at the start of a segment's feed.
     #[must_use]
     pub const fn start(snapshot: SnapshotId) -> Cursor {
-        Cursor { snapshot, index: 0 }
+        Cursor {
+            snapshot,
+            listing: Listing::Feed,
+            index: 0,
+        }
     }
 
     /// A cursor at a place in a snapshot-tied listing.
@@ -201,10 +246,16 @@ impl Cursor {
     /// snapshot so a stale one is refused rather than silently restarted, and
     /// counting **what this viewer has been shown** rather than what exists.
     /// One rendering and one parser for both, rather than a second cursor
-    /// format that would have to be got right twice.
+    /// format that would have to be got right twice -- but **not** one cursor:
+    /// the listing is in the check, so a feed cursor handed to `list_beacons`
+    /// is refused rather than read as a beacon offset.
     #[must_use]
-    pub const fn at(snapshot: SnapshotId, index: u32) -> Cursor {
-        Cursor { snapshot, index }
+    pub const fn at(snapshot: SnapshotId, listing: Listing, index: u32) -> Cursor {
+        Cursor {
+            snapshot,
+            listing,
+            index,
+        }
     }
 
     /// Which snapshot it belongs to.
@@ -231,9 +282,10 @@ impl Cursor {
     /// # Errors
     ///
     /// [`crate::error::Code::InvalidArgument`] when the text is not a cursor
-    /// this gateway wrote, and [`crate::error::Code::StaleSnapshot`] when it is
-    /// one but belongs to another snapshot.
-    pub fn parse(text: &str, current: SnapshotId) -> Result<Cursor, Error> {
+    /// this gateway wrote **or is one the other listing issued**, and
+    /// [`crate::error::Code::StaleSnapshot`] when it is this listing's but
+    /// belongs to another snapshot.
+    pub fn parse(text: &str, current: SnapshotId, listing: Listing) -> Result<Cursor, Error> {
         // Exactly 32 lower-case hex digits, because that is exactly what
         // `render` writes. `from_str_radix` would also take `FFFF` and a leading
         // `+`, and "a cursor this gateway issued" should mean literally that
@@ -259,10 +311,17 @@ impl Cursor {
             .ok_or_else(|| Error::invalid("that is not a cursor this gateway issued"))?;
         let cursor = Cursor {
             snapshot: SnapshotId(snapshot),
+            listing,
             index,
         };
         if cursor.check() != check {
-            return Err(Error::invalid("that cursor is damaged"));
+            // A cursor of the other listing fails here, which is the point of
+            // the tag: it is a place in something else, and resuming a beacon
+            // page at an event count is a place nobody meant.
+            return Err(Error::invalid(format!(
+                "that is not a cursor {} issued",
+                listing.name()
+            )));
         }
         if cursor.snapshot != current {
             return Err(Error::stale_snapshot(
@@ -273,10 +332,11 @@ impl Cursor {
     }
 
     /// The check value: the low 32 bits of the project's one hash function over
-    /// the snapshot id and the index.
+    /// the snapshot id, the listing and the index.
     fn check(self) -> u32 {
-        let mut bytes: Vec<u8> = Vec::with_capacity(12);
+        let mut bytes: Vec<u8> = Vec::with_capacity(13);
         bytes.extend_from_slice(&self.snapshot.0.to_le_bytes());
+        bytes.push(self.listing.tag());
         bytes.extend_from_slice(&self.index.to_le_bytes());
         let hash = pharmakos_sim::digest(&bytes);
         u32::try_from(hash & 0xffff_ffff).unwrap_or(0)
@@ -284,6 +344,16 @@ impl Cursor {
 }
 
 /// One 60-second digest of game time, with its per-kind counts (item 97).
+///
+/// PLACEHOLDER: **the digest payload's exact contents** -- the skeleton plan's
+/// own named T13 PLACEHOLDER. What this build carries is the window, the
+/// per-kind counts item 97 asks for, and the deterministic prose; what a
+/// digest is *for* -- the watch view's "what happened while I was reading" --
+/// may want a settlement line, a loss line or a standing delta once there are
+/// any, and every one of those is a field `gp.api.v1.Digest` does not have
+/// yet. OWNER settles the payload at **S7** (watch & share), where the view
+/// that reads it is built; a stage that adds one of those numbers adds its
+/// field in the same proto change.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Digest {
     /// Game milliseconds since the start of the segment, inclusive.
@@ -426,7 +496,7 @@ impl SegmentFeed {
         limit: usize,
     ) -> Result<Page, Error> {
         let from = match cursor {
-            Some(text) if !text.is_empty() => Cursor::parse(text, self.snapshot)?,
+            Some(text) if !text.is_empty() => Cursor::parse(text, self.snapshot, Listing::Feed)?,
             _ => Cursor::start(self.snapshot),
         };
         let start = usize::try_from(from.index()).unwrap_or(usize::MAX);
@@ -448,6 +518,7 @@ impl SegmentFeed {
         let index = start.min(visible.len()).saturating_add(events.len());
         let next = Cursor {
             snapshot: self.snapshot,
+            listing: Listing::Feed,
             index: u32::try_from(index).unwrap_or(u32::MAX),
         };
         Ok(Page {
@@ -550,7 +621,8 @@ fn clock(at: Ms) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        Cursor, DIGEST_PERIOD, Event, Kind, MAX_PAGE_EVENTS, SegmentFeed, SnapshotId, digests,
+        Cursor, DIGEST_PERIOD, Event, Kind, Listing, MAX_PAGE_EVENTS, SegmentFeed, SnapshotId,
+        digests,
     };
     use crate::error::Code;
     use crate::fog::{Audience, Blind, FogFilter, FogPolicy, Viewer};
@@ -845,10 +917,10 @@ mod tests {
         let current = snapshot();
         let mut text = Cursor::start(current).render();
         text.replace_range(20..21, "f");
-        let error = Cursor::parse(&text, current).expect_err("refused");
+        let error = Cursor::parse(&text, current, Listing::Feed).expect_err("refused");
         assert_eq!(error.code, Code::InvalidArgument);
         assert_eq!(
-            Cursor::parse("nonsense", current)
+            Cursor::parse("nonsense", current, Listing::Feed)
                 .expect_err("refused")
                 .code,
             Code::InvalidArgument
@@ -857,15 +929,44 @@ mod tests {
         // issued, however it would parse.
         let issued = Cursor::start(current).render();
         assert_eq!(
-            Cursor::parse(&issued.to_uppercase(), current)
+            Cursor::parse(&issued.to_uppercase(), current, Listing::Feed)
                 .expect_err("refused")
                 .code,
             Code::InvalidArgument,
             "upper-case hex is not the rendering"
         );
         assert!(
-            Cursor::parse(&issued, current).is_ok(),
+            Cursor::parse(&issued, current, Listing::Feed).is_ok(),
             "and the rendering itself still reads"
+        );
+    }
+
+    #[test]
+    fn a_cursor_of_one_listing_is_refused_by_the_other() {
+        let current = snapshot();
+        let feed = Cursor::at(current, Listing::Feed, 2).render();
+        let beacons = Cursor::at(current, Listing::Beacons, 2).render();
+        assert_ne!(
+            feed, beacons,
+            "the listing is in the check, so the two renderings differ"
+        );
+        assert_eq!(
+            Cursor::parse(&feed, current, Listing::Beacons)
+                .expect_err("an event index is not a beacon offset")
+                .code,
+            Code::InvalidArgument
+        );
+        assert_eq!(
+            Cursor::parse(&beacons, current, Listing::Feed)
+                .expect_err("and not the other way round either")
+                .code,
+            Code::InvalidArgument
+        );
+        assert_eq!(
+            Cursor::parse(&beacons, current, Listing::Beacons)
+                .expect("its own listing reads it")
+                .index(),
+            2
         );
     }
 
