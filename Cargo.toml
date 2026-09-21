@@ -58,9 +58,21 @@ getrandom    = { version = "0.4", default-features = false, features = ["std"] }
 # dot_vox      = "5"      # .vox models, meshed by our own greedy mesher
 # pathfinding  = "4"      # primitives only; HPA* is ours (hierarchical_pathfinding is banned)
 # --- client ---
-# godot        = "0.5.5"  # gdext, Godot 4.7; crates/client-gdext only. 0.5 is the line that
-#                         # targets 4.7+; 0.3 predates the API (decisions log item 101). MPL-2.0,
-#                         # and godot-core pulls glam, which is why client-gdext is walled.
+# gdext, Godot 4.7; crates/client-gdext only. 0.5 is the line that targets 4.7+; 0.3
+# predates the API (decisions log item 101). MPL-2.0, and godot-core pulls glam, which is
+# float maths and exactly why client-gdext is in WALLED_PACKAGES.
+#
+# The `=` pin is decisions log item 73: gdext 0.5.5 and Godot 4.7.2 exactly, "the pair
+# every G1 number was taken on", because a bump is determinism-adjacent — it re-runs the
+# geometry golden and goes through a deliberate PR. A caret range would let a silent ABI
+# or renderer change show up as a moved golden with no commit to blame.
+#
+# `api-4-7` is the API level: gdext's default targets the newest engine it knows, and
+# naming the level makes the `compatibility_minimum = 4.7` in godot/pharmakos.gdextension
+# a statement the compiler shares rather than a claim only the engine checks.
+# `__codegen-full` comes back because `default-features = false` drops it: the lean
+# codegen omits most engine classes, and path B needs `RenderingServer`.
+godot        = { version = "=0.5.5", default-features = false, features = ["api-4-7", "__codegen-full"] }
 # --- workspace-internal ---
 # The walled mesher is uncommented because it has no dependencies of its own and
 # client-gdext takes it today (decisions log §2.7 item 56). The rest stay commented until
