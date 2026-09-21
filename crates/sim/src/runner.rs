@@ -72,7 +72,7 @@
 
 use crate::encoding::Enc;
 use crate::events::{Emission, Event, EventKind};
-use crate::math::quantity::{Ms, Tick};
+use crate::math::quantity::{MS_PER_TICK, Ms, Tick};
 use crate::rules::RulesTable;
 use crate::snapshot::{Snapshot, SnapshotError};
 use crate::tables::SeatId;
@@ -263,12 +263,18 @@ impl MatchState {
     /// The effective ladder is the host's list when it has one and the rules
     /// table's otherwise (item 40). The rules loader refuses an empty
     /// `match.segment_lengths_ms`, so the effective list is never empty.
+    ///
+    /// Both the host's list and the round limit are **clamped, not trusted**:
+    /// `round_limit` to at least one round, and every ladder entry to at least
+    /// one tick ([`clamp_ladder`]). A lobby that hands the sim a zero-length
+    /// round would otherwise get a Push that closes on its first tick while the
+    /// editor's clock showed zero, which is not a match anybody can play.
     #[must_use]
     pub fn new(settings: &MatchSettings, rules: &RulesTable) -> MatchState {
         let segment_lengths_ms = if settings.segment_lengths_ms.is_empty() {
-            rules.segment_lengths_ms().to_vec()
+            clamp_ladder(rules.segment_lengths_ms().to_vec())
         } else {
-            settings.segment_lengths_ms.clone()
+            clamp_ladder(settings.segment_lengths_ms.clone())
         };
         let coming_segment_ms = length_for_round(&segment_lengths_ms, 1);
         MatchState {
@@ -385,10 +391,18 @@ impl MatchState {
     // --- the transitions, all crate-internal -----------------------------
 
     /// Open a Push at `tick`, running the coming segment's length.
+    ///
+    /// The length is floored at one tick. This is the single point where a
+    /// number becomes a Push's duration, so it is the one place that has to
+    /// hold the floor: the ladder is clamped on both the way in
+    /// ([`MatchState::new`]) and the way back ([`MatchState::from_parts`]), but
+    /// [`MatchState::coming_segment_ms`] also travels in a save file, and a
+    /// hand-edited one must not be able to describe a Push that closes before
+    /// anything in it runs.
     pub(crate) fn open_push(&mut self, tick: Tick) {
         self.phase = MatchPhase::Push;
         self.segment_started = tick;
-        self.segment_length_ms = self.coming_segment_ms;
+        self.segment_length_ms = self.coming_segment_ms.max(MS_PER_TICK);
     }
 
     /// Close the segment at `tick` and open the recap, writing the coming
@@ -448,6 +462,14 @@ impl MatchState {
     /// reason is not one this build defines — a file from another version, or
     /// an edited one, refused rather than restored into a phase that does not
     /// exist.
+    ///
+    /// **Structure is refused; values are normalised.** A phase id nothing
+    /// names is a file this build cannot read, so it is turned away at the
+    /// door. A ladder entry shorter than a tick is a *value*, and it takes the
+    /// same clamp the host's list takes in [`MatchState::new`] — refusing it
+    /// instead would make `Snapshot::default()` unrestorable, which is the one
+    /// thing that default is hand-written to guarantee
+    /// (`impl Default for Snapshot`, and it carries an empty ladder).
     #[must_use]
     pub(crate) fn from_parts(parts: MatchParts) -> Option<MatchState> {
         let phase = MatchPhase::from_id(parts.phase)?;
@@ -470,7 +492,7 @@ impl MatchState {
             phase,
             round: parts.round,
             round_limit: parts.round_limit,
-            segment_lengths_ms: parts.segment_lengths_ms,
+            segment_lengths_ms: clamp_ladder(parts.segment_lengths_ms),
             segment_started: Tick::new(parts.segment_started),
             segment_length_ms: parts.segment_length_ms,
             coming_segment_ms: parts.coming_segment_ms,
@@ -519,9 +541,25 @@ pub(crate) struct MatchParts {
     pub(crate) ended_at: u32,
 }
 
+/// Every entry floored at one tick, because a round shorter than a tick is a
+/// round that closes before anything in it runs.
+///
+/// The ladder's companion to `round_limit.max(1)`: a list arrives either from a
+/// lobby ([`MatchSettings`]) or from a save file ([`MatchState::from_parts`]),
+/// and neither is trusted. Idempotent, so the rules table's own ladder — every
+/// entry minutes long — passes through unchanged and no committed hash moves.
+fn clamp_ladder(mut lengths: Vec<i32>) -> Vec<i32> {
+    for ms in &mut lengths {
+        *ms = (*ms).max(MS_PER_TICK);
+    }
+    lengths
+}
+
 /// Item 40's lookup: round *i* takes the *i*-th entry, rounds past the end take
 /// the last entry, and an empty list — which the rules loader refuses — gives
-/// zero rather than panicking inside a tick.
+/// zero rather than panicking inside a tick. A zero from here still cannot
+/// produce a zero-tick Push, because [`MatchState::open_push`] floors the
+/// length it consumes.
 fn length_for_round(lengths: &[i32], round: u32) -> i32 {
     let Some(last) = lengths.len().checked_sub(1) else {
         return 0;
@@ -536,6 +574,10 @@ fn length_for_round(lengths: &[i32], round: u32) -> i32 {
 /// it, and it is the file a host saves from ("the host can save during any
 /// Lull, from the frozen segment-end snapshot"). It is frozen rather than live
 /// precisely so that two seats planning at once see the same world.
+///
+/// It is taken at a segment end and, on a restore, from the restored world —
+/// so after a mid-Push restore it is a mid-Push capture rather than a planning
+/// snapshot (see [`Runner::restore`]).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct FrozenSnapshot {
     snapshot: Snapshot,
@@ -806,6 +848,14 @@ impl Runner {
     /// derived from it: a restore lands at a segment boundary (the only place a
     /// save is written — spec section 3, "no saving mid-Push"), where the frozen
     /// snapshot and the world are the same thing.
+    ///
+    /// **After a mid-Push restore, [`Runner::frozen`] is that mid-Push world**,
+    /// not a segment-end freeze. Nothing a host saves lands there, but a test
+    /// and a scenario file can (`a_restored_match_keeps_its_phase_round_and_ladder`
+    /// does), so it is said here rather than left to be discovered: the
+    /// alternative — keeping the receiving runner's own frozen snapshot — would
+    /// hand back a planning snapshot of a *different world*, which is worse than
+    /// one of this world at the wrong tick. The next segment end replaces it.
     ///
     /// # Errors
     ///
