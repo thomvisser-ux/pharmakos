@@ -54,9 +54,10 @@ use crate::mapgen::{self, MapError};
 use crate::math::fixed::{Angle, Fx};
 use crate::math::quantity::{Hp, Kw, Money, Tick};
 use crate::pathing::router::{RestoredRouter, first_route_digest_mismatch};
+use crate::runner::{DEFAULT_ROUND_LIMIT, MatchParts, MatchPhase, MatchState};
 use crate::tables::{
-    BeaconColumns, BeaconTable, SeatTable, StructureColumns, StructureTable, UnitColumns,
-    UnitTable, WreckTable,
+    BeaconColumns, BeaconTable, SeatColumns, SeatId, SeatTable, StructureColumns, StructureTable,
+    UnitColumns, UnitTable, WreckTable,
 };
 use crate::voxels::{CHUNK_VOXELS, VoxelStore};
 use crate::world::{RestoredTables, World};
@@ -75,14 +76,26 @@ use serde::{Deserialize, Serialize};
 /// The pathing *graph* is deliberately not in the file: it is a pure function
 /// of the chunk store and the cost rows, so a restore rebuilds it. The routes
 /// are not, because a route is a decision a unit already made.
-pub const SNAPSHOT_VERSION: u32 = 3;
+///
+/// **Version 4 is T10's**: it adds the match state — the phase, the round, the
+/// round limit, the effective per-round length list, the segment's start tick
+/// and length, **the coming segment's length** and the outcome — and the three
+/// per-seat match columns (the elimination tick, the commander's death count
+/// for this Push and any pending respawn). The coming segment's length is the
+/// number item 30 puts in this snapshot and nowhere else, and it is what
+/// `plan-core`'s `context::segment_length_ms` reads.
+///
+/// The event bus is deliberately **not** in the file: it is derived output that
+/// nothing in a tick reads, so a resumed match starts with an empty feed
+/// ([`crate::events`]).
+pub const SNAPSHOT_VERSION: u32 = 4;
 
 /// A flat, fixed-width projection of the world.
 ///
 /// Column-per-field rather than struct-per-row, matching the `SoA` tables: it
 /// keeps every field fixed-width and it is what makes the byte count above
 /// small enough to save at a Lull boundary without the player noticing.
-#[derive(Clone, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct Snapshot {
     /// [`SNAPSHOT_VERSION`] at the time of writing.
     pub version: u32,
@@ -101,6 +114,14 @@ pub struct Snapshot {
     pub seat_supply: Vec<i32>,
     /// Per-seat power draw, in `kW`.
     pub seat_draw: Vec<i32>,
+    /// The tick each seat was eliminated at, or
+    /// [`crate::tables::NOT_ELIMINATED`].
+    pub seat_eliminated_at: Vec<u32>,
+    /// How many times each seat's commander has died in this Push (item 21).
+    pub seat_commander_deaths: Vec<u32>,
+    /// The tick each seat's commander is due back at, or
+    /// [`crate::tables::NO_RESPAWN`].
+    pub seat_respawn_due: Vec<u32>,
 
     /// Unit ids.
     pub unit_id: Vec<u32>,
@@ -182,6 +203,108 @@ pub struct Snapshot {
     pub route_nodes: Vec<u32>,
     /// The repath queue's round-robin cursor.
     pub repath_cursor: u32,
+
+    /// [`crate::runner::MatchPhase::id`] — where the match is.
+    pub match_phase: u8,
+    /// Which round is being played, from one.
+    pub match_round: u32,
+    /// The host-set round limit.
+    pub match_round_limit: u32,
+    /// The effective per-round length list, in game milliseconds (item 40).
+    /// Resolved once at construction from the host's list or the rules table's
+    /// ladder, and carried here because it is what decides every later
+    /// segment's length.
+    pub match_segment_lengths_ms: Vec<i32>,
+    /// The tick the running segment opened on.
+    pub match_segment_started: u32,
+    /// The running segment's length in game milliseconds; zero outside a Push.
+    pub match_segment_length_ms: i32,
+    /// **The coming segment's length, in game milliseconds** (item 30).
+    ///
+    /// The number `get_status`, `get_briefing`, the editor's clock, the fits
+    /// pill and `render_plan` read — and the one `plan-core`'s
+    /// `context::segment_length_ms` was waiting for. Read it from here and
+    /// never from `rules.match.segment_lengths_ms`: the ladder is the host's
+    /// setting, the snapshot is the fact.
+    pub coming_segment_ms: i32,
+    /// [`crate::runner::MatchEndReason::id`], or `0` while the match runs.
+    pub match_end_reason: u8,
+    /// The winning seat, or [`crate::tables::SeatId::NEUTRAL`] for none.
+    pub match_winner: u8,
+    /// The tick the match ended on; zero while it runs.
+    pub match_ended_at: u32,
+}
+
+/// An empty snapshot in an **opening Lull**, not an empty one in no phase at
+/// all.
+///
+/// Written by hand rather than derived because a derived `Default` would give
+/// `match_phase = 0`, which is not a phase this build defines, so a
+/// `Snapshot { ..Default::default() }` — the shape three crates' tests build —
+/// could be encoded but never restored. The same reasoning as [`Enc`]'s
+/// hand-written `Default` in [`crate::encoding`]: a default that cannot be used
+/// the documented way is a trap, not a convenience.
+///
+/// [`Enc`]: crate::encoding::Enc
+impl Default for Snapshot {
+    fn default() -> Snapshot {
+        Snapshot {
+            version: SNAPSHOT_VERSION,
+            match_seed: 0,
+            tick: 0,
+            seat_id: Vec::new(),
+            seat_treasury: Vec::new(),
+            seat_supply: Vec::new(),
+            seat_draw: Vec::new(),
+            seat_eliminated_at: Vec::new(),
+            seat_commander_deaths: Vec::new(),
+            seat_respawn_due: Vec::new(),
+            unit_id: Vec::new(),
+            unit_seat: Vec::new(),
+            unit_kind: Vec::new(),
+            unit_pos: Vec::new(),
+            unit_dest: Vec::new(),
+            unit_heading: Vec::new(),
+            unit_hp: Vec::new(),
+            beacon_id: Vec::new(),
+            beacon_seat: Vec::new(),
+            beacon_pos: Vec::new(),
+            beacon_mandate: Vec::new(),
+            beacon_program: Vec::new(),
+            beacon_hp: Vec::new(),
+            beacon_dormant: Vec::new(),
+            structure_id: Vec::new(),
+            structure_seat: Vec::new(),
+            structure_kind: Vec::new(),
+            structure_pos: Vec::new(),
+            structure_hp: Vec::new(),
+            structure_home: Vec::new(),
+            wreck_id: Vec::new(),
+            wreck_pos: Vec::new(),
+            wreck_salvage: Vec::new(),
+            modified_chunk: Vec::new(),
+            modified_chunk_bytes: Vec::new(),
+            chunk_digest: Vec::new(),
+            unit_walk_state: Vec::new(),
+            unit_accumulator: Vec::new(),
+            unit_route_len: Vec::new(),
+            unit_route_cursor: Vec::new(),
+            unit_route_hash: Vec::new(),
+            unit_route_partial: Vec::new(),
+            route_nodes: Vec::new(),
+            repath_cursor: 0,
+            match_phase: MatchPhase::Lull.id(),
+            match_round: 1,
+            match_round_limit: DEFAULT_ROUND_LIMIT,
+            match_segment_lengths_ms: Vec::new(),
+            match_segment_started: 0,
+            match_segment_length_ms: 0,
+            coming_segment_ms: 0,
+            match_end_reason: 0,
+            match_winner: SeatId::NEUTRAL.raw(),
+            match_ended_at: 0,
+        }
+    }
 }
 
 /// What went wrong saving or restoring.
@@ -229,6 +352,16 @@ pub enum SnapshotError {
         /// The unit the digests disagree at, the lowest one.
         unit: u32,
     },
+    /// The match state names a phase or an end reason this build does not
+    /// define. A file from another version or an edited one: refused rather
+    /// than restored into a match that is in no phase at all, which is a world
+    /// whose next tick would do nothing and whose hash would say so.
+    MatchState {
+        /// The phase byte the file carried.
+        phase: u8,
+        /// The end-reason byte the file carried.
+        end_reason: u8,
+    },
 }
 
 impl core::fmt::Display for SnapshotError {
@@ -261,6 +394,11 @@ impl core::fmt::Display for SnapshotError {
                 "the snapshot's route digest for unit {unit} is not the digest of the route \
                  nodes it carries"
             ),
+            SnapshotError::MatchState { phase, end_reason } => write!(
+                f,
+                "the snapshot's match phase {phase} or end reason {end_reason} is not one this \
+                 build defines"
+            ),
         }
     }
 }
@@ -285,6 +423,7 @@ impl Snapshot {
         let wrecks = world.wrecks();
         let voxels = world.voxels();
 
+        let state = world.match_state().to_parts();
         let modified_chunk = voxels.modified_indices();
         let mut modified_chunk_bytes: Vec<u8> =
             Vec::with_capacity(modified_chunk.len().saturating_mul(CHUNK_VOXELS));
@@ -303,6 +442,9 @@ impl Snapshot {
             seat_treasury: seats.treasuries().iter().map(|m| m.raw()).collect(),
             seat_supply: seats.supplies().iter().map(|k| k.raw()).collect(),
             seat_draw: seats.draws().iter().map(|k| k.raw()).collect(),
+            seat_eliminated_at: seats.eliminated_at().to_vec(),
+            seat_commander_deaths: seats.commander_deaths().to_vec(),
+            seat_respawn_due: seats.respawn_due().to_vec(),
 
             unit_id: units.ids().to_vec(),
             unit_seat: units.seats().to_vec(),
@@ -348,6 +490,17 @@ impl Snapshot {
                 .collect(),
             route_nodes: world.router().packed_routes(),
             repath_cursor: world.router().queue_cursor(),
+
+            match_phase: state.phase,
+            match_round: state.round,
+            match_round_limit: state.round_limit,
+            match_segment_lengths_ms: state.segment_lengths_ms,
+            match_segment_started: state.segment_started,
+            match_segment_length_ms: state.segment_length_ms,
+            coming_segment_ms: state.coming_segment_ms,
+            match_end_reason: state.end_reason,
+            match_winner: state.winner,
+            match_ended_at: state.ended_at,
         }
     }
 
@@ -401,14 +554,34 @@ impl Snapshot {
     pub fn restore_into(&self, world: &mut World) -> Result<(), SnapshotError> {
         let seat_count = u32::try_from(self.seat_id.len()).unwrap_or(0);
         let mut seats = SeatTable::with_capacity(seat_count);
-        if !seats.restore(
-            self.seat_id.clone(),
-            self.seat_treasury.iter().copied().map(Money::new).collect(),
-            self.seat_supply.iter().copied().map(Kw::new).collect(),
-            self.seat_draw.iter().copied().map(Kw::new).collect(),
-        ) {
+        if !seats.restore(SeatColumns {
+            seat: self.seat_id.clone(),
+            treasury: self.seat_treasury.iter().copied().map(Money::new).collect(),
+            supply: self.seat_supply.iter().copied().map(Kw::new).collect(),
+            draw: self.seat_draw.iter().copied().map(Kw::new).collect(),
+            eliminated_at: self.seat_eliminated_at.clone(),
+            commander_deaths: self.seat_commander_deaths.clone(),
+            respawn_due: self.seat_respawn_due.clone(),
+        }) {
             return Err(SnapshotError::Ragged("seat"));
         }
+
+        let match_state = MatchState::from_parts(MatchParts {
+            phase: self.match_phase,
+            round: self.match_round,
+            round_limit: self.match_round_limit,
+            segment_lengths_ms: self.match_segment_lengths_ms.clone(),
+            segment_started: self.match_segment_started,
+            segment_length_ms: self.match_segment_length_ms,
+            coming_segment_ms: self.coming_segment_ms,
+            end_reason: self.match_end_reason,
+            winner: self.match_winner,
+            ended_at: self.match_ended_at,
+        })
+        .ok_or(SnapshotError::MatchState {
+            phase: self.match_phase,
+            end_reason: self.match_end_reason,
+        })?;
 
         let mut units = UnitTable::with_capacity(u32::try_from(self.unit_id.len()).unwrap_or(0));
         if !units.restore(UnitColumns {
@@ -480,6 +653,7 @@ impl Snapshot {
             voxels,
             chunks,
             router,
+            match_state,
         }) {
             return Err(SnapshotError::Unindexable { units: unit_count });
         }

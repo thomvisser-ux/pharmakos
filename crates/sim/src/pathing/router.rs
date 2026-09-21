@@ -149,6 +149,11 @@ pub struct Router {
     /// Diagnostic, never hashed: it is what lets a test compare the discipline
     /// against a model of it, and what T10's event bus will carry.
     served_this_tick: Vec<u32>,
+    /// Units parked as sealed in by this tick's serving, in the order the round
+    /// robin reached them. Diagnostic, never hashed — it is what the match
+    /// phase turns into `unit_sealed_in` events, which is the "report" half of
+    /// item 60's "park and report" that T7 could only offer as a count.
+    sealed_this_tick: Vec<u32>,
     served_total: u64,
     sealed_total: u64,
     backlog_peak: u32,
@@ -182,6 +187,7 @@ impl Router {
             digest_bytes: Vec::with_capacity(stride.saturating_mul(4)),
             arrived: Vec::with_capacity(count),
             served_this_tick: Vec::with_capacity(count),
+            sealed_this_tick: Vec::with_capacity(count),
             served_total: 0,
             sealed_total: 0,
             backlog_peak: 0,
@@ -314,6 +320,13 @@ impl Router {
         &self.served_this_tick
     }
 
+    /// The units the last [`Router::serve`] parked as sealed in, in the same
+    /// order.
+    #[must_use]
+    pub fn sealed_this_tick(&self) -> &[u32] {
+        &self.sealed_this_tick
+    }
+
     /// Ask for a route. Idempotent: a unit already waiting stays waiting.
     pub fn request(&mut self, unit: u32) {
         self.set_state(unit, WalkState::Waiting);
@@ -375,6 +388,7 @@ impl Router {
         cap: u32,
     ) -> ServeReport {
         self.served_this_tick.clear();
+        self.sealed_this_tick.clear();
         let count = self.len();
         if count == 0 || cap == 0 {
             return ServeReport {
@@ -402,6 +416,7 @@ impl Router {
             let (Some(start), Some(goal)) = (start, goal) else {
                 self.set_state(unit, WalkState::Sealed);
                 self.set_route_len(unit, 0, 0, 0, false);
+                self.sealed_this_tick.push(unit);
                 sealed = sealed.saturating_add(1);
                 self.sealed_total = self.sealed_total.saturating_add(1);
                 continue;
@@ -422,6 +437,7 @@ impl Router {
                 None => {
                     self.set_route_len(unit, 0, 0, 0, false);
                     self.set_state(unit, WalkState::Sealed);
+                    self.sealed_this_tick.push(unit);
                     sealed = sealed.saturating_add(1);
                     self.sealed_total = self.sealed_total.saturating_add(1);
                 }

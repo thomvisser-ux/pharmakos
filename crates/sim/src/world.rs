@@ -38,9 +38,11 @@
 
 use crate::chunks::ChunkDigests;
 use crate::encoding::Enc;
+use crate::events::{EVENT_BUS_CAPACITY, Emission, Event, EventBus, EventKind};
+use crate::knowledge::{AssetId, Position};
 use crate::mapgen::{self, MapError};
-use crate::math::fixed::{Angle, Fx};
-use crate::math::quantity::{Hp, Kw, Money, Tick};
+use crate::math::fixed::{Angle, Fx, Sq};
+use crate::math::quantity::{Hp, Kw, Money, Ms, Tick};
 use crate::math::random::{Stream, StreamRng};
 use crate::pathing::clusters::Clusters;
 use crate::pathing::repair::{RepairReport, Repairer, repair};
@@ -48,14 +50,15 @@ use crate::pathing::router::{Router, ServeReport, WalkState};
 use crate::pathing::search::Scratch;
 use crate::pathing::surface::{StepCosts, Surface};
 use crate::rules::RulesTable;
+use crate::runner::{MatchEndReason, MatchPhase, MatchSettings, MatchState};
 use crate::seams::WorkCounter;
 use crate::tables::{
-    BeaconTable, Csr, MovementColumns, SeatId, SeatTable, StructureTable, UnitId, UnitKind,
-    UnitTable, WreckTable,
+    BeaconId, BeaconTable, Csr, MovementColumns, NO_RESPAWN, NOT_ELIMINATED, SeatId, SeatTable,
+    StructureId, StructureTable, UnitId, UnitKind, UnitTable, WreckTable,
 };
 use crate::voxels::{CHUNK_EDGE, VoxelEdit, VoxelStore};
 
-/// The eleven named phases of a tick, in the order they run.
+/// The twelve named phases of a tick, in the order they run.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Phase {
     /// Rebuild the CSR uniform grid from this tick's positions (T2).
@@ -82,12 +85,22 @@ pub enum Phase {
     Pathing,
     /// Apply this tick's voxel edits and refresh the chunks they touched (T5).
     Voxels,
+    /// Settle the match: respawns, local elimination, seat elimination, the
+    /// one-tick match-end rule and the segment's end (T10).
+    ///
+    /// **After everything that can kill and before the hash**, which is the
+    /// only place it can be: elimination is a consequence of this tick's
+    /// damage, and the phase that acts on it has to run after the phases that
+    /// deal it, while the tick whose hash records the consequence has to be the
+    /// tick the consequence happened on (item 16's one-tick rule is a claim
+    /// about a tick, so it has to be true of that tick's hash).
+    Match,
     /// Encode the world in declared table order and digest it (T2).
     Hash,
 }
 
 /// The tick, in order. Determinism code: see the module docs.
-pub const PHASE_ORDER: [Phase; 11] = [
+pub const PHASE_ORDER: [Phase; 12] = [
     Phase::Broadphase,
     Phase::Programs,
     Phase::Movement,
@@ -98,6 +111,7 @@ pub const PHASE_ORDER: [Phase; 11] = [
     Phase::Decision,
     Phase::Pathing,
     Phase::Voxels,
+    Phase::Match,
     Phase::Hash,
 ];
 
@@ -113,6 +127,14 @@ const HARNESS_WORK_BUDGET: u32 = 1_000_000;
 /// tick at 20 Hz, and 64 leaves room for a burst without ever growing. S2 sets
 /// the real number when combat is the thing filling the queue (owner, at S2).
 const HARNESS_EDIT_QUEUE: usize = 64;
+
+/// PLACEHOLDER (harness): how many damage orders one tick's queue holds.
+///
+/// Fixed at construction for the reason the edit queue is: nothing in a tick
+/// allocates (G3' section 9.17). Sized above the edit queue because one crater
+/// can hurt several things, and S2 sets the real number when combat is the
+/// thing filling it (owner, at S2).
+const HARNESS_DAMAGE_QUEUE: usize = 256;
 
 /// PLACEHOLDER (harness): the largest radius a broadphase query asks for, in
 /// **voxels**. S2's combat phase replaces it with a weapon's range out of the
@@ -152,6 +174,10 @@ pub struct WorldConfig {
     pub units_per_seat: u32,
     /// The rules table, an **input** to the sim and never hashed state.
     pub rules: RulesTable,
+    /// What the lobby decided: the per-round segment length list and the round
+    /// limit (item 40). [`MatchSettings::default`] takes the rules table's
+    /// ladder and the spec's round limit.
+    pub match_settings: MatchSettings,
 }
 
 /// The authoritative world: the hashed tables, the derived indexes and the
@@ -170,6 +196,12 @@ pub struct World {
 
     // --- hashed state, continued: the router (item 62's routes) ---
     router: Router,
+
+    // --- hashed state, continued: the match (T10) ---
+    /// The phase, the round, the ladder and the outcome. See
+    /// [`crate::runner`]: every field of it decides what a tick does, so all of
+    /// it is hashed, snapshotted and in the goldens.
+    match_state: MatchState,
 
     // --- the voxels themselves: hashed only through `chunks` (item 66) ---
     voxels: VoxelStore,
@@ -201,6 +233,43 @@ pub struct World {
     touched: Vec<u32>,
     /// Scratch for broadphase queries, so a query allocates nothing.
     candidates: Vec<u32>,
+    /// This tick's damage orders, drained by [`Phase::Combat`].
+    damage: Vec<DamageOrder>,
+    /// What the tick reported. **Derived output, never hashed** — see
+    /// [`crate::events`].
+    events: EventBus,
+    /// Each seat's commander, by unit index, or [`UnitId::NONE`] for a seat
+    /// with none. Derived from the unit table, whose count is fixed at
+    /// construction, so it is built once and rebuilt on a restore.
+    commanders: Vec<u32>,
+    /// Which beacons were alive at the end of the previous tick.
+    ///
+    /// Derived, never hashed: it exists to spot the *edge* — the tick a beacon
+    /// died — so that item 20's local elimination and its event fire once
+    /// rather than every tick afterwards. A restore rebuilds it from the
+    /// restored hit points, which loses no edge, because a snapshot is taken
+    /// after the match phase has already acted on this tick's deaths.
+    beacon_alive: Vec<bool>,
+}
+
+/// What a damage order hits.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub enum DamageTarget {
+    /// One unit.
+    Unit(UnitId),
+    /// One beacon.
+    Beacon(BeaconId),
+    /// One structure.
+    Structure(StructureId),
+}
+
+/// One helping of damage, filed for this tick's combat phase.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct DamageOrder {
+    /// What it hits.
+    pub target: DamageTarget,
+    /// How much, clamped at zero hit points by [`Hp::damaged_by`].
+    pub amount: Hp,
 }
 
 /// Every hashed table of a restored world, handed over in one piece.
@@ -220,6 +289,7 @@ pub(crate) struct RestoredTables {
     pub(crate) voxels: VoxelStore,
     pub(crate) chunks: ChunkDigests,
     pub(crate) router: crate::pathing::router::RestoredRouter,
+    pub(crate) match_state: MatchState,
 }
 
 impl World {
@@ -303,16 +373,25 @@ impl World {
             unit = unit.saturating_add(1);
         }
 
+        let beacons = generated.beacons;
+        let beacon_alive = beacons
+            .hit_points()
+            .iter()
+            .map(|hp| hp.is_alive())
+            .collect();
+        let commanders = commander_index(&units, config.seats);
+
         Ok(World {
             match_seed: config.match_seed,
             tick: Tick::ZERO,
             seats,
             units,
-            beacons: generated.beacons,
+            beacons,
             structures: StructureTable::with_capacity(0),
             wrecks: WreckTable::with_capacity(0),
             chunks,
             router,
+            match_state: MatchState::new(&config.match_settings, &config.rules),
             voxels,
             rules: config.rules.clone(),
             broadphase,
@@ -330,6 +409,10 @@ impl World {
             // buffer that has to grow is an allocation inside a tick.
             touched: Vec::with_capacity(usize::try_from(chunk_total).unwrap_or(0)),
             candidates: Vec::with_capacity(usize::try_from(unit_count).unwrap_or(0)),
+            damage: Vec::with_capacity(HARNESS_DAMAGE_QUEUE),
+            events: EventBus::with_capacity(EVENT_BUS_CAPACITY),
+            commanders,
+            beacon_alive,
         })
     }
 
@@ -457,14 +540,49 @@ impl World {
         self.router.backlog()
     }
 
+    /// The match's phase, round, ladder and outcome (T10).
+    #[must_use]
+    pub const fn match_state(&self) -> &MatchState {
+        &self.match_state
+    }
+
+    /// Everything the tick reported since the last drain, in `(tick, seq)`
+    /// order. Derived output, never hashed — see [`crate::events`].
+    #[must_use]
+    pub fn events(&self) -> &[Event] {
+        self.events.as_slice()
+    }
+
+    /// The event bus itself, for the counts a host watches
+    /// ([`EventBus::dropped`]).
+    #[must_use]
+    pub const fn event_bus(&self) -> &EventBus {
+        &self.events
+    }
+
+    /// Take the reported events out, keeping the allocation.
+    pub fn clear_events(&mut self) {
+        self.events.clear();
+    }
+
+    /// Which unit is `seat`'s commander, or [`UnitId::NONE`].
+    ///
+    /// A seat beyond the map's occupied zones is seated but unplaced and has
+    /// none (see [`crate::mapgen`]).
+    #[must_use]
+    pub fn commander_of(&self, seat: SeatId) -> UnitId {
+        let index = usize::from(seat.raw());
+        self.commanders
+            .get(index)
+            .copied()
+            .map_or(UnitId::NONE, UnitId::new)
+    }
+
     /// How many units are parked as sealed in right now.
     ///
-    /// The report half of item 60's "park and report": the seat learns through
-    /// this until T10's event bus exists to carry it as an event.
-    ///
-    /// PLACEHOLDER: the report half of "park and report" is a count read by a
-    /// caller, not an event pushed to the seat, because there is no event bus
-    /// to push it onto — owner, at T10.
+    /// The standing count; the *edge* — a unit parking this tick — rides the
+    /// event bus as `unit_sealed_in`, which is the report half of item 60's
+    /// "park and report" (the PLACEHOLDER T7 left here named this task).
     #[must_use]
     pub fn sealed_units(&self) -> u32 {
         let mut count: u32 = 0;
@@ -519,6 +637,61 @@ impl World {
         self.edits.len()
     }
 
+    /// File a damage order for this tick's combat phase. `false` when the
+    /// queue is full.
+    ///
+    /// **What is T10's here and what is S2's.** The *source* of damage — who
+    /// fires, at what, for how much, with what spread off `Stream::Combat` —
+    /// is S2's and none of it exists. What exists is the drain: elimination,
+    /// local elimination and the commander's respawn are all consequences of
+    /// something dying, so T10 needs death to be a thing that can happen
+    /// before it can implement the rules that follow from it. S2 fills the
+    /// phase that files these orders; it does not have to change the way they
+    /// land.
+    ///
+    /// The queue is applied in the order it was filled, so a filler owes the
+    /// same discipline the voxel queue's does: fill it in an order that is
+    /// itself deterministic, every sort key ending in a unique id (item 62).
+    pub fn request_damage(&mut self, order: DamageOrder) -> bool {
+        if self.damage.len() >= HARNESS_DAMAGE_QUEUE {
+            return false;
+        }
+        self.damage.push(order);
+        true
+    }
+
+    /// How many damage orders are queued for this tick's combat phase.
+    #[must_use]
+    pub fn queued_damage(&self) -> usize {
+        self.damage.len()
+    }
+
+    /// Emit one event. Crate-internal: the phases and the runner are the only
+    /// emitters.
+    pub(crate) fn emit(&mut self, tick: Tick, emission: Emission) -> bool {
+        self.events.emit(tick, emission)
+    }
+
+    /// Open a Push at `tick`, resetting the per-Push state item 21 makes
+    /// per-Push. Crate-internal: [`crate::runner::Runner::begin_push`] is the
+    /// only caller, so the phase machine cannot be walked around.
+    pub(crate) fn open_push(&mut self, tick: Tick) {
+        self.match_state.open_push(tick);
+        let columns = self.seats.match_columns();
+        for slot in columns.commander_deaths.iter_mut() {
+            *slot = 0;
+        }
+        for slot in columns.respawn_due.iter_mut() {
+            *slot = NO_RESPAWN;
+        }
+    }
+
+    /// Close the recap at `tick`. `false` when that ended the match.
+    /// Crate-internal for the same reason [`World::open_push`] is.
+    pub(crate) fn close_recap(&mut self, tick: Tick) -> bool {
+        self.match_state.close_recap(tick)
+    }
+
     /// Advance one tick and return the tick's state hash.
     ///
     /// `enc` is the caller's buffer, reused across ticks: that is what makes a
@@ -540,6 +713,7 @@ impl World {
                 Phase::Decision => self.phase_decision(),
                 Phase::Pathing => self.phase_pathing(),
                 Phase::Voxels => self.phase_voxels(),
+                Phase::Match => self.phase_match(),
                 Phase::Hash => hash = self.phase_hash(enc),
             }
         }
@@ -600,13 +774,43 @@ impl World {
             .advance(&self.surface, kinds, hit_points, positions, headings);
     }
 
-    /// Fire and damage. **Empty: S2 fills it.** `Stream::Combat` is reserved
-    /// for it and is drawn from nowhere else.
-    #[allow(
-        clippy::unused_self,
-        reason = "an empty phase stub keeps the tick's shape visible; S2 fills the body"
-    )]
-    const fn phase_combat(&mut self) {}
+    /// Fire and damage.
+    ///
+    /// **S2 fills the firing half**; `Stream::Combat` is reserved for it and is
+    /// drawn from nowhere else. What is here is the landing half: this tick's
+    /// [`DamageOrder`]s are applied in the order they were filed, and hit
+    /// points clamp at zero because nothing is more destroyed than destroyed
+    /// ([`Hp::damaged_by`]). T10 needs it because elimination, local
+    /// elimination and the commander's respawn are consequences of a death, and
+    /// a rule about a death cannot be written — or tested — against a world in
+    /// which nothing can die.
+    fn phase_combat(&mut self) {
+        let orders = core::mem::take(&mut self.damage);
+        for order in &orders {
+            match order.target {
+                DamageTarget::Unit(unit) => {
+                    let index = usize::try_from(unit.raw()).unwrap_or(usize::MAX);
+                    if let Some(slot) = self.units.hit_points_mut().get_mut(index) {
+                        *slot = slot.damaged_by(order.amount);
+                    }
+                }
+                DamageTarget::Beacon(beacon) => {
+                    let index = usize::try_from(beacon.raw()).unwrap_or(usize::MAX);
+                    if let Some(slot) = self.beacons.hit_points_mut().get_mut(index) {
+                        *slot = slot.damaged_by(order.amount);
+                    }
+                }
+                DamageTarget::Structure(structure) => {
+                    let index = usize::try_from(structure.raw()).unwrap_or(usize::MAX);
+                    if let Some(slot) = self.structures.hit_points_mut().get_mut(index) {
+                        *slot = slot.damaged_by(order.amount);
+                    }
+                }
+            }
+        }
+        self.damage = orders;
+        self.damage.clear();
+    }
 
     /// Per-seat kill-credit counters, at most three per asset, apportioned by
     /// largest remainder with ties to the lowest seat id. **Empty: T14 fills
@@ -770,6 +974,512 @@ impl World {
         self.edits.clear();
     }
 
+    /// Settle the match (T10): the rules that follow from a tick's deaths, and
+    /// the segment's end.
+    ///
+    /// The order below is the rule set's order, and each step is where it is
+    /// because of the step before it:
+    ///
+    /// 1. **Report the units this tick sealed in.** Not a match rule — item
+    ///    60's "park and report" — but the report half has to leave the sim
+    ///    somewhere, and this is the phase that owns the event bus. It runs
+    ///    outside the Push gate because it is true of a world stepped by hand
+    ///    as well.
+    /// 2. **Beacon deaths → local elimination** (item 20): the dead beacon's
+    ///    structures become neutral ruins immediately.
+    /// 3. **Seat elimination** (spec section 3): a seat whose last beacon has
+    ///    fallen disbands its units on the spot and its structures become
+    ///    ruins. Its commander despawns with them (item 21), which is why this
+    ///    runs before anything that looks at a commander.
+    /// 4. **Respawns that are due** (item 21).
+    /// 5. **Commanders that died this tick** get their growing delay — after 4,
+    ///    so that a commander coming back this tick cannot also be counted as
+    ///    dying on it.
+    /// 6. **The one-tick match-end rule** (item 16), evaluated every tick.
+    /// 7. **The segment's end**, last, because a segment that ends must first
+    ///    let this tick's deaths settle — and because a pending respawn
+    ///    *always completes by segment end*, which is a force applied here.
+    ///
+    /// Outside a Push, only step 1 runs: `World::step` is the tick and runs
+    /// whatever phase it is in, and a world nobody opened a Push on is not
+    /// playing a segment (see [`crate::runner`]).
+    fn phase_match(&mut self) {
+        self.report_sealed_units();
+        if self.match_state.phase() != MatchPhase::Push {
+            return;
+        }
+        self.settle_beacon_deaths();
+        self.settle_eliminations();
+        self.settle_respawns(false);
+        self.settle_commander_deaths();
+        if self.check_match_end() {
+            return;
+        }
+        self.close_segment_if_over();
+    }
+
+    /// Item 60's report half: one `unit_sealed_in` per unit this tick parked.
+    fn report_sealed_units(&mut self) {
+        if self.router.sealed_this_tick().is_empty() {
+            return;
+        }
+        let tick = self.tick;
+        let mut at: usize = 0;
+        while at < self.router.sealed_this_tick().len() {
+            let Some(unit) = self.router.sealed_this_tick().get(at).copied() else {
+                break;
+            };
+            at = at.saturating_add(1);
+            let index = usize::try_from(unit).unwrap_or(usize::MAX);
+            let seat = self.units.seats().get(index).copied().unwrap_or(0);
+            let position = self.units.positions().get(index).copied();
+            let mut emission = Emission::of(EventKind::UnitSealedIn)
+                .seat(SeatId::new(seat))
+                .subject(AssetId::of_unit(UnitId::new(unit)));
+            if let Some(point) = position {
+                emission = emission.at(Position::from_array(point));
+            }
+            self.emit(tick, emission);
+        }
+    }
+
+    /// Item 20: a beacon that reached zero hit points takes its structures with
+    /// it, immediately, as neutral ruins.
+    ///
+    /// The edge is spotted against [`World::beacon_alive`], so this fires on
+    /// the tick the beacon died and not on every tick after it.
+    fn settle_beacon_deaths(&mut self) {
+        let tick = self.tick;
+        let count = usize::try_from(self.beacons.len()).unwrap_or(0);
+        let mut index: usize = 0;
+        while index < count {
+            let alive = self
+                .beacons
+                .hit_points()
+                .get(index)
+                .is_some_and(|hp| hp.is_alive());
+            let was_alive = self.beacon_alive.get(index).copied().unwrap_or(alive);
+            if let Some(slot) = self.beacon_alive.get_mut(index) {
+                *slot = alive;
+            }
+            if was_alive && !alive {
+                let id = self.beacons.ids().get(index).copied().unwrap_or(0);
+                let seat = self.beacons.seats().get(index).copied().unwrap_or(0);
+                let at = self.beacons.positions().get(index).copied();
+                let mut emission = Emission::of(EventKind::BeaconDestroyed)
+                    .seat(SeatId::new(seat))
+                    .subject(AssetId::of_beacon(BeaconId::new(id)));
+                if let Some(point) = at {
+                    emission = emission.at(Position::from_array(point));
+                }
+                self.emit(tick, emission);
+                self.ruin_structures(Some(BeaconId::new(id)), None);
+            }
+            index = index.saturating_add(1);
+        }
+    }
+
+    /// Turn structures into neutral ruins: those homed to `home`, or all of
+    /// `seat`'s, whichever is given.
+    ///
+    /// Item 20's ruin, in one write: no owner. Inert, no supply, no draw, no
+    /// capability, unrepairable, zero audit value — all of which follow from
+    /// having no seat, rather than from five flags that could disagree.
+    fn ruin_structures(&mut self, home: Option<BeaconId>, seat: Option<SeatId>) {
+        let tick = self.tick;
+        let count = usize::try_from(self.structures.len()).unwrap_or(0);
+        let mut index: usize = 0;
+        while index < count {
+            let owner = self.structures.seats().get(index).copied().unwrap_or(0);
+            let matches_home = home
+                .is_some_and(|id| self.structures.homes().get(index).copied() == Some(id.raw()));
+            let matches_seat = seat.is_some_and(|id| owner == id.raw());
+            if SeatId::new(owner).is_some() && (matches_home || matches_seat) {
+                let id = self.structures.ids().get(index).copied().unwrap_or(0);
+                let at = self.structures.positions().get(index).copied();
+                if let Some(slot) = self.structures.seats_mut().get_mut(index) {
+                    *slot = SeatId::NEUTRAL.raw();
+                }
+                let mut emission = Emission::of(EventKind::StructureRuined)
+                    .subject(AssetId::of_structure(StructureId::new(id)));
+                if let Some(point) = at {
+                    emission = emission.at(Position::from_array(point));
+                }
+                self.emit(tick, emission);
+            }
+            index = index.saturating_add(1);
+        }
+    }
+
+    /// Spec section 3: when a seat's last beacon falls, its units disband on
+    /// the spot and its structures become neutral ruins.
+    ///
+    /// **A seat with no beacon row at all is not eliminated**, because it was
+    /// never placed: the determinism harness runs four seats on a three-zone
+    /// map on purpose, and a seat beyond the map's zones is seated but unplaced
+    /// (see [`crate::mapgen`]). It never had a core to lose, so it is neither
+    /// eliminated nor counted by the one-tick rule. A seat's first beacon is
+    /// its core (spec section 3), so "has a beacon row" is exactly "was in the
+    /// match".
+    fn settle_eliminations(&mut self) {
+        let tick = self.tick;
+        let seats = usize::try_from(self.seats.len()).unwrap_or(0);
+        let mut index: usize = 0;
+        while index < seats {
+            let raw = self.seats.seats().get(index).copied().unwrap_or(0);
+            let standing = self.seat_standing(raw);
+            if self.seats.is_alive(index) && standing == SeatStanding::Fallen {
+                {
+                    let columns = self.seats.match_columns();
+                    if let Some(slot) = columns.eliminated_at.get_mut(index) {
+                        *slot = tick.raw();
+                    }
+                    if let Some(slot) = columns.respawn_due.get_mut(index) {
+                        *slot = NO_RESPAWN;
+                    }
+                }
+                self.disband_units(SeatId::new(raw));
+                self.ruin_structures(None, Some(SeatId::new(raw)));
+                self.emit(
+                    tick,
+                    Emission::of(EventKind::SeatEliminated).seat(SeatId::new(raw)),
+                );
+            }
+            index = index.saturating_add(1);
+        }
+    }
+
+    /// Disband every one of a seat's units where it stands, the commander
+    /// included (item 21: it despawns at the tick its seat is eliminated).
+    ///
+    /// A disbanded unit also loses its route: a route is a decision a unit made
+    /// and a disbanded unit is making none, and leaving it in the repath queue
+    /// would spend the tick's cap on the dead.
+    fn disband_units(&mut self, seat: SeatId) {
+        let count = usize::try_from(self.units.len()).unwrap_or(0);
+        let mut index: usize = 0;
+        while index < count {
+            if self.units.seats().get(index).copied() == Some(seat.raw()) {
+                if let Some(slot) = self.units.hit_points_mut().get_mut(index) {
+                    *slot = Hp::ZERO;
+                }
+                if let Ok(unit) = u32::try_from(index) {
+                    self.router.clear(unit);
+                }
+            }
+            index = index.saturating_add(1);
+        }
+    }
+
+    /// Item 21: bring back every commander whose respawn is due.
+    ///
+    /// `force` completes every pending respawn regardless of its due tick, and
+    /// is what "a pending respawn always completes by segment end, so every
+    /// Lull snapshot has a live commander at a known place" means in code.
+    ///
+    /// The place is the core — the seat's lowest-id beacon — or, if the core is
+    /// gone, the surviving beacon nearest to where the commander died, ties to
+    /// the lowest beacon id (item 62's convention). A seat with no living
+    /// beacon at all is being eliminated in the same tick, so it has nowhere to
+    /// come back to and does not.
+    fn settle_respawns(&mut self, force: bool) {
+        let tick = self.tick;
+        let seats = usize::try_from(self.seats.len()).unwrap_or(0);
+        let hp = self.commander_hp();
+        let mut index: usize = 0;
+        while index < seats {
+            let due = self
+                .seats
+                .respawn_due()
+                .get(index)
+                .copied()
+                .unwrap_or(NO_RESPAWN);
+            let alive_seat = self.seats.is_alive(index);
+            if due == NO_RESPAWN || !alive_seat || (!force && due > tick.raw()) {
+                index = index.saturating_add(1);
+                continue;
+            }
+            let raw = self.seats.seats().get(index).copied().unwrap_or(0);
+            let commander = self.commander_of(SeatId::new(raw));
+            let Some(unit) = usize::try_from(commander.raw())
+                .ok()
+                .filter(|_| commander.is_some())
+            else {
+                index = index.saturating_add(1);
+                continue;
+            };
+            let died_at = self
+                .units
+                .positions()
+                .get(unit)
+                .copied()
+                .unwrap_or([Fx::ZERO; 3]);
+            let Some(point) = self.respawn_point(raw, died_at) else {
+                index = index.saturating_add(1);
+                continue;
+            };
+            if let Some(slot) = self.units.positions_mut().get_mut(unit) {
+                *slot = point;
+            }
+            if let Some(slot) = self.units.hit_points_mut().get_mut(unit) {
+                *slot = hp;
+            }
+            if let Some(slot) = self.units.destinations_mut().get_mut(unit) {
+                *slot = point;
+            }
+            if let Ok(id) = u32::try_from(unit) {
+                self.router.clear(id);
+                self.router.request(id);
+            }
+            {
+                let columns = self.seats.match_columns();
+                if let Some(slot) = columns.respawn_due.get_mut(index) {
+                    *slot = NO_RESPAWN;
+                }
+            }
+            let waited = tick.raw().saturating_sub(due);
+            self.emit(
+                tick,
+                Emission::of(EventKind::CommanderRespawned)
+                    .seat(SeatId::new(raw))
+                    .subject(AssetId::of_unit(commander))
+                    .at(Position::from_array(point))
+                    .value(i64::from(waited)),
+            );
+            index = index.saturating_add(1);
+        }
+    }
+
+    /// Item 21: a commander that has reached zero hit points and has no
+    /// respawn pending has just died. Book the death and its growing delay.
+    ///
+    /// The condition is the state itself rather than a remembered edge, which
+    /// is what keeps it from firing twice: the write that books the death is
+    /// the write that makes the condition false.
+    fn settle_commander_deaths(&mut self) {
+        let tick = self.tick;
+        let (base, growth) = self.respawn_curve();
+        let seats = usize::try_from(self.seats.len()).unwrap_or(0);
+        let mut index: usize = 0;
+        while index < seats {
+            let raw = self.seats.seats().get(index).copied().unwrap_or(0);
+            let commander = self.commander_of(SeatId::new(raw));
+            let dead = usize::try_from(commander.raw())
+                .ok()
+                .filter(|_| commander.is_some())
+                .and_then(|unit| self.units.hit_points().get(unit).copied())
+                .is_some_and(|hp| !hp.is_alive());
+            let pending = self
+                .seats
+                .respawn_due()
+                .get(index)
+                .copied()
+                .unwrap_or(NO_RESPAWN)
+                != NO_RESPAWN;
+            if dead && !pending && self.seats.is_alive(index) {
+                let deaths = self
+                    .seats
+                    .commander_deaths()
+                    .get(index)
+                    .copied()
+                    .unwrap_or(0);
+                let delay = Ms::new(
+                    base.saturating_add(growth.saturating_mul(i32::try_from(deaths).unwrap_or(0))),
+                );
+                let due = tick.raw().saturating_add(delay.to_ticks_ceil());
+                {
+                    let columns = self.seats.match_columns();
+                    if let Some(slot) = columns.commander_deaths.get_mut(index) {
+                        *slot = deaths.saturating_add(1);
+                    }
+                    if let Some(slot) = columns.respawn_due.get_mut(index) {
+                        *slot = due;
+                    }
+                }
+                let at = usize::try_from(commander.raw())
+                    .ok()
+                    .and_then(|unit| self.units.positions().get(unit).copied());
+                let mut emission = Emission::of(EventKind::CommanderDied)
+                    .seat(SeatId::new(raw))
+                    .subject(AssetId::of_unit(commander))
+                    .value(i64::from(deaths.saturating_add(1)));
+                if let Some(point) = at {
+                    emission = emission.at(Position::from_array(point));
+                }
+                self.emit(tick, emission);
+            }
+            index = index.saturating_add(1);
+        }
+    }
+
+    /// Item 16, the one-tick rule: end conditions are evaluated **every tick**,
+    /// and the Push halts at the first tick where fewer than two seats remain.
+    ///
+    /// `true` when this tick ended the match. If no seat survives that tick the
+    /// final audit at that tick decides, so the outcome is
+    /// [`MatchEndReason::NoSurvivor`] with no winner — there is no draw state,
+    /// and the audit that would name a winner is T14's.
+    fn check_match_end(&mut self) -> bool {
+        let mut remaining: u32 = 0;
+        let mut last: Option<SeatId> = None;
+        let seats = usize::try_from(self.seats.len()).unwrap_or(0);
+        let mut index: usize = 0;
+        while index < seats {
+            let raw = self.seats.seats().get(index).copied().unwrap_or(0);
+            if self.seats.is_alive(index) && self.seat_standing(raw) == SeatStanding::Standing {
+                remaining = remaining.saturating_add(1);
+                last = Some(SeatId::new(raw));
+            }
+            index = index.saturating_add(1);
+        }
+        if remaining >= 2 {
+            return false;
+        }
+        // This is a segment end like any other, so item 21's rule holds
+        // without an exception: a pending respawn always completes by segment
+        // end. An eliminated seat's does not, because `settle_respawns` skips
+        // a seat that is out.
+        self.settle_respawns(true);
+        let tick = self.tick;
+        let ran = tick.since(self.match_state.segment_started());
+        let (reason, winner) = match last {
+            Some(seat) => (MatchEndReason::LastSeatStanding, Some(seat)),
+            None => (MatchEndReason::NoSurvivor, None),
+        };
+        self.emit(
+            tick,
+            Emission::of(EventKind::SegmentEnded).value(i64::from(ran)),
+        );
+        self.match_state.decide(reason, winner, tick);
+        let round = self.match_state.round();
+        self.emit(
+            tick,
+            Emission::of(EventKind::RecapOpened).value(i64::from(round)),
+        );
+        let mut emission = Emission::of(EventKind::MatchEnded).value(i64::from(reason.id()));
+        if let Some(seat) = winner {
+            emission = emission.seat(seat);
+        }
+        self.emit(tick, emission);
+        true
+    }
+
+    /// Close the segment once it has run its length, freeing every pending
+    /// respawn on the way out.
+    fn close_segment_if_over(&mut self) {
+        let ticks = self.match_state.segment_ticks();
+        let ran = self.tick.since(self.match_state.segment_started());
+        if ran < ticks {
+            return;
+        }
+        // Item 21, in one line: the respawn always completes by segment end,
+        // so every Lull snapshot has a live commander at a known place.
+        self.settle_respawns(true);
+        let tick = self.tick;
+        self.emit(
+            tick,
+            Emission::of(EventKind::SegmentEnded).value(i64::from(ran)),
+        );
+        self.match_state.close_segment(tick);
+        let round = self.match_state.round();
+        self.emit(
+            tick,
+            Emission::of(EventKind::RecapOpened).value(i64::from(round)),
+        );
+    }
+
+    /// Whether a seat is standing, has fallen, or was never placed.
+    fn seat_standing(&self, seat: u8) -> SeatStanding {
+        let mut placed = false;
+        let count = usize::try_from(self.beacons.len()).unwrap_or(0);
+        let mut index: usize = 0;
+        while index < count {
+            if self.beacons.seats().get(index).copied() == Some(seat) {
+                placed = true;
+                if self
+                    .beacons
+                    .hit_points()
+                    .get(index)
+                    .is_some_and(|hp| hp.is_alive())
+                {
+                    return SeatStanding::Standing;
+                }
+            }
+            index = index.saturating_add(1);
+        }
+        if placed {
+            SeatStanding::Fallen
+        } else {
+            SeatStanding::Unplaced
+        }
+    }
+
+    /// Where a seat's commander comes back: the core, or the surviving beacon
+    /// nearest `from`, ties to the lowest beacon id.
+    fn respawn_point(&self, seat: u8, from: [Fx; 3]) -> Option<[Fx; 3]> {
+        let mut core: Option<(u32, [Fx; 3], bool)> = None;
+        let mut nearest: Option<(Sq, u32, [Fx; 3])> = None;
+        let count = usize::try_from(self.beacons.len()).unwrap_or(0);
+        let mut index: usize = 0;
+        while index < count {
+            if self.beacons.seats().get(index).copied() == Some(seat) {
+                let id = self.beacons.ids().get(index).copied().unwrap_or(0);
+                let at = self
+                    .beacons
+                    .positions()
+                    .get(index)
+                    .copied()
+                    .unwrap_or([Fx::ZERO; 3]);
+                let alive = self
+                    .beacons
+                    .hit_points()
+                    .get(index)
+                    .is_some_and(|hp| hp.is_alive());
+                if core.is_none_or(|(best, _, _)| id < best) {
+                    core = Some((id, at, alive));
+                }
+                if alive {
+                    let distance = Sq::between(at, from);
+                    if nearest.is_none_or(|(best, best_id, _)| (distance, id) < (best, best_id)) {
+                        nearest = Some((distance, id, at));
+                    }
+                }
+            }
+            index = index.saturating_add(1);
+        }
+        match core {
+            Some((_, at, true)) => Some(at),
+            _ => nearest.map(|(_, _, at)| at),
+        }
+    }
+
+    /// The commander's hit points, from `commander.hp`.
+    fn commander_hp(&self) -> Hp {
+        self.rules
+            .message()
+            .commander
+            .as_ref()
+            .and_then(|block| i32::try_from(block.hp).ok())
+            .map_or(Hp::ZERO, Hp::new)
+    }
+
+    /// The respawn delay curve: `commander.respawn_base_ms` plus
+    /// `commander.respawn_growth_ms` per earlier death in the same Push
+    /// (item 90's rows, both PLACEHOLDER tuning re-derived by the owner at S2).
+    ///
+    /// Read from the rules table and never from a constant (AGENTS.md §12),
+    /// which is also what makes the curve a tuning question rather than a code
+    /// change.
+    fn respawn_curve(&self) -> (i32, i32) {
+        self.rules
+            .message()
+            .commander
+            .as_ref()
+            .map_or((0, 0), |block| {
+                (block.respawn_base_ms, block.respawn_growth_ms)
+            })
+    }
+
     /// Encode the world and digest it.
     fn phase_hash(&self, enc: &mut Enc) -> u64 {
         self.encode(enc);
@@ -801,6 +1511,14 @@ impl World {
     ///    restored nodes and refuses the file with
     ///    [`crate::snapshot::SnapshotError::RouteDigest`] when the two
     ///    disagree, exactly as it does for the chunk store.
+    /// 9. the match state — phase, round, round limit, the effective per-round
+    ///    length list, the segment's start tick and length, the coming
+    ///    segment's length and the outcome ([`crate::runner::MatchState`]).
+    ///    Every one of those decides what a tick does, so every one is here.
+    ///
+    /// The seat block gained three columns with the match state: the tick a
+    /// seat was eliminated at, its commander's death count for this Push, and
+    /// the tick a pending respawn is due — hashed for the same reason.
     ///
     /// The rules table, the voxel bytes, the broadphase and the work counter
     /// are **not** here. The first, third and fourth are inputs or derived
@@ -812,34 +1530,7 @@ impl World {
         enc.u64(self.match_seed);
         enc.u32(self.tick.raw());
 
-        enc.len(self.seats.len());
-        for (index, seat) in self.seats.seats().iter().enumerate() {
-            enc.u8(*seat);
-            enc.i64(
-                self.seats
-                    .treasuries()
-                    .get(index)
-                    .copied()
-                    .unwrap_or(Money::ZERO)
-                    .raw(),
-            );
-            enc.i32(
-                self.seats
-                    .supplies()
-                    .get(index)
-                    .copied()
-                    .unwrap_or(Kw::ZERO)
-                    .raw(),
-            );
-            enc.i32(
-                self.seats
-                    .draws()
-                    .get(index)
-                    .copied()
-                    .unwrap_or(Kw::ZERO)
-                    .raw(),
-            );
-        }
+        self.encode_seats(enc);
 
         enc.len(self.units.len());
         let positions = self.units.positions();
@@ -898,6 +1589,65 @@ impl World {
 
         self.chunks.encode(enc);
         self.router.encode(enc);
+        self.match_state.encode(enc);
+    }
+
+    /// The seat block of the canonical encoding: treasury and power, then the
+    /// three match columns T10 added.
+    ///
+    /// Split out of [`World::encode`] because the seat row is now seven fields
+    /// wide and the encoder reads better as one block per table than as one
+    /// function per world.
+    fn encode_seats(&self, enc: &mut Enc) {
+        enc.len(self.seats.len());
+        for (index, seat) in self.seats.seats().iter().enumerate() {
+            enc.u8(*seat);
+            enc.i64(
+                self.seats
+                    .treasuries()
+                    .get(index)
+                    .copied()
+                    .unwrap_or(Money::ZERO)
+                    .raw(),
+            );
+            enc.i32(
+                self.seats
+                    .supplies()
+                    .get(index)
+                    .copied()
+                    .unwrap_or(Kw::ZERO)
+                    .raw(),
+            );
+            enc.i32(
+                self.seats
+                    .draws()
+                    .get(index)
+                    .copied()
+                    .unwrap_or(Kw::ZERO)
+                    .raw(),
+            );
+            enc.u32(
+                self.seats
+                    .eliminated_at()
+                    .get(index)
+                    .copied()
+                    .unwrap_or(NOT_ELIMINATED),
+            );
+            enc.u32(
+                self.seats
+                    .commander_deaths()
+                    .get(index)
+                    .copied()
+                    .unwrap_or(0),
+            );
+            enc.u32(
+                self.seats
+                    .respawn_due()
+                    .get(index)
+                    .copied()
+                    .unwrap_or(NO_RESPAWN),
+            );
+        }
     }
 
     /// The per-tick state hash, allocating its own encoder.
@@ -966,7 +1716,15 @@ impl World {
         self.tick = restored.tick;
         self.seats = restored.seats;
         self.units = restored.units;
+        self.commanders = commander_index(&self.units, self.seats.len());
         self.beacons = restored.beacons;
+        self.beacon_alive = self
+            .beacons
+            .hit_points()
+            .iter()
+            .map(|hp| hp.is_alive())
+            .collect();
+        self.match_state.restore(restored.match_state);
         self.structures = restored.structures;
         self.wrecks = restored.wrecks;
         self.voxels = restored.voxels;
@@ -983,12 +1741,61 @@ impl World {
         self.repair_report = RepairReport::default();
         self.serve_report = ServeReport::default();
         self.edits.clear();
+        self.damage.clear();
+        // The event bus is derived output and is not in the file
+        // ([`crate::events`]): a restored world starts with an empty feed,
+        // which costs nothing because a host drains it every tick and a save is
+        // written at a segment boundary, with the bus already empty.
+        self.events.clear();
         self.touched = Vec::with_capacity(usize::try_from(self.voxels.chunk_count()).unwrap_or(0));
         // The query scratch is sized the same way, and for the same reason: a
         // query that has to grow its buffer is an allocation inside a tick.
         self.candidates = Vec::with_capacity(usize::try_from(unit_count).unwrap_or(0));
         true
     }
+}
+
+/// Where a seat stands in the match.
+///
+/// Three states rather than two, because "has no living beacon" is two
+/// different things: a seat whose core has fallen is **out**, and a seat that
+/// was never placed was never **in**. See [`World::settle_eliminations`].
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+enum SeatStanding {
+    /// At least one beacon of this seat is alive.
+    Standing,
+    /// This seat had beacons and none of them is alive.
+    Fallen,
+    /// This seat has no beacon row at all: it was seated but never placed.
+    Unplaced,
+}
+
+/// Each seat's commander, by unit index, or [`UnitId::NONE`].
+///
+/// Derived from the unit table, which fixes its count at construction, so it is
+/// built once here and rebuilt on a restore. The **first** commander row a seat
+/// has, in unit-id order, which is the only commander a seat ever has (spec
+/// section 4: one per occupied seat).
+fn commander_index(units: &UnitTable, seats: u32) -> Vec<u32> {
+    let mut commanders = vec![UnitId::NONE.raw(); usize::try_from(seats).unwrap_or(0)];
+    let commander = UnitKind::Commander.id();
+    for (index, kind) in units.kinds().iter().enumerate() {
+        if *kind != commander {
+            continue;
+        }
+        let Some(seat) = units.seats().get(index).copied() else {
+            continue;
+        };
+        let Ok(id) = u32::try_from(index) else {
+            continue;
+        };
+        if let Some(slot) = commanders.get_mut(usize::from(seat))
+            && *slot == UnitId::NONE.raw()
+        {
+            *slot = id;
+        }
+    }
+    commanders
 }
 
 /// The unit table: the generator's starting force first, then the harness's

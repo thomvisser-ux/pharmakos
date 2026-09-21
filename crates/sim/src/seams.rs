@@ -256,6 +256,47 @@ pub struct LocalView<'a> {
     pub knowledge: &'a crate::knowledge::SeatKnowledge,
 }
 
+/// The seam the **playbook interpreter** plugs into, and the one thing T10
+/// leaves for T11.
+///
+/// [`crate::world::Phase::Decision`] is the tick phase that calls it, once per
+/// `match.decision_tick_ms` of game time — 250 ms, which is exactly five ticks
+/// at 20 Hz, so no decision lands between ticks. Everything about what a
+/// decision *is* belongs to T11 (the v1 vocabulary: route steps, handlers,
+/// selectors, the fixed 20 % reflex, `on_death` and `fallback`), and **none of
+/// it is built here**: this trait exists so that the runner, the phases and the
+/// event bus can be written against a stable shape, and so that the tick's
+/// order does not move when the interpreter arrives.
+///
+/// Two rules bind it, both inherited from [`Operator`] and from AGENTS.md §2:
+///
+/// * **No script runtime.** A playbook is data with a closed vocabulary; an
+///   implementation of this trait is Rust, compiled in, and reads that data.
+/// * **No clock.** A budget is [`WorkCounter`] units, never wall time.
+///
+/// PLACEHOLDER: the parameter list is the shape [`Operator`] already has,
+/// because a decision needs the same three things — a fog-limited view, the
+/// mandate in force, and somewhere to put intents. T11 settles the signature
+/// when the vocabulary it has to carry exists, and **T11 is also free to widen
+/// it**; nothing in this crate calls it yet, so widening it costs one
+/// implementation and no call site (owner, at T11).
+pub trait PlaybookInterpreter {
+    /// Run one decision tick for one seat.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OutOfWork`] when the tick's work budget runs out mid-decision.
+    /// The intents already pushed stand, for the reason [`Operator::decide`]'s
+    /// do: a budget is a stop, not a rollback.
+    fn decide(
+        &mut self,
+        view: &LocalView<'_>,
+        mandate: BeaconMandate,
+        work: &mut WorkCounter,
+        out: &mut IntentSink,
+    ) -> Result<(), OutOfWork>;
+}
+
 /// The seam the operator arm hangs off (spec section 15, "Seams kept for
 /// later").
 ///

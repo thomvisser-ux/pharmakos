@@ -1,0 +1,476 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+//! The event bus: what a tick reports, in a total order, under a name a
+//! scenario file can assert on.
+//!
+//! The gateway's `get_segment_feed` and the watch rig's live event list both
+//! read this bus; `crates/gateway/src/feed.rs` fog-filters it, pages it behind
+//! opaque cursors and counts it per kind in each 60 s digest. That module's
+//! own doc says the catalogue of kinds "belongs to the sim's event bus (T10)",
+//! and this module is it.
+//!
+//! # A kind is a name, and the name is the contract
+//!
+//! Decisions log item 97: a scenario file asserts `"event": "beacon_placed"`,
+//! and T15's extension counts the same names. So a kind is **not a free
+//! string** — it is an [`EventKind`] whose [`EventKind::name`] is lower-case
+//! ASCII letters, digits and underscores, starting with a letter, exactly what
+//! the gateway's `Kind::new` accepts. `every_kind_is_assertable` asserts the
+//! spelling of every variant rather than trusting it, and
+//! [`EventKind::id`] is written out so that reordering the enum cannot change a
+//! wire value by accident (the same rule the unit kinds and the RNG streams
+//! follow).
+//!
+//! Adding a kind is additive: a new variant, a new id at the end, a new name.
+//! Renaming one breaks every scenario file that asserts on it, so a name is
+//! treated as append-only from the day it ships.
+//!
+//! # The bus is derived output, not hashed state — and why that is safe
+//!
+//! Nothing in a tick reads an event. Events are produced by the phases, drained
+//! by the host, and never consulted again by the sim, so dropping one cannot
+//! change what the world does next. That is the whole test AGENTS.md §4.8 sets:
+//! *a field that affects behaviour must be hashed*. This one affects nothing,
+//! so it is deliberately **outside** the state hash, outside the snapshot and
+//! outside the golden files, and `the_event_bus_is_not_in_the_state_encoding`
+//! asserts it rather than leaving it as a claim.
+//!
+//! That is a decision with a price, and the price is written down: a resumed
+//! match starts with an empty bus. It costs nothing in practice because the
+//! host drains the bus every tick and a segment-end freeze happens with the bus
+//! already emptied, but a stage that wants the feed to survive a save has to
+//! make it state rather than assume it already is.
+//!
+//! What the bus *is* is **deterministic**: the same seed and the same playbooks
+//! produce the same events in the same order on every platform, because every
+//! emitter walks its table in id order and the order below is a total one.
+//! `the_same_seed_produces_the_same_events` asserts that.
+//!
+//! # The total order
+//!
+//! An event is ordered by `(tick, seq)`. `seq` counts from zero within a tick
+//! and is assigned in emission order; emission order is fixed because the tick
+//! phases run in [`crate::world::PHASE_ORDER`] and every phase walks its table
+//! in ascending id. **Never arrival order**: nothing here is fed by a channel,
+//! a task or a thread, and nothing may be (AGENTS.md §4.6).
+//!
+//! # A full bus drops and says so
+//!
+//! [`EVENT_BUS_CAPACITY`] is fixed at construction, because nothing in a tick
+//! allocates (G3′ §9.17). A bus with no room **drops the event and counts the
+//! drop** ([`EventBus::dropped`]); it never grows and never blocks. A drop is
+//! deterministic — it depends only on how many events the tick produced — so it
+//! cannot desync a match, but it can silence an assertion, which is why the
+//! count is part of the public surface rather than an internal detail.
+
+use crate::knowledge::{AssetId, Position};
+use crate::math::quantity::Tick;
+use crate::tables::SeatId;
+
+/// How many events one bus holds between drains.
+///
+/// Sized above the gateway's `MAX_PAGE_EVENTS` (256), so a host draining once
+/// per tick and paging at the gateway's ceiling never meets a full bus at the
+/// skeleton's event rate. The tick that produces the most events is a seat's
+/// elimination, which emits one line per beacon of that seat plus one per
+/// structure homed to it.
+///
+/// PLACEHOLDER: 512 is a working number against a world total of 300 units and
+/// 40 beacons (item 63). The owner settles it with the read-method detail
+/// budgets at hardening, alongside `MAX_PAGE_EVENTS`.
+pub const EVENT_BUS_CAPACITY: usize = 512;
+
+/// What happened. The name is what a scenario file asserts on (item 97).
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub enum EventKind {
+    /// The match opened. Emitted once, at tick zero, before the first Lull.
+    MatchStarted,
+    /// A Lull opened: seats may plan against the frozen snapshot.
+    LullOpened,
+    /// A Push began. `value` carries the segment's length in game
+    /// milliseconds.
+    PushStarted,
+    /// A Push ended, either by running its length or by the one-tick rule.
+    /// `value` carries the ticks the segment actually ran.
+    SegmentEnded,
+    /// The recap opened: the Ledger settles and the frozen snapshot is taken.
+    RecapOpened,
+    /// The match ended. `seat` is the winner when there is one.
+    MatchEnded,
+    /// A beacon reached zero hit points. Its structures become neutral ruins
+    /// in the same tick (item 20, local elimination).
+    BeaconDestroyed,
+    /// A structure became a neutral ruin: inert, no supply, no draw, no
+    /// capability, unrepairable, zero audit value (item 20).
+    StructureRuined,
+    /// A seat lost its last beacon: its units disband and its structures
+    /// become ruins (spec section 3, Elimination).
+    SeatEliminated,
+    /// A commander died. `value` carries how many times it has died in this
+    /// Push, counting this one.
+    CommanderDied,
+    /// A commander came back. `value` carries the ticks the respawn took.
+    CommanderRespawned,
+    /// A unit was parked as sealed in: no route to its destination exists
+    /// (item 60, "park and report").
+    UnitSealedIn,
+}
+
+impl EventKind {
+    /// Every kind, in ascending [`EventKind::id`] order.
+    pub const ALL: [EventKind; 12] = [
+        EventKind::MatchStarted,
+        EventKind::LullOpened,
+        EventKind::PushStarted,
+        EventKind::SegmentEnded,
+        EventKind::RecapOpened,
+        EventKind::MatchEnded,
+        EventKind::BeaconDestroyed,
+        EventKind::StructureRuined,
+        EventKind::SeatEliminated,
+        EventKind::CommanderDied,
+        EventKind::CommanderRespawned,
+        EventKind::UnitSealedIn,
+    ];
+
+    /// The wire id. Additive only: never reuse, never renumber.
+    #[must_use]
+    pub const fn id(self) -> u8 {
+        match self {
+            EventKind::MatchStarted => 1,
+            EventKind::LullOpened => 2,
+            EventKind::PushStarted => 3,
+            EventKind::SegmentEnded => 4,
+            EventKind::RecapOpened => 5,
+            EventKind::MatchEnded => 6,
+            EventKind::BeaconDestroyed => 7,
+            EventKind::StructureRuined => 8,
+            EventKind::SeatEliminated => 9,
+            EventKind::CommanderDied => 10,
+            EventKind::CommanderRespawned => 11,
+            EventKind::UnitSealedIn => 12,
+        }
+    }
+
+    /// The kind an id names, or `None` for an id this build does not define.
+    #[must_use]
+    pub const fn from_id(id: u8) -> Option<EventKind> {
+        match id {
+            1 => Some(EventKind::MatchStarted),
+            2 => Some(EventKind::LullOpened),
+            3 => Some(EventKind::PushStarted),
+            4 => Some(EventKind::SegmentEnded),
+            5 => Some(EventKind::RecapOpened),
+            6 => Some(EventKind::MatchEnded),
+            7 => Some(EventKind::BeaconDestroyed),
+            8 => Some(EventKind::StructureRuined),
+            9 => Some(EventKind::SeatEliminated),
+            10 => Some(EventKind::CommanderDied),
+            11 => Some(EventKind::CommanderRespawned),
+            12 => Some(EventKind::UnitSealedIn),
+            _ => None,
+        }
+    }
+
+    /// The name a scenario file asserts on: `lower_snake_case`, ASCII, starting
+    /// with a letter (item 97; the gateway's `Kind::new` enforces the same
+    /// shape on the way out).
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            EventKind::MatchStarted => "match_started",
+            EventKind::LullOpened => "lull_opened",
+            EventKind::PushStarted => "push_started",
+            EventKind::SegmentEnded => "segment_ended",
+            EventKind::RecapOpened => "recap_opened",
+            EventKind::MatchEnded => "match_ended",
+            EventKind::BeaconDestroyed => "beacon_destroyed",
+            EventKind::StructureRuined => "structure_ruined",
+            EventKind::SeatEliminated => "seat_eliminated",
+            EventKind::CommanderDied => "commander_died",
+            EventKind::CommanderRespawned => "commander_respawned",
+            EventKind::UnitSealedIn => "unit_sealed_in",
+        }
+    }
+
+    /// The kind a name spells, or `None` when nothing does.
+    ///
+    /// The other half of [`EventKind::name`], so a scenario file's string can
+    /// be resolved once, at load, rather than compared per event.
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<EventKind> {
+        EventKind::ALL.into_iter().find(|kind| kind.name() == name)
+    }
+}
+
+/// One thing that happened, at one tick.
+///
+/// Ordered by `(tick, seq)`, which is a total order because `seq` is unique
+/// within a tick (item 62's convention: every ordering key ends in something
+/// unique).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Event {
+    /// The tick it happened on.
+    pub tick: Tick,
+    /// Where it sits within that tick, from zero, in emission order.
+    pub seq: u32,
+    /// What happened.
+    pub kind: EventKind,
+    /// Whose it is, when it belongs to a seat. `None` for a match-wide event
+    /// and for anything that has become neutral.
+    pub seat: Option<SeatId>,
+    /// What it is about, when it is about one thing.
+    pub subject: Option<AssetId>,
+    /// Where it happened, when it happened somewhere. The gateway's fog filter
+    /// decides visibility from this, so an event about a place carries one.
+    pub at: Option<Position>,
+    /// A kind-specific number; each variant of [`EventKind`] documents its own.
+    /// Zero when the kind carries none.
+    pub value: i64,
+}
+
+/// One event under construction.
+///
+/// A builder rather than a seven-argument `emit`, because five of those seven
+/// arguments are optional and adjacent, and a positional list that long is how
+/// a seat id ends up in the subject slot.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct Emission {
+    kind: EventKind,
+    seat: Option<SeatId>,
+    subject: Option<AssetId>,
+    at: Option<Position>,
+    value: i64,
+}
+
+impl Emission {
+    /// An event of `kind`, about nothing in particular.
+    pub(crate) const fn of(kind: EventKind) -> Emission {
+        Emission {
+            kind,
+            seat: None,
+            subject: None,
+            at: None,
+            value: 0,
+        }
+    }
+
+    /// Whose it is.
+    pub(crate) const fn seat(mut self, seat: SeatId) -> Emission {
+        self.seat = Some(seat);
+        self
+    }
+
+    /// What it is about.
+    pub(crate) const fn subject(mut self, subject: AssetId) -> Emission {
+        self.subject = Some(subject);
+        self
+    }
+
+    /// Where it happened.
+    pub(crate) const fn at(mut self, at: Position) -> Emission {
+        self.at = Some(at);
+        self
+    }
+
+    /// The kind's own number.
+    pub(crate) const fn value(mut self, value: i64) -> Emission {
+        self.value = value;
+        self
+    }
+}
+
+/// A fixed-capacity, ordered sink for one tick's events.
+///
+/// Derived output: see the module docs for why it is not hashed, not
+/// snapshotted and not in the goldens.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct EventBus {
+    events: Vec<Event>,
+    capacity: usize,
+    /// The tick `seq` is currently counting within.
+    tick: Tick,
+    /// The next sequence number for [`EventBus::tick`].
+    seq: u32,
+    emitted: u64,
+    dropped: u64,
+}
+
+impl EventBus {
+    /// A bus holding `capacity` events between drains, allocated once.
+    #[must_use]
+    pub fn with_capacity(capacity: usize) -> EventBus {
+        EventBus {
+            events: Vec::with_capacity(capacity),
+            capacity,
+            tick: Tick::ZERO,
+            seq: 0,
+            emitted: 0,
+            dropped: 0,
+        }
+    }
+
+    /// Everything emitted since the last drain, in `(tick, seq)` order.
+    #[must_use]
+    pub fn as_slice(&self) -> &[Event] {
+        &self.events
+    }
+
+    /// How many events are waiting.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.events.len()
+    }
+
+    /// Whether none are waiting.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.events.is_empty()
+    }
+
+    /// How many the bus will hold before it starts dropping.
+    #[must_use]
+    pub const fn capacity(&self) -> usize {
+        self.capacity
+    }
+
+    /// Take the waiting events out, keeping the allocation.
+    ///
+    /// The sequence counter is **not** reset: it belongs to the tick, not to
+    /// the drain, so a host that drains twice within one tick still gets a
+    /// strictly increasing `seq`.
+    pub fn clear(&mut self) {
+        self.events.clear();
+    }
+
+    /// How many events have ever been emitted, drops included.
+    #[must_use]
+    pub const fn emitted(&self) -> u64 {
+        self.emitted
+    }
+
+    /// How many events have ever been dropped for want of room.
+    ///
+    /// Non-zero means a scenario assertion may be looking at an incomplete
+    /// feed. It never means the sim diverged.
+    #[must_use]
+    pub const fn dropped(&self) -> u64 {
+        self.dropped
+    }
+
+    /// Record `emission` as having happened at `tick`. `false` when the bus was
+    /// full and the event was dropped.
+    ///
+    /// Crate-internal: the sim's phases and its runner are the only emitters,
+    /// so nothing outside can put a line in a seat's feed.
+    pub(crate) fn emit(&mut self, tick: Tick, emission: Emission) -> bool {
+        if tick != self.tick {
+            self.tick = tick;
+            self.seq = 0;
+        }
+        self.emitted = self.emitted.saturating_add(1);
+        if self.events.len() >= self.capacity {
+            self.dropped = self.dropped.saturating_add(1);
+            return false;
+        }
+        self.events.push(Event {
+            tick,
+            seq: self.seq,
+            kind: emission.kind,
+            seat: emission.seat,
+            subject: emission.subject,
+            at: emission.at,
+            value: emission.value,
+        });
+        self.seq = self.seq.saturating_add(1);
+        true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Emission, EventBus, EventKind};
+    use crate::math::quantity::Tick;
+
+    #[test]
+    fn a_sequence_counts_within_a_tick_and_restarts_at_the_next() {
+        let mut bus = EventBus::with_capacity(8);
+        bus.emit(Tick::new(3), Emission::of(EventKind::PushStarted));
+        bus.emit(Tick::new(3), Emission::of(EventKind::UnitSealedIn));
+        bus.emit(Tick::new(4), Emission::of(EventKind::UnitSealedIn));
+
+        let seen: Vec<(u32, u32)> = bus
+            .as_slice()
+            .iter()
+            .map(|event| (event.tick.raw(), event.seq))
+            .collect();
+        assert_eq!(seen, [(3, 0), (3, 1), (4, 0)]);
+        for pair in seen.windows(2) {
+            let (Some(first), Some(second)) = (pair.first(), pair.get(1)) else {
+                continue;
+            };
+            assert!(first < second, "(tick, seq) is a total order");
+        }
+    }
+
+    #[test]
+    fn a_drain_does_not_restart_the_sequence_within_a_tick() {
+        // A host may drain twice in one tick; `seq` belongs to the tick, not to
+        // the drain, so the second page continues where the first left off.
+        let mut bus = EventBus::with_capacity(8);
+        bus.emit(Tick::new(1), Emission::of(EventKind::LullOpened));
+        bus.clear();
+        bus.emit(Tick::new(1), Emission::of(EventKind::PushStarted));
+        assert_eq!(bus.as_slice().first().map(|event| event.seq), Some(1));
+    }
+
+    #[test]
+    fn a_full_bus_drops_and_counts_rather_than_growing() {
+        let mut bus = EventBus::with_capacity(2);
+        assert!(bus.emit(Tick::new(1), Emission::of(EventKind::LullOpened)));
+        assert!(bus.emit(Tick::new(1), Emission::of(EventKind::PushStarted)));
+        assert!(
+            !bus.emit(Tick::new(1), Emission::of(EventKind::UnitSealedIn)),
+            "the third does not fit"
+        );
+
+        assert_eq!(bus.len(), 2, "and the bus did not grow to hold it");
+        assert_eq!(bus.capacity(), 2);
+        assert_eq!(bus.dropped(), 1, "the drop is counted, never silent");
+        assert_eq!(bus.emitted(), 3, "drops included");
+
+        // Draining makes room again, and the counters keep the history.
+        bus.clear();
+        assert!(bus.is_empty());
+        assert!(bus.emit(Tick::new(2), Emission::of(EventKind::SegmentEnded)));
+        assert_eq!(bus.dropped(), 1);
+        assert_eq!(bus.emitted(), 4);
+    }
+
+    #[test]
+    fn an_emission_carries_what_it_was_given_and_nothing_else() {
+        use crate::knowledge::AssetId;
+        use crate::tables::{SeatId, UnitId};
+
+        let mut bus = EventBus::with_capacity(4);
+        bus.emit(
+            Tick::new(7),
+            Emission::of(EventKind::CommanderDied)
+                .seat(SeatId::new(2))
+                .subject(AssetId::of_unit(UnitId::new(5)))
+                .value(3),
+        );
+        // `.expect()` is banned in this crate's source text by
+        // `tests/confinement.rs`, unit-test modules included, so a test in
+        // `src/` reads its subject the way the sim does.
+        let Some(event) = bus.as_slice().first().copied() else {
+            panic!("the bus holds the event it was given");
+        };
+        assert_eq!(event.kind, EventKind::CommanderDied);
+        assert_eq!(event.seat, Some(SeatId::new(2)));
+        assert_eq!(event.subject, Some(AssetId::of_unit(UnitId::new(5))));
+        assert_eq!(event.at, None, "no place was given, so none is claimed");
+        assert_eq!(event.value, 3);
+    }
+}

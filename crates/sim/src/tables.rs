@@ -49,10 +49,20 @@ use crate::seams::BeaconMandate;
 pub struct UnitId(u32);
 
 impl UnitId {
+    /// "No unit" — the sentinel a per-seat index carries for a seat that has
+    /// none. Same reasoning as [`BeaconId::NONE`].
+    pub const NONE: UnitId = UnitId(u32::MAX);
+
     /// Build from a raw id.
     #[must_use]
     pub const fn new(raw: u32) -> UnitId {
         UnitId(raw)
+    }
+
+    /// Whether this is a real unit rather than [`UnitId::NONE`].
+    #[must_use]
+    pub const fn is_some(self) -> bool {
+        self.0 != UnitId::NONE.0
     }
 
     /// The raw id, for the canonical encoder and for sort keys.
@@ -68,6 +78,15 @@ impl UnitId {
 pub struct SeatId(u8);
 
 impl SeatId {
+    /// Nobody's — the owner a neutral ruin carries.
+    ///
+    /// A sentinel rather than an `Option` for the reason [`BeaconId::NONE`] is
+    /// one: the seat column is snapshotted and hashed, and the snapshot's rule
+    /// is that every field is fixed-width with no tag byte whose layout could
+    /// differ between targets ([`crate::snapshot`]). `255` is far above v1's
+    /// three seats and above the determinism harness's four.
+    pub const NEUTRAL: SeatId = SeatId(u8::MAX);
+
     /// Build from a raw id.
     #[must_use]
     pub const fn new(raw: u8) -> SeatId {
@@ -78,6 +97,12 @@ impl SeatId {
     #[must_use]
     pub const fn raw(self) -> u8 {
         self.0
+    }
+
+    /// Whether this is a real seat rather than [`SeatId::NEUTRAL`].
+    #[must_use]
+    pub const fn is_some(self) -> bool {
+        self.0 != SeatId::NEUTRAL.0
     }
 }
 
@@ -194,6 +219,25 @@ impl UnitTable {
         &self.hp
     }
 
+    /// The hit-point column, to write into.
+    ///
+    /// Three callers, all in [`crate::world`]'s tick: the combat phase's damage
+    /// drain, elimination disbanding a seat's units on the spot, and a
+    /// commander coming back from a respawn. A unit's hit points are the one
+    /// thing about it that a phase other than movement changes.
+    pub fn hit_points_mut(&mut self) -> &mut [Hp] {
+        &mut self.hp
+    }
+
+    /// The position column, to write into.
+    ///
+    /// Movement writes it through [`UnitTable::movement_columns`]; this is for
+    /// the one write that is not a walk — a commander reappearing at its core
+    /// after a respawn (item 21).
+    pub fn positions_mut(&mut self) -> &mut [[Fx; 3]] {
+        &mut self.pos
+    }
+
     /// Every column the movement phase touches, borrowed at once.
     ///
     /// One method rather than six accessors because the phase needs the
@@ -295,11 +339,29 @@ pub struct MovementColumns<'a> {
     pub headings: &'a mut [Angle],
 }
 
-/// Per-seat treasury and power, structure-of-arrays.
+/// "This seat is still in the match" — the value [`SeatTable::eliminated_at`]
+/// carries for a seat that has not been eliminated.
+///
+/// A sentinel rather than an `Option`, for the reason [`BeaconId::NONE`] is
+/// one. It is not a tick any match reaches: `u32::MAX` ticks is over six years
+/// of game time ([`crate::math::quantity::Tick::next`]).
+pub const NOT_ELIMINATED: u32 = u32::MAX;
+
+/// "No respawn is pending" — the value [`SeatTable::respawn_due`] carries for a
+/// seat whose commander is alive.
+pub const NO_RESPAWN: u32 = u32::MAX;
+
+/// Per-seat treasury, power and match standing, structure-of-arrays.
 ///
 /// The economy proper is T14's; what is here is the shape the hash and the
 /// snapshot need from day one, so that adding the real columns is an ordinary
 /// extension rather than a new table.
+///
+/// The last three columns are T10's, and two of them are **per-Push state**
+/// (item 21): the commander's death counter and its pending respawn are reset
+/// when a Push opens, so that a seat's fifth death in round 1 does not price
+/// its first death in round 2. `eliminated_at` is not — elimination is for the
+/// match.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct SeatTable {
     count: u32,
@@ -307,6 +369,9 @@ pub struct SeatTable {
     treasury: Vec<Money>,
     supply: Vec<Kw>,
     draw: Vec<Kw>,
+    eliminated_at: Vec<u32>,
+    commander_deaths: Vec<u32>,
+    respawn_due: Vec<u32>,
 }
 
 impl SeatTable {
@@ -320,15 +385,21 @@ impl SeatTable {
             treasury: Vec::with_capacity(n),
             supply: Vec::with_capacity(n),
             draw: Vec::with_capacity(n),
+            eliminated_at: Vec::with_capacity(n),
+            commander_deaths: Vec::with_capacity(n),
+            respawn_due: Vec::with_capacity(n),
         }
     }
 
-    /// Append one seat. Construction only.
+    /// Append one seat, alive and with no deaths behind it. Construction only.
     pub fn push(&mut self, seat: SeatId, treasury: Money, supply: Kw, draw: Kw) {
         self.seat.push(seat.raw());
         self.treasury.push(treasury);
         self.supply.push(supply);
         self.draw.push(draw);
+        self.eliminated_at.push(NOT_ELIMINATED);
+        self.commander_deaths.push(0);
+        self.respawn_due.push(NO_RESPAWN);
         self.count = self.count.saturating_add(1);
     }
 
@@ -368,29 +439,106 @@ impl SeatTable {
         &self.draw
     }
 
+    /// The tick each seat was eliminated at, or [`NOT_ELIMINATED`].
+    #[must_use]
+    pub fn eliminated_at(&self) -> &[u32] {
+        &self.eliminated_at
+    }
+
+    /// Whether a seat is still in the match. An index the table does not cover
+    /// answers `false`, which is the safe direction: a seat that is not there
+    /// is not one of the two the one-tick rule counts.
+    #[must_use]
+    pub fn is_alive(&self, index: usize) -> bool {
+        self.eliminated_at
+            .get(index)
+            .is_some_and(|at| *at == NOT_ELIMINATED)
+    }
+
+    /// How many times each seat's commander has died **in this Push**
+    /// (item 21).
+    #[must_use]
+    pub fn commander_deaths(&self) -> &[u32] {
+        &self.commander_deaths
+    }
+
+    /// The tick each seat's commander is due back at, or [`NO_RESPAWN`].
+    #[must_use]
+    pub fn respawn_due(&self) -> &[u32] {
+        &self.respawn_due
+    }
+
+    /// The three match columns, to write into. [`crate::world`]'s match phase
+    /// is the only caller.
+    pub fn match_columns(&mut self) -> MatchColumns<'_> {
+        MatchColumns {
+            eliminated_at: &mut self.eliminated_at,
+            commander_deaths: &mut self.commander_deaths,
+            respawn_due: &mut self.respawn_due,
+        }
+    }
+
     /// Replace the whole table from a restored snapshot. Same contract as
     /// [`UnitTable::restore`].
-    pub fn restore(
-        &mut self,
-        seat: Vec<u8>,
-        treasury: Vec<Money>,
-        supply: Vec<Kw>,
-        draw: Vec<Kw>,
-    ) -> bool {
-        let n = seat.len();
-        if treasury.len() != n || supply.len() != n || draw.len() != n {
+    pub fn restore(&mut self, columns: SeatColumns) -> bool {
+        let n = columns.seat.len();
+        if columns.treasury.len() != n
+            || columns.supply.len() != n
+            || columns.draw.len() != n
+            || columns.eliminated_at.len() != n
+            || columns.commander_deaths.len() != n
+            || columns.respawn_due.len() != n
+        {
             return false;
         }
         let Ok(count) = u32::try_from(n) else {
             return false;
         };
         self.count = count;
-        self.seat = seat;
-        self.treasury = treasury;
-        self.supply = supply;
-        self.draw = draw;
+        self.seat = columns.seat;
+        self.treasury = columns.treasury;
+        self.supply = columns.supply;
+        self.draw = columns.draw;
+        self.eliminated_at = columns.eliminated_at;
+        self.commander_deaths = columns.commander_deaths;
+        self.respawn_due = columns.respawn_due;
         true
     }
+}
+
+/// Every column of a restored [`SeatTable`]. Same reasoning as
+/// [`UnitColumns`].
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct SeatColumns {
+    /// Seat ids.
+    pub seat: Vec<u8>,
+    /// Treasuries.
+    pub treasury: Vec<Money>,
+    /// Power supplies.
+    pub supply: Vec<Kw>,
+    /// Power draws.
+    pub draw: Vec<Kw>,
+    /// Elimination ticks, or [`NOT_ELIMINATED`].
+    pub eliminated_at: Vec<u32>,
+    /// Commander deaths this Push.
+    pub commander_deaths: Vec<u32>,
+    /// Pending respawn ticks, or [`NO_RESPAWN`].
+    pub respawn_due: Vec<u32>,
+}
+
+/// The three match columns, borrowed together.
+///
+/// One borrow rather than three accessors because the match phase writes all
+/// three in the same loop — a seat that is eliminated stops counting deaths and
+/// drops its pending respawn in one step.
+#[derive(Debug)]
+pub struct MatchColumns<'a> {
+    /// Elimination ticks, or [`NOT_ELIMINATED`].
+    pub eliminated_at: &'a mut [u32],
+    /// Commander deaths this Push.
+    pub commander_deaths: &'a mut [u32],
+    /// Pending respawn ticks, or [`NO_RESPAWN`].
+    pub respawn_due: &'a mut [u32],
 }
 
 /// A CSR uniform grid over the map footprint, rebuilt every tick by counting
@@ -1006,6 +1154,15 @@ impl BeaconTable {
         &self.dormant
     }
 
+    /// The hit-point column, to write into.
+    ///
+    /// The combat phase's damage drain is the only caller. A beacon at zero
+    /// hit points is dead, and item 20's local elimination follows in the same
+    /// tick.
+    pub fn hit_points_mut(&mut self) -> &mut [Hp] {
+        &mut self.hp
+    }
+
     /// Replace the whole table from a restored snapshot. Same contract as
     /// [`UnitTable::restore`].
     pub fn restore(&mut self, columns: BeaconColumns) -> bool {
@@ -1133,6 +1290,22 @@ impl StructureTable {
     #[must_use]
     pub fn homes(&self) -> &[u32] {
         &self.home
+    }
+
+    /// The hit-point column, to write into. The combat phase's damage drain.
+    pub fn hit_points_mut(&mut self) -> &mut [Hp] {
+        &mut self.hp
+    }
+
+    /// The owner column, to write into.
+    ///
+    /// One caller, one value: item 20's ruination writes [`SeatId::NEUTRAL`]
+    /// when the structure's home beacon dies or its seat is eliminated. A ruin
+    /// is inert — no supply, no draw, no capability, unrepairable, zero audit
+    /// value — and having no owner is what makes it all of those at once,
+    /// rather than five flags that could disagree.
+    pub fn seats_mut(&mut self) -> &mut [u8] {
+        &mut self.seat
     }
 
     /// Replace the whole table from a restored snapshot. Same contract as

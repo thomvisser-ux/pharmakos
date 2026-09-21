@@ -24,6 +24,7 @@ use pharmakos_sim::encoding::{Enc, hex};
 use pharmakos_sim::knowledge::{AssetId, AssetKind, Position, SeatKnowledge, Sighting};
 use pharmakos_sim::math::fixed::{Fx, Sq};
 use pharmakos_sim::math::quantity::{Ms, Tick};
+use pharmakos_sim::runner::{MatchPhase, MatchSettings, Runner};
 use pharmakos_sim::snapshot::{SNAPSHOT_VERSION, Snapshot, SnapshotError};
 use pharmakos_sim::tables::SeatId;
 use pharmakos_sim::voxels::{Material, VoxelEdit, VoxelStore};
@@ -77,6 +78,16 @@ fn world_with(rules: RulesTable) -> World {
     world_of(rules, pharmakos_sim::DETERMINISM_UNITS_PER_SEAT)
 }
 
+/// The harness's match settings, exactly as `pharmakos_sim::determinism_world`
+/// sets them: short segments, so a 1 200-tick chain covers whole segments and
+/// the phase changes between them (T10).
+fn harness_settings() -> MatchSettings {
+    MatchSettings {
+        segment_lengths_ms: pharmakos_sim::DETERMINISM_SEGMENT_LENGTHS_MS.to_vec(),
+        round_limit: pharmakos_sim::DEFAULT_ROUND_LIMIT,
+    }
+}
+
 /// The harness world at a chosen size, for the tests that need two worlds of
 /// different shapes.
 fn world_of(rules: RulesTable, units_per_seat: u32) -> World {
@@ -85,21 +96,39 @@ fn world_of(rules: RulesTable, units_per_seat: u32) -> World {
         seats: pharmakos_sim::DETERMINISM_SEATS,
         units_per_seat,
         rules,
+        match_settings: harness_settings(),
     })
     .expect("the rules table describes a map and a broadphase grid")
 }
 
 /// The chain, in the file format `xtask` validates: `tick<TAB>hash\n`.
-fn chain(world: &mut World, ticks: u32) -> String {
-    let mut enc = Enc::with_capacity(64 * 1024);
+///
+/// Driven through the [`Runner`] rather than by stepping the world, because
+/// that is what `src/bin/determinism.rs` does and
+/// `the_binary_reproduces_the_library_in_a_fresh_process` compares the two byte
+/// for byte. The host's part — opening a Push the moment a Lull is reached and
+/// closing a recap the moment one opens — is the same one the binary plays,
+/// and it is what puts whole segments inside the chain (T10).
+fn chain(world: World, ticks: u32) -> String {
+    let mut runner = Runner::new(world);
     let mut out = String::with_capacity(usize::try_from(ticks).unwrap_or(0).saturating_mul(24));
     for tick in 0..ticks {
         let hash = if tick == 0 {
-            world.encode(&mut enc);
-            enc.finish()
+            runner.world().state_hash()
         } else {
-            world.step(&mut enc)
+            loop {
+                match runner.phase() {
+                    MatchPhase::Push | MatchPhase::Ended => break,
+                    MatchPhase::Lull => assert!(runner.begin_push(), "a Lull opens a Push"),
+                    MatchPhase::Recap => assert!(runner.end_recap(), "a recap closes"),
+                }
+            }
+            match runner.step() {
+                Some(report) => report.hash,
+                None => break,
+            }
         };
+        runner.clear_events();
         out.push_str(&tick.to_string());
         out.push('\t');
         out.push_str(&hex(hash));
@@ -110,7 +139,7 @@ fn chain(world: &mut World, ticks: u32) -> String {
 
 #[test]
 fn the_hash_chain_matches_its_golden() {
-    let fresh = chain(&mut world_with(rules()), GOLDEN_TICKS);
+    let fresh = chain(world_with(rules()), GOLDEN_TICKS);
 
     // Hand the fresh output to `cargo xtask ci`'s golden step before asserting,
     // so a failure here still leaves it a readable first-difference report.
@@ -193,7 +222,7 @@ fn the_binary_reproduces_the_library_in_a_fresh_process() {
         runs.get(1),
         "two runs of the determinism binary disagree"
     );
-    let in_process = chain(&mut world_with(rules()), 200);
+    let in_process = chain(world_with(rules()), 200);
     assert_eq!(
         runs.first().map(Vec::as_slice),
         Some(in_process.as_bytes()),
@@ -488,7 +517,7 @@ fn a_performance_knob_is_not_hashed_state() {
     // state, not a calibration constant". The assertion that it moves the chain
     // is `the_repath_cap_is_a_rule_not_a_knob` below.
     let base = rules();
-    let reference = chain(&mut world_with(base.clone()), 200);
+    let reference = chain(world_with(base.clone()), 200);
 
     for cell_size in [4_u32, 8, 16, 32, 64] {
         let altered = rules_edited(|message| {
@@ -503,7 +532,7 @@ fn a_performance_knob_is_not_hashed_state() {
             "the altered table must be a different table"
         );
         assert_eq!(
-            chain(&mut world_with(altered), 200),
+            chain(world_with(altered), 200),
             reference,
             "the hash chain moved when only a performance knob changed (cell size {cell_size})"
         );
@@ -518,7 +547,7 @@ fn the_repath_cap_is_a_rule_not_a_knob() {
     // ticks and the chain says so. A cap that left the chain alone would mean
     // the round robin of item 60 was not being served in a fixed order.
     let base = rules();
-    let reference = chain(&mut world_with(base.clone()), 200);
+    let reference = chain(world_with(base.clone()), 200);
     let altered = rules_edited(|message| {
         message
             .locomotion
@@ -526,7 +555,7 @@ fn the_repath_cap_is_a_rule_not_a_knob() {
             .repath_cap_per_tick = 1;
     });
     assert_ne!(
-        chain(&mut world_with(altered), 200),
+        chain(world_with(altered), 200),
         reference,
         "the repath cap left the hash chain alone; it decides which unit repaths on which tick (items 60 and 69), so it is a rule and it has to move the chain"
     );
@@ -667,6 +696,7 @@ fn the_phase_order_is_the_documented_one() {
             Phase::Decision,
             Phase::Pathing,
             Phase::Voxels,
+            Phase::Match,
             Phase::Hash,
         ]
     );
@@ -1311,6 +1341,7 @@ fn the_map_is_inside_the_hash_and_not_merely_beside_it() {
         seats: pharmakos_sim::DETERMINISM_SEATS,
         units_per_seat: pharmakos_sim::DETERMINISM_UNITS_PER_SEAT,
         rules: rules(),
+        match_settings: harness_settings(),
     })
     .expect("a world on another seed");
     let mut base = world_with(rules());
