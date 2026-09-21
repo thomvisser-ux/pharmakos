@@ -1411,10 +1411,13 @@ fn step_screenshot(ctx: &Ctx) -> Result<Outcome, String> {
                 .to_owned(),
         ));
     }
-    if !tool_available("godot") {
+    let godot = godot_program();
+    if !tool_available(&godot) {
         return skip_or_fail(
             ctx,
-            "godot is not installed (the CI job installs the pinned 4.7.2 build)",
+            &format!(
+                "`{godot}` is not installed (the CI job installs the pinned 4.7.2 build; \n                 $PHARMAKOS_GODOT overrides the name)"
+            ),
         );
     }
     if !tool_available("xvfb-run") {
@@ -1429,7 +1432,7 @@ fn step_screenshot(ctx: &Ctx) -> Result<Outcome, String> {
     // classes are placeholders and the scene fails on its first call.
     run(
         ctx,
-        "godot",
+        &godot,
         &[
             "--headless".to_owned(),
             "--path".to_owned(),
@@ -1463,7 +1466,7 @@ fn step_screenshot(ctx: &Ctx) -> Result<Outcome, String> {
             "-a".to_owned(),
             "-s".to_owned(),
             VISTA_SCREEN.to_owned(),
-            "godot".to_owned(),
+            godot.clone(),
             "--path".to_owned(),
             GODOT_PROJECT_DIR.to_owned(),
             "--resolution".to_owned(),
@@ -1646,20 +1649,22 @@ fn step_stage_client(ctx: &Ctx) -> Result<Outcome, String> {
     }
     let staged_bytes = bytes.len();
 
-    if !tool_available("godot") {
+    let godot = godot_program();
+    if !tool_available(&godot) {
         return skip_or_fail(
             ctx,
             &format!(
-                "the library is staged at {}, but godot is not installed, so the import that a \
-                 fresh checkout needs could not run (the `client` job in \
-                 .github/workflows/ci.yml installs the pinned 4.7.2 build)",
+                "the library is staged at {}, but `{godot}` is not installed, so the import that \
+                 a fresh checkout needs could not run (the `client` job in \
+                 .github/workflows/ci.yml installs the pinned 4.7.2 build; $PHARMAKOS_GODOT \
+                 overrides the name)",
                 staged.display()
             ),
         );
     }
 
     // The pre-step every fresh checkout needs; see this function's doc comment.
-    let import_note = import_project(ctx, &project)?;
+    let import_note = import_project(ctx, &godot, &project)?;
 
     if !ctx.client_check {
         return Ok(Outcome::Done(format!(
@@ -1670,7 +1675,7 @@ fn step_stage_client(ctx: &Ctx) -> Result<Outcome, String> {
 
     run(
         ctx,
-        "godot",
+        &godot,
         &[
             "--headless".to_owned(),
             "--path".to_owned(),
@@ -1713,14 +1718,14 @@ fn step_stage_client(ctx: &Ctx) -> Result<Outcome, String> {
 /// four runs to. A failed import is retried once, because the second run is the
 /// one that exits cleanly, and the run is only accepted when the file is
 /// present either way. If it is not, the failure is reported with the reason.
-fn import_project(ctx: &Ctx, project: &Path) -> Result<String, String> {
+fn import_project(ctx: &Ctx, godot: &str, project: &Path) -> Result<String, String> {
     let import_args: Vec<String> = vec![
         "--headless".to_owned(),
         "--path".to_owned(),
         GODOT_PROJECT_DIR.to_owned(),
         "--import".to_owned(),
     ];
-    let first = run(ctx, "godot", &import_args);
+    let first = run(ctx, godot, &import_args);
     let mut note = "project imported".to_owned();
     if let Err(error) = first {
         println!(
@@ -1728,7 +1733,7 @@ fn import_project(ctx: &Ctx, project: &Path) -> Result<String, String> {
              teardown fault with a GDExtension loaded — retrying, and the extension list is \
              checked either way"
         );
-        run(ctx, "godot", &import_args)?;
+        run(ctx, godot, &import_args)?;
         "project imported (the cold import crashed at teardown and the retry exited cleanly)"
             .clone_into(&mut note);
     }
@@ -2402,6 +2407,31 @@ fn render_command(program: &str, args: &[String]) -> String {
     }
     line
 }
+
+/// The Godot binary to run: `$PHARMAKOS_GODOT` when it names one, plain `godot`
+/// otherwise.
+///
+/// Every `godot` invocation in this file goes through here, and the reason is a
+/// failure that already cost this lane a CI run. `$GITHUB_PATH` entries written
+/// from Git Bash on the Windows runner are MSYS POSIX paths
+/// (`/c/Users/runneradmin/godot`); bash resolves such an entry and
+/// `Command::new` does not, so a workflow step could print `godot: 4.7.2` and
+/// the very next step could report the tool missing. The workflow now writes a
+/// native path, and this override means the steps do not depend on it having
+/// done so: CI points the variable straight at the binary it installed.
+///
+/// An empty or blank value is treated as unset, so `PHARMAKOS_GODOT=` in an
+/// environment file does not turn into an attempt to execute the empty string.
+fn godot_program() -> String {
+    match env::var("PHARMAKOS_GODOT") {
+        Ok(path) if !path.trim().is_empty() => path,
+        _ => GODOT_DEFAULT_PROGRAM.to_owned(),
+    }
+}
+
+/// The name Godot is looked for under when `$PHARMAKOS_GODOT` is not set: the
+/// name a developer has locally.
+const GODOT_DEFAULT_PROGRAM: &str = "godot";
 
 /// True when the tool answers `--version`. On Windows this finds `tool.exe` but
 /// not a `tool.cmd` shim, which is why CI installs buf as a real binary.

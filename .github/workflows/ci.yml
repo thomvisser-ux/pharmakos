@@ -484,22 +484,61 @@ jobs:
           else
             7z x -y -o"$HOME/godot" "$HOME/godot/godot.zip" > /dev/null
           fi
+          # The PATH entry has to be spelled the way a NATIVE process spawn
+          # resolves it, not the way this shell does. `$HOME` under Git Bash on
+          # the Windows runner is an MSYS POSIX path (`/c/Users/runneradmin`),
+          # and writing that to `$GITHUB_PATH` publishes an entry Git Bash can
+          # follow and `CreateProcess` cannot — so every later bash step finds
+          # `godot` and xtask's `Command::new("godot")` does not. That is what
+          # made this leg red on the first run of this job: the version step
+          # below printed 4.7.2 and the very next step said godot was not
+          # installed. `cygpath -w` converts it to `C:\Users\runneradmin\godot`,
+          # which both resolve.
+          #
+          # PHARMAKOS_GODOT is the belt to that brace: `cargo xtask stage-client`
+          # and `cargo xtask screenshot` run the binary it names in place of a
+          # bare `godot`, so the step does not depend on how any shell spelled a
+          # PATH entry at all.
+          #
+          # `cygpath -w` for the directory, because a Windows PATH entry is
+          # spelled with backslashes; `cygpath -m` for the binary, because that
+          # form (`C:/Users/.../godot.exe`) is the one BOTH this shell and a
+          # native `CreateProcess` accept, and the guard step below runs it from
+          # bash while xtask runs it from Rust.
           if [ "${RUNNER_OS}" = "Windows" ]; then
             mv "$HOME/godot/${GODOT_BINARY}" "$HOME/godot/godot.exe"
+            godot_dir="$(cygpath -w "$HOME/godot")"
+            godot_exe="$(cygpath -m "$HOME/godot/godot.exe")"
           else
             mv "$HOME/godot/${GODOT_BINARY}" "$HOME/godot/godot"
             chmod +x "$HOME/godot/godot"
+            godot_dir="$HOME/godot"
+            godot_exe="${godot_dir}/godot"
           fi
-          echo "$HOME/godot" >> "$GITHUB_PATH"
+          echo "${godot_dir}" >> "$GITHUB_PATH"
+          echo "PHARMAKOS_GODOT=${godot_exe}" >> "$GITHUB_ENV"
 
       - name: Godot reports the pinned version
         # A wrong archive is otherwise found much later, by a failure that reads
         # like a code problem.
+        #
+        # This step asks the question the NEXT step will ask, in the way it will
+        # ask it. Running `godot --version` through bash proves only that bash
+        # can resolve the name; the first run of this job passed exactly that
+        # check and then failed on a native spawn of the same name. So on
+        # Windows `where` is consulted as well — it resolves against the same
+        # PATH a native process gets — and the binary PHARMAKOS_GODOT names is
+        # run directly, which is what xtask actually invokes.
         shell: bash
         run: |
           set -euo pipefail
-          version=$(godot --version | head -n 1)
-          echo "godot: ${version}"
+          if [ "${RUNNER_OS}" = "Windows" ]; then
+            cmd //c where godot
+          else
+            command -v godot
+          fi
+          version=$("${PHARMAKOS_GODOT}" --version | head -n 1)
+          echo "godot: ${version} (PHARMAKOS_GODOT=${PHARMAKOS_GODOT})"
           case "${version}" in
             4.7.2.stable*) ;;
             *) echo "::error::expected Godot 4.7.2.stable, got ${version}"; exit 1 ;;
