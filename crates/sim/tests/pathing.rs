@@ -1164,8 +1164,13 @@ fn a_sealed_in_walker_parks_and_is_re_armed_when_the_graph_changes() {
     // Wall the first unit in: a solid voxel five above each of its eight
     // neighbours' surfaces. The columns stay walkable, and every step out of
     // the middle one is a five-voxel climb, which the one-voxel rule refuses.
-    let unit = 0_u32;
-    let position = world.units().positions()[0];
+    // Unit **1**, not unit 0: unit 0 is seat 0's commander, and since T11 a
+    // commander's destination is its playbook's to set — the harness draw does
+    // not reach one, so a commander with no playbook stands still and is
+    // `Idle` rather than `Sealed`. Unit 1 is a starting build drone, which the
+    // harness still walks.
+    let unit = 1_u32;
+    let position = world.units().positions()[1];
     let (x, y) = (position[0].floor_voxels(), position[1].floor_voxels());
     let mut wall: Vec<[i32; 3]> = Vec::new();
     for dy in -1..=1_i32 {
@@ -1208,7 +1213,7 @@ fn a_sealed_in_walker_parks_and_is_re_armed_when_the_graph_changes() {
         (reported[0].1, reported[0].2),
         (
             AssetId::of_unit(UnitId::new(unit)),
-            Some(world.units().positions()[0])
+            Some(world.units().positions()[1])
         ),
         "the line names the unit that parked and where it stopped — which is what the gateway's \
          fog filter decides on"

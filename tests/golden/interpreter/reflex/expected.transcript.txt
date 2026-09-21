@@ -1,0 +1,23 @@
+# tick	seq	kind	seat	subject	value
+0	0	match_started	-	-	60000
+0	1	lull_opened	-	-	1
+0	2	plan_sealed	0	-	2
+0	3	push_started	-	-	60000
+1	0	step_started	0	-	0
+1	1	step_completed	0	-	0
+6	0	step_started	0	-	1
+6	1	visit_started	0	268435456	3
+66	0	row_committed	0	268435456	0
+71	0	visit_ended	0	268435456	1
+71	1	reflex_fired	0	-	20
+71	2	reflex_cleared	0	-	20
+71	3	step_started	0	-	1
+71	4	visit_started	0	268435456	3
+131	0	row_committed	0	268435456	0
+161	0	row_committed	0	268435456	1
+191	0	row_committed	0	268435456	2
+191	1	visit_ended	0	268435456	3
+191	2	step_completed	0	-	1
+191	3	fallback_engaged	0	-	1
+251	0	reflex_fired	0	-	10
+251	1	reflex_cleared	0	-	10

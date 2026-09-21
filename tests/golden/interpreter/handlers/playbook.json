@@ -1,0 +1,40 @@
+{
+  "schema_version": {"major": 1, "minor": 0},
+  "meta": {"title": "Four rules, every resume", "author_kind": "HUMAN"},
+  "kind": "PLAYBOOK",
+  "declarative": {
+    "route": [
+      {"label": "first", "hold": {"ms": 4000}},
+      {"label": "second", "hold": {"ms": 4000}},
+      {"label": "third", "hold": {"ms": 4000}},
+      {"label": "fourth", "hold": {"ms": 4000}},
+      {"label": "last", "hold": {"ms": 4000}}
+    ],
+    "handlers": [
+      {"id": "h1", "when": {"segment_elapsed": {"ms": {"op": "GE", "value": 1000}}},
+        "body": [{"label": "b1", "hold": {"ms": 500}}],
+        "resume": "CONTINUE", "cooldown_ms": 5000, "max_fires": 2},
+      {"id": "h2", "when": {"any": {"items": [
+        {"rule_fired": {"handler_id": "h1"}},
+        {"treasury": {"dollars": {"op": "GE", "value": 999999}}}
+      ]}},
+        "body": [{"label": "b2", "hold": {"ms": 500}}],
+        "resume": "SKIP_STEP", "cooldown_ms": 5000, "max_fires": 1},
+      {"id": "h3", "when": {"all": {"items": [
+        {"rule_fired": {"handler_id": "h2"}},
+        {"not": {"item": {"cmdr_hp_pct": {"cmp": "LT", "pct": 50}}}}
+      ]}},
+        "body": [{"label": "b3", "hold": {"ms": 500}}],
+        "resume": "JUMP_FORWARD", "resume_at_label": "last",
+        "cooldown_ms": 5000, "max_fires": 1},
+      {"id": "h4", "when": {"all": {"items": [
+        {"rule_fired": {"handler_id": "h3"}},
+        {"cmdr_hp_pct": {"cmp": "GE", "pct": 50}}
+      ]}},
+        "body": [{"label": "b4", "hold": {"ms": 500}}],
+        "resume": "END_ROUTE", "cooldown_ms": 5000, "max_fires": 1}
+    ]
+  },
+  "on_death": {"on_respawn": "CONTINUE", "max_deaths_before_fallback": 2},
+  "fallback": {"hold": {"at": {"beacon_anchor": {"weakest": {}}}}}
+}
