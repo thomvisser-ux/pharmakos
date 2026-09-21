@@ -695,19 +695,16 @@ impl Surface {
 
     /// Drain the sim's event bus onto the segment feed.
     ///
-    /// The translation is the fog filter's input: a match-wide line is
-    /// [`Audience::Public`] and everything else is [`Audience::World`], owned
-    /// by the seat it happened to and placed where it happened. An event that
-    /// belongs to a seat and carries **no** place is placed at the origin,
-    /// which under a fogged policy means its own seat sees it and nobody else
-    /// does -- the conservative answer, and the right one for a line about
-    /// somebody's commander.
+    /// The translation is the fog filter's input, and [`Surface::audience_of`]
+    /// decides it kind by kind.
     ///
     /// # Errors
     ///
     /// [`crate::error::Code::Internal`] when the sim emits a kind this crate's
     /// [`Kind`] rule refuses, which would mean the two spellings of item 97's
-    /// rule had drifted apart.
+    /// rule had drifted apart; and when a kind that is one seat's private
+    /// business arrives naming no seat, because there is then nobody it may
+    /// be shown to and showing it to everybody is the wrong default.
     fn absorb_events(&mut self) -> Result<(), Error> {
         let Some(host) = self.host.as_mut() else {
             return Ok(());
@@ -722,26 +719,7 @@ impl Surface {
                     error.message
                 ))
             })?;
-            let audience = if matches!(
-                event.kind,
-                pharmakos_sim::events::EventKind::MatchStarted
-                    | pharmakos_sim::events::EventKind::LullOpened
-                    | pharmakos_sim::events::EventKind::PushStarted
-                    | pharmakos_sim::events::EventKind::SegmentEnded
-                    | pharmakos_sim::events::EventKind::RecapOpened
-                    | pharmakos_sim::events::EventKind::MatchEnded
-                    | pharmakos_sim::events::EventKind::SeatEliminated
-            ) {
-                Audience::Public
-            } else {
-                Audience::World {
-                    owner: event.seat,
-                    at: event
-                        .at
-                        .map(crate::view::voxel_of_position)
-                        .unwrap_or_default(),
-                }
-            };
+            let audience = Self::audience_of(&event)?;
             let at_ms = Ms::from_ticks(event.tick.since(anchor));
             self.feed.publish(Event {
                 at_ms,
@@ -751,6 +729,73 @@ impl Surface {
             })?;
         }
         Ok(())
+    }
+
+    /// Who one sim event is for.
+    ///
+    /// One arm per kind, so a kind added to the sim's bus fails to compile
+    /// here rather than being shown to whoever the default happened to be --
+    /// the same reason [`crate::strings::event_text`] matches exhaustively.
+    ///
+    /// * A match-wide line is [`Audience::Public`].
+    /// * Something that happened to an asset in the world is
+    ///   [`Audience::World`], owned by the seat it happened to and placed
+    ///   where it happened, and fog decides. One that carries no place is
+    ///   placed at the origin.
+    /// * What the playbook interpreter reports -- the seal, a step, a rule, the
+    ///   reflex, a visit and its rows, the fallback -- is
+    ///   [`Audience::Private`] to the seat whose commander it is. Those lines
+    ///   carry step and rule indices, which are the shape of a sealed
+    ///   playbook, and a playbook never leaves the gateway for another seat
+    ///   (AGENTS.md section 7): not through fog, not under a no-fog policy and
+    ///   not to a spectator. `beacon_placed` is the exception among them,
+    ///   because a beacon standing in the world is a thing an opponent with
+    ///   eyes on the place can see.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::Internal`] when a private kind names no seat.
+    fn audience_of(event: &pharmakos_sim::events::Event) -> Result<Audience, Error> {
+        use pharmakos_sim::events::EventKind;
+        match event.kind {
+            EventKind::MatchStarted
+            | EventKind::LullOpened
+            | EventKind::PushStarted
+            | EventKind::SegmentEnded
+            | EventKind::RecapOpened
+            | EventKind::MatchEnded
+            | EventKind::SeatEliminated => Ok(Audience::Public),
+            EventKind::BeaconDestroyed
+            | EventKind::StructureRuined
+            | EventKind::CommanderDied
+            | EventKind::CommanderRespawned
+            | EventKind::UnitSealedIn
+            | EventKind::BeaconPlaced => Ok(Audience::World {
+                owner: event.seat,
+                at: event
+                    .at
+                    .map(crate::view::voxel_of_position)
+                    .unwrap_or_default(),
+            }),
+            EventKind::PlanSealed
+            | EventKind::StepStarted
+            | EventKind::StepCompleted
+            | EventKind::StepSkipped
+            | EventKind::StepFailed
+            | EventKind::RuleFired
+            | EventKind::RuleEnded
+            | EventKind::ReflexFired
+            | EventKind::ReflexCleared
+            | EventKind::VisitStarted
+            | EventKind::RowCommitted
+            | EventKind::VisitEnded
+            | EventKind::FallbackEngaged => event.seat.map(Audience::Private).ok_or_else(|| {
+                Error::internal(format!(
+                    "the sim emitted `{}` for no seat, and a seat's orders have no other audience",
+                    event.kind.name()
+                ))
+            }),
+        }
     }
 
     /// File the safe playbook for every seat that sealed nothing.
@@ -1854,5 +1899,65 @@ mod tests {
         )
         .expect_err("refused");
         assert_eq!(error.code, Code::InvalidArgument);
+    }
+
+    fn sim_event(
+        kind: pharmakos_sim::events::EventKind,
+        seat: Option<u8>,
+    ) -> pharmakos_sim::events::Event {
+        pharmakos_sim::events::Event {
+            tick: Tick::new(7),
+            seq: 0,
+            kind,
+            seat: seat.map(SeatId::new),
+            subject: None,
+            at: None,
+            value: 3,
+        }
+    }
+
+    #[test]
+    fn a_seats_orders_are_private_to_it_whatever_the_fog_policy() {
+        use crate::fog::{Audience, FogFilter, Viewer};
+        use pharmakos_sim::events::EventKind;
+        let mut private = 0;
+        for kind in EventKind::ALL {
+            let audience = Surface::audience_of(&sim_event(kind, Some(1))).expect("an audience");
+            let Audience::Private(owner) = audience else {
+                continue;
+            };
+            private += 1;
+            assert_eq!(owner, SeatId::new(1), "{kind:?}");
+            for policy in [FogPolicy::fogged(), FogPolicy::casual()] {
+                let filter = FogFilter::new(&policy, &Blind);
+                assert!(filter.visible(Viewer::Seat(SeatId::new(1)), &audience));
+                for viewer in [
+                    Viewer::Seat(SeatId::new(0)),
+                    Viewer::Spectator { nofog: true },
+                    Viewer::Admin,
+                ] {
+                    assert!(
+                        !filter.visible(viewer, &audience),
+                        "{kind:?} reached {viewer:?}"
+                    );
+                }
+            }
+        }
+        // The seal, four step lines, two rule lines, two reflex lines, three
+        // visit lines and the fallback: thirteen of T11's fourteen kinds.
+        // `beacon_placed` is a thing in the world and fog decides it.
+        assert_eq!(private, 13);
+        assert!(matches!(
+            Surface::audience_of(&sim_event(EventKind::BeaconPlaced, Some(1))),
+            Ok(Audience::World { .. })
+        ));
+    }
+
+    #[test]
+    fn a_private_kind_that_names_no_seat_is_refused_rather_than_shown() {
+        use pharmakos_sim::events::EventKind;
+        let error = Surface::audience_of(&sim_event(EventKind::StepStarted, None))
+            .expect_err("nobody to show it to");
+        assert_eq!(error.code, Code::Internal);
     }
 }

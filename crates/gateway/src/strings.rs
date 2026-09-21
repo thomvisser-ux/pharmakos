@@ -62,6 +62,45 @@ pub fn event_text(event: &Event) -> String {
         EventKind::UnitSealedIn => {
             format!("A unit of {seat} is sealed in and has parked where it stopped.")
         }
+        // The interpreter's kinds (T11). Every one of them but `beacon_placed`
+        // is the seat's own commander's orders, so `Surface::audience_of`
+        // keeps the line private to that seat: a step or a rule is named by
+        // its index here and is still never shown to anybody else.
+        EventKind::PlanSealed => format!(
+            "The playbook of {seat} was sealed: {} route steps.",
+            event.value
+        ),
+        EventKind::StepStarted => format!("Step {} started.", event.value),
+        EventKind::StepCompleted => format!("Step {} completed.", event.value),
+        EventKind::StepSkipped => format!(
+            "Step {} was skipped: its skip_if guard was true.",
+            event.value
+        ),
+        EventKind::StepFailed => format!(
+            "A step failed with failure code {}, and its on_fail decided what came next.",
+            event.value
+        ),
+        EventKind::RuleFired => format!("Rule {} fired.", event.value),
+        EventKind::RuleEnded => format!("A rule's body ended with resume code {}.", event.value),
+        EventKind::ReflexFired => format!(
+            "The commander's reflex fired at {} % hit points and it is withdrawing.",
+            event.value
+        ),
+        EventKind::ReflexCleared => format!(
+            "The commander's reflex cleared at {} % hit points and the route continues.",
+            event.value
+        ),
+        EventKind::VisitStarted => format!(
+            "The commander began a visit of {} interface rows.",
+            event.value
+        ),
+        EventKind::RowCommitted => format!("Interface row {} committed.", event.value),
+        EventKind::VisitEnded => format!("The visit ended with {} rows committed.", event.value),
+        EventKind::BeaconPlaced => format!("A beacon of {seat} was deployed."),
+        EventKind::FallbackEngaged => format!(
+            "The route ended and the fallback took over, posture code {}.",
+            event.value
+        ),
     }
 }
 
