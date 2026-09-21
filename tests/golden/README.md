@@ -100,7 +100,7 @@ named fills it.
 | `mapgen/` | Per-seed map digests | T5 |
 | `mesher/` | Per-chunk vertex and index digests | T4 |
 | `schema/` | Generated JSON Schema and `get_schema` output | T13 |
-| `docs/` | Generated documentation output | T13 |
+| `docs/` | Generated documentation output | T15, T20 |
 | `scenarios/` | Hash chains and event logs the scenario runner asserts on | T11, T15 |
 | `vista/` | The rendered screenshot, compared with a tolerance | T16 |
 

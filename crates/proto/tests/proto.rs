@@ -322,6 +322,99 @@ fn durations_are_bare_numbers_in_the_canonical_form() {
 }
 
 // ---------------------------------------------------------------------------
+// One canonical form, one spelling
+// ---------------------------------------------------------------------------
+
+/// Decisions-log item 100 (10): `canonicalise` answers exactly what `decode`
+/// then `encode` answers.
+///
+/// The two are different code paths over the same document -- `encode` goes
+/// through prost, whose encoder drops a scalar at its proto3 default, and
+/// `canonicalise` goes JSON -> wire -> JSON with no typed message in between.
+/// Before the rule at `codec::is_proto3_default` the second wrote the zero out
+/// again, so one document had two canonical spellings and which one a caller
+/// got depended on which function it happened to call. The goldens did not
+/// move when the rule landed, which says the committed files were all written
+/// by the first path; this says the second path agrees, which is the actual
+/// claim.
+#[test]
+fn canonicalise_agrees_with_decode_then_encode() {
+    // Documents that spell fields out at their proto3 default: `minor: 0`, an
+    // empty `note`, a `0` count. All three are what an editor or a hand author
+    // writes and none of them survives prost's encoder.
+    let playbook_text = concat!(
+        "{\"schema_version\": {\"major\": 1, \"minor\": 0},\n",
+        " \"meta\": {\"title\": \"Defaults\", \"author_kind\": \"HUMAN\", \"note\": \"\"},\n",
+        " \"declarative\": {\"route\": [{\"label\": \"first\", \"hold\": {\"ms\": 1000}}]},\n",
+        " \"on_death\": {\"on_respawn\": \"CONTINUE\"},\n",
+        " \"fallback\": {\"hold\": {\"at\": {\"beacon_anchor\": {\"safest\": {}}}}},\n",
+        " \"kind\": \"PLAYBOOK\"}\n"
+    );
+    let typed: Playbook = json::decode(playbook_text).expect("the document decodes");
+    let through_prost = json::encode(&typed).expect("and re-encodes");
+    let canonical = json::canonicalise("gp.v1.Playbook", playbook_text).expect("and canonicalises");
+    assert_eq!(
+        canonical, through_prost,
+        "two paths over one document must produce one spelling"
+    );
+    assert!(
+        !canonical.contains("\"minor\""),
+        "a scalar written out at its default is dropped:\n{canonical}"
+    );
+    assert!(
+        !canonical.contains("\"note\""),
+        "an empty string is a default too:\n{canonical}"
+    );
+
+    // And over the largest real document either package has, which is full of
+    // rows a tuning pass left at zero.
+    let rules_text = fs::read_to_string(workspace_root().join("rules").join("rules.v1.json"))
+        .expect("reading the rules table");
+    let rules: RulesTable = json::decode(&rules_text).expect("the rules table decodes");
+    assert_eq!(
+        json::canonicalise("gp.v1.RulesTable", &rules_text).expect("canonicalises"),
+        json::encode(&rules).expect("re-encodes"),
+        "the shipped rules table canonicalises to one spelling"
+    );
+}
+
+/// Where the rule stops: the cases that **have presence** in proto3 survive
+/// canonicalisation even when they hold their own zero.
+///
+/// Two of the three `codec::is_proto3_default` names are testable here. The
+/// third -- a proto3 `optional` field -- has no instance to test: neither
+/// `gp.v1` nor `gp.api.v1` declares one today, and the exclusion is written
+/// where it is because `optional` compiles to a synthetic one-field oneof and
+/// is covered by the same arm as the first case.
+#[test]
+fn a_value_with_presence_survives_canonicalisation() {
+    // A oneof arm holding its own zero. `BeaconRef.beacon_id` set to the empty
+    // string is not the same message as a `BeaconRef` with no arm set at all:
+    // dropping it would delete the arm, not a value.
+    let arm = r#"{"beacon_id": ""}"#;
+    let canonical = json::canonicalise("gp.v1.BeaconRef", arm).expect("canonicalises");
+    assert!(
+        canonical.contains("\"beacon_id\""),
+        "the oneof arm disappeared:\n{canonical}"
+    );
+
+    // A present but empty submessage, which is a different message from an
+    // absent one.
+    let empty = r#"{"beacon_anchor": {"safest": {}}}"#;
+    let canonical = json::canonicalise("gp.v1.Location", empty).expect("canonicalises");
+    assert!(
+        canonical.contains("\"safest\""),
+        "an empty submessage is presence, not a default:\n{canonical}"
+    );
+
+    // A repeated field's empty array already writes nothing, and writing it
+    // out is not an error either way.
+    let empty_route = r#"{"route": []}"#;
+    let canonical = json::canonicalise("gp.v1.Declarative", empty_route).expect("canonicalises");
+    assert!(!canonical.contains("\"route\""), "{canonical}");
+}
+
+// ---------------------------------------------------------------------------
 // Strictness
 // ---------------------------------------------------------------------------
 

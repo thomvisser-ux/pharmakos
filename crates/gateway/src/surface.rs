@@ -986,11 +986,15 @@ impl Surface {
         )))
     }
 
-    /// Store a draft for a seat.
+    /// Store a draft for a seat without going through `save_draft`.
     ///
-    /// The host's way in until T13 builds `save_draft`, and the reason the
-    /// secrecy tests have something to fail to read. It takes the subject like
-    /// every other path to the private store.
+    /// T13 built `save_draft`, so this is no longer the only way in: what it is
+    /// now is the **host's and a test's** way to seed a seat's private store
+    /// directly, which is how the secrecy tests get something to fail to read.
+    /// It takes the subject like every other path to the private store, so it
+    /// is not a way around the secrecy gate; what it is around is the method's
+    /// bounds on a label, an id and a count, which is why nothing a **client**
+    /// sends reaches it.
     ///
     /// # Errors
     ///

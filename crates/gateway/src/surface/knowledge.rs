@@ -64,6 +64,23 @@ pub const fn beacon_budget(detail: Detail) -> usize {
     }
 }
 
+/// The most waypoints one `estimate_route` may name.
+///
+/// A route costs one abstract search per leg and there is no estimate cache
+/// (decisions-log item 61), so the count is the caller's multiplier on the
+/// gateway's whole single-threaded turn: measured on the shipped 384x384x64
+/// map, 2 000 waypoints between two far corners is a 64 KiB request -- well
+/// inside [`crate::frame::MAX_MESSAGE_BYTES`] -- that takes twelve seconds,
+/// during which nothing else is answered and the match is not stepped. So the
+/// count is refused before any search runs, the same shape
+/// `get_economy_forecast` already refuses a surplus of what-ifs in.
+///
+/// PLACEHOLDER: 64 is a working number -- a route with more legs than a
+/// playbook has steps at item 94's 128-unit budget is not a route an editor
+/// draws. OWNER settles it at hardening with the rate limits, beside
+/// [`crate::surface::MAX_WAIT_MS`] and the draft bounds.
+pub const MAX_WAYPOINTS: usize = 64;
+
 /// How many what-if answers one `get_economy_forecast` carries at each rung.
 ///
 /// PLACEHOLDER: as [`beacon_budget`], and settled with it.
@@ -190,23 +207,32 @@ impl Surface {
         // length to learn how many beacons it was not told about.
         let snapshot = self.feed().snapshot();
         let from = match request.string_param("cursor")? {
-            Some(text) if !text.is_empty() => {
-                usize::try_from(crate::feed::Cursor::parse(text, snapshot)?.index())
-                    .unwrap_or(usize::MAX)
-            }
+            Some(text) if !text.is_empty() => usize::try_from(
+                crate::feed::Cursor::parse(text, snapshot, crate::feed::Listing::Beacons)?.index(),
+            )
+            .unwrap_or(usize::MAX),
             _ => 0,
         };
+        // `limit` is taken as asked, zero included: the doc above says a client
+        // may always ask for less than its budget, and zero is less. A page of
+        // none with the cursor where it was is the honest answer to it, and a
+        // silent `.max(1)` would be the gateway deciding what the client meant.
         let page: Vec<Json> = visible
             .iter()
             .skip(from)
-            .take(limit.max(1))
+            .take(limit)
             .map(|(id, at)| beacon_summary(*id, *at))
             .collect();
         let index = from.min(visible.len()).saturating_add(page.len());
         let next = if index >= visible.len() {
             String::new()
         } else {
-            crate::feed::Cursor::at(snapshot, u32::try_from(index).unwrap_or(u32::MAX)).render()
+            crate::feed::Cursor::at(
+                snapshot,
+                crate::feed::Listing::Beacons,
+                u32::try_from(index).unwrap_or(u32::MAX),
+            )
+            .render()
         };
         Ok(Json::Object(vec![
             (String::from("beacons"), Json::Array(page)),
@@ -379,6 +405,13 @@ impl Surface {
         if waypoints.len() < 2 {
             return Err(Error::invalid(format!(
                 "a route has two or more waypoints and this has {}",
+                waypoints.len()
+            )));
+        }
+        // Before a single search runs: see [`MAX_WAYPOINTS`].
+        if waypoints.len() > MAX_WAYPOINTS {
+            return Err(Error::invalid(format!(
+                "a route names at most {MAX_WAYPOINTS} waypoints and this names {}",
                 waypoints.len()
             )));
         }

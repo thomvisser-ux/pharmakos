@@ -151,14 +151,27 @@ impl Surface {
         let template_id = request
             .string_param("template_id")?
             .ok_or_else(|| Error::invalid("`template_id` names a template"))?;
+        if !is_template_id(template_id) {
+            return Err(Error::invalid(
+                "`template_id` is a plain file stem: no separators, no control characters, no \
+                 percent escapes",
+            ));
+        }
         let folder = self.host()?.library().ok_or_else(|| {
             Error::not_found(
                 "this gateway has no template folder, so there is nothing to \
                               instantiate",
             )
         })?;
-        let text = pharmakos_plan_core::library::read(folder, template_id)
-            .map_err(|error| Error::not_found(error.message))?;
+        // The failure names the **template**, never the path it tried: where
+        // the library lives is the host's business, and a refusal that spelled
+        // out an absolute directory would hand every seat the layout of the
+        // machine it is playing on for the price of one bad id.
+        let text = pharmakos_plan_core::library::read(folder, template_id).map_err(|_| {
+            Error::not_found(format!(
+                "no template `{template_id}` in this gateway's library"
+            ))
+        })?;
 
         let mut parameters: Vec<pharmakos_plan_core::library::Parameter> = Vec::new();
         if let Some(value) = request.param("parameters") {
@@ -290,7 +303,7 @@ impl Surface {
         }
         let round = self.host()?.runner().round();
         let draft_id = request.string_param("draft_id")?.map_or_else(
-            || format!("d{round}-{}", self.next_draft_number(seat)),
+            || format!("d{round}-{}", self.next_draft_number(seat, round)),
             str::to_owned,
         );
         if !is_draft_id(&draft_id) {
@@ -397,9 +410,23 @@ impl Surface {
     }
 
     /// The next unused number for an auto-named draft of this seat.
-    fn next_draft_number(&self, seat: pharmakos_sim::tables::SeatId) -> usize {
-        self.seat_state(crate::token::Subject::Seat(seat), seat)
-            .map_or(1, |state| state.drafts.len().saturating_add(1))
+    ///
+    /// The lowest `d{round}-{n}` the seat does not already hold, and **not**
+    /// `len() + 1`: a seat that named a draft `d1-2` itself, or that carries
+    /// last round's draft under [`crate::surface::CARRIED_DRAFT_ID`], would
+    /// otherwise have its next auto-named save land on an id it already held
+    /// and silently replace it. `save_draft` replacing an id on purpose is what
+    /// an editor's Save is; replacing one the client never named is data loss
+    /// with no error to notice it by.
+    fn next_draft_number(&self, seat: pharmakos_sim::tables::SeatId, round: u32) -> usize {
+        let Ok(state) = self.seat_state(crate::token::Subject::Seat(seat), seat) else {
+            return 1;
+        };
+        // Bounded by MAX_DRAFTS + 1 by construction: at most MAX_DRAFTS ids are
+        // held, so one of the first MAX_DRAFTS + 1 candidates is free.
+        (1..=MAX_DRAFTS.saturating_add(1))
+            .find(|number| state.draft(&format!("d{round}-{number}")).is_none())
+            .unwrap_or(1)
     }
 }
 
@@ -430,6 +457,32 @@ fn depth_of(request: &Request) -> Result<Depth, Error> {
             "`depth` is `quick` or `full`, and this is `{other}`"
         ))),
     }
+}
+
+/// True for a template id this gateway will look up.
+///
+/// The gate in front of `plan-core`'s own character rule, and it is here rather
+/// than there for a reason the two reviews found between them: `plan-core`'s
+/// rule refuses a separator, a device name and a relative step, which is what
+/// stops a traversal, but `..%2Fsecret` and `ok\0` are neither -- they are
+/// refused by the **filesystem**, one level further down, and the message that
+/// comes back from there names the absolute path it tried to open. A percent
+/// escape and a control byte are not part of a plain file stem in the first
+/// place, so they are refused by name before a path exists at all.
+///
+/// Deliberately the same shape as [`is_draft_id`]: characters, never
+/// `std::path::Component`, so the same hostile id gets the same answer on all
+/// three platforms (decisions-log item 100's closing note).
+fn is_template_id(text: &str) -> bool {
+    !text.is_empty()
+        && text.chars().count() <= 128
+        && !text.chars().any(|character| {
+            character.is_control()
+                || matches!(
+                    character,
+                    '%' | '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|'
+                )
+        })
 }
 
 /// True for a draft id a seat may name.

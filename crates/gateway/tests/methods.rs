@@ -87,14 +87,15 @@ fn hosted() -> Surface {
 /// The same, with a segment of a stated length: a test about what a client may
 /// do *during* a Push needs a Push long enough to do it in.
 fn hosted_with(segment_ms: i32) -> Surface {
-    let mut surface = Surface::new(
-        MATCH,
-        SEED,
-        rules(),
-        FogPolicy::fogged(),
-        &[SeatId::new(0), SeatId::new(1)],
-    )
-    .expect("a match id");
+    hosted_as(segment_ms, FogPolicy::fogged(), None)
+}
+
+/// The same again, with the fog policy and the template folder spelled out: a
+/// casual match is where "the seat's own beacons come first" has anything to
+/// come before, and the library is what `instantiate_template` reads.
+fn hosted_as(segment_ms: i32, fog: FogPolicy, library: Option<PathBuf>) -> Surface {
+    let mut surface = Surface::new(MATCH, SEED, rules(), fog, &[SeatId::new(0), SeatId::new(1)])
+        .expect("a match id");
     let host = Host::open(
         &pharmakos_sim::world::WorldConfig {
             match_seed: SEED,
@@ -106,7 +107,7 @@ fn hosted_with(segment_ms: i32) -> Surface {
                 round_limit: 3,
             },
         },
-        None,
+        library,
     )
     .expect("a match");
     surface.attach(host).expect("attached");
@@ -902,6 +903,626 @@ fn a_seat_that_seals_nothing_has_the_safe_playbook_filed_for_it() {
 }
 
 // ---------------------------------------------------------------------------
+// The reads nothing else covers
+// ---------------------------------------------------------------------------
+
+/// The error code a refused call came back with.
+fn code(response: &Json, what: &str) -> String {
+    response
+        .get("error")
+        .and_then(|error| error.get("data"))
+        .and_then(|data| data.get("code"))
+        .map_or_else(
+            || panic!("{what} was not refused: {response:?}"),
+            |value| match value {
+                Json::String(text) => text.clone(),
+                other => panic!("a code is a string, and it is {other:?}"),
+            },
+        )
+}
+
+/// `get_map_summary` answers the seed the match was built with, in the spelling
+/// the scenario files use.
+///
+/// The field `match_seed` is the one this lane made a contract change to add,
+/// and a served field nothing asserts is a field that can quietly become empty.
+#[test]
+fn get_map_summary_answers_the_seed_the_match_was_built_with() {
+    let mut surface = hosted();
+    let token = seat_token(&mut surface, 0);
+    let summary = result(
+        &surface.call(Some(&token), &request("get_map_summary", "{}"), &Blind),
+        "get_map_summary",
+    );
+    assert_eq!(
+        text_of(&summary, "match_seed"),
+        pharmakos_gateway::view::seed_text(SEED),
+        "the seed is `part of the match, not a secret`, and it is this match's"
+    );
+    let size = summary.get("size").expect("the extent");
+    for axis in ["x", "y", "z"] {
+        match size.get(axis) {
+            Some(Json::Number(text)) => assert_ne!(text, "0", "the {axis} extent"),
+            other => panic!("the {axis} extent is a number, and it is {other:?}"),
+        }
+    }
+}
+
+/// `list_beacons`: own beacons first, the asked-for limit honoured exactly, and
+/// a cursor that resumes where the page stopped -- and only that listing's.
+#[test]
+fn list_beacons_puts_the_seats_own_first_and_pages_with_its_own_cursor() {
+    // Casual, so seat 0 can see somebody else's beacons and "own first" has
+    // something to come before.
+    let mut surface = hosted_as(SEGMENT_MS, FogPolicy::casual(), None);
+    let token = seat_token(&mut surface, 0);
+    let (own, _, _, _) = own_beacon(&surface);
+
+    let all = result(
+        &surface.call(Some(&token), &request("list_beacons", "{}"), &Blind),
+        "list_beacons",
+    );
+    let ids = beacon_ids(&all);
+    assert!(ids.len() >= 2, "two seats, two core beacons: {ids:?}");
+    assert_eq!(ids.first(), Some(&own), "the seat's own comes first");
+    assert!(
+        text_of(&all, "next_cursor").is_empty(),
+        "one page held them all"
+    );
+
+    // One at a time, following the cursor.
+    let first = result(
+        &surface.call(
+            Some(&token),
+            &request("list_beacons", r#"{"limit":1}"#),
+            &Blind,
+        ),
+        "list_beacons{limit:1}",
+    );
+    assert_eq!(beacon_ids(&first), vec![own.clone()]);
+    let cursor = text_of(&first, "next_cursor");
+    assert!(!cursor.is_empty(), "there is more to come");
+    let second = result(
+        &surface.call(
+            Some(&token),
+            &request(
+                "list_beacons",
+                &format!(r#"{{"limit":1,"cursor":"{cursor}"}}"#),
+            ),
+            &Blind,
+        ),
+        "list_beacons{cursor}",
+    );
+    let resumed = beacon_ids(&second);
+    assert_eq!(resumed.len(), 1);
+    assert_ne!(
+        resumed.first(),
+        Some(&own),
+        "the cursor resumed rather than restarting"
+    );
+
+    // `limit: 0` is a client asking for less than its budget, and less than one
+    // is none.
+    let none = result(
+        &surface.call(
+            Some(&token),
+            &request("list_beacons", r#"{"limit":0}"#),
+            &Blind,
+        ),
+        "list_beacons{limit:0}",
+    );
+    assert_eq!(beacon_ids(&none), Vec::<String>::new());
+
+    // A cursor the feed issued is not a place in this listing, and is told so
+    // rather than read as a beacon offset.
+    let feed = result(
+        &surface.call(Some(&token), &request("get_segment_feed", "{}"), &Blind),
+        "get_segment_feed",
+    );
+    let feed_cursor = text_of(&feed, "next_cursor");
+    assert!(!feed_cursor.is_empty());
+    let refused = surface.call(
+        Some(&token),
+        &request("list_beacons", &format!(r#"{{"cursor":"{feed_cursor}"}}"#)),
+        &Blind,
+    );
+    assert_eq!(
+        code(&refused, "a feed cursor handed to list_beacons"),
+        "INVALID_ARGUMENT"
+    );
+}
+
+/// The beacon ids of a `list_beacons` answer, in the order it gave them.
+fn beacon_ids(answer: &Json) -> Vec<String> {
+    match answer.get("beacons") {
+        Some(Json::Array(rows)) => rows
+            .iter()
+            .map(|row| match row.get("beacon_id") {
+                Some(Json::String(id)) => id.clone(),
+                other => panic!("a beacon summary carries an id, and it is {other:?}"),
+            })
+            .collect(),
+        other => panic!("beacons is an array, and it is {other:?}"),
+    }
+}
+
+/// A beacon a fogged seat cannot see does not exist, as far as that seat is
+/// told -- and the same `NOT_FOUND` an id nobody holds gets, so a seat cannot
+/// map the enemy by asking for every id.
+#[test]
+fn a_fogged_seat_is_told_a_beacon_it_cannot_see_is_not_there() {
+    let mut surface = hosted();
+    let token = seat_token(&mut surface, 0);
+    let (own, _, _, _) = own_beacon(&surface);
+
+    let mine = surface.call(
+        Some(&token),
+        &request("get_beacon", &format!(r#"{{"beacon_id":"{own}"}}"#)),
+        &Blind,
+    );
+    let _ = result(&mine, "the seat's own beacon");
+
+    let others: Vec<String> = {
+        let host = surface.host().expect("a hosted match");
+        let beacons = host.world().beacons();
+        beacons
+            .seats()
+            .iter()
+            .enumerate()
+            .filter(|(_, seat)| **seat != 0)
+            .filter_map(|(row, _)| beacons.ids().get(row).copied())
+            .map(|id| pharmakos_gateway::view::beacon_id(pharmakos_sim::tables::BeaconId::new(id)))
+            .collect()
+    };
+    let enemy = others.first().expect("seat 1 has a core beacon");
+    let refused = surface.call(
+        Some(&token),
+        &request("get_beacon", &format!(r#"{{"beacon_id":"{enemy}"}}"#)),
+        &Blind,
+    );
+    assert_eq!(code(&refused, "somebody else's beacon"), "NOT_FOUND");
+    let nobodys = surface.call(
+        Some(&token),
+        &request("get_beacon", r#"{"beacon_id":"b_99"}"#),
+        &Blind,
+    );
+    assert_eq!(
+        code(&nobodys, "a beacon nobody holds"),
+        "NOT_FOUND",
+        "the same answer, which is the point"
+    );
+
+    // And a fogged listing shows the seat its own and nothing else.
+    let listed = result(
+        &surface.call(Some(&token), &request("list_beacons", "{}"), &Blind),
+        "list_beacons",
+    );
+    assert_eq!(beacon_ids(&listed), vec![own]);
+}
+
+/// `get_recap` and `get_economy_forecast` answer under their own scope and
+/// phase gate.
+///
+/// The forecast's body is deliberately empty -- every number in it is T14's
+/// economy and the message reserves 1 to 15 for them -- so what is asserted is
+/// what exists today: it answers, it carries the footer, and it refuses a
+/// what-if that names something the vocabulary does not have.
+#[test]
+fn get_recap_and_get_economy_forecast_answer_under_their_gate() {
+    let mut surface = hosted();
+    let token = seat_token(&mut surface, 0);
+
+    let recap = result(
+        &surface.call(Some(&token), &request("get_recap", "{}"), &Blind),
+        "get_recap",
+    );
+    assert!(!text_of(&recap, "prose").is_empty());
+
+    let forecast = result(
+        &surface.call(
+            Some(&token),
+            &request("get_economy_forecast", r#"{"what_ifs":[{},{}]}"#),
+            &Blind,
+        ),
+        "get_economy_forecast",
+    );
+    assert!(
+        forecast.get("_status").is_some(),
+        "the envelope still carries the footer"
+    );
+    let named = surface.call(
+        Some(&token),
+        &request(
+            "get_economy_forecast",
+            r#"{"what_ifs":[{"build":"refinery"}]}"#,
+        ),
+        &Blind,
+    );
+    assert_eq!(
+        code(
+            &named,
+            "a what-if naming a field the vocabulary has not got"
+        ),
+        "INVALID_ARGUMENT"
+    );
+    let too_many = surface.call(
+        Some(&token),
+        &request(
+            "get_economy_forecast",
+            r#"{"detail":"brief","what_ifs":[{},{},{}]}"#,
+        ),
+        &Blind,
+    );
+    assert_eq!(
+        code(&too_many, "more what-ifs than the brief budget"),
+        "INVALID_ARGUMENT"
+    );
+}
+
+/// `estimate_route` refuses a route longer than it will search, before it
+/// searches any of it.
+#[test]
+fn estimate_route_refuses_more_waypoints_than_it_will_search() {
+    let mut surface = hosted();
+    let token = seat_token(&mut surface, 0);
+    let (cx, cy, cz) = commander_at(&surface);
+    let (_, bx, by, bz) = own_beacon(&surface);
+
+    let mut points = String::new();
+    for index in 0..=pharmakos_gateway::surface::knowledge::MAX_WAYPOINTS {
+        if index > 0 {
+            points.push(',');
+        }
+        let (x, y, z) = if index % 2 == 0 {
+            (cx, cy, cz)
+        } else {
+            (bx, by, bz)
+        };
+        let point = format!(r#"{{"voxel":{{"x":{x},"y":{y},"z":{z}}}}}"#);
+        points.push_str(&point);
+    }
+    let refused = surface.call(
+        Some(&token),
+        &request("estimate_route", &format!(r#"{{"waypoints":[{points}]}}"#)),
+        &Blind,
+    );
+    assert_eq!(
+        code(&refused, "a route past the cap"),
+        "INVALID_ARGUMENT",
+        "one search per leg and no estimate cache: the count is the caller's \
+         multiplier on the whole process"
+    );
+    let one = surface.call(
+        Some(&token),
+        &request(
+            "estimate_route",
+            r#"{"waypoints":[{"voxel":{"x":1,"y":1,"z":1}}]}"#,
+        ),
+        &Blind,
+    );
+    assert_eq!(code(&one, "a route of one waypoint"), "INVALID_ARGUMENT");
+}
+
+/// `instantiate_template` against a real library folder, and against the ids a
+/// hostile client sends.
+///
+/// The second half is the one that matters: no refusal may name the folder the
+/// gateway reads, because where the library lives is the host's business and a
+/// seat that learned it learned the layout of the machine it is playing on.
+#[test]
+fn instantiate_template_reads_the_library_and_names_no_path_when_it_refuses() {
+    let folder = target_dir().join("t13-library");
+    fs::create_dir_all(&folder).expect("a library folder");
+    fs::write(folder.join("expand_east.jsonc"), TEMPLATE).expect("a template");
+    let mut surface = hosted_as(SEGMENT_MS, FogPolicy::fogged(), Some(folder.clone()));
+    let token = seat_token(&mut surface, 0);
+
+    let listed = result(
+        &surface.call(Some(&token), &request("list_templates", "{}"), &Blind),
+        "list_templates",
+    );
+    match listed.get("templates") {
+        Some(Json::Array(rows)) => assert_eq!(rows.len(), 1, "one template in the folder"),
+        other => panic!("templates is an array, and it is {other:?}"),
+    }
+
+    let made = result(
+        &surface.call(
+            Some(&token),
+            &request(
+                "instantiate_template",
+                r#"{"template_id":"expand_east","parameters":[
+                     {"name":"/declarative/route/0/place_beacon/at/voxel/x","value":"40"}]}"#,
+            ),
+            &Blind,
+        ),
+        "instantiate_template",
+    );
+    let playbook = text_of(&made, "playbook_jsonc");
+    assert!(
+        playbook.contains("// the site the wizard fills in"),
+        "a template's comments survive instantiation: {playbook}"
+    );
+    assert!(playbook.contains("\"PLAYBOOK\""), "{playbook}");
+    let verified = result(
+        &surface.call(
+            Some(&token),
+            &request(
+                "verify_plan",
+                &format!(r#"{{"playbook_jsonc":{}}}"#, quote(&playbook)),
+            ),
+            &Blind,
+        ),
+        "verify_plan on the instantiated template",
+    );
+    assert_eq!(
+        verified
+            .get("report")
+            .and_then(|report| report.get("depth")),
+        Some(&Json::String(String::from("full")))
+    );
+
+    let library = folder.display().to_string();
+    for hostile in [
+        "..%2Fsecret",
+        "ok\u{0}",
+        "../secret",
+        "..\\secret",
+        "C:\\Windows\\win",
+        "/etc/passwd",
+        "con",
+        "ok/../../secret",
+        "no_such_template",
+    ] {
+        let refused = surface.call(
+            Some(&token),
+            &request(
+                "instantiate_template",
+                &format!(r#"{{"template_id":{}}}"#, quote(hostile)),
+            ),
+            &Blind,
+        );
+        let message = refused
+            .get("error")
+            .and_then(|error| error.get("message"))
+            .map_or_else(String::new, |value| format!("{value:?}"));
+        assert!(
+            refused.get("result").is_none(),
+            "`{hostile}` was instantiated"
+        );
+        assert!(
+            !message.contains(&library) && !message.contains("os error"),
+            "the refusal of `{hostile}` names the host's filesystem: {message}"
+        );
+    }
+}
+
+/// A template file, in the shape `plan-core`'s own library tests use.
+const TEMPLATE: &str = concat!(
+    "// Expand east, then mine.\n",
+    "{\"schema_version\":{\"major\":1},\n",
+    " \"meta\":{\"title\":\"Expand & Mine\",\"author_kind\":\"HUMAN\",",
+    "\"note\":\"Walks east and puts a Mine beacon down.\"},\n",
+    " \"declarative\":{\"route\":[\n",
+    "   // the site the wizard fills in\n",
+    "   {\"label\":\"go\",\"place_beacon\":{\"at\":{\"voxel\":{\"x\":1,\"y\":2,\"z\":3}},",
+    "\"tags\":[\"east\"]}}]},\n",
+    " \"on_death\":{\"on_respawn\":\"CONTINUE\"},\n",
+    " \"fallback\":{\"hold\":{\"at\":{\"beacon_anchor\":{\"safest\":{}}}}},\n",
+    " \"kind\":\"TEMPLATE\"}\n"
+);
+
+/// `get_safe_plan` hands back a playbook the verifier qualifies.
+///
+/// Spec section 14 and item 81: the editor can render what a timeout would
+/// file, so the cost of a timeout is visible. A safe playbook the verifier
+/// refused would make that promise a lie.
+#[test]
+fn get_safe_plan_returns_a_playbook_verify_plan_qualifies() {
+    let mut surface = hosted();
+    let token = seat_token(&mut surface, 0);
+    let safe = result(
+        &surface.call(Some(&token), &request("get_safe_plan", "{}"), &Blind),
+        "get_safe_plan",
+    );
+    let playbook = text_of(&safe, "playbook_jsonc");
+    assert_eq!(playbook, pharmakos_gateway::host::SAFE_PLAYBOOK);
+    let report = result(
+        &surface.call(
+            Some(&token),
+            &request(
+                "verify_plan",
+                &format!(
+                    r#"{{"depth":"full","playbook_jsonc":{}}}"#,
+                    quote(&playbook)
+                ),
+            ),
+            &Blind,
+        ),
+        "verify_plan on the safe playbook",
+    );
+    assert_eq!(
+        report
+            .get("report")
+            .and_then(|report| report.get("qualifies")),
+        Some(&Json::Bool(true)),
+        "what the gateway would file for a seat that ran out of time must qualify"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The bounds are refusals, and they are tested like refusals
+// ---------------------------------------------------------------------------
+
+/// Every transport bound this lane introduced, refused rather than truncated.
+#[test]
+fn the_transport_bounds_refuse_rather_than_silently_correcting() {
+    let mut surface = hosted();
+    let token = seat_token(&mut surface, 0);
+
+    let long_label = "x".repeat(pharmakos_gateway::surface::planning::MAX_DRAFT_LABEL_CHARS + 1);
+    let refused = surface.call(
+        Some(&token),
+        &request(
+            "save_draft",
+            &format!(
+                r#"{{"label":{},"playbook_jsonc":{}}}"#,
+                quote(&long_label),
+                quote(BROKEN)
+            ),
+        ),
+        &Blind,
+    );
+    assert_eq!(
+        code(&refused, "an over-long draft label"),
+        "INVALID_ARGUMENT"
+    );
+
+    let refused = surface.call(
+        Some(&token),
+        &request(
+            "save_draft",
+            &format!(
+                r#"{{"draft_id":"Draft-1","playbook_jsonc":{}}}"#,
+                quote(BROKEN)
+            ),
+        ),
+        &Blind,
+    );
+    assert_eq!(code(&refused, "an upper-case draft id"), "INVALID_ARGUMENT");
+
+    let long_playbook = "x".repeat(pharmakos_gateway::surface::planning::MAX_PLAYBOOK_CHARS + 1);
+    let refused = surface.call(
+        Some(&token),
+        &request(
+            "verify_plan",
+            &format!(r#"{{"playbook_jsonc":{}}}"#, quote(&long_playbook)),
+        ),
+        &Blind,
+    );
+    assert_eq!(code(&refused, "an over-long playbook"), "INVALID_ARGUMENT");
+
+    let refused = surface.call(
+        Some(&token),
+        &request(
+            "wait_for",
+            &format!(
+                r#"{{"trigger":"phase_change","timeout_ms":{}}}"#,
+                i64::from(pharmakos_gateway::surface::MAX_WAIT_MS) + 1
+            ),
+        ),
+        &Blind,
+    );
+    assert_eq!(code(&refused, "a timeout over the cap"), "INVALID_ARGUMENT");
+
+    // The 33rd draft, one save at a time, with the cap coming from the crate
+    // rather than from a number written twice. Through `call`, which reports
+    // the client's own timer between calls the way a real editor does -- the
+    // rate limiter is counted in ticks and thirty-three saves in one of them is
+    // a different refusal from the one this is about.
+    let cap = pharmakos_gateway::surface::planning::MAX_DRAFTS;
+    let mut left = LULL_MS;
+    for number in 0..cap {
+        let saved = call(
+            &mut surface,
+            &token,
+            &mut left,
+            "save_draft",
+            &format!(
+                r#"{{"draft_id":"held-{number}","playbook_jsonc":{}}}"#,
+                quote(BROKEN)
+            ),
+        );
+        let _ = result(&saved, "a draft inside the cap");
+    }
+    let refused = call(
+        &mut surface,
+        &token,
+        &mut left,
+        "save_draft",
+        &format!(
+            r#"{{"draft_id":"one-too-many","playbook_jsonc":{}}}"#,
+            quote(BROKEN)
+        ),
+    );
+    assert_eq!(code(&refused, "one draft past the cap"), "INVALID_ARGUMENT");
+    // Saving over one it already holds is not a new draft and is still allowed.
+    let _ = result(
+        &call(
+            &mut surface,
+            &token,
+            &mut left,
+            "save_draft",
+            &format!(
+                r#"{{"draft_id":"held-0","playbook_jsonc":{}}}"#,
+                quote(BROKEN)
+            ),
+        ),
+        "saving over a draft it already holds",
+    );
+}
+
+/// An auto-named `save_draft` never replaces a draft the client named itself.
+#[test]
+fn an_auto_named_draft_never_lands_on_an_id_the_client_already_holds() {
+    let mut surface = hosted();
+    let token = seat_token(&mut surface, 0);
+    let round = surface.host().expect("a hosted match").runner().round();
+
+    // The client names the id an auto-name would have reached for second.
+    let named = result(
+        &surface.call(
+            Some(&token),
+            &request(
+                "save_draft",
+                &format!(
+                    r#"{{"draft_id":"d{round}-2","label":"HAND NAMED","playbook_jsonc":{}}}"#,
+                    quote(BROKEN)
+                ),
+            ),
+            &Blind,
+        ),
+        "a hand-named draft",
+    );
+    assert_eq!(text_of(&named, "draft_id"), format!("d{round}-2"));
+
+    let auto = result(
+        &surface.call(
+            Some(&token),
+            &request(
+                "save_draft",
+                &format!(r#"{{"label":"AUTO","playbook_jsonc":{}}}"#, quote(BROKEN)),
+            ),
+            &Blind,
+        ),
+        "an auto-named draft",
+    );
+    assert_ne!(
+        text_of(&auto, "draft_id"),
+        format!("d{round}-2"),
+        "the auto-name landed on the id the client had already taken"
+    );
+
+    let listed = result(
+        &surface.call(Some(&token), &request("list_drafts", "{}"), &Blind),
+        "list_drafts",
+    );
+    let labels: Vec<String> = match listed.get("drafts") {
+        Some(Json::Array(rows)) => rows
+            .iter()
+            .map(|row| match row.get("label") {
+                Some(Json::String(label)) => label.clone(),
+                other => panic!("a summary carries a label, and it is {other:?}"),
+            })
+            .collect(),
+        other => panic!("drafts is an array, and it is {other:?}"),
+    };
+    assert_eq!(labels.len(), 2, "both drafts are there: {labels:?}");
+    assert!(labels.iter().any(|label| label == "HAND NAMED"));
+    assert!(labels.iter().any(|label| label == "AUTO"));
+}
+
+// ---------------------------------------------------------------------------
 // The gateway's own tick is monotonic
 // ---------------------------------------------------------------------------
 
@@ -924,7 +1545,10 @@ fn the_gateways_tick_never_goes_backwards_across_a_phase_boundary() {
     };
 
     note("the opening Lull", &surface);
-    for left in [LULL_MS / 2, 0] {
+    // Half of LULL_MS, then none of it, written out rather than divided: the
+    // rounding lint is denied inside a test too, and a literal is clearer than
+    // a checked division for a number this file already fixes.
+    for left in [90_000, 0] {
         surface.set_phase_remaining_ms(Ms::new(left));
         note("the Lull, counting down", &surface);
     }
