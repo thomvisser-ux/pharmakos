@@ -19,7 +19,7 @@ gp.api.v1.GetEconomyForecastResponse
   numbers: 1-15
 
 gp.api.v1.GetMapSummaryResponse
-  numbers: 4-15
+  numbers: 5-15
 
 gp.api.v1.GetRecapResponse
   numbers: 2-15

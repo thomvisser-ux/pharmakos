@@ -49,11 +49,14 @@
 //!   need one; adding one would give the canonical form two spellings, which
 //!   is the one thing it may not have.
 //!
-//!   PLACEHOLDER: T8 (plan-core) owns that text-preserving layer and is where
-//!   the byte-for-byte claim is actually tested, per decisions-log item 74.
-//!   If T8 finds it needs the canonical encoder to emit a written default
-//!   instead, that is a change to the canonical form and therefore an owner
-//!   decision (AGENTS.md section 5) — raise it, do not add the flag here.
+//!   The **JSON → wire** direction holds up its half of that (decisions-log
+//!   item 100 (10)): a field a document spells out at its default is dropped
+//!   on the way to the wire, exactly as prost's encoder drops it, so
+//!   [`super::canonicalise`] — which never sees a typed message — answers
+//!   what `decode` then `encode` answers. [`is_proto3_default`] is the rule
+//!   and says where it stops: `oneof` members, `optional` fields, repeated
+//!   fields and message-typed fields all have presence in proto3 and are
+//!   never dropped.
 
 use std::collections::BTreeMap;
 
@@ -387,6 +390,12 @@ fn json_to_message(
                 ));
             }
             oneofs_used.insert(index, key.clone());
+        } else if is_proto3_default(schema, field, item) {
+            // A field WRITTEN OUT at its proto3 default is not written to the
+            // wire, exactly as prost's own encoder drops it. `is_proto3_default`
+            // says why that has to happen here rather than in `canonicalise`,
+            // and where the rule stops.
+            continue;
         }
         resolved.push((field, item));
     }
@@ -411,6 +420,90 @@ fn json_to_message(
         }
     }
     Ok(writer.into_vec())
+}
+
+/// True when `value` is what this field would hold if it were absent — and
+/// when absence and this value are indistinguishable once decoded.
+///
+/// # Why this exists: `canonicalise` has to agree with `decode` then `encode`
+///
+/// The canonical form has to have exactly one spelling, and before
+/// decisions-log item 100 (10) it had two. [`super::encode`] goes through
+/// prost, whose encoder drops a scalar at its default, so
+/// `{"major":1,"minor":0}` came back as `{"major": 1}`. [`super::canonicalise`]
+/// goes JSON → wire → JSON without a typed message in between, so it wrote the
+/// zero out again and came back as `{"major": 1, "minor": 0}`. Two callers,
+/// one document, two answers — and the committed goldens
+/// (`tests/golden/proto/expected.expand_east.json`, `tests/golden/plan-core/**`)
+/// all carry the first spelling, so the first is the canonical one and this is
+/// where the second is removed.
+///
+/// # Where the rule stops
+///
+/// This mirrors prost's encoder and nothing wider, so the three cases that
+/// **have presence** in proto3 are all excluded, at the call site rather than
+/// here:
+///
+/// * a **`oneof` member**, where which arm is set is the whole message — an
+///   arm holding its own zero still has to be written, or the arm disappears;
+/// * an **`optional` field**, which protoc compiles to a synthetic one-field
+///   oneof, so the same exclusion covers it without a second test;
+/// * a **`repeated` field**, whose empty array already writes nothing.
+///
+/// A **message-typed** field is excluded here, by this function: a present but
+/// empty submessage is a different message from an absent one, and prost writes
+/// a zero-length one for `Some(Default::default())`.
+fn is_proto3_default(schema: &Schema, field: &Field, value: &Json) -> bool {
+    if field.repeated {
+        return false;
+    }
+    match field.kind {
+        // Two different reasons for one answer. A present submessage HAS
+        // presence, so `{}` is not absence and must be written. A
+        // floating-point field is refused outright by `write_scalar`, and must
+        // reach it to be refused: a dropped field is not an error, and a float
+        // field has to be one.
+        ScalarKind::Message | ScalarKind::Double | ScalarKind::Float => false,
+        ScalarKind::Bool => matches!(value, Json::Bool(false)),
+        ScalarKind::String | ScalarKind::Bytes => {
+            matches!(value, Json::String(text) if text.is_empty())
+        }
+        ScalarKind::Enum => {
+            schema
+                .enumeration(&field.type_name)
+                .is_some_and(|declared| match value {
+                    Json::String(name) => declared
+                        .value_by_name(name)
+                        .is_some_and(|it| it.number == 0),
+                    Json::Number(lexeme) => is_zero(lexeme),
+                    _ => false,
+                })
+        }
+        ScalarKind::Int32
+        | ScalarKind::Sint32
+        | ScalarKind::Uint32
+        | ScalarKind::Fixed32
+        | ScalarKind::Sfixed32
+        | ScalarKind::Int64
+        | ScalarKind::Sint64
+        | ScalarKind::Uint64
+        | ScalarKind::Fixed64
+        | ScalarKind::Sfixed64 => match value {
+            // The mapping accepts a 64-bit integer as a quoted string as well
+            // as bare, so both spellings of zero are the same zero.
+            Json::Number(lexeme) | Json::String(lexeme) => is_zero(lexeme),
+            _ => false,
+        },
+    }
+}
+
+/// True when a JSON number lexeme is a whole zero.
+///
+/// Parsed rather than compared with `"0"`: `-0` and `00` are the same value and
+/// a lexeme this schema cannot hold (`0.0`, `1e3`) is left for `write_scalar`
+/// to refuse with its own message.
+fn is_zero(lexeme: &str) -> bool {
+    lexeme.parse::<i64>() == Ok(0) || lexeme.parse::<u64>() == Ok(0)
 }
 
 #[allow(

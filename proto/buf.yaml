@@ -70,28 +70,28 @@ breaking:
     # RE-ADD it, scoped to the files it is needed for and with the
     # justification written out, in any later change that does. OWNER: the
     # same rule the block it replaces was written under - the previous
-    # occupant was scoped to gp/v1/playbook.proto for T1's own stub filling
-    # and is deleted here because T1 is on main and that waiver is spent.
+    # occupant was scoped to gp/v1/rules.proto for T5a's discharge of the
+    # Economy and Power stubs, and is deleted here because that waiver is
+    # spent and this change touches no file it named.
     #
-    # Why it is here THIS time. Holding a future field number as a
-    # RESERVATION is how this schema stops a number being reused for
-    # something else before the stage that fills it arrives: rules.proto's
-    # `Economy` and `Power` were committed as empty stubs holding 1 to 15 so
-    # that `rules_hash` covered a table of the final shape from the first
-    # golden, and so that nobody filled those blocks with a number of their
-    # own choosing in the meantime. Decisions-log items 90, 91 and 94 now fix
-    # the values, so this change DISCHARGES the held numbers: `Economy` 1-11
-    # and `Power` 1-7 become the rows the items name, and 12-15 and 8-15 stay
-    # reserved for the next stage's.
+    # Why it is here THIS time. T13 (decisions-log item 100 (10)) is the first
+    # task with a method that has to answer "which map is this", and
+    # GetMapSummaryResponse could not: the match seed is 64 bits and
+    # `uint32 map_seed = 2` is 32, and the map IS a function of the whole
+    # seed. Number 2 is therefore deprecated rather than reused, and the
+    # replacement `string match_seed` takes 4 - which is the FIRST NUMBER OF
+    # THE HELD RANGE, discharging it exactly as the range was held for. The
+    # reservation shrinks from `4 to 15` to `5 to 15` and every number that
+    # left it arrives back the same tick as a named field with the same
+    # number, which is the safest possible outcome and the one the
+    # reservation was made for.
     #
     # Discharging a held number is the one move buf cannot tell apart from a
     # genuine un-reservation, so RESERVED_MESSAGE_NO_DELETE fires on the
-    # reserved lines that shrink even though every number that leaves the
-    # range arrives back the same tick as a named field with the same number
-    # - which is the safest possible outcome and the one the reservation was
-    # made for. gp/v1/playbook.proto and gp/api/v1/gateway.proto are NOT
-    # listed today because nothing in this change discharges a reservation in
-    # either.
+    # reserved line that shrank. gp/v1/playbook.proto and gp/v1/rules.proto
+    # are NOT listed today because nothing in this change discharges a
+    # reservation in either: gp.api.v1.Digest gains `counts = 4` and the new
+    # KindCount message, and Digest reserves nothing at all.
     #
     # The rule fires again at S1, S2, S3 and S4, once per PR that fills a
     # held stub, and each of those PRs re-adds this block for its own files.
@@ -100,12 +100,5 @@ breaking:
     # nobody intended through unnoticed - and an un-reservation nobody
     # intended is exactly the reuse of a retired number that WIRE_JSON exists
     # to catch.
-    #
-    # The alternative - holding never-used numbers with a plain comment
-    # ("Numbers 8 and 9 are free for a further row", as this schema does in
-    # the places where a gap is genuinely open rather than earmarked) - was
-    # considered and not taken: a comment does not stop protoc accepting a
-    # reuse, and the whole point of the held ranges is that the stub messages
-    # are filled later by somebody who was not here for this conversation.
     RESERVED_MESSAGE_NO_DELETE:
-      - gp/v1/rules.proto
+      - gp/api/v1/gateway.proto
