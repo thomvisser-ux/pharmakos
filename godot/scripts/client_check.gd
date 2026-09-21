@@ -46,14 +46,14 @@ const RULES_JSON := '{"revision":1,"mesher":{"surfacesPerFrame":4,"bytesPerFrame
 const CHUNK_EDGE := 32
 const CHUNK_VOLUME := 32768
 
-## The floor depth the driven chunk is built at, and the shallower one that follows it.
+## The floor the driven chunk is built at, and the square bitten out of its top layer.
 ##
-## Two different depths, because an upload of the SAME geometry twice is the only thing
-## that lets the uploader take its in-place branch, and an upload of DIFFERENT geometry is
-## the only thing that makes it rebuild. Both have to happen for the engine side to be
-## exercised rather than merely reached.
+## The bite is what makes the second upload a rebuild rather than a patch: it changes the
+## geometry enough that the uploader's guards fire. Both branches have to happen for the
+## engine side to be exercised rather than merely reached.
 const FLOOR_DEPTH := 8
-const SHALLOWER_DEPTH := 6
+const BITE_FROM := 12
+const BITE_TO := 20
 
 ## Full light, so the bake the mesher folds into the vertex colour is not zero everywhere.
 const FULL_LIGHT := 15
@@ -153,32 +153,48 @@ func _ready() -> void:
 ##   1. nothing is resident, so the plan is CREATE — and it is the create arm that reads
 ##      the surface layout back out of the engine, which is the probe item 53's in-place
 ##      write is only ever allowed on;
-##   2. the geometry changes, so the index array changes and the plan is REBUILD;
-##   3. the same geometry again, so the index array is equal and the plan is PATCH — IF
-##      the read-back said the layout is the one a region write assumes.
+##   2. a bite is taken out of the floor's top layer, which moves quads between face
+##      directions; measured, that changes the VERTEX COUNT, which is the uploader's first
+##      rebuild guard, so the plan is REBUILD — `mesh_clear` and a fresh
+##      `mesh_add_surface_from_arrays` over the same RID. (A change that kept the count but
+##      moved the index array would fire the second guard instead; the counters say which
+##      fired, and the run reports `rebuilds_vertex_count: 1`.)
+##   3. the same bitten geometry again, so nothing moved and the plan is PATCH — if the
+##      read-back said the layout is the one a region write assumes.
 ##
-## That last "if" is why this asserts `rebuilds + patches`, not `patches`. Under
-## `--headless` Godot selects the dummy rendering server, whose `mesh_get_surface` returns
-## nothing; `read_back_probe` then correctly reports "not patchable" and the third upload
-## rebuilds instead. Both outcomes are a pass here: what this run is for is that the calls
-## execute against a real engine without panicking, and the byte-level equality of the two
-## paths is what `run_self_check` above proves. Asserting a patch count would make this
-## leg fail on exactly the renderer CI has.
+## A floor of a different DEPTH would not do for step 2: it has the same vertex count and
+## the same index array as the first, so it patches, and the rebuild arm would never run.
+## That is not a guess — the first version of this check used two depths and reported one
+## create and two patches.
+##
+## MEASURED, not assumed: headless Godot 4.7.2 is **not** a no-op here. The first run of
+## this check on CI's Linux leg reported `surface_probe: strides 12/4, colour truncate` and
+## two patches, which means `mesh_get_surface` returned a real surface layout and the
+## in-place region writes executed against the rendering server. The comment this replaces
+## predicted the opposite — that the dummy renderer would return nothing and the probe would
+## refuse the in-place path — and the measurement says otherwise, so the measurement is what
+## is written down.
+##
+## The assertion is still on `rebuilds + patches >= 2` rather than on a patch count. A
+## platform whose headless server returned no surface layout would refuse the in-place path
+## and rebuild instead, and that is a correct outcome, not a failure: what this run exists to
+## show is that the calls execute against a real engine without panicking. The byte-for-byte
+## equality of what the two paths leave resident is `run_self_check`'s to prove.
 func _drive_the_engine_upload(bridge: Node, failures: Array[String]) -> void:
 	var light := PackedByteArray()
 	light.resize(CHUNK_VOLUME)
 	light.fill(FULL_LIGHT)
 
-	var deep: PackedByteArray = bridge.transpose_chunk(_sim_chunk(FLOOR_DEPTH))
-	var shallow: PackedByteArray = bridge.transpose_chunk(_sim_chunk(SHALLOWER_DEPTH))
-	if deep.size() != CHUNK_VOLUME or shallow.size() != CHUNK_VOLUME:
+	var whole: PackedByteArray = bridge.transpose_chunk(_sim_chunk(false))
+	var bitten: PackedByteArray = bridge.transpose_chunk(_sim_chunk(true))
+	if whole.size() != CHUNK_VOLUME or bitten.size() != CHUNK_VOLUME:
 		failures.append("transpose_chunk refused a full-length chunk")
 		return
 
-	var created: Dictionary = bridge.upload_chunk(0, Vector3.ZERO, deep, light)
-	var rebuilt: Dictionary = bridge.upload_chunk(0, Vector3.ZERO, shallow, light)
-	var again: Dictionary = bridge.upload_chunk(0, Vector3.ZERO, shallow, light)
-	for report in [created, rebuilt, again]:
+	var created: Dictionary = bridge.upload_chunk(0, Vector3.ZERO, whole, light)
+	var changed: Dictionary = bridge.upload_chunk(0, Vector3.ZERO, bitten, light)
+	var repeated: Dictionary = bridge.upload_chunk(0, Vector3.ZERO, bitten, light)
+	for report in [created, changed, repeated]:
 		if report.is_empty():
 			failures.append("upload_chunk returned nothing; its reason is in the log above")
 			return
@@ -190,23 +206,34 @@ func _drive_the_engine_upload(bridge: Node, failures: Array[String]) -> void:
 	print("[client-check] upload budget: %s" % bridge.upload_budget())
 	if int(counters.get("creates", 0)) < 1:
 		failures.append("the engine-side upload never created a surface")
+	if int(counters.get("rebuilds", 0)) < 1:
+		failures.append("the bitten chunk did not rebuild: %s" % counters)
 	var settled: int = int(counters.get("rebuilds", 0)) + int(counters.get("patches", 0))
 	if settled < 2:
 		failures.append("the two later uploads neither rebuilt nor patched: %s" % counters)
 
-## One chunk in SIM voxel order, solid to `depth` and air above it.
+## One chunk in SIM voxel order: a flat floor, optionally with a bite out of its top layer.
 ##
-## Sim order is east + 32*north + 1024*up (decisions-log item 92), so a floor `depth`
-## layers deep is exactly the first `depth` slabs of 1024 bytes. The bridge transposes it
-## into the mesher's order; this script does not, because deciding the order is the
+## Sim order is east + 32*north + 1024*up (decisions-log item 92), so a floor FLOOR_DEPTH
+## layers deep is exactly the first FLOOR_DEPTH slabs of 1024 bytes. The bridge transposes
+## it into the mesher's order; this script does not, because deciding the order is the
 ## bridge's job and duplicating it here is how the two would drift.
-func _sim_chunk(depth: int) -> PackedByteArray:
+##
+## `bite` clears a square of the top layer. That is what moves quads between face
+## directions and so changes the index array — the difference between a rebuild and a
+## patch, and the only reason there are two shapes here at all.
+func _sim_chunk(bite: bool) -> PackedByteArray:
 	var chunk := PackedByteArray()
 	chunk.resize(CHUNK_VOLUME)
 	chunk.fill(0)
-	var solid := depth * CHUNK_EDGE * CHUNK_EDGE
-	for index in range(solid):
+	var layer := CHUNK_EDGE * CHUNK_EDGE
+	for index in range(FLOOR_DEPTH * layer):
 		chunk[index] = 1
+	if bite:
+		var top := (FLOOR_DEPTH - 1) * layer
+		for north in range(BITE_FROM, BITE_TO):
+			for east in range(BITE_FROM, BITE_TO):
+				chunk[top + north * CHUNK_EDGE + east] = 0
 	return chunk
 
 func _fail(message: String) -> void:
