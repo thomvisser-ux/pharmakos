@@ -44,8 +44,8 @@
 //! There is no flag anywhere in this module that relaxes any of it (AGENTS.md
 //! section 7: "no LAN convenience binding, not even behind a flag").
 
-use crate::base64;
 use crate::sha1;
+use pharmakos_proto::json::base64;
 
 /// The GUID RFC 6455 section 4.2.2 concatenates with the client's key. A
 /// constant of the standard, not a secret and not a tuning value.
@@ -199,6 +199,35 @@ pub fn accept_key(key: &str) -> String {
     base64::encode(&sha1::digest(message.as_bytes()))
 }
 
+/// True for exactly the text RFC 6455 section 4.1 requires of a
+/// `Sec-WebSocket-Key`: sixteen random bytes as **standard**, padded base64,
+/// which is twenty-two alphabet symbols and two `=`.
+///
+/// The shape is checked here rather than left to the decoder, and that is the
+/// point of the function. `pharmakos_proto::json::base64::decode` is the
+/// proto3 JSON mapping's reader (decisions-log item 100 (10) deleted this
+/// crate's forty-line copy in favour of it), and the mapping *requires* a
+/// reader to be lenient: it accepts the URL-safe alphabet and unpadded text as
+/// well. That is correct for a `bytes` field and wrong here. `q83vASNFZ4mrze8`
+/// and `q83vASNFZ4mrze8BI0VniavN7w` both decode to sixteen bytes and neither
+/// is a key a conforming client sends, so the only thing that turns them away
+/// is this check. The server side of the handshake is allowed to be strict
+/// (section 4.2.1), and a security surface should be.
+fn is_sixteen_base64_bytes(key: &str) -> bool {
+    // 16 bytes is five whole quanta plus one byte: 22 symbols and "==".
+    let Some(symbols) = key.strip_suffix("==") else {
+        return false;
+    };
+    if symbols.len() != 22
+        || !symbols
+            .bytes()
+            .all(|symbol| matches!(symbol, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'+' | b'/'))
+    {
+        return false;
+    }
+    base64::decode(key).is_some_and(|bytes| bytes.len() == 16)
+}
+
 /// Read one header value, case-insensitively, refusing a duplicate.
 fn header<'a>(headers: &'a [(String, String)], name: &str) -> Result<Option<&'a str>, Refusal> {
     let mut found: Option<&str> = None;
@@ -339,9 +368,8 @@ pub fn review(text: &str, policy: &Policy) -> Result<Upgrade, Refusal> {
     }
 
     let key = header(&headers, "Sec-WebSocket-Key")?.ok_or(Refusal::MissingKey)?;
-    match base64::decode(key) {
-        Some(bytes) if bytes.len() == 16 => {}
-        _ => return Err(Refusal::MalformedKey),
+    if !is_sixteen_base64_bytes(key) {
+        return Err(Refusal::MalformedKey);
     }
 
     let authorization = header(&headers, "Authorization")?.ok_or(Refusal::MissingAuthorization)?;

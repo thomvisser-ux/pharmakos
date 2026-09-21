@@ -86,7 +86,7 @@ godot        = { version = "=0.5.5", default-features = false, features = ["api-
 pharmakos-mesher = { path = "crates/mesher", version = "0" }
 pharmakos-proto  = { path = "crates/proto", version = "0" }
 pharmakos-sim       = { path = "crates/sim", version = "0", default-features = false }
-# pharmakos-plan-core = { path = "crates/plan-core", version = "0" }
+pharmakos-plan-core = { path = "crates/plan-core", version = "0" }
 pharmakos-verifier  = { path = "crates/verifier", version = "0" }
 # pharmakos-operator  = { path = "crates/operator", version = "0" }
 # pharmakos-gateway   = { path = "crates/gateway", version = "0" }

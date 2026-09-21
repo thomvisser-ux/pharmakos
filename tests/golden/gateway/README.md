@@ -5,19 +5,21 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # Gateway goldens
 
-What the Seat Gateway's **security surface** does, written down: who sees which
-event, what a 60-second digest says, what the audit log records, and which
-opening handshakes the gateway accepts. Produced by
-`crates/gateway/tests/goldens.rs`; compared by `cargo xtask ci`'s `golden` step;
+What the Seat Gateway does, written down: who sees which event, what a
+60-second digest says, what the audit log records, which opening handshakes the
+gateway accepts, and what the spec's own worked session answers call by call.
+Produced by `crates/gateway/tests/goldens.rs` and
+`crates/gateway/tests/methods.rs`; compared by `cargo xtask ci`'s `golden` step;
 re-blessed with `cargo xtask golden --bless`, which a pull request then has to
 explain (AGENTS.md §5).
 
-These four exist because the surface is the thing the whole roadmap inherits
+The first four exist because the surface is the thing the whole roadmap inherits
 (skeleton plan T9, risk R8). A unit test says a rule holds; a golden says what
 the rule *does*, in a table a reviewer can read without running anything — and
-it is the shape of that table, not any one line of it, that v1.1 publishes.
+it is the shape of that table, not any one line of it, that v1.1 publishes. The
+fifth is T13's, and is the method slice answering the session spec §12 prints.
 
-## The four cases
+## The five cases
 
 | Case | File | What it pins |
 | --- | --- | --- |
@@ -25,6 +27,7 @@ it is the shape of that table, not any one line of it, that v1.1 publishes.
 | `segment_digest/` | `expected.digest.txt` | `get_segment_feed`'s 60-second digests and their per-kind counts |
 | `audit_log/` | `expected.audit.txt` | One scripted session's access log |
 | `handshake/` | `expected.handshake.txt` | Every opening handshake the gateway will and will not accept |
+| `walkthrough/` | `expected.walkthrough.txt` | Spec §12's 14-call session, call by call, against a live gateway |
 
 ## What a diff means, case by case
 
@@ -134,6 +137,36 @@ that value moves, the SHA-1 or the base64 is wrong and every WebSocket client in
 the world will disagree with this server** — it is not a behaviour change to
 bless, it is a bug to fix. `crates/gateway/src/sha1.rs` also pins the three FIPS
 180-4 vectors for the same reason.
+
+### `walkthrough/expected.walkthrough.txt`
+
+One line per call: the call's number, the method, and one phrase saying what
+came back. Spec §12 prints this session and the skeleton plan's T13 acceptance
+line asks for it end to end, so the file is the session's *shape* rather than
+its contents — the contents are asserted in
+`crates/gateway/tests/methods.rs`, which is where a reader should look for what
+each line means.
+
+Three lines are load-bearing and a diff in any of them is a behaviour change
+rather than a wording one.
+
+* **Line 2, `segment_length_ms=1000`.** The coming segment's length comes from
+  the frozen snapshot and never from a constant (spec §10, "Segment end"; T10).
+  A number here that matched the rules table's ladder instead would mean the
+  gateway had started deriving it.
+* **Line 11, `report_hash matches call 9`.** `submit_plan` always runs FULL, so
+  the seal a seat gets is the report it was shown by its own pre-check (spec
+  §11; decisions-log item 82). If this line ever stops saying it, the promise
+  that makes a seal inspectable has gone, and no amount of blessing fixes that.
+* **Line 7, `qualifies=false`.** An invalid playbook is a full report and not a
+  method error. A `qualifies=true` here would mean the verifier stopped seeing
+  the two errors the walkthrough puts in front of it; a refusal in its place
+  would mean the gateway had started treating a bad playbook as a bad call.
+
+Line 4 says `0 templates (no folder configured)` because no template folder is
+set in the test, which is the plan's own T13 PLACEHOLDER (the folder's location
+on each platform is the owner's, with packaging at T21). When that lands, this
+line moves and the move is the feature arriving.
 
 ## Conventions
 

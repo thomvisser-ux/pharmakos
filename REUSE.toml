@@ -121,6 +121,18 @@ precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 Pharmakos contributors"
 SPDX-License-Identifier = "MIT OR Apache-2.0"
 
+# tests/golden/schema/** is the generated JSON Schema `get_schema` serves: a view
+# of proto/**, which is the permissive tier, and the document a third party
+# writing a playbook tool reads to know what a playbook is. Permissive, exactly
+# as tests/golden/proto/ and tests/golden/plan-core/ are, and for the same
+# reason (decisions-log item 100 (11), taken at T13 — the task that commits the
+# first golden in this area). AFTER the tests/** block, so it wins.
+[[annotations]]
+path = ["tests/golden/schema/**"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Pharmakos contributors"
+SPDX-License-Identifier = "MIT OR Apache-2.0"
+
 # --- The rules table -------------------------------------------------------
 # rules/rules.v1.json is the canonical JSON of one gp.v1.RulesTable
 # (decisions-log item 78): the shape is schema and the values are data. It is
@@ -188,16 +200,16 @@ SPDX-License-Identifier = "GPL-3.0-or-later"
 # tests/golden/README.md and scenarios/README.md carry their own headers and
 # are unaffected, and so do the JSONC scenario files, which have comments.
 #
-# PLACEHOLDER: two golden areas still to come will hold byte-for-byte
+# PLACEHOLDER: one golden area still to come will hold byte-for-byte
 # reproductions of material that is MIT OR Apache-2.0 where it lives today —
-# tests/golden/schema/ (generated JSON Schema) and tests/golden/docs/
-# (generated documentation). docs/LICENSING.md puts both sources in the
-# permissive tier, so those goldens arguably belong there too, with the
-# per-directory LICENSE pointers that tier uses. Two cases are already
-# answered: T1 committed tests/golden/proto/ and gave it its own permissive
-# block above, and T8's tests/golden/plan-core/ followed it (decisions-log
-# item 100). Owner decides at T13 and T20 — each commits the first golden in
-# its area — and until then the broad tests/** block covers them.
+# tests/golden/docs/ (generated documentation). docs/LICENSING.md puts that
+# source in the permissive tier, so those goldens arguably belong there too,
+# with the per-directory LICENSE pointers that tier uses. Three cases are
+# already answered the same way: T1 committed tests/golden/proto/ and gave it
+# its own permissive block above, T8's tests/golden/plan-core/ followed it, and
+# T13's tests/golden/schema/ followed both (decisions-log item 100 (11)). Owner
+# decides at T20, which commits the first golden in the remaining area, and
+# until then the broad tests/** block covers it.
 [[annotations]]
 path = ["scenarios/**"]
 precedence = "aggregate"

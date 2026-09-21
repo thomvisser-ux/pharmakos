@@ -199,8 +199,10 @@ name = "pharmakos-gateway"
 version = "0.0.0"
 dependencies = [
  "getrandom",
+ "pharmakos-plan-core",
  "pharmakos-proto",
  "pharmakos-sim",
+ "pharmakos-verifier",
 ]
 
 [[package]]

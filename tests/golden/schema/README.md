@@ -5,7 +5,16 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # `schema/` — generated schema and `get_schema`
 
-**Filled by T1** (the generated JSON Schema) and T13 (`get_schema`).
+**Filled by T13.** One case, `get_schema/expected.json`: the whole playbook
+vocabulary as JSON Schema 2020-12, which is what `get_schema{}` with no `part`
+answers. Produced by `crates/gateway/tests/methods.rs`, which compares the
+**method's** answer rather than the generator's — so a gateway that started
+assembling its own would move this file even if the generator had not changed.
+
+The document is walked out of the checked-in descriptor set
+(`crates/proto/src/generated/descriptor.binpb`) by
+`crates/gateway/src/schema.rs`. Nothing in it is written down twice, which is
+the whole of what "so they can't drift" buys.
 
 Regenerated and compared on every run, so the published schema cannot drift from
 the `.proto` files it comes from (AGENTS.md §9 item 8).
