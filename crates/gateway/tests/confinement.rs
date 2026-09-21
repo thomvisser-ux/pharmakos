@@ -180,6 +180,13 @@ const STEPPING: &[(&str, &str)] = &[
         "filing a seat's orders into the match belongs to the match host: a handler that could \
          seal could rewrite a seat's orders from inside a read (decisions-log item 103 (1))",
     ),
+    (
+        "seal_plans",
+        "the same rule, spelled the way a handler would actually reach it. `seal_playbook` is \
+         the *runner's* name for it and `Host::seal_plans` is this crate's, and a needle that \
+         only knew the first would have let `host_mut()?.seal_plans(..)` through a handler \
+         untouched -- the review found exactly that hole",
+    ),
 ];
 
 /// The two modules every method handler lives in.

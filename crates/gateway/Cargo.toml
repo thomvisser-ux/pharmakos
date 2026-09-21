@@ -34,8 +34,11 @@ pharmakos-proto = { workspace = true }
 pharmakos-sim = { workspace = true, default-features = false }
 # Everything done TO a playbook that is not simulating it: the canonical form, the JSONC
 # round trip, JSON Patch, `render_plan`'s prose, the template library and the travel
-# estimator's seam. Its canonical form is also the decode `Plan::compile` reads, so a
-# submission is decoded once and the report and the plan are taken over the same bytes.
+# estimator's seam. Its canonical form is also the decode `Plan::compile` reads, so the
+# report and the plan are taken over the same CANONICAL FORM and the two doors cannot
+# disagree about what the file says. (Not over the same parse: `verify_plan` and
+# `compile_playbook` each canonicalise the text. Parsing it twice is a cost; reading it
+# two different ways would be a bug, and it is the second that this line is about.)
 # In process with the gateway (crate map).
 pharmakos-plan-core = { workspace = true }
 # Seal inspection. `verify_plan` and `submit_plan` hand its report back unchanged; an

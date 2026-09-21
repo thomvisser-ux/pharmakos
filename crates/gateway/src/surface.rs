@@ -401,16 +401,42 @@ impl Surface {
     /// onto the first segment's feed here, so a client that connects before the
     /// first Push still reads how the match began.
     ///
+    /// # The seat lists have to agree, and this is where that is checked
+    ///
+    /// A surface's seats come from [`Surface::new`] and a world's from the
+    /// lobby's [`pharmakos_sim::world::WorldConfig`], and before T13b nothing
+    /// compared them: a surface holding a seat the world has not got was inert,
+    /// because nothing the surface did ever reached the world with a seat id.
+    /// Sealing does. A mismatch would now be found at
+    /// [`Surface::begin_push`] — as [`crate::error::Code::Internal`], one phase
+    /// after it was made, with the safe playbooks already filed — so it is
+    /// refused here instead, where the two lists are being put together and the
+    /// message can name both counts.
+    ///
     /// # Errors
     ///
     /// [`crate::error::Code::InvalidArgument`] when a match is already hosted:
     /// a surface hosts one match, and replacing it would leave every cursor,
     /// every draft and every sealed playbook pointing at a world that is gone.
+    /// And [`crate::error::Code::InvalidArgument`] for a host whose world does
+    /// not have every seat this surface was built for.
     pub fn attach(&mut self, host: Host) -> Result<(), Error> {
         if self.host.is_some() {
             return Err(Error::invalid(
                 "this surface already hosts a match; a second one is a second surface",
             ));
+        }
+        let in_world = host.world().seats().len();
+        if let Some(beyond) = self
+            .seats
+            .iter()
+            .find(|slot| u32::from(slot.seat.raw()) >= in_world)
+        {
+            return Err(Error::invalid(format!(
+                "this surface was built for seat {} and the match it is being given has {in_world} \
+                 seats: a seat the world has not got can be sealed for, and nothing would play it",
+                beyond.seat.raw()
+            )));
         }
         let round = host.runner().round();
         self.host = Some(host);
@@ -507,10 +533,19 @@ impl Surface {
     /// **seal every seat's plan into the match**, open a fresh segment feed,
     /// and step the runner into the Push.
     ///
-    /// Returns false when the runner was not in a Lull.
+    /// Returns false when the runner was not in a Lull, **and does nothing at
+    /// all in that case**.
     ///
     /// # The order of these five steps is the whole of the method
     ///
+    /// 0. **Refuse out of phase, before touching anything.** The answer a host
+    ///    that asked twice gets is `Ok(false)`, and it has been since T13. The
+    ///    seal step below would otherwise reach it first and turn it into
+    ///    [`crate::error::Code::Internal`] — blaming a seat for the host's
+    ///    phase mistake — *after* the safe playbooks had been filed and the
+    ///    running segment's feed replaced. The review found that; the guard is
+    ///    the answer, and the `Internal` at step 4 keeps the case it is
+    ///    actually described for: a refusal the phase did not predict.
     /// 1. **Drain** whatever the last phase left on the bus, onto the feed it
     ///    belongs to.
     /// 2. **File the safe playbook** for every seat whose seal is not this
@@ -532,6 +567,9 @@ impl Surface {
     /// As [`Surface::host`], plus [`crate::error::Code::Internal`] when a
     /// filed safe playbook will not compile or the runner refuses a seal.
     pub fn begin_push(&mut self) -> Result<bool, Error> {
+        if self.host()?.runner().phase() != MatchPhase::Lull {
+            return Ok(false);
+        }
         self.absorb_events()?;
         let round = self.host()?.runner().round();
         self.file_safe_playbooks(round)?;

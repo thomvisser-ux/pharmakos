@@ -52,7 +52,7 @@ use std::path::{Path, PathBuf};
 use pharmakos_sim::interpreter::Plan;
 use pharmakos_sim::math::quantity::MS_PER_TICK;
 use pharmakos_sim::rules::RulesTable;
-use pharmakos_sim::runner::{MatchSettings, Runner, TickReport};
+use pharmakos_sim::runner::{MatchPhase, MatchSettings, Runner, TickReport};
 use pharmakos_sim::tables::SeatId;
 use pharmakos_sim::world::{World, WorldConfig};
 
@@ -248,13 +248,27 @@ impl Host {
     ///
     /// It belongs here for the same reason the other three do: the runner is
     /// this module's, and a handler that could seal could rewrite a seat's
-    /// orders from inside a read. `tests/confinement.rs` asserts that
-    /// `seal_playbook` is named in this file and in no other.
+    /// orders from inside a read. `tests/confinement.rs` asserts that neither
+    /// this method's name nor the runner's (`seal_playbook`) is written
+    /// anywhere else — the review found that the second needle alone left the
+    /// first spelling, which is the one a handler would actually reach for,
+    /// unguarded.
     ///
     /// The caller orders the list — [`crate::surface::Surface::begin_push`]
     /// sorts it by seat id — and this preserves that order rather than choosing
     /// one of its own, because the order is the caller's claim to make and the
     /// events come out in it.
+    ///
+    /// # It is all of them or none of them
+    ///
+    /// Both of [`pharmakos_sim::runner::SealRefused`]'s reasons can be read off
+    /// the runner without sealing anything, so they are, before the first seal
+    /// goes in. A loop that sealed as it went would leave a refusal half
+    /// applied — some seats holding this round's orders with their execution
+    /// state reset and a `plan_sealed` on the bus, the rest holding last
+    /// round's — and a host that retried would seal the first group twice. That
+    /// is close to the "answer that looks like success" the runner's own doc
+    /// refuses to give.
     ///
     /// # Errors
     ///
@@ -264,6 +278,25 @@ impl Host {
     /// whoever drove the host, and nothing a caller of a gateway method did
     /// could have caused or avoided it.
     pub fn seal_plans(&mut self, plans: Vec<(SeatId, Plan)>) -> Result<(), Error> {
+        let phase = self.runner.phase();
+        if phase != MatchPhase::Lull && !plans.is_empty() {
+            return Err(Error::internal(format!(
+                "this match would take no sealed playbook: a playbook is sealed during a Lull and \
+                 this match is in its {}",
+                phase.name()
+            )));
+        }
+        let in_world = self.runner.world().seats().len();
+        for (seat, _) in &plans {
+            if u32::from(seat.raw()) >= in_world {
+                return Err(Error::internal(format!(
+                    "this match would not take seat {}'s sealed playbook: this match has no seat \
+                     {}",
+                    seat.raw(),
+                    seat.raw()
+                )));
+            }
+        }
         for (seat, plan) in plans {
             self.runner.seal_playbook(seat, plan).map_err(|refused| {
                 Error::internal(format!(
@@ -450,14 +483,56 @@ mod tests {
 
         assert!(host.begin_push());
         let error = host
-            .seal_plans(vec![(SeatId::new(0), plan)])
+            .seal_plans(vec![(SeatId::new(0), plan.clone())])
             .expect_err("a Push does not");
         assert_eq!(
             error.code,
             Code::Internal,
             "a host that seals late is a bug"
         );
-        assert!(error.message.contains("seat 0"), "{}", error.message);
+        assert!(error.message.contains("its push"), "{}", error.message);
+    }
+
+    /// A refusal is all of them or none of them.
+    ///
+    /// The review's finding: a loop that sealed as it went would leave seat 0
+    /// holding this round's orders and seat 1 holding last round's, and a host
+    /// that retried would seal seat 0 twice. Both of the runner's refusals are
+    /// readable before anything is sealed, so both are read first.
+    #[test]
+    fn a_refused_list_seals_none_of_it() {
+        let mut host = Host::open(
+            &config(MatchSettings {
+                segment_lengths_ms: vec![1_000],
+                round_limit: 2,
+            }),
+            None,
+        )
+        .expect("a match");
+        let plan = crate::surface::planning::compile_playbook(SAFE_PLAYBOOK, &rules())
+            .expect("the safe playbook");
+        // Seat 2 is not a seat of this two-seat match, and it is last in the
+        // list -- so a loop would have sealed seats 0 and 1 before finding out.
+        let error = host
+            .seal_plans(vec![
+                (SeatId::new(0), plan.clone()),
+                (SeatId::new(1), plan.clone()),
+                (SeatId::new(2), plan),
+            ])
+            .expect_err("a seat this match has not got");
+        assert_eq!(error.code, Code::Internal);
+        assert!(error.message.contains("no seat 2"), "{}", error.message);
+        assert!(
+            host.world().interpreter().plan(0).is_none(),
+            "seat 0 came before the refusal in the list and is still unsealed"
+        );
+        assert!(host.world().interpreter().plan(1).is_none());
+        assert!(
+            host.drain_events()
+                .iter()
+                .all(|event| event.kind != pharmakos_sim::events::EventKind::PlanSealed),
+            "and no seat was told it had sealed"
+        );
     }
 
     #[test]
