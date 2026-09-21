@@ -1099,6 +1099,24 @@ impl BeaconTable {
         self.count = self.count.saturating_add(1);
     }
 
+    /// Make room for `extra` more beacons without growing later.
+    ///
+    /// The beacon table is the one table a **Push** adds rows to: a
+    /// `place_beacon` step deploys one (T11). Nothing in a tick allocates
+    /// (G3′ §9.17), so the room is reserved at construction and at a restore,
+    /// and a deploy that finds none fails the step rather than growing a
+    /// column. Construction only — never called inside a tick.
+    pub fn reserve(&mut self, extra: u32) {
+        let n = usize::try_from(extra).unwrap_or(0);
+        self.id.reserve(n);
+        self.seat.reserve(n);
+        self.pos.reserve(n);
+        self.mandate.reserve(n);
+        self.program.reserve(n);
+        self.hp.reserve(n);
+        self.dormant.reserve(n);
+    }
+
     /// How many beacons the table holds.
     #[must_use]
     pub const fn len(&self) -> u32 {
@@ -1127,6 +1145,15 @@ impl BeaconTable {
     #[must_use]
     pub fn positions(&self) -> &[[Fx; 3]] {
         &self.pos
+    }
+
+    /// The mandate column, to write into.
+    ///
+    /// One caller: the interpreter's committed `set_mandate` row, which is the
+    /// only thing in the sim that changes a beacon's writ — *touch to change*
+    /// (AGENTS.md §1).
+    pub fn mandates_mut(&mut self) -> &mut [u8] {
+        &mut self.mandate
     }
 
     /// The mandate column, as [`crate::seams::MandateKind::id`] wire values.

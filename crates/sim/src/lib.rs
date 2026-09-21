@@ -20,6 +20,11 @@
 //!   AGENTS.md §5.
 //! * **The tick** — twelve named phases in a fixed order ([`world::PHASE_ORDER`]),
 //!   several of them still empty and each naming the task that fills it.
+//! * **The playbook interpreter** — [`interpreter`]: the compiled plan, the
+//!   decision every 250 ms of game time, one rule body at a time, the fixed
+//!   20 % reflex, the route steps and their guards, late-bound selectors, the
+//!   interface rows that commit at the end of their own durations, and the
+//!   guaranteed tail. Its per-seat state is hashed; the plans are inputs.
 //! * **The match** — [`runner`]: Lull, Push and recap in their fixed order, the
 //!   segment ladder, the frozen segment-end snapshot, the one-tick match-end
 //!   rule, elimination and the commander's respawn. [`runner::Runner`] is what
@@ -70,6 +75,7 @@
 pub mod chunks;
 pub mod encoding;
 pub mod events;
+pub mod interpreter;
 pub mod knowledge;
 pub mod mapgen;
 pub mod math;
@@ -89,6 +95,7 @@ pub mod research;
 
 pub use encoding::{ENCODING_VERSION, Enc, STATE_HASH_SEED, digest, hex};
 pub use events::{EVENT_BUS_CAPACITY, Event, EventBus, EventKind};
+pub use interpreter::{Interpreter, Plan, PlanError, PlanState, REFLEX_HP_PERCENT};
 pub use mapgen::{GeneratedMap, MapError, MapFile, MapReport};
 pub use pathing::{
     Clusters, Estimate, Fog, Node, Router, Scratch, Speed, Surface, WalkState, estimate,
@@ -101,6 +108,8 @@ pub use runner::{
 pub use snapshot::{SNAPSHOT_VERSION, Snapshot, SnapshotError};
 pub use voxels::{CHUNK_EDGE, CHUNK_VOXELS, Material, Richness, VoxelEdit, VoxelStore};
 pub use world::{DamageOrder, DamageTarget, PHASE_ORDER, Phase, World, WorldConfig};
+
+use pharmakos_proto::gp;
 
 /// The match seed the determinism harness runs on.
 ///
@@ -166,6 +175,8 @@ pub enum WorldError {
     Rules(RulesError),
     /// The rules table cannot describe a map, or a world on one.
     Map(MapError),
+    /// A playbook could not be compiled for this build.
+    Plan(PlanError),
 }
 
 impl std::fmt::Display for WorldError {
@@ -173,6 +184,7 @@ impl std::fmt::Display for WorldError {
         match self {
             WorldError::Rules(error) => write!(f, "{error}"),
             WorldError::Map(error) => write!(f, "{error}"),
+            WorldError::Plan(error) => write!(f, "{error}"),
         }
     }
 }
@@ -191,18 +203,26 @@ impl From<MapError> for WorldError {
     }
 }
 
-/// Build the world the determinism harness and its goldens run on.
+impl From<PlanError> for WorldError {
+    fn from(error: PlanError) -> WorldError {
+        WorldError::Plan(error)
+    }
+}
+
+/// Build the world the determinism harness and its goldens run on, with the
+/// harness playbook sealed for every seat.
 ///
 /// One constructor, used by the binary and by every test, so a golden can never
 /// disagree with the run that produced it.
 ///
 /// # Errors
 ///
-/// Returns [`WorldError`] when the rules table cannot be read from `path` or
-/// cannot describe a map.
+/// Returns [`WorldError`] when the rules table cannot be read from `path`,
+/// cannot describe a map, or cannot compile [`determinism_playbook`].
 pub fn determinism_world(rules_path: &std::path::Path) -> Result<World, WorldError> {
     let rules = RulesTable::load(rules_path)?;
-    Ok(World::new(&WorldConfig {
+    let plan = interpreter::Plan::compile(&determinism_playbook(), &rules)?;
+    let mut world = World::new(&WorldConfig {
         match_seed: DETERMINISM_MATCH_SEED,
         seats: DETERMINISM_SEATS,
         units_per_seat: DETERMINISM_UNITS_PER_SEAT,
@@ -211,5 +231,205 @@ pub fn determinism_world(rules_path: &std::path::Path) -> Result<World, WorldErr
             segment_lengths_ms: DETERMINISM_SEGMENT_LENGTHS_MS.to_vec(),
             round_limit: DEFAULT_ROUND_LIMIT,
         },
-    })?)
+    })?;
+    let mut seat: u32 = 0;
+    while seat < DETERMINISM_SEATS {
+        let id = tables::SeatId::new(u8::try_from(seat).unwrap_or(u8::MAX));
+        world.seal_playbook(id, plan.clone());
+        seat = seat.saturating_add(1);
+    }
+    Ok(world)
+}
+
+/// PLACEHOLDER (harness): the playbook every seat seals in the determinism run.
+///
+/// It is a *harness* playbook, not a game one, and it is written in code rather
+/// than read from a file for the reason the harness's seeds are constants: the
+/// determinism binary must produce its chain from nothing but the rules table.
+/// What it is for is coverage — the chain has to run the interpreter's state
+/// through its shapes, so the harness plays a route that uses a **late-bound
+/// selector**, a **visit with a committed row**, a **hold**, a **wait on a
+/// clock predicate** and a **handler with a cooldown and a fire limit**, and
+/// then falls through to its guaranteed tail. Every place is a selector rather
+/// than a voxel, so the same file is legal for every seat on every spawn.
+///
+/// It is deliberately *not* `examples/playbooks/expand_east.jsonc`: that file
+/// names voxels in one seat's corner of one map, and the harness runs four
+/// seats. The worked example is exercised by the scenario file instead
+/// (`scenarios/skeleton/expand-east-segment.scenario.jsonc`).
+///
+/// Deleted when `DETERMINISM_TICKS` is raised to a real segment and the chain
+/// covers a real playbook (owner, at T20, with `DETERMINISM_SEGMENT_LENGTHS_MS`).
+#[must_use]
+pub fn determinism_playbook() -> gp::v1::Playbook {
+    use gp::v1::{
+        Declarative, Fallback, FallbackHold, Meta, OnDeath, Playbook, SchemaVersion, meta,
+        on_death, playbook,
+    };
+
+    Playbook {
+        schema_version: Some(SchemaVersion { major: 1, minor: 0 }),
+        meta: Some(Meta {
+            title: "Determinism harness".to_owned(),
+            author_kind: i32::from(meta::AuthorKind::Builtin),
+            ..Meta::default()
+        }),
+        kind: i32::from(playbook::Kind::Playbook),
+        declarative: Some(Declarative {
+            route: harness_route(),
+            handlers: harness_handlers(),
+            options: None,
+        }),
+        on_death: Some(OnDeath {
+            on_respawn: i32::from(on_death::OnRespawn::Continue),
+            max_deaths_before_fallback: 2,
+        }),
+        fallback: Some(Fallback {
+            posture: Some(gp::v1::fallback::Posture::Hold(FallbackHold {
+                at: Some(safest_place()),
+            })),
+        }),
+    }
+}
+
+/// "the safest own beacon", as a place. Every target in the harness playbook is
+/// a selector rather than a voxel, so the same file is legal for every seat on
+/// every spawn.
+fn safest_place() -> gp::v1::Location {
+    gp::v1::Location {
+        place: Some(gp::v1::location::Place::Safest(gp::v1::Safest {})),
+    }
+}
+
+/// "the safest own beacon", as a beacon reference.
+fn safest_beacon() -> gp::v1::BeaconRef {
+    gp::v1::BeaconRef {
+        r#ref: Some(gp::v1::beacon_ref::Ref::Safest(gp::v1::Safest {})),
+    }
+}
+
+/// `on_fail: SKIP` — the harness never wants a failed step to end its route,
+/// because the chain is about the interpreter running, not about it giving up.
+fn skip_on_fail() -> gp::v1::OnFail {
+    gp::v1::OnFail {
+        action: i32::from(gp::v1::on_fail::Action::Skip),
+        jump_to_label: String::new(),
+    }
+}
+
+/// The harness playbook's route: a walk to a selector, a visit with a committed
+/// row, a hold and a wait on a clock predicate.
+fn harness_route() -> Vec<gp::v1::Step> {
+    use gp::v1::{
+        Condition, HoldStep, IntCompare, InterfaceRow, InterfaceStep, MoveStep, SegmentElapsed,
+        Step, WaitUntilStep, condition, int_compare, interface_row, move_step, step,
+    };
+    vec![
+        Step {
+            label: "to_core".to_owned(),
+            timeout_ms: 60_000,
+            on_fail: Some(skip_on_fail()),
+            kind: Some(step::Kind::Move(MoveStep {
+                to: Some(safest_place()),
+                pace: i32::from(move_step::Pace::Direct),
+            })),
+            ..Step::default()
+        },
+        // The one step that adds a row to a table **inside a tick**, which is
+        // why it is in the harness playbook: `BeaconTable::reserve` is what
+        // keeps that row from being an allocation (G3′ §9.17), and
+        // `tests/allocations.rs` can only assert it over a deploy it actually
+        // performs. The site is the `safest` selector, like every other place
+        // here, so the same file is legal for every seat on every spawn — the
+        // commander has just walked to that beacon, so the site is inside its
+        // own sphere and within placement range.
+        Step {
+            label: "deploy".to_owned(),
+            timeout_ms: 30_000,
+            on_fail: Some(skip_on_fail()),
+            kind: Some(step::Kind::PlaceBeacon(gp::v1::PlaceBeaconStep {
+                at: Some(safest_place()),
+                tags: Vec::new(),
+                // A writ and no settings: choosing the mandate type is free at
+                // deploy time (spec section 5), so this costs the deploy and
+                // nothing more, and the new beacon carries Mine rather than no
+                // writ at all.
+                initial: Some(gp::v1::InitialSettings {
+                    priority: 0,
+                    mandate: Some(gp::v1::MandateSettings {
+                        mandate: Some(gp::v1::mandate_settings::Mandate::Mine(
+                            gp::v1::MineSettings::default(),
+                        )),
+                        ..gp::v1::MandateSettings::default()
+                    }),
+                }),
+            })),
+            ..Step::default()
+        },
+        Step {
+            label: "touch".to_owned(),
+            timeout_ms: 30_000,
+            on_fail: Some(skip_on_fail()),
+            kind: Some(step::Kind::Interface(InterfaceStep {
+                beacon: Some(safest_beacon()),
+                rows: vec![InterfaceRow {
+                    row: Some(interface_row::Row::SetPriority(i32::from(
+                        interface_row::QuartermasterPriority::Normal,
+                    ))),
+                }],
+            })),
+            ..Step::default()
+        },
+        Step {
+            label: "settle".to_owned(),
+            kind: Some(step::Kind::Hold(HoldStep { ms: 2_000 })),
+            ..Step::default()
+        },
+        Step {
+            label: "watch".to_owned(),
+            timeout_ms: 20_000,
+            on_fail: Some(skip_on_fail()),
+            kind: Some(step::Kind::WaitUntil(WaitUntilStep {
+                condition: Some(Condition {
+                    node: Some(condition::Node::SegmentElapsed(SegmentElapsed {
+                        ms: Some(IntCompare {
+                            op: i32::from(int_compare::Op::Ge),
+                            value: 12_000,
+                        }),
+                    })),
+                }),
+            })),
+            ..Step::default()
+        },
+    ]
+}
+
+/// The harness playbook's one handler: a condition that is always true, a
+/// cooldown and a fire limit, so the chain covers a rule body running and
+/// stopping.
+fn harness_handlers() -> Vec<gp::v1::Handler> {
+    use gp::v1::{
+        Condition, Handler, HoldStep, IntCompare, Step, Treasury, condition, handler, int_compare,
+        step,
+    };
+    vec![Handler {
+        id: "stocktake".to_owned(),
+        when: Some(Condition {
+            node: Some(condition::Node::Treasury(Treasury {
+                dollars: Some(IntCompare {
+                    op: i32::from(int_compare::Op::Ge),
+                    value: 0,
+                }),
+            })),
+        }),
+        body: vec![Step {
+            label: "pause".to_owned(),
+            kind: Some(step::Kind::Hold(HoldStep { ms: 1_000 })),
+            ..Step::default()
+        }],
+        resume: i32::from(handler::Resume::Continue),
+        cooldown_ms: 5_000,
+        max_fires: 2,
+        ..Handler::default()
+    }]
 }

@@ -88,7 +88,20 @@ use serde::{Deserialize, Serialize};
 /// The event bus is deliberately **not** in the file: it is derived output that
 /// nothing in a tick reads, so a resumed match starts with an empty feed
 /// ([`crate::events`]).
-pub const SNAPSHOT_VERSION: u32 = 4;
+///
+/// **Version 5 is T11's**: it adds the interpreter's per-seat state — the route
+/// cursor, the highest step reached, the stage of the step in progress with its
+/// start tick and deadline, the rule body running, the pinned selector target,
+/// the visit with its row and commit tick, the reflex's armed and active flags
+/// and its last-damage marker, the fallback's leg, the match-long commander
+/// death count, and every handler's fire count and cooldown.
+///
+/// The **playbooks themselves are not in the file**, for the reason the rules
+/// table is not: the sim is a pure function of `(map seed, playbooks, rules
+/// hash)` and all three are inputs. A host resumes a save by re-sealing the
+/// playbooks it saved beside it; `crate::interpreter::state::Interpreter::restore`
+/// carries the PLACEHOLDER for the plan fingerprint T17 owes the save's stamp.
+pub const SNAPSHOT_VERSION: u32 = 5;
 
 /// A flat, fixed-width projection of the world.
 ///
@@ -233,6 +246,54 @@ pub struct Snapshot {
     pub match_winner: u8,
     /// The tick the match ended on; zero while it runs.
     pub match_ended_at: u32,
+
+    /// Commander deaths this **match**, per seat (`gp.v1.CmdrDeaths`).
+    pub plan_deaths_match: Vec<u32>,
+    /// The route cursor, per seat, or [`crate::interpreter::state::NO_INDEX`]
+    /// once the fallback has taken over.
+    pub plan_cursor: Vec<u32>,
+    /// The highest route index entered, per seat — what `step_reached` reads.
+    pub plan_reached: Vec<u32>,
+    /// [`crate::interpreter::VisitState::id`], per seat.
+    pub plan_stage: Vec<u8>,
+    /// The tick the step in progress started, per seat.
+    pub plan_started: Vec<u32>,
+    /// The tick it times out at, per seat.
+    pub plan_deadline: Vec<u32>,
+    /// The handler whose body is running, per seat.
+    pub plan_rule: Vec<u32>,
+    /// How far into that body, per seat.
+    pub plan_rule_step: Vec<u32>,
+    /// Whether the step in progress has a pinned target, per seat.
+    pub plan_pinned: Vec<u8>,
+    /// The pinned beacon, per seat.
+    pub plan_pinned_beacon: Vec<u32>,
+    /// The pinned place, three whole voxels per seat.
+    pub plan_pinned_at: Vec<i32>,
+    /// The beacon a visit or deploy is at, per seat.
+    pub plan_visit_beacon: Vec<u32>,
+    /// The row committing, per seat.
+    pub plan_visit_row: Vec<u32>,
+    /// The tick that row, handshake or deploy commits at, per seat.
+    pub plan_visit_due: Vec<u32>,
+    /// Whether the reflex may fire, per seat.
+    pub plan_reflex_armed: Vec<u8>,
+    /// Whether the reflex is walking the commander to safety, per seat.
+    pub plan_reflex_active: Vec<u8>,
+    /// The tick the commander last took damage, per seat.
+    pub plan_last_damage: Vec<u32>,
+    /// The commander's hit points at the last decision, per seat.
+    pub plan_last_hp: Vec<i32>,
+    /// The patrol waypoint the fallback is walking to, per seat.
+    pub plan_fallback_leg: Vec<u32>,
+    /// How many handlers each seat's sealed plan has.
+    pub plan_rule_count: Vec<u32>,
+    /// Per-handler fire counts, packed in seat order behind
+    /// [`Snapshot::plan_rule_count`] — the shape the route nodes take, and for
+    /// the same reason.
+    pub plan_fires: Vec<u32>,
+    /// Per-handler cooldown ticks, packed the same way.
+    pub plan_ready: Vec<u32>,
 }
 
 /// An empty snapshot in an **opening Lull**, not an empty one in no phase at
@@ -303,6 +364,28 @@ impl Default for Snapshot {
             match_end_reason: 0,
             match_winner: SeatId::NEUTRAL.raw(),
             match_ended_at: 0,
+            plan_deaths_match: Vec::new(),
+            plan_cursor: Vec::new(),
+            plan_reached: Vec::new(),
+            plan_stage: Vec::new(),
+            plan_started: Vec::new(),
+            plan_deadline: Vec::new(),
+            plan_rule: Vec::new(),
+            plan_rule_step: Vec::new(),
+            plan_pinned: Vec::new(),
+            plan_pinned_beacon: Vec::new(),
+            plan_pinned_at: Vec::new(),
+            plan_visit_beacon: Vec::new(),
+            plan_visit_row: Vec::new(),
+            plan_visit_due: Vec::new(),
+            plan_reflex_armed: Vec::new(),
+            plan_reflex_active: Vec::new(),
+            plan_last_damage: Vec::new(),
+            plan_last_hp: Vec::new(),
+            plan_fallback_leg: Vec::new(),
+            plan_rule_count: Vec::new(),
+            plan_fires: Vec::new(),
+            plan_ready: Vec::new(),
         }
     }
 }
@@ -424,6 +507,7 @@ impl Snapshot {
         let voxels = world.voxels();
 
         let state = world.match_state().to_parts();
+        let plan = world.interpreter().to_parts();
         let modified_chunk = voxels.modified_indices();
         let mut modified_chunk_bytes: Vec<u8> =
             Vec::with_capacity(modified_chunk.len().saturating_mul(CHUNK_VOXELS));
@@ -501,6 +585,29 @@ impl Snapshot {
             match_end_reason: state.end_reason,
             match_winner: state.winner,
             match_ended_at: state.ended_at,
+
+            plan_deaths_match: plan.deaths_match,
+            plan_cursor: plan.cursor,
+            plan_reached: plan.reached,
+            plan_stage: plan.stage,
+            plan_started: plan.started,
+            plan_deadline: plan.deadline,
+            plan_rule: plan.rule,
+            plan_rule_step: plan.rule_step,
+            plan_pinned: plan.pinned,
+            plan_pinned_beacon: plan.pinned_beacon,
+            plan_pinned_at: plan.pinned_at,
+            plan_visit_beacon: plan.visit_beacon,
+            plan_visit_row: plan.visit_row,
+            plan_visit_due: plan.visit_due,
+            plan_reflex_armed: plan.reflex_armed,
+            plan_reflex_active: plan.reflex_active,
+            plan_last_damage: plan.last_damage,
+            plan_last_hp: plan.last_hp,
+            plan_fallback_leg: plan.fallback_leg,
+            plan_rule_count: plan.rule_count,
+            plan_fires: plan.fires,
+            plan_ready: plan.ready,
         }
     }
 
@@ -566,22 +673,7 @@ impl Snapshot {
             return Err(SnapshotError::Ragged("seat"));
         }
 
-        let match_state = MatchState::from_parts(MatchParts {
-            phase: self.match_phase,
-            round: self.match_round,
-            round_limit: self.match_round_limit,
-            segment_lengths_ms: self.match_segment_lengths_ms.clone(),
-            segment_started: self.match_segment_started,
-            segment_length_ms: self.match_segment_length_ms,
-            coming_segment_ms: self.coming_segment_ms,
-            end_reason: self.match_end_reason,
-            winner: self.match_winner,
-            ended_at: self.match_ended_at,
-        })
-        .ok_or(SnapshotError::MatchState {
-            phase: self.match_phase,
-            end_reason: self.match_end_reason,
-        })?;
+        let match_state = self.restore_match()?;
 
         let mut units = UnitTable::with_capacity(u32::try_from(self.unit_id.len()).unwrap_or(0));
         if !units.restore(UnitColumns {
@@ -642,6 +734,10 @@ impl Snapshot {
 
         let unit_count = units.len();
         let router = self.restore_router()?;
+        let plan = self.restore_plan();
+        if !plan.is_consistent(self.seat_id.len()) {
+            return Err(SnapshotError::Ragged("plan"));
+        }
         if !world.restore_tables(RestoredTables {
             match_seed: self.match_seed,
             tick: Tick::new(self.tick),
@@ -654,10 +750,71 @@ impl Snapshot {
             chunks,
             router,
             match_state,
+            plan,
         }) {
             return Err(SnapshotError::Unindexable { units: unit_count });
         }
         Ok(())
+    }
+
+    /// The match state, refused at the door when its phase or end reason is
+    /// not one this build defines.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SnapshotError::MatchState`]; see
+    /// [`crate::runner::MatchState::from_parts`] for why structure is refused
+    /// while values are normalised.
+    fn restore_match(&self) -> Result<MatchState, SnapshotError> {
+        MatchState::from_parts(MatchParts {
+            phase: self.match_phase,
+            round: self.match_round,
+            round_limit: self.match_round_limit,
+            segment_lengths_ms: self.match_segment_lengths_ms.clone(),
+            segment_started: self.match_segment_started,
+            segment_length_ms: self.match_segment_length_ms,
+            coming_segment_ms: self.coming_segment_ms,
+            end_reason: self.match_end_reason,
+            winner: self.match_winner,
+            ended_at: self.match_ended_at,
+        })
+        .ok_or(SnapshotError::MatchState {
+            phase: self.match_phase,
+            end_reason: self.match_end_reason,
+        })
+    }
+
+    /// The interpreter's columns, as the state module's own shape.
+    ///
+    /// Checked by `PlanParts::is_consistent` at the call site above, before
+    /// anything is written, so a ragged plan column is refused with
+    /// [`SnapshotError::Ragged`] like every other ragged table rather than
+    /// through the restore's generic failure.
+    fn restore_plan(&self) -> crate::interpreter::PlanParts {
+        crate::interpreter::PlanParts {
+            deaths_match: self.plan_deaths_match.clone(),
+            cursor: self.plan_cursor.clone(),
+            reached: self.plan_reached.clone(),
+            stage: self.plan_stage.clone(),
+            started: self.plan_started.clone(),
+            deadline: self.plan_deadline.clone(),
+            rule: self.plan_rule.clone(),
+            rule_step: self.plan_rule_step.clone(),
+            pinned: self.plan_pinned.clone(),
+            pinned_beacon: self.plan_pinned_beacon.clone(),
+            pinned_at: self.plan_pinned_at.clone(),
+            visit_beacon: self.plan_visit_beacon.clone(),
+            visit_row: self.plan_visit_row.clone(),
+            visit_due: self.plan_visit_due.clone(),
+            reflex_armed: self.plan_reflex_armed.clone(),
+            reflex_active: self.plan_reflex_active.clone(),
+            last_damage: self.plan_last_damage.clone(),
+            last_hp: self.plan_last_hp.clone(),
+            fallback_leg: self.plan_fallback_leg.clone(),
+            rule_count: self.plan_rule_count.clone(),
+            fires: self.plan_fires.clone(),
+            ready: self.plan_ready.clone(),
+        }
     }
 
     /// The router's columns, checked against each other before anything is

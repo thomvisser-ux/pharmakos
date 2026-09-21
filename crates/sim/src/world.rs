@@ -42,6 +42,8 @@
 use crate::chunks::ChunkDigests;
 use crate::encoding::Enc;
 use crate::events::{EVENT_BUS_CAPACITY, Emission, Event, EventBus, EventKind};
+use crate::interpreter::state::PlanParts;
+use crate::interpreter::{Interpreter, Plan};
 use crate::knowledge::{AssetId, Position};
 use crate::mapgen::{self, MapError};
 use crate::math::fixed::{Angle, Fx, Sq};
@@ -54,7 +56,7 @@ use crate::pathing::search::Scratch;
 use crate::pathing::surface::{StepCosts, Surface};
 use crate::rules::RulesTable;
 use crate::runner::{MatchEndReason, MatchPhase, MatchSettings, MatchState};
-use crate::seams::WorkCounter;
+use crate::seams::{BeaconMandate, MandateKind, ProgramId, WorkCounter};
 use crate::tables::{
     BeaconId, BeaconTable, Csr, MovementColumns, NO_RESPAWN, NOT_ELIMINATED, SeatId, SeatTable,
     StructureId, StructureTable, UnitId, UnitKind, UnitTable, WreckTable,
@@ -139,6 +141,36 @@ const HARNESS_EDIT_QUEUE: usize = 64;
 /// thing filling it (owner, at S2).
 const HARNESS_DAMAGE_QUEUE: usize = 256;
 
+/// PLACEHOLDER (harness): how many beacons a match may place on top of the
+/// cores the generator pre-places.
+///
+/// The beacon table fixes its count at construction like every other table, so
+/// room for the beacons a Push deploys has to be reserved there — a `push` that
+/// grew the columns would be an allocation inside a tick (G3′ §9.17), and
+/// `tests/allocations.rs` fails on one. Forty is item 63's world total of 40
+/// beacons, taken as the room *per match* rather than per seat, and a deploy
+/// that finds no room fails the step with `no_beacon_room` rather than growing.
+/// The owner settles the real ceiling with the economy that pays for them
+/// (owner, at T14).
+const BEACON_TABLE_ROOM: u32 = 40;
+
+/// How many beacon rows a match of `seats` seats may ever hold.
+///
+/// Derived from the **seat count** rather than from the table's current length,
+/// and by one expression called from both places that set it — construction and
+/// restore — because the cap decides what a tick does: it is what turns a
+/// `place_beacon` into `no_beacon_room`. A cap recomputed on the way in from
+/// "however many beacons there are now" would grow every time a match was saved
+/// and resumed, so a restored run could deploy a beacon the unbroken run
+/// refused, and the two hash chains would part with nothing red to show for it
+/// (AGENTS.md §4.8's test is whether a value decides what a tick does, not
+/// whether it looks like an allocation size). The generator pre-places one core
+/// per seat, so this is the old expression's value on a fresh world and a
+/// reproducible one on a resumed one.
+const fn beacon_limit_of(seats: u32) -> u32 {
+    seats.saturating_add(BEACON_TABLE_ROOM)
+}
+
 /// PLACEHOLDER (harness): the largest radius a broadphase query asks for, in
 /// **voxels**. S2's combat phase replaces it with a weapon's range out of the
 /// rules table (owner, at S2).
@@ -206,6 +238,17 @@ pub struct World {
     /// it is hashed, snapshotted and in the goldens.
     match_state: MatchState,
 
+    // --- hashed state, continued: the interpreter (T11) ---
+    /// Where each seat's sealed playbook has got to — and, beside it, the
+    /// sealed plans themselves.
+    ///
+    /// The **state** is hashed, snapshotted and in the goldens; the **plans**
+    /// are not, because a playbook is an input exactly as the rules table is
+    /// (see [`crate::interpreter::state`]). [`Interpreter::encode`] walks the
+    /// states and never touches the plans, which is what keeps that true by
+    /// construction.
+    interpreter: Interpreter,
+
     // --- the voxels themselves: hashed only through `chunks` (item 66) ---
     voxels: VoxelStore,
 
@@ -253,6 +296,14 @@ pub struct World {
     /// restored hit points, which loses no edge, because a snapshot is taken
     /// after the match phase has already acted on this tick's deaths.
     beacon_alive: Vec<bool>,
+    /// How many beacon rows the table may ever hold: [`beacon_limit_of`] of the
+    /// seat count.
+    ///
+    /// Derived and not hashed, but **not** merely the size of an allocation: it
+    /// is what turns a `place_beacon` into `no_beacon_room`, so it is derived
+    /// from a quantity a restore reproduces exactly rather than from the table's
+    /// own length — see [`beacon_limit_of`].
+    beacon_limit: u32,
 }
 
 /// What a damage order hits.
@@ -293,6 +344,7 @@ pub(crate) struct RestoredTables {
     pub(crate) chunks: ChunkDigests,
     pub(crate) router: crate::pathing::router::RestoredRouter,
     pub(crate) match_state: MatchState,
+    pub(crate) plan: PlanParts,
 }
 
 impl World {
@@ -376,12 +428,15 @@ impl World {
             unit = unit.saturating_add(1);
         }
 
-        let beacons = generated.beacons;
-        let beacon_alive = beacons
-            .hit_points()
-            .iter()
-            .map(|hp| hp.is_alive())
-            .collect();
+        // Room for the beacons a Push deploys is reserved here, at
+        // construction, because a `push` that grew the columns would allocate
+        // inside a tick — the same rule every other table in this world keeps.
+        let mut beacons = generated.beacons;
+        let beacon_limit = beacon_limit_of(config.seats);
+        beacons.reserve(beacon_limit.saturating_sub(beacons.len()));
+        let mut beacon_alive: Vec<bool> =
+            Vec::with_capacity(usize::try_from(beacon_limit).unwrap_or(0));
+        beacon_alive.extend(beacons.hit_points().iter().map(|hp| hp.is_alive()));
         let commanders = commander_index(&units, config.seats);
 
         Ok(World {
@@ -395,6 +450,7 @@ impl World {
             chunks,
             router,
             match_state: MatchState::new(&config.match_settings, &config.rules),
+            interpreter: Interpreter::with_seats(config.seats),
             voxels,
             rules: config.rules.clone(),
             broadphase,
@@ -416,6 +472,7 @@ impl World {
             events: EventBus::with_capacity(EVENT_BUS_CAPACITY),
             commanders,
             beacon_alive,
+            beacon_limit,
         })
     }
 
@@ -549,6 +606,117 @@ impl World {
         &self.match_state
     }
 
+    /// Where each seat's sealed playbook has got to (T11).
+    #[must_use]
+    pub const fn interpreter(&self) -> &Interpreter {
+        &self.interpreter
+    }
+
+    /// Seal a compiled playbook for a seat, replacing whatever it had sealed.
+    ///
+    /// What a host calls at the end of a Lull, once the verifier has accepted
+    /// the submission: the latest verified submission replaces the previous
+    /// one, any number of times, until the timer ends (item 5). Sealing resets
+    /// that seat's execution state — the route starts from the top, every
+    /// handler's cooldown and fire count go back to zero — and keeps the
+    /// match-long commander death count, because sealing a playbook does not
+    /// un-kill a commander.
+    ///
+    /// `false` when `seat` is not a seat of this match.
+    pub fn seal_playbook(&mut self, seat: SeatId, plan: Plan) -> bool {
+        let index = usize::from(seat.raw());
+        if index >= self.interpreter.len() {
+            return false;
+        }
+        let steps = i64::try_from(plan.route().len()).unwrap_or(i64::MAX);
+        let hp = self.commander_hp_of(seat);
+        self.interpreter.seal(index, plan, hp);
+        let tick = self.tick;
+        self.emit(
+            tick,
+            Emission::of(EventKind::PlanSealed).seat(seat).value(steps),
+        );
+        true
+    }
+
+    /// The hit points of a seat's commander, or zero when it has none.
+    fn commander_hp_of(&self, seat: SeatId) -> i32 {
+        let commander = self.commander_of(seat);
+        if !commander.is_some() {
+            return 0;
+        }
+        usize::try_from(commander.raw())
+            .ok()
+            .and_then(|index| self.units.hit_points().get(index).copied())
+            .map_or(0, Hp::raw)
+    }
+
+    /// Send a unit somewhere: write its destination and ask for a route.
+    ///
+    /// Crate-internal, and the interpreter is its only caller. The walking
+    /// itself is T7's — one legal step at a time, one-voxel climbs, blocked by
+    /// walls, craters and trenches — and none of it changes because a playbook
+    /// rather than the harness chose the destination.
+    pub(crate) fn set_unit_destination(&mut self, unit: u32, to: [Fx; 3]) {
+        let index = usize::try_from(unit).unwrap_or(usize::MAX);
+        if let Some(slot) = self.units.destinations_mut().get_mut(index) {
+            *slot = to;
+        }
+        self.router.clear(unit);
+        self.router.request(unit);
+    }
+
+    /// Deploy a beacon for `seat` at `at`, carrying `mandate`.
+    ///
+    /// `None` when the table has no room left ([`BEACON_TABLE_ROOM`]), which
+    /// the caller reports as a step failure rather than growing a column inside
+    /// a tick.
+    ///
+    /// PLACEHOLDER: the `$` a beacon costs (`structures.beacon.cost_dollars`)
+    /// is **not** charged here, and an aborted deploy therefore refunds
+    /// nothing. Spending is "paid means yours" (item 23) and belongs to the
+    /// Quartermaster, which is T14's; charging it here without the treasury
+    /// rules around it would be half an economy (owner, at T14).
+    pub(crate) fn place_beacon(
+        &mut self,
+        seat: SeatId,
+        at: [Fx; 3],
+        mandate: MandateKind,
+    ) -> Option<BeaconId> {
+        if self.beacons.len() >= self.beacon_limit {
+            return None;
+        }
+        let id = BeaconId::new(self.beacons.len());
+        let hp = self
+            .rules
+            .message()
+            .structures
+            .as_ref()
+            .and_then(|block| block.beacon)
+            .and_then(|row| i32::try_from(row.hp).ok())
+            .map_or(Hp::ZERO, Hp::new);
+        self.beacons.push(
+            id,
+            seat,
+            at,
+            BeaconMandate {
+                kind: mandate,
+                program_id: ProgramId::NONE,
+            },
+            hp,
+            false,
+        );
+        self.beacon_alive.push(hp.is_alive());
+        Some(id)
+    }
+
+    /// Write a beacon's writ. The interpreter's committed `set_mandate` row.
+    pub(crate) fn set_beacon_mandate(&mut self, row: usize, mandate: MandateKind) {
+        if let Some(slot) = self.beacons.mandates_mut().get_mut(row) {
+            *slot = mandate.id();
+        }
+    }
+
     /// Everything the tick reported since the last drain, in `(tick, seq)`
     /// order. Derived output, never hashed — see [`crate::events`].
     #[must_use]
@@ -680,13 +848,28 @@ impl World {
     /// only caller, so the phase machine cannot be walked around.
     pub(crate) fn open_push(&mut self, tick: Tick) {
         self.match_state.open_push(tick);
-        let columns = self.seats.match_columns();
-        for slot in columns.commander_deaths.iter_mut() {
-            *slot = 0;
+        {
+            let columns = self.seats.match_columns();
+            for slot in columns.commander_deaths.iter_mut() {
+                *slot = 0;
+            }
+            for slot in columns.respawn_due.iter_mut() {
+                *slot = NO_RESPAWN;
+            }
         }
-        for slot in columns.respawn_due.iter_mut() {
-            *slot = NO_RESPAWN;
-        }
+        // The playbook stops at segment end and nothing carries over except the
+        // world itself (spec section 10), so every per-segment field of the
+        // interpreter is reset here — the cursor, the visit, every handler's
+        // cooldown and fire count, the reflex's marker. The commander's hit
+        // points go in as the fresh damage marker so that a Push does not open
+        // by reading last segment's damage as new.
+        let hp: Vec<i32> = self
+            .seats
+            .seats()
+            .iter()
+            .map(|seat| self.commander_hp_of(SeatId::new(*seat)))
+            .collect();
+        self.interpreter.open_push(&hp);
     }
 
     /// Close the recap at `tick`. `false` when that ended the match.
@@ -855,13 +1038,66 @@ impl World {
     )]
     const fn phase_quartermaster(&mut self) {}
 
-    /// The interpreter's decision tick, one per 250 ms of game time. **Empty:
-    /// T11 fills it.**
-    #[allow(
-        clippy::unused_self,
-        reason = "an empty phase stub keeps the tick's shape visible; T11 fills the body"
-    )]
-    const fn phase_decision(&mut self) {}
+    /// The interpreter's decision tick (T11).
+    ///
+    /// One decision per seat per `match.decision_tick_ms` of game time — 250 ms,
+    /// which is exactly five ticks at 20 Hz, so no decision lands between ticks
+    /// (spec section 10, "Execution"). Seats are walked in **seat order**, and
+    /// each one's decision is independent of the others': a decision reads the
+    /// world and writes only its own seat's commander, its own beacons and its
+    /// own execution state, so the order is a total order over the writes
+    /// rather than a race (AGENTS.md §4.6).
+    ///
+    /// The interpreter is taken out and put back, for the reason
+    /// [`World::phase_voxels`] takes its edit queue out: a decision needs the
+    /// whole world mutably *and* its own state mutably, and moving a `Vec` out
+    /// and back allocates nothing.
+    fn phase_decision(&mut self) {
+        if !self.is_decision_tick() {
+            return;
+        }
+        let mut interpreter = core::mem::take(&mut self.interpreter);
+        let seats = interpreter.len();
+        let mut seat: usize = 0;
+        while seat < seats {
+            if let Some((plan, state)) = interpreter.parts_mut(seat) {
+                crate::interpreter::exec::decide(self, seat, plan, state);
+            }
+            seat = seat.saturating_add(1);
+        }
+        self.interpreter = interpreter;
+    }
+
+    /// Whether this tick takes a decision.
+    ///
+    /// Decisions run inside a Push and nowhere else — a Lull and a recap
+    /// consume no tick at all — and the first one falls on the Push's **first
+    /// played tick**, so a playbook starts at the start of the segment rather
+    /// than 250 ms into it.
+    fn is_decision_tick(&self) -> bool {
+        if self.match_state.phase() != MatchPhase::Push {
+            return false;
+        }
+        let elapsed = self.tick.since(self.match_state.segment_started());
+        if elapsed == 0 {
+            return false;
+        }
+        elapsed.saturating_sub(1) % self.decision_ticks() == 0
+    }
+
+    /// `match.decision_tick_ms` in whole ticks, at least one.
+    ///
+    /// The one place a decision cadence becomes a tick count. A table that sets
+    /// it below one tick gets one tick, because a decision cannot land between
+    /// ticks.
+    fn decision_ticks(&self) -> u32 {
+        self.rules
+            .message()
+            .r#match
+            .as_ref()
+            .map_or(1, |block| Ms::new(block.decision_tick_ms).to_ticks_ceil())
+            .max(1)
+    }
 
     /// Repair the abstract graph, re-arm the units it may have freed, and serve
     /// the repath cap round-robin by `(seat, beacon, unit)`.
@@ -902,12 +1138,19 @@ impl World {
         self.draw_new_destinations();
     }
 
-    /// Give every unit that reached the end of a route somewhere new to be.
+    /// Give every unit that reached the end of a route somewhere new to be —
+    /// **except a commander**.
     ///
     /// PLACEHOLDER (harness): the destination is drawn from [`Stream::Spawn`] at
     /// `(tick, seat, unit id)`, which is the wandering T2 introduced so that the
-    /// hash chain covers a moving table. T11's playbook interpreter is what
-    /// replaces it with a destination somebody chose (owner, at T11).
+    /// hash chain covers a moving table. T14 deletes it with
+    /// `WorldConfig::units_per_seat`, the walkers it exists to move.
+    ///
+    /// **A commander is not drawn for** (T11): where the commander goes is the
+    /// playbook's to say, and a seat that has sealed none leaves its commander
+    /// standing where it is rather than wandering. That is the half of this
+    /// PLACEHOLDER the interpreter discharged, and it is one of the two reasons
+    /// the determinism chain moved in T11's pull request.
     fn draw_new_destinations(&mut self) {
         if self.router.arrived().is_empty() {
             return;
@@ -928,6 +1171,9 @@ impl World {
             };
             at = at.saturating_add(1);
             let index = usize::try_from(unit).unwrap_or(usize::MAX);
+            if self.units.kinds().get(index).copied() == Some(UnitKind::Commander.id()) {
+                continue;
+            }
             let seat = self.units.seats().get(index).copied().unwrap_or(0);
             let id = self.units.ids().get(index).copied().unwrap_or(0);
             let mut rng = StreamRng::new(match_seed, Stream::Spawn, tick, seat, id);
@@ -1319,6 +1565,11 @@ impl World {
                         *slot = due;
                     }
                 }
+                // The match-long death count `gp.v1.CmdrDeaths` asks about is
+                // booked here, in the one place a death is booked, so it
+                // cannot drift from the per-Push counter beside it (item 21
+                // resets that one at every Push; this one is for the match).
+                self.interpreter.book_death(index);
                 let at = usize::try_from(commander.raw())
                     .ok()
                     .and_then(|unit| self.units.positions().get(unit).copied());
@@ -1538,6 +1789,14 @@ impl World {
     ///    length list, the segment's start tick and length, the coming
     ///    segment's length and the outcome ([`crate::runner::MatchState`]).
     ///    Every one of those decides what a tick does, so every one is here.
+    /// 10. the interpreter — per seat: the route cursor, the highest step
+    ///     reached, the stage of the step in progress with its start tick and
+    ///     deadline, the rule body running, the pinned selector target, the
+    ///     visit with its row and its commit tick, the reflex's armed and
+    ///     active flags with the last-damage marker, the fallback's leg, and
+    ///     every handler's fire count and cooldown
+    ///     ([`crate::interpreter::state`]). The **plans** are not here: a
+    ///     playbook is an input, exactly like the rules table.
     ///
     /// The seat block gained three columns with the match state: the tick a
     /// seat was eliminated at, its commander's death count for this Push, and
@@ -1613,6 +1872,7 @@ impl World {
         self.chunks.encode(enc);
         self.router.encode(enc);
         self.match_state.encode(enc);
+        self.interpreter.encode(enc);
     }
 
     /// The seat block of the canonical encoding: treasury and power, then the
@@ -1734,6 +1994,13 @@ impl World {
         if !self.router.restore(restored.router) {
             return false;
         }
+        // The interpreter's *state* is restored; its **plans** are not in the
+        // file, because a playbook is an input exactly as the rules table is
+        // (see `crate::interpreter::state::Interpreter::restore`).
+        let seat_width = usize::try_from(restored.seats.len()).unwrap_or(usize::MAX);
+        if !self.interpreter.restore(&restored.plan, seat_width) {
+            return false;
+        }
 
         self.match_seed = restored.match_seed;
         self.tick = restored.tick;
@@ -1741,12 +2008,21 @@ impl World {
         self.units = restored.units;
         self.commanders = commander_index(&self.units, self.seats.len());
         self.beacons = restored.beacons;
-        self.beacon_alive = self
-            .beacons
-            .hit_points()
-            .iter()
-            .map(|hp| hp.is_alive())
-            .collect();
+        // Room for the beacons the resumed match may still deploy, reserved on
+        // the way in for the reason `World::new` reserves it: a `push` that
+        // grew a column would allocate inside a tick. The **ceiling** is
+        // derived from the seat count by exactly the expression construction
+        // uses, and not from the table's current length: a limit of "however
+        // many beacons there are now, plus forty" would hand a resumed match a
+        // fresh forty rows, so a saved-and-restored run could deploy a beacon
+        // the unbroken run refused and the two chains would part (see
+        // [`beacon_limit_of`]).
+        self.beacon_limit = beacon_limit_of(self.seats.len());
+        self.beacons
+            .reserve(self.beacon_limit.saturating_sub(self.beacons.len()));
+        self.beacon_alive = Vec::with_capacity(usize::try_from(self.beacon_limit).unwrap_or(0));
+        self.beacon_alive
+            .extend(self.beacons.hit_points().iter().map(|hp| hp.is_alive()));
         self.match_state.restore(restored.match_state);
         self.structures = restored.structures;
         self.wrecks = restored.wrecks;
