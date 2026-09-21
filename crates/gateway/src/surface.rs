@@ -246,6 +246,16 @@ pub struct Surface {
     /// second would put the gateway's tick a whole Lull ahead of the runner's
     /// before anybody had planned anything.
     lull_remaining_ms: Option<Ms>,
+    /// How much of **this** Lull the client has reported spending, in ticks,
+    /// as a high-water mark. A client that reports a *larger* remaining than
+    /// before has not un-spent the time it already spent, so this never goes
+    /// down within a Lull. Reset to zero when the Lull ends.
+    lull_elapsed: u32,
+    /// The ticks of host time that no sim tick covers: the sum of every Lull
+    /// this match has finished. Added to the runner's tick for as long as the
+    /// match lasts, which is what makes [`MatchTime::tick`] **monotonic**
+    /// across a Lull -> Push boundary. See [`Surface::sync_time`].
+    lull_offset: u32,
 }
 
 impl Surface {
@@ -287,6 +297,8 @@ impl Surface {
             host: None,
             feed_anchor: Tick::ZERO,
             lull_remaining_ms: None,
+            lull_elapsed: 0,
+            lull_offset: 0,
         })
     }
 
@@ -481,6 +493,9 @@ impl Surface {
         self.file_safe_playbooks(round);
         self.begin_segment(round, 0);
         let started = self.host_mut()?.begin_push();
+        if started {
+            self.close_lull();
+        }
         self.sync_time();
         self.absorb_events()?;
         Ok(started)
@@ -512,6 +527,13 @@ impl Surface {
     /// As [`Surface::host`].
     pub fn end_recap(&mut self) -> Result<bool, Error> {
         let ended = self.host_mut()?.end_recap();
+        if ended {
+            // The recap's own reported remaining is the recap's; the Lull that
+            // opens next counts from whatever its client says, not from what
+            // the recap had left. (`lull_elapsed` is already zero here: only a
+            // Lull raises it, and `begin_push` folded the last one away.)
+            self.close_lull();
+        }
         self.sync_time();
         self.absorb_events()?;
         Ok(ended)
@@ -574,23 +596,35 @@ impl Surface {
     /// would stamp every call of the Lull with the same tick; a token's expiry
     /// would not move.
     ///
-    /// So the tick here is the runner's **plus however much of this Lull has
-    /// run**, derived from two numbers the gateway is given rather than from a
-    /// clock it read: `rules.match.lull_ms`, which is the Lull's length, and
-    /// the client's own answer to how much of it is left
+    /// So the tick here is the runner's **plus every tick of host time no sim
+    /// tick covered**, derived from two numbers the gateway is given rather
+    /// than from a clock it read: `rules.match.lull_ms`, which is the Lull's
+    /// length, and the client's own answer to how much of it is left
     /// ([`Surface::set_phase_remaining_ms`]). That is decisions-log item 99's
     /// arrangement exactly -- "the Lull's timer stays on the client side of the
     /// wall" and what reaches the gateway is the host's answer, in ticks of
     /// host time it is given.
     ///
+    /// # It is monotonic, and that is the whole of the arithmetic
+    ///
+    /// A Lull's elapsed ticks are **carried**, not recomputed: while a Lull
+    /// runs they accumulate in `lull_elapsed` as a high-water mark, and when
+    /// the Lull ends [`Surface::begin_push`] folds them into `lull_offset`,
+    /// which never comes back down. Without that fold the reported tick would
+    /// fall by a whole Lull -- 3 600 ticks at a three-minute one -- the instant
+    /// the Push began, and [`RateLimiter::admit`] says in as many words that it
+    /// treats a backwards tick as the host going wrong and refuses to refill a
+    /// budget from it. A seat would get one tick's worth of calls for a whole
+    /// Push. So: `runner.tick() + lull_offset + lull_elapsed`, in every phase,
+    /// and the sum only ever rises.
+    ///
     /// Two consequences, both deliberate. [`MatchTime::tick`] is **not** the
-    /// sim's tick during a Lull, so anything that has to be in sim-tick space
-    /// reads `host.runner().tick()` instead -- [`Surface::begin_segment`] is
-    /// the one place that does. And a client that reports a *larger* remaining
-    /// than before walks the tick backwards; the limiter and the audit log both
-    /// survive that (a window restarts, a sequence number does not), and a
-    /// client that lies to itself about its own timer is not a threat model the
-    /// closed error set has a code for.
+    /// sim's tick, so anything that has to be in sim-tick space reads
+    /// `host.runner().tick()` instead -- [`Surface::begin_segment`] is the one
+    /// place that does. And the derivation applies to the **Lull** and to no
+    /// other phase: `rules.match.lull_ms` is a Lull's length and means nothing
+    /// measured against a recap, which has no declared length at all and simply
+    /// holds the tick still for as long as it lasts.
     fn sync_time(&mut self) {
         let Some(host) = self.host.as_ref() else {
             return;
@@ -604,6 +638,7 @@ impl Surface {
             MatchPhase::Ended => Phase::Ended,
         };
         let in_push = runner.phase() == MatchPhase::Push;
+        let in_lull = runner.phase() == MatchPhase::Lull;
         let reported = self.lull_remaining_ms;
         let remaining = if in_push {
             let elapsed = runner.tick().since(state.segment_started());
@@ -617,23 +652,45 @@ impl Surface {
             .r#match
             .as_ref()
             .map_or(0, |settings| settings.lull_ms);
-        let elapsed_in_lull = match (in_push, reported) {
-            (false, Some(left)) => {
+        let elapsed_in_lull = match (in_lull, reported) {
+            (true, Some(left)) => {
                 Ms::new(lull_ms.saturating_sub(left.raw()).max(0)).to_ticks_floor()
             }
-            // In a Push the sim's own tick is the clock, and before a client
-            // has said anything there is nothing to derive from.
+            // In a Push the sim's own tick is the clock; in a recap there is no
+            // declared length to measure against; and before a client has said
+            // anything there is nothing to derive from.
             _ => 0,
         };
+        let sim_tick = runner.tick().raw();
+        let carried = self.lull_offset;
+        self.lull_elapsed = self.lull_elapsed.max(elapsed_in_lull);
         self.time = MatchTime {
-            // The sim's tick, plus however much of this Lull has run. See the
-            // method's own doc for why that is not a clock read.
-            tick: Tick::new(runner.tick().raw().saturating_add(elapsed_in_lull)),
+            // The sim's tick, plus every tick of host time no sim tick covered.
+            // See the method's own doc for why that is not a clock read, and
+            // why it is a running total rather than this Lull's own figure.
+            tick: Tick::new(
+                sim_tick
+                    .saturating_add(carried)
+                    .saturating_add(self.lull_elapsed),
+            ),
             phase,
             phase_remaining_ms: remaining,
             segment_length_ms: runner.frozen().coming_segment_ms(),
             round: runner.round(),
         };
+    }
+
+    /// The Lull is over: carry what it spent, and forget its timer.
+    ///
+    /// Called where a phase that consumes no sim tick ends. Folding
+    /// `lull_elapsed` into `lull_offset` is what keeps [`MatchTime::tick`]
+    /// monotonic (see [`Surface::sync_time`]); clearing `lull_remaining_ms` is
+    /// what stops the next phase reporting the last one's leftover as its own
+    /// `phase_remaining_ms`.
+    fn close_lull(&mut self) {
+        self.lull_offset = self.lull_offset.saturating_add(self.lull_elapsed);
+        self.lull_elapsed = 0;
+        self.lull_remaining_ms = None;
     }
 
     /// Drain the sim's event bus onto the segment feed.
@@ -1186,7 +1243,8 @@ impl Surface {
             }
             if timeout > i64::from(MAX_WAIT_MS) {
                 return Err(Error::invalid(format!(
-                    "`timeout_ms` is at most {MAX_WAIT_MS} game milliseconds and this is                      {timeout}"
+                    "`timeout_ms` is at most {MAX_WAIT_MS} game milliseconds and this \
+                     is {timeout}"
                 )));
             }
         }
@@ -1225,7 +1283,9 @@ impl Surface {
     /// Who a subject is, to the fog filter.
     #[allow(
         clippy::unused_self,
-        reason = "a method, not a free function: who a subject is to the fog                   filter is the surface's answer, and the day a match carries a                   spectator policy of its own this reads it"
+        reason = "a method, not a free function: who a subject is to the fog filter is the \
+                  surface's answer, and the day a match carries a spectator policy of its own \
+                  this reads it"
     )]
     fn viewer_of(&self, subject: Subject, held: scopes::ScopeSet) -> Viewer {
         match subject {
