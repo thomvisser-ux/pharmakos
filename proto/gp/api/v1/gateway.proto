@@ -595,14 +595,31 @@ message GetMapSummaryResponse {
   // Voxels on each axis.
   gp.v1.Voxel size = 1;
 
-  // The seed the map was generated from. Part of the match, not a secret.
-  uint32 map_seed = 2;
+  // DEPRECATED, and never served: the match seed is 64 bits wide
+  // (pharmakos_sim::world::WorldConfig::match_seed, and "the map seed IS the
+  // match seed"), so a uint32 cannot carry it and the low half of a seed names
+  // no map at all. T13 found this the first time a method had to answer the
+  // question. `match_seed` below replaces it; this number stays occupied
+  // rather than being reused, which is the rule for every retired number in
+  // this schema.
+  uint32 map_seed = 2 [deprecated = true];
 
   string prose = 3;
 
+  // The seed the map was generated from, as a quoted hexadecimal string:
+  // "0x00000000ca5caded". Part of the match, not a secret.
+  //
+  // A STRING, for the reason scenarios/README.md gives about the same number:
+  // a JSON number is a double in half the world's parsers and a 64-bit seed
+  // loses its low bits in one. The proto3 JSON mapping would have quoted a
+  // uint64 anyway; spelling it as a string makes the base explicit and matches
+  // the scenario file a reader will compare it against.
+  string match_seed = 4;
+
   // PLACEHOLDER STUB - vents, seams and terrain summary, fog-filtered. Filled
-  // by T13 over T5's generated map.
-  reserved 4 to 15;
+  // over T5's generated map at S1, with the economy that gives a vent and a
+  // seam something to report.
+  reserved 5 to 15;
 }
 
 // `$` and kW, with what-ifs (spec section 12). The arithmetic is the
@@ -771,6 +788,14 @@ message Diagnostic {
   Severity severity = 2;
 
   // RFC 6901 JSON Pointer into the playbook.
+  //
+  // ONE NAMED EXCEPTION, and it is the only one (decisions-log item 96 (2)):
+  // when the bytes are not JSON at all there is no tree to point into, so
+  // E0001 carries `/byte/<offset>` — the byte offset the parser stopped at —
+  // and the verifier forwards that unchanged. It is deliberately not an RFC
+  // 6901 pointer, because there is no document for one to address; a client
+  // branches on the `/byte/` prefix and puts the caret at that offset rather
+  // than resolving a path.
   string path = 3;
 
   // Other places that matter to this diagnostic.
@@ -955,4 +980,26 @@ message Digest {
   int32 from_ms = 1;
   int32 to_ms = 2;
   string text = 3;
+
+  // How many events of each kind the window held, in kind-name order so two
+  // machines render the same digest.
+  //
+  // Decisions-log item 97: the scenario format's `event_fired` assertion names
+  // an event by the same lower_snake_case string, and T15's
+  // `event_count_in_range` extension counts it. Carrying the count here is
+  // what lets that assertion land without a new event shape or a format
+  // change. The counts are of the events THIS VIEWER may see — a digest is
+  // part of a fog-filtered answer — and they cover the whole segment rather
+  // than one page of it, so a caller's `cursor`, `limit` and `detail` budget
+  // never move them.
+  repeated KindCount counts = 4;
+}
+
+// How many events of one kind a digest's window held.
+message KindCount {
+  // The event kind, lower_snake_case, exactly as Event.kind spells it and as a
+  // scenario file asserts on it.
+  string kind = 1;
+
+  uint32 count = 2;
 }

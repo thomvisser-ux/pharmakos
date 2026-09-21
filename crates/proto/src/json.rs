@@ -21,7 +21,7 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
-mod base64;
+pub mod base64;
 mod codec;
 mod value;
 
@@ -88,6 +88,13 @@ pub fn decode_json<M: Message + Name + Default>(value: &Json) -> Result<M, Error
 /// This is the function the golden files are made of, and the one a caller
 /// wants when it has a type name rather than a Rust type — `gamectl verify`,
 /// the rules table, the schema drift check.
+///
+/// **It answers exactly what [`decode`] then [`encode`] answers**, which is
+/// the property decisions-log item 100 (10) asked for and
+/// `canonicalise_agrees_with_decode_then_encode` asserts: a field the input
+/// spells out at its proto3 default is dropped, because the canonical form has
+/// one spelling and the committed goldens carry that one. The rule and its
+/// three exclusions live at `codec::is_proto3_default`.
 ///
 /// # Errors
 ///

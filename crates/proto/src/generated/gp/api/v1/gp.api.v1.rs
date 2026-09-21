@@ -556,11 +556,28 @@ pub struct GetMapSummaryResponse {
     /// Voxels on each axis.
     #[prost(message, optional, tag="1")]
     pub size: ::core::option::Option<super::super::v1::Voxel>,
-    /// The seed the map was generated from. Part of the match, not a secret.
+    /// DEPRECATED, and never served: the match seed is 64 bits wide
+    /// (pharmakos_sim::world::WorldConfig::match_seed, and "the map seed IS the
+    /// match seed"), so a uint32 cannot carry it and the low half of a seed names
+    /// no map at all. T13 found this the first time a method had to answer the
+    /// question. `match_seed` below replaces it; this number stays occupied
+    /// rather than being reused, which is the rule for every retired number in
+    /// this schema.
+    #[deprecated]
     #[prost(uint32, tag="2")]
     pub map_seed: u32,
     #[prost(string, tag="3")]
     pub prose: ::prost::alloc::string::String,
+    /// The seed the map was generated from, as a quoted hexadecimal string:
+    /// "0x00000000ca5caded". Part of the match, not a secret.
+    ///
+    /// A STRING, for the reason scenarios/README.md gives about the same number:
+    /// a JSON number is a double in half the world's parsers and a 64-bit seed
+    /// loses its low bits in one. The proto3 JSON mapping would have quoted a
+    /// uint64 anyway; spelling it as a string makes the base explicit and matches
+    /// the scenario file a reader will compare it against.
+    #[prost(string, tag="4")]
+    pub match_seed: ::prost::alloc::string::String,
 }
 impl ::prost::Name for GetMapSummaryResponse {
 const NAME: &'static str = "GetMapSummaryResponse";
@@ -818,6 +835,14 @@ pub struct Diagnostic {
     #[prost(enumeration="diagnostic::Severity", tag="2")]
     pub severity: i32,
     /// RFC 6901 JSON Pointer into the playbook.
+    ///
+    /// ONE NAMED EXCEPTION, and it is the only one (decisions-log item 96 (2)):
+    /// when the bytes are not JSON at all there is no tree to point into, so
+    /// E0001 carries `/byte/<offset>` — the byte offset the parser stopped at —
+    /// and the verifier forwards that unchanged. It is deliberately not an RFC
+    /// 6901 pointer, because there is no document for one to address; a client
+    /// branches on the `/byte/` prefix and puts the caret at that offset rather
+    /// than resolving a path.
     #[prost(string, tag="3")]
     pub path: ::prost::alloc::string::String,
     /// Other places that matter to this diagnostic.
@@ -1151,7 +1176,7 @@ const NAME: &'static str = "Event";
 const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.Event".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.Event".into() }}
 /// One 60-second digest of game time.
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Digest {
     #[prost(int32, tag="1")]
     pub from_ms: i32,
@@ -1159,11 +1184,38 @@ pub struct Digest {
     pub to_ms: i32,
     #[prost(string, tag="3")]
     pub text: ::prost::alloc::string::String,
+    /// How many events of each kind the window held, in kind-name order so two
+    /// machines render the same digest.
+    ///
+    /// Decisions-log item 97: the scenario format's `event_fired` assertion names
+    /// an event by the same lower_snake_case string, and T15's
+    /// `event_count_in_range` extension counts it. Carrying the count here is
+    /// what lets that assertion land without a new event shape or a format
+    /// change. The counts are of the events THIS VIEWER may see — a digest is
+    /// part of a fog-filtered answer — and they cover the whole segment rather
+    /// than one page of it, so a caller's `cursor`, `limit` and `detail` budget
+    /// never move them.
+    #[prost(message, repeated, tag="4")]
+    pub counts: ::prost::alloc::vec::Vec<KindCount>,
 }
 impl ::prost::Name for Digest {
 const NAME: &'static str = "Digest";
 const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.Digest".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.Digest".into() }}
+/// How many events of one kind a digest's window held.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct KindCount {
+    /// The event kind, lower_snake_case, exactly as Event.kind spells it and as a
+    /// scenario file asserts on it.
+    #[prost(string, tag="1")]
+    pub kind: ::prost::alloc::string::String,
+    #[prost(uint32, tag="2")]
+    pub count: u32,
+}
+impl ::prost::Name for KindCount {
+const NAME: &'static str = "KindCount";
+const PACKAGE: &'static str = "gp.api.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.KindCount".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.KindCount".into() }}
 // =============================================================================
 // Scopes
 // =============================================================================
