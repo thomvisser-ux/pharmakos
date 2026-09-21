@@ -1,0 +1,17 @@
+{
+  "schema_version": {"major": 1, "minor": 0},
+  "meta": {"title": "Guards on every step", "author_kind": "HUMAN"},
+  "kind": "PLAYBOOK",
+  "declarative": {
+    "route": [
+      {"label": "never", "skip_if": {"treasury": {"dollars": {"op": "GE", "value": 0}}}, "hold": {"ms": 5000}},
+      {"label": "impatient", "wait_until": {"condition": {"treasury": {"dollars": {"op": "GE", "value": 999999}}}},
+        "timeout_ms": 1000, "on_fail": {"action": "JUMP_FORWARD", "jump_to_label": "tail"}},
+      {"label": "jumped_over", "hold": {"ms": 5000}},
+      {"label": "tail", "broadcast": {"go_code": {"code": "A"}}, "on_fail": {"action": "ABORT_ROUTE"}}
+    ],
+    "handlers": []
+  },
+  "on_death": {"on_respawn": "CONTINUE", "max_deaths_before_fallback": 1},
+  "fallback": {"patrol": {"waypoints": [{"safest": {}}, {"beacon_anchor": {"nearest": {}}}]}}
+}

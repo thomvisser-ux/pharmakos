@@ -1,0 +1,27 @@
+# tick	seq	kind	seat	subject	value
+0	0	match_started	-	-	60000
+0	1	lull_opened	-	-	1
+0	2	plan_sealed	0	-	5
+0	3	push_started	-	-	60000
+1	0	step_started	0	-	0
+21	0	rule_fired	0	-	0
+21	1	step_started	0	-	0
+31	0	step_completed	0	-	0
+31	1	rule_ended	0	-	1
+36	0	rule_fired	0	-	1
+36	1	step_started	0	-	0
+46	0	step_completed	0	-	0
+46	1	rule_ended	0	-	2
+51	0	rule_fired	0	-	2
+51	1	step_started	0	-	0
+61	0	step_completed	0	-	0
+61	1	rule_ended	0	-	3
+66	0	rule_fired	0	-	3
+66	1	step_started	0	-	0
+76	0	step_completed	0	-	0
+76	1	rule_ended	0	-	4
+76	2	fallback_engaged	0	-	1
+121	0	rule_fired	0	-	0
+121	1	step_started	0	-	0
+131	0	step_completed	0	-	0
+131	1	rule_ended	0	-	1

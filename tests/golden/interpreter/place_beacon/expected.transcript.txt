@@ -1,0 +1,16 @@
+# tick	seq	kind	seat	subject	value
+0	0	match_started	-	-	60000
+0	1	lull_opened	-	-	1
+0	2	plan_sealed	0	-	2
+0	3	push_started	-	-	60000
+1	0	step_started	0	-	0
+241	0	beacon_placed	0	268435459	4
+301	0	row_committed	0	268435459	0
+331	0	row_committed	0	268435459	1
+331	1	step_completed	0	-	0
+336	0	step_started	0	-	1
+336	1	visit_started	0	268435459	1
+396	0	row_committed	0	268435459	0
+396	1	visit_ended	0	268435459	1
+396	2	step_completed	0	-	1
+396	3	fallback_engaged	0	-	2

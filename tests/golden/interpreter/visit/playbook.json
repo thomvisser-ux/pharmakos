@@ -1,0 +1,17 @@
+{
+  "schema_version": {"major": 1, "minor": 0},
+  "meta": {"title": "Touch the core", "author_kind": "HUMAN"},
+  "kind": "PLAYBOOK",
+  "declarative": {
+    "route": [
+      {"label": "to_core", "move": {"to": {"safest": {}}, "pace": "DIRECT"}, "timeout_ms": 60000, "on_fail": {"action": "SKIP"}},
+      {"label": "touch", "interface": {"beacon": {"safest": {}}, "rows": [
+        {"set_mandate": {"survey": {}}},
+        {"set_priority": "HIGH"}
+      ]}, "timeout_ms": 30000, "on_fail": {"action": "SKIP"}}
+    ],
+    "handlers": []
+  },
+  "on_death": {"on_respawn": "CONTINUE", "max_deaths_before_fallback": 2},
+  "fallback": {"hold": {"at": {"safest": {}}}}
+}

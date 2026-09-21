@@ -20,9 +20,13 @@
 //! fails here, in itself, rather than in a budget measurement three stages
 //! later.
 //!
-//! **One test in this file, on purpose.** The counter is process-wide, and a
-//! second test allocating on another harness thread would be counted as this
-//! one's.
+//! **One test in this file, on purpose**, and the counter is **per thread**.
+//! Both halves matter. A process-wide counter charges this test for every
+//! allocation any other thread makes, and one of those threads is libtest's
+//! own: it prints "has been running for over 60 seconds" from the main thread,
+//! which allocates, and a test long enough to earn that line then fails for a
+//! reason that has nothing to do with the sim. Counting on the allocating
+//! thread makes the assertion say what it means.
 
 #![allow(
     clippy::expect_used,
@@ -31,14 +35,35 @@
 )]
 
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::cell::Cell;
 
 use pharmakos_sim::encoding::Enc;
 use pharmakos_sim::runner::{DEFAULT_ROUND_LIMIT, Runner};
+use pharmakos_sim::tables::SeatId;
 use pharmakos_sim::voxels::VoxelEdit;
 use pharmakos_sim::{MatchSettings, RulesTable, World, WorldConfig};
 
-static ALLOCATIONS: AtomicU64 = AtomicU64::new(0);
+thread_local! {
+    /// How many times **this thread** has allocated.
+    ///
+    /// `const`-initialised and holding a type with no destructor, so the slot
+    /// needs no lazy setup and registers no teardown hook — which is what makes
+    /// it safe to touch from inside the global allocator, where anything that
+    /// allocated would recurse for ever.
+    static ALLOCATIONS: Cell<u64> = const { Cell::new(0) };
+}
+
+/// Count one allocation against the calling thread.
+fn charge() {
+    // `try_with` rather than `with`: during thread teardown the slot is gone,
+    // and an allocation then is not this test's business.
+    let _ = ALLOCATIONS.try_with(|count| count.set(count.get().saturating_add(1)));
+}
+
+/// How many times this thread has allocated so far.
+fn allocations() -> u64 {
+    ALLOCATIONS.try_with(Cell::get).unwrap_or(0)
+}
 
 /// The system allocator, counting.
 struct Counting;
@@ -58,7 +83,7 @@ struct Counting;
 )]
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+        charge();
         unsafe { System.alloc(layout) }
     }
 
@@ -67,12 +92,12 @@ unsafe impl GlobalAlloc for Counting {
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+        charge();
         unsafe { System.realloc(ptr, layout, new_size) }
     }
 
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+        charge();
         unsafe { System.alloc_zeroed(layout) }
     }
 }
@@ -111,6 +136,23 @@ fn a_tick_allocates_nothing() {
     // segment's end and every event they emit — would sit outside the counted
     // loop.
     let mut runner = Runner::new(world);
+    // Every seat seals the harness playbook, for the same reason: the decision
+    // phase returns immediately for a seat that sealed nothing, so without this
+    // the whole interpreter — selector resolution, the visit's row clocks, the
+    // reflex, the handler scan — would sit outside the one assertion that a
+    // tick allocates nothing (T11).
+    let plan = pharmakos_sim::Plan::compile(
+        &pharmakos_sim::determinism_playbook(),
+        runner.world().rules(),
+    )
+    .expect("the harness playbook compiles");
+    for seat in 0..pharmakos_sim::DETERMINISM_SEATS {
+        let id = SeatId::new(u8::try_from(seat).expect("the harness runs few seats"));
+        assert!(
+            runner.world_mut().seal_playbook(id, plan.clone()),
+            "seat {seat} seals"
+        );
+    }
     assert!(runner.begin_push(), "a match opens in a Lull");
     let mut enc = Enc::with_capacity(64 * 1024);
 
@@ -127,15 +169,43 @@ fn a_tick_allocates_nothing() {
         runner.clear_events();
         runner.world().encode(&mut enc);
     }
+    // The deploy window. The harness playbook's `place_beacon` step is the one
+    // thing in a tick that adds a **row to a table**: `BeaconTable::reserve`
+    // makes room for it at construction so the `push` cannot allocate, and that
+    // claim is only worth anything over a deploy the test actually performs.
+    // It is counted separately from the steady loop below because the
+    // encoding legitimately *grows* when a beacon lands — which is exactly what
+    // the fixed-stride assertion further down would otherwise read as a bug.
+    let before_deploy = allocations();
+    let beacons_before = runner.world().beacons().len();
+    for step in 0..400 {
+        crater_at(runner.world_mut(), step + 50);
+        runner.step().expect("the segment outlasts this test");
+        runner.clear_events();
+        runner.world().encode(&mut enc);
+    }
+    let deploying = allocations() - before_deploy;
+    assert_eq!(
+        deploying, 0,
+        "the 400 ticks that deploy a beacon per seat allocated {deploying} times. A `place_beacon` \
+         step adds a beacon row inside a tick, and the room for it is reserved at construction \
+         (BeaconTable::reserve) precisely so that it cannot allocate."
+    );
+    assert!(
+        runner.world().beacons().len() > beacons_before,
+        "the harness playbook's deploy landed inside the counted window; without it this file \
+         never exercises the one in-tick table growth there is"
+    );
+
     let capacity_after_warmup = enc.encoded_len();
 
-    let before = ALLOCATIONS.load(Ordering::Relaxed);
+    let before = allocations();
     for step in 0..500 {
         // Every tick of the measured loop goes through the voxel phase with
         // work in it: a crater is the edit S2 will file by the thousand, and an
         // empty queue would leave `settle`, `mark` and `crater` outside the
         // property this file exists to defend.
-        crater_at(runner.world_mut(), step + 50);
+        crater_at(runner.world_mut(), step + 450);
         runner.step().expect("the segment outlasts this test");
         // A host drains every tick, and the bus is fixed-capacity: draining it
         // is what keeps an event emission inside the assertion instead of
@@ -143,7 +213,7 @@ fn a_tick_allocates_nothing() {
         runner.clear_events();
         runner.world().encode(&mut enc);
     }
-    let during = ALLOCATIONS.load(Ordering::Relaxed) - before;
+    let during = allocations() - before;
 
     assert_eq!(
         during, 0,
