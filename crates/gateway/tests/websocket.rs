@@ -21,6 +21,8 @@
 use pharmakos_gateway::fog::{Blind, FogPolicy};
 use pharmakos_gateway::frame::Opcode;
 use pharmakos_gateway::handshake::{Policy, Refusal};
+use pharmakos_gateway::host::Host;
+use pharmakos_gateway::limit::Limits;
 use pharmakos_gateway::scopes::{Scope, ScopeSet};
 use pharmakos_gateway::session::{self, Ended};
 use pharmakos_gateway::surface::Surface;
@@ -113,6 +115,32 @@ fn surface() -> Surface {
         segment_length_ms: Ms::new(180_000),
         round: 1,
     });
+    surface
+}
+
+/// The same surface with a real match behind it, sitting in its opening Lull.
+///
+/// The planning methods read the frozen snapshot, so the walkthrough needs a
+/// host where the rest of this file does not.
+fn hosted() -> Surface {
+    let mut surface = surface();
+    let host = Host::open(
+        &pharmakos_sim::world::WorldConfig {
+            match_seed: 0x00ca_5cad_ed00_0001,
+            seats: 2,
+            units_per_seat: 0,
+            rules: rules(),
+            match_settings: pharmakos_sim::runner::MatchSettings {
+                segment_lengths_ms: vec![1_000],
+                round_limit: 3,
+            },
+        },
+        None,
+    )
+    .expect("a match");
+    surface.attach(host).expect("attached");
+    surface.set_phase_remaining_ms(Ms::new(180_000));
+    surface.open_lull().expect("the opening Lull");
     surface
 }
 
@@ -481,3 +509,221 @@ fn a_frame_over_the_cap_closes_the_connection() {
     let (ended, _) = run(input, &mut surface);
     assert_eq!(ended, Ended::GatewayClosed(1009));
 }
+
+// ---------------------------------------------------------------------------
+// The walkthrough, over the transport
+// ---------------------------------------------------------------------------
+
+/// Spec section 12's fourteen calls, on **one connection**, as frames.
+///
+/// `tests/methods.rs` replays the same session through `Surface::call` and
+/// drives the host between calls -- which is the half a live session cannot do,
+/// because `session::serve` owns the surface for as long as the socket is open.
+/// This is the other half: the same fourteen calls go through the RFC 6455
+/// upgrade, the masking and the framing, and the assertion the skeleton plan
+/// names is read back off the wire -- `submit_plan`'s `report_hash` equals the
+/// FULL pre-check's.
+///
+/// Every payload here is fixed rather than taken from the previous answer,
+/// because a `Wire` is a script written before the session starts. The one
+/// place that costs something is call 8's patch, which `tests/methods.rs`
+/// builds from the verifier's own suggestions; here it is written out, and the
+/// playbook calls 9 to 11 carry is one that qualifies.
+#[test]
+fn the_fourteen_call_walkthrough_also_runs_over_the_transport() {
+    let mut surface = hosted();
+    let token = seat_token(&mut surface);
+    // Fourteen calls land on one tick here: nothing advances the host's clock
+    // while a session holds the surface, and the per-tick cap is eight. The
+    // limiter has its own tests; this one is about the wire.
+    surface.set_limits(Limits {
+        per_tick: 64,
+        per_window: 600,
+        window_ticks: 200,
+    });
+    let safe = pharmakos_gateway::host::SAFE_PLAYBOOK;
+
+    let calls: Vec<(u32, &str, String)> = vec![
+        (1, "get_status", String::from("{}")),
+        (2, "get_briefing", String::from(r#"{"detail":"standard"}"#)),
+        (
+            3,
+            "get_beacon",
+            format!(r#"{{"beacon_id":"{}"}}"#, own_beacon(&surface)),
+        ),
+        (4, "list_templates", String::from(r#"{"tag":"attack"}"#)),
+        (5, "get_schema", String::from(r#"{"part":"step"}"#)),
+        (6, "estimate_route", route_params(&surface)),
+        (
+            7,
+            "verify_plan",
+            format!(r#"{{"depth":"quick","playbook_jsonc":{}}}"#, quote(BROKEN)),
+        ),
+        (
+            8,
+            "patch_plan",
+            format!(
+                r#"{{"playbook_jsonc":{},"json_patch":{}}}"#,
+                quote(BROKEN),
+                quote(FIX)
+            ),
+        ),
+        (
+            9,
+            "verify_plan",
+            format!(r#"{{"depth":"full","playbook_jsonc":{}}}"#, quote(safe)),
+        ),
+        (
+            10,
+            "render_plan",
+            format!(r#"{{"playbook_jsonc":{}}}"#, quote(safe)),
+        ),
+        (
+            11,
+            "submit_plan",
+            format!(r#"{{"playbook_jsonc":{}}}"#, quote(safe)),
+        ),
+        (12, "set_ready", String::from(r#"{"ready":true}"#)),
+        (
+            13,
+            "wait_for",
+            String::from(r#"{"trigger":"phase_change","timeout_ms":5000}"#),
+        ),
+        (14, "wait_for", String::from(r#"{"trigger":"feed_digest"}"#)),
+    ];
+
+    let mut input = upgrade(&token.render(), None);
+    for (id, method, params) in &calls {
+        input.extend_from_slice(&call_frame(*id, method, params));
+    }
+    let (ended, wire) = run(input, &mut surface);
+    assert_eq!(ended, Ended::Disconnected, "the client stopped talking");
+
+    let body_at = wire
+        .output
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .expect("the handshake ends")
+        .saturating_add(4);
+    let answers = responses(wire.output.get(body_at..).unwrap_or_default());
+    assert_eq!(answers.len(), calls.len(), "one answer per call");
+
+    let mut precheck: Option<String> = None;
+    for (index, ((id, method, _), answer)) in calls.iter().zip(answers.iter()).enumerate() {
+        assert_eq!(
+            answer.get("id"),
+            Some(&Json::Number(id.to_string())),
+            "answer {index} is out of order"
+        );
+        let result = answer.get("result").unwrap_or_else(|| {
+            panic!("`{method}` (call {id}) was refused over the wire: {answer:?}")
+        });
+        assert!(
+            result.get("_status").is_some(),
+            "`{method}` came back without the footer"
+        );
+        if *id == 9 {
+            precheck = Some(report_hash(result));
+        }
+        if *id == 11 {
+            assert_eq!(result.get("accepted"), Some(&Json::Bool(true)));
+            assert_eq!(
+                Some(report_hash(result)),
+                precheck,
+                "submit runs FULL, so its report_hash is the FULL pre-check's -- byte for \
+                 byte, and over the wire (spec section 11; decisions-log item 82)"
+            );
+        }
+    }
+}
+
+/// A report's `report_hash`, from a `verify_plan` or `submit_plan` result.
+fn report_hash(result: &Json) -> String {
+    match result
+        .get("report")
+        .and_then(|report| report.get("report_hash"))
+    {
+        Some(Json::String(text)) => text.clone(),
+        other => panic!("a report carries a report_hash, and it is {other:?}"),
+    }
+}
+
+/// Seat 0's own core beacon, as the wire spells it.
+fn own_beacon(surface: &Surface) -> String {
+    let host = surface.host().expect("a hosted match");
+    let beacons = host.world().beacons();
+    let row = beacons
+        .seats()
+        .iter()
+        .position(|seat| *seat == 0)
+        .expect("seat 0 has a core beacon");
+    pharmakos_gateway::view::beacon_id(pharmakos_sim::tables::BeaconId::new(
+        beacons.ids().get(row).copied().expect("an id"),
+    ))
+}
+
+/// `estimate_route`'s parameters: from the commander to its own core beacon.
+fn route_params(surface: &Surface) -> String {
+    let host = surface.host().expect("a hosted match");
+    let world = host.world();
+    let commander = world.commander_of(SeatId::new(0));
+    let row = world
+        .units()
+        .ids()
+        .iter()
+        .position(|id| *id == commander.raw())
+        .expect("the commander is in the unit table");
+    let from = pharmakos_gateway::view::voxel_of(
+        world
+            .units()
+            .positions()
+            .get(row)
+            .copied()
+            .expect("a position"),
+    );
+    let beacons = world.beacons();
+    let beacon_row = beacons
+        .seats()
+        .iter()
+        .position(|seat| *seat == 0)
+        .expect("seat 0 has a core beacon");
+    let to = pharmakos_gateway::view::voxel_of(
+        beacons
+            .positions()
+            .get(beacon_row)
+            .copied()
+            .expect("a position"),
+    );
+    format!(
+        r#"{{"waypoints":[{{"voxel":{{"x":{},"y":{},"z":{}}}}},{{"voxel":{{"x":{},"y":{},"z":{}}}}}]}}"#,
+        from.x, from.y, from.z, to.x, to.y, to.z
+    )
+}
+
+/// A Rust string as a JSON string literal.
+fn quote(text: &str) -> String {
+    pharmakos_proto::json::write(&Json::String(text.to_owned()))
+        .trim_end()
+        .to_owned()
+}
+
+/// The walkthrough's broken playbook, as `tests/methods.rs` writes it.
+const BROKEN: &str = concat!(
+    "// Two holds, and both of them are wrong.\n",
+    "{\"schema_version\": {\"major\": 1},\n",
+    " \"meta\": {\"title\": \"Walkthrough\", \"author_kind\": \"HUMAN\"},\n",
+    " \"declarative\": {\"route\": [\n",
+    "   {\"label\": \"first\", \"hold\": {\"ms\": -1}},\n",
+    "   {\"label\": \"second\", \"hold\": {\"ms\": -2}}\n",
+    " ]},\n",
+    " \"on_death\": {\"on_respawn\": \"CONTINUE\"},\n",
+    " \"fallback\": {\"hold\": {\"at\": {\"beacon_anchor\": {\"safest\": {}}}}},\n",
+    " \"kind\": \"PLAYBOOK\"}\n",
+);
+
+/// The fix, written out: see the test's own doc for why it is not the
+/// verifier's own suggestion here.
+const FIX: &str = concat!(
+    "[{\"op\": \"add\", \"path\": \"/declarative/route/0/hold/ms\", \"value\": 1000},\n",
+    " {\"op\": \"add\", \"path\": \"/declarative/route/1/hold/ms\", \"value\": 2000}]"
+);
