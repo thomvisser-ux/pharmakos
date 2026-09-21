@@ -12,6 +12,14 @@
 //! No port is bound and no thread is started, which is why these are ordinary
 //! fast tests rather than something with a timeout in it. `tests/security.rs`
 //! covers the socket itself.
+//!
+//! Two of them go further than the transport and say something about the match
+//! behind it: spec section 12's fourteen-call walkthrough, and T13b's
+//! `a_playbook_submitted_over_the_transport_is_executed`, which submits a
+//! playbook over one connection, lets the host play the Push, and reads the
+//! seat's own `plan_sealed` and `step_started` lines back over a second one.
+//! Two connections rather than one, because a live session holds the surface
+//! and the Lull ends on the host's word.
 #![allow(
     clippy::expect_used,
     clippy::unwrap_used,
@@ -727,3 +735,168 @@ const FIX: &str = concat!(
     "[{\"op\": \"add\", \"path\": \"/declarative/route/0/hold/ms\", \"value\": 1000},\n",
     " {\"op\": \"add\", \"path\": \"/declarative/route/1/hold/ms\", \"value\": 2000}]"
 );
+
+// ---------------------------------------------------------------------------
+// The orders reach the match, over the wire (T13b)
+// ---------------------------------------------------------------------------
+
+/// Where seat 0's commander stands, as a voxel.
+fn commander_voxel(surface: &Surface) -> (i32, i32, i32) {
+    let host = surface.host().expect("a hosted match");
+    let world = host.world();
+    let commander = world.commander_of(SeatId::new(0));
+    let row = world
+        .units()
+        .ids()
+        .iter()
+        .position(|id| *id == commander.raw())
+        .expect("the commander is in the unit table");
+    let at = pharmakos_gateway::view::voxel_of(
+        world
+            .units()
+            .positions()
+            .get(row)
+            .copied()
+            .expect("a position"),
+    );
+    (at.x, at.y, at.z)
+}
+
+/// A playbook that walks seat 0's commander six voxels east of where it stands.
+fn walk_east(surface: &Surface) -> String {
+    let (x, y, z) = commander_voxel(surface);
+    let step = format!(
+        "{{\"label\": \"east\", \"move\": {{\"to\": {{\"voxel\": {{\"x\": {}, \"y\": {y}, \
+         \"z\": {z}}}}}, \"pace\": \"DIRECT\"}}, \"timeout_ms\": 60000}}",
+        x.saturating_add(6)
+    );
+    format!(
+        concat!(
+            "{{\"schema_version\": {{\"major\": 1}},\n",
+            " \"meta\": {{\"title\": \"East\", \"author_kind\": \"HUMAN\"}},\n",
+            " \"declarative\": {{\"route\": [{}]}},\n",
+            " \"on_death\": {{\"on_respawn\": \"CONTINUE\"}},\n",
+            " \"fallback\": {{\"hold\": {{\"at\": {{\"beacon_anchor\": {{\"safest\": {{}}}}}}}}}},\n",
+            " \"kind\": \"PLAYBOOK\"}}\n"
+        ),
+        step
+    )
+}
+
+/// A playbook submitted over the transport is **executed**, and the seat reads
+/// its own orders back off the feed over the transport too.
+///
+/// `tests/methods.rs` proves this against `Surface::call`; this is the same
+/// claim with the RFC 6455 upgrade, the masking and the framing in front of it.
+/// It takes two connections, for the reason the walkthrough's own header gives:
+/// a live session holds the surface, so the host cannot end the Lull while one
+/// is open. That is not a limitation of the test -- it is what "the Lull ends
+/// on the host's word" looks like from the wire.
+#[test]
+fn a_playbook_submitted_over_the_transport_is_executed() {
+    let mut surface = surface();
+    let host = Host::open(
+        &pharmakos_sim::world::WorldConfig {
+            match_seed: 0x00ca_5cad_ed00_0001,
+            seats: 2,
+            units_per_seat: 0,
+            rules: rules(),
+            match_settings: pharmakos_sim::runner::MatchSettings {
+                // Twelve seconds: a commander walks a voxel a second at the
+                // committed tuning values, so six voxels fit with room to
+                // spare.
+                segment_lengths_ms: vec![12_000],
+                round_limit: 3,
+            },
+        },
+        None,
+    )
+    .expect("a match");
+    surface.attach(host).expect("attached");
+    surface.set_phase_remaining_ms(Ms::new(180_000));
+    surface.open_lull().expect("the opening Lull");
+    let token = seat_token(&mut surface);
+    surface.set_limits(Limits {
+        per_tick: 64,
+        per_window: 600,
+        window_ticks: 200,
+    });
+
+    let from = commander_voxel(&surface);
+    let playbook = walk_east(&surface);
+
+    // Connection one: the seat submits.
+    let mut input = upgrade(&token.render(), None);
+    input.extend_from_slice(&call_frame(
+        1,
+        "submit_plan",
+        &format!(r#"{{"playbook_jsonc":{}}}"#, quote(&playbook)),
+    ));
+    let (ended, wire) = run(input, &mut surface);
+    assert_eq!(ended, Ended::Disconnected);
+    let answers = responses(body_of(&wire));
+    let submitted = answers
+        .first()
+        .and_then(|answer| answer.get("result"))
+        .unwrap_or_else(|| panic!("submit_plan was refused over the wire: {answers:?}"))
+        .clone();
+    assert_eq!(submitted.get("accepted"), Some(&Json::Bool(true)));
+
+    // The host plays the Push, which is the one thing no client does.
+    surface.begin_push().expect("the Push begins");
+    let mut farthest_east = from.0;
+    while let Some(report) = surface.step().expect("a tick") {
+        farthest_east = farthest_east.max(commander_voxel(&surface).0);
+        if report.segment_ended {
+            break;
+        }
+    }
+    assert!(
+        farthest_east > from.0,
+        "the commander never went east, so nothing executed the playbook that arrived over \
+         the wire"
+    );
+
+    // Connection two: the seat reads its own orders back.
+    let mut input = upgrade(&token.render(), None);
+    input.extend_from_slice(&call_frame(
+        1,
+        "get_segment_feed",
+        r#"{"detail":"full","limit":256}"#,
+    ));
+    let (ended, wire) = run(input, &mut surface);
+    assert_eq!(ended, Ended::Disconnected);
+    let answers = responses(body_of(&wire));
+    let page = answers
+        .first()
+        .and_then(|answer| answer.get("result"))
+        .unwrap_or_else(|| panic!("get_segment_feed was refused: {answers:?}"))
+        .clone();
+    let Some(Json::Array(events)) = page.get("events") else {
+        panic!("a page carries events");
+    };
+    let kinds: Vec<String> = events
+        .iter()
+        .filter_map(|event| match event.get("kind") {
+            Some(Json::String(kind)) => Some(kind.clone()),
+            _ => None,
+        })
+        .collect();
+    for expected in ["plan_sealed", "step_started"] {
+        assert!(
+            kinds.iter().any(|kind| kind == expected),
+            "`{expected}` never reached the seat over the wire: {kinds:?}"
+        );
+    }
+}
+
+/// Everything after the handshake's blank line.
+fn body_of(wire: &Wire) -> &[u8] {
+    let body_at = wire
+        .output
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .expect("the handshake ends")
+        .saturating_add(4);
+    wire.output.get(body_at..).unwrap_or_default()
+}
