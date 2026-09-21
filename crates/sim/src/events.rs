@@ -344,6 +344,27 @@ impl EventBus {
         self.events.clear();
     }
 
+    /// Empty the bus and re-anchor it on `tick`, with `seq` back at zero.
+    ///
+    /// What a **restore** does, as against a drain. A drain leaves the anchor
+    /// alone because the tick has not changed; a restore replaces the world, so
+    /// leaving the anchor alone would carry the *receiving* world's history into
+    /// the resumed feed — the same snapshot resumed in two runners would emit
+    /// the same event under two different `seq` values whenever the receiving
+    /// bus happened to be anchored on the restored tick. The feed after a
+    /// restore is then a function of the restored state and of nothing else,
+    /// which is what `a_restore_re_anchors_the_feed_so_two_resumes_agree`
+    /// asserts.
+    ///
+    /// It does not make the feed survive a save — see the module docs: a
+    /// resumed match still starts with an empty feed, and that price is the
+    /// decision, not an oversight.
+    pub(crate) fn reset(&mut self, tick: Tick) {
+        self.events.clear();
+        self.tick = tick;
+        self.seq = 0;
+    }
+
     /// How many events have ever been emitted, drops included.
     #[must_use]
     pub const fn emitted(&self) -> u64 {
