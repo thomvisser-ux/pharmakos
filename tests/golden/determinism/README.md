@@ -19,6 +19,32 @@ a later job byte-compares the three. That comparison is gate G4 in the flesh:
 identical hashes on three operating systems. The format is enforced line by line
 by `validate_hash_file` in `xtask/src/main.rs`.
 
+## What the committed chain covers (T11)
+
+**A sealed playbook, running.** Every seat seals
+`pharmakos_sim::determinism_playbook` — a harness playbook whose every target is
+a **selector** rather than a voxel, so the same file is legal for every seat on
+every spawn — and the chain therefore covers the interpreter's hashed state: the
+route cursor, the stage of the step in progress with its start tick and
+deadline, the pinned selector target, the visit's row and its commit tick, the
+reflex's marker, and the handler's fire count and cooldown.
+
+The harness route also **deploys a beacon**, which is the one thing a tick does
+that adds a row to a table: `crates/sim/tests/allocations.rs` counts the ticks
+around that deploy separately, so `BeaconTable::reserve` is asserted over a
+deploy that actually happens rather than described in a doc comment. It is why
+the beacon table's length is not the same on every tick of the chain.
+
+Two consequences worth knowing before reading a diff:
+
+* A **commander's** destination is the playbook's to set. The harness's random
+  destination draw (`Stream::Spawn`) still moves the `units_per_seat` walkers and
+  no longer reaches a commander, so a seat that sealed nothing leaves its
+  commander standing where the generator put it.
+* A decision falls on every fifth tick of a Push — `match.decision_tick_ms` is
+  250 ms — starting with the Push's first played tick. A diff that begins on a
+  tick that is not `1 mod 5` of a segment's start is *not* a decision moving.
+
 ## What the committed chain covers (T10)
 
 **Whole segments, and the phase changes between them.** One line per *Push*
