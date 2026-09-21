@@ -18,8 +18,15 @@
 //!   determinism contract (items 48–51, 62, 66) lives in one crate, which is
 //!   what makes "the determinism code" a nameable contract path for
 //!   AGENTS.md §5.
-//! * **The tick** — eleven named phases in a fixed order ([`world::PHASE_ORDER`]),
-//!   most of them still empty and each naming the task that fills it.
+//! * **The tick** — twelve named phases in a fixed order ([`world::PHASE_ORDER`]),
+//!   several of them still empty and each naming the task that fills it.
+//! * **The match** — [`runner`]: Lull, Push and recap in their fixed order, the
+//!   segment ladder, the frozen segment-end snapshot, the one-tick match-end
+//!   rule, elimination and the commander's respawn. [`runner::Runner`] is what
+//!   a host drives; [`runner::MatchState`] is the hashed state it moves.
+//! * **The event bus** — [`events`]: what a tick reports, in a total order,
+//!   under a name a scenario file can assert on. Derived output, not hashed
+//!   state, and that module says why.
 //! * **The public type surface** — [`snapshot`], [`knowledge`] and [`rules`],
 //!   which `plan-core`, `verifier`, `gateway` and `operator` compile against
 //!   with `default-features = false`.
@@ -62,11 +69,13 @@
 
 pub mod chunks;
 pub mod encoding;
+pub mod events;
 pub mod knowledge;
 pub mod mapgen;
 pub mod math;
 pub mod pathing;
 pub mod rules;
+pub mod runner;
 pub mod seams;
 pub mod snapshot;
 pub mod tables;
@@ -79,14 +88,19 @@ pub mod world;
 pub mod research;
 
 pub use encoding::{ENCODING_VERSION, Enc, STATE_HASH_SEED, digest, hex};
+pub use events::{EVENT_BUS_CAPACITY, Event, EventBus, EventKind};
 pub use mapgen::{GeneratedMap, MapError, MapFile, MapReport};
 pub use pathing::{
     Clusters, Estimate, Fog, Node, Router, Scratch, Speed, Surface, WalkState, estimate,
 };
 pub use rules::{RULES_PATH, RulesError, RulesTable};
+pub use runner::{
+    DEFAULT_ROUND_LIMIT, FrozenSnapshot, MatchEndReason, MatchOutcome, MatchPhase, MatchSettings,
+    MatchState, PHASE_CYCLE, Runner, TickReport,
+};
 pub use snapshot::{SNAPSHOT_VERSION, Snapshot, SnapshotError};
 pub use voxels::{CHUNK_EDGE, CHUNK_VOXELS, Material, Richness, VoxelEdit, VoxelStore};
-pub use world::{PHASE_ORDER, Phase, World, WorldConfig};
+pub use world::{DamageOrder, DamageTarget, PHASE_ORDER, Phase, World, WorldConfig};
 
 /// The match seed the determinism harness runs on.
 ///
@@ -105,6 +119,20 @@ pub const DETERMINISM_SEATS: u32 = 4;
 
 /// Units per seat in the determinism harness.
 pub const DETERMINISM_UNITS_PER_SEAT: u32 = 50;
+
+/// PLACEHOLDER (harness): the per-round segment length list the determinism
+/// harness plays, in game milliseconds.
+///
+/// Item 40 makes the per-round length list a **host** setting, and the harness
+/// is a host: it sets short segments so that `cargo xtask ci`'s 1 200-tick run
+/// covers whole segments and the phase changes between them, instead of sitting
+/// 1 200 ticks into the first three-minute Push of item 68's real ladder and
+/// never reaching a boundary. 20 000 ms is 400 ticks and 15 000 ms is 300, so
+/// the committed chain covers `push → recap → lull → push` three times over.
+///
+/// Deleted when `DETERMINISM_TICKS` is raised from 1 200 to a real segment
+/// (owner, at T20 — the same PLACEHOLDER T2 left in `xtask`).
+pub const DETERMINISM_SEGMENT_LENGTHS_MS: [i32; 2] = [20_000, 15_000];
 
 /// Find `rules/rules.v1.json` from wherever the caller happens to stand.
 ///
@@ -173,5 +201,9 @@ pub fn determinism_world(rules_path: &std::path::Path) -> Result<World, WorldErr
         seats: DETERMINISM_SEATS,
         units_per_seat: DETERMINISM_UNITS_PER_SEAT,
         rules,
+        match_settings: MatchSettings {
+            segment_lengths_ms: DETERMINISM_SEGMENT_LENGTHS_MS.to_vec(),
+            round_limit: DEFAULT_ROUND_LIMIT,
+        },
     })?)
 }

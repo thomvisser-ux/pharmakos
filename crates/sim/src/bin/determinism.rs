@@ -43,7 +43,8 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use pharmakos_sim::encoding::{Enc, hex};
+use pharmakos_sim::encoding::hex;
+use pharmakos_sim::runner::{MatchPhase, Runner};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -86,8 +87,8 @@ fn run(args: &[String]) -> Result<String, String> {
         return Ok(HELP.to_owned());
     }
     let cli = parse(args)?;
-    let mut world = build_world(&cli)?;
-    let text = chain(&mut world, &cli)?;
+    let mut runner = build_runner(&cli)?;
+    let text = chain(&mut runner, &cli)?;
 
     if let Some(parent) = cli.out.parent() {
         std::fs::create_dir_all(parent)
@@ -99,11 +100,14 @@ fn run(args: &[String]) -> Result<String, String> {
         .map_err(|error| format!("writing {}: {error}", cli.out.display()))?;
 
     Ok(format!(
-        "{} ticks written to {} (rules {}, rules_hash {})",
+        "{} ticks written to {} (rules {}, rules_hash {}, round {}, {} events, {} dropped)",
         cli.ticks,
         cli.out.display(),
         cli.rules_path.display(),
-        hex(world.rules().rules_hash())
+        hex(runner.world().rules().rules_hash()),
+        runner.round(),
+        runner.world().event_bus().emitted(),
+        runner.world().event_bus().dropped(),
     ))
 }
 
@@ -160,9 +164,9 @@ fn parse(args: &[String]) -> Result<Cli, String> {
     })
 }
 
-/// The world the run starts from: a fresh one, or a restored snapshot.
-fn build_world(cli: &Cli) -> Result<pharmakos_sim::World, String> {
-    let mut world = match cli.seed {
+/// The runner the run starts from: a fresh match, or a restored snapshot.
+fn build_runner(cli: &Cli) -> Result<Runner, String> {
+    let world = match cli.seed {
         None => {
             pharmakos_sim::determinism_world(&cli.rules_path).map_err(|error| error.to_string())?
         }
@@ -174,28 +178,40 @@ fn build_world(cli: &Cli) -> Result<pharmakos_sim::World, String> {
                 seats: pharmakos_sim::DETERMINISM_SEATS,
                 units_per_seat: pharmakos_sim::DETERMINISM_UNITS_PER_SEAT,
                 rules,
+                match_settings: pharmakos_sim::MatchSettings {
+                    segment_lengths_ms: pharmakos_sim::DETERMINISM_SEGMENT_LENGTHS_MS.to_vec(),
+                    round_limit: pharmakos_sim::DEFAULT_ROUND_LIMIT,
+                },
             })
             .map_err(|error| error.to_string())?
         }
     };
+    let mut runner = Runner::new(world);
 
     if let Some(path) = cli.resume.as_ref() {
         let bytes =
             std::fs::read(path).map_err(|error| format!("reading {}: {error}", path.display()))?;
         let snapshot =
             pharmakos_sim::Snapshot::from_bytes(&bytes).map_err(|error| error.to_string())?;
-        snapshot
-            .restore_into(&mut world)
+        runner
+            .restore(&snapshot)
             .map_err(|error| error.to_string())?;
     }
-    Ok(world)
+    Ok(runner)
 }
 
 /// The chain itself, one `tick<TAB>hash` line per tick.
-fn chain(world: &mut pharmakos_sim::World, cli: &Cli) -> Result<String, String> {
+///
+/// **The harness is the host** (T10). A Lull and a recap consume no tick and
+/// end on the host's word, so this loop plays that part: it opens the Push the
+/// moment a Lull is reached and closes the recap the moment one opens, which is
+/// what puts whole segments — and the phase changes between them — inside a
+/// 1 200-tick chain. It also drains the event bus every tick, as any host does,
+/// so the bus is never full and the run's totals are reported at the end.
+fn chain(runner: &mut Runner, cli: &Cli) -> Result<String, String> {
     // A resumed run numbers its lines from the snapshot's own tick, so the two
     // chains line up without either side having to know the other's offset.
-    let first_tick: u32 = world.tick().raw();
+    let first_tick: u32 = runner.tick().raw();
     let past_the_end = first_tick.saturating_add(cli.ticks);
     if let Some(at) = cli.save_at {
         if at < first_tick || at >= past_the_end {
@@ -205,26 +221,33 @@ fn chain(world: &mut pharmakos_sim::World, cli: &Cli) -> Result<String, String> 
         }
     }
 
-    // One encoder for the whole run: a tick allocates nothing (G3′ §9.17).
-    let mut enc = Enc::with_capacity(64 * 1024);
     let mut text =
         String::with_capacity(usize::try_from(cli.ticks).unwrap_or(0).saturating_mul(24));
     let mut written: u32 = 0;
     while written < cli.ticks {
         let tick = first_tick.saturating_add(written);
         let hash = if written == 0 {
-            world.encode(&mut enc);
-            enc.finish()
+            // Tick 0 is the hash of the state as it stands, before any phase
+            // has run — the opening Lull of a fresh match, or whatever tick a
+            // resumed snapshot was taken at.
+            runner.world().state_hash()
         } else {
-            world.step(&mut enc)
+            open_a_push(runner);
+            match runner.step() {
+                Some(report) => report.hash,
+                // The match ended before the requested ticks ran out. The run
+                // stops rather than inventing lines for a match that is over.
+                None => break,
+            }
         };
+        runner.clear_events();
         text.push_str(&tick.to_string());
         text.push('\t');
         text.push_str(&hex(hash));
         text.push('\n');
         if cli.save_at == Some(tick) {
             if let Some(path) = cli.snapshot_out.as_ref() {
-                write_snapshot(world, path)?;
+                write_snapshot(runner, path)?;
             }
         }
         written = written.saturating_add(1);
@@ -232,9 +255,29 @@ fn chain(world: &mut pharmakos_sim::World, cli: &Cli) -> Result<String, String> 
     Ok(text)
 }
 
+/// Play the host's part until a tick can run, or the match is over.
+fn open_a_push(runner: &mut Runner) {
+    loop {
+        match runner.phase() {
+            MatchPhase::Push | MatchPhase::Ended => return,
+            MatchPhase::Lull => {
+                if !runner.begin_push() {
+                    return;
+                }
+            }
+            MatchPhase::Recap => {
+                if !runner.end_recap() {
+                    return;
+                }
+            }
+        }
+    }
+}
+
 /// Write the world's snapshot to `path`, in binary, creating the directory.
-fn write_snapshot(world: &pharmakos_sim::World, path: &std::path::Path) -> Result<(), String> {
-    let bytes = pharmakos_sim::Snapshot::capture(world)
+fn write_snapshot(runner: &Runner, path: &std::path::Path) -> Result<(), String> {
+    let bytes = runner
+        .capture()
         .to_bytes()
         .map_err(|error| error.to_string())?;
     if let Some(parent) = path.parent() {

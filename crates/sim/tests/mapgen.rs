@@ -29,7 +29,7 @@ use pharmakos_sim::encoding::hex;
 use pharmakos_sim::mapgen::{self, GeneratedMap, MapFile, MapReport};
 use pharmakos_sim::tables::{BeaconId, UnitKind};
 use pharmakos_sim::voxels::{Material, Richness, VoxelStore};
-use pharmakos_sim::{RulesTable, World, WorldConfig};
+use pharmakos_sim::{MatchSettings, RulesTable, World, WorldConfig};
 
 /// The committed seed set: eight seeds, pinned, in ascending order.
 ///
@@ -631,6 +631,7 @@ fn the_world_takes_its_map_from_the_generator() {
         seats: GOLDEN_SEATS,
         units_per_seat: 0,
         rules: rules(),
+        match_settings: MatchSettings::default(),
     })
     .expect("a world on the committed table");
 

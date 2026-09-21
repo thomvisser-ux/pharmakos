@@ -22,7 +22,7 @@
 
 use pharmakos_sim::encoding::Enc;
 use pharmakos_sim::research::{fork, fork_and_step};
-use pharmakos_sim::{RulesTable, World, WorldConfig};
+use pharmakos_sim::{MatchSettings, RulesTable, World, WorldConfig};
 
 fn world() -> World {
     let rules = RulesTable::load(
@@ -37,6 +37,7 @@ fn world() -> World {
         seats: pharmakos_sim::DETERMINISM_SEATS,
         units_per_seat: pharmakos_sim::DETERMINISM_UNITS_PER_SEAT,
         rules,
+        match_settings: MatchSettings::default(),
     })
     .expect("the rules table describes a map and a broadphase grid")
 }

@@ -35,7 +35,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use pharmakos_sim::encoding::Enc;
 use pharmakos_sim::voxels::VoxelEdit;
-use pharmakos_sim::{RulesTable, World, WorldConfig};
+use pharmakos_sim::{MatchSettings, RulesTable, World, WorldConfig};
 
 static ALLOCATIONS: AtomicU64 = AtomicU64::new(0);
 
@@ -93,6 +93,7 @@ fn a_tick_allocates_nothing() {
         seats: pharmakos_sim::DETERMINISM_SEATS,
         units_per_seat: pharmakos_sim::DETERMINISM_UNITS_PER_SEAT,
         rules,
+        match_settings: MatchSettings::default(),
     })
     .expect("the rules table describes a map and a broadphase grid");
     let mut enc = Enc::with_capacity(64 * 1024);

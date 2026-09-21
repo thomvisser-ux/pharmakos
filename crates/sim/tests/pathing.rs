@@ -47,7 +47,7 @@ use pharmakos_sim::pathing::search::{Bound, Scratch, astar, astar_with_order, di
 use pharmakos_sim::pathing::surface::{DEFAULT_ORDER, Node, StepCosts, Surface};
 use pharmakos_sim::tables::UnitKind;
 use pharmakos_sim::voxels::{Material, VoxelEdit, VoxelStore};
-use pharmakos_sim::{RulesTable, World, WorldConfig, mapgen};
+use pharmakos_sim::{MatchSettings, RulesTable, World, WorldConfig, mapgen};
 
 /// The seed every fixture in this file runs on: the determinism harness's own,
 /// so a map that moved shows up in one place rather than two.
@@ -1621,6 +1621,7 @@ fn harness_world(units_per_seat: u32) -> World {
         seats: SEATS,
         units_per_seat,
         rules: rules(),
+        match_settings: MatchSettings::default(),
     })
     .expect("the committed rules table describes a world")
 }
