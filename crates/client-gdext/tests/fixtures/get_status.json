@@ -1,0 +1,8 @@
+{
+  "status": {
+    "phase": "LULL",
+    "phase_remaining_ms": 90000,
+    "segment_length_ms": 180000,
+    "round": 1
+  }
+}
