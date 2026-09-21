@@ -59,6 +59,7 @@
 //! cargo xtask ci --skip buf         # everything except one step
 //! cargo xtask clippy -p pharmakos-sim   # one step, scoped (what the pre-commit hook runs)
 //! cargo xtask golden --bless        # accept the fresh outputs as the new goldens
+//! cargo xtask stage-client --check  # build the cdylib, stage, import, run the client check
 //! cargo xtask list                  # list the steps
 //! ```
 //!
@@ -86,7 +87,8 @@
 #![allow(
     clippy::too_many_lines,        // `run_cli` is a flat argument parser, splitting it hides it
     clippy::doc_markdown,          // shell snippets and tool names in the docs above
-    clippy::missing_panics_doc     // nothing here is a library API
+    clippy::missing_panics_doc,    // nothing here is a library API
+    clippy::struct_excessive_bools // `Ctx` is the parsed flag list; each bool IS a flag
 )]
 
 use std::env;
@@ -279,10 +281,53 @@ const VISTA_RESOLUTION: &str = "1280x720";
 const VISTA_SCREEN: &str = "-screen 0 1280x720x24";
 
 /// PLACEHOLDER: the scene the vista job loads and the flag that makes it take
-/// one shot and quit are T16's to name — the Godot project does not exist yet.
-/// When it does, this becomes the scene path passed to `godot --path godot`.
-/// Owner/T16.
+/// one shot and quit are T16's to name — the vista does not exist yet. When it
+/// does, this becomes the scene path passed to `godot --path godot`. Owner/T16.
 const VISTA_SCENE: &str = "res://scenes/vista_shot.tscn";
+
+// --- the client extension (T12) --------------------------------------------
+//
+// `cargo xtask stage-client` builds the gdext cdylib, copies it into the Godot
+// project's staging directory, byte-scans it for the entry symbol, and runs the
+// import that a fresh checkout cannot do without. Every constant below is one
+// half of a pair that has to agree with `godot/pharmakos.gdextension`; the step
+// reads that file and says so when they do not, because a mismatch is otherwise
+// a run-time failure inside Godot and a silent one on a fresh checkout, where
+// the extension's classes instantiate as placeholders anyway.
+
+/// The package holding the bridge, and its library target's file stem.
+const CLIENT_PACKAGE: &str = "pharmakos-client-gdext";
+const CLIENT_LIB_STEM: &str = "pharmakos_client_gdext";
+
+/// Where the staged library goes, relative to [`GODOT_PROJECT_DIR`], and the
+/// extension file that points at it.
+const CLIENT_STAGE_DIR: &str = "bin";
+const GDEXTENSION_FILE: &str = "pharmakos.gdextension";
+
+/// gdext's entry point, as `pharmakos.gdextension` names it.
+///
+/// The byte-scan for this string is not belt and braces. Building a second
+/// target into the same directory can replace the staged library with one that
+/// has no gdext in it; Godot then reports "Can't resolve symbol gdext_rust_init,
+/// error 127", which reads like an ABI failure and is not one (spike G1 §10.12,
+/// "Two builds, two target directories").
+const ENTRY_SYMBOL: &str = "gdext_rust_init";
+
+/// The scene `--check` runs: the headless client check, which prints its report
+/// and quits non-zero if the bridge caught a panic or the two upload paths
+/// disagreed.
+const CLIENT_CHECK_SCENE: &str = "res://scenes/client_check.tscn";
+
+/// The profile the client is staged from.
+///
+/// Debug, and deliberately. `[profile.release]` sets `panic = "abort"`, under
+/// which `catch_unwind` catches nothing — so the bridge's caught-panic counter,
+/// which is what T12's acceptance asserts on, would be dead in a release build
+/// and a panic would take the whole engine process down instead. `[profile.*]`
+/// is a contract path (AGENTS.md §5), so this staging step takes the profile
+/// where the instrument works and T12's pull request raises the release
+/// question with the owner rather than answering it.
+const CLIENT_PROFILE_DIR: &str = "debug";
 
 // ---------------------------------------------------------------------------
 // Step table
@@ -376,6 +421,13 @@ const STEPS: &[Step] = &[
         about: "render the vista headless and compare it to its golden PNG",
         run: step_screenshot,
     },
+    // The client extension. Like the two above it needs a tool the deterministic
+    // crates do not, so it skips with a named reason where Godot is absent.
+    Step {
+        name: "stage-client",
+        about: "build the gdext cdylib, stage it into godot/bin and import the project",
+        run: step_stage_client,
+    },
 ];
 
 // ---------------------------------------------------------------------------
@@ -412,6 +464,10 @@ struct Ctx {
     locked: bool,
     /// `-p/--package`: restrict package-scoped steps (the pre-commit hook).
     packages: Vec<String>,
+    /// `--check`: `stage-client` also runs the headless client check and takes
+    /// its exit code as its own. The CI client leg passes it; `cargo xtask ci`
+    /// does not, so a developer without a Godot binary is not stopped by it.
+    client_check: bool,
     /// Workspace metadata, or the reason it could not be read.
     workspace: Result<Workspace, String>,
 }
@@ -421,6 +477,7 @@ fn run_cli(args: &[String]) -> Result<bool, String> {
     let mut skipped: Vec<String> = Vec::new();
     let mut packages: Vec<String> = Vec::new();
     let mut bless = false;
+    let mut client_check = false;
     let mut quick = false;
     let mut fix = false;
     let mut require_tools = env::var_os("PHARMAKOS_REQUIRE_TOOLS").is_some();
@@ -447,6 +504,7 @@ fn run_cli(args: &[String]) -> Result<bool, String> {
             "--quick" => quick = true,
             "--fix" => fix = true,
             "--bless" => bless = true,
+            "--check" => client_check = true,
             "--require-tools" => require_tools = true,
             "--no-require-tools" => require_tools = false,
             "--locked" => locked = Some(true),
@@ -501,6 +559,7 @@ fn run_cli(args: &[String]) -> Result<bool, String> {
         require_tools,
         locked,
         packages,
+        client_check,
         workspace,
     };
 
@@ -600,6 +659,7 @@ fn print_help() {
     println!("    --skip <step>      leave one step out of `ci`");
     println!("    -p, --package <n>  restrict package-scoped steps to these packages");
     println!("    --bless            rewrite golden files from the fresh outputs");
+    println!("    --check            stage-client: also run the headless client check");
     println!("    --require-tools    fail instead of skipping when a tool is missing");
     println!("    --locked           pass --locked to cargo (automatic when $CI is set)");
     println!();
@@ -1453,6 +1513,271 @@ fn step_screenshot(ctx: &Ctx) -> Result<Outcome, String> {
         "the vista matches {VISTA_GOLDEN} ({} of {} pixels differ at all)",
         diff.differing, diff.pixels
     )))
+}
+
+/// Builds the gdext cdylib, stages it where Godot can load it, and runs the
+/// import a fresh checkout cannot do without.
+///
+/// Four things happen, in this order, and the third is the one that saves time
+/// later:
+///
+/// 1. `cargo build -p pharmakos-client-gdext`;
+/// 2. the library is copied from **Cargo's own target directory**, read back out
+///    of `cargo metadata`, into `godot/bin/`. Never an assumed `target/`: a
+///    user-level `build.target-dir` or `CARGO_TARGET_DIR` moves it, a `res://`
+///    path cannot escape the project folder, and staging from the wrong place
+///    is how the two-target-directories trap starts;
+/// 3. the staged file is **byte-scanned for `gdext_rust_init`**, and
+///    `pharmakos.gdextension` is read back to check it names this exact file.
+///    A library without the symbol, or an extension file pointing at a name
+///    nothing writes, both surface inside Godot as "Can't resolve symbol
+///    gdext_rust_init, error 127", which reads like an ABI failure and is not
+///    one (spike G1 §10.12);
+/// 4. `godot --headless --path godot --import`. **Not optional**: a non-editor
+///    Godot run loads GDExtensions only from `res://.godot/extension_list.cfg`,
+///    which the editor writes when it scans the project and which is
+///    git-ignored, so on a fresh checkout — every CI runner — the extension's
+///    classes instantiate as placeholders and the first call on them fails. G1
+///    lost four runs to this.
+///
+/// With `--check`, the headless client check runs afterwards and its exit code
+/// is the step's: that is where T12's "assert the caught-panic count is 0"
+/// lives, and where paths A and B are compared inside the engine rather than
+/// only under `cargo test`.
+fn step_stage_client(ctx: &Ctx) -> Result<Outcome, String> {
+    let project = ctx.root.join(GODOT_PROJECT_DIR);
+    if !project.join("project.godot").is_file() {
+        return Ok(Outcome::Skipped(format!(
+            "no {GODOT_PROJECT_DIR}/project.godot yet"
+        )));
+    }
+    // macOS is not a skip for want of a tool; it is a skip because there is
+    // nothing to stage. `pharmakos.gdextension` declares windows.x86_64 and
+    // linux.x86_64 only (decisions-log item 73) — the two platforms the client
+    // ships on — so a macOS library would have no entry to be loaded from.
+    if cfg!(target_os = "macos") {
+        return Ok(Outcome::Skipped(format!(
+            "{GODOT_PROJECT_DIR}/{GDEXTENSION_FILE} declares windows.x86_64 and linux.x86_64 \
+             only (decisions-log item 73), so there is no macOS library for Godot to load; \
+             the client ships on Windows and Linux (spec section 15)"
+        )));
+    }
+
+    let workspace = match &ctx.workspace {
+        Ok(workspace) => workspace,
+        Err(reason) => return Ok(Outcome::Skipped(format!("no metadata: {reason}"))),
+    };
+    if workspace.present(&[CLIENT_PACKAGE]).is_empty()
+        && !workspace
+            .packages
+            .iter()
+            .any(|package| package.name == CLIENT_PACKAGE)
+    {
+        return Ok(Outcome::Skipped(format!(
+            "`{CLIENT_PACKAGE}` is not a member of this workspace"
+        )));
+    }
+
+    let mut args: Vec<String> = vec![
+        "build".to_owned(),
+        "--package".to_owned(),
+        CLIENT_PACKAGE.to_owned(),
+        "--lib".to_owned(),
+    ];
+    if ctx.locked {
+        args.push("--locked".to_owned());
+    }
+    run(ctx, &ctx.cargo, &args)?;
+
+    let library = client_library_name();
+    let built = workspace.target_dir.join(CLIENT_PROFILE_DIR).join(&library);
+    if !built.is_file() {
+        return Err(format!(
+            "{} was not produced. Cargo's target directory for this workspace is {}, which is \
+             what `cargo metadata` reports and what this step stages from — if the library is \
+             somewhere else, a second target directory is in play (spike G1 section 10.12)",
+            built.display(),
+            workspace.target_dir.display()
+        ));
+    }
+
+    // The extension file is the contract between this step and Godot; read it
+    // back rather than trusting that the two have stayed in step.
+    let extension_path = project.join(GDEXTENSION_FILE);
+    let extension = fs::read_to_string(&extension_path)
+        .map_err(|error| format!("reading {}: {error}", extension_path.display()))?;
+    let reference = format!("res://{CLIENT_STAGE_DIR}/{library}");
+    if !extension.contains(&reference) {
+        return Err(format!(
+            "{} does not name `{reference}`, so Godot would look for a library this step does \
+             not write. Keep the [libraries] paths and xtask's CLIENT_LIB_STEM in step.",
+            extension_path.display()
+        ));
+    }
+    if !extension.contains(ENTRY_SYMBOL) {
+        return Err(format!(
+            "{} does not set `entry_symbol = \"{ENTRY_SYMBOL}\"`",
+            extension_path.display()
+        ));
+    }
+
+    let stage_dir = project.join(CLIENT_STAGE_DIR);
+    fs::create_dir_all(&stage_dir)
+        .map_err(|error| format!("creating {}: {error}", stage_dir.display()))?;
+    let staged = stage_dir.join(&library);
+    fs::copy(&built, &staged).map_err(|error| {
+        format!(
+            "copying {} to {}: {error}",
+            built.display(),
+            staged.display()
+        )
+    })?;
+
+    let bytes =
+        fs::read(&staged).map_err(|error| format!("reading {}: {error}", staged.display()))?;
+    if !contains_bytes(&bytes, ENTRY_SYMBOL.as_bytes()) {
+        return Err(format!(
+            "{} does not contain the symbol `{ENTRY_SYMBOL}`. Godot reports this as \"Can't \
+             resolve symbol {ENTRY_SYMBOL}, error 127\", which reads like an ABI problem and is \
+             not one: something built a different target over the staged library (spike G1 \
+             section 10.12, \"Two builds, two target directories\").",
+            staged.display()
+        ));
+    }
+    let staged_bytes = bytes.len();
+
+    if !tool_available("godot") {
+        return skip_or_fail(
+            ctx,
+            &format!(
+                "the library is staged at {}, but godot is not installed, so the import that a \
+                 fresh checkout needs could not run (the `client` job in \
+                 .github/workflows/ci.yml installs the pinned 4.7.2 build)",
+                staged.display()
+            ),
+        );
+    }
+
+    // The pre-step every fresh checkout needs; see this function's doc comment.
+    let import_note = import_project(ctx, &project)?;
+
+    if !ctx.client_check {
+        return Ok(Outcome::Done(format!(
+            "{library} staged ({staged_bytes} bytes, carries `{ENTRY_SYMBOL}`); {import_note}; \
+             `--check` also runs the headless client check"
+        )));
+    }
+
+    run(
+        ctx,
+        "godot",
+        &[
+            "--headless".to_owned(),
+            "--path".to_owned(),
+            GODOT_PROJECT_DIR.to_owned(),
+            CLIENT_CHECK_SCENE.to_owned(),
+        ],
+    )
+    .map_err(|error| {
+        format!(
+            "{error}\n      The client check failed inside Godot. Its own report is above: a \
+             non-zero caught-panic count means gdext caught a panic at a `#[func]` boundary and \
+             turned it into a healthy-looking result, which is the failure the counter exists \
+             to make visible (spike G1 section 10.12)."
+        )
+    })?;
+
+    Ok(Outcome::Done(format!(
+        "{library} staged ({staged_bytes} bytes, carries `{ENTRY_SYMBOL}`); {import_note}; the \
+         headless client check passed with no caught panics"
+    )))
+}
+
+/// `godot --headless --path godot --import`, and the check that it produced what
+/// it is run for.
+///
+/// **Godot 4.7.2 segfaults at the end of a COLD import when a GDExtension
+/// registering a class is present.** Measured on Windows against gdext 0.5.5:
+/// the first import of a project with no `.godot/` exits 139 / 0xC0000005 after
+/// the scan has finished and the editor layout has loaded; a second import of
+/// the same project exits 0, and a scene run after the crashed import loads the
+/// extension and passes. Bisected: an extension with no registered class does
+/// not crash, an extension with a single empty `#[class(base = Node3D)]` does,
+/// so it is a teardown fault in the engine or in gdext and not in this crate's
+/// code. The artefact the import exists to produce —
+/// `.godot/extension_list.cfg` — is written by the crashing run.
+///
+/// So the exit code alone is not the question worth asking. This function asks
+/// the one that is: **is the extension list there, and does it name our
+/// extension?** That is precisely what a fresh checkout lacks and what G1 lost
+/// four runs to. A failed import is retried once, because the second run is the
+/// one that exits cleanly, and the run is only accepted when the file is
+/// present either way. If it is not, the failure is reported with the reason.
+fn import_project(ctx: &Ctx, project: &Path) -> Result<String, String> {
+    let import_args: Vec<String> = vec![
+        "--headless".to_owned(),
+        "--path".to_owned(),
+        GODOT_PROJECT_DIR.to_owned(),
+        "--import".to_owned(),
+    ];
+    let first = run(ctx, "godot", &import_args);
+    let mut note = "project imported".to_owned();
+    if let Err(error) = first {
+        println!(
+            "   note: the import exited badly ({error}); this is the known Godot 4.7.2 cold-import \
+             teardown fault with a GDExtension loaded — retrying, and the extension list is \
+             checked either way"
+        );
+        run(ctx, "godot", &import_args)?;
+        "project imported (the cold import crashed at teardown and the retry exited cleanly)"
+            .clone_into(&mut note);
+    }
+
+    let extension_list = project.join(".godot").join("extension_list.cfg");
+    let listed = fs::read_to_string(&extension_list).map_err(|error| {
+        format!(
+            "{} was not produced ({error}). This file is the whole reason the import runs: a \
+             non-editor Godot loads GDExtensions only from it, so without it the extension's \
+             classes instantiate as placeholders and the first call on one fails (spike G1 \
+             section 10.12)",
+            extension_list.display()
+        )
+    })?;
+    if !listed.contains(GDEXTENSION_FILE) {
+        return Err(format!(
+            "{} does not name {GDEXTENSION_FILE}; it holds:\n      {}",
+            extension_list.display(),
+            listed.trim()
+        ));
+    }
+    Ok(note)
+}
+
+/// The cdylib's file name on this platform.
+///
+/// macOS is listed for completeness; [`step_stage_client`] returns before it
+/// ever gets here, because `pharmakos.gdextension` has no macOS entry.
+fn client_library_name() -> String {
+    if cfg!(target_os = "windows") {
+        format!("{CLIENT_LIB_STEM}.dll")
+    } else if cfg!(target_os = "macos") {
+        format!("lib{CLIENT_LIB_STEM}.dylib")
+    } else {
+        format!("lib{CLIENT_LIB_STEM}.so")
+    }
+}
+
+/// Whether `haystack` contains `needle` anywhere, byte for byte.
+///
+/// A library is not text, so this is a plain window scan rather than anything
+/// that would have to decide an encoding first.
+fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return false;
+    }
+    haystack
+        .windows(needle.len())
+        .any(|window| window == needle)
 }
 
 /// The `cargo run` argument list for one of the workspace's own binaries.

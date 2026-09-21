@@ -69,11 +69,21 @@ jobs:
           # the first vista golden, this leg would pass the first three preconditions and
           # then fail on a tool it was never given. The render belongs to that job, which
           # installs what it needs; this leg would also be doing it twice.
+          #
+          # `--skip stage-client` on the ubuntu and windows legs is REQUIRED for the same
+          # reason. `stage-client` builds the gdext cdylib, stages it and then runs
+          # `godot --headless --path godot --import`; godot is installed in the `client`
+          # job below and nowhere else, so on these two legs the step would reach
+          # `skip_or_fail` and fail under PHARMAKOS_REQUIRE_TOOLS. The macOS leg keeps the
+          # step and reports the real reason it cannot run: `pharmakos.gdextension`
+          # declares windows.x86_64 and linux.x86_64 only (decisions-log item 73), so
+          # there is no macOS library for Godot to load. That skip is the one worth
+          # reading in the summary, and it is why the step is not skipped there too.
           - os: ubuntu-latest
-            xtask_args: "--skip screenshot"
+            xtask_args: "--skip screenshot --skip stage-client"
             reuse: true
           - os: windows-latest
-            xtask_args: "--skip reuse"
+            xtask_args: "--skip reuse --skip stage-client"
             reuse: false
           - os: macos-latest
             xtask_args: "--skip reuse"
@@ -322,12 +332,18 @@ jobs:
     # installed here and nowhere else, which is why the ubuntu `ci` leg above
     # passes `--skip screenshot`.
     #
-    # WIRED BUT SKIPPING. `godot/` does not exist and no vista golden is
-    # committed, so `cargo xtask screenshot` reports itself skipped, with the
-    # reason and the task that fills it. The heavy install steps below are
-    # gated on the Godot project appearing, so today this leg costs a checkout
-    # and a cargo build. T16 lands the project and the first golden; T20
-    # promotes the step from skipping to required.
+    # WIRED BUT SKIPPING. `godot/` exists from T12, but no vista golden is
+    # committed, so `cargo xtask screenshot` reports itself skipped on its
+    # second precondition, with the reason and the task that fills it.
+    #
+    # The heavy install steps below are gated on the **vista golden**, not on
+    # `godot/project.godot`. They were gated on the project until T12 created
+    # it, at which point the gate would have opened on a leg whose Godot install
+    # step is still a PLACEHOLDER that exits 1 — a red build caused by a
+    # directory appearing. The golden is the honest gate either way: it is what
+    # the step compares against, and without it there is nothing to render for.
+    # T16 lands the vista and the first golden and fills the install step below;
+    # T20 promotes the step from skipping to required.
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -354,7 +370,7 @@ jobs:
         # after which Godot silently falls back to OpenGL 3 — a different
         # renderer from the golden's. Let the loader enumerate the installed
         # ICDs.
-        if: hashFiles('godot/project.godot') != ''
+        if: hashFiles('tests/golden/vista/expected.vista.png') != ''
         shell: bash
         run: |
           set -euo pipefail
@@ -367,7 +383,7 @@ jobs:
         # downloaded here. T16 writes this step with the project it needs;
         # leaving it empty today would make the step below look installed when
         # it is not.
-        if: hashFiles('godot/project.godot') != ''
+        if: hashFiles('tests/golden/vista/expected.vista.png') != ''
         shell: bash
         run: |
           set -euo pipefail
@@ -400,3 +416,103 @@ jobs:
           # produced no PNG rendered nothing, and that must not read as a pass.
           if-no-files-found: ignore
           retention-days: 14
+
+  client:
+    name: client extension (${{ matrix.os }})
+    # T12's acceptance, and the one thing no other leg can check: does the gdext
+    # cdylib actually LOAD into Godot, and did the bridge catch a panic doing its
+    # work. Everything `cargo xtask stage-client --check` asserts is also asserted
+    # by `cargo test` on all three legs above — the geometry comparison between
+    # upload paths A and B, the rules marshalling, the schema round trip. What
+    # only this job can tell us is whether `PharmakosBridge` is a real class in a
+    # real engine rather than a placeholder, which on a fresh checkout is exactly
+    # what it is until `--import` has run (spike G1 §10.12; four runs lost).
+    #
+    # Windows and Linux, because those are the two platforms
+    # `godot/pharmakos.gdextension` declares (decisions-log item 73) and the two
+    # the client ships on (spec §15). macOS is deliberately absent: there is no
+    # macOS library entry for Godot to load, and the `ci` leg above reports that
+    # as a named skip rather than pretending the step ran.
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            godot_asset: Godot_v4.7.2-stable_linux.x86_64.zip
+            godot_binary: Godot_v4.7.2-stable_linux.x86_64
+          - os: windows-latest
+            godot_asset: Godot_v4.7.2-stable_win64.exe.zip
+            godot_binary: Godot_v4.7.2-stable_win64.exe
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Install the Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and target
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: client-${{ matrix.os }}
+
+      - name: Install Godot 4.7.2
+        # PINNED to the exact build decisions-log item 73 names — "godot = "=0.5.5"
+        # and Godot 4.7.2 exactly, the pair every G1 number was taken on". A bump
+        # is determinism-adjacent: it re-runs the geometry golden and goes through
+        # a deliberate pull request, so `latest` has no place here.
+        #
+        # The binary is put on PATH under the name `godot`, because that is what
+        # `cargo xtask stage-client` looks for — the same name a developer has
+        # locally, so the command is the same one in both places.
+        shell: bash
+        env:
+          GODOT_ASSET: ${{ matrix.godot_asset }}
+          GODOT_BINARY: ${{ matrix.godot_binary }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/godot"
+          curl --fail --location --silent --show-error \
+            --output "$HOME/godot/godot.zip" \
+            "https://github.com/godotengine/godot/releases/download/4.7.2-stable/${GODOT_ASSET}"
+          # `unzip` is on the Linux image and is NOT part of Git for Windows; 7-Zip is on
+          # the Windows image. Neither is worth an action, and a step that assumed one
+          # would fail on exactly one leg, which is the kind of thing that costs a run.
+          if command -v unzip >/dev/null 2>&1; then
+            unzip -q -o "$HOME/godot/godot.zip" -d "$HOME/godot"
+          else
+            7z x -y -o"$HOME/godot" "$HOME/godot/godot.zip" > /dev/null
+          fi
+          if [ "${RUNNER_OS}" = "Windows" ]; then
+            mv "$HOME/godot/${GODOT_BINARY}" "$HOME/godot/godot.exe"
+          else
+            mv "$HOME/godot/${GODOT_BINARY}" "$HOME/godot/godot"
+            chmod +x "$HOME/godot/godot"
+          fi
+          echo "$HOME/godot" >> "$GITHUB_PATH"
+
+      - name: Godot reports the pinned version
+        # A wrong archive is otherwise found much later, by a failure that reads
+        # like a code problem.
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(godot --version | head -n 1)
+          echo "godot: ${version}"
+          case "${version}" in
+            4.7.2.stable*) ;;
+            *) echo "::error::expected Godot 4.7.2.stable, got ${version}"; exit 1 ;;
+          esac
+
+      - name: cargo xtask stage-client --check
+        # Build the cdylib, copy it into godot/bin, byte-scan the staged library
+        # for `gdext_rust_init`, run `godot --headless --path godot --import`, and
+        # then run the headless client check — which exits non-zero if the bridge
+        # caught a panic at a `#[func]` boundary or if the two upload paths left
+        # different geometry resident.
+        #
+        # PHARMAKOS_REQUIRE_TOOLS is set for the whole workflow, so a runner that
+        # somehow lost its Godot fails here rather than skipping quietly.
+        shell: bash
+        run: cargo xtask stage-client --check
