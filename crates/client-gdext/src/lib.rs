@@ -1,44 +1,101 @@
 // SPDX-FileCopyrightText: 2026 Pharmakos contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The gdext bridge to the Godot 4.7 client. Role from spec §15 (Architecture), clients
-//! layer: "Godot 4.7 client — GDScript views and playbook editor; thin gdext crate".
+// gdext registers a GDExtension by implementing an `unsafe` trait — `unsafe impl
+// ExtensionLibrary for Pharmakos` in `entry` below — and its `#[godot_api]` macro expands
+// to code that needs the same permission. `unsafe_code` is denied for the whole workspace
+// in Cargo.toml's `[workspace.lints.rust]`, so one of the two has to give.
+//
+// Decisions log section 2.7 item 83 chose THIS shape over a per-crate `[lints]` override:
+// a crate-local allow, in `crates/client-gdext` only, with a comment naming gdext as the
+// reason, raised in T12's pull request rather than edited into the contract lint table.
+// The crate is walled and `cargo xtask wall-guard` proves no deterministic crate depends
+// on it.
+//
+// **The precedent is this and nothing wider.** AGENTS.md section 4.9 warns about exactly
+// this shape for DETERMINISM lints — float arithmetic, `as` casts, hash maps, clocks —
+// where an inner allow would be invisible to CI and would open a determinism hole.
+// `unsafe_code` is not one of those: it has no bearing on the hash chain, the wall lifts
+// none of the determinism lints in this file, and `cargo xtask clippy` pass 2 still lints
+// this crate with `-D warnings`, `indexing_slicing`, `unwrap_used` and `integer_division`.
+// Nobody should read this line as licence to allow anything else here.
+#![allow(
+    unsafe_code,
+    reason = "gdext's ExtensionLibrary impl and #[godot_api] expansion; decisions log \
+              section 2.7 item 83"
+)]
+
+//! The thin gdext bridge between the Rust core and the Godot 4.7 client.
 //!
-//! # What lives here
+//! Role from spec section 15 (Architecture), clients layer: "Godot 4.7 client — GDScript
+//! views and playbook editor; thin gdext crate". **Thin** is the whole specification:
+//! this crate marshals, and it decides nothing (AGENTS.md section 3 rule 4). No game
+//! rule, no verification, no `$`, no `kW`, no time arithmetic lives on either side of
+//! this seam — the editor runs none of its own and asks the gateway, and the bridge does
+//! not do for it what it is forbidden to do for itself. `tests/no_arithmetic.rs` reads
+//! this crate's own source and says so.
 //!
-//! The narrow seam between Rust and Godot, and nothing else:
+//! # What crosses, and in which direction
 //!
-//! * Mesh uploads — our own greedy mesher in Rust feeds Godot `RenderingServer` RIDs under
-//!   a per-frame upload budget. The same mesher handles terrain and `.vox` models loaded
-//!   with `dot_vox`, so no Godot importer addons are needed and Voxel Tools stays optional.
-//!   **The mesher itself now lives in `pharmakos-mesher`** (decisions log §2.7 item 56), a
-//!   walled crate that links without gdext; this crate only marshals its buffers — it
-//!   applies the per-frame upload budget and hands the vertex, colour and index arrays to
-//!   the `RenderingServer`, and it decides nothing about the geometry. This crate is the
-//!   mesher's only dependant today; what `cargo xtask wall-guard` checks on every run is
-//!   the half that matters — that no deterministic crate, the sim included, ever becomes
-//!   one.
-//! * Gateway and plan-core calls the editor needs — the plan model, the verifier and
-//!   travel-time queries are reached through here.
-//! * The watch rig's data: own-fog camera, event list, speed and skip, and the full map on
-//!   elimination or match end.
+//! | in | out | module |
+//! |---|---|---|
+//! | sim-order chunk bytes | mesher-order chunk bytes | [`chunks`] |
+//! | a `gp.v1.RulesTable` | the mesher's `DrainBudget` and `LightParams` | [`rules`] |
+//! | `MeshBuffers` | an [`UploadOp`](upload::UploadOp) the engine executes | [`surface`], [`upload`] |
+//! | a `gp.api.v1` result as JSON | canonical JSON, schema-checked | [`api`] |
 //!
-//! # What does not live here
+//! Each of those is a copy or a lookup. The two places where something is *decided* are
+//! both presentation plumbing that the sim must never see: which frame a chunk is
+//! uploaded on (the mesher's own `DrainQueue`, item 54) and whether a surface can be
+//! patched in place rather than rebuilt (item 53's guards, [`upload`]).
 //!
-//! Decisions. GDScript is views and editor only; this crate marshals between them and the
-//! Rust core. No game rule, no verification, no time maths is implemented on either side
-//! of this seam — the editor runs none of its own, and neither does the bridge.
+//! # Why this crate is behind the wall
 //!
-//! Like every crate outside `crates/sim`, it must never enable or transitively reach the
-//! `research` feature that gates `fork`.
+//! Vertex positions are `f32` and `godot-core` pulls `glam`, so floats, `as` casts, hash
+//! maps and clocks are legal here and nowhere in the deterministic crates. That allowance
+//! is a crate boundary, not an attribute: `cargo xtask clippy` pass 2 passes it on the
+//! command line, and `cargo xtask wall-guard` fails the build if `sim`, `plan-core`,
+//! `verifier`, `operator` or `gateway` ever depends on this crate (AGENTS.md section 4.9).
+//! Nothing in this source asks for one of those allowances, and the one `#![allow]` above
+//! is `unsafe_code`, which is not among them.
 //!
-//! Nothing is implemented yet. Spike G1 (mesher and remesh in Godot 4.7) is closed — its
-//! results are in `docs/spikes/G1-destruction-remesh.md` §10 and its decisions are items
-//! 52–56 — and the bridge is written against the real types at the walking skeleton's
-//! vista task. The `.gdextension` file and the Godot project itself live outside this
-//! crate and are not written yet.
+//! # Two things the bridge counts, because neither is loud
 //!
-//! One G1 lesson lands here rather than in the mesher: **gdext's panic catch at the
-//! `#[func]` boundary is silent**, turning a panic into a default return value and a
-//! healthy-looking frame. Count caught panics at the boundary and report them, rather than
-//! trusting the boundary to be loud (G1 §10.12).
+//! * **Caught panics.** gdext's catch at the `#[func]` boundary turns a panic into a
+//!   default return value and a healthy-looking frame (G1 section 10.12). [`panics`]
+//!   counts its own catches, the self-check reports the count, and CI asserts it is zero.
+//! * **Why each upload took the branch it took.** Path B's in-place write is only legal
+//!   when the index array is unchanged and the probed layout is the one being written; the
+//!   counters say how often each guard fired, so "the fast path is working" is a number.
+//!
+//! # What is not here yet
+//!
+//! The gateway connection itself. T12's bridge is tested against committed `gp.api.v1`
+//! fixtures, "which is marshalling and needs no live server; it meets the real gateway at
+//! T16" (skeleton plan T12). The vista, the camera, the event list and the `.vox` models
+//! are T16's and T19's, and `dot_vox` arrives with the models rather than here
+//! (decisions log item 101).
+
+pub mod api;
+pub mod chunks;
+pub mod error;
+pub mod panics;
+pub mod rules;
+pub mod surface;
+pub mod upload;
+
+mod bridge;
+mod engine;
+mod entry;
+mod variant;
+
+pub use crate::bridge::{PharmakosBridge, SelfCheck, self_check};
+pub use crate::error::BridgeError;
+
+/// The class name the `.gdextension` and the scenes refer to.
+///
+/// Kept beside the type rather than only in the `#[class]` attribute so that
+/// `tests/godot_project.rs` can check `godot/` and this crate still agree about it — a
+/// renamed class is otherwise a run-time failure inside Godot, and a silent one on a
+/// fresh checkout where the classes instantiate as placeholders anyway.
+pub const BRIDGE_CLASS_NAME: &str = "PharmakosBridge";
