@@ -115,11 +115,72 @@ pub enum EventKind {
     /// A unit was parked as sealed in: no route to its destination exists
     /// (item 60, "park and report").
     UnitSealedIn,
+    /// A seat sealed a playbook. `value` carries the route's length in steps.
+    PlanSealed,
+    /// A route or rule-body step started. `value` carries its index, and `at`
+    /// the target its late-bound selector pinned, when it has one.
+    ///
+    /// **The index is a route index or a body index and the line does not say
+    /// which** — a body's step 0 and route step 0 write the same four fields.
+    /// A reader tells them apart by the `rule_fired` / `rule_ended` pair a body
+    /// runs between, which is enough for a transcript and for item 97's "event
+    /// count in range". It is not enough for an assertion that wants to name
+    /// one step, so a second field, or a `rule_step_started` kind beside this
+    /// one, is the additive answer when T15's scenario assertions ask for it
+    /// (owner, at T15). The same holds of `step_completed`, `step_skipped` and
+    /// `step_failed`.
+    StepStarted,
+    /// A step completed. `value` carries its index.
+    StepCompleted,
+    /// A step's `skip_if` guard was true as it would have started, so it was
+    /// skipped. `value` carries its index.
+    StepSkipped,
+    /// A step failed and `on_fail` decided what happened next. `value` carries
+    /// [`crate::interpreter::state::StepFailure::id`] — never a silent skip.
+    StepFailed,
+    /// A handler's body started. `value` carries the handler's index.
+    RuleFired,
+    /// A handler's body ended. `value` carries
+    /// [`crate::interpreter::Resume::id`].
+    RuleEnded,
+    /// The fixed 20 % self-preservation reflex fired: it aborted any visit and
+    /// walked the commander to the safest own beacon. `value` carries the
+    /// commander's hit points as a whole percentage.
+    ReflexFired,
+    /// The reflex stopped holding the seat's decision, and the route continues
+    /// from the step it was on. `value` carries the commander's hit points as a
+    /// whole percentage, exactly as `reflex_fired` does.
+    ///
+    /// One kind covers **all four** of its exits, because what a reader wants
+    /// from it is "the playbook is running again" and the interpreter's state
+    /// carries which exit it was: the commander reached the safest own beacon;
+    /// there was no living own beacon to walk to (the line then lands on the
+    /// same tick as its `reflex_fired`); the beacon it was walking to died on
+    /// the way; or no route to it exists and the walker was parked (item 60,
+    /// with its own `unit_sealed_in` beside this line). Splitting them is
+    /// additive and costs a wire id, so it waits for a reader that needs it.
+    ReflexCleared,
+    /// A visit began: the commander is on site and the handshake is being paid.
+    /// `value` carries how many rows the visit will commit.
+    VisitStarted,
+    /// One interface row committed, at the end of its own duration. `value`
+    /// carries the row's index within the visit.
+    RowCommitted,
+    /// A visit ended. `value` carries how many rows committed — which is how a
+    /// transcript shows that an aborted visit kept the rows it had already
+    /// committed and pays the handshake again when it resumes.
+    VisitEnded,
+    /// A beacon was deployed. `value` carries
+    /// [`crate::seams::MandateKind::id`].
+    BeaconPlaced,
+    /// The route ended and the fallback posture took over. `value` carries
+    /// [`crate::interpreter::Posture::id`].
+    FallbackEngaged,
 }
 
 impl EventKind {
     /// Every kind, in ascending [`EventKind::id`] order.
-    pub const ALL: [EventKind; 12] = [
+    pub const ALL: [EventKind; 26] = [
         EventKind::MatchStarted,
         EventKind::LullOpened,
         EventKind::PushStarted,
@@ -132,6 +193,20 @@ impl EventKind {
         EventKind::CommanderDied,
         EventKind::CommanderRespawned,
         EventKind::UnitSealedIn,
+        EventKind::PlanSealed,
+        EventKind::StepStarted,
+        EventKind::StepCompleted,
+        EventKind::StepSkipped,
+        EventKind::StepFailed,
+        EventKind::RuleFired,
+        EventKind::RuleEnded,
+        EventKind::ReflexFired,
+        EventKind::ReflexCleared,
+        EventKind::VisitStarted,
+        EventKind::RowCommitted,
+        EventKind::VisitEnded,
+        EventKind::BeaconPlaced,
+        EventKind::FallbackEngaged,
     ];
 
     /// The wire id. Additive only: never reuse, never renumber.
@@ -150,6 +225,20 @@ impl EventKind {
             EventKind::CommanderDied => 10,
             EventKind::CommanderRespawned => 11,
             EventKind::UnitSealedIn => 12,
+            EventKind::PlanSealed => 13,
+            EventKind::StepStarted => 14,
+            EventKind::StepCompleted => 15,
+            EventKind::StepSkipped => 16,
+            EventKind::StepFailed => 17,
+            EventKind::RuleFired => 18,
+            EventKind::RuleEnded => 19,
+            EventKind::ReflexFired => 20,
+            EventKind::ReflexCleared => 21,
+            EventKind::VisitStarted => 22,
+            EventKind::RowCommitted => 23,
+            EventKind::VisitEnded => 24,
+            EventKind::BeaconPlaced => 25,
+            EventKind::FallbackEngaged => 26,
         }
     }
 
@@ -169,6 +258,20 @@ impl EventKind {
             10 => Some(EventKind::CommanderDied),
             11 => Some(EventKind::CommanderRespawned),
             12 => Some(EventKind::UnitSealedIn),
+            13 => Some(EventKind::PlanSealed),
+            14 => Some(EventKind::StepStarted),
+            15 => Some(EventKind::StepCompleted),
+            16 => Some(EventKind::StepSkipped),
+            17 => Some(EventKind::StepFailed),
+            18 => Some(EventKind::RuleFired),
+            19 => Some(EventKind::RuleEnded),
+            20 => Some(EventKind::ReflexFired),
+            21 => Some(EventKind::ReflexCleared),
+            22 => Some(EventKind::VisitStarted),
+            23 => Some(EventKind::RowCommitted),
+            24 => Some(EventKind::VisitEnded),
+            25 => Some(EventKind::BeaconPlaced),
+            26 => Some(EventKind::FallbackEngaged),
             _ => None,
         }
     }
@@ -191,6 +294,20 @@ impl EventKind {
             EventKind::CommanderDied => "commander_died",
             EventKind::CommanderRespawned => "commander_respawned",
             EventKind::UnitSealedIn => "unit_sealed_in",
+            EventKind::PlanSealed => "plan_sealed",
+            EventKind::StepStarted => "step_started",
+            EventKind::StepCompleted => "step_completed",
+            EventKind::StepSkipped => "step_skipped",
+            EventKind::StepFailed => "step_failed",
+            EventKind::RuleFired => "rule_fired",
+            EventKind::RuleEnded => "rule_ended",
+            EventKind::ReflexFired => "reflex_fired",
+            EventKind::ReflexCleared => "reflex_cleared",
+            EventKind::VisitStarted => "visit_started",
+            EventKind::RowCommitted => "row_committed",
+            EventKind::VisitEnded => "visit_ended",
+            EventKind::BeaconPlaced => "beacon_placed",
+            EventKind::FallbackEngaged => "fallback_engaged",
         }
     }
 
