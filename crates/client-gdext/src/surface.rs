@@ -112,9 +112,19 @@ impl Surface {
 
     /// A surface built from its three arrays, for tests and for the headless comparison.
     ///
+    /// Both checks are the envelope doing its job. The lengths have to agree because the
+    /// two arrays are written as one vertex stream, and every index has to address a
+    /// vertex that exists because this type is handed straight to
+    /// `mesh_add_surface_from_arrays`: an index past the end is not caught there, it is
+    /// read past the end of the engine's own buffer. [`Self::from_mesh`] cannot produce
+    /// one — the mesher caps the vertex count first — so only a caller building a surface
+    /// by hand can, which is exactly who this constructor is for.
+    ///
     /// # Errors
     ///
-    /// [`BridgeError::Length`] when the position and colour arrays disagree in length.
+    /// [`BridgeError::Length`] when the position and colour arrays disagree in length;
+    /// [`BridgeError::SurfaceSize`] when an index addresses a vertex the surface does not
+    /// have.
     pub fn new(
         positions: Vec<[f32; 3]>,
         colours: Vec<[u8; 4]>,
@@ -126,6 +136,16 @@ impl Surface {
                 expected: positions.len(),
                 got: colours.len(),
             });
+        }
+        if let Some(highest) = indices.iter().copied().max() {
+            let addressed = usize::from(highest).saturating_add(1);
+            if addressed > positions.len() {
+                return Err(BridgeError::SurfaceSize {
+                    what: "the highest index",
+                    got: addressed,
+                    cap: positions.len(),
+                });
+            }
         }
         Ok(Self {
             positions,
@@ -370,7 +390,13 @@ mod tests {
 
     fn surface_of(colours: Vec<[u8; 4]>) -> Surface {
         let positions = vec![[0.0_f32, 0.0, 0.0]; colours.len()];
-        Surface::new(positions, colours, vec![0, 1, 2]).expect("matching lengths")
+        // One index per vertex, so the fixture addresses only vertices it has. These
+        // tests are about the colour bytes and not about the topology, and a surface
+        // whose indices ran past its vertices is refused by the constructor.
+        let indices: Vec<u16> = (0..colours.len())
+            .map(|index| u16::try_from(index).unwrap_or(0))
+            .collect();
+        Surface::new(positions, colours, indices).expect("matching lengths")
     }
 
     /// The measured finding in the module header. Both candidates are exact round trips
@@ -463,12 +489,8 @@ mod tests {
 
     #[test]
     fn vertex_bytes_are_little_endian_triples() {
-        let surface = Surface::new(
-            vec![[1.0_f32, 2.0, 3.0]],
-            vec![[0, 0, 0, 255]],
-            vec![0, 1, 2],
-        )
-        .expect("matching lengths");
+        let surface = Surface::new(vec![[1.0_f32, 2.0, 3.0]], vec![[0, 0, 0, 255]], vec![0])
+            .expect("matching lengths");
         let mut bytes = Vec::new();
         surface.vertex_bytes(&mut bytes);
         assert_eq!(bytes.len(), VERTEX_STRIDE);
@@ -482,5 +504,46 @@ mod tests {
         let error = Surface::new(vec![[0.0_f32; 3]; 2], vec![[0_u8; 4]], Vec::new())
             .expect_err("two positions, one colour");
         assert!(matches!(error, BridgeError::Length { .. }), "{error}");
+    }
+
+    /// An index the surface cannot address is refused at construction.
+    ///
+    /// The envelope's whole job is that what it hands
+    /// `mesh_add_surface_from_arrays` addresses itself. An out-of-range index is not
+    /// caught there: it is read past the end of the engine's own vertex buffer, and what
+    /// comes back is a stretched triangle or a crash, depending on what happened to be
+    /// after it.
+    #[test]
+    fn an_index_that_addresses_a_vertex_the_surface_does_not_have_is_refused() {
+        let error = Surface::new(vec![[0.0_f32; 3]], vec![[0_u8; 4]], vec![0, 9_999])
+            .expect_err("one vertex, an index addressing ten thousand");
+        assert!(
+            matches!(
+                error,
+                BridgeError::SurfaceSize {
+                    what: "the highest index",
+                    got: 10_000,
+                    cap: 1,
+                }
+            ),
+            "{error}"
+        );
+    }
+
+    /// The boundary itself: the last vertex is addressable, one past it is not.
+    #[test]
+    fn the_last_vertex_is_addressable_and_the_one_after_it_is_not() {
+        let positions = vec![[0.0_f32; 3]; 3];
+        let colours = vec![[0_u8; 4]; 3];
+        Surface::new(positions.clone(), colours.clone(), vec![0, 1, 2])
+            .expect("index 2 is the third of three vertices");
+        Surface::new(positions, colours, vec![0, 1, 3]).expect_err("index 3 is one past the end");
+    }
+
+    /// An empty index array is legal: a chunk with nothing to draw has no indices, and
+    /// refusing it would turn an ordinary empty chunk into an error.
+    #[test]
+    fn a_surface_with_no_indices_at_all_is_accepted() {
+        Surface::new(Vec::new(), Vec::new(), Vec::new()).expect("an empty surface is legal");
     }
 }

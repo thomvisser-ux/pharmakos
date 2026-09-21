@@ -117,9 +117,14 @@ fn sources() -> Vec<PathBuf> {
 }
 
 // `fs::read_dir` is on clippy.toml's disallowed-methods list because directory order
-// differs between filesystems. Allowed here because `sources()` sorts before anything
-// reads the result, which is the remedy the ban asks for.
-#[allow(clippy::disallowed_methods)]
+// differs between filesystems; `sources()` sorts before anything reads the result, which
+// is the remedy the ban asks for.
+//
+// There is deliberately NO `#[allow]` here. This crate is walled, and the wall is a
+// command-line allowance passed by `cargo xtask clippy` pass 2 (`WALL_ALLOW` in
+// xtask/src/main.rs already carries `-A clippy::disallowed_methods`), not something the
+// source asks for — AGENTS.md section 4.9, "nothing in the source asks for the
+// allowance". The one exception this crate takes is item 83's `unsafe_code` in lib.rs.
 fn collect(dir: &Path, extension: &str, out: &mut Vec<PathBuf>) {
     let Ok(entries) = fs::read_dir(dir) else {
         return;

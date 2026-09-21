@@ -32,6 +32,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use pharmakos_client_gdext::BRIDGE_CLASS_NAME;
+use pharmakos_client_gdext::rules::{mesher_rules, table_from_json};
 
 fn godot_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -142,6 +143,13 @@ fn the_project_pins_the_settings_item_56_rests_on() {
             "anti_aliasing/quality/msaa_3d=0",
             "MSAA off is why the mesher's T-junctions have never shown",
         ),
+        (
+            "common/physics_jitter_fix=0.0",
+            "the PROJECT setting, not a line in one scene's _ready. At its 0.5 default it \
+             rewrites delta into a quantised estimate — 647 of 1 000 steady G1 frames \
+             reported exactly 1.3889 ms — and a scene added later would silently inherit \
+             it (spike G1 section 10.12)",
+        ),
     ] {
         assert!(
             project.contains(setting),
@@ -151,6 +159,59 @@ fn the_project_pins_the_settings_item_56_rests_on() {
     assert!(
         project.contains("config/features=PackedStringArray(\"4.7\""),
         "project.godot must declare the 4.7 feature set (decisions-log item 73 pins 4.7.2)"
+    );
+}
+
+/// The check script's inline rules table is the committed one.
+///
+/// `client_check.gd` carries item 54's five numbers as a JSON literal, because a `res://`
+/// path inside Godot cannot reach `rules/rules.v1.json` at the repository root. That makes
+/// it a second copy of a tuning row, and a copy nothing compares is exactly what
+/// AGENTS.md section 12 forbids: the row moves, the copy does not, every check stays green
+/// and the client leg reports a table that no longer exists. The bridge's own inline copy
+/// is pinned the same way by `bridge::tests::the_self_checks_table_is_the_committed_one`.
+#[test]
+fn the_check_scripts_inline_rules_table_is_the_committed_one() {
+    let script = read("scripts/client_check.gd");
+    let line = script
+        .lines()
+        .find(|line| line.starts_with("const RULES_JSON"))
+        .expect("client_check.gd declares RULES_JSON");
+    let json = line
+        .split_once('\'')
+        .and_then(|(_, rest)| rest.rsplit_once('\''))
+        .map(|(body, _)| body)
+        .expect("RULES_JSON is a single-quoted GDScript literal");
+
+    let inline = mesher_rules(&table_from_json(json).expect("the inline table is canonical JSON"))
+        .expect("the inline table has a mesher row");
+
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("rules")
+        .join("rules.v1.json");
+    let text = fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("reading {}: {error}", path.display()));
+    let committed =
+        mesher_rules(&table_from_json(&text).expect("the committed table is canonical gp.v1 JSON"))
+            .expect("the committed table has a mesher row");
+
+    // The MESHER ROW, not the whole table: `revision` is the committed table's own
+    // version and moves whenever any lane adds a row anywhere in it. See
+    // `bridge::tests::the_self_checks_table_is_the_committed_one`, which pins the Rust
+    // copy the same way and for the same reason.
+    assert_eq!(
+        inline.budget, committed.budget,
+        "godot/scripts/client_check.gd's RULES_JSON carries a drain budget that is no \
+         longer rules/rules.v1.json's. Update it, `bridge::round_trip_rules` and the \
+         committed table together, and say in the pull request which row moved."
+    );
+    assert_eq!(
+        inline.light, committed.light,
+        "godot/scripts/client_check.gd's RULES_JSON carries light parameters that are no \
+         longer rules/rules.v1.json's. Update it, `bridge::round_trip_rules` and the \
+         committed table together, and say in the pull request which row moved."
     );
 }
 
