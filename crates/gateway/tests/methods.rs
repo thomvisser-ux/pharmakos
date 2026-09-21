@@ -16,10 +16,17 @@
 //!    `tests/golden/schema/`, so the published surface cannot drift from the
 //!    `.proto` files (`tests/golden/schema/README.md`).
 //!
-//! Every call here goes through [`Surface::call`], which is the same path a
-//! WebSocket frame takes: authenticate, rate-limit, resolve, scope, phase,
-//! answer, log. Nothing reaches a handler by the back door, because there is no
-//! back door to reach it by.
+//! Every call here goes through [`Surface::call`]: authenticate, rate-limit,
+//! resolve, scope, phase, answer, log. Nothing reaches a handler by the back
+//! door, because there is no back door to reach it by.
+//!
+//! What that is **not** is the transport. `Surface::call` is where a decoded
+//! JSON-RPC request arrives; the RFC 6455 upgrade, the framing and the masking
+//! in front of it are `tests/websocket.rs`'s, which replays the same fourteen
+//! calls over a live `session::serve` on one connection
+//! (`the_fourteen_call_walkthrough_also_runs_over_the_transport`). The two
+//! halves are split because this one drives the host between calls -- the Lull
+//! ends on the host's word -- and a session that owns the surface cannot.
 #![allow(
     clippy::expect_used,
     clippy::unwrap_used,
@@ -223,28 +230,63 @@ fn commander_at(surface: &Surface) -> (i32, i32, i32) {
 /// A playbook with two errors in it, and a comment, which is what a player
 /// hands the gateway.
 ///
-/// The two errors are the same one twice -- a `hold` for a negative number of
-/// game milliseconds -- because item 46 puts exactly that rejection on the
-/// verifier with a JSON Pointer rather than at decode, and two of them make the
+/// The two errors are the same one twice -- a `hold` for **no** game
+/// milliseconds -- because item 46 puts exactly that rejection on the verifier
+/// with a JSON Pointer rather than at decode, and two of them make the
 /// walkthrough's "(2 errors, with fixes)" literally true.
+///
+/// Zero rather than a negative number, and that is the whole reason it is
+/// zero: a *negative* duration breaks two rules at once (`E0109`, a duration is
+/// never negative, and `E0303`, a hold lasts a positive number of
+/// milliseconds), so two bad steps would be four diagnostics and the
+/// walkthrough's own line would not be true of it. A zero hold breaks one rule,
+/// once per step.
 const BROKEN: &str = concat!(
     "// Two holds, and both of them are wrong.\n",
     "{\"schema_version\": {\"major\": 1},\n",
     " \"meta\": {\"title\": \"Walkthrough\", \"author_kind\": \"HUMAN\"},\n",
     " \"declarative\": {\"route\": [\n",
-    "   {\"label\": \"first\", \"hold\": {\"ms\": -1}},\n",
-    "   {\"label\": \"second\", \"hold\": {\"ms\": -2}}\n",
+    "   {\"label\": \"first\", \"hold\": {\"ms\": 0}},\n",
+    "   {\"label\": \"second\", \"hold\": {\"ms\": 0}}\n",
     " ]},\n",
     " \"on_death\": {\"on_respawn\": \"CONTINUE\"},\n",
     " \"fallback\": {\"hold\": {\"at\": {\"beacon_anchor\": {\"safest\": {}}}}},\n",
     " \"kind\": \"PLAYBOOK\"}\n",
 );
 
-/// The patch that fixes both of them, as `patch_plan` takes it.
-const FIX: &str = concat!(
-    "[{\"op\": \"replace\", \"path\": \"/declarative/route/0/hold/ms\", \"value\": 1000},\n",
-    " {\"op\": \"replace\", \"path\": \"/declarative/route/1/hold/ms\", \"value\": 2000}]"
-);
+/// The patch that fixes both of them, built from the **verifier's own**
+/// machine-applicable suggestions rather than written out here.
+///
+/// That is the loop an editor runs -- "(2 errors, with fixes)" in spec section
+/// 12 is about `gp.api.v1.PatchSuggestion.json_patch`, and a walkthrough that
+/// hand-wrote the fix would leave the half of it the suggestions are for
+/// untested. Every diagnostic's first suggestion, in the order the report gives
+/// them, concatenated into one RFC 6902 patch.
+fn fix_from(report: &Json) -> String {
+    let Some(Json::Array(diagnostics)) = report.get("diagnostics") else {
+        panic!("a report carries diagnostics");
+    };
+    let mut operations: Vec<Json> = Vec::new();
+    for diagnostic in diagnostics {
+        let Some(Json::Array(suggestions)) = diagnostic.get("suggestions") else {
+            panic!("`{diagnostic:?}` carries no suggestions, so there is no fix to apply");
+        };
+        let first = suggestions
+            .first()
+            .unwrap_or_else(|| panic!("`{diagnostic:?}` carries an empty suggestion list"));
+        let patch = match first.get("json_patch") {
+            Some(Json::String(text)) => text.clone(),
+            other => panic!("a suggestion's json_patch is text, and it is {other:?}"),
+        };
+        match pharmakos_proto::json::read(&patch).expect("a suggestion is a JSON patch") {
+            Json::Array(operation) => operations.extend(operation),
+            other => panic!("a JSON patch is an array, and it is {other:?}"),
+        }
+    }
+    pharmakos_proto::json::write(&Json::Array(operations))
+        .trim_end()
+        .to_owned()
+}
 
 // ---------------------------------------------------------------------------
 // The walkthrough
@@ -409,13 +451,15 @@ fn the_specs_fourteen_call_walkthrough_runs_end_to_end() {
         Some(&Json::String(String::from("quick")))
     );
     let errors = diagnostics_of(report);
-    assert!(
-        errors >= 2,
-        "the walkthrough's two errors, and {errors} found"
+    assert_eq!(
+        errors, 2,
+        "the walkthrough's line is `(2 errors, with fixes)`, and this is what the two are"
     );
-    row(7, "verify_plan{depth=quick}", "qualifies=false");
+    row(7, "verify_plan{depth=quick}", "qualifies=false, 2 errors");
 
-    // 8. patch_plan
+    // 8. patch_plan -- with the verifier's own fixes, which is the other half
+    // of "(2 errors, with fixes)" and the loop the editor runs.
+    let fix = fix_from(report);
     let response = call(
         &mut surface,
         &token,
@@ -424,7 +468,7 @@ fn the_specs_fourteen_call_walkthrough_runs_end_to_end() {
         &format!(
             r#"{{"playbook_jsonc":{},"json_patch":{}}}"#,
             quote(BROKEN),
-            quote(FIX)
+            quote(&fix)
         ),
     );
     let patched = result(&response, "patch_plan");
@@ -437,7 +481,7 @@ fn the_specs_fourteen_call_walkthrough_runs_end_to_end() {
     row(
         8,
         "patch_plan",
-        "comments survive; an inverse patch comes back",
+        "the report's own two fixes applied; comments survive",
     );
 
     // 9. verify_plan{depth:"full"} -- the pre-check.
@@ -543,6 +587,16 @@ fn the_specs_fourteen_call_walkthrough_runs_end_to_end() {
         Some(&Json::Bool(true)),
         "the Lull ended and the recap opened"
     );
+    // A fifteenth call in a fourteen-call session, and it is in the transcript
+    // rather than left uncounted: `wait_for` polls and never blocks (the
+    // gateway reads no clock), so "the seat waits for the phase to change" is
+    // two calls with the host's own act between them, and a golden that showed
+    // only one would be describing a gateway that blocks.
+    row(
+        13,
+        "wait_for{phase_change} again",
+        "fired=true, after the host ended the Lull",
+    );
 
     // 14. wait_for{feed_digest}
     let response = call(
@@ -584,6 +638,9 @@ fn header() -> String {
     concat!(
         "# Spec section 12's 14-call walkthrough, replayed against a live gateway.\n",
         "# Seed 0x00000000ca5caded, two seats, a 1 000 ms segment.\n",
+        "# Fifteen rows for fourteen calls: call 13 is made twice, because\n",
+        "# `wait_for` polls and never blocks, and the host ends the Lull between\n",
+        "# the two. Everything else is one row to one call, in the spec's order.\n",
         "# call\tmethod\twhat came back\n",
     )
     .to_owned()

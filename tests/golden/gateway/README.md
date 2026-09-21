@@ -165,10 +165,23 @@ rather than a wording one.
   the seal a seat gets is the report it was shown by its own pre-check (spec
   §11; decisions-log item 82). If this line ever stops saying it, the promise
   that makes a seal inspectable has gone, and no amount of blessing fixes that.
-* **Line 7, `qualifies=false`.** An invalid playbook is a full report and not a
-  method error. A `qualifies=true` here would mean the verifier stopped seeing
-  the two errors the walkthrough puts in front of it; a refusal in its place
-  would mean the gateway had started treating a bad playbook as a bad call.
+* **Line 7, `qualifies=false, 2 errors`.** An invalid playbook is a full report
+  and not a method error. A `qualifies=true` here would mean the verifier
+  stopped seeing the two errors the walkthrough puts in front of it; a count
+  other than 2 would mean one broken step had started producing a different
+  number of diagnostics, which is the spec's own `(2 errors, with fixes)`
+  moving; and a refusal in its place would mean the gateway had started
+  treating a bad playbook as a bad call.
+
+**Fifteen rows, fourteen calls, and the file says so in its header.** Call 13 is
+made twice with the host ending the Lull between the two, because `wait_for`
+polls and never blocks — the gateway reads no clock, so "the seat waits for the
+phase to change" *is* two calls. A file with one row 13 would be describing a
+gateway that blocks.
+
+Line 8 says the fixes came from the report itself: call 8's patch is built from
+the diagnostics' own `json_patch` suggestions, which is the loop the editor runs
+and the other half of the spec's `with fixes`.
 
 Line 4 says `0 templates (no folder configured)` because no template folder is
 set in the test, which is the plan's own T13 PLACEHOLDER (the folder's location
