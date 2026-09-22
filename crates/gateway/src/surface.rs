@@ -1140,7 +1140,12 @@ impl Surface {
             | EventKind::CommanderDied
             | EventKind::CommanderRespawned
             | EventKind::UnitSealedIn
-            | EventKind::BeaconPlaced => Ok(Audience::World {
+            | EventKind::BeaconPlaced
+            // T14's one world line. A finished Generator is a building
+            // standing on a vent: an opponent with eyes on the place sees it,
+            // exactly as it sees a placed beacon. Its *queuing* is not here -
+            // that is a spend, and a spend is the seat's own business.
+            | EventKind::StructureCompleted => Ok(Audience::World {
                 owner: event.seat,
                 at: event
                     .at
@@ -1159,7 +1164,38 @@ impl Surface {
             | EventKind::VisitStarted
             | EventKind::RowCommitted
             | EventKind::VisitEnded
-            | EventKind::FallbackEngaged => event.seat.map(Audience::Private).ok_or_else(|| {
+            | EventKind::FallbackEngaged
+            // T14's economy lines, every one of them private, by item 103(10)'s
+            // reasoning applied row by row: anything that reveals a seat's
+            // orders, treasury, spend or power state is the seat's own.
+            //
+            // * `beacon_browned_out` and `beacon_revived` are **power state** -
+            //   how close a seat is to its supply ceiling, which is what an
+            //   attacker most wants to know and what the seat has no way to
+            //   hide. The dome going dark is visible in the vista; the *line*
+            //   naming the beacon is not.
+            // * `unit_fabricated` and `structure_queued` are **spends**: both
+            //   say what a seat decided to buy and therefore what its mandate
+            //   is doing. The thing they buy becomes visible on its own terms -
+            //   a unit through fog, a structure through `structure_completed`.
+            // * `ore_delivered`, `salvage_delivered`, `beacon_recycled` and
+            //   `settled` all carry a **treasury** figure in `value`.
+            //   `beacon_recycled` is the one that had a case for being a world
+            //   line, because a beacon leaving the world is visible - but its
+            //   `value` is the refund, and the `beacon_destroyed` line that
+            //   follows it on the same tick already tells an onlooker the
+            //   beacon is gone.
+            // * `kill_credited` names who was paid for a destruction, which is
+            //   a seat's own share and nobody else's business until the recap.
+            | EventKind::BeaconBrownedOut
+            | EventKind::BeaconRevived
+            | EventKind::UnitFabricated
+            | EventKind::StructureQueued
+            | EventKind::OreDelivered
+            | EventKind::SalvageDelivered
+            | EventKind::BeaconRecycled
+            | EventKind::Settled
+            | EventKind::KillCredited => event.seat.map(Audience::Private).ok_or_else(|| {
                 Error::internal(format!(
                     "the sim emitted `{}` for no seat, and a seat's orders have no other audience",
                     event.kind.name()
@@ -2359,7 +2395,12 @@ mod tests {
         // The seal, four step lines, two rule lines, two reflex lines, three
         // visit lines and the fallback: thirteen of T11's fourteen kinds.
         // `beacon_placed` is a thing in the world and fog decides it.
-        assert_eq!(private, 13);
+        //
+        // Plus T14's nine economy lines: the two brownout lines, the two spend
+        // lines, and the five that carry a treasury or a credit figure.
+        // `structure_completed` is the tenth kind T14 adds and is the one it
+        // puts on the world's side, for the reason `beacon_placed` is there.
+        assert_eq!(private, 13 + 9);
         assert!(matches!(
             Surface::audience_of(&sim_event(EventKind::BeaconPlaced, Some(1))),
             Ok(Audience::World { .. })
