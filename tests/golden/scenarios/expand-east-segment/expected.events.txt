@@ -6,6 +6,8 @@
 0	4	push_started	-	-	180000
 1	0	step_started	0	-	0
 1	1	step_started	1	-	0
+2036	0	ore_delivered	1	7	64
+2157	0	ore_delivered	0	3	64
 2401	0	step_failed	0	-	1
 2401	1	step_failed	1	-	1
 2406	0	step_started	0	-	1
@@ -16,5 +18,9 @@
 2411	1	step_failed	0	-	10
 2411	2	fallback_engaged	0	-	1
 2411	3	step_started	1	-	2
+3226	0	ore_delivered	0	3	32
+3453	0	ore_delivered	1	7	32
 3600	0	segment_ended	-	-	3600
 3600	1	recap_opened	-	-	1
+3600	2	settled	0	-	110
+3600	3	settled	1	-	95

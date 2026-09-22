@@ -65,6 +65,26 @@ So a diff that starts exactly at tick 400, 700 or 1 000 is a segment-boundary
 change — the close, the round increment, or the coming segment's length — and a
 diff that starts at tick 0 is a change to what the encoding covers.
 
+## What the committed chain covers (T14)
+
+**The economy.** The encoding gained the `$` and `kW` state and the tables the
+Quartermaster, the mandates and Survey write, so the chain now covers all of it:
+
+* the seat row's **Quartermaster round-robin cursor**, which decides whose turn
+  it is within an urgency band;
+* the unit row's **home beacon**, what it is **carrying** and the tick it is
+  **busy until** — a mining drone's load and a build drone's work;
+* the beacon row's **Quartermaster priority** and its **scout count**;
+* the structure row's **building** flag, which is what "paid means yours"
+  distinguishes from finished;
+* three blocks that did not exist: the beacons' **mandate targets** (Build
+  targets, protected areas, Survey probe areas), the seats' **sightings** with
+  the tick each was taken at, and the per-asset **kill-credit** damage counters.
+
+Because the seat and unit rows are wider from the first tick, **the T14 chain
+diverges from the T13b chain at tick 0** and every line after it. That is the
+encoding covering more, not the sim walking differently.
+
 ## What a diff means
 
 **The sim's behaviour changed.** That is all it can mean: the chain is a pure
