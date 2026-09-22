@@ -97,6 +97,35 @@ pub fn event_text(event: &Event) -> String {
         EventKind::RowCommitted => format!("Interface row {} committed.", event.value),
         EventKind::VisitEnded => format!("The visit ended with {} rows committed.", event.value),
         EventKind::BeaconPlaced => format!("A beacon of {seat} was deployed."),
+        // T14's economy lines. Every figure a line carries is named in words
+        // as well as in the number, because a feed is read rather than parsed.
+        EventKind::BeaconBrownedOut => format!("A beacon of {seat} went dark: draw outran supply."),
+        EventKind::BeaconRevived => format!("A beacon of {seat} came back on."),
+        EventKind::UnitFabricated => format!("A fabricator of {seat} produced a unit."),
+        EventKind::StructureQueued => format!("{seat} paid for a structure; it is going up now."),
+        EventKind::StructureCompleted => format!("A structure of {seat} is finished."),
+        EventKind::OreDelivered => {
+            format!(
+                "A mining drone of {seat} delivered ore worth $ {}.",
+                event.value
+            )
+        }
+        EventKind::SalvageDelivered => {
+            format!(
+                "A reclaim drone of {seat} delivered salvage worth $ {}.",
+                event.value
+            )
+        }
+        EventKind::BeaconRecycled => {
+            format!(
+                "A beacon of {seat} was recycled on site for $ {}.",
+                event.value
+            )
+        }
+        EventKind::Settled => format!("The Ledger settled and credited {seat} $ {}.", event.value),
+        EventKind::KillCredited => {
+            format!("{seat} was credited $ {} of a destruction.", event.value)
+        }
         EventKind::FallbackEngaged => format!(
             "The route ended and the fallback took over, posture code {}.",
             event.value
