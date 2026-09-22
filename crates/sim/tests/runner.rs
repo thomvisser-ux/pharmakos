@@ -116,6 +116,10 @@ fn destroy(runner: &mut Runner, target: DamageTarget) {
         runner.world_mut().request_damage(DamageOrder {
             target,
             amount: Hp::new(1_000_000),
+            // Nobody's doing: these tests kill outright to exercise the rules
+            // that follow from a death, and `NEUTRAL` is how a death with no
+            // enemy damage on the clock is written (item 17).
+            by: SeatId::NEUTRAL,
         }),
         "the damage queue has room"
     );
@@ -556,6 +560,10 @@ fn a_beacon_death_ruins_the_structures_homed_to_it() {
         .extend([at[0].raw(), at[1].raw(), at[2].raw()]);
     saved.structure_hp.push(500);
     saved.structure_home.push(core.raw());
+    // T14's column: `false` is a finished structure. The one this test wants is
+    // standing, not going up, because what it asserts is what happens to a
+    // finished building when the beacon it is homed to dies.
+    saved.structure_building.push(0);
     runner
         .restore(&saved)
         .expect("the edited snapshot restores");

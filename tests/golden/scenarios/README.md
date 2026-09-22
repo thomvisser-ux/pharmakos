@@ -45,5 +45,12 @@ and by the determinism chain, whose harness playbook completes a visit and a
 deploy. A second scenario whose playbook finishes its route is worth having and
 is not this task's to add (one scenario file per lane).
 
+What it *does* cover from T14 onward is the **economy running underneath a
+playbook that is going nowhere**: each seat's starting mining drone finds ore in
+its core's sphere and delivers it twice over the segment, and the Ledger settles
+at the recap. Those `ore_delivered` and `settled` lines come from the mandate
+layer rather than from the playbook, which is the point — a seat that seals
+nothing still earns and is still paid.
+
 **This line format is a contract**, like `interpreter/`'s: it is the same
 tab-separated event line, and a scenario file asserts on the `kind` names in it.

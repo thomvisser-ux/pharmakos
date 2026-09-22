@@ -84,7 +84,11 @@ cargo xtask golden --bless              # accepts them
   moved — most often the rules hash or the verifier version. Say which.
   `rules_hash` covers the **whole** rules table including its `note`
   (decisions-log item 89), so a tuning pull request moves every report in this
-  directory, and that is correct rather than surprising.
+  directory, and that is correct rather than surprising. The **snapshot** is the
+  other one that moves in bulk: a sim task that adds hashed state widens
+  `Snapshot`, the fixture snapshot's bytes change, and every report hash here
+  moves with them while the reports themselves stay identical. T14 is the first
+  time that happened.
 * **A report moved.** A diagnostic's code, severity, JSON Pointer, message,
   beginner sentence or patch suggestion changed. The pointer and the code are
   what clients bind to; the message is what players read.

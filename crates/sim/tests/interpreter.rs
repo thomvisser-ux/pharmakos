@@ -176,6 +176,7 @@ fn transcript(case: &str) -> String {
                     runner.world_mut().request_damage(DamageOrder {
                         target: DamageTarget::Unit(commander),
                         amount: Hp::new(*amount),
+                        by: SeatId::NEUTRAL,
                     }),
                     "the damage queue has room"
                 );
@@ -544,12 +545,16 @@ fn a_construct_this_build_cannot_execute_is_refused_rather_than_skipped() {
     // seal time rather than treating the construct as true, false or absent.
     let cases: [(&str, gp::v1::Step); 2] = [
         (
-            "recycle",
+            "queue_structure",
             interface_step(
-                "r",
+                "q",
                 beacon_id("b_00"),
                 vec![gp::v1::InterfaceRow {
-                    row: Some(gp::v1::interface_row::Row::Recycle(gp::v1::RecycleRow {})),
+                    row: Some(gp::v1::interface_row::Row::QueueStructure(
+                        gp::v1::QueueStructureRow {
+                            blueprint_id: "radio_mast".to_owned(),
+                        },
+                    )),
                 }],
             ),
         ),
@@ -697,6 +702,7 @@ fn rows_of_the_visit_case(damage: &[(u32, i32)]) -> Vec<u32> {
                     runner.world_mut().request_damage(DamageOrder {
                         target: DamageTarget::Unit(commander),
                         amount: Hp::new(*amount),
+                        by: SeatId::NEUTRAL,
                     }),
                     "the damage queue has room"
                 );

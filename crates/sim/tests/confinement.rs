@@ -52,6 +52,14 @@ const ALLOWED_LINTS: &[&str] = &[
     "clippy::integer_division",
     // An empty tick-phase stub that keeps the tick's shape visible.
     "clippy::unused_self",
+    // A row append with one argument per column of an SoA table, named at
+    // every call site. Neither a determinism lint nor a judgement call: the
+    // bulk form of the same thing is the `*Columns` struct beside it.
+    "clippy::too_many_arguments",
+    // A flat projection, or a constructor, whose whole point is that it is one
+    // expression: a `Snapshot` cannot be built in halves and a restore's checks
+    // cannot move behind its writes.
+    "clippy::too_many_lines",
 ];
 
 /// Lints that may be allowed only under this path prefix.

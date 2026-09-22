@@ -1,0 +1,19 @@
+# round	seat	event	value	closing_treasury	supply	draw	closing_held
+1	0	ore_delivered	64	359	10	6	491
+1	1	ore_delivered	64	374	10	6	494
+1	0	settled	95	359	10	6	491
+1	1	settled	110	374	10	6	494
+1	2	settled	102	302	10	6	486
+2	2	ore_delivered	64	500	10	6	620
+2	0	ore_delivered	32	501	10	6	621
+2	1	ore_delivered	32	501	10	6	621
+2	2	ore_delivered	32	500	10	6	620
+2	0	settled	110	501	10	6	621
+2	1	settled	95	501	10	6	621
+2	2	settled	102	500	10	6	620
+3	0	settled	102	603	10	6	723
+3	1	settled	95	596	10	6	716
+3	2	settled	110	610	10	6	730
+final	0	audit	0	603	10	6	723
+final	1	audit	0	596	10	6	716
+final	2	audit	0	610	10	6	730

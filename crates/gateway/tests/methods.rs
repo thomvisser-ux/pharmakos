@@ -2382,40 +2382,18 @@ fn sim_door_cases() -> Vec<Case> {
     cases
 }
 
-/// The gaps an **interface row** opens: four rows of spec section 5's table
+/// The gaps an **interface row** opens: the rows of spec section 5's table
 /// that the v1 vocabulary spells and this build does not carry out.
+///
+/// **One is left.** T14 closed `recycle`, `add_build_target` and
+/// `remove_build_target`; `queue_structure` waits for S4's capability
+/// catalogue, because the thing it queues is a licensed structure and there is
+/// no licence to check.
 fn interface_row_gaps() -> Vec<Case> {
     vec![
-        sim(
-            "an interface row whose effect waits for the Quartermaster",
-            one_step(
-                "{\"label\": \"r\", \"interface\": {\"beacon\": {\"safest\": {}}, \"rows\": \
-                 [{\"recycle\": {}}]}, \"timeout_ms\": 30000}",
-            ),
-            "interface row `recycle`",
-            "T14",
-        ),
-        sim(
-            "an interface row that adds a build target",
-            one_step(
-                "{\"label\": \"b\", \"interface\": {\"beacon\": {\"safest\": {}}, \"rows\": \
-                 [{\"add_build_target\": {\"target\": {\"blueprint_id\": \"generator\", \
-                 \"anchor\": {\"voxel\": {\"x\": 40, \"y\": 40, \"z\": 30}}, \
-                 \"rotation_quarter_turns\": 0, \"order\": 1}}}]}, \"timeout_ms\": 30000}",
-            ),
-            "interface row `add_build_target`",
-            "T14",
-        ),
-        sim(
-            "an interface row that removes a build target",
-            one_step(
-                "{\"label\": \"rb\", \"interface\": {\"beacon\": {\"safest\": {}}, \"rows\": \
-                 [{\"remove_build_target\": {\"anchor\": {\"voxel\": {\"x\": 40, \"y\": 40, \
-                 \"z\": 30}}}}]}, \"timeout_ms\": 30000}",
-            ),
-            "interface row `remove_build_target`",
-            "T14",
-        ),
+        // T14 closed three rows of this block: `recycle`, `add_build_target`
+        // and `remove_build_target` all execute now, so they are gaps at
+        // neither door and have no row here. The one that is left is S4's.
         sim(
             "an interface row that queues a licensed capability structure",
             one_step(
@@ -2431,11 +2409,13 @@ fn interface_row_gaps() -> Vec<Case> {
 
 /// The gaps a **mandate's settings block** or a **rule** opens.
 ///
-/// Four settings blocks and two rule-shaped cases. The settings ones are four
-/// separate match arms of `interpreter::mandate_fields` with four separate
-/// `construct` strings, which is why there are four rows and not one with the
-/// other three reasoned from it -- the first draft of this table did the
-/// second thing and the review was right that it does not hold.
+/// Two settings blocks and two rule-shaped cases. The settings ones are
+/// separate match arms of `interpreter::mandate_fields` with separate
+/// `construct` strings, which is why they have a row each and are not reasoned
+/// from a neighbour -- the first draft of this table did the second thing and
+/// the review was right that it does not hold. **T14 closed two of the four**:
+/// Survey probe areas and Build targets and protected areas now compile, and
+/// the rows for them are gone rather than moved.
 fn mandate_and_rule_gaps() -> Vec<Case> {
     vec![
         sim(
@@ -2458,30 +2438,10 @@ fn mandate_and_rule_gaps() -> Vec<Case> {
             "Attack mandate settings",
             "S2",
         ),
-        sim(
-            "a Survey beacon given somewhere to probe",
-            one_step(
-                "{\"label\": \"s\", \"interface\": {\"beacon\": {\"safest\": {}}, \"rows\": \
-                 [{\"set_mandate_settings\": {\"roe\": \"HOLD_FIRE\", \"survey\": \
-                 {\"scout_count\": 1, \"probe_areas\": [{\"min\": {\"x\": 10, \"y\": 10, \
-                 \"z\": 10}, \"max\": {\"x\": 20, \"y\": 20, \"z\": 20}}]}}}]}, \
-                 \"timeout_ms\": 30000}",
-            ),
-            "Survey probe areas",
-            "T14",
-        ),
-        sim(
-            "a Build beacon given a target list",
-            one_step(
-                "{\"label\": \"bt\", \"interface\": {\"beacon\": {\"safest\": {}}, \"rows\": \
-                 [{\"set_mandate_settings\": {\"roe\": \"HOLD_FIRE\", \"build\": {\"targets\": \
-                 [{\"blueprint_id\": \"generator\", \"anchor\": {\"voxel\": {\"x\": 40, \
-                 \"y\": 40, \"z\": 30}}, \"rotation_quarter_turns\": 0, \"order\": 1}]}}}]}, \
-                 \"timeout_ms\": 30000}",
-            ),
-            "Build mandate targets and protected areas",
-            "T14",
-        ),
+        // T14 closed the other two rows of this block as well: a Survey
+        // mandate's probe areas and a Build mandate's targets and protected
+        // areas are compiled, sealed and executed now. Defend and Attack
+        // settings are still S2's, above.
         sim(
             "a predicate that asks whether a beacon is under attack",
             one_step(
@@ -2680,9 +2640,11 @@ fn a_playbook_this_build_cannot_execute_is_a_method_error_and_keeps_the_old_seal
         );
     }
     assert_eq!(
-        gaps, 10,
-        "the pull request lists ten gaps between the two doors, each with the stage that closes \
-         it. A different number here means the list is out of date -- in either direction"
+        gaps, 5,
+        "the pull request lists five gaps between the two doors, each with the stage that closes \
+         it. A different number here means the list is out of date -- in either direction. It \
+         was ten before T14, which closed `recycle`, `add_build_target`, `remove_build_target`, \
+         Survey probe areas, and Build targets and protected areas"
     );
 
     // And the seal that survived all of that is still the one the match plays.
