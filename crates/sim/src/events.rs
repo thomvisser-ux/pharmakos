@@ -176,11 +176,48 @@ pub enum EventKind {
     /// The route ended and the fallback posture took over. `value` carries
     /// [`crate::interpreter::Posture::id`].
     FallbackEngaged,
+    /// A beacon went dormant: draw outran supply and the brownout order
+    /// reached it. Everything homed to it powers down and parks (item 10).
+    /// `value` is unused.
+    BeaconBrownedOut,
+    /// A dormant beacon came back: supply exceeded draw by
+    /// `power.revive_margin_kw` with this beacon's own load added back.
+    BeaconRevived,
+    /// A beacon's fabricator produced a unit. `value` carries
+    /// [`crate::tables::UnitKind::id`].
+    UnitFabricated,
+    /// The Quartermaster paid for a Build target and the structure went into
+    /// the ground at one hit point. `value` carries
+    /// [`crate::tables::StructureKind::id`]. "Paid means yours": the `$` has
+    /// already left the treasury (item 23).
+    StructureQueued,
+    /// A structure reached full hit points and started supplying or drawing.
+    /// `value` carries [`crate::tables::StructureKind::id`].
+    StructureCompleted,
+    /// A mining drone delivered its load to its home beacon and the `$` were
+    /// credited. `value` carries the amount (spec section 6: "delivered ore is
+    /// credited to the seat treasury immediately").
+    OreDelivered,
+    /// A reclaim drone delivered salvage. `value` carries the amount.
+    SalvageDelivered,
+    /// A beacon was recycled on site. `value` carries the refund, which is
+    /// `economy.recycle_refund_percent` of its remaining value (item 18). The
+    /// beacon then dies down the ordinary path, so a `beacon_destroyed` line
+    /// follows it on the same tick.
+    BeaconRecycled,
+    /// The Ledger settled at a recap and credited a seat. `value` carries the
+    /// Basic Minimum Income it was paid, after the standing adjustment
+    /// (item 19).
+    Settled,
+    /// One seat's share of a destruction, apportioned by largest remainder
+    /// with ties to the lowest seat id (item 17). `value` carries the share, in
+    /// `$` of the destroyed thing's full build cost.
+    KillCredited,
 }
 
 impl EventKind {
     /// Every kind, in ascending [`EventKind::id`] order.
-    pub const ALL: [EventKind; 26] = [
+    pub const ALL: [EventKind; 36] = [
         EventKind::MatchStarted,
         EventKind::LullOpened,
         EventKind::PushStarted,
@@ -207,6 +244,16 @@ impl EventKind {
         EventKind::VisitEnded,
         EventKind::BeaconPlaced,
         EventKind::FallbackEngaged,
+        EventKind::BeaconBrownedOut,
+        EventKind::BeaconRevived,
+        EventKind::UnitFabricated,
+        EventKind::StructureQueued,
+        EventKind::StructureCompleted,
+        EventKind::OreDelivered,
+        EventKind::SalvageDelivered,
+        EventKind::BeaconRecycled,
+        EventKind::Settled,
+        EventKind::KillCredited,
     ];
 
     /// The wire id. Additive only: never reuse, never renumber.
@@ -239,6 +286,16 @@ impl EventKind {
             EventKind::VisitEnded => 24,
             EventKind::BeaconPlaced => 25,
             EventKind::FallbackEngaged => 26,
+            EventKind::BeaconBrownedOut => 27,
+            EventKind::BeaconRevived => 28,
+            EventKind::UnitFabricated => 29,
+            EventKind::StructureQueued => 30,
+            EventKind::StructureCompleted => 31,
+            EventKind::OreDelivered => 32,
+            EventKind::SalvageDelivered => 33,
+            EventKind::BeaconRecycled => 34,
+            EventKind::Settled => 35,
+            EventKind::KillCredited => 36,
         }
     }
 
@@ -272,6 +329,16 @@ impl EventKind {
             24 => Some(EventKind::VisitEnded),
             25 => Some(EventKind::BeaconPlaced),
             26 => Some(EventKind::FallbackEngaged),
+            27 => Some(EventKind::BeaconBrownedOut),
+            28 => Some(EventKind::BeaconRevived),
+            29 => Some(EventKind::UnitFabricated),
+            30 => Some(EventKind::StructureQueued),
+            31 => Some(EventKind::StructureCompleted),
+            32 => Some(EventKind::OreDelivered),
+            33 => Some(EventKind::SalvageDelivered),
+            34 => Some(EventKind::BeaconRecycled),
+            35 => Some(EventKind::Settled),
+            36 => Some(EventKind::KillCredited),
             _ => None,
         }
     }
@@ -308,6 +375,16 @@ impl EventKind {
             EventKind::VisitEnded => "visit_ended",
             EventKind::BeaconPlaced => "beacon_placed",
             EventKind::FallbackEngaged => "fallback_engaged",
+            EventKind::BeaconBrownedOut => "beacon_browned_out",
+            EventKind::BeaconRevived => "beacon_revived",
+            EventKind::UnitFabricated => "unit_fabricated",
+            EventKind::StructureQueued => "structure_queued",
+            EventKind::StructureCompleted => "structure_completed",
+            EventKind::OreDelivered => "ore_delivered",
+            EventKind::SalvageDelivered => "salvage_delivered",
+            EventKind::BeaconRecycled => "beacon_recycled",
+            EventKind::Settled => "settled",
+            EventKind::KillCredited => "kill_credited",
         }
     }
 

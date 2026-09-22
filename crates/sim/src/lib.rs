@@ -73,17 +73,23 @@
 //! against `tests/golden/determinism/expected.hashes.txt`.
 
 pub mod chunks;
+pub mod credit;
+pub mod economy;
 pub mod encoding;
 pub mod events;
 pub mod interpreter;
 pub mod knowledge;
+pub mod mandate;
 pub mod mapgen;
 pub mod math;
 pub mod pathing;
+pub mod power;
+pub mod programs;
 pub mod rules;
 pub mod runner;
 pub mod seams;
 pub mod snapshot;
+pub mod survey;
 pub mod tables;
 pub mod voxels;
 pub mod world;
@@ -93,13 +99,17 @@ pub mod world;
 #[cfg(feature = "research")]
 pub mod research;
 
+pub use economy::{Purchase, Quartermaster, SingleTreasury, SpendRequest, Urgency};
 pub use encoding::{ENCODING_VERSION, Enc, STATE_HASH_SEED, digest, hex};
 pub use events::{EVENT_BUS_CAPACITY, Event, EventBus, EventKind};
 pub use interpreter::{Interpreter, Plan, PlanError, PlanState, REFLEX_HP_PERCENT};
+pub use mandate::{Mandate, mandate_for};
 pub use mapgen::{GeneratedMap, MapError, MapFile, MapReport};
 pub use pathing::{
     Clusters, Estimate, Fog, Node, Router, Scratch, Speed, Surface, WalkState, estimate,
 };
+pub use power::PowerRules;
+pub use programs::{Program, program_for};
 pub use rules::{RULES_PATH, RulesError, RulesTable};
 pub use runner::{
     DEFAULT_ROUND_LIMIT, FrozenSnapshot, MatchEndReason, MatchOutcome, MatchPhase, MatchSettings,

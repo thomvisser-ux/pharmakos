@@ -200,6 +200,52 @@ impl Router {
         u32::try_from(self.state.len()).unwrap_or(0)
     }
 
+    /// Make room for `extra` more units without growing later.
+    ///
+    /// The router's columns are one row per unit, and the unit table grows
+    /// during a Push because a fabricator produces drones (item 22). So the
+    /// router grows with it — through [`Router::push_unit`], which appends a
+    /// single idle row — and the capacity for that is reserved here, at
+    /// construction and at a restore, for the reason every other table reserves
+    /// it: a push that reallocated would be an allocation inside a tick
+    /// (G3′ §9.17), and `tests/allocations.rs` fails on one.
+    ///
+    /// **Nothing about the encoding moves.** [`Router::encode`] walks
+    /// [`Router::len`], which counts rows rather than capacity, so reserving
+    /// room changes no hash; the hash moves when a unit is actually fabricated,
+    /// which is a unit-table row as well.
+    pub fn reserve(&mut self, extra: u32) {
+        let count = usize::try_from(extra).unwrap_or(0);
+        let stride = usize::try_from(MAX_ROUTE_NODES).unwrap_or(0);
+        self.state.reserve(count);
+        self.accumulator.reserve(count);
+        self.route_len.reserve(count);
+        self.route_cursor.reserve(count);
+        self.route_hash.reserve(count);
+        self.route_partial.reserve(count);
+        self.nodes.reserve(count.saturating_mul(stride));
+        self.arrived.reserve(count);
+        self.served_this_tick.reserve(count);
+        self.sealed_this_tick.reserve(count);
+    }
+
+    /// Append one idle unit, with no route and nothing accumulated.
+    ///
+    /// What a fabricator's new drone gets. Call [`Router::request`] after it to
+    /// give the unit its first route; a fresh row is `Idle`, which is what a
+    /// unit standing where it was built looks like.
+    pub fn push_unit(&mut self) {
+        let stride = usize::try_from(MAX_ROUTE_NODES).unwrap_or(0);
+        self.state.push(WalkState::Idle.id());
+        self.accumulator.push(0);
+        self.route_len.push(0);
+        self.route_cursor.push(0);
+        self.route_hash.push(0);
+        self.route_partial.push(false);
+        self.nodes
+            .resize(self.state.len().saturating_mul(stride), 0);
+    }
+
     /// Whether it carries none.
     #[must_use]
     pub fn is_empty(&self) -> bool {

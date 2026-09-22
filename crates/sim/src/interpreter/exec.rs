@@ -42,7 +42,7 @@ use crate::interpreter::{
 use crate::knowledge::{AssetId, Position};
 use crate::math::fixed::Fx;
 use crate::math::quantity::Tick;
-use crate::tables::{BeaconId, SeatId};
+use crate::tables::{BeaconId, SeatId, TargetKind};
 use crate::world::World;
 
 /// What one pass over the step in progress concluded.
@@ -702,7 +702,7 @@ fn run_visit(
         complete(world, seat, index);
         return Outcome::Complete;
     };
-    commit_row(world, row_index, *row);
+    commit_row(world, row_index, seat, row);
     emit(
         world,
         tick,
@@ -816,7 +816,7 @@ fn run_deploy(
         complete(world, seat, index);
         return Outcome::Complete;
     };
-    commit_row(world, row_index, *row);
+    commit_row(world, row_index, seat, row);
     emit(
         world,
         tick,
@@ -848,16 +848,78 @@ fn run_deploy(
 /// edit. A settings row that wrote the writ would buy the 8 s change at the 2 s
 /// price, which is the one reading the spec rules out.
 ///
-/// PLACEHOLDER: a beacon has no Quartermaster priority column and no mandate
-/// settings — both are T14's, with the Quartermaster and the minimal Build
-/// mandate — so `set_priority` and every field of `set_mandate_settings` pay
-/// their interface time and report their commit and **write nothing**. That is
-/// deliberately not silent: the `row_committed` event names the row, and the
-/// time is the same time T14 will charge (owner, at T14).
-fn commit_row(world: &mut World, row: usize, spec: Row) {
+/// **A row that cannot be applied still commits.** Spec section 5's table
+/// prices a change by what it is, not by whether it landed, and item 23's
+/// "an order the treasury cannot cover fails like any other step" is about a
+/// *spend*, not about an edit. So a Build target added outside the beacon's own
+/// sphere, or a removal naming an anchor nothing sits on, pays its time and
+/// reports its commit and changes nothing — and the `row_committed` event names
+/// the row, so a transcript shows it rather than hiding it.
+///
+/// The one row that does more than write a column is [`Row::Recycle`], which
+/// takes the beacon out of the world; it is applied last of its visit because
+/// the rows after it would have nothing to write to, which
+/// [`run_visit`]'s `BeaconGone` test then catches on the next decision.
+fn commit_row(world: &mut World, row: usize, seat: SeatId, spec: &Row) {
+    let beacon = world
+        .beacons()
+        .ids()
+        .get(row)
+        .copied()
+        .map_or(BeaconId::NONE, BeaconId::new);
     match spec {
-        Row::Mandate { kind } => world.set_beacon_mandate(row, kind),
-        Row::Settings { .. } | Row::Priority { .. } => {}
+        Row::Mandate { kind } => world.set_beacon_mandate(row, *kind),
+        Row::Priority { priority } => world.set_beacon_priority(row, *priority),
+        Row::Recycle => {
+            world.recycle_beacon(seat, beacon);
+        }
+        Row::AddTarget { blueprint, anchor } => {
+            let at = point_of(*anchor);
+            if crate::mandate::inside_sphere(world, beacon, at) {
+                world.add_target(beacon, TargetKind::Build, *blueprint, at, 0);
+            }
+        }
+        Row::RemoveTarget { anchor } => {
+            world.remove_target_at(beacon, point_of(*anchor));
+        }
+        Row::Settings {
+            targets,
+            protected,
+            probes,
+            scouts,
+            ..
+        } => {
+            // A settings edit **replaces** the lists it names, because spec
+            // section 5 makes a multi-field edit all-or-nothing and a list that
+            // merged would have no way to remove an entry except the dedicated
+            // `remove_build_target` row. A list the row does not name is left
+            // alone, which is what "edits settings within the current mandate"
+            // means for the fields it is silent about.
+            if !targets.is_empty() {
+                world.clear_targets(beacon, TargetKind::Build);
+                for (blueprint, anchor) in targets {
+                    let at = point_of(*anchor);
+                    if crate::mandate::inside_sphere(world, beacon, at) {
+                        world.add_target(beacon, TargetKind::Build, *blueprint, at, 0);
+                    }
+                }
+            }
+            if !protected.is_empty() {
+                world.clear_targets(beacon, TargetKind::Protected);
+                for (centre, radius) in protected {
+                    world.add_target(beacon, TargetKind::Protected, 0, point_of(*centre), *radius);
+                }
+            }
+            if !probes.is_empty() {
+                world.clear_targets(beacon, TargetKind::Probe);
+                for (centre, radius) in probes {
+                    world.add_target(beacon, TargetKind::Probe, 0, point_of(*centre), *radius);
+                }
+            }
+            if *scouts > 0 {
+                world.set_beacon_scouts(row, u8::try_from(*scouts).unwrap_or(u8::MAX));
+            }
+        }
     }
 }
 

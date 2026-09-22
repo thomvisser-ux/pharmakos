@@ -126,6 +126,9 @@ pub struct UnitTable {
     dest: Vec<[Fx; 3]>,
     heading: Vec<Angle>,
     hp: Vec<Hp>,
+    home: Vec<u32>,
+    carrying: Vec<Money>,
+    busy_until: Vec<u32>,
 }
 
 impl UnitTable {
@@ -142,10 +145,44 @@ impl UnitTable {
             dest: Vec::with_capacity(n),
             heading: Vec::with_capacity(n),
             hp: Vec::with_capacity(n),
+            home: Vec::with_capacity(n),
+            carrying: Vec::with_capacity(n),
+            busy_until: Vec::with_capacity(n),
         }
     }
 
-    /// Append one unit. Construction only — never called inside a tick.
+    /// Make room for `extra` more units without growing later.
+    ///
+    /// The unit table is the second table a **Push** adds rows to: a beacon's
+    /// fabricator produces a drone while its mandate has outstanding work
+    /// (item 22). The room is reserved at construction and at a restore for the
+    /// reason [`BeaconTable::reserve`] gives — a `push` that grew a column would
+    /// be an allocation inside a tick — and a fabrication order that finds none
+    /// is held rather than filled. Construction only.
+    pub fn reserve(&mut self, extra: u32) {
+        let n = usize::try_from(extra).unwrap_or(0);
+        self.id.reserve(n);
+        self.seat.reserve(n);
+        self.kind.reserve(n);
+        self.pos.reserve(n);
+        self.dest.reserve(n);
+        self.heading.reserve(n);
+        self.hp.reserve(n);
+        self.home.reserve(n);
+        self.carrying.reserve(n);
+        self.busy_until.reserve(n);
+    }
+
+    /// Append one unit, carrying nothing and doing nothing.
+    ///
+    /// `home` is the beacon whose fabricator produced it — the one whose
+    /// mandate it follows, even outside the sphere, and the one whose dormancy
+    /// powers it down (spec section 5). [`BeaconId::NONE`] is harness
+    /// scaffolding only: see [`UnitTable::homes`].
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one argument per column of a nine-column SoA table, named at every call site; a struct here would be `UnitColumns` with a length of one, which is the shape `restore` already has for the bulk case"
+    )]
     pub fn push(
         &mut self,
         id: UnitId,
@@ -154,6 +191,7 @@ impl UnitTable {
         pos: [Fx; 3],
         dest: [Fx; 3],
         hp: Hp,
+        home: BeaconId,
     ) {
         self.id.push(id.raw());
         self.seat.push(seat.raw());
@@ -162,6 +200,9 @@ impl UnitTable {
         self.dest.push(dest);
         self.heading.push(Angle::ZERO);
         self.hp.push(hp);
+        self.home.push(home.raw());
+        self.carrying.push(Money::ZERO);
+        self.busy_until.push(NO_WORK);
         self.count = self.count.saturating_add(1);
     }
 
@@ -266,6 +307,62 @@ impl UnitTable {
         &mut self.dest
     }
 
+    /// The home-beacon column, as raw [`BeaconId`]s.
+    ///
+    /// Every unit a fabricator produces is bound to the beacon that produced it
+    /// and follows that beacon's mandate, even outside the sphere (spec section
+    /// 5, "Units"). [`BeaconId::NONE`] means the unit is on no grid at all: it
+    /// draws no `kW`, no mandate drives it and no dormancy parks it. Nothing in
+    /// a real match produces one — the value exists for the harness walkers
+    /// [`crate::world::WorldConfig::units_per_seat`] fields, which are
+    /// scaffolding rather than a seat's force.
+    #[must_use]
+    pub fn homes(&self) -> &[u32] {
+        &self.home
+    }
+
+    /// The home-beacon column, to write into.
+    ///
+    /// Two callers, both in the match phase: item 20's re-homing when a bound
+    /// beacon dies or is recycled, and the fabricator giving a fresh unit its
+    /// home.
+    pub fn homes_mut(&mut self) -> &mut [u32] {
+        &mut self.home
+    }
+
+    /// The carried-`$` column: ore a mining drone has dug and not yet
+    /// delivered, and salvage a reclaim drone is carrying.
+    ///
+    /// Hashed state, because "delivered ore is credited to the seat treasury
+    /// immediately" (spec section 6, Mine) makes *where* the `$` is a fact about
+    /// the world: a drone killed on the way home loses its load.
+    #[must_use]
+    pub fn carrying(&self) -> &[Money] {
+        &self.carrying
+    }
+
+    /// The carried-`$` column, to write into. The mine and salvage programs.
+    pub fn carrying_mut(&mut self) -> &mut [Money] {
+        &mut self.carrying
+    }
+
+    /// The tick each unit's timed work finishes at, or [`NO_WORK`] when it is
+    /// doing none.
+    ///
+    /// One column for every program's clock — a mining drone's
+    /// `economy.mining_ms_per_voxel`, a reclaim drone's salvage — because a
+    /// unit does one timed thing at a time and a second column would be a second
+    /// chance for the two to disagree.
+    #[must_use]
+    pub fn busy_until(&self) -> &[u32] {
+        &self.busy_until
+    }
+
+    /// The busy-until column, to write into. The programs phase.
+    pub fn busy_until_mut(&mut self) -> &mut [u32] {
+        &mut self.busy_until
+    }
+
     /// Replace the whole table from the columns of a restored snapshot.
     ///
     /// Returns `false` and changes nothing when the columns disagree in
@@ -278,6 +375,9 @@ impl UnitTable {
             || columns.dest.len() != n
             || columns.heading.len() != n
             || columns.hp.len() != n
+            || columns.home.len() != n
+            || columns.carrying.len() != n
+            || columns.busy_until.len() != n
         {
             return false;
         }
@@ -292,6 +392,9 @@ impl UnitTable {
         self.dest = columns.dest;
         self.heading = columns.heading;
         self.hp = columns.hp;
+        self.home = columns.home;
+        self.carrying = columns.carrying;
+        self.busy_until = columns.busy_until;
         true
     }
 }
@@ -317,6 +420,12 @@ pub struct UnitColumns {
     pub heading: Vec<Angle>,
     /// Hit points.
     pub hp: Vec<Hp>,
+    /// Home beacons, or [`BeaconId::NONE`].
+    pub home: Vec<u32>,
+    /// Carried but undelivered `$`.
+    pub carrying: Vec<Money>,
+    /// The tick each unit's timed work finishes at, or [`NO_WORK`].
+    pub busy_until: Vec<u32>,
 }
 
 /// The columns [`UnitTable::movement_columns`] hands out, borrowed together.
@@ -351,6 +460,13 @@ pub const NOT_ELIMINATED: u32 = u32::MAX;
 /// seat whose commander is alive.
 pub const NO_RESPAWN: u32 = u32::MAX;
 
+/// "This unit is doing no timed work" — the value [`UnitTable::busy_until`]
+/// carries for a unit that is walking, idle or parked.
+///
+/// A sentinel rather than an `Option`, for the reason [`BeaconId::NONE`] is
+/// one, and not a tick any match reaches.
+pub const NO_WORK: u32 = u32::MAX;
+
 /// Per-seat treasury, power and match standing, structure-of-arrays.
 ///
 /// The economy proper is T14's; what is here is the shape the hash and the
@@ -372,6 +488,7 @@ pub struct SeatTable {
     eliminated_at: Vec<u32>,
     commander_deaths: Vec<u32>,
     respawn_due: Vec<u32>,
+    qm_cursor: Vec<u32>,
 }
 
 impl SeatTable {
@@ -388,6 +505,7 @@ impl SeatTable {
             eliminated_at: Vec::with_capacity(n),
             commander_deaths: Vec::with_capacity(n),
             respawn_due: Vec::with_capacity(n),
+            qm_cursor: Vec::with_capacity(n),
         }
     }
 
@@ -400,6 +518,7 @@ impl SeatTable {
         self.eliminated_at.push(NOT_ELIMINATED);
         self.commander_deaths.push(0);
         self.respawn_due.push(NO_RESPAWN);
+        self.qm_cursor.push(BeaconId::NONE.raw());
         self.count = self.count.saturating_add(1);
     }
 
@@ -425,6 +544,47 @@ impl SeatTable {
     #[must_use]
     pub fn treasuries(&self) -> &[Money] {
         &self.treasury
+    }
+
+    /// The treasury column, to write into.
+    ///
+    /// The single treasury (spec section 7): the Quartermaster's spend, the
+    /// recycle refund, delivered ore and salvage, and the Ledger's settlement
+    /// at each recap. There are no per-beacon pools and no sweeps, so there is
+    /// one column and one writer.
+    pub fn treasuries_mut(&mut self) -> &mut [Money] {
+        &mut self.treasury
+    }
+
+    /// The supply and draw columns, borrowed together.
+    ///
+    /// One borrow rather than two accessors because the power phase settles
+    /// both in the same pass: a seat's headroom is the difference, and a phase
+    /// that could write one without the other is a phase that can leave them
+    /// describing two different ticks.
+    pub fn power_columns(&mut self) -> PowerColumns<'_> {
+        PowerColumns {
+            supply: &mut self.supply,
+            draw: &mut self.draw,
+        }
+    }
+
+    /// Where each seat's Quartermaster left off in its round-robin, as a
+    /// [`BeaconId`] raw value, or [`BeaconId::NONE`] before it has served
+    /// anybody.
+    ///
+    /// Hashed state, and not a cache: it is what decides which beacon of a band
+    /// is served first on the next tick, so two machines that disagree about it
+    /// spend a seat's `$` on different beacons (spec section 7: "round-robin
+    /// within a band, so no single beacon can hog the treasury").
+    #[must_use]
+    pub fn qm_cursors(&self) -> &[u32] {
+        &self.qm_cursor
+    }
+
+    /// The Quartermaster's cursor column, to write into.
+    pub fn qm_cursors_mut(&mut self) -> &mut [u32] {
+        &mut self.qm_cursor
     }
 
     /// The power-supply column.
@@ -488,6 +648,7 @@ impl SeatTable {
             || columns.eliminated_at.len() != n
             || columns.commander_deaths.len() != n
             || columns.respawn_due.len() != n
+            || columns.qm_cursor.len() != n
         {
             return false;
         }
@@ -502,6 +663,7 @@ impl SeatTable {
         self.eliminated_at = columns.eliminated_at;
         self.commander_deaths = columns.commander_deaths;
         self.respawn_due = columns.respawn_due;
+        self.qm_cursor = columns.qm_cursor;
         true
     }
 }
@@ -524,6 +686,17 @@ pub struct SeatColumns {
     pub commander_deaths: Vec<u32>,
     /// Pending respawn ticks, or [`NO_RESPAWN`].
     pub respawn_due: Vec<u32>,
+    /// The Quartermaster's round-robin cursor, per seat.
+    pub qm_cursor: Vec<u32>,
+}
+
+/// The supply and draw columns, borrowed together.
+#[derive(Debug)]
+pub struct PowerColumns<'a> {
+    /// Power supply, per seat.
+    pub supply: &'a mut [Kw],
+    /// Power draw, per seat.
+    pub draw: &'a mut [Kw],
 }
 
 /// The three match columns, borrowed together.
@@ -539,6 +712,805 @@ pub struct MatchColumns<'a> {
     pub commander_deaths: &'a mut [u32],
     /// Pending respawn ticks, or [`NO_RESPAWN`].
     pub respawn_due: &'a mut [u32],
+}
+
+/// What one row of a [`TargetTable`] is.
+///
+/// The ids are written out and additive only, for the reason every other wire
+/// id in this crate is: the byte reaches the canonical encoding.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub enum TargetKind {
+    /// One entry of a Build mandate's target list: a blueprint at an anchor
+    /// (spec section 6, the Build row).
+    Build,
+    /// Ground a Build mandate will not dig, fill or build on.
+    Protected,
+    /// Where a Survey mandate's scouts look first.
+    Probe,
+}
+
+impl TargetKind {
+    /// Every kind, in ascending id order.
+    pub const ALL: [TargetKind; 3] = [TargetKind::Build, TargetKind::Protected, TargetKind::Probe];
+
+    /// The wire id. Additive only: never reuse, never renumber.
+    #[must_use]
+    pub const fn id(self) -> u8 {
+        match self {
+            TargetKind::Build => 1,
+            TargetKind::Protected => 2,
+            TargetKind::Probe => 3,
+        }
+    }
+
+    /// The kind an id names, or `None` for one this build does not define.
+    #[must_use]
+    pub const fn from_id(id: u8) -> Option<TargetKind> {
+        match id {
+            1 => Some(TargetKind::Build),
+            2 => Some(TargetKind::Protected),
+            3 => Some(TargetKind::Probe),
+            _ => None,
+        }
+    }
+}
+
+/// A beacon's mandate settings that are **lists**: Build targets, protected
+/// areas and Survey probe areas.
+///
+/// One table rather than three, sorted by `(beacon, kind)`, because all three
+/// are the same shape — a place, a radius and a blueprint — and because a
+/// mandate switch clears all of one beacon's rows at once (item 20).
+///
+/// Hashed state: a target decides what a fabricator pays for and where a build
+/// drone walks.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct TargetTable {
+    count: u32,
+    beacon: Vec<u32>,
+    kind: Vec<u8>,
+    blueprint: Vec<u8>,
+    at: Vec<[Fx; 3]>,
+    radius: Vec<i32>,
+    built: Vec<u32>,
+    capacity: u32,
+}
+
+impl TargetTable {
+    /// A table holding `capacity` rows across the whole match, never growing.
+    #[must_use]
+    pub fn with_capacity(capacity: u32) -> TargetTable {
+        let n = usize::try_from(capacity).unwrap_or(0);
+        TargetTable {
+            count: 0,
+            beacon: Vec::with_capacity(n),
+            kind: Vec::with_capacity(n),
+            blueprint: Vec::with_capacity(n),
+            at: Vec::with_capacity(n),
+            radius: Vec::with_capacity(n),
+            built: Vec::with_capacity(n),
+            capacity,
+        }
+    }
+
+    /// How many rows the table holds.
+    #[must_use]
+    pub const fn len(&self) -> u32 {
+        self.count
+    }
+
+    /// Whether no beacon carries a list setting.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.count == 0
+    }
+
+    /// How many rows it will ever hold.
+    #[must_use]
+    pub const fn capacity(&self) -> u32 {
+        self.capacity
+    }
+
+    /// The beacon column.
+    #[must_use]
+    pub fn beacons(&self) -> &[u32] {
+        &self.beacon
+    }
+
+    /// The kind column, as [`TargetKind::id`] wire values.
+    #[must_use]
+    pub fn kinds(&self) -> &[u8] {
+        &self.kind
+    }
+
+    /// The blueprint column, as [`StructureKind::id`] wire values; zero on a
+    /// row that names no blueprint.
+    #[must_use]
+    pub fn blueprints(&self) -> &[u8] {
+        &self.blueprint
+    }
+
+    /// The anchor column.
+    #[must_use]
+    pub fn anchors(&self) -> &[[Fx; 3]] {
+        &self.at
+    }
+
+    /// The radius column, in whole voxels; zero for a point target.
+    #[must_use]
+    pub fn radii(&self) -> &[i32] {
+        &self.radius
+    }
+
+    /// The structure realising each Build target, or [`BeaconId::NONE`]'s raw
+    /// value when nothing has been paid for yet.
+    #[must_use]
+    pub fn built(&self) -> &[u32] {
+        &self.built
+    }
+
+    /// The realising-structure column, to write into: the Quartermaster sets
+    /// it when it pays for the target, and item 20's ruination clears it.
+    pub fn built_mut(&mut self) -> &mut [u32] {
+        &mut self.built
+    }
+
+    /// Append one row, keeping the table in `(beacon, kind)` order.
+    ///
+    /// `false` when the table is full, which the caller reports as a step
+    /// failure rather than growing a column inside a tick.
+    pub fn add(
+        &mut self,
+        beacon: BeaconId,
+        kind: TargetKind,
+        blueprint: u8,
+        at: [Fx; 3],
+        radius: i32,
+    ) -> bool {
+        if self.count >= self.capacity {
+            return false;
+        }
+        let key = (beacon.raw(), kind.id());
+        let mut slot: usize = 0;
+        while slot < self.beacon.len() {
+            let here = (
+                self.beacon.get(slot).copied().unwrap_or(0),
+                self.kind.get(slot).copied().unwrap_or(0),
+            );
+            if here > key {
+                break;
+            }
+            slot = slot.saturating_add(1);
+        }
+        self.beacon.insert(slot, beacon.raw());
+        self.kind.insert(slot, kind.id());
+        self.blueprint.insert(slot, blueprint);
+        self.at.insert(slot, at);
+        self.radius.insert(slot, radius);
+        self.built.insert(slot, BeaconId::NONE.raw());
+        self.count = self.count.saturating_add(1);
+        true
+    }
+
+    /// Remove row `slot`.
+    pub fn remove(&mut self, slot: usize) {
+        if slot >= self.beacon.len() {
+            return;
+        }
+        self.beacon.remove(slot);
+        self.kind.remove(slot);
+        self.blueprint.remove(slot);
+        self.at.remove(slot);
+        self.radius.remove(slot);
+        self.built.remove(slot);
+        self.count = self.count.saturating_sub(1);
+    }
+
+    /// Remove every row of `beacon`.
+    ///
+    /// What a mandate switch does (item 20: "switching a beacon's mandate
+    /// clears the old mandate's settings and targets"), and what a recycled or
+    /// destroyed beacon leaves behind — nothing.
+    pub fn clear_beacon(&mut self, beacon: BeaconId) {
+        let mut slot: usize = 0;
+        while slot < self.beacon.len() {
+            if self.beacon.get(slot).copied() == Some(beacon.raw()) {
+                self.remove(slot);
+            } else {
+                slot = slot.saturating_add(1);
+            }
+        }
+    }
+
+    /// Replace the whole table from a restored snapshot. Same contract as
+    /// [`UnitTable::restore`], plus: every kind byte must name a kind this
+    /// build defines, for the reason the match phase's byte must.
+    pub fn restore(&mut self, capacity: u32, columns: TargetColumns) -> bool {
+        let n = columns.beacon.len();
+        if columns.kind.len() != n
+            || columns.blueprint.len() != n
+            || columns.at.len() != n
+            || columns.radius.len() != n
+            || columns.built.len() != n
+        {
+            return false;
+        }
+        if !columns
+            .kind
+            .iter()
+            .all(|id| TargetKind::from_id(*id).is_some())
+        {
+            return false;
+        }
+        let Ok(count) = u32::try_from(n) else {
+            return false;
+        };
+        if count > capacity {
+            return false;
+        }
+        self.count = count;
+        self.capacity = capacity;
+        self.beacon = columns.beacon;
+        self.kind = columns.kind;
+        self.blueprint = columns.blueprint;
+        self.at = columns.at;
+        self.radius = columns.radius;
+        self.built = columns.built;
+        true
+    }
+}
+
+/// Every column of a restored [`TargetTable`]. Same reasoning as
+/// [`UnitColumns`].
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct TargetColumns {
+    /// The beacon each row belongs to.
+    pub beacon: Vec<u32>,
+    /// [`TargetKind::id`] per row.
+    pub kind: Vec<u8>,
+    /// [`StructureKind::id`] per row, or zero.
+    pub blueprint: Vec<u8>,
+    /// Anchors.
+    pub at: Vec<[Fx; 3]>,
+    /// Radii in whole voxels.
+    pub radius: Vec<i32>,
+    /// The structure realising each Build target.
+    pub built: Vec<u32>,
+}
+
+/// What one seat remembers seeing, with the tick it was seen at (spec section
+/// 6, "Vision and sightings").
+///
+/// Hashed state, because a Survey mandate re-checks "the sightings closest to
+/// leaving the reach window" and that decides where a scout walks. The **age**
+/// a playbook compares against is derived from `seen_at` and the current tick,
+/// so the age accrues on match game time and the Lull and the recap add nothing
+/// to it — there is no tick in either.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct SightingTable {
+    count: u32,
+    seat: Vec<u8>,
+    asset: Vec<u32>,
+    owner: Vec<u8>,
+    kind: Vec<u8>,
+    at: Vec<[Fx; 3]>,
+    seen_at: Vec<u32>,
+    capacity: u32,
+}
+
+impl SightingTable {
+    /// A table holding `capacity` sightings across every seat, never growing.
+    #[must_use]
+    pub fn with_capacity(capacity: u32) -> SightingTable {
+        let n = usize::try_from(capacity).unwrap_or(0);
+        SightingTable {
+            count: 0,
+            seat: Vec::with_capacity(n),
+            asset: Vec::with_capacity(n),
+            owner: Vec::with_capacity(n),
+            kind: Vec::with_capacity(n),
+            at: Vec::with_capacity(n),
+            seen_at: Vec::with_capacity(n),
+            capacity,
+        }
+    }
+
+    /// How many sightings are remembered.
+    #[must_use]
+    pub const fn len(&self) -> u32 {
+        self.count
+    }
+
+    /// Whether nobody remembers anything.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.count == 0
+    }
+
+    /// How many sightings it will ever hold.
+    #[must_use]
+    pub const fn capacity(&self) -> u32 {
+        self.capacity
+    }
+
+    /// The seat column.
+    #[must_use]
+    pub fn seats(&self) -> &[u8] {
+        &self.seat
+    }
+
+    /// The asset column.
+    #[must_use]
+    pub fn assets(&self) -> &[u32] {
+        &self.asset
+    }
+
+    /// The owning-seat column.
+    #[must_use]
+    pub fn owners(&self) -> &[u8] {
+        &self.owner
+    }
+
+    /// The kind column, as [`crate::knowledge::AssetKind::id`] wire values.
+    #[must_use]
+    pub fn kinds(&self) -> &[u8] {
+        &self.kind
+    }
+
+    /// The remembered-place column.
+    #[must_use]
+    pub fn places(&self) -> &[[Fx; 3]] {
+        &self.at
+    }
+
+    /// The tick each sighting was taken at.
+    #[must_use]
+    pub fn seen_at(&self) -> &[u32] {
+        &self.seen_at
+    }
+
+    /// Where `(seat, asset)` sits, or where it would be inserted. The list is
+    /// sorted by that pair, which is unique by construction (item 62).
+    #[allow(
+        clippy::integer_division,
+        reason = "a binary search's midpoint; both operands are non-negative and the halving is exact by construction"
+    )]
+    fn seek(&self, seat: u8, asset: u32) -> Result<usize, usize> {
+        let mut lo: usize = 0;
+        let mut hi = self.seat.len();
+        while lo < hi {
+            let mid = lo.saturating_add(hi.saturating_sub(lo) / 2);
+            let here = (
+                self.seat.get(mid).copied().unwrap_or(0),
+                self.asset.get(mid).copied().unwrap_or(0),
+            );
+            match here.cmp(&(seat, asset)) {
+                core::cmp::Ordering::Less => lo = mid.saturating_add(1),
+                core::cmp::Ordering::Greater => hi = mid,
+                core::cmp::Ordering::Equal => return Ok(mid),
+            }
+        }
+        Err(lo)
+    }
+
+    /// Record that `seat` saw `asset` at `at` on `tick`.
+    ///
+    /// A second sighting of the same asset **replaces** the memory of it rather
+    /// than joining it, which is what keeps the `(seat, asset)` key unique. A
+    /// full table forgets that seat's stalest sighting first, ties to the lowest
+    /// asset id — the same order the Survey mandate refreshes in, so what falls
+    /// out is what was about to leave the window anyway. `false` when nothing
+    /// was recorded, which is a full table with no row of this seat's to drop.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one argument per column of the row being written, as the SoA `push`es above"
+    )]
+    pub fn see(
+        &mut self,
+        seat: SeatId,
+        asset: u32,
+        owner: SeatId,
+        kind: u8,
+        at: [Fx; 3],
+        tick: u32,
+    ) -> bool {
+        match self.seek(seat.raw(), asset) {
+            Ok(slot) => {
+                if let Some(place) = self.at.get_mut(slot) {
+                    *place = at;
+                }
+                if let Some(when) = self.seen_at.get_mut(slot) {
+                    *when = tick;
+                }
+                if let Some(who) = self.owner.get_mut(slot) {
+                    *who = owner.raw();
+                }
+                if let Some(what) = self.kind.get_mut(slot) {
+                    *what = kind;
+                }
+                true
+            }
+            Err(slot) => {
+                if self.count >= self.capacity {
+                    let Some(stalest) = self.stalest_of(seat) else {
+                        return false;
+                    };
+                    self.forget(stalest);
+                    return self.see(seat, asset, owner, kind, at, tick);
+                }
+                self.seat.insert(slot, seat.raw());
+                self.asset.insert(slot, asset);
+                self.owner.insert(slot, owner.raw());
+                self.kind.insert(slot, kind);
+                self.at.insert(slot, at);
+                self.seen_at.insert(slot, tick);
+                self.count = self.count.saturating_add(1);
+                true
+            }
+        }
+    }
+
+    /// The row holding `seat`'s stalest sighting — the one closest to leaving
+    /// the reach window — or `None` when it remembers nothing.
+    ///
+    /// The key is `(seen_at, asset)`: earliest first, ties to the lowest asset
+    /// id, which is item 62's convention and what makes "closest to leaving the
+    /// window first" a total order rather than a preference.
+    #[must_use]
+    pub fn stalest_of(&self, seat: SeatId) -> Option<usize> {
+        let mut best: Option<(u32, u32, usize)> = None;
+        for (slot, who) in self.seat.iter().enumerate() {
+            if *who != seat.raw() {
+                continue;
+            }
+            let when = self.seen_at.get(slot).copied().unwrap_or(0);
+            let asset = self.asset.get(slot).copied().unwrap_or(0);
+            if best.is_none_or(|(bw, ba, _)| (when, asset) < (bw, ba)) {
+                best = Some((when, asset, slot));
+            }
+        }
+        best.map(|(_, _, slot)| slot)
+    }
+
+    /// Forget row `slot`.
+    pub fn forget(&mut self, slot: usize) {
+        if slot >= self.seat.len() {
+            return;
+        }
+        self.seat.remove(slot);
+        self.asset.remove(slot);
+        self.owner.remove(slot);
+        self.kind.remove(slot);
+        self.at.remove(slot);
+        self.seen_at.remove(slot);
+        self.count = self.count.saturating_sub(1);
+    }
+
+    /// Replace the whole table from a restored snapshot. Same contract as
+    /// [`UnitTable::restore`], plus: the `(seat, asset)` key must be strictly
+    /// ascending, which is what the table's own search assumes.
+    pub fn restore(&mut self, capacity: u32, columns: SightingColumns) -> bool {
+        let n = columns.seat.len();
+        if columns.asset.len() != n
+            || columns.owner.len() != n
+            || columns.kind.len() != n
+            || columns.at.len() != n
+            || columns.seen_at.len() != n
+        {
+            return false;
+        }
+        let mut slot: usize = 1;
+        while slot < n {
+            let previous = slot.saturating_sub(1);
+            let before = (
+                columns.seat.get(previous).copied().unwrap_or(0),
+                columns.asset.get(previous).copied().unwrap_or(0),
+            );
+            let here = (
+                columns.seat.get(slot).copied().unwrap_or(0),
+                columns.asset.get(slot).copied().unwrap_or(0),
+            );
+            if before >= here {
+                return false;
+            }
+            slot = slot.saturating_add(1);
+        }
+        let Ok(count) = u32::try_from(n) else {
+            return false;
+        };
+        if count > capacity {
+            return false;
+        }
+        self.count = count;
+        self.capacity = capacity;
+        self.seat = columns.seat;
+        self.asset = columns.asset;
+        self.owner = columns.owner;
+        self.kind = columns.kind;
+        self.at = columns.at;
+        self.seen_at = columns.seen_at;
+        true
+    }
+}
+
+/// Every column of a restored [`SightingTable`]. Same reasoning as
+/// [`UnitColumns`].
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct SightingColumns {
+    /// Whose memory each row is.
+    pub seat: Vec<u8>,
+    /// What was seen.
+    pub asset: Vec<u32>,
+    /// Who owns the thing seen.
+    pub owner: Vec<u8>,
+    /// [`crate::knowledge::AssetKind::id`] per row.
+    pub kind: Vec<u8>,
+    /// Where it was when it was seen.
+    pub at: Vec<[Fx; 3]>,
+    /// The tick it was seen at.
+    pub seen_at: Vec<u32>,
+}
+
+/// The Quartermaster priority a beacon carries when nobody has set one:
+/// `gp.v1.InterfaceRow.QuartermasterPriority.NORMAL`.
+///
+/// The three constants are the schema's wire values rather than an enum of our
+/// own, because the byte reaches the canonical encoding and a second numbering
+/// beside the proto's is a second thing to keep in step.
+pub const PRIORITY_NORMAL: u8 = 2;
+
+/// `gp.v1.InterfaceRow.QuartermasterPriority.LOW` - browned out first.
+pub const PRIORITY_LOW: u8 = 1;
+
+/// `gp.v1.InterfaceRow.QuartermasterPriority.HIGH` - browned out last.
+pub const PRIORITY_HIGH: u8 = 3;
+
+/// How many seats may hold kill credit against one asset at a time (item 17).
+///
+/// Three, which is exactly enough and not a cap anybody can meet: only damage
+/// dealt by **other** seats counts, and v1 seats three, so an asset can carry
+/// credit for at most two. The determinism harness seats four, which is the
+/// reason the slot count is three rather than two - it is the widest the table
+/// can be asked to be. A fourth distinct damager is dropped by
+/// [`CreditTable::credit`], deterministically and with the reason written
+/// there, rather than growing a row inside a tick.
+pub const CREDIT_SLOTS: usize = 3;
+
+/// Per-seat kill-credit counters, at most [`CREDIT_SLOTS`] per asset
+/// (item 17).
+///
+/// Sparse and sorted by [`crate::knowledge::AssetId`]: an asset nobody has
+/// damaged has no row, so the table is empty until combat exists (S2) and costs
+/// the hash one length prefix. It is **hashed from the day it exists** anyway,
+/// because a field that affects behaviour and is not hashed is a latent desync
+/// and the apportionment it feeds decides who is paid for a kill
+/// (AGENTS.md section 4.8).
+///
+/// The rules it carries, all item 17's: only damage dealt by other seats
+/// counts, clamped to the hit points actually removed; reaching full hit points
+/// clears the counters; an asset lost with no enemy damage on the clock credits
+/// nobody; an eliminated seat's accrued share is dropped rather than
+/// redistributed; and the split is apportioned as integers by largest remainder
+/// with ties to the lowest seat id.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct CreditTable {
+    count: u32,
+    asset: Vec<u32>,
+    seat: Vec<[u8; CREDIT_SLOTS]>,
+    damage: Vec<[i32; CREDIT_SLOTS]>,
+    capacity: u32,
+}
+
+impl CreditTable {
+    /// A table that will hold credit against `capacity` assets at once and
+    /// never grow.
+    #[must_use]
+    pub fn with_capacity(capacity: u32) -> CreditTable {
+        let n = usize::try_from(capacity).unwrap_or(0);
+        CreditTable {
+            count: 0,
+            asset: Vec::with_capacity(n),
+            seat: Vec::with_capacity(n),
+            damage: Vec::with_capacity(n),
+            capacity,
+        }
+    }
+
+    /// How many assets carry credit right now.
+    #[must_use]
+    pub const fn len(&self) -> u32 {
+        self.count
+    }
+
+    /// Whether nobody holds credit against anything.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.count == 0
+    }
+
+    /// How many assets it will ever hold credit against.
+    #[must_use]
+    pub const fn capacity(&self) -> u32 {
+        self.capacity
+    }
+
+    /// The asset column, ascending. The sort key, and unique: one row per
+    /// asset (item 62).
+    #[must_use]
+    pub fn assets(&self) -> &[u32] {
+        &self.asset
+    }
+
+    /// The per-slot seat column.
+    #[must_use]
+    pub fn seats(&self) -> &[[u8; CREDIT_SLOTS]] {
+        &self.seat
+    }
+
+    /// The per-slot damage column, in hit points actually removed.
+    #[must_use]
+    pub fn damages(&self) -> &[[i32; CREDIT_SLOTS]] {
+        &self.damage
+    }
+
+    /// Where `asset` sits, or where it would be inserted.
+    fn seek(&self, asset: u32) -> Result<usize, usize> {
+        self.asset.binary_search(&asset)
+    }
+
+    /// Book `amount` hit points of damage dealt to `asset` by `by`.
+    ///
+    /// `false` when nothing was booked: `amount` is not positive, `by` is not a
+    /// seat, the table is full, or the asset already carries [`CREDIT_SLOTS`]
+    /// other damagers. A drop is deterministic and visible to the caller, and
+    /// it cannot happen at any seat count v1 allows.
+    pub fn credit(&mut self, asset: u32, by: SeatId, amount: i32) -> bool {
+        if amount <= 0 || !by.is_some() {
+            return false;
+        }
+        let at = match self.seek(asset) {
+            Ok(at) => at,
+            Err(at) => {
+                if self.count >= self.capacity {
+                    return false;
+                }
+                self.asset.insert(at, asset);
+                self.seat.insert(at, [SeatId::NEUTRAL.raw(); CREDIT_SLOTS]);
+                self.damage.insert(at, [0; CREDIT_SLOTS]);
+                self.count = self.count.saturating_add(1);
+                at
+            }
+        };
+        let (Some(seats), Some(damages)) = (self.seat.get_mut(at), self.damage.get_mut(at)) else {
+            return false;
+        };
+        let mut slot: usize = 0;
+        while slot < CREDIT_SLOTS {
+            let held = seats.get(slot).copied().unwrap_or(SeatId::NEUTRAL.raw());
+            if held == by.raw() {
+                if let Some(total) = damages.get_mut(slot) {
+                    *total = total.saturating_add(amount);
+                }
+                return true;
+            }
+            if held == SeatId::NEUTRAL.raw() {
+                if let Some(owner) = seats.get_mut(slot) {
+                    *owner = by.raw();
+                }
+                if let Some(total) = damages.get_mut(slot) {
+                    *total = amount;
+                }
+                return true;
+            }
+            slot = slot.saturating_add(1);
+        }
+        false
+    }
+
+    /// What each seat has dealt to `asset`, ascending by seat id, into `out`.
+    ///
+    /// `out` is the caller's buffer and is cleared first, so a tick phase that
+    /// keeps one around allocates nothing.
+    pub fn shares_of(&self, asset: u32, out: &mut Vec<(u8, i32)>) {
+        out.clear();
+        let Ok(at) = self.seek(asset) else {
+            return;
+        };
+        let (Some(seats), Some(damages)) = (self.seat.get(at), self.damage.get(at)) else {
+            return;
+        };
+        let mut slot: usize = 0;
+        while slot < CREDIT_SLOTS {
+            let seat = seats.get(slot).copied().unwrap_or(SeatId::NEUTRAL.raw());
+            let dealt = damages.get(slot).copied().unwrap_or(0);
+            if SeatId::new(seat).is_some() && dealt > 0 {
+                out.push((seat, dealt));
+            }
+            slot = slot.saturating_add(1);
+        }
+        // item 62: the key is the seat id, unique within a row by `credit`.
+        out.sort_unstable();
+    }
+
+    /// Forget every counter against `asset`.
+    ///
+    /// Item 17: reaching full hit points clears the counters, and so does
+    /// settling a death. A cleared row leaves the table rather than sitting
+    /// there at zero, so the table stays the sparse list its sort key assumes.
+    pub fn clear_asset(&mut self, asset: u32) {
+        let Ok(at) = self.seek(asset) else {
+            return;
+        };
+        self.asset.remove(at);
+        self.seat.remove(at);
+        self.damage.remove(at);
+        self.count = self.count.saturating_sub(1);
+    }
+
+    /// Drop every counter an eliminated seat holds, everywhere.
+    ///
+    /// Item 17: an eliminated seat's accrued share is **dropped, not
+    /// redistributed**, so the remaining damagers keep their own numbers and
+    /// the apportionment simply has less to divide.
+    pub fn drop_seat(&mut self, seat: SeatId) {
+        let rows = self.seat.len();
+        let mut row: usize = 0;
+        while row < rows {
+            let mut slot: usize = 0;
+            while slot < CREDIT_SLOTS {
+                let held = self
+                    .seat
+                    .get(row)
+                    .and_then(|slots| slots.get(slot))
+                    .copied()
+                    .unwrap_or(SeatId::NEUTRAL.raw());
+                if held == seat.raw() {
+                    if let Some(owner) = self.seat.get_mut(row).and_then(|s| s.get_mut(slot)) {
+                        *owner = SeatId::NEUTRAL.raw();
+                    }
+                    if let Some(total) = self.damage.get_mut(row).and_then(|d| d.get_mut(slot)) {
+                        *total = 0;
+                    }
+                }
+                slot = slot.saturating_add(1);
+            }
+            row = row.saturating_add(1);
+        }
+    }
+
+    /// Replace the whole table from a restored snapshot.
+    ///
+    /// Returns `false` and changes nothing when the columns disagree in
+    /// length, when the asset column is not strictly ascending — the sort key
+    /// the table's own search assumes — or when the file holds more rows than
+    /// the receiving world has room for.
+    pub fn restore(
+        &mut self,
+        capacity: u32,
+        asset: Vec<u32>,
+        seat: Vec<[u8; CREDIT_SLOTS]>,
+        damage: Vec<[i32; CREDIT_SLOTS]>,
+    ) -> bool {
+        let n = asset.len();
+        if seat.len() != n || damage.len() != n {
+            return false;
+        }
+        if asset.windows(2).any(|w| w.first() >= w.get(1)) {
+            return false;
+        }
+        let Ok(count) = u32::try_from(n) else {
+            return false;
+        };
+        if count > capacity {
+            return false;
+        }
+        self.count = count;
+        self.capacity = capacity;
+        self.asset = asset;
+        self.seat = seat;
+        self.damage = damage;
+        true
+    }
 }
 
 /// A CSR uniform grid over the map footprint, rebuilt every tick by counting
@@ -1022,6 +1994,10 @@ pub struct BeaconColumns {
     pub hp: Vec<Hp>,
     /// Dormancy.
     pub dormant: Vec<bool>,
+    /// The Quartermaster priority knob.
+    pub priority: Vec<u8>,
+    /// The Survey mandate's scout count.
+    pub scouts: Vec<u8>,
 }
 
 /// Every column of a restored [`StructureTable`]. Same reasoning as
@@ -1040,6 +2016,8 @@ pub struct StructureColumns {
     pub hp: Vec<Hp>,
     /// Home beacons, or [`BeaconId::NONE`].
     pub home: Vec<u32>,
+    /// Whether each structure is still going up.
+    pub building: Vec<bool>,
 }
 
 /// Beacons, structure-of-arrays.
@@ -1060,6 +2038,8 @@ pub struct BeaconTable {
     program: Vec<u32>,
     hp: Vec<Hp>,
     dormant: Vec<bool>,
+    priority: Vec<u8>,
+    scouts: Vec<u8>,
 }
 
 impl BeaconTable {
@@ -1076,6 +2056,8 @@ impl BeaconTable {
             program: Vec::with_capacity(n),
             hp: Vec::with_capacity(n),
             dormant: Vec::with_capacity(n),
+            priority: Vec::with_capacity(n),
+            scouts: Vec::with_capacity(n),
         }
     }
 
@@ -1096,6 +2078,8 @@ impl BeaconTable {
         self.program.push(mandate.program_id.raw());
         self.hp.push(hp);
         self.dormant.push(dormant);
+        self.priority.push(PRIORITY_NORMAL);
+        self.scouts.push(0);
         self.count = self.count.saturating_add(1);
     }
 
@@ -1115,6 +2099,8 @@ impl BeaconTable {
         self.program.reserve(n);
         self.hp.reserve(n);
         self.dormant.reserve(n);
+        self.priority.reserve(n);
+        self.scouts.reserve(n);
     }
 
     /// How many beacons the table holds.
@@ -1181,6 +2167,48 @@ impl BeaconTable {
         &self.dormant
     }
 
+    /// The dormancy column, to write into.
+    ///
+    /// One caller: the power phase's brownout and revive
+    /// ([`crate::power`]). Dormancy is a consequence of supply and draw, never
+    /// an order a playbook can give.
+    pub fn dormant_mut(&mut self) -> &mut [bool] {
+        &mut self.dormant
+    }
+
+    /// The Quartermaster-priority column, as
+    /// `gp.v1.InterfaceRow.QuartermasterPriority` wire values
+    /// ([`PRIORITY_LOW`], [`PRIORITY_NORMAL`], [`PRIORITY_HIGH`]).
+    ///
+    /// The one player lever over power (spec section 7): it orders brownouts
+    /// and nothing else, while `$` follows the urgency ladder. It belongs to the
+    /// **beacon**, not to the mandate, so a mandate switch does not clear it
+    /// (item 20).
+    #[must_use]
+    pub fn priorities(&self) -> &[u8] {
+        &self.priority
+    }
+
+    /// The priority column, to write into. The interpreter's committed
+    /// `set_priority` row is the only caller — *touch to change*.
+    pub fn priorities_mut(&mut self) -> &mut [u8] {
+        &mut self.priority
+    }
+
+    /// The Survey mandate's scout count, per beacon; zero on every other writ.
+    ///
+    /// The one mandate setting that is a plain number rather than a list, so it
+    /// lives beside the writ rather than in [`TargetTable`].
+    #[must_use]
+    pub fn scout_counts(&self) -> &[u8] {
+        &self.scouts
+    }
+
+    /// The scout-count column, to write into. A committed settings row.
+    pub fn scout_counts_mut(&mut self) -> &mut [u8] {
+        &mut self.scouts
+    }
+
     /// The hit-point column, to write into.
     ///
     /// The combat phase's damage drain is the only caller. A beacon at zero
@@ -1200,6 +2228,8 @@ impl BeaconTable {
             || columns.program.len() != n
             || columns.hp.len() != n
             || columns.dormant.len() != n
+            || columns.priority.len() != n
+            || columns.scouts.len() != n
         {
             return false;
         }
@@ -1214,6 +2244,8 @@ impl BeaconTable {
         self.program = columns.program;
         self.hp = columns.hp;
         self.dormant = columns.dormant;
+        self.priority = columns.priority;
+        self.scouts = columns.scouts;
         true
     }
 }
@@ -1233,6 +2265,7 @@ pub struct StructureTable {
     pos: Vec<[Fx; 3]>,
     hp: Vec<Hp>,
     home: Vec<u32>,
+    building: Vec<bool>,
 }
 
 impl StructureTable {
@@ -1248,10 +2281,34 @@ impl StructureTable {
             pos: Vec::with_capacity(n),
             hp: Vec::with_capacity(n),
             home: Vec::with_capacity(n),
+            building: Vec::with_capacity(n),
         }
     }
 
-    /// Append one structure. Construction only.
+    /// Make room for `extra` more structures without growing later. Same
+    /// contract as [`BeaconTable::reserve`].
+    pub fn reserve(&mut self, extra: u32) {
+        let n = usize::try_from(extra).unwrap_or(0);
+        self.id.reserve(n);
+        self.seat.reserve(n);
+        self.kind.reserve(n);
+        self.pos.reserve(n);
+        self.hp.reserve(n);
+        self.home.reserve(n);
+        self.building.reserve(n);
+    }
+
+    /// Append one structure.
+    ///
+    /// `building` is spec section 7's "construction time is HP and spectacle,
+    /// not accounting": a structure the Quartermaster has paid for goes into
+    /// the ground at one hit point with the flag set, and a build drone raises
+    /// it. It supplies nothing, draws nothing and has no capability until the
+    /// flag clears at full hit points.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one argument per column, as `UnitTable::push` above; the same reasoning applies"
+    )]
     pub fn push(
         &mut self,
         id: StructureId,
@@ -1260,6 +2317,7 @@ impl StructureTable {
         pos: [Fx; 3],
         hp: Hp,
         home: BeaconId,
+        building: bool,
     ) {
         self.id.push(id.raw());
         self.seat.push(seat.raw());
@@ -1267,6 +2325,7 @@ impl StructureTable {
         self.pos.push(pos);
         self.hp.push(hp);
         self.home.push(home.raw());
+        self.building.push(building);
         self.count = self.count.saturating_add(1);
     }
 
@@ -1319,9 +2378,31 @@ impl StructureTable {
         &self.home
     }
 
-    /// The hit-point column, to write into. The combat phase's damage drain.
+    /// The hit-point column, to write into. The combat phase's damage drain
+    /// and the build program's construction.
     pub fn hit_points_mut(&mut self) -> &mut [Hp] {
         &mut self.hp
+    }
+
+    /// The under-construction column.
+    ///
+    /// `true` while a structure is going up: paid for in full (item 23), worth
+    /// build cost times its current hit points (item 18), and inert until it is
+    /// finished.
+    #[must_use]
+    pub fn building(&self) -> &[bool] {
+        &self.building
+    }
+
+    /// The under-construction column, to write into. The build program clears
+    /// it at full hit points.
+    pub fn building_mut(&mut self) -> &mut [bool] {
+        &mut self.building
+    }
+
+    /// The home-beacon column, to write into. Item 20's re-homing.
+    pub fn homes_mut(&mut self) -> &mut [u32] {
+        &mut self.home
     }
 
     /// The owner column, to write into.
@@ -1344,6 +2425,7 @@ impl StructureTable {
             || columns.pos.len() != n
             || columns.hp.len() != n
             || columns.home.len() != n
+            || columns.building.len() != n
         {
             return false;
         }
@@ -1357,6 +2439,7 @@ impl StructureTable {
         self.pos = columns.pos;
         self.hp = columns.hp;
         self.home = columns.home;
+        self.building = columns.building;
         true
     }
 }
@@ -1387,7 +2470,16 @@ impl WreckTable {
         }
     }
 
-    /// Append one wreck. Construction only.
+    /// Make room for `extra` more wrecks without growing later. Same contract
+    /// as [`BeaconTable::reserve`].
+    pub fn reserve(&mut self, extra: u32) {
+        let n = usize::try_from(extra).unwrap_or(0);
+        self.id.reserve(n);
+        self.pos.reserve(n);
+        self.salvage.reserve(n);
+    }
+
+    /// Append one wreck.
     pub fn push(&mut self, id: WreckId, pos: [Fx; 3], salvage: Money) {
         self.id.push(id.raw());
         self.pos.push(pos);
@@ -1423,6 +2515,12 @@ impl WreckTable {
     #[must_use]
     pub fn salvages(&self) -> &[Money] {
         &self.salvage
+    }
+
+    /// The salvage-value column, to write into. A reclaim drone lifting a
+    /// wreck drains it; a wreck at zero is picked clean.
+    pub fn salvages_mut(&mut self) -> &mut [Money] {
+        &mut self.salvage
     }
 
     /// Replace the whole table from a restored snapshot. Same contract as

@@ -56,7 +56,8 @@ use crate::math::quantity::{Hp, Kw, Money, Tick};
 use crate::pathing::router::{RestoredRouter, first_route_digest_mismatch};
 use crate::runner::{DEFAULT_ROUND_LIMIT, MatchParts, MatchPhase, MatchState};
 use crate::tables::{
-    BeaconColumns, BeaconTable, SeatColumns, SeatId, SeatTable, StructureColumns, StructureTable,
+    BeaconColumns, BeaconTable, CREDIT_SLOTS, CreditTable, SeatColumns, SeatId, SeatTable,
+    SightingColumns, SightingTable, StructureColumns, StructureTable, TargetColumns, TargetTable,
     UnitColumns, UnitTable, WreckTable,
 };
 use crate::voxels::{CHUNK_VOXELS, VoxelStore};
@@ -101,7 +102,19 @@ use serde::{Deserialize, Serialize};
 /// hash)` and all three are inputs. A host resumes a save by re-sealing the
 /// playbooks it saved beside it; `crate::interpreter::state::Interpreter::restore`
 /// carries the PLACEHOLDER for the plan fingerprint T17 owes the save's stamp.
-pub const SNAPSHOT_VERSION: u32 = 5;
+/// **Version 6 is T14's**: it adds the economy. Per unit, the home beacon, the
+/// `$` it is carrying and the tick its timed work finishes at; per beacon, the
+/// Quartermaster priority and the Survey scout count; per structure, the
+/// under-construction flag; per seat, the Quartermaster's round-robin cursor;
+/// and three new tables - every beacon's list settings (Build targets,
+/// protected areas and probe areas), what each seat remembers seeing, and the
+/// per-seat kill-credit counters.
+///
+/// The kill-credit counters are in the file although nothing fills them until
+/// combat lands at S2, for the same reason they are in the hash: a field that
+/// affects behaviour and is not carried is a restore that silently forgets it
+/// (AGENTS.md section 4.8).
+pub const SNAPSHOT_VERSION: u32 = 6;
 
 /// A flat, fixed-width projection of the world.
 ///
@@ -135,6 +148,8 @@ pub struct Snapshot {
     /// The tick each seat's commander is due back at, or
     /// [`crate::tables::NO_RESPAWN`].
     pub seat_respawn_due: Vec<u32>,
+    /// The Quartermaster's round-robin cursor, per seat.
+    pub seat_qm_cursor: Vec<u32>,
 
     /// Unit ids.
     pub unit_id: Vec<u32>,
@@ -150,6 +165,13 @@ pub struct Snapshot {
     pub unit_heading: Vec<u16>,
     /// Hit points per unit.
     pub unit_hp: Vec<i32>,
+    /// Each unit's home beacon, or [`crate::tables::BeaconId::NONE`].
+    pub unit_home: Vec<u32>,
+    /// Carried but undelivered `$`, per unit.
+    pub unit_carrying: Vec<i64>,
+    /// The tick each unit's timed work finishes at, or
+    /// [`crate::tables::NO_WORK`].
+    pub unit_busy_until: Vec<u32>,
 
     /// Beacon ids.
     pub beacon_id: Vec<u32>,
@@ -166,6 +188,10 @@ pub struct Snapshot {
     /// Dormancy per beacon, `0` or `1` — a byte rather than a `bool`, so the
     /// encoding has no type whose width the format decides.
     pub beacon_dormant: Vec<u8>,
+    /// The Quartermaster priority knob, per beacon.
+    pub beacon_priority: Vec<u8>,
+    /// The Survey mandate's scout count, per beacon.
+    pub beacon_scouts: Vec<u8>,
 
     /// Structure ids.
     pub structure_id: Vec<u32>,
@@ -179,6 +205,8 @@ pub struct Snapshot {
     pub structure_hp: Vec<i32>,
     /// Each structure's home beacon, or [`crate::tables::BeaconId::NONE`].
     pub structure_home: Vec<u32>,
+    /// Whether each structure is still going up, `0` or `1`.
+    pub structure_building: Vec<u8>,
 
     /// Wreck ids.
     pub wreck_id: Vec<u32>,
@@ -186,6 +214,39 @@ pub struct Snapshot {
     pub wreck_pos: Vec<i32>,
     /// Salvage value per wreck, in `$`.
     pub wreck_salvage: Vec<i64>,
+
+    /// The beacon each list setting belongs to.
+    pub target_beacon: Vec<u32>,
+    /// [`crate::tables::TargetKind::id`] per list setting.
+    pub target_kind: Vec<u8>,
+    /// [`crate::tables::StructureKind::id`] per list setting, or zero.
+    pub target_blueprint: Vec<u8>,
+    /// Three raw Q16.16 coordinates per list setting's anchor.
+    pub target_at: Vec<i32>,
+    /// Radii in whole voxels, per list setting.
+    pub target_radius: Vec<i32>,
+    /// The structure realising each Build target.
+    pub target_built: Vec<u32>,
+
+    /// Whose memory each sighting is.
+    pub sighting_seat: Vec<u8>,
+    /// What was seen, as a [`crate::knowledge::AssetId`] raw value.
+    pub sighting_asset: Vec<u32>,
+    /// Who owns the thing seen.
+    pub sighting_owner: Vec<u8>,
+    /// [`crate::knowledge::AssetKind::id`] per sighting.
+    pub sighting_kind: Vec<u8>,
+    /// Three raw Q16.16 coordinates per sighting.
+    pub sighting_at: Vec<i32>,
+    /// The tick each sighting was taken at.
+    pub sighting_seen_at: Vec<u32>,
+
+    /// The assets that carry kill credit, ascending.
+    pub credit_asset: Vec<u32>,
+    /// [`crate::tables::CREDIT_SLOTS`] seat ids per asset, concatenated.
+    pub credit_seat: Vec<u8>,
+    /// [`crate::tables::CREDIT_SLOTS`] damage figures per asset, concatenated.
+    pub credit_damage: Vec<i32>,
 
     /// The chunks an edit has touched since generation, ascending.
     pub modified_chunk: Vec<u32>,
@@ -320,6 +381,7 @@ impl Default for Snapshot {
             seat_eliminated_at: Vec::new(),
             seat_commander_deaths: Vec::new(),
             seat_respawn_due: Vec::new(),
+            seat_qm_cursor: Vec::new(),
             unit_id: Vec::new(),
             unit_seat: Vec::new(),
             unit_kind: Vec::new(),
@@ -327,6 +389,9 @@ impl Default for Snapshot {
             unit_dest: Vec::new(),
             unit_heading: Vec::new(),
             unit_hp: Vec::new(),
+            unit_home: Vec::new(),
+            unit_carrying: Vec::new(),
+            unit_busy_until: Vec::new(),
             beacon_id: Vec::new(),
             beacon_seat: Vec::new(),
             beacon_pos: Vec::new(),
@@ -334,15 +399,33 @@ impl Default for Snapshot {
             beacon_program: Vec::new(),
             beacon_hp: Vec::new(),
             beacon_dormant: Vec::new(),
+            beacon_priority: Vec::new(),
+            beacon_scouts: Vec::new(),
             structure_id: Vec::new(),
             structure_seat: Vec::new(),
             structure_kind: Vec::new(),
             structure_pos: Vec::new(),
             structure_hp: Vec::new(),
             structure_home: Vec::new(),
+            structure_building: Vec::new(),
             wreck_id: Vec::new(),
             wreck_pos: Vec::new(),
             wreck_salvage: Vec::new(),
+            target_beacon: Vec::new(),
+            target_kind: Vec::new(),
+            target_blueprint: Vec::new(),
+            target_at: Vec::new(),
+            target_radius: Vec::new(),
+            target_built: Vec::new(),
+            sighting_seat: Vec::new(),
+            sighting_asset: Vec::new(),
+            sighting_owner: Vec::new(),
+            sighting_kind: Vec::new(),
+            sighting_at: Vec::new(),
+            sighting_seen_at: Vec::new(),
+            credit_asset: Vec::new(),
+            credit_seat: Vec::new(),
+            credit_damage: Vec::new(),
             modified_chunk: Vec::new(),
             modified_chunk_bytes: Vec::new(),
             chunk_digest: Vec::new(),
@@ -498,12 +581,19 @@ impl Snapshot {
     /// voxels are absent for the same reason one level up: the seed is the
     /// source of truth, and the file carries only what an edit has changed.
     #[must_use]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one line per column of a flat projection, and the whole point of the projection is that it is one expression: a `Snapshot` cannot be built in halves, so splitting it would mean a second struct whose only job is to be moved into this one"
+    )]
     pub fn capture(world: &World) -> Snapshot {
         let units = world.units();
         let seats = world.seats();
         let beacons = world.beacons();
         let structures = world.structures();
         let wrecks = world.wrecks();
+        let targets = world.targets();
+        let sightings = world.sightings();
+        let credit = world.credit();
         let voxels = world.voxels();
 
         let state = world.match_state().to_parts();
@@ -529,6 +619,7 @@ impl Snapshot {
             seat_eliminated_at: seats.eliminated_at().to_vec(),
             seat_commander_deaths: seats.commander_deaths().to_vec(),
             seat_respawn_due: seats.respawn_due().to_vec(),
+            seat_qm_cursor: seats.qm_cursors().to_vec(),
 
             unit_id: units.ids().to_vec(),
             unit_seat: units.seats().to_vec(),
@@ -537,6 +628,9 @@ impl Snapshot {
             unit_dest: axes_from_points(units.destinations()),
             unit_heading: units.headings().iter().map(|a| a.raw()).collect(),
             unit_hp: units.hit_points().iter().map(|h| h.raw()).collect(),
+            unit_home: units.homes().to_vec(),
+            unit_carrying: units.carrying().iter().map(|m| m.raw()).collect(),
+            unit_busy_until: units.busy_until().to_vec(),
 
             beacon_id: beacons.ids().to_vec(),
             beacon_seat: beacons.seats().to_vec(),
@@ -545,6 +639,8 @@ impl Snapshot {
             beacon_program: beacons.programs().to_vec(),
             beacon_hp: beacons.hit_points().iter().map(|h| h.raw()).collect(),
             beacon_dormant: beacons.dormant().iter().map(|d| u8::from(*d)).collect(),
+            beacon_priority: beacons.priorities().to_vec(),
+            beacon_scouts: beacons.scout_counts().to_vec(),
 
             structure_id: structures.ids().to_vec(),
             structure_seat: structures.seats().to_vec(),
@@ -552,10 +648,29 @@ impl Snapshot {
             structure_pos: axes_from_points(structures.positions()),
             structure_hp: structures.hit_points().iter().map(|h| h.raw()).collect(),
             structure_home: structures.homes().to_vec(),
+            structure_building: structures.building().iter().map(|b| u8::from(*b)).collect(),
 
             wreck_id: wrecks.ids().to_vec(),
             wreck_pos: axes_from_points(wrecks.positions()),
             wreck_salvage: wrecks.salvages().iter().map(|m| m.raw()).collect(),
+
+            target_beacon: targets.beacons().to_vec(),
+            target_kind: targets.kinds().to_vec(),
+            target_blueprint: targets.blueprints().to_vec(),
+            target_at: axes_from_points(targets.anchors()),
+            target_radius: targets.radii().to_vec(),
+            target_built: targets.built().to_vec(),
+
+            sighting_seat: sightings.seats().to_vec(),
+            sighting_asset: sightings.assets().to_vec(),
+            sighting_owner: sightings.owners().to_vec(),
+            sighting_kind: sightings.kinds().to_vec(),
+            sighting_at: axes_from_points(sightings.places()),
+            sighting_seen_at: sightings.seen_at().to_vec(),
+
+            credit_asset: credit.assets().to_vec(),
+            credit_seat: credit.seats().iter().flatten().copied().collect(),
+            credit_damage: credit.damages().iter().flatten().copied().collect(),
 
             modified_chunk,
             modified_chunk_bytes,
@@ -658,6 +773,10 @@ impl Snapshot {
     /// [`SnapshotError::Unindexable`] when the receiving world's rules table
     /// cannot describe a grid for the restored unit count. Either way the world
     /// is left exactly as it was.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one block per table, and every block must run before the first assignment: a restore either applies in full or changes nothing, so the checks cannot be moved behind the writes"
+    )]
     pub fn restore_into(&self, world: &mut World) -> Result<(), SnapshotError> {
         let seat_count = u32::try_from(self.seat_id.len()).unwrap_or(0);
         let mut seats = SeatTable::with_capacity(seat_count);
@@ -669,6 +788,7 @@ impl Snapshot {
             eliminated_at: self.seat_eliminated_at.clone(),
             commander_deaths: self.seat_commander_deaths.clone(),
             respawn_due: self.seat_respawn_due.clone(),
+            qm_cursor: self.seat_qm_cursor.clone(),
         }) {
             return Err(SnapshotError::Ragged("seat"));
         }
@@ -689,6 +809,9 @@ impl Snapshot {
                 .map(Angle::from_raw)
                 .collect(),
             hp: self.unit_hp.iter().copied().map(Hp::new).collect(),
+            home: self.unit_home.clone(),
+            carrying: self.unit_carrying.iter().copied().map(Money::new).collect(),
+            busy_until: self.unit_busy_until.clone(),
         }) {
             return Err(SnapshotError::Ragged("unit"));
         }
@@ -703,6 +826,8 @@ impl Snapshot {
             program: self.beacon_program.clone(),
             hp: self.beacon_hp.iter().copied().map(Hp::new).collect(),
             dormant: self.beacon_dormant.iter().map(|d| *d != 0).collect(),
+            priority: self.beacon_priority.clone(),
+            scouts: self.beacon_scouts.clone(),
         }) {
             return Err(SnapshotError::Ragged("beacon"));
         }
@@ -717,6 +842,7 @@ impl Snapshot {
                 .ok_or(SnapshotError::Ragged("structure_pos"))?,
             hp: self.structure_hp.iter().copied().map(Hp::new).collect(),
             home: self.structure_home.clone(),
+            building: self.structure_building.iter().map(|b| *b != 0).collect(),
         }) {
             return Err(SnapshotError::Ragged("structure"));
         }
@@ -729,6 +855,10 @@ impl Snapshot {
         ) {
             return Err(SnapshotError::Ragged("wreck"));
         }
+
+        let targets = self.restore_targets(world)?;
+        let sightings = self.restore_sightings(world)?;
+        let credit = self.restore_credit(world)?;
 
         let (voxels, chunks) = self.restore_store(world, seat_count)?;
 
@@ -746,6 +876,9 @@ impl Snapshot {
             beacons,
             structures,
             wrecks,
+            targets,
+            sightings,
+            credit,
             voxels,
             chunks,
             router,
@@ -755,6 +888,107 @@ impl Snapshot {
             return Err(SnapshotError::Unindexable { units: unit_count });
         }
         Ok(())
+    }
+
+    /// Every beacon's list settings, checked before anything is written.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SnapshotError::Ragged`] when the columns disagree in length,
+    /// when a kind byte names no kind this build defines, or when the file
+    /// holds more rows than the receiving world has room for — the same three
+    /// checks every other table gets, for the same reason: a restore either
+    /// applies in full or changes nothing.
+    fn restore_targets(&self, world: &World) -> Result<TargetTable, SnapshotError> {
+        let capacity = world.targets().capacity();
+        let mut targets = TargetTable::with_capacity(capacity);
+        if !targets.restore(
+            capacity,
+            TargetColumns {
+                beacon: self.target_beacon.clone(),
+                kind: self.target_kind.clone(),
+                blueprint: self.target_blueprint.clone(),
+                at: points_from_axes(&self.target_at).ok_or(SnapshotError::Ragged("target_at"))?,
+                radius: self.target_radius.clone(),
+                built: self.target_built.clone(),
+            },
+        ) {
+            return Err(SnapshotError::Ragged("target"));
+        }
+        Ok(targets)
+    }
+
+    /// What each seat remembers seeing.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SnapshotError::Ragged`], including when the `(seat, asset)`
+    /// key is not strictly ascending — which is the order the table's own
+    /// search assumes, so a file that broke it would restore into a table whose
+    /// lookups silently missed.
+    fn restore_sightings(&self, world: &World) -> Result<SightingTable, SnapshotError> {
+        let capacity = world.sightings().capacity();
+        let mut sightings = SightingTable::with_capacity(capacity);
+        if !sightings.restore(
+            capacity,
+            SightingColumns {
+                seat: self.sighting_seat.clone(),
+                asset: self.sighting_asset.clone(),
+                owner: self.sighting_owner.clone(),
+                kind: self.sighting_kind.clone(),
+                at: points_from_axes(&self.sighting_at)
+                    .ok_or(SnapshotError::Ragged("sighting_at"))?,
+                seen_at: self.sighting_seen_at.clone(),
+            },
+        ) {
+            return Err(SnapshotError::Ragged("sighting"));
+        }
+        Ok(sightings)
+    }
+
+    /// The per-seat kill-credit counters, unpacked from their fixed stride.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SnapshotError::Ragged`] when the packed columns are not
+    /// exactly [`CREDIT_SLOTS`] entries per asset, or when the asset column is
+    /// not strictly ascending.
+    fn restore_credit(&self, world: &World) -> Result<CreditTable, SnapshotError> {
+        let rows = self.credit_asset.len();
+        let packed = rows.saturating_mul(CREDIT_SLOTS);
+        if self.credit_seat.len() != packed || self.credit_damage.len() != packed {
+            return Err(SnapshotError::Ragged("credit"));
+        }
+        let mut seats: Vec<[u8; CREDIT_SLOTS]> = Vec::with_capacity(rows);
+        let mut damages: Vec<[i32; CREDIT_SLOTS]> = Vec::with_capacity(rows);
+        for row in 0..rows {
+            let from = row.saturating_mul(CREDIT_SLOTS);
+            let to = from.saturating_add(CREDIT_SLOTS);
+            let (Some(slot), Some(dealt)) = (
+                self.credit_seat.get(from..to),
+                self.credit_damage.get(from..to),
+            ) else {
+                return Err(SnapshotError::Ragged("credit"));
+            };
+            let mut seat = [SeatId::NEUTRAL.raw(); CREDIT_SLOTS];
+            let mut damage = [0_i32; CREDIT_SLOTS];
+            for at in 0..CREDIT_SLOTS {
+                if let (Some(into), Some(value)) = (seat.get_mut(at), slot.get(at)) {
+                    *into = *value;
+                }
+                if let (Some(into), Some(value)) = (damage.get_mut(at), dealt.get(at)) {
+                    *into = *value;
+                }
+            }
+            seats.push(seat);
+            damages.push(damage);
+        }
+        let capacity = world.credit().capacity();
+        let mut credit = CreditTable::with_capacity(capacity);
+        if !credit.restore(capacity, self.credit_asset.clone(), seats, damages) {
+            return Err(SnapshotError::Ragged("credit"));
+        }
+        Ok(credit)
     }
 
     /// The match state, refused at the door when its phase or end reason is
