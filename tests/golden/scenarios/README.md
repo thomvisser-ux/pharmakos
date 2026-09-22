@@ -31,6 +31,16 @@ written during `cargo test` — `crates/gamectl/tests/scenarios.rs` plays every
 committed scenario — so a bless never needs the binary to have been run by
 hand.
 
+**`expand-east-segment` has two producers, and this is deliberate.**
+`crates/sim/tests/scenario.rs` drives the sim's own runner and writes both the
+chain and the event log; `crates/gamectl/tests/scenarios.rs` plays the same
+file through a gateway-hosted match and writes the chain. Both write
+`actual.hashes.txt` in the same place, and **both compare it against the
+committed copy inside their own test** — so if the two ever disagreed, the
+producer would say so rather than the `golden` step silently judging whichever
+ran last. That the two agree byte for byte is the thing worth having: the sim's
+runner and a match hosted behind a `Surface` are the same match.
+
 The chain has the same format as `determinism/`: tick, TAB, sixteen lowercase
 hex digits, one line per tick, LF, trailing newline. `scenarios/README.md`
 documents the scenario files themselves.
