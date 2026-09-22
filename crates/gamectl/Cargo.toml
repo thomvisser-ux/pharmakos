@@ -12,6 +12,14 @@ authors.workspace = true
 repository.workspace = true
 publish.workspace = true
 
+# A library as well as a binary. The binary is the four lines that turn an exit code
+# into a process status; everything else is the library, because an integration test
+# cannot call into a `[[bin]]` and `scenario run`'s acceptance is a chain compared with
+# another chain rather than a string compared with a golden.
+[lib]
+name = "pharmakos_gamectl"
+path = "src/lib.rs"
+
 [[bin]]
 name = "gamectl"
 path = "src/main.rs"
@@ -23,11 +31,29 @@ path = "src/main.rs"
 # inside the CLI would defeat the same guarantee, so keep it out by hand.)
 
 [dependencies]
-# None yet. Expected, and the same list AGENTS.md §3's crate map gives for this crate:
-# pharmakos-proto, pharmakos-plan-core, pharmakos-verifier, pharmakos-gateway, and an
-# argument parser chosen during the walking skeleton. The gateway is on the list because
+# AGENTS.md §3's crate map gives this crate pharmakos-proto, pharmakos-plan-core,
+# pharmakos-verifier and pharmakos-gateway, plus an argument parser chosen during the
+# walking skeleton (lexopt, item 105 (3)). The gateway is on the list because
 # `gamectl scenario run` hosts a headless match; `verify`, `schema` and `docs` need only
-# the first three. Keep the two lists identical — if one changes, change both.
+# the first three.
+#
+# ONE EDGE THE CRATE MAP DOES NOT LIST, and it is not optional: pharmakos-sim.
+# The gateway's public API is written in the sim's types -- `Surface::new` takes a
+# `RulesTable` and `SeatId`s, `Host::open` takes a `WorldConfig`, `Surface::step`
+# returns a `TickReport` -- so a client of the gateway cannot name a single one of
+# those calls without naming the sim. It is taken with `default-features = false`,
+# like every other crate that takes it, so the `research` feature that gates `fork`
+# is never reachable from here. Decisions-log item 106 (3) draws the line this crate
+# is actually held to: `scenario run` hosts *through the same `Surface` and `Host`*
+# and never names the sim's `Runner`, and `tests/confinement.rs` asserts that over
+# this crate's own source text. The pull request raises the crate-map line with the
+# owner rather than editing AGENTS.md, which is a contract file (§5).
+pharmakos-proto     = { workspace = true }
+pharmakos-sim       = { workspace = true }
+pharmakos-plan-core = { workspace = true }
+pharmakos-verifier  = { workspace = true }
+pharmakos-gateway   = { workspace = true }
+lexopt              = { workspace = true }
 
 [lints]
 workspace = true

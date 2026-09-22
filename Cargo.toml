@@ -89,7 +89,15 @@ pharmakos-sim       = { path = "crates/sim", version = "0", default-features = f
 pharmakos-plan-core = { path = "crates/plan-core", version = "0" }
 pharmakos-verifier  = { path = "crates/verifier", version = "0" }
 # pharmakos-operator  = { path = "crates/operator", version = "0" }
-# pharmakos-gateway   = { path = "crates/gateway", version = "0" }
+pharmakos-gateway   = { path = "crates/gateway", version = "0" }
+# --- the CLI's argument parser (decisions log §2.7 item 105 (3)) ---
+# Approved by the owner for crates/gamectl and for no other crate. No dependencies, no
+# proc macros, MIT. It handles what a hand-rolled parser gets wrong -- `--`, combined
+# short flags, non-UTF-8 paths on Windows -- and it generates no `--help`, so `gamectl`
+# writes its help by hand from the one string table (crates/gamectl/src/strings.rs).
+# A caret range like every other non-determinism-critical entry: nothing hashed comes
+# from it, and it decides no game rule.
+lexopt       = "0.3.2"
 #
 # NOTE on the `research` feature: only crates/sim defines it. Any crate that depends on
 # pharmakos-sim must do so with default-features = false and must never name
