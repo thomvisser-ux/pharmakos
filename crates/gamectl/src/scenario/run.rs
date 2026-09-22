@@ -176,7 +176,7 @@ pub fn run(root: &Path, source: &Path) -> Result<String, Failure> {
 pub fn play(root: &Path, scenario: &Scenario) -> Result<Played, Failure> {
     let rules = load_rules(root, scenario)?;
     let rules_hash = rules.rules_hash();
-    let mut surface = open(root, scenario, rules)?;
+    let mut surface = open(scenario, rules)?;
     let tokens = mint(&mut surface, scenario)?;
 
     let mut played = Played {
@@ -274,9 +274,8 @@ fn load_rules(root: &Path, scenario: &Scenario) -> Result<RulesTable, Failure> {
     })
 }
 
-/// A hosted match in its opening Lull, with the rate limits a batch client
-/// needs.
-fn open(root: &Path, scenario: &Scenario, rules: RulesTable) -> Result<Surface, Failure> {
+/// A hosted match in its opening Lull, at the gateway's own rate limits.
+fn open(scenario: &Scenario, rules: RulesTable) -> Result<Surface, Failure> {
     let seats: Vec<SeatId> = scenario
         .seats
         .iter()
@@ -342,7 +341,6 @@ fn open(root: &Path, scenario: &Scenario, rules: RulesTable) -> Result<Surface, 
     // the window numbers here would also have frozen a copy of two gateway
     // constants that carry PLACEHOLDERs of their own, so that when the owner
     // moves them at hardening this would silently not follow.
-    let _ = root;
     Ok(surface)
 }
 

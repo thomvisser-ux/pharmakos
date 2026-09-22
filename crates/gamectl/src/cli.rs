@@ -6,9 +6,11 @@
 //! Parsing is `lexopt` (decisions-log item 105 (3)), which is a parser and not
 //! a framework: it has no dependencies, no proc macros and **no generated
 //! `--help`**. The help is hand-written in [`crate::strings`] and built from
-//! [`COMMANDS`] below, so the table here is the single list of what exists —
-//! the parser reads it, the help prints it, and `tests/cli.rs` asserts the two
-//! agree.
+//! [`COMMANDS`] and [`OPTIONS`] below, so the two tables here are the single
+//! list of what exists — the parser reads them, the help prints them,
+//! `gamectl docs` prints them, and `tests/cli.rs` asserts that all of those
+//! agree. [`OPTIONS`] is the younger of the two and exists because a review
+//! found `--depth` parsed, tested and in neither the help nor the reference.
 //!
 //! # There is no `connect`
 //!
@@ -79,6 +81,64 @@ pub const COMMANDS: &[CommandRow] = &[
     },
 ];
 
+/// One row of the options table: how the help spells a flag, whose it is, and
+/// the half-line under it.
+///
+/// It exists because a review found `--depth` — a real, parsed, tested flag —
+/// in neither `gamectl --help` nor `gamectl docs`, which is exactly the
+/// staleness [`crate::strings`]'s own header says nothing would notice. The
+/// options are now a table for the same reason the commands are: the parser
+/// reads it, the help prints it, `docs` prints it, and `tests/cli.rs` asserts
+/// that every flag the parser accepts has a row.
+#[derive(Clone, Copy, Debug)]
+pub struct OptionRow {
+    /// How the help spells it, long form and short form together.
+    pub spelling: &'static str,
+    /// The long flag the parser matches on, which is also what a refusal
+    /// names.
+    pub flag: &'static str,
+    /// The command it belongs to, or the empty string when it belongs to all
+    /// of them.
+    pub command: &'static str,
+    /// What it does, in one half-line.
+    pub about: &'static str,
+}
+
+/// Every option, in the order the help prints them.
+pub const OPTIONS: &[OptionRow] = &[
+    OptionRow {
+        spelling: "-h, --help",
+        flag: "--help",
+        command: "",
+        about: "print this help and exit 0",
+    },
+    OptionRow {
+        spelling: "-V, --version",
+        flag: "--version",
+        command: "",
+        about: "print the version of this build and exit 0",
+    },
+    OptionRow {
+        spelling: "    --root <dir>",
+        flag: "--root",
+        command: "",
+        about: "the repository root every other path is read against (default: the working \
+                directory)",
+    },
+    OptionRow {
+        spelling: "    --part <name>",
+        flag: "--part",
+        command: "schema",
+        about: "one message of gp.v1 by its lower_snake_case name, instead of the whole playbook",
+    },
+    OptionRow {
+        spelling: "    --depth <quick|full>",
+        flag: "--depth",
+        command: "verify",
+        about: "how deep to run the pipeline (default: full, which is what submit_plan runs)",
+    },
+];
+
 /// What was asked for.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Command {
@@ -145,7 +205,11 @@ where
     let mut parser = lexopt::Parser::from_args(args);
     let mut root: Option<PathBuf> = None;
     let mut part: Option<String> = None;
-    let mut depth = Depth::Full;
+    // `None` rather than `Depth::Full`, so that "the caller said nothing" and
+    // "the caller said `full`" are different facts: a review found `--depth`
+    // silently ignored on every command but `verify`, and a default cannot be
+    // refused.
+    let mut depth: Option<Depth> = None;
     let mut operands: Vec<OsString> = Vec::new();
 
     loop {
@@ -183,8 +247,8 @@ where
                     .value()
                     .map_err(|error| Failure::usage(strings::bad_argument(&error)))?;
                 depth = match value.to_string_lossy().as_ref() {
-                    "quick" => Depth::Quick,
-                    "full" => Depth::Full,
+                    "quick" => Some(Depth::Quick),
+                    "full" => Some(Depth::Full),
                     other => return Err(Failure::usage(strings::bad_depth(other))),
                 };
             }
@@ -204,18 +268,31 @@ where
 fn command_of(
     operands: &[OsString],
     part: Option<String>,
-    depth: Depth,
+    depth: Option<Depth>,
 ) -> Result<Command, Failure> {
     let Some(first) = operands.first() else {
         return Err(Failure::usage(strings::no_command()));
     };
     let name = first.to_string_lossy().into_owned();
     let rest = operands.get(1..).unwrap_or_default();
+    // A flag that means nothing to this command is refused, not ignored — the
+    // stance this crate already takes on an extra operand and on an unknown
+    // key in a scenario file, applied to the third way of typing something
+    // that will not happen. A review found `gamectl docs --depth quick`
+    // exiting 0 having done nothing with it.
+    if COMMANDS.iter().any(|row| row.name == name) {
+        flags_belong_to(&name, part.is_some(), depth.is_some())?;
+    }
 
     match name.as_str() {
         "verify" => {
             let path = one_operand("verify", "playbook", rest)?;
-            Ok(Command::Verify { path, depth })
+            Ok(Command::Verify {
+                path,
+                // FULL by default, which is what `submit_plan` always runs
+                // (spec §11).
+                depth: depth.unwrap_or(Depth::Full),
+            })
         }
         "schema" => {
             no_operands("schema", rest)?;
@@ -263,6 +340,29 @@ fn command_of(
         }
         other => Err(Failure::usage(strings::unknown_command(other))),
     }
+}
+
+/// Every flag given belongs to the command it was given to.
+///
+/// The general options ([`OPTIONS`] rows with an empty `command`) belong to
+/// all of them and are not checked here; the two that belong to one command
+/// each are.
+fn flags_belong_to(command: &str, part: bool, depth: bool) -> Result<(), Failure> {
+    for (flag, given) in [("--part", part), ("--depth", depth)] {
+        if !given {
+            continue;
+        }
+        let owner = OPTIONS
+            .iter()
+            .find(|row| row.flag == flag)
+            .map_or("", |row| row.command);
+        if command != owner {
+            return Err(Failure::usage(strings::flag_elsewhere(
+                command, flag, owner,
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Exactly one operand, or a usage error naming what was wanted.

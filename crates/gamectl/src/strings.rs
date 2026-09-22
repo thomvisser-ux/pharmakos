@@ -46,7 +46,7 @@
 
 use std::fmt::Write as _;
 
-use crate::cli::COMMANDS;
+use crate::cli::{COMMANDS, OPTIONS};
 use crate::exit::Exit;
 
 /// The binary's name, as it is spelled on a command line and in its own help.
@@ -69,8 +69,12 @@ pub fn version() -> String {
 
 /// `gamectl --help`, and what a usage error points at.
 ///
-/// Built from the command table and the exit-code table rather than typed out,
-/// so a command or a code added to either appears here without a second edit.
+/// Built from the command table, the **options table** and the exit-code table
+/// rather than typed out, so a command, a flag or a code added to any of them
+/// appears here without a second edit. The options table is the newest of the
+/// three and is there because a review found `--depth` parsed, tested and
+/// undocumented: a hand-written options block is exactly the thing this
+/// module's header says nothing would notice going stale.
 #[must_use]
 pub fn help() -> String {
     let mut text =
@@ -78,14 +82,11 @@ pub fn help() -> String {
     for command in COMMANDS {
         let _ = writeln!(text, "  {:<26}{}", command.usage, command.about);
     }
-    text.push_str(
-        "\noptions:\n  \
-         -h, --help                print this help and exit 0\n  \
-         -V, --version             print the version of this build and exit 0\n      \
-         --root <dir>              the repository root every other path is read against\n                            \
-         (default: the working directory)\n\
-         \nexit codes:\n",
-    );
+    text.push_str("\noptions:\n");
+    for option in OPTIONS {
+        let _ = writeln!(text, "  {:<26}{}", option.spelling, option_about(option));
+    }
+    text.push_str("\nexit codes:\n");
     for (code, meaning) in Exit::ALL {
         let _ = writeln!(text, "  {}  {meaning}", code.code());
     }
@@ -95,6 +96,19 @@ pub fn help() -> String {
          build does not keep.\n",
     );
     text
+}
+
+/// One option's half-line, with the command it belongs to in front of it when
+/// it belongs to one.
+///
+/// `gamectl docs --depth quick` is now a usage error, so the help has to say
+/// whose flag it is before somebody types it.
+#[must_use]
+pub fn option_about(option: &crate::cli::OptionRow) -> String {
+    if option.command.is_empty() {
+        return option.about.to_owned();
+    }
+    format!("{} only: {}", option.command, option.about)
 }
 
 // ---------------------------------------------------------------------------
@@ -148,6 +162,21 @@ pub fn bad_depth(given: &str) -> String {
     format!("{BINARY}: `--depth {given}` is neither `quick` nor `full`.")
 }
 
+/// A flag given to a command that does not read it.
+///
+/// Refused rather than ignored, which is the stance the rest of this crate
+/// already takes: an extra operand is an error ([`extra_operand`]) and an
+/// unknown key in a scenario file is an error, and a flag that does nothing is
+/// the third way of typing something that will not happen.
+#[must_use]
+pub fn flag_elsewhere(command: &str, flag: &str, owner: &str) -> String {
+    format!(
+        "{BINARY} {command}: `{flag}` is `{owner}`'s option and does nothing here. It is refused \
+         rather than ignored, so that a command line that reads as though it asked for something \
+         never quietly did not."
+    )
+}
+
 /// Whatever `lexopt` refused, with the command it was refused under.
 #[must_use]
 pub fn bad_argument(error: &lexopt::Error) -> String {
@@ -155,8 +184,21 @@ pub fn bad_argument(error: &lexopt::Error) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Input
+// Input and output
 // ---------------------------------------------------------------------------
+
+/// Standard output could not be written — a full disc, a read-only target.
+///
+/// Not a closed pipe, which is ordinary (`gamectl docs | head`) and is not a
+/// failure of the command. This one is: `gamectl docs > file` that reported
+/// success over a truncated file is a generated reference nobody would know to
+/// distrust.
+#[must_use]
+pub fn unwritable_output(why: &str) -> String {
+    format!(
+        "{BINARY}: standard output could not be written, so what it printed is incomplete: {why}"
+    )
+}
 
 /// A file that could not be read.
 #[must_use]
