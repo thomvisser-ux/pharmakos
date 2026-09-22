@@ -1086,6 +1086,12 @@ message GetViewResponse {
   // A delta mode for entities is deliberately NOT here. It arrives, if it
   // arrives, as a new field of GetViewRequest that a client opts into, so that
   // the meaning of this field never changes under a client that did not ask.
+  //
+  // PLACEHOLDER: a full entity list per view is 20-30 KB a poll at S2's 300
+  // units, which is the point at which the opt-in delta mode has to be
+  // decided rather than deferred — OWNER, S2. The other half of the same
+  // question, ViewEntity.at's whole-voxel positions, is OWNER, S7, with
+  // recording-grade positions.
   repeated ViewEntity entities = 3;
 
   // Where to read from next. Opaque.
@@ -1172,10 +1178,19 @@ message ViewEntity {
 
   // Where it stands, in WHOLE voxels, floored on every axis. Finer-than-voxel
   // positions are a recording's concern and are held at 6 to 15 with the rest.
+  //
+  // PLACEHOLDER: whole voxels are enough for a camera and are not enough for
+  // a recording that has to interpolate — OWNER, S7, with the recording
+  // format.
   gp.v1.Voxel at = 5;
 
   // RESERVED — hit points, power state, heading, build progress, and
   // sub-voxel position. See the message comment.
+  //
+  // PLACEHOLDER: what a seat may see of an ENEMY asset beyond where it is —
+  // hit points, power state, heading, build progress — is a rule the spec
+  // does not state, so these numbers are held rather than guessed at.
+  // OWNER, S2, with the stage that makes any of them matter.
   reserved 6 to 15;
 
   enum Kind {
