@@ -24,6 +24,7 @@ use pharmakos_sim::tables::{
     BeaconId, PRIORITY_HIGH, PRIORITY_LOW, PRIORITY_NORMAL, SeatId, StructureId, StructureKind,
     TargetKind, UnitKind,
 };
+use pharmakos_sim::voxels::Material;
 use pharmakos_sim::world::{DamageOrder, DamageTarget, World, WorldConfig};
 use pharmakos_sim::{MatchSettings, RulesTable, default_rules_path};
 use std::fmt::Write as _;
@@ -176,6 +177,32 @@ fn value_follows_condition_at_the_audit_and_at_the_recycle_refund() {
         refund,
         percent_of(remaining, percent).raw(),
         "the refund is a percentage of remaining value, which is condition-scaled"
+    );
+    // The **rounding** spelled out rather than delegated. Both assertions
+    // above run `value_of` and `percent_of` on each side, so a change to the
+    // rule they share would move both sides together and neither would go
+    // red. Here the arithmetic is written from item 18's sentence instead —
+    // build cost times current hit points, divided by full hit points,
+    // truncated toward zero, and the divide after the multiply so the
+    // truncation happens once — so a rounding change fails here.
+    let cost = world.beacon_cost().raw();
+    let left = i64::from(full.raw().saturating_sub(half.raw()));
+    let spelled = cost
+        .saturating_mul(left)
+        .checked_div(i64::from(full.raw()))
+        .unwrap_or(0);
+    assert_eq!(
+        remaining.raw(),
+        spelled,
+        "remaining value is `cost * hp / max_hp`, truncated toward zero"
+    );
+    assert_eq!(
+        refund,
+        spelled
+            .saturating_mul(i64::from(percent))
+            .checked_div(100)
+            .unwrap_or(0),
+        "and the refund is that many percent of it, truncated the same way"
     );
     assert!(
         refund
@@ -380,9 +407,15 @@ fn the_brownout_order_is_priority_then_distance_then_the_core_last() {
         .copied()
         .unwrap_or_default();
 
-    // Three more beacons of this seat: one near on normal priority, one far on
-    // normal, and one nearer on low. The order has to shed the low one first
-    // however near it stands, then the furthest normal one, and the core last.
+    // Four more beacons of this seat: one near on normal priority, one far on
+    // normal, one nearer on low, and one on high. The deficit is sized so that
+    // **exactly two** sheds settle it, which is what makes every term of the
+    // order readable from the final state rather than implied by it: with
+    // supply at the core's deep-bore surplus alone (10 kW at the committed
+    // table) and a draw of five beacons at their base plus the four starting
+    // units, shedding the low one and then the furthest normal one balances
+    // the grid — so `near`, `spare` and the core are still lit, and each of
+    // them is lit for a different reason.
     let near = runner
         .world_mut()
         .place_beacon_directly(seat, offset(at, 4), MandateKind::Build, PRIORITY_NORMAL)
@@ -395,21 +428,41 @@ fn the_brownout_order_is_priority_then_distance_then_the_core_last() {
         .world_mut()
         .place_beacon_directly(seat, offset(at, 6), MandateKind::Build, PRIORITY_LOW)
         .unwrap_or_else(|| panic!("room for a beacon"));
+    let spare = runner
+        .world_mut()
+        .place_beacon_directly(seat, offset(at, 22), MandateKind::Build, PRIORITY_HIGH)
+        .unwrap_or_else(|| panic!("room for a beacon"));
 
     assert!(runner.begin_push(), "the Push begins");
     runner.step();
     let world = runner.world();
 
-    // The grid cannot carry four beacons plus the starting force on one core
-    // surplus, so something is dark — and the order says which.
+    let (supply, draw) = supply_and_draw(world, seat);
+    assert!(
+        supply.raw() < draw.raw().saturating_add(4),
+        "the fixture has to be short of power for the order to be visible: \
+         supply {supply:?} draw {draw:?}"
+    );
+
+    // Every term of the order, asserted positively rather than as an
+    // implication that a single shed would satisfy vacuously.
     assert!(
         dormant(world, low),
         "lowest priority sheds first, however near the core it stands"
     );
-    let shed_far_before_near = !dormant(world, near) || dormant(world, far);
     assert!(
-        shed_far_before_near,
-        "within a priority band, the furthest from the core sheds first"
+        dormant(world, far),
+        "then the furthest from the core within a band"
+    );
+    assert!(
+        !dormant(world, near),
+        "and not the nearer one of the same band, which is what makes the \
+         second term distance and not id"
+    );
+    assert!(
+        !dormant(world, spare),
+        "a high-priority beacon outlives both normal ones, however far out it \
+         stands: priority outranks distance"
     );
     assert!(
         !dormant(world, core),
@@ -452,6 +505,173 @@ fn the_autocannon_is_never_shed() {
     );
 }
 
+#[test]
+fn only_one_generator_per_vent_adds_to_the_supply() {
+    // Spec section 5: "one Generator per vent, output set by the vent's
+    // richness, **because the vent's heat is the limit, not the tap**". The
+    // rule is enforced where the heat is counted, so a seat may stand a second
+    // Generator on a tapped vent and waste the `$`; what it may not do is
+    // double its supply.
+    let mut runner = Runner::new(world(&[20_000]));
+    let seat = SeatId::new(0);
+    let core = core_of(runner.world(), seat);
+    let at = runner
+        .world()
+        .beacons()
+        .positions()
+        .get(usize::try_from(core.raw()).unwrap_or(0))
+        .copied()
+        .unwrap_or_default();
+    let (first, second) = vent_stands(runner.world(), at);
+
+    assert!(runner.begin_push(), "the Push begins");
+    runner.step();
+    let (bare, _) = supply_and_draw(runner.world(), seat);
+
+    runner
+        .world_mut()
+        .raise_structure(seat, core, StructureKind::Generator, first)
+        .unwrap_or_else(|| panic!("room for a structure"));
+    runner.step();
+    let (tapped, _) = supply_and_draw(runner.world(), seat);
+    assert!(
+        tapped.raw() > bare.raw(),
+        "a Generator standing on a vent taps it: {bare:?} -> {tapped:?}"
+    );
+
+    runner
+        .world_mut()
+        .raise_structure(seat, core, StructureKind::Generator, second)
+        .unwrap_or_else(|| panic!("room for a structure"));
+    runner.step();
+    let (twice, _) = supply_and_draw(runner.world(), seat);
+    assert_eq!(
+        twice, tapped,
+        "a second Generator on the same vent adds nothing: the vent's heat is \
+         the limit, not the tap"
+    );
+}
+
+#[test]
+fn one_anchor_is_one_building() {
+    // "Paid means yours" charges at commit (item 23), so a second Build target
+    // on ground a target already claims would buy the same building twice and
+    // stand two structure rows in one voxel. The interface row that adds a
+    // target refuses a claimed anchor; the claim is across every beacon,
+    // because the treasury and the ground are the seat's and not the
+    // beacon's.
+    let mut world = world(&[20_000]);
+    let seat = SeatId::new(0);
+    let core = core_of(&world, seat);
+    let at = world
+        .beacons()
+        .positions()
+        .get(usize::try_from(core.raw()).unwrap_or(0))
+        .copied()
+        .unwrap_or_default();
+    let anchor = offset(at, 2);
+    assert!(
+        !world.anchor_is_claimed(anchor),
+        "bare ground is nobody's yet"
+    );
+    assert!(world.add_target(
+        core,
+        TargetKind::Build,
+        StructureKind::Generator.id(),
+        anchor,
+        0
+    ));
+    assert!(
+        world.anchor_is_claimed(anchor),
+        "a Build target claims the ground it names"
+    );
+    assert!(
+        !world.anchor_is_claimed(offset(at, 3)),
+        "and only the ground it names"
+    );
+    let neighbour = world
+        .place_beacon_directly(seat, offset(at, 6), MandateKind::Build, PRIORITY_NORMAL)
+        .unwrap_or_else(|| panic!("room for a beacon"));
+    assert!(
+        world.anchor_is_claimed(anchor),
+        "the claim is the seat's, so another beacon of the same seat sees it \
+         too: {neighbour:?}"
+    );
+}
+
+/// Two standing points on one heat vent: the first vent column found walking
+/// out from `at`, and a neighbour of it inside the same stamped patch.
+///
+/// Nothing in the world indexes vents — they are voxel material and the map
+/// report is generation-time — so the test finds them the way a player would,
+/// by looking at the ground.
+fn vent_stands(world: &World, at: [Fx; 3]) -> ([Fx; 3], [Fx; 3]) {
+    let cx: i32 = at.first().map_or(0, |value| value.floor_voxels());
+    let cy: i32 = at.get(1).map_or(0, |value| value.floor_voxels());
+    let mut found: Option<[i32; 3]> = None;
+    let mut reach: i32 = 0;
+    while reach <= 48 && found.is_none() {
+        let mut dy: i32 = -reach;
+        while dy <= reach {
+            let mut dx: i32 = -reach;
+            while dx <= reach {
+                let x = cx.saturating_add(dx);
+                let y = cy.saturating_add(dy);
+                if let Some(z) = world.voxels().top_solid_z(x, y)
+                    && world
+                        .voxels()
+                        .get([x, y, z])
+                        .and_then(Material::vent_richness)
+                        .is_some()
+                {
+                    found = Some([x, y, z]);
+                    break;
+                }
+                dx = dx.saturating_add(1);
+            }
+            if found.is_some() {
+                break;
+            }
+            dy = dy.saturating_add(1);
+        }
+        reach = reach.saturating_add(1);
+    }
+    let here = found.unwrap_or_else(|| panic!("the zone's heat vent is on the map"));
+    let stand = |column: [i32; 3]| {
+        [
+            Fx::from_voxels(i16::try_from(column.first().copied().unwrap_or(0)).unwrap_or(0)),
+            Fx::from_voxels(i16::try_from(column.get(1).copied().unwrap_or(0)).unwrap_or(0)),
+            Fx::from_voxels(
+                i16::try_from(column.get(2).copied().unwrap_or(0).saturating_add(1)).unwrap_or(0),
+            ),
+        ]
+    };
+    // A neighbour column of the same patch, so the second tap is a different
+    // voxel of one vent rather than the same voxel twice.
+    for step in [[1_i32, 0_i32], [0, 1], [-1, 0], [0, -1]] {
+        let x = here
+            .first()
+            .copied()
+            .unwrap_or(0)
+            .saturating_add(step.first().copied().unwrap_or(0));
+        let y = here
+            .get(1)
+            .copied()
+            .unwrap_or(0)
+            .saturating_add(step.get(1).copied().unwrap_or(0));
+        if let Some(z) = world.voxels().top_solid_z(x, y)
+            && world
+                .voxels()
+                .get([x, y, z])
+                .and_then(Material::vent_richness)
+                .is_some()
+        {
+            return (stand(here), stand([x, y, z]));
+        }
+    }
+    (stand(here), stand(here))
+}
+
 /// A place `voxels` east of `at`, on the ground.
 fn offset(at: [Fx; 3], voxels: i16) -> [Fx; 3] {
     [at[0].saturating_add(Fx::from_voxels(voxels)), at[1], at[2]]
@@ -476,42 +696,89 @@ fn no_beacon_starves_another_within_a_band() {
         .place_beacon_directly(seat, offset(at, 6), MandateKind::Build, PRIORITY_HIGH)
         .unwrap_or_else(|| panic!("room for a beacon"));
 
-    // Both beacons want a Generator: the same band, the same price. The writ is
-    // set after the beacons exist, because setting it clears the target list.
+    // Both beacons want Generators: the same band, the same price, and three
+    // orders each so the ladder has something left to give after the first
+    // round. **Distinct anchors**, because one anchor is one building: a
+    // second target on claimed ground would be charged for in its own right
+    // (`World::anchor_is_claimed`). The writ is set after the beacons exist,
+    // because setting it clears the target list.
     world.set_writ(core, MandateKind::Build);
     world.set_writ(second, MandateKind::Build);
-    for beacon in [core, second] {
-        assert!(world.add_target(
-            beacon,
-            TargetKind::Build,
-            StructureKind::Generator.id(),
-            offset(at, 2),
-            0
-        ));
-    }
-
-    let mut runner = Runner::new(world);
-    let mut feed: Vec<Event> = Vec::new();
-    play_segment(&mut runner, &mut feed);
-
-    let mut served: Vec<u32> = Vec::new();
-    for event in &feed {
-        if event.kind == EventKind::StructureQueued
-            && let Some(subject) = event.subject
-        {
-            let row = usize::try_from(subject.index()).unwrap_or(usize::MAX);
-            if let Some(home) = runner.world().structures().homes().get(row).copied() {
-                served.push(home);
-            }
+    for (beacon, first) in [(core, 1_i16), (second, 8)] {
+        for step in 0..3_i16 {
+            assert!(world.add_target(
+                beacon,
+                TargetKind::Build,
+                StructureKind::Generator.id(),
+                offset(at, first.saturating_add(step)),
+                0
+            ));
         }
     }
+    let price = world.structure_cost(StructureKind::Generator);
+
+    // **Starve the band.** With money for everybody the question the round
+    // robin answers never comes up: both beacons are paid on the first
+    // decision tick and the test would pass with the cursor term deleted from
+    // the sort. Topping the treasury up to one Generator a tick makes "who is
+    // served next" the only thing that decides, and the answer has to
+    // alternate.
+    let mut runner = Runner::new(world);
+    assert!(runner.begin_push(), "the Push begins");
+    runner.clear_events();
+    let mut served: Vec<u32> = Vec::new();
+    let mut cursors: Vec<u32> = Vec::new();
+    for _ in 0..60 {
+        runner.world_mut().set_treasury(seat, price);
+        let Some(report) = runner.step() else { break };
+        for event in runner.events() {
+            if event.kind == EventKind::StructureQueued
+                && let Some(subject) = event.subject
+            {
+                let row = usize::try_from(subject.index()).unwrap_or(usize::MAX);
+                if let Some(home) = runner.world().structures().homes().get(row).copied() {
+                    served.push(home);
+                    cursors.push(
+                        runner
+                            .world()
+                            .seats()
+                            .qm_cursors()
+                            .first()
+                            .copied()
+                            .unwrap_or(u32::MAX),
+                    );
+                }
+            }
+        }
+        runner.clear_events();
+        if report.segment_ended {
+            break;
+        }
+    }
+
     assert!(
-        served.len() >= 2,
-        "both beacons were paid for within one segment, not one for ever: {served:?}"
+        served.len() >= 4,
+        "a starved band still fills an order a tick: {served:?}"
     );
     assert!(
         served.contains(&core.raw()) && served.contains(&second.raw()),
         "the round robin reached both beacons: {served:?}"
+    );
+    for pair in served.windows(2) {
+        let (Some(first), Some(next)) = (pair.first(), pair.get(1)) else {
+            continue;
+        };
+        assert_ne!(
+            first, next,
+            "no beacon is served twice running while its neighbour waits: {served:?}"
+        );
+    }
+    // The cursor is what does it, and it is hashed state: it has to move with
+    // the beacon that was served, or the alternation above would be a
+    // coincidence of the id tie-break.
+    assert_eq!(
+        cursors, served,
+        "the Quartermaster cursor follows the beacon it just paid"
     );
 }
 
@@ -739,6 +1006,71 @@ fn a_split_is_apportioned_by_largest_remainder_with_ties_to_the_lowest_seat() {
 // ---------------------------------------------------------------------------
 // The settlement golden, and the bench
 // ---------------------------------------------------------------------------
+
+#[test]
+fn a_tie_on_held_value_places_the_lower_seat_id_ahead() {
+    // Spec section 7: "rank on held value ... among living seats, **tie-break
+    // the lower seat index**" — ahead, so a tied lower id draws the leader's
+    // malus and a tied higher id draws last place's catch-up bonus. AGENTS.md
+    // §4.6 states the same convention for the sim at large ("ties to the
+    // lowest seat id"). The direction has no test of its own in the ledger
+    // golden, where the tie is a coincidence of the numbers rather than a
+    // stated case, so it gets one here: written the other way round the sim
+    // would pay the catch-up dial to whoever happened to be seat 0.
+    let mut runner = Runner::new(world(&[1_000]));
+    let mut feed: Vec<Event> = Vec::new();
+    play_segment(&mut runner, &mut feed);
+
+    // One second earns and loses nothing on a three-way symmetric map, so the
+    // seats are still exactly level when the Ledger settles — which is the
+    // arrangement the tie rule is about.
+    let mut paid: Vec<(u8, i64)> = Vec::new();
+    for event in &feed {
+        if event.kind == EventKind::Settled
+            && let Some(seat) = event.seat
+        {
+            paid.push((seat.raw(), event.value));
+        }
+    }
+    assert_eq!(
+        paid.len(),
+        usize::try_from(SEATS).unwrap_or(0),
+        "every living seat is settled once: {paid:?}"
+    );
+    let level: Vec<i64> = paid
+        .iter()
+        .map(|(seat, value)| {
+            runner
+                .world()
+                .held_value(SeatId::new(*seat))
+                .raw()
+                .saturating_sub(*value)
+        })
+        .collect();
+    assert!(
+        level.windows(2).all(|pair| pair.first() == pair.get(1)),
+        "the fixture has to be a tie for the tie rule to be under test: {level:?}"
+    );
+
+    let rules = rules();
+    let leader = pharmakos_sim::economy::bmi_for(&rules, 0, SEATS);
+    let last = pharmakos_sim::economy::bmi_for(&rules, SEATS.saturating_sub(1), SEATS);
+    assert!(
+        leader.raw() < last.raw(),
+        "the ladder has to run downhill for the assertion below to mean \
+         anything: leader {leader:?} last {last:?}"
+    );
+    for (seat, value) in &paid {
+        let rank = u32::from(*seat);
+        assert_eq!(
+            *value,
+            pharmakos_sim::economy::bmi_for(&rules, rank, SEATS).raw(),
+            "seat {seat} is ranked at its own index on a level ladder, so the \
+             lowest id takes the leader's malus and the highest last place's \
+             bonus: {paid:?}"
+        );
+    }
+}
 
 /// A fixed three-round match, settled at each recap, read line by line.
 #[test]
