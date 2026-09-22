@@ -18,6 +18,14 @@ docs                      print the generated reference: the schema's shape and 
 scenario run <file>       play a scenario headless and check its assertions on events and hashes
 seat doctor               check this installation and report what is wrong
 
+## Options
+
+-h, --help                print this help and exit 0
+-V, --version             print the version of this build and exit 0
+    --root <dir>          the repository root every other path is read against (default: the working directory)
+    --part <name>         schema only: one message of gp.v1 by its lower_snake_case name, instead of the whole playbook
+    --depth <quick|full>  verify only: how deep to run the pipeline (default: full, which is what submit_plan runs)
+
 ## Exit codes
 
 0  everything asked for held

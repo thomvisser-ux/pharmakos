@@ -24,8 +24,24 @@ fn main() -> ExitCode {
     // A closed pipe is not a failure of the command: `gamectl docs | head` is
     // an ordinary thing to type, and the exit code belongs to what was asked
     // rather than to whether the reader stayed to hear the answer.
-    let _ = std::io::stdout().write_all(outcome.out.as_bytes());
+    //
+    // **Everything else is.** A review found the same `let _` swallowing a
+    // full disc and a read-only target, so `gamectl docs > file` reported
+    // success over a truncated file. Standard error is not checked the same
+    // way: there would be nowhere to report the failure to.
+    let written = std::io::stdout()
+        .write_all(outcome.out.as_bytes())
+        .and_then(|()| std::io::stdout().flush());
     let _ = std::io::stderr().write_all(outcome.err.as_bytes());
-    let _ = std::io::stdout().flush();
+    if let Err(error) = written {
+        if error.kind() != std::io::ErrorKind::BrokenPipe {
+            let _ = writeln!(
+                std::io::stderr(),
+                "{}",
+                pharmakos_gamectl::strings::unwritable_output(&error.to_string())
+            );
+            return ExitCode::from(pharmakos_gamectl::exit::Exit::Internal.code());
+        }
+    }
     ExitCode::from(outcome.code.code())
 }

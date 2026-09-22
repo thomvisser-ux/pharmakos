@@ -26,13 +26,23 @@ use crate::strings;
 /// misspelled operand, not a broken build — and [`Exit::Internal`] when the
 /// checked-in descriptor set does not carry the root it was asked for, which
 /// would mean the generated tree and this build disagree.
+///
+/// **Both of the gateway's ways of saying "that is not a part" are the
+/// caller's fault**, and a review found only one of them mapped here.
+/// `schema::text` answers `NOT_FOUND` for a well-formed name that matches no
+/// message (`--part nonesuch`) and `INVALID_ARGUMENT` for one that is not a
+/// `lower_snake_case` name at all (`--part Step`, `--part gp.v1.Playbook`,
+/// `--part ../../etc`) — and the second used to fall to [`Exit::Internal`],
+/// which [`crate::exit`] documents as "this build is inconsistent with itself;
+/// nothing the caller did caused it". A misspelled operand is not that.
 pub fn run(part: &str) -> Result<String, Failure> {
+    use pharmakos_gateway::Code;
+
     match pharmakos_gateway::schema::text(part) {
         Ok(text) => Ok(text),
-        Err(error) if error.code == pharmakos_gateway::Code::NotFound => Err(Failure::new(
-            Exit::Usage,
-            strings::unknown_part(&error.message),
-        )),
+        Err(error) if error.code == Code::NotFound || error.code == Code::InvalidArgument => Err(
+            Failure::new(Exit::Usage, strings::unknown_part(&error.message)),
+        ),
         Err(error) => Err(Failure::internal(strings::unknown_part(&error.message))),
     }
 }

@@ -9,11 +9,12 @@
 //! [`pharmakos_proto::descriptor::schema`], the same checked-in descriptor set
 //! the canonical JSON codec and the gateway's `get_schema` are driven from; the
 //! diagnostics section is [`pharmakos_verifier::catalogue::CATALOGUE`] and the
-//! verifier's own string table; and the command and exit-code sections are
-//! [`crate::cli::COMMANDS`] and [`crate::exit::Exit::ALL`], which are also what
-//! `--help` prints. A field added to `gp.v1`, a diagnostic added to the
-//! catalogue or a command added to the parser appears here the moment the tree
-//! is regenerated, and the golden moves in the pull request that added it.
+//! verifier's own string table; and the command, option and exit-code sections
+//! are [`crate::cli::COMMANDS`], [`crate::cli::OPTIONS`] and
+//! [`crate::exit::Exit::ALL`], which are also what `--help` prints. A field
+//! added to `gp.v1`, a diagnostic added to the catalogue or a command or flag
+//! added to the parser appears here the moment the tree is regenerated, and the
+//! golden moves in the pull request that added it.
 //!
 //! # What the golden is for
 //!
@@ -35,7 +36,7 @@ use std::fmt::Write as _;
 use pharmakos_proto::descriptor::{Field, Message, ScalarKind, schema};
 use pharmakos_verifier::catalogue::{CATALOGUE, severity_name};
 
-use crate::cli::COMMANDS;
+use crate::cli::{COMMANDS, OPTIONS};
 use crate::exit::{Exit, Failure};
 use crate::strings;
 
@@ -90,6 +91,18 @@ fn commands(text: &mut String) {
     text.push_str("## Commands\n\n");
     for command in COMMANDS {
         let _ = writeln!(text, "{:<26}{}", command.usage, command.about);
+    }
+    // The options, from the same table `--help` prints: a review found
+    // `--depth` in neither, which is a flag the reference does not know the
+    // build accepts.
+    text.push_str("\n## Options\n\n");
+    for option in OPTIONS {
+        let _ = writeln!(
+            text,
+            "{:<26}{}",
+            option.spelling,
+            strings::option_about(option)
+        );
     }
     text.push_str("\n## Exit codes\n\n");
     for (code, meaning) in Exit::ALL {

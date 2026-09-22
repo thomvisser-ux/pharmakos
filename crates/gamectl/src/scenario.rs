@@ -61,22 +61,31 @@ pub const DEFAULT_RULES: &str = "rules/rules.v1.json";
 
 /// The assertion vocabulary, in full.
 ///
-/// PLACEHOLDER — and this one is a decision, not an omission. Skeleton plan §7
-/// decision 16 (recommended, not yet logged) schedules **one** extension of
-/// this list for T15, "when the runner meets real events", naming
-/// `event_count_in_range`, `state_hash_at_tick` and `terminal_hash`. T15 met
-/// the real events and did not take it: `hash_chain_equals` already pins every
-/// tick's hash, so `terminal_hash` and `state_hash_at_tick` assert a subset of
-/// what is already asserted, and no scenario this task writes wants a count
-/// range that `event_fired` does not cover. Taking it anyway would move the
-/// vocabulary in `xtask/src/scenario.rs` and `scenarios/README.md`, both
-/// contract paths (AGENTS.md §5), to buy assertions nothing needs. **The owner
-/// decides** whether to leave the three names reserved or to spend the contract
-/// change; the pull request puts the question with the measurement beside it.
+/// PLACEHOLDER — and this one is a decision, not an omission.
+/// **Decisions-log item 97** (which is plan §7 decision 16, taken on the
+/// recommendation on 2026-09-14 — an earlier draft of this comment called it
+/// "recommended, not yet logged", and a review was right that it is logged)
+/// authorises T15 to extend this list **once**, "when `scenario run` meets real
+/// events", by *at most* `event_count_in_range`, `state_hash_at_tick` and
+/// `terminal_hash`. "At most" is the word that matters: taking none of the
+/// three is inside the decision, and that is what T15 did.
+///
+/// Why none. `hash_chain_equals` already pins every tick's hash, so
+/// `terminal_hash` and `state_hash_at_tick` assert a subset of what is already
+/// asserted. A count range is the one of the three that asserts something new,
+/// and neither committed scenario needs it: `deploy-and-visit`'s claim that all
+/// four route steps complete is carried by `visit_ended` on the last step,
+/// every step having `on_fail: ABORT_ROUTE` — so a step that failed would have
+/// stopped the route before that event. Taking the extension anyway would move
+/// the vocabulary in `xtask/src/scenario.rs` and `scenarios/README.md`, both
+/// contract paths (AGENTS.md §5), to buy assertions nothing needs.
+///
+/// **The owner confirms** that taking none is the right reading of item 97's
+/// "by at most", or names which of the three to spend the contract change on.
 /// Until then the three stay reserved and naming one is an error that says so.
 pub const ASSERTIONS: &[&str] = &["event_fired", "hash_chain_equals"];
 
-/// Names held for decision 16's extension.
+/// Names held for decisions-log item 97's extension.
 const RESERVED_ASSERTIONS: &[&str] = &[
     "event_count_in_range",
     "state_hash_at_tick",
@@ -423,13 +432,18 @@ fn read_seats(root: &Path, json: &Json, problems: &mut Problems) -> Vec<Seat> {
         unknown_keys(&base, members, SEAT_KEYS, problems);
         let wanted = i64::try_from(index).unwrap_or(-1);
         match integer(seat.get("seat")) {
-            Some(number) if number == wanted => {}
-            Some(number) => problems.at(
+            Some(Ok(number)) if number == wanted => {}
+            Some(Ok(number)) => problems.at(
                 &format!("{base}/seat"),
                 format!(
                     "seat ids run from 0 in array order so that ties break to the lowest seat id \
                      the same way everywhere; expected {index}, found {number}"
                 ),
+            ),
+            Some(Err(())) => problems.at(
+                &format!("{base}/seat"),
+                "a seat id is a small integer, and this number is not one any integer type here \
+                 can hold",
             ),
             None => problems.at(&format!("{base}/seat"), "required: the seat id, an integer"),
         }
@@ -501,17 +515,22 @@ fn read_segments(json: &Json, problems: &mut Problems) -> Vec<Segment> {
         unknown_keys(&base, members, SEGMENT_KEYS, problems);
         let wanted = i64::try_from(index).unwrap_or(-1);
         match integer(segment.get("index")) {
-            Some(number) if number == wanted => {}
-            Some(number) => problems.at(
+            Some(Ok(number)) if number == wanted => {}
+            Some(Ok(number)) => problems.at(
                 &format!("{base}/index"),
                 format!("segments run in order from 0; expected {index}, found {number}"),
+            ),
+            Some(Err(())) => problems.at(
+                &format!("{base}/index"),
+                "a segment index counts from 0, and this number is not one any integer type here \
+                 can hold",
             ),
             None => problems.at(
                 &format!("{base}/index"),
                 "required: the segment index, an integer counting from 0",
             ),
         }
-        match integer(segment.get("length_ms")).map(i32::try_from) {
+        match integer_as::<i32>(segment.get("length_ms")) {
             Some(Ok(length)) if length > 0 => read.push(Segment {
                 index,
                 length_ms: length,
@@ -566,9 +585,9 @@ fn read_assertions(root: &Path, json: &Json, problems: &mut Problems) -> Vec<Ass
             problems.at(
                 &format!("{base}/assert"),
                 format!(
-                    "`{kind}` is reserved for the vocabulary extension skeleton-plan §7 decision \
-                     16 schedules; T15 did not take it and the owner has the question (see \
-                     crates/gamectl/src/scenario.rs). It is not in {FORMAT}."
+                    "`{kind}` is reserved for the vocabulary extension decisions-log item 97 \
+                     authorises (plan §7 decision 16); T15 took none of the three and the owner \
+                     has the question (see crates/gamectl/src/scenario.rs). It is not in {FORMAT}."
                 ),
             );
             continue;
@@ -591,11 +610,28 @@ fn read_assertions(root: &Path, json: &Json, problems: &mut Problems) -> Vec<Ass
                     // `tests/golden/../../../etc/x.hashes.txt` satisfies
                     // both the prefix and the suffix.
                     check_path(root, &format!("{base}/golden"), golden, false, problems);
-                    if !golden.starts_with("tests/golden/") {
+                    // `tests/golden/scenarios/` and not merely `tests/golden/`,
+                    // which is where a review found this. The runner writes the
+                    // run's fresh chain to `<target>/golden/<area>/actual.…`
+                    // (`crate::actual_for`), so a scenario naming
+                    // `tests/golden/determinism/expected.hashes.txt` would
+                    // overwrite the determinism area's fresh output in the
+                    // shared target directory — the file
+                    // `crates/sim/tests/determinism.rs` writes and compares in
+                    // the same `cargo test` run. Nothing committed does it; a
+                    // scenario written next year would.
+                    //
+                    // Stricter than `xtask/src/scenario.rs`'s reader, in the
+                    // same direction as the `event_fired` name resolution above
+                    // and for the same reason: this is the thing that decides
+                    // whether a scenario passed, and `xtask` shells it.
+                    if !golden.starts_with("tests/golden/scenarios/") {
                         problems.at(
                             &format!("{base}/golden"),
-                            "the committed hash chain lives under `tests/golden/`, where the \
-                                 `golden` step and `cargo xtask golden --bless` can see it",
+                            "a scenario's committed chain lives under \
+                                 `tests/golden/scenarios/<name>/`, where the `golden` step and \
+                                 `cargo xtask golden --bless` can see it and where it cannot \
+                                 collide with another area's fresh output",
                         );
                     }
                     if !golden.ends_with(".hashes.txt") {
@@ -668,7 +704,7 @@ fn read_event_fired(assertion: &Json, base: &str, problems: &mut Problems) -> Op
     }
     let event = event.clone();
     let seat = if let Some(value) = assertion.get("seat") {
-        let Some(Ok(seat)) = integer(Some(value)).map(u8::try_from) else {
+        let Some(Ok(seat)) = integer_as::<u8>(Some(value)) else {
             problems.at(
                 &format!("{base}/seat"),
                 "optional, but when present it is a seat id: an integer of 0 or more",
@@ -679,12 +715,13 @@ fn read_event_fired(assertion: &Json, base: &str, problems: &mut Problems) -> Op
     } else {
         None
     };
-    let by_tick = match integer(assertion.get("by_tick")).map(u32::try_from) {
+    let by_tick = match integer_as::<u32>(assertion.get("by_tick")) {
         Some(Ok(tick)) => tick,
-        Some(Err(_)) => {
+        Some(Err(())) => {
             problems.at(
                 &format!("{base}/by_tick"),
-                "must be a tick number of 0 or more",
+                "must be a tick number of 0 or more, and small enough to be one: a number that \
+                 does not fit is a deadline this match could not reach",
             );
             return None;
         }
@@ -734,12 +771,27 @@ fn string_at(json: &Json, key: &str, pointer: &str, problems: &mut Problems) -> 
     }
 }
 
-/// A JSON number as an integer, or `None` when it is not one.
-fn integer(value: Option<&Json>) -> Option<i64> {
+/// A JSON number as an integer.
+///
+/// `None` means "no number is there at all"; `Some(Err(…))` means "a number is
+/// there and it is not one this format can use". A review found the two
+/// conflated: `"by_tick": 99999999999999999999` is present and overflows
+/// `i64`, and the reader answered "required", which is a pointer at the right
+/// key under the wrong sentence in the module whose stated contract is every
+/// problem with a pointer at it.
+fn integer(value: Option<&Json>) -> Option<Result<i64, ()>> {
     match value {
-        Some(Json::Number(lexeme)) => lexeme.parse::<i64>().ok(),
+        Some(Json::Number(lexeme)) => Some(lexeme.parse::<i64>().map_err(|_| ())),
         _ => None,
     }
+}
+
+/// [`integer`], narrowed to the type the field is written in.
+///
+/// The same three answers: `None` for "not there", `Some(Err(()))` for "there
+/// and out of range", `Some(Ok(_))` for a usable number.
+fn integer_as<T: TryFrom<i64>>(value: Option<&Json>) -> Option<Result<T, ()>> {
+    integer(value).map(|number| number.and_then(|number| T::try_from(number).map_err(|_| ())))
 }
 
 /// The path rule every path in a scenario follows: from the repository root,
