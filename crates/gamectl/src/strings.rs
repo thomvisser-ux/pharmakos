@@ -39,10 +39,13 @@
 //! It matters more here than elsewhere for a second reason: `lexopt` generates
 //! no `--help` (decisions-log item 105 (3)). The help below is hand-written, so
 //! it is the *only* thing that says what this binary does — nothing derives it
-//! from the parser, and nothing would notice it going stale. Two things keep it
-//! honest instead: [`HELP`] is built from [`crate::exit::Exit::ALL`] and
-//! [`crate::cli::COMMANDS`] at run time rather than typed out twice, and
-//! `tests/cli.rs` asserts that every command the parser accepts appears in it.
+//! from the parser, and nothing would notice it going stale. Three things keep
+//! it honest instead: [`help`] is built from [`crate::exit::Exit::ALL`],
+//! [`crate::cli::COMMANDS`] and [`crate::cli::OPTIONS`] at run time rather than
+//! typed out twice; `tests/cli.rs` asserts that every command and every flag
+//! the parser accepts appears in it; and that last table exists because a
+//! review found this prediction coming true for `--depth`, which was parsed,
+//! tested and in neither the help nor `gamectl docs`.
 
 use std::fmt::Write as _;
 
