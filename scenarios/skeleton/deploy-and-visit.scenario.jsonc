@@ -1,0 +1,88 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// T15's scenario: the one where the playbook FINISHES.
+//
+// Decisions-log item 103 (3) books it here in as many words -- "a second
+// scenario whose per-seat playbooks complete a visit and a deploy on the
+// skeleton map goes to T15" -- and it is the other half of the pair.
+// expand-east-segment.scenario.jsonc pins the interpreter refusing loudly on
+// the spec's own worked example: a move that times out, a deploy out of
+// placement range, a tail naming another seat's beacon. That is an honest
+// record and it is not a demonstration that any of this works. This file is:
+// four route steps, all four completed, with a beacon standing in the world
+// and a row committed on site at the end of it.
+//
+// The two seats are deliberately different kinds, so that one run covers both
+// halves of how a seat gets its orders:
+//
+//   seat 0  seals scenarios/skeleton/deploy-and-visit.playbook.jsonc, which
+//           arrives through `submit_plan` like every playbook a player writes;
+//   seat 1  seals NOTHING, so the gateway files the safe playbook for it at
+//           the end of the Lull (spec section 14) -- the `safe` seat kind, and
+//           the only committed scenario that exercises it.
+//
+// It replaces expand-east.scenario.jsonc, which asserted a `beacon_placed`
+// that item 103 (3) established cannot happen on this map. See the pull
+// request: a scenario that asserts something the build cannot do is not a
+// failing test, it is a claim nobody can act on.
+{
+  "format": "pharmakos.scenario.v1",
+  "name": "deploy-and-visit",
+  "summary": "Seat 0 walks eight voxels, deploys a Mine beacon inside its core's sphere, walks home and commits one interface row on the core -- four route steps, all four completed. Seat 1 seals nothing and the gateway files the safe playbook for it, which holds where it stands. Sixty seconds of game time is about twice what the route needs, so the margin is the assertion's and not the tuning's.",
+
+  // The same seed both other scenarios name, so the three are about one map
+  // and a map bug shows up in all of them. Seat 0's commander opens at
+  // 358, 22, 36 on it and its core `b_00` stands at 358, 24, 36; every voxel
+  // in the playbook is read off those two.
+  "map": {
+    "seed": "0x00000000ca5caded",
+    "generator": "skeleton"
+  },
+
+  // The third leg of the determinism triple, written out rather than left to
+  // the default: the chain below is a claim about these values as much as
+  // about this seed. The route's timings come from this table's
+  // `interface_times` and `commander` blocks (AGENTS.md section 12 -- tuning
+  // values are data), so a tuning pull request that moves them moves this
+  // chain and has to say so.
+  "rules": "rules/rules.v1.json",
+
+  "seats": [
+    { "seat": 0, "kind": "playbook", "playbook": "scenarios/skeleton/deploy-and-visit.playbook.jsonc" },
+    { "seat": 1, "kind": "safe" }
+  ],
+
+  // Sixty seconds, not the ladder's first rung: the route takes about
+  // thirty-five (eight walking, twelve deploying, about twelve walking back,
+  // one and a half committing), and a segment three times longer would be
+  // three thousand lines of hash chain pinning a commander standing still.
+  "segments": [
+    { "index": 0, "length_ms": 60000, "note": "20 Hz x 60 s = 1 200 ticks." }
+  ],
+
+  // Events AND hashes. The events say the route ran and finished; the chain
+  // says it will do so again, on every operating system, until somebody
+  // changes a rule.
+  "assertions": [
+    { "assert": "event_fired", "event": "plan_sealed", "seat": 0, "by_tick": 1,
+      "note": "Seat 0's submission reached the match. Sealed during the Lull, which consumes no sim tick, so it is reported on the tick the Push opens on." },
+    { "assert": "event_fired", "event": "plan_sealed", "seat": 1, "by_tick": 1,
+      "note": "And seat 1's, which it never submitted: the gateway filed the safe playbook for it. This is the line that would go missing if `file_safe_playbooks` stopped running." },
+    { "assert": "event_fired", "event": "step_started", "seat": 0, "by_tick": 20,
+      "note": "The first decision is the Push's first played tick, so the route starts at the start of the segment." },
+    { "assert": "event_fired", "event": "beacon_placed", "seat": 0, "by_tick": 550,
+      "note": "The deploy completed: eight voxels of walking, then the rules table's own 12 000 ms deploy. It lands at tick 451 and the deadline is 550, which is about a fifth of margin -- enough that a tuning nudge is a tuning task rather than a red build, and tight enough that a deploy that stopped happening would not pass. A world event, so the fog filter decides who is told; the assertion reads it from the bus, because a scenario is the harness's view and not a seat's." },
+    { "assert": "event_fired", "event": "visit_started", "seat": 0, "by_tick": 850,
+      "note": "The commander walked back to its core and interfaced ON SITE, at tick 716. Touch to change: this is the premise, asserted." },
+    { "assert": "event_fired", "event": "row_committed", "seat": 0, "by_tick": 600,
+      "note": "And a row landed -- the first is the new beacon's own priority at tick 511, the last is the core's at 776. A row commits at the end of its own duration, at the rules table's rate, which is what makes an interface a cost rather than a click." },
+    { "assert": "event_fired", "event": "step_completed", "seat": 0, "by_tick": 300,
+      "note": "A step reported completion rather than failure, at tick 206 -- which is the whole difference between this scenario and its sibling. All four of the route's steps complete; the chain is what pins which." },
+    { "assert": "event_fired", "event": "segment_ended", "by_tick": 1200,
+      "note": "The segment ends on the tick, not near it." },
+    { "assert": "hash_chain_equals",
+      "golden": "tests/golden/scenarios/deploy-and-visit/expected.hashes.txt",
+      "note": "Byte-identical on Windows, Linux and macOS: gate G4 in the flesh. Re-blessed with `cargo xtask golden --bless`, and never to turn a red build green." }
+  ]
+}

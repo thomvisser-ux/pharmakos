@@ -14,6 +14,23 @@ tests/golden/scenarios/<name>/expected.hashes.txt   the per-tick chain
 tests/golden/scenarios/<name>/expected.events.txt   the event log it asserts on
 ```
 
+The chain is the half a scenario file names, in its `hash_chain_equals`
+assertion, and every scenario has one. **The event log is optional and only
+`expand-east-segment` carries one**, because `crates/sim/tests/scenario.rs`
+produces it by driving the sim directly and can therefore see a sim event's
+`seq`, `subject` and `value`. `gamectl scenario run` reads the gateway's
+segment feed instead — the events as a *match* reports them — which carries a
+kind, an audience and a time and not those three fields. It writes no event
+log, and the `event_fired` assertions inside the scenario file are the event
+half of that scenario's claim: they are checked on every run, by the runner,
+and a scenario with none of them is refused by the format.
+
+Re-bless a chain with **`cargo xtask golden --bless`**, after
+`cargo test --workspace` has produced the fresh one. Every chain here is
+written during `cargo test` — `crates/gamectl/tests/scenarios.rs` plays every
+committed scenario — so a bless never needs the binary to have been run by
+hand.
+
 The chain has the same format as `determinism/`: tick, TAB, sixteen lowercase
 hex digits, one line per tick, LF, trailing newline. `scenarios/README.md`
 documents the scenario files themselves.
@@ -51,6 +68,22 @@ its core's sphere and delivers it twice over the segment, and the Ledger settles
 at the recap. Those `ore_delivered` and `settled` lines come from the mandate
 layer rather than from the playbook, which is the point — a seat that seals
 nothing still earns and is still paid.
+
+**T15 added it: `deploy-and-visit`.** Four route steps and all four complete —
+a walk, a deploy that puts a beacon in the ground at tick 451, a walk home and
+an interface row committed on the core at 776 — with seat 1 sealing nothing so
+that the gateway files the safe playbook for it. Read the two together: this
+one is what the interpreter does when a playbook fits the map, that one is what
+it does when a playbook does not, and neither is the whole picture on its own.
+
+`expand-east-segment` carries one more thing worth knowing before its chain is
+read. The playbook it seals **does not qualify against either seat's own frozen
+snapshot** on this map: `E0401` for `b_01`, which is seat 1's core and is not in
+seat 0's view, and `E0403` for a site two hundred and sixty voxels outside every
+sphere. No client could submit it. `gamectl scenario run` therefore seals it
+through a documented harness door and prints a `note` line saying so on every
+run; `deploy-and-visit` needs no such line. See `crates/gamectl/src/scenario/
+run.rs` and the pull request that added the runner.
 
 **This line format is a contract**, like `interpreter/`'s: it is the same
 tab-separated event line, and a scenario file asserts on the `kind` names in it.

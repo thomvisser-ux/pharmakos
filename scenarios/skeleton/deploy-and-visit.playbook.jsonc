@@ -1,0 +1,92 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// The completing playbook: seat 0's orders in deploy-and-visit.scenario.jsonc.
+//
+// It lives beside its scenario rather than in examples/ on purpose. The files
+// under examples/ are the spec's worked examples and are contract files; this
+// one is a test fixture, written against ONE map (seed 0x00000000ca5caded) and
+// ONE seat (0), with voxels chosen from where that map actually puts seat 0's
+// commander and core. Moving it to examples/ would make it look reusable, and
+// it is not: every number below is a property of that map.
+//
+// WHY IT EXISTS (decisions-log item 103 (3)). The spec's own expand_east
+// cannot complete its first step on the skeleton's map at these tuning values
+// -- the commander walks east for the whole of its 120 s timeout without
+// arriving, the site is then out of placement range, and the tail names
+// another seat's beacon. That finding is recorded honestly by
+// expand-east-segment.scenario.jsonc, which pins the interpreter REFUSING.
+// The owner is owed the other half: a scenario in which a playbook finishes
+// its route. This is that playbook, and item 103 (3) books it to T15.
+//
+// THE NUMBERS, AND WHERE THEY COME FROM. Everything here is read off the map
+// and the rules table rather than guessed:
+//
+//   seat 0's commander opens at 358, 22, 36
+//   seat 0's core `b_00` stands at 358, 24, 36
+//   commander.placement_range_voxels  12   -- how far a beacon may be deployed
+//   commander.interface_range_voxels   4   -- how close a visit must be
+//   commander.arrive_radius_voxels     2   -- arriving is a radius, not equality
+//   beacon.sphere_radius_voxels       24   -- a new site sits inside an own sphere
+//   interface_times.place_beacon_deploy_ms 12000
+//   interface_times.set_priority_ms         1500
+//
+// So the walk is eight voxels west, the beacon goes into the ground where the
+// commander is then standing -- eight voxels from the core, well inside its
+// twenty-four-voxel sphere -- and the tail walks back to `b_00`, which for
+// seat 0 is seat 0's own, and commits one row on it.
+//
+// NO FORWARD REFERENCE TO THE BEACON IT PLACES, and that is not an oversight.
+// A `beacon_id` is resolved against the seat's frozen snapshot, so naming the
+// beacon this playbook is about to place is `E0401` and the submission would
+// be refused at the door (crates/verifier/src/resolve.rs). The interpreter's
+// own `place_beacon` transcript can name one because it compiles a plan
+// directly; a playbook that goes through `submit_plan` cannot, and every
+// playbook a player writes goes through `submit_plan`.
+{
+  "schema_version": {"major": 1},
+  "meta": {
+    "title": "Deploy beside the core",
+    "author_kind": "HUMAN",
+    "note": "Walk a little west, deploy a Mine beacon inside the core's sphere, walk back and re-prioritise the core."
+  },
+  "kind": "PLAYBOOK",
+  "declarative": {
+    "route": [
+      // Eight voxels west. DIRECT because nothing on this map is a known
+      // threat yet and a detour would only make the timing harder to read.
+      {"label": "to_site", "timeout_ms": 30000,
+        "move": {"to": {"voxel": {"x": 350, "y": 22, "z": 36}}, "pace": "DIRECT"},
+        "on_fail": {"action": "ABORT_ROUTE"}},
+
+      // Deployed where the commander is standing. The SAME voxel the step
+      // above walked to, and that is the rule rather than a convenience: a
+      // deploy tests the commander against the INTERFACE range (4 voxels), not
+      // the placement range, because "the commander must stay for all of it"
+      // and it stands at the site (spec section 5; crates/sim's `run_deploy`).
+      // The placement range is how far the site may be from the commander when
+      // the site is chosen, and twelve voxels of it is no use to a step that
+      // then wants the commander within four. The spec's own expand_east
+      // writes the pair this way too.
+      {"label": "place_west", "timeout_ms": 30000,
+        "place_beacon": {"at": {"voxel": {"x": 350, "y": 22, "z": 36}}, "tags": ["west"],
+          "initial": {"priority": "NORMAL", "mandate": {"roe": "RETURN_FIRE", "mine": {"dig_max_depth": 4, "flee_on_threat": true}}}},
+        "on_fail": {"action": "ABORT_ROUTE"}},
+
+      // Home, to something that already exists: `b_00` is seat 0's own core on
+      // this map. (`b_01` is seat 1's, which is the whole of item 103 (3)'s
+      // third finding.)
+      {"label": "back_home", "timeout_ms": 60000,
+        "move": {"to": {"beacon_anchor": {"beacon_id": "b_00"}}, "pace": "DIRECT"},
+        "on_fail": {"action": "ABORT_ROUTE"}},
+
+      // And the visit the route exists to reach: one row, committed on site.
+      {"label": "touch_core", "timeout_ms": 20000,
+        "interface": {"beacon": {"beacon_id": "b_00"}, "rows": [{"set_priority": "LOW"}]},
+        "on_fail": {"action": "ABORT_ROUTE"}}
+    ],
+    "handlers": []
+  },
+  "on_death": {"on_respawn": "CONTINUE", "max_deaths_before_fallback": 2},
+  "fallback": {"hold": {"at": {"beacon_anchor": {"safest": {}}}}}
+}
