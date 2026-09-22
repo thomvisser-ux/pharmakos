@@ -292,10 +292,11 @@ pub fn percent_of(amount: Money, percent: u32) -> Money {
 /// percent = (bonus * rank - malus * (living - 1 - rank)) / (living - 1)
 /// ```
 ///
-/// truncated toward zero, and **zero when `living` is one**: a seat that is
-/// both the leader and the last place has nobody to catch up to, and the
-/// formula's denominator says the same thing by being empty rather than by
-/// dividing by nothing.
+/// truncated toward zero. The **adjustment** is zero when `living` is one, so
+/// the seat is paid the unadjusted `economy.bmi_dollars`: a seat that is both
+/// the leader and the last place has nobody to catch up to, and the formula's
+/// denominator says the same thing by being empty rather than by dividing by
+/// nothing.
 #[must_use]
 pub fn bmi_for(rules: &RulesTable, rank: u32, living: u32) -> Money {
     let Some(economy) = rules.message().economy.as_ref() else {

@@ -56,10 +56,23 @@ use crate::world::World;
 /// [`crate::tables::CreditTable::shares_of`] guarantees; the tie rule is then
 /// simply "the earlier entry wins", because that entry is the lower seat.
 ///
-/// The shares sum to exactly `total` whenever `total` is not negative and the
-/// damage sums to more than zero. `out` is the caller's buffer and is cleared
-/// first, so nothing here allocates inside a tick.
+/// `shares` must also hold at most [`crate::tables::CREDIT_SLOTS`] entries,
+/// which is the counter table's own ceiling ("at most 3 per asset", item 17)
+/// and what [`crate::tables::CreditTable::shares_of`] emits. The largest-
+/// remainder pass below marks a topped-up entry in a fixed array of that
+/// width, so a longer list would leave its tail permanently unmarked and the
+/// leftover units undealt — hence the `debug_assert` rather than a silent
+/// short sum.
+///
+/// The shares then sum to exactly `total` whenever `total` is not negative and
+/// the damage sums to more than zero. `out` is the caller's buffer and is
+/// cleared first, so nothing here allocates inside a tick.
 pub fn apportion(total: i64, shares: &[(u8, i32)], out: &mut Vec<(u8, i64)>) {
+    debug_assert!(
+        shares.len() <= crate::tables::CREDIT_SLOTS,
+        "apportion takes at most CREDIT_SLOTS shares; got {}",
+        shares.len()
+    );
     out.clear();
     if total <= 0 || shares.is_empty() {
         return;

@@ -115,6 +115,32 @@ pub struct SalvageProgram;
 /// (AGENTS.md §11: "no manual control" cuts the other way too — no program may
 /// steer it either). A raider runs the move program until S2 gives it a
 /// target.
+///
+/// PLACEHOLDER: the exception above is **argued, not decided**. Item 10 says a
+/// dormant beacon parks "its bound units ... at 0 kW" without excepting the
+/// commander, and the asymmetry this build ships is the part to put in front
+/// of the owner: the commander keeps drawing `power.kw_per_unit` toward the
+/// very shortfall it is immune to. The two options are (a) as built — the
+/// commander walks through a brownout and still draws, so a shortfall is
+/// always recoverable by walking to a beacon and raising its priority; and
+/// (b) the commander parks like every other unit, which reads the rule
+/// literally and makes a total blackout a lockout the seat cannot walk out of
+/// until the settlement pays it. A third reading — walks but draws nothing —
+/// would need a draw exemption the rules table has no row for. Owner, at S1,
+/// with the rest of the grid's tuning.
+///
+/// PLACEHOLDER: a unit's program is chosen from its **kind** alone and never
+/// from its home beacon's writ, so the mandate layer governs spending and not
+/// behaviour. Spec section 6's Common row — "a unit the mandate has no job for
+/// keeps the common settings and idles at its beacon" — reads as though the
+/// writ should gate the program, and under that reading the starting mining
+/// drone would idle, because the spec's own starting force (item 90) homes it
+/// to a core on **Build**. That is the tension, and it is why this build does
+/// not guess: gating on the writ would leave the skeleton with no income at
+/// all, and the starting force is the spec's, not this task's. Owner, at S1,
+/// with the mandate's settings: either the writ gates the program (and the
+/// starting core's writ or its drone changes), or a unit's kind is its job and
+/// the mandate only decides what is bought.
 #[must_use]
 pub fn program_for(kind: UnitKind) -> Option<&'static dyn Program> {
     match kind {
@@ -283,25 +309,21 @@ impl Program for MineProgram {
             finish_dig(world, unit);
             return;
         }
-        // 2. A full load goes home. "Delivered ore is credited to the seat
-        //    treasury immediately" (spec section 6), so the credit lands on
-        //    arrival and not at the seam.
         let carried = world
             .units()
             .carrying()
             .get(row)
             .copied()
             .unwrap_or(Money::ZERO);
-        if carried.raw() >= full_load(world) {
-            deliver(world, unit, EventKind::OreDelivered);
-            return;
-        }
-        // 3. Otherwise dig. The drone keeps the target it is already walking
-        //    to while that voxel is still ore — one lookup instead of a search
-        //    over the whole sphere — and searches again only when the voxel it
-        //    was going for has gone. The answer is the same either way, because
-        //    the search is a pure function of the chunk store and the store
-        //    changes only where a drone digs.
+        // 2. Keep walking to the stand it already has, while the voxel beside
+        //    that stand is still ore — one lookup instead of a search over the
+        //    whole sphere, and the drone searches again only when the voxel it
+        //    was going for has gone. The answer is the same either way,
+        //    because the search is a pure function of the chunk store and the
+        //    store changes only where a drone digs. A drone in transit cannot
+        //    have become full — only a dig fills its hands, and a dig happens
+        //    standing still — so the load test below loses nothing by sitting
+        //    after this.
         if let Some(stand) = current_dig(world, row)
             && !within(
                 world
@@ -316,12 +338,28 @@ impl Program for MineProgram {
         {
             return;
         }
-        let Some(stand) = world
-            .ore_in_sphere(home)
-            .and_then(|ore| world.dig_stand(ore))
-        else {
-            // No ore left in the sphere, or none a drone can stand beside:
-            // take home whatever is in hand rather than standing over it.
+        // 3. The next voxel of the seam — which is also what decides whether
+        //    the hands are full, because the load is a number of **voxels**
+        //    and a voxel's worth depends on the seam's grade.
+        let Some(ore) = world.ore_in_sphere(home) else {
+            // No ore left in the sphere: take home whatever is in hand rather
+            // than standing over it.
+            if carried.raw() > 0 {
+                deliver(world, unit, EventKind::OreDelivered);
+            } else {
+                idle_at_home(world, unit);
+            }
+            return;
+        };
+        // 4. A full load goes home. "Delivered ore is credited to the seat
+        //    treasury immediately" (spec section 6), so the credit lands on
+        //    arrival and not at the seam.
+        if carried.raw() >= full_load(world, ore) {
+            deliver(world, unit, EventKind::OreDelivered);
+            return;
+        }
+        let Some(stand) = world.dig_stand(ore) else {
+            // Ore, but none a drone can stand beside.
             if carried.raw() > 0 {
                 deliver(world, unit, EventKind::OreDelivered);
             } else {
@@ -428,8 +466,11 @@ impl Program for ScoutProgram {
         // sightings closest to leaving the reach window" (spec section 6).
         // Being *inside* a probe area is what "scanned" means at the skeleton:
         // the sighting half is done by `crate::survey`, which runs every
-        // decision tick wherever the scout happens to be standing.
-        if let Some(area) = world.nearest_unvisited_probe(home, here) {
+        // decision tick wherever the scout happens to be standing. Nothing
+        // records the visit, so a mandate with two or more areas works only
+        // the first one its scout reaches — see `World::probe_to_enter`'s
+        // PLACEHOLDER for what settling that costs and who settles it.
+        if let Some(area) = world.probe_to_enter(home, here) {
             world.send_unit(unit, area);
             return;
         }
@@ -453,22 +494,36 @@ fn hp_per_tick() -> i32 {
         .max(1)
 }
 
-/// What a full load of ore is worth, in `$`.
+/// What a full load of ore is worth, in `$`, for a drone working the seam that
+/// `ore` belongs to.
 ///
-/// [`MINING_LOAD_VOXELS`] voxels at the **standard** yield, so the load is a
-/// number of voxels rather than a number of `$` and a rich seam fills the
-/// drone's hands in the same number of trips as a lean one — which is what
-/// "richness sets the total yield" means (item 22): the richness is in what a
-/// voxel is worth, not in how much a drone can hold.
-fn full_load(world: &World) -> i64 {
-    let standard = world
-        .rules()
-        .message()
-        .economy
-        .as_ref()
-        .and_then(|economy| economy.ore_yield_per_voxel_dollars)
-        .map_or(0, |by| i64::from(by.standard));
-    standard.saturating_mul(i64::from(MINING_LOAD_VOXELS))
+/// [`MINING_LOAD_VOXELS`] voxels **at that seam's own yield**, so the load is a
+/// number of voxels rather than a number of `$`: a rich seam fills the drone's
+/// hands in the same number of digs as a lean one and is worth four times as
+/// much when it gets home. That is what "richness sets the total yield" means
+/// (item 22) — the richness is in what a voxel is worth, not in how much a
+/// drone can hold. Measured against the next voxel rather than against a
+/// counter on the unit row, which would be a fourth hashed column for a figure
+/// the seam already carries; the two answers differ only for a drone whose
+/// trip crosses from one grade to another, and [`crate::mapgen`] stamps a seam
+/// at one grade.
+///
+/// A voxel that is not ore — the seam went while the drone walked — falls back
+/// to the standard yield, so the test stays a number rather than a panic.
+fn full_load(world: &World, ore: [i32; 3]) -> i64 {
+    let per_voxel = world.ore_yield_at(ore).map_or_else(
+        || {
+            world
+                .rules()
+                .message()
+                .economy
+                .as_ref()
+                .and_then(|economy| economy.ore_yield_per_voxel_dollars)
+                .map_or(0, |by| i64::from(by.standard))
+        },
+        Money::raw,
+    );
+    per_voxel.saturating_mul(i64::from(MINING_LOAD_VOXELS))
 }
 
 /// Where the drone is already walking to, when that place is still a legal

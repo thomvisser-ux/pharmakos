@@ -118,7 +118,11 @@ const ZONE_JITTER_VOXELS: i32 = 4;
 /// PLACEHOLDER: a heat vent is a three-by-three patch of surface voxels. The
 /// patch's shape is tuning and nothing reads it yet — T14's Generator sits on
 /// the vent, it does not mine it. Owner, at S1.
-const VENT_PATCH_RADIUS: i32 = 1;
+///
+/// Read outside this module by [`crate::power`], which needs the patch's span
+/// to tell two taps on one vent from taps on two vents ("one Generator per
+/// vent", spec section 5).
+pub(crate) const VENT_PATCH_RADIUS: i32 = 1;
 
 /// PLACEHOLDER: how many voxels of ore a seam column carries before the seam
 /// moves to the next column. Four, so a 150-voxel seam is about 38 columns and

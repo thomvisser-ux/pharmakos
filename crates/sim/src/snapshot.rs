@@ -928,7 +928,8 @@ impl Snapshot {
     /// lookups silently missed.
     fn restore_sightings(&self, world: &World) -> Result<SightingTable, SnapshotError> {
         let capacity = world.sightings().capacity();
-        let mut sightings = SightingTable::with_capacity(capacity);
+        let mut sightings =
+            SightingTable::with_room(world.seats().len(), world.sightings().per_seat());
         if !sightings.restore(
             capacity,
             SightingColumns {
