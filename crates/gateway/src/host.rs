@@ -49,14 +49,18 @@
 
 use std::path::{Path, PathBuf};
 
+use pharmakos_proto::gp::v1::Voxel;
 use pharmakos_sim::interpreter::Plan;
+use pharmakos_sim::math::fixed::{Fx, Sq};
 use pharmakos_sim::math::quantity::MS_PER_TICK;
 use pharmakos_sim::rules::RulesTable;
 use pharmakos_sim::runner::{MatchPhase, MatchSettings, Runner, TickReport};
 use pharmakos_sim::tables::SeatId;
-use pharmakos_sim::world::{World, WorldConfig};
+use pharmakos_sim::voxels::VoxelEdit;
+use pharmakos_sim::world::{DamageOrder, World, WorldConfig};
 
 use crate::error::Error;
+use crate::fog::Vision;
 use crate::routes::RouteAdapter;
 
 /// The safe playbook the gateway hands back until the built-in operator
@@ -100,6 +104,27 @@ pub const SAFE_PLAYBOOK: &str = concat!(
     "}\n",
 );
 
+/// What the lobby chose, in plain values.
+///
+/// The point of this struct is what is **not** in it: no `pharmakos-sim`
+/// type. AGENTS.md section 3's crate map gives `gamectl` no edge to the sim,
+/// and [`Host::open`] takes the sim's
+/// [`WorldConfig`](pharmakos_sim::world::WorldConfig) — so a binary that
+/// wanted to host a match had to name a sim type to do it (decisions-log item
+/// 107 (11)). [`Host::open_from`] takes this instead, with the rules table as
+/// **text** that this crate parses, so `gamectl host` needs nothing but the
+/// gateway.
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct Settings {
+    /// The Push lengths, in game milliseconds, one per round. Empty means the
+    /// rules table's own ladder (decisions-log item 40).
+    pub segment_lengths_ms: Vec<i32>,
+    /// How many rounds the match runs at most.
+    pub round_limit: u32,
+    /// How many units each seat starts with beyond its commander.
+    pub units_per_seat: u32,
+}
+
 /// The match, its search graph and the folder the templates are read from.
 #[derive(Debug)]
 pub struct Host {
@@ -131,6 +156,46 @@ impl Host {
             library,
             safe_playbook: String::from(SAFE_PLAYBOOK),
         })
+    }
+
+    /// Open a match from **text and plain values**: the rules table as the
+    /// canonical JSON a file holds, and the lobby's own numbers.
+    ///
+    /// [`Host::open`] is unchanged and is what a caller that already has a
+    /// [`RulesTable`] uses. This one exists so that a binary can host a match
+    /// without naming a `pharmakos-sim` type at all — see [`Settings`] and
+    /// decisions-log item 107 (11). It is also what
+    /// [`crate::serve::run`] uses itself, which is what keeps the two paths
+    /// from drifting: the host loop takes the same door a caller does.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::InvalidArgument`] for a rules table this build
+    /// will not read and for a lobby setting [`Host::check_settings`] refuses,
+    /// and [`crate::error::Code::Internal`] as [`Host::open`].
+    pub fn open_from(
+        rules_json: &str,
+        seed: u64,
+        seats: u32,
+        settings: &Settings,
+        library: Option<PathBuf>,
+    ) -> Result<Host, Error> {
+        let rules = RulesTable::from_canonical_json(rules_json).map_err(|error| {
+            Error::invalid(format!(
+                "this is not a rules table this build reads: {error}"
+            ))
+        })?;
+        let config = WorldConfig {
+            match_seed: seed,
+            seats,
+            units_per_seat: settings.units_per_seat,
+            rules,
+            match_settings: MatchSettings {
+                segment_lengths_ms: settings.segment_lengths_ms.clone(),
+                round_limit: settings.round_limit,
+            },
+        };
+        Host::open(&config, library)
     }
 
     /// Refuse a lobby setting the sim would silently correct.
@@ -339,6 +404,154 @@ impl Host {
         let drained: Vec<pharmakos_sim::events::Event> = self.runner.events().to_vec();
         self.runner.clear_events();
         drained
+    }
+
+    // -----------------------------------------------------------------------
+    // The test seam: a host may file this tick's orders, and no wire method may
+    // -----------------------------------------------------------------------
+
+    /// File a voxel edit for this tick's voxel phase. `false` when the queue
+    /// is full.
+    ///
+    /// **A host-side seam, reached by no wire method, and that is the whole of
+    /// its design.** Three of T16a's acceptance lines are about what a seat
+    /// may see of an edit and of an elimination, and on `main` nothing in a
+    /// hosted match edits a voxel or kills a seat: combat's craters are S2's
+    /// and construction's sets are T14's. `Runner::world_mut`'s own doc names
+    /// exactly this — "what a host files this tick's orders through — a voxel
+    /// edit, a damage order" — so the seam is that sentence and nothing more.
+    ///
+    /// `tests/confinement.rs` bans this name and
+    /// [`Host::file_damage`] from every handler module and from
+    /// `surface/control.rs`, and
+    /// `no_wire_method_files_a_voxel_edit_or_a_damage_order` asserts that no
+    /// dispatch arm reaches either. **`gamectl`'s scenario runner must not
+    /// grow a dependency on them without the owner's word**: a scenario that
+    /// edits voxels is a scenario-format question, which is T3's.
+    pub fn file_voxel_edit(&mut self, edit: VoxelEdit) -> bool {
+        self.runner.world_mut().request_voxel_edit(edit)
+    }
+
+    /// File a damage order for this tick's combat phase. `false` when the
+    /// queue is full.
+    ///
+    /// As [`Host::file_voxel_edit`], and for the same reason: elimination is a
+    /// consequence of something dying, and nothing on `main` kills anything in
+    /// a hosted match.
+    pub fn file_damage(&mut self, order: DamageOrder) -> bool {
+        self.runner.world_mut().request_damage(order)
+    }
+}
+
+/// The production [`Vision`]: a seat sees inside the spheres of its own living
+/// beacons.
+///
+/// # This is a labelled stopgap, and the label is the point
+///
+/// Spec section 6 states one sight rule and the rules table gives it a number:
+/// **spheres give passive vision**, at `beacon.sphere_radius_voxels`. That is
+/// the only sight rule in v1 that is both stated and numbered, so it is the
+/// one the production host computes with — and computing it *here* means the
+/// gateway holds a second definition of "inside a sphere" beside the sim's own
+/// private `within`, which is exactly the kind of duplication this project
+/// does not keep.
+///
+/// **The follow-up is named and sequenced** (decisions-log item 107 (6)): once
+/// T14 merges, a small `crates/sim` change adds a public
+/// `World::in_own_sphere(seat, voxel)` that reuses the sim's own `within`, and
+/// Survey-lite's sightings join it as a second term. This type then becomes a
+/// call to it. Until then the arithmetic is written to be the same arithmetic
+/// — the sim's own [`Fx`] and [`Sq`], integer squared distance, no square root
+/// (AGENTS.md section 4.2), and the beacon's centre never rounded — and
+/// `the_boundary_voxel_of_a_sphere_is_seen_and_the_next_one_is_not` pins the
+/// boundary with the expected answer written out.
+///
+/// What it does **not** model, because nothing states it: a unit's or a
+/// structure's own sight, Survey's far vision, a Sensor Spire's reveal, and
+/// reach memory. A commander that walks out of its own spheres is still drawn
+/// to its owner — that is ownership, not sight — and sees no enemy entity or
+/// edit around it. PLACEHOLDER: **OWNER**, a sight-radius row per unit and
+/// structure, **S1 at the latest**, with Survey-lite's sightings at **S3**.
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct SphereVision {
+    /// One entry per living beacon: the seat that owns it, its centre in the
+    /// sim's fixed point, and the squared sphere radius.
+    ///
+    /// An owned snapshot, rebuilt before each call, so that nothing here can
+    /// be read after the world has moved on.
+    spheres: Vec<(u8, [Fx; 3], Sq)>,
+}
+
+impl SphereVision {
+    /// The spheres of every living beacon in `world`.
+    #[must_use]
+    pub fn of(world: &World) -> SphereVision {
+        let radius_voxels = world
+            .rules()
+            .message()
+            .beacon
+            .as_ref()
+            .map_or(0, |beacon| beacon.sphere_radius_voxels);
+        let radius = Fx::from_voxels(
+            i16::try_from(radius_voxels)
+                .ok()
+                .filter(|value| *value >= 0)
+                .unwrap_or(0),
+        );
+        let squared = Sq::of_radius(radius);
+
+        let beacons = world.beacons();
+        let mut spheres: Vec<(u8, [Fx; 3], Sq)> = Vec::new();
+        for row in 0..beacons.ids().len() {
+            let alive = beacons
+                .hit_points()
+                .get(row)
+                .copied()
+                .is_some_and(pharmakos_sim::math::quantity::Hp::is_alive);
+            if !alive {
+                continue;
+            }
+            let Some(centre) = beacons.positions().get(row).copied() else {
+                continue;
+            };
+            let seat = beacons.seats().get(row).copied().unwrap_or_default();
+            spheres.push((seat, centre, squared));
+        }
+        SphereVision { spheres }
+    }
+
+    /// How many living beacons the snapshot holds.
+    #[must_use]
+    pub fn spheres(&self) -> usize {
+        self.spheres.len()
+    }
+
+    /// One whole voxel as the fixed-point point a squared distance is taken
+    /// to.
+    ///
+    /// The voxel's own lowest corner, which is the point
+    /// [`crate::view::voxel_of`] floors a position onto — so "the voxel a
+    /// beacon stands in" and "the voxel a sphere reaches" are measured from
+    /// the same place. `None` for a coordinate outside the fixed-point range,
+    /// which is off every map this project makes.
+    fn point_of(at: &Voxel) -> Option<[Fx; 3]> {
+        Some([
+            Fx::from_voxels(i16::try_from(at.x).ok()?),
+            Fx::from_voxels(i16::try_from(at.y).ok()?),
+            Fx::from_voxels(i16::try_from(at.z).ok()?),
+        ])
+    }
+}
+
+impl Vision for SphereVision {
+    fn sees(&self, seat: SeatId, at: &Voxel) -> bool {
+        let Some(point) = SphereVision::point_of(at) else {
+            return false;
+        };
+        self.spheres
+            .iter()
+            .filter(|(owner, _, _)| *owner == seat.raw())
+            .any(|(_, centre, squared)| Sq::between(point, *centre) <= *squared)
     }
 }
 

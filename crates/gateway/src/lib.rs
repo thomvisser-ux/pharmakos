@@ -55,6 +55,8 @@
 //! | [`audit`] | The audit log: tick, sequence number, subject, method, outcome |
 //! | [`fog`] | The per-match server-side fog policy and its filter |
 //! | [`feed`] | The event bus, the 60 s digest cadence and the opaque cursors |
+//! | [`viewfeed`] | The view's derived, unhashed state: the generated map, the stamps, the entitled bytes |
+//! | [`serve`] | The host loop: one config line in, one announce line out, one surface behind many connections |
 //! | [`cache`] | The private match cache: where it goes, and what is in it |
 //! | [`detail`] | The read-method detail budgets, in the fixed salience order |
 //! | [`time`] | The host's tick reaching the gateway, because the gateway has no clock |
@@ -129,6 +131,7 @@ pub mod routes;
 pub mod rpc;
 pub mod schema;
 pub mod scopes;
+pub mod serve;
 pub mod session;
 pub mod sha1;
 pub mod strings;
@@ -136,6 +139,7 @@ pub mod surface;
 pub mod time;
 pub mod token;
 pub mod view;
+pub mod viewfeed;
 
 pub use error::{Code, Error};
 pub use surface::Surface;

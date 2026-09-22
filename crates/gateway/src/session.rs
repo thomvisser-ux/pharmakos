@@ -26,6 +26,22 @@
 //! depends on its value, no result changes if the operating system honours it
 //! late, and it is never read as a time. The gateway's clock is the host's tick
 //! and there is no other (AGENTS.md section 4.5).
+//!
+//! # The transport half and the surface half (T16a)
+//!
+//! T9 wrote one function that did both: it parsed frames *and* held a
+//! `&mut Surface` to answer them with. One surface and several connections
+//! cannot both be true of that shape, because two connections cannot both
+//! hold the one mutable borrow -- so [`crate::serve`] would have had to
+//! rewrite the transport rather than use it.
+//!
+//! The split is a trait and nothing else. [`Door`] is "somewhere a token is
+//! authenticated and a text message is answered"; everything above it in this
+//! module is RFC 6455 and JSON-RPC and knows nothing about a match.
+//! [`SurfaceDoor`] is the in-process door, which is what [`serve`] still
+//! builds, so every T9 and T13 test drives the same code it always did.
+//! [`crate::serve`]'s door hands the work to the one thread that owns the
+//! surface.
 
 use crate::error::Error;
 use crate::frame::{self, Assembler, Message, Opcode};
@@ -33,7 +49,6 @@ use crate::handshake::{self, MAX_HANDSHAKE_BYTES, Policy, Refusal};
 use crate::rpc;
 use crate::surface::Surface;
 use crate::token::Token;
-use pharmakos_proto::json::Json;
 use std::io::{Read, Write};
 use std::time::Duration;
 
@@ -61,6 +76,99 @@ pub enum Ended {
     Io(String),
 }
 
+/// Where a connection's token is authenticated and its messages are answered.
+///
+/// The transport knows nothing else about the gateway. One implementation
+/// ([`SurfaceDoor`]) holds the surface directly, which is what a test and a
+/// single-connection host do; [`crate::serve`]'s implementation hands each
+/// message to the one thread that owns the surface, which is what lets several
+/// connections share one match.
+pub trait Door {
+    /// Authenticate the token that rode the upgrade and record it.
+    ///
+    /// `false` ends the connection with a 401 before a single frame is read,
+    /// which is what makes every frame this gateway parses one the rate
+    /// limiter can count.
+    fn open(&mut self, token: &Token) -> bool;
+
+    /// Answer one JSON-RPC text message, as the text that goes back.
+    fn answer(&mut self, token: &Token, text: &str) -> String;
+
+    /// Record a refused upgrade. Every refusal is in the audit log, whatever
+    /// it was.
+    fn refused(&mut self, refusal: &Refusal);
+}
+
+/// The in-process door: the surface itself, with the vision the fog filter
+/// asks.
+pub struct SurfaceDoor<'a, V: crate::fog::Vision> {
+    surface: &'a mut Surface,
+    vision: &'a V,
+}
+
+// By hand, because a `Vision` is not required to be `Debug` and requiring it
+// would put a derive of this crate's in the way of the host's own vision type.
+impl<V: crate::fog::Vision> std::fmt::Debug for SurfaceDoor<'_, V> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("SurfaceDoor")
+            .field("match_id", &self.surface.match_id())
+            .finish_non_exhaustive()
+    }
+}
+
+impl<'a, V: crate::fog::Vision> SurfaceDoor<'a, V> {
+    /// A door onto this surface.
+    pub fn new(surface: &'a mut Surface, vision: &'a V) -> SurfaceDoor<'a, V> {
+        SurfaceDoor { surface, vision }
+    }
+}
+
+impl<V: crate::fog::Vision> Door for SurfaceDoor<'_, V> {
+    fn open(&mut self, token: &Token) -> bool {
+        let tick = self.surface.time().tick;
+        let match_id = self.surface.match_id().to_owned();
+        let Ok(grant) = self.surface.tokens().authenticate(token, &match_id, tick) else {
+            return false;
+        };
+        let (subject, handle) = (grant.subject, grant.handle);
+        self.surface.audit().record(
+            tick,
+            Some(subject),
+            Some(handle),
+            "upgrade",
+            crate::audit::Outcome::Ok,
+        );
+        true
+    }
+
+    fn answer(&mut self, token: &Token, text: &str) -> String {
+        let response = match rpc::parse(text) {
+            Ok(request) => self.surface.call(Some(token), &request, self.vision),
+            Err(malformed) => rpc::malformed_response(&malformed),
+        };
+        rpc::render(&response)
+    }
+
+    fn refused(&mut self, refusal: &Refusal) {
+        let tick = self.surface.time().tick;
+        let error = refusal_error(refusal);
+        self.surface
+            .audit()
+            .refused(tick, None, None, "upgrade", &error);
+    }
+}
+
+/// The error a refused upgrade is logged as.
+#[must_use]
+pub fn refusal_error(refusal: &Refusal) -> Error {
+    match refusal.status() {
+        401 => Error::unauthenticated(refusal.reason()),
+        403 => Error::forbidden(refusal.reason()),
+        _ => Error::invalid(refusal.reason()),
+    }
+}
+
 /// Serve one connection from the first byte to the last.
 ///
 /// Every outcome is an [`Ended`] rather than an error: a refused upgrade and a
@@ -72,6 +180,16 @@ pub fn serve<S: Read + Write, V: crate::fog::Vision>(
     vision: &V,
     policy: &Policy,
 ) -> Ended {
+    let mut door = SurfaceDoor::new(surface, vision);
+    serve_through(stream, &mut door, policy)
+}
+
+/// Serve one connection through any [`Door`].
+pub fn serve_through<S: Read + Write, D: Door + ?Sized>(
+    stream: &mut S,
+    door: &mut D,
+    policy: &Policy,
+) -> Ended {
     let (request, leftover) = match read_handshake(stream) {
         Ok(pair) => pair,
         Err(ended) => return ended,
@@ -79,35 +197,23 @@ pub fn serve<S: Read + Write, V: crate::fog::Vision>(
 
     let upgrade = match handshake::review(&request, policy) {
         Ok(upgrade) => upgrade,
-        Err(refusal) => return refuse(stream, surface, &refusal),
+        Err(refusal) => return refuse(stream, door, &refusal),
     };
 
     // Authenticate before a single frame is read. The token is parsed into a
     // `Token` here and the text is dropped with the `Upgrade`.
     let Some(token) = Token::parse(&upgrade.bearer) else {
-        return refuse(stream, surface, &Refusal::MalformedToken);
+        return refuse(stream, door, &Refusal::MalformedToken);
     };
-    let tick = surface.time().tick;
-    let (subject, handle) = {
-        let match_id = surface.match_id().to_owned();
-        match surface.tokens().authenticate(&token, &match_id, tick) {
-            Ok(grant) => (grant.subject, grant.handle),
-            Err(_) => return refuse(stream, surface, &Refusal::Unauthenticated),
-        }
-    };
+    if !door.open(&token) {
+        return refuse(stream, door, &Refusal::Unauthenticated);
+    }
 
     if let Err(error) = stream.write_all(handshake::response(&upgrade).as_bytes()) {
         return Ended::Io(error.to_string());
     }
-    surface.audit().record(
-        tick,
-        Some(subject),
-        Some(handle),
-        "upgrade",
-        crate::audit::Outcome::Ok,
-    );
 
-    pump(stream, surface, vision, &token, leftover)
+    pump(stream, door, &token, leftover)
 }
 
 /// Serve one accepted TCP connection, with the socket's read timeout set.
@@ -117,11 +223,21 @@ pub fn serve_connection<V: crate::fog::Vision>(
     vision: &V,
     policy: &Policy,
 ) -> Ended {
+    let mut door = SurfaceDoor::new(surface, vision);
+    serve_connection_through(connection, &mut door, policy)
+}
+
+/// Serve one accepted TCP connection through any [`Door`].
+pub fn serve_connection_through<D: Door + ?Sized>(
+    connection: crate::net::Connection,
+    door: &mut D,
+    policy: &Policy,
+) -> Ended {
     let mut stream = connection.stream;
     if let Err(error) = stream.set_read_timeout(Some(READ_TIMEOUT)) {
         return Ended::Io(error.to_string());
     }
-    serve(&mut stream, surface, vision, policy)
+    serve_through(&mut stream, door, policy)
 }
 
 /// Read the opening handshake, up to and including the blank line.
@@ -157,23 +273,16 @@ fn read_handshake<S: Read>(stream: &mut S) -> Result<(String, Vec<u8>), Ended> {
 }
 
 /// Write an HTTP refusal, log it, and end.
-fn refuse<S: Write>(stream: &mut S, surface: &mut Surface, refusal: &Refusal) -> Ended {
-    let tick = surface.time().tick;
-    let error = match refusal.status() {
-        401 => Error::unauthenticated(refusal.reason()),
-        403 => Error::forbidden(refusal.reason()),
-        _ => Error::invalid(refusal.reason()),
-    };
-    surface.audit().refused(tick, None, None, "upgrade", &error);
+fn refuse<S: Write, D: Door + ?Sized>(stream: &mut S, door: &mut D, refusal: &Refusal) -> Ended {
+    door.refused(refusal);
     let _ = stream.write_all(handshake::refusal_response(refusal).as_bytes());
     Ended::UpgradeRefused(refusal.clone())
 }
 
 /// The message loop.
-fn pump<S: Read + Write, V: crate::fog::Vision>(
+fn pump<S: Read + Write, D: Door + ?Sized>(
     stream: &mut S,
-    surface: &mut Surface,
-    vision: &V,
+    door: &mut D,
     token: &Token,
     leftover: Vec<u8>,
 ) -> Ended {
@@ -204,8 +313,10 @@ fn pump<S: Read + Write, V: crate::fog::Vision>(
 
             match message {
                 Message::Text(text) => {
-                    let response = answer(surface, vision, token, &text);
-                    let bytes = frame::encode(Opcode::Text, rpc::render(&response).as_bytes());
+                    // One request in flight per connection: the answer is
+                    // waited for before the next frame is read.
+                    let response = door.answer(token, &text);
+                    let bytes = frame::encode(Opcode::Text, response.as_bytes());
                     if let Err(error) = stream.write_all(&bytes) {
                         return Ended::Io(error.to_string());
                     }
@@ -232,19 +343,6 @@ fn pump<S: Read + Write, V: crate::fog::Vision>(
             },
             Err(error) => return Ended::Io(error.to_string()),
         }
-    }
-}
-
-/// One text message in, one JSON-RPC response out.
-fn answer<V: crate::fog::Vision>(
-    surface: &mut Surface,
-    vision: &V,
-    token: &Token,
-    text: &str,
-) -> Json {
-    match rpc::parse(text) {
-        Ok(request) => surface.call(Some(token), &request, vision),
-        Err(malformed) => rpc::malformed_response(&malformed),
     }
 }
 
