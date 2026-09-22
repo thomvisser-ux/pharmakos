@@ -996,12 +996,21 @@ pub struct SightingTable {
     at: Vec<[Fx; 3]>,
     seen_at: Vec<u32>,
     capacity: u32,
+    per_seat: u32,
 }
 
 impl SightingTable {
-    /// A table holding `capacity` sightings across every seat, never growing.
+    /// A table holding `per_seat` sightings for each of `seats` seats, never
+    /// growing.
+    ///
+    /// The per-seat number is the one the eviction rule reads, and the total
+    /// is its product with the seat count: one seat filling its own memory
+    /// therefore costs another seat nothing, which is what "per seat" has to
+    /// mean if the constant is to be read the way it is named. The rows share
+    /// one set of columns only so that the table is one allocation.
     #[must_use]
-    pub fn with_capacity(capacity: u32) -> SightingTable {
+    pub fn with_room(seats: u32, per_seat: u32) -> SightingTable {
+        let capacity = seats.saturating_mul(per_seat);
         let n = usize::try_from(capacity).unwrap_or(0);
         SightingTable {
             count: 0,
@@ -1012,7 +1021,26 @@ impl SightingTable {
             at: Vec::with_capacity(n),
             seen_at: Vec::with_capacity(n),
             capacity,
+            per_seat,
         }
+    }
+
+    /// How many sightings **one seat** may hold at once.
+    #[must_use]
+    pub const fn per_seat(&self) -> u32 {
+        self.per_seat
+    }
+
+    /// How many sightings `seat` is holding.
+    #[must_use]
+    pub fn len_of(&self, seat: SeatId) -> u32 {
+        let mut total: u32 = 0;
+        for who in &self.seat {
+            if *who == seat.raw() {
+                total = total.saturating_add(1);
+            }
+        }
+        total
     }
 
     /// How many sightings are remembered.
@@ -1097,10 +1125,14 @@ impl SightingTable {
     ///
     /// A second sighting of the same asset **replaces** the memory of it rather
     /// than joining it, which is what keeps the `(seat, asset)` key unique. A
-    /// full table forgets that seat's stalest sighting first, ties to the lowest
-    /// asset id — the same order the Survey mandate refreshes in, so what falls
-    /// out is what was about to leave the window anyway. `false` when nothing
-    /// was recorded, which is a full table with no row of this seat's to drop.
+    /// seat that is holding its [`SightingTable::per_seat`] allowance forgets
+    /// its **own** stalest sighting first, ties to the lowest asset id — the
+    /// same order the Survey mandate refreshes in, so what falls out is what
+    /// was about to leave the window anyway. The allowance is per seat rather
+    /// than per table, so a seat that sees a great deal cannot starve a seat
+    /// that has seen nothing; the shared ceiling is the sum of the allowances
+    /// and cannot be reached before one of them is. `false` when nothing was
+    /// recorded.
     #[allow(
         clippy::too_many_arguments,
         reason = "one argument per column of the row being written, as the SoA `push`es above"
@@ -1131,12 +1163,15 @@ impl SightingTable {
                 true
             }
             Err(slot) => {
-                if self.count >= self.capacity {
+                if self.len_of(seat) >= self.per_seat {
                     let Some(stalest) = self.stalest_of(seat) else {
                         return false;
                     };
                     self.forget(stalest);
                     return self.see(seat, asset, owner, kind, at, tick);
+                }
+                if self.count >= self.capacity {
+                    return false;
                 }
                 self.seat.insert(slot, seat.raw());
                 self.asset.insert(slot, asset);

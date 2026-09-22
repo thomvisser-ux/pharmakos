@@ -153,8 +153,11 @@ const HARNESS_DAMAGE_QUEUE: usize = 256;
 /// `tests/allocations.rs` fails on one. Forty is item 63's world total of 40
 /// beacons, taken as the room *per match* rather than per seat, and a deploy
 /// that finds no room fails the step with `no_beacon_room` rather than growing.
-/// The owner settles the real ceiling with the economy that pays for them
-/// (owner, at T14).
+/// The owner settles the real ceiling with the economy that pays for them.
+/// T14 built that economy and did **not** settle it: the ceiling is a property
+/// of the world rather than a rule (spec section 7, "Unit ceiling"), so it
+/// belongs beside [`UNIT_TABLE_ROOM`] with the rest of the fielding limits
+/// (owner, at S1).
 const BEACON_TABLE_ROOM: u32 = 40;
 
 /// PLACEHOLDER (harness): how many units a match may fabricate on top of the
@@ -196,12 +199,24 @@ const WRECK_TABLE_ROOM: u32 = 120;
 /// measurement (owner, at S3).
 const TARGETS_PER_BEACON: u32 = 8;
 
+/// [`TARGETS_PER_BEACON`] as an array length.
+///
+/// A second constant rather than a cast, because a cast is a decision
+/// (AGENTS.md section 4.3) and `const` context has no `try_from`. The
+/// assertion below is what keeps the two the same number: move one and the
+/// crate stops compiling.
+const TARGETS_PER_BEACON_SLOTS: usize = 8;
+const _: () = assert!(TARGETS_PER_BEACON == 8 && TARGETS_PER_BEACON_SLOTS == 8);
+
 /// PLACEHOLDER (harness): how many sightings one seat remembers at once.
 ///
-/// Sixty-four. A seat that sees more forgets its stalest first, which is the
-/// same order Survey refreshes in, so what falls out is what was about to leave
-/// `verifier.reach_memory_ms` anyway. The owner settles it with the reach
-/// window and the briefing's detail budget (owner, at S3).
+/// Sixty-four, **each**: the table holds this many rows for every seat and
+/// evicts against a seat's own count, so a seat that sees more forgets its own
+/// stalest first and never crowds a seat that has seen nothing
+/// ([`SightingTable::see`]). That is the same order Survey refreshes in, so
+/// what falls out is what was about to leave `verifier.reach_memory_ms`
+/// anyway. The owner settles it with the reach window and the briefing's
+/// detail budget (owner, at S3).
 const SIGHTINGS_PER_SEAT: u32 = 64;
 
 /// How many beacon rows a match of `seats` seats may ever hold.
@@ -562,9 +577,7 @@ impl World {
             structures,
             wrecks,
             targets: TargetTable::with_capacity(beacon_limit.saturating_mul(TARGETS_PER_BEACON)),
-            sightings: SightingTable::with_capacity(
-                config.seats.saturating_mul(SIGHTINGS_PER_SEAT),
-            ),
+            sightings: SightingTable::with_room(config.seats, SIGHTINGS_PER_SEAT),
             credit: CreditTable::with_capacity(
                 unit_ceiling
                     .saturating_add(beacon_limit)
@@ -1344,15 +1357,27 @@ impl World {
         best.map(|(_, id)| id)
     }
 
-    /// The nearest probe area of `beacon` that `here` is **not** already
-    /// inside, or `None` when the scout is inside one (or there are none).
+    /// The nearest probe area of `beacon` for the scout at `here` to walk
+    /// into, or `None` when it is already standing inside one (or there are
+    /// none).
     ///
     /// "Scouts scan unexplored ground inside these first" (spec section 6):
     /// standing inside a probe area is what scanning it means at the skeleton,
     /// because the sighting half is done wherever the scout is standing
     /// ([`crate::survey`]).
+    ///
+    /// Named for what it does rather than for a visit it does not track.
+    /// PLACEHOLDER: **no probe area is ever recorded as visited**, so a Survey
+    /// mandate carrying two or more areas only ever works the one its scout
+    /// reaches first — inside that area this answers `None` for ever and
+    /// [`crate::programs`] falls through to the stalest sighting. Working
+    /// through the list needs a visited column on the target table, which is
+    /// hashed state (state hash, snapshot, goldens) and a rule the spec does
+    /// not write down: whether an area is re-scanned after the whole list is
+    /// walked, and on what clock. Owner, at S3, with the reach window that
+    /// decides when a scan goes stale.
     #[must_use]
-    pub fn nearest_unvisited_probe(&self, beacon: BeaconId, here: [Fx; 3]) -> Option<[Fx; 3]> {
+    pub fn probe_to_enter(&self, beacon: BeaconId, here: [Fx; 3]) -> Option<[Fx; 3]> {
         let mut best: Option<(Sq, usize, [Fx; 3])> = None;
         let count = usize::try_from(self.targets.len()).unwrap_or(0);
         let mut row: usize = 0;
@@ -1616,6 +1641,20 @@ impl World {
         }
     }
 
+    /// Write a seat's treasury directly.
+    ///
+    /// Fixture API. The one way to make the Quartermaster's round robin
+    /// visible is to starve it — with money for one order a tick, "who is
+    /// served next" stops being "everybody" — and a Push long enough to earn
+    /// that shortage honestly would be a match rather than a test.
+    pub fn set_treasury(&mut self, seat: SeatId, amount: Money) {
+        if let Some(index) = self.seat_row(seat)
+            && let Some(slot) = self.seats.treasuries_mut().get_mut(index)
+        {
+            *slot = amount;
+        }
+    }
+
     /// Set a beacon's dormancy directly.
     ///
     /// Fixture API. The power phase settles dormancy every tick, so a world
@@ -1652,6 +1691,128 @@ impl World {
         radius: i32,
     ) -> bool {
         self.targets.add(beacon, kind, blueprint, at, radius)
+    }
+
+    /// Whether some Build target already claims the anchor `at`.
+    ///
+    /// One anchor, one building. A second Build target on a claimed anchor
+    /// would be paid for in its own right — "paid means yours" charges at
+    /// commit (item 23) — and would put a second structure row in the same
+    /// voxel, so a playbook naming one anchor twice, or two beacons naming the
+    /// same one, would buy the same building twice over. Every target of every
+    /// beacon counts, because the treasury and the ground are the seat's and
+    /// not the beacon's.
+    #[must_use]
+    pub fn anchor_is_claimed(&self, at: [Fx; 3]) -> bool {
+        let count = usize::try_from(self.targets.len()).unwrap_or(0);
+        let mut row: usize = 0;
+        while row < count {
+            if self.targets.kinds().get(row).copied() == Some(TargetKind::Build.id())
+                && self.targets.anchors().get(row).copied() == Some(at)
+            {
+                return true;
+            }
+            row = row.saturating_add(1);
+        }
+        false
+    }
+
+    /// Replace `beacon`'s Build target list, carrying the structure each kept
+    /// anchor has already been paid for across the edit.
+    ///
+    /// A settings edit **replaces** the list it names (spec section 5, and
+    /// [`crate::interpreter::exec`]'s reasoning), but replacing is not
+    /// abandoning: an anchor that appears in both the old list and the new one
+    /// is the same order, and its `built` link has to survive, or the mandate
+    /// would read the re-added row as unpaid, charge for it again and stand a
+    /// second building in the same voxel while the first stayed at one hit
+    /// point for ever with no target to finish it.
+    ///
+    /// PLACEHOLDER: an anchor that appears in the old list and **not** in the
+    /// new one — a `remove_build_target`, or a replacement that drops it —
+    /// strands whatever was already paid for there: the structure stays in the
+    /// world, unfinished, and no drone returns to it. That is a reading, not a
+    /// rule: "paid means yours" says the `$` is spent and the building is the
+    /// seat's, and the alternatives are to ruin it (S2's ruins, which do not
+    /// exist yet) or to refund it at its condition (which would make a
+    /// remove-and-re-add a way to move a half-built structure across the map
+    /// for free). Owner, at S2, with destruction and ruins.
+    /// The list arrives as a cloneable iterator rather than a slice because
+    /// the caller's anchors are whole voxels and this walks them twice: a
+    /// `collect` into a `Vec` here would be an allocation inside a tick, which
+    /// `tests/allocations.rs` fails on.
+    pub(crate) fn replace_build_targets<I>(&mut self, beacon: BeaconId, list: I)
+    where
+        I: Iterator<Item = (u8, [Fx; 3])> + Clone,
+    {
+        // The carry-over has to be read before the list is cleared, and the
+        // read has nowhere to go but a fixed array. `TARGETS_PER_BEACON_SLOTS` is
+        // the table's own ceiling, so an entry past it could not have been
+        // added anyway.
+        let mut carried = [BeaconId::NONE.raw(); TARGETS_PER_BEACON_SLOTS];
+        for (slot, (_, anchor)) in list.clone().enumerate() {
+            let Some(cell) = carried.get_mut(slot) else {
+                break;
+            };
+            *cell = self.built_at(beacon, anchor);
+        }
+        self.clear_targets(beacon, TargetKind::Build);
+        for (slot, (blueprint, anchor)) in list.enumerate() {
+            if !crate::mandate::inside_sphere(self, beacon, anchor)
+                || self.anchor_is_claimed(anchor)
+            {
+                continue;
+            }
+            if !self
+                .targets
+                .add(beacon, TargetKind::Build, blueprint, anchor, 0)
+            {
+                continue;
+            }
+            let built = carried.get(slot).copied().unwrap_or(BeaconId::NONE.raw());
+            if built != BeaconId::NONE.raw() {
+                self.set_built_at(beacon, anchor, built);
+            }
+        }
+    }
+
+    /// The structure `beacon`'s Build target at `at` has already been paid
+    /// for, or [`BeaconId::NONE`]'s raw value when there is no such target.
+    fn built_at(&self, beacon: BeaconId, at: [Fx; 3]) -> u32 {
+        let count = usize::try_from(self.targets.len()).unwrap_or(0);
+        let mut row: usize = 0;
+        while row < count {
+            if self.targets.beacons().get(row).copied() == Some(beacon.raw())
+                && self.targets.kinds().get(row).copied() == Some(TargetKind::Build.id())
+                && self.targets.anchors().get(row).copied() == Some(at)
+            {
+                return self
+                    .targets
+                    .built()
+                    .get(row)
+                    .copied()
+                    .unwrap_or(BeaconId::NONE.raw());
+            }
+            row = row.saturating_add(1);
+        }
+        BeaconId::NONE.raw()
+    }
+
+    /// Write the `built` link of `beacon`'s Build target at `at`.
+    fn set_built_at(&mut self, beacon: BeaconId, at: [Fx; 3], built: u32) {
+        let count = usize::try_from(self.targets.len()).unwrap_or(0);
+        let mut row: usize = 0;
+        while row < count {
+            if self.targets.beacons().get(row).copied() == Some(beacon.raw())
+                && self.targets.kinds().get(row).copied() == Some(TargetKind::Build.id())
+                && self.targets.anchors().get(row).copied() == Some(at)
+                && let Some(slot) = self.targets.built_mut().get_mut(row)
+            {
+                *slot = built;
+                return;
+            }
+            row = row.saturating_add(1);
+        }
     }
 
     /// Remove every list setting of `beacon` of one kind.
@@ -2302,7 +2463,14 @@ impl World {
                     .and_then(mandate_of_id)
                 && let Some(mandate) = crate::mandate::mandate_for(kind)
                 && let Some(request) = mandate.request(self, id)
-                && out.len() < out.capacity()
+                // The bound is the **beacon ceiling**, which is hashed-state
+                // derived (`beacon_limit_of`), and not `out.capacity()`: a
+                // `Vec`'s capacity is documented as "at least" what was asked
+                // for, so gating a seat's spending on it would let the
+                // allocator decide whether an order was filled. The buffer is
+                // reserved to the same number, so this never drops a request
+                // that the reservation left room for.
+                && out.len() < usize::try_from(self.beacon_limit).unwrap_or(0)
             {
                 out.push(request);
             }
@@ -3115,8 +3283,10 @@ impl World {
     /// it here puts the credit on the tick whose hash is the segment's last,
     /// which is also the tick the snapshot is frozen from.
     ///
-    /// The band is **rank on held value among the living seats**, ties to the
-    /// lower seat index; an eliminated seat leaves the ladder rather than
+    /// The band is **rank on held value among the living seats**, tie-broken
+    /// by the lower seat index placing *ahead* (spec section 7, so a tied
+    /// lower id draws the leader's malus rather than last place's bonus); an
+    /// eliminated seat leaves the ladder rather than
     /// sitting at the bottom of it, which is what makes the catch-up dial a
     /// dial between the seats still playing.
     fn settle_ledger(&mut self) {
@@ -3156,15 +3326,23 @@ impl World {
             let raw = self.seats.seats().get(index).copied().unwrap_or(0);
             let seat = SeatId::new(raw);
             let mine = ladder.get(index).copied().unwrap_or(0);
-            // Rank by counting how many living seats hold strictly more, with
-            // the **lower seat index** winning a tie (spec section 7). No sort
-            // and no second buffer: the count is the rank.
+            // Rank by counting how many living seats are placed ahead of this
+            // one, with the **lower seat index** winning a tie: spec section 7
+            // says "rank on held value ... among living seats, tie-break the
+            // lower seat index", and AGENTS.md §4.6 states the same convention
+            // for the sim at large. A seat is ahead when it holds strictly
+            // more, or when it holds the same and carries the lower index — so
+            // the tie term is `other < index`, not `other > index`. Written
+            // the other way round the lower id would draw last place's
+            // catch-up bonus on every tie, which is the opposite of the rule
+            // and is what the first pass of this did. No sort and no second
+            // buffer: the count is the rank.
             let mut rank: u32 = 0;
             let mut other: usize = 0;
             while other < count {
                 if other != index && self.seats.is_alive(other) {
                     let theirs = ladder.get(other).copied().unwrap_or(0);
-                    if (theirs, other) > (mine, index) {
+                    if theirs > mine || (theirs == mine && other < index) {
                         rank = rank.saturating_add(1);
                     }
                 }
@@ -3682,6 +3860,15 @@ impl World {
         self.candidates = Vec::with_capacity(
             usize::try_from(unit_count.saturating_add(UNIT_TABLE_ROOM)).unwrap_or(0),
         );
+        // The three phase scratch buffers are re-reserved from the **restored**
+        // counts for the same reason the tables are: they were sized at
+        // construction from the config's seat count, and a snapshot of a match
+        // with more seats raises `beacon_limit` and `seats.len()` past what
+        // they were built for. A `power_order.push` past the reservation would
+        // then allocate inside a tick, which `tests/allocations.rs` fails on.
+        self.requests = Vec::with_capacity(usize::try_from(self.beacon_limit).unwrap_or(0));
+        self.power_order = Vec::with_capacity(usize::try_from(self.beacon_limit).unwrap_or(0));
+        self.settlement = Vec::with_capacity(usize::try_from(self.seats.len()).unwrap_or(0));
         true
     }
 }

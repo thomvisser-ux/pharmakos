@@ -875,7 +875,11 @@ fn commit_row(world: &mut World, row: usize, seat: SeatId, spec: &Row) {
         }
         Row::AddTarget { blueprint, anchor } => {
             let at = point_of(*anchor);
-            if crate::mandate::inside_sphere(world, beacon, at) {
+            // One anchor, one building: a target on ground another target has
+            // already claimed would be charged for in its own right and would
+            // stand a second structure in the same voxel
+            // ([`World::anchor_is_claimed`]).
+            if crate::mandate::inside_sphere(world, beacon, at) && !world.anchor_is_claimed(at) {
                 world.add_target(beacon, TargetKind::Build, *blueprint, at, 0);
             }
         }
@@ -896,13 +900,16 @@ fn commit_row(world: &mut World, row: usize, seat: SeatId, spec: &Row) {
             // alone, which is what "edits settings within the current mandate"
             // means for the fields it is silent about.
             if !targets.is_empty() {
-                world.clear_targets(beacon, TargetKind::Build);
-                for (blueprint, anchor) in targets {
-                    let at = point_of(*anchor);
-                    if crate::mandate::inside_sphere(world, beacon, at) {
-                        world.add_target(beacon, TargetKind::Build, *blueprint, at, 0);
-                    }
-                }
+                // Replacing is not abandoning: an anchor that survives the
+                // edit keeps the structure it has already been paid for, or
+                // the mandate would buy it a second time
+                // ([`World::replace_build_targets`]).
+                world.replace_build_targets(
+                    beacon,
+                    targets
+                        .iter()
+                        .map(|(blueprint, anchor)| (*blueprint, point_of(*anchor))),
+                );
             }
             if !protected.is_empty() {
                 world.clear_targets(beacon, TargetKind::Protected);

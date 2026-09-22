@@ -15,9 +15,10 @@
 //! neither draws nor is ever shed.
 //!
 //! Supply is the core's deep-bore surplus plus one Generator per vent at the
-//! vent's richness — the vent's heat is the limit, not the tap. Draw is per
-//! fielded item: every beacon its base draw, every unit `power.kw_per_unit`,
-//! every capability structure its own row.
+//! vent's richness — the vent's heat is the limit, not the tap, so a second
+//! Generator on a vent that is already tapped adds nothing ([`supply_of`]).
+//! Draw is per fielded item: every beacon its base draw, every unit
+//! `power.kw_per_unit`, every capability structure its own row.
 //!
 //! # The order is fixed, and it is not the `$` order
 //!
@@ -181,12 +182,89 @@ pub(crate) fn settle(world: &mut World, order: &mut Vec<u32>) {
     }
 }
 
-/// The seat's supply: the core's deep-bore surplus plus every live Generator.
+/// How far apart two surface columns can stand and still be voxels of one heat
+/// vent.
+///
+/// A vent is stamped as a square patch around one column
+/// ([`crate::mapgen::VENT_PATCH_RADIUS`]), so two voxels of one patch differ by
+/// at most its full span on each axis.
+const VENT_PATCH_SPAN: i32 = 2 * crate::mapgen::VENT_PATCH_RADIUS;
+
+/// Whether two standing points are taps on **one** heat vent.
+///
+/// Same grade and inside one patch's span on both horizontal axes. The grade
+/// is part of the test because two patches of different richness are two
+/// vents however close the generator laid them.
+///
+/// PLACEHOLDER: the span is the honest test only while a vent is the square
+/// patch [`crate::mapgen`] stamps and two patches of the same grade are never
+/// laid within it — which is true of every map the committed table generates,
+/// and is what `STARTING_FEATURE_CLEARANCE` keeps true for contested features.
+/// A vent identity carried on the world (a vent table, hashed) would make it
+/// true by construction and would also let Survey report vents; that is the
+/// map's own work. Owner, at S1, with the vent and seam tuning.
+fn one_vent(world: &World, a: [crate::math::fixed::Fx; 3], b: [crate::math::fixed::Fx; 3]) -> bool {
+    let (Some(grade_a), Some(grade_b)) = (vent_under(world, a), vent_under(world, b)) else {
+        return false;
+    };
+    if grade_a != grade_b {
+        return false;
+    }
+    let (Some(ax), Some(ay)) = (a.first(), a.get(1)) else {
+        return false;
+    };
+    let (Some(bx), Some(by)) = (b.first(), b.get(1)) else {
+        return false;
+    };
+    let dx = ax.floor_voxels().saturating_sub(bx.floor_voxels());
+    let dy = ay.floor_voxels().saturating_sub(by.floor_voxels());
+    dx.saturating_abs() <= VENT_PATCH_SPAN && dy.saturating_abs() <= VENT_PATCH_SPAN
+}
+
+/// Whether an earlier live Generator of `seat` already taps the vent under
+/// `at`.
+///
+/// "Earlier" is the lower structure id, which is a total order (item 62), so
+/// which tap counts does not depend on the order the table is walked in.
+fn vent_already_tapped(
+    world: &World,
+    seat: SeatId,
+    before: usize,
+    at: [crate::math::fixed::Fx; 3],
+) -> bool {
+    let structures = world.structures();
+    let mut row: usize = 0;
+    while row < before {
+        if structure_is_live(world, seat, row)
+            && structures.kinds().get(row).copied() == Some(StructureKind::Generator.id())
+            && let Some(other) = structures.positions().get(row).copied()
+            && one_vent(world, at, other)
+        {
+            return true;
+        }
+        row = row.saturating_add(1);
+    }
+    false
+}
+
+/// The seat's supply: the core's deep-bore surplus plus every live Generator,
+/// **one to a vent**.
 ///
 /// A Generator that is still going up supplies nothing — "construction time is
 /// hit points and spectacle" (item 23) — and one homed to a dormant beacon
 /// supplies nothing either, because dormancy powers down everything homed to a
 /// beacon and a tap that is powered down is not a tap.
+///
+/// A second Generator standing on a vent that is already tapped supplies
+/// nothing either, and that is the whole of "one Generator per vent, output
+/// set by the vent's richness, **because the vent's heat is the limit, not the
+/// tap**" (spec section 5). The rule is enforced here, where the heat is
+/// counted, rather than by refusing the second building: a seat is free to
+/// stand two Generators on one vent and free to waste the `$`, and the grid is
+/// not one kilowatt richer for it. The interface row that names a Build target
+/// already refuses an anchor another target has claimed
+/// ([`World::anchor_is_claimed`]), so the sealed-playbook route to stacking
+/// them is shut as well.
 #[must_use]
 pub(crate) fn supply_of(world: &World, seat: SeatId, rules: PowerRules) -> i32 {
     let mut total: i32 = 0;
@@ -205,7 +283,9 @@ pub(crate) fn supply_of(world: &World, seat: SeatId, rules: PowerRules) -> i32 {
         {
             let at = structures.positions().get(row).copied();
             let richness = at.and_then(|point| vent_under(world, point));
-            if let Some(grade) = richness {
+            if let (Some(grade), Some(point)) = (richness, at)
+                && !vent_already_tapped(world, seat, row, point)
+            {
                 total = total.saturating_add(rules.generator_output(grade));
             }
         }
