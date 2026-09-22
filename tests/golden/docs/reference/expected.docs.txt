@@ -2,11 +2,12 @@
 
 the Pharmakos command-line client: inspect a playbook, read the schema, play a scenario headless.
 
-EVERY LINE BELOW IS GENERATED. The vocabulary comes from the checked-in gp.v1
-descriptor set, the diagnostics from the verifier's catalogue and string table, and
-the commands and exit codes from this binary's own tables. Nothing here is written
-by hand, which is what makes it unable to drift from what the code does (spec §12,
-"Generated docs"). Regenerate it with `gamectl docs`; the committed copy is
+EVERY ENTRY BELOW IS GENERATED; the section headings and the notes under them
+are not. The vocabulary comes from the checked-in gp.v1 descriptor set, the
+diagnostics from the verifier's catalogue and string table, and the commands and
+exit codes from this binary's own tables. No entry is written by hand, which is what
+makes the reference unable to drift from what the code does (spec §12, "Generated
+docs"). Regenerate it with `gamectl docs`; the committed copy is
 tests/golden/docs/reference/expected.docs.txt.
 
 ## Commands

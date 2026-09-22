@@ -25,6 +25,14 @@
 //! scenario parses here, and the doctored copies it writes are refused here for
 //! the reason `xtask` would give.
 //!
+//! One asymmetry, deliberate and in one direction only: this reader also
+//! resolves an `event_fired` assertion's name against
+//! `pharmakos_sim::events::EventKind`, which `xtask` cannot do because it has
+//! no dependencies. Every file `xtask` refuses is refused here; a file with a
+//! misspelled event name is refused here and not there. Strictly stricter is
+//! the safe direction — the runner is the thing that decides whether a
+//! scenario passed, and `xtask` shells the runner.
+//!
 //! # Every problem, with a JSON Pointer at it
 //!
 //! A scenario is written by hand, and five round trips to fix five typos is
@@ -636,6 +644,28 @@ fn read_event_fired(assertion: &Json, base: &str, problems: &mut Problems) -> Op
         );
         return None;
     };
+    // Resolved against the sim's own vocabulary, here, rather than compared as
+    // a string per event later. `EventKind::from_name` exists for exactly this
+    // and its doc says so; a review found nothing calling it. Without this, a
+    // typo such as `beacon_place` validates, plays a whole match and then exits
+    // 3 with "never fired" — which is this module's own contract
+    // ("every problem, with a JSON Pointer at it") not met for one field.
+    if pharmakos_sim::events::EventKind::from_name(event).is_none() {
+        let known: Vec<&str> = pharmakos_sim::events::EventKind::ALL
+            .iter()
+            .map(|kind| kind.name())
+            .collect();
+        problems.at(
+            &format!("{base}/event"),
+            format!(
+                "`{event}` is not an event this build's sim reports. A misspelled name would \
+                 otherwise play the whole match and then fail for never having fired, which is \
+                 a typo reported as a behaviour change. Known: {}",
+                known.join(", ")
+            ),
+        );
+        return None;
+    }
     let event = event.clone();
     let seat = if let Some(value) = assertion.get("seat") {
         let Some(Ok(seat)) = integer(Some(value)).map(u8::try_from) else {
@@ -729,7 +759,7 @@ fn check_path(
         // a slash, so the check above does not see it.
         || relative.as_bytes().get(1) == Some(&b':');
     if bad {
-        problems.at(pointer, strings::path_escapes(pointer, relative));
+        problems.at(pointer, strings::path_escapes(relative));
         return;
     }
     if must_exist && !root.join(relative).is_file() {

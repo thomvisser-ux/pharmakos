@@ -3,12 +3,38 @@
 
 //! This crate's section of the one English string table.
 //!
-//! **Every string a person reads is written here and nowhere else** — the help
-//! text, the version line, each refusal, each report heading. AGENTS.md §12:
-//! "Diagnostic codes and user-facing strings are English and live in one string
-//! table". The other crates keep the same rule (`pharmakos_verifier::strings`,
+//! The help text, the version line, each refusal, each report heading and every
+//! sentence the reports are made of live here. AGENTS.md §12: "Diagnostic codes
+//! and user-facing strings are English and live in one string table". The other
+//! crates keep the same rule (`pharmakos_verifier::strings`,
 //! `pharmakos_gateway::strings`), so translation at some later stage is one
 //! pass over a known set of modules rather than a grep over the tree.
+//!
+//! # What is *not* here, said plainly
+//!
+//! An earlier draft of this header claimed every string a person reads is
+//! written here and nowhere else, and a review found that false. Two kinds of
+//! text are still written beside the code that raises them:
+//!
+//! * the `detail` of each `gamectl seat doctor` check, and the six check names
+//!   (`crate::doctor`);
+//! * the per-problem messages of the scenario format's diagnostics
+//!   (`crate::scenario`) and a handful of the runner's
+//!   (`crate::scenario::run`).
+//!
+//! Both are *structured diagnostics*: a message that only makes sense standing
+//! next to the condition it describes, the way the verifier's catalogue entries
+//! sit next to their checks. Moving them would put a hundred one-use functions
+//! here and a hundred call sites there. `tests/confinement.rs` holds the line
+//! that is actually enforceable — no message **names the binary** outside this
+//! module — and says so under that name rather than standing in for a
+//! guarantee nothing checks.
+//!
+//! PLACEHOLDER: whether the doctor details and the scenario diagnostics belong
+//! in a string table at translation time, or whether a catalogue beside the
+//! checks is the right shape for them as it is for the verifier's. **OWNER**,
+//! at the stage that first wants a second language (AGENTS.md §11 puts
+//! translation past v1).
 //!
 //! It matters more here than elsewhere for a second reason: `lexopt` generates
 //! no `--help` (decisions-log item 105 (3)). The help below is hand-written, so
@@ -112,6 +138,16 @@ pub fn extra_operand(command: &str, given: &str) -> String {
     format!("{BINARY} {command}: `{given}` is one operand too many.")
 }
 
+/// A `--depth` that is neither of the two the verifier has.
+///
+/// Here rather than in the parser, which is where a review found it: the
+/// parser built it from [`BINARY`] and the confinement test's needle was
+/// looking for the literal name.
+#[must_use]
+pub fn bad_depth(given: &str) -> String {
+    format!("{BINARY}: `--depth {given}` is neither `quick` nor `full`.")
+}
+
 /// Whatever `lexopt` refused, with the command it was refused under.
 #[must_use]
 pub fn bad_argument(error: &lexopt::Error) -> String {
@@ -129,12 +165,13 @@ pub fn unreadable(what: &str, path: &str, why: &str) -> String {
 }
 
 /// A path that leaves the repository, or that is not repository-relative.
+///
+/// No pointer of its own: every caller is a scenario-format problem, and
+/// [`scenario_invalid`] renders the pointer in front of the message. Printing
+/// it twice is what a review found here.
 #[must_use]
-pub fn path_escapes(pointer: &str, path: &str) -> String {
-    format!(
-        "{pointer}: `{path}` must be a path from the repository root, with forward slashes and \
-         no `..`"
-    )
+pub fn path_escapes(path: &str) -> String {
+    format!("`{path}` must be a path from the repository root, with forward slashes and no `..`")
 }
 
 /// The rules table is missing a block the checks read.
@@ -199,9 +236,13 @@ pub fn verify_footer() -> String {
 // ---------------------------------------------------------------------------
 
 /// A `--part` that names no message of `gp.v1`.
+///
+/// The gateway's own sentence with this binary's name in front of it, and not
+/// a second copy of it: `schema::text` already answers "`x` is not a part of
+/// the playbook schema", and the draft this replaces said it twice.
 #[must_use]
-pub fn unknown_part(part: &str, why: &str) -> String {
-    format!("{BINARY} schema: `{part}` is not a part of the playbook schema: {why}")
+pub fn unknown_part(why: &str) -> String {
+    format!("{BINARY} schema: {why}")
 }
 
 // ---------------------------------------------------------------------------
@@ -382,7 +423,9 @@ pub fn scenario_passed(name: &str, assertions: usize) -> String {
 /// The closing line of a run that did not.
 #[must_use]
 pub fn scenario_failed(name: &str, failed: usize, assertions: usize) -> String {
-    let plural = if failed == 1 { "" } else { "s" };
+    // The suffix belongs to `assertions`, which is the noun it is attached to:
+    // "1 of 9 assertions did not hold", never "1 of 9 assertion".
+    let plural = if assertions == 1 { "" } else { "s" };
     format!("\n{name}: {failed} of {assertions} assertion{plural} did not hold.")
 }
 

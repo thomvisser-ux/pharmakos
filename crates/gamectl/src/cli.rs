@@ -185,12 +185,7 @@ where
                 depth = match value.to_string_lossy().as_ref() {
                     "quick" => Depth::Quick,
                     "full" => Depth::Full,
-                    other => {
-                        return Err(Failure::usage(format!(
-                            "{}: `--depth {other}` is neither `quick` nor `full`.",
-                            strings::BINARY
-                        )));
-                    }
+                    other => return Err(Failure::usage(strings::bad_depth(other))),
                 };
             }
             Value(value) => operands.push(value),
