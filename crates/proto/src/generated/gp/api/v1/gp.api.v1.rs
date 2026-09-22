@@ -1269,6 +1269,12 @@ pub struct GetViewResponse {
     /// A delta mode for entities is deliberately NOT here. It arrives, if it
     /// arrives, as a new field of GetViewRequest that a client opts into, so that
     /// the meaning of this field never changes under a client that did not ask.
+    ///
+    /// PLACEHOLDER: a full entity list per view is 20-30 KB a poll at S2's 300
+    /// units, which is the point at which the opt-in delta mode has to be
+    /// decided rather than deferred — OWNER, S2. The other half of the same
+    /// question, ViewEntity.at's whole-voxel positions, is OWNER, S7, with
+    /// recording-grade positions.
     #[prost(message, repeated, tag="3")]
     pub entities: ::prost::alloc::vec::Vec<ViewEntity>,
     /// Where to read from next. Opaque.
@@ -1359,6 +1365,10 @@ pub struct ViewEntity {
     pub owner: ::prost::alloc::string::String,
     /// Where it stands, in WHOLE voxels, floored on every axis. Finer-than-voxel
     /// positions are a recording's concern and are held at 6 to 15 with the rest.
+    ///
+    /// PLACEHOLDER: whole voxels are enough for a camera and are not enough for
+    /// a recording that has to interpolate — OWNER, S7, with the recording
+    /// format.
     #[prost(message, optional, tag="5")]
     pub at: ::core::option::Option<super::super::v1::Voxel>,
 }
