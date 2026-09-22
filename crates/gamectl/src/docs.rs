@@ -76,11 +76,12 @@ fn heading(text: &mut String) {
     text.push_str("# Pharmakos reference\n\n");
     text.push_str(strings::TAGLINE);
     text.push_str(
-        "\n\nEVERY LINE BELOW IS GENERATED. The vocabulary comes from the checked-in gp.v1\n\
-         descriptor set, the diagnostics from the verifier's catalogue and string table, and\n\
-         the commands and exit codes from this binary's own tables. Nothing here is written\n\
-         by hand, which is what makes it unable to drift from what the code does (spec §12,\n\
-         \"Generated docs\"). Regenerate it with `gamectl docs`; the committed copy is\n\
+        "\n\nEVERY ENTRY BELOW IS GENERATED; the section headings and the notes under them\n\
+         are not. The vocabulary comes from the checked-in gp.v1 descriptor set, the\n\
+         diagnostics from the verifier's catalogue and string table, and the commands and\n\
+         exit codes from this binary's own tables. No entry is written by hand, which is what\n\
+         makes the reference unable to drift from what the code does (spec §12, \"Generated\n\
+         docs\"). Regenerate it with `gamectl docs`; the committed copy is\n\
          tests/golden/docs/reference/expected.docs.txt.\n\n",
     );
 }

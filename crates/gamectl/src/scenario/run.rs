@@ -28,8 +28,16 @@
 //! driven over a live WebSocket session, for the same seed, rules and
 //! playbooks.
 //!
-//! The crate map gives `gamectl` no edge to the sim's `Runner`, and this file
-//! names it nowhere; `tests/confinement.rs` asserts that over the source text.
+//! The crate map gives `gamectl` no edge to the sim's `Runner`, and nothing
+//! here *drives* one: the guard is against driving it, and that is the claim
+//! `tests/confinement.rs` makes over the source text. Said exactly, because a
+//! review found the earlier wording stronger than the test — this file does
+//! **read** the runner, through `Host::runner()`, for three values a report
+//! needs: the tick a Lull is standing on, the phase a refused `begin_push` was
+//! in, and the round a seal belongs to. `Host::runner` hands out a `&Runner`
+//! and every stepping method on it needs `&mut`, so the reach cannot become a
+//! second way to play a match; if T16a gives `Surface` accessors for those
+//! three, this file should take them and `.runner()` should join the needles.
 //!
 //! # What is fixed here rather than in the file, and why
 //!
@@ -55,7 +63,6 @@ use std::path::Path;
 
 use pharmakos_gateway::fog::{Audience, Blind, FogPolicy};
 use pharmakos_gateway::host::Host;
-use pharmakos_gateway::limit::Limits;
 use pharmakos_gateway::scopes::{Scope, ScopeSet};
 use pharmakos_gateway::surface::Surface;
 use pharmakos_gateway::token::{Subject, Token};
@@ -72,6 +79,19 @@ use crate::strings;
 
 /// No harness walkers. See the module doc.
 const UNITS_PER_SEAT: u32 = 0;
+
+/// The most of the hash chain this runner reserves up front, in bytes.
+///
+/// Sixteen megabytes is about seven hundred thousand ticks, which is nine and
+/// a half hours of game time — past anything a scenario plays and short of
+/// anything that hurts. It caps the *reservation* only.
+///
+/// PLACEHOLDER: the real fix is a cap on `length_ms` in the scenario format,
+/// reported with a pointer the way `MAX_SEATS` is. That cap has to hold in
+/// `xtask/src/scenario.rs` as well or the two readers of the format stop
+/// agreeing, and `xtask` is a contract path (AGENTS.md §5). **OWNER**, with the
+/// format's other open question in this task's pull request.
+const CHAIN_RESERVE_CAP: usize = 16 * 1024 * 1024;
 
 /// The match id every scenario run hosts under.
 ///
@@ -160,8 +180,17 @@ pub fn play(root: &Path, scenario: &Scenario) -> Result<Played, Failure> {
     let tokens = mint(&mut surface, scenario)?;
 
     let mut played = Played {
+        // Reserved, and capped. A line is twenty-four bytes, so the reservation
+        // is the chain's real size for every scenario anybody writes — but
+        // `length_ms` is any positive int32, and two segments of `i32::MAX`
+        // would ask for two gigabytes before the first tick. The cap is a
+        // reservation, not a limit on the run: a chain longer than
+        // [`CHAIN_RESERVE_CAP`] grows the ordinary way. Reviewed finding,
+        // wave 5.
         chain: String::with_capacity(
-            usize::try_from(scenario.ticks().saturating_mul(24)).unwrap_or(0),
+            usize::try_from(scenario.ticks().saturating_mul(24))
+                .unwrap_or(CHAIN_RESERVE_CAP)
+                .min(CHAIN_RESERVE_CAP),
         ),
         events: Vec::new(),
         segments: Vec::with_capacity(scenario.segments.len()),
@@ -239,7 +268,7 @@ fn load_rules(root: &Path, scenario: &Scenario) -> Result<RulesTable, Failure> {
     RulesTable::load(&path).map_err(|error| {
         Failure::input(strings::unreadable(
             "rules table",
-            &path.display().to_string(),
+            &crate::display(&path),
             &error.to_string(),
         ))
     })
@@ -304,15 +333,15 @@ fn open(root: &Path, scenario: &Scenario, rules: RulesTable) -> Result<Surface, 
     surface.attach(host).map_err(internal)?;
     surface.set_phase_remaining_ms(lull_ms(&surface)?);
     surface.open_lull().map_err(internal)?;
-    // A scenario submits every seat's playbook in one burst at one tick, which
-    // is not how a human plans and is exactly how a batch runner does. The
-    // limiter counts per tick, so the default per-tick budget would refuse the
-    // third seat for going too fast in a race against nobody.
-    surface.set_limits(Limits {
-        per_tick: 64,
-        per_window: 600,
-        window_ticks: 200,
-    });
+    // The limits are left at the gateway's own defaults, deliberately. An
+    // earlier draft raised them "because a scenario submits every seat's
+    // playbook in one burst"; that reason was wrong and the review found it.
+    // `Surface::admit` counts per *token* (`crates/gateway/src/surface.rs`),
+    // `mint` gives every seat its own, and this module makes exactly one
+    // `Surface::call` per seat per segment — one of the default eight. Copying
+    // the window numbers here would also have frozen a copy of two gateway
+    // constants that carry PLACEHOLDERs of their own, so that when the owner
+    // moves them at hardening this would silently not follow.
     let _ = root;
     Ok(surface)
 }
@@ -383,6 +412,23 @@ pub enum Door {
 /// the pull request puts it with its alternatives: refuse instead and the
 /// `scenario` step is red on a committed file this task does not own; change
 /// that scenario and T11's honest record and T14's re-bless target both move.
+///
+/// # What the door is *not*, since a review asked
+///
+/// It is not a fall-through. Only an explicit `"accepted": false` opens it: an
+/// answer with no `accepted` flag at all is this build's gateway and this
+/// build's runner disagreeing about the shape of a result, and that is
+/// [`Exit::Internal`] rather than a quiet move onto the second door.
+///
+/// It is still *unscoped*, and the review is right that it should not be: a
+/// scenario broken later by a rules or a map change keeps playing and announces
+/// it only in a `note`. The fix is an opt-in key in the file — `"seal":
+/// "harness"` beside `"kind": "playbook"` — with an unrequested refusal an
+/// [`Exit::Failed`] naming the codes. That key has to be known to
+/// `xtask/src/scenario.rs`'s reader as well, which rejects an unknown key
+/// rather than ignoring it, and `xtask` is a contract path (AGENTS.md §5). So
+/// it rides with the owner's ruling on the door itself rather than being taken
+/// here.
 fn seal(
     root: &Path,
     surface: &mut Surface,
@@ -421,8 +467,23 @@ fn seal(
         )));
     }
     let result = answer.get("result");
-    if result.and_then(|result| result.get("accepted")) == Some(&Json::Bool(true)) {
-        return Ok(Door::Submitted);
+    match result.and_then(|answer| answer.get("accepted")) {
+        Some(Json::Bool(true)) => return Ok(Door::Submitted),
+        // An explicit refusal, which is the only thing the second door is for.
+        Some(Json::Bool(false)) => {}
+        // Anything else is the *shape* of the answer having moved, not a
+        // playbook having been refused — and a runner that treated a missing
+        // `accepted` as a refusal would quietly move every scenario onto the
+        // harness door the day `submit_plan`'s result changed. Reviewed
+        // finding, wave 5: the fall-through was unscoped.
+        other => {
+            return Err(Failure::internal(format!(
+                "`submit_plan` answered with no `accepted` flag ({other:?}). That is this \
+                 build's gateway and this build's runner disagreeing about the shape of an \
+                 answer, not a playbook a scenario got wrong, and the harness door is not \
+                 the answer to it."
+            )));
+        }
     }
 
     // The codes, not the count. "2 diagnostics" sends the reader back to the
@@ -445,12 +506,18 @@ fn seal(
             codes.push(format!("{code} at {path}"));
         }
     }
+    // Decoded, not stored as its own text. `Sealed::report_hash` is documented
+    // as "eight big-endian bytes" and the wire spells it base64
+    // (`surface/planning.rs`), so `text.into_bytes()` would have put twelve
+    // ASCII characters where the eight bytes go — latent today because nothing
+    // outside tests reads the field, and T17's restore path is named as the
+    // first reader. Reviewed finding, wave 5.
     let report_hash = match result
         .and_then(|result| result.get("report"))
         .and_then(|report| report.get("report_hash"))
     {
-        Some(Json::String(text)) => text.clone(),
-        _ => String::new(),
+        Some(Json::String(text)) => pharmakos_proto::json::base64::decode(text).unwrap_or_default(),
+        _ => Vec::new(),
     };
 
     // The second door. Compiled by the route `compile_playbook` takes, so the
@@ -476,7 +543,7 @@ fn seal(
         .map_err(internal)?;
     state.sealed = Some(pharmakos_gateway::surface::Sealed {
         playbook_jsonc: playbook,
-        report_hash: report_hash.into_bytes(),
+        report_hash,
         round,
         // False, and deliberately: `true` means the gateway filed the safe
         // playbook for a seat that sealed nothing (spec §14), and saying so

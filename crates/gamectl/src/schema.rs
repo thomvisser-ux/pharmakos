@@ -31,11 +31,8 @@ pub fn run(part: &str) -> Result<String, Failure> {
         Ok(text) => Ok(text),
         Err(error) if error.code == pharmakos_gateway::Code::NotFound => Err(Failure::new(
             Exit::Usage,
-            strings::unknown_part(part, &error.message),
+            strings::unknown_part(&error.message),
         )),
-        Err(error) => Err(Failure::internal(strings::unknown_part(
-            part,
-            &error.message,
-        ))),
+        Err(error) => Err(Failure::internal(strings::unknown_part(&error.message))),
     }
 }

@@ -40,7 +40,7 @@ pub fn load(root: &Path) -> Result<RulesTable, Failure> {
     RulesTable::load(&path).map_err(|error| {
         Failure::input(strings::unreadable(
             "rules table",
-            &path.display().to_string(),
+            &crate::display(&path),
             &error.to_string(),
         ))
     })

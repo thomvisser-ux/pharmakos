@@ -15,9 +15,14 @@
 //! check below *uses* what it is checking: the rules table is loaded and its
 //! hash printed, the descriptor set is walked, the verifier verifies a
 //! playbook, `plan-core` round-trips one, and the last check **opens a match
-//! and steps it**. That last one is slow — a map is generated and a search
-//! graph is built — and it is the only check that proves this machine can host
-//! the thing the game is.
+//! behind a `Surface` and steps it**. That last one is slow — a map is
+//! generated and a search graph is built — and it is the only check that proves
+//! this machine can host the thing the game is.
+//!
+//! Behind a `Surface` and not beside it, for the reason
+//! `crate::scenario::run`'s header gives at length: there is one way to play a
+//! match in this crate, and a check that drove the `Host` on its own would be a
+//! second one.
 //!
 //! The loopback check is the one that is allowed to be uncertain. The gateway
 //! binds `127.0.0.1` and `::1` and nothing else (AGENTS.md §7), and a host with
@@ -62,7 +67,16 @@ const CHECK_SEED: u64 = 0x0000_0000_ca5c_aded;
 /// A segment one tick long. The check is "can this machine host and step a
 /// match", and one tick answers it; the expensive part is the map and the
 /// search graph, which `Host::open` builds either way.
-const CHECK_SEGMENT_MS: i32 = 50;
+///
+/// Read from the sim rather than typed: "one tick long" is only true while the
+/// tick is fifty milliseconds, and a literal here would have been a second
+/// spelling of a sim constant this crate already reads in
+/// [`crate::scenario::ticks_of`].
+const CHECK_SEGMENT_MS: i32 = pharmakos_sim::math::quantity::MS_PER_TICK;
+
+/// The match id the check hosts under. Lower-case letters and hyphens only,
+/// because `MatchCache::valid_match_id` says so.
+const CHECK_MATCH: &str = "m-doctor";
 
 /// Run every check.
 ///
@@ -318,40 +332,103 @@ fn check_match(table: Option<&pharmakos_sim::rules::RulesTable>, lines: &mut Vec
         },
         None,
     );
-    let mut host = match host {
+    let host = match host {
         Ok(host) => host,
         Err(error) => {
             note(lines, State::Fail, "host a match", &error.message);
             return;
         }
     };
-    if !host.begin_push() {
-        note(
-            lines,
-            State::Fail,
-            "host a match",
-            "a match that has just opened would not leave its Lull",
-        );
-        return;
+
+    // Behind a `Surface`, and not by driving the `Host` directly. Decisions-log
+    // item 106 (3) defines the client path as "a match hosted by the gateway's
+    // `Host` **behind a `Surface`**", and a review found this check going
+    // around it — a second way to play a match inside the crate whose runner
+    // module says there must not be one. Going through the surface also makes
+    // the check strictly stronger: `Surface::begin_push` files the safe
+    // playbook for every seat that sealed nothing and compiles it, so a
+    // machine whose safe playbook will not compile now fails here rather than
+    // at the first Lull of a real match.
+    let mut surface = match surface_for(table, host) {
+        Ok(surface) => surface,
+        Err(detail) => {
+            note(lines, State::Fail, "host a match", &detail);
+            return;
+        }
+    };
+    match surface.begin_push() {
+        Ok(true) => {}
+        Ok(false) => {
+            note(
+                lines,
+                State::Fail,
+                "host a match",
+                "a match that has just opened would not leave its Lull",
+            );
+            return;
+        }
+        Err(error) => {
+            note(lines, State::Fail, "host a match", &error.message);
+            return;
+        }
     }
-    match host.step() {
-        Some(report) => note(
+    match surface.step() {
+        Ok(Some(report)) => note(
             lines,
             State::Ok,
             "host a match",
             &format!(
-                "seed {CHECK_SEED:#018x} generated, stepped to tick {} with state hash {}",
+                "seed {CHECK_SEED:#018x} generated, safe playbooks filed, stepped to tick {} \
+                 with state hash {}",
                 report.tick.raw(),
                 pharmakos_sim::hex(report.hash)
             ),
         ),
-        None => note(
+        Ok(None) => note(
             lines,
             State::Fail,
             "host a match",
             "a Push that had just opened produced no tick",
         ),
+        Err(error) => note(lines, State::Fail, "host a match", &error.message),
     }
+}
+
+/// The surface the match check drives, in its opening Lull.
+///
+/// `Err` carries the line the check prints, because everything that can go
+/// wrong here is something a report has to name rather than something to
+/// unwrap.
+fn surface_for(
+    table: &pharmakos_sim::rules::RulesTable,
+    host: pharmakos_gateway::host::Host,
+) -> Result<pharmakos_gateway::surface::Surface, String> {
+    let lull = table
+        .message()
+        .r#match
+        .as_ref()
+        .map(|block| block.lull_ms)
+        .ok_or_else(|| {
+            String::from(
+                "the rules table carries no `match` block, so nothing says how long a Lull is",
+            )
+        })?;
+    let seats = [
+        pharmakos_sim::tables::SeatId::new(0),
+        pharmakos_sim::tables::SeatId::new(1),
+    ];
+    let mut surface = pharmakos_gateway::surface::Surface::new(
+        CHECK_MATCH,
+        CHECK_SEED,
+        table.clone(),
+        pharmakos_gateway::fog::FogPolicy::fogged(),
+        &seats,
+    )
+    .map_err(|error| error.message)?;
+    surface.attach(host).map_err(|error| error.message)?;
+    surface.set_phase_remaining_ms(pharmakos_sim::math::quantity::Ms::new(lull));
+    surface.open_lull().map_err(|error| error.message)?;
+    Ok(surface)
 }
 
 /// The reference seat view `verify` answers about, printed so that a person
