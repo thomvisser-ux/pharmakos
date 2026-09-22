@@ -1,0 +1,888 @@
+# Pharmakos reference
+
+the Pharmakos command-line client: inspect a playbook, read the schema, play a scenario headless.
+
+EVERY LINE BELOW IS GENERATED. The vocabulary comes from the checked-in gp.v1
+descriptor set, the diagnostics from the verifier's catalogue and string table, and
+the commands and exit codes from this binary's own tables. Nothing here is written
+by hand, which is what makes it unable to drift from what the code does (spec §12,
+"Generated docs"). Regenerate it with `gamectl docs`; the committed copy is
+tests/golden/docs/reference/expected.docs.txt.
+
+## Commands
+
+verify <playbook.jsonc>   inspect a playbook and print its report and report_hash
+schema [--part <name>]    print the JSON Schema a seat authors against, generated from gp.v1
+docs                      print the generated reference: the schema's shape and every diagnostic
+scenario run <file>       play a scenario headless and check its assertions on events and hashes
+seat doctor               check this installation and report what is wrong
+
+## Exit codes
+
+0  everything asked for held
+1  the command line was wrong; nothing ran
+2  a file named on the command line could not be read
+3  the answer is no: a playbook did not qualify, an assertion did not hold, a check failed
+4  this build is inconsistent with itself; nothing the caller did caused it
+
+## The playbook vocabulary (gp.v1)
+
+88 messages. A field's name is the one the canonical form writes, which is
+the .proto spelling and not lowerCamelCase. A reserved number is one held on
+purpose: field numbers are added, never renumbered or reused.
+
+gp.v1.AddBuildTargetRow
+  target                       1   gp.v1.BuildTarget
+
+gp.v1.All
+  items                        1   repeated gp.v1.Condition
+
+gp.v1.Any
+  items                        1   repeated gp.v1.Condition
+
+gp.v1.Area
+  min                          1   gp.v1.Voxel
+  max                          2   gp.v1.Voxel
+
+gp.v1.AttackSettings
+  reserved 1 to 15
+
+gp.v1.BeaconFilter
+  side                         1   gp.v1.BeaconFilter.Side
+  mandate                      2   gp.v1.BeaconFilter.MandateKind
+  tags                         3   repeated string
+
+gp.v1.BeaconHpPct
+  beacon                       1   gp.v1.BeaconRef
+  pct                          2   gp.v1.IntCompare
+
+gp.v1.BeaconPowered
+  beacon                       1   gp.v1.BeaconRef
+  powered                      2   bool
+
+gp.v1.BeaconRef
+  oneof: ref
+  beacon_id                    1   string
+  safest                       2   gp.v1.Safest
+  nearest                      10  gp.v1.Nearest
+  weakest                      11  gp.v1.Weakest
+  most_threatened              12  gp.v1.MostThreatened
+  reserved 13 to 49
+
+gp.v1.BeaconUnderAttack
+  beacon                       1   gp.v1.BeaconRef
+  within_ms                    2   int32
+
+gp.v1.BroadcastStep
+  oneof: payload
+  mark_target                  1   gp.v1.MarkTarget
+  threat_at                    2   gp.v1.ThreatAt
+  go_code                      3   gp.v1.GoCode
+  rally                        4   gp.v1.Rally
+
+gp.v1.BuildSettings
+  targets                      1   repeated gp.v1.BuildTarget
+  repair_threshold_pct         2   uint32
+  rebuild_destroyed            3   bool
+  terraform                    4   gp.v1.BuildSettings.Terraform
+  protected_areas              5   repeated gp.v1.Area
+  reserved 6
+  reserved 7
+  reserved reclaim_drones, repair_drones
+
+gp.v1.BuildTarget
+  blueprint_id                 1   string
+  anchor                       2   gp.v1.Location
+  rotation_quarter_turns       3   uint32
+  order                        4   uint32
+
+gp.v1.BuiltinMandate
+  builtin_id                   1   string
+  program                      2   gp.v1.Program
+
+gp.v1.BuiltinOperator
+  builtin_id                   1   string
+
+gp.v1.BuiltinProgram
+  program_id                   1   string
+
+gp.v1.ByRichness
+  lean                         1   uint32
+  standard                     2   uint32
+  rich                         3   uint32
+
+gp.v1.CmdrDeaths
+  deaths                       1   gp.v1.IntCompare
+
+gp.v1.CmdrHpPct
+  cmp                          1   gp.v1.CmdrHpPct.Cmp
+  pct                          2   uint32
+
+gp.v1.CmdrTookDamageWithin
+  ms                           1   int32
+
+gp.v1.Condition
+  oneof: node
+  all                          1   gp.v1.All
+  any                          2   gp.v1.Any
+  not                          3   gp.v1.Not
+  cmdr_hp_pct                  20  gp.v1.CmdrHpPct
+  cmdr_took_damage_within      21  gp.v1.CmdrTookDamageWithin
+  cmdr_deaths                  22  gp.v1.CmdrDeaths
+  segment_elapsed              30  gp.v1.SegmentElapsed
+  beacon_hp_pct                40  gp.v1.BeaconHpPct
+  beacon_under_attack          41  gp.v1.BeaconUnderAttack
+  beacon_powered               42  gp.v1.BeaconPowered
+  treasury                     70  gp.v1.Treasury
+  kw_headroom                  71  gp.v1.KwHeadroom
+  step_reached                 90  gp.v1.StepReached
+  rule_fired                   91  gp.v1.RuleFired
+  reserved 23 to 29
+  reserved 31 to 39
+  reserved 43 to 49
+  reserved 50 to 59
+  reserved 60 to 69
+  reserved 72 to 79
+  reserved 80 to 89
+  reserved 92 to 99
+  reserved 100
+  reserved 101
+  reserved 110
+  reserved 111
+  reserved 112
+  reserved 120
+  reserved flag_clear, flag_set, grid_island, jammed, link_up, satellite_pass
+
+gp.v1.Declarative
+  route                        1   repeated gp.v1.Step
+  handlers                     2   repeated gp.v1.Handler
+  options                      3   gp.v1.Options
+
+gp.v1.DefendSettings
+  reserved 1 to 15
+
+gp.v1.Fallback
+  oneof: posture
+  hold                         1   gp.v1.FallbackHold
+  shadow                       2   gp.v1.FallbackShadow
+  patrol                       3   gp.v1.FallbackPatrol
+
+gp.v1.FallbackHold
+  at                           1   gp.v1.Location
+
+gp.v1.FallbackPatrol
+  waypoints                    1   repeated gp.v1.Location
+
+gp.v1.FallbackShadow
+  beacon                       1   gp.v1.BeaconRef
+
+gp.v1.Freshness
+  kind                         1   gp.v1.Freshness.Kind
+  known_within_ms              2   int32
+
+gp.v1.GoCode
+  code                         1   string
+
+gp.v1.Handler
+  id                           1   string
+  when                         2   gp.v1.Condition
+  body                         3   repeated gp.v1.Step
+  resume                       4   gp.v1.Handler.Resume
+  cooldown_ms                  5   int32
+  max_fires                    6   uint32
+  resume_at_label              7   string
+  note                         8   string
+
+gp.v1.HoldStep
+  ms                           1   int32
+
+gp.v1.InitialSettings
+  priority                     1   gp.v1.InterfaceRow.QuartermasterPriority
+  mandate                      2   gp.v1.MandateSettings
+
+gp.v1.IntCompare
+  op                           1   gp.v1.IntCompare.Op
+  value                        2   int32
+
+gp.v1.InterfaceRow
+  oneof: row
+  set_mandate                  1   gp.v1.MandateSettings
+  set_mandate_settings         2   gp.v1.MandateSettings
+  set_priority                 3   gp.v1.InterfaceRow.QuartermasterPriority
+  recycle                      4   gp.v1.RecycleRow
+  add_build_target             5   gp.v1.AddBuildTargetRow
+  remove_build_target          6   gp.v1.RemoveBuildTargetRow
+  queue_structure              7   gp.v1.QueueStructureRow
+
+gp.v1.InterfaceStep
+  beacon                       1   gp.v1.BeaconRef
+  rows                         2   repeated gp.v1.InterfaceRow
+
+gp.v1.KwHeadroom
+  kw                           1   gp.v1.IntCompare
+
+gp.v1.Location
+  oneof: place
+  voxel                        1   gp.v1.Voxel
+  beacon_anchor                2   gp.v1.BeaconRef
+  safest                       3   gp.v1.Safest
+  reserved 10 to 49
+
+gp.v1.Mandate
+  oneof: kind
+  builtin                      1   gp.v1.BuiltinMandate
+  script                       2   gp.v1.ScriptMandate
+
+gp.v1.MandateSettings
+  oneof: mandate
+  roe                          1   gp.v1.MandateSettings.Roe
+  retreat_hp_pct               2   uint32
+  build                        10  gp.v1.BuildSettings
+  defend                       11  gp.v1.DefendSettings
+  attack                       12  gp.v1.AttackSettings
+  survey                       13  gp.v1.SurveySettings
+  mine                         14  gp.v1.MineSettings
+  reserved 3
+  reserved 4
+  reserved accept_broadcasts, report_kinds
+
+gp.v1.MarkTarget
+  at                           1   gp.v1.Location
+
+gp.v1.Meta
+  title                        1   string
+  author_kind                  2   gp.v1.Meta.AuthorKind
+  fingerprint                  3   bytes
+  note                         4   string
+  reserved 5
+  reserved team_id
+
+gp.v1.MineSettings
+  dig_max_depth                1   uint32
+  flee_on_threat               2   bool
+  seam_choice                  3   gp.v1.MineSettings.SeamChoice
+  pillar_spacing               4   uint32
+
+gp.v1.MostThreatened
+  filter                       1   gp.v1.BeaconFilter
+
+gp.v1.MoveStep
+  to                           1   gp.v1.Location
+  pace                         2   gp.v1.MoveStep.Pace
+
+gp.v1.Nearest
+  filter                       1   gp.v1.BeaconFilter
+
+gp.v1.Not
+  item                         1   gp.v1.Condition
+
+gp.v1.OnDeath
+  on_respawn                   1   gp.v1.OnDeath.OnRespawn
+  max_deaths_before_fallback   2   uint32
+
+gp.v1.OnFail
+  action                       1   gp.v1.OnFail.Action
+  jump_to_label                2   string
+
+gp.v1.Operator
+  oneof: kind
+  builtin                      1   gp.v1.BuiltinOperator
+  script                       2   gp.v1.ScriptOperator
+
+gp.v1.Options
+  allow_dormant_beacons        1   bool
+  reserved 2
+  reserved reflex_hp_pct
+
+gp.v1.PlaceBeaconStep
+  at                           1   gp.v1.Location
+  tags                         2   repeated string
+  initial                      3   gp.v1.InitialSettings
+
+gp.v1.Playbook
+  schema_version               1   gp.v1.SchemaVersion
+  meta                         2   gp.v1.Meta
+  declarative                  3   gp.v1.Declarative
+  on_death                     4   gp.v1.OnDeath
+  fallback                     5   gp.v1.Fallback
+  kind                         7   gp.v1.Playbook.Kind
+  reserved 6
+  reserved dispatch
+
+gp.v1.Program
+  oneof: kind
+  builtin                      1   gp.v1.BuiltinProgram
+  script                       2   gp.v1.ScriptProgram
+
+gp.v1.QueueStructureRow
+  blueprint_id                 1   string
+
+gp.v1.Rally
+  at                           1   gp.v1.Location
+
+gp.v1.RecycleRow
+
+gp.v1.RemoveBuildTargetRow
+  anchor                       1   gp.v1.Location
+
+gp.v1.RuleFired
+  handler_id                   1   string
+
+gp.v1.RulesTable
+  revision                     1   uint32
+  note                         2   string
+  match                        10  gp.v1.RulesTable.Match
+  locomotion                   11  gp.v1.RulesTable.Locomotion
+  broadphase                   12  gp.v1.RulesTable.Broadphase
+  interface_times              13  gp.v1.RulesTable.InterfaceTimes
+  mesher                       14  gp.v1.RulesTable.Mesher
+  economy                      15  gp.v1.RulesTable.Economy
+  power                        16  gp.v1.RulesTable.Power
+  commander                    17  gp.v1.RulesTable.Commander
+  beacon                       18  gp.v1.RulesTable.Beacon
+  map                          19  gp.v1.RulesTable.Map
+  units                        20  gp.v1.RulesTable.Units
+  structures                   21  gp.v1.RulesTable.Structures
+  verifier                     22  gp.v1.RulesTable.Verifier
+
+gp.v1.RulesTable.Beacon
+  sphere_radius_voxels         1   uint32
+  core_hp                      2   uint32
+
+gp.v1.RulesTable.Broadphase
+  cell_size_voxels             1   uint32
+
+gp.v1.RulesTable.Commander
+  hp                           1   uint32
+  cost_per_second              2   uint32
+  respawn_base_ms              3   int32
+  respawn_growth_ms            4   int32
+  arrive_radius_voxels         5   uint32
+  placement_range_voxels       6   uint32
+  interface_range_voxels       7   uint32
+
+gp.v1.RulesTable.Economy
+  bmi_dollars                  1   uint32
+  starting_bmi_multiplier      2   uint32
+  scaling_last_place_bonus_percent 3   uint32
+  scaling_leader_malus_percent 4   uint32
+  award_fund_percent_of_bmi    5   uint32
+  recycle_refund_percent       6   uint32
+  salvage_percent              7   uint32
+  backlog_threshold_per_drone  8   uint32
+  ore_yield_per_voxel_dollars  9   gp.v1.ByRichness
+  seam_voxels                  10  uint32
+  mining_ms_per_voxel          11  int32
+  reserved 12 to 15
+
+gp.v1.RulesTable.InterfaceTimes
+  visit_handshake_ms           1   int32
+  set_priority_ms              2   int32
+  edit_settings_base_ms        3   int32
+  edit_settings_per_field_ms   4   int32
+  edit_settings_max_ms         5   int32
+  build_target_ms              6   int32
+  queue_structure_ms           7   int32
+  switch_mandate_ms            8   int32
+  recycle_ms                   9   int32
+  place_beacon_deploy_ms       10  int32
+
+gp.v1.RulesTable.Locomotion
+  step_cost_cardinal           1   uint32
+  step_cost_diagonal           2   uint32
+  climb_surcharge              3   uint32
+  move_cost_per_tick           4   uint32
+  repath_cap_per_tick          5   uint32
+  fog_cost_numerator           6   uint32
+  fog_cost_denominator         7   uint32
+  hpa_cluster_voxels           8   uint32
+  commander_cost_per_second    9   uint32
+  drone_cost_per_second        10  uint32
+  raider_cost_per_second       11  uint32
+  scout_cost_per_second        12  uint32
+
+gp.v1.RulesTable.Map
+  size_x                       1   uint32
+  size_y                       2   uint32
+  size_z                       3   uint32
+  spawn_zones                  4   uint32
+  spawn_zone_radius_voxels     5   uint32
+  start_vent_richness          6   gp.v1.ByRichness.Richness
+  vent_min_distance_voxels     7   uint32
+  vent_max_distance_voxels     8   uint32
+  start_seam_richness          9   gp.v1.ByRichness.Richness
+  seam_min_distance_voxels     10  uint32
+  seam_max_distance_voxels     11  uint32
+  contested_standard_vents     12  uint32
+  contested_rich_vents         13  uint32
+  contested_rich_seams         14  uint32
+  spawn_separation_pushes_numerator 15  uint32
+  spawn_separation_pushes_denominator 16  uint32
+
+gp.v1.RulesTable.Match
+  segment_lengths_ms           1   repeated int32
+  lull_ms                      2   int32
+  decision_tick_ms             3   int32
+
+gp.v1.RulesTable.Mesher
+  surfaces_per_frame           1   uint32
+  bytes_per_frame              2   uint32
+  age_frames                   3   uint32
+  light_max                    4   uint32
+  light_atten                  5   uint32
+
+gp.v1.RulesTable.Power
+  core_surplus_kw              1   uint32
+  generator_output_kw          2   gp.v1.ByRichness
+  kw_per_unit                  3   uint32
+  reserve_percent              4   uint32
+  map_ceiling_kw               5   uint32
+  revive_margin_kw             6   uint32
+  beacon_base_draw_kw          7   uint32
+  reserved 8 to 15
+
+gp.v1.RulesTable.StructureKind
+  cost_dollars                 1   uint32
+  hp                           2   uint32
+  draw_kw                      3   uint32
+
+gp.v1.RulesTable.Structures
+  beacon                       1   gp.v1.RulesTable.StructureKind
+  generator                    2   gp.v1.RulesTable.StructureKind
+  autocannon                   3   gp.v1.RulesTable.StructureKind
+  mortar                       4   gp.v1.RulesTable.StructureKind
+  survey_post                  5   gp.v1.RulesTable.StructureKind
+  resonance_spire              6   gp.v1.RulesTable.StructureKind
+  wall_cost_per_voxel          7   uint32
+  demolition_charge_cost_dollars 8   uint32
+
+gp.v1.RulesTable.UnitKind
+  cost_dollars                 1   uint32
+  hp                           2   uint32
+  draw_kw                      3   uint32
+  cost_per_second              4   uint32
+
+gp.v1.RulesTable.Units
+  build_drone                  1   gp.v1.RulesTable.UnitKind
+  mining_drone                 2   gp.v1.RulesTable.UnitKind
+  repair_drone                 3   gp.v1.RulesTable.UnitKind
+  raider                       4   gp.v1.RulesTable.UnitKind
+  scout                        5   gp.v1.RulesTable.UnitKind
+  starting_build_drones        6   uint32
+  starting_mining_drones       7   uint32
+
+gp.v1.RulesTable.Verifier
+  size_budget_units            1   uint32
+  handler_cooldown_min_ms      2   int32
+  max_fires_max                3   uint32
+  notebook_max_chars           4   uint32
+  reach_memory_ms              5   int32
+
+gp.v1.Safest
+
+gp.v1.SchemaVersion
+  major                        1   uint32
+  minor                        2   uint32
+
+gp.v1.ScriptMandate
+  reserved 1 to 15
+
+gp.v1.ScriptOperator
+  reserved 1 to 15
+
+gp.v1.ScriptProgram
+  reserved 1 to 15
+
+gp.v1.SegmentElapsed
+  ms                           1   gp.v1.IntCompare
+
+gp.v1.Step
+  oneof: kind
+  label                        1   string
+  note                         2   string
+  skip_if                      3   gp.v1.Condition
+  timeout_ms                   4   int32
+  on_fail                      5   gp.v1.OnFail
+  move                         10  gp.v1.MoveStep
+  interface                    11  gp.v1.InterfaceStep
+  place_beacon                 12  gp.v1.PlaceBeaconStep
+  wait_until                   13  gp.v1.WaitUntilStep
+  hold                         14  gp.v1.HoldStep
+  broadcast                    15  gp.v1.BroadcastStep
+  reserved 16
+  reserved 17
+  reserved 18
+  reserved 19
+  reserved 20
+  reserved 21
+  reserved 22
+  reserved branch, capture, clear_flag, logistics, reassign, repeat, set_flag
+
+gp.v1.StepReached
+  label                        1   string
+
+gp.v1.SurveySettings
+  probe_areas                  1   repeated gp.v1.Area
+  scout_count                  2   uint32
+  reserved 3
+  reserved probe_directions
+
+gp.v1.ThreatAt
+  at                           1   gp.v1.Location
+
+gp.v1.Treasury
+  dollars                      1   gp.v1.IntCompare
+
+gp.v1.Voxel
+  x                            1   int32
+  y                            2   int32
+  z                            3   int32
+
+gp.v1.WaitUntilStep
+  condition                    1   gp.v1.Condition
+
+gp.v1.Weakest
+  filter                       1   gp.v1.BeaconFilter
+
+
+## The enumerations (gp.v1)
+
+16 of them. JSON spells an enum by value name.
+
+
+gp.v1.BeaconFilter.MandateKind
+  MANDATE_KIND_UNSPECIFIED         0
+  BUILD                            1
+  DEFEND                           2
+  ATTACK                           3
+  SURVEY                           4
+  MINE                             5
+
+gp.v1.BeaconFilter.Side
+  SIDE_UNSPECIFIED                 0
+  OWN                              1
+  ENEMY_KNOWN                      2
+
+gp.v1.BuildSettings.Terraform
+  TERRAFORM_UNSPECIFIED            0
+  NONE                             1
+  FILL                             2
+  DIG                              3
+  BOTH                             4
+
+gp.v1.ByRichness.Richness
+  RICHNESS_UNSPECIFIED             0
+  LEAN                             1
+  STANDARD                         2
+  RICH                             3
+
+gp.v1.CmdrHpPct.Cmp
+  CMP_UNSPECIFIED                  0
+  LT                               1
+  LE                               2
+  EQ                               3
+  NE                               4
+  GE                               5
+  GT                               6
+
+gp.v1.Freshness.Kind
+  FRESHNESS_UNSPECIFIED            0
+  VISIBLE_NOW                      1
+  KNOWN_WITHIN                     2
+
+gp.v1.Handler.Resume
+  RESUME_UNSPECIFIED               0
+  CONTINUE                         1
+  SKIP_STEP                        2
+  JUMP_FORWARD                     3
+  END_ROUTE                        4
+
+gp.v1.IntCompare.Op
+  OP_UNSPECIFIED                   0
+  LT                               1
+  LE                               2
+  EQ                               3
+  NE                               4
+  GE                               5
+  GT                               6
+
+gp.v1.InterfaceRow.QuartermasterPriority
+  QUARTERMASTER_PRIORITY_UNSPECIFIED 0
+  LOW                              1
+  NORMAL                           2
+  HIGH                             3
+
+gp.v1.MandateSettings.Roe
+  ROE_UNSPECIFIED                  0
+  HOLD_FIRE                        1
+  RETURN_FIRE                      2
+  FREE_FIRE                        3
+
+gp.v1.Meta.AuthorKind
+  AUTHOR_KIND_UNSPECIFIED          0
+  HUMAN                            1
+  BUILTIN                          2
+  SCRIPT                           3
+
+gp.v1.MineSettings.SeamChoice
+  SEAM_CHOICE_UNSPECIFIED          0
+  RICHEST                          1
+  NEAREST                          2
+  SAFEST                           3
+
+gp.v1.MoveStep.Pace
+  PACE_UNSPECIFIED                 0
+  DIRECT                           1
+  AVOID_KNOWN_THREATS              2
+
+gp.v1.OnDeath.OnRespawn
+  ON_RESPAWN_UNSPECIFIED           0
+  CONTINUE                         1
+
+gp.v1.OnFail.Action
+  ON_FAIL_UNSPECIFIED              0
+  SKIP                             1
+  ABORT_ROUTE                      2
+  JUMP_FORWARD                     3
+
+gp.v1.Playbook.Kind
+  KIND_UNSPECIFIED                 0
+  PLAYBOOK                         1
+  TEMPLATE                         2
+  SAMPLE                           3
+
+
+## Diagnostics
+
+57 codes. A code is language-neutral, append-only and never
+reused; only an ERROR stops a playbook qualifying. `none at the skeleton` names the
+task that owes the emitter, which is honesty about coverage rather than a gap.
+
+
+E0001  ERROR  decode and version  raised at: decode
+  the playbook did not decode: {detail}
+  This file is not a playbook the game can read. The message says where reading stopped.
+
+E0002  ERROR  decode and version  raised at: decode
+  `{field}` is not a field the schema declares. Unknown fields are rejected, never stripped.
+  There is a name here that the playbook vocabulary does not have. Nothing is removed for you: correct the name or take the line out yourself.
+
+E0003  ERROR  decode and version  raised at: decode
+  `{field}` is held back to a later version and is not part of the v1 vocabulary.
+  This is a word the game keeps for later. It is refused rather than quietly ignored, so nothing you wrote disappears without you seeing it.
+
+E0004  ERROR  decode and version  raised at: decode
+  schema version {found} is not supported; this build speaks {supported}.
+  The file says it was written for a different version of the game.
+
+E0005  ERROR  decode and version  raised at: decode
+  `kind` is unset; a playbook must say whether it is a PLAYBOOK, a TEMPLATE or a SAMPLE.
+  The file does not say what it is.
+
+E0006  ERROR  decode and version  raised at: decode
+  `author_kind` is SCRIPT, which is reserved for a later version and is rejected in v1.
+  Scripts are not part of this version of the game.
+
+E0007  ERROR  decode and version  raised at: decode
+  `author_kind` is unset; an unset tag is an error, never a default.
+  The file does not say who wrote it.
+
+E0008  WARNING  decode and version  raised at: decode
+  the recorded fingerprint does not match these bytes; the verifier has recomputed it.
+  The stamp on this file was out of date. It has been worked out again for you.
+
+E0101  ERROR  limits and required blocks  raised at: structure
+  {what} is required and is missing.
+  A part that every playbook must have is not here.
+
+E0102  ERROR  limits and required blocks  raised at: structure
+  the route has no steps.
+  A playbook needs at least one step for the commander to walk.
+
+E0103  ERROR  limits and required blocks  raised at: structure
+  the step names no action.
+  This step does not say what to do.
+
+E0104  ERROR  limits and required blocks  raised at: structure
+  {what} has no name.
+  Give this a name, so the rest of the playbook can refer to it.
+
+E0105  ERROR  limits and required blocks  raised at: structure
+  `{name}` is used twice; a name is unique {scope}.
+  Two things share a name, so a reference to it would be ambiguous.
+
+E0106  ERROR  limits and required blocks  raised at: structure
+  the handler has no condition.
+  A rule needs something to watch for.
+
+E0107  ERROR  limits and required blocks  raised at: structure
+  `max_fires` is {found}; it must be between 1 and {max}.
+  A rule fires between once and a few times in a segment.
+
+E0108  ERROR  limits and required blocks  raised at: structure
+  `cooldown_ms` is {found} ms; the minimum is {min} ms.
+  A rule waits a while between firings, so put at least the minimum here.
+
+E0109  ERROR  limits and required blocks  raised at: structure
+  `{field}` is {found} ms; a duration is never negative.
+  Time does not run backwards. Use nothing, or more.
+
+E0110  ERROR  limits and required blocks  raised at: structure
+  the playbook is {found} size units; the budget is {budget}.
+  This playbook is larger than the seal allows. Take something out of it.
+
+E0111  ERROR  limits and required blocks  raised at: structure
+  `{field}` is unset; an unset choice is an error, never a default.
+  One of the choices here has been left blank.
+
+E0112  ERROR  limits and required blocks  raised at: none at the skeleton (T9, the gateway owns the seat notebook)
+  the notebook is {found} characters; the maximum is {max}.
+  The notebook is longer than a seat may keep.
+
+E0201  ERROR  conditions  raised at: structure
+  the comparison names no operator.
+  Say how to compare: at most, equal to, more than, and so on.
+
+E0202  ERROR  conditions  raised at: structure
+  the percentage is {found}; it must be between 0 and 100.
+  A percentage runs from none of it to all of it.
+
+E0203  ERROR  conditions  raised at: structure
+  `{node}` has no items.
+  This condition groups other conditions, and there are none inside it.
+
+E0204  ERROR  conditions  raised at: structure
+  the condition is {found} levels deep; the limit is {max}.
+  This condition is nested too deeply to be read at a glance. Flatten it.
+
+E0205  ERROR  conditions  raised at: structure
+  the condition has {found} nodes; the limit is {max}.
+  This condition has too many parts.
+
+E0206  ERROR  conditions  raised at: structure
+  the condition names no predicate.
+  This condition is empty.
+
+E0207  ERROR  conditions  raised at: resolve
+  `rule_fired` names `{id}`, which this playbook does not declare.
+  There is no rule by that name in this playbook.
+
+E0208  ERROR  conditions  raised at: resolve
+  `step_reached` names `{label}`, which this playbook's route does not declare.
+  There is no step by that name on the route.
+
+E0209  ERROR  conditions  raised at: none at the skeleton (S2/S3, with the enemy-knowledge predicates)
+  an enemy predicate must declare its freshness.
+  Say how recently you must have seen the thing you are asking about.
+
+E0301  ERROR  control flow  raised at: semantics
+  `{label}` is at or before this step; a jump only ever goes forward.
+  A jump can send the commander onward, never back. That is part of why a playbook always finishes.
+
+E0302  ERROR  control flow  raised at: semantics
+  `wait_until` has no timeout, and every wait has one.
+  A wait needs a time limit, or the commander could stand there all segment.
+
+E0303  ERROR  control flow  raised at: semantics
+  `hold` is {found} ms; a hold lasts a positive number of milliseconds.
+  Say how long to hold for.
+
+E0304  ERROR  control flow  raised at: semantics
+  the jump names no target label.
+  This says to jump, but not where to.
+
+E0305  ERROR  control flow  raised at: resolve
+  `{label}` is not a label this {scope} declares.
+  There is no step by that name to jump to.
+
+E0401  ERROR  references and placement  raised at: resolve
+  `{id}` is not a beacon this seat's snapshot holds.
+  The seat does not know a beacon by that name.
+
+E0402  ERROR  references and placement  raised at: semantics
+  the voxel ({x}, {y}, {z}) lies outside the map, which is {sx} by {sy} by {sz}.
+  That place is off the edge of the world.
+
+E0403  ERROR  references and placement  raised at: semantics
+  the site ({x}, {y}, {z}) lies outside every one of this seat's spheres.
+  A beacon goes up inside ground you already hold.
+
+E0404  WARNING  references and placement  raised at: semantics
+  an enemy-side filter and a tag filter select nothing together: an enemy beacon carries none of your tags.
+  Nothing can match both of these at once, so this selector never finds anything.
+
+E0405  ERROR  references and placement  raised at: semantics
+  `{id}` is a beacon this seat does not own.
+  A commander interfaces with your own beacons.
+
+E0406  ERROR  references and placement  raised at: semantics
+  the area is inside out: min ({minx}, {miny}, {minz}) is not at or below max ({maxx}, {maxy}, {maxz}) on every axis.
+  The two corners of this box are the wrong way round, so the box holds nothing.
+
+E0501  ERROR  settings and recycle  raised at: semantics
+  `{field}` is {found}; it must be between 0 and 100.
+  A percentage runs from none of it to all of it.
+
+E0502  ERROR  settings and recycle  raised at: semantics
+  the mandate settings name no mandate.
+  Say which writ the beacon is on.
+
+E0503  ERROR  settings and recycle  raised at: semantics
+  `{id}` is on the {mandate} writ; a build target is only added to a beacon on BUILD.
+  Only a beacon told to build takes a build target.
+
+E0504  ERROR  settings and recycle  raised at: semantics
+  `{id}` is the core, and the core cannot be recycled.
+  The core is where the seat begins, and it cannot be taken apart.
+
+E0505  ERROR  settings and recycle  raised at: semantics
+  `rotation_quarter_turns` is {found}; it must be between 0 and 3.
+  A building turns in quarter turns: none, one, two or three.
+
+E0506  ERROR  settings and recycle  raised at: none at the skeleton (S4, with the capability catalogue)
+  `{id}` is not a blueprint the catalogue holds.
+  There is no such thing to build.
+
+E0507  ERROR  settings and recycle  raised at: none at the skeleton (S4, with licences)
+  `{id}` needs a licence this seat does not hold.
+  The seat has not earned the right to build this yet.
+
+E0601  ERROR  economy, power and messaging  raised at: none at the skeleton (S1, the estimate stage)
+  the playbook adds {found} kW of draw beyond supply; set `allow_dormant_beacons` to accept the shortfall instead.
+  There is not enough power for everything this playbook switches on.
+
+E0602  ERROR  economy, power and messaging  raised at: none at the skeleton (S4, with radio)
+  a broadcast needs a Radio Mast, and coverage at the place it is sent from.
+  Nothing can be sent without a mast.
+
+W0601  WARNING  economy, power and messaging  raised at: none at the skeleton (S1, the estimate stage)
+  the grid is already {found} kW short.
+  The power the seat has is already less than the power it is using.
+
+W0602  WARNING  economy, power and messaging  raised at: none at the skeleton (S1, the estimate stage)
+  committed spending of {found} outruns the projected treasury of {available}.
+  This playbook spends more than the seat is likely to have.
+
+W0603  WARNING  economy, power and messaging  raised at: none at the skeleton (S1, the estimate stage)
+  the playbook adds {found} kW of draw beyond supply; `allow_dormant_beacons`                   accepts it, and the beacons past the supply stay dormant.
+  Some of what this playbook switches on will have no power and will sit idle.
+
+W0701  WARNING  schedule, conflicts and staleness  raised at: none at the skeleton (S1, the estimate stage)
+  the route needs about {found} ms and the coming segment is {segment} ms.
+  There may not be time to walk this whole route this round.
+
+W0702  WARNING  schedule, conflicts and staleness  raised at: none at the skeleton (S3, the lint stage)
+  `{id}` can never fire: `{winner}` is earlier and its condition is true first.
+  An earlier rule always wins, so this one never gets a turn.
+
+W0703  WARNING  schedule, conflicts and staleness  raised at: none at the skeleton (S2/S3, with the reach window)
+  the sighting this rests on is {found} ms old; the reach window is {max} ms.
+  What the seat remembers here may be too old to act on.
+
+I0001  INFO  information  raised at: none at the skeleton (T7/S1, the estimate stage)
+  the route is about {found} ms of walking.
+  Roughly how long the walking takes.
+
+I0002  INFO  information  raised at: none at the skeleton (S3, the lint stage)
+  `{selector}` would resolve to `{id}` right now.
+  What this selector picks if the round started now.

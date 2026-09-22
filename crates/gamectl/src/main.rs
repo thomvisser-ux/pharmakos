@@ -1,41 +1,31 @@
 // SPDX-FileCopyrightText: 2026 Pharmakos contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `gamectl` — the command-line client. Role from spec §15 (Architecture), clients layer,
-//! detailed in spec §12.
+//! The `gamectl` binary: the process's edges, and nothing else.
 //!
-//! Subcommands in v1: `verify`, `schema`, `docs`, `scenarios`, `seat doctor`. There is no
-//! `connect` in v1 — nothing outside the game attaches to a seat. `gamectl scenario run`
-//! is what drives the three nightly adversarial scenarios (Rusher, Turtle, Hunter) against
-//! the Balanced built-in operator on a fixed seed set, asserting on events and hashes.
-//!
-//! It is an ordinary client of the Seat Gateway: same snapshot, same verifier, same submit
-//! path, no privileged reads. `schema` and `docs` output is generated from the Protobuf
-//! schema so it cannot drift. Like every seat-facing crate it must never reach the
-//! `research` feature that gates `fork`.
-//!
-//! Nothing is implemented yet: `scenario run` and the headless screenshots arrive in the
-//! named half-week at the end of the walking skeleton.
+//! Everything this binary does lives in the library beside it
+//! (`pharmakos_gamectl`), because `scenario run`'s acceptance is a hash chain
+//! compared with another hash chain and an integration test cannot call into a
+//! `[[bin]]`. What is left here is what a library must not do: read the real
+//! argument list, read the real working directory, write to the real handles,
+//! and exit with a number.
 
-fn main() {
-    let mut args = std::env::args().skip(1);
-    let command = args.next();
+use std::io::Write as _;
+use std::process::ExitCode;
 
-    println!(
-        "gamectl {} — pre-spike placeholder, nothing implemented yet.",
-        env!("CARGO_PKG_VERSION")
-    );
-    match command.as_deref() {
-        Some(name) => println!("requested subcommand: {name}"),
-        None => println!("no subcommand given"),
-    }
-    println!();
-    println!("planned subcommands (spec §12, §15):");
-    println!("  verify <playbook.jsonc>     run the verifier and print the report");
-    println!("  schema [--part <part>]      print the schema slice a seat may use");
-    println!("  docs                        print generated docs (never hand-written)");
-    println!("  scenario run <file>         headless match: map seed + playbooks + assertions");
-    println!("  seat doctor                 check a seat's setup and report what is wrong");
+fn main() -> ExitCode {
+    let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+    // A working directory that cannot be read is not a reason to guess: `.`
+    // resolves against the same directory the process is already in, so the
+    // fallback changes nothing except that it cannot fail.
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let outcome = pharmakos_gamectl::run(args, &cwd);
 
-    std::process::exit(1);
+    // A closed pipe is not a failure of the command: `gamectl docs | head` is
+    // an ordinary thing to type, and the exit code belongs to what was asked
+    // rather than to whether the reader stayed to hear the answer.
+    let _ = std::io::stdout().write_all(outcome.out.as_bytes());
+    let _ = std::io::stderr().write_all(outcome.err.as_bytes());
+    let _ = std::io::stdout().flush();
+    ExitCode::from(outcome.code.code())
 }
