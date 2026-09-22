@@ -26,7 +26,7 @@ use pharmakos_gateway::surface::control::{MAX_ADVANCE_MS, MAX_CLOCK_STEP_MS};
 use pharmakos_gateway::token::{Subject, Token};
 use pharmakos_proto::gp::api::v1::status::Phase;
 use pharmakos_proto::json::Json;
-use pharmakos_sim::math::quantity::Tick;
+use pharmakos_sim::math::quantity::{Ms, Tick};
 use pharmakos_sim::tables::SeatId;
 use std::collections::BTreeSet;
 
@@ -54,17 +54,23 @@ fn chain_in_process() -> Vec<u64> {
 
 /// Drive a whole segment entirely through `advance_push`, in steps of `ms`.
 ///
-/// Returns the state the segment ended on and how much game time the calls
-/// reported running. The **chain** cannot come back this way, and that is the
-/// design rather than a limitation of the test: the answer carries
-/// `advanced_ms` and nothing else, so a client -- and this test -- learns the
-/// pace it asked for and never the world's hash.
-fn wire_run(ms: i32) -> (u64, i32, u32) {
+/// Returns, for each call, the tick the segment stood at when it answered and
+/// the world's state hash **read in process** at that moment -- plus how much
+/// game time the calls reported running in total.
+///
+/// The distinction the whole file turns on: the hash never comes back through
+/// the **answer**, which carries `advanced_ms` and nothing else
+/// (`advanced_ms` asserts that as a key set). It is read here from the world
+/// the test is holding, exactly as `chain_in_process` reads `TickReport::hash`
+/// -- so the comparison below is a comparison of chains and not of one
+/// terminal state.
+fn wire_run(ms: i32) -> (Vec<(u32, u64)>, i32, u32) {
     let mut surface = hosted(2, SEGMENT_MS, 2);
     let admin = admin_token(&mut surface);
     let _ = result(&call(&mut surface, &admin, "end_lull", "{}"), "end_lull");
     let mut advanced = 0_i32;
     let mut calls = 0_u32;
+    let mut chain: Vec<(u32, u64)> = Vec::new();
     while surface.time().phase == Phase::Push {
         let response = call(
             &mut surface,
@@ -75,10 +81,14 @@ fn wire_run(ms: i32) -> (u64, i32, u32) {
         let answer = result(&response, "advance_push");
         calls = calls.saturating_add(1);
         advanced = advanced.saturating_add(advanced_ms(&answer));
+        // Which tick of the segment this call landed on, in ticks rather than
+        // in the milliseconds the wire speaks: the client never learns how
+        // long a tick is, and this test is not a client.
+        let at = Ms::new(advanced).to_ticks_floor();
+        chain.push((at, surface.host().expect("a match").world().state_hash()));
         assert!(calls < 200, "an advance that never reaches segment end");
     }
-    let hash = surface.host().expect("a match").world().state_hash();
-    (hash, advanced, calls)
+    (chain, advanced, calls)
 }
 
 /// The `advanced_ms` of one answer, and a check that the answer carries
@@ -123,10 +133,27 @@ fn advancing_in_steps_of_50_100_200_and_60000_ms_yields_the_same_chain() {
     );
 
     for ms in [50_i32, 100, 200, MAX_ADVANCE_MS] {
-        let (hash, advanced, calls) = wire_run(ms);
+        let (chain, advanced, calls) = wire_run(ms);
+        for (at, hash) in &chain {
+            let index = usize::try_from(*at).expect("a tick of this segment");
+            assert_eq!(
+                reference.get(index.saturating_sub(1)).copied(),
+                Some(*hash),
+                "a Push advanced in {ms} ms steps stood on a different state at tick {at}"
+            );
+        }
+        if ms == 50 {
+            assert_eq!(
+                chain.len(),
+                reference.len(),
+                "a 50 ms step is one tick, so this run compared the WHOLE chain and not a \
+                 sub-sequence of it"
+            );
+        }
         assert_eq!(
-            hash, terminal,
-            "a Push advanced in {ms} ms steps ended on a different state"
+            chain.last().map(|(_, hash)| *hash),
+            Some(terminal),
+            "and it ended where playing it out one tick at a time ends"
         );
         assert_eq!(
             advanced, 1_000,
@@ -141,9 +168,10 @@ fn skipping_to_segment_end_yields_the_same_terminal_hash_as_playing_it_out() {
     let played = chain_in_process();
     let terminal = played.last().copied().expect("twenty ticks");
 
-    let (hash, advanced, calls) = wire_run(MAX_ADVANCE_MS);
+    let (chain, advanced, calls) = wire_run(MAX_ADVANCE_MS);
     assert_eq!(
-        hash, terminal,
+        chain.last().map(|(_, hash)| *hash),
+        Some(terminal),
         "a segment skipped and a segment watched end on the same state"
     );
     assert_eq!(advanced, 1_000, "the call stopped at segment end");
@@ -340,6 +368,18 @@ fn a_host_clock_that_runs_backwards_or_jumps_is_refused_not_clamped() {
     assert_eq!(code(&response), "INVALID_ARGUMENT", "negative");
     let response = call(&mut surface, &admin, "report_host_clock", "{}");
     assert_eq!(code(&response), "INVALID_ARGUMENT", "a missing clock");
+    let response = call(
+        &mut surface,
+        &admin,
+        "report_host_clock",
+        &clock(10_000, LULL_MS.saturating_add(1)),
+    );
+    assert_eq!(
+        code(&response),
+        "INVALID_ARGUMENT",
+        "a countdown longer than the Lull `rules.match.lull_ms` declares: the footer every \
+         seat reads says how long it has to plan, so the number is bounded at both ends"
+    );
 
     assert_eq!(
         surface.time().tick,

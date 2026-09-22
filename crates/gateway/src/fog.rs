@@ -168,6 +168,18 @@ impl FogPolicy {
     pub fn eliminated(&self) -> Vec<SeatId> {
         self.unlocked.iter().copied().map(SeatId::new).collect()
     }
+
+    /// How many seats' fog has been lifted individually.
+    ///
+    /// The same question as `eliminated().len()` and the answer a tick asks:
+    /// [`crate::surface::Surface::step`] compares it before and after, up to
+    /// 1 200 times inside one `advance_push`, and a `Vec` built to be
+    /// counted and dropped is an allocation per tick on the one thread that
+    /// owns the surface.
+    #[must_use]
+    pub fn unlocked_count(&self) -> usize {
+        self.unlocked.len()
+    }
 }
 
 /// What a seat can see, as the host knows it.

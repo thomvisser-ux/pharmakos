@@ -1,7 +1,7 @@
 # Seat 0's get_view keyframe at the opening Lull of seed 0x00000000ca5caded.
 # The whole generated map: what is fogged is what changes it and what stands on
 # it, and at the opening Lull nothing has (item 107 (1)).
-# pages 1, chunks 288, encoded bytes 285525
+# pages 1, chunks 288, run bytes 201558, json bytes 285525
 # chunk	origin	runs	digest
 0	(0,0,0)	409	1cb498d23f83b10f
 1	(32,0,0)	323	440c1067e1b41089

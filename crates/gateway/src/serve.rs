@@ -69,7 +69,10 @@
 //! answer before reading the next frame), a bounded queue in front of the
 //! surface thread, and at most [`MAX_CONNECTIONS`] live connections with an
 //! audited 503 beyond that. A flood of silent sockets therefore fills the
-//! pending slots, times out and disturbs nothing that has authenticated.
+//! pending slots, times out and disturbs nothing that has authenticated --
+//! and, said plainly because the cap counts sockets rather than sessions, it
+//! *does* keep a new client out for as long as it keeps them open.
+//! [`MAX_CONNECTIONS`] carries that sentence and the two ways out of it.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
@@ -96,8 +99,20 @@ use crate::token::{Subject, Token};
 /// measurement. **A connection costs a thread**, because the transport is
 /// blocking threads and `std::sync` channels (decisions-log item 99) and not
 /// an async runtime; eight covers three seats, an editor, a lobby, a spectator
-/// and two spare, which is more than the whole of v1 has clients. **OWNER**,
-/// at hardening, with `READ_TIMEOUT`, `MAX_MESSAGE_BYTES` and the rate limits.
+/// and two spare, which is more than the whole of v1 has clients.
+///
+/// The honest statement of what the cap does and does not do: a slot is taken
+/// at **accept** and given back when the connection's thread returns, so a
+/// socket that opens and then says nothing holds its slot for the whole of
+/// `session::READ_TIMEOUT` (30 s). Eight silent sockets therefore deny *new*
+/// connections for as long as a local process cares to keep reopening them.
+/// What they cannot do is disturb a connection that has already
+/// authenticated, which is what the bound is for here and what
+/// `a_flood_of_silent_connections_cannot_disturb_a_live_session` pins. The
+/// fix, if the owner wants one, is to count the cap over authenticated
+/// connections or to give the handshake a shorter timeout of its own.
+/// **OWNER**, at hardening, with `READ_TIMEOUT`, `MAX_MESSAGE_BYTES` and the
+/// rate limits.
 pub const MAX_CONNECTIONS: usize = 8;
 
 /// How many requests may wait in front of the surface thread.
@@ -616,7 +631,16 @@ fn spawn_dispatcher(
                 // host would not serve is still a connection somebody made.
                 let mut stream = connection.stream;
                 let _ = stream.write_all(OVER_CAPACITY.as_bytes());
-                let _ = jobs.send(Job::Refused {
+                // `try_send`, and not `send`: this is the accept loop, the
+                // queue in front of the surface is bounded, and the surface
+                // thread can be inside a whole `advance_push`. A blocking
+                // send here would let a flood of refusals stop the host
+                // accepting the connection that matters, which is the very
+                // thing the cap exists to prevent. The 503 has already gone
+                // out on the socket; the audit line is what is dropped when
+                // the queue is full, and a full queue is itself a fact the
+                // log shows as a gap.
+                let _ = jobs.try_send(Job::Refused {
                     reason: format!(
                         "this host serves at most {MAX_CONNECTIONS} connections at once"
                     ),

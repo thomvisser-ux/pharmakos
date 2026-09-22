@@ -22,7 +22,7 @@
 
 mod support;
 
-use pharmakos_gateway::fog::{Viewer, Vision};
+use pharmakos_gateway::fog::{FogPolicy, Viewer, Vision};
 use pharmakos_gateway::host::SphereVision;
 use pharmakos_gateway::surface::Surface;
 use pharmakos_gateway::token::Token;
@@ -35,8 +35,9 @@ use std::fs;
 
 use support::{
     LULL_MS, MATCH, SEED, SEGMENT_MS, admin_token, array_of, call, call_in_lull, chunks_of, code,
-    core_beacon, erase, fell, hosted, result, seat_token, seen_and_unseen_in_one_chunk,
-    spectator_token, sphere_radius, step, target_dir, text_of, view, view_pages, workspace_root,
+    core_beacon, erase, fell, hosted, hosted_as, hosted_casual, result, seat_token,
+    seen_and_unseen_in_one_chunk, spectator_token, sphere_radius, step, target_dir, text_of, view,
+    view_pages, workspace_root,
 };
 
 // ---------------------------------------------------------------------------
@@ -314,15 +315,20 @@ fn no_view_ever_carries_a_destination_a_step_a_mandate_or_a_hit_point() {
         "round",
     ];
 
-    for casual in [false, true] {
-        let mut surface = if casual {
-            let mut surface = hosted(2, SEGMENT_MS, 3);
-            // The no-fog policy a casual match is made with, reached the way
-            // the host reaches it.
-            surface.fog().end_match();
-            surface
-        } else {
-            hosted(2, SEGMENT_MS, 3)
+    // All three policies a match can be under, and they are three: the
+    // default, the one a CASUAL match is made with at `Surface::new`, and the
+    // one a match that has ended reaches through the unlock. The second and
+    // third answer `unfogged` the same way and arrive by different roads, so
+    // the allow-list is run over both roads.
+    for policy in ["fogged", "casual", "ended"] {
+        let mut surface = match policy {
+            "casual" => hosted_casual(2, SEGMENT_MS, 3),
+            "ended" => {
+                let mut surface = hosted(2, SEGMENT_MS, 3);
+                surface.fog().end_match();
+                surface
+            }
+            _ => hosted(2, SEGMENT_MS, 3),
         };
         let seat = seat_token(&mut surface, 0);
         let spectator = spectator_token(&mut surface, true);
@@ -336,7 +342,8 @@ fn no_view_ever_carries_a_destination_a_step_a_mandate_or_a_hit_point() {
             for key in &found {
                 assert!(
                     ALLOWED.contains(&key.as_str()),
-                    "a view carried `{key}`, which is not one of the fields `get_view` answers. \
+                    "a view under the `{policy}` policy carried `{key}`, which is not one of \
+                     the fields `get_view` answers. \
                      Never on the wire: a destination, a route, a step or rule index, a mandate, \
                      a treasury, a score, a hit point, a power state, a count."
                 );
@@ -503,21 +510,22 @@ fn a_cursor_from_another_view_is_stale_rather_than_a_silent_restart() {
     let (_, cursor) = view(&mut surface, &token, "");
 
     // A second match is a second view. The cursor is a match's, so the one
-    // from the first is refused rather than read as a place in the second.
-    let mut other = hosted(2, SEGMENT_MS, 3);
+    // from the first is refused rather than read as a place in the second --
+    // the same seed and the same map, and a different view all the same,
+    // because the view's id is minted from the match this gateway attached
+    // and not from the map it attached.
+    let mut other = hosted_as("m-0002", FogPolicy::fogged(), 2, SEGMENT_MS, 3);
     let held = seat_token(&mut other, 0);
-    // Same seed, same map -- and a different view all the same, because the
-    // id is minted at `attach` rather than derived from the map alone.
     let response = call(
         &mut other,
         &held,
         "get_view",
         &format!(r#"{{"cursor":"{cursor}"}}"#),
     );
-    let answer = code(&response);
-    assert!(
-        answer == "STALE_SNAPSHOT" || answer == "<no error>",
-        "either a stale cursor or the same view; never a place nobody meant: {answer}"
+    assert_eq!(
+        code(&response),
+        "STALE_SNAPSHOT",
+        "a cursor of another match is never read as a place in this one"
     );
 
     let response = call(
@@ -584,7 +592,7 @@ fn the_full_map_unlock_comes_from_a_server_side_policy_change() {
     );
 
     // And seat 1, still standing, still does not.
-    let (page, _) = view(&mut surface, &bystander, "");
+    let (page, standing_cursor) = view(&mut surface, &bystander, "");
     assert_eq!(
         material_at(&[page], hidden),
         Some(pristine),
@@ -602,11 +610,20 @@ fn the_full_map_unlock_comes_from_a_server_side_policy_change() {
     );
     assert!(surface.end_recap().expect("a match"), "the recap closes");
     assert!(surface.fog().ended(), "and closing it ended the match");
+    // On the cursor it was already holding, and not on a fresh keyframe: a
+    // camera that is caught up asks for a delta, so the unlock has to reach
+    // the delta path or it does not reach the camera at all.
+    let pages = view_pages(&mut surface, &bystander, &standing_cursor);
+    assert_eq!(
+        material_at(&pages, hidden),
+        Some(Material::AIR),
+        "at match end every seat sees everything, on the cursor and the token it already had"
+    );
     let pages = view_pages(&mut surface, &bystander, "");
     assert_eq!(
         material_at(&pages, hidden),
         Some(Material::AIR),
-        "at match end every seat sees everything, and no token was reissued"
+        "and a fresh keyframe says the same"
     );
 }
 
@@ -831,11 +848,19 @@ fn the_view_keyframe_golden() {
         row(&mut jsonl, &line);
     }
 
+    // Two sizes, because they are two different numbers and the one a reader
+    // takes away should not be ambiguous: the runs are what the feed budgets
+    // and pages on, the JSON is what actually goes down the socket once
+    // `bytes` has become base64 and the entities have been written out.
+    let run_bytes: usize = chunks_of(&pages)
+        .iter()
+        .map(|(_, voxels)| pharmakos_proto::chunk_rle::encode(voxels).len())
+        .sum();
     let mut readable = format!(
         "# Seat 0's get_view keyframe at the opening Lull of seed 0x{SEED:016x}.\n\
          # The whole generated map: what is fogged is what changes it and what stands on\n\
          # it, and at the opening Lull nothing has (item 107 (1)).\n\
-         # pages {}, chunks {}, encoded bytes {}\n\
+         # pages {}, chunks {}, run bytes {run_bytes}, json bytes {}\n\
          # chunk\torigin\truns\tdigest\n",
         pages.len(),
         chunks_of(&pages).len(),
