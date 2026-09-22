@@ -23,15 +23,32 @@ item 10.
 
 ## Status
 
-The **format** is frozen (this file and `xtask/src/scenario.rs`). The **runner**
-is not written: `gamectl scenario run` arrives at T15. Until then
-`cargo xtask ci`'s `scenario` step still reads every file here, validates it
-against the format, and reports itself *skipped, with the reason and the task
-named*. A malformed scenario is a red build today; a missing runner is a skip.
+The **format** is frozen (this file and `xtask/src/scenario.rs`) and the
+**runner** exists: `gamectl scenario run <file>` plays one and fails on the
+first assertion that does not hold (T15). `cargo xtask ci`'s `scenario` step
+validates every file here against the format and then runs each of them.
 
-The formats land first on purpose (decisions-log §2.7 item 75): every later task
-delivers *into* a format instead of inventing one, and no golden's shape is
-renegotiated under deadline in the last fortnight.
+The formats landed first on purpose (decisions-log §2.7 item 75): every later
+task delivers *into* a format instead of inventing one, and no golden's shape is
+renegotiated under deadline in the last fortnight. The runner was written into
+this format unchanged, which is that decision paying out.
+
+### Two doors, and when the second one is used
+
+A `playbook` seat's file goes through **`submit_plan`**, which is the door every
+playbook a player writes goes through: verified against that seat's own frozen
+snapshot, compiled, then sealed at the end of the Lull. That is what a scenario
+should use and what almost every scenario will.
+
+A playbook the verifier refuses *against that seat's own snapshot* is sealed by
+the harness instead, and **every run that does so prints a `note` line naming
+the seat, the file and the diagnostic codes**. It exists because
+`expand-east-segment` needs it: the spec's worked `expand_east` names `b_01`,
+which on the skeleton map is seat 1's core and is not in seat 0's view at all,
+and its site is far outside every sphere — so no client could ever have
+submitted it, and the chain that scenario pins was produced by a test that
+compiles a plan directly. A harness is for pinning what the sim does, including
+with orders the door would refuse; what it may not do is be quiet about it.
 
 ## Layout
 
