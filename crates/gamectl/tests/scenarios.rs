@@ -54,6 +54,22 @@ const COMPLETING: &str = "scenarios/skeleton/deploy-and-visit.scenario.jsonc";
 /// The scenario that pins the interpreter refusing loudly (T11's).
 const REFUSING: &str = "scenarios/skeleton/expand-east-segment.scenario.jsonc";
 
+/// **The exact set of scenarios allowed to seal through the harness door.**
+///
+/// The door is unscoped in the runner — anything `submit_plan` explicitly
+/// refuses takes it, with a `note` line and exit 0 — and a review is right
+/// that a scenario acquiring it later would be invisible in CI, because
+/// `xtask`'s `scenario` step reads the child's exit status and nothing else.
+/// Scoping it properly means an opt-in key in the file, which
+/// `xtask/src/scenario.rs` would have to know about, and `xtask` is a contract
+/// path (AGENTS.md §5) — so it rides with the owner's ruling on the door.
+///
+/// This list is the interim that costs nothing: the door is pinned to the one
+/// file that needs it, in a test that already plays every committed scenario.
+/// A scenario that starts using it, or one that stops, turns `cargo test` red
+/// with the reason in the message.
+const HARNESS_DOOR: &[&str] = &[REFUSING];
+
 /// What a doctored copy is named.
 ///
 /// **Not** [`SUFFIX`], and that is the whole point of the constant: a scratch
@@ -116,6 +132,19 @@ fn every_committed_scenario_passes_on_its_events_and_its_hashes() {
             "{source}:\n{}",
             outcome.out
         );
+        // And it went through the door it is allowed to go through. Checked
+        // here rather than in a test of its own so that it costs no extra
+        // match: every scenario is already played on this line.
+        let used_the_door = outcome.out.contains("HARNESS door");
+        assert_eq!(
+            used_the_door,
+            HARNESS_DOOR.contains(source),
+            "{source} {} the harness door. That list is the exact set allowed to use it; a \
+             scenario that starts using it has stopped being a claim about what a client could \
+             cause, and one that stops no longer needs the door.\n{}",
+            if used_the_door { "used" } else { "did not use" },
+            outcome.out
+        );
     }
 }
 
@@ -166,10 +195,15 @@ fn a_doctored_assertion_fails_readably_and_exits_non_zero() {
             "\"event\": \"beacon_placed\", \"seat\": 0, \"by_tick\": 10",
             &["first fired at tick", "which is after tick 10"],
         ),
+        // Named for what it asserts, which a review found it was not: this
+        // repoints `golden` at a path nothing is committed at, so the branch
+        // it exercises is `scenario_chain_missing`. A chain that *moved* is
+        // `a_moved_chain_names_the_first_tick_that_disagrees` below, which
+        // doctors the bytes rather than the path.
         (
-            "doctored-moved-chain",
+            "doctored-missing-chain",
             "tests/golden/scenarios/deploy-and-visit/expected.hashes.txt",
-            "tests/golden/scenarios/doctored-moved-chain/expected.hashes.txt",
+            "tests/golden/scenarios/doctored-missing-chain/expected.hashes.txt",
             &["nothing is committed", "cargo xtask golden --bless"],
         ),
     ];
@@ -351,13 +385,9 @@ fn a_scenario_sealed_behind_the_verifiers_door_says_so_in_its_report() {
         outcome.out
     );
 
-    // And the other one did not need it: a note that appeared on every run
-    // would be a note nobody reads.
-    let clean = gamectl(&["scenario", "run", COMPLETING]);
-    assert_eq!(clean.code, Exit::Ok, "{}{}", clean.out, clean.err);
-    assert!(
-        !clean.out.contains("HARNESS door"),
-        "deploy-and-visit's playbook goes through `submit_plan`:\n{}",
-        clean.out
-    );
+    // That `deploy-and-visit` does *not* print the note — a note on every run
+    // is a note nobody reads — is asserted by
+    // `every_committed_scenario_passes_on_its_events_and_its_hashes` against
+    // [`HARNESS_DOOR`], which covers every committed scenario rather than this
+    // one pair and plays no extra match to do it.
 }

@@ -11,7 +11,9 @@ One directory per scenario, named after its `name` key:
 
 ```text
 tests/golden/scenarios/<name>/expected.hashes.txt   the per-tick chain
-tests/golden/scenarios/<name>/expected.events.txt   the event log it asserts on
+tests/golden/scenarios/<name>/expected.events.txt   the event log its producing
+                                                    test writes (expand-east-
+                                                    segment only)
 ```
 
 The chain is the half a scenario file names, in its `hash_chain_equals`

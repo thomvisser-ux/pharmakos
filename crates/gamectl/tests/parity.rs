@@ -217,6 +217,14 @@ fn client_path(scenario: &Scenario) -> String {
     chain
 }
 
+/// `rules.match.lull_ms`, read and never defaulted.
+///
+/// A review found a `180_000` fallback here — the shipped table's value,
+/// copied into a test. AGENTS.md §12: tuning values are data, not constants
+/// sprinkled through the code, and a test that defaulted would keep passing
+/// against a table that had lost its `match` block. The two production readers
+/// of the same row (`src/scenario/run.rs` and `src/doctor.rs`) refuse with
+/// this sentence, so this one refuses with it too.
 fn lull_ms(surface: &Surface) -> i32 {
     surface
         .host()
@@ -225,7 +233,14 @@ fn lull_ms(surface: &Surface) -> i32 {
         .message()
         .r#match
         .as_ref()
-        .map_or(180_000, |block| block.lull_ms)
+        .map_or_else(
+            || {
+                panic!(
+                    "the rules table carries no `match` block, so nothing says how long a Lull is"
+                )
+            },
+            |block| block.lull_ms,
+        )
 }
 
 fn mint(surface: &mut Surface, seat: u8) -> Token {

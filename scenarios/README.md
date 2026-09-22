@@ -69,26 +69,33 @@ JSONC — canonical JSON with `//` and `/* */` comments, exactly like a playbook
 nightly run goes red the first question is *what was this asserting, and why*,
 and the answer belongs in the file rather than in a commit message.
 
+The example below is `scenarios/skeleton/deploy-and-visit.scenario.jsonc` with
+its comments and most of its assertions cut away — **a file that exists, is
+committed and passes**. (Until T15 this block showed `expand-east-3min`, whose
+scenario T15 deleted and whose golden nobody ever committed: a worked example
+that asserts something the build cannot do teaches the wrong thing twice over.)
+
 ```jsonc
 {
   "format": "pharmakos.scenario.v1",
-  "name": "expand-east-3min",
-  "summary": "One sealed playbook walks the commander east and places a beacon.",
+  "name": "deploy-and-visit",
+  "summary": "Seat 0 walks eight voxels, deploys a Mine beacon, walks home and commits one row.",
 
   "map": { "seed": "0x00000000ca5caded", "generator": "skeleton" },
   "rules": "rules/rules.v1.json",
 
   "seats": [
-    { "seat": 0, "kind": "playbook", "playbook": "examples/playbooks/expand_east.jsonc" },
+    { "seat": 0, "kind": "playbook", "playbook": "scenarios/skeleton/deploy-and-visit.playbook.jsonc" },
     { "seat": 1, "kind": "safe" }
   ],
 
-  "segments": [ { "index": 0, "length_ms": 180000 } ],
+  "segments": [ { "index": 0, "length_ms": 60000 } ],
 
   "assertions": [
-    { "assert": "event_fired", "event": "beacon_placed", "seat": 0, "by_tick": 2400 },
+    { "assert": "event_fired", "event": "beacon_placed", "seat": 0, "by_tick": 550 },
+    { "assert": "event_fired", "event": "visit_ended", "seat": 0, "by_tick": 850 },
     { "assert": "hash_chain_equals",
-      "golden": "tests/golden/scenarios/expand-east-3min/expected.hashes.txt" }
+      "golden": "tests/golden/scenarios/deploy-and-visit/expected.hashes.txt" }
   ]
 }
 ```
@@ -149,22 +156,34 @@ without saying so is the failure AGENTS.md §4.8 is about.
 `by_tick` is **required**. An assertion with no deadline is satisfied by the end
 of the match, which is not an assertion.
 
-`golden` is a repository-relative path under `tests/golden/`, ending
-`.hashes.txt`, with forward slashes and no `..` — the same path rule as
+`golden` is a repository-relative path under **`tests/golden/scenarios/`**,
+ending `.hashes.txt`, with forward slashes and no `..` — the same path rule as
 `seats[].playbook`. It need not exist yet: the task that first drives the run
 commits the chain.
+
+The `scenarios/` part of that prefix is enforced by the runner and not by
+`xtask/src/scenario.rs`, which checks `tests/golden/` only — one of the two
+places the runner is deliberately *stricter* than the harness reader (the other
+is resolving an `event_fired` name against the sim's event vocabulary). A run
+writes its fresh chain to `<target>/golden/<area>/<name>/actual.hashes.txt`, so
+a scenario naming another area's golden would overwrite that area's fresh
+output in the shared target directory — which is a red build in a place nobody
+would think to look. Strictly stricter in the runner is the safe direction: the
+runner is what decides whether a scenario passed, and `xtask` shells the runner.
 
 **Every scenario asserts on events AND on the hash chain.** Events alone prove
 the match did something; hashes alone prove it did the same thing twice; only
 the pair proves it did the right thing reproducibly. The `scenario` step
 enforces this.
 
-Three names are **reserved** for the one extension skeleton-plan §7 decision 16
-(recommended, not yet logged) schedules for T15, when the runner meets real
-events: `event_count_in_range`,
-`state_hash_at_tick`, `terminal_hash`. Using one today is an error naming the
-task that adds it. The vocabulary is *data inside* the format, so adding to it
-is not a format break; removing one would be.
+Three names are **reserved** for the one extension **decisions-log item 97**
+(plan §7 decision 16, taken 2026-09-14) authorises, "when `scenario run` meets
+real events": `event_count_in_range`, `state_hash_at_tick`, `terminal_hash`.
+Item 97 says *by at most* those three, and T15 — the task that met the real
+events — took **none** of them: `hash_chain_equals` already pins every tick, and
+neither committed scenario needs a count range. Using one today is an error
+naming the decision that holds it. The vocabulary is *data inside* the format,
+so adding to it is not a format break; removing one would be.
 
 ### Writing conventions
 
