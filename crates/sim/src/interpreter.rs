@@ -78,7 +78,7 @@
 //! # What this build refuses, and why that is the honest answer
 //!
 //! A construct in the v1 vocabulary whose *effect* needs a stage that has not
-//! been built — an interface row that recycles a beacon, a selector that ranks
+//! been built — a row that queues a capability structure, a selector that ranks
 //! by incoming threat — is refused by [`Plan::compile`] with
 //! [`PlanError::NotAtThisStage`], which names the construct and the stage that
 //! fills it. It is refused at **seal** time, where there is a host to tell,
@@ -246,7 +246,14 @@ pub enum Place {
 /// Each row is **one change that commits at the end of its own duration**, so a
 /// multi-field edit is all-or-nothing. The durations are rules-table data, not
 /// schema and not constants: [`Row::duration_ms`] reads them.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+///
+/// **Not `Copy`.** A settings row carries the lists it writes - Build targets,
+/// protected areas and Survey probe areas - and those are `Vec`s. They are in
+/// the compiled plan rather than looked up again at commit time for the reason
+/// everything else in a `Plan` is: a playbook is an input, compiled once at the
+/// seal, and a row that re-read the submission would be reading it during a
+/// tick.
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Row {
     /// Switch mandate type — `interface_times.switch_mandate_ms`. Clears the
     /// old mandate's settings and targets; the beacon's Quartermaster priority
@@ -268,11 +275,45 @@ pub enum Row {
         /// How many settings fields the row writes. The first costs the base
         /// time and each further one the per-field time, capped at the maximum.
         fields: u32,
+        /// The Build mandate's target list: blueprint and anchor.
+        targets: Vec<(u8, [i32; 3])>,
+        /// The Build mandate's protected areas, as centre and radius in whole
+        /// voxels.
+        protected: Vec<([i32; 3], i32)>,
+        /// The Survey mandate's probe areas, same shape.
+        probes: Vec<([i32; 3], i32)>,
+        /// The Survey mandate's scout count.
+        scouts: u32,
     },
     /// Set the Quartermaster priority — `interface_times.set_priority_ms`.
     Priority {
         /// `gp.v1.InterfaceRow.QuartermasterPriority`'s wire value.
         priority: u8,
+    },
+    /// Recycle the beacon — `interface_times.recycle_ms`.
+    ///
+    /// `economy.recycle_refund_percent` of its remaining value is refunded when
+    /// it commits, and the removal books destruction credit exactly as
+    /// destruction does (item 18).
+    Recycle,
+    /// Add one target to the beacon's Build mandate —
+    /// `interface_times.build_target_ms`.
+    AddTarget {
+        /// The blueprint, as a [`crate::tables::StructureKind::id`].
+        blueprint: u8,
+        /// Where it goes. Must lie inside one of your own spheres, which the
+        /// interpreter tests when the row commits.
+        anchor: [i32; 3],
+    },
+    /// Remove the Build target anchored at this place —
+    /// `interface_times.build_target_ms`.
+    ///
+    /// Named by its anchor rather than by an index because a playbook is sealed
+    /// before the round runs, and an index into a list the mandate may have
+    /// changed is not a stable reference (`playbook.proto`'s own words).
+    RemoveTarget {
+        /// The anchor naming the target.
+        anchor: [i32; 3],
     },
 }
 
@@ -284,14 +325,16 @@ impl Row {
     /// compiled plan, because a tuning value is data and the table is the one
     /// place it lives (AGENTS.md §12).
     #[must_use]
-    pub fn duration_ms(self, rules: &RulesTable) -> i32 {
+    pub fn duration_ms(&self, rules: &RulesTable) -> i32 {
         let times = rules.message().interface_times.as_ref();
         let get = |pick: fn(&gp::v1::rules_table::InterfaceTimes) -> i32| -> i32 {
             times.map_or(0, pick)
         };
-        match self {
+        match *self {
             Row::Mandate { .. } => get(|t| t.switch_mandate_ms),
             Row::Priority { .. } => get(|t| t.set_priority_ms),
+            Row::Recycle => get(|t| t.recycle_ms),
+            Row::AddTarget { .. } | Row::RemoveTarget { .. } => get(|t| t.build_target_ms),
             Row::Settings { fields, .. } => {
                 let base = get(|t| t.edit_settings_base_ms);
                 let per = get(|t| t.edit_settings_per_field_ms);
@@ -795,7 +838,7 @@ fn compile_action(step: &gp::v1::Step, names: &Names<'_>) -> Result<Action, Plan
             let beacon = compile_beacon_ref(interface.beacon.as_ref(), names)?;
             let mut rows: Vec<Row> = Vec::with_capacity(interface.rows.len());
             for row in &interface.rows {
-                rows.push(compile_row(row)?);
+                rows.push(compile_row(row, names)?);
             }
             Ok(Action::Interface { beacon, rows })
         }
@@ -805,14 +848,14 @@ fn compile_action(step: &gp::v1::Step, names: &Names<'_>) -> Result<Action, Plan
             let mut mandate = MandateKind::None;
             if let Some(initial) = place.initial.as_ref() {
                 if let Some(settings) = initial.mandate.as_ref() {
-                    let row = compile_settings_row(settings)?;
-                    if let Row::Settings { kind, fields } = row {
+                    let row = compile_settings_row(settings, names)?;
+                    if let Row::Settings { kind, fields, .. } = &row {
                         mandate = kind.unwrap_or(MandateKind::None);
                         // Choosing the mandate type is free at place_beacon
                         // time (spec section 5); only the settings cost time,
                         // so a row with no settings fields is not filed at all.
-                        if fields > 0 {
-                            rows.push(Row::Settings { kind, fields });
+                        if *fields > 0 {
+                            rows.push(row);
                         }
                     }
                 }
@@ -848,29 +891,30 @@ fn compile_action(step: &gp::v1::Step, names: &Names<'_>) -> Result<Action, Plan
     }
 }
 
-fn compile_row(row: &gp::v1::InterfaceRow) -> Result<Row, PlanError> {
+fn compile_row(row: &gp::v1::InterfaceRow, names: &Names<'_>) -> Result<Row, PlanError> {
     let inner = row.row.as_ref().ok_or(PlanError::MissingBlock("row"))?;
     match inner {
         gp::v1::interface_row::Row::SetMandate(settings) => {
             let kind = mandate_of(settings).ok_or(PlanError::UnsetEnum("set_mandate.mandate"))?;
             Ok(Row::Mandate { kind })
         }
-        gp::v1::interface_row::Row::SetMandateSettings(settings) => compile_settings_row(settings),
+        gp::v1::interface_row::Row::SetMandateSettings(settings) => {
+            compile_settings_row(settings, names)
+        }
         gp::v1::interface_row::Row::SetPriority(priority) => Ok(Row::Priority {
             priority: compile_priority(*priority)?,
         }),
-        gp::v1::interface_row::Row::Recycle(_) => Err(PlanError::NotAtThisStage {
-            construct: "interface row `recycle`",
-            stage: "T14 (the economy: the refund is 50 % of remaining value and books destruction \
-                    credit through the damage split)",
-        }),
-        gp::v1::interface_row::Row::AddBuildTarget(_) => Err(PlanError::NotAtThisStage {
-            construct: "interface row `add_build_target`",
-            stage: "T14 (the minimal Build mandate and its target list)",
-        }),
-        gp::v1::interface_row::Row::RemoveBuildTarget(_) => Err(PlanError::NotAtThisStage {
-            construct: "interface row `remove_build_target`",
-            stage: "T14 (the minimal Build mandate and its target list)",
+        gp::v1::interface_row::Row::Recycle(_) => Ok(Row::Recycle),
+        gp::v1::interface_row::Row::AddBuildTarget(add) => {
+            let target = add
+                .target
+                .as_ref()
+                .ok_or(PlanError::MissingBlock("add_build_target.target"))?;
+            let (blueprint, anchor) = compile_build_target(target, names)?;
+            Ok(Row::AddTarget { blueprint, anchor })
+        }
+        gp::v1::interface_row::Row::RemoveBuildTarget(remove) => Ok(Row::RemoveTarget {
+            anchor: compile_voxel_place(remove.anchor.as_ref(), names)?,
         }),
         gp::v1::interface_row::Row::QueueStructure(_) => Err(PlanError::NotAtThisStage {
             construct: "interface row `queue_structure`",
@@ -902,7 +946,10 @@ fn compile_priority(priority: i32) -> Result<u8, PlanError> {
 /// The field count is what spec section 5's "2 s + 0.5 s per extra field, max
 /// 6 s" is over, so it is counted here, once, where the schema says which
 /// fields there are.
-fn compile_settings_row(settings: &gp::v1::MandateSettings) -> Result<Row, PlanError> {
+fn compile_settings_row(
+    settings: &gp::v1::MandateSettings,
+    names: &Names<'_>,
+) -> Result<Row, PlanError> {
     let mut fields: u32 = 0;
     if settings.roe != 0 {
         fields = fields.saturating_add(1);
@@ -910,13 +957,130 @@ fn compile_settings_row(settings: &gp::v1::MandateSettings) -> Result<Row, PlanE
     if settings.retreat_hp_pct != 0 {
         fields = fields.saturating_add(1);
     }
+    let mut targets: Vec<(u8, [i32; 3])> = Vec::new();
+    let mut protected: Vec<([i32; 3], i32)> = Vec::new();
+    let mut probes: Vec<([i32; 3], i32)> = Vec::new();
+    let mut scouts: u32 = 0;
     if let Some(mandate) = settings.mandate.as_ref() {
         fields = fields.saturating_add(mandate_fields(mandate)?);
+        match mandate {
+            gp::v1::mandate_settings::Mandate::Build(build) => {
+                for target in &build.targets {
+                    targets.push(compile_build_target(target, names)?);
+                }
+                for area in &build.protected_areas {
+                    protected.push(compile_area(area, names)?);
+                }
+            }
+            gp::v1::mandate_settings::Mandate::Survey(survey) => {
+                for area in &survey.probe_areas {
+                    probes.push(compile_area(area, names)?);
+                }
+                scouts = survey.scout_count;
+            }
+            gp::v1::mandate_settings::Mandate::Mine(_)
+            | gp::v1::mandate_settings::Mandate::Defend(_)
+            | gp::v1::mandate_settings::Mandate::Attack(_) => {}
+        }
     }
     Ok(Row::Settings {
         kind: mandate_of(settings),
         fields,
+        targets,
+        protected,
+        probes,
+        scouts,
     })
+}
+
+/// One Build target: its blueprint and its anchor.
+///
+/// PLACEHOLDER: the blueprint catalogue is spec section 8's contract and its
+/// licences land at **S4**, so `blueprint_id` is a string in the schema and the
+/// skeleton's minimal Build mandate ships exactly one blueprint, the Generator,
+/// which is what the plan's wk-18.5 row names. Any other id is refused rather
+/// than compiled to a structure this build cannot raise, so a playbook naming a
+/// capability structure fails loudly at the seal instead of silently building
+/// nothing (owner, at S4).
+fn compile_build_target(
+    target: &gp::v1::BuildTarget,
+    names: &Names<'_>,
+) -> Result<(u8, [i32; 3]), PlanError> {
+    let blueprint = match target.blueprint_id.as_str() {
+        "generator" => crate::tables::StructureKind::Generator.id(),
+        _ => {
+            return Err(PlanError::NotAtThisStage {
+                construct: "a Build target naming a blueprint other than `generator`",
+                stage: "S4 (the capability catalogue and its licences)",
+            });
+        }
+    };
+    Ok((
+        blueprint,
+        compile_voxel_place(target.anchor.as_ref(), names)?,
+    ))
+}
+
+/// One area, as its centre and a radius in whole voxels.
+///
+/// The schema's `Area` is an axis-aligned box; the sim keeps a centre and a
+/// radius because every test it does on an area is a range check, and a range
+/// check in squared distance is the one form that needs no square root
+/// (AGENTS.md section 4.2). The radius is the box's **half-diagonal in x and
+/// y**, rounded up, so the circle covers the box rather than being covered by
+/// it - over-covering a protected area protects a little more ground, which is
+/// the safe direction.
+fn compile_area(area: &gp::v1::Area, names: &Names<'_>) -> Result<([i32; 3], i32), PlanError> {
+    let min = area
+        .min
+        .as_ref()
+        .ok_or(PlanError::MissingBlock("area.min"))?;
+    let max = area
+        .max
+        .as_ref()
+        .ok_or(PlanError::MissingBlock("area.max"))?;
+    names.voxel(min)?;
+    names.voxel(max)?;
+    let centre = [
+        min.x.saturating_add(max.x).div_euclid(2),
+        min.y.saturating_add(max.y).div_euclid(2),
+        min.z.saturating_add(max.z).div_euclid(2),
+    ];
+    let half_x = max
+        .x
+        .saturating_sub(min.x)
+        .abs()
+        .saturating_add(1)
+        .div_euclid(2);
+    let half_y = max
+        .y
+        .saturating_sub(min.y)
+        .abs()
+        .saturating_add(1)
+        .div_euclid(2);
+    Ok((centre, half_x.max(half_y)))
+}
+
+/// A `Location` that has to be a fixed voxel.
+///
+/// A Build target's anchor and a removal's anchor are both written into a
+/// beacon's settings and compared against later, so a late-bound selector would
+/// have to resolve at commit time and then be compared against a selector that
+/// resolved somewhere else. Refused rather than resolved: `playbook.proto` says
+/// a removal names its anchor "rather than by an index because a playbook is
+/// sealed before the round runs", and the same argument bars a target whose
+/// place is not fixed either.
+fn compile_voxel_place(
+    place: Option<&gp::v1::Location>,
+    names: &Names<'_>,
+) -> Result<[i32; 3], PlanError> {
+    match compile_place(place, names)? {
+        Place::Voxel(at) => Ok(at),
+        Place::Beacon(_) => Err(PlanError::NotAtThisStage {
+            construct: "a Build target anchored on a selector rather than on a voxel",
+            stage: "S3 (the full selector work, where a pinned anchor gets a meaning)",
+        }),
+    }
 }
 
 /// How many settings fields one mandate's own block writes.
@@ -926,13 +1090,18 @@ fn compile_settings_row(settings: &gp::v1::MandateSettings) -> Result<Row, PlanE
 fn mandate_fields(mandate: &gp::v1::mandate_settings::Mandate) -> Result<u32, PlanError> {
     match mandate {
         gp::v1::mandate_settings::Mandate::Build(build) => {
-            if !build.targets.is_empty() || !build.protected_areas.is_empty() {
-                return Err(PlanError::NotAtThisStage {
-                    construct: "Build mandate targets and protected areas",
-                    stage: "T14 (the minimal Build mandate)",
-                });
-            }
+            // Targets and protected areas are **lists**, and spec section 5
+            // prices an edit by the number of fields it writes rather than by
+            // the number of entries in a list: a target list is one field
+            // however long it is, which is also what keeps a long list from
+            // buying more interface time than the cap allows.
             let mut fields: u32 = 0;
+            if !build.targets.is_empty() {
+                fields = fields.saturating_add(1);
+            }
+            if !build.protected_areas.is_empty() {
+                fields = fields.saturating_add(1);
+            }
             if build.repair_threshold_pct != 0 {
                 fields = fields.saturating_add(1);
             }
@@ -945,13 +1114,11 @@ fn mandate_fields(mandate: &gp::v1::mandate_settings::Mandate) -> Result<u32, Pl
             Ok(fields)
         }
         gp::v1::mandate_settings::Mandate::Survey(survey) => {
+            let mut fields = u32::from(survey.scout_count != 0);
             if !survey.probe_areas.is_empty() {
-                return Err(PlanError::NotAtThisStage {
-                    construct: "Survey probe areas",
-                    stage: "T14 (Survey-lite)",
-                });
+                fields = fields.saturating_add(1);
             }
-            Ok(u32::from(survey.scout_count != 0))
+            Ok(fields)
         }
         gp::v1::mandate_settings::Mandate::Mine(mine) => {
             let mut fields: u32 = 0;
@@ -1384,10 +1551,9 @@ pub enum PlanError {
     ///
     /// | Construct | Stage |
     /// |---|---|
-    /// | `recycle`, `add_build_target`, `remove_build_target` | T14 |
     /// | `queue_structure` | S4 (capability licences) |
-    /// | Build targets and protected areas in mandate settings | T14 |
-    /// | Survey probe areas | T14 (Survey-lite) |
+    /// | a Build target naming a blueprint other than `generator` | S4 |
+    /// | a Build target anchored on a selector rather than on a voxel | S3 |
     /// | Defend and Attack mandate settings | S2 |
     /// | selector `most_threatened` | S2 |
     /// | selector filter `side: ENEMY_KNOWN` | S3 |
