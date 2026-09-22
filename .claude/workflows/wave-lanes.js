@@ -23,6 +23,9 @@
 //       extras: '...',                        // wave-specific emphasis for the builder (may be '')
 //       lens_a: '...',                        // extra checks for lens A (may be '')
 //       lens_b: '...',                        // extra checks for lens B (may be '')
+//       build_resume: '...',                  // optional: only when resuming a run whose builder
+//                                             // died mid-way (what the worktree already holds)
+//       fix_resume: '...',                    // optional: the same for a fix pass that died
 //     }],
 //   }
 //
@@ -166,12 +169,18 @@ ${JSON.stringify(findings, null, 2)}
 
 Verify each finding against the actual files before acting: apply the ones that are real (every real blocker and major; minors and nits where cheap), skip the ones that are wrong and say why. Make NEW commits (never amend, never rewrite, never force-push). Run "cargo xtask ci --quick" as you go and the full suite once at the end (to the log file, summary only, exit code checked); re-bless a golden only with the behaviour change explained. Update the PR body file at ${bodyPath(lane)} so it is accurate, adding a "Review" section that lists each finding and whether it was applied or rejected and why, then push the commits (plain "git push") and update the PR with:
     tail -n +3 ${bodyPath(lane)} > ${SCRATCH}/${lane.id}-pr-body.notitle.md && gh pr edit ${build.pr} --body-file ${SCRATCH}/${lane.id}-pr-body.notitle.md
-Then wait for the matrix ("gh pr checks ${build.pr} --watch --interval 30") and fix anything red the same way. Stop when every check is green: never merge. Return the same structured output as the builder, with notes describing what you changed.`
+Then wait for the matrix ("gh pr checks ${build.pr} --watch --interval 30") and fix anything red the same way. Stop when every check is green: never merge. Return the same structured output as the builder, with notes describing what you changed.` + resume(lane.fix_resume)
+}
+
+// Only set when a run is resumed after an agent died mid-way (an API outage): the prompts of
+// the agents that completed stay byte-identical, so they replay from the run's cache.
+function resume(note) {
+  return note ? `\n\nRESUMING A PREVIOUS ATTEMPT (read before anything else): ${note}\nStart with "git status" and "git diff" (and "git log main..HEAD") in the worktree to see exactly what that attempt left; continue from it, never discard it and never start over.` : ''
 }
 
 const results = await pipeline(
   LANES,
-  lane => agent(env(lane, 'build') + brief(lane), { label: `build:${lane.id}`, phase: 'Build', model: 'opus', effort: 'high', schema: BUILD_SCHEMA }),
+  lane => agent(env(lane, 'build') + brief(lane) + resume(lane.build_resume), { label: `build:${lane.id}`, phase: 'Build', model: 'opus', effort: 'high', schema: BUILD_SCHEMA }),
   async (build, lane) => {
     if (!build) { log(`${lane.id}: build returned nothing`); return null }
     log(`${lane.id}: build done, PR #${build.pr}, ci_green=${build.ci_green}, ${build.commits.length} commits`)
