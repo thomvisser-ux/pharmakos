@@ -22,5 +22,5 @@
 3453	0	ore_delivered	1	7	32
 3600	0	segment_ended	-	-	3600
 3600	1	recap_opened	-	-	1
-3600	2	settled	0	-	110
-3600	3	settled	1	-	95
+3600	2	settled	0	-	95
+3600	3	settled	1	-	110

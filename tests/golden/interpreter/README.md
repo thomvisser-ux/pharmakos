@@ -86,3 +86,13 @@ ticks, and that list is part of the case.
 * **A kind changed its name.** A name is append-only from the day it ships
   (item 97): every scenario file that asserts on it breaks. Add a kind; do not
   rename one.
+* **A line appeared that the interpreter did not emit.** A transcript is every
+  event of the run, not only the interpreter's, so the mandate layer shows up
+  in it wherever a case's playbook gives a beacon a writ with work in hand —
+  `place_beacon`'s new beacon is deployed on the **Mine** mandate, so its
+  fabricator buys it a mining drone on the next decision tick. Those lines are
+  as much a part of the case as the `row_committed` ones: a case that stopped
+  emitting one would mean a mandate stopped asking, and that is a behaviour
+  change like any other. What they do **not** pin is where anything stands —
+  positions stay out of a transcript (above), and the world's movement is
+  `determinism/`'s.
