@@ -66,9 +66,11 @@ that depends on it: `tests/golden/scenarios/<name>/expected.hashes.txt` is a
 per-tick chain over that exact store, so a two-seat map that generated
 differently moves the chain at tick 0. A second golden carrying the same claim
 in a weaker form would be one more file to re-bless every time the generator
-moves, for a signal the chain already gives. **Owner decides** whether this
-file should nonetheless carry `(seed, seats)` lines when a later stage wants a
-map digest without a match behind it.
+moves, for a signal the chain already gives. **PLACEHOLDER: whether this file
+should nonetheless carry `(seed, seats)` lines. OWNER, when a later stage wants
+a map digest without a match behind it.** (Spelled with the marker because a
+review found a tree-wide `grep PLACEHOLDER` missing this one — AGENTS.md §12
+fixes the spelling.)
 
 ## What a diff means
 
