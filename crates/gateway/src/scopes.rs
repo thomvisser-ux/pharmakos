@@ -16,21 +16,30 @@
 //! and forgets its annotation, the gateway's own suite goes red rather than
 //! quietly serving it under no scope at all.
 //!
-//! # Two scopes gate no method, and that is the design
+//! # One scope gates no method, and that is the design
 //!
-//! `spectate.nofog` and `admin` annotate nothing. They are not oversights:
+//! `spectate.nofog` annotates nothing, and that is not an oversight: **it gates
+//! tokens, not methods** (decisions-log item 26). Fog is a per-match
+//! server-side policy applied by [`crate::fog`], so the scope's whole job is to
+//! mark a *spectator* token as one that sees through it. That is what keeps "a
+//! seat token can never hold `spectate.nofog`" literally true while every
+//! method stays callable by an ordinary seat.
 //!
-//! * **`spectate.nofog` gates tokens, not methods** (decisions-log item 26). Fog
-//!   is a per-match server-side policy applied by [`crate::fog`], so the scope's
-//!   whole job is to mark a *spectator* token as one that sees through it. That
-//!   is what keeps "a seat token can never hold `spectate.nofog`" literally true
-//!   and keeps every method callable by an ordinary seat.
-//! * **`admin` covers lobby and match control**, which in v1 is minting and
-//!   revoking tokens, starting and ending a match -- host operations, not
-//!   JSON-RPC methods. `gamectl connect` does not exist in v1.
+//! **`admin` gated nothing until T16a, and now gates exactly four methods.**
+//! Spec section 12 gives `admin` "lobby and match control", and until this
+//! lane match control was a set of Rust calls with no caller outside a test
+//! (decisions-log item 106 (1)): nothing moved a Push. The four control
+//! methods -- `end_lull`, `advance_push`, `end_recap`, `report_host_clock` --
+//! are that sentence on the wire, and [`ADMIN_METHODS`] is the list.
 //!
-//! So `no_method_is_gated_by_a_token_only_scope` is an assertion about the
-//! design rather than a coincidence of today's method list.
+//! The reason `admin` was kept off methods is still honoured and is worth
+//! restating, because it is what the list has to keep true: an admin-gated
+//! *read* would be a way for the lobby to reach a seat's private state. None
+//! of the four reads anything of a seat's; the one thing they report about
+//! seats at all is `report_host_clock`'s aggregate `all_ready` bit. The gate
+//! that actually holds secrecy is [`crate::surface::Surface::seat_state`],
+//! which takes the subject asking and refuses anybody but that seat -- the
+//! scope has never been what protects it.
 
 pub use pharmakos_proto::gp::api::v1::{Method, Scope};
 use pharmakos_proto::scope as annotation;
@@ -108,6 +117,19 @@ pub const ALL: &[Scope] = &[
     Scope::Docs,
     Scope::SpectateNofog,
     Scope::Admin,
+];
+
+/// The methods `admin` gates: match control, and nothing else.
+///
+/// Written out so the test below can assert the list rather than the absence
+/// of one -- a method that quietly gained `admin` would otherwise be indis-
+/// tinguishable from these four. Adding to it is a `proto/**` change and needs
+/// the owner's approval like any other (AGENTS.md section 5).
+pub const ADMIN_METHODS: &[Method] = &[
+    Method::EndLull,
+    Method::AdvancePush,
+    Method::EndRecap,
+    Method::ReportHostClock,
 ];
 
 /// Scopes a **seat** token may never hold.
@@ -205,8 +227,8 @@ fn bit(scope: Scope) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ALL, METHOD_ENUM, Method, NEVER_ON_A_SEAT, Scope, ScopeSet, method_from_wire,
-        method_wire_name, required, scope_from_wire, scope_wire_name,
+        ADMIN_METHODS, ALL, METHOD_ENUM, Method, NEVER_ON_A_SEAT, Scope, ScopeSet,
+        method_from_wire, method_wire_name, required, scope_from_wire, scope_wire_name,
     };
     use pharmakos_proto::descriptor::schema;
 
@@ -289,9 +311,9 @@ mod tests {
         );
     }
 
-    /// The two token-only scopes. See the module docs.
+    /// The one token-only scope. See the module docs.
     #[test]
-    fn no_method_is_gated_by_a_token_only_scope() {
+    fn no_method_is_gated_by_spectate_nofog() {
         for method in methods() {
             let scope = required(method).expect("annotated");
             assert_ne!(
@@ -301,12 +323,35 @@ mod tests {
                  and would break the token invariant instead of the fog policy",
                 method_wire_name(method)
             );
+        }
+    }
+
+    /// `admin` gates match control and nothing else.
+    ///
+    /// Both directions, because each without the other passes vacuously: every
+    /// control method needs `admin`, and no other method does. A read that
+    /// gained `admin` would be a way for the lobby to reach a seat's private
+    /// state through a scope rather than through
+    /// `Surface::seat_state`, which is the gate that actually holds it.
+    #[test]
+    fn admin_gates_match_control_and_nothing_else() {
+        for method in ADMIN_METHODS {
+            assert_eq!(
+                required(*method),
+                Some(Scope::Admin),
+                "{} is match control and must need `admin`",
+                method_wire_name(*method)
+            );
+        }
+        for method in methods() {
+            if ADMIN_METHODS.contains(&method) {
+                continue;
+            }
             assert_ne!(
-                scope,
+                required(method).expect("annotated"),
                 Scope::Admin,
-                "{} is gated by admin: lobby and match control are host operations, not \
-                 JSON-RPC methods, and an admin-gated method is a way for admin to read a \
-                 seat's private state",
+                "{} is not match control and is gated by admin: an admin-gated read is a way \
+                 for the lobby to reach a seat's private state",
                 method_wire_name(method)
             );
         }

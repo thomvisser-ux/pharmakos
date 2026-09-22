@@ -187,6 +187,11 @@ pub enum Listing {
     Feed,
     /// `list_beacons`.
     Beacons,
+    /// `get_view`. Three numbers wide rather than one, and match-tied rather
+    /// than segment-tied, so it is [`ViewCursor`] rather than [`Cursor`] --
+    /// but the rendering, the parser and the check value are this module's,
+    /// once.
+    View,
 }
 
 impl Listing {
@@ -195,6 +200,7 @@ impl Listing {
         match self {
             Listing::Feed => 0,
             Listing::Beacons => 1,
+            Listing::View => 2,
         }
     }
 
@@ -203,6 +209,7 @@ impl Listing {
         match self {
             Listing::Feed => "the segment feed",
             Listing::Beacons => "the beacon listing",
+            Listing::View => "the view",
         }
     }
 }
@@ -337,6 +344,131 @@ impl Cursor {
         let mut bytes: Vec<u8> = Vec::with_capacity(13);
         bytes.extend_from_slice(&self.snapshot.0.to_le_bytes());
         bytes.push(self.listing.tag());
+        bytes.extend_from_slice(&self.index.to_le_bytes());
+        let hash = pharmakos_sim::digest(&bytes);
+        u32::try_from(hash & 0xffff_ffff).unwrap_or(0)
+    }
+}
+
+/// A place in the view, opaque to the client.
+///
+/// [`Cursor`] is a place in one **segment's** listing and goes stale when a
+/// segment ends. A view is not a segment's: a camera watches the Lull, the
+/// Push and the recap without interruption, and a cursor that went stale at
+/// every phase change would make the client ask for a fresh keyframe of the
+/// whole map three times a round. So this one is tied to the **match** --
+/// strictly, to the match as this gateway attached it -- and goes stale only
+/// when the world behind the view was replaced, which is
+/// [`crate::surface::Surface::attach`] and nothing else.
+///
+/// # Two stamps, and the second is what makes paging leak-proof
+///
+/// The rendering is 16 hex digits of the view's id, 16 of `from_seq`, 16 of
+/// `to_seq`, 8 of the next chunk index and 8 of a check over all four and the
+/// listing -- sixty-four lower-case hex digits.
+///
+/// `from_seq` is **what the answer is measured against**: a delta carries the
+/// chunks whose bytes for this viewer changed after it, and `from_seq == 0`
+/// means a keyframe, which no live stamp ever is (the feed's stamp starts at
+/// one). `to_seq` is **the stamp the listing was started at**, and it is the
+/// one the completing page hands back as the client's new position.
+///
+/// That second number is the whole trick, and the design sketch in
+/// `docs/design/skeleton-plan-t16a-notes.md` -- which called this three
+/// numbers wide -- did not have it. Both a keyframe and a delta are paged, so
+/// the world can move while the client is halfway through one. If the
+/// completing page handed back "wherever the feed is now", a chunk that
+/// changed during the paging at an index already passed would never be sent
+/// again. Handing back the stamp the listing **started** at costs one
+/// re-delivery of whatever moved and loses nothing, which is the right way
+/// round for a camera.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct ViewCursor {
+    /// The view this cursor belongs to. A cursor from before an `attach` is
+    /// [`crate::error::Code::StaleSnapshot`].
+    pub view_id: u64,
+    /// What the listing is measured against. Zero is a keyframe.
+    ///
+    /// **Never a sim tick**: visibility changes in a Lull and in a recap, and
+    /// neither spends one.
+    pub from_seq: u64,
+    /// The feed's stamp when this listing was started.
+    pub to_seq: u64,
+    /// The next chunk index to deliver. Zero starts a listing.
+    pub index: u32,
+}
+
+impl ViewCursor {
+    /// How many characters a rendered view cursor has.
+    pub const CHARS: usize = 64;
+
+    /// True when this cursor is a keyframe still being paged.
+    #[must_use]
+    pub const fn is_keyframe(self) -> bool {
+        self.from_seq == 0
+    }
+
+    /// The opaque text a client receives and hands back.
+    #[must_use]
+    pub fn render(self) -> String {
+        format!(
+            "{:016x}{:016x}{:016x}{:08x}{:08x}",
+            self.view_id,
+            self.from_seq,
+            self.to_seq,
+            self.index,
+            self.check()
+        )
+    }
+
+    /// Read a cursor a client handed back.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::InvalidArgument`] when the text is not a cursor
+    /// this gateway wrote, and [`crate::error::Code::StaleSnapshot`] when it
+    /// belongs to a view this gateway no longer has.
+    pub fn parse(text: &str, current: u64) -> Result<ViewCursor, Error> {
+        let refuse = || Error::invalid("that is not a cursor the view issued");
+        if text.len() != ViewCursor::CHARS
+            || !text
+                .bytes()
+                .all(|digit| matches!(digit, b'0'..=b'9' | b'a'..=b'f'))
+        {
+            return Err(refuse());
+        }
+        let field = |from: usize, to: usize| text.get(from..to).ok_or_else(refuse);
+        let view_id = u64::from_str_radix(field(0, 16)?, 16).map_err(|_| refuse())?;
+        let from_seq = u64::from_str_radix(field(16, 32)?, 16).map_err(|_| refuse())?;
+        let to_seq = u64::from_str_radix(field(32, 48)?, 16).map_err(|_| refuse())?;
+        let index = u32::from_str_radix(field(48, 56)?, 16).map_err(|_| refuse())?;
+        let check = u32::from_str_radix(field(56, 64)?, 16).map_err(|_| refuse())?;
+        let cursor = ViewCursor {
+            view_id,
+            from_seq,
+            to_seq,
+            index,
+        };
+        if cursor.check() != check {
+            return Err(refuse());
+        }
+        if cursor.view_id != current {
+            return Err(Error::stale_snapshot(
+                "that cursor was issued against a view this gateway no longer has; ask for a \
+                 keyframe",
+            ));
+        }
+        Ok(cursor)
+    }
+
+    /// The check value: the low 32 bits of the project's one hash function
+    /// over the view id, the listing, both stamps and the index.
+    fn check(self) -> u32 {
+        let mut bytes: Vec<u8> = Vec::with_capacity(29);
+        bytes.extend_from_slice(&self.view_id.to_le_bytes());
+        bytes.push(Listing::View.tag());
+        bytes.extend_from_slice(&self.from_seq.to_le_bytes());
+        bytes.extend_from_slice(&self.to_seq.to_le_bytes());
         bytes.extend_from_slice(&self.index.to_le_bytes());
         let hash = pharmakos_sim::digest(&bytes);
         u32::try_from(hash & 0xffff_ffff).unwrap_or(0)
@@ -622,7 +754,7 @@ fn clock(at: Ms) -> String {
 mod tests {
     use super::{
         Cursor, DIGEST_PERIOD, Event, Kind, Listing, MAX_PAGE_EVENTS, SegmentFeed, SnapshotId,
-        digests,
+        ViewCursor, digests,
     };
     use crate::error::Code;
     use crate::fog::{Audience, Blind, FogFilter, FogPolicy, Viewer};
@@ -983,6 +1115,96 @@ mod tests {
             .page(Viewer::Seat(SeatId::new(0)), &filter, None, usize::MAX)
             .expect("a page");
         assert_eq!(page.events.len(), MAX_PAGE_EVENTS);
+    }
+
+    #[test]
+    fn a_view_cursor_round_trips_and_is_opaque() {
+        let cursor = ViewCursor {
+            view_id: 0x00ca_5cad_ed00_0001,
+            from_seq: 12,
+            to_seq: 40,
+            index: 7,
+        };
+        let text = cursor.render();
+        assert_eq!(text.len(), ViewCursor::CHARS);
+        assert!(
+            text.bytes()
+                .all(|digit| matches!(digit, b'0'..=b'9' | b'a'..=b'f')),
+            "{text}"
+        );
+        assert_eq!(
+            ViewCursor::parse(&text, cursor.view_id).expect("its own view"),
+            cursor
+        );
+        assert!(!cursor.is_keyframe());
+        assert!(
+            ViewCursor {
+                from_seq: 0,
+                ..cursor
+            }
+            .is_keyframe(),
+            "a keyframe is measured against nothing, and no live stamp is zero"
+        );
+    }
+
+    #[test]
+    fn a_view_cursor_from_another_view_is_stale_and_a_damaged_one_is_refused() {
+        let cursor = ViewCursor {
+            view_id: 9,
+            from_seq: 1,
+            to_seq: 1,
+            index: 0,
+        };
+        let text = cursor.render();
+        assert_eq!(
+            ViewCursor::parse(&text, 10).expect_err("another view").code,
+            Code::StaleSnapshot,
+            "a restore mints a new view and the client asks for a keyframe"
+        );
+        let mut damaged = text.clone();
+        damaged.replace_range(20..21, "f");
+        assert_eq!(
+            ViewCursor::parse(&damaged, 9).expect_err("refused").code,
+            Code::InvalidArgument
+        );
+        assert_eq!(
+            ViewCursor::parse("nonsense", 9).expect_err("refused").code,
+            Code::InvalidArgument
+        );
+        assert_eq!(
+            ViewCursor::parse(&text.to_uppercase(), 9)
+                .expect_err("refused")
+                .code,
+            Code::InvalidArgument,
+            "upper-case hex is not the rendering"
+        );
+    }
+
+    /// A feed cursor and a view cursor are different lengths and different
+    /// listings, so neither can be read as a place in the other.
+    #[test]
+    fn a_view_cursor_is_not_a_feed_cursor() {
+        let snapshot = snapshot();
+        let feed = Cursor::at(snapshot, Listing::Feed, 3).render();
+        assert_eq!(
+            ViewCursor::parse(&feed, snapshot.raw())
+                .expect_err("an event index is not a place in a view")
+                .code,
+            Code::InvalidArgument
+        );
+        let view = ViewCursor {
+            view_id: snapshot.raw(),
+            from_seq: 3,
+            to_seq: 3,
+            index: 0,
+        }
+        .render();
+        assert_eq!(
+            Cursor::parse(&view, snapshot, Listing::Feed)
+                .expect_err("and not the other way round")
+                .code,
+            Code::InvalidArgument
+        );
     }
 
     #[test]

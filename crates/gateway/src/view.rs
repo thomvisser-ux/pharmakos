@@ -19,7 +19,7 @@ use pharmakos_proto::gp::v1::beacon_filter::MandateKind as WireMandate;
 use pharmakos_sim::knowledge::Position;
 use pharmakos_sim::math::fixed::Fx;
 use pharmakos_sim::seams::MandateKind;
-use pharmakos_sim::tables::BeaconId;
+use pharmakos_sim::tables::{BeaconId, SeatId, StructureKind, UnitKind};
 
 /// How many digits a rendered beacon id pads to.
 ///
@@ -129,6 +129,48 @@ pub fn mandate_from_id(id: u8) -> MandateKind {
         5 => MandateKind::Survey,
         _ => MandateKind::None,
     }
+}
+
+/// A unit kind as `gp.api.v1.ViewEntity.subtype` spells it.
+///
+/// `lower_snake_case`, like every other free-form name this project puts on
+/// the wire, and written out here rather than taken from a `Debug` derive: a
+/// `Debug` spelling changes whenever somebody renames a variant, and a client
+/// draws a model from this string.
+#[must_use]
+pub const fn unit_subtype(kind: UnitKind) -> &'static str {
+    match kind {
+        UnitKind::Commander => "commander",
+        UnitKind::BuildDrone => "build_drone",
+        UnitKind::MiningDrone => "mining_drone",
+        UnitKind::RepairDrone => "repair_drone",
+        UnitKind::Raider => "raider",
+        UnitKind::Scout => "scout",
+    }
+}
+
+/// A structure kind as `gp.api.v1.ViewEntity.subtype` spells it.
+#[must_use]
+pub const fn structure_subtype(kind: StructureKind) -> &'static str {
+    match kind {
+        StructureKind::Generator => "generator",
+        StructureKind::Autocannon => "autocannon",
+        StructureKind::Mortar => "mortar",
+        StructureKind::SurveyPost => "survey_post",
+        StructureKind::ResonanceSpire => "resonance_spire",
+        StructureKind::Wall => "wall",
+    }
+}
+
+/// A seat as `gp.api.v1.ViewEntity.owner` spells it: `seat.0`.
+///
+/// The same spelling [`crate::token::Subject::render`] writes into the audit
+/// log, because no answer of this gateway has ever carried a bare seat
+/// *number* and one would be a second way to name the same thing. Seats are
+/// zero-based in every golden this project has.
+#[must_use]
+pub fn owner_text(seat: SeatId) -> String {
+    format!("seat.{}", seat.raw())
 }
 
 /// A 64-bit match seed as the quoted hexadecimal `gp.api.v1` carries.

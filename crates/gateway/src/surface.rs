@@ -77,8 +77,10 @@
 //! spectator. There is no second path to the private store for a handler to
 //! reach for.
 
+pub mod control;
 pub mod knowledge;
 pub mod planning;
+pub mod watch;
 
 use crate::audit::{AuditLog, Outcome};
 use crate::error::Error;
@@ -90,6 +92,7 @@ use crate::rpc::{self, Request};
 use crate::scopes::{self, Scope};
 use crate::time::MatchTime;
 use crate::token::{Grant, Handle, Subject, Token, TokenStore};
+use crate::viewfeed::ViewFeed;
 use pharmakos_proto::gp::api::v1::status::Phase;
 use pharmakos_proto::gp::api::v1::verify_plan::Depth;
 use pharmakos_proto::gp::api::v1::{Method, VerifyReport};
@@ -270,16 +273,29 @@ pub struct Surface {
     /// second would put the gateway's tick a whole Lull ahead of the runner's
     /// before anybody had planned anything.
     lull_remaining_ms: Option<Ms>,
-    /// How much of **this** Lull the client has reported spending, in ticks,
+    /// Host time spent in the **current** phase, as `report_host_clock` last
+    /// reported it. `None` until a client says, and cleared when the phase
+    /// ends.
+    ///
+    /// Phase-neutral where `lull_remaining_ms` is a Lull's alone: a recap and
+    /// an ended match spend no sim tick either, and a gateway whose tick stood
+    /// still through both would hand every token
+    /// [`crate::limit::CALLS_PER_TICK`] calls for the whole of each -- which
+    /// is exactly where the full-map unlock lands (decisions-log item
+    /// 107 (3)).
+    reported_elapsed_ms: Option<Ms>,
+    /// How much of **this** phase the client has reported spending, in ticks,
     /// as a high-water mark. A client that reports a *larger* remaining than
     /// before has not un-spent the time it already spent, so this never goes
-    /// down within a Lull. Reset to zero when the Lull ends.
-    lull_elapsed: u32,
+    /// down within a phase. Reset to zero when the phase ends.
+    phase_elapsed: u32,
     /// The ticks of host time that no sim tick covers: the sum of every Lull
-    /// this match has finished. Added to the runner's tick for as long as the
-    /// match lasts, which is what makes [`MatchTime::tick`] **monotonic**
-    /// across a Lull -> Push boundary. See [`Surface::sync_time`].
+    /// and every recap this match has finished. Added to the runner's tick for
+    /// as long as the match lasts, which is what makes [`MatchTime::tick`]
+    /// **monotonic** across a phase boundary. See [`Surface::sync_time`].
     lull_offset: u32,
+    /// The view feed's derived, unhashed state ([`crate::viewfeed`]).
+    views: ViewFeed,
 }
 
 impl Surface {
@@ -321,8 +337,10 @@ impl Surface {
             host: None,
             feed_anchor: Tick::ZERO,
             lull_remaining_ms: None,
-            lull_elapsed: 0,
+            reported_elapsed_ms: None,
+            phase_elapsed: 0,
             lull_offset: 0,
+            views: ViewFeed::new(),
         })
     }
 
@@ -442,7 +460,40 @@ impl Surface {
         self.host = Some(host);
         self.sync_time();
         self.begin_segment(round, 0);
+        // The view opens over the world it is a view of: the generated map is
+        // encoded once here and every keyframe of the match is served from it.
+        // Minting the view's id here is also what makes every cursor issued
+        // before this call stale, which is the answer T17's restore needs.
+        {
+            let Surface {
+                views,
+                host,
+                match_seed,
+                ..
+            } = self;
+            if let Some(host) = host.as_ref() {
+                views.attach(host.world().voxels(), *match_seed);
+            }
+        }
         self.absorb_events()
+    }
+
+    /// The view feed, to read. The watch handler is the only thing that writes
+    /// it, and no client reaches it except through `get_view`.
+    #[must_use]
+    pub const fn views(&self) -> &ViewFeed {
+        &self.views
+    }
+
+    /// Game milliseconds since the current segment opened -- the epoch
+    /// `gp.api.v1.Event.at_ms` and `gp.api.v1.GetViewResponse.at_ms` share, so
+    /// that a recording can interleave view frames and feed events on one
+    /// clock (S7). Zero in a Lull, because a Lull spends no game time.
+    #[must_use]
+    pub fn segment_elapsed_ms(&self) -> Ms {
+        self.host.as_ref().map_or(Ms::ZERO, |host| {
+            Ms::from_ticks(host.runner().tick().since(self.feed_anchor))
+        })
     }
 
     /// True when a match is hosted.
@@ -488,6 +539,62 @@ impl Surface {
         self.sync_time();
     }
 
+    /// The host's own clock for the phase the match is in, as
+    /// `report_host_clock` reports it.
+    ///
+    /// `elapsed` is host time spent in the **current** phase and is what moves
+    /// [`MatchTime::tick`] in every phase that spends no sim tick;
+    /// `remaining` is what the `_status` footer shows as left, which only a
+    /// Lull has.
+    ///
+    /// # The input is client-attested, and is bounded rather than trusted
+    ///
+    /// The gateway has no clock to check this against (AGENTS.md section
+    /// 4.5), and the rate limiter counts in the ticks this number moves. So
+    /// the two properties a clock has are required rather than assumed:
+    /// **monotone within a phase** -- time already spent is not un-spent --
+    /// and **no single report further on than
+    /// [`crate::surface::control::MAX_CLOCK_STEP_MS`]**, which turns "one call
+    /// refills any number of windows" into "a client that stalled reports in
+    /// steps". Both are refused rather than clamped, and the refusal is
+    /// audited like any other.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::InvalidArgument`] for a negative, backwards or
+    /// jumping clock.
+    pub fn set_host_clock(&mut self, elapsed: Ms, remaining: Ms) -> Result<(), Error> {
+        if elapsed.raw() < 0 || remaining.raw() < 0 {
+            return Err(Error::invalid(
+                "a clock is reported in game milliseconds and neither figure is ever negative",
+            ));
+        }
+        let last = self.reported_elapsed_ms.unwrap_or(Ms::ZERO);
+        if elapsed < last {
+            return Err(Error::invalid(format!(
+                "this phase's clock was last reported at {} ms and this report is {} ms: time \
+                 already spent in a phase is not un-spent, and a backwards clock is refused \
+                 rather than clamped",
+                last.raw(),
+                elapsed.raw()
+            )));
+        }
+        let step = elapsed.raw().saturating_sub(last.raw());
+        if step > crate::surface::control::MAX_CLOCK_STEP_MS {
+            return Err(Error::invalid(format!(
+                "one report may carry this phase's clock at most {} ms further on and this \
+                 carries it {step} ms; after a long stall, report in steps",
+                crate::surface::control::MAX_CLOCK_STEP_MS
+            )));
+        }
+        self.reported_elapsed_ms = Some(elapsed);
+        if self.time.phase == Phase::Lull {
+            self.lull_remaining_ms = Some(remaining);
+        }
+        self.sync_time();
+        Ok(())
+    }
+
     /// True when every seat of the match has said it is ready.
     ///
     /// What the host polls to decide whether to end the Lull early. The other
@@ -526,6 +633,9 @@ impl Surface {
         for seat in &mut self.seats {
             seat.ready = false;
         }
+        // A Lull opening is a moment a view can change without a tick: the
+        // phase moved, and the recap's world is now the planning world.
+        self.views.bump();
         Ok(())
     }
 
@@ -578,7 +688,8 @@ impl Surface {
         self.host_mut()?.seal_plans(plans)?;
         let started = self.host_mut()?.begin_push();
         if started {
-            self.close_lull();
+            self.close_phase();
+            self.views.bump();
         }
         self.sync_time();
         self.absorb_events()?;
@@ -630,18 +741,82 @@ impl Surface {
     /// # Errors
     ///
     /// As [`Surface::host`].
+    /// One tick of the Push, with the events it produced on the feed, the fog
+    /// policy brought up to date, and the view feed stamped.
+    ///
+    /// # Three things happen after the tick, and all three are one sentence
+    ///
+    /// **The fog policy follows the world.** Spec section 12 unlocks a seat's
+    /// fog on elimination and everyone's at match end, and no token is
+    /// reissued for either. Match end had a caller since T13;
+    /// [`FogPolicy::eliminate`] had none at all until T16a, so a seat that
+    /// lost its last beacon went on seeing a fogged world for the rest of the
+    /// match.
+    ///
+    /// **The view feed is stamped.** `VoxelStore::settled()` is the sim's own
+    /// answer to "which chunks did this tick write", refreshed inside the tick
+    /// that wrote them, so the gateway asks rather than deriving. The stamp
+    /// moves first and the chunks are marked at the new stamp, so a cursor
+    /// issued before this tick is strictly older than anything it wrote.
+    ///
+    /// **Neither is hashed.** Both are derived state; see
+    /// [`crate::viewfeed`].
+    ///
+    /// # Errors
+    ///
+    /// As [`Surface::host`].
     pub fn step(&mut self) -> Result<Option<TickReport>, Error> {
         let report = self.host_mut()?.step();
         self.sync_time();
         self.absorb_events()?;
+
+        let unlocked_before = self.fog.eliminated().len();
+        let ended_before = self.fog.ended();
         if let Some(report) = report {
             if report.match_ended {
-                // Spec section 12: the fog is unlocked at match end, and no
-                // token is reissued for it.
                 self.fog.end_match();
             }
         }
+        for seat in self.fallen_seats() {
+            self.fog.eliminate(seat);
+        }
+        let policy_moved =
+            self.fog.eliminated().len() != unlocked_before || self.fog.ended() != ended_before;
+
+        if report.is_some() || policy_moved {
+            self.views.bump();
+        }
+        {
+            let Surface { views, host, .. } = self;
+            if let Some(host) = host.as_ref() {
+                views.stamp(host.world().voxels().settled());
+            }
+        }
         Ok(report)
+    }
+
+    /// The seats the world says are no longer standing.
+    ///
+    /// Read from [`pharmakos_sim::tables::SeatTable::is_alive`], which is the
+    /// sim's own rule (T10: `Standing` / `Fallen` / `Unplaced`, and only
+    /// `Fallen` is elimination), rather than from a rule of this crate's.
+    ///
+    /// Empty when no match is hosted: a lobby has eliminated nobody.
+    fn fallen_seats(&self) -> Vec<SeatId> {
+        let Some(host) = self.host.as_ref() else {
+            return Vec::new();
+        };
+        let seats = host.world().seats();
+        let mut fallen: Vec<SeatId> = Vec::new();
+        for row in 0..seats.seats().len() {
+            if seats.is_alive(row) {
+                continue;
+            }
+            if let Some(raw) = seats.seats().get(row).copied() {
+                fallen.push(SeatId::new(raw));
+            }
+        }
+        fallen
     }
 
     /// End the recap. Returns false when the runner was not in a recap.
@@ -652,11 +827,12 @@ impl Surface {
     pub fn end_recap(&mut self) -> Result<bool, Error> {
         let ended = self.host_mut()?.end_recap();
         if ended {
-            // The recap's own reported remaining is the recap's; the Lull that
-            // opens next counts from whatever its client says, not from what
-            // the recap had left. (`lull_elapsed` is already zero here: only a
-            // Lull raises it, and `begin_push` folded the last one away.)
-            self.close_lull();
+            // The recap's own reported clock is the recap's; the Lull that
+            // opens next counts from whatever its client says. What the recap
+            // spent is folded into the offset here, which is what keeps
+            // `MatchTime::tick` monotonic across the boundary.
+            self.close_phase();
+            self.views.bump();
         }
         self.sync_time();
         self.absorb_events()?;
@@ -776,18 +952,26 @@ impl Surface {
             .r#match
             .as_ref()
             .map_or(0, |settings| settings.lull_ms);
-        let elapsed_in_lull = match (in_lull, reported) {
-            (true, Some(left)) => {
-                Ms::new(lull_ms.saturating_sub(left.raw()).max(0)).to_ticks_floor()
+        // In a Push the sim's own tick is the clock. Outside one, the host's
+        // own report is taken first -- it is phase-neutral and is what a recap
+        // and an ended match have -- and the Lull's countdown is the older
+        // derivation kept for a client that reports only that (item 99's
+        // arrangement, and what `set_phase_remaining_ms` still does).
+        let elapsed_in_phase = if in_push {
+            0
+        } else if let Some(spent) = self.reported_elapsed_ms {
+            spent.to_ticks_floor()
+        } else {
+            match (in_lull, reported) {
+                (true, Some(left)) => {
+                    Ms::new(lull_ms.saturating_sub(left.raw()).max(0)).to_ticks_floor()
+                }
+                _ => 0,
             }
-            // In a Push the sim's own tick is the clock; in a recap there is no
-            // declared length to measure against; and before a client has said
-            // anything there is nothing to derive from.
-            _ => 0,
         };
         let sim_tick = runner.tick().raw();
         let carried = self.lull_offset;
-        self.lull_elapsed = self.lull_elapsed.max(elapsed_in_lull);
+        self.phase_elapsed = self.phase_elapsed.max(elapsed_in_phase);
         self.time = MatchTime {
             // The sim's tick, plus every tick of host time no sim tick covered.
             // See the method's own doc for why that is not a clock read, and
@@ -795,7 +979,7 @@ impl Surface {
             tick: Tick::new(
                 sim_tick
                     .saturating_add(carried)
-                    .saturating_add(self.lull_elapsed),
+                    .saturating_add(self.phase_elapsed),
             ),
             phase,
             phase_remaining_ms: remaining,
@@ -804,17 +988,19 @@ impl Surface {
         };
     }
 
-    /// The Lull is over: carry what it spent, and forget its timer.
+    /// A phase that consumes no sim tick is over: carry what it spent, and
+    /// forget its clock.
     ///
-    /// Called where a phase that consumes no sim tick ends. Folding
-    /// `lull_elapsed` into `lull_offset` is what keeps [`MatchTime::tick`]
-    /// monotonic (see [`Surface::sync_time`]); clearing `lull_remaining_ms` is
-    /// what stops the next phase reporting the last one's leftover as its own
-    /// `phase_remaining_ms`.
-    fn close_lull(&mut self) {
-        self.lull_offset = self.lull_offset.saturating_add(self.lull_elapsed);
-        self.lull_elapsed = 0;
+    /// Folding `phase_elapsed` into `lull_offset` is what keeps
+    /// [`MatchTime::tick`] monotonic (see [`Surface::sync_time`]); clearing
+    /// the two reported figures is what stops the next phase reporting the
+    /// last one's leftover as its own, and what lets the monotone check in
+    /// [`Surface::set_host_clock`] start again from zero.
+    fn close_phase(&mut self) {
+        self.lull_offset = self.lull_offset.saturating_add(self.phase_elapsed);
+        self.phase_elapsed = 0;
         self.lull_remaining_ms = None;
+        self.reported_elapsed_ms = None;
     }
 
     /// Drain the sim's event bus onto the segment feed.
@@ -1394,6 +1580,17 @@ impl Surface {
             Method::ListDrafts => self.list_drafts(subject),
             Method::GetSafePlan => self.get_safe_plan(),
             Method::SubmitPlan => self.submit_plan(subject, request),
+
+            // The view.
+            Method::GetView => self.get_view(subject, held, request, vision),
+
+            // Match control. Four `admin` methods, and the only handlers of
+            // this crate that may drive the match -- `surface/control.rs` says
+            // why, and `tests/confinement.rs` holds the rule.
+            Method::EndLull => self.serve_end_lull(),
+            Method::AdvancePush => self.serve_advance_push(request),
+            Method::EndRecap => self.serve_end_recap(),
+            Method::ReportHostClock => self.serve_report_host_clock(request),
 
             // The four `gateway.proto` gives no request/response pair at all,
             // plus `METHOD_UNSPECIFIED`, which `method_from_wire` already

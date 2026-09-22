@@ -31,14 +31,39 @@
 //!    playbooks" is checkable rather than asserted.
 //! 5. **No research build, anywhere.** [`NO_DRY_RUNS`]: no file of this crate
 //!    names `fork` or the sim's `research` feature, so no seat can reach either.
-//! 6. **The match is stepped in one module.** [`STEPPING`] and
-//!    [`the_match_is_stepped_in_one_module`]. T9's version of this said
-//!    "never", and T13 changed the fact rather than the rule: the gateway
-//!    *hosts* the match now, so something here has to build a world and drive a
-//!    runner. What "no dry runs" is actually about is that **no method handler
-//!    may** -- so `src/host.rs` is the one module that names a stepping call,
-//!    `src/surface.rs` may reach one only through `host_mut()`, and the handler
-//!    modules may not name one at all.
+//! 6. **The match is stepped in one module, and driven from one more.**
+//!    [`STEPPING`] and [`the_match_is_stepped_in_one_module`].
+//!
+//!    T9's version said "never". T13 changed the fact rather than the rule:
+//!    the gateway *hosts* the match, so something here has to build a world
+//!    and drive a runner, and `src/host.rs` became the one module that names a
+//!    stepping call.
+//!
+//!    **T16a changes the rule itself** (decisions-log item 107 (4)), because
+//!    before this lane nothing outside a test called `Host::step` at all and
+//!    the Push therefore had no owner. The rule is now:
+//!
+//!    > No handler may step or seal, **except** the admin-scoped control
+//!    > handlers in `surface/control.rs`, which may drive only the live match
+//!    > through the surface's three driving methods, and may name none of
+//!    > `Runner`, `Host`, `World`, `host_mut`, `seal_plans`, `seal_playbook`,
+//!    > `snapshot`, `.clone()`, `file_voxel_edit` or `file_damage`.
+//!
+//!    So: `src/host.rs` names the stepping calls, `src/surface.rs` reaches
+//!    them only through `host_mut()`, `src/surface/control.rs` may name the
+//!    three driving methods and nothing else on the list, and the read
+//!    handlers may name none of it. `every_control_handler_needs_the_admin_scope_in_the_schema`
+//!    in `tests/control.rs` is the other half: the exemption is for
+//!    admin-scoped methods, and the scope is read off the descriptor set
+//!    rather than off this file.
+//!
+//! 7. **No wire method files a voxel edit or a damage order.**
+//!    [`no_wire_method_files_a_voxel_edit_or_a_damage_order`]. `Host` gained
+//!    two public mutators at T16a as a **test seam** -- nothing on `main`
+//!    edits a voxel or kills a seat in a hosted match, and three acceptance
+//!    lines about fog need one to. They are reached by no method, and the
+//!    scenario runner must not grow a dependency on them without the owner's
+//!    word.
 //!
 //! And then the rule that is about the *schema* rather than the source: a
 //! playbook is data with a closed vocabulary, and no field of that vocabulary
@@ -166,6 +191,19 @@ const STEPPING: &[(&str, &str)] = &[
         "a world is built by the match host and by nothing else",
     ),
     (
+        "world_mut",
+        "the world is written by the match host and by nothing else: a handler holding it could \
+         put a voxel edit or a damage order into a match from inside a read",
+    ),
+    (
+        "file_voxel_edit",
+        "the host-side test seam: no wire method may reach it (decisions-log item 107 (7))",
+    ),
+    (
+        "file_damage",
+        "the host-side test seam: no wire method may reach it (decisions-log item 107 (7))",
+    ),
+    (
         "Runner::new",
         "a runner is made by the match host and by nothing else",
     ),
@@ -199,13 +237,55 @@ const STEPPING: &[(&str, &str)] = &[
 /// have put the second door at `begin_push`, where nobody is listening for its
 /// refusal; a rule that allowed both would have let a handler rewrite the
 /// match.
-const HANDLER_MODULES: &[&str] = &["knowledge.rs", "planning.rs"];
+const HANDLER_MODULES: &[&str] = &["knowledge.rs", "planning.rs", "watch.rs"];
 
 /// The module that may name [`STEPPING`]'s needles outright.
 const HOST_MODULE: &str = "host.rs";
 
 /// The module that may *reach* them, and only through the host.
 const HOST_DRIVER_MODULE: &str = "surface.rs";
+
+/// The one handler module that may drive the live match (item 107 (4)).
+///
+/// Matched by its **bare file name**, like every other module on these lists,
+/// which is why the view handler is `surface/watch.rs` and not
+/// `surface/view.rs`: `src/view.rs` already exists and a scan that keyed on a
+/// bare name could not tell the two apart.
+const CONTROL_MODULE: &str = "control.rs";
+
+/// What [`CONTROL_MODULE`] may name of [`STEPPING`]: the surface's three
+/// driving methods, and those alone.
+const CONTROL_MAY_DRIVE: &[&str] = &[".step(", "begin_push", "end_recap"];
+
+/// What [`CONTROL_MODULE`] may never name.
+///
+/// The exemption above is "drive the live match", not "reach into it". A
+/// control handler that could name a `Runner`, a `World` or `host_mut` could
+/// do anything the host can; one that could `.clone()` could fork a match in a
+/// crate whose whole rule is that it does not
+/// (AGENTS.md section 3 rule 2).
+const CONTROL_BANNED: &[(&str, &str)] = &[
+    ("Runner", "the runner is the host's, not a handler's"),
+    ("Host", "the host type is the host module's"),
+    ("World", "the world is the host's"),
+    (
+        "host_mut",
+        "a control handler drives the surface, which drives the host: two doors would be two \
+         places the phase check could be forgotten",
+    ),
+    ("seal_plans", "sealing is the host's (item 103 (1))"),
+    ("seal_playbook", "the runner's spelling of the same thing"),
+    (
+        "snapshot",
+        "the frozen planning snapshot is a read the knowledge handlers already have",
+    ),
+    (
+        ".clone()",
+        "a cloned match is a forked match, in a crate that must not fork one",
+    ),
+    ("file_voxel_edit", "the host-side test seam"),
+    ("file_damage", "the host-side test seam"),
+];
 
 /// The `#[allow]`s this crate is permitted, each with the reason it is not a
 /// determinism allowance.
@@ -409,29 +489,33 @@ fn no_research_build_is_named_anywhere_in_the_crate() {
     );
 }
 
-/// The match is built and stepped in `host.rs`, reached only through the host
-/// from `surface.rs`, and named nowhere else.
+/// The match is built and stepped in `host.rs`, driven from `surface.rs` and
+/// from `surface/control.rs`, and named nowhere else.
 ///
-/// Three assertions, and the middle one is the one that matters. A method
-/// handler lives in `surface/knowledge.rs` or `surface/planning.rs`; neither
-/// file may name a stepping call at all, so `verify_plan`, `estimate_route`,
-/// `render_plan`, `patch_plan`, `get_economy_forecast` and
-/// `instantiate_template` cannot answer "what would happen" by making it
-/// happen. `surface.rs` drives the match, and every line of it that reaches a
-/// stepping call has to go through `host_mut()` -- so there is no second path
-/// to the runner for a handler in that file to reach for either.
+/// Four assertions, and the rule they hold is the one T16a changed -- see the
+/// module docs, rule 6.
+///
+/// * **Nothing outside those three names a stepping call at all**, so a read
+///   handler cannot answer "what would happen" by making it happen.
+/// * **`surface.rs` reaches the runner only through `host_mut()`**, so there
+///   is no second path to it in the file that drives it.
+/// * **`surface/control.rs` names the three driving methods and nothing else
+///   on the list**, which is the whole of the exemption: it may move the live
+///   match on, and it may not reach inside it.
+/// * **Each exemption guards something**: the host really does build and step
+///   a match, and the control module really does drive one. An exemption over
+///   an empty room is a rule that has quietly stopped applying.
 #[test]
 fn the_match_is_stepped_in_one_module() {
-    let findings = scan_except(STEPPING, &[HOST_MODULE, HOST_DRIVER_MODULE]);
+    let findings = scan_except(STEPPING, &[HOST_MODULE, HOST_DRIVER_MODULE, CONTROL_MODULE]);
     assert!(
         findings.is_empty(),
-        "the match is stepped outside {HOST_MODULE}:\n{}",
+        "the match is stepped outside {HOST_MODULE}, {HOST_DRIVER_MODULE} and {CONTROL_MODULE}:\n{}",
         findings.join("\n")
     );
 
-    let driver = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("src")
-        .join(HOST_DRIVER_MODULE);
+    let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
+    let driver = source.join(HOST_DRIVER_MODULE);
     let text = std::fs::read_to_string(&driver).expect("the surface is where it always was");
     let mut direct: Vec<String> = Vec::new();
     for (number, line) in code_lines(&text) {
@@ -454,11 +538,43 @@ fn the_match_is_stepped_in_one_module() {
         direct.join("\n")
     );
 
-    // And the exemption is not guarding an empty room: the host really does
-    // build and step the match.
-    let host = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("src")
-        .join(HOST_MODULE);
+    // The control module: the three driving methods, and nothing else.
+    let control = source.join("surface").join(CONTROL_MODULE);
+    let control_text =
+        std::fs::read_to_string(&control).expect("the control handlers are where they live");
+    let control_lines = code_lines(&control_text);
+    assert!(
+        control_lines.len() > 40,
+        "{CONTROL_MODULE} read as {} lines of code; the scan is looking at the wrong file",
+        control_lines.len()
+    );
+    let mut overreach: Vec<String> = Vec::new();
+    for (number, line) in &control_lines {
+        for (needle, _) in STEPPING {
+            if uses(line, needle) && !CONTROL_MAY_DRIVE.contains(needle) {
+                overreach.push(format!(
+                    "{CONTROL_MODULE}:{number}: `{needle}`\n    {}",
+                    line.trim()
+                ));
+            }
+        }
+        for (needle, why) in CONTROL_BANNED {
+            if uses(line, needle) {
+                overreach.push(format!(
+                    "{CONTROL_MODULE}:{number}: `{needle}` -- {why}\n    {}",
+                    line.trim()
+                ));
+            }
+        }
+    }
+    assert!(
+        overreach.is_empty(),
+        "a control handler reaches past the three driving methods:\n{}",
+        overreach.join("\n")
+    );
+
+    // And neither exemption is guarding an empty room.
+    let host = source.join(HOST_MODULE);
     let host_text = std::fs::read_to_string(&host).expect("the host is where it was written");
     let host_lines = code_lines(&host_text);
     for (needle, _) in STEPPING {
@@ -466,6 +582,59 @@ fn the_match_is_stepped_in_one_module() {
             host_lines.iter().any(|(_, line)| uses(line, needle)),
             "`{needle}` is on the stepping list and nothing in {HOST_MODULE} does it, so the \
              exemption is guarding nothing"
+        );
+    }
+    for needle in CONTROL_MAY_DRIVE {
+        assert!(
+            control_lines.iter().any(|(_, line)| uses(line, needle)),
+            "`{needle}` is what {CONTROL_MODULE} is exempted for and it does not do it, so the \
+             exemption is guarding nothing"
+        );
+    }
+}
+
+/// The host-side test seam is reached by no wire method (item 107 (7)).
+///
+/// The scan above exempts `surface.rs` for anything reached through
+/// `host_mut()`, which is right for a stepping call and wrong for these two:
+/// `self.host_mut()?.file_voxel_edit(..)` inside a dispatch arm would pass it
+/// and would be a wire method that edits the world. So the two names are
+/// checked separately, over the whole crate, with **no** exemption but the
+/// module that defines them.
+///
+/// `Host::file_voxel_edit` and `Host::file_damage` exist because nothing on
+/// `main` edits a voxel or kills a seat in a hosted match -- combat's craters
+/// are S2's and construction's sets are T14's -- and three of this lane's
+/// acceptance lines are about what a seat may see of an edit and of an
+/// elimination.
+#[test]
+fn no_wire_method_files_a_voxel_edit_or_a_damage_order() {
+    const SEAM: &[(&str, &str)] = &[
+        (
+            "file_voxel_edit",
+            "a host-side test seam, reached by no wire method",
+        ),
+        (
+            "file_damage",
+            "a host-side test seam, reached by no wire method",
+        ),
+    ];
+    let findings = scan_except(SEAM, &[HOST_MODULE]);
+    assert!(
+        findings.is_empty(),
+        "the host-side test seam is reachable from a method:\n{}",
+        findings.join("\n")
+    );
+
+    let host = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join(HOST_MODULE);
+    let text = std::fs::read_to_string(&host).expect("the host is where it was written");
+    let lines = code_lines(&text);
+    for (needle, _) in SEAM {
+        assert!(
+            lines.iter().any(|(_, line)| uses(line, needle)),
+            "`{needle}` is guarded everywhere and defined nowhere, so this test guards nothing"
         );
     }
 }
