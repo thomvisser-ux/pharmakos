@@ -1,0 +1,14 @@
+# A watch session, as the lobby and the camera drive it together.
+# The camera holds the seat's connection and the lobby holds the admin's; the
+# gateway reads no clock, so the lobby's `report_host_clock` is what moves the
+# gateway's tick in every phase that spends no sim tick.
+# call	method	connection	answer
+1	get_view	seat	keyframe: 1 pages, 288 chunks, 5 entities
+2	report_host_clock	admin	all_ready=Some(Bool(false))
+3	end_lull	admin	phase=push
+4	advance_push	admin	advanced_ms=Some(Number("200")), phase=push
+5	get_view	seat	delta: 0 chunks, 5 entities, at_ms=Some(Number("200"))
+6	advance_push	admin	skip: 1 call(s), phase=recap
+7	report_host_clock	admin	tick moved by 40
+8	end_recap	admin	phase=lull
+9	get_view	seat	delta: 0 chunks, 5 entities

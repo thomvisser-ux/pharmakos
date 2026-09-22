@@ -1,0 +1,15 @@
+# One tick of a hosted match through every viewer's `get_view` (item 107 (5)).
+# Two voxels of ONE chunk were turned to air in the same tick: `seen` is inside
+# seat 0's core sphere and `unseen` is outside it, so the chunk is half seen.
+# The material column is what THAT viewer's own bytes say at that voxel.
+# policy	viewer	chunks	seen	unseen	entities
+fogged	seat.0	288	air	dirt	b_00 u_1 u_2 u_3 u_4
+fogged	seat.1	288	stone	dirt	b_01 u_1 u_2 u_3 u_4
+fogged	spectator	0	-	-	-
+fogged	spectator.nofog	288	air	air	b_00 b_01 u_1 u_2 u_3 u_4 u_5 u_6 u_7 u_8
+fogged	admin	0	-	-	-
+match-ended	seat.0	288	air	air	b_00 b_01 u_1 u_2 u_3 u_4 u_5 u_6 u_7 u_8
+match-ended	seat.1	288	air	air	b_00 b_01 u_1 u_2 u_3 u_4 u_5 u_6 u_7 u_8
+match-ended	spectator	0	-	-	-
+match-ended	spectator.nofog	288	air	air	b_00 b_01 u_1 u_2 u_3 u_4 u_5 u_6 u_7 u_8
+match-ended	admin	0	-	-	-

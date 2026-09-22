@@ -580,7 +580,7 @@ fn entitled_bytes<V: Vision>(
 
 #[cfg(test)]
 mod tests {
-    use super::{Sight, ViewFeed};
+    use super::{Sight, VIEW_PAGE_BYTES, ViewFeed};
     use crate::fog::{Blind, KnownVoxels, Viewer};
     use pharmakos_proto::chunk_rle;
     use pharmakos_proto::gp::v1::Voxel;
@@ -732,6 +732,67 @@ mod tests {
             "u_1",
             "another viewer's numbering is its own"
         );
+    }
+
+    /// A keyframe wider than one page is paged, and the pages between them
+    /// carry the stamp the listing started at.
+    ///
+    /// The golden seed's own map does **not** exercise this: 288 chunks of
+    /// generated heightmap encode to about 200 KiB of runs, which is one page.
+    /// So the case is made here, with the worst chunk the encoding has -- no
+    /// two neighbours alike, three bytes a voxel, 96 KiB a chunk -- which is
+    /// also the shape the page budget is counted in bytes for.
+    #[test]
+    fn a_keyframe_wider_than_a_page_is_paged_in_ascending_chunk_order() {
+        let mut store = VoxelStore::new([128, 32, 32]).expect("a four-chunk store");
+        for z in 0..32_i32 {
+            for y in 0..32_i32 {
+                for x in 0..128_i32 {
+                    let alternate = x.saturating_add(y).saturating_add(z) & 1;
+                    if alternate == 1 {
+                        store.set([x, y, z], Material::STONE);
+                    }
+                }
+            }
+        }
+        let mut digests = pharmakos_sim::chunks::ChunkDigests::new(store.chunk_count());
+        store.settle(&mut digests);
+
+        let mut feed = ViewFeed::new();
+        feed.attach(&store, 11);
+        let viewer = Viewer::Seat(SeatId::new(0));
+        feed.refresh(viewer, sight(false), &store, &Blind);
+
+        let mut pages = 0_u32;
+        let mut delivered: Vec<i32> = Vec::new();
+        let mut cursor = None;
+        loop {
+            let page = feed.page(viewer, cursor, &store);
+            pages = pages.saturating_add(1);
+            let spent: usize = page.chunks.iter().map(|(_, bytes)| bytes.len()).sum();
+            assert!(
+                spent <= VIEW_PAGE_BYTES || page.chunks.len() == 1,
+                "a page is cut at {VIEW_PAGE_BYTES} bytes of runs, and only a single chunk \
+                 larger than the whole budget goes over"
+            );
+            for (origin, _) in &page.chunks {
+                delivered.push(origin.x);
+            }
+            cursor = Some(page.next);
+            if page.complete {
+                break;
+            }
+            assert!(pages < 16, "a keyframe that never completes");
+        }
+        assert!(pages > 1, "four worst-case chunks do not fit one page");
+        assert_eq!(
+            delivered,
+            vec![0, 32, 64, 96],
+            "every chunk, once, in ascending chunk order"
+        );
+        let last = cursor.expect("a completing cursor");
+        assert_eq!(last.from_seq, last.to_seq, "and the client is caught up");
+        assert!(!last.is_keyframe());
     }
 
     #[test]

@@ -51,6 +51,15 @@
 //! | here | `get_status`, `wait_for`, `save_notes`, `set_ready`, `get_segment_feed` |
 //! | [`knowledge`] | `get_briefing`, `get_recap`, `list_beacons`, `get_beacon`, `get_map_summary`, `get_economy_forecast`, `estimate_route` |
 //! | [`planning`] | `get_schema`, `list_templates`, `instantiate_template`, `verify_plan`, `render_plan`, `patch_plan`, `save_draft`, `list_drafts`, `get_safe_plan`, `submit_plan` |
+//! | [`watch`] | `get_view` |
+//! | [`control`] | `end_lull`, `advance_push`, `end_recap`, `report_host_clock` |
+//!
+//! [`control`] is the **one** exception to the paragraph above, and T16a
+//! changed the rule to say so rather than working around it (decisions-log
+//! item 107 (4)): the four `admin` methods it serves drive the live match,
+//! because the gateway reads no clock and something has to. They may reach the
+//! match only through this module's own three driving methods, and
+//! `tests/confinement.rs` holds that line.
 //!
 //! Read methods take spec section 12's `detail` budget ([`crate::detail`]). The
 //! parameter, its three rungs, its wire spelling and the two salience rules are
@@ -826,6 +835,16 @@ impl Surface {
     /// As [`Surface::host`].
     pub fn end_recap(&mut self) -> Result<bool, Error> {
         let ended = self.host_mut()?.end_recap();
+        if ended && self.host()?.runner().phase() == MatchPhase::Ended {
+            // Spec section 12 unlocks the fog at match end, and a match that
+            // runs out of rounds ends **here** rather than on a tick:
+            // `MatchState::close_recap` is what calls `decide` for
+            // `RoundLimit`, so the last tick of the last segment reports
+            // `match_ended: false` and [`Surface::step`]'s unlock never fires.
+            // Found by T16a's own acceptance test; the one-tick rule's path
+            // (a match decided *during* a Push) was already covered.
+            self.fog.end_match();
+        }
         if ended {
             // The recap's own reported clock is the recap's; the Lull that
             // opens next counts from whatever its client says. What the recap
