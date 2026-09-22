@@ -85,6 +85,17 @@ fn every_module_is_checked() {
 /// crate is held to is the one item 106 (3) draws — host through the same
 /// `Surface` and `Host`, never around them — and these are the spellings that
 /// would go around them.
+///
+/// # What this does *not* forbid, since a review asked
+///
+/// The crate reads the runner: `crate::scenario::run` calls `Host::runner()`
+/// for the tick a Lull is standing on, the phase a refused `begin_push` was in,
+/// and the round a seal belongs to. `.runner()` is deliberately **not** a
+/// needle, because the guard is against *driving* a `Runner`, not against
+/// naming one — and `Host::runner` hands out a `&Runner` whose every stepping
+/// method needs `&mut`, so the reach cannot grow into a second way to play a
+/// match. If T16a gives `Surface` accessors for those three values, the runner
+/// takes them and `.runner()` joins the list below.
 #[test]
 fn nothing_here_drives_a_match_except_through_the_gateway() {
     const FORBIDDEN: &[(&str, &str)] = &[
@@ -184,13 +195,22 @@ fn nothing_here_attaches_to_a_seat_from_outside() {
     );
 }
 
-/// AGENTS.md §12: user-facing strings live in one string table.
+/// AGENTS.md §12, as much of it as a source-text check can hold: **no message
+/// names the binary outside the string table.**
 ///
-/// Checked by its tell rather than by reading every literal: a message this
-/// binary prints names the binary, and `gamectl` appearing inside a `format!`
-/// outside `strings.rs` is a message that was written somewhere else.
+/// Named for what it does rather than for what one would like it to do. A
+/// review found the earlier name — `every_user_facing_string_is_in_the_string_
+/// table` — claiming a guarantee this cannot make: the doctor's `detail` lines
+/// and the scenario format's diagnostics are written beside the conditions they
+/// describe, and `src/strings.rs`'s header now says so. What *is* enforceable
+/// is the tell: a message addressed to a person from this binary names the
+/// binary, and the binary's name appearing in a `format!` outside `strings.rs`
+/// is a message that grew somewhere else.
+///
+/// Both spellings are needles, because `strings::BINARY` is the other way to
+/// write it and the earlier single needle let `src/cli.rs` past.
 #[test]
-fn every_user_facing_string_is_in_the_string_table() {
+fn no_message_names_the_binary_outside_the_string_table() {
     for relative in SOURCES {
         if *relative == "src/strings.rs" {
             continue;
@@ -203,8 +223,9 @@ fn every_user_facing_string_is_in_the_string_table() {
             if trimmed.starts_with("//") {
                 continue;
             }
+            let names_it = line.contains("gamectl") || line.contains("strings::BINARY");
             assert!(
-                !(line.contains("format!") && line.contains("gamectl")),
+                !(line.contains("format!") && names_it),
                 "{relative}:{}: a message naming the binary is built outside the string table:\n  \
                  {line}",
                 number.saturating_add(1)
@@ -253,12 +274,25 @@ fn nothing_here_writes_a_committed_golden() {
     );
 }
 
+/// The research-feature ban, as far as this crate can enforce it on itself.
+///
+/// **Weaker than what the other four crates get, and said so out loud.**
+/// `cargo xtask ci`'s research guard walks `cargo tree -e features` for
+/// `plan-core`, `verifier`, `operator` and `gateway`; `gamectl` is on neither
+/// that list nor the wall guard's, so what stands in for them here is a read of
+/// the manifest text. A manifest read cannot see a *transitive* enablement —
+/// some future dependency turning `research` on further down the graph would
+/// pass this test and fail the walk. There is no live violation today
+/// (`cargo tree -e features -p pharmakos-gamectl` mentions `research` nowhere),
+/// and the real fix is one line in `xtask/src/main.rs`: `gamectl` added to
+/// `GUARDED_PACKAGES` and to `WALL_GUARDED_PACKAGES`.
+///
+/// PLACEHOLDER: that one-line change. `xtask`'s definition of what `ci` runs is
+/// a contract path (AGENTS.md §5) and this lane does not own it. **OWNER**, at
+/// T20's harness half-week, where it sits beside the other two `xtask` items
+/// this skeleton has booked there.
 #[test]
 fn the_crate_takes_the_sim_with_default_features_off() {
-    // The `research` feature that gates `fork` is defined by crates/sim alone
-    // and must never be reachable. `cargo xtask ci`'s research guard names
-    // plan-core, verifier, operator and gateway and not this crate, so the
-    // manifest is checked here instead.
     let manifest = std::fs::read_to_string(crate_root().join("Cargo.toml")).expect("the manifest");
     assert!(
         manifest.contains("pharmakos-sim       = { workspace = true }"),

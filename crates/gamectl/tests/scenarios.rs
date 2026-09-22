@@ -73,6 +73,29 @@ fn root() -> PathBuf {
         .to_path_buf()
 }
 
+/// Where a doctored copy is written: the target directory, not the repository.
+///
+/// A review found these three tests writing into `scenarios/skeleton/` and
+/// deleting the file afterwards. [`SCRATCH`] already kept the `scenario` step
+/// away from a leftover, but nothing kept `reuse` away: a run that panicked
+/// between the write and the remove would leave an untracked file with no SPDX
+/// header in the tree, and `cargo xtask ci` runs `reuse` after `test` — so the
+/// next build would go red on licensing for a reason unrelated to the change.
+/// Outside the tree there is nothing to leave behind.
+///
+/// The runner joins an absolute operand as an absolute path, and every path
+/// *inside* a scenario file is resolved against `--root` rather than against
+/// the file, so a scenario plays identically from here.
+fn scratch(name: &str) -> PathBuf {
+    let dir = pharmakos_gamectl::target_dir()
+        .expect("an integration test runs from a cargo target directory")
+        .join("scratch")
+        .join("scenarios");
+    std::fs::create_dir_all(&dir)
+        .unwrap_or_else(|error| panic!("creating {}: {error}", dir.display()));
+    dir.join(format!("{name}{SCRATCH}"))
+}
+
 fn gamectl(args: &[&str]) -> pharmakos_gamectl::Outcome {
     pharmakos_gamectl::run(args.iter().map(|arg| (*arg).to_owned()), &root())
 }
@@ -161,15 +184,12 @@ fn a_doctored_assertion_fails_readably_and_exits_non_zero() {
             "\"name\": \"deploy-and-visit\"",
             &format!("\"name\": \"{name}\""),
         );
-        let path = root()
-            .join("scenarios")
-            .join("skeleton")
-            .join(format!("{name}{SCRATCH}"));
+        let path = scratch(name);
         std::fs::write(&path, doctored.as_bytes())
             .unwrap_or_else(|error| panic!("writing {}: {error}", path.display()));
 
-        let relative = format!("scenarios/skeleton/{name}{SCRATCH}");
-        let outcome = gamectl(&["scenario", "run", &relative]);
+        let named = path.to_string_lossy().into_owned();
+        let outcome = gamectl(&["scenario", "run", &named]);
         let _ = std::fs::remove_file(&path);
 
         assert_ne!(outcome.code, Exit::Ok, "{name} passed after being doctored");
@@ -228,10 +248,7 @@ fn a_moved_chain_names_the_first_tick_that_disagrees() {
 /// nothing held or did not hold.
 #[test]
 fn a_malformed_scenario_is_refused_with_a_pointer_at_every_problem() {
-    let path = root()
-        .join("scenarios")
-        .join("skeleton")
-        .join(format!("malformed{SCRATCH}"));
+    let path = scratch("malformed");
     std::fs::write(
         &path,
         concat!(
@@ -248,11 +265,8 @@ fn a_malformed_scenario_is_refused_with_a_pointer_at_every_problem() {
         .as_bytes(),
     )
     .expect("the scratch file");
-    let outcome = gamectl(&[
-        "scenario",
-        "run",
-        &format!("scenarios/skeleton/malformed{SCRATCH}"),
-    ]);
+    let named = path.to_string_lossy().into_owned();
+    let outcome = gamectl(&["scenario", "run", &named]);
     let _ = std::fs::remove_file(&path);
 
     assert_eq!(outcome.code, Exit::Input, "{}", outcome.err);
@@ -294,16 +308,10 @@ fn a_builtin_seat_names_the_task_that_owes_the_operator() {
             "\"name\": \"deploy-and-visit\"",
             "\"name\": \"builtin-seat\"",
         );
-    let path = root()
-        .join("scenarios")
-        .join("skeleton")
-        .join(format!("builtin-seat{SCRATCH}"));
+    let path = scratch("builtin-seat");
     std::fs::write(&path, doctored.as_bytes()).expect("the scratch file");
-    let outcome = gamectl(&[
-        "scenario",
-        "run",
-        &format!("scenarios/skeleton/builtin-seat{SCRATCH}"),
-    ]);
+    let named = path.to_string_lossy().into_owned();
+    let outcome = gamectl(&["scenario", "run", &named]);
     let _ = std::fs::remove_file(&path);
 
     assert_eq!(outcome.code, Exit::Input, "{}", outcome.err);

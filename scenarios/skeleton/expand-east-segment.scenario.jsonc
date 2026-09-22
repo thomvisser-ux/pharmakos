@@ -4,17 +4,27 @@
 // T11's scenario: a full three-minute segment driven by the spec's own worked
 // playbook, asserting on events AND on the per-tick hash chain.
 //
-// It is the sibling of expand-east.scenario.jsonc, and the difference between
-// them is deliberate. That one is the format's worked example and its seats are
-// "one playbook, one safe playbook"; the safe playbook is the built-in
-// operator's (T18) and does not exist yet, so nothing can reproduce its chain.
-// This one names two playbook seats, which is a match the skeleton can play
-// today — so its chain is committed and compared now rather than promised.
+// It had a sibling, expand-east.scenario.jsonc, and T15 deleted it: that file
+// asserted a beacon placed by tick 2400 for a playbook decisions-log item
+// 103 (3) had already shown cannot place one, named a golden nobody committed,
+// and nothing had ever run it. deploy-and-visit.scenario.jsonc replaces it on
+// the same seed and the same two seats, asserting things that hold. This file
+// is unchanged by that and names two playbook seats, which is a match the
+// skeleton can play — so its chain is committed and compared rather than
+// promised.
 //
-// The chain's producer, until `gamectl scenario run` arrives at T15, is
-// crates/sim/tests/scenario.rs. That file's header says exactly how it
-// reproduces every input named below, and asserts that the canonical playbook
-// it loads is this example.
+// Two producers write this chain, and both compare it in-test against the
+// committed copy: crates/sim/tests/scenario.rs, which drives the sim's own
+// runner and also writes the event log beside it, and — since T15 —
+// crates/gamectl/tests/scenarios.rs, which plays this file through
+// `gamectl scenario run`. The two agree, which is the point: the sim's runner
+// and a gateway-hosted match produce the same chain byte for byte.
+//
+// T15's note: seat 0 cannot *submit* this playbook — it does not qualify
+// against seat 0's own frozen snapshot on this map — so the runner seals it
+// through its one documented harness door and prints a `note` line saying so
+// on every run. crates/gamectl/src/scenario/run.rs has the whole of it, and
+// the owner has the question.
 {
   "format": "pharmakos.scenario.v1",
   "name": "expand-east-segment",

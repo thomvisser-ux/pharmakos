@@ -41,7 +41,6 @@ use pharmakos_gateway::fog::{Blind, FogPolicy};
 use pharmakos_gateway::frame::Opcode;
 use pharmakos_gateway::handshake::Policy;
 use pharmakos_gateway::host::Host;
-use pharmakos_gateway::limit::Limits;
 use pharmakos_gateway::scopes::{Scope, ScopeSet};
 use pharmakos_gateway::session::{self, Ended};
 use pharmakos_gateway::surface::Surface;
@@ -150,19 +149,22 @@ fn client_path(scenario: &Scenario) -> String {
     )
     .expect("a match");
 
-    // A different match id, a different fog policy and a socket in front of it.
-    // All three are deliberate: if any of them reached the sim, this test would
-    // be the thing that found out.
+    // A different match id, a different fog policy, and the real transport
+    // codec over an in-memory duplex — the RFC 6455 upgrade, the masked frames
+    // and `session::serve` — as `crates/gateway/tests/websocket.rs` does. No
+    // port is bound; the header above says so and a review found this comment
+    // claiming otherwise. All three are deliberate: if any of them reached the
+    // sim, this test would be the thing that found out.
     let mut surface =
         Surface::new(MATCH, scenario.seed, rules, FogPolicy::casual(), &seats).expect("a match id");
     surface.attach(host).expect("attached");
     surface.set_phase_remaining_ms(Ms::new(lull_ms(&surface)));
     surface.open_lull().expect("the opening Lull");
-    surface.set_limits(Limits {
-        per_tick: 64,
-        per_window: 600,
-        window_ticks: 200,
-    });
+    // The limits stay at the gateway's defaults, as `scenario::run::play`'s do:
+    // the limiter is per token, every seat mints its own, and one `submit_plan`
+    // is one of the default eight in a tick. Raising them here would have been
+    // the client half getting a concession the harness half does not, inside a
+    // test whose whole point is that the two halves are treated alike.
 
     for seat in &scenario.seats {
         let SeatKind::Playbook(relative) = &seat.kind else {
