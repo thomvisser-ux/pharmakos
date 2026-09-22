@@ -225,7 +225,7 @@ fn visible_entities<V: Vision>(
         {
             continue;
         }
-        let owner = beacons.seats().get(row).copied().unwrap_or_default();
+        let owner = beacons.seats().get(row).copied();
         let at = beacons
             .positions()
             .get(row)
@@ -255,7 +255,7 @@ fn visible_entities<V: Vision>(
         {
             continue;
         }
-        let owner = units.seats().get(row).copied().unwrap_or_default();
+        let owner = units.seats().get(row).copied();
         let at = units
             .positions()
             .get(row)
@@ -282,7 +282,7 @@ fn visible_entities<V: Vision>(
         {
             continue;
         }
-        let owner = structures.seats().get(row).copied().unwrap_or_default();
+        let owner = structures.seats().get(row).copied();
         let at = structures
             .positions()
             .get(row)
@@ -303,15 +303,25 @@ fn visible_entities<V: Vision>(
 }
 
 /// One row's audience: a thing of `owner`'s, standing at `at`.
-fn world_at(owner: u8, at: Voxel) -> Audience {
+///
+/// `None` is a thing nobody owns, and it stays `None` all the way into the
+/// filter. A missing seat defaulted to zero would be filtered as seat 0's own
+/// asset -- visible to that seat wherever it stood -- which is the one kind of
+/// mistake a fog filter must not make quietly.
+fn world_at(owner: Option<u8>, at: Voxel) -> Audience {
     Audience::World {
-        owner: Some(SeatId::new(owner)),
+        owner: owner.map(SeatId::new),
         at,
     }
 }
 
 /// One `gp.api.v1.ViewEntity`.
-fn entity(id: &str, kind: &str, subtype: &str, owner: u8, at: Voxel) -> Json {
+///
+/// `owner` is empty for a thing nobody owns, which is what the field's own
+/// comment in `gateway.proto` promises. Nothing in v1 makes one; the promise
+/// is kept here rather than in a comment so that the first thing that does is
+/// not silently attributed to seat 0.
+fn entity(id: &str, kind: &str, subtype: &str, owner: Option<u8>, at: Voxel) -> Json {
     Json::Object(vec![
         (String::from("id"), Json::String(id.to_owned())),
         (
@@ -321,7 +331,9 @@ fn entity(id: &str, kind: &str, subtype: &str, owner: u8, at: Voxel) -> Json {
         (String::from("subtype"), Json::String(subtype.to_owned())),
         (
             String::from("owner"),
-            Json::String(view::owner_text(SeatId::new(owner))),
+            Json::String(
+                owner.map_or_else(String::new, |seat| view::owner_text(SeatId::new(seat))),
+            ),
         ),
         (String::from("at"), voxel(at)),
     ])

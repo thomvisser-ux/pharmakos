@@ -86,12 +86,35 @@ pub fn rules_json() -> String {
 /// A hosted match sitting in its opening Lull.
 #[must_use]
 pub fn hosted(seats: u32, segment_ms: i32, round_limit: u32) -> Surface {
+    hosted_as(MATCH, FogPolicy::fogged(), seats, segment_ms, round_limit)
+}
+
+/// A hosted match with a casual (no-fog) policy, made the way a casual match
+/// is made: at [`Surface::new`], and never mid-match.
+///
+/// Not the same thing as a match that has *ended*, which reaches the same
+/// answer through [`FogPolicy::end_match`]. A test that wants "both policies"
+/// wants this one and [`hosted`], and a test that wants the unlock wants the
+/// other.
+#[must_use]
+pub fn hosted_casual(seats: u32, segment_ms: i32, round_limit: u32) -> Surface {
+    hosted_as(MATCH, FogPolicy::casual(), seats, segment_ms, round_limit)
+}
+
+/// A hosted match under a given match id and fog policy.
+#[must_use]
+pub fn hosted_as(
+    match_id: &str,
+    policy: FogPolicy,
+    seats: u32,
+    segment_ms: i32,
+    round_limit: u32,
+) -> Surface {
     let ids: Vec<SeatId> = (0..seats)
         .filter_map(|raw| u8::try_from(raw).ok())
         .map(SeatId::new)
         .collect();
-    let mut surface =
-        Surface::new(MATCH, SEED, rules(), FogPolicy::fogged(), &ids).expect("a match id");
+    let mut surface = Surface::new(match_id, SEED, rules(), policy, &ids).expect("a match id");
     let host = Host::open(
         &WorldConfig {
             match_seed: SEED,
@@ -206,13 +229,19 @@ pub fn array_of(value: &Json, key: &str) -> Vec<Json> {
 }
 
 /// A seat token with the four scopes a seat holds.
+///
+/// Minted against the surface's **own** match id rather than the constant, so
+/// that a test which builds a second match under a second id gets a token
+/// that works on it -- a token is tied to a match, and that is a different
+/// rule from the view's.
 #[must_use]
 pub fn seat_token(surface: &mut Surface, seat: u8) -> Token {
     let scopes = ScopeSet::of(&[Scope::Observe, Scope::Plan, Scope::PlanSubmit, Scope::Docs]);
     let tick = surface.time().tick;
+    let held = surface.match_id().to_owned();
     let (token, _) = surface
         .tokens()
-        .mint(Subject::Seat(SeatId::new(seat)), MATCH, scopes, tick)
+        .mint(Subject::Seat(SeatId::new(seat)), &held, scopes, tick)
         .expect("minted");
     token
 }
@@ -221,11 +250,12 @@ pub fn seat_token(surface: &mut Surface, seat: u8) -> Token {
 #[must_use]
 pub fn admin_token(surface: &mut Surface) -> Token {
     let tick = surface.time().tick;
+    let held = surface.match_id().to_owned();
     let (token, _) = surface
         .tokens()
         .mint(
             Subject::Admin,
-            MATCH,
+            &held,
             ScopeSet::of(&[Scope::Admin, Scope::Observe]),
             tick,
         )
@@ -242,9 +272,10 @@ pub fn spectator_token(surface: &mut Surface, nofog: bool) -> Token {
         scopes = scopes.with(Scope::SpectateNofog);
     }
     let tick = surface.time().tick;
+    let held = surface.match_id().to_owned();
     let (token, _) = surface
         .tokens()
-        .mint(Subject::Spectator, MATCH, scopes, tick)
+        .mint(Subject::Spectator, &held, scopes, tick)
         .expect("minted");
     token
 }

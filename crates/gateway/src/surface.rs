@@ -477,11 +477,12 @@ impl Surface {
             let Surface {
                 views,
                 host,
+                match_id,
                 match_seed,
                 ..
             } = self;
             if let Some(host) = host.as_ref() {
-                views.attach(host.world().voxels(), *match_seed);
+                views.attach(host.world().voxels(), match_id, *match_seed);
             }
         }
         self.absorb_events()
@@ -568,10 +569,19 @@ impl Surface {
     /// steps". Both are refused rather than clamped, and the refusal is
     /// audited like any other.
     ///
+    /// `remaining` is bounded by the same argument from the other end. It is
+    /// not a budget the limiter spends, but it **is** what every seat reads
+    /// off the `_status` footer as the time it has left to plan, so an
+    /// unbounded one would let the lobby tell a seat its Lull lasts a day.
+    /// The bound is the Lull's own declared length, `rules.match.lull_ms` --
+    /// a tuning value read from the rules table and not a constant of this
+    /// crate's (AGENTS.md section 12) -- and it is refused rather than
+    /// clamped like the other three.
+    ///
     /// # Errors
     ///
     /// [`crate::error::Code::InvalidArgument`] for a negative, backwards or
-    /// jumping clock.
+    /// jumping clock, and for a countdown longer than the Lull itself.
     pub fn set_host_clock(&mut self, elapsed: Ms, remaining: Ms) -> Result<(), Error> {
         if elapsed.raw() < 0 || remaining.raw() < 0 {
             return Err(Error::invalid(
@@ -594,6 +604,14 @@ impl Surface {
                 "one report may carry this phase's clock at most {} ms further on and this \
                  carries it {step} ms; after a long stall, report in steps",
                 crate::surface::control::MAX_CLOCK_STEP_MS
+            )));
+        }
+        let lull_ms = self.lull_ms();
+        if remaining.raw() > lull_ms {
+            return Err(Error::invalid(format!(
+                "`remaining_ms` is what is left of a Lull and a Lull is {lull_ms} ms long; this \
+                 reports {} ms left, which is refused rather than clamped",
+                remaining.raw()
             )));
         }
         self.reported_elapsed_ms = Some(elapsed);
@@ -745,11 +763,6 @@ impl Surface {
         plans
     }
 
-    /// One tick of the Push, with the events it produced on the feed.
-    ///
-    /// # Errors
-    ///
-    /// As [`Surface::host`].
     /// One tick of the Push, with the events it produced on the feed, the fog
     /// policy brought up to date, and the view feed stamped.
     ///
@@ -779,18 +792,20 @@ impl Surface {
         self.sync_time();
         self.absorb_events()?;
 
-        let unlocked_before = self.fog.eliminated().len();
+        // Counted rather than collected, and read row by row rather than
+        // gathered into a `Vec`: this is the hot path `advance_push` runs up
+        // to 1 200 times in one call, on the one thread that owns the
+        // surface, so it allocates nothing.
+        let unlocked_before = self.fog.unlocked_count();
         let ended_before = self.fog.ended();
         if let Some(report) = report {
             if report.match_ended {
                 self.fog.end_match();
             }
         }
-        for seat in self.fallen_seats() {
-            self.fog.eliminate(seat);
-        }
+        self.eliminate_the_fallen();
         let policy_moved =
-            self.fog.eliminated().len() != unlocked_before || self.fog.ended() != ended_before;
+            self.fog.unlocked_count() != unlocked_before || self.fog.ended() != ended_before;
 
         if report.is_some() || policy_moved {
             self.views.bump();
@@ -804,28 +819,31 @@ impl Surface {
         Ok(report)
     }
 
-    /// The seats the world says are no longer standing.
+    /// Lift the fog of every seat the world says is no longer standing.
     ///
     /// Read from [`pharmakos_sim::tables::SeatTable::is_alive`], which is the
     /// sim's own rule (T10: `Standing` / `Fallen` / `Unplaced`, and only
     /// `Fallen` is elimination), rather than from a rule of this crate's.
+    /// [`FogPolicy::eliminate`] is idempotent, so a seat already unlocked
+    /// costs a set lookup and nothing else.
     ///
-    /// Empty when no match is hosted: a lobby has eliminated nobody.
-    fn fallen_seats(&self) -> Vec<SeatId> {
-        let Some(host) = self.host.as_ref() else {
-            return Vec::new();
+    /// Does nothing when no match is hosted: a lobby has eliminated nobody.
+    /// The two fields are borrowed apart rather than gathered through a
+    /// `Vec`, because this runs once a tick.
+    fn eliminate_the_fallen(&mut self) {
+        let Surface { fog, host, .. } = self;
+        let Some(host) = host.as_ref() else {
+            return;
         };
         let seats = host.world().seats();
-        let mut fallen: Vec<SeatId> = Vec::new();
         for row in 0..seats.seats().len() {
             if seats.is_alive(row) {
                 continue;
             }
             if let Some(raw) = seats.seats().get(row).copied() {
-                fallen.push(SeatId::new(raw));
+                fog.eliminate(SeatId::new(raw));
             }
         }
-        fallen
     }
 
     /// End the recap. Returns false when the runner was not in a recap.
@@ -944,6 +962,20 @@ impl Surface {
     /// other phase: `rules.match.lull_ms` is a Lull's length and means nothing
     /// measured against a recap, which has no declared length at all and simply
     /// holds the tick still for as long as it lasts.
+    /// `rules.match.lull_ms`: how long a Lull is declared to be.
+    ///
+    /// A tuning value, read from the rules table the surface was built with
+    /// rather than written into this crate as a constant (AGENTS.md section
+    /// 12). Zero when the table has no match settings, which is a table no
+    /// shipped match runs on.
+    fn lull_ms(&self) -> i32 {
+        self.rules
+            .message()
+            .r#match
+            .as_ref()
+            .map_or(0, |settings| settings.lull_ms)
+    }
+
     fn sync_time(&mut self) {
         let Some(host) = self.host.as_ref() else {
             return;
@@ -959,6 +991,15 @@ impl Surface {
         let in_push = runner.phase() == MatchPhase::Push;
         let in_lull = runner.phase() == MatchPhase::Lull;
         let reported = self.lull_remaining_ms;
+        // PLACEHOLDER: what `_status.phase_remaining_ms` shows outside a Push
+        // is the client's own report, and zero when there is none -- which
+        // makes an UNTIMED Lull and a RECAP read identically to a Lull whose
+        // timer has just run out. A recap has no declared length at all, and
+        // `serve_report_host_clock` now refuses a countdown outside a Lull,
+        // so the recap's figure is fixed at zero by this lane rather than
+        // decided. Whether a recap and an untimed Lull should instead be a
+        // distinguishable "no countdown" is **OWNER**, at **S1**, with the
+        // recap screen.
         let remaining = if in_push {
             let elapsed = runner.tick().since(state.segment_started());
             Ms::from_ticks(state.segment_ticks().saturating_sub(elapsed))

@@ -20,9 +20,13 @@
 //! re-minted).
 //!
 //! The stamp is the feed's own [`ViewFeed::seq`], bumped once per stepped
-//! tick and once per attach, phase change and fog-policy change. It is
-//! deliberately **not** a sim tick: a Lull and a recap consume none, and a
-//! seat's view changes in both -- a beacon it may see comes into a sphere, a
+//! tick, once per attach, phase change and fog-policy change, and once more
+//! inside [`ViewFeed::refresh`] whenever a viewer's own sight turns out to
+//! have moved since it last looked -- so that the delivery rule cannot be
+//! broken by a caller that forgot.
+//!
+//! It is deliberately **not** a sim tick: a Lull and a recap consume none, and
+//! a seat's view changes in both -- a beacon it may see comes into a sphere, a
 //! seat is eliminated and the map opens up. A tick-stamped feed would answer
 //! "nothing changed" to every one of those.
 //!
@@ -163,6 +167,10 @@ pub struct ViewFeed {
     /// Zero until a match is attached: a cursor can then never be mistaken for
     /// one of a view that exists.
     view_id: u64,
+    /// How many times this feed has been attached. Part of the view's id, so
+    /// that a second attach over the same world mints a different one --
+    /// which is what makes T17's restore stale every outstanding cursor.
+    attaches: u64,
     seq: u64,
     /// The generated map, encoded once, one entry per chunk in chunk order.
     generated: Vec<Vec<u8>>,
@@ -180,6 +188,7 @@ impl ViewFeed {
     pub const fn new() -> ViewFeed {
         ViewFeed {
             view_id: 0,
+            attaches: 0,
             seq: 0,
             generated: Vec::new(),
             changed_at: Vec::new(),
@@ -196,10 +205,28 @@ impl ViewFeed {
     /// [`crate::error::Code::StaleSnapshot`] afterwards, because the view id
     /// is minted here.
     ///
+    /// # What the id is made of, and why all four
+    ///
+    /// The match's **id** and **seed** are what make a cursor match-tied:
+    /// hand one to another match and it is refused rather than read as a
+    /// place in a world nobody meant. The chunk **count** is the map's own
+    /// shape, so a cursor cannot survive into a view of a different size even
+    /// if the first two ever repeated. And the **attach count** is what T17
+    /// needs: a restore re-attaches the *same* match id, the same seed and
+    /// the same map, and every cursor a client is holding still has to go
+    /// stale, because [`ViewFeed::seq`] starts again at one and a cursor
+    /// carrying a larger `from_seq` would match nothing for ever.
+    ///
+    /// It is a digest rather than a counter for the first reason, not the
+    /// last: a counter would make the first view of every match the same view.
+    /// Nothing here reads a clock or any entropy, so a match replayed from the
+    /// same inputs mints the same id -- which is what lets a golden hold a
+    /// rendered cursor.
+    ///
     /// The whole map is encoded once: 288 chunks at the skeleton's size, a few
     /// hundred kilobytes of runs, and every keyframe of the match is served
     /// from it without touching the world again.
-    pub fn attach(&mut self, voxels: &VoxelStore, match_seed: u64) {
+    pub fn attach(&mut self, voxels: &VoxelStore, match_id: &str, match_seed: u64) {
         let count = voxels.chunk_count();
         let slots = usize::try_from(count).unwrap_or(0);
         let mut generated: Vec<Vec<u8>> = Vec::with_capacity(slots);
@@ -209,11 +236,15 @@ impl ViewFeed {
                 .map_or_else(Vec::new, |raw| chunk_rle::encode(raw.as_slice()));
             generated.push(bytes);
         }
-        let mut identity: Vec<u8> = Vec::with_capacity(16);
+        self.attaches = self.attaches.saturating_add(1);
+        let mut identity: Vec<u8> = Vec::with_capacity(match_id.len().saturating_add(32));
+        identity.extend_from_slice(match_id.as_bytes());
+        // A separator, so that ("m-1", 2) and ("m-12", ...) cannot run into
+        // one another: a match id is variable width and the rest is not.
+        identity.push(0);
         identity.extend_from_slice(&match_seed.to_le_bytes());
         identity.extend_from_slice(&u64::from(count).to_le_bytes());
-        // Not a counter: a cursor from another match is then refused rather
-        // than accepted by coincidence, which is `SnapshotId`'s own argument.
+        identity.extend_from_slice(&self.attaches.to_le_bytes());
         self.view_id = pharmakos_sim::digest(&identity) | 1;
         self.seq = 1;
         self.generated = generated;
@@ -246,7 +277,10 @@ impl ViewFeed {
     /// Once per stepped tick, and once per attach, phase change and fog-policy
     /// change. Bumping too often costs a recomputation; bumping too seldom
     /// loses a change, so this is called from the places that cannot be missed
-    /// rather than from the places that are interesting.
+    /// rather than from the places that are interesting -- and
+    /// [`ViewFeed::refresh`] bumps once more on its own when a viewer's sight
+    /// has moved, which is the backstop for a caller that changed the policy
+    /// and did not.
     pub const fn bump(&mut self) {
         if self.view_id != 0 {
             self.seq = self.seq.saturating_add(1);
@@ -296,6 +330,20 @@ impl ViewFeed {
     /// the unlock free: the world wrote it since this viewer last looked, or
     /// the viewer's own sight changed -- a beacon gained or lost, the fog
     /// policy lifted.
+    ///
+    /// # A sight change stamps the feed itself
+    ///
+    /// A recomputed chunk is stamped with the feed's **current** stamp, and
+    /// [`ViewFeed::page`] delivers a chunk only when that stamp is strictly
+    /// later than the cursor's. A viewer already caught up therefore carries
+    /// `from_seq == seq`, and a sight change that moved no stamp would
+    /// recompute its chunks into `changed_at == from_seq` and deliver them
+    /// **never**. Every caller does bump before it changes the policy, but an
+    /// invariant that lives in three call sites is an invariant with a hole
+    /// in it, so the bump is here as well: a sight that differs from the one
+    /// this viewer was last refreshed at moves the stamp before anything is
+    /// stamped with it. The cost of the extra bump is nothing -- a stamp
+    /// nobody's bytes carry changes nobody's delta.
     pub fn refresh<V: Vision>(
         &mut self,
         viewer: Viewer,
@@ -303,6 +351,17 @@ impl ViewFeed {
         voxels: &VoxelStore,
         vision: &V,
     ) {
+        let index = slot_of(&mut self.viewers, viewer);
+        // A viewer seeing this feed for the first time needs no bump: it has
+        // no cursor yet, and its keyframe is stamped with whatever the feed
+        // is on. A viewer whose sight *moved* does: see the note above.
+        let moved = self
+            .viewers
+            .get(index)
+            .is_some_and(|state| state.refreshed_at != 0 && state.sight != sight);
+        if moved {
+            self.bump();
+        }
         let ViewFeed {
             seq,
             generated,
@@ -311,7 +370,6 @@ impl ViewFeed {
             viewers,
             ..
         } = self;
-        let index = slot_of(viewers, viewer);
         let Some(state) = viewers.get_mut(index) else {
             return;
         };
@@ -603,7 +661,7 @@ mod tests {
     fn open() -> (ViewFeed, VoxelStore) {
         let store = store();
         let mut feed = ViewFeed::new();
-        feed.attach(&store, 7);
+        feed.attach(&store, "m-0001", 7);
         (feed, store)
     }
 
@@ -633,6 +691,42 @@ mod tests {
         }
         assert!(feed.is_open());
         assert_eq!(feed.modified(), 0, "the generator's writes are pristine");
+    }
+
+    /// The id is the match's, and a second attach over the same world is a
+    /// different view: T17's restore is what calls that, and every cursor a
+    /// client is still holding has to go stale rather than page into a feed
+    /// whose stamp has started again at one.
+    #[test]
+    fn a_re_attach_mints_a_different_view_than_the_attach_before_it() {
+        let store = store();
+        let mut feed = ViewFeed::new();
+        feed.attach(&store, "m-0001", 7);
+        let first = feed.view_id();
+        feed.attach(&store, "m-0001", 7);
+        let second = feed.view_id();
+        assert_ne!(
+            first, second,
+            "a restore re-attaches the same match over the same map, and the cursors from \
+             before it are still STALE_SNAPSHOT"
+        );
+        assert_eq!(feed.seq(), 1, "and the new view's stamp starts again");
+
+        // And the same match attached from scratch elsewhere is the same
+        // view, because nothing in the id is read from a clock: a replay of
+        // the same inputs renders the same cursor.
+        let mut again = ViewFeed::new();
+        again.attach(&store, "m-0001", 7);
+        assert_eq!(again.view_id(), first);
+
+        // Another match is another view, on the id alone and on the seed
+        // alone.
+        let mut other = ViewFeed::new();
+        other.attach(&store, "m-0002", 7);
+        assert_ne!(other.view_id(), first);
+        let mut seeded = ViewFeed::new();
+        seeded.attach(&store, "m-0001", 8);
+        assert_ne!(seeded.view_id(), first);
     }
 
     #[test]
@@ -718,6 +812,35 @@ mod tests {
         assert_eq!(page.chunks.len(), 1, "only the modified chunk pages out");
     }
 
+    /// The same unlock, with the caller's bump left out: the feed stamps
+    /// itself when a viewer's sight moves, so the delivery rule does not
+    /// depend on three call sites remembering.
+    #[test]
+    fn a_sight_change_moves_the_stamp_even_when_the_caller_did_not() {
+        let (mut feed, mut store) = open();
+        let viewer = Viewer::Seat(SeatId::new(0));
+        feed.refresh(viewer, sight(false), &store, &Blind);
+        let caught_up = feed.page(viewer, None, &store).next;
+
+        let mut digests = pharmakos_sim::chunks::ChunkDigests::new(store.chunk_count());
+        store.set([40, 4, 0], Material::AIR);
+        store.settle(&mut digests);
+        feed.bump();
+        feed.stamp(store.settled());
+        feed.refresh(viewer, sight(false), &store, &Blind);
+        let caught_up = feed.page(viewer, Some(caught_up), &store).next;
+        assert_eq!(caught_up.from_seq, feed.seq(), "the viewer is caught up");
+
+        // No bump here, which is the whole point of the test.
+        feed.refresh(viewer, sight(true), &store, &Blind);
+        let page = feed.page(viewer, Some(caught_up), &store);
+        assert_eq!(
+            page.chunks.len(),
+            1,
+            "a caught-up cursor and a stamp that had not moved would have delivered nothing"
+        );
+    }
+
     #[test]
     fn a_handle_counts_what_this_viewer_has_seen_and_nothing_else() {
         let (mut feed, _store) = open();
@@ -759,7 +882,7 @@ mod tests {
         store.settle(&mut digests);
 
         let mut feed = ViewFeed::new();
-        feed.attach(&store, 11);
+        feed.attach(&store, "m-0001", 11);
         let viewer = Viewer::Seat(SeatId::new(0));
         feed.refresh(viewer, sight(false), &store, &Blind);
 

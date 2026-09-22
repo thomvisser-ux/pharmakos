@@ -234,7 +234,7 @@ the producer; a fixture made by the consumer would test nothing but the consumer
 T16 commits a byte-identical copy under `godot/fixtures/`, guarded by a test that
 compares the two.
 
-A diff here means one of four things, and the first is the only cheap one:
+A diff here means one of five things, and the first is the only cheap one:
 
 * **the map generator moved.** `tests/golden/mapgen/` will have moved too, and
   that is where the explanation belongs.
@@ -246,6 +246,15 @@ A diff here means one of four things, and the first is the only cheap one:
 * **what seat 0 is entitled to moved.** At the opening Lull nothing has been
   written yet, so every chunk here is the generated one; a diff that is *only* in
   some chunks means the fog rule changed under a keyframe.
+* **only `next_cursor` moved.** Then what changed is what the view's id is
+  minted from (`ViewFeed::attach`), and nothing a client draws moved at all.
+  The id is a digest of the match id, the match seed, the chunk count and how
+  many times the feed has been attached — deterministic on purpose, which is
+  what lets a rendered cursor sit in a golden.
+
+The `.txt` header carries **two** byte figures and they are different numbers:
+`run bytes` is what the encoder produced and what `VIEW_PAGE_BYTES` budgets,
+and `json bytes` is the served response once `voxels_rle` has become base64.
 
 Measured at 288 chunks, about 197 KiB of encoded runs and 279 KiB of JSON, which
 is **one page** at `VIEW_PAGE_BYTES` = 256 KiB. Paging is therefore not exercised
