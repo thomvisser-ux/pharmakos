@@ -340,6 +340,16 @@ enum Job {
     },
     /// Record a refused upgrade.
     Refused { reason: String, status: u16 },
+    /// The control pipe reached end of file: put the match down.
+    ///
+    /// The channel closing would not do it. A reader thread and the accept
+    /// dispatcher each hold a sender, and both outlive [`run`] by design -- a
+    /// blocking `accept` cannot be interrupted without dialling the listener,
+    /// which this crate may not do (`tests/confinement.rs`: the gateway
+    /// accepts connections and makes none). So the end of the match is a
+    /// message rather than a dropped channel, and the process exiting is what
+    /// collects the rest.
+    Stop,
 }
 
 /// A connection's door: everything goes to the one thread that owns the
@@ -453,6 +463,10 @@ pub fn run<C: Read, A: Write>(setup: Setup, control: C, mut announce: A) -> Resu
     let mut rest: Vec<u8> = Vec::new();
     let _ = lines.read_to_end(&mut rest);
 
+    // The surface thread flushes the audit log on its way out, so it is joined
+    // rather than abandoned. The accept threads are not: they are blocked in
+    // `accept`, and `gamectl host` exiting is what ends them.
+    let _ = jobs.send(Job::Stop);
     drop(jobs);
     let _ = surface_thread.join();
     drop(dispatcher);
@@ -671,6 +685,7 @@ fn serve_surface(
                 };
                 let _ = reply.send(rpc::render(&response));
             }
+            Job::Stop => break,
             Job::Refused { reason, status } => {
                 let tick = surface.time().tick;
                 let error = match status {
