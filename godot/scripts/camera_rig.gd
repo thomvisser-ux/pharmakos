@@ -26,17 +26,19 @@ const ZOOM_STEP := 1.12
 const TURN_RATE := 0.005
 ## How quickly the camera closes on what it follows, per second. PLACEHOLDER, as above.
 const FOLLOW_RATE := 4.0
-## The nearest and farthest the camera sits from its focus, in voxels.
+## The nearest and farthest the camera sits from its focus, in voxels. PLACEHOLDER, as
+## above.
 const NEAREST := 12.0
 const FARTHEST := 900.0
 
 ## The point the camera looks at.
 var focus := Vector3.ZERO
-## The heading, in radians about the vertical.
+## The heading, in radians about the vertical. The starting pose (this, the pitch and the
+## distance) is a PLACEHOLDER, as above.
 var yaw := 0.8
-## The look-down angle, in radians; negative looks down.
+## The look-down angle, in radians; negative looks down. PLACEHOLDER, as above.
 var pitch := -0.9
-## How far the camera sits from its focus.
+## How far the camera sits from its focus. PLACEHOLDER, as above.
 var distance := 420.0
 ## What the camera follows, or null for free-look.
 var target: Node3D = null
