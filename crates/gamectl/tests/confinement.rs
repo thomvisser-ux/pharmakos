@@ -288,16 +288,16 @@ fn nothing_here_writes_a_committed_golden() {
 /// `GUARDED_PACKAGES` and to `WALL_GUARDED_PACKAGES`.
 ///
 /// PLACEHOLDER: that one-line change. `xtask`'s definition of what `ci` runs is
-/// a contract path (AGENTS.md §5) and this lane does not own it. **OWNER**, at
-/// T20's harness half-week, where it sits beside the other two `xtask` items
-/// this skeleton has booked there.
+/// a contract path (AGENTS.md §5) and this lane does not own it. Decisions-log
+/// item 109 moved it forward from T20: the main session's harness pull request
+/// that follows this one makes it, and this test stays as a second guard.
 #[test]
 fn the_crate_takes_the_sim_with_default_features_off() {
     let manifest = std::fs::read_to_string(crate_root().join("Cargo.toml")).expect("the manifest");
     assert!(
-        manifest.contains("pharmakos-sim       = { workspace = true }"),
-        "the sim is taken through the workspace entry, which carries \
-         `default-features = false`:\n{manifest}"
+        manifest.contains("pharmakos-sim       = { workspace = true, default-features = false }"),
+        "the sim is taken with `default-features = false`, in the form AGENTS.md \
+         section 3 rule 1 writes it:\n{manifest}"
     );
     assert!(
         !manifest.contains("[features]") && !manifest.contains("features = [\"research\"]"),
