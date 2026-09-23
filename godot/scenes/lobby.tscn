@@ -1,0 +1,13 @@
+[gd_scene load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://scripts/lobby.gd" id="1_lobby"]
+[ext_resource type="Script" path="res://scripts/host_link.gd" id="2_link"]
+[ext_resource type="PackedScene" path="res://scenes/vista.tscn" id="3_vista"]
+
+[node name="Lobby" type="Node"]
+script = ExtResource("1_lobby")
+
+[node name="Vista" parent="." instance=ExtResource("3_vista")]
+
+[node name="HostLink" type="Node" parent="."]
+script = ExtResource("2_link")
