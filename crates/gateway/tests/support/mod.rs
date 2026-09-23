@@ -454,6 +454,7 @@ pub fn fell(surface: &mut Surface, seat: u8) {
             host.file_damage(DamageOrder {
                 target: DamageTarget::Beacon(id),
                 amount: Hp::new(i32::MAX),
+                by: SeatId::NEUTRAL,
             }),
             "the damage queue took the order"
         );
