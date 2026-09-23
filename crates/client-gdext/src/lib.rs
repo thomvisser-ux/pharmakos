@@ -43,6 +43,9 @@
 //! | a `gp.v1.RulesTable` | the mesher's `DrainBudget` and `LightParams` | [`rules`] |
 //! | `MeshBuffers` | an [`UploadOp`](upload::UploadOp) the engine executes | [`surface`], [`upload`] |
 //! | a `gp.api.v1` result as JSON | canonical JSON, schema-checked | [`api`] |
+//! | a `get_view` result | chunks on the drain queue, the entity list | [`view`] |
+//! | a gateway answer | the next JSON-RPC frame for each connection | [`rig`] |
+//! | the wall clock | game milliseconds asked for, the host clock reported | [`pacer`] |
 //!
 //! Each of those is a copy or a lookup. The two places where something is *decided* are
 //! both presentation plumbing that the sim must never see: which frame a chunk is
@@ -68,21 +71,35 @@
 //!   when the index array is unchanged and the probed layout is the one being written; the
 //!   counters say how often each guard fired, so "the fast path is working" is a number.
 //!
+//! # The watch rig (T16)
+//!
+//! The client meets the real gateway here, as the plan's T16 amendment describes
+//! (`docs/design/skeleton-plan-t16a-notes.md` section A): the lobby spawns `gamectl host`
+//! and holds two WebSocket connections and their tokens in GDScript; [`rig`] decides what
+//! each connection sends and reads what comes back; [`view`] turns `get_view` results into
+//! chunks on the drain queue; and [`pacer`] is the one wall clock — the pacer that asks for
+//! game milliseconds, the host clock reported outside a Push, and the keep-alive. The pacer
+//! is **presentation pacing on the walled side, like the Lull timer, and not game-rule time
+//! arithmetic**: it never sees a step of the sim or a hash, and `tests/no_arithmetic.rs`
+//! still holds every other module of this crate to "no time maths".
+//!
 //! # What is not here yet
 //!
-//! The gateway connection itself. T12's bridge is tested against committed `gp.api.v1`
-//! fixtures, "which is marshalling and needs no live server; it meets the real gateway at
-//! T16" (skeleton plan T12). The vista, the camera, the event list and the `.vox` models
-//! are T16's and T19's, and `dot_vox` arrives with the models rather than here
-//! (decisions log item 101).
+//! The `.vox` models: entities are drawn as placeholder primitives by GDScript until T19
+//! and S6, and `dot_vox` arrives with the models rather than here (decisions log item
+//! 101).
 
 pub mod api;
 pub mod chunks;
+pub mod enums;
 pub mod error;
+pub mod pacer;
 pub mod panics;
+pub mod rig;
 pub mod rules;
 pub mod surface;
 pub mod upload;
+pub mod view;
 
 mod bridge;
 mod engine;

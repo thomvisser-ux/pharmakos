@@ -1,0 +1,55 @@
+{
+  "events": [
+    {
+      "kind": "push_started",
+      "text": "The Push began. This segment runs 3:00."
+    },
+    {
+      "kind": "plan_sealed",
+      "text": "The playbook of seat 0 was sealed: 3 route steps."
+    },
+    {
+      "at_ms": 250,
+      "kind": "step_started",
+      "text": "Step 0 started."
+    },
+    {
+      "at_ms": 14250,
+      "kind": "step_completed",
+      "text": "Step 0 completed."
+    },
+    {
+      "at_ms": 14250,
+      "kind": "step_started",
+      "text": "Step 1 started."
+    },
+    {
+      "at_ms": 31500,
+      "kind": "beacon_placed",
+      "text": "A beacon of seat 0 was deployed."
+    },
+    {
+      "at_ms": 47750,
+      "kind": "ore_delivered",
+      "text": "A mining drone of seat 0 delivered ore worth $ 40."
+    },
+    {
+      "at_ms": 63000,
+      "kind": "structure_queued",
+      "text": "seat 0 paid for a structure; it is going up now."
+    }
+  ],
+  "digests": [
+    {
+      "to_ms": 60000,
+      "text": "0:00-1:00: 7 events.",
+      "counts": [
+        {
+          "kind": "step_started",
+          "count": 2
+        }
+      ]
+    }
+  ],
+  "next_cursor": "a730c5c72d863a51"
+}

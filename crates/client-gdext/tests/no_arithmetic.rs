@@ -232,15 +232,53 @@ fn has_arithmetic(code: &str) -> bool {
 }
 
 /// Every offending line, as `path:line: text`.
+/// The one module whose TIME arithmetic is the design rather than a breach of it.
+///
+/// `src/pacer.rs` is the pacer, the host clock and the keep-alive: "presentation pacing on
+/// the walled side, like the Lull timer, not game-rule time arithmetic"
+/// (`docs/design/skeleton-plan-t16a-notes.md` section A (2), adopted by decisions-log item
+/// 107). Wall time times the speed is game time owed; the Lull countdown is the Lull's
+/// length less the wall time spent in it. The notes put exactly that in this crate, and
+/// the gateway reads no clock, so it can live nowhere else.
+///
+/// The carve-out is by FILE and by KIND: the pacer is still scanned for money and power,
+/// and `tests/pacer.rs::the_pacer_names_no_tick` holds it to never naming a step of the
+/// sim. Every other file in this crate and in `godot/scripts/` is held to the whole rule.
+const PACING_MODULE: &str = "pacer.rs";
+
+/// The fragments of [`QUANTITIES`] that mean time, which [`PACING_MODULE`] may compute
+/// with.
+const TIME: &[&str] = &[
+    "_ms",
+    "ms_",
+    "millis",
+    "seconds",
+    "duration",
+    "elapsed",
+    "remaining",
+    "timeout",
+    "deadline",
+    "frame",
+];
+
 fn offences(files: &[PathBuf]) -> Vec<String> {
     let mut found: Vec<String> = Vec::new();
     for path in files {
         let Ok(text) = fs::read_to_string(path) else {
             continue;
         };
+        let pacing = path.file_name().and_then(|name| name.to_str()) == Some(PACING_MODULE)
+            && path
+                .parent()
+                .and_then(Path::file_name)
+                .and_then(|name| name.to_str())
+                == Some("src");
         for (index, line) in text.lines().enumerate() {
             let code = code_of(line);
-            let named = quantities_in(&code);
+            let mut named = quantities_in(&code);
+            if pacing {
+                named.retain(|word| !TIME.iter().any(|fragment| word.contains(fragment)));
+            }
             if named.is_empty() || !has_arithmetic(&code) {
                 continue;
             }
@@ -306,6 +344,29 @@ fn the_scanner_does_not_trip_on_ordinary_code() {
             "the scanner tripped on `{line}`, which is not arithmetic on a quantity"
         );
     }
+}
+
+/// The pacing carve-out is one file wide and covers time only: money or power arithmetic
+/// in the pacer is still an offence.
+#[test]
+fn the_pacing_module_is_exempt_for_time_and_for_nothing_else() {
+    let pacer = crate_root().join("src").join(PACING_MODULE);
+    assert!(pacer.is_file(), "the carve-out names a file that exists");
+    let scratch = std::env::temp_dir().join(format!("pharmakos-na-{}", std::process::id()));
+    let fake = scratch.join("src");
+    fs::create_dir_all(&fake).expect("scratch");
+    let path = fake.join(PACING_MODULE);
+    fs::write(
+        &path,
+        "let owed_ms = spent_ms * speed;
+let draw_kw = generator_kw + autocannon_kw;
+",
+    )
+    .expect("scratch file");
+    let found = offences(std::slice::from_ref(&path));
+    let _ = fs::remove_dir_all(&scratch);
+    assert_eq!(found.len(), 1, "time passes, power does not: {found:?}");
+    assert!(found.iter().all(|line| line.contains("_kw")), "{found:?}");
 }
 
 #[test]

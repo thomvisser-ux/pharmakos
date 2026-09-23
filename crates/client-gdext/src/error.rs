@@ -56,6 +56,14 @@ pub enum BridgeError {
         /// The name as it arrived.
         name: String,
     },
+    /// A `get_view` page this client could not store: a chunk with no origin, an origin
+    /// off the chunk grid, a run list `chunk_rle` refuses, or a map the light bake refuses.
+    /// The page is refused whole, because a view drawn with a hole in it cannot be told
+    /// from a map with one.
+    View(String),
+    /// A JSON-RPC answer the watch rig could not read: not an object, no id, or an id no
+    /// request of this client's carried.
+    Rpc(String),
     /// A surface carried more vertices than a 16-bit index buffer can address, or more
     /// than the engine-side buffer that was already allocated for it.
     SurfaceSize {
@@ -100,6 +108,8 @@ impl fmt::Display for BridgeError {
                 "`{name}` is not a value of `gp.api.v1.Method`; the bridge looks methods up in \
                  the schema and keeps no table of its own"
             ),
+            Self::View(why) => write!(formatter, "the view was not stored: {why}"),
+            Self::Rpc(why) => write!(formatter, "the gateway's answer was not read: {why}"),
             Self::SurfaceSize { what, got, cap } => {
                 write!(formatter, "{what} is {got}, which exceeds the cap of {cap}")
             }
