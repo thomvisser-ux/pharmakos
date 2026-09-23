@@ -206,19 +206,28 @@ const WALLED_PACKAGES: &[&str] = &["presentation", "solve", "client-gdext", "mes
 /// `sim` is deliberately absent: it is the crate that *defines* the feature, so
 /// it is the one package for which reaching `research` is correct. Walled
 /// crates are kept away by the separate [`WALL_GUARDED_PACKAGES`] list below,
-/// which does include `sim`.
-const GUARDED_PACKAGES: &[&str] = &["plan-core", "verifier", "operator", "gateway"];
+/// which does include `sim`. `gamectl` joined at decisions-log item 109: it
+/// takes the sim with default features off, because the gateway's API is
+/// written in the sim's types.
+const GUARDED_PACKAGES: &[&str] = &["plan-core", "verifier", "operator", "gateway", "gamectl"];
 
 /// Crates that may never depend on a walled crate, transitively included.
 ///
-/// [`GUARDED_PACKAGES`] plus `sim`. The four guarded crates must not reach the
+/// [`GUARDED_PACKAGES`] plus `sim`. The guarded crates must not reach the
 /// float, cast, hash-map and clock allowance, and neither must the sim — it is
 /// the crate that owns hashed state, so it is the one the wall exists to
 /// protect (AGENTS.md section 4.9). The two lists are separate rather than one
 /// because `sim` defines the `research` feature and so cannot join the research
 /// guard. Keep this list, AGENTS.md section 4.9 and `clippy.toml`'s header in
 /// step; widening it is a contract change like any other.
-const WALL_GUARDED_PACKAGES: &[&str] = &["sim", "plan-core", "verifier", "operator", "gateway"];
+const WALL_GUARDED_PACKAGES: &[&str] = &[
+    "sim",
+    "plan-core",
+    "verifier",
+    "operator",
+    "gateway",
+    "gamectl",
+];
 
 /// Candidate names for the one crate that owns the `research` feature.
 const SIM_PACKAGES: &[&str] = &["sim"];
@@ -376,7 +385,7 @@ const STEPS: &[Step] = &[
     },
     Step {
         name: "research-guard",
-        about: "plan-core/verifier/operator/gateway must not reach `research`",
+        about: "plan-core/verifier/operator/gateway/gamectl must not reach `research`",
         run: step_research_guard,
     },
     Step {
@@ -905,7 +914,7 @@ fn step_research_guard(ctx: &Ctx) -> Result<Outcome, String> {
     let present = workspace.present(GUARDED_PACKAGES);
     if present.is_empty() {
         return Ok(Outcome::Skipped(
-            "none of plan-core, verifier, operator, gateway exist yet".to_owned(),
+            "none of plan-core, verifier, operator, gateway, gamectl exist yet".to_owned(),
         ));
     }
 
@@ -962,7 +971,7 @@ fn step_research_guard(ctx: &Ctx) -> Result<Outcome, String> {
 /// The wall is a crate boundary. Floats, `as` casts and hash maps are legal
 /// inside the walled crates, so nothing deterministic may depend on them —
 /// otherwise the allowance leaks into hashed state. "Nothing deterministic" is
-/// [`WALL_GUARDED_PACKAGES`]: the four guarded crates and the sim itself.
+/// [`WALL_GUARDED_PACKAGES`]: the guarded crates and the sim itself.
 fn step_wall_guard(ctx: &Ctx) -> Result<Outcome, String> {
     let workspace = match &ctx.workspace {
         Ok(workspace) => workspace,
