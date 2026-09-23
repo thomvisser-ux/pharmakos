@@ -46,10 +46,10 @@ path = "src/main.rs"
 # is never reachable from here. Decisions-log item 106 (3) draws the line this crate
 # is actually held to: `scenario run` hosts *through the same `Surface` and `Host`*
 # and never names the sim's `Runner`, and `tests/confinement.rs` asserts that over
-# this crate's own source text. The pull request raises the crate-map line with the
-# owner rather than editing AGENTS.md, which is a contract file (§5).
+# this crate's own source text. Decisions-log item 109 keeps the edge and adds it to the
+# crate map, and puts this crate on xtask's research and wall guards.
 pharmakos-proto     = { workspace = true }
-pharmakos-sim       = { workspace = true }
+pharmakos-sim       = { workspace = true, default-features = false }
 pharmakos-plan-core = { workspace = true }
 pharmakos-verifier  = { workspace = true }
 pharmakos-gateway   = { workspace = true }
