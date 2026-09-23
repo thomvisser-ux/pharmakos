@@ -377,6 +377,19 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends xvfb mesa-vulkan-drivers vulkan-tools
           vulkaninfo --summary || echo "::notice::vulkaninfo failed; the render step will report what it selected"
+          # `cargo xtask screenshot` asks whether a tool is installed by running it with
+          # `--version` (xtask/src/main.rs, `tool_available`), and xvfb-run has no such
+          # option: it prints its usage and exits non-zero, so the step reported
+          # "xvfb-run is not installed" on a runner where it was. That is an xtask bug and
+          # the fix belongs in xtask (T16's pull request reports it for T20); until then
+          # this shim answers `--version` and hands every other invocation to the real
+          # xvfb-run untouched.
+          mkdir -p "$HOME/shims"
+          printf '%s\n' '#!/bin/sh' \
+            'if [ "$1" = "--version" ]; then echo "xvfb-run (version probe shim)"; exit 0; fi' \
+            'exec /usr/bin/xvfb-run "$@"' > "$HOME/shims/xvfb-run"
+          chmod +x "$HOME/shims/xvfb-run"
+          echo "$HOME/shims" >> "$GITHUB_PATH"
 
       - name: Install Godot 4.7.2
         # The pinned build decisions-log item 73 names, exactly as the `client`
