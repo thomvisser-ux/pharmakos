@@ -1,0 +1,11 @@
+# The live event list, rendered from crates/client-gdext/tests/fixtures/
+# get_segment_feed.json: one row per event, in the feed's order - the time in the
+# segment, the kind and the gateway's own words, nothing added or dropped.
+0:00  push_started  The Push began. This segment runs 3:00.
+0:00  plan_sealed  The playbook of seat 0 was sealed: 3 route steps.
+0:00  step_started  Step 0 started.
+0:14  step_completed  Step 0 completed.
+0:14  step_started  Step 1 started.
+0:31  beacon_placed  A beacon of seat 0 was deployed.
+0:47  ore_delivered  A mining drone of seat 0 delivered ore worth $ 40.
+1:03  structure_queued  seat 0 paid for a structure; it is going up now.

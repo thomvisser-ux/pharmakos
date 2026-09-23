@@ -99,7 +99,14 @@ pub fn response_type(method: Method) -> Result<String, BridgeError> {
 pub fn decode_result(wire_method: &str, text: &str) -> Result<Json, BridgeError> {
     let method = method_from_wire(wire_method)?;
     let full_name = response_type(method)?;
-    let value = json::read(text)?;
+    // What the live gateway sends is not quite canonical proto JSON, in two ways the
+    // T12 fixtures did not show: every result carries the `_status` footer, which is an
+    // envelope concern and not a field of the message, and an enum value is spelt the
+    // lower-case wire way (decisions-log item 80). The footer is set aside and the enum
+    // spelling translated back through the schema (`crate::enums`); everything else is
+    // read exactly as strictly as before.
+    let (body, _) = crate::view::split_footer(&json::read(text)?);
+    let value = crate::enums::canonical(&full_name, &body);
     let bytes = json::json_to_wire(&full_name, &value)?;
     Ok(json::wire_to_json(&full_name, &bytes)?)
 }

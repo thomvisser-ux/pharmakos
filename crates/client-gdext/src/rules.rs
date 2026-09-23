@@ -89,6 +89,23 @@ pub fn mesher_rules(table: &RulesTable) -> Result<MesherRules, BridgeError> {
     })
 }
 
+/// The Lull's planning timer, `match.lull_ms`, in milliseconds.
+///
+/// The rules table's own comment says the row is "read by the host and the editor, never
+/// by the sim", and the gateway's `_status` footer shows the countdown the client reports
+/// rather than one of its own (skeleton-plan-t16a-notes.md section D: "the client counts,
+/// the gateway is told"), so the watch rig takes the Lull's length from here. `None` when
+/// the table carries no `match` block or a length of zero or less, which the rig treats
+/// as an untimed Lull rather than inventing a default.
+#[must_use]
+pub fn lull_ms(table: &RulesTable) -> Option<u32> {
+    table
+        .r#match
+        .as_ref()
+        .and_then(|row| u32::try_from(row.lull_ms).ok())
+        .filter(|length| *length > 0)
+}
+
 /// A light value narrowed from the table's `uint32` to the byte the mesher stores.
 fn light_byte(field: &'static str, value: u32) -> Result<u8, BridgeError> {
     u8::try_from(value).map_err(|_| BridgeError::RulesOutOfRange {

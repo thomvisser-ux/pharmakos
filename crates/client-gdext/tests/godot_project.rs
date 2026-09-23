@@ -162,21 +162,24 @@ fn the_project_pins_the_settings_item_56_rests_on() {
     );
 }
 
-/// The check script's inline rules table is the committed one.
+/// The inline rules table in godot/ is the committed one.
 ///
-/// `client_check.gd` carries item 54's five numbers as a JSON literal, because a `res://`
-/// path inside Godot cannot reach `rules/rules.v1.json` at the repository root. That makes
-/// it a second copy of a tuning row, and a copy nothing compares is exactly what
+/// `scripts/mesher_rules.gd` carries item 54's five numbers as a JSON literal, because a
+/// `res://` path inside Godot cannot reach `rules/rules.v1.json` at the repository root.
+/// That makes it a second copy of a tuning row, and a copy nothing compares is exactly what
 /// AGENTS.md section 12 forbids: the row moves, the copy does not, every check stays green
-/// and the client leg reports a table that no longer exists. The bridge's own inline copy
+/// and the client draws with a table that no longer exists. The bridge's own inline copy
 /// is pinned the same way by `bridge::tests::the_self_checks_table_is_the_committed_one`.
+///
+/// It is also the ONLY copy in godot/: a second `const RULES_JSON` in any script is a copy
+/// this test would not be reading, so the test counts them.
 #[test]
-fn the_check_scripts_inline_rules_table_is_the_committed_one() {
-    let script = read("scripts/client_check.gd");
+fn the_inline_rules_table_is_the_committed_one() {
+    let script = read("scripts/mesher_rules.gd");
     let line = script
         .lines()
         .find(|line| line.starts_with("const RULES_JSON"))
-        .expect("client_check.gd declares RULES_JSON");
+        .expect("mesher_rules.gd declares RULES_JSON");
     let json = line
         .split_once('\'')
         .and_then(|(_, rest)| rest.rsplit_once('\''))
@@ -203,15 +206,135 @@ fn the_check_scripts_inline_rules_table_is_the_committed_one() {
     // copy the same way and for the same reason.
     assert_eq!(
         inline.budget, committed.budget,
-        "godot/scripts/client_check.gd's RULES_JSON carries a drain budget that is no \
+        "godot/scripts/mesher_rules.gd's RULES_JSON carries a drain budget that is no \
          longer rules/rules.v1.json's. Update it, `bridge::round_trip_rules` and the \
          committed table together, and say in the pull request which row moved."
     );
     assert_eq!(
         inline.light, committed.light,
-        "godot/scripts/client_check.gd's RULES_JSON carries light parameters that are no \
+        "godot/scripts/mesher_rules.gd's RULES_JSON carries light parameters that are no \
          longer rules/rules.v1.json's. Update it, `bridge::round_trip_rules` and the \
          committed table together, and say in the pull request which row moved."
+    );
+
+    let lull =
+        |table: &pharmakos_proto::gp::v1::RulesTable| table.r#match.as_ref().map(|row| row.lull_ms);
+    assert_eq!(
+        lull(&table_from_json(json).expect("canonical")),
+        lull(&table_from_json(&text).expect("canonical")),
+        "godot/scripts/mesher_rules.gd's RULES_JSON carries a Lull length that is no longer          rules/rules.v1.json's match.lull_ms. Update both together and say which moved."
+    );
+
+    let scripts = godot_dir().join("scripts");
+    let mut copies = 0_usize;
+    for name in SCRIPTS {
+        let text = fs::read_to_string(scripts.join(name))
+            .unwrap_or_else(|error| panic!("reading scripts/{name}: {error}"));
+        copies += text
+            .lines()
+            .filter(|line| line.starts_with("const RULES_JSON"))
+            .count();
+    }
+    assert_eq!(
+        copies, 1,
+        "one pinned copy of the rules row in godot/, not {copies}"
+    );
+}
+
+/// Every GDScript file in the project, named rather than walked, so a script this list
+/// forgot is a failure rather than a file nothing checks.
+const SCRIPTS: &[&str] = &[
+    "boot.gd",
+    "camera_rig.gd",
+    "client_check.gd",
+    "host_link.gd",
+    "lobby.gd",
+    "mesher_rules.gd",
+    "vista.gd",
+    "vista_shot.gd",
+    "watch_check.gd",
+];
+
+/// Every script is on [`SCRIPTS`], and every scene names scripts and scenes that exist.
+///
+/// GDScript has no compiler and a `.tscn` is read by the engine at run time, so a renamed
+/// file surfaces as an error inside a job that has already spent ten minutes building.
+///
+/// `fs::read_dir` is on clippy.toml's disallowed-methods list because directory order
+/// differs between filesystems; the names are sorted before anything compares them, which
+/// is the remedy the ban asks for, and this crate is walled (AGENTS.md section 4.9).
+#[test]
+fn every_script_is_listed_and_every_scene_names_files_that_exist() {
+    let scripts = godot_dir().join("scripts");
+    let mut on_disk: Vec<String> = Vec::new();
+    for entry in fs::read_dir(&scripts).expect("godot/scripts").flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if Path::new(&name)
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("gd"))
+        {
+            on_disk.push(name);
+        }
+    }
+    on_disk.sort();
+    assert_eq!(
+        on_disk,
+        SCRIPTS
+            .iter()
+            .map(|name| (*name).to_owned())
+            .collect::<Vec<_>>(),
+        "godot/scripts and this test's list disagree"
+    );
+
+    for scene in [
+        "scenes/boot.tscn",
+        "scenes/client_check.tscn",
+        "scenes/lobby.tscn",
+        "scenes/vista.tscn",
+        "scenes/vista_shot.tscn",
+        "scenes/watch_check.tscn",
+    ] {
+        let text = read(scene);
+        for line in text.lines().filter(|line| line.contains("path=\"res://")) {
+            let path = line
+                .split("path=\"res://")
+                .nth(1)
+                .and_then(|rest| rest.split('"').next())
+                .expect("a res:// path");
+            assert!(
+                godot_dir().join(path).is_file(),
+                "{scene} names res://{path}, which does not exist"
+            );
+        }
+    }
+    assert!(
+        read("scenes/vista.tscn").contains(&format!("type=\"{BRIDGE_CLASS_NAME}\"")),
+        "the vista instantiates the bridge"
+    );
+}
+
+/// The screenshot step renders `res://scenes/vista_shot.tscn` through the project's main
+/// scene, passing `--scene=` and `--shot=` after `--` (`xtask/src/main.rs`,
+/// `step_screenshot`), so the main scene is the boot scene that honours both, and the shot
+/// is taken from the committed keyframe fixture with no host running.
+#[test]
+fn the_main_scene_dispatches_the_screenshot_steps_arguments() {
+    let project = read("project.godot");
+    assert!(
+        project.contains("run/main_scene=\"res://scenes/boot.tscn\""),
+        "project.godot's main scene is the boot scene"
+    );
+    let boot = read("scripts/boot.gd");
+    assert!(boot.contains("--scene="), "boot.gd reads --scene=");
+    let shot = read("scripts/vista_shot.gd");
+    assert!(shot.contains("--shot="), "vista_shot.gd reads --shot=");
+    assert!(
+        shot.contains("res://fixtures/view_keyframe.jsonl"),
+        "the shot renders the committed keyframe fixture, with no host running"
+    );
+    assert!(
+        !shot.contains("host_link") && !shot.contains("execute_with_pipe"),
+        "the shot starts no host (skeleton-plan-t16a-notes.md section A (4))"
     );
 }
 

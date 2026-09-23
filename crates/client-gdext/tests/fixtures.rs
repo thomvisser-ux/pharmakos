@@ -38,8 +38,8 @@ use std::path::{Path, PathBuf};
 
 use pharmakos_client_gdext::api;
 use pharmakos_proto::gp::api::v1::{
-    BeaconSummary, GetBriefingResponse, GetStatusResponse, ListBeaconsResponse, Standing, Status,
-    status,
+    BeaconSummary, Digest, Event, GetBriefingResponse, GetSegmentFeedResponse, GetStatusResponse,
+    KindCount, ListBeaconsResponse, Standing, Status, status,
 };
 use pharmakos_proto::gp::v1::Voxel;
 use pharmakos_proto::json;
@@ -55,13 +55,15 @@ fn fixtures_dir() -> PathBuf {
 
 /// The fixtures, as `(method wire name, file name, canonical JSON)`.
 ///
-/// Three, and each is there for a shape rather than for a method:
+/// Four, and each is there for a shape rather than for a method:
 ///
 /// * `get_status` — the `_status` footer's own message: a scalar enum, three integers;
 /// * `get_briefing` — a nested message and a string, the notebook at the top as spec
 ///   section 12 asks;
 /// * `list_beacons` — a repeated message with a nested `gp.v1` type inside it, and an
-///   empty `next_cursor`, which canonical JSON omits rather than writing as `""`.
+///   empty `next_cursor`, which canonical JSON omits rather than writing as `""`;
+/// * `get_segment_feed` — the live event list's source (T16), whose rows the event-list
+///   golden pins.
 fn generate() -> Vec<(&'static str, &'static str, String)> {
     let status = GetStatusResponse {
         status: Some(Status {
@@ -119,7 +121,59 @@ fn generate() -> Vec<(&'static str, &'static str, String)> {
             "list_beacons.json",
             json::encode(&beacons).expect("ListBeaconsResponse encodes"),
         ),
+        (
+            "get_segment_feed",
+            "get_segment_feed.json",
+            json::encode(&feed_fixture()).expect("GetSegmentFeedResponse encodes"),
+        ),
     ]
+}
+
+/// One Push's worth of the segment feed, in the kinds and the words the gateway's own
+/// string table writes (`pharmakos_gateway::strings::event_text`), with a 60-second digest
+/// beside it. The event list's golden (`tests/golden/vista/expected.events.txt`) is
+/// rendered from this fixture by `tests/event_list.rs`.
+fn feed_fixture() -> GetSegmentFeedResponse {
+    let event = |at_ms: i32, kind: &str, text: &str| Event {
+        at_ms,
+        kind: kind.to_owned(),
+        text: text.to_owned(),
+        at: None,
+    };
+    GetSegmentFeedResponse {
+        events: vec![
+            event(0, "push_started", "The Push began. This segment runs 3:00."),
+            event(
+                0,
+                "plan_sealed",
+                "The playbook of seat 0 was sealed: 3 route steps.",
+            ),
+            event(250, "step_started", "Step 0 started."),
+            event(14_250, "step_completed", "Step 0 completed."),
+            event(14_250, "step_started", "Step 1 started."),
+            event(31_500, "beacon_placed", "A beacon of seat 0 was deployed."),
+            event(
+                47_750,
+                "ore_delivered",
+                "A mining drone of seat 0 delivered ore worth $ 40.",
+            ),
+            event(
+                63_000,
+                "structure_queued",
+                "seat 0 paid for a structure; it is going up now.",
+            ),
+        ],
+        digests: vec![Digest {
+            from_ms: 0,
+            to_ms: 60_000,
+            text: "0:00-1:00: 7 events.".to_owned(),
+            counts: vec![KindCount {
+                kind: "step_started".to_owned(),
+                count: 2,
+            }],
+        }],
+        next_cursor: "a730c5c72d863a51".to_owned(),
+    }
 }
 
 /// Fixture files are read on three operating systems, so they follow the same rule the

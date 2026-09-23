@@ -52,7 +52,10 @@
 
 use std::fmt;
 
-use godot::builtin::{GString, PackedByteArray, VarDictionary, Variant, Vector3};
+use godot::builtin::{
+    GString, PackedByteArray, PackedStringArray, VarArray, VarDictionary, Variant, Vector3,
+    Vector3i,
+};
 use godot::classes::{INode3D, Node3D};
 use godot::meta::ToGodot;
 use godot::obj::{Base, WithBaseField};
@@ -70,11 +73,14 @@ use crate::api;
 use crate::chunks;
 use crate::engine::ChunkRenderer;
 use crate::error::BridgeError;
+use crate::pacer::WallClock;
 use crate::panics::PanicCounter;
+use crate::rig::{Answer, Rig};
 use crate::rules::{self, MesherRules};
 use crate::surface::{ColourQuantisation, Surface, SurfaceProbe};
 use crate::upload::{DEFAULT_UPLOAD_PATH, ResidentSurface, UploadCounters, UploadPath, Uploader};
 use crate::variant::json_to_variant;
+use crate::view::{self, Applied, Entity, ViewModel};
 
 /// The bridge node. One per client; the scenes hold it and GDScript calls it.
 #[derive(GodotClass)]
@@ -90,10 +96,18 @@ pub struct PharmakosBridge {
     /// Item 54's K, B and ageing term, as `configure` read them. Held so a caller can ask
     /// what this client is budgeted at without re-reading the table.
     budget: Option<DrainBudget>,
+    /// The Lull's length, `match.lull_ms`, as `configure` read it; `None` is untimed.
+    lull_ms: Option<u32>,
     /// Reused across the frame's chunks, so a steady-state remesh allocates nothing.
     buffers: MeshBuffers,
     /// Reused across the frame's chunks, so the per-chunk transposition allocates once.
     transposed: Vec<u8>,
+    /// The client's copy of the view: built by `configure`, filled by `view_apply`.
+    view: Option<ViewModel>,
+    /// The watch rig: built by `watch_begin`.
+    rig: Option<Rig>,
+    /// The one wall clock the client reads (`crate::pacer`).
+    wall: WallClock,
 }
 
 impl fmt::Debug for PharmakosBridge {
@@ -121,8 +135,12 @@ impl INode3D for PharmakosBridge {
             renderer: None,
             mesher: None,
             budget: None,
+            lull_ms: None,
             buffers: MeshBuffers::empty(),
             transposed: Vec::new(),
+            view: None,
+            rig: None,
+            wall: WallClock::start(),
         }
     }
 
@@ -181,10 +199,11 @@ impl PharmakosBridge {
     fn configure(&mut self, chunks: i64, rules_json: GString) -> VarDictionary {
         let text = rules_json.to_string();
         let parsed = self.panics.guard("configure", || {
-            rules::table_from_json(&text).and_then(|table| rules::mesher_rules(&table))
+            rules::table_from_json(&text)
+                .and_then(|table| Ok((rules::mesher_rules(&table)?, rules::lull_ms(&table))))
         });
         let mut report = VarDictionary::new();
-        let parsed = match parsed {
+        let (parsed, lull_ms) = match parsed {
             Some(Ok(parsed)) => parsed,
             Some(Err(error)) => {
                 godot_error!("[pharmakos] configure: {error}");
@@ -203,29 +222,10 @@ impl PharmakosBridge {
 
         self.mesher = Some(Mesher::new(parsed.light));
         self.budget = Some(parsed.budget);
+        self.view = Some(ViewModel::new(parsed.light, parsed.budget));
+        self.lull_ms = lull_ms;
 
-        let count = usize::try_from(chunks).unwrap_or(0);
-        let scenario = self
-            .base()
-            .get_world_3d()
-            .map(|world| world.get_scenario())
-            .filter(godot::prelude::Rid::is_valid);
-        let attached = match scenario {
-            Some(scenario) => {
-                let holder = match DEFAULT_UPLOAD_PATH {
-                    UploadPath::ArrayMesh => Some(self.to_gd().upcast::<Node3D>()),
-                    UploadPath::RenderingServerRids => None,
-                };
-                self.renderer = Some(ChunkRenderer::new(
-                    DEFAULT_UPLOAD_PATH,
-                    count,
-                    scenario,
-                    holder,
-                ));
-                true
-            }
-            None => false,
-        };
+        let attached = self.attach_renderer(usize::try_from(chunks).unwrap_or(0));
 
         report.set(&"configured".to_variant(), &true.to_variant());
         report.set(&"attached".to_variant(), &attached.to_variant());
@@ -253,17 +253,13 @@ impl PharmakosBridge {
     /// surface cost and how the uploads have gone; an empty dictionary means the reason is
     /// in the log.
     ///
-    /// # The six neighbour borders are written but not wired
+    /// # This call meshes one chunk as if surrounded by air
     ///
-    /// This call passes [`ChunkView::no_borders`], so every chunk is meshed **as if
-    /// surrounded by air** and the full set of chunk-boundary faces is emitted. That is
-    /// correct for the single-chunk self-check and wrong for any real world.
-    /// [`chunks::sim_to_mesher_border`](crate::chunks::sim_to_mesher_border) is the
-    /// transposition for them — written, documented and unit-tested — and no `#[func]`
-    /// takes a border slice yet, because nothing in the client has a neighbour to pass:
-    /// the chunk set arrives with the watch rig at T16, and wiring the six arrays into
-    /// this signature belongs there rather than here. Said out loud so the next author
-    /// does not assume the bridge already carries them.
+    /// It passes [`ChunkView::no_borders`], so the full set of chunk-boundary faces is
+    /// emitted: right for the single-chunk self-check and the engine-side upload check,
+    /// wrong for a world. The world's chunks go through `view_drain` instead, which meshes
+    /// each chunk of the resident map with its six real neighbours and its baked light
+    /// (`crate::view`, T16).
     #[func]
     fn upload_chunk(
         &mut self,
@@ -327,18 +323,10 @@ impl PharmakosBridge {
     ///
     /// The three numbers the mesher's own `DrainQueue` is built from.
     ///
-    /// **They are reported here and applied nowhere.** No `DrainQueue` is constructed in
-    /// this crate, and `upload_chunk` is a per-chunk call with no per-frame accounting in
-    /// it, so the bound item 54 exists to impose is not imposed by the client today: the
-    /// caller decides how many surfaces and how many bytes a frame carries. That is
-    /// deliberate and it is T16's to close. A queue needs a DIRTY SET to drain — which
-    /// chunks changed, and how long ago — and nothing in the client has one until the
-    /// watch rig exists; a queue built now would be a queue over a set of one, which
-    /// would prove nothing and would have to be rebuilt around the real one anyway.
-    /// What this lane owes item 54 is that the rows reach the client unaltered and can be
-    /// read back, which is what this call and `configure` are, plus the test that pins
-    /// them to the committed table. T16 builds the queue from exactly these three
-    /// numbers.
+    /// **They are applied by `view_drain`** (T16): `configure` builds the view model's
+    /// drain queue from exactly these three numbers, and each call of `view_drain` uploads
+    /// what item 54's order and budget allow that frame. `upload_chunk` stays a per-chunk
+    /// call with no per-frame accounting, because its callers are checks, not a world.
     ///
     /// Carrying them is the bridge's job either way, because the mesher cannot read the
     /// rules table itself (item 92).
@@ -444,6 +432,240 @@ impl PharmakosBridge {
         }
     }
 
+    /// **The view feed's one entry**: a `get_view` result text in, its chunks on the
+    /// drain queue out.
+    ///
+    /// `result_text` is the object a JSON-RPC answer's `result` member holds, `_status`
+    /// footer and all; one line of `godot/fixtures/view_keyframe.jsonl` is exactly one.
+    /// The chunks are decoded, stored by origin, lit and queued ([`crate::view`]); nothing
+    /// is drawn until `view_drain`. The watch rig hands every `get_view` answer it reads to
+    /// the same function this calls, so the hostless vista and the live one decode through
+    /// one path.
+    ///
+    /// The dictionary says `complete`, `next_cursor`, `at_ms`, `chunks`, `queued`,
+    /// `pending` and `held`, and on a completing page `entities`: an array of dictionaries
+    /// with `id`, `kind`, `subtype`, `owner` and `at` (a `Vector3i` in the SIM's axes: x
+    /// east, y north, z up). An empty dictionary means the reason is in the log.
+    #[func]
+    fn view_apply(&mut self, result_text: GString) -> VarDictionary {
+        let text = result_text.to_string();
+        let parsed = self.panics.guard("view_apply", || {
+            json::read(&text).map_err(BridgeError::from)
+        });
+        match parsed {
+            Some(Ok(result)) => self.apply_view(&result),
+            Some(Err(error)) => {
+                godot_error!("[pharmakos] view_apply: {error}");
+                VarDictionary::new()
+            }
+            None => VarDictionary::new(),
+        }
+    }
+
+    /// One frame's uploads: item 54's K surfaces and B bytes, nearest the camera first.
+    ///
+    /// `camera` is the camera's position in the world, which is the MESHER's axes (y up).
+    /// Returns `uploaded` and `pending`; an empty dictionary means the reason is in the
+    /// log.
+    #[func]
+    fn view_drain(&mut self, camera: Vector3) -> VarDictionary {
+        let (Some(mut model), Some(mut mesher)) = (self.view.take(), self.mesher.take()) else {
+            return VarDictionary::new();
+        };
+        let mut buffers = std::mem::replace(&mut self.buffers, MeshBuffers::empty());
+        let mut renderer = self.renderer.take();
+        let edge = f32::from(u16::try_from(pharmakos_mesher::CHUNK_EDGE).unwrap_or(32));
+        let camera_chunk = [
+            (camera.x / edge).floor() as i32,
+            (camera.y / edge).floor() as i32,
+            (camera.z / edge).floor() as i32,
+        ];
+        let outcome = self.panics.guard("view_drain", || {
+            let mut uploaded = 0_usize;
+            for chunk in model.next_uploads(camera_chunk) {
+                let corner = model.mesh(chunk, &mut mesher, &mut buffers)?;
+                let surface = Surface::from_mesh(&buffers)?;
+                if let Some(renderer) = renderer.as_mut() {
+                    let index = usize::try_from(chunk).unwrap_or(usize::MAX);
+                    renderer.upload(index, corner.map(|value| value as f32), &surface)?;
+                }
+                uploaded = uploaded.saturating_add(1);
+            }
+            Ok::<usize, BridgeError>(uploaded)
+        });
+        let pending = model.pending();
+        self.view = Some(model);
+        self.mesher = Some(mesher);
+        self.buffers = buffers;
+        self.renderer = renderer;
+        let mut report = VarDictionary::new();
+        match outcome {
+            Some(Ok(uploaded)) => {
+                report.set(&"uploaded".to_variant(), &count_of(uploaded));
+                report.set(&"pending".to_variant(), &count_of(pending));
+            }
+            Some(Err(error)) => godot_error!("[pharmakos] view_drain: {error}"),
+            None => {}
+        }
+        report
+    }
+
+    /// The map's extent in voxels, in the MESHER's axes (y up); zero before a keyframe.
+    #[func]
+    fn view_extent(&mut self) -> Vector3i {
+        let grid = self.view.as_ref().and_then(ViewModel::grid);
+        self.panics
+            .guard("view_extent", || {
+                grid.map_or(Vector3i::ZERO, |grid| {
+                    let [x, y, z] = grid.voxels();
+                    Vector3i::new(x, y, z)
+                })
+            })
+            .unwrap_or(Vector3i::ZERO)
+    }
+
+    /// Starts a fresh watch rig, with both connections closed, timing its Lulls by the
+    /// `match.lull_ms` row `configure` read (untimed when there was none).
+    #[func]
+    fn watch_begin(&mut self) {
+        let mut rig = Rig::new();
+        rig.set_lull_length(self.lull_ms.map_or(0, u64::from));
+        self.rig = Some(rig);
+    }
+
+    /// Connection `link` (0 admin, 1 seat) is open.
+    #[func]
+    fn watch_opened(&mut self, link: i64) {
+        if let (Some(rig), Ok(link)) = (self.rig.as_mut(), usize::try_from(link)) {
+            let _ = self.panics.guard("watch_opened", || rig.opened(link));
+        }
+    }
+
+    /// Connection `link` (0 admin, 1 seat) dropped.
+    #[func]
+    fn watch_dropped(&mut self, link: i64) {
+        if let (Some(rig), Ok(link)) = (self.rig.as_mut(), usize::try_from(link)) {
+            let _ = self.panics.guard("watch_dropped", || rig.dropped(link));
+        }
+    }
+
+    /// Reads one text frame from connection `link`.
+    ///
+    /// Returns `phase`, `phase_changed`, `events` (new event-list rows, as strings),
+    /// `error` (the gateway's refusal, empty when there was none) and, for a `get_view`
+    /// answer, `view`: what `view_apply` returns for the same result. An empty dictionary
+    /// means the frame could not be read, and the reason is in the log.
+    #[func]
+    fn watch_receive(&mut self, link: i64, text: GString) -> VarDictionary {
+        let (Some(mut rig), Ok(link)) = (self.rig.take(), usize::try_from(link)) else {
+            return VarDictionary::new();
+        };
+        let text = text.to_string();
+        let read = self
+            .panics
+            .guard("watch_receive", || rig.receive(link, &text));
+        let phase = rig.phase().name();
+        self.rig = Some(rig);
+        let answer = match read {
+            Some(Ok(answer)) => answer,
+            Some(Err(error)) => {
+                godot_error!("[pharmakos] watch_receive: {error}");
+                return VarDictionary::new();
+            }
+            None => return VarDictionary::new(),
+        };
+        let Answer {
+            view,
+            events,
+            error,
+            phase_changed,
+        } = answer;
+        let mut report = VarDictionary::new();
+        report.set(&"phase".to_variant(), &phase.to_variant());
+        report.set(&"phase_changed".to_variant(), &phase_changed.to_variant());
+        let mut rows = PackedStringArray::new();
+        for row in &events {
+            rows.push(row.as_str());
+        }
+        report.set(&"events".to_variant(), &rows.to_variant());
+        report.set(
+            &"error".to_variant(),
+            &error.unwrap_or_default().to_variant(),
+        );
+        if let Some(result) = view {
+            let applied = self.apply_view(&result);
+            report.set(&"view".to_variant(), &applied.to_variant());
+        }
+        report
+    }
+
+    /// The frames to send now, as an array of `[link, text]` pairs.
+    #[func]
+    fn watch_outbox(&mut self) -> VarArray {
+        let Some(rig) = self.rig.as_mut() else {
+            return VarArray::new();
+        };
+        let now = self.wall.now_us();
+        let frames = self
+            .panics
+            .guard("watch_outbox", || rig.poll(now))
+            .unwrap_or_default();
+        let mut out = VarArray::new();
+        for frame in frames {
+            let mut pair = VarArray::new();
+            pair.push(&count_of(frame.link));
+            pair.push(&frame.text.to_variant());
+            out.push(&pair.to_variant());
+        }
+        out
+    }
+
+    /// A human command to the rig: `speed` (with the speed as `value`), `skip`, `ready`,
+    /// `end_lull` or `end_recap`. Returns whether it was taken.
+    #[func]
+    fn watch_command(&mut self, command: GString, value: i64) -> bool {
+        let Some(rig) = self.rig.as_mut() else {
+            return false;
+        };
+        let command = command.to_string();
+        self.panics
+            .guard("watch_command", || match command.as_str() {
+                "speed" => u32::try_from(value).is_ok_and(|speed| rig.set_speed(speed)),
+                "skip" => {
+                    rig.skip();
+                    true
+                }
+                "ready" => {
+                    rig.ready();
+                    true
+                }
+                "end_lull" => {
+                    rig.end_lull();
+                    true
+                }
+                "end_recap" => {
+                    rig.end_recap();
+                    true
+                }
+                _ => false,
+            })
+            .unwrap_or(false)
+    }
+
+    /// What the lobby shows: `phase`, `round`, `timer`, `speed`, `skipping`, `all_ready`,
+    /// `drops_admin`, `drops_seat`, `calls_admin`, `calls_seat`, `view_settled`, `pending`
+    /// and `last_error`.
+    #[func]
+    fn watch_state(&mut self) -> VarDictionary {
+        let Some(rig) = self.rig.as_ref() else {
+            return VarDictionary::new();
+        };
+        let pending = self.view.as_ref().map_or(0, ViewModel::pending);
+        self.panics
+            .guard("watch_state", || rig_state(rig, pending))
+            .unwrap_or_default()
+    }
+
     /// Runs T12's acceptance and returns it as a dictionary.
     ///
     /// The one call `godot/scripts/client_check.gd` makes, and through it the one the CI
@@ -473,6 +695,139 @@ impl PharmakosBridge {
         );
         dictionary
     }
+}
+
+impl PharmakosBridge {
+    /// Builds a renderer for `count` chunks in this node's world, freeing any previous one.
+    /// Returns whether there is a world to render into.
+    fn attach_renderer(&mut self, count: usize) -> bool {
+        if let Some(mut previous) = self.renderer.take() {
+            previous.free_all();
+        }
+        let scenario = self
+            .base()
+            .get_world_3d()
+            .map(|world| world.get_scenario())
+            .filter(godot::prelude::Rid::is_valid);
+        let Some(scenario) = scenario else {
+            return false;
+        };
+        let holder = match DEFAULT_UPLOAD_PATH {
+            UploadPath::ArrayMesh => Some(self.to_gd().upcast::<Node3D>()),
+            UploadPath::RenderingServerRids => None,
+        };
+        self.renderer = Some(ChunkRenderer::new(
+            DEFAULT_UPLOAD_PATH,
+            count,
+            scenario,
+            holder,
+        ));
+        true
+    }
+
+    /// Decodes one `get_view` result into the view model: the body of `view_apply`, and
+    /// what the watch rig does with every `get_view` answer.
+    fn apply_view(&mut self, result: &pharmakos_proto::json::Json) -> VarDictionary {
+        let Some(mut model) = self.view.take() else {
+            godot_error!("[pharmakos] view_apply: call configure() first");
+            return VarDictionary::new();
+        };
+        let outcome = self.panics.guard("view_apply", || {
+            let page = view::decode_page(result)?;
+            model.apply(page)
+        });
+        let applied: Applied = match outcome {
+            Some(Ok(applied)) => applied,
+            Some(Err(error)) => {
+                godot_error!("[pharmakos] view_apply: {error}");
+                self.view = Some(model);
+                return VarDictionary::new();
+            }
+            None => {
+                self.view = Some(model);
+                return VarDictionary::new();
+            }
+        };
+        if applied.grid_changed {
+            let count = model
+                .grid()
+                .and_then(|grid| usize::try_from(grid.chunk_count()).ok())
+                .unwrap_or(0);
+            self.attach_renderer(count);
+        }
+        let mut report = VarDictionary::new();
+        report.set(&"complete".to_variant(), &applied.complete.to_variant());
+        report.set(
+            &"next_cursor".to_variant(),
+            &applied.next_cursor.to_variant(),
+        );
+        report.set(
+            &"at_ms".to_variant(),
+            &i64::from(applied.at_ms).to_variant(),
+        );
+        report.set(&"chunks".to_variant(), &count_of(applied.chunks));
+        report.set(&"queued".to_variant(), &count_of(applied.queued));
+        report.set(&"pending".to_variant(), &count_of(model.pending()));
+        report.set(&"held".to_variant(), &count_of(model.held()));
+        if applied.complete {
+            let mut entities = VarArray::new();
+            for entity in model.entities() {
+                entities.push(&entity_dictionary(entity).to_variant());
+            }
+            report.set(&"entities".to_variant(), &entities.to_variant());
+        }
+        self.view = Some(model);
+        report
+    }
+}
+
+/// The rig's state as the dictionary `watch_state` returns.
+fn rig_state(rig: &Rig, pending: usize) -> VarDictionary {
+    let mut state = VarDictionary::new();
+    state.set(&"phase".to_variant(), &rig.phase().name().to_variant());
+    state.set(&"round".to_variant(), &i64::from(rig.round()).to_variant());
+    state.set(&"timer".to_variant(), &rig.timer_text().to_variant());
+    state.set(&"speed".to_variant(), &i64::from(rig.speed()).to_variant());
+    state.set(&"skipping".to_variant(), &rig.skipping().to_variant());
+    state.set(&"all_ready".to_variant(), &rig.all_ready().to_variant());
+    state.set(
+        &"drops_admin".to_variant(),
+        &i64::from(rig.drops(crate::rig::ADMIN)).to_variant(),
+    );
+    state.set(
+        &"drops_seat".to_variant(),
+        &i64::from(rig.drops(crate::rig::SEAT)).to_variant(),
+    );
+    state.set(
+        &"calls_admin".to_variant(),
+        &counter(rig.calls(crate::rig::ADMIN)),
+    );
+    state.set(
+        &"calls_seat".to_variant(),
+        &counter(rig.calls(crate::rig::SEAT)),
+    );
+    state.set(
+        &"view_settled".to_variant(),
+        &rig.view_settled().to_variant(),
+    );
+    state.set(&"pending".to_variant(), &count_of(pending));
+    state.set(
+        &"last_error".to_variant(),
+        &rig.last_error().unwrap_or_default().to_variant(),
+    );
+    state
+}
+
+/// One entity as a dictionary GDScript can read.
+fn entity_dictionary(entity: &Entity) -> VarDictionary {
+    let mut dictionary = VarDictionary::new();
+    dictionary.set(&"id".to_variant(), &entity.id.to_variant());
+    dictionary.set(&"kind".to_variant(), &entity.kind.name().to_variant());
+    dictionary.set(&"subtype".to_variant(), &entity.subtype.to_variant());
+    dictionary.set(&"owner".to_variant(), &entity.owner.to_variant());
+    let [x, y, z] = entity.at;
+    dictionary.set(&"at".to_variant(), &Vector3i::new(x, y, z).to_variant());
+    dictionary
 }
 
 /// One renderer's counters as a dictionary GDScript can read.
@@ -944,14 +1299,14 @@ mod tests {
         assert_eq!(
             inline.budget, committed.budget,
             "the self-check's inline drain budget has drifted from rules/rules.v1.json. \
-             Update `round_trip_rules` and `godot/scripts/client_check.gd`'s RULES_JSON \
+             Update `round_trip_rules` and `godot/scripts/mesher_rules.gd`'s RULES_JSON \
              together, and say in the pull request which row moved."
         );
         assert_eq!(
             inline.light, committed.light,
             "the self-check's inline light parameters have drifted from \
              rules/rules.v1.json. Update `round_trip_rules` and \
-             `godot/scripts/client_check.gd`'s RULES_JSON together, and say in the pull \
+             `godot/scripts/mesher_rules.gd`'s RULES_JSON together, and say in the pull \
              request which row moved."
         );
     }
