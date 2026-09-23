@@ -144,7 +144,9 @@ pub fn unknown_command(given: &str) -> String {
 #[must_use]
 pub fn host_on_a_terminal() -> String {
     format!(
-        "{BINARY} host: standard output is a terminal, so nothing was started. This command          is the game's own match host: the lobby starts it with a pipe on both ends, and its          one line of output carries the match's tokens, which must never reach a console."
+        "{BINARY} host: standard output is a terminal, so nothing was started. This command \
+         is the game's own match host: the lobby starts it with a pipe on both ends, and its \
+         one line of output carries the match's tokens, which must never reach a console."
     )
 }
 

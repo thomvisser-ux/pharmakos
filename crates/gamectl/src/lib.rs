@@ -60,7 +60,9 @@ use crate::exit::{Exit, Failure};
 /// Rendering into strings rather than writing to the process's own handles
 /// keeps every command a pure function of its inputs, which is what lets
 /// `tests/cli.rs` run the whole binary's behaviour in process with no
-/// subprocess and no captured pipe.
+/// subprocess and no captured pipe. `host` is the one exception: it owns the
+/// process's real standard input and output for the life of a match, writes
+/// its announce line itself, and leaves `out` empty.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Outcome {
     /// The status to exit with.
@@ -97,14 +99,12 @@ where
 
 fn dispatch(invocation: &cli::Invocation) -> Result<String, Failure> {
     let root = invocation.root.as_path();
-    // `host` writes its one announce line to standard output itself and owns
-    // the process's standard input until it closes, so it is the one command
-    // whose output is not a string returned here: nothing is appended to what
-    // it wrote, not even a newline.
-    if invocation.command == Command::Host {
-        return host::run(root);
-    }
-    match &invocation.command {
+    let rendered = match &invocation.command {
+        // `host` writes its one announce line to standard output itself and
+        // owns the process's standard input until it closes, so it is the one
+        // command whose output is not a string returned here: it returns at
+        // once, and nothing is appended to what it wrote, not even a newline.
+        Command::Host => return host::run(root),
         Command::Help => Ok(strings::help()),
         Command::Version => Ok(strings::version()),
         Command::Verify { path, depth } => verify::run(root, path, *depth),
@@ -112,9 +112,8 @@ fn dispatch(invocation: &cli::Invocation) -> Result<String, Failure> {
         Command::Docs => docs::run(),
         Command::ScenarioRun { path } => scenario::run::run(root, path),
         Command::SeatDoctor => doctor::run(root),
-        Command::Host => host::run(root),
-    }
-    .map(with_newline)
+    };
+    rendered.map(with_newline)
 }
 
 /// Every message this binary prints ends in exactly one newline, wherever it
