@@ -53,8 +53,8 @@
 use std::fmt;
 
 use godot::builtin::{
-    GString, PackedByteArray, PackedStringArray, VarArray, VarDictionary, Variant, Vector3,
-    Vector3i,
+    GString, PackedByteArray, PackedInt32Array, PackedStringArray, VarArray, VarDictionary,
+    Variant, Vector3, Vector3i,
 };
 use godot::classes::{INode3D, Node3D};
 use godot::meta::ToGodot;
@@ -199,11 +199,16 @@ impl PharmakosBridge {
     fn configure(&mut self, chunks: i64, rules_json: GString) -> VarDictionary {
         let text = rules_json.to_string();
         let parsed = self.panics.guard("configure", || {
-            rules::table_from_json(&text)
-                .and_then(|table| Ok((rules::mesher_rules(&table)?, rules::lull_ms(&table))))
+            rules::table_from_json(&text).and_then(|table| {
+                Ok((
+                    rules::mesher_rules(&table)?,
+                    rules::lull_ms(&table),
+                    rules::map_extent(&table)?,
+                ))
+            })
         });
         let mut report = VarDictionary::new();
-        let (parsed, lull_ms) = match parsed {
+        let (parsed, lull_ms, extent) = match parsed {
             Some(Ok(parsed)) => parsed,
             Some(Err(error)) => {
                 godot_error!("[pharmakos] configure: {error}");
@@ -222,7 +227,7 @@ impl PharmakosBridge {
 
         self.mesher = Some(Mesher::new(parsed.light));
         self.budget = Some(parsed.budget);
-        self.view = Some(ViewModel::new(parsed.light, parsed.budget));
+        self.view = Some(ViewModel::new(parsed.light, parsed.budget, extent));
         self.lull_ms = lull_ms;
 
         let attached = self.attach_renderer(usize::try_from(chunks).unwrap_or(0));
@@ -453,7 +458,7 @@ impl PharmakosBridge {
             json::read(&text).map_err(BridgeError::from)
         });
         match parsed {
-            Some(Ok(result)) => self.apply_view(&result),
+            Some(Ok(result)) => self.apply_view(&result).unwrap_or_default(),
             Some(Err(error)) => {
                 godot_error!("[pharmakos] view_apply: {error}");
                 VarDictionary::new()
@@ -593,10 +598,31 @@ impl PharmakosBridge {
             &error.unwrap_or_default().to_variant(),
         );
         if let Some(result) = view {
+            // The rig has already moved its cursor past this page; a page the bridge
+            // refuses is lost unless the rig is told, so it asks for a keyframe again.
             let applied = self.apply_view(&result);
-            report.set(&"view".to_variant(), &applied.to_variant());
+            if applied.is_none() {
+                if let Some(rig) = self.rig.as_mut() {
+                    let _ = self.panics.guard("watch_receive", || rig.view_refused());
+                }
+            }
+            report.set(
+                &"view".to_variant(),
+                &applied.unwrap_or_default().to_variant(),
+            );
         }
         report
+    }
+
+    /// The speeds the watch rig offers, `pacer::SPEEDS`, in order: the lobby builds its
+    /// speed buttons from this, so the set has one home.
+    #[func]
+    fn watch_speeds(&self) -> PackedInt32Array {
+        let mut speeds = PackedInt32Array::new();
+        for speed in crate::pacer::SPEEDS {
+            speeds.push(i32::try_from(speed).unwrap_or(i32::MAX));
+        }
+        speeds
     }
 
     /// The frames to send now, as an array of `[link, text]` pairs.
@@ -653,8 +679,8 @@ impl PharmakosBridge {
     }
 
     /// What the lobby shows: `phase`, `round`, `timer`, `speed`, `skipping`, `all_ready`,
-    /// `drops_admin`, `drops_seat`, `calls_admin`, `calls_seat`, `view_settled`, `pending`
-    /// and `last_error`.
+    /// `drops_admin`, `drops_seat`, `calls_admin`, `calls_seat`, `view_settled`,
+    /// `seat_settled`, `view_refusals`, `pending` and `last_error`.
     #[func]
     fn watch_state(&mut self) -> VarDictionary {
         let Some(rig) = self.rig.as_ref() else {
@@ -726,11 +752,12 @@ impl PharmakosBridge {
     }
 
     /// Decodes one `get_view` result into the view model: the body of `view_apply`, and
-    /// what the watch rig does with every `get_view` answer.
-    fn apply_view(&mut self, result: &pharmakos_proto::json::Json) -> VarDictionary {
+    /// what the watch rig does with every `get_view` answer. `None` when the page was
+    /// refused, with the reason in the log.
+    fn apply_view(&mut self, result: &pharmakos_proto::json::Json) -> Option<VarDictionary> {
         let Some(mut model) = self.view.take() else {
             godot_error!("[pharmakos] view_apply: call configure() first");
-            return VarDictionary::new();
+            return None;
         };
         let outcome = self.panics.guard("view_apply", || {
             let page = view::decode_page(result)?;
@@ -741,11 +768,11 @@ impl PharmakosBridge {
             Some(Err(error)) => {
                 godot_error!("[pharmakos] view_apply: {error}");
                 self.view = Some(model);
-                return VarDictionary::new();
+                return None;
             }
             None => {
                 self.view = Some(model);
-                return VarDictionary::new();
+                return None;
             }
         };
         if applied.grid_changed {
@@ -777,7 +804,7 @@ impl PharmakosBridge {
             report.set(&"entities".to_variant(), &entities.to_variant());
         }
         self.view = Some(model);
-        report
+        Some(report)
     }
 }
 
@@ -809,6 +836,14 @@ fn rig_state(rig: &Rig, pending: usize) -> VarDictionary {
     state.set(
         &"view_settled".to_variant(),
         &rig.view_settled().to_variant(),
+    );
+    state.set(
+        &"seat_settled".to_variant(),
+        &rig.seat_settled().to_variant(),
+    );
+    state.set(
+        &"view_refusals".to_variant(),
+        &i64::from(rig.view_refusals()).to_variant(),
     );
     state.set(&"pending".to_variant(), &count_of(pending));
     state.set(

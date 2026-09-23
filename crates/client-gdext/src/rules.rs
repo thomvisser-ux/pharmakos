@@ -106,6 +106,35 @@ pub fn lull_ms(table: &RulesTable) -> Option<u32> {
         .filter(|length| *length > 0)
 }
 
+/// The generated map's extent in voxels, `map.size_x`, `size_y` and `size_z`, in the SIM's
+/// axes (x east, y north, z up).
+///
+/// The view model refuses a chunk whose origin lies outside it, because the grid it builds
+/// is sized from the largest origin it holds: an origin far outside the map would size a
+/// grid of billions of voxels, and an allocation that fails aborts the process where the
+/// panic guard cannot catch it. The bound is the map's own, not a cap of the client's.
+///
+/// # Errors
+///
+/// [`BridgeError::MissingRules`] when the table has no `map` row, which is an error rather
+/// than a default for the same reason the mesher row's absence is, and
+/// [`BridgeError::RulesOutOfRange`] for a zero extent on any axis.
+pub fn map_extent(table: &RulesTable) -> Result<[u32; 3], BridgeError> {
+    let row = table
+        .map
+        .as_ref()
+        .ok_or(BridgeError::MissingRules { row: "map" })?;
+    let extent = [row.size_x, row.size_y, row.size_z];
+    if extent.contains(&0) {
+        return Err(BridgeError::RulesOutOfRange {
+            field: "map.size_x/size_y/size_z",
+            value: 0,
+            because: "a map with no extent on an axis has no voxel a chunk could hold",
+        });
+    }
+    Ok(extent)
+}
+
 /// A light value narrowed from the table's `uint32` to the byte the mesher stores.
 fn light_byte(field: &'static str, value: u32) -> Result<u8, BridgeError> {
     u8::try_from(value).map_err(|_| BridgeError::RulesOutOfRange {
@@ -202,6 +231,17 @@ mod tests {
         assert_eq!(rules.budget.age_frames, 2, "the ageing term (item 54)");
         assert_eq!(rules.light.light_max(), 15, "the light ceiling (item 54)");
         assert_eq!(rules.light.light_atten(), 1, "the fall per voxel (item 54)");
+        assert_eq!(
+            map_extent(&table).expect("the committed table has a map row"),
+            [384, 384, 64],
+            "the map's extent (item 90)"
+        );
+    }
+
+    #[test]
+    fn a_table_without_a_map_row_has_no_extent() {
+        let error = map_extent(&table_with(Some(row()))).expect_err("no row, no default");
+        assert_eq!(error, BridgeError::MissingRules { row: "map" });
     }
 
     #[test]

@@ -84,14 +84,13 @@ fn the_vista_fixture_is_the_gateways_golden() {
 }
 
 /// The committed table's light and drain rows, read the way the bridge reads them.
-fn rules() -> (LightParams, DrainBudget) {
+fn rules() -> (LightParams, DrainBudget, [u32; 3]) {
     let text = fs::read_to_string(root().join("rules").join("rules.v1.json"))
         .expect("rules/rules.v1.json");
-    let rules = pharmakos_client_gdext::rules::mesher_rules(
-        &pharmakos_client_gdext::rules::table_from_json(&text).expect("canonical"),
-    )
-    .expect("a mesher row");
-    (rules.light, rules.budget)
+    let table = pharmakos_client_gdext::rules::table_from_json(&text).expect("canonical");
+    let rules = pharmakos_client_gdext::rules::mesher_rules(&table).expect("a mesher row");
+    let extent = pharmakos_client_gdext::rules::map_extent(&table).expect("a map row");
+    (rules.light, rules.budget, extent)
 }
 
 /// The mesher golden's vertex digest: 28 bytes a vertex, in emission order.
@@ -126,8 +125,8 @@ fn target_dir() -> PathBuf {
 
 #[test]
 fn a_view_response_decodes_and_meshes_to_the_committed_geometry_digest() {
-    let (params, budget) = rules();
-    let mut model = ViewModel::new(params, budget);
+    let (params, budget, extent) = rules();
+    let mut model = ViewModel::new(params, budget, extent);
     let text = fs::read_to_string(godot_copy()).expect("the fixture");
     let mut pages = 0_usize;
     for line in text.lines().filter(|line| !line.trim().is_empty()) {
