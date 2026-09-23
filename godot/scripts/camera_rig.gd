@@ -48,7 +48,8 @@ func _ready() -> void:
 	_place()
 
 
-## Looks at the whole of a map `extent` voxels across (x, up, north), from the south-east.
+## Looks at the whole of a map `extent` voxels across (x, up, north), from above its
+## north-east corner (largest x and north nearest the camera).
 func frame_extent(extent: Vector3) -> void:
 	# A little past the centre towards the camera, so perspective does not cut the near
 	# corner off the bottom of the frame.

@@ -93,7 +93,8 @@ the live watch rig uses, drains the upload queue to empty under item 54's
 budget, draws a few more frames with nothing left to upload, and only then reads
 the frame back — so the shot is taken on a frame outside any measured series
 (nothing in the scene is timed at all). The camera is the rig's whole-map
-framing, looking from the south-east.
+framing, looking from the north-east (the corner at the map's largest x and
+north coordinates is nearest the camera).
 
 Decisions-log item 105 (5): the golden is rendered by CI's Linux leg, not on a
 developer's machine. With no `expected.vista.png` committed, the `screenshot`
@@ -104,7 +105,25 @@ the golden, push, download, look.
 
 ### What the golden shows
 
-WRITTEN WHEN THE FIRST LINUX RENDER IS COMMITTED.
+Committed from the `screenshot` job's bootstrap render on CI's Linux leg
+(workflow run 35820083263, xvfb + lavapipe, Godot 4.7.2), looked at before it
+was committed and again by the main session before the merge.
+
+It shows **the whole generated map of the golden seed** (`0x00000000ca5caded`,
+384 x 384 x 64 voxels, 12 x 2 x 12 chunks) from above its north-east corner, as
+a diamond on the ash-grey sky of the Pall: open dirt terrain with the generator's
+contour steps visible as fine lines, the scrap seams as pale-yellow blobs, the
+heat vents as small blue patches, the stone of the map's rim along the two near
+edges, and seat 0's own beacon and units as small markers near the right-hand
+corner of the frame (the beacon a glowing yellow pillar). Nothing else stands on it, because the
+fixture is seat 0's view of the opening Lull. Checked by eye for the bug classes
+this golden exists for: no cracks between chunks, no missing chunk, no
+back-face-culled holes, and the tops facing the camera (winding correct).
+
+The terrain reads as one flat colour because every open voxel is lit to
+`light_max` under the flood fill and the top face is unshaded; that is the
+placeholder palette and shading (mesher `PALETTE`, `FACE_SHADE_256`, and
+`client-gdext`'s `view::palette_of`), all art PLACEHOLDERs for S6.
 
 ### What a diff in the PNG means
 
