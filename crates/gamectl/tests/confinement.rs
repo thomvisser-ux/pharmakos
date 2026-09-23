@@ -29,6 +29,7 @@ const SOURCES: &[&str] = &[
     "src/docs.rs",
     "src/doctor.rs",
     "src/exit.rs",
+    "src/host.rs",
     "src/lib.rs",
     "src/main.rs",
     "src/rules.rs",

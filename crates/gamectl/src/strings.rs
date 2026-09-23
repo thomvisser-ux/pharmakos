@@ -137,6 +137,23 @@ pub fn unknown_command(given: &str) -> String {
     format!("{BINARY}: `{given}` is not a command. `{BINARY} --help` lists them.")
 }
 
+/// `gamectl host` started with a terminal on standard output.
+///
+/// The announce line carries two bearer tokens, and a token printed to a
+/// console is a token in a scrollback buffer (decisions-log item 107 (2)).
+#[must_use]
+pub fn host_on_a_terminal() -> String {
+    format!(
+        "{BINARY} host: standard output is a terminal, so nothing was started. This command          is the game's own match host: the lobby starts it with a pipe on both ends, and its          one line of output carries the match's tokens, which must never reach a console."
+    )
+}
+
+/// `gamectl host` could not start or keep its match.
+#[must_use]
+pub fn host_refused(why: &str) -> String {
+    format!("{BINARY} host: the match could not be hosted: {why}")
+}
+
 /// A subcommand of a command this build does not have.
 #[must_use]
 pub fn unknown_subcommand(command: &str, given: &str) -> String {

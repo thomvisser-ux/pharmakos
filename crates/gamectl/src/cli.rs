@@ -52,7 +52,8 @@ pub struct CommandRow {
 /// Every command, in the order the help prints them.
 ///
 /// Spec §12's list, in full: `verify`, `schema`, `docs`, `scenario run`,
-/// `seat doctor`. Nothing else, and in particular no `connect`.
+/// `seat doctor` — and `host`, the child process the Godot lobby spawns
+/// (decisions-log item 107 (2)). Nothing else, and in particular no `connect`.
 pub const COMMANDS: &[CommandRow] = &[
     CommandRow {
         name: "verify",
@@ -78,6 +79,12 @@ pub const COMMANDS: &[CommandRow] = &[
         name: "seat",
         usage: "seat doctor",
         about: "check this installation and report what is wrong",
+    },
+    CommandRow {
+        name: "host",
+        usage: "host",
+        about: "serve one match to the game client over this process's stdio pipe; the \
+                lobby starts it, and it refuses a terminal",
     },
 ];
 
@@ -169,6 +176,9 @@ pub enum Command {
     },
     /// Check this installation.
     SeatDoctor,
+    /// Serve one match to the Godot client over this process's own stdio
+    /// pipe, until standard input closes (decisions-log item 107 (2)).
+    Host,
 }
 
 /// One whole command line, parsed.
@@ -337,6 +347,10 @@ fn command_of(
             }
             no_operands("seat doctor", rest.get(1..).unwrap_or_default())?;
             Ok(Command::SeatDoctor)
+        }
+        "host" => {
+            no_operands("host", rest)?;
+            Ok(Command::Host)
         }
         other => Err(Failure::usage(strings::unknown_command(other))),
     }
