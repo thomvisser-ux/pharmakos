@@ -70,14 +70,14 @@ editor UI. Nothing else executes. Directories are under `crates/`; package names
 
 | Crate | Does | May depend on |
 |---|---|---|
-| `crates/proto` — `pharmakos-proto` | Generated prost types for `gp.v1` (playbooks, templates) and `gp.api.v1` (gateway), and the canonical JSON mapping. The single schema source. Licensed `MIT OR Apache-2.0`, unlike the rest. | `prost` |
+| `crates/proto` — `pharmakos-proto` | Generated prost types for `gp.v1` (playbooks, templates) and `gp.api.v1` (gateway), the canonical JSON mapping, and the voxel run-length codec (`chunk_rle`) the gateway's view feed encodes with and the client decodes with. The single schema source. Licensed `MIT OR Apache-2.0`, unlike the rest. | `prost` |
 | `crates/sim` — `pharmakos-sim` | The deterministic sim: 20 Hz fixed tick, integer maths, SoA tables, 32³ copy-on-write chunks, runner (Lull/Push/recap), playbook interpreter, mandates, programs, Quartermaster, power grid, combat, kill-credit counters, pathing/ETA, map generation, snapshot/restore, replay, per-tick xxh3 state hash. `fork` lives **here and nowhere else**, behind `feature = "research"`. | `pharmakos-proto`, and the determinism crates (`xxh3`, `imbl`, `postcard`/`rkyv`, pathfinding primitives) |
 | `crates/plan-core` — `pharmakos-plan-core` | Playbook core: canonical form, JSONC round-trip (comments survive), JSON Patch, `render_plan` prose, interface-time and `$`/`kW` arithmetic, travel estimates. In process with the gateway. | `pharmakos-proto`, `pharmakos-verifier`, `pharmakos-sim` *only* as `default-features = false` |
 | `crates/verifier` — `pharmakos-verifier` | Seal inspection: decode → structure → resolve → semantics (QUICK) → estimate → lint (FULL). Diagnostic catalogue, `report_hash`. | `pharmakos-proto`, `pharmakos-sim` *only* as `default-features = false` |
 | `crates/operator` — `pharmakos-operator` | The built-in operator: templates + utility scoring, the safe playbook, Easy/Normal/Hard. An ordinary gateway client with no privileged reads. | `pharmakos-proto`, `pharmakos-plan-core`, `pharmakos-verifier`, the `gp.api.v1` service traits |
 | `crates/gateway` — `pharmakos-gateway` | Seat Gateway: JSON-RPC over a localhost WebSocket, tokens, scopes, fog filter, rate limits, event bus, snapshots, private match cache, saves. Hosts the match. | `pharmakos-proto`, `pharmakos-plan-core`, `pharmakos-verifier`, `pharmakos-sim` *only* as `default-features = false` |
-| `crates/gamectl` — `pharmakos-gamectl` (bin `gamectl`) | CLI: `verify`, `schema`, `docs`, `scenario run`, `seat doctor`. No `connect` in v1. `scenario run` hosts a headless match, which is why the gateway is on the list. | `pharmakos-proto`, `pharmakos-plan-core`, `pharmakos-verifier`, `pharmakos-gateway` |
-| `crates/mesher` — `pharmakos-mesher` | The **walled** greedy mesher: integer chunk data and `.vox` models in, vertex and index buffers out, under the per-frame upload budget the client applies. Links without gdext, so the headless CPU proxy and the CI geometry check reuse it. | `dot_vox` later; nothing from the sim. Never depended on by `sim`, `plan-core`, `verifier`, `operator` or `gateway` — `cargo xtask wall-guard` fails the build over it (`WALL_GUARDED_PACKAGES`, §4.9) |
+| `crates/gamectl` — `pharmakos-gamectl` (bin `gamectl`) | CLI: `verify`, `schema`, `docs`, `scenario run`, `seat doctor`, `host`. No `connect` in v1. `scenario run` hosts a headless match and `host` serves one to the Godot client over its own stdio pipe (the config line in on stdin, the announce line with the port and the tokens out on stdout, exit when stdin ends), which is why the gateway is on the list. An edge to `pharmakos-operator` is decided at T18's opening, not before. | `pharmakos-proto`, `pharmakos-plan-core`, `pharmakos-verifier`, `pharmakos-gateway`, and `pharmakos-sim` *only* as `default-features = false`, because the gateway's API is written in the sim's types. `gamectl` drives a match only through the gateway's `Host` and `Surface`, never through the sim's `Runner` (decisions-log item 109) |
+| `crates/mesher` — `pharmakos-mesher` | The **walled** greedy mesher: integer chunk data and `.vox` models in, vertex and index buffers out, under the per-frame upload budget the client applies. Links without gdext, so the headless CPU proxy and the CI geometry check reuse it. | `dot_vox` later; nothing from the sim. Never depended on by `sim`, `plan-core`, `verifier`, `operator`, `gateway` or `gamectl` — `cargo xtask wall-guard` fails the build over it (`WALL_GUARDED_PACKAGES`, §4.9) |
 | `crates/client-gdext` — `pharmakos-client-gdext` | **Thin** gdext bridge (`cdylib` + `rlib`): marshals gateway calls and mesh buffers between Godot 4.7 and Rust. It marshals; it does not decide. | `godot` (gdext), `pharmakos-proto`, `pharmakos-mesher` |
 | `xtask` | `cargo xtask ci` and friends. Dev-only, never shipped, std-only, no dependencies. | nothing |
 
@@ -101,18 +101,23 @@ editor UI. Nothing else executes. Directories are under `crates/`; package names
 
 1. **The research-feature ban.** `fork` exists only behind `pharmakos-sim`'s compile-time
    `research` feature, which is defined in that crate and in no other. Release builds never enable
-   it; CI builds both configurations. `plan-core`, `verifier`, `operator` and `gateway` must never
-   reach it — not in `[dependencies]`, not in `[dev-dependencies]`, not through a default feature,
+   it; CI builds both configurations. `plan-core`, `verifier`, `operator`, `gateway` and `gamectl` must
+   never reach it — not in `[dependencies]`, not in `[dev-dependencies]`, not through a default feature,
    not transitively. They declare no `[features]` section of their own, and any dependency they take
    on the sim reads `pharmakos-sim = { workspace = true, default-features = false }`.
    `cargo xtask ci` walks `cargo tree -e features` and fails the build if the feature reaches any of
-   the four.
+   the five.
 2. **No dry runs.** `plan-core` and `verifier` may estimate — pathfinder travel over known terrain,
    interface-time arithmetic, `$`/`kW` projection, placement legality, selector previews, mast
    coverage. They may never step or fork the sim, run mandates, programs, combat or construction,
    model enemy behaviour, or evaluate rule conditions over a projected future. Prefer depending on
    the sim's snapshot and knowledge types only; if you find yourself wanting its stepping API, the
-   design is wrong — stop and ask.
+   design is wrong — stop and ask. The match itself is stepped and sealed in one module, the
+   gateway's `host.rs`. No handler steps or seals, *except* the admin-scoped control handlers in
+   `crates/gateway/src/surface/control.rs`, which drive only the live match through `Surface`'s
+   driving methods and may name none of `Runner`, `Host`, `World`, `host_mut`, `seal_plans`,
+   `seal_playbook`, `snapshot` or `.clone()`; `crates/gateway/tests/confinement.rs` is the guard
+   (decisions-log item 107).
 3. **The operator is not privileged.** `operator` sees the world only through `gp.api.v1` service
    traits — same snapshot, same verifier, same submit path as the human. It must not name the sim's
    internal types.
@@ -121,7 +126,7 @@ editor UI. Nothing else executes. Directories are under `crates/`; package names
    its own" — it asks the gateway. GDScript is views and editor UI only.
 5. **Banned dependencies.** `bincode` (unmaintained), `cordic`, `hierarchical_pathfinding` (stale),
    `rmcp`, `wasmi`, any scripting engine. Approved: `prost`, `buf` (tooling), `rkyv`/`postcard` (with `serde` as postcard's derive companion only — decisions-log item 88),
-   `xxh3`, `imbl`, `dot_vox`, pathfinding primitives under our own HPA\*. Adding a dependency that
+   `xxh3`, `imbl`, `dot_vox`, pathfinding primitives under our own HPA\*, `getrandom` (the gateway's seat tokens only — item 99), `lexopt` 0.3 (`gamectl` only — item 105). Adding a dependency that
    is not on the approved list is an owner decision — open a PR and stop (§5).
 
 ## 4. Determinism rules
@@ -283,6 +288,9 @@ places in the same PR — the state hash, the snapshot/restore round-trip, and t
 field that affects behaviour but is not hashed is a latent desync, and CI will only catch it once
 two operating systems disagree. That includes the per-seat kill-credit counters (at most three per
 asset) and their largest-remainder apportionment: they are hashed state like everything else.
+Widening the snapshot has one more consequence to plan for: the fixture snapshot is one of
+`report_hash`'s inputs, so every verifier report golden moves with it. Re-bless them in the same
+PR and say why (decisions-log item 109).
 
 For the chunk store there is a **fourth** place: a voxel write must *mark its chunk* so that
 `settle` refreshes the chunk's digest. Miss the mark and the bytes change while the digest does
@@ -309,9 +317,9 @@ per-path allow-list, so the mechanism is this and nothing else:
   (`indexing_slicing`, `unwrap_used`) and the rounding lint (`integer_division`) stay denied inside a
   walled crate too, so a walled crate still reads slices through `get` and divides through
   `checked_div`.
-- `cargo xtask wall-guard` then fails the build if `sim`, `plan-core`, `verifier`, `operator` or
-  `gateway` depends on a walled crate, transitively included. That list is `WALL_GUARDED_PACKAGES`
-  in `xtask/src/main.rs` — the research guard's four crates plus the sim, which cannot join the
+- `cargo xtask wall-guard` then fails the build if `sim`, `plan-core`, `verifier`, `operator`,
+  `gateway` or `gamectl` depends on a walled crate, transitively included. That list is `WALL_GUARDED_PACKAGES`
+  in `xtask/src/main.rs` — the research guard's five crates plus the sim, which cannot join the
   research guard because the sim is the crate that *defines* the `research` feature. The sim is on
   the wall's list because it is the crate that owns hashed state, so it is the one the wall exists
   to protect. That dependency edge is what makes the allowance safe, and it is only visible to CI

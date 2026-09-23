@@ -64,41 +64,10 @@ breaking:
   except:
     # Nothing. Minor versions add optional fields; a major version comes with a
     # converter that is kept forever.
-  ignore_only:
-    # PER-CHANGE WAIVER, not standing configuration. DELETE THIS BLOCK in the
-    # next proto change that does NOT discharge a held field number, and
-    # RE-ADD it, scoped to the files it is needed for and with the
-    # justification written out, in any later change that does. OWNER: the
-    # same rule the block it replaces was written under - the previous
-    # occupant was scoped to gp/v1/rules.proto for T5a's discharge of the
-    # Economy and Power stubs, and is deleted here because that waiver is
-    # spent and this change touches no file it named.
-    #
-    # Why it is here THIS time. T13 (decisions-log item 100 (10)) is the first
-    # task with a method that has to answer "which map is this", and
-    # GetMapSummaryResponse could not: the match seed is 64 bits and
-    # `uint32 map_seed = 2` is 32, and the map IS a function of the whole
-    # seed. Number 2 is therefore deprecated rather than reused, and the
-    # replacement `string match_seed` takes 4 - which is the FIRST NUMBER OF
-    # THE HELD RANGE, discharging it exactly as the range was held for. The
-    # reservation shrinks from `4 to 15` to `5 to 15` and every number that
-    # left it arrives back the same tick as a named field with the same
-    # number, which is the safest possible outcome and the one the
-    # reservation was made for.
-    #
-    # Discharging a held number is the one move buf cannot tell apart from a
-    # genuine un-reservation, so RESERVED_MESSAGE_NO_DELETE fires on the
-    # reserved line that shrank. gp/v1/playbook.proto and gp/v1/rules.proto
-    # are NOT listed today because nothing in this change discharges a
-    # reservation in either: gp.api.v1.Digest gains `counts = 4` and the new
-    # KindCount message, and Digest reserves nothing at all.
-    #
-    # The rule fires again at S1, S2, S3 and S4, once per PR that fills a
-    # held stub, and each of those PRs re-adds this block for its own files.
-    # It is written as a delete-and-re-add task rather than as permanent
-    # configuration because a standing ignore would let an un-reservation
-    # nobody intended through unnoticed - and an un-reservation nobody
-    # intended is exactly the reuse of a retired number that WIRE_JSON exists
-    # to catch.
-    RESERVED_MESSAGE_NO_DELETE:
-      - gp/api/v1/gateway.proto
+  # ignore_only: none today. A change that DISCHARGES a held field number (fills a
+  # reserved range with the field it was held for) trips RESERVED_MESSAGE_NO_DELETE,
+  # which buf cannot tell apart from a genuine un-reservation. That change adds an
+  # ignore_only block here scoped to the files it discharges in, with the
+  # justification written out, and the next proto change that discharges nothing
+  # deletes it again, so an un-reservation nobody intended never passes unnoticed
+  # (decisions-log items 100 (10) and 109).
