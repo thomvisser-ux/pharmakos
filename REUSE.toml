@@ -56,6 +56,17 @@ precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 Pharmakos contributors"
 SPDX-License-Identifier = "GPL-3.0-or-later"
 
+# godot/fixtures/view_keyframe.jsonl is a byte-identical copy of the gateway's keyframe
+# golden, tests/golden/gateway/view_keyframe/expected.keyframe.jsonl, so Godot can load
+# it from res:// for the hostless vista shot (T16). It cannot carry a header of its own
+# without ceasing to be a copy, so its licence is stated here, and it is the licence of
+# the file it copies. crates/client-gdext/tests/vista_fixture.rs keeps the two identical.
+[[annotations]]
+path = ["godot/fixtures/**"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Pharmakos contributors"
+SPDX-License-Identifier = "GPL-3.0-or-later"
+
 # --- Interfaces and words: reusable by anyone ------------------------------
 # The wire format (gp.v1, gp.api.v1), generated JSON Schema, documentation,
 # example playbooks, the harness docs and llms.txt. Permissive so third-party

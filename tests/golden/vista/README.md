@@ -3,10 +3,61 @@ SPDX-FileCopyrightText: 2026 Pharmakos contributors
 SPDX-License-Identifier: GPL-3.0-or-later
 -->
 
-# `vista/` — the rendered screenshot
+# `vista/` — the rendered screenshot, and the client's two text goldens
 
 **Filled by T16** (`godot/` and `crates/client-gdext`), promoted from skipping to
 required by T20.
+
+Three files, and none of them is compared by the `golden` step
+(`xtask/src/golden.rs` lists `vista/` in `SELF_COMPARED_AREAS`):
+
+| File | Compared by | Re-baselined with |
+| --- | --- | --- |
+| `expected.vista.png` | `cargo xtask screenshot`, with a tolerance, on the Linux leg | a deliberate re-render (below) |
+| `expected.geometry.txt` | `crates/client-gdext/tests/vista_fixture.rs`, byte for byte, on every leg | `PHARMAKOS_BLESS_VISTA=1 cargo test -p pharmakos-client-gdext` |
+| `expected.events.txt` | `crates/client-gdext/tests/event_list.rs`, byte for byte, on every leg | the same |
+
+The two text goldens write their fresh output to
+`<target>/golden/vista/actual.*.txt` whether they pass or not, so a red run
+leaves the new file on disk to be diffed.
+
+## `expected.geometry.txt` — the client's geometry for the keyframe fixture
+
+One line per chunk of the map: the chunk's index and corner in the **mesher's**
+axes (y up), then the vertex and index digests in the mesher golden's own format
+(xxh3-64 over 28 bytes a vertex and 2 bytes an index, `mesher/README.md`), then
+the counts. The input is `godot/fixtures/view_keyframe.jsonl` — a byte-identical
+copy of `gateway/view_keyframe/expected.keyframe.jsonl`, the gateway's own
+golden — pushed through exactly what the live client does with a `get_view`
+answer: the `_status` footer split off, the lower-case enum spelling translated
+back, every chunk's run list decoded by `pharmakos_proto::chunk_rle`, each wire
+material looked up in the palette table (`view::palette_of`; an unknown value
+draws nothing), the chunk transposed into mesher order, the whole map lit by the
+mesher's flood fill, and each chunk meshed with its six real neighbours.
+
+The wire carries no chunk digest (T16a cut it), so this is the client's half of
+the view pinned end to end. A diff means one of:
+
+* **the gateway's keyframe golden moved** — the vista fixture test fails first,
+  because the copy under `godot/` no longer matches. Copy it again; the reason
+  belongs to the gateway's pull request (map generator, run-length codec or the
+  view's shape; `gateway/README.md`).
+* **the mesher moved** — `mesher/` will have moved too, and it explains why.
+* **the client moved** — the palette lookup, the transposition, the light
+  wiring or the border gathering. That is this crate's behaviour change, and the
+  vista golden will usually move with it.
+
+## `expected.events.txt` — the live event list
+
+The rows the watch rig renders from `crates/client-gdext/tests/fixtures/
+get_segment_feed.json` (a `get_segment_feed` result generated through the
+codec): one row per event, in the feed's order, as `m:ss  kind  text`. The event
+list is a view of the segment feed and of nothing else, so a row added, dropped,
+merged, reordered or reworded by the client is the diff this file exists to
+show. A new *event kind* is not a diff here: the fixture holds the kinds it holds
+until somebody adds one to it.
+
+## `expected.vista.png` — the rendered vista
 
 `expected.vista.png` is a 1280 x 720 render, taken **windowed under xvfb and
 lavapipe on Linux**. It is the one golden in the tree that is *not* compared byte
@@ -32,7 +83,30 @@ The first render of every fresh checkout is preceded by
 instantiate as placeholders and the scene fails on its first call. G1 lost four
 CI runs to this.
 
-## What a diff means
+### How it is rendered, and how it is re-rendered
+
+The scene is `res://scenes/vista_shot.tscn`, reached through the project's main
+scene with `--scene=` and `--shot=` after `--` (`xtask/src/main.rs`,
+`step_screenshot`). It starts **no host**: it feeds every line of
+`godot/fixtures/view_keyframe.jsonl` through `view_apply`, the same decode entry
+the live watch rig uses, drains the upload queue to empty under item 54's
+budget, draws a few more frames with nothing left to upload, and only then reads
+the frame back — so the shot is taken on a frame outside any measured series
+(nothing in the scene is timed at all). The camera is the rig's whole-map
+framing, looking from the south-east.
+
+Decisions-log item 105 (5): the golden is rendered by CI's Linux leg, not on a
+developer's machine. With no `expected.vista.png` committed, the `screenshot`
+job's bootstrap step renders with the same command line and uploads the PNG as
+the `vista-screenshot` artefact; somebody looks at it, commits it here and
+writes below what it shows. A deliberate re-render starts the same way: delete
+the golden, push, download, look.
+
+### What the golden shows
+
+WRITTEN WHEN THE FIRST LINUX RENDER IS COMMITTED.
+
+### What a diff in the PNG means
 
 The comparator prints both statistics and the worst single-channel delta, and
 publishes them as a `::notice::` annotation because GitHub hides job logs and
@@ -55,7 +129,7 @@ step summaries from logged-out viewers.
   configuration error, and the comparator reports it as one rather than as a
   difference.
 
-## Who compares this file
+### Who compares the PNG
 
 Not the `golden` step. `xtask/src/golden.rs` names `vista/` in
 `SELF_COMPARED_AREAS` and leaves it alone: the fresh render exists only on the
