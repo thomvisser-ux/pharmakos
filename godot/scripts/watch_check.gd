@@ -13,8 +13,10 @@
 #     keeps it alive is the keep-alive, and what keeps the admin connection alive is the
 #     host clock it reports four times a second;
 #   * `end_lull` opens the Push, the pacer at 4x plays it, and the admin connection's
-#     `_status` footer reaches RECAP;
-#   * the bridge caught no panic, the gateway refused no call, and entities were drawn;
+#     `_status` footer reaches RECAP; the seat connection then catches up (its last view
+#     and feed polls answered) before the rows are counted, so the count is the segment's;
+#   * the bridge caught no panic, refused no view page, the gateway refused no call, and
+#     entities were drawn;
 #   * the child exits once the client lets go of its standard input.
 #
 # The last line printed before a pass carries the host's process id, so the CI step can
@@ -104,6 +106,10 @@ func _run() -> void:
 		vista.rig.follow(follow)
 	if not await _until(func() -> bool: return _state().get("phase", "") == "recap", PUSH_WAIT):
 		_failures.append("the Push never reached its recap")
+		_finish()
+		return
+	if not await _until(func() -> bool: return _state().get("seat_settled", false), START_WAIT):
+		_failures.append("the seat connection never caught up after the recap began")
 	_finish()
 
 
@@ -115,6 +121,8 @@ func _finish() -> void:
 		_failures.append("a connection dropped: admin %s, seat %s" % [state.get("drops_admin"), state.get("drops_seat")])
 	if vista.bridge.caught_panics() != 0:
 		_failures.append("%d panic(s) were caught at the bridge boundary" % vista.bridge.caught_panics())
+	if int(state.get("view_refusals", 0)) != 0:
+		_failures.append("the bridge refused %s view page(s)" % state.get("view_refusals"))
 	if not _refusals.is_empty():
 		_failures.append("the gateway refused %d call(s): %s" % [_refusals.size(), "; ".join(_refusals)])
 	if vista.marker_count() == 0:
@@ -146,7 +154,10 @@ func _on_received(answer: Dictionary) -> void:
 		_refusals.append(refusal)
 	_events += (answer.get("events", PackedStringArray()) as PackedStringArray).size()
 	if answer.has("view"):
-		vista.take_view(answer["view"])
+		if (answer["view"] as Dictionary).is_empty():
+			_failures.append("a get_view page did not decode (the reason is in the log)")
+		else:
+			vista.take_view(answer["view"])
 
 
 func _state() -> Dictionary:

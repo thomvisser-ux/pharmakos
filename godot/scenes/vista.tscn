@@ -3,6 +3,7 @@
 [ext_resource type="Script" path="res://scripts/vista.gd" id="1_vista"]
 [ext_resource type="Script" path="res://scripts/camera_rig.gd" id="2_rig"]
 
+; PLACEHOLDER: the Pall's sky, ambient and glow values below are art. OWNER, at S6's art pass.
 [sub_resource type="Environment" id="Environment_pall"]
 background_mode = 1
 background_color = Color(0.22, 0.2, 0.19, 1)
@@ -22,6 +23,7 @@ script = ExtResource("1_vista")
 [node name="CameraRig" type="Node3D" parent="."]
 script = ExtResource("2_rig")
 
+; PLACEHOLDER: the camera's field of view and far plane are Tuning. OWNER, at the demo review.
 [node name="Camera" type="Camera3D" parent="CameraRig"]
 current = true
 fov = 50.0
@@ -30,6 +32,7 @@ far = 4000.0
 [node name="Pall" type="WorldEnvironment" parent="."]
 environment = SubResource("Environment_pall")
 
+; PLACEHOLDER: the glare's direction, colour and energy are art. OWNER, at S6's art pass.
 [node name="Glare" type="DirectionalLight3D" parent="."]
 transform = Transform3D(0.707107, -0.5, 0.5, 0, 0.707107, 0.707107, -0.707107, -0.5, 0.5, 0, 200, 0)
 light_color = Color(0.85, 0.8, 0.72, 1)

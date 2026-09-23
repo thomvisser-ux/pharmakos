@@ -114,7 +114,9 @@ func _build_ui() -> void:
 	column.add_child(_status)
 	var buttons := HBoxContainer.new()
 	column.add_child(buttons)
-	for speed in [1, 2, 4]:
+	# The speed set is the pacer's (crates/client-gdext/src/pacer.rs SPEEDS, a PLACEHOLDER);
+	# the lobby only draws a button for each, so the set has one home.
+	for speed in vista.bridge.watch_speeds():
 		_button(buttons, "%dx" % speed, func() -> void: vista.bridge.watch_command("speed", speed))
 	_button(buttons, "Skip", func() -> void: vista.bridge.watch_command("skip", 0))
 	_button(buttons, "Ready", func() -> void: vista.bridge.watch_command("ready", 0))

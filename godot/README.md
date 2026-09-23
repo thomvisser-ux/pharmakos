@@ -32,8 +32,10 @@ a fresh checkout, which is every CI runner, the extension's classes instantiate 
 editor has opened the project once. Spike G1 lost four runs to it (§10.12).
 
 So every CI job and every packaging step runs `godot --headless --path godot --import`
-first. `cargo xtask stage-client` does it for you; `.github/workflows/ci.yml`'s client leg
-runs that command and nothing else.
+first. `cargo xtask stage-client` does it for you, and `.github/workflows/ci.yml`'s client leg
+stages the project with that command and nothing else. The same leg then builds `gamectl`,
+runs `scenes/watch_check.tscn` headless against a real `gamectl host`, and checks that no
+`gamectl` process outlives the client.
 
 ## Layout
 
