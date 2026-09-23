@@ -330,26 +330,23 @@ jobs:
     # geometry (skeleton-plan §7 decision 22, recommended and not yet logged —
     # G1 measured 1.14 % of pixels differing between a Quadro and lavapipe on
     # identical geometry). The stronger of the two geometry checks is the
-    # mesher's digests, which need no GPU and do run on every leg.
+    # client's and the mesher's digests, which need no GPU and run on every leg.
     #
     # This job is the ONLY place the vista is rendered: godot and xvfb are
     # installed here and nowhere else, which is why the ubuntu `ci` leg above
     # passes `--skip screenshot`.
     #
-    # WIRED BUT SKIPPING. `godot/` exists from T12, but no vista golden is
-    # committed, so `cargo xtask screenshot` reports itself skipped on its
-    # second precondition, with the reason and the task that fills it.
-    #
-    # The heavy install steps below are gated on the **vista golden**, not on
-    # `godot/project.godot`. They were gated on the project until T12 created
-    # it, at which point the gate would have opened on a leg whose Godot install
-    # step is still a PLACEHOLDER that exits 1 — a red build caused by a
-    # directory appearing. The golden is the honest gate either way: it is what
-    # the step compares against, and without it there is nothing to render for.
-    # T16 lands the vista and the first golden and fills the install step below;
+    # FILLED BY T16. The scene is res://scenes/vista_shot.tscn: the committed
+    # keyframe fixture (godot/fixtures/view_keyframe.jsonl, a byte-identical copy
+    # of the gateway's golden) drawn through the client's live decode entry with
+    # NO host running. The install steps run whether or not a golden is
+    # committed, because the first golden is rendered HERE (decisions-log item
+    # 105 (5)): with no tests/golden/vista/expected.vista.png the bootstrap step
+    # below renders the vista anyway and the artefact carries it, to be looked
+    # at and committed; with one, `cargo xtask screenshot` renders and compares.
     # T20 promotes the step from skipping to required.
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - name: Check out
         uses: actions/checkout@v4
@@ -374,7 +371,6 @@ jobs:
         # after which Godot silently falls back to OpenGL 3 — a different
         # renderer from the golden's. Let the loader enumerate the installed
         # ICDs.
-        if: hashFiles('tests/golden/vista/expected.vista.png') != ''
         shell: bash
         run: |
           set -euo pipefail
@@ -382,17 +378,53 @@ jobs:
           sudo apt-get install -y --no-install-recommends xvfb mesa-vulkan-drivers vulkan-tools
           vulkaninfo --summary || echo "::notice::vulkaninfo failed; the render step will report what it selected"
 
-      - name: Install Godot
-        # PLACEHOLDER: the pinned Godot 4.7.2 build (decisions-log item 73) is
-        # downloaded here. T16 writes this step with the project it needs;
-        # leaving it empty today would make the step below look installed when
-        # it is not.
-        if: hashFiles('tests/golden/vista/expected.vista.png') != ''
+      - name: Install Godot 4.7.2
+        # The pinned build decisions-log item 73 names, exactly as the `client`
+        # job installs it (Linux only here). PHARMAKOS_GODOT is what
+        # `cargo xtask stage-client` and `cargo xtask screenshot` run.
         shell: bash
         run: |
           set -euo pipefail
-          echo "::error::the Godot install step is a PLACEHOLDER — T16 fills it with the pinned 4.7.2 build"
-          exit 1
+          mkdir -p "$HOME/godot"
+          curl --fail --location --silent --show-error \
+            --output "$HOME/godot/godot.zip" \
+            "https://github.com/godotengine/godot/releases/download/4.7.2-stable/Godot_v4.7.2-stable_linux.x86_64.zip"
+          unzip -q -o "$HOME/godot/godot.zip" -d "$HOME/godot"
+          mv "$HOME/godot/Godot_v4.7.2-stable_linux.x86_64" "$HOME/godot/godot"
+          chmod +x "$HOME/godot/godot"
+          echo "$HOME/godot" >> "$GITHUB_PATH"
+          echo "PHARMAKOS_GODOT=$HOME/godot/godot" >> "$GITHUB_ENV"
+          version=$("$HOME/godot/godot" --version | head -n 1)
+          echo "godot: ${version}"
+          case "${version}" in
+            4.7.2.stable*) ;;
+            *) echo "::error::expected Godot 4.7.2.stable, got ${version}"; exit 1 ;;
+          esac
+
+      - name: Stage the client library
+        # The vista is drawn by the bridge, so the extension has to be built,
+        # staged into godot/bin and imported before the scene can load it —
+        # `cargo xtask screenshot` imports but does not build or stage.
+        shell: bash
+        run: cargo xtask stage-client
+
+      - name: Render a first vista (no golden committed yet)
+        # The bootstrap for decisions-log item 105 (5): the first golden is this
+        # leg's render, looked at by a person and committed. `cargo xtask
+        # screenshot` skips before rendering when there is no golden to compare
+        # with, so this step renders with the same command line it would use and
+        # leaves the PNG where the upload below finds it. It runs only while
+        # tests/golden/vista/expected.vista.png is absent — the same step is how
+        # a deliberate re-render starts: delete the golden, push, download, look.
+        if: hashFiles('tests/golden/vista/expected.vista.png') == ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p target/golden/vista
+          xvfb-run -a -s "-screen 0 1280x720x24" "${PHARMAKOS_GODOT}" --path godot \
+            --resolution 1280x720 -- --scene=res://scenes/vista_shot.tscn \
+            "--shot=$PWD/target/golden/vista/actual.vista.png"
+          test -s target/golden/vista/actual.vista.png
 
       - name: cargo xtask screenshot
         # The step runs `godot --headless --path godot --import` itself before
@@ -415,10 +447,9 @@ jobs:
         with:
           name: vista-screenshot
           path: target/golden/vista/actual.vista.png
-          # Nothing produces this yet, so a missing file is expected.
-          # FLIP AT T16: make this `error` — once the vista exists, a leg that
-          # produced no PNG rendered nothing, and that must not read as a pass.
-          if-no-files-found: ignore
+          # Flipped at T16: the vista exists, so a leg that produced no PNG
+          # rendered nothing, and that must not read as a pass.
+          if-no-files-found: error
           retention-days: 14
 
   client:
@@ -559,3 +590,62 @@ jobs:
         # somehow lost its Godot fails here rather than skipping quietly.
         shell: bash
         run: cargo xtask stage-client --check
+
+      - name: Build gamectl for the headless watch run
+        # The watch run below spawns `gamectl host` as the lobby does (decisions-log
+        # item 107 (2), confirmed as item 108 (2)). A debug build, like the staged
+        # client, so a panic in the host is a panic rather than an abort.
+        shell: bash
+        run: cargo build --package pharmakos-gamectl --bin gamectl
+
+      - name: Headless watch run against a real gamectl host
+        # T16's live acceptance (docs/design/skeleton-plan-t16a-notes.md section A (4)):
+        # the lobby's host link spawns `gamectl host` with OS.execute_with_pipe, reads
+        # its announce line, opens the admin and seat connections, idles 35 s in the
+        # Lull (longer than the gateway's 30 s READ_TIMEOUT, so a missing keep-alive
+        # drops a connection), ends the Lull, plays the segment at 4x until `_status`
+        # reaches RECAP, and asserts no caught panic, no dropped connection and no
+        # refused call. It then closes the host's standard input and waits for the
+        # child to exit. The scene's exit code is the verdict.
+        #
+        # This step is also where OS.execute_with_pipe is confirmed on Linux: the
+        # owner measured it on Windows only (item 108 (2)).
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${RUNNER_OS}" = "Windows" ]; then
+            gamectl="$(cygpath -m "$PWD/target/debug/gamectl.exe")"
+            root="$(cygpath -m "$PWD")"
+          else
+            gamectl="$PWD/target/debug/gamectl"
+            root="$PWD"
+          fi
+          set +e
+          "${PHARMAKOS_GODOT}" --headless --path godot res://scenes/watch_check.tscn -- \
+            "--gamectl=${gamectl}" "--root=${root}" > watch_check.log 2>&1
+          status=$?
+          set -e
+          cat watch_check.log
+          if [ "${status}" -ne 0 ]; then
+            echo "::error::the headless watch run failed (exit ${status}); its report is above"
+            exit "${status}"
+          fi
+          grep -q '^\[watch-check\] OK' watch_check.log
+
+      - name: No gamectl is left once the client has exited
+        # "The child exits when the client does" (item 108 (2)): the watch run has
+        # exited, so no host may still be running on this runner.
+        shell: bash
+        run: |
+          set -euo pipefail
+          sleep 2
+          if [ "${RUNNER_OS}" = "Windows" ]; then
+            if tasklist //FI "IMAGENAME eq gamectl.exe" | grep -qi gamectl; then
+              echo "::error::a gamectl process outlived the client"; tasklist //FI "IMAGENAME eq gamectl.exe"; exit 1
+            fi
+          else
+            if pgrep -x gamectl > /dev/null; then
+              echo "::error::a gamectl process outlived the client"; pgrep -a gamectl; exit 1
+            fi
+          fi
+          echo "no gamectl process is running"
