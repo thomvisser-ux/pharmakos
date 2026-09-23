@@ -54,7 +54,11 @@ jobs:
   ci:
     name: cargo xtask ci (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    # 90, not 45 (decisions-log item 109): windows-latest ran the suite in 41 minutes at T14
+    # and ran out of time once T15 added its headless matches. The limit is a hang guard,
+    # not a budget. PLACEHOLDER: the suite's own time budget, and which tests pay for it,
+    # are T20's to set with xtask's closing half-week (owner).
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
