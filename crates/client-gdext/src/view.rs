@@ -96,8 +96,14 @@ pub enum EntityKind {
     Beacon,
     /// A structure.
     Structure,
-    /// A kind this build does not know. Drawn as a generic marker rather than dropped: the
-    /// server decided the viewer may see it.
+    /// A kind the schema declares and this build has no marker for (today only
+    /// `KIND_UNSPECIFIED`, or a number with no name). Drawn as a generic marker rather than
+    /// dropped: the server decided the viewer may see it.
+    ///
+    /// A kind spelt as a string the schema does NOT declare never reaches here: the strict
+    /// codec refuses the page, as it refuses any field it does not know, the watch rig asks
+    /// for a keyframe again ([`crate::rig::Rig::view_refused`]) and the refusal is counted.
+    /// A new kind is a `gateway.proto` change, and it ships with a client that knows it.
     Unknown,
 }
 
@@ -328,6 +334,9 @@ pub struct Applied {
 pub struct ViewModel {
     params: LightParams,
     budget: DrainBudget,
+    /// The map's extent in voxels, sim axes, from the rules table's `map` row: no chunk
+    /// origin at or beyond it is taken.
+    extent: [u32; 3],
     /// Every chunk ever received, keyed by its sim-axes origin, in mesher order.
     held: BTreeMap<[i32; 3], Vec<u8>>,
     /// Origins whose bytes changed since the last completing page.
@@ -339,13 +348,15 @@ pub struct ViewModel {
 }
 
 impl ViewModel {
-    /// An empty model that will bake with `params` and drain under `budget` — both read
-    /// from the rules table by [`crate::rules`].
+    /// An empty model that will bake with `params`, drain under `budget` and take chunks
+    /// inside `extent` (voxels, sim axes) — all three read from the rules table by
+    /// [`crate::rules`].
     #[must_use]
-    pub fn new(params: LightParams, budget: DrainBudget) -> Self {
+    pub fn new(params: LightParams, budget: DrainBudget, extent: [u32; 3]) -> Self {
         Self {
             params,
             budget,
+            extent,
             held: BTreeMap::new(),
             changed: BTreeSet::new(),
             map: None,
@@ -382,9 +393,16 @@ impl ViewModel {
     ///
     /// # Errors
     ///
-    /// [`BridgeError::View`] when the grid cannot be built from the chunks held, or the
-    /// light bake refuses the map.
+    /// [`BridgeError::View`] when a chunk's origin lies outside the map's extent, when the
+    /// grid cannot be built from the chunks held, or when the light bake refuses the map.
+    /// A page with a chunk outside the map is refused whole, before anything is stored.
     pub fn apply(&mut self, page: Page) -> Result<Applied, BridgeError> {
+        if let Some(outside) = page.chunks.iter().find(|chunk| !self.inside(chunk.origin)) {
+            return Err(BridgeError::View(format!(
+                "a chunk's origin {:?} is outside the map's extent {:?}",
+                outside.origin, self.extent
+            )));
+        }
         let chunks = page.chunks.len();
         for chunk in page.chunks {
             if self.held.get(&chunk.origin) != Some(&chunk.materials) {
@@ -418,6 +436,15 @@ impl ViewModel {
             queued,
             grid_changed,
         })
+    }
+
+    /// Whether a chunk at `origin` lies inside the map: every axis non-negative and below
+    /// the extent. [`decode_page`] has already refused a negative or off-grid origin.
+    fn inside(&self, origin: [i32; 3]) -> bool {
+        origin
+            .iter()
+            .zip(self.extent)
+            .all(|(value, limit)| u32::try_from(*value).is_ok_and(|value| value < limit))
     }
 
     /// Builds the grid from every chunk held, bakes the whole map and queues every chunk.
@@ -587,6 +614,9 @@ mod tests {
     use pharmakos_proto::gp::api::v1::{ViewChunk, ViewEntity};
     use pharmakos_proto::gp::v1::Voxel;
 
+    /// The committed map's extent, `map.size_*` in rules/rules.v1.json.
+    const EXTENT: [u32; 3] = [384, 384, 64];
+
     fn params() -> LightParams {
         LightParams::new(15, 1).expect("the committed pair")
     }
@@ -702,7 +732,7 @@ mod tests {
 
     #[test]
     fn a_keyframe_builds_the_grid_and_queues_every_chunk() {
-        let mut model = ViewModel::new(params(), budget());
+        let mut model = ViewModel::new(params(), budget(), EXTENT);
         let first = decode_page(&result(&[([0, 0, 0], floor(4, 2))], false)).expect("page 1");
         let applied = model.apply(first).expect("applies");
         assert!(!applied.complete);
@@ -726,7 +756,7 @@ mod tests {
 
     #[test]
     fn a_delta_that_changes_nothing_queues_nothing_and_one_that_does_queues_its_fan_out() {
-        let mut model = ViewModel::new(params(), budget());
+        let mut model = ViewModel::new(params(), budget(), EXTENT);
         let keyframe = [([0, 0, 0], floor(4, 2)), ([32, 0, 0], floor(4, 2))];
         model
             .apply(decode_page(&result(&keyframe, true)).expect("keyframe"))
@@ -747,9 +777,35 @@ mod tests {
     }
 
     #[test]
+    fn a_chunk_outside_the_map_is_refused_before_anything_is_stored() {
+        let mut model = ViewModel::new(params(), budget(), EXTENT);
+        // 360 chunks east and north: a grid of 4.27e9 voxels if it were ever sized from it.
+        let far = decode_page(&result(
+            &[([0, 0, 0], floor(4, 2)), ([11_520, 11_520, 0], floor(4, 2))],
+            true,
+        ))
+        .expect("the page itself decodes");
+        let error = model
+            .apply(far)
+            .expect_err("outside the 384 x 384 x 64 map");
+        assert!(matches!(error, BridgeError::View(_)), "{error}");
+        assert_eq!(model.held(), 0, "the page is refused whole");
+        assert_eq!(model.grid(), None);
+        let edge = decode_page(&result(&[([352, 352, 32], floor(4, 2))], true)).expect("decodes");
+        model
+            .apply(edge)
+            .expect("the last chunk inside the map is taken");
+        let grid = model.grid().expect("a grid");
+        assert_eq!(
+            (grid.chunks_x(), grid.chunks_y(), grid.chunks_z()),
+            (12, 2, 12)
+        );
+    }
+
+    #[test]
     fn a_box_rebake_and_a_whole_bake_agree() {
         let keyframe = [([0, 0, 0], floor(6, 2)), ([32, 0, 0], floor(6, 2))];
-        let mut boxed = ViewModel::new(params(), budget());
+        let mut boxed = ViewModel::new(params(), budget(), EXTENT);
         boxed
             .apply(decode_page(&result(&keyframe, true)).expect("keyframe"))
             .expect("applies");
@@ -757,7 +813,7 @@ mod tests {
             .apply(decode_page(&result(&[([32, 0, 0], floor(2, 1))], true)).expect("delta"))
             .expect("applies");
 
-        let mut whole = ViewModel::new(params(), budget());
+        let mut whole = ViewModel::new(params(), budget(), EXTENT);
         whole
             .apply(
                 decode_page(&result(

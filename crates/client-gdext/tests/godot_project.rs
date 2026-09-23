@@ -32,7 +32,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use pharmakos_client_gdext::BRIDGE_CLASS_NAME;
-use pharmakos_client_gdext::rules::{mesher_rules, table_from_json};
+use pharmakos_client_gdext::rules::{map_extent, mesher_rules, table_from_json};
 
 fn godot_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -222,7 +222,15 @@ fn the_inline_rules_table_is_the_committed_one() {
     assert_eq!(
         lull(&table_from_json(json).expect("canonical")),
         lull(&table_from_json(&text).expect("canonical")),
-        "godot/scripts/mesher_rules.gd's RULES_JSON carries a Lull length that is no longer          rules/rules.v1.json's match.lull_ms. Update both together and say which moved."
+        "godot/scripts/mesher_rules.gd's RULES_JSON carries a Lull length that is no longer \
+         rules/rules.v1.json's match.lull_ms. Update both together and say which moved."
+    );
+    assert_eq!(
+        map_extent(&table_from_json(json).expect("canonical")).ok(),
+        map_extent(&table_from_json(&text).expect("canonical")).ok(),
+        "godot/scripts/mesher_rules.gd's RULES_JSON carries a map extent that is no longer \
+         rules/rules.v1.json's map.size_x/size_y/size_z. Update both together and say which \
+         moved."
     );
 
     let scripts = godot_dir().join("scripts");

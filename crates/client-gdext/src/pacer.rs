@@ -146,20 +146,22 @@ impl Pacer {
         }
     }
 
-    /// The Push began: start owing game time from nothing.
+    /// The Push began: start owing game time from nothing, with nothing in flight.
     pub fn start(&mut self) {
         self.active = true;
         self.skipping = false;
         self.owed_us = 0;
         self.since_ask_us = PACER_PERIOD_US;
+        self.in_flight = None;
     }
 
     /// The Push is over: owe nothing and stop skipping. An answer still in flight is
-    /// received and forgotten.
+    /// forgotten here, so it can never hold up the next Push, and ignored when it arrives.
     pub fn stop(&mut self) {
         self.active = false;
         self.skipping = false;
         self.owed_us = 0;
+        self.in_flight = None;
     }
 
     /// Whether a Push is being paced.
@@ -465,9 +467,21 @@ impl Timing {
     /// Whether connection `link` has been quiet long enough to need a keep-alive.
     #[must_use]
     pub fn keepalive_due(&self, link: usize) -> bool {
+        self.quiet_at_least(link, KEEPALIVE_US)
+    }
+
+    /// Whether connection `link` has sent nothing for at least `wall_us`.
+    #[must_use]
+    pub fn quiet_at_least(&self, link: usize, wall_us: u64) -> bool {
         self.quiet_us
             .get(link)
-            .is_some_and(|quiet| *quiet >= KEEPALIVE_US)
+            .is_some_and(|quiet| *quiet >= wall_us)
+    }
+
+    /// The latest [`WallClock`] reading [`Timing::advance`] was given; zero before any.
+    #[must_use]
+    pub fn now_us(&self) -> u64 {
+        self.last_us.unwrap_or(0)
     }
 }
 
@@ -517,6 +531,18 @@ mod tests {
         pacer.stop();
         assert_eq!(pacer.next_ask(), None, "the footer left the Push");
         assert!(!pacer.skipping());
+    }
+
+    #[test]
+    fn an_ask_left_in_flight_at_the_end_of_a_push_never_holds_up_the_next() {
+        let mut pacer = pushing(1);
+        pacer.skip();
+        assert_eq!(pacer.next_ask(), Some(MAX_ADVANCE_MS));
+        pacer.stop();
+        assert!(!pacer.in_flight());
+        pacer.start();
+        pacer.elapse(PACER_PERIOD_US);
+        assert_eq!(pacer.next_ask(), Some(100), "the new Push asks at once");
     }
 
     #[test]

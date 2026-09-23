@@ -231,7 +231,6 @@ fn has_arithmetic(code: &str) -> bool {
     false
 }
 
-/// Every offending line, as `path:line: text`.
 /// The one module whose TIME arithmetic is the design rather than a breach of it.
 ///
 /// `src/pacer.rs` is the pacer, the host clock and the keep-alive: "presentation pacing on
@@ -261,6 +260,7 @@ const TIME: &[&str] = &[
     "frame",
 ];
 
+/// Every offending line, as `path:line: text`.
 fn offences(files: &[PathBuf]) -> Vec<String> {
     let mut found: Vec<String> = Vec::new();
     for path in files {

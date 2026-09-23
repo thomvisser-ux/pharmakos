@@ -48,7 +48,7 @@ use pharmakos_proto::json::{self, Json};
 
 use crate::enums;
 use crate::error::BridgeError;
-use crate::pacer::{ClockPhase, Timing, clock_text};
+use crate::pacer::{CLOCK_REPORT_US, ClockPhase, KEEPALIVE_US, Timing, clock_text};
 use crate::view::{read_status, split_footer};
 
 /// The admin connection's index.
@@ -180,6 +180,10 @@ pub struct Rig {
     last_error: Option<String>,
     /// The Lull's length, from the rules table's `match.lull_ms`; zero is untimed.
     lull_length: u64,
+    /// How many `get_view` pages this client refused after the gateway served them.
+    view_refusals: u32,
+    /// After a refused page: the wall time before which no keyframe is asked again.
+    keyframe_not_before_us: u64,
 }
 
 impl Default for Rig {
@@ -209,6 +213,8 @@ impl Rig {
             all_ready: false,
             last_error: None,
             lull_length: 0,
+            view_refusals: 0,
+            keyframe_not_before_us: 0,
         }
     }
 
@@ -284,7 +290,14 @@ impl Rig {
             return None;
         }
         if self.phase == Phase::Unknown {
-            return Some((Purpose::Status, "get_status", object(Vec::new())));
+            // At once the first time; after that at the clock's cadence, so a footer this
+            // build cannot place (an unreadable one, or an unspecified phase) is asked about
+            // again without spinning against the rate limiter.
+            let first = self.links.get(ADMIN).is_some_and(|state| state.calls == 0);
+            if first || self.timing.quiet_at_least(ADMIN, CLOCK_REPORT_US) {
+                return Some((Purpose::Status, "get_status", object(Vec::new())));
+            }
+            return None;
         }
         if self.wants.end_lull && self.phase == Phase::Lull {
             return Some((Purpose::EndLull, "end_lull", object(Vec::new())));
@@ -324,7 +337,7 @@ impl Rig {
         if let Some(cursor) = self.view_paging.clone() {
             return Some((Purpose::View, "get_view", cursor_params(&cursor)));
         }
-        if self.due.keyframe {
+        if self.due.keyframe && self.timing.now_us() >= self.keyframe_not_before_us {
             return Some((Purpose::View, "get_view", cursor_params("")));
         }
         if self.wants.ready && self.phase == Phase::Lull {
@@ -420,14 +433,32 @@ impl Rig {
             answer.error = Some(said);
             return Ok(answer);
         }
-        let result = frame.get("result").ok_or_else(|| {
-            BridgeError::Rpc("an answer with neither result nor error".to_owned())
-        })?;
+        let Some(result) = frame.get("result") else {
+            // The call is settled either way: nothing is left waiting on it.
+            self.refused(purpose, "RPC");
+            return Err(BridgeError::Rpc(
+                "an answer with neither result nor error".to_owned(),
+            ));
+        };
+        // What the call was for is settled BEFORE the footer is read, so a footer this
+        // build cannot read never leaves the pacer or the host clock waiting on an answer
+        // that has already arrived.
+        self.settle(purpose, result, &mut answer)?;
         if link == ADMIN {
             if let (_, Some(footer)) = split_footer(result) {
                 answer.phase_changed = self.observe(&read_status(&footer)?);
             }
         }
+        Ok(answer)
+    }
+
+    /// Routes one successful answer by what its call was for.
+    fn settle(
+        &mut self,
+        purpose: Purpose,
+        result: &Json,
+        answer: &mut Answer,
+    ) -> Result<(), BridgeError> {
         match purpose {
             Purpose::View => {
                 let complete = matches!(result.get("complete"), Some(Json::Bool(true)));
@@ -480,7 +511,20 @@ impl Rig {
             Purpose::Ready => self.wants.ready = false,
             Purpose::Status => {}
         }
-        Ok(answer)
+        Ok(())
+    }
+
+    /// The bridge could not decode or apply a `get_view` page the rig had already read.
+    ///
+    /// The cursor the page carried is not trusted: the page is lost, and a view with a hole
+    /// in it cannot be told from a map with one, so the seat asks for a keyframe again —
+    /// no sooner than [`KEEPALIVE_US`] from now, so a page this build can never read is
+    /// not asked for in a loop.
+    pub fn view_refused(&mut self) {
+        self.view_refusals = self.view_refusals.saturating_add(1);
+        self.due.keyframe = true;
+        self.view_paging = None;
+        self.keyframe_not_before_us = self.timing.now_us().saturating_add(KEEPALIVE_US);
     }
 
     /// Undoes what a refused call had counted on.
@@ -640,6 +684,19 @@ impl Rig {
     pub const fn view_settled(&self) -> bool {
         !self.due.keyframe && self.view_paging.is_none()
     }
+
+    /// Whether the seat connection has caught up: its view settled, no view or feed poll
+    /// owed, and nothing in flight.
+    #[must_use]
+    pub fn seat_settled(&self) -> bool {
+        self.view_settled() && !self.due.view && !self.due.feed && self.idle(SEAT)
+    }
+
+    /// How many `get_view` pages the bridge refused after the gateway served them.
+    #[must_use]
+    pub const fn view_refusals(&self) -> u32 {
+        self.view_refusals
+    }
 }
 
 /// The event list's rows for one `get_segment_feed` page, in the feed's order.
@@ -697,7 +754,7 @@ fn json_text(value: &Json) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pacer::{CLOCK_REPORT_US, KEEPALIVE_US, PACER_PERIOD_US};
+    use crate::pacer::PACER_PERIOD_US;
 
     fn answer(id: i64, result: &str, phase: &str) -> String {
         let body = result.trim_end_matches('}');
@@ -894,6 +951,131 @@ mod tests {
         assert_eq!(rig.drops(SEAT), 1);
         rig.opened(SEAT);
         assert!(!rig.view_settled(), "a reconnect starts from a keyframe");
+    }
+
+    /// A rig in a Push at 4x, with nothing owed yet.
+    fn in_push() -> Rig {
+        let mut rig = in_lull();
+        rig.end_lull();
+        let sent = rig.poll(1);
+        let end = sent.first().expect("end_lull");
+        rig.receive(ADMIN, &answer(id_of(end), "{}", "push"))
+            .expect("reads");
+        assert!(rig.set_speed(4));
+        settle(&mut rig, 1);
+        rig
+    }
+
+    #[test]
+    fn the_host_clock_is_reported_in_a_recap_and_after_the_match_ends() {
+        for phase in ["recap", "ended"] {
+            let mut rig = in_push();
+            let sent = rig.poll(1 + PACER_PERIOD_US);
+            let advance = sent
+                .iter()
+                .find(|frame| frame.link == ADMIN)
+                .expect("an advance");
+            rig.receive(
+                ADMIN,
+                &answer(id_of(advance), r#"{"advanced_ms":400}"#, phase),
+            )
+            .expect("reads");
+            assert_eq!(rig.phase().name(), phase);
+            let sent = rig.poll(2 + PACER_PERIOD_US);
+            let clock = sent
+                .iter()
+                .find(|frame| frame.link == ADMIN)
+                .expect("an admin call");
+            assert_eq!(method_of(clock), "report_host_clock", "{phase}");
+            assert!(
+                clock.text.contains(r#""remaining_ms": 0"#),
+                "{phase}: {}",
+                clock.text
+            );
+            rig.receive(ADMIN, &answer(id_of(clock), "{}", phase))
+                .expect("reads");
+            let sent = rig.poll(2 + PACER_PERIOD_US + CLOCK_REPORT_US);
+            assert!(
+                sent.iter()
+                    .any(|frame| frame.link == ADMIN && method_of(frame) == "report_host_clock"),
+                "{phase}: reported again at the cadence: {sent:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unreadable_footer_leaves_nothing_waiting() {
+        let mut rig = in_push();
+        let sent = rig.poll(1 + PACER_PERIOD_US);
+        let advance = sent
+            .iter()
+            .find(|frame| frame.link == ADMIN)
+            .expect("an advance");
+        let broken = format!(
+            r#"{{"jsonrpc":"2.0","id":{},"result":{{"advanced_ms":400,"_status":{{"phase":"push","not_a_field":1}}}}}}"#,
+            id_of(advance)
+        );
+        rig.receive(ADMIN, &broken)
+            .expect_err("the footer is not a Status");
+        let sent = rig.poll(1 + 2 * PACER_PERIOD_US);
+        assert!(
+            sent.iter()
+                .any(|frame| frame.link == ADMIN && method_of(frame) == "advance_push"),
+            "the pacer asks again: {sent:?}"
+        );
+    }
+
+    #[test]
+    fn an_unknown_phase_is_asked_about_at_the_clocks_cadence() {
+        let mut rig = Rig::new();
+        rig.opened(ADMIN);
+        let sent = rig.poll(0);
+        let status = sent.first().expect("the first get_status");
+        let no_phase = format!(
+            r#"{{"jsonrpc":"2.0","id":{},"result":{{"_status":{{"round":1}}}}}}"#,
+            id_of(status)
+        );
+        rig.receive(ADMIN, &no_phase).expect("reads");
+        assert_eq!(rig.phase(), Phase::Unknown);
+        assert!(rig.poll(1).is_empty(), "not again at once");
+        let sent = rig.poll(CLOCK_REPORT_US);
+        assert_eq!(sent.len(), 1, "{sent:?}");
+    }
+
+    #[test]
+    fn a_page_the_client_refused_is_asked_for_again_as_a_keyframe() {
+        let mut rig = in_lull();
+        rig.due.view = true;
+        let sent = rig.poll(1);
+        let view = sent
+            .iter()
+            .find(|frame| frame.link == SEAT)
+            .expect("a view poll");
+        rig.receive(
+            SEAT,
+            &answer(
+                id_of(view),
+                r#"{"next_cursor":"c2","complete":true}"#,
+                "lull",
+            ),
+        )
+        .expect("reads");
+        rig.view_refused();
+        assert_eq!(rig.view_refusals(), 1);
+        assert!(!rig.view_settled());
+        assert!(
+            !rig.poll(2)
+                .iter()
+                .any(|frame| frame.link == SEAT && method_of(frame) == "get_view"),
+            "not in a loop"
+        );
+        let sent = rig.poll(2 + KEEPALIVE_US);
+        let again = sent
+            .iter()
+            .find(|frame| frame.link == SEAT)
+            .expect("a keyframe");
+        assert_eq!(method_of(again), "get_view");
+        assert!(again.text.contains("\"params\": {}"), "{}", again.text);
     }
 
     #[test]
