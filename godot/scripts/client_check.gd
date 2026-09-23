@@ -24,18 +24,10 @@
 
 extends Node3D
 
-## Item 54's rules rows, as canonical `gp.v1.RulesTable` JSON.
-##
-## Inline rather than read from `rules/rules.v1.json`, because a `res://` path cannot
-## escape the project folder and the rules table lives at the repository root. The bridge
-## still parses it through the schema, which is the half being checked here.
-##
-## Being a COPY of a tuning row, it is pinned:
-## `godot_project.rs::the_check_scripts_inline_rules_table_is_the_committed_one` parses this
-## very literal and compares the mesher row with `rules/rules.v1.json`, so the copy cannot
-## drift in silence (AGENTS.md section 12). `revision` is deliberately not compared — it is
-## the whole table's version and moves whenever any lane adds a row anywhere in it.
-const RULES_JSON := '{"revision":1,"mesher":{"surfacesPerFrame":4,"bytesPerFrame":524288,"ageFrames":2,"lightMax":15,"lightAtten":1}}'
+## Item 54's rules rows, as canonical `gp.v1.RulesTable` JSON: the one pinned copy in
+## godot/, shared with the vista (`scripts/mesher_rules.gd` says why it is a copy and
+## which test pins it).
+const MesherRules := preload("res://scripts/mesher_rules.gd")
 
 ## One chunk edge and one chunk's voxel count, as the mesher defines them.
 ##
@@ -81,7 +73,7 @@ func _ready() -> void:
 	print("[client-check] upload path: %s" % bridge.upload_path())
 
 	# 2. The rules table marshals, and the mesher's five parameters come out of it.
-	var configured: Dictionary = bridge.configure(4, RULES_JSON)
+	var configured: Dictionary = bridge.configure(4, MesherRules.RULES_JSON)
 	if not configured.get("configured", false):
 		failures.append("configure() refused the rules table: %s" % configured.get("reason", ""))
 	else:

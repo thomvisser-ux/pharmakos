@@ -1,0 +1,9 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/vista_shot.gd" id="1_shot"]
+[ext_resource type="PackedScene" path="res://scenes/vista.tscn" id="2_vista"]
+
+[node name="VistaShot" type="Node"]
+script = ExtResource("1_shot")
+
+[node name="Vista" parent="." instance=ExtResource("2_vista")]
