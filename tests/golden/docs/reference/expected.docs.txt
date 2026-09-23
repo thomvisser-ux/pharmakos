@@ -17,6 +17,7 @@ schema [--part <name>]    print the JSON Schema a seat authors against, generate
 docs                      print the generated reference: the schema's shape and every diagnostic
 scenario run <file>       play a scenario headless and check its assertions on events and hashes
 seat doctor               check this installation and report what is wrong
+host                      serve one match to the game client over this process's stdio pipe; the lobby starts it, and it refuses a terminal
 
 ## Options
 

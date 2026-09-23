@@ -4,8 +4,10 @@
 //! `gamectl` — the command-line client. Role from spec §15 (Architecture),
 //! clients layer, detailed in spec §12.
 //!
-//! Five commands and no sixth: `verify`, `schema`, `docs`, `scenario run`,
-//! `seat doctor`. **There is no `connect`** — nothing outside the game attaches
+//! Spec §12's five commands — `verify`, `schema`, `docs`, `scenario run`,
+//! `seat doctor` — and `host`, which serves one match to the Godot client over
+//! this process's own stdio pipe (decisions-log item 107 (2); [`host`]).
+//! **There is no `connect`** — nothing outside the game attaches
 //! to a seat in v1 (AGENTS.md §11), the Seat Gateway is internal, and the
 //! published API is v1.1.
 //!
@@ -39,6 +41,7 @@ pub mod cli;
 pub mod docs;
 pub mod doctor;
 pub mod exit;
+pub mod host;
 pub mod rules;
 pub mod scenario;
 pub mod schema;
@@ -94,6 +97,13 @@ where
 
 fn dispatch(invocation: &cli::Invocation) -> Result<String, Failure> {
     let root = invocation.root.as_path();
+    // `host` writes its one announce line to standard output itself and owns
+    // the process's standard input until it closes, so it is the one command
+    // whose output is not a string returned here: nothing is appended to what
+    // it wrote, not even a newline.
+    if invocation.command == Command::Host {
+        return host::run(root);
+    }
     match &invocation.command {
         Command::Help => Ok(strings::help()),
         Command::Version => Ok(strings::version()),
@@ -102,6 +112,7 @@ fn dispatch(invocation: &cli::Invocation) -> Result<String, Failure> {
         Command::Docs => docs::run(),
         Command::ScenarioRun { path } => scenario::run::run(root, path),
         Command::SeatDoctor => doctor::run(root),
+        Command::Host => host::run(root),
     }
     .map(with_newline)
 }
