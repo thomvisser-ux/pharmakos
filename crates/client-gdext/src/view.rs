@@ -296,6 +296,13 @@ pub fn chunk_coords_of(origin: [i32; 3]) -> Option<[i32; 3]> {
 /// `a_box_rebake_and_a_whole_bake_agree` in this module's tests checks.
 pub const WHOLE_BAKE_ABOVE: usize = 16;
 
+/// How many voxel boundaries a pick ray crosses before it gives up: longer than the
+/// camera's farthest reach across the whole map.
+///
+/// PLACEHOLDER: a presentation bound with no rule behind it; OWNER, with the camera's other
+/// numbers at the demo review.
+pub const PICK_REACH: usize = 4096;
+
 /// The whole map as this client holds it, once a keyframe has established it.
 #[derive(Debug)]
 struct MapState {
@@ -387,6 +394,101 @@ impl ViewModel {
     #[must_use]
     pub fn held(&self) -> usize {
         self.held.len()
+    }
+
+    /// The voxel of ground a ray from the camera points at: the empty voxel in front of the
+    /// first solid face the ray meets, in the SIM's axes (x east, y north, z up), which is
+    /// where a commander would stand. `None` when the ray meets nothing within
+    /// [`PICK_REACH`] voxels, or starts inside the ground.
+    ///
+    /// `origin` and `direction` are in the WORLD's axes (x east, y up, z north). This is
+    /// picking — which voxel is under the cursor — and a presentation question: the walk
+    /// reads only the chunks this client was sent, and whether the voxel is somewhere a
+    /// beacon may go is the verifier's answer, asked for by the editor (T19's ghost).
+    #[must_use]
+    pub fn pick(&self, origin: [f32; 3], direction: [f32; 3]) -> Option<[i32; 3]> {
+        let length = direction
+            .iter()
+            .map(|value| value * value)
+            .sum::<f32>()
+            .sqrt();
+        if length.is_nan() || length <= 0.0 {
+            return None;
+        }
+        let direction = direction.map(|value| value / length);
+        let mut cell = origin.map(|value| value.floor() as i32);
+        if self.solid_world(cell) {
+            return None;
+        }
+        let setup = |d: f32, o: f32, c: i32| -> (i32, f32, f32) {
+            if d > 0.0 {
+                (1, ((c as f32) + 1.0 - o) / d, 1.0 / d)
+            } else if d < 0.0 {
+                (-1, (o - (c as f32)) / -d, 1.0 / -d)
+            } else {
+                (0, f32::INFINITY, f32::INFINITY)
+            }
+        };
+        let [dx, dy, dz] = direction;
+        let [ox, oy, oz] = origin;
+        let [cx, cy, cz] = cell;
+        let setups = [setup(dx, ox, cx), setup(dy, oy, cy), setup(dz, oz, cz)];
+        let step = setups.map(|one| one.0);
+        let mut next = setups.map(|one| one.1);
+        let delta = setups.map(|one| one.2);
+        for _ in 0..PICK_REACH {
+            let previous = cell;
+            let [east, up, north] = next;
+            let axis = if east <= up && east <= north {
+                0
+            } else if up <= north {
+                1
+            } else {
+                2
+            };
+            if let (Some(position), Some(time), Some(by), Some(stride)) = (
+                cell.get_mut(axis),
+                next.get_mut(axis),
+                step.get(axis),
+                delta.get(axis),
+            ) {
+                *position = position.saturating_add(*by);
+                *time += stride;
+            }
+            if self.solid_world(cell) {
+                let [x, up, north] = previous;
+                return Some([x, north, up]);
+            }
+        }
+        None
+    }
+
+    /// Whether the voxel at `world` (x east, y up, z north) is solid in the chunks held.
+    fn solid_world(&self, world: [i32; 3]) -> bool {
+        let edge = i32::try_from(CHUNK_EDGE).unwrap_or(32);
+        let [x, up, north] = world;
+        if x < 0 || up < 0 || north < 0 {
+            return false;
+        }
+        let local = |value: i32| value.rem_euclid(edge);
+        let origin = [
+            x.saturating_sub(local(x)),
+            north.saturating_sub(local(north)),
+            up.saturating_sub(local(up)),
+        ];
+        let Some(bytes) = self.held.get(&origin) else {
+            return false;
+        };
+        let (Ok(mx), Ok(my), Ok(mz)) = (
+            usize::try_from(local(x)),
+            usize::try_from(local(up)),
+            usize::try_from(local(north)),
+        ) else {
+            return false;
+        };
+        bytes
+            .get(pharmakos_mesher::voxel_index(mx, my, mz))
+            .is_some_and(|material| *material != AIR)
     }
 
     /// Stores one page, and on a completing page bakes and queues what changed.
@@ -728,6 +830,37 @@ mod tests {
         let error = decode_page(&result(&[([0, 0, 0], vec![1_u8; 100])], true))
             .expect_err("a short run list");
         assert!(matches!(error, BridgeError::View(_)), "{error}");
+    }
+
+    #[test]
+    fn a_pick_finds_the_empty_voxel_on_top_of_the_ground() {
+        let mut model = ViewModel::new(params(), budget(), EXTENT);
+        model
+            .apply(decode_page(&result(&[([0, 0, 0], floor(4, 2))], true)).expect("keyframe"))
+            .expect("applies");
+        // World axes: x east, y up, z north. Straight down over sim (10, 20): the ground's
+        // top voxel is z = 3, so the voxel a commander would stand in is z = 4.
+        assert_eq!(
+            model.pick([10.5, 40.0, 20.5], [0.0, -1.0, 0.0]),
+            Some([10, 20, 4])
+        );
+        let slanted = model.pick([2.5, 30.0, 2.5], [0.3, -1.0, 0.2]);
+        assert_eq!(slanted.map(|[_, _, up]| up), Some(4), "{slanted:?}");
+        assert_eq!(
+            model.pick([10.5, 40.0, 20.5], [0.0, 1.0, 0.0]),
+            None,
+            "looking up meets nothing"
+        );
+        assert_eq!(
+            model.pick([10.5, 1.5, 20.5], [0.0, -1.0, 0.0]),
+            None,
+            "a ray that starts inside the ground picks nothing"
+        );
+        assert_eq!(
+            model.pick([10.5, 40.0, 20.5], [0.0, 0.0, 0.0]),
+            None,
+            "no direction"
+        );
     }
 
     #[test]

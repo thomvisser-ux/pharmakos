@@ -71,6 +71,8 @@ use pharmakos_proto::json;
 
 use crate::api;
 use crate::chunks;
+use crate::editor::Action;
+use crate::editor_view::{rows_array, rows_of_report_text, state_dictionary, target_of};
 use crate::engine::ChunkRenderer;
 use crate::error::BridgeError;
 use crate::pacer::WallClock;
@@ -692,6 +694,225 @@ impl PharmakosBridge {
             .unwrap_or_default()
     }
 
+    // --- The editor (T19, pull request 1) ----------------------------------------------
+    //
+    // The editor lives in the watch rig, because it shares the seat connection and its rate
+    // budget with the vista's polls; so every call below needs `watch_begin` first, and
+    // answers `false` or an empty value before it.
+
+    /// The seat this client plays, spelt as the gateway spells a seat (`seat.0`): the
+    /// editor starts every route from this seat's commander.
+    #[func]
+    fn editor_seat(&mut self, seat: GString) {
+        let seat = seat.to_string();
+        if let Some(rig) = self.rig.as_mut() {
+            let _ = self
+                .panics
+                .guard("editor_seat", || rig.editor_mut().set_seat(&seat));
+        }
+    }
+
+    /// Load a playbook file's bytes. The file is QUICK-checked first and refused, with the
+    /// verifier's code and pointer, when it carries anything the v1 vocabulary does not
+    /// (spec section 13). Returns `false` for bytes that are not text at all.
+    #[func]
+    fn editor_load(&mut self, bytes: PackedByteArray) -> bool {
+        let Some(rig) = self.rig.as_mut() else {
+            return false;
+        };
+        self.panics
+            .guard("editor_load", || rig.editor_mut().load(bytes.as_slice()))
+            .unwrap_or(false)
+    }
+
+    /// The playbook the editor holds, as the bytes Save writes; empty before a Load.
+    #[func]
+    fn editor_bytes(&mut self) -> PackedByteArray {
+        let Some(rig) = self.rig.as_ref() else {
+            return PackedByteArray::new();
+        };
+        self.panics
+            .guard("editor_bytes", || {
+                PackedByteArray::from(rig.editor().bytes().as_slice())
+            })
+            .unwrap_or_default()
+    }
+
+    /// The bytes the last accepted `submit_plan` sealed; empty before one.
+    #[func]
+    fn editor_sealed_bytes(&mut self) -> PackedByteArray {
+        let Some(rig) = self.rig.as_ref() else {
+            return PackedByteArray::new();
+        };
+        self.panics
+            .guard("editor_sealed_bytes", || {
+                PackedByteArray::from(rig.editor().sealed_bytes().as_slice())
+            })
+            .unwrap_or_default()
+    }
+
+    /// A map action: `go`, `visit_low`, `visit_normal`, `visit_high`, `recycle` or `place`,
+    /// at a target dictionary naming a `beacon`, a `selector` or a `voxel` (sim axes).
+    /// Returns whether the action was taken.
+    #[func]
+    fn editor_action(&mut self, action: GString, target: VarDictionary) -> bool {
+        let Some(rig) = self.rig.as_mut() else {
+            return false;
+        };
+        let action = action.to_string();
+        self.panics
+            .guard("editor_action", || {
+                match (Action::from_name(&action), target_of(&target)) {
+                    (Some(action), Some(target)) => rig.editor_mut().act(action, &target),
+                    _ => false,
+                }
+            })
+            .unwrap_or(false)
+    }
+
+    /// The placement ghost at `at` (sim axes): the QUICK verdict of the draft with a beacon
+    /// placed there, asked for once per click.
+    #[func]
+    fn editor_preview_place(&mut self, at: Vector3i) -> bool {
+        let Some(rig) = self.rig.as_mut() else {
+            return false;
+        };
+        self.panics
+            .guard("editor_preview_place", || {
+                rig.editor_mut().preview_place([at.x, at.y, at.z])
+            })
+            .unwrap_or(false)
+    }
+
+    /// Apply the `fix`th Fix button of validation row `row`: the verifier's own patch,
+    /// through `patch_plan`.
+    #[func]
+    fn editor_fix(&mut self, row: i64, fix: i64) -> bool {
+        let (Some(rig), Ok(row), Ok(fix)) = (
+            self.rig.as_mut(),
+            usize::try_from(row),
+            usize::try_from(fix),
+        ) else {
+            return false;
+        };
+        self.panics
+            .guard("editor_fix", || rig.editor_mut().fix(row, fix))
+            .unwrap_or(false)
+    }
+
+    /// Undo the last edit with the inverse patch the gateway handed back for it.
+    #[func]
+    fn editor_undo(&mut self) -> bool {
+        let Some(rig) = self.rig.as_mut() else {
+            return false;
+        };
+        self.panics
+            .guard("editor_undo", || rig.editor_mut().undo())
+            .unwrap_or(false)
+    }
+
+    /// Submit the playbook on screen.
+    #[func]
+    fn editor_submit(&mut self) -> bool {
+        let Some(rig) = self.rig.as_mut() else {
+            return false;
+        };
+        self.panics
+            .guard("editor_submit", || rig.editor_mut().submit())
+            .unwrap_or(false)
+    }
+
+    /// Save the notes box to the seat notebook.
+    #[func]
+    fn editor_save_notes(&mut self, notes: GString) {
+        let notes = notes.to_string();
+        if let Some(rig) = self.rig.as_mut() {
+            let _ = self
+                .panics
+                .guard("editor_save_notes", || rig.editor_mut().save_notes(&notes));
+        }
+    }
+
+    /// Keep the playbook on screen as this seat's editor draft.
+    #[func]
+    fn editor_save_draft(&mut self, label: GString) -> bool {
+        let Some(rig) = self.rig.as_mut() else {
+            return false;
+        };
+        let label = label.to_string();
+        self.panics
+            .guard("editor_save_draft", || rig.editor_mut().save_draft(&label))
+            .unwrap_or(false)
+    }
+
+    /// Ask the gateway about the beacon `id` (`b_NN`), for the map menu's heading.
+    #[func]
+    fn editor_describe_beacon(&mut self, id: GString) {
+        let id = id.to_string();
+        if let Some(rig) = self.rig.as_mut() {
+            let _ = self.panics.guard("editor_describe_beacon", || {
+                rig.editor_mut().describe_beacon(&id);
+            });
+        }
+    }
+
+    /// Everything the editor's panel draws: the rows, the route, the ghost, the notes, the
+    /// drafts, the last submission and the status line, with a `changes` counter that moves
+    /// whenever any of it did. Empty before `watch_begin`.
+    #[func]
+    fn editor_state(&mut self) -> VarDictionary {
+        let Some(rig) = self.rig.as_ref() else {
+            return VarDictionary::new();
+        };
+        self.panics
+            .guard("editor_state", || state_dictionary(rig.editor()))
+            .unwrap_or_default()
+    }
+
+    /// Validation rows from a `gp.api.v1.VerifyReport` JSON text, with no gateway behind
+    /// them: what the render-only rows scene draws. An empty array means the reason is in
+    /// the log.
+    #[func]
+    fn editor_rows_of_report(&mut self, report_json: GString) -> VarArray {
+        let text = report_json.to_string();
+        match self
+            .panics
+            .guard("editor_rows_of_report", || rows_of_report_text(&text))
+        {
+            Some(Ok(rows)) => rows_array(&rows),
+            Some(Err(error)) => {
+                godot_error!("[pharmakos] editor_rows_of_report: {error}");
+                VarArray::new()
+            }
+            None => VarArray::new(),
+        }
+    }
+
+    /// The voxel of ground under a ray from the camera (`origin` and `direction` in the
+    /// world's axes): `{hit, at}`, with `at` in the sim's axes, or `{hit: false}`.
+    #[func]
+    fn view_pick(&mut self, origin: Vector3, direction: Vector3) -> VarDictionary {
+        let mut report = VarDictionary::new();
+        let Some(model) = self.view.as_ref() else {
+            report.set(&"hit".to_variant(), &false.to_variant());
+            return report;
+        };
+        let found = self
+            .panics
+            .guard("view_pick", || {
+                model.pick(
+                    [origin.x, origin.y, origin.z],
+                    [direction.x, direction.y, direction.z],
+                )
+            })
+            .flatten();
+        report.set(&"hit".to_variant(), &found.is_some().to_variant());
+        if let Some([x, y, z]) = found {
+            report.set(&"at".to_variant(), &Vector3i::new(x, y, z).to_variant());
+        }
+        report
+    }
+
     /// Runs T12's acceptance and returns it as a dictionary.
     ///
     /// The one call `godot/scripts/client_check.gd` makes, and through it the one the CI
@@ -802,6 +1023,13 @@ impl PharmakosBridge {
                 entities.push(&entity_dictionary(entity).to_variant());
             }
             report.set(&"entities".to_variant(), &entities.to_variant());
+            // Every route the editor draws starts where the seat's commander stands.
+            if let Some(rig) = self.rig.as_mut() {
+                let seen = model.entities();
+                let _ = self
+                    .panics
+                    .guard("view_apply", || rig.editor_mut().set_entities(seen));
+            }
         }
         self.view = Some(model);
         Some(report)

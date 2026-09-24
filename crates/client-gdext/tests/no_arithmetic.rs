@@ -383,3 +383,63 @@ fn the_scan_reads_the_gdscript_as_well_as_the_rust() {
         "the bridge module itself was not scanned"
     );
 }
+
+/// Every `.gd` file anywhere under `godot/`, in sorted order.
+fn gdscript_everywhere() -> Vec<PathBuf> {
+    let mut files: Vec<PathBuf> = Vec::new();
+    collect(&godot_root(), "gd", &mut files);
+    files.sort();
+    files
+}
+
+/// **The editor makes no time arithmetic of its own** (skeleton plan T19, acceptance): no
+/// GDScript file anywhere in the project does arithmetic on `$`, `kW` or a duration.
+///
+/// The bridge-wide test above reads `godot/scripts/`; this one reads every `.gd` under
+/// `godot/`, so a script moved into a subfolder, or a scene's own script, is held to the
+/// same rule. The editor shows travel times, sizes and verdicts exactly as the gateway
+/// answered them, and every one of them comes from the gateway (AGENTS.md section 3 rule 4:
+/// the editor "runs no validation or time maths of its own — it asks the gateway").
+#[test]
+fn the_editor_makes_no_time_arithmetic_of_its_own() {
+    let files = gdscript_everywhere();
+    assert!(
+        files
+            .iter()
+            .any(|path| path.file_name().and_then(|name| name.to_str()) == Some("editor.gd")),
+        "the editor's script was not among the files scanned: {files:?}"
+    );
+    let found = offences(&files);
+    assert!(
+        found.is_empty(),
+        "the editor does arithmetic on something the gateway owns — a duration, `$` or `kW`. \
+         Ask the gateway for the number instead, and show it as it came back.\n{}",
+        found.join("\n")
+    );
+}
+
+/// The editor's scripts read no clock: the pacer (`src/pacer.rs`) is the client's one wall
+/// clock, and the editor's one timer — FULL after 600 ms idle — is kept there
+/// (`pacer::IdleTimer`). A `Timer` node or a `Time.get_ticks_*` in an editor script would
+/// be a second clock deciding when to ask the gateway something.
+#[test]
+fn the_editor_scripts_read_no_clock_of_their_own() {
+    const CLOCKS: &[&str] = &["time.", "timer", "get_ticks", "unix_time", "create_tween"];
+    let mut found: Vec<String> = Vec::new();
+    for name in ["editor.gd", "rows.gd", "strings.gd"] {
+        let path = godot_root().join("scripts").join(name);
+        let text =
+            fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+        for (index, line) in text.lines().enumerate() {
+            let code = code_of(line).to_ascii_lowercase();
+            if CLOCKS.iter().any(|clock| code.contains(clock)) {
+                found.push(format!("{name}:{}: {}", index + 1, line.trim()));
+            }
+        }
+    }
+    assert!(
+        found.is_empty(),
+        "an editor script reads a clock; timing is the pacer's (src/pacer.rs):\n{}",
+        found.join("\n")
+    );
+}

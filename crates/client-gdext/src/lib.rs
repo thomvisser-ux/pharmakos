@@ -45,6 +45,7 @@
 //! | a `gp.api.v1` result as JSON | canonical JSON, schema-checked | [`api`] |
 //! | a `get_view` result | chunks on the drain queue, the entity list | [`view`] |
 //! | a gateway answer | the next JSON-RPC frame for each connection | [`rig`] |
+//! | a click on the map, a Load, a Fix | the editor's next planning call, and its rows | [`editor`] |
 //! | the wall clock | game milliseconds asked for, the host clock reported | [`pacer`] |
 //!
 //! Each of those is a copy or a lookup. The two places where something is *decided* are
@@ -83,6 +84,15 @@
 //! arithmetic**: it never sees a step of the sim or a hash, and `tests/no_arithmetic.rs`
 //! still holds every other module of this crate to "no time maths".
 //!
+//! # The editor (T19, pull request 1)
+//!
+//! The playbook editor is one more client of the gateway on the seat connection the vista
+//! already holds: [`editor`] turns a click on the map into a JSON Patch and each answer into
+//! validation rows, a priced route and a placement ghost, and [`rig`] fits its calls into the
+//! seat token's rate budget beside the vista's polls. Every verdict, travel time and patch
+//! is the gateway's; the editor's one timer, FULL after 600 ms idle, is the pacer's
+//! ([`pacer::IdleTimer`]).
+//!
 //! # What is not here yet
 //!
 //! The `.vox` models: entities are drawn as placeholder primitives by GDScript until T19
@@ -91,6 +101,7 @@
 
 pub mod api;
 pub mod chunks;
+pub mod editor;
 pub mod enums;
 pub mod error;
 pub mod pacer;
@@ -102,6 +113,7 @@ pub mod upload;
 pub mod view;
 
 mod bridge;
+mod editor_view;
 mod engine;
 mod entry;
 mod variant;

@@ -36,20 +36,48 @@
 //! | `end_lull` once the Lull is ready to end | `set_ready`, once the human says so |
 //! | `end_recap` once the human continues | `get_view` from the cursor after the match moved |
 //! | `advance_push`, when the pacer says | `get_segment_feed` after the match moved |
-//! | `report_host_clock`, outside a Push | |
+//! | `report_host_clock`, outside a Push | the editor's planning calls, in a Lull |
 //! | a keep-alive `get_status` | a keep-alive `get_status` |
 //!
 //! "Ready ends the Lull": the host clock's answer carries `all_ready`, and when it is true
 //! or the Lull's countdown has run out, the admin connection calls `end_lull`. That is the
 //! one gameplay-shaped decision in this file, and it is the spec's, not the client's.
+//! `set_ready` waits behind anything the editor still owes the gateway, so a Ready pressed
+//! after Submit reaches the gateway after the submission it is ready with.
+//!
+//! # The seat connection's rate budget
+//!
+//! The editor shares the seat connection with the vista's polls
+//! (`docs/design/skeleton-plan-t16a-notes.md` section B, "T19" (5)), and the seat token's
+//! budget is the gateway's: `pharmakos_gateway::limit::CALLS_PER_TICK` calls per gateway
+//! tick. That tick moves only when the match's clock does: in a Lull, when the admin
+//! connection's `report_host_clock` is answered, about four times a second; in a Push, when
+//! an `advance_push` ran any game time (section B, "T19" (3)). So the rig spends at most
+//! [`SEAT_CALLS_PER_REFILL`] seat calls between two such answers. With one call in flight per
+//! connection, at most one more can land in the same gateway tick, the one that was already
+//! on its way when the clock moved, which keeps the seat under the gateway's limit however
+//! fast the player edits (`tests/rate_budget.rs`).
 
 use pharmakos_proto::gp::api::v1::{GetSegmentFeedResponse, status};
 use pharmakos_proto::json::{self, Json};
 
+use crate::editor::Editor;
 use crate::enums;
 use crate::error::BridgeError;
 use crate::pacer::{CLOCK_REPORT_US, ClockPhase, KEEPALIVE_US, Timing, clock_text};
 use crate::view::{read_status, split_footer};
+
+/// Seat calls the rig sends between two moves of the gateway's clock.
+///
+/// The gateway admits a token eight calls per tick (`pharmakos_gateway::limit::
+/// CALLS_PER_TICK`, itself a PLACEHOLDER for hardening). Six here plus the one call that can
+/// straddle a clock move is seven, one under the limit, so a keep-alive or a late answer
+/// never tips a burst of edits into `RATE_LIMITED`. `tests/rate_budget.rs` reads the
+/// gateway's constants out of its source and drives the rig against them.
+///
+/// PLACEHOLDER: the margin is the client's; the numbers are OWNER's at hardening with the
+/// gateway's rate limits, and this follows them.
+pub const SEAT_CALLS_PER_REFILL: u32 = 6;
 
 /// The admin connection's index.
 pub const ADMIN: usize = 0;
@@ -111,6 +139,8 @@ enum Purpose {
     EndLull,
     EndRecap,
     Ready,
+    /// One of the editor's planning calls ([`crate::editor`]).
+    Plan,
 }
 
 /// One connection's state.
@@ -164,7 +194,8 @@ struct Wants {
     ready: bool,
 }
 
-/// The watch rig: the two connections' state, the view and feed cursors, and the timing.
+/// The watch rig: the two connections' state, the view and feed cursors, the timing, and
+/// the editor that shares the seat connection.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Rig {
     links: [Link; 2],
@@ -184,6 +215,16 @@ pub struct Rig {
     view_refusals: u32,
     /// After a refused page: the wall time before which no keyframe is asked again.
     keyframe_not_before_us: u64,
+    /// Seat calls left before the gateway's clock next moves.
+    seat_budget: u32,
+    /// Whether `set_ready` has gone out this Lull: the seat's orders are final, and the
+    /// editor sends nothing more until the next Lull.
+    ///
+    /// PLACEHOLDER: Ready is final for the rest of the Lull; an un-ready toggle that reopens
+    /// the editor (`set_ready {ready: false}`) is the real lobby's. OWNER, S6.
+    ready_sent: bool,
+    /// The playbook editor.
+    editor: Editor,
 }
 
 impl Default for Rig {
@@ -215,7 +256,21 @@ impl Rig {
             lull_length: 0,
             view_refusals: 0,
             keyframe_not_before_us: 0,
+            seat_budget: SEAT_CALLS_PER_REFILL,
+            ready_sent: false,
+            editor: Editor::default(),
         }
+    }
+
+    /// The editor, to act on.
+    pub fn editor_mut(&mut self) -> &mut Editor {
+        &mut self.editor
+    }
+
+    /// The editor, to read.
+    #[must_use]
+    pub const fn editor(&self) -> &Editor {
+        &self.editor
     }
 
     /// Times every Lull at `length`, the rules table's `match.lull_ms`; zero is untimed.
@@ -241,6 +296,13 @@ impl Rig {
         }
     }
 
+    /// The editor's edits restart the idle timer that owes FULL.
+    fn sync_editor(&mut self) {
+        if self.editor.take_edit_mark() {
+            self.timing.idle.edited();
+        }
+    }
+
     /// Connection `link` dropped. Whatever it had in flight is carried or forgotten, and
     /// the drop is counted: the watch check asserts there were none.
     pub fn dropped(&mut self, link: usize) {
@@ -254,12 +316,14 @@ impl Rig {
         match state.in_flight.take() {
             Some((_, Purpose::Advance)) => self.timing.pacer.refused(),
             Some((_, Purpose::Clock)) => self.timing.clock.refused(),
+            Some((_, Purpose::Plan)) => self.editor.dropped(),
             _ => {}
         }
     }
 
     /// The frames to send now, given a [`crate::pacer::WallClock`] reading.
     pub fn poll(&mut self, now_us: u64) -> Vec<Outgoing> {
+        self.sync_editor();
         self.timing.advance(now_us);
         if self.phase == Phase::Lull && self.timing.clock.run_out() {
             self.wants.end_lull = true;
@@ -331,7 +395,7 @@ impl Rig {
     }
 
     fn seat_next(&mut self) -> Option<(Purpose, &'static str, Json)> {
-        if !self.idle(SEAT) {
+        if !self.idle(SEAT) || self.seat_budget == 0 {
             return None;
         }
         if let Some(cursor) = self.view_paging.clone() {
@@ -340,12 +404,25 @@ impl Rig {
         if self.due.keyframe && self.timing.now_us() >= self.keyframe_not_before_us {
             return Some((Purpose::View, "get_view", cursor_params("")));
         }
-        if self.wants.ready && self.phase == Phase::Lull {
+        if self.wants.ready && self.phase == Phase::Lull && !self.editor.has_pending_jobs() {
+            self.ready_sent = true;
             return Some((
                 Purpose::Ready,
                 "set_ready",
                 object(vec![("ready", Json::Bool(true))]),
             ));
+        }
+        // Planning is open in a Lull and closed once this seat is ready or the Lull is
+        // ending: a call sent into the end of a Lull would come back PHASE_CLOSED.
+        if self.phase == Phase::Lull && !self.ready_sent && !self.wants.end_lull && !self.all_ready
+        {
+            let full_due = self.timing.idle.due();
+            if let Some(call) = self.editor.next_call(full_due) {
+                if call.full {
+                    self.timing.idle.clear();
+                }
+                return Some((Purpose::Plan, call.method, call.params));
+            }
         }
         if self.due.view {
             let cursor = self.view_cursor.clone();
@@ -374,6 +451,9 @@ impl Rig {
         let id = state.next_id;
         state.in_flight = Some((id, purpose));
         state.calls = state.calls.saturating_add(1);
+        if link == SEAT {
+            self.seat_budget = self.seat_budget.saturating_sub(1);
+        }
         self.timing.sent(link);
         match purpose {
             Purpose::View => self.due.view = false,
@@ -428,6 +508,11 @@ impl Rig {
                 .unwrap_or("")
                 .to_owned();
             self.refused(purpose, &code);
+            if purpose == Purpose::Plan {
+                // A refusal is an answer: the editor settles the call and says what it was.
+                let _ = self.editor.answered(Err((code.as_str(), message.as_str())));
+                self.sync_editor();
+            }
             let said = format!("{code}: {message}");
             self.last_error = Some(said.clone());
             answer.error = Some(said);
@@ -443,7 +528,9 @@ impl Rig {
         // What the call was for is settled BEFORE the footer is read, so a footer this
         // build cannot read never leaves the pacer or the host clock waiting on an answer
         // that has already arrived.
-        self.settle(purpose, result, &mut answer)?;
+        let settled = self.settle(purpose, result, &mut answer);
+        self.sync_editor();
+        settled?;
         if link == ADMIN {
             if let (_, Some(footer)) = split_footer(result) {
                 answer.phase_changed = self.observe(&read_status(&footer)?);
@@ -497,10 +584,14 @@ impl Rig {
                 if ran > 0 {
                     self.due.view = true;
                     self.due.feed = true;
+                    // The Push moved the gateway's clock, and with it every token's budget.
+                    self.seat_budget = SEAT_CALLS_PER_REFILL;
                 }
             }
             Purpose::Clock => {
                 self.timing.clock.answered();
+                // The report moved the gateway's clock, and with it every token's budget.
+                self.seat_budget = SEAT_CALLS_PER_REFILL;
                 self.all_ready = matches!(result.get("all_ready"), Some(Json::Bool(true)));
                 if self.all_ready && self.phase == Phase::Lull {
                     self.wants.end_lull = true;
@@ -509,6 +600,7 @@ impl Rig {
             Purpose::EndLull => self.wants.end_lull = false,
             Purpose::EndRecap => self.wants.end_recap = false,
             Purpose::Ready => self.wants.ready = false,
+            Purpose::Plan => self.editor.answered(Ok(result))?,
             Purpose::Status => {}
         }
         Ok(())
@@ -545,8 +637,11 @@ impl Rig {
             }
             Purpose::EndLull => self.wants.end_lull = false,
             Purpose::EndRecap => self.wants.end_recap = false,
-            Purpose::Ready => self.wants.ready = false,
-            Purpose::Status => {}
+            Purpose::Ready => {
+                self.wants.ready = false;
+                self.ready_sent = false;
+            }
+            Purpose::Plan | Purpose::Status => {}
         }
     }
 
@@ -572,6 +667,8 @@ impl Rig {
                 self.timing.clock.enter(ClockPhase::Silent);
             }
             Phase::Lull => {
+                self.ready_sent = false;
+                self.editor.lull_opened(footer.round);
                 self.timing.pacer.stop();
                 // A footer that already shows a countdown is one this client reported
                 // before a reconnect; otherwise the Lull is as long as the rules say.
@@ -757,7 +854,7 @@ mod tests {
     use crate::pacer::PACER_PERIOD_US;
 
     fn answer(id: i64, result: &str, phase: &str) -> String {
-        let body = result.trim_end_matches('}');
+        let body = result.strip_suffix('}').expect("a result is an object");
         let sep = if body.len() > 1 { "," } else { "" };
         format!(
             r#"{{"jsonrpc":"2.0","id":{id},"result":{body}{sep}"_status":{{"phase":"{phase}","phase_remaining_ms":180000,"round":1}}}}}}"#
@@ -1086,5 +1183,121 @@ mod tests {
             .expect("reads");
         assert_eq!(got, Answer::default());
         assert_eq!(rig.phase(), Phase::Lull);
+    }
+
+    /// A rig in a Lull whose editor holds a playbook it has checked.
+    fn editing() -> Rig {
+        let mut rig = in_lull();
+        assert!(rig.editor_mut().load(b"{}"));
+        let sent = rig.poll(2);
+        let check = sent
+            .iter()
+            .find(|frame| frame.link == SEAT)
+            .expect("the load check");
+        assert_eq!(method_of(check), "verify_plan");
+        rig.receive(
+            SEAT,
+            &answer(
+                id_of(check),
+                r#"{"report":{"qualifies":true,"depth":"quick"}}"#,
+                "lull",
+            ),
+        )
+        .expect("reads");
+        assert!(rig.editor().has_text());
+        rig
+    }
+
+    #[test]
+    fn ready_waits_behind_the_submission_it_is_ready_with() {
+        let mut rig = editing();
+        assert!(rig.editor_mut().submit());
+        rig.ready();
+        let sent = rig.poll(3);
+        let first = sent
+            .iter()
+            .find(|frame| frame.link == SEAT)
+            .expect("a seat call");
+        assert_eq!(method_of(first), "submit_plan", "the submission goes first");
+        rig.receive(
+            SEAT,
+            &answer(
+                id_of(first),
+                r#"{"report":{"qualifies":true,"depth":"full"},"accepted":true}"#,
+                "lull",
+            ),
+        )
+        .expect("reads");
+        let sent = rig.poll(4);
+        let next = sent
+            .iter()
+            .find(|frame| frame.link == SEAT)
+            .expect("a seat call");
+        assert_eq!(method_of(next), "set_ready");
+        rig.receive(SEAT, &answer(id_of(next), "{}", "lull"))
+            .expect("reads");
+        // Ready means the orders are final: the editor sends nothing more this Lull.
+        assert!(rig.editor_mut().act(
+            crate::editor::Action::Go,
+            &crate::editor::Target::Beacon("b_00".to_owned())
+        ));
+        assert!(
+            !rig.poll(5)
+                .iter()
+                .any(|frame| frame.link == SEAT && method_of(frame) == "patch_plan"),
+            "no planning call after Ready"
+        );
+    }
+
+    #[test]
+    fn planning_calls_wait_for_a_lull_and_for_budget() {
+        let mut rig = editing();
+        rig.end_lull();
+        let sent = rig.poll(3);
+        let end = sent
+            .iter()
+            .find(|frame| frame.link == ADMIN)
+            .expect("end_lull");
+        rig.receive(ADMIN, &answer(id_of(end), "{}", "push"))
+            .expect("reads");
+        assert_eq!(rig.phase(), Phase::Push);
+        assert!(rig.editor_mut().submit());
+        settle(&mut rig, 4);
+        assert!(
+            rig.editor().has_pending_jobs(),
+            "planning is closed in a Push; the submission waits for the next Lull"
+        );
+    }
+
+    #[test]
+    fn the_seat_spends_no_more_than_its_budget_between_clock_reports() {
+        let mut rig = editing();
+        for _ in 0..12 {
+            assert!(rig.editor_mut().act(
+                crate::editor::Action::Go,
+                &crate::editor::Target::Beacon("b_00".to_owned())
+            ));
+        }
+        let mut seat_calls = 0_u32;
+        // Answer every seat call at once, with no clock report in between.
+        for step in 0..64_u64 {
+            let sent = rig.poll(3 + step);
+            for frame in sent.iter().filter(|frame| frame.link == SEAT) {
+                seat_calls += 1;
+                let result = match method_of(frame).as_str() {
+                    "patch_plan" => {
+                        r#"{"playbook_jsonc":"{ }","inverse_json_patch":"[]"}"#.to_owned()
+                    }
+                    _ => r#"{"report":{"qualifies":true,"depth":"quick"}}"#.to_owned(),
+                };
+                rig.receive(SEAT, &answer(id_of(frame), &result, "lull"))
+                    .expect("reads");
+            }
+            // The admin connection's calls are left unanswered: the clock never moves.
+        }
+        assert!(
+            seat_calls <= SEAT_CALLS_PER_REFILL,
+            "{seat_calls} seat calls with the gateway's clock standing still"
+        );
     }
 }
