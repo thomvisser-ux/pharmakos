@@ -2,12 +2,14 @@
 # Seed 0x00000000ca5caded, two seats, a 1 000 ms segment.
 # Fifteen rows for fourteen calls: call 13 is made twice, because
 # `wait_for` polls and never blocks, and the host ends the Lull between
-# the two. Everything else is one row to one call, in the spec's order.
+# the two. Row 4 also counts the whole library, with a second, untagged
+# list_templates. Everything else is one row to one call, in the spec's
+# order. The library is the committed library/ folder.
 # call	method	what came back
 1	get_status	phase=lull
 2	get_briefing	segment_length_ms=1000
-3	get_beacon	the seat's own core
-4	list_templates	0 templates (no folder configured)
+3	get_beacon	the seat's own core: owner=seat.0, core=true, priority=normal, powered=true
+4	list_templates	0 templates tagged attack, of 3 in the library
 5	get_schema	part=step
 6	estimate_route	reachable, 1 leg, not fogged
 7	verify_plan{depth=quick}	qualifies=false, 2 errors

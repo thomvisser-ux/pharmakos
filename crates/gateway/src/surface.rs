@@ -77,6 +77,20 @@
 //! definition -- "the gateway failed; never used to report anything the caller
 //! could have avoided" -- is true of a method this build does not serve.
 //!
+//! # Advice, and the tokens the host minted for itself
+//!
+//! T18a (decisions-log item 111). The built-in operator advises each seat it
+//! does not play at the start of every Lull, through [`crate::serve`], and
+//! [`Surface::file_advice`] files what it said into that seat's own store: its
+//! safe playbook, verified FULL and compiled there, and its suggestions for the
+//! editor's wizard. `get_safe_plan` and `instantiate_template{suggested}`
+//! answer from that store and only to that seat; [`Surface::begin_push`] files
+//! that seat's own safe playbook, or the gateway's fallback with an audit line
+//! saying why. Tokens the host minted for itself are registered with
+//! [`Surface::register_in_process`]: their own rate, and for an advisor a
+//! scratch view feed. Both methods are host-side, and `tests/confinement.rs`
+//! holds that no handler names either.
+//!
 //! # Secrecy
 //!
 //! [`Surface::seat_state`] is the **only** way to a seat's notebook, drafts or
@@ -91,6 +105,7 @@ pub mod knowledge;
 pub mod planning;
 pub mod watch;
 
+use crate::advice::Advice;
 use crate::audit::{AuditLog, Outcome};
 use crate::error::Error;
 use crate::feed::{Event, Kind, SegmentFeed, SnapshotId};
@@ -212,6 +227,51 @@ pub const MAX_WAIT_MS: i32 = 60_000;
 /// before would otherwise find two.
 pub const CARRIED_DRAFT_ID: &str = "carried";
 
+/// What the built-in operator advised a seat this round, as the gateway
+/// filed it ([`Surface::file_advice`]).
+///
+/// Private to the seat like everything else in [`SeatState`]: a seat is told
+/// its own suggestions and its own safe playbook and nobody else's
+/// (`advice_for_one_seat_never_reaches_another`).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Advised {
+    /// Which round it is for. A Lull opening forgets it
+    /// ([`Surface::open_lull`]), and every reader checks the round as well.
+    pub round: u32,
+    /// What the operator said, as it said it.
+    pub advice: Advice,
+    /// The operator's safe playbook, verified FULL and compiled when it was
+    /// filed. `None` when it did not qualify or would not compile, in which
+    /// case the gateway's fallback is what this seat is shown and filed, and
+    /// the audit log says why.
+    pub safe: Option<Sealed>,
+}
+
+/// How the host treats a token it minted for itself: a built-in seat's or an
+/// advisor's ([`crate::serve`]).
+///
+/// Registered by the host with [`Surface::register_in_process`], which no
+/// method handler reaches (`tests/confinement.rs`), because a client that
+/// could register its own token would give itself a rate.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct InProcess {
+    /// The token's own rate limit, [`crate::limit::IN_PROCESS_LIMITS`] in the
+    /// host. Counted exactly as a socket's is; only the numbers differ.
+    pub limits: Limits,
+    /// Answer this token's `get_view` from a **scratch copy** of the view
+    /// feed, thrown away afterwards.
+    ///
+    /// An advisor calls as the seat it advises, and the view feed keeps its
+    /// derived state per viewer rather than per token: entity handles minted
+    /// in the order a viewer first sees each thing, and the stamp a sight
+    /// change moves (decisions-log item 111, H15). An advisor's `get_view` on
+    /// the real feed would therefore write into the human's own feed state.
+    /// On a scratch copy it reads exactly what that seat may see and leaves
+    /// the human's next answer byte for byte as it would have been
+    /// (`the_advisor_leaves_the_humans_view_feed_as_it_found_it`).
+    pub scratch_view: bool,
+}
+
 /// One seat's private state.
 ///
 /// Reached only through [`Surface::seat_state`] and
@@ -230,6 +290,9 @@ pub struct SeatState {
     pub sealed: Option<Sealed>,
     /// What the carried draft's re-verification found, if there is one.
     pub continuity: Option<Continuity>,
+    /// What the built-in operator advised this seat this round, if it
+    /// advises this seat at all.
+    pub advice: Option<Advised>,
 }
 
 impl SeatState {
@@ -243,6 +306,7 @@ impl SeatState {
             ready: false,
             sealed: None,
             continuity: None,
+            advice: None,
         }
     }
 
@@ -266,6 +330,9 @@ pub struct Surface {
     audit: AuditLog,
     limits: Limits,
     limiters: Vec<(Handle, RateLimiter)>,
+    /// The tokens the host minted for itself, and how each is treated. In
+    /// handle order, like `limiters`.
+    in_process: Vec<(Handle, InProcess)>,
     seats: Vec<SeatState>,
     /// The match, when one is hosted. `None` in the lobby, and in the tests
     /// that exercise the security surface without a world behind it.
@@ -342,6 +409,7 @@ impl Surface {
             audit: AuditLog::new(),
             limits: Limits::default(),
             limiters: Vec::new(),
+            in_process: Vec::new(),
             seats: slots,
             host: None,
             feed_anchor: Tick::ZERO,
@@ -398,9 +466,36 @@ impl Surface {
 
     /// Set the rate limits, for a host or a test that wants tighter ones than
     /// the PLACEHOLDER defaults.
+    ///
+    /// A token registered with [`Surface::register_in_process`] keeps its own.
     pub fn set_limits(&mut self, limits: Limits) {
         self.limits = limits;
         self.limiters.clear();
+    }
+
+    /// Mark a token as one the host minted for itself, with its own rate limit
+    /// and, for an advisor, a scratch view feed ([`InProcess`]).
+    ///
+    /// **Host-side, and reached by no method handler**: `tests/confinement.rs`
+    /// bans the name from every handler module. The token is still
+    /// authenticated, scoped, phase-checked, fog-filtered and audited on every
+    /// call; this changes the numbers its limiter counts against, and where an
+    /// advisor's `get_view` is answered from, and nothing else.
+    pub fn register_in_process(&mut self, handle: Handle, treatment: InProcess) {
+        self.in_process.retain(|(held, _)| *held != handle);
+        self.in_process.push((handle, treatment));
+        self.in_process.sort_by_key(|(held, _)| held.raw());
+        // A limiter made before the token was registered was made at the
+        // default numbers; the next call makes it again at these.
+        self.limiters.retain(|(held, _)| *held != handle);
+    }
+
+    /// How the host treats a token, if it minted it for itself.
+    fn in_process_of(&self, handle: Handle) -> Option<InProcess> {
+        self.in_process
+            .iter()
+            .find(|(held, _)| *held == handle)
+            .map(|(_, treatment)| *treatment)
     }
 
     /// Start a new segment: a new feed, a new snapshot, and every cursor from
@@ -659,6 +754,9 @@ impl Surface {
         }
         for seat in &mut self.seats {
             seat.ready = false;
+            // Last round's advice was about last round's snapshot. The host
+            // asks again once this Lull is open (`crate::serve`).
+            seat.advice = None;
         }
         // A Lull opening is a moment a view can change without a tick: the
         // phase moved, and the recap's world is now the planning world.
@@ -1214,54 +1312,194 @@ impl Surface {
     /// world as well as in this store, because [`Surface::begin_push`] seals
     /// whatever is here.
     ///
-    /// The safe playbook is **compiled here**, and a failure is
-    /// [`crate::error::Code::Internal`] and loud. It is the gateway's own
-    /// constant ([`crate::host::SAFE_PLAYBOOK`], T18's to replace): if it will
-    /// not compile then the one playbook that is supposed to be safe in every
-    /// situation is not runnable in any, and filing it silently would hand the
-    /// seat a Push in which its commander stands still for the reason this
-    /// whole task exists to remove.
+    /// # Whose safe playbook
+    ///
+    /// **The seat's own**, when the built-in operator advised it this round
+    /// and its safe playbook qualified (decisions-log item 111, decision C5):
+    /// that one was verified FULL and compiled when it was filed
+    /// ([`Surface::file_advice`]), against the frozen snapshot this Lull has
+    /// planned against all along, so it is filed here as it stands. Otherwise
+    /// the gateway's fallback, [`crate::host::SAFE_PLAYBOOK`] — for a seat no
+    /// operator advises, and for one whose advice did not qualify, which the
+    /// audit log already says.
+    ///
+    /// The fallback is **compiled here**, and a failure is
+    /// [`crate::error::Code::Internal`] and loud: if it will not compile then
+    /// the one playbook that is supposed to be safe in every situation is not
+    /// runnable in any, and filing it silently would hand the seat a Push in
+    /// which its commander stands still.
     ///
     /// # Errors
     ///
-    /// [`crate::error::Code::Internal`] when the safe playbook will not
-    /// compile.
+    /// [`crate::error::Code::Internal`] when the fallback will not compile.
     fn file_safe_playbooks(&mut self, round: u32) -> Result<(), Error> {
         let Some(host) = self.host.as_ref() else {
             return Ok(());
         };
-        let safe = host.safe_playbook().to_owned();
-        let needed = self
+        let stale = |seat: &SeatState| seat.sealed.as_ref().is_none_or(|held| held.round != round);
+        let own = |seat: &SeatState| {
+            seat.advice
+                .as_ref()
+                .filter(|advised| advised.round == round)
+                .and_then(|advised| advised.safe.clone())
+        };
+        let needs_fallback = self
             .seats
             .iter()
-            .any(|seat| seat.sealed.as_ref().is_none_or(|held| held.round != round));
-        if !needed {
-            return Ok(());
-        }
-        let plan =
-            crate::surface::planning::compile_playbook(&safe, host.rules()).map_err(|error| {
-                Error::internal(format!(
-                    "the safe playbook this gateway files will not compile: {}",
-                    error.message
-                ))
-            })?;
+            .any(|seat| stale(seat) && own(seat).is_none());
+        let fallback = if needs_fallback {
+            let safe = host.safe_playbook().to_owned();
+            let plan = crate::surface::planning::compile_playbook(&safe, host.rules()).map_err(
+                |error| {
+                    Error::internal(format!(
+                        "the safe playbook this gateway files will not compile: {}",
+                        error.message
+                    ))
+                },
+            )?;
+            Some(Sealed {
+                playbook_jsonc: safe,
+                // No report: this playbook did not come from a seat and was
+                // not pre-checked by one. The Push's own verification is what
+                // accepts it, and an invented hash here would be a hash
+                // nothing produced.
+                report_hash: Vec::new(),
+                round,
+                filed_by_the_gateway: true,
+                plan,
+            })
+        } else {
+            None
+        };
         for seat in &mut self.seats {
-            let stale = seat.sealed.as_ref().is_none_or(|held| held.round != round);
-            if stale {
-                seat.sealed = Some(Sealed {
-                    playbook_jsonc: safe.clone(),
-                    // No report: this playbook did not come from a seat and
-                    // was not pre-checked by one. The Push's own verification
-                    // is what accepts it, and an invented hash here would be a
-                    // hash nothing produced.
-                    report_hash: Vec::new(),
-                    round,
-                    filed_by_the_gateway: true,
-                    plan: plan.clone(),
-                });
+            if !stale(seat) {
+                continue;
+            }
+            let filed = own(seat).or_else(|| fallback.clone());
+            if let Some(mut filed) = filed {
+                filed.round = round;
+                seat.sealed = Some(filed);
             }
         }
         Ok(())
+    }
+
+    /// File what the built-in operator advised one seat for this round.
+    ///
+    /// **Host-side.** [`crate::serve`] calls it once per Lull for each seat the
+    /// operator does not play, with what that seat's [`crate::serve::Advisor`]
+    /// returned; no method handler reaches it, and `tests/confinement.rs`
+    /// bans the name from every handler module (decisions-log item 111,
+    /// decision C5). It writes the seat's private store directly, as
+    /// [`Surface::begin_push`]'s filing does, because the subject asking is
+    /// the host rather than a token.
+    ///
+    /// The safe playbook is **verified FULL and compiled here**, against the
+    /// frozen snapshot, which does not change for the rest of the Lull — so
+    /// verifying it now and verifying it when the Lull ends are the same check,
+    /// and `get_safe_plan` can answer exactly what would be filed. One that
+    /// does not qualify, or qualifies and will not compile, is not stored:
+    /// the seat is shown and filed the gateway's fallback, and the audit log
+    /// gets a `file advice` line naming the code, so a bad advice is never
+    /// replaced silently. A good one is logged `ok`.
+    ///
+    /// # Errors
+    ///
+    /// As [`Surface::host`]; [`crate::error::Code::PhaseClosed`] outside a
+    /// Lull, because advice is for a round that has not been sealed yet; and
+    /// [`crate::error::Code::NotFound`] for a seat the match has not got.
+    pub fn file_advice(&mut self, seat: SeatId, advice: Advice) -> Result<(), Error> {
+        if self.host()?.runner().phase() != MatchPhase::Lull {
+            return Err(Error::phase_closed(
+                "advice is filed during a Lull, for the round about to be sealed",
+            ));
+        }
+        if !self.seats.iter().any(|slot| slot.seat == seat) {
+            return Err(Error::not_found(format!(
+                "this match has no seat {}",
+                seat.raw()
+            )));
+        }
+        let round = self.host()?.runner().round();
+        let tick = self.time.tick;
+        let subject = Subject::Seat(seat);
+        let checked = self.qualify_safe_playbook(seat, &advice.safe_playbook_jsonc, round);
+        let safe = match checked {
+            Ok(sealed) => {
+                self.audit
+                    .record(tick, Some(subject), None, "file advice", Outcome::Ok);
+                Some(sealed)
+            }
+            Err(error) => {
+                self.audit
+                    .refused(tick, Some(subject), None, "file advice", &error);
+                None
+            }
+        };
+        if let Some(slot) = self.seats.iter_mut().find(|slot| slot.seat == seat) {
+            slot.advice = Some(Advised {
+                round,
+                advice,
+                safe,
+            });
+        }
+        Ok(())
+    }
+
+    /// An advised safe playbook, verified FULL and compiled, or the reason it
+    /// is not filed.
+    ///
+    /// `NO_QUALIFYING_PLAN` for one the verifier refuses — the code spec
+    /// section 12 names for "nothing that qualifies" — and the compile door's
+    /// own refusal for one this build cannot execute
+    /// ([`crate::surface::planning::compile_playbook`]).
+    fn qualify_safe_playbook(
+        &self,
+        seat: SeatId,
+        playbook_jsonc: &str,
+        round: u32,
+    ) -> Result<Sealed, Error> {
+        if playbook_jsonc.chars().count() > crate::surface::planning::MAX_PLAYBOOK_CHARS {
+            return Err(Error::invalid(format!(
+                "an advised safe playbook is at most {} characters, like any other",
+                crate::surface::planning::MAX_PLAYBOOK_CHARS
+            )));
+        }
+        let report = self.verify_for(seat, playbook_jsonc, Depth::Full)?;
+        if !report.qualifies {
+            return Err(Error::new(
+                crate::error::Code::NoQualifyingPlan,
+                format!(
+                    "seat {}'s advised safe playbook does not qualify ({} diagnostics); the \
+                     gateway's fallback is filed instead",
+                    seat.raw(),
+                    report.diagnostics.len()
+                ),
+            ));
+        }
+        let plan =
+            crate::surface::planning::compile_playbook(playbook_jsonc, self.host()?.rules())?;
+        Ok(Sealed {
+            playbook_jsonc: playbook_jsonc.to_owned(),
+            report_hash: report.report_hash,
+            round,
+            // Filed on the seat's behalf, not written by it: draft continuity
+            // does not offer it back as the seat's own work.
+            filed_by_the_gateway: true,
+            plan,
+        })
+    }
+
+    /// What the operator advised a seat for the round the match is in, if it
+    /// did.
+    pub(crate) fn current_advice(&self, seat: SeatId) -> Option<&Advised> {
+        let round = self.host.as_ref()?.runner().round();
+        self.seats
+            .iter()
+            .find(|slot| slot.seat == seat)?
+            .advice
+            .as_ref()
+            .filter(|advised| advised.round == round)
     }
 
     /// Pre-load last round's playbook as an editable draft and re-verify it.
@@ -1375,7 +1613,8 @@ impl Surface {
             .filter(|index| beacons.seats().get(*index).copied() == Some(seat.raw()))
             .collect();
         own.sort_by_key(|index| beacons.ids().get(*index).copied().unwrap_or(u32::MAX));
-        for (rank, index) in own.into_iter().enumerate() {
+        let core = crate::surface::knowledge::core_beacon_of(world, seat);
+        for index in own {
             let id = beacons.ids().get(index).copied().unwrap_or_default();
             scope.push_beacon(pharmakos_verifier::KnownBeacon {
                 beacon_id: crate::view::beacon_id(pharmakos_sim::tables::BeaconId::new(id)),
@@ -1393,7 +1632,7 @@ impl Surface {
                     .copied()
                     .map(crate::view::voxel_of)
                     .unwrap_or_default(),
-                is_core: rank == 0,
+                is_core: core == Some(id),
             });
         }
         Ok(scope)
@@ -1576,8 +1815,11 @@ impl Surface {
         tick: pharmakos_sim::math::quantity::Tick,
     ) -> Result<(), Error> {
         if !self.limiters.iter().any(|(held, _)| *held == handle) {
+            let limits = self
+                .in_process_of(handle)
+                .map_or(self.limits, |treatment| treatment.limits);
             self.limiters
-                .push((handle, RateLimiter::with_limits(self.limits)));
+                .push((handle, RateLimiter::with_limits(limits)));
             self.limiters.sort_by_key(|(held, _)| held.raw());
         }
         let index = self
@@ -1595,7 +1837,7 @@ impl Surface {
     /// Steps 3 to 6.
     fn serve<V: Vision>(
         &mut self,
-        _handle: Handle,
+        handle: Handle,
         subject: Subject,
         held: scopes::ScopeSet,
         request: &Request,
@@ -1626,7 +1868,22 @@ impl Surface {
             )));
         }
 
-        let mut result = self.dispatch(method, subject, held, request, vision)?;
+        let scratch = method == Method::GetView
+            && self
+                .in_process_of(handle)
+                .is_some_and(|treatment| treatment.scratch_view);
+        let mut result = if scratch {
+            // See [`InProcess::scratch_view`]. The view feed is derived,
+            // unhashed state, so a copy answers exactly what the real one
+            // would, and putting the real one back leaves every viewer's state
+            // and the feed's stamp as they were.
+            let kept = self.views.clone();
+            let answered = self.dispatch(method, subject, held, request, vision);
+            self.views = kept;
+            answered?
+        } else {
+            self.dispatch(method, subject, held, request, vision)?
+        };
         if let Json::Object(entries) = &mut result {
             entries.push((String::from("_status"), self.time.footer()));
         }
@@ -1662,19 +1919,19 @@ impl Surface {
             Method::ListBeacons => self.list_beacons(subject, held, request, vision),
             Method::GetBeacon => self.get_beacon(subject, held, request, vision),
             Method::GetMapSummary => self.get_map_summary(request),
-            Method::GetEconomyForecast => self.get_economy_forecast(request),
+            Method::GetEconomyForecast => self.get_economy_forecast(subject, request),
             Method::EstimateRoute => self.estimate_route(subject, request),
 
             // Docs and planning.
             Method::GetSchema => Surface::get_schema(request),
             Method::ListTemplates => self.list_templates(request),
-            Method::InstantiateTemplate => self.instantiate_template(request),
+            Method::InstantiateTemplate => self.instantiate_template(subject, request),
             Method::VerifyPlan => self.verify_plan(subject, request),
             Method::RenderPlan => self.render_plan(subject, request),
             Method::PatchPlan => Surface::patch_plan(request),
             Method::SaveDraft => self.save_draft(subject, request),
             Method::ListDrafts => self.list_drafts(subject),
-            Method::GetSafePlan => self.get_safe_plan(),
+            Method::GetSafePlan => self.get_safe_plan(subject),
             Method::SubmitPlan => self.submit_plan(subject, request),
 
             // The view.
@@ -1946,7 +2203,7 @@ impl Surface {
 /// problem; both are the log failing at the one thing it is for. So an unknown
 /// method is logged as an unknown method, which is what the reader needs to
 /// know, and the name it asked for is in the refusal the caller gets back.
-fn call_action(method: &str) -> String {
+pub(crate) fn call_action(method: &str) -> String {
     scopes::method_from_wire(method).map_or_else(
         || String::from("call <unknown>"),
         |resolved| format!("call {}", scopes::method_wire_name(resolved)),

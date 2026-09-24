@@ -8,9 +8,10 @@ SPDX-License-Identifier: GPL-3.0-or-later
 What the Seat Gateway does, written down: who sees which event, what a
 60-second digest says, what the audit log records, which opening handshakes the
 gateway accepts, what the spec's own worked session answers call by call, and —
-since T16a — what a **camera** is shown. Produced by
-`crates/gateway/tests/goldens.rs`, `crates/gateway/tests/methods.rs` and
-`crates/gateway/tests/view.rs`; compared by `cargo xtask ci`'s `golden` step;
+since T16a — what a **camera** is shown, and since T18a what the editor's
+**wizard** is handed. Produced by `crates/gateway/tests/goldens.rs`,
+`crates/gateway/tests/methods.rs`, `crates/gateway/tests/view.rs` and
+`crates/gateway/tests/advice.rs`; compared by `cargo xtask ci`'s `golden` step;
 re-blessed with `cargo xtask golden --bless`, which a pull request then has to
 explain (AGENTS.md §5).
 
@@ -19,9 +20,9 @@ The first four exist because the surface is the thing the whole roadmap inherits
 the rule *does*, in a table a reviewer can read without running anything — and
 it is the shape of that table, not any one line of it, that v1.1 publishes. The
 fifth is T13's, and is the method slice answering the session spec §12 prints.
-The last three are T16a's.
+The next three are T16a's, and the ninth is T18a's.
 
-## The eight cases
+## The nine cases
 
 | Case | File | What it pins |
 | --- | --- | --- |
@@ -33,6 +34,7 @@ The last three are T16a's.
 | `view_one_tick/` | `expected.view.txt` | One tick's terrain and entities through every viewer's `get_view` |
 | `view_keyframe/` | `expected.keyframe.jsonl`, `expected.keyframe.txt` | Seat 0's whole-map keyframe on the golden seed — **the fixture T16 renders from** |
 | `walkthrough_watch/` | `expected.watch.txt` | A watch session: keyframe, clock, `end_lull`, speed, skip, `end_recap` |
+| `instantiate_suggested/` | `expected.response.json` | One `instantiate_template{suggested: true}` answer on the wire — **the fixture T19's wizard reads** |
 
 ## What a diff means, case by case
 
@@ -188,10 +190,19 @@ Line 8 says the fixes came from the report itself: call 8's patch is built from
 the diagnostics' own `json_patch` suggestions, which is the loop the editor runs
 and the other half of the spec's `with fixes`.
 
-Line 4 says `0 templates (no folder configured)` because no template folder is
-set in the test, which is the plan's own T13 PLACEHOLDER (the folder's location
-on each platform is the owner's, with packaging at T21). When that lands, this
-line moves and the move is the feature arriving.
+Line 3 says what an **own** beacon carries since T18a (decisions-log item 111,
+decision C7): `owner`, and for the seat's own beacons only `core`, `priority`
+and `powered`. A diff here is the wire telling a seat something new or no longer
+telling it something; another seat's beacon carries its `owner` and nothing
+more, which `crates/gateway/tests/advice.rs` pins under both fog policies.
+
+Line 4 reads the committed `library/` folder, as `gamectl host` does since
+T18a, and counts it: `0 templates tagged attack, of 3 in the library`. The
+skeleton's three templates are Hold & Build, Expand & Mine and the Safe Playbook
+(item 81), none of them attack-shaped. The count moves when the library does,
+and the first number moves when an attack template lands (S3). Before T18a the
+line said `0 templates (no folder configured)`, because no host passed a
+folder.
 
 ### `view_one_tick/expected.view.txt`
 
@@ -286,6 +297,37 @@ Three lines are load-bearing.
 The `0 chunks` deltas are honest and not a bug: at the skeleton nothing in a
 Push writes a voxel — mining is T14's and craters are S2's — so a watched Push
 changes entity positions and no terrain at all.
+
+### `instantiate_suggested/expected.response.json`
+
+One whole JSON-RPC response, exactly as the wire carries it: seat 0's
+`instantiate_template{template_id: "hold_and_build", suggested: true}` on the
+golden seed, in the opening Lull, after a **scripted** advisor filed a suggestion
+for the Generator's anchor and none for the hold (decisions-log item 111,
+decision C2). Produced by
+`a_suggested_instantiation_reports_every_declared_parameter_in_order`.
+
+It is a fixture as well as a golden: T19's second pull request copies it byte
+for byte to `godot/fixtures/instantiate_suggested.json`, with a guard that keeps
+the two identical, and builds the wizard's pages from it until T18's real
+operator runs in the headless check. So a diff here is **also a diff in the
+editor's input**, and the pull request that moves it names which of four things
+moved:
+
+* **The `parameters` list** — its order is the template's declaration order,
+  one entry per declared parameter, with `suggested: true` exactly where the
+  value is the operator's. An entry missing, reordered or mis-flagged is the
+  wizard showing the wrong page.
+* **`value`** — compact JSON text, raw (a duration in game milliseconds; the
+  wire carries no unit, because the editor may not convert one).
+* **`why`** — the scripted advisor's own sentence, passed through untouched.
+* **`playbook_jsonc`** — `library/hold_and_build.jsonc` itself, instantiated:
+  `kind` is `PLAYBOOK`, `meta.parameters` is gone and every comment survives.
+  **It moves whenever the template does**, which is why `library/` is frozen
+  through wave 6's second run (skeleton-plan-w6-notes.md section B).
+
+The `_status` footer is the opening Lull's, with the whole Lull reported left;
+it moving means the footer's shape did.
 
 ## Conventions
 

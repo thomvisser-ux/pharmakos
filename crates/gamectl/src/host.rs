@@ -22,10 +22,12 @@
 //!    reader this command writes for.
 //! 2. Reads the rules table to **text** — the gateway parses it, so this crate
 //!    names no `pharmakos-sim` type here (item 107 (11)).
-//! 3. Hands text, no template library and no built-in seat to `serve::run`,
-//!    with the process's own standard input and standard output. It returns
-//!    when standard input reaches end of file, which is the whole of the
-//!    shutdown protocol: no heartbeat and no clock.
+//! 3. Hands text, the template library's folder ([`LIBRARY_PATH`] under
+//!    `--root`) and an operator factory that plays and advises nobody
+//!    (`serve::NoOperators`, until **T18** lands the built-in operator) to
+//!    `serve::run`, with the process's own standard input and standard
+//!    output. It returns when standard input reaches end of file, which is the
+//!    whole of the shutdown protocol: no heartbeat and no clock.
 //!
 //! # Exit codes
 //!
@@ -42,20 +44,27 @@
 //! command has to say goes to standard error, which is where the lobby's
 //! "host failed to start" message reads it from.
 //!
-//! PLACEHOLDER: the template library is `None` and the rules table is read from
-//! `--root`, as every other command reads it. Where both live beside a shipped
-//! binary is packaging's question (T13's and `crate::rules`' PLACEHOLDER);
-//! **T21** decides it, and T19's editor is the first client that needs the
-//! library.
+//! PLACEHOLDER: the rules table and the template library are both read from
+//! `--root`, as every other command reads the rules. Where both live beside a
+//! shipped binary is packaging's question (T13's and `crate::rules`'
+//! PLACEHOLDER); **T21** decides it.
 
 use std::io::IsTerminal as _;
 use std::path::Path;
 
 use pharmakos_gateway::Code;
-use pharmakos_gateway::serve::{self, Setup};
+use pharmakos_gateway::serve::{self, NoOperators, Setup};
 
 use crate::exit::Failure;
 use crate::{rules, strings};
+
+/// The template library, relative to the root: the flat `library/` folder
+/// the gateway reads to list and instantiate templates (decisions-log item
+/// 111, decision C13), beside [`crate::rules::RULES_PATH`].
+///
+/// PLACEHOLDER: where the library lives beside a shipped binary is packaging's
+/// question, **T21**.
+pub const LIBRARY_PATH: &str = "library";
 
 /// Host one match until standard input closes.
 ///
@@ -79,8 +88,13 @@ pub fn run(root: &Path) -> Result<String, Failure> {
     })?;
     let setup = Setup {
         rules_json,
-        library: None,
-        built_in: Vec::new(),
+        // A path, not a check: the gateway reads the folder on every
+        // `list_templates` and says so when it cannot, and a checkout always
+        // has one.
+        library: Some(root.join(LIBRARY_PATH)),
+        // PLACEHOLDER: T18 hands its operator factory here; until then every
+        // seat that seals nothing is filed the gateway's fallback.
+        operators: Box::new(NoOperators),
     };
     serve::run(setup, std::io::stdin().lock(), std::io::stdout().lock()).map_err(|error| {
         let message = strings::host_refused(&error.to_string());

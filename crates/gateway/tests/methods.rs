@@ -333,7 +333,12 @@ fn fix_from(report: &Json) -> String {
               the spec would have to reassemble it."
 )]
 fn the_specs_fourteen_call_walkthrough_runs_end_to_end() {
-    let mut surface = hosted();
+    // The committed library, as `gamectl host` hands it over since T18a.
+    let mut surface = hosted_as(
+        SEGMENT_MS,
+        FogPolicy::fogged(),
+        Some(workspace_root().join(pharmakos_gateway::host::LIBRARY_FOLDER)),
+    );
     let token = seat_token(&mut surface, 0);
     let (beacon, bx, by, bz) = own_beacon(&surface);
     let (cx, cy, cz) = commander_at(&surface);
@@ -395,12 +400,28 @@ fn the_specs_fourteen_call_walkthrough_runs_end_to_end() {
         &format!(r#"{{"beacon_id":"{beacon}"}}"#),
     );
     let one = result(&response, "get_beacon");
+    let summary = one.get("summary").expect("a summary");
     assert_eq!(
-        one.get("summary")
-            .and_then(|summary| summary.get("beacon_id")),
+        summary.get("beacon_id"),
         Some(&Json::String(beacon.clone()))
     );
-    row(3, "get_beacon", "the seat's own core");
+    // T18a (decisions-log item 111, decision C7): an own beacon carries its
+    // owner, whether it is the core, its priority and its power state.
+    let flag = |key: &str| match summary.get(key) {
+        Some(Json::Bool(value)) => value.to_string(),
+        other => panic!("`{key}` is a bool on an own beacon, and it is {other:?}"),
+    };
+    row(
+        3,
+        "get_beacon",
+        &format!(
+            "the seat's own core: owner={}, core={}, priority={}, powered={}",
+            text_of(summary, "owner"),
+            flag("core"),
+            text_of(summary, "priority"),
+            flag("powered")
+        ),
+    );
 
     // 4. list_templates{tag:"attack"}
     let response = call(
@@ -414,9 +435,21 @@ fn the_specs_fourteen_call_walkthrough_runs_end_to_end() {
     assert_eq!(
         templates.get("templates"),
         Some(&Json::Array(Vec::new())),
-        "no template folder is configured, so the library is empty rather than absent"
+        "the skeleton's library has nothing attack-shaped: combat is S2's (item 81)"
     );
-    row(4, "list_templates", "0 templates (no folder configured)");
+    let everything = result(
+        &call(&mut surface, &token, &mut left, "list_templates", "{}"),
+        "list_templates with no tag",
+    );
+    let shipped = match everything.get("templates") {
+        Some(Json::Array(rows)) => rows.len(),
+        other => panic!("templates is an array, and it is {other:?}"),
+    };
+    row(
+        4,
+        "list_templates",
+        &format!("0 templates tagged attack, of {shipped} in the library"),
+    );
 
     // 5. get_schema{part:"step"}
     let response = call(
@@ -656,7 +689,9 @@ fn header() -> String {
         "# Seed 0x00000000ca5caded, two seats, a 1 000 ms segment.\n",
         "# Fifteen rows for fourteen calls: call 13 is made twice, because\n",
         "# `wait_for` polls and never blocks, and the host ends the Lull between\n",
-        "# the two. Everything else is one row to one call, in the spec's order.\n",
+        "# the two. Row 4 also counts the whole library, with a second, untagged\n",
+        "# list_templates. Everything else is one row to one call, in the spec's\n",
+        "# order. The library is the committed library/ folder.\n",
         "# call\tmethod\twhat came back\n",
     )
     .to_owned()
@@ -856,9 +891,10 @@ fn the_latest_verified_submission_replaces_the_previous_one_any_number_of_times(
     let mut surface = hosted();
     let token = seat_token(&mut surface, 0);
     let mut hashes: Vec<String> = Vec::new();
-    for ms in [1_000, 2_000, 3_000] {
+    for ms in [8_000, 9_000, 10_000] {
+        // Three playbooks that differ in one number: the flee rule's wait.
         let playbook = pharmakos_gateway::host::SAFE_PLAYBOOK
-            .replace("\"ms\": 1000", &format!("\"ms\": {ms}"));
+            .replace("\"ms\": 8000", &format!("\"ms\": {ms}"));
         let response = surface.call(
             Some(&token),
             &request(

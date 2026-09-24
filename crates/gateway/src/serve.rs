@@ -63,6 +63,39 @@
 //!   the Lull has been ended is told `PHASE_CLOSED`, which is the honest
 //!   answer to "I was too late".
 //!
+//! # The seats this process plays itself, and the seats it advises
+//!
+//! Two seams, both handed a closure that **is** [`Surface::call`] bound to a
+//! token this process minted for itself and never lets out of it (no
+//! announce line, no file, no argv):
+//!
+//! * a [`BuiltInSeat`] plays a seat nobody at this machine plays: it plans,
+//!   submits and says it is ready, like any client (spec section 14's
+//!   operator, which is **T18**'s);
+//! * an [`Advisor`] advises a seat the operator does **not** play -- the
+//!   human's -- at the start of every Lull: that seat's own safe playbook and
+//!   one suggestion per template for the editor's wizard (decisions-log item
+//!   111, decisions C2 and C5). Its token holds `observe`, `docs` and `plan`
+//!   and never `plan.submit`, and on top of the scopes this module keeps a
+//!   **method allow-list** ([`ADVISOR_METHODS`]): `save_notes`, `save_draft`,
+//!   `list_drafts`, `submit_plan` and `set_ready` -- every write, and the
+//!   drafts -- are answered `FORBIDDEN_SCOPE` and audited, whatever the
+//!   token's scopes would allow. What it advises is filed host-side by
+//!   [`Surface::file_advice`], which no method handler reaches.
+//!
+//! Both are built by the [`Operators`] factory **after** the config line is
+//! read, because only then is it known which seats exist and which one is
+//! the human's (item 111, H11): one [`BuiltInSeat`] per seat the factory
+//! plays, one [`Advisor`] per other seat, each a fresh instance. The skeleton
+//! ships [`NoOperators`], which plays and advises nobody, so every seat that
+//! seals nothing is filed the gateway's fallback safe playbook.
+//!
+//! Both kinds of token go through the same door, the same audit and the same
+//! fog as a socket, **with their own rate limit**
+//! ([`crate::limit::IN_PROCESS_LIMITS`], decision C6): the host plans them
+//! synchronously on one Lull tick, which a socket's
+//! [`crate::limit::CALLS_PER_TICK`] would cut short.
+//!
 //! # Bounds
 //!
 //! One request in flight per connection ([`crate::session`] waits for each
@@ -83,6 +116,9 @@ use std::sync::mpsc::{Receiver, Sender, SyncSender, channel, sync_channel};
 use pharmakos_proto::json::Json;
 use pharmakos_sim::tables::SeatId;
 
+use pharmakos_proto::gp::api::v1::Method;
+
+use crate::advice::Advice;
 use crate::error::Error;
 use crate::fog::FogPolicy;
 use crate::host::{Host, Settings, SphereVision};
@@ -90,8 +126,8 @@ use crate::net::Listener;
 use crate::rpc::{self, Request};
 use crate::scopes::{Scope, ScopeSet};
 use crate::session::{self, Door};
-use crate::surface::Surface;
-use crate::token::{Subject, Token};
+use crate::surface::{InProcess, Surface};
+use crate::token::{Handle, Subject, Token};
 
 /// How many connections the host serves at once.
 ///
@@ -131,18 +167,115 @@ const OVER_CAPACITY: &str =
 /// The seam **T18** fills. A built-in seat is an ordinary client of this
 /// gateway and this trait is what makes that literally true: `plan` is handed
 /// a closure that *is* `Surface::call` bound to that seat's own minted token,
-/// so the operator is rate-limited, audited and fog-filtered exactly like a
-/// socket, and it never sees a token, the surface or a `pharmakos-sim` type.
+/// so the operator goes through **the same door as a socket**: the same
+/// authentication, scopes and phase checks, **the same audit** and **the same
+/// fog**. It never sees a token, the surface or a `pharmakos-sim` type.
+///
+/// **Its rate is its own**, and that is the one difference, stated rather than
+/// hidden (decisions-log item 111, decision C6): its token is counted against
+/// [`crate::limit::IN_PROCESS_LIMITS`] rather than a socket's
+/// [`crate::limit::CALLS_PER_TICK`], because the host plans it synchronously
+/// on one Lull tick, where a socket's limit would refuse its ninth call. It is
+/// a rate, never a read: nothing it may see differs from what a socket holding
+/// the same scopes may see.
 ///
 /// A seat that files nothing gets the safe playbook at `begin_push`, which the
-/// surface already does -- so an empty list, which is what the skeleton ships,
-/// is a match two built-in seats play safely rather than a match that will not
-/// start. An implementation that wants the Lull to end on "all ready" must end
-/// by calling `set_ready`.
+/// surface already does. An implementation that wants the Lull to end on "all
+/// ready" must end by calling `set_ready`; one whose own plan fails its
+/// repairs submits its own safe playbook through `submit_plan`.
 pub trait BuiltInSeat: Send {
     /// Plan this seat's round.
     fn plan(&mut self, seat: u8, call: &mut dyn FnMut(&Request) -> Json);
 }
+
+/// The built-in operator advising a seat it does not play.
+///
+/// Decisions-log item 111, decisions C2 and C5, and the owner's question D3
+/// taken on the recommendation. Called at the start of **every** Lull for each
+/// seat with no [`BuiltInSeat`] -- the human's -- with a closure that is
+/// `Surface::call` bound to that seat's in-process advisor token: `observe`,
+/// `docs` and `plan`, never `plan.submit`, and behind [`ADVISOR_METHODS`] on
+/// top of that. What it returns is filed by [`Surface::file_advice`]: the
+/// seat's own safe playbook, verified FULL and compiled there, and one
+/// suggestion per template for `instantiate_template{suggested: true}`.
+///
+/// Its `get_view` is answered from a scratch copy of the view feed, so it
+/// reads what the seat may see and leaves the human's own feed state exactly
+/// as it was (H15; [`crate::surface::InProcess::scratch_view`]). `get_briefing`
+/// still carries the seat's notebook: the operator ignores it (spec section
+/// 14), which is the operator's test to keep, and the read is the one the
+/// design admits.
+pub trait Advisor: Send {
+    /// Advise this seat for the round the Lull has just opened.
+    fn advise(&mut self, seat: u8, call: &mut dyn FnMut(&Request) -> Json) -> Advice;
+}
+
+/// What the host asks for each seat once the config line is read: the
+/// factory the built-in operator plugs into (decisions-log item 111, H11).
+///
+/// Called once per seat and never again, in ascending seat id: [`Operators::built_in`]
+/// for every seat that is not the human's, then [`Operators::advisor`] for
+/// every seat that got no built-in operator, the human's included. Each
+/// answer must be a **fresh instance with no state shared** with any other
+/// seat's, because each is a client of its own seat and nobody else's.
+pub trait Operators: Send {
+    /// The operator that plays `seat`, or `None` to leave it to the safe
+    /// playbook the gateway files. Never asked for the human's seat.
+    fn built_in(&mut self, seat: u8) -> Option<Box<dyn BuiltInSeat>>;
+
+    /// The operator that advises `seat`, or `None` for no advice: the seat is
+    /// then shown and filed the gateway's fallback safe playbook, and its
+    /// wizard is pre-filled with the templates' own values.
+    fn advisor(&mut self, seat: u8) -> Option<Box<dyn Advisor>>;
+}
+
+/// The skeleton's factory until **T18**: it plays nobody and advises nobody.
+///
+/// A match hosted with it is a match every seat that seals nothing plays on
+/// the gateway's fallback safe playbook, which is what `gamectl host` did
+/// before the seams existed.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct NoOperators;
+
+impl Operators for NoOperators {
+    fn built_in(&mut self, _seat: u8) -> Option<Box<dyn BuiltInSeat>> {
+        None
+    }
+
+    fn advisor(&mut self, _seat: u8) -> Option<Box<dyn Advisor>> {
+        None
+    }
+}
+
+/// The methods an [`Advisor`] may call, and nothing else.
+///
+/// **A host-side allow-list**, held here rather than in a handler, because it
+/// is about who is calling rather than about the method (decisions-log item
+/// 111, decision C5). The five the design names -- `save_notes`,
+/// `save_draft`, `list_drafts`, `submit_plan` and `set_ready` -- are off it:
+/// an advisor writes nothing into the seat's store and never reads the seat's
+/// drafts. So are the four `admin` methods and the four the schema gives no
+/// pair. Anything off it is answered `FORBIDDEN_SCOPE` and audited
+/// (`an_advisor_is_refused_every_method_off_its_allow_list`).
+pub const ADVISOR_METHODS: [Method; 17] = [
+    Method::GetStatus,
+    Method::WaitFor,
+    Method::GetBriefing,
+    Method::GetRecap,
+    Method::ListBeacons,
+    Method::GetBeacon,
+    Method::GetMapSummary,
+    Method::GetEconomyForecast,
+    Method::EstimateRoute,
+    Method::GetSchema,
+    Method::ListTemplates,
+    Method::InstantiateTemplate,
+    Method::VerifyPlan,
+    Method::RenderPlan,
+    Method::PatchPlan,
+    Method::GetSafePlan,
+    Method::GetView,
+];
 
 /// What the binary hands the host loop.
 pub struct Setup {
@@ -151,8 +284,9 @@ pub struct Setup {
     pub rules_json: String,
     /// The template library folder, when the binary was given one.
     pub library: Option<PathBuf>,
-    /// The seats this process plays itself. Empty in the skeleton.
-    pub built_in: Vec<Box<dyn BuiltInSeat>>,
+    /// The factory the seats this process plays or advises come from, asked
+    /// once the config line has been read ([`NoOperators`] in the skeleton).
+    pub operators: Box<dyn Operators>,
 }
 
 impl std::fmt::Debug for Setup {
@@ -161,8 +295,7 @@ impl std::fmt::Debug for Setup {
             .debug_struct("Setup")
             .field("rules_json", &self.rules_json.len())
             .field("library", &self.library)
-            .field("built_in", &self.built_in.len())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -438,14 +571,18 @@ impl Door for RemoteDoor {
 pub fn run<C: Read, A: Write>(setup: Setup, control: C, mut announce: A) -> Result<(), Error> {
     let mut lines = BufReader::new(control);
     let config = read_config(&mut lines)?;
-    let mut built_in = setup.built_in;
+    let mut operators = setup.operators;
     let (mut surface, seats) = open_surface(&setup.rules_json, setup.library, &config)?;
 
     let listener = Listener::bind(0)?;
     let port = listener.port();
     let policy = listener.policy();
 
-    let minted = mint_tokens(&mut surface, &config, &seats, built_in.len())?;
+    let minted = mint_tokens(&mut surface, &config)?;
+    // After the config line, which is the only time the factory can know
+    // which seats exist and which is the human's (item 111, H11).
+    let mut in_process =
+        InProcessSeats::open(&mut surface, &seats, config.human_seat, operators.as_mut())?;
     let announcement = Announce {
         port,
         match_id: config.match_id.clone(),
@@ -464,11 +601,10 @@ pub fn run<C: Read, A: Write>(setup: Setup, control: C, mut announce: A) -> Resu
     // a test of something rather than of nothing.
     let cache =
         crate::cache::MatchCache::open(&crate::cache::locate()?, &config.match_id, config.seed)?;
-    let tokens = minted.built_in;
 
     let (jobs, work) = sync_channel::<Job>(QUEUE_DEPTH);
     let surface_thread = std::thread::spawn(move || {
-        serve_surface(&mut surface, &cache, &mut built_in, &tokens, &work);
+        serve_surface(&mut surface, &cache, &mut in_process, &work);
     });
     let dispatcher = spawn_dispatcher(listener.accept(), policy, jobs.clone());
 
@@ -540,25 +676,34 @@ fn open_surface(
     Ok((surface, seats))
 }
 
-/// Every token this host mints, and the only time any of them is handed out.
+/// The two tokens this host hands out, and the only time either is.
 struct Minted {
     admin: Token,
     seat: Option<Token>,
-    built_in: Vec<(u8, Token)>,
 }
 
-/// Mint the lobby's token, the human seat's, and one per built-in seat.
+/// The scopes a seat's own token holds: a socket's, and a built-in seat's.
+fn seat_scopes() -> ScopeSet {
+    ScopeSet::of(&[Scope::Observe, Scope::Plan, Scope::PlanSubmit, Scope::Docs])
+}
+
+/// The scopes an advisor's token holds: a seat's, less `plan.submit`
+/// (decisions-log item 111, decision C5). [`ADVISOR_METHODS`] narrows it
+/// further.
+fn advisor_scopes() -> ScopeSet {
+    ScopeSet::of(&[Scope::Observe, Scope::Plan, Scope::Docs])
+}
+
+/// Mint the lobby's token and the human seat's.
+///
+/// The tokens of the seats this process plays or advises are minted by
+/// [`InProcessSeats::open`] and never leave it.
 ///
 /// **No spectator token is minted.** Spec section 5 gives the spectator camera
 /// to built-in-only matches and unlocks an eliminated human by *policy* rather
 /// than by token, and this demo has a human seat. PLACEHOLDER: **OWNER**, at
 /// **S5**, with the built-in-only match flow.
-fn mint_tokens(
-    surface: &mut Surface,
-    config: &Config,
-    seats: &[SeatId],
-    built_in: usize,
-) -> Result<Minted, Error> {
+fn mint_tokens(surface: &mut Surface, config: &Config) -> Result<Minted, Error> {
     let minted_at = surface.time().tick;
     // `observe` beside `admin`, because the lobby watches the match it
     // controls -- the phase and the timer ride the `_status` footer of every
@@ -571,48 +716,229 @@ fn mint_tokens(
         ScopeSet::of(&[Scope::Admin, Scope::Observe]),
         minted_at,
     )?;
-    let seat_scopes = ScopeSet::of(&[Scope::Observe, Scope::Plan, Scope::PlanSubmit, Scope::Docs]);
     let seat = match config.human_seat {
         Some(raw) => {
             let (token, _) = surface.tokens().mint(
                 Subject::Seat(SeatId::new(raw)),
                 &config.match_id,
-                seat_scopes,
+                seat_scopes(),
                 minted_at,
             )?;
             Some(token)
         }
         None => None,
     };
+    Ok(Minted { admin, seat })
+}
 
-    // A token per built-in seat, minted here and never leaving this process:
-    // the operator comes through `Surface::call` like a socket client.
-    let spare: Vec<SeatId> = seats
-        .iter()
-        .copied()
-        .filter(|held| Some(held.raw()) != config.human_seat)
-        .collect();
-    if built_in > spare.len() {
-        return Err(Error::invalid(format!(
-            "this match has {} seats for a built-in operator and {built_in} were given",
-            spare.len()
-        )));
+/// One seat this process plays.
+struct Played {
+    seat: u8,
+    token: Token,
+    operator: Box<dyn BuiltInSeat>,
+}
+
+/// One seat this process advises.
+struct Advised {
+    seat: u8,
+    token: Token,
+    handle: Handle,
+    advisor: Box<dyn Advisor>,
+}
+
+/// The seats this process plays or advises, with the tokens it minted for
+/// them.
+///
+/// Built once, after the config line ([`InProcessSeats::open`]), and run once
+/// per Lull ([`InProcessSeats::plan`]). Public so that a test can drive the
+/// two seams against a surface it holds, without a socket, exactly as the host
+/// loop does; its tokens are private fields and there is no accessor, so
+/// nothing outside this module can render one.
+pub struct InProcessSeats {
+    played: Vec<Played>,
+    advised: Vec<Advised>,
+    /// The last round planned, so each Lull is planned once.
+    planned: u32,
+}
+
+impl std::fmt::Debug for InProcessSeats {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("InProcessSeats")
+            .field("played", &self.played_seats())
+            .field("advised", &self.advised_seats())
+            .field("planned", &self.planned)
+            .finish()
     }
-    let mut played: Vec<(u8, Token)> = Vec::with_capacity(built_in);
-    for held in spare.into_iter().take(built_in) {
-        let (token, _) = surface.tokens().mint(
-            Subject::Seat(held),
-            &config.match_id,
-            seat_scopes,
-            minted_at,
-        )?;
-        played.push((held.raw(), token));
+}
+
+impl InProcessSeats {
+    /// Ask the factory for each seat, and mint and register a token for each
+    /// answer.
+    ///
+    /// `seats` in any order; they are asked in ascending seat id. The human's
+    /// seat is never offered a built-in operator. Every token minted here is
+    /// registered with [`Surface::register_in_process`] at
+    /// [`crate::limit::IN_PROCESS_LIMITS`]; an advisor's also reads a scratch
+    /// view feed.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::Internal`] when the operating system will not give
+    /// entropy for a token.
+    pub fn open(
+        surface: &mut Surface,
+        seats: &[SeatId],
+        human_seat: Option<u8>,
+        operators: &mut dyn Operators,
+    ) -> Result<InProcessSeats, Error> {
+        let mut ordered: Vec<u8> = seats.iter().map(|seat| seat.raw()).collect();
+        ordered.sort_unstable();
+        ordered.dedup();
+        let minted_at = surface.time().tick;
+        let match_id = surface.match_id().to_owned();
+        let mut played: Vec<Played> = Vec::new();
+        let mut advised: Vec<Advised> = Vec::new();
+        for raw in ordered {
+            let subject = Subject::Seat(SeatId::new(raw));
+            if Some(raw) != human_seat {
+                if let Some(operator) = operators.built_in(raw) {
+                    let (token, handle) =
+                        surface
+                            .tokens()
+                            .mint(subject, &match_id, seat_scopes(), minted_at)?;
+                    surface.register_in_process(
+                        handle,
+                        InProcess {
+                            limits: crate::limit::IN_PROCESS_LIMITS,
+                            scratch_view: false,
+                        },
+                    );
+                    played.push(Played {
+                        seat: raw,
+                        token,
+                        operator,
+                    });
+                    continue;
+                }
+            }
+            if let Some(advisor) = operators.advisor(raw) {
+                let (token, handle) =
+                    surface
+                        .tokens()
+                        .mint(subject, &match_id, advisor_scopes(), minted_at)?;
+                surface.register_in_process(
+                    handle,
+                    InProcess {
+                        limits: crate::limit::IN_PROCESS_LIMITS,
+                        scratch_view: true,
+                    },
+                );
+                advised.push(Advised {
+                    seat: raw,
+                    token,
+                    handle,
+                    advisor,
+                });
+            }
+        }
+        Ok(InProcessSeats {
+            played,
+            advised,
+            planned: 0,
+        })
     }
-    Ok(Minted {
-        admin,
-        seat,
-        built_in: played,
-    })
+
+    /// The seats this process plays, ascending.
+    #[must_use]
+    pub fn played_seats(&self) -> Vec<u8> {
+        self.played.iter().map(|played| played.seat).collect()
+    }
+
+    /// The seats this process advises, ascending.
+    #[must_use]
+    pub fn advised_seats(&self) -> Vec<u8> {
+        self.advised.iter().map(|advised| advised.seat).collect()
+    }
+
+    /// Plan every played seat's round and advise every advised seat, once per
+    /// Lull.
+    ///
+    /// Does nothing outside a Lull or in a Lull already planned. The played
+    /// seats go first, in ascending seat id, then the advised ones: neither can
+    /// see the other's work (an advisor writes nothing but the advice the host
+    /// files, and a built-in seat's store is its own), so the order is a
+    /// convention rather than a dependency
+    /// (`a_built_in_seats_sealed_plan_is_the_same_with_and_without_an_advisor_running`).
+    pub fn plan(&mut self, surface: &mut Surface) {
+        let time = surface.time();
+        if time.phase != pharmakos_proto::gp::api::v1::status::Phase::Lull
+            || time.round == self.planned
+        {
+            return;
+        }
+        self.planned = time.round;
+        for played in &mut self.played {
+            let token = &played.token;
+            let mut call = |request: &Request| -> Json {
+                let vision = vision_of(surface);
+                surface.call(Some(token), request, &vision)
+            };
+            played.operator.plan(played.seat, &mut call);
+        }
+        for advised in &mut self.advised {
+            let (seat, token, handle) = (advised.seat, &advised.token, advised.handle);
+            let mut call =
+                |request: &Request| -> Json { advisor_call(surface, seat, token, handle, request) };
+            let advice = advised.advisor.advise(seat, &mut call);
+            if let Err(error) = surface.file_advice(SeatId::new(seat), advice) {
+                // Only a host that asked outside a Lull, or for a seat the
+                // match has not got, gets here: said in the log rather than
+                // dropped.
+                let tick = surface.time().tick;
+                surface.audit().refused(
+                    tick,
+                    Some(Subject::Seat(SeatId::new(seat))),
+                    Some(handle),
+                    "file advice",
+                    &error,
+                );
+            }
+        }
+    }
+}
+
+/// One call an advisor makes: through the allow-list, then the ordinary door.
+fn advisor_call(
+    surface: &mut Surface,
+    seat: u8,
+    token: &Token,
+    handle: Handle,
+    request: &Request,
+) -> Json {
+    let method = crate::scopes::method_from_wire(&request.method);
+    let allowed = method.is_some_and(|method| ADVISOR_METHODS.contains(&method));
+    if !allowed {
+        let error = Error::forbidden(format!(
+            "the built-in operator advising seat {seat} may not call `{}`: an advisor reads and \
+             never writes, and a seat's notebook, drafts, submission and readiness are its own",
+            method.map_or_else(
+                || String::from("<unknown>"),
+                crate::scopes::method_wire_name
+            )
+        ));
+        let tick = surface.time().tick;
+        surface.audit().refused(
+            tick,
+            Some(Subject::Seat(SeatId::new(seat))),
+            Some(handle),
+            crate::surface::call_action(&request.method),
+            &error,
+        );
+        return rpc::failure(&request.id, &error);
+    }
+    let vision = vision_of(surface);
+    surface.call(Some(token), request, &vision)
 }
 
 /// Accept connections, bounded by [`MAX_CONNECTIONS`], one reader thread each.
@@ -664,12 +990,11 @@ fn spawn_dispatcher(
 fn serve_surface(
     surface: &mut Surface,
     cache: &crate::cache::MatchCache,
-    built_in: &mut [Box<dyn BuiltInSeat>],
-    tokens: &[(u8, Token)],
+    in_process: &mut InProcessSeats,
     work: &Receiver<Job>,
 ) {
-    let mut planned: u32 = 0;
-    plan_built_in(surface, built_in, tokens, &mut planned);
+    in_process.plan(surface);
+    let _ = cache.append_audit(&surface.audit().take());
     while let Ok(job) = work.recv() {
         match job {
             Job::Open { token, reply } => {
@@ -721,7 +1046,7 @@ fn serve_surface(
                 surface.audit().refused(tick, None, None, "upgrade", &error);
             }
         }
-        plan_built_in(surface, built_in, tokens, &mut planned);
+        in_process.plan(surface);
         let _ = cache.append_audit(&surface.audit().take());
     }
     let _ = cache.append_audit(&surface.audit().take());
@@ -737,34 +1062,4 @@ fn vision_of(surface: &Surface) -> SphereVision {
         |_| SphereVision::default(),
         |host| SphereVision::of(host.world()),
     )
-}
-
-/// Hand each built-in seat its round, once per Lull.
-///
-/// The closure it is given **is** `Surface::call` bound to that seat's own
-/// token, so a built-in seat goes through the same seven steps a socket does.
-fn plan_built_in(
-    surface: &mut Surface,
-    built_in: &mut [Box<dyn BuiltInSeat>],
-    tokens: &[(u8, Token)],
-    planned: &mut u32,
-) {
-    if built_in.is_empty() {
-        return;
-    }
-    let time = surface.time();
-    if time.phase != pharmakos_proto::gp::api::v1::status::Phase::Lull || time.round == *planned {
-        return;
-    }
-    *planned = time.round;
-    for (index, seat) in built_in.iter_mut().enumerate() {
-        let Some((raw, token)) = tokens.get(index) else {
-            continue;
-        };
-        let mut call = |request: &Request| -> Json {
-            let vision = vision_of(surface);
-            surface.call(Some(token), request, &vision)
-        };
-        seat.plan(*raw, &mut call);
-    }
 }

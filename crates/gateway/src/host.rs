@@ -63,46 +63,74 @@ use crate::error::Error;
 use crate::fog::Vision;
 use crate::routes::RouteAdapter;
 
-/// The safe playbook the gateway hands back until the built-in operator
-/// exists.
+/// The gateway's **fallback** safe playbook: the library's Safe Playbook
+/// template (`library/safe_playbook.jsonc`) with nothing raised.
 ///
-/// Spec section 14 makes this the operator's: "it files the safe playbook when
-/// a seat submits nothing verified before the Lull ends", and item 81 ships it
-/// as one of the skeleton's three templates precisely so the editor can render
-/// "the cost of a timeout". The operator is **T18**, and `get_safe_plan` is a
-/// method the skeleton's clients call *now*, so the gateway ships the one
-/// playbook that needs no situation to be safe: hold where you are, and fall
-/// back to the safest beacon you own.
+/// Spec section 14 makes the safe playbook the operator's: "it files the safe
+/// playbook when a seat submits nothing verified before the Lull ends", and
+/// each seat's is its own, because whether power is short depends on the seat.
+/// Decisions-log item 111 (decision C5) gives the operator that job through
+/// [`crate::serve::Advisor`]: at every Lull's start it advises each seat it
+/// does not play, and [`crate::surface::Surface::file_advice`] verifies and
+/// files that seat's own. **This constant is what is filed when there is no
+/// such advice** — a host with no advisor installed (`gamectl scenario run`,
+/// the tests, a hosted match until T18 lands the operator) — and when an
+/// advice does not qualify, which the audit log then says.
+///
+/// It is the spec's safe playbook in the one situation that needs no reading
+/// of the seat's own economy (decision C16): move to the safest beacon, raise
+/// nothing, then shadow the safest beacon, with the flee rule. It leaves every
+/// beacon's configuration as it is. "Written once, tested twice" (item 81):
+/// `the_gateways_fallback_is_the_safe_template_with_nothing_raised` holds it
+/// canonical-equal, comments aside, to the template instantiated with no
+/// parameters, so the file the editor renders and the constant a timeout
+/// files cannot drift apart.
 ///
 /// It is JSONC, comments and all, because that is what every other playbook a
 /// client receives is and because the "why" note is the teaching half
 /// (spec section 13).
 ///
-/// PLACEHOLDER: the real safe playbook is the built-in operator's, generated
-/// against the seat's own snapshot. **T18** replaces this constant with a call
-/// to it; the method, its scope, its shape and its tests do not move when that
-/// happens. `always_qualifies` keeps this one honest in the meantime.
+/// PLACEHOLDER: the spec's rescue rule ("with the flee and rescue rules") is
+/// absent, because nothing can be rescued before combat: flee only. **OWNER**,
+/// at **S2/S5**.
 pub const SAFE_PLAYBOOK: &str = concat!(
     "// The safe playbook: what is filed for you if the Lull ends with nothing\n",
-    "// sealed. It spends nothing and risks nothing.\n",
+    "// sealed and no built-in operator advised you. It spends nothing, places\n",
+    "// nothing and changes no beacon.\n",
     "{\n",
-    "  \"schema_version\": {\"major\": 1},\n",
+    "  \"schema_version\": {\"major\": 1, \"minor\": 0},\n",
     "  \"meta\": {\n",
     "    \"title\": \"Safe playbook\",\n",
     "    \"author_kind\": \"BUILTIN\",\n",
-    "    \"note\": \"Hold position for the segment, then fall back to the safest beacon you own.\"\n",
+    "    \"note\": \"Move to the safest beacon, raise the priority of any beacon about to brown out, then stay with the safest beacon.\"\n",
     "  },\n",
+    "  \"kind\": \"PLAYBOOK\",\n",
     "  \"declarative\": {\n",
     "    \"route\": [\n",
-    "      // One step, and it is the whole plan: stand still.\n",
-    "      {\"label\": \"hold\", \"hold\": {\"ms\": 1000}}\n",
+    "      // Nothing is raised: the whole route is the walk to safety.\n",
+    "      {\"label\": \"to_safety\", \"move\": {\"to\": {\"safest\": {}}, \"pace\": \"AVOID_KNOWN_THREATS\"}}\n",
+    "    ],\n",
+    "    \"handlers\": [\n",
+    "      // Hurt and under fire, walk back to safety and wait.\n",
+    "      {\"id\": \"flee\", \"when\": {\"all\": {\"items\": [{\"cmdr_hp_pct\": {\"cmp\": \"LE\", \"pct\": 40}}, {\"cmdr_took_damage_within\": {\"ms\": 3000}}]}},\n",
+    "       \"body\": [{\"label\": \"flee_to_safety\", \"move\": {\"to\": {\"safest\": {}}}}, {\"label\": \"flee_wait\", \"hold\": {\"ms\": 8000}}],\n",
+    "       \"resume\": \"CONTINUE\", \"cooldown_ms\": 30000, \"max_fires\": 3}\n",
     "    ]\n",
     "  },\n",
     "  \"on_death\": {\"on_respawn\": \"CONTINUE\"},\n",
-    "  \"fallback\": {\"hold\": {\"at\": {\"beacon_anchor\": {\"safest\": {}}}}},\n",
-    "  \"kind\": \"PLAYBOOK\"\n",
+    "  // Then stay with the safest beacon, wherever that turns out to be.\n",
+    "  \"fallback\": {\"shadow\": {\"beacon\": {\"safest\": {}}}}\n",
     "}\n",
 );
+
+/// Where the gateway's own tests and `gamectl host` find the template
+/// library, relative to the workspace root: the flat `library/` folder
+/// (decisions-log item 111, decision C13).
+///
+/// PLACEHOLDER: where the library lives beside a **shipped** binary is
+/// packaging's question, **T21** (`gamectl`'s `LIBRARY_PATH` names this same
+/// folder for a checkout).
+pub const LIBRARY_FOLDER: &str = "library";
 
 /// What the lobby chose, in plain values.
 ///
@@ -277,14 +305,17 @@ impl Host {
         self.library.as_deref()
     }
 
-    /// The safe playbook, as JSONC.
+    /// The fallback safe playbook, as JSONC: what a seat with no advice of its
+    /// own is shown and filed ([`SAFE_PLAYBOOK`] unless a host replaced it).
     #[must_use]
     pub fn safe_playbook(&self) -> &str {
         &self.safe_playbook
     }
 
-    /// Replace the safe playbook, which is what **T18** does once the built-in
-    /// operator can generate one.
+    /// Replace the fallback safe playbook, for a host or a test that wants a
+    /// different one. A seat's **own** safe playbook is not set here: it comes
+    /// from the built-in operator's advice ([`crate::serve::Advisor`],
+    /// decisions-log item 111), per seat and per round.
     pub fn set_safe_playbook(&mut self, playbook_jsonc: &str) {
         playbook_jsonc.clone_into(&mut self.safe_playbook);
     }
