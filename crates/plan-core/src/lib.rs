@@ -92,7 +92,7 @@ pub use canonical::{Canonical, canonicalise, canonicalise_text};
 pub use context::PlanContext;
 pub use error::Error;
 pub use jsonc::Document;
-pub use library::instantiate_template;
+pub use library::{instantiate, instantiate_template};
 pub use patch::{Patch, patch_text};
 pub use projection::{Projection, project};
 pub use render::render_plan;

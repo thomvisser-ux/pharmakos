@@ -87,6 +87,19 @@ precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 Pharmakos contributors"
 SPDX-License-Identifier = "MIT OR Apache-2.0"
 
+# --- The template library: permissive, like the example playbooks ----------
+# library/ is the folder the Seat Gateway reads to list and instantiate
+# templates (spec section 13, "Local-first library"): Hold & Build, Expand &
+# Mine and the Safe Playbook at the skeleton (decisions-log item 81). They are
+# playbook files, data a player copies and changes, and nothing in them
+# executes, so they take the example playbooks' licence (decisions-log item
+# 111, decision C13). The files carry the header themselves as well.
+[[annotations]]
+path = ["library/**"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Pharmakos contributors"
+SPDX-License-Identifier = "MIT OR Apache-2.0"
+
 # --- The schema crate: permissive, unlike the rest of crates/ --------------
 # crates/proto holds the generated gp.v1 / gp.api.v1 types, which are the same
 # public surface as proto/**: a third party writing a tool against the API must
@@ -248,6 +261,7 @@ path = [
     "assets/LICENSE",
     "docs/LICENSE",
     "examples/LICENSE",
+    "library/LICENSE",
     "proto/LICENSE",
     "rules/LICENSE",
     "tests/LICENSE",

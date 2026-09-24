@@ -1,0 +1,54 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: MIT OR Apache-2.0
+//
+// hold_and_build.jsonc: the Hold & Build template (decisions-log item 81).
+//
+// It teaches the beacon: walk to one, change it on site ("touch to change"),
+// and let its Build mandate do the work while the commander stays close. The
+// change is one Generator added to the beacon's Build list, which is how a
+// seat's kW supply rises at the skeleton.
+//
+// A Generator stands on a heat vent. This file cannot know where your vents
+// are, so the anchor below is a place-holder at the map's corner. It
+// qualifies, and a target outside the beacon's own sphere is dropped when the
+// row commits, so it builds nothing and spends nothing. The wizard asks for
+// the vent, and the built-in operator's suggestion names the one inside your
+// sphere.
+{
+  "schema_version": {"major": 1, "minor": 0},
+  "meta": {
+    "parameters": [
+      // Why: the one choice that decides whether the Generator is ever built.
+      // It has to be a heat vent inside the beacon's own sphere.
+      {"pointer": "/declarative/route/1/interface/rows/0/add_build_target/target/anchor/voxel", "label": "Where the Generator goes: a heat vent inside the beacon's sphere"},
+      // Why: holding keeps the commander inside its own sphere while the build
+      // drones work. A duration is game milliseconds.
+      {"pointer": "/declarative/route/2/hold/ms", "label": "How long to hold at the beacon, in game milliseconds"}
+    ],
+    "title": "Hold & Build",
+    "author_kind": "BUILTIN",
+    "note": "Stay home and grow the grid: walk to the safest beacon, add a Generator to its Build list, and hold there."
+  },
+  "kind": "TEMPLATE",
+  "declarative": {
+    "route": [
+      {"label": "to_beacon", "move": {"to": {"safest": {}}, "pace": "DIRECT"}, "timeout_ms": 60000, "on_fail": {"action": "SKIP"}},
+      // Why: the safest own beacon is the core at the start of a match, and the
+      // core is on a Build mandate, so this is a visit that can add a target.
+      {"label": "add_generator", "interface": {"beacon": {"safest": {}}, "rows": [
+        {"add_build_target": {"target": {"blueprint_id": "generator", "anchor": {"voxel": {"x": 0, "y": 0, "z": 0}}, "rotation_quarter_turns": 0, "order": 1}}}
+      ]}, "timeout_ms": 30000, "on_fail": {"action": "SKIP"}},
+      {"label": "hold", "hold": {"ms": 30000}}
+    ],
+    "handlers": [
+      // Why: bravery is an ordinary rule. Hurt and under fire, the commander
+      // walks back to safety and waits before carrying on.
+      {"id": "flee", "when": {"all": {"items": [{"cmdr_hp_pct": {"cmp": "LE", "pct": 40}}, {"cmdr_took_damage_within": {"ms": 3000}}]}},
+       "body": [{"label": "flee_to_safety", "move": {"to": {"safest": {}}}}, {"label": "flee_wait", "hold": {"ms": 8000}}],
+       "resume": "CONTINUE", "cooldown_ms": 30000, "max_fires": 3}
+    ]
+  },
+  "on_death": {"on_respawn": "CONTINUE"},
+  // Why: after the hold, stay with the safest beacon and its drones.
+  "fallback": {"shadow": {"beacon": {"safest": {}}}}
+}
