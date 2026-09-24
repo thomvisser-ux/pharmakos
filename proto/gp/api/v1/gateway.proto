@@ -598,15 +598,44 @@ message ListBeaconsResponse {
 }
 
 // One beacon as the seat knows it.
+//
+// Fields 3 to 6 are T18a's (decisions-log item 111, decision C7): what an
+// ordinary client needs to tell that power is short and which beacons would
+// brown out first (spec section 14's safe playbook), read from the world as it
+// stands — the frozen snapshot's in a Lull or a recap, the live world's in a
+// Push.
+//
+// A seat's OWN beacon carries all four. ANOTHER seat's beacon carries `owner`
+// and nothing more: its core flag, priority and power state are that seat's
+// business (spec section 3 names only a seat's own), and are left unset rather
+// than zeroed — which is why `priority` is never QUARTERMASTER_PRIORITY_UNSPECIFIED
+// on an own beacon, and a reader can tell the two apart by it.
 message BeaconSummary {
   string beacon_id = 1;
   gp.v1.Voxel at = 2;
 
-  // PLACEHOLDER STUB - mandate, HP, power state, units by role, tags, and the
-  // sighting age for a beacon that is not the seat's own. Filled by T13; the
-  // fields that exist here are the two a beacon has before any other system
-  // does.
-  reserved 3 to 15;
+  // The seat that owns it, spelt as ViewEntity.owner spells a seat: `seat.0`.
+  string owner = 3;
+
+  // OWN beacons only: true for the seat's core, the beacon the map pre-places
+  // for it. PLACEHOLDER: read today as "the seat's lowest-numbered beacon",
+  // which is true of every map the generator makes because it places the core
+  // first, and the same rule the verifier's scope uses; it becomes a column
+  // the day a beacon carries a kind (OWNER, S1).
+  bool core = 4;
+
+  // OWN beacons only: the Quartermaster priority, which orders brownouts
+  // (spec section 7). On the JSON-RPC wire it is lower case, as every enum
+  // this surface answers with is (decisions-log item 80): "normal".
+  gp.v1.InterfaceRow.QuartermasterPriority priority = 5;
+
+  // OWN beacons only: false while the beacon is browned out (dormant).
+  bool powered = 6;
+
+  // PLACEHOLDER STUB - mandate, HP, units by role, tags, and the sighting age
+  // for a beacon that is not the seat's own. What a seat may see of an ENEMY
+  // beacon beyond its owner is S2's, with combat.
+  reserved 7 to 15;
 }
 
 message GetBeaconRequest {
@@ -674,10 +703,37 @@ message WhatIf {
   reserved 1 to 15;
 }
 
+// Fields 1 to 4 are PRESENT-STATE values and are named so (decisions-log item
+// 111, decision C7, a departure from item 105 (2) taken in the open): the
+// seat's OWN economy as the world stands, the frozen snapshot's in a Lull or a
+// recap and the live world's in a Push. They are what the sim already reads
+// out, not a projection. S1's projection, income and what-if answers land in
+// NEW fields and never redefine these four. Another seat's economy is on no
+// wire at all (spec section 10: enemy treasury is deliberately absent).
+//
+// Whole $ and whole kW, int32 like gp.v1's Treasury and KwHeadroom predicates,
+// which is what a playbook compares them against.
 message GetEconomyForecastResponse {
-  // PLACEHOLDER STUB - treasury, projected income, kW supply, draw and
-  // headroom, plus one answer per what-if. Filled by T13 with T14's economy.
-  reserved 1 to 15;
+  // The seat's treasury, whole $.
+  int32 treasury_now = 1;
+
+  // The seat's power supply, whole kW.
+  int32 supply_kw_now = 2;
+
+  // The seat's power draw, whole kW.
+  int32 draw_kw_now = 3;
+
+  // Supply minus draw, whole kW. Negative means the grid is short and the
+  // brownout order is running — the KwHeadroom predicate's own number.
+  int32 headroom_kw_now = 4;
+
+  // PLACEHOLDER STUB - projected income, the projection, and one answer per
+  // what-if. S1, with the economy's review; filled additively.
+  //
+  // PLACEHOLDER: this method answers the LIVE world during a Push, although
+  // its name says "forecast": spec section 3 allows a seat its own score live
+  // and does not name $ or kW. OWNER, at S1.
+  reserved 5 to 15;
 }
 
 // The travel estimate of item 61, exposed. Abstract search only; it never
@@ -755,21 +811,70 @@ message TemplateSummary {
 
 message InstantiateTemplateRequest {
   string template_id = 1;
+
+  // Explicit values. An explicit value beats a suggestion.
   repeated Parameter parameters = 2;
+
+  // Pre-fill every declared parameter the caller did not name with the
+  // built-in operator's suggestion for THIS seat, where there is one (spec
+  // section 13: "a parameter wizard pre-filled with the built-in operator's
+  // suggestion and a 'why' note"). The suggestion is computed at the start of
+  // the Lull, for a seat the built-in operator does not play, and a seat is
+  // only ever told its own (decisions-log item 111, decision C2).
+  bool suggested = 3;
 }
 
 // PLACEHOLDER STUB - a typed parameter catalogue is S6's, with the editor and
 // the template library. Name and text value until then: the template declares
-// what it accepts and the verifier rejects what does not fit, so the wire
-// shape does not have to carry the type.
+// what it accepts (gp.v1.Meta.parameters) and the verifier rejects what does
+// not fit, so the wire shape does not have to carry the type.
 message Parameter {
+  // The RFC 6901 JSON Pointer a gp.v1.TemplateParameter declares.
   string name = 1;
+
+  // The JSON to put there, as text: `3000`, `{"voxel":{"x":1,"y":2,"z":3}}`.
   string value = 2;
 }
 
 message InstantiateTemplateResponse {
-  // A whole playbook file, JSONC, comments included.
+  // A whole playbook file, JSONC, comments included. kind is PLAYBOOK and
+  // meta.parameters is gone: what comes back is a playbook, not a template.
   string playbook_jsonc = 1;
+
+  // Every parameter the template declares, in declaration order, with the
+  // value that was applied: the explicit one, else the suggestion when
+  // `suggested` was asked for and there is one, else the template's own. The
+  // wizard builds its pages from this list.
+  repeated FilledParameter parameters = 2;
+
+  // Why the operator suggested what it did: one sentence, English. Empty when
+  // `suggested` was not asked for or there is no suggestion for this seat and
+  // template. PLACEHOLDER: the wording is the operator's, from the one string
+  // table (OWNER, S6).
+  string why = 3;
+}
+
+// One declared parameter, filled.
+message FilledParameter {
+  // The gp.v1.TemplateParameter's pointer.
+  string pointer = 1;
+
+  // The gp.v1.TemplateParameter's label.
+  string label = 2;
+
+  // The JSON that was applied, as compact text. A duration is game
+  // milliseconds: the wire carries no unit display, and the editor may not
+  // convert one itself (AGENTS.md section 3 rule 4). PLACEHOLDER: unit display
+  // is OWNER's, at S6, with the typed catalogue.
+  string value = 3;
+
+  // True when `value` is the operator's suggestion rather than an explicit
+  // value or the template's own.
+  bool suggested = 4;
+
+  // RESERVED — the typed catalogue's echo of gp.v1.TemplateParameter 3 to 15
+  // (S6).
+  reserved 5 to 15;
 }
 
 message VerifyPlanRequest {
@@ -888,6 +993,21 @@ message RenderPlanRequest {
 message RenderPlanResponse {
   // Deterministic template prose. Reads the coming segment's length from the
   // frozen snapshot, never from a constant.
+  //
+  // LINE LAYOUT, which is part of the contract: one rule, step or block per
+  // line, in file order. Every line ends in "\n" and the indent says what a
+  // line is:
+  //   * column 0: the envelope (title, author, kind, note), then one heading
+  //     per block — `Route`, `Rules`, `If the commander dies`, `Fallback`,
+  //     `Budget` — each block after one empty line, in that order;
+  //   * two spaces: one line per route step and one per rule, numbered in
+  //     file order, and one line per statement of the two tail blocks;
+  //   * four spaces and deeper: what belongs to the line above it — a step's
+  //     guards, a rule's body steps, its resume and its firing limits.
+  // So a rule, a step or a block always begins a line of its own. The
+  // editor's rule list reads lines and never parses sentences (decisions-log
+  // item 111, decision C3: chips are S3's), and plan-core's render_plan prose
+  // goldens (tests/golden/plan-core) pin the layout.
   string prose = 1;
 }
 
@@ -936,6 +1056,12 @@ message DraftSummary {
 
 // What the operator would file on a timeout, so a seat can see the cost of one
 // (spec section 14). Always qualifies.
+//
+// THE SEAT'S OWN (decisions-log item 111, decision C5): the built-in operator's
+// safe playbook for the calling seat, computed at the start of the Lull and
+// verified FULL when it was filed. A host with no operator advising that seat,
+// or an advice that did not qualify, answers the gateway's fallback, which is
+// the library's Safe Playbook template with nothing raised.
 message GetSafePlanRequest {}
 
 message GetSafePlanResponse {
