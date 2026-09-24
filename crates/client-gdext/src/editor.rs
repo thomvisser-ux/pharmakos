@@ -1,0 +1,2130 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+//! The playbook editor's half of the seat connection: which planning call goes out next,
+//! and what each answer means (skeleton plan T19, pull request 1).
+//!
+//! The editor is **one more client of the Seat Gateway** (spec section 12), and a thin one.
+//! Every verdict it shows is the verifier's, every travel time is the estimator's, every
+//! edit is a JSON Patch the gateway applied, and every Fix is the verifier's own patch
+//! (AGENTS.md section 3 rule 4: the editor "runs no validation or time maths of its own —
+//! it asks the gateway"). What is left for this module is marshalling and ordering:
+//!
+//! * turning a click on the map into a JSON Patch — an **append** to the route, whose value
+//!   is the step the click names ([`step_value`]); the patch is applied by `patch_plan`;
+//! * choosing the next call, one at a time, on the seat connection the vista already holds
+//!   (`docs/design/skeleton-plan-t16a-notes.md` section B, "T19" (5)), in an order that
+//!   keeps what the player sees about the text they are looking at;
+//! * reading each answer into rows, a route, a ghost, the notes, the drafts.
+//!
+//! **When** a call may go out is not decided here: the watch rig ([`crate::rig`]) holds the
+//! seat connection's rate budget and the phase, and the pacer's idle timer
+//! ([`crate::pacer::IdleTimer`]) says when FULL is owed. This module holds no clock.
+//!
+//! # The order of the calls
+//!
+//! 1. an **edit** the player asked for — a Load, a map action, a Fix, an Undo, a placement
+//!    preview — in the order they were asked, one at a time, each against the text the one
+//!    before it produced;
+//! 2. **QUICK** for the newest text, once no edit is waiting ("QUICK runs on every edit",
+//!    spec section 13; an edit a newer edit replaced before its check went out is not
+//!    checked separately, so the rows always describe the text on screen);
+//! 3. the **route estimate** for the newest text;
+//! 4. everything else the player asked for, in order: submit, the notes, the drafts, a
+//!    beacon's description;
+//! 5. **FULL**, once the editor has been left alone for 600 ms.
+//!
+//! # What the editor reads out of the playbook itself
+//!
+//! One thing: where the route goes, so it can be drawn and priced. The step targets are
+//! read out of the player's text by a deliberately lax walk ([`route_waypoints`]) over the
+//! JSON the comments were stripped from. It is lax because it decides nothing: the file's
+//! verdict is the verifier's, a step this walk cannot read is simply not drawn, and the
+//! times on the route are the gateway's answer to the waypoints it was sent.
+
+use std::collections::VecDeque;
+
+use pharmakos_proto::gp::api::v1::diagnostic::Severity;
+use pharmakos_proto::gp::api::v1::patch_suggestion::Applicability;
+use pharmakos_proto::gp::api::v1::{
+    GetBeaconResponse, GetBriefingResponse, ListDraftsResponse, PatchPlanResponse,
+    SaveNotesResponse, SubmitPlanResponse, VerifyPlanResponse, VerifyReport,
+};
+use pharmakos_proto::json::{self, Json};
+
+use crate::enums;
+use crate::error::BridgeError;
+use crate::view::{Entity, EntityKind, split_footer};
+
+/// The verifier codes on which Load refuses a file rather than opening it.
+///
+/// Spec section 13: "Load rejects any out-of-vocabulary construct with a verifier code and a
+/// JSON Pointer to the offending node; it never silently strips what it cannot draw." Load
+/// is a QUICK `verify_plan` of the file as it is on disk, and these are the decode stage's
+/// codes for a file that carries something the v1 vocabulary does not have, or that does not
+/// decode at all: `E0001` not a playbook, `E0002` a field the schema does not declare,
+/// `E0003` a construct held back to a later version (flags, branch, repeat), `E0004` a
+/// schema version this build does not speak, `E0006` a SCRIPT author. Every other
+/// diagnostic opens the file and shows as a row, because the editor can draw it.
+///
+/// PLACEHOLDER: the list is the client's reading of the diagnostic catalogue's decode
+/// family. A column in the catalogue saying which codes refuse a load would make it the
+/// verifier's, and a new decode code would then need no change here. OWNER, S6, with the
+/// editor's Load and Save as template.
+pub const LOAD_REFUSALS: &[&str] = &["E0001", "E0002", "E0003", "E0004", "E0006"];
+
+/// The draft id the editor's "Save draft" keeps its copy under, so repeated saves replace
+/// one draft rather than filling the seat's store.
+///
+/// PLACEHOLDER: one editor draft per seat is the skeleton's; named drafts and a draft
+/// browser are S6's (skeleton plan T19, PR 2 and S6).
+pub const EDITOR_DRAFT_ID: &str = "editor";
+
+/// The draft id the gateway pre-loads last round's playbook under
+/// (`pharmakos_gateway::surface::CARRIED_DRAFT_ID`, spec section 13 "Draft continuity").
+pub const CARRIED_DRAFT_ID: &str = "carried";
+
+/// The route's JSON Pointer in a playbook.
+const ROUTE_POINTER: &str = "/declarative/route";
+
+/// A beacon selector: what Alt-click turns a fixed target into (spec section 13, "Alt-click
+/// turns a fixed target into nearest, weakest, safest or most threatened").
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Selector {
+    /// The nearest own beacon when the step starts.
+    Nearest,
+    /// The weakest own beacon when the step starts.
+    Weakest,
+    /// The safest own beacon when the step starts.
+    Safest,
+    /// The most threatened own beacon when the step starts.
+    MostThreatened,
+}
+
+impl Selector {
+    /// The selector a name stands for: `nearest`, `weakest`, `safest`, `most_threatened`.
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "nearest" => Some(Self::Nearest),
+            "weakest" => Some(Self::Weakest),
+            "safest" => Some(Self::Safest),
+            "most_threatened" => Some(Self::MostThreatened),
+            _ => None,
+        }
+    }
+
+    /// The `gp.v1.BeaconRef` this selector is, over the seat's own beacons.
+    ///
+    /// Own beacons because the click was on one of the seat's own: an enemy beacon is a
+    /// target for an Attack beacon, which is S2's.
+    fn beacon_ref(self) -> Json {
+        let own = || object(vec![("filter", object(vec![("side", text("OWN"))]))]);
+        match self {
+            Self::Nearest => object(vec![("nearest", own())]),
+            Self::Weakest => object(vec![("weakest", own())]),
+            Self::Safest => object(vec![("safest", object(Vec::new()))]),
+            Self::MostThreatened => object(vec![("most_threatened", own())]),
+        }
+    }
+}
+
+/// What a click on the map points at.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum Target {
+    /// One of the seat's beacons, by its `b_NN` id.
+    Beacon(String),
+    /// A beacon chosen when the step starts.
+    Selector(Selector),
+    /// A voxel of ground, in the sim's axes (x east, y north, z up).
+    Voxel([i32; 3]),
+}
+
+/// A Quartermaster priority, as a Visit & change row sets it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Priority {
+    /// `LOW`.
+    Low,
+    /// `NORMAL`.
+    Normal,
+    /// `HIGH`.
+    High,
+}
+
+impl Priority {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Low => "LOW",
+            Self::Normal => "NORMAL",
+            Self::High => "HIGH",
+        }
+    }
+}
+
+/// What the player chose from the map's menu (spec section 13, "Map route").
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Action {
+    /// Go here: a move step.
+    Go,
+    /// Visit & change: an interface step with one row, the beacon's priority.
+    ///
+    /// PLACEHOLDER: a priority row is the one change the skeleton's menu offers; the
+    /// mandate and build-target rows arrive with S3's pickers. OWNER, S3.
+    Visit(Priority),
+    /// Recycle: an interface step with the recycle row.
+    Recycle,
+    /// Place beacon: a place-beacon step.
+    Place,
+}
+
+impl Action {
+    /// The action a name stands for: `go`, `visit_low`, `visit_normal`, `visit_high`,
+    /// `recycle`, `place`.
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "go" => Some(Self::Go),
+            "visit_low" => Some(Self::Visit(Priority::Low)),
+            "visit_normal" => Some(Self::Visit(Priority::Normal)),
+            "visit_high" => Some(Self::Visit(Priority::High)),
+            "recycle" => Some(Self::Recycle),
+            "place" => Some(Self::Place),
+            _ => None,
+        }
+    }
+
+    /// The stem of the label the new step gets.
+    const fn stem(self) -> &'static str {
+        match self {
+            Self::Go => "go",
+            Self::Visit(_) => "visit",
+            Self::Recycle => "recycle",
+            Self::Place => "place",
+        }
+    }
+}
+
+/// A validation row's severity: the icon and the word beside it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum RowSeverity {
+    /// The playbook cannot be sealed as it is.
+    Error,
+    /// Worth a look.
+    Warning,
+    /// For information.
+    Info,
+}
+
+impl RowSeverity {
+    /// The name GDScript looks the icon and the word up by.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Error => "error",
+            Self::Warning => "warning",
+            Self::Info => "info",
+        }
+    }
+}
+
+/// A Fix button: the verifier's own machine-applicable patch and what the button says.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Fix {
+    /// What the button says, from the verifier.
+    pub title: String,
+    /// The RFC 6902 patch, as the verifier wrote it.
+    pub patch: String,
+}
+
+/// One validation row: an icon, a plain sentence, the code and the pointer, and the fixes.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Row {
+    /// The severity.
+    pub severity: RowSeverity,
+    /// The diagnostic code, `E0002`.
+    pub code: String,
+    /// The JSON Pointer into the playbook, as the verifier wrote it.
+    pub pointer: String,
+    /// The plain-language sentence: the verifier's beginner text, or its precise message
+    /// when it has none. The row's accessible name is exactly this (spec section 13,
+    /// "accessible names generated from the rendered sentences").
+    pub sentence: String,
+    /// The precise message.
+    pub message: String,
+    /// The machine-applicable fixes only: those are the editor's Fix buttons (spec section
+    /// 13; `gp.api.v1.PatchSuggestion.Applicability`).
+    pub fixes: Vec<Fix>,
+}
+
+/// The rows of one report, in the verifier's order.
+#[must_use]
+pub fn rows_of(report: &VerifyReport) -> Vec<Row> {
+    report
+        .diagnostics
+        .iter()
+        .map(|diagnostic| {
+            let severity = match diagnostic.severity() {
+                Severity::Warning => RowSeverity::Warning,
+                Severity::Info => RowSeverity::Info,
+                Severity::Error | Severity::Unspecified => RowSeverity::Error,
+            };
+            let sentence = if diagnostic.beginner.is_empty() {
+                diagnostic.message.clone()
+            } else {
+                diagnostic.beginner.clone()
+            };
+            let fixes = diagnostic
+                .suggestions
+                .iter()
+                .filter(|suggestion| suggestion.applicability() == Applicability::MachineApplicable)
+                .map(|suggestion| Fix {
+                    title: suggestion.title.clone(),
+                    patch: suggestion.json_patch.clone(),
+                })
+                .collect();
+            Row {
+                severity,
+                code: diagnostic.code.clone(),
+                pointer: diagnostic.path.clone(),
+                sentence,
+                message: diagnostic.message.clone(),
+                fixes,
+            }
+        })
+        .collect()
+}
+
+/// Which answer the rows on screen came from.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Verdict {
+    /// Nothing has been checked.
+    None,
+    /// Load refused the file; the rows say why, and the editor's text is unchanged.
+    Refused,
+    /// QUICK, for the text on screen.
+    Quick,
+    /// FULL, for the text on screen.
+    Full,
+    /// `submit_plan`'s report, which is FULL.
+    Submitted,
+}
+
+impl Verdict {
+    /// The name GDScript reads.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Refused => "refused",
+            Self::Quick => "quick",
+            Self::Full => "full",
+            Self::Submitted => "submitted",
+        }
+    }
+}
+
+/// The route as the gateway priced it: where each leg ends and what it costs.
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct Route {
+    /// The commander's voxel, then where each leg ends; sim axes.
+    pub points: Vec<[i32; 3]>,
+    /// Each leg's travel, in game milliseconds, exactly as the gateway answered.
+    pub legs: Vec<i64>,
+    /// The whole route's travel, in game milliseconds, as the gateway answered.
+    pub whole: i64,
+    /// Whether the connectivity oracle found a route at all.
+    pub reachable: bool,
+    /// Whether this route describes the text on screen.
+    pub current: bool,
+}
+
+/// The placement ghost's verdict (spec section 13, "a live legality ghost", per click at
+/// the skeleton: plan T19 amendment, `skeleton-plan-w6-notes.md` A4).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum GhostState {
+    /// The patched draft is being checked.
+    Waiting,
+    /// QUICK found nothing wrong with the placed step.
+    Legal,
+    /// QUICK found an error in the placed step.
+    Illegal,
+}
+
+impl GhostState {
+    /// The name GDScript reads.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Waiting => "waiting",
+            Self::Legal => "legal",
+            Self::Illegal => "illegal",
+        }
+    }
+}
+
+/// Where a beacon would go, and what QUICK said about the draft with it placed.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Ghost {
+    /// The voxel, sim axes.
+    pub at: [i32; 3],
+    /// The verdict.
+    pub state: GhostState,
+    /// The verifier's sentence for the first error in the placed step, when there is one.
+    pub sentence: String,
+}
+
+/// One of the seat's drafts, as `list_drafts` summarises it.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct DraftRow {
+    /// The draft's id.
+    pub id: String,
+    /// Its label.
+    pub label: String,
+    /// The round it was saved in.
+    pub round: u32,
+}
+
+/// What the last `submit_plan` said.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Submitted {
+    /// Whether the submission is now the seat's sealed order.
+    pub accepted: bool,
+    /// Whether FULL qualified it.
+    pub qualifies: bool,
+}
+
+/// What the editor last had to tell the player that is not a row: a key GDScript looks up
+/// in the string table, and the detail that goes into it.
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct Status {
+    /// The string table's key; empty when there is nothing to say.
+    pub key: String,
+    /// What fills the sentence: a code and pointer, a gateway refusal, a count.
+    pub detail: String,
+}
+
+/// What kind of edit a patch is.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum EditKind {
+    /// A map action.
+    Map,
+    /// A Fix button.
+    Fix,
+}
+
+/// A placement that has been patched into a copy of the draft and not yet applied.
+#[derive(Clone, PartialEq, Eq, Debug)]
+struct Preview {
+    at: [i32; 3],
+    base: u64,
+    step: Option<usize>,
+    patched: String,
+    inverse: String,
+    /// QUICK's rows for the patched draft, and whether it qualified, once answered.
+    checked: Option<(Vec<Row>, bool)>,
+}
+
+/// One planning call the editor owes, before it is sent.
+#[derive(Clone, PartialEq, Eq, Debug)]
+enum Job {
+    Load {
+        candidate: String,
+    },
+    Edit {
+        patch: String,
+        kind: EditKind,
+    },
+    Undo,
+    Preview {
+        at: [i32; 3],
+        patch: String,
+        step: Option<usize>,
+    },
+    PreviewCheck,
+    Submit,
+    Briefing,
+    Drafts,
+    Notes {
+        notes: String,
+    },
+    SaveDraft {
+        label: String,
+    },
+    Beacon {
+        id: String,
+    },
+}
+
+impl Job {
+    /// Whether this job changes the text, so it goes before the checks of the text.
+    const fn is_edit(&self) -> bool {
+        matches!(
+            self,
+            Self::Load { .. }
+                | Self::Edit { .. }
+                | Self::Undo
+                | Self::Preview { .. }
+                | Self::PreviewCheck
+        )
+    }
+}
+
+/// The call in flight, with what the answer is needed for.
+#[derive(Clone, PartialEq, Eq, Debug)]
+enum Sent {
+    Load {
+        candidate: String,
+    },
+    Edit {
+        base: u64,
+    },
+    Undo {
+        base: u64,
+    },
+    Preview {
+        at: [i32; 3],
+        base: u64,
+        step: Option<usize>,
+    },
+    PreviewCheck,
+    Quick {
+        revision: u64,
+    },
+    Full {
+        revision: u64,
+    },
+    Estimate {
+        revision: u64,
+    },
+    Submit {
+        text: String,
+        revision: u64,
+    },
+    Briefing,
+    Drafts,
+    Notes,
+    SaveDraft,
+    Beacon,
+}
+
+/// One call to send: the method and its params.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Call {
+    /// The gateway's wire spelling.
+    pub method: &'static str,
+    /// The params object.
+    pub params: Json,
+    /// Whether this call is the FULL the idle timer owed, so the rig can clear it.
+    pub full: bool,
+}
+
+/// The checks the editor owes the text on screen.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+struct Owed {
+    /// QUICK for the newest text.
+    quick: bool,
+    /// The route estimate for the newest text.
+    estimate: bool,
+    /// An edit landed, so the rig restarts the idle timer that owes FULL.
+    edited: bool,
+}
+
+/// What the editor has read from the gateway at least once.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+struct Known {
+    notes: bool,
+    drafts: bool,
+}
+
+/// The editor: the draft's text, its undo stack, the queue of calls it owes, and what the
+/// gateway last said about it.
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct Editor {
+    seat: String,
+    text: Option<String>,
+    revision: u64,
+    undo: Vec<String>,
+    queue: VecDeque<Job>,
+    in_flight: Option<Sent>,
+    owed: Owed,
+    full_done: Option<u64>,
+    rows: Vec<Row>,
+    verdict: Option<Verdict>,
+    rows_revision: u64,
+    qualifies: bool,
+    route: Route,
+    commander: Option<[i32; 3]>,
+    preview: Option<Preview>,
+    ghost: Option<Ghost>,
+    notes: String,
+    notes_saved: Option<u32>,
+    drafts: Vec<DraftRow>,
+    known: Known,
+    sealed: Option<String>,
+    submitted: Option<Submitted>,
+    round: u32,
+    carried_round: u32,
+    beacon_prose: String,
+    status: Status,
+    refusals: u32,
+    changes: u64,
+}
+
+impl Editor {
+    /// An editor with no text, playing `seat` (spelt as the gateway spells a seat).
+    #[must_use]
+    pub fn new(seat: &str) -> Self {
+        Self {
+            seat: seat.to_owned(),
+            ..Self::default()
+        }
+    }
+
+    /// The seat this editor plays.
+    pub fn set_seat(&mut self, seat: &str) {
+        seat.clone_into(&mut self.seat);
+        self.touch();
+    }
+
+    // --- What the player asks for -------------------------------------------------------
+
+    /// Load a file's bytes. Returns `false` when the bytes are not UTF-8 text, which no
+    /// playbook can be; otherwise the file is checked by QUICK before the editor takes it.
+    pub fn load(&mut self, bytes: &[u8]) -> bool {
+        let Ok(candidate) = String::from_utf8(bytes.to_vec()) else {
+            self.say("load_not_text", "");
+            return false;
+        };
+        self.queue.push_back(Job::Load { candidate });
+        self.touch();
+        true
+    }
+
+    /// The text the editor holds, as bytes: what Save writes. Empty with no text.
+    #[must_use]
+    pub fn bytes(&self) -> Vec<u8> {
+        self.text
+            .as_ref()
+            .map(|text| text.as_bytes().to_vec())
+            .unwrap_or_default()
+    }
+
+    /// The text the last accepted submission sealed, as bytes; empty before one.
+    #[must_use]
+    pub fn sealed_bytes(&self) -> Vec<u8> {
+        self.sealed
+            .as_ref()
+            .map(|text| text.as_bytes().to_vec())
+            .unwrap_or_default()
+    }
+
+    /// A map action. Returns whether it was taken: an action needs text to act on, and a
+    /// target it can name (a visit or a recycle names a beacon, a placement names ground).
+    pub fn act(&mut self, action: Action, target: &Target) -> bool {
+        let Some(text) = self.text.as_ref() else {
+            self.say("no_playbook", "");
+            return false;
+        };
+        if action == Action::Place {
+            if let Target::Voxel(at) = target {
+                return self.place(*at);
+            }
+            return false;
+        }
+        let label = fresh_label(text, action.stem());
+        let Some(step) = step_value(action, target, &label) else {
+            return false;
+        };
+        self.queue.push_back(Job::Edit {
+            patch: append_patch(step),
+            kind: EditKind::Map,
+        });
+        self.touch();
+        true
+    }
+
+    /// Show the placement ghost at `at`: patch a beacon into a copy of the draft and ask
+    /// QUICK about it, without applying it. Per click, not live on hover (T19 amendment).
+    pub fn preview_place(&mut self, at: [i32; 3]) -> bool {
+        let Some(text) = self.text.as_ref() else {
+            self.say("no_playbook", "");
+            return false;
+        };
+        let label = fresh_label(text, Action::Place.stem());
+        let Some(step) = step_value(Action::Place, &Target::Voxel(at), &label) else {
+            return false;
+        };
+        let step_index = route_len(text);
+        self.queue
+            .retain(|job| !matches!(job, Job::Preview { .. } | Job::PreviewCheck));
+        self.queue.push_back(Job::Preview {
+            at,
+            patch: append_patch(step),
+            step: step_index,
+        });
+        self.preview = None;
+        self.ghost = Some(Ghost {
+            at,
+            state: GhostState::Waiting,
+            sentence: String::new(),
+        });
+        self.touch();
+        true
+    }
+
+    /// Place a beacon at `at`. When the ghost at `at` was checked against the text on
+    /// screen, its patched draft is taken as it is — no second call — and its QUICK report
+    /// becomes the rows; otherwise the placement is patched like any other map action.
+    fn place(&mut self, at: [i32; 3]) -> bool {
+        let ready = self.preview.as_ref().is_some_and(|preview| {
+            preview.at == at && preview.base == self.revision && preview.checked.is_some()
+        });
+        if ready {
+            if let Some(preview) = self.preview.take() {
+                self.undo.push(preview.inverse);
+                self.accept_text(preview.patched);
+                if let Some((rows, qualifies)) = preview.checked {
+                    self.rows = rows;
+                    self.verdict = Some(Verdict::Quick);
+                    self.rows_revision = self.revision;
+                    self.qualifies = qualifies;
+                    self.owed.quick = false;
+                }
+                return true;
+            }
+        }
+        let Some(text) = self.text.as_ref() else {
+            return false;
+        };
+        let label = fresh_label(text, Action::Place.stem());
+        let Some(step) = step_value(Action::Place, &Target::Voxel(at), &label) else {
+            return false;
+        };
+        self.queue.push_back(Job::Edit {
+            patch: append_patch(step),
+            kind: EditKind::Map,
+        });
+        self.touch();
+        true
+    }
+
+    /// Apply the `fix`th Fix of row `row`. Refused while the rows describe an older text
+    /// than the one on screen, because the verifier's patch points into the text it saw.
+    pub fn fix(&mut self, row: usize, fix: usize) -> bool {
+        if !self.rows_current() || self.busy() {
+            return false;
+        }
+        let Some(patch) = self
+            .rows
+            .get(row)
+            .and_then(|row| row.fixes.get(fix))
+            .map(|fix| fix.patch.clone())
+        else {
+            return false;
+        };
+        self.queue.push_back(Job::Edit {
+            patch,
+            kind: EditKind::Fix,
+        });
+        self.touch();
+        true
+    }
+
+    /// Undo the last edit, with the inverse patch `patch_plan` handed back for it.
+    pub fn undo(&mut self) -> bool {
+        if self.undo.is_empty() {
+            return false;
+        }
+        self.queue.push_back(Job::Undo);
+        self.touch();
+        true
+    }
+
+    /// Submit the text on screen (spec section 12: `submit_plan` always runs FULL).
+    pub fn submit(&mut self) -> bool {
+        if self.text.is_none() {
+            self.say("no_playbook", "");
+            return false;
+        }
+        self.queue.push_back(Job::Submit);
+        self.touch();
+        true
+    }
+
+    /// Save the notes box through `save_notes`.
+    pub fn save_notes(&mut self, notes: &str) {
+        self.queue.push_back(Job::Notes {
+            notes: notes.to_owned(),
+        });
+        self.touch();
+    }
+
+    /// Keep the text on screen as the seat's editor draft, through `save_draft`.
+    pub fn save_draft(&mut self, label: &str) -> bool {
+        if self.text.is_none() {
+            self.say("no_playbook", "");
+            return false;
+        }
+        self.queue.push_back(Job::SaveDraft {
+            label: label.to_owned(),
+        });
+        self.touch();
+        true
+    }
+
+    /// Ask the gateway about one beacon, for the map menu's heading
+    /// (`skeleton-plan-t16a-notes.md` section B, "T19" (4): a click maps onto `get_beacon`
+    /// through the beacon's `b_NN` id).
+    pub fn describe_beacon(&mut self, id: &str) {
+        self.beacon_prose.clear();
+        self.queue.retain(|job| !matches!(job, Job::Beacon { .. }));
+        self.queue.push_back(Job::Beacon { id: id.to_owned() });
+        self.touch();
+    }
+
+    // --- What the rig tells the editor --------------------------------------------------
+
+    /// A Lull opened, in `round`. The notes and the drafts are read again, and a text the
+    /// editor already holds is checked again against the new snapshot.
+    pub fn lull_opened(&mut self, round: u32) {
+        let new_round = round != self.round;
+        self.round = round;
+        if !self.known.notes {
+            self.queue.push_back(Job::Briefing);
+        }
+        self.queue.push_back(Job::Drafts);
+        if new_round && self.text.is_some() {
+            self.owed.quick = true;
+            self.owed.estimate = true;
+            self.full_done = None;
+            self.owed.edited = true;
+        }
+        self.touch();
+    }
+
+    /// The view's latest complete entity list: the editor finds its own commander in it,
+    /// because every route starts where the commander stands.
+    pub fn set_entities(&mut self, entities: &[Entity]) {
+        let commander = entities
+            .iter()
+            .find(|entity| {
+                entity.kind == EntityKind::Unit
+                    && entity.subtype == "commander"
+                    && entity.owner == self.seat
+            })
+            .map(|entity| entity.at);
+        if commander != self.commander {
+            self.commander = commander;
+            if self.text.is_some() {
+                self.owed.estimate = true;
+            }
+            self.touch();
+        }
+    }
+
+    /// The call to send next, if any. `full_due` is the pacer's idle timer.
+    ///
+    /// The rig calls this only in a Lull, with the seat connection idle and budget left.
+    pub fn next_call(&mut self, full_due: bool) -> Option<Call> {
+        if self.in_flight.is_some() {
+            return None;
+        }
+        // 1. The edits, in order.
+        while self.queue.front().is_some_and(Job::is_edit) {
+            let job = self.queue.pop_front()?;
+            if let Some(call) = self.render(job) {
+                return Some(call);
+            }
+        }
+        // 2. QUICK for the newest text.
+        if self.owed.quick {
+            self.owed.quick = false;
+            if let Some(text) = self.text.clone() {
+                let revision = self.revision;
+                return Some(self.send(
+                    Sent::Quick { revision },
+                    "verify_plan",
+                    verify_params(&text, "quick"),
+                ));
+            }
+        }
+        // 3. The route, priced.
+        if self.owed.estimate {
+            self.owed.estimate = false;
+            if let Some(call) = self.estimate_call() {
+                return Some(call);
+            }
+        }
+        // 4. Everything else, in order.
+        while let Some(job) = self.queue.pop_front() {
+            if let Some(call) = self.render(job) {
+                return Some(call);
+            }
+        }
+        // 5. FULL, once the editor has been left alone.
+        if full_due && self.full_done != Some(self.revision) {
+            if let Some(text) = self.text.clone() {
+                let revision = self.revision;
+                let mut call = self.send(
+                    Sent::Full { revision },
+                    "verify_plan",
+                    verify_params(&text, "full"),
+                );
+                call.full = true;
+                return Some(call);
+            }
+        }
+        None
+    }
+
+    /// Whether anything the player asked for is still waiting or in flight — the thing Ready
+    /// waits behind, so a Ready pressed after Submit reaches the gateway after the submit.
+    #[must_use]
+    pub fn has_pending_jobs(&self) -> bool {
+        !self.queue.is_empty() || self.in_flight.is_some()
+    }
+
+    /// Whether an edit is waiting or in flight.
+    #[must_use]
+    pub fn busy(&self) -> bool {
+        self.queue.iter().any(Job::is_edit)
+            || matches!(
+                self.in_flight,
+                Some(
+                    Sent::Load { .. }
+                        | Sent::Edit { .. }
+                        | Sent::Undo { .. }
+                        | Sent::Preview { .. }
+                        | Sent::PreviewCheck
+                )
+            )
+    }
+
+    /// Whether the checks of the text on screen are all answered: no edit, QUICK or route
+    /// estimate waiting.
+    #[must_use]
+    pub fn settled(&self) -> bool {
+        !self.busy() && !self.owed.quick && !self.owed.estimate && self.in_flight.is_none()
+    }
+
+    /// Whether an edit landed since the last call: the rig restarts the idle timer.
+    pub fn take_edit_mark(&mut self) -> bool {
+        std::mem::take(&mut self.owed.edited)
+    }
+
+    /// The answer to the call in flight: a result, or the gateway's refusal as
+    /// `(code, message)`.
+    ///
+    /// # Errors
+    ///
+    /// [`BridgeError::Schema`] when a result is not the message its method answers with;
+    /// the call is settled either way and nothing waits on it.
+    pub fn answered(&mut self, answer: Result<&Json, (&str, &str)>) -> Result<(), BridgeError> {
+        let Some(sent) = self.in_flight.take() else {
+            return Ok(());
+        };
+        self.touch();
+        match answer {
+            Ok(result) => self.settle(sent, result),
+            Err((code, message)) => {
+                self.refused(&sent, code, message);
+                Ok(())
+            }
+        }
+    }
+
+    /// The seat connection dropped with a call in flight: an edit or a request the player
+    /// made is asked again once it is back; a check is owed again.
+    pub fn dropped(&mut self) {
+        let Some(sent) = self.in_flight.take() else {
+            return;
+        };
+        match sent {
+            Sent::Load { candidate } => self.queue.push_front(Job::Load { candidate }),
+            Sent::Quick { .. } | Sent::Edit { .. } | Sent::Undo { .. } => {
+                // An edit whose answer was lost may or may not have been applied by a
+                // gateway that holds no editor state; the text on screen is still the one
+                // it was applied to, so it is checked again rather than guessed at.
+                self.owed.quick = true;
+            }
+            Sent::Estimate { .. } => self.owed.estimate = true,
+            Sent::Full { .. } => self.owed.edited = true,
+            Sent::Submit { .. } => self.queue.push_front(Job::Submit),
+            Sent::Briefing => self.queue.push_front(Job::Briefing),
+            Sent::Drafts | Sent::SaveDraft => self.queue.push_front(Job::Drafts),
+            Sent::Preview { .. } | Sent::PreviewCheck => {
+                self.ghost = None;
+                self.preview = None;
+            }
+            Sent::Notes | Sent::Beacon => {}
+        }
+        self.touch();
+    }
+
+    // --- What GDScript reads ------------------------------------------------------------
+
+    /// Whether the editor holds a playbook.
+    #[must_use]
+    pub const fn has_text(&self) -> bool {
+        self.text.is_some()
+    }
+
+    /// The text's revision: one more for every edit that landed.
+    #[must_use]
+    pub const fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    /// How many edits Undo can take back.
+    #[must_use]
+    pub fn undo_depth(&self) -> usize {
+        self.undo.len()
+    }
+
+    /// The rows on screen.
+    #[must_use]
+    pub fn rows(&self) -> &[Row] {
+        &self.rows
+    }
+
+    /// Which answer the rows came from.
+    #[must_use]
+    pub fn verdict(&self) -> Verdict {
+        self.verdict.unwrap_or(Verdict::None)
+    }
+
+    /// Whether the rows describe the text on screen.
+    #[must_use]
+    pub fn rows_current(&self) -> bool {
+        self.verdict
+            .is_some_and(|verdict| verdict != Verdict::Refused)
+            && self.rows_revision == self.revision
+    }
+
+    /// Whether the last report for the text on screen qualified it.
+    #[must_use]
+    pub fn qualifies(&self) -> bool {
+        self.rows_current() && self.qualifies
+    }
+
+    /// The route, as last priced.
+    #[must_use]
+    pub const fn route(&self) -> &Route {
+        &self.route
+    }
+
+    /// The placement ghost, if one is showing.
+    #[must_use]
+    pub const fn ghost(&self) -> Option<&Ghost> {
+        self.ghost.as_ref()
+    }
+
+    /// The notebook as the gateway last returned it.
+    #[must_use]
+    pub fn notes(&self) -> &str {
+        &self.notes
+    }
+
+    /// Whether the notebook has been read.
+    #[must_use]
+    pub const fn notes_known(&self) -> bool {
+        self.known.notes
+    }
+
+    /// The characters the gateway stored at the last `save_notes`, in its own count.
+    #[must_use]
+    pub const fn notes_saved(&self) -> Option<u32> {
+        self.notes_saved
+    }
+
+    /// The seat's drafts, as `list_drafts` last listed them.
+    #[must_use]
+    pub fn drafts(&self) -> &[DraftRow] {
+        &self.drafts
+    }
+
+    /// Whether the drafts have been listed.
+    #[must_use]
+    pub const fn drafts_known(&self) -> bool {
+        self.known.drafts
+    }
+
+    /// What the last submission said.
+    #[must_use]
+    pub const fn submitted(&self) -> Option<Submitted> {
+        self.submitted
+    }
+
+    /// What `get_beacon` said about the beacon last clicked.
+    #[must_use]
+    pub fn beacon_prose(&self) -> &str {
+        &self.beacon_prose
+    }
+
+    /// The status line.
+    #[must_use]
+    pub const fn status(&self) -> &Status {
+        &self.status
+    }
+
+    /// How many of the editor's calls the gateway refused.
+    #[must_use]
+    pub const fn refusals(&self) -> u32 {
+        self.refusals
+    }
+
+    /// A counter that moves whenever anything above changed, so a view redraws only then.
+    #[must_use]
+    pub const fn changes(&self) -> u64 {
+        self.changes
+    }
+
+    // --- Inside ----------------------------------------------------------------------
+
+    fn touch(&mut self) {
+        self.changes = self.changes.wrapping_add(1);
+    }
+
+    fn say(&mut self, key: &str, detail: &str) {
+        self.status = Status {
+            key: key.to_owned(),
+            detail: detail.to_owned(),
+        };
+        self.touch();
+    }
+
+    fn send(&mut self, sent: Sent, method: &'static str, params: Json) -> Call {
+        self.in_flight = Some(sent);
+        Call {
+            method,
+            params,
+            full: false,
+        }
+    }
+
+    /// One queued job as the call it becomes, against the text as it is now. `None` for a
+    /// job with nothing to act on any more (an Undo with an empty stack, a preview whose
+    /// patch never came back).
+    fn render(&mut self, job: Job) -> Option<Call> {
+        let current = self.text.clone();
+        let revision = self.revision;
+        Some(match job {
+            Job::Load { candidate } => {
+                let params = verify_params(&candidate, "quick");
+                self.send(Sent::Load { candidate }, "verify_plan", params)
+            }
+            Job::Edit { patch, kind: _ } => {
+                let playbook = current?;
+                self.send(
+                    Sent::Edit { base: revision },
+                    "patch_plan",
+                    patch_params(&playbook, &patch),
+                )
+            }
+            Job::Undo => {
+                let patch = self.undo.last()?.clone();
+                let playbook = current?;
+                self.send(
+                    Sent::Undo { base: revision },
+                    "patch_plan",
+                    patch_params(&playbook, &patch),
+                )
+            }
+            Job::Preview { at, patch, step } => {
+                let playbook = current?;
+                self.send(
+                    Sent::Preview {
+                        at,
+                        base: revision,
+                        step,
+                    },
+                    "patch_plan",
+                    patch_params(&playbook, &patch),
+                )
+            }
+            Job::PreviewCheck => {
+                let patched = self.preview.as_ref()?.patched.clone();
+                self.send(
+                    Sent::PreviewCheck,
+                    "verify_plan",
+                    verify_params(&patched, "quick"),
+                )
+            }
+            Job::Submit => {
+                let playbook = current?;
+                let params = object(vec![("playbook_jsonc", Json::String(playbook.clone()))]);
+                self.send(
+                    Sent::Submit {
+                        text: playbook,
+                        revision,
+                    },
+                    "submit_plan",
+                    params,
+                )
+            }
+            Job::Briefing => self.send(Sent::Briefing, "get_briefing", object(Vec::new())),
+            Job::Drafts => self.send(Sent::Drafts, "list_drafts", object(Vec::new())),
+            Job::Notes { notes } => self.send(
+                Sent::Notes,
+                "save_notes",
+                object(vec![("notes", Json::String(notes))]),
+            ),
+            Job::SaveDraft { label } => {
+                let playbook = current?;
+                self.send(
+                    Sent::SaveDraft,
+                    "save_draft",
+                    object(vec![
+                        ("playbook_jsonc", Json::String(playbook)),
+                        ("label", Json::String(label)),
+                        ("draft_id", text(EDITOR_DRAFT_ID)),
+                    ]),
+                )
+            }
+            Job::Beacon { id } => self.send(
+                Sent::Beacon,
+                "get_beacon",
+                object(vec![("beacon_id", Json::String(id))]),
+            ),
+        })
+    }
+
+    /// The route estimate for the text on screen, when there is a route to price and a
+    /// commander to start it from.
+    fn estimate_call(&mut self) -> Option<Call> {
+        let text = self.text.as_ref()?;
+        let commander = self.commander?;
+        let targets = route_waypoints(text)?;
+        if targets.is_empty() {
+            self.route = Route {
+                points: vec![commander],
+                current: true,
+                reachable: true,
+                ..Route::default()
+            };
+            self.touch();
+            return None;
+        }
+        let mut waypoints = Vec::with_capacity(targets.len().saturating_add(1));
+        waypoints.push(voxel_location(commander));
+        waypoints.extend(targets);
+        let revision = self.revision;
+        Some(self.send(
+            Sent::Estimate { revision },
+            "estimate_route",
+            object(vec![("waypoints", Json::Array(waypoints))]),
+        ))
+    }
+
+    fn settle(&mut self, sent: Sent, result: &Json) -> Result<(), BridgeError> {
+        match sent {
+            Sent::Load { candidate } => self.settle_load(candidate, &report_of(result)?),
+            Sent::Edit { base } => {
+                let answer = patch_of(result)?;
+                if base == self.revision {
+                    self.undo.push(answer.inverse_json_patch);
+                    self.drop_settled_ghost();
+                    self.accept_text(answer.playbook_jsonc);
+                }
+            }
+            Sent::Undo { base } => {
+                let answer = patch_of(result)?;
+                if base == self.revision {
+                    self.undo.pop();
+                    self.drop_settled_ghost();
+                    self.accept_text(answer.playbook_jsonc);
+                }
+            }
+            Sent::Preview { at, base, step } => {
+                let answer = patch_of(result)?;
+                if self.ghost.as_ref().is_some_and(|ghost| ghost.at == at) {
+                    self.preview = Some(Preview {
+                        at,
+                        base,
+                        step,
+                        patched: answer.playbook_jsonc,
+                        inverse: answer.inverse_json_patch,
+                        checked: None,
+                    });
+                    self.queue.push_front(Job::PreviewCheck);
+                }
+            }
+            Sent::PreviewCheck => {
+                let report = report_of(result)?;
+                if let Some(preview) = self.preview.as_mut() {
+                    let (state, sentence) = placement_verdict(&report, preview.step);
+                    self.ghost = Some(Ghost {
+                        at: preview.at,
+                        state,
+                        sentence,
+                    });
+                    preview.checked = Some((rows_of(&report), report.qualifies));
+                }
+            }
+            Sent::Quick { revision } => {
+                let report = report_of(result)?;
+                if revision == self.revision {
+                    self.take_rows(&report, Verdict::Quick);
+                }
+            }
+            Sent::Full { revision } => {
+                let report = report_of(result)?;
+                if revision == self.revision {
+                    self.take_rows(&report, Verdict::Full);
+                    self.full_done = Some(revision);
+                }
+            }
+            Sent::Estimate { revision } => {
+                if revision == self.revision {
+                    self.take_route(result);
+                }
+            }
+            Sent::Submit { text, revision } => {
+                let response: SubmitPlanResponse =
+                    json::decode_json(&body(result, "gp.api.v1.SubmitPlanResponse"))?;
+                self.settle_submit(text, revision, response);
+            }
+            Sent::Briefing => {
+                let response: GetBriefingResponse =
+                    json::decode_json(&body(result, "gp.api.v1.GetBriefingResponse"))?;
+                self.notes = response.notes;
+                self.known.notes = true;
+            }
+            Sent::Notes => {
+                let response: SaveNotesResponse =
+                    json::decode_json(&body(result, "gp.api.v1.SaveNotesResponse"))?;
+                self.notes_saved = Some(response.characters);
+                self.say("notes_saved", &response.characters.to_string());
+            }
+            Sent::Drafts => {
+                let response: ListDraftsResponse =
+                    json::decode_json(&body(result, "gp.api.v1.ListDraftsResponse"))?;
+                self.settle_drafts(response);
+            }
+            Sent::SaveDraft => {
+                self.queue.push_back(Job::Drafts);
+                self.say("draft_saved", "");
+            }
+            Sent::Beacon => {
+                let response: GetBeaconResponse =
+                    json::decode_json(&body(result, "gp.api.v1.GetBeaconResponse"))?;
+                self.beacon_prose = response.prose;
+            }
+        }
+        Ok(())
+    }
+
+    /// Load's QUICK answer: refuse the file with the code and the pointer, or open it.
+    fn settle_load(&mut self, candidate: String, report: &VerifyReport) {
+        let refusal = report.diagnostics.iter().find(|diagnostic| {
+            diagnostic.severity() == Severity::Error
+                && LOAD_REFUSALS.contains(&diagnostic.code.as_str())
+        });
+        if let Some(refusal) = refusal {
+            let detail = format!("{} {}", refusal.code, refusal.path);
+            self.rows = rows_of(report);
+            self.verdict = Some(Verdict::Refused);
+            self.say("load_refused", &detail);
+        } else {
+            self.undo.clear();
+            self.preview = None;
+            self.ghost = None;
+            self.accept_text(candidate);
+            self.take_rows(report, Verdict::Quick);
+            self.owed.quick = false;
+            self.say("loaded", "");
+        }
+    }
+
+    fn settle_drafts(&mut self, response: ListDraftsResponse) {
+        self.drafts = response
+            .drafts
+            .into_iter()
+            .map(|draft| DraftRow {
+                id: draft.draft_id,
+                label: draft.label,
+                round: draft.round,
+            })
+            .collect();
+        self.known.drafts = true;
+        self.carry_forward();
+    }
+
+    fn settle_submit(&mut self, text: String, revision: u64, response: SubmitPlanResponse) {
+        let report = response.report.unwrap_or_default();
+        self.submitted = Some(Submitted {
+            accepted: response.accepted,
+            qualifies: report.qualifies,
+        });
+        if revision == self.revision {
+            self.take_rows(&report, Verdict::Submitted);
+            self.full_done = Some(revision);
+        }
+        if response.accepted {
+            self.sealed = Some(text);
+            self.say("submitted", "");
+        } else {
+            self.say("submit_refused", "");
+        }
+    }
+
+    /// Draft continuity (spec section 13): "each Lull opens with last round's playbook
+    /// pre-loaded as an editable draft, re-verified against the new snapshot".
+    ///
+    /// The gateway pre-loads the sealed playbook as the `carried` draft and re-verifies it
+    /// when the Lull opens; `list_drafts` says it is there. Its **body** is not on the wire
+    /// (`gp.api.v1.DraftSummary` carries none, on purpose), so the text the editor opens is
+    /// its own copy of what it submitted and the gateway sealed — the same bytes — and the
+    /// checks run again at once against the new snapshot.
+    ///
+    /// PLACEHOLDER: a client that did not submit the carried playbook itself (a restarted
+    /// client resuming a match) has no copy of it and needs the draft's body from the
+    /// gateway. OWNER, with T17's resume and T19's pull request 2, which is when a client
+    /// can first be restarted mid-match.
+    fn carry_forward(&mut self) {
+        let carried = self.drafts.iter().any(|draft| draft.id == CARRIED_DRAFT_ID);
+        if !carried || self.carried_round == self.round {
+            return;
+        }
+        let Some(sealed) = self.sealed.clone() else {
+            return;
+        };
+        self.carried_round = self.round;
+        self.undo.clear();
+        self.preview = None;
+        self.ghost = None;
+        self.accept_text(sealed);
+        let previous = self.round.saturating_sub(1).to_string();
+        self.say("carried", &previous);
+    }
+
+    /// An edit landed: a ghost already answered describes the text before it and goes. A
+    /// ghost still waiting stays, because its preview is patched against the text as it is
+    /// when the preview goes out, which is after this edit.
+    fn drop_settled_ghost(&mut self) {
+        if self
+            .ghost
+            .as_ref()
+            .is_some_and(|ghost| ghost.state != GhostState::Waiting)
+        {
+            self.ghost = None;
+            self.preview = None;
+        }
+    }
+
+    /// A new text is on screen: every check of it is owed.
+    fn accept_text(&mut self, text: String) {
+        self.text = Some(text);
+        self.revision = self.revision.wrapping_add(1);
+        self.owed.quick = true;
+        self.owed.estimate = true;
+        self.owed.edited = true;
+        self.route.current = false;
+        self.touch();
+    }
+
+    fn take_rows(&mut self, report: &VerifyReport, verdict: Verdict) {
+        self.rows = rows_of(report);
+        self.verdict = Some(verdict);
+        self.rows_revision = self.revision;
+        self.qualifies = report.qualifies;
+        self.touch();
+    }
+
+    fn take_route(&mut self, result: &Json) {
+        let (answer, _) = split_footer(result);
+        let reachable = matches!(answer.get("reachable"), Some(Json::Bool(true)));
+        let mut route = Route {
+            reachable,
+            whole: answer.get("ms").and_then(integer).unwrap_or(0),
+            current: true,
+            ..Route::default()
+        };
+        if let Some(commander) = self.commander {
+            route.points.push(commander);
+        }
+        if let Some(Json::Array(legs)) = answer.get("legs") {
+            for leg in legs {
+                route
+                    .legs
+                    .push(leg.get("ms").and_then(integer).unwrap_or(0));
+                // `gp.api.v1.Leg.to` is a `gp.v1.Location`, `{"voxel":{..}}`; the gateway
+                // at `main` writes the bare voxel `{"x":..}` there instead. Both spellings
+                // name the same voxel, so both are read; the disagreement is the gateway's
+                // to settle and is reported in this lane's pull request.
+                let to = leg.get("to");
+                let voxel = to.and_then(|to| to.get("voxel")).or(to);
+                route.points.push(voxel.map_or([0, 0, 0], voxel_of));
+            }
+        }
+        self.route = route;
+        self.touch();
+    }
+
+    fn refused(&mut self, sent: &Sent, code: &str, message: &str) {
+        self.refusals = self.refusals.saturating_add(1);
+        let detail = format!("{code}: {message}");
+        match sent {
+            Sent::Load { .. } => self.say("load_refused_by_gateway", &detail),
+            Sent::Preview { .. } | Sent::PreviewCheck => {
+                self.ghost = None;
+                self.preview = None;
+                self.say("gateway_refused", &detail);
+            }
+            _ => self.say("gateway_refused", &detail),
+        }
+    }
+}
+
+/// The ghost's verdict from the patched draft's QUICK report: illegal when an error points
+/// into the placed step, legal otherwise. `step` is the placed step's index in the route;
+/// when the route could not be read, the report's own `qualifies` is the verdict.
+fn placement_verdict(report: &VerifyReport, step: Option<usize>) -> (GhostState, String) {
+    let inside = |path: &str| match step {
+        Some(index) => {
+            let pointer = format!("{ROUTE_POINTER}/{index}");
+            path == pointer || path.starts_with(&format!("{pointer}/"))
+        }
+        None => true,
+    };
+    let found = report
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.severity() == Severity::Error && inside(&diagnostic.path));
+    match found {
+        Some(diagnostic) => {
+            let sentence = if diagnostic.beginner.is_empty() {
+                diagnostic.message.clone()
+            } else {
+                diagnostic.beginner.clone()
+            };
+            (GhostState::Illegal, sentence)
+        }
+        None if step.is_none() && !report.qualifies => (GhostState::Illegal, String::new()),
+        None => (GhostState::Legal, String::new()),
+    }
+}
+
+/// The route step one map action adds, labelled `label`. `None` when the action cannot
+/// name that target: a visit or a recycle names a beacon, a placement names ground.
+#[must_use]
+pub fn step_value(action: Action, target: &Target, label: &str) -> Option<Json> {
+    let beacon_ref = match target {
+        Target::Beacon(id) => Some(object(vec![("beacon_id", Json::String(id.clone()))])),
+        Target::Selector(selector) => Some(selector.beacon_ref()),
+        Target::Voxel(_) => None,
+    };
+    let location = match target {
+        Target::Voxel(at) => voxel_location(*at),
+        Target::Beacon(_) | Target::Selector(_) => {
+            object(vec![("beacon_anchor", beacon_ref.clone()?)])
+        }
+    };
+    let kind = match action {
+        Action::Go => ("move", object(vec![("to", location)])),
+        Action::Visit(priority) => (
+            "interface",
+            object(vec![
+                ("beacon", beacon_ref?),
+                (
+                    "rows",
+                    Json::Array(vec![object(vec![("set_priority", text(priority.name()))])]),
+                ),
+            ]),
+        ),
+        Action::Recycle => (
+            "interface",
+            object(vec![
+                ("beacon", beacon_ref?),
+                (
+                    "rows",
+                    Json::Array(vec![object(vec![("recycle", object(Vec::new()))])]),
+                ),
+            ]),
+        ),
+        Action::Place => {
+            let Target::Voxel(_) = target else {
+                return None;
+            };
+            ("place_beacon", object(vec![("at", location)]))
+        }
+    };
+    Some(object(vec![
+        ("label", Json::String(label.to_owned())),
+        kind,
+    ]))
+}
+
+/// The RFC 6902 patch that appends `step` to the route.
+#[must_use]
+pub fn append_patch(step: Json) -> String {
+    json::write(&Json::Array(vec![object(vec![
+        ("op", text("add")),
+        ("path", text(&format!("{ROUTE_POINTER}/-"))),
+        ("value", step),
+    ])]))
+}
+
+/// The first label `stem_1`, `stem_2`, ... that the text does not already contain as a
+/// quoted string anywhere.
+///
+/// A text search rather than a read of the labels: a label is unique in the file if its
+/// quoted spelling appears nowhere in it, so this never names a label twice — it may skip a
+/// free one that a comment happens to quote, which costs nothing. The verifier still has
+/// the last word (`E0105`, a name used twice).
+#[must_use]
+pub fn fresh_label(text: &str, stem: &str) -> String {
+    let mut number: u32 = 1;
+    loop {
+        let label = format!("{stem}_{number}");
+        if !text.contains(&format!("\"{label}\"")) {
+            return label;
+        }
+        number = number.saturating_add(1);
+        if number == u32::MAX {
+            return label;
+        }
+    }
+}
+
+/// A JSONC text with its comments blanked out, so a plain JSON reader can read it.
+///
+/// Line comments (`//` to the end of the line) and block comments (`/* ... */`) outside
+/// string literals become spaces, line breaks inside them are kept, and everything else —
+/// string contents and escapes included — is copied as it is. Used only to see where the
+/// route goes ([`route_waypoints`]); the verdict on the file is the verifier's.
+#[must_use]
+pub fn strip_comments(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut characters = text.chars().peekable();
+    let mut in_string = false;
+    while let Some(character) = characters.next() {
+        if in_string {
+            out.push(character);
+            if character == '\\' {
+                if let Some(escaped) = characters.next() {
+                    out.push(escaped);
+                }
+            } else if character == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match (character, characters.peek()) {
+            ('"', _) => {
+                in_string = true;
+                out.push(character);
+            }
+            ('/', Some('/')) => {
+                out.push(' ');
+                for rest in characters.by_ref() {
+                    if rest == '\n' {
+                        out.push('\n');
+                        break;
+                    }
+                    out.push(' ');
+                }
+            }
+            ('/', Some('*')) => {
+                out.push(' ');
+                let mut last = ' ';
+                for rest in characters.by_ref() {
+                    out.push(if rest == '\n' { '\n' } else { ' ' });
+                    if last == '*' && rest == '/' {
+                        break;
+                    }
+                    last = rest;
+                }
+            }
+            _ => out.push(character),
+        }
+    }
+    out
+}
+
+/// The route's steps, read laxly out of a JSONC text.
+fn route_steps(text: &str) -> Option<Vec<Json>> {
+    let document = json::read(&strip_comments(text)).ok()?;
+    match document
+        .get("declarative")
+        .and_then(|value| value.get("route"))
+    {
+        Some(Json::Array(steps)) => Some(steps.clone()),
+        Some(_) => None,
+        None => Some(Vec::new()),
+    }
+}
+
+/// How many steps the route has, when the text can be read.
+#[must_use]
+pub fn route_len(text: &str) -> Option<usize> {
+    route_steps(text).map(|steps| steps.len())
+}
+
+/// Where each step of the route sends the commander, as `gp.v1.Location`s in route order:
+/// a move's `to`, a visit's beacon, a placement's `at`. Steps that go nowhere (a hold, a
+/// wait, a broadcast) and steps this lax walk cannot read are left out. `None` when the
+/// text is not JSON once its comments are gone.
+#[must_use]
+pub fn route_waypoints(text: &str) -> Option<Vec<Json>> {
+    let steps = route_steps(text)?;
+    Some(
+        steps
+            .iter()
+            .filter_map(|step| {
+                if let Some(to) = step.get("move").and_then(|value| value.get("to")) {
+                    return Some(to.clone());
+                }
+                if let Some(beacon) = step.get("interface").and_then(|value| value.get("beacon")) {
+                    return Some(object(vec![("beacon_anchor", beacon.clone())]));
+                }
+                step.get("place_beacon")
+                    .and_then(|value| value.get("at"))
+                    .cloned()
+            })
+            .collect(),
+    )
+}
+
+/// A `verify_plan` answer's report.
+fn report_of(result: &Json) -> Result<VerifyReport, BridgeError> {
+    let response: VerifyPlanResponse =
+        json::decode_json(&body(result, "gp.api.v1.VerifyPlanResponse"))?;
+    Ok(response.report.unwrap_or_default())
+}
+
+/// A `patch_plan` answer.
+fn patch_of(result: &Json) -> Result<PatchPlanResponse, BridgeError> {
+    Ok(json::decode_json(&body(
+        result,
+        "gp.api.v1.PatchPlanResponse",
+    ))?)
+}
+
+/// The result with its footer set aside and its enum values spelt as the schema spells
+/// them, ready for the typed decode.
+fn body(result: &Json, full_name: &str) -> Json {
+    let (answer, _) = split_footer(result);
+    enums::canonical(full_name, &answer)
+}
+
+fn verify_params(playbook: &str, depth: &str) -> Json {
+    object(vec![
+        ("depth", text(depth)),
+        ("playbook_jsonc", Json::String(playbook.to_owned())),
+    ])
+}
+
+fn patch_params(playbook: &str, patch: &str) -> Json {
+    object(vec![
+        ("playbook_jsonc", Json::String(playbook.to_owned())),
+        ("json_patch", Json::String(patch.to_owned())),
+    ])
+}
+
+/// A voxel as a `gp.v1.Location`.
+fn voxel_location(at: [i32; 3]) -> Json {
+    let [x, y, z] = at;
+    object(vec![(
+        "voxel",
+        object(vec![
+            ("x", Json::Number(x.to_string())),
+            ("y", Json::Number(y.to_string())),
+            ("z", Json::Number(z.to_string())),
+        ]),
+    )])
+}
+
+/// A `gp.v1.Voxel` object's three axes; an absent axis is zero, as proto3 JSON writes it.
+fn voxel_of(value: &Json) -> [i32; 3] {
+    let axis = |name: &str| {
+        value
+            .get(name)
+            .and_then(integer)
+            .and_then(|found| i32::try_from(found).ok())
+            .unwrap_or(0)
+    };
+    [axis("x"), axis("y"), axis("z")]
+}
+
+fn integer(value: &Json) -> Option<i64> {
+    match value {
+        Json::Number(lexeme) | Json::String(lexeme) => lexeme.parse::<i64>().ok(),
+        _ => None,
+    }
+}
+
+fn object(entries: Vec<(&str, Json)>) -> Json {
+    Json::Object(
+        entries
+            .into_iter()
+            .map(|(key, value)| (key.to_owned(), value))
+            .collect(),
+    )
+}
+
+fn text(value: &str) -> Json {
+    Json::String(value.to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const EXPAND_EAST: &str = include_str!("../../../examples/playbooks/expand_east.jsonc");
+
+    fn read(text: &str) -> Json {
+        json::read(text).expect("json")
+    }
+
+    fn quick_report(diagnostics: &str, qualifies: bool) -> Json {
+        read(&format!(
+            r#"{{"report":{{"qualifies":{qualifies},"depth":"quick","diagnostics":[{diagnostics}]}},"_status":{{"phase":"lull"}}}}"#
+        ))
+    }
+
+    fn patched(text: &str, inverse: &str) -> Json {
+        object(vec![
+            ("playbook_jsonc", Json::String(text.to_owned())),
+            ("inverse_json_patch", Json::String(inverse.to_owned())),
+        ])
+    }
+
+    /// An editor holding `text`, loaded and QUICK-checked clean.
+    fn loaded(text: &str) -> Editor {
+        let mut editor = Editor::new("seat.0");
+        assert!(editor.load(text.as_bytes()));
+        let call = editor.next_call(false).expect("the load check");
+        assert_eq!(call.method, "verify_plan");
+        editor.answered(Ok(&quick_report("", true))).expect("reads");
+        assert!(editor.has_text());
+        editor
+    }
+
+    fn method_of(call: Option<Call>) -> &'static str {
+        call.map_or("none", |call| call.method)
+    }
+
+    fn compact(value: &Json) -> String {
+        json::write(value).split_whitespace().collect()
+    }
+
+    #[test]
+    fn a_click_becomes_one_appended_step() {
+        let go = step_value(Action::Go, &Target::Beacon("b_00".to_owned()), "go_1").expect("go");
+        assert_eq!(
+            compact(&go),
+            r#"{"label":"go_1","move":{"to":{"beacon_anchor":{"beacon_id":"b_00"}}}}"#
+        );
+        let near = step_value(Action::Go, &Target::Selector(Selector::Nearest), "go_2")
+            .expect("a selector");
+        assert!(compact(&near).contains(r#""nearest":{"filter":{"side":"OWN"}}"#));
+        let visit = step_value(
+            Action::Visit(Priority::High),
+            &Target::Selector(Selector::Safest),
+            "visit_1",
+        )
+        .expect("a visit");
+        let written = compact(&visit);
+        assert!(
+            written.contains(
+                r#""interface":{"beacon":{"safest":{}},"rows":[{"set_priority":"HIGH"}]}"#
+            ),
+            "{written}"
+        );
+        let place = step_value(Action::Place, &Target::Voxel([1, 2, 3]), "place_1").expect("place");
+        assert!(compact(&place).contains(r#""place_beacon":{"at":{"voxel":{"x":1,"y":2,"z":3}}}"#));
+        assert!(step_value(Action::Visit(Priority::Low), &Target::Voxel([1, 2, 3]), "v").is_none());
+        assert!(step_value(Action::Recycle, &Target::Voxel([1, 2, 3]), "r").is_none());
+        assert!(step_value(Action::Place, &Target::Beacon("b_00".to_owned()), "p").is_none());
+        let patch = append_patch(go);
+        assert!(patch.contains("/declarative/route/-"), "{patch}");
+    }
+
+    #[test]
+    fn a_fresh_label_is_one_the_file_does_not_quote() {
+        assert_eq!(fresh_label(EXPAND_EAST, "go"), "go_1");
+        let text = r#"{"route":[{"label":"go_1"},{"label":"go_2"}]}"#;
+        assert_eq!(fresh_label(text, "go"), "go_3");
+    }
+
+    #[test]
+    fn comments_go_and_strings_stay() {
+        let text = "{ // a comment\n \"a\": \"x // y /* z */\", /* block\n two */ \"b\": 1 }";
+        let stripped = strip_comments(text);
+        let value = read(&stripped);
+        assert_eq!(
+            value.get("a"),
+            Some(&Json::String("x // y /* z */".to_owned()))
+        );
+        assert_eq!(value.get("b"), Some(&Json::Number("1".to_owned())));
+        assert_eq!(
+            stripped.matches('\n').count(),
+            text.matches('\n').count(),
+            "line breaks are kept"
+        );
+    }
+
+    #[test]
+    fn the_route_is_read_out_of_the_committed_example() {
+        let waypoints = route_waypoints(EXPAND_EAST).expect("the example reads");
+        assert_eq!(
+            waypoints.len(),
+            3,
+            "move, place, move; the handler is not the route"
+        );
+        let first = waypoints.first().map(compact).unwrap_or_default();
+        assert!(first.contains("\"voxel\""), "{first}");
+        let last = waypoints.last().map(compact).unwrap_or_default();
+        assert!(last.contains("b_01"), "{last}");
+        assert_eq!(route_len(EXPAND_EAST), Some(3));
+        assert_eq!(route_waypoints("not json"), None);
+    }
+
+    #[test]
+    fn open_and_save_give_the_same_bytes() {
+        for text in [
+            EXPAND_EAST.to_owned(),
+            EXPAND_EAST.replace('\n', "\r\n"),
+            format!("\u{feff}{EXPAND_EAST}"),
+        ] {
+            let editor = loaded(&text);
+            assert_eq!(
+                editor.bytes(),
+                text.as_bytes(),
+                "a load and a save are byte-identical"
+            );
+        }
+    }
+
+    #[test]
+    fn bytes_that_are_not_text_are_refused_before_any_call() {
+        let mut editor = Editor::new("seat.0");
+        assert!(!editor.load(&[0xff, 0xfe, 0x00]));
+        assert_eq!(editor.status().key, "load_not_text");
+        assert!(editor.next_call(false).is_none());
+    }
+
+    #[test]
+    fn load_refuses_an_out_of_vocabulary_construct_with_its_code_and_pointer() {
+        let mut editor = Editor::new("seat.0");
+        assert!(editor.load(br#"{"declarative":{"route":[{"label":"a","branch":{}}]}}"#));
+        assert_eq!(method_of(editor.next_call(false)), "verify_plan");
+        let diagnostic = r#"{"code":"E0003","severity":"error","path":"/declarative/route/0/branch","message":"held back","beginner":"This is a word the game keeps for later."}"#;
+        editor
+            .answered(Ok(&quick_report(diagnostic, false)))
+            .expect("reads");
+        assert!(
+            !editor.has_text(),
+            "a refused file is not opened, and nothing is stripped"
+        );
+        assert_eq!(editor.verdict(), Verdict::Refused);
+        assert_eq!(editor.status().key, "load_refused");
+        assert_eq!(editor.status().detail, "E0003 /declarative/route/0/branch");
+        let row = editor.rows().first().expect("the refusal is a row");
+        assert_eq!(row.sentence, "This is a word the game keeps for later.");
+        assert_eq!(row.pointer, "/declarative/route/0/branch");
+    }
+
+    #[test]
+    fn an_edit_is_patched_then_quick_then_priced_then_full_after_idle() {
+        let mut editor = loaded(EXPAND_EAST);
+        editor.set_entities(&[Entity {
+            id: "u_1".to_owned(),
+            kind: EntityKind::Unit,
+            subtype: "commander".to_owned(),
+            owner: "seat.0".to_owned(),
+            at: [358, 22, 36],
+        }]);
+        // The load itself owes a route estimate.
+        let call = editor.next_call(false).expect("the estimate");
+        assert_eq!(call.method, "estimate_route");
+        let waypoints = json::write(&call.params);
+        assert!(
+            waypoints.contains("358"),
+            "the route starts at the commander: {waypoints}"
+        );
+        editor
+            .answered(Ok(&read(
+                r#"{"reachable":true,"ms":9000,"legs":[{"to":{"x":96,"y":11,"z":62},"ms":8000},{"to":{"x":96,"y":11,"z":62},"ms":0},{"to":{"voxel":{"x":358,"y":24,"z":36}},"ms":1000}]}"#,
+            )))
+            .expect("reads");
+        assert_eq!(editor.route().legs, vec![8000, 0, 1000]);
+        assert_eq!(editor.route().points.len(), 4);
+        assert_eq!(editor.route().points.last(), Some(&[358, 24, 36]));
+
+        assert!(editor.act(Action::Go, &Target::Selector(Selector::Nearest)));
+        let call = editor.next_call(false).expect("the patch");
+        assert_eq!(call.method, "patch_plan");
+        assert!(json::write(&call.params).contains("go_1"));
+        editor
+            .answered(Ok(&patched(r#"{"declarative":{"route":[]}}"#, "[]")))
+            .expect("reads");
+        assert_eq!(editor.revision(), 2);
+        assert!(
+            !editor.rows_current(),
+            "the rows describe the text before the edit"
+        );
+        assert!(editor.take_edit_mark(), "the idle timer restarts");
+        assert_eq!(method_of(editor.next_call(false)), "verify_plan");
+        editor.answered(Ok(&quick_report("", true))).expect("reads");
+        assert_eq!(editor.verdict(), Verdict::Quick);
+        assert!(editor.rows_current());
+        // The patched text has no route, so there is nothing to price and no call.
+        assert!(
+            editor.next_call(false).is_none(),
+            "FULL waits for the idle timer"
+        );
+        let full = editor.next_call(true).expect("FULL once idle");
+        assert!(full.full);
+        assert!(json::write(&full.params).contains("full"));
+        editor
+            .answered(Ok(&read(
+                r#"{"report":{"qualifies":true,"depth":"full","diagnostics":[]}}"#,
+            )))
+            .expect("reads");
+        assert_eq!(editor.verdict(), Verdict::Full);
+        assert!(editor.next_call(true).is_none(), "FULL once per text");
+    }
+
+    #[test]
+    fn a_fix_button_is_the_verifiers_own_machine_applicable_patch() {
+        let mut editor = Editor::new("seat.0");
+        assert!(editor.load(b"{}"));
+        let _ = editor.next_call(false);
+        let diagnostic = r#"{"code":"E0108","severity":"error","path":"/declarative/handlers/0/cooldown_ms","beginner":"A rule waits a while.","suggestions":[{"title":"Set the cooldown to 1000 ms","json_patch":"[{\"op\":\"add\",\"path\":\"/declarative/handlers/0/cooldown_ms\",\"value\":1000}]","applicability":"machine_applicable"},{"title":"Look at it","json_patch":"[]","applicability":"maybe_incorrect"}]}"#;
+        editor
+            .answered(Ok(&quick_report(diagnostic, false)))
+            .expect("reads");
+        let row = editor.rows().first().expect("a row");
+        assert_eq!(
+            row.fixes.len(),
+            1,
+            "only the machine-applicable one is a Fix button"
+        );
+        assert!(editor.fix(0, 0));
+        let call = editor.next_call(false).expect("the fix");
+        assert_eq!(call.method, "patch_plan");
+        assert!(json::write(&call.params).contains("cooldown_ms"));
+        assert!(!editor.fix(0, 0), "not while the edit is in flight");
+        assert!(!editor.fix(0, 1), "no such fix");
+    }
+
+    #[test]
+    fn a_checked_placement_is_taken_without_a_second_call() {
+        let mut editor = loaded(EXPAND_EAST);
+        assert!(editor.preview_place([350, 22, 36]));
+        assert_eq!(
+            editor.ghost().map(|ghost| ghost.state),
+            Some(GhostState::Waiting)
+        );
+        let call = editor.next_call(false).expect("the preview patch");
+        assert_eq!(call.method, "patch_plan");
+        assert_eq!(editor.revision(), 1, "a preview applies nothing");
+        editor
+            .answered(Ok(&patched(
+                r#"{"placed":1}"#,
+                r#"[{"op":"remove","path":"/declarative/route/3"}]"#,
+            )))
+            .expect("reads");
+        let call = editor.next_call(false).expect("the preview's QUICK");
+        assert!(json::write(&call.params).contains("placed"));
+        let diagnostic = r#"{"code":"E0501","severity":"error","path":"/declarative/route/3/place_beacon/at","beginner":"Too far from anything of yours."}"#;
+        editor
+            .answered(Ok(&quick_report(diagnostic, false)))
+            .expect("reads");
+        let ghost = editor.ghost().expect("the ghost");
+        assert_eq!(ghost.state, GhostState::Illegal);
+        assert_eq!(ghost.sentence, "Too far from anything of yours.");
+
+        assert!(editor.act(Action::Place, &Target::Voxel([350, 22, 36])));
+        assert_eq!(editor.revision(), 2, "taken as checked");
+        assert_eq!(editor.bytes(), br#"{"placed":1}"#);
+        assert!(editor.rows_current(), "and its QUICK report is the rows");
+        assert_eq!(editor.undo_depth(), 1);
+        assert!(editor.undo());
+        let call = editor.next_call(false).expect("the undo");
+        assert!(
+            json::write(&call.params).contains("remove"),
+            "the inverse patch"
+        );
+    }
+
+    #[test]
+    fn a_ghost_over_a_clean_step_is_legal() {
+        let report = VerifyReport {
+            qualifies: true,
+            ..VerifyReport::default()
+        };
+        assert_eq!(placement_verdict(&report, Some(3)).0, GhostState::Legal);
+    }
+
+    /// Answers every call the editor makes with something unremarkable, until it is quiet.
+    fn drain(editor: &mut Editor, drafts: &str) {
+        for _ in 0..32 {
+            let Some(call) = editor.next_call(false) else {
+                return;
+            };
+            let answer = match call.method {
+                "get_briefing" => read(r#"{"notes":"remember the vent"}"#),
+                "list_drafts" => read(drafts),
+                "estimate_route" => read(r#"{"reachable":true}"#),
+                _ => quick_report("", true),
+            };
+            editor.answered(Ok(&answer)).expect("reads");
+        }
+        panic!("the editor never went quiet");
+    }
+
+    #[test]
+    fn the_carried_draft_is_last_rounds_sealed_playbook_checked_again() {
+        let mut editor = loaded(EXPAND_EAST);
+        editor.lull_opened(1);
+        drain(&mut editor, r#"{"drafts":[]}"#);
+        assert_eq!(editor.notes(), "remember the vent");
+        assert!(editor.submit());
+        assert_eq!(method_of(editor.next_call(false)), "submit_plan");
+        editor
+            .answered(Ok(&read(
+                r#"{"report":{"qualifies":true,"depth":"full"},"accepted":true}"#,
+            )))
+            .expect("reads");
+        assert_eq!(editor.sealed_bytes(), EXPAND_EAST.as_bytes());
+        // An edit after the submission, never submitted.
+        assert!(editor.act(Action::Go, &Target::Beacon("b_00".to_owned())));
+        let _ = editor.next_call(false);
+        editor
+            .answered(Ok(&patched(r#"{"unsubmitted":1}"#, "[]")))
+            .expect("reads");
+
+        editor.lull_opened(2);
+        drain(
+            &mut editor,
+            r#"{"drafts":[{"draft_id":"carried","label":"carried from round 1","round":2}]}"#,
+        );
+        assert_eq!(
+            editor.bytes(),
+            EXPAND_EAST.as_bytes(),
+            "last round's sealed playbook"
+        );
+        assert_eq!(editor.status().key, "carried");
+        assert!(
+            editor.rows_current(),
+            "and checked against the new snapshot at once"
+        );
+    }
+
+    #[test]
+    fn a_refusal_settles_the_call_and_says_so() {
+        let mut editor = loaded(EXPAND_EAST);
+        assert!(editor.act(Action::Go, &Target::Beacon("b_00".to_owned())));
+        let _ = editor.next_call(false);
+        editor
+            .answered(Err(("INVALID_ARGUMENT", "no such path")))
+            .expect("settled");
+        assert_eq!(editor.revision(), 1, "a refused patch changes nothing");
+        assert_eq!(editor.refusals(), 1);
+        assert_eq!(editor.status().key, "gateway_refused");
+        assert!(!editor.busy());
+    }
+}

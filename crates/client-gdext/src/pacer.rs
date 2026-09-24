@@ -84,6 +84,14 @@ pub const MAX_CLOCK_STEP_MS: u64 = 60_000;
 /// 10 s" the plan asks for. OWNER, at hardening, together with `READ_TIMEOUT`.
 pub const KEEPALIVE_US: u64 = 5_000_000;
 
+/// How long the editor must be left alone before FULL runs: 600 ms of wall time.
+///
+/// Spec section 13, "Validation: QUICK runs on every edit and FULL after 600 ms idle". The
+/// number is the spec's, not a tuning guess, and it is a question of *when* to ask, which is
+/// why it lives beside the other three timers rather than in the editor: the editor asks the
+/// gateway for every verdict and measures no time of its own (AGENTS.md section 3 rule 4).
+pub const FULL_AFTER_IDLE_US: u64 = 600_000;
+
 /// Microseconds in a millisecond.
 const US_PER_MS: u64 = 1_000;
 
@@ -432,6 +440,44 @@ pub fn clock_text(ms: u64) -> String {
     format!("{minutes}:{rest:02}")
 }
 
+/// The editor's idle timer: when FULL is owed (spec section 13, "FULL after 600 ms idle").
+///
+/// An edit restarts it; once [`FULL_AFTER_IDLE_US`] of wall time has gone by with no further
+/// edit, [`IdleTimer::due`] says so until the editor has asked for FULL and
+/// [`IdleTimer::clear`] is called. A timer nobody restarted is never due, so a draft that has
+/// not changed is not verified again for nothing.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct IdleTimer {
+    /// Wall microseconds since the last edit, or `None` when no FULL is owed.
+    quiet_us: Option<u64>,
+}
+
+impl IdleTimer {
+    /// An edit landed: FULL is owed once the editor has been left alone long enough.
+    pub fn edited(&mut self) {
+        self.quiet_us = Some(0);
+    }
+
+    /// `wall_us` of wall time went by.
+    pub fn elapse(&mut self, wall_us: u64) {
+        if let Some(quiet) = self.quiet_us.as_mut() {
+            *quiet = quiet.saturating_add(wall_us);
+        }
+    }
+
+    /// Whether FULL is owed now.
+    #[must_use]
+    pub fn due(&self) -> bool {
+        self.quiet_us
+            .is_some_and(|quiet| quiet >= FULL_AFTER_IDLE_US)
+    }
+
+    /// FULL was asked for (or is no longer wanted): nothing is owed until the next edit.
+    pub fn clear(&mut self) {
+        self.quiet_us = None;
+    }
+}
+
 /// Everything the watch rig times, advanced together from one reading of [`WallClock`].
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct Timing {
@@ -440,6 +486,8 @@ pub struct Timing {
     pub pacer: Pacer,
     /// The host clock outside a Push.
     pub clock: HostClock,
+    /// The editor's idle timer.
+    pub idle: IdleTimer,
     /// Wall microseconds since each connection last sent anything: admin, then seat.
     quiet_us: [u64; 2],
 }
@@ -452,6 +500,7 @@ impl Timing {
         self.last_us = Some(now_us.max(self.last_us.unwrap_or(0)));
         self.pacer.elapse(gone);
         self.clock.elapse(gone);
+        self.idle.elapse(gone);
         for quiet in &mut self.quiet_us {
             *quiet = quiet.saturating_add(gone);
         }
@@ -622,6 +671,27 @@ mod tests {
         assert!(timing.keepalive_due(0) && timing.keepalive_due(1));
         timing.sent(1);
         assert!(timing.keepalive_due(0) && !timing.keepalive_due(1));
+    }
+
+    #[test]
+    fn full_is_owed_only_after_600_ms_with_no_edit() {
+        let mut timing = Timing::default();
+        timing.advance(0);
+        assert!(!timing.idle.due(), "nothing was edited");
+        timing.idle.edited();
+        timing.advance(FULL_AFTER_IDLE_US - 1);
+        assert!(!timing.idle.due());
+        timing.idle.edited();
+        timing.advance(FULL_AFTER_IDLE_US + 10);
+        assert!(!timing.idle.due(), "an edit restarts the wait");
+        timing.advance(2 * FULL_AFTER_IDLE_US);
+        assert!(timing.idle.due());
+        timing.idle.clear();
+        timing.advance(4 * FULL_AFTER_IDLE_US);
+        assert!(
+            !timing.idle.due(),
+            "asked for once, not again until the next edit"
+        );
     }
 
     #[test]
