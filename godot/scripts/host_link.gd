@@ -106,9 +106,11 @@ static func find_root() -> String:
 
 
 ## The one config line `pharmakos_gateway::serve::Config` reads: match id, seed, seats,
-## the human seat, the segment ladder and the round limit, tab separated.
-static func config_line(match_id: String, ladder: String) -> String:
-	return "%s\t%s\t%d\t%d\t%s\t%d\n" % [match_id, MATCH_SEED, MATCH_SEATS, HUMAN_SEAT, ladder, ROUND_LIMIT]
+## the human seat, the segment ladder and the round limit, tab separated. `seats` is the
+## lobby's two unless a caller names another (the headless watch check hosts one, so that
+## its own Ready is every seat's).
+static func config_line(match_id: String, ladder: String, seats: int = MATCH_SEATS) -> String:
+	return "%s\t%s\t%d\t%d\t%s\t%d\n" % [match_id, MATCH_SEED, seats, HUMAN_SEAT, ladder, ROUND_LIMIT]
 
 
 ## The seat the human plays, spelt as the gateway spells a seat.

@@ -45,11 +45,17 @@ runs `scenes/watch_check.tscn` headless against a real `gamectl host`, and check
 | `pharmakos.gdextension` | item 73's shape: `gdext_rust_init`, `compatibility_minimum = 4.7`, `reloadable = false`, explicit Windows and Linux paths |
 | `bin/` | the staging target. Git-ignored except for its `.gitkeep`; nothing built is committed |
 | `fixtures/view_keyframe.jsonl` | a byte-identical copy of the gateway's keyframe golden, for the hostless vista shot; `crates/client-gdext/tests/vista_fixture.rs` keeps it identical. Excluded from any export preset (T21) |
+| `fixtures/editor_check.jsonc` | the committed playbook the headless watch check opens, edits and submits: plan-core's canonical form, qualifying both on the golden seed's seat 0 and against `gamectl verify`'s reference seat |
+| `fixtures/editor_check.expected.jsonc` | what the watch check must submit: `editor_check.jsonc` with the check's one map action appended, as plan-core's `patch_text` (the function behind `patch_plan`) writes it |
+| `fixtures/out_of_vocabulary.json` | the verifier's own E0003 case, byte for byte: the file Load must refuse with a code and a pointer |
+| `fixtures/needs_a_fix.jsonc` | the verifier's own E0108 case: a file with one machine-applicable Fix |
+| `fixtures/rows_report.json` | a `VerifyReport` of four committed verifier diagnostics, for the render-only rows scene |
 | `scenes/boot.tscn` | the main scene: `--scene=<res path>` after `--` sends the run there, otherwise to the lobby |
-| `scenes/lobby.tscn` | the game at the skeleton: starts `gamectl host`, watches the match (T16) |
+| `scenes/lobby.tscn` | the game at the skeleton: starts `gamectl host`, watches the match (T16), and edits the seat's orders (T19) |
 | `scenes/vista.tscn` | the vista: the bridge, the camera rig, the entity markers, the Pall |
 | `scenes/vista_shot.tscn` | the vista golden's scene: the keyframe fixture with **no host running** |
-| `scenes/watch_check.tscn` | the headless-driven run against a real `gamectl host` (CI's `client` job) |
+| `scenes/watch_check.tscn` | the headless-driven run against a real `gamectl host` (CI's `client` job): the watch rig and the editor |
+| `scenes/rows_shot.tscn` | the validation rows drawn from `fixtures/rows_report.json` with no host: render-only, looked at and not compared until T20 |
 | `scenes/client_check.tscn` | T12's headless acceptance scene |
 | `scripts/` | GDScript — **views and editor UI only** (AGENTS.md §3 rule 4) |
 | `.godot/` | Godot's own import cache. Git-ignored, and written by `--import` |
@@ -83,6 +89,36 @@ godot --headless --path godot res://scenes/watch_check.tscn -- \
     --gamectl=<target>/debug/gamectl[.exe] --root=<repository>
 ```
 
+## The editor (T19, pull request 1)
+
+`scripts/editor.gd` is the playbook editor: a panel on the right of the lobby and a route
+and a placement ghost on the map. It is one more client of the gateway on the seat
+connection the vista already holds, and a thin one. Load and Save read and write the
+player's own JSONC file byte for byte; a file is opened only after QUICK has seen it, and an
+out-of-vocabulary construct is refused with the verifier's code and pointer. Click one of
+your beacons for Visit & change, Go here or Recycle; click the ground for Go here or Place
+beacon (the ghost shows QUICK's verdict for that click); Alt-click a beacon to make the
+step's target a selector. Every edit is a JSON Patch the gateway applies, QUICK runs on
+every edit and FULL after 600 ms idle, and the rows' Fix buttons apply the verifier's own
+machine-applicable patches. The route is the gateway's `estimate_route`, drawn as a polyline
+with each leg's travel time in game milliseconds as it came back; there are no dashed legs
+at the skeleton. The notebook, draft continuity, Submit and Ready go through the gateway
+too. Every sentence the client writes itself is in `scripts/strings.gd`.
+
+What the editor sends and when is the bridge's (`crates/client-gdext/src/editor.rs` and
+`rig.rs`): the calls share the seat token's rate budget with the vista's polls, and Ready
+waits behind any submission still on its way.
+
+## The rows shot
+
+```sh
+godot --path godot --resolution 1280x720 -- --scene=res://scenes/rows_shot.tscn --shot=<png>
+```
+
+Windowed, like the vista shot. It is **render-only** at T19: the shot is taken and looked at,
+and T20 commits and compares it (decisions-log item 110 (4)). Headless without `--shot=`, the
+scene draws the rows, checks each row's accessible name is its sentence, and quits.
+
 ## The vista shot
 
 ```sh
@@ -98,11 +134,13 @@ says how, and what it shows.
 Read what the bridge returns, and draw it. No game rule, no validation, no arithmetic on
 `$`, `kW` or a duration — the editor "runs no validation or time maths of its own", it asks
 the gateway, and `crates/client-gdext`'s `tests/no_arithmetic.rs` scans both sides of the
-seam for exactly that. No fog logic and no reveal toggle either: what a seat sees is the
+seam, and every `.gd` under `godot/`, for exactly that
+(`the_editor_makes_no_time_arithmetic_of_its_own`). No fog logic and no reveal toggle either: what a seat sees is the
 gateway's decision, and `tests/unlock.rs` scans every script for the words that would start
 one.
 
 ## What is not here yet
 
-The editor, the notes box and the real lobby are **T19**'s; the `.vox` models and the art
-pass are S6's. Entities are drawn as placeholder primitives until then.
+The template wizard, the rule list as prose lines, the `$`/`kW` meter and the lobby's Resume
+are **T19**'s second pull request; the real lobby, the `.vox` models and the art pass are
+S6's. Entities are drawn as placeholder primitives until then.

@@ -17,18 +17,24 @@
 # nothing here computes a time, a price or a rule, and nothing here can show more of the
 # map than the gateway sent (AGENTS.md section 3 rule 4).
 #
+# The playbook editor (`scripts/editor.gd`, T19) sits beside the watch rig: its panel on the
+# right, its route and ghost on the map. It shares the seat connection, and the bridge fits
+# its calls into the seat's rate budget beside the vista's polls.
+#
 # PLACEHOLDER: the whole layout - a strip of buttons and a text column over the vista -
-# is the skeleton's; the editor, the notes box and the real lobby are T19's and S6's.
+# is the skeleton's; the real lobby is S6's.
 
 extends Node
 
 const HostLink := preload("res://scripts/host_link.gd")
+const Strings := preload("res://scripts/strings.gd")
 
 ## How many event rows the list keeps on screen. PLACEHOLDER, UI, OWNER at S6.
 const EVENT_ROWS := 14
 
 @onready var vista: Node3D = $Vista
 @onready var link: Node = $HostLink
+@onready var editor: CanvasLayer = $Editor
 
 var _status: Label
 var _events: Label
@@ -46,9 +52,11 @@ func _ready() -> void:
 	link.failed.connect(_on_failed)
 	link.received.connect(_on_received)
 	link.announced.connect(_on_announced)
+	editor.setup(vista)
 	var match_id := "local-%d" % OS.get_process_id()
-	_status.text = "Starting the match host..."
-	link.start(HostLink.find_gamectl(), HostLink.find_root(), HostLink.config_line(match_id, HostLink.LADDER))
+	_status.text = Strings.text("lobby_starting")
+	if link.start(HostLink.find_gamectl(), HostLink.find_root(), HostLink.config_line(match_id, HostLink.LADDER)):
+		editor.begin(HostLink.my_seat())
 
 
 func _process(_delta: float) -> void:
@@ -58,16 +66,16 @@ func _process(_delta: float) -> void:
 	var state: Dictionary = vista.bridge.watch_state()
 	if state.is_empty():
 		return
-	var line := "Round %s - %s" % [state.get("round", 0), String(state.get("phase", "")).to_upper()]
+	var parts: PackedStringArray = [Strings.text("lobby_status", {"round": state.get("round", 0), "phase": String(state.get("phase", "")).to_upper()})]
 	var timer := String(state.get("timer", ""))
 	if timer != "":
-		line += "  " + timer
-	line += "   speed %sx" % state.get("speed", 1)
+		parts.append(timer)
+	parts.append(Strings.text("lobby_speed", {"speed": state.get("speed", 1)}))
 	if state.get("skipping", false):
-		line += "  (skipping)"
+		parts.append(Strings.text("lobby_skipping"))
 	if state.get("all_ready", false):
-		line += "  all ready"
-	_status.text = line
+		parts.append(Strings.text("lobby_all_ready"))
+	_status.text = "  ".join(parts)
 
 
 func _notification(what: int) -> void:
@@ -77,12 +85,12 @@ func _notification(what: int) -> void:
 
 
 func _on_announced(_match_id: String) -> void:
-	_status.text = "Connected. Waiting for the view..."
+	_status.text = Strings.text("lobby_connected")
 
 
 func _on_failed(reason: String) -> void:
 	_failed = true
-	_status.text = "The match host failed: %s" % reason
+	_status.text = Strings.text("lobby_failed", {"reason": reason})
 
 
 func _on_received(answer: Dictionary) -> void:
@@ -117,13 +125,13 @@ func _build_ui() -> void:
 	# The speed set is the pacer's (crates/client-gdext/src/pacer.rs SPEEDS, a PLACEHOLDER);
 	# the lobby only draws a button for each, so the set has one home.
 	for speed in vista.bridge.watch_speeds():
-		_button(buttons, "%dx" % speed, func() -> void: vista.bridge.watch_command("speed", speed))
-	_button(buttons, "Skip", func() -> void: vista.bridge.watch_command("skip", 0))
-	_button(buttons, "Ready", func() -> void: vista.bridge.watch_command("ready", 0))
-	_button(buttons, "Continue", func() -> void: vista.bridge.watch_command("end_recap", 0))
-	_follow = _button(buttons, "Follow", _toggle_follow)
+		_button(buttons, Strings.text("lobby_speed_button", {"speed": speed}), func() -> void: vista.bridge.watch_command("speed", speed))
+	_button(buttons, Strings.text("lobby_skip"), func() -> void: vista.bridge.watch_command("skip", 0))
+	_button(buttons, Strings.text("lobby_ready"), func() -> void: vista.bridge.watch_command("ready", 0))
+	_button(buttons, Strings.text("lobby_continue"), func() -> void: vista.bridge.watch_command("end_recap", 0))
+	_follow = _button(buttons, Strings.text("lobby_follow"), _toggle_follow)
 	_follow.toggle_mode = true
-	_button(buttons, "Whole map", func() -> void: vista.frame_whole_map())
+	_button(buttons, Strings.text("lobby_whole_map"), func() -> void: vista.frame_whole_map())
 	_events = Label.new()
 	column.add_child(_events)
 
@@ -131,6 +139,7 @@ func _build_ui() -> void:
 func _button(parent: Node, text: String, pressed: Callable) -> Button:
 	var button := Button.new()
 	button.text = text
+	button.accessibility_name = text
 	button.focus_mode = Control.FOCUS_NONE
 	button.pressed.connect(pressed)
 	parent.add_child(button)

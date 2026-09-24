@@ -1,0 +1,68 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// A playbook the editor opens with one Fix button on it: its rule waits
+// 1 000 ms between firings, under the rules table's minimum, and the verifier
+// answers E0108 with a MACHINE_APPLICABLE patch that raises it (spec section
+// 13: "Fix buttons apply the machine-applicable patches the verifier offers").
+//
+// The headless watch check (scripts/watch_check.gd) opens it, presses that
+// Fix, and asserts that the gateway's patch_plan applied the verifier's patch
+// and that QUICK then finds nothing. It is the verifier's own case,
+// crates/verifier/tests/cases/e0108_cooldown_below_minimum.json, with this
+// header.
+{
+  "schema_version": {
+    "major": 1
+  },
+  "meta": {
+    "title": "case",
+    "author_kind": "HUMAN"
+  },
+  "kind": "PLAYBOOK",
+  "declarative": {
+    "route": [
+      {
+        "label": "s1",
+        "hold": {
+          "ms": 1000
+        }
+      }
+    ],
+    "handlers": [
+      {
+        "id": "h1",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [
+          {
+            "label": "b1",
+            "hold": {
+              "ms": 1000
+            }
+          }
+        ],
+        "resume": "CONTINUE",
+        "cooldown_ms": 1000,
+        "max_fires": 2
+      }
+    ]
+  },
+  "on_death": {
+    "on_respawn": "CONTINUE",
+    "max_deaths_before_fallback": 1
+  },
+  "fallback": {
+    "hold": {
+      "at": {
+        "beacon_anchor": {
+          "safest": {}
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,64 @@
+{
+  "qualifies": false,
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0003",
+      "severity": "ERROR",
+      "path": "/declarative/route/0/set_flag",
+      "message": "`set_flag` is held back to a later version and is not part of the v1 vocabulary.",
+      "beginner": "This is a word the game keeps for later. It is refused rather than quietly ignored, so nothing you wrote disappears without you seeing it.",
+      "suggestions": [
+        {
+          "title": "Delete `set_flag`",
+          "json_patch": "[{\"op\":\"remove\",\"path\":\"/declarative/route/0/set_flag\"}]",
+          "applicability": "MAYBE_INCORRECT"
+        }
+      ]
+    },
+    {
+      "code": "E0108",
+      "severity": "ERROR",
+      "path": "/declarative/handlers/0/cooldown_ms",
+      "message": "`cooldown_ms` is 1000 ms; the minimum is 5000 ms.",
+      "beginner": "A rule waits a while between firings, so put at least the minimum here.",
+      "suggestions": [
+        {
+          "title": "Set the cooldown to 5000 ms",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/handlers/0/cooldown_ms\",\"value\":5000}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "E0008",
+      "severity": "WARNING",
+      "path": "/meta/fingerprint",
+      "message": "the recorded fingerprint does not match these bytes; the verifier has recomputed it.",
+      "beginner": "The stamp on this file was out of date. It has been worked out again for you.",
+      "suggestions": [
+        {
+          "title": "Remove the stale fingerprint",
+          "json_patch": "[{\"op\":\"remove\",\"path\":\"/meta/fingerprint\"}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "E0403",
+      "severity": "ERROR",
+      "path": "/declarative/route/0/place_beacon/at/voxel",
+      "message": "the site (200, 200, 30) lies outside every one of this seat's spheres.",
+      "beginner": "A beacon goes up inside ground you already hold.",
+      "map_refs": [
+        {
+          "x": 200,
+          "y": 200,
+          "z": 30
+        }
+      ]
+    }
+  ],
+  "size_units": 7,
+  "size_budget": 128
+}

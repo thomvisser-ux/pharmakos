@@ -1,8 +1,9 @@
-[gd_scene load_steps=4 format=3]
+[gd_scene load_steps=5 format=3]
 
 [ext_resource type="Script" path="res://scripts/watch_check.gd" id="1_check"]
 [ext_resource type="Script" path="res://scripts/host_link.gd" id="2_link"]
 [ext_resource type="PackedScene" path="res://scenes/vista.tscn" id="3_vista"]
+[ext_resource type="Script" path="res://scripts/editor.gd" id="4_editor"]
 
 [node name="WatchCheck" type="Node"]
 script = ExtResource("1_check")
@@ -11,3 +12,6 @@ script = ExtResource("1_check")
 
 [node name="HostLink" type="Node" parent="."]
 script = ExtResource("2_link")
+
+[node name="Editor" type="CanvasLayer" parent="."]
+script = ExtResource("4_editor")
