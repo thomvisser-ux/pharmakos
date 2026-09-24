@@ -451,10 +451,10 @@ fn an_explicit_parameter_beats_a_suggestion() {
 // ---------------------------------------------------------------------------
 
 /// Seat 1 asks for its safe playbook and its suggestion and is told its own,
-/// never seat 0's -- and the other way round.
+/// never seat 0's -- and the other way round -- under both fog policies; a
+/// subject that is not a seat, a nofog spectator included, is told neither.
 #[test]
 fn advice_for_one_seat_never_reaches_another() {
-    let mut surface = hosted();
     let advice_for = |seat: u8| Advice {
         safe_playbook_jsonc: safe_with_wait(9_000_u32.saturating_add(u32::from(seat))),
         suggestions: vec![hold_and_build(
@@ -462,61 +462,86 @@ fn advice_for_one_seat_never_reaches_another() {
             &format!("For seat {seat} alone."),
         )],
     };
-    let _seats = run_seats(
-        &mut surface,
-        Given::default()
-            .advises(0, fixed_advisor(advice_for(0)))
-            .advises(1, fixed_advisor(advice_for(1))),
-    );
+    for policy in [FogPolicy::fogged(), FogPolicy::casual()] {
+        let mut surface = match_with(policy.clone());
+        let _seats = run_seats(
+            &mut surface,
+            Given::default()
+                .advises(0, fixed_advisor(advice_for(0)))
+                .advises(1, fixed_advisor(advice_for(1))),
+        );
 
-    for seat in [0_u8, 1] {
-        let token = support::seat_token(&mut surface, seat);
-        let other = 1_u8.saturating_sub(seat);
-        let safe = text_of(
-            &result(
-                &support::call(&mut surface, &token, "get_safe_plan", "{}"),
+        for seat in [0_u8, 1] {
+            let token = support::seat_token(&mut surface, seat);
+            let other = 1_u8.saturating_sub(seat);
+            let safe = text_of(
+                &result(
+                    &support::call(&mut surface, &token, "get_safe_plan", "{}"),
+                    "get_safe_plan",
+                ),
+                "playbook_jsonc",
+            );
+            assert_eq!(
+                safe,
+                advice_for(seat).safe_playbook_jsonc,
+                "{policy:?}: seat {seat} is shown its own"
+            );
+            assert_ne!(safe, advice_for(other).safe_playbook_jsonc);
+
+            let made = result(
+                &support::call(
+                    &mut surface,
+                    &token,
+                    "instantiate_template",
+                    r#"{"template_id":"hold_and_build","suggested":true}"#,
+                ),
+                "instantiate_template",
+            );
+            assert_eq!(text_of(&made, "why"), format!("For seat {seat} alone."));
+            let value = text_of(
+                &support::array_of(&made, "parameters")
+                    .first()
+                    .cloned()
+                    .expect("a parameter"),
+                "value",
+            );
+            assert_eq!(
+                value,
+                format!(r#"{{"x":{},"y":12,"z":100}}"#, 100_u8.saturating_add(seat)),
+                "{policy:?}: seat {seat}'s own suggestion"
+            );
+        }
+
+        // And nobody who is not a seat has a safe playbook or a suggestion:
+        // the lobby's token does not even hold `plan`, and a spectator that
+        // sees through the fog holds neither `plan` nor a seat.
+        let lobby = support::admin_token(&mut surface);
+        assert_eq!(
+            outcome(&support::call(&mut surface, &lobby, "get_safe_plan", "{}")),
+            "FORBIDDEN_SCOPE"
+        );
+        let spectator = support::spectator_token(&mut surface, true);
+        assert_eq!(
+            outcome(&support::call(
+                &mut surface,
+                &spectator,
                 "get_safe_plan",
-            ),
-            "playbook_jsonc",
+                "{}"
+            )),
+            "FORBIDDEN_SCOPE",
+            "{policy:?}: a nofog spectator has no safe playbook"
         );
         assert_eq!(
-            safe,
-            advice_for(seat).safe_playbook_jsonc,
-            "seat {seat} is shown its own"
-        );
-        assert_ne!(safe, advice_for(other).safe_playbook_jsonc);
-
-        let made = result(
-            &support::call(
+            outcome(&support::call(
                 &mut surface,
-                &token,
+                &spectator,
                 "instantiate_template",
                 r#"{"template_id":"hold_and_build","suggested":true}"#,
-            ),
-            "instantiate_template",
-        );
-        assert_eq!(text_of(&made, "why"), format!("For seat {seat} alone."));
-        let value = text_of(
-            &support::array_of(&made, "parameters")
-                .first()
-                .cloned()
-                .expect("a parameter"),
-            "value",
-        );
-        assert_eq!(
-            value,
-            format!(r#"{{"x":{},"y":12,"z":100}}"#, 100_u8.saturating_add(seat)),
-            "seat {seat}'s own suggestion"
+            )),
+            "FORBIDDEN_SCOPE",
+            "{policy:?}: nor a suggestion"
         );
     }
-
-    // And nobody who is not a seat has a safe playbook at all: the lobby's
-    // token does not even hold `plan`.
-    let lobby = support::admin_token(&mut surface);
-    assert_eq!(
-        outcome(&support::call(&mut surface, &lobby, "get_safe_plan", "{}")),
-        "FORBIDDEN_SCOPE"
-    );
 }
 
 /// The operator ignores the notebook (spec section 14) and never reads the
@@ -562,6 +587,24 @@ fn a_seats_advice_is_the_same_whatever_its_own_notebook_and_drafts_hold() {
     let (noisy, noisy_advice) = run(true);
     assert!(quiet_advice.is_some(), "the advice was filed");
     assert_eq!(quiet.len(), 12, "every call the advisor made was answered");
+    // Answered, not rate-limited: the advisor's thirteen calls land on one
+    // Lull tick, past a socket's CALLS_PER_TICK, so this holds only because
+    // its token counts against IN_PROCESS_LIMITS.
+    // Twelve written down, and the `list_beacons` it advises from.
+    let calls = u32::try_from(quiet.len().saturating_add(1)).expect("fits");
+    assert!(
+        calls > pharmakos_gateway::limit::CALLS_PER_TICK,
+        "the round is longer than a socket's per-tick cap, so this pins the in-process rate"
+    );
+    for line in &quiet {
+        if line.starts_with("list_drafts") {
+            continue;
+        }
+        assert!(
+            line.contains("\"result\"") && !line.contains("RATE_LIMITED"),
+            "an allowed call is answered under the in-process rate: {line}"
+        );
+    }
     assert!(
         quiet
             .iter()
@@ -707,7 +750,7 @@ fn an_advisor_is_refused_every_method_off_its_allow_list() {
                         held.push((method.to_owned(), outcome(&response)));
                     }
                 }
-                for method in ["get_status", "end_lull", "query_area"] {
+                for method in ["get_status", "get_segment_feed", "end_lull", "query_area"] {
                     let response = call(&ask(method, "{}"));
                     if let Ok(mut held) = kept.lock() {
                         held.push((method.to_owned(), outcome(&response)));
@@ -727,6 +770,9 @@ fn an_advisor_is_refused_every_method_off_its_allow_list() {
         .map(|(method, _)| ((*method).to_owned(), String::from("FORBIDDEN_SCOPE")))
         .chain([
             (String::from("get_status"), String::from("ok")),
+            // On the list although C5 did not name it: the feed keeps no
+            // per-viewer state, so reading it disturbs nobody's.
+            (String::from("get_segment_feed"), String::from("ok")),
             (String::from("end_lull"), String::from("FORBIDDEN_SCOPE")),
             (String::from("query_area"), String::from("FORBIDDEN_SCOPE")),
         ])
@@ -924,6 +970,87 @@ fn an_advised_safe_playbook_that_does_not_qualify_is_replaced_by_the_fallback_an
     }
 }
 
+/// A wizard suggestion that would not instantiate is the operator's mistake,
+/// never the human's: it is dropped when it is filed, with an audit line
+/// naming the code, and the human's `instantiate_template{suggested}` answers
+/// the template's own values instead of failing for the rest of the round.
+#[test]
+fn a_suggestion_that_would_not_instantiate_is_dropped_and_audited() {
+    let not_json = Suggestion {
+        template_id: String::from("hold_and_build"),
+        parameters: vec![SuggestedValue {
+            pointer: String::from("/declarative/route/2/hold/ms"),
+            value: String::from("30s"),
+        }],
+        why: String::from("Not JSON."),
+    };
+    let nowhere = Suggestion {
+        template_id: String::from("no_such_template"),
+        parameters: Vec::new(),
+        why: String::from("No such template."),
+    };
+    let good = hold_and_build([7, 12, 9], "A good one.");
+    for (suggestion, code) in [
+        (not_json, Some("INVALID_ARGUMENT")),
+        (nowhere, Some("NOT_FOUND")),
+        (good, None),
+    ] {
+        let mut surface = hosted();
+        let human = support::seat_token(&mut surface, 0);
+        let _seats = run_seats(
+            &mut surface,
+            Given::default().advises(
+                0,
+                fixed_advisor(Advice {
+                    safe_playbook_jsonc: String::from(SAFE_PLAYBOOK),
+                    suggestions: vec![suggestion.clone()],
+                }),
+            ),
+        );
+        let lines: Vec<(Option<Subject>, String)> = surface
+            .audit()
+            .entries()
+            .iter()
+            .filter(|entry| entry.action == "file advice suggestion")
+            .map(|entry| (entry.subject, entry.outcome.render()))
+            .collect();
+        let filed = advice_of(&surface, 0).expect("the advice was filed");
+        let made = result(
+            &support::call(
+                &mut surface,
+                &human,
+                "instantiate_template",
+                r#"{"template_id":"hold_and_build","suggested":true}"#,
+            ),
+            "instantiate_template",
+        );
+        let parameters = support::array_of(&made, "parameters");
+        let any_suggested = parameters
+            .iter()
+            .any(|parameter| parameter.get("suggested") == Some(&Json::Bool(true)));
+        if let Some(code) = code {
+            assert_eq!(
+                lines,
+                vec![(Some(Subject::Seat(SeatId::new(0))), String::from(code))],
+                "{}: dropped, and never silently",
+                suggestion.why
+            );
+            assert!(filed.advice.suggestions.is_empty(), "{}", suggestion.why);
+            assert_eq!(text_of(&made, "why"), "", "{}", suggestion.why);
+            assert!(
+                !any_suggested,
+                "{}: the template's own values",
+                suggestion.why
+            );
+        } else {
+            assert!(lines.is_empty(), "a good suggestion is filed as it is");
+            assert_eq!(filed.advice.suggestions, vec![suggestion.clone()]);
+            assert_eq!(text_of(&made, "why"), "A good one.");
+            assert!(any_suggested, "the good suggestion is applied");
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // The in-process rate (C6, H8)
 // ---------------------------------------------------------------------------
@@ -996,81 +1123,84 @@ fn an_in_process_seat_finishes_a_round_under_its_limits_and_a_socket_does_not_ge
 // ---------------------------------------------------------------------------
 
 /// Each seat is told its own `$` and kW as the world stands, and never
-/// another seat's; a subject that is not a seat has no economy.
+/// another seat's, under both fog policies; a subject that is not a seat has
+/// no economy.
 #[test]
 fn a_seat_is_told_its_own_economy_and_never_another_seats() {
-    let mut surface = support::hosted_with(MATCH, FogPolicy::fogged(), 2, 2_000, 3, None);
-    // Knock seat 1's beacons down and play the Push out, so that the two
-    // seats' economies are not the same numbers by construction.
-    support::fell(&mut surface, 1);
-    assert!(surface.begin_push().expect("the Push opens"));
-    let _ = support::step(&mut surface, 40);
+    for policy in [FogPolicy::fogged(), FogPolicy::casual()] {
+        let mut surface = support::hosted_with(MATCH, policy.clone(), 2, 2_000, 3, None);
+        // Knock seat 1's beacons down and play the Push out, so that the two
+        // seats' economies are not the same numbers by construction.
+        support::fell(&mut surface, 1);
+        assert!(surface.begin_push().expect("the Push opens"));
+        let _ = support::step(&mut surface, 40);
 
-    let mut answers: Vec<[i64; 4]> = Vec::new();
-    for seat in [0_u8, 1] {
-        let token = support::seat_token(&mut surface, seat);
-        let answer = result(
-            &support::call(&mut surface, &token, "get_economy_forecast", "{}"),
-            "get_economy_forecast",
+        let mut answers: Vec<[i64; 4]> = Vec::new();
+        for seat in [0_u8, 1] {
+            let token = support::seat_token(&mut surface, seat);
+            let answer = result(
+                &support::call(&mut surface, &token, "get_economy_forecast", "{}"),
+                "get_economy_forecast",
+            );
+            let number = |key: &str| match answer.get(key) {
+                Some(Json::Number(lexeme)) => lexeme.parse::<i64>().expect("a whole number"),
+                other => panic!("`{key}` is a number, and it is {other:?}"),
+            };
+            let told = [
+                number("treasury_now"),
+                number("supply_kw_now"),
+                number("draw_kw_now"),
+                number("headroom_kw_now"),
+            ];
+            let seats = surface.host().expect("hosted").world().seats();
+            let row = seats
+                .seats()
+                .iter()
+                .position(|held| *held == seat)
+                .expect("a row");
+            let supply = i64::from(seats.supplies().get(row).expect("supply").raw());
+            let draw = i64::from(seats.draws().get(row).expect("draw").raw());
+            assert_eq!(
+                told,
+                [
+                    seats.treasuries().get(row).expect("treasury").raw(),
+                    supply,
+                    draw,
+                    supply.saturating_sub(draw),
+                ],
+                "seat {seat} is told its own row, as the world stands"
+            );
+            answers.push(told);
+        }
+        assert_ne!(
+            answers.first(),
+            answers.get(1),
+            "the two seats' economies differ, so each being told its own is a test of something"
         );
-        let number = |key: &str| match answer.get(key) {
-            Some(Json::Number(lexeme)) => lexeme.parse::<i64>().expect("a whole number"),
-            other => panic!("`{key}` is a number, and it is {other:?}"),
-        };
-        let told = [
-            number("treasury_now"),
-            number("supply_kw_now"),
-            number("draw_kw_now"),
-            number("headroom_kw_now"),
-        ];
-        let seats = surface.host().expect("hosted").world().seats();
-        let row = seats
-            .seats()
-            .iter()
-            .position(|held| *held == seat)
-            .expect("a row");
-        let supply = i64::from(seats.supplies().get(row).expect("supply").raw());
-        let draw = i64::from(seats.draws().get(row).expect("draw").raw());
+
+        let lobby = support::admin_token(&mut surface);
         assert_eq!(
-            told,
-            [
-                seats.treasuries().get(row).expect("treasury").raw(),
-                supply,
-                draw,
-                supply.saturating_sub(draw),
-            ],
-            "seat {seat} is told its own row, as the world stands"
+            outcome(&support::call(
+                &mut surface,
+                &lobby,
+                "get_economy_forecast",
+                "{}"
+            )),
+            "FORBIDDEN_SCOPE",
+            "the lobby has no economy"
         );
-        answers.push(told);
+        let spectator = support::spectator_token(&mut surface, true);
+        assert_eq!(
+            outcome(&support::call(
+                &mut surface,
+                &spectator,
+                "get_economy_forecast",
+                "{}"
+            )),
+            "FORBIDDEN_SCOPE",
+            "nor does a spectator, even one that sees through the fog"
+        );
     }
-    assert_ne!(
-        answers.first(),
-        answers.get(1),
-        "the two seats' economies differ, so each being told its own is a test of something"
-    );
-
-    let lobby = support::admin_token(&mut surface);
-    assert_eq!(
-        outcome(&support::call(
-            &mut surface,
-            &lobby,
-            "get_economy_forecast",
-            "{}"
-        )),
-        "FORBIDDEN_SCOPE",
-        "the lobby has no economy"
-    );
-    let spectator = support::spectator_token(&mut surface, true);
-    assert_eq!(
-        outcome(&support::call(
-            &mut surface,
-            &spectator,
-            "get_economy_forecast",
-            "{}"
-        )),
-        "FORBIDDEN_SCOPE",
-        "nor does a spectator, even one that sees through the fog"
-    );
 }
 
 /// A vision that sees everywhere, so a fogged match can show seat 0 another

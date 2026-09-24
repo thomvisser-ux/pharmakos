@@ -238,7 +238,8 @@ pub struct Advised {
     /// Which round it is for. A Lull opening forgets it
     /// ([`Surface::open_lull`]), and every reader checks the round as well.
     pub round: u32,
-    /// What the operator said, as it said it.
+    /// What the operator said, as it said it, less any suggestion that would
+    /// not instantiate ([`Surface::file_advice`] drops and audits those).
     pub advice: Advice,
     /// The operator's safe playbook, verified FULL and compiled when it was
     /// filed. `None` when it did not qualify or would not compile, in which
@@ -1403,6 +1404,12 @@ impl Surface {
     /// gets a `file advice` line naming the code, so a bad advice is never
     /// replaced silently. A good one is logged `ok`.
     ///
+    /// Each wizard suggestion is **instantiated once here** over the template
+    /// it names; one that would not instantiate is dropped with a
+    /// `file advice suggestion` line naming the code, so the human's
+    /// `instantiate_template{suggested}` shows the template's own values
+    /// rather than failing on the operator's mistake.
+    ///
     /// # Errors
     ///
     /// As [`Surface::host`]; [`crate::error::Code::PhaseClosed`] outside a
@@ -1436,14 +1443,75 @@ impl Surface {
                 None
             }
         };
+        let Advice {
+            safe_playbook_jsonc,
+            suggestions,
+        } = advice;
+        let mut kept = Vec::with_capacity(suggestions.len());
+        for suggestion in suggestions {
+            match self.check_suggestion(&suggestion) {
+                Ok(()) => kept.push(suggestion),
+                Err(error) => {
+                    self.audit.refused(
+                        tick,
+                        Some(subject),
+                        None,
+                        // The id is the operator's text, so it stays out of
+                        // the log's action column.
+                        "file advice suggestion",
+                        &error,
+                    );
+                }
+            }
+        }
         if let Some(slot) = self.seats.iter_mut().find(|slot| slot.seat == seat) {
             slot.advice = Some(Advised {
                 round,
-                advice,
+                advice: Advice {
+                    safe_playbook_jsonc,
+                    suggestions: kept,
+                },
                 safe,
             });
         }
         Ok(())
+    }
+
+    /// Whether one wizard suggestion instantiates, on its own, over the
+    /// template it names.
+    ///
+    /// A suggestion that would not -- a template the library has not got, a
+    /// value that is not JSON, a pointer that does not resolve -- is the
+    /// operator's fault, and filing it would make the human's
+    /// `instantiate_template{suggested}` fail for that template, blamed on a
+    /// parameter the human never wrote, until the next Lull. So
+    /// [`Surface::file_advice`] drops it here and audits why, and the wizard
+    /// shows the template's own values. With no library there is nothing to
+    /// instantiate and nothing to check: `instantiate_template` answers
+    /// `NOT_FOUND` whatever the advice says.
+    fn check_suggestion(&self, suggestion: &crate::advice::Suggestion) -> Result<(), Error> {
+        let Some(folder) = self.host()?.library() else {
+            return Ok(());
+        };
+        let template_id = suggestion.template_id.as_str();
+        // The refusal names the template and never the path, as
+        // `instantiate_template`'s does.
+        let text = pharmakos_plan_core::library::read(folder, template_id).map_err(|_| {
+            Error::not_found(format!(
+                "no template `{template_id}` in this gateway's library"
+            ))
+        })?;
+        let offered: Vec<pharmakos_plan_core::library::Parameter> = suggestion
+            .parameters
+            .iter()
+            .map(|value| pharmakos_plan_core::library::Parameter {
+                name: value.pointer.clone(),
+                value: value.value.clone(),
+            })
+            .collect();
+        pharmakos_plan_core::instantiate(&text, &[], &offered)
+            .map(|_| ())
+            .map_err(|error| Error::invalid(error.message))
     }
 
     /// An advised safe playbook, verified FULL and compiled, or the reason it
