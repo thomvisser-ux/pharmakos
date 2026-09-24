@@ -420,6 +420,118 @@ CI; they do not include the owner's review latency, which the float in section 4
 - **Contract PR:** yes — the snapshot and replay formats.
 - **Agent-days:** 4.
 - **PLACEHOLDERs:** none new.
+- **Amended 2026-09-23 (item 111): this section is not buildable as written above.** T17 owns `crates/sim` **and**
+  `crates/gateway` (the crate map puts saves in the gateway) and runs in wave 6's run 2, after T18a merges. Saves are
+  automatic at item 84's Lull boundaries (at `begin_push`, and on control end-of-file in a Lull), one `save.json` per
+  match through `cache.rs`; a `sealed` save resumes into its Push; resume is the config line's seventh field; the
+  private replay is inputs only (sealed files, per-segment hash files); and the lane carries the vision follow-up
+  (`World::in_own_sphere`) and the seat bound (item 110(5)). 6 agent-days. The amendment in full is section A2 of
+  `docs/design/skeleton-plan-w6-notes.md`, and it outranks the lines above where they disagree.
+
+---
+
+### T18a — `proto/**` + `crates/plan-core` + `crates/gateway` + `library/`: the planning wire
+
+Added 2026-09-23 by item 111, as T16a was by item 106: everything T18 and T19 presuppose and `main` lacks. This is
+section A1 of `docs/design/skeleton-plan-w6-notes.md`; its decisions C1–C7, C13 and C16 give every option and
+its downside, and its section 0 lists the holes (H1–H16) the lines below close.
+
+- **Crate(s) owned:** `proto/gp/v1/playbook.proto` (one message, one field), `proto/gp/api/v1/gateway.proto`,
+  `proto/buf.yaml`'s `ignore_only` block (discharged numbers), the regenerated tree and descriptor in `crates/proto`,
+  `crates/plan-core`, `crates/gateway`, `scenarios/skeleton/deploy-and-visit.scenario.jsonc`'s chain (re-blessed, H13),
+  the new top-level `library/` with its `LICENSE` pointer and `REUSE.toml` annotation, and one named place,
+  `crates/gamectl/src/host.rs` (the library path only). **No edit in `crates/sim`, `crates/verifier`,
+  `crates/operator`, `crates/client-gdext` or `godot/`.** H14's two literals are fixed on `main` before the run
+  (section B), so this lane never reaches into the Godot unit's crate.
+- **Builds:**
+  1. **Template parameters, declared in the template** (decision C1): `gp.v1.TemplateParameter { string pointer = 1;
+     string label = 2; reserved 3 to 15; }` (3-15 for S6's typed catalogue) and `Meta.parameters = 6` (`Meta` uses
+     1-4 and holds 5 for `team_id`; 6 is named here so nobody "takes the next free" over a reservation).
+     The field is meaningful only when `kind = TEMPLATE`. `instantiate_template` removes it as it sets `kind:
+     PLAYBOOK`, so no playbook's fingerprint or golden moves. On a hand-written PLAYBOOK it is round-tripped and never
+     read, as `meta.note` already is ("Round-tripped, never interpreted", `playbook.proto`); nothing is stripped.
+  2. **The suggestion on the wire** (decision C2): `InstantiateTemplateRequest.suggested` (bool, 3);
+     `InstantiateTemplateResponse.parameters` (repeated `FilledParameter { pointer = 1; label = 2; value = 3;
+     bool suggested = 4; }`, 2) and `why` (string, 3). The declared list is always returned, in declaration order,
+     with the value that was applied: explicit, then suggested when `suggested`, else the template's own. `value` is
+     the raw JSON text at the pointer (a duration is game milliseconds); the wire carries no unit display.
+  3. **The advisor seam** (decision C5): `serve::Advisor`, run at every `open_lull` for **each seat that has no
+     built-in operator** (the human's), through a per-seat in-process token (`observe`, `docs`, `plan`; never
+     `plan.submit`, never leaving the process). The in-process door enforces a **method allow-list** host-side in
+     `serve.rs`: `save_notes`, `save_draft`, `list_drafts`, `submit_plan` and `set_ready` answer `FORBIDDEN` to an
+     advisor, audited. It returns plain gateway types, `Advice { safe_playbook_jsonc, suggestions: [{template_id,
+     parameters, why}] }`, which `serve.rs` files with a host-side `Surface::file_advice(seat, advice)`. No handler may
+     reach `file_advice` (`tests/confinement.rs` needle). `begin_push` files **that seat's** safe playbook. It is
+     verified FULL and compiled at filing; anything that fails falls back to `SAFE_PLAYBOOK` with an audit line, never
+     silently. `get_safe_plan` returns the seat's own. A built-in seat needs no advisor: its operator submits its own
+     plan and, when its repair loop fails, submits its own safe playbook through `submit_plan` on its own token.
+     `SAFE_PLAYBOOK` stays as the fallback for a host with no advisor (scenario runs, tests).
+  4. **`Setup` built-ins become a factory** (H11): the host builds one `BuiltInSeat` per built-in seat and one
+     `Advisor` per other seat after reading the config line, each a fresh instance with no shared state.
+  5. **In-process token limits** (decision C6, H8), **subject to the owner-now question in section D**: tokens minted
+     for built-in seats and advisors get their own `Limits`, `IN_PROCESS_LIMITS` (PLACEHOLDER), sized to the
+     operator's declared budget. They are still counted, audited and fog-filtered. A per-token `Limits` replaces the
+     per-surface one for those handles only. `BuiltInSeat`'s doc (`serve.rs:131-134`, "rate-limited ... exactly like
+     a socket") is rewritten to say what is now true: same door, same audit, same fog, its own rate.
+  6. **The operator's inputs and the meter** (decision C7, H9/H10): `GetEconomyForecastResponse` fields 1-4, named as
+     **present-state** values (`treasury_now`, `supply_kw_now`, `draw_kw_now`, `headroom_kw_now`), so S1's projection,
+     income and what-ifs land in new fields and never redefine these. They are the seat's **own** economy as the world
+     stands, in every phase: the frozen snapshot in a Lull or a recap, the live world in a Push. `BeaconSummary`
+     gains `owner` (spelt `seat.0`, as `ViewEntity`), and for the seat's **own** beacons only `core`, `priority` and
+     `powered`. Another seat's beacon carries `owner` and nothing more.
+  7. **The three templates** (decision C13) as `library/hold_and_build.jsonc`, `library/expand_and_mine.jsonc` and
+     `library/safe_playbook.jsonc`, `kind: TEMPLATE`, each declaring its parameters, "why" comments in the file. The
+     safe template is the spec's (decision C16): move to the safest beacon, the priority raise as parameters (empty by
+     default), then shadow the safest beacon, with a flee handler. **`SAFE_PLAYBOOK` becomes that template's
+     nothing-raised instantiation**, and `deploy-and-visit`'s chain is re-blessed with that reason stated.
+     `gamectl host` passes `root.join(LIBRARY_PATH)`.
+  8. `RenderPlanResponse.prose`'s comment gains its line layout: one rule, step or block per line, in file order.
+     The existing `render_plan` prose goldens pin it, so the wizard's rule list reads lines, never parses sentences.
+  9. Nothing else: no chips, no structured render (decision C3).
+- **Implements:** spec sections 12 (Planning group, `get_economy_forecast`, `get_safe_plan`), 13 (templates, wizard
+  pre-fill), 14 (the safe playbook is the operator's and per seat); item 81; item 105(2), departed from in the open
+  (decision C7); AGENTS.md section 3 rules 3 and 4, section 7 (limits and audit are part of the feature).
+- **Needs:** nothing unmerged, once section B's two-line pre-run commit is on `main`.
+- **Acceptance:** `each_template_instantiates_and_qualifies_for_both_seats_of_the_golden_seed`;
+  `the_gateways_fallback_is_the_safe_template_with_nothing_raised` (canonical-equal, comments aside: "written once,
+  tested twice", item 81); `a_suggested_instantiation_reports_every_declared_parameter_in_order`;
+  `an_explicit_parameter_beats_a_suggestion`; `advice_for_one_seat_never_reaches_another` (seat 1 calls
+  `get_safe_plan` and `instantiate_template{suggested}` and sees only its own);
+  `a_seats_advice_is_the_same_whatever_its_own_notebook_and_drafts_hold` (the operator ignores the notebook, spec
+  section 14); `the_advice_for_a_seat_is_a_function_of_that_seats_own_calls` (byte-identical whether or not the other
+  seat wrote drafts and a notebook); `a_built_in_seats_sealed_plan_is_the_same_with_and_without_an_advisor_running`;
+  `an_advisor_is_refused_every_method_off_its_allow_list` (each of the five, audited);
+  `the_advisor_leaves_the_humans_view_feed_as_it_found_it` (H15: the human's next `get_view` deltas and handles are
+  byte-identical with and without an advisor run; if they cannot be, the advisor path makes no `get_view` call and
+  the lane says what the operator loses);
+  `an_advised_safe_playbook_that_does_not_qualify_is_replaced_by_the_fallback_and_audited`;
+  `no_handler_can_file_advice`; `an_in_process_seat_finishes_a_round_under_its_limits_and_a_socket_does_not_get_them`;
+  `a_seat_is_told_its_own_economy_and_never_another_seats`; `another_seats_beacon_carries_its_owner_and_nothing_else`,
+  under both fog policies; `the_host_builds_one_operator_per_built_in_seat_and_one_advisor_per_other_seat`;
+  `a_token_appears_on_the_announce_line_and_nowhere_else_the_host_writes`, extended: an in-process token appears on
+  no announce line and in no file the host writes. Goldens: an `instantiate_suggested/expected.response.json`
+  produced with a scripted advisor, **the fixture T19's run-2 PR copies**. Re-blessed with the reason stated: the
+  descriptor, `tests/golden/proto/expected.reserved.txt`, `tests/golden/schema/get_schema/expected.json` (it serves
+  `gp.v1`), `tests/golden/docs/reference/**`, `tests/golden/gateway/walkthrough/expected.walkthrough.txt`
+  (`get_beacon` gains fields, `get_safe_plan` changes text), and `deploy-and-visit`'s chain (the fallback safe
+  playbook became the spec's; the chain moves from the first tick seat 1's commander acts differently).
+  `buf breaking` green in `WIRE_JSON`, with an `ignore_only` block for `RESERVED_MESSAGE_NO_DELETE` on
+  `gp/api/v1/gateway.proto` (buf scopes by rule and file, not by field number; the harness-docs PR deletes it,
+  section B). No determinism or `report_hash` golden moves; if one does, the lane stops and says why.
+- **Contract PR:** **yes.** `proto/**` and `buf.yaml` are the first commit, alone in it; the lane also touches
+  `REUSE.toml`, adds `library/LICENSE`, and moves a scenario chain. The agent opens the PR and stops; the main
+  session merges under items 85-86 once CI is green and both reviews are applied.
+- **Agent-days:** 8.75: proto, goldens and ignore block 1.25; plan-core instantiate and declarations 0.75; advisor
+  seam, allow-list, per-seat store, filing, limits and factory 2.5; economy and beacon fields 1.0; templates, the
+  constant and the scenario re-bless 1.25; remaining tests and fixtures 1.25; review cycle 0.5; `gamectl` place 0.25.
+  **One PR by default** (item 107(9)). **Split seam if it runs long:** PR 1 = 1, 7, 8, 9 and the plain instantiate
+  handler's parameter list (4.25 d); PR 2 = 2 (`suggested` and `why`, so nothing ships with nothing behind it) and
+  3-6 (4.5 d).
+- **PLACEHOLDERs:** `IN_PROCESS_LIMITS` (owner, now, then the numbers at hardening); the typed parameter catalogue
+  and a parameter's `type` (owner, S6; numbers 3-15 held); whether the verifier should refuse `meta.parameters` on a
+  PLAYBOOK with a new code rather than round-trip it (owner, S6); forecast what-ifs, projection and income (S1);
+  enemy beacon detail (S2); the live Push readout of own `$`/`kW` in a method named "forecast" (owner, S1);
+  `LIBRARY_PATH` beside a shipped binary (T21).
 
 ---
 
@@ -433,6 +545,12 @@ CI; they do not include the owner's review latency, which the float in section 4
 - **Contract PR:** no.
 - **Agent-days:** 8.
 - **PLACEHOLDERs:** the Balanced utility weights (Tuning, owner at S5); target spread is S5 and deliberately absent; which three templates ship is decision 10.
+- **Amended 2026-09-23 (item 111).** The operator depends on `pharmakos-proto` alone and drives a call closure that
+  `gamectl host` adapts to the gateway's `BuiltInSeat` and `Advisor` seams (the `gamectl` → operator edge rides the
+  harness-docs PR between the runs). The wire it reads and the three templates in `library/` are T18a's and frozen
+  through run 2; it reads the public rules text for its tuning rows, draws nothing at random at Easy, and derives
+  its call budget from its evaluation units. 8 agent-days, run 2. The amendment in full is section A3 of
+  `docs/design/skeleton-plan-w6-notes.md`, and it outranks the lines above where they disagree.
 
 ---
 
@@ -446,6 +564,12 @@ CI; they do not include the owner's review latency, which the float in section 4
 - **Contract PR:** no.
 - **Agent-days:** 10. **Split seam:** the wizard and validation rows as PR 1; the map route surface as PR 2.
 - **PLACEHOLDERs:** the string table's file and format (owner, S6); accessibility polish beyond generated names deferred to S6; the segment clock and fits pill are S3/S6 and are not built.
+- **Amended 2026-09-23 (item 111).** Two pull requests across both runs, the split seam reversed. PR 1 (run 1,
+  5.5 d): the map route surface, the validation rows, the notes box, draft continuity, submit and ready, on today's
+  wire. PR 2 (run 2, 6.5 d, after T18a): the wizard from `instantiate_template{suggested}`, values shown raw under
+  the template's label, the rule list as `render_plan`'s prose lines (chips move to S3), an own `$`/`kW` meter, and
+  the lobby's Resume. The two screenshots are render-only until T20 compares them. The amendment in full is
+  section A4 of `docs/design/skeleton-plan-w6-notes.md`, and it outranks the lines above where they disagree.
 
 ---
 
@@ -504,12 +628,12 @@ Days are working days, five to a week. A task's start is the day its last input 
 | W3 | 3.4 – 5.0 | **T7** HPA\* + estimator (8 d, d17–25) | **T9** gateway surface (8 d, d18–26) | **T8** plan-core (10 d, d18–28) | The path-hash file agreeing on three OSes; the estimator's signed-error and sustainability reports; a hand-written JSONC playbook round-tripping and rendering as English prose |
 | W4 | 5.0 – 7.4 | **T10** runner (5 d, d25–30), then **T11** interpreter (8 d, d30–38) | **T13** gateway method slice (9 d, d30–39) | **T12** client bridge (9 d, d28–37) | The spec's 14-call walkthrough passing against a live gateway; the extension loading in Godot on a fresh checkout with zero caught panics |
 | W5 | 7.4 – 9.8 | **T14** economy, Build, Survey-lite, programs (10 d, d38–48) | **T15** gamectl + `scenario run` (8 d, d39–47) | **T16a** view feed, match control, host loop (10 d, run 1, items 106–107); then **T16** vista + watch rig (10 d, run 2) | **Flying over the generated map, craters remeshing**; the watch rig playing a segment at 2–4× and skipping to its end; `gamectl scenario run` as a green `xtask ci` step |
-| W6 | 9.8 – 11.8 | **T17** save/resume + private replay (4 d, d48–52) | **T18** operator Easy + safe playbook (8 d, d48–56) | **T19** editor wizard (10 d, d49–59) | **A sealed playbook walking the commander**: a beacon placed, a Generator built, the treasury and kW meter moving, BMI settled at the recap — and a two-seat match against Easy |
+| W6 | 9.8 – 11.8 | run 2: **T17** save/resume, private replay, vision follow-up (6 d) | run 2: **T18** operator Easy + safe playbook (8 d) | run 1: **T18a** planning wire (8.75 d) and **T19** PR 1, route surface (5.5 d); run 2: **T19** PR 2, wizard (6.5 d) — item 111 | **A sealed playbook walking the commander**: a beacon placed, a Generator built, the treasury and kW meter moving, BMI settled at the recap — and a two-seat match against Easy |
 | W7 | 11.8 – 12.8 | **T21** packaging (5 d, d59–64) | — | **T20** xtask closing half-week (5 d, d59–64) | A zip that launches on a clean Windows and a clean Linux machine; one `xtask ci` covering §10 items 1–4 with nothing skipped |
 | W8 | 12.8 – 14.2 | — | — | **T22** integration, goldens, demo (6 d, d64–71) | The stage demo of §1.1 |
 | — | **14.2 – 15.5** | **float: 1.3 weeks** | | | |
 
-**Totals.** 24 tasks, **182 agent-days** (T16a added 2026-09-21, item 106; the schedule figures that follow predate it) over 71 working days of schedule. At three slots that is 213
+**Totals.** 24 tasks, **182 agent-days** (T16a added 2026-09-21, item 106; T18a added and T17 and T19 re-estimated 2026-09-23, item 111, which make it 25 tasks and about 194.75 agent-days; the schedule figures that follow predate both) over 71 working days of schedule. At three slots that is 213
 slot-days, so utilisation is about 80 % — the 20 % is where a contract PR waits for review, and it is
 deliberate. The critical path is **T0 → T2 → T5 → T7 → T10 → T11 → T14 → T18 → T19 → T20 → T22**,
 71 days end to end; the sim alone carries 52 agent-days across six of the eight waves.
