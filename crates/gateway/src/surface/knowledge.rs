@@ -9,8 +9,10 @@
 //! planning snapshot or the live world through the fog filter**, and not one of
 //! them steps anything: `estimate_route` goes through
 //! [`crate::routes::RouteAdapter`], which owns its own search graph and has no
-//! `World` in its hand at all, and `get_economy_forecast` is arithmetic over
-//! the snapshot (AGENTS.md section 3 rule 2).
+//! `World` in its hand at all, and `get_economy_forecast` reads the calling
+//! seat's own row of the hosted world -- the frozen planning world in a Lull
+//! or a recap, the live one in a Push -- and projects nothing (AGENTS.md
+//! section 3 rule 2).
 //!
 //! # Salience, per method
 //!

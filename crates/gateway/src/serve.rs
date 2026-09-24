@@ -254,10 +254,16 @@ impl Operators for NoOperators {
 /// 111, decision C5). The five the design names -- `save_notes`,
 /// `save_draft`, `list_drafts`, `submit_plan` and `set_ready` -- are off it:
 /// an advisor writes nothing into the seat's store and never reads the seat's
-/// drafts. So are the four `admin` methods and the four the schema gives no
-/// pair. Anything off it is answered `FORBIDDEN_SCOPE` and audited
-/// (`an_advisor_is_refused_every_method_off_its_allow_list`).
-pub const ADVISOR_METHODS: [Method; 17] = [
+/// drafts. So are the four `admin` methods, which its scopes refuse anyway,
+/// and the four the schema gives no request and response pair
+/// (`query_area`, `list_known_enemies`, `get_reports`, `get_capabilities`),
+/// which no client is served. Every other method a seat's `observe`, `docs`
+/// and `plan` reach is on it, `get_segment_feed` included: the feed is read
+/// through an opaque cursor the caller holds and keeps no per-viewer state in
+/// the gateway, so an advisor reading it (the recap's events, say) leaves the
+/// human's feed as it found it. Anything off it is answered `FORBIDDEN_SCOPE`
+/// and audited (`an_advisor_is_refused_every_method_off_its_allow_list`).
+pub const ADVISOR_METHODS: [Method; 18] = [
     Method::GetStatus,
     Method::WaitFor,
     Method::GetBriefing,
@@ -275,6 +281,7 @@ pub const ADVISOR_METHODS: [Method; 17] = [
     Method::PatchPlan,
     Method::GetSafePlan,
     Method::GetView,
+    Method::GetSegmentFeed,
 ];
 
 /// What the binary hands the host loop.

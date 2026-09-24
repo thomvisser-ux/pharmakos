@@ -1212,10 +1212,12 @@ fn a_fogged_seat_is_told_a_beacon_it_cannot_see_is_not_there() {
 /// `get_recap` and `get_economy_forecast` answer under their own scope and
 /// phase gate.
 ///
-/// The forecast's body is deliberately empty -- every number in it is T14's
-/// economy and the message reserves 1 to 15 for them -- so what is asserted is
-/// what exists today: it answers, it carries the footer, and it refuses a
-/// what-if that names something the vocabulary does not have.
+/// The forecast's four present-state fields (`treasury_now`,
+/// `supply_kw_now`, `draw_kw_now`, `headroom_kw_now`) are pinned by
+/// `advice.rs`'s `a_seat_is_told_its_own_economy_and_never_another_seats`,
+/// and S1's projection has 5 to 15 reserved for it; what this test pins is
+/// the gate: it answers, it carries the footer, and it refuses a what-if that
+/// names something the vocabulary does not have.
 #[test]
 fn get_recap_and_get_economy_forecast_answer_under_their_gate() {
     let mut surface = hosted();

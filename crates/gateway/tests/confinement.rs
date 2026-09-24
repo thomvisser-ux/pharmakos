@@ -390,7 +390,9 @@ fn scan(needles: &[(&str, &str)]) -> Vec<String> {
     scan_except(needles, &[])
 }
 
-/// [`scan`], skipping files whose name is on `exempt`.
+/// [`scan`], skipping files whose path ends with an entry on `exempt`: a bare
+/// file name, or a path under the crate such as `src/serve.rs`, compared
+/// component by component.
 fn scan_except(needles: &[(&str, &str)], exempt: &[&str]) -> Vec<String> {
     let mut findings: Vec<String> = Vec::new();
     for path in sources() {
@@ -655,7 +657,8 @@ fn no_wire_method_files_a_voxel_edit_or_a_damage_order() {
 /// may reach either. So each name may appear in `surface.rs` only on the line
 /// that defines it, in `serve.rs` (the one caller), and nowhere else in the
 /// crate -- not in a handler module, not in `surface/control.rs`, not in a
-/// dispatch arm.
+/// dispatch arm. The same holds for `InProcessSeats`, the public type in
+/// `serve.rs` that drives both, which may be named nowhere else in the crate.
 #[test]
 fn no_handler_can_file_advice() {
     const HOST_SIDE: &[(&str, &str)] = &[
@@ -672,10 +675,30 @@ fn no_handler_can_file_advice() {
     ];
     const CALLER: &str = "serve.rs";
     const DEFINER: &str = "surface.rs";
-    let findings = scan_except(HOST_SIDE, &[CALLER, DEFINER]);
+    // Exempted by their path under the crate, not by their bare name, so a
+    // `serve.rs` or `surface.rs` added in a handler directory is scanned.
+    const CALLER_PATH: &str = "src/serve.rs";
+    const DEFINER_PATH: &str = "src/surface.rs";
+    // The public driver of both seams: `InProcessSeats::open` registers the
+    // in-process tokens and `InProcessSeats::plan` files the advice. A handler
+    // that named it would reach both without naming either, so it is as
+    // host-side as they are and may be named only where it is defined.
+    const DRIVER: &[(&str, &str)] = &[(
+        "InProcessSeats",
+        "the host loop's driver of both seams; a handler that could name it would reach \
+         file_advice and register_in_process through it",
+    )];
+    let findings = scan_except(HOST_SIDE, &[CALLER_PATH, DEFINER_PATH]);
     assert!(
         findings.is_empty(),
         "a host-side seam is named outside the host loop:\n{}",
+        findings.join("\n")
+    );
+
+    let findings = scan_except(DRIVER, &[CALLER_PATH]);
+    assert!(
+        findings.is_empty(),
+        "the host loop's in-process driver is named outside the host loop:\n{}",
         findings.join("\n")
     );
 
