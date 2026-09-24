@@ -1,0 +1,51 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: MIT OR Apache-2.0
+//
+// safe_playbook.jsonc: the Safe Playbook template (spec section 14).
+//
+// What the built-in operator files for a seat that seals nothing verified
+// before the Lull ends, and what get_safe_plan shows, so a seat can see the
+// cost of a timeout. It leaves every beacon's configuration as it is: it
+// places nothing, recycles nothing and switches no mandate.
+//
+// With nothing raised, which is this file's own value, it is also the
+// gateway's fallback for a seat no operator advises: crates/gateway's
+// SAFE_PLAYBOOK is this template instantiated with no parameters, and
+// `the_gateways_fallback_is_the_safe_template_with_nothing_raised` keeps the
+// two equal ("written once, tested twice", decisions-log item 81).
+{
+  "schema_version": {"major": 1, "minor": 0},
+  "meta": {
+    "parameters": [
+      // Why: the priority raises are the one situational part of the safe
+      // playbook. When power is short, the operator adds one interface step
+      // per own beacon at risk of browning out that it can reach within 60 s,
+      // nearest first and at most two, each setting Quartermaster priority to
+      // HIGH so it browns out last. A seat with power to spare gets the route
+      // as written here: nothing raised.
+      {"pointer": "/declarative/route", "label": "The route: to the safest beacon, then one priority raise per beacon at risk (none by default)"}
+    ],
+    "title": "Safe playbook",
+    "author_kind": "BUILTIN",
+    "note": "Move to the safest beacon, raise the priority of any beacon about to brown out, then stay with the safest beacon."
+  },
+  "kind": "TEMPLATE",
+  "declarative": {
+    "route": [
+      // Why: the safest own beacon is where the fixed 20% reflex runs to as
+      // well, so the commander starts the segment where trouble would send it.
+      {"label": "to_safety", "move": {"to": {"safest": {}}, "pace": "AVOID_KNOWN_THREATS"}}
+    ],
+    "handlers": [
+      // Why: bravery is an ordinary rule. Hurt and under fire, the commander
+      // walks back to safety and waits before carrying on.
+      {"id": "flee", "when": {"all": {"items": [{"cmdr_hp_pct": {"cmp": "LE", "pct": 40}}, {"cmdr_took_damage_within": {"ms": 3000}}]}},
+       "body": [{"label": "flee_to_safety", "move": {"to": {"safest": {}}}}, {"label": "flee_wait", "hold": {"ms": 8000}}],
+       "resume": "CONTINUE", "cooldown_ms": 30000, "max_fires": 3}
+    ]
+  },
+  "on_death": {"on_respawn": "CONTINUE"},
+  // Why: once the route is done, stay with the safest beacon rather than hold
+  // one spot, so the commander goes with it if another beacon becomes safer.
+  "fallback": {"shadow": {"beacon": {"safest": {}}}}
+}

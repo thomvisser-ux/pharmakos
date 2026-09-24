@@ -1,0 +1,22 @@
+SPDX-FileCopyrightText: 2026 Pharmakos contributors
+SPDX-License-Identifier: MIT OR Apache-2.0
+
+Everything in library/ — the template library the Seat Gateway reads to list
+and instantiate templates (spec section 13, "Local-first library") — is
+licensed under either of
+
+  * MIT License            (../LICENSES/MIT.txt)
+  * Apache License, 2.0    (../LICENSES/Apache-2.0.txt)
+
+at your option, like the example playbooks in ../examples/. These files are
+data meant to be copied: open one in the in-game editor, change it, save it as
+your own template, or ship it in a tutorial. Nothing in the library executes,
+and nothing you build from it is obliged to be GPL.
+
+Unless you state otherwise, any contribution you intentionally submit for
+inclusion in this directory shall be dual licensed as above, with no additional
+terms or conditions, and signed off under the Developer Certificate of Origin
+1.1 (../docs/DCO.txt).
+
+The repository-wide scheme is described in ../LICENSE and ../docs/LICENSING.md;
+the machine-readable manifest is ../REUSE.toml.
