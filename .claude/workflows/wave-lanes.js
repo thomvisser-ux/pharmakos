@@ -5,7 +5,8 @@
 // agent in its own worktree, reviewed by two adversarial agents with different lenses, and
 // fixed by a fourth, as a pipeline (lane B's review does not wait for lane A's build).
 //
-// Run it from the owner's session with `Workflow({name: 'wave-lanes', args: {...}})`.
+// Run it from the owner's session with
+// `Workflow({scriptPath: 'C:/Users/PC/pharmakos/.claude/workflows/wave-lanes.js', args: {...}})`.
 // `args` is the whole wave description; nothing wave-specific lives in this file:
 //
 //   {
@@ -76,7 +77,7 @@ ENVIRONMENT (read first)
 - Toolchain present: rustc/cargo 1.98.1 (MSVC), protoc 36, buf 1.73.0, protoc-gen-prost 0.5.0, cargo-deny, reuse, gh (signed in). "cargo xtask ci" is the single check suite; "cargo xtask golden --bless" accepts fresh outputs under tests/golden for the areas the golden step compares; "cargo xtask determinism --bless" re-baselines the determinism chain and is ONLY for the sim lane, with the movement explained in the PR body.
 - Goldens: read tests/golden/README.md first. A producing test writes actual.<ext> under $CARGO_TARGET_DIR/golden/<area>/... and the golden step compares it with tests/golden/<area>/...; LF endings, trailing newline, no carriage return. Every area's README.md says what a diff means; keep it accurate. A golden that moves is a behaviour change: say which in the PR body, never re-bless to make a red test green without the reason.
 - Determinism rules are not advisory (AGENTS.md section 4): no floats outside walled crates, no as-casts outside the sim's audited math module, no HashMap/HashSet, no wall clock, ordered iteration, integer newtypes, overflow checks on, clippy pedantic plus the deny set with -D warnings; never add #[allow] on a determinism lint. Sim state added goes into the state hash, the snapshot round-trip and the goldens in the same PR - four places for a voxel write, which must mark its chunk. Every guessed value is a "// PLACEHOLDER: <what, who decides, when>" comment listed in the PR body. Tuning values come from the rules table (rules/rules.v1.json via pharmakos_sim::rules::RulesTable; RulesTable::message() reaches the whole decoded table), never from constants; a tuning value with no row yet is a named constant carrying a PLACEHOLDER (AGENTS.md section 12).
-- Commits: conventional-commit subject with your crate as scope, DCO sign-off via "git commit -s", and the line "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>" ABOVE the Signed-off-by line. Write each message to a file and commit with -F. Several commits are fine. Never amend or rewrite a pushed commit; never merge anything.
+- Commits: conventional-commit subject with your crate as scope, DCO sign-off via "git commit -s", and the line "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" ABOVE the Signed-off-by line. Write each message to a file and commit with -F. Several commits are fine. Never amend or rewrite a pushed commit; never merge anything.
 - The Bash tool's heredocs are not UTF-8 safe for non-ASCII characters (the docs use section signs, primes and em dashes). Write or edit files containing them with the Write/Edit tools. Keep new Rust source ASCII where you can.
 - SPDX header on every new file (AGENTS.md section 8): game code is GPL-3.0-or-later. Doc comments on every public item (missing_docs warns; warnings are denied).
 `
