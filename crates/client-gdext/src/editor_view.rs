@@ -106,6 +106,7 @@ pub(crate) fn state_dictionary(editor: &Editor) -> VarDictionary {
     drawn.set(&"legs".to_variant(), &legs.to_variant());
     drawn.set(&"whole".to_variant(), &route.whole.to_variant());
     drawn.set(&"reachable".to_variant(), &route.reachable.to_variant());
+    drawn.set(&"readable".to_variant(), &route.readable.to_variant());
     drawn.set(&"current".to_variant(), &route.current.to_variant());
     put("route", drawn.to_variant());
 

@@ -159,9 +159,27 @@ impl Gateway {
                     Some(Json::String(text)) => text.clone(),
                     other => panic!("a playbook, not {other:?}"),
                 };
-                // The stand-in applies nothing; a changed text is all the editor needs to
-                // see an edit land.
-                let patched = format!("{text} ");
+                // The stand-in does not apply the patch; it records the new step's label in
+                // a trailing comment, which is enough for the editor to see an edit land and
+                // for the next click's label to be chosen against it. A label the text
+                // already quotes is the verifier's E0105 (a name used twice) and fails the
+                // test: every click in a burst must get its own.
+                let patch = match params.get("json_patch") {
+                    Some(Json::String(patch)) => patch.clone(),
+                    other => panic!("a patch, not {other:?}"),
+                };
+                let label = patch
+                    .split("\"label\":")
+                    .nth(1)
+                    .and_then(|rest| rest.trim_start().strip_prefix('"'))
+                    .and_then(|rest| rest.split('"').next())
+                    .expect("a map action's step carries a label")
+                    .to_owned();
+                assert!(
+                    !text.contains(&format!("\"{label}\"")),
+                    "two edits carry the label {label}; the verifier would say E0105"
+                );
+                let patched = format!("{text}\n// \"{label}\"\n");
                 json::write(&Json::Object(vec![
                     ("playbook_jsonc".to_owned(), Json::String(patched)),
                     (

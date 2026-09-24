@@ -17,7 +17,8 @@
 # The map route surface (spec section 13):
 #   * click one of your beacons: Visit & change (a priority row), Go here, or Recycle;
 #   * click the ground: Go here, or Place beacon - the ghost shows QUICK's verdict for this
-#     click (per click at the skeleton, not live on hover: plan T19 amendment);
+#     click (per click at the skeleton, not live on hover: plan T19 amendment).
+#     PLACEHOLDER: a live-on-hover legality ghost is S3/S6's (w6 notes A4 item 5), OWNER;
 #   * Alt-click a beacon: the step's target becomes a selector - nearest, weakest, safest
 #     or most threatened own beacon, chosen when the step starts;
 #   * the route is drawn as a polyline from the gateway's `estimate_route` legs, each leg
@@ -32,6 +33,12 @@
 #
 # PLACEHOLDER: the panel's layout, sizes and colours, the menu's wording and the ghost's
 # look are the skeleton's; the real editor's layout is S6's, OWNER (skeleton plan T19).
+#
+# PLACEHOLDER: the segment clock and the "fits" pill are S3/S6's and are not built
+# (skeleton plan T19, PLACEHOLDERs line), OWNER. So is a rendered travel time: legs and the
+# whole route are shown as the raw game milliseconds the estimator answered, not the
+# generously rounded or whole-second figure decisions-log items 57 and 61 ask for, until the
+# gateway answers one (see strings.gd's `leg`), OWNER with plan-core/T18a, S3.
 
 extends CanvasLayer
 
@@ -165,6 +172,12 @@ func status_text() -> String:
 	return _status.text
 
 
+## Closes the map menu, as a click elsewhere would.
+func close_menu() -> void:
+	_menu.hide()
+	_visit_menu.hide()
+
+
 ## Called by the lobby every frame: redraws when the bridge says something changed.
 func refresh() -> void:
 	var state: Dictionary = bridge.editor_state()
@@ -213,6 +226,9 @@ func _beacon_under(camera: Camera3D, at: Vector2) -> Dictionary:
 
 
 func _on_beacon_clicked(beacon: Dictionary, alt: bool, at: Vector2) -> void:
+	# Menu routing, not a rule: the owner is the gateway's own field on the view, and the
+	# map route surface's menu is for the seat's own beacons (spec section 13). A visit
+	# to another seat's beacon is the verifier's E0401 if it is ever written by hand.
 	if String(beacon["owner"]) != vista.my_seat:
 		_say_local("status_not_yours", {})
 		return

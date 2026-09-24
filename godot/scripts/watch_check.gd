@@ -21,11 +21,13 @@
 #         fixed by its Fix button, through `patch_plan` with the verifier's own patch;
 #       - a committed playbook in plan-core's canonical form, `fixtures/editor_check.jsonc`,
 #         opens, QUICK qualifies it, and it saves back BYTE FOR BYTE;
-#       - a placement ghost comes back with QUICK's verdict, the placement is taken and
-#         undone, and the undo gives the loaded bytes back;
-#       - one map action (Alt-click on the seat's own beacon, Go here, nearest own beacon)
-#         is applied through `patch_plan`, QUICK runs, the route is priced, and FULL runs
-#         after 600 ms idle and qualifies;
+#       - a ground click (the map surface's own handler) brings a placement ghost back
+#         with QUICK's verdict, which must be legal; the menu's Place beacon takes it, and
+#         Undo gives the loaded bytes back;
+#       - one map action through the map surface's own handlers (Alt-click on the seat's
+#         own beacon, Go here, nearest own beacon) is applied through `patch_plan` with the
+#         selector in the step, QUICK runs, the route is priced, and FULL runs after 600 ms
+#         idle and qualifies;
 #       - the notebook is saved through `save_notes` and a draft through `save_draft`;
 #       - the playbook is submitted and accepted, the SUBMITTED BYTES EQUAL
 #         `fixtures/editor_check.expected.jsonc` (plan-core's own patch of its canonical
@@ -219,11 +221,18 @@ func _edit() -> bool:
 		_failures.append("the view shows no commander of this seat's")
 		return false
 	var spot := Vector3i(commander.x - 8, commander.y, commander.z)
-	vista.bridge.editor_preview_place(spot)
+	# Through the map surface's own handlers: a ground click opens the menu and asks for the
+	# ghost, and the menu's Place beacon takes it.
+	editor._on_ground_clicked(spot, Vector2.ZERO)
 	if not await _editor_until(func(s: Dictionary) -> bool: return s.get("ghost", {}).get("state", "waiting") != "waiting", "the placement ghost never came back"):
 		return false
 	print("[watch-check] ghost at %s: %s %s" % [spot, _editor()["ghost"].get("state"), _editor()["ghost"].get("sentence")])
-	if not editor.act("place", {"voxel": spot}) or int(_editor().get("revision", 0)) != loaded_revision + 1:
+	if String(_editor()["ghost"].get("state")) != "legal":
+		_failures.append("the ghost at %s is not legal: %s" % [spot, _editor()["ghost"]])
+		return false
+	editor._on_menu(editor.ITEM_PLACE)
+	editor.close_menu()
+	if int(_editor().get("revision", 0)) != loaded_revision + 1:
 		_failures.append("the checked placement was not taken at once")
 		return false
 	vista.bridge.editor_undo()
@@ -234,20 +243,21 @@ func _edit() -> bool:
 	print("[watch-check] placement taken and undone; the bytes are the loaded ones again")
 
 	# 5. One map action: Alt-click on the seat's own beacon, Go here, the nearest own beacon.
-	var own := ""
+	var own := {}
 	for beacon in vista.beacons():
 		if beacon["owner"] == vista.my_seat:
-			own = String(beacon["id"])
-	if own == "":
+			own = beacon
+	if own.is_empty():
 		_failures.append("the view shows no beacon of this seat's")
 		return false
-	vista.bridge.editor_describe_beacon(own)
-	if not await _editor_until(func(s: Dictionary) -> bool: return String(s.get("beacon_prose", "")) != "", "get_beacon never described %s" % own):
-		return false
 	var before := int(_editor().get("revision", 0))
-	if not editor.act("go", {"selector": "nearest"}):
-		_failures.append("the map action was not taken")
+	# Through the map surface's own handlers: an Alt-click on the beacon (which also asks
+	# get_beacon about it), whose menu's first target is the nearest own beacon, then Go here.
+	editor._on_beacon_clicked(own, true, Vector2.ZERO)
+	if not await _editor_until(func(s: Dictionary) -> bool: return String(s.get("beacon_prose", "")) != "", "get_beacon never described %s" % own["id"]):
 		return false
+	editor._on_menu(editor.ITEM_GO)
+	editor.close_menu()
 	if not await _editor_until(func(s: Dictionary) -> bool: return int(s.get("revision", 0)) > before and s.get("verdict", "") == "full" and s.get("route", {}).get("current", false), "the map action was never patched, checked and priced"):
 		return false
 	var after := _editor()
@@ -257,6 +267,8 @@ func _edit() -> bool:
 	print("[watch-check] map action applied; FULL qualifies it; route %s point(s), legs %s" % [(route.get("points", []) as Array).size(), route.get("legs")])
 	if (route.get("points", []) as Array).size() < 2 or not route.get("reachable", false):
 		_failures.append("the edited route was not priced: %s" % [route])
+	if not ("\"nearest\"" in vista.bridge.editor_bytes().get_string_from_utf8()):
+		_failures.append("the Alt-click did not make the step's target the nearest own beacon")
 
 	# 6. The notebook and a draft.
 	vista.bridge.editor_save_notes(NOTES)

@@ -336,10 +336,16 @@ pub struct Route {
     pub reachable: bool,
     /// Whether this route describes the text on screen.
     pub current: bool,
+    /// Whether every leg named where it ends. When one did not, `points` is empty and no
+    /// polyline is drawn, rather than one to a point the gateway never named.
+    pub readable: bool,
 }
 
-/// The placement ghost's verdict (spec section 13, "a live legality ghost", per click at
-/// the skeleton: plan T19 amendment, `skeleton-plan-w6-notes.md` A4).
+/// The placement ghost's verdict (spec section 13, "a live legality ghost").
+///
+/// PLACEHOLDER: the ghost is per click at the skeleton, not live on hover (plan T19
+/// amendment, `skeleton-plan-w6-notes.md` A4); a live-on-hover legality ghost is S3/S6's
+/// (A4 item 5). OWNER, S3/S6.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum GhostState {
     /// The patched draft is being checked.
@@ -403,15 +409,6 @@ pub struct Status {
     pub detail: String,
 }
 
-/// What kind of edit a patch is.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum EditKind {
-    /// A map action.
-    Map,
-    /// A Fix button.
-    Fix,
-}
-
 /// A placement that has been patched into a copy of the draft and not yet applied.
 #[derive(Clone, PartialEq, Eq, Debug)]
 struct Preview {
@@ -425,20 +422,27 @@ struct Preview {
 }
 
 /// One planning call the editor owes, before it is sent.
+///
+/// A map action and a placement preview are kept as what the player asked for, not as a
+/// patch: the new step's label and the route index it lands at are read off the text the
+/// patch is applied to, which is the text when the job is rendered, after every edit queued
+/// ahead of it has landed. Two quick clicks therefore get two different labels.
 #[derive(Clone, PartialEq, Eq, Debug)]
 enum Job {
     Load {
         candidate: String,
     },
+    /// A Fix button's patch, the verifier's own.
     Edit {
         patch: String,
-        kind: EditKind,
+    },
+    Map {
+        action: Action,
+        target: Target,
     },
     Undo,
     Preview {
         at: [i32; 3],
-        patch: String,
-        step: Option<usize>,
     },
     PreviewCheck,
     Submit,
@@ -462,6 +466,7 @@ impl Job {
             self,
             Self::Load { .. }
                 | Self::Edit { .. }
+                | Self::Map { .. }
                 | Self::Undo
                 | Self::Preview { .. }
                 | Self::PreviewCheck
@@ -477,6 +482,8 @@ enum Sent {
     },
     Edit {
         base: u64,
+        /// The job again, for a connection that drops before the answer.
+        retry: Box<Job>,
     },
     Undo {
         base: u64,
@@ -502,9 +509,13 @@ enum Sent {
     },
     Briefing,
     Drafts,
-    Notes,
+    Notes {
+        notes: String,
+    },
     SaveDraft,
-    Beacon,
+    Beacon {
+        id: String,
+    },
 }
 
 /// One call to send: the method and its params.
@@ -621,47 +632,41 @@ impl Editor {
     /// A map action. Returns whether it was taken: an action needs text to act on, and a
     /// target it can name (a visit or a recycle names a beacon, a placement names ground).
     pub fn act(&mut self, action: Action, target: &Target) -> bool {
-        let Some(text) = self.text.as_ref() else {
+        if self.text.is_none() {
             self.say("no_playbook", "");
             return false;
-        };
+        }
         if action == Action::Place {
             if let Target::Voxel(at) = target {
                 return self.place(*at);
             }
             return false;
         }
-        let label = fresh_label(text, action.stem());
-        let Some(step) = step_value(action, target, &label) else {
+        // Whether the action can name this target at all. The label is chosen later,
+        // against the text the patch is applied to (see [`Job`]).
+        if step_value(action, target, "").is_none() {
             return false;
-        };
-        self.queue.push_back(Job::Edit {
-            patch: append_patch(step),
-            kind: EditKind::Map,
+        }
+        self.queue.push_back(Job::Map {
+            action,
+            target: target.clone(),
         });
         self.touch();
         true
     }
 
     /// Show the placement ghost at `at`: patch a beacon into a copy of the draft and ask
-    /// QUICK about it, without applying it. Per click, not live on hover (T19 amendment).
+    /// QUICK about it, without applying it. Per click, not live on hover (T19 amendment;
+    /// see [`GhostState`]'s PLACEHOLDER). The copy is patched against the text as it is
+    /// when the preview goes out, after every edit queued ahead of it.
     pub fn preview_place(&mut self, at: [i32; 3]) -> bool {
-        let Some(text) = self.text.as_ref() else {
+        if self.text.is_none() {
             self.say("no_playbook", "");
             return false;
-        };
-        let label = fresh_label(text, Action::Place.stem());
-        let Some(step) = step_value(Action::Place, &Target::Voxel(at), &label) else {
-            return false;
-        };
-        let step_index = route_len(text);
+        }
         self.queue
             .retain(|job| !matches!(job, Job::Preview { .. } | Job::PreviewCheck));
-        self.queue.push_back(Job::Preview {
-            at,
-            patch: append_patch(step),
-            step: step_index,
-        });
+        self.queue.push_back(Job::Preview { at });
         self.preview = None;
         self.ghost = Some(Ghost {
             at,
@@ -673,12 +678,14 @@ impl Editor {
     }
 
     /// Place a beacon at `at`. When the ghost at `at` was checked against the text on
-    /// screen, its patched draft is taken as it is — no second call — and its QUICK report
-    /// becomes the rows; otherwise the placement is patched like any other map action.
+    /// screen and no edit is waiting ahead of it, its patched draft is taken as it is — no
+    /// second call — and its QUICK report becomes the rows; otherwise the placement is
+    /// patched like any other map action, in its turn.
     fn place(&mut self, at: [i32; 3]) -> bool {
-        let ready = self.preview.as_ref().is_some_and(|preview| {
-            preview.at == at && preview.base == self.revision && preview.checked.is_some()
-        });
+        let ready = !self.busy()
+            && self.preview.as_ref().is_some_and(|preview| {
+                preview.at == at && preview.base == self.revision && preview.checked.is_some()
+            });
         if ready {
             if let Some(preview) = self.preview.take() {
                 self.undo.push(preview.inverse);
@@ -693,16 +700,12 @@ impl Editor {
                 return true;
             }
         }
-        let Some(text) = self.text.as_ref() else {
+        if self.text.is_none() {
             return false;
-        };
-        let label = fresh_label(text, Action::Place.stem());
-        let Some(step) = step_value(Action::Place, &Target::Voxel(at), &label) else {
-            return false;
-        };
-        self.queue.push_back(Job::Edit {
-            patch: append_patch(step),
-            kind: EditKind::Map,
+        }
+        self.queue.push_back(Job::Map {
+            action: Action::Place,
+            target: Target::Voxel(at),
         });
         self.touch();
         true
@@ -722,10 +725,7 @@ impl Editor {
         else {
             return false;
         };
-        self.queue.push_back(Job::Edit {
-            patch,
-            kind: EditKind::Fix,
-        });
+        self.queue.push_back(Job::Edit { patch });
         self.touch();
         true
     }
@@ -935,28 +935,44 @@ impl Editor {
 
     /// The seat connection dropped with a call in flight: an edit or a request the player
     /// made is asked again once it is back; a check is owed again.
+    ///
+    /// Asking again is safe for every one of them: `patch_plan` is stateless on the gateway
+    /// (it hands back the patched text and keeps nothing), the text on screen is still the
+    /// one the lost edit was patched against, and `save_notes` replaces the notebook whole.
     pub fn dropped(&mut self) {
         let Some(sent) = self.in_flight.take() else {
             return;
         };
         match sent {
             Sent::Load { candidate } => self.queue.push_front(Job::Load { candidate }),
-            Sent::Quick { .. } | Sent::Edit { .. } | Sent::Undo { .. } => {
-                // An edit whose answer was lost may or may not have been applied by a
-                // gateway that holds no editor state; the text on screen is still the one
-                // it was applied to, so it is checked again rather than guessed at.
-                self.owed.quick = true;
+            Sent::Edit { base, retry } => {
+                if base == self.revision {
+                    self.queue.push_front(*retry);
+                }
             }
+            Sent::Undo { base } => {
+                if base == self.revision {
+                    self.queue.push_front(Job::Undo);
+                }
+            }
+            Sent::Quick { .. } => self.owed.quick = true,
             Sent::Estimate { .. } => self.owed.estimate = true,
             Sent::Full { .. } => self.owed.edited = true,
             Sent::Submit { .. } => self.queue.push_front(Job::Submit),
             Sent::Briefing => self.queue.push_front(Job::Briefing),
             Sent::Drafts | Sent::SaveDraft => self.queue.push_front(Job::Drafts),
-            Sent::Preview { .. } | Sent::PreviewCheck => {
-                self.ghost = None;
-                self.preview = None;
+            Sent::Preview { at, .. } => {
+                if self.ghost.as_ref().is_some_and(|ghost| ghost.at == at) {
+                    self.queue.push_front(Job::Preview { at });
+                }
             }
-            Sent::Notes | Sent::Beacon => {}
+            Sent::PreviewCheck => {
+                if self.preview.is_some() {
+                    self.queue.push_front(Job::PreviewCheck);
+                }
+            }
+            Sent::Notes { notes } => self.queue.push_front(Job::Notes { notes }),
+            Sent::Beacon { id } => self.queue.push_front(Job::Beacon { id }),
         }
         self.touch();
     }
@@ -1113,12 +1129,30 @@ impl Editor {
                 let params = verify_params(&candidate, "quick");
                 self.send(Sent::Load { candidate }, "verify_plan", params)
             }
-            Job::Edit { patch, kind: _ } => {
+            Job::Edit { patch } => {
                 let playbook = current?;
+                let params = patch_params(&playbook, &patch);
                 self.send(
-                    Sent::Edit { base: revision },
+                    Sent::Edit {
+                        base: revision,
+                        retry: Box::new(Job::Edit { patch }),
+                    },
                     "patch_plan",
-                    patch_params(&playbook, &patch),
+                    params,
+                )
+            }
+            Job::Map { action, target } => {
+                let playbook = current?;
+                let label = fresh_label(&playbook, action.stem());
+                let step = step_value(action, &target, &label)?;
+                let params = patch_params(&playbook, &append_patch(step));
+                self.send(
+                    Sent::Edit {
+                        base: revision,
+                        retry: Box::new(Job::Map { action, target }),
+                    },
+                    "patch_plan",
+                    params,
                 )
             }
             Job::Undo => {
@@ -1130,8 +1164,11 @@ impl Editor {
                     patch_params(&playbook, &patch),
                 )
             }
-            Job::Preview { at, patch, step } => {
+            Job::Preview { at } => {
                 let playbook = current?;
+                let label = fresh_label(&playbook, Action::Place.stem());
+                let patch = append_patch(step_value(Action::Place, &Target::Voxel(at), &label)?);
+                let step = route_len(&playbook);
                 self.send(
                     Sent::Preview {
                         at,
@@ -1164,11 +1201,10 @@ impl Editor {
             }
             Job::Briefing => self.send(Sent::Briefing, "get_briefing", object(Vec::new())),
             Job::Drafts => self.send(Sent::Drafts, "list_drafts", object(Vec::new())),
-            Job::Notes { notes } => self.send(
-                Sent::Notes,
-                "save_notes",
-                object(vec![("notes", Json::String(notes))]),
-            ),
+            Job::Notes { notes } => {
+                let params = object(vec![("notes", Json::String(notes.clone()))]);
+                self.send(Sent::Notes { notes }, "save_notes", params)
+            }
             Job::SaveDraft { label } => {
                 let playbook = current?;
                 self.send(
@@ -1181,11 +1217,10 @@ impl Editor {
                     ]),
                 )
             }
-            Job::Beacon { id } => self.send(
-                Sent::Beacon,
-                "get_beacon",
-                object(vec![("beacon_id", Json::String(id))]),
-            ),
+            Job::Beacon { id } => {
+                let params = object(vec![("beacon_id", Json::String(id.clone()))]);
+                self.send(Sent::Beacon { id }, "get_beacon", params)
+            }
         })
     }
 
@@ -1200,6 +1235,7 @@ impl Editor {
                 points: vec![commander],
                 current: true,
                 reachable: true,
+                readable: true,
                 ..Route::default()
             };
             self.touch();
@@ -1219,7 +1255,7 @@ impl Editor {
     fn settle(&mut self, sent: Sent, result: &Json) -> Result<(), BridgeError> {
         match sent {
             Sent::Load { candidate } => self.settle_load(candidate, &report_of(result)?),
-            Sent::Edit { base } => {
+            Sent::Edit { base, retry: _ } => {
                 let answer = patch_of(result)?;
                 if base == self.revision {
                     self.undo.push(answer.inverse_json_patch);
@@ -1290,7 +1326,7 @@ impl Editor {
                 self.notes = response.notes;
                 self.known.notes = true;
             }
-            Sent::Notes => {
+            Sent::Notes { .. } => {
                 let response: SaveNotesResponse =
                     json::decode_json(&body(result, "gp.api.v1.SaveNotesResponse"))?;
                 self.notes_saved = Some(response.characters);
@@ -1305,7 +1341,7 @@ impl Editor {
                 self.queue.push_back(Job::Drafts);
                 self.say("draft_saved", "");
             }
-            Sent::Beacon => {
+            Sent::Beacon { .. } => {
                 let response: GetBeaconResponse =
                     json::decode_json(&body(result, "gp.api.v1.GetBeaconResponse"))?;
                 self.beacon_prose = response.prose;
@@ -1381,9 +1417,22 @@ impl Editor {
     /// client resuming a match) has no copy of it and needs the draft's body from the
     /// gateway. OWNER, with T17's resume and T19's pull request 2, which is when a client
     /// can first be restarted mid-match.
+    ///
+    /// Only a `carried` draft saved in **this** round counts. The gateway carries nothing
+    /// forward after a round whose playbook it filed itself (the safe playbook on a miss),
+    /// and an older `carried` draft can still be listed then; opening the editor's copy
+    /// over it would call a playbook from two rounds ago "last round's". The status line
+    /// names the draft by the gateway's own label.
     fn carry_forward(&mut self) {
-        let carried = self.drafts.iter().any(|draft| draft.id == CARRIED_DRAFT_ID);
-        if !carried || self.carried_round == self.round {
+        let Some(label) = self
+            .drafts
+            .iter()
+            .find(|draft| draft.id == CARRIED_DRAFT_ID && draft.round == self.round)
+            .map(|draft| draft.label.clone())
+        else {
+            return;
+        };
+        if self.carried_round == self.round {
             return;
         }
         let Some(sealed) = self.sealed.clone() else {
@@ -1394,8 +1443,7 @@ impl Editor {
         self.preview = None;
         self.ghost = None;
         self.accept_text(sealed);
-        let previous = self.round.saturating_sub(1).to_string();
-        self.say("carried", &previous);
+        self.say("carried", &label);
     }
 
     /// An edit landed: a ghost already answered describes the text before it and goes. A
@@ -1438,6 +1486,7 @@ impl Editor {
             reachable,
             whole: answer.get("ms").and_then(integer).unwrap_or(0),
             current: true,
+            readable: true,
             ..Route::default()
         };
         if let Some(commander) = self.commander {
@@ -1454,8 +1503,16 @@ impl Editor {
                 // to settle and is reported in this lane's pull request.
                 let to = leg.get("to");
                 let voxel = to.and_then(|to| to.get("voxel")).or(to);
-                route.points.push(voxel.map_or([0, 0, 0], voxel_of));
+                match voxel {
+                    Some(voxel @ Json::Object(_)) => route.points.push(voxel_of(voxel)),
+                    // A leg that names no end is not drawn to a point the gateway never
+                    // named: the polyline goes, and the times stay.
+                    _ => route.readable = false,
+                }
             }
+        }
+        if !route.readable {
+            route.points.clear();
         }
         self.route = route;
         self.touch();
@@ -2112,6 +2169,178 @@ mod tests {
             editor.rows_current(),
             "and checked against the new snapshot at once"
         );
+    }
+
+    /// A playbook whose route is one move step per label.
+    fn with_route(labels: &[&str]) -> String {
+        let steps: Vec<String> = labels
+            .iter()
+            .map(|label| {
+                format!(
+                    r#"{{"label":"{label}","move":{{"to":{{"voxel":{{"x":1,"y":2,"z":3}}}}}}}}"#
+                )
+            })
+            .collect();
+        format!(r#"{{"declarative":{{"route":[{}]}}}}"#, steps.join(","))
+    }
+
+    #[test]
+    fn quick_clicks_get_their_labels_and_indices_from_the_text_they_are_applied_to() {
+        let mut editor = loaded(&with_route(&["start"]));
+        assert!(editor.act(Action::Go, &Target::Beacon("b_00".to_owned())));
+        assert!(editor.act(Action::Go, &Target::Beacon("b_02".to_owned())));
+        assert!(editor.preview_place([350, 22, 36]));
+
+        let first = editor.next_call(false).expect("the first edit");
+        assert_eq!(first.method, "patch_plan");
+        assert!(json::write(&first.params).contains("go_1"));
+        editor
+            .answered(Ok(&patched(&with_route(&["start", "go_1"]), "[]")))
+            .expect("reads");
+
+        let second = editor.next_call(false).expect("the second edit");
+        assert_eq!(second.method, "patch_plan");
+        let written = json::write(&second.params);
+        assert!(
+            written.contains("go_2"),
+            "the second click is labelled against the text the first produced: {written}"
+        );
+        editor
+            .answered(Ok(&patched(&with_route(&["start", "go_1", "go_2"]), "[]")))
+            .expect("reads");
+
+        let preview = editor
+            .next_call(false)
+            .expect("the preview, behind both edits");
+        assert_eq!(preview.method, "patch_plan");
+        assert!(json::write(&preview.params).contains("place_1"));
+        editor
+            .answered(Ok(&patched(
+                &with_route(&["start", "go_1", "go_2", "place_1"]),
+                r#"[{"op":"remove","path":"/declarative/route/3"}]"#,
+            )))
+            .expect("reads");
+        let check = editor.next_call(false).expect("the preview's QUICK");
+        assert_eq!(check.method, "verify_plan");
+        // The placed step is route index 3, after both edits; an error there is illegal.
+        let diagnostic = r#"{"code":"E0403","severity":"error","path":"/declarative/route/3/place_beacon/at/voxel","beginner":"Outside every sphere of yours."}"#;
+        editor
+            .answered(Ok(&quick_report(diagnostic, false)))
+            .expect("reads");
+        assert_eq!(
+            editor.ghost().map(|ghost| ghost.state),
+            Some(GhostState::Illegal)
+        );
+    }
+
+    #[test]
+    fn a_checked_ghost_is_not_taken_ahead_of_an_edit_still_waiting() {
+        let mut editor = loaded(&with_route(&["start"]));
+        assert!(editor.preview_place([350, 22, 36]));
+        let _ = editor.next_call(false);
+        editor
+            .answered(Ok(&patched(&with_route(&["start", "place_1"]), "[]")))
+            .expect("reads");
+        let _ = editor.next_call(false);
+        editor.answered(Ok(&quick_report("", true))).expect("reads");
+        assert_eq!(
+            editor.ghost().map(|ghost| ghost.state),
+            Some(GhostState::Legal)
+        );
+        // A Go clicked before Place: the placement waits its turn instead of jumping it.
+        assert!(editor.act(Action::Go, &Target::Beacon("b_00".to_owned())));
+        assert!(editor.act(Action::Place, &Target::Voxel([350, 22, 36])));
+        assert_eq!(editor.revision(), 1, "nothing was taken out of turn");
+        let go = editor.next_call(false).expect("the go");
+        assert!(json::write(&go.params).contains("go_1"));
+    }
+
+    #[test]
+    fn an_edit_or_a_note_lost_to_a_dropped_connection_is_asked_again() {
+        let mut editor = loaded(&with_route(&["start"]));
+        assert!(editor.act(Action::Go, &Target::Beacon("b_00".to_owned())));
+        let first = editor.next_call(false).expect("the edit");
+        editor.dropped();
+        let again = editor.next_call(false).expect("the edit, again");
+        assert_eq!(again.method, "patch_plan");
+        assert_eq!(json::write(&again.params), json::write(&first.params));
+        editor
+            .answered(Ok(&patched(&with_route(&["start", "go_1"]), "[]")))
+            .expect("reads");
+        assert_eq!(
+            editor.revision(),
+            2,
+            "the edit the player asked for happened"
+        );
+
+        drain(&mut editor, r#"{"drafts":[]}"#);
+        editor.save_notes("remember the vent");
+        let notes = editor.next_call(false).expect("the notes");
+        assert_eq!(notes.method, "save_notes");
+        editor.dropped();
+        let again = editor.next_call(false).expect("the notes, again");
+        assert_eq!(again.method, "save_notes");
+        assert!(json::write(&again.params).contains("remember the vent"));
+    }
+
+    #[test]
+    fn a_missed_round_does_not_reopen_an_older_playbook_as_last_rounds() {
+        let mut editor = loaded(EXPAND_EAST);
+        editor.lull_opened(1);
+        drain(&mut editor, r#"{"drafts":[]}"#);
+        assert!(editor.submit());
+        assert_eq!(method_of(editor.next_call(false)), "submit_plan");
+        editor
+            .answered(Ok(&read(
+                r#"{"report":{"qualifies":true,"depth":"full"},"accepted":true}"#,
+            )))
+            .expect("reads");
+        // Round 2: the carried draft is round 1's playbook, and the player edits it
+        // but submits nothing, so the gateway files the safe playbook.
+        editor.lull_opened(2);
+        drain(
+            &mut editor,
+            r#"{"drafts":[{"draft_id":"carried","label":"carried from round 1","round":2}]}"#,
+        );
+        assert!(editor.act(Action::Go, &Target::Beacon("b_00".to_owned())));
+        let _ = editor.next_call(false);
+        editor
+            .answered(Ok(&patched(r#"{"round_two_work":1}"#, "[]")))
+            .expect("reads");
+        // Round 3: nothing was carried, and round 2's `carried` draft is still listed.
+        let before = editor.revision();
+        editor.lull_opened(3);
+        drain(
+            &mut editor,
+            r#"{"drafts":[{"draft_id":"carried","label":"carried from round 1","round":2}]}"#,
+        );
+        assert_eq!(
+            editor.bytes(),
+            br#"{"round_two_work":1}"#,
+            "the text on screen is kept; round 1's playbook is not last round's"
+        );
+        assert_eq!(editor.revision(), before, "nothing was opened over it");
+    }
+
+    #[test]
+    fn a_leg_that_names_no_end_draws_no_polyline() {
+        let mut editor = loaded(EXPAND_EAST);
+        editor.set_entities(&[Entity {
+            id: "u_1".to_owned(),
+            kind: EntityKind::Unit,
+            subtype: "commander".to_owned(),
+            owner: "seat.0".to_owned(),
+            at: [358, 22, 36],
+        }]);
+        assert_eq!(method_of(editor.next_call(false)), "estimate_route");
+        editor
+            .answered(Ok(&read(
+                r#"{"reachable":true,"ms":9000,"legs":[{"to":{"x":96,"y":11,"z":62},"ms":8000},{"ms":1000}]}"#,
+            )))
+            .expect("reads");
+        assert!(!editor.route().readable);
+        assert!(editor.route().points.is_empty(), "no point is invented");
+        assert_eq!(editor.route().legs, vec![8000, 1000], "the times stay");
     }
 
     #[test]

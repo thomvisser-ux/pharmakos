@@ -14,7 +14,8 @@
 //! # What it does, and what it deliberately does not
 //!
 //! It **reads this crate's own source and the GDScript beside it**, strips comments and
-//! string literals, and fails on any line where a money, power or duration identifier
+//! string literals (keeping a literal that is one identifier, a dictionary key), and fails
+//! on any line where a money, power or duration identifier
 //! appears next to an arithmetic operator. It is a text scan, not a type system — it will
 //! not catch arithmetic on a variable named `x` that happens to hold a cost, and it does
 //! not pretend to. What it does catch is the shape the rule is actually broken in:
@@ -37,36 +38,51 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Fragments of an identifier that mean money, power or time.
+/// Words that mean money, power or time, matched against the `_`-separated parts of an
+/// identifier (and the identifier itself), never as substrings: `remaining_ms` is a
+/// duration because one of its parts is `ms`, and `submitted` is not money merely because
+/// the letters `bmi` sit inside it.
 ///
 /// Drawn from the field names `gp.v1` and `gp.api.v1` actually use — every duration in
 /// the schema is an `int32` of game milliseconds and is spelled `..._ms` (decisions-log
-/// item 46), money is `$` and is spelled with `cost`, `credits`, `treasury` or `bmi`, and
-/// power is `kw`. `tick` and `frame` are here too: a frame count converted to a time, or
-/// a tick converted to a second, is time arithmetic wearing a different unit.
+/// item 46), or is the bare key `ms` of an estimate's `Leg` and its whole route; money is
+/// `$` and is spelled with `cost`, `credits`, `treasury` or `bmi`, and power is `kw`.
+/// `leg`, `legs`, `whole`, `travel` and `eta` are the names the editor holds the
+/// estimator's travel times under. `tick` and `frame` are here too: a frame count
+/// converted to a time, or a tick converted to a second, is time arithmetic wearing a
+/// different unit.
 const QUANTITIES: &[&str] = &[
-    "_ms",
-    "ms_",
+    "ms",
     "millis",
+    "milliseconds",
     "seconds",
+    "secs",
     "duration",
     "elapsed",
     "remaining",
     "timeout",
     "deadline",
+    "leg",
+    "legs",
+    "whole",
+    "travel",
+    "eta",
     "cost",
+    "costs",
     "credits",
     "treasury",
     "bmi",
     "dollars",
     "price",
-    "budget_",
-    "_kw",
-    "kw_",
+    "budget",
+    "kw",
     "power",
     "watt",
+    "watts",
     "tick",
+    "ticks",
     "frame",
+    "frames",
 ];
 
 /// Identifiers that contain a fragment above but are not a quantity at all.
@@ -76,7 +92,7 @@ const QUANTITIES: &[&str] = &[
 const EXEMPT: &[&str] = &[
     // `DrainBudget`'s three rows are per-FRAME upload limits, and the bridge copies them
     // from the rules table into the mesher's parameter type without touching them. The
-    // scan sees "budget_", "frame" and "bytes_per_frame"; there is no arithmetic on any
+    // scan sees "budget", "frame" and "bytes_per_frame"; there is no arithmetic on any
     // of them in this crate, and if one ever appears this exemption does not hide it,
     // because the exemption is by IDENTIFIER and the operator check still runs on the
     // rest of the line.
@@ -139,24 +155,55 @@ fn collect(dir: &Path, extension: &str, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// One line of source with its comments and string literals removed.
+/// One line of source with its comments and string literals removed — except a string
+/// literal that is a bare identifier, which is kept as that word.
 ///
-/// Both have to go. A comment in this crate says "no arithmetic on `$`, `kW` or
-/// durations" in several places and would trip the scan on the word it is warning about;
-/// a string literal carries diagnostic prose and JSON with the same words in it.
+/// Comments have to go: a comment in this crate says "no arithmetic on `$`, `kW` or
+/// durations" in several places and would trip the scan on the word it is warning about.
+/// Prose and JSON in string literals go for the same reason. But a literal that is one
+/// identifier is how GDScript reads a dictionary — `route.get("whole", 0) / 1000` is
+/// arithmetic on a duration whose only name on the line is the key `"whole"` — so such a
+/// literal stays, as the word it spells.
 fn code_of(line: &str) -> String {
     let mut out = String::with_capacity(line.len());
     let mut characters = line.chars().peekable();
     let mut in_string = false;
     let mut string_delimiter = '"';
+    let mut literal = String::new();
+    let mut after_format = false;
     while let Some(character) = characters.next() {
         if in_string {
             if character == '\\' {
                 characters.next();
+                literal.push('\\');
             } else if character == string_delimiter {
                 in_string = false;
+                let identifier = literal
+                    .chars()
+                    .next()
+                    .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
+                    && literal
+                        .chars()
+                        .all(|each| each.is_ascii_alphanumeric() || each == '_');
+                if identifier {
+                    out.push(' ');
+                    out.push_str(&literal);
+                    out.push(' ');
+                } else {
+                    after_format = true;
+                }
+            } else {
+                literal.push(character);
             }
             continue;
+        }
+        // `"..." % values` is GDScript's string formatting, not a remainder: a `%` right
+        // after a literal of text is dropped with the literal.
+        if after_format && character != ' ' {
+            after_format = false;
+            if character == '%' {
+                continue;
+            }
         }
         match character {
             '"' | '\'' => {
@@ -165,6 +212,7 @@ fn code_of(line: &str) -> String {
                 if character == '"' {
                     in_string = true;
                     string_delimiter = '"';
+                    literal.clear();
                     continue;
                 }
                 out.push(character);
@@ -177,6 +225,12 @@ fn code_of(line: &str) -> String {
     out
 }
 
+/// Whether one identifier names something in `words`: the identifier itself, or one of its
+/// `_`-separated parts.
+fn names_one_of(word: &str, words: &[&str]) -> bool {
+    words.contains(&word) || word.split('_').any(|part| words.contains(&part))
+}
+
 /// The quantity identifiers a line names, ignoring the exempt ones.
 fn quantities_in(code: &str) -> Vec<String> {
     let lowered = code.to_ascii_lowercase();
@@ -187,7 +241,7 @@ fn quantities_in(code: &str) -> Vec<String> {
         if word.is_empty() || EXEMPT.contains(&word) {
             continue;
         }
-        if QUANTITIES.iter().any(|fragment| word.contains(fragment)) {
+        if names_one_of(word, QUANTITIES) {
             found.push(word.to_owned());
         }
     }
@@ -248,16 +302,18 @@ const PACING_MODULE: &str = "pacer.rs";
 /// The fragments of [`QUANTITIES`] that mean time, which [`PACING_MODULE`] may compute
 /// with.
 const TIME: &[&str] = &[
-    "_ms",
-    "ms_",
+    "ms",
     "millis",
+    "milliseconds",
     "seconds",
+    "secs",
     "duration",
     "elapsed",
     "remaining",
     "timeout",
     "deadline",
     "frame",
+    "frames",
 ];
 
 /// Every offending line, as `path:line: text`.
@@ -277,7 +333,15 @@ fn offences(files: &[PathBuf]) -> Vec<String> {
             let code = code_of(line);
             let mut named = quantities_in(&code);
             if pacing {
-                named.retain(|word| !TIME.iter().any(|fragment| word.contains(fragment)));
+                // A word the pacer may compute with is one whose every quantity part is
+                // time: `owed_ms` passes, `remaining_kw` does not.
+                named.retain(|word| {
+                    !word
+                        .split('_')
+                        .chain(std::iter::once(word.as_str()))
+                        .filter(|part| QUANTITIES.contains(part))
+                        .all(|part| TIME.contains(&part))
+                });
             }
             if named.is_empty() || !has_arithmetic(&code) {
                 continue;
@@ -316,6 +380,12 @@ fn the_scanner_catches_what_it_is_for() {
         "self.treasury -= spend;",
         "var left := remaining_ms - elapsed_ms",
         "let draw = generator_kw + autocannon_kw;",
+        // A bare `ms`, and the two places the editor actually shows a duration, with a
+        // conversion planted in each (review of T19 PR 1).
+        "var t = ms * 1000",
+        "label.text = Strings.text(\"leg\", {\"ms\": legs[index] / 1000})",
+        "_route_label.text = Strings.text(\"route_whole\", {\"ms\": route.get(\"whole\", 0) / 1000})",
+        "var seconds_left = travel - 5",
     ];
     for line in broken {
         let code = code_of(line);
@@ -336,6 +406,11 @@ fn the_scanner_does_not_trip_on_ordinary_code() {
         "// the phase_remaining_ms field is never read here",
         "# remaining_ms belongs to the gateway",
         "report.set(&\"bytes_per_frame\".to_variant(), &value);",
+        // Letters inside a word are not a quantity: `submitted` holds `bmi`.
+        "var submitted_count := index + 1",
+        "print(\"legs %s\" % route.get(\"legs\"))",
+        "second * CHUNK_EDGE + first",
+        "label.text = Strings.text(\"leg\", {\"ms\": legs[index]})",
     ];
     for line in fine {
         let code = code_of(line);
