@@ -1,0 +1,71 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// The committed playbook the headless watch check opens, edits and submits
+// (godot/scripts/watch_check.gd; skeleton plan T19, pull request 1).
+//
+// It is written in plan-core's CANONICAL form, comments included, so opening
+// and saving it in the editor gives these bytes back, and so the check can say
+// what a submission of it looks like byte for byte
+// (godot/fixtures/editor_check.expected.jsonc).
+//
+// It qualifies twice over: against the live seat 0 of the golden seed
+// (0x00000000ca5caded), where the commander opens at 358, 22, 36, and against
+// `gamectl verify`'s reference seat view. So it names no beacon by id -- the
+// two views hold different beacons -- and walks to a voxel and home to the
+// safest own beacon, a place both views can answer.
+{
+  "schema_version": {
+    "major": 1
+  },
+  "meta": {
+    "title": "Editor check",
+    "author_kind": "HUMAN"
+  },
+  "declarative": {
+    "route": [
+      // Eight voxels west of where seat 0's commander opens.
+      {
+        "label": "walk_west",
+        "timeout_ms": 30000,
+        "move": {
+          "to": {
+            "voxel": {
+              "x": 350,
+              "y": 22,
+              "z": 36
+            }
+          },
+          "pace": "DIRECT"
+        }
+      },
+      // And home again.
+      {
+        "label": "back_home",
+        "timeout_ms": 60000,
+        "move": {
+          "to": {
+            "beacon_anchor": {
+              "safest": {}
+            }
+          },
+          "pace": "DIRECT"
+        }
+      }
+    ]
+  },
+  "on_death": {
+    "on_respawn": "CONTINUE",
+    "max_deaths_before_fallback": 2
+  },
+  "fallback": {
+    "hold": {
+      "at": {
+        "beacon_anchor": {
+          "safest": {}
+        }
+      }
+    }
+  },
+  "kind": "PLAYBOOK"
+}

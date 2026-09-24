@@ -91,9 +91,31 @@ func my_commander() -> Node3D:
 	return null
 
 
+## The voxel this seat's commander stands on, in the sim's axes, as the view last said;
+## `Vector3i(-1, -1, -1)` when the view shows none.
+func my_commander_at() -> Vector3i:
+	for id in _markers:
+		var marker: Dictionary = _markers[id]
+		if marker["kind"] == "unit" and marker["subtype"] == "commander" and marker["owner"] == my_seat:
+			return marker["at"]
+	return Vector3i(-1, -1, -1)
+
+
 ## How many markers are drawn.
 func marker_count() -> int:
 	return _markers.size()
+
+
+## The beacons drawn: `id` (the `b_NN` id `get_beacon` takes), `owner`, and `position`, the
+## middle of the marker in the world, for the editor to pick by screen distance.
+func beacons() -> Array:
+	var out := []
+	for id in _markers:
+		var marker: Dictionary = _markers[id]
+		if marker["kind"] == "beacon":
+			var node: Node3D = marker["node"]
+			out.append({"id": id, "owner": marker["owner"], "position": node.global_position + Vector3(0.0, 4.5, 0.0)})
+	return out
 
 
 func _process(delta: float) -> void:
@@ -129,8 +151,10 @@ func _show(entities: Array, snap: bool) -> void:
 				"subtype": String(entity["subtype"]),
 				"owner": String(entity["owner"]),
 				"target": goal,
+				"at": at,
 			}
 		_markers[id]["target"] = goal
+		_markers[id]["at"] = at
 		if snap:
 			_markers[id]["node"].position = goal
 	for id in _markers.keys():
