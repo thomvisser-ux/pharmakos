@@ -37,7 +37,7 @@ host                      serve one match to the game client over this process's
 
 ## The playbook vocabulary (gp.v1)
 
-88 messages. A field's name is the one the canonical form writes, which is
+89 messages. A field's name is the one the canonical form writes, which is
 the .proto spelling and not lowerCamelCase. A reserved number is one held on
 purpose: field numbers are added, never renumbered or reused.
 
@@ -264,6 +264,7 @@ gp.v1.Meta
   author_kind                  2   gp.v1.Meta.AuthorKind
   fingerprint                  3   bytes
   note                         4   string
+  parameters                   6   repeated gp.v1.TemplateParameter
   reserved 5
   reserved team_id
 
@@ -536,6 +537,11 @@ gp.v1.SurveySettings
   scout_count                  2   uint32
   reserved 3
   reserved probe_directions
+
+gp.v1.TemplateParameter
+  pointer                      1   string
+  label                        2   string
+  reserved 3 to 15
 
 gp.v1.ThreatAt
   at                           1   gp.v1.Location
