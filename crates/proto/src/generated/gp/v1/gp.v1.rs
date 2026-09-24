@@ -91,7 +91,7 @@ impl ::prost::Name for SchemaVersion {
 const NAME: &'static str = "SchemaVersion";
 const PACKAGE: &'static str = "gp.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.v1.SchemaVersion".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.SchemaVersion".into() }}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Meta {
     /// Free text, shown in the editor and the recap.
     #[prost(string, tag="1")]
@@ -126,6 +126,24 @@ pub struct Meta {
     /// Free text for the author. Round-tripped, never interpreted.
     #[prost(string, tag="4")]
     pub note: ::prost::alloc::string::String,
+    /// What a TEMPLATE lets its wizard fill in, in the order the wizard asks
+    /// (spec section 13: "Each is a parameter wizard pre-filled with the
+    /// built-in operator's suggestion and a 'why' note"). Decisions-log item
+    /// 111, decision C1: a template declares its parameters in the file itself,
+    /// because the library is data a player can copy, and S6's "Save as
+    /// template" makes templates no operator has code for.
+    ///
+    /// Meaningful only when kind = TEMPLATE. instantiate_template removes the
+    /// list as it sets kind to PLAYBOOK, so no playbook's fingerprint moves. On a
+    /// hand-written PLAYBOOK it is round-tripped and never read, exactly as
+    /// `note` is; nothing is stripped. PLACEHOLDER: whether the verifier should
+    /// refuse it on a PLAYBOOK with a code of its own rather than round-trip it
+    /// is OWNER's, at S6 (a refusal is a new diagnostic catalogue code).
+    ///
+    /// Number 6, and not "the next free one" by accident: 5 stays held for
+    /// team_id above.
+    #[prost(message, repeated, tag="6")]
+    pub parameters: ::prost::alloc::vec::Vec<TemplateParameter>,
 }
 /// Nested message and enum types in `Meta`.
 pub mod meta {
@@ -173,6 +191,31 @@ impl ::prost::Name for Meta {
 const NAME: &'static str = "Meta";
 const PACKAGE: &'static str = "gp.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.v1.Meta".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.Meta".into() }}
+/// One parameter a TEMPLATE declares (Meta.parameters).
+///
+/// Untyped until S6, on purpose: the value a wizard fills in is the JSON at
+/// `pointer`, written as it would be written in the file (a duration is game
+/// milliseconds), and the verifier refuses what does not fit, so the
+/// declaration does not have to carry the type. PLACEHOLDER: the typed
+/// parameter catalogue — a parameter's type, unit, range and choices — is
+/// OWNER's, at S6, with the editor and the library, and takes numbers 3 to 15.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct TemplateParameter {
+    /// An RFC 6901 JSON Pointer into this file: where the value goes. The
+    /// wizard's edit is an RFC 6902 `replace` at this pointer, the same
+    /// mechanism as every other editor edit (spec section 13, "Edits are JSON
+    /// Patches"), so it must resolve in the template as written.
+    #[prost(string, tag="1")]
+    pub pointer: ::prost::alloc::string::String,
+    /// What the wizard calls it, in the author's words. English, like every
+    /// other string a template carries.
+    #[prost(string, tag="2")]
+    pub label: ::prost::alloc::string::String,
+}
+impl ::prost::Name for TemplateParameter {
+const NAME: &'static str = "TemplateParameter";
+const PACKAGE: &'static str = "gp.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.v1.TemplateParameter".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.TemplateParameter".into() }}
 /// The body of the playbook. "Declarative" is the v1 vocabulary: route steps
 /// with guards, handlers, selectors, on_death, fallback and options — exactly
 /// what the editor renders (spec section 10).

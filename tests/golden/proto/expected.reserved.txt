@@ -4,9 +4,12 @@
 # dropping one from this file is a WIRE_JSON break (AGENTS.md section 5).
 
 gp.api.v1.BeaconSummary
-  numbers: 3-15
+  numbers: 7-15
 
 gp.api.v1.Event
+  numbers: 5-15
+
+gp.api.v1.FilledParameter
   numbers: 5-15
 
 gp.api.v1.GetBeaconResponse
@@ -16,7 +19,7 @@ gp.api.v1.GetBriefingResponse
   numbers: 5-15
 
 gp.api.v1.GetEconomyForecastResponse
-  numbers: 1-15
+  numbers: 5-15
 
 gp.api.v1.GetMapSummaryResponse
   numbers: 5-15
@@ -91,6 +94,9 @@ gp.v1.Step
 gp.v1.SurveySettings
   numbers: 3
   names:   probe_directions
+
+gp.v1.TemplateParameter
+  numbers: 3-15
 
 gp.api.v1.Method
   numbers: 80, 81, 82, 83

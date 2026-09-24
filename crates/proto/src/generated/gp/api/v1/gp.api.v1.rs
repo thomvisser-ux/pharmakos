@@ -509,12 +509,42 @@ const NAME: &'static str = "ListBeaconsResponse";
 const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.ListBeaconsResponse".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.ListBeaconsResponse".into() }}
 /// One beacon as the seat knows it.
+///
+/// Fields 3 to 6 are T18a's (decisions-log item 111, decision C7): what an
+/// ordinary client needs to tell that power is short and which beacons would
+/// brown out first (spec section 14's safe playbook), read from the world as it
+/// stands — the frozen snapshot's in a Lull or a recap, the live world's in a
+/// Push.
+///
+/// A seat's OWN beacon carries all four. ANOTHER seat's beacon carries `owner`
+/// and nothing more: its core flag, priority and power state are that seat's
+/// business (spec section 3 names only a seat's own), and are left unset rather
+/// than zeroed — which is why `priority` is never QUARTERMASTER_PRIORITY_UNSPECIFIED
+/// on an own beacon, and a reader can tell the two apart by it.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BeaconSummary {
     #[prost(string, tag="1")]
     pub beacon_id: ::prost::alloc::string::String,
     #[prost(message, optional, tag="2")]
     pub at: ::core::option::Option<super::super::v1::Voxel>,
+    /// The seat that owns it, spelt as ViewEntity.owner spells a seat: `seat.0`.
+    #[prost(string, tag="3")]
+    pub owner: ::prost::alloc::string::String,
+    /// OWN beacons only: true for the seat's core, the beacon the map pre-places
+    /// for it. PLACEHOLDER: read today as "the seat's lowest-numbered beacon",
+    /// which is true of every map the generator makes because it places the core
+    /// first, and the same rule the verifier's scope uses; it becomes a column
+    /// the day a beacon carries a kind (OWNER, S1).
+    #[prost(bool, tag="4")]
+    pub core: bool,
+    /// OWN beacons only: the Quartermaster priority, which orders brownouts
+    /// (spec section 7). On the JSON-RPC wire it is lower case, as every enum
+    /// this surface answers with is (decisions-log item 80): "normal".
+    #[prost(enumeration="super::super::v1::interface_row::QuartermasterPriority", tag="5")]
+    pub priority: i32,
+    /// OWN beacons only: false while the beacon is browned out (dormant).
+    #[prost(bool, tag="6")]
+    pub powered: bool,
 }
 impl ::prost::Name for BeaconSummary {
 const NAME: &'static str = "BeaconSummary";
@@ -608,8 +638,31 @@ impl ::prost::Name for WhatIf {
 const NAME: &'static str = "WhatIf";
 const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.WhatIf".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.WhatIf".into() }}
+/// Fields 1 to 4 are PRESENT-STATE values and are named so (decisions-log item
+/// 111, decision C7, a departure from item 105 (2) taken in the open): the
+/// seat's OWN economy as the world stands, the frozen snapshot's in a Lull or a
+/// recap and the live world's in a Push. They are what the sim already reads
+/// out, not a projection. S1's projection, income and what-if answers land in
+/// NEW fields and never redefine these four. Another seat's economy is on no
+/// wire at all (spec section 10: enemy treasury is deliberately absent).
+///
+/// Whole $ and whole kW, int32 like gp.v1's Treasury and KwHeadroom predicates,
+/// which is what a playbook compares them against.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetEconomyForecastResponse {
+    /// The seat's treasury, whole $.
+    #[prost(int32, tag="1")]
+    pub treasury_now: i32,
+    /// The seat's power supply, whole kW.
+    #[prost(int32, tag="2")]
+    pub supply_kw_now: i32,
+    /// The seat's power draw, whole kW.
+    #[prost(int32, tag="3")]
+    pub draw_kw_now: i32,
+    /// Supply minus draw, whole kW. Negative means the grid is short and the
+    /// brownout order is running — the KwHeadroom predicate's own number.
+    #[prost(int32, tag="4")]
+    pub headroom_kw_now: i32,
 }
 impl ::prost::Name for GetEconomyForecastResponse {
 const NAME: &'static str = "GetEconomyForecastResponse";
@@ -735,8 +788,17 @@ fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.TemplateSummary".i
 pub struct InstantiateTemplateRequest {
     #[prost(string, tag="1")]
     pub template_id: ::prost::alloc::string::String,
+    /// Explicit values. An explicit value beats a suggestion.
     #[prost(message, repeated, tag="2")]
     pub parameters: ::prost::alloc::vec::Vec<Parameter>,
+    /// Pre-fill every declared parameter the caller did not name with the
+    /// built-in operator's suggestion for THIS seat, where there is one (spec
+    /// section 13: "a parameter wizard pre-filled with the built-in operator's
+    /// suggestion and a 'why' note"). The suggestion is computed at the start of
+    /// the Lull, for a seat the built-in operator does not play, and a seat is
+    /// only ever told its own (decisions-log item 111, decision C2).
+    #[prost(bool, tag="3")]
+    pub suggested: bool,
 }
 impl ::prost::Name for InstantiateTemplateRequest {
 const NAME: &'static str = "InstantiateTemplateRequest";
@@ -744,12 +806,14 @@ const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.InstantiateTemplateRequest".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.InstantiateTemplateRequest".into() }}
 /// PLACEHOLDER STUB - a typed parameter catalogue is S6's, with the editor and
 /// the template library. Name and text value until then: the template declares
-/// what it accepts and the verifier rejects what does not fit, so the wire
-/// shape does not have to carry the type.
+/// what it accepts (gp.v1.Meta.parameters) and the verifier rejects what does
+/// not fit, so the wire shape does not have to carry the type.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Parameter {
+    /// The RFC 6901 JSON Pointer a gp.v1.TemplateParameter declares.
     #[prost(string, tag="1")]
     pub name: ::prost::alloc::string::String,
+    /// The JSON to put there, as text: `3000`, `{"voxel":{"x":1,"y":2,"z":3}}`.
     #[prost(string, tag="2")]
     pub value: ::prost::alloc::string::String,
 }
@@ -757,16 +821,53 @@ impl ::prost::Name for Parameter {
 const NAME: &'static str = "Parameter";
 const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.Parameter".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.Parameter".into() }}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct InstantiateTemplateResponse {
-    /// A whole playbook file, JSONC, comments included.
+    /// A whole playbook file, JSONC, comments included. kind is PLAYBOOK and
+    /// meta.parameters is gone: what comes back is a playbook, not a template.
     #[prost(string, tag="1")]
     pub playbook_jsonc: ::prost::alloc::string::String,
+    /// Every parameter the template declares, in declaration order, with the
+    /// value that was applied: the explicit one, else the suggestion when
+    /// `suggested` was asked for and there is one, else the template's own. The
+    /// wizard builds its pages from this list.
+    #[prost(message, repeated, tag="2")]
+    pub parameters: ::prost::alloc::vec::Vec<FilledParameter>,
+    /// Why the operator suggested what it did: one sentence, English. Empty when
+    /// `suggested` was not asked for or there is no suggestion for this seat and
+    /// template. PLACEHOLDER: the wording is the operator's, from the one string
+    /// table (OWNER, S6).
+    #[prost(string, tag="3")]
+    pub why: ::prost::alloc::string::String,
 }
 impl ::prost::Name for InstantiateTemplateResponse {
 const NAME: &'static str = "InstantiateTemplateResponse";
 const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.InstantiateTemplateResponse".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.InstantiateTemplateResponse".into() }}
+/// One declared parameter, filled.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct FilledParameter {
+    /// The gp.v1.TemplateParameter's pointer.
+    #[prost(string, tag="1")]
+    pub pointer: ::prost::alloc::string::String,
+    /// The gp.v1.TemplateParameter's label.
+    #[prost(string, tag="2")]
+    pub label: ::prost::alloc::string::String,
+    /// The JSON that was applied, as compact text. A duration is game
+    /// milliseconds: the wire carries no unit display, and the editor may not
+    /// convert one itself (AGENTS.md section 3 rule 4). PLACEHOLDER: unit display
+    /// is OWNER's, at S6, with the typed catalogue.
+    #[prost(string, tag="3")]
+    pub value: ::prost::alloc::string::String,
+    /// True when `value` is the operator's suggestion rather than an explicit
+    /// value or the template's own.
+    #[prost(bool, tag="4")]
+    pub suggested: bool,
+}
+impl ::prost::Name for FilledParameter {
+const NAME: &'static str = "FilledParameter";
+const PACKAGE: &'static str = "gp.api.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.FilledParameter".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.FilledParameter".into() }}
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct VerifyPlanRequest {
     #[prost(string, tag="1")]
@@ -968,6 +1069,21 @@ fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.RenderPlanRequest"
 pub struct RenderPlanResponse {
     /// Deterministic template prose. Reads the coming segment's length from the
     /// frozen snapshot, never from a constant.
+    ///
+    /// LINE LAYOUT, which is part of the contract: one rule, step or block per
+    /// line, in file order. Every line ends in "\n" and the indent says what a
+    /// line is:
+    ///    * column 0: the envelope (title, author, kind, note), then one heading
+    ///      per block — `Route`, `Rules`, `If the commander dies`, `Fallback`,
+    ///      `Budget` — each block after one empty line, in that order;
+    ///    * two spaces: one line per route step and one per rule, numbered in
+    ///      file order, and one line per statement of the two tail blocks;
+    ///    * four spaces and deeper: what belongs to the line above it — a step's
+    ///      guards, a rule's body steps, its resume and its firing limits.
+    /// So a rule, a step or a block always begins a line of its own. The
+    /// editor's rule list reads lines and never parses sentences (decisions-log
+    /// item 111, decision C3: chips are S3's), and plan-core's render_plan prose
+    /// goldens (tests/golden/plan-core) pin the layout.
     #[prost(string, tag="1")]
     pub prose: ::prost::alloc::string::String,
 }
@@ -1057,6 +1173,12 @@ const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.DraftSummary".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.DraftSummary".into() }}
 /// What the operator would file on a timeout, so a seat can see the cost of one
 /// (spec section 14). Always qualifies.
+///
+/// THE SEAT'S OWN (decisions-log item 111, decision C5): the built-in operator's
+/// safe playbook for the calling seat, computed at the start of the Lull and
+/// verified FULL when it was filed. A host with no operator advising that seat,
+/// or an advice that did not qualify, answers the gateway's fallback, which is
+/// the library's Safe Playbook template with nothing raised.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetSafePlanRequest {
 }

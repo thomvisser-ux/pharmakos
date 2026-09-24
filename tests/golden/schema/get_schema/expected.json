@@ -1791,6 +1791,12 @@
         },
         "note": {
           "type": "string"
+        },
+        "parameters": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TemplateParameter"
+          }
         }
       }
     },
@@ -2276,6 +2282,19 @@
         },
         "scout_count": {
           "type": "integer"
+        }
+      }
+    },
+    "TemplateParameter": {
+      "type": "object",
+      "description": "gp.v1.TemplateParameter",
+      "additionalProperties": false,
+      "properties": {
+        "pointer": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
         }
       }
     },
