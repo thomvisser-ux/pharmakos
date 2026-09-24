@@ -476,7 +476,7 @@ pub fn instantiate(
                 ));
                 compact(applied)
             }
-            // Resolved by `declared_in` already; `Null` only if it vanished,
+            // Resolved by `declared_in` already; empty only if it vanished,
             // which a parsed document cannot do.
             None => value_at(&template, &declaration.pointer)?.map_or_else(String::new, compact),
         };

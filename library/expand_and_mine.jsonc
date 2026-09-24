@@ -11,6 +11,10 @@
 // safest own beacon, which qualifies and places nothing (a beacon cannot stand
 // on another). The wizard asks for the site, and the built-in operator's
 // suggestion names one at the edge of your own sphere.
+//
+// PLACEHOLDER: the two sites' own values (the safest own beacon) are harmless
+// stand-ins that the wizard or the operator replaces; what the template ships
+// as its own values is the OWNER's, with T18's suggestions, in run 2.
 {
   "schema_version": {"major": 1, "minor": 0},
   "meta": {

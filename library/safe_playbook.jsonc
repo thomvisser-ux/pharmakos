@@ -13,6 +13,10 @@
 // SAFE_PLAYBOOK is this template instantiated with no parameters, and
 // `the_gateways_fallback_is_the_safe_template_with_nothing_raised` keeps the
 // two equal ("written once, tested twice", decisions-log item 81).
+//
+// PLACEHOLDER: spec section 14 names "the flee and rescue rules"; this has
+// the flee rule only, because nothing can be rescued before combat. Whether
+// and how it gains a rescue rule is the OWNER's, at S2/S5.
 {
   "schema_version": {"major": 1, "minor": 0},
   "meta": {
