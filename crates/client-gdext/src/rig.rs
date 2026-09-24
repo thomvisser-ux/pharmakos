@@ -1250,7 +1250,7 @@ mod tests {
     }
 
     #[test]
-    fn planning_calls_wait_for_a_lull_and_for_budget() {
+    fn planning_calls_wait_for_a_lull() {
         let mut rig = editing();
         rig.end_lull();
         let sent = rig.poll(3);

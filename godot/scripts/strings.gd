@@ -84,13 +84,17 @@ const TEXT := {
 	"status_submit_refused": "Not submitted: the check found errors.",
 	"status_notes_saved": "Notebook saved ({detail} characters).",
 	"status_draft_saved": "Draft saved.",
-	"status_carried": "Last round's orders are loaded again and checked against the new map (from round {detail}).",
+	"status_carried": "Last round's orders are loaded again and checked against the new map ({detail}).",
 	"status_not_yours": "That beacon is not yours.",
 	"status_saved_file": "Saved to {path}.",
 	"status_save_failed": "Could not write {path}.",
 	"status_open_failed": "Could not read {path}.",
 
 	# --- The route -------------------------------------------------------------
+	# PLACEHOLDER: travel times are shown as the raw game milliseconds the estimator
+	# answered, until the gateway answers a rendered figure (decisions-log items 57 and 61:
+	# a short route's ETA rounded generously or shown in whole seconds). OWNER, with
+	# plan-core/T18a, S3.
 	"leg": "{ms} ms",
 	"route_whole": "Travel, as estimated: {ms} ms",
 	"route_none": "No route: the commander cannot get there.",

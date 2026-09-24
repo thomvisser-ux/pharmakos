@@ -48,10 +48,14 @@
 //! | a click on the map, a Load, a Fix | the editor's next planning call, and its rows | [`editor`] |
 //! | the wall clock | game milliseconds asked for, the host clock reported | [`pacer`] |
 //!
-//! Each of those is a copy or a lookup. The two places where something is *decided* are
-//! both presentation plumbing that the sim must never see: which frame a chunk is
-//! uploaded on (the mesher's own `DrainQueue`, item 54) and whether a surface can be
-//! patched in place rather than rebuilt (item 53's guards, [`upload`]).
+//! Each of those is a copy or a lookup. The places where something is *decided* are all
+//! presentation or connection plumbing that the sim must never see: which frame a chunk is
+//! uploaded on (the mesher's own `DrainQueue`, item 54); whether a surface can be patched
+//! in place rather than rebuilt (item 53's guards, [`upload`]); the order the editor's
+//! planning calls go out in ([`editor`]); how many calls the seat connection spends
+//! between two clock reports, and Ready waiting behind a submission still in flight
+//! ([`rig`]); and when FULL is owed after 600 ms idle ([`pacer::IdleTimer`]). None of them
+//! is a rule of the game, a verdict, a price or a travel time; those are the gateway's.
 //!
 //! # Why this crate is behind the wall
 //!
@@ -95,9 +99,10 @@
 //!
 //! # What is not here yet
 //!
-//! The `.vox` models: entities are drawn as placeholder primitives by GDScript until T19
-//! and S6, and `dot_vox` arrives with the models rather than here (decisions log item
-//! 101).
+//! T19's pull request 2: the template wizard with `instantiate_template`'s suggestions,
+//! the prose rule list, the `$`/`kW` meter and the lobby's Resume. The `.vox` models:
+//! entities are drawn as placeholder primitives by GDScript until S6, and `dot_vox` arrives
+//! with the models rather than here (decisions log item 101).
 
 pub mod api;
 pub mod chunks;
