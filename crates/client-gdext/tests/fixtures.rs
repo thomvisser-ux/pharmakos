@@ -83,6 +83,13 @@ fn generate() -> Vec<(&'static str, &'static str, String)> {
         segment_length_ms: 180_000,
         prose: "Round 1. You hold the core and one Generator.".to_owned(),
     };
+    // `gp.api.v1.BeaconSummary` gains fields in wave 6 (decisions-log item 111), and
+    // canonical JSON omits a field at its default, so this fixture's bytes do not move
+    // when they land; the base keeps the literals compiling across that additive change.
+    #[allow(
+        clippy::needless_update,
+        reason = "the base is for the fields gp.api.v1.BeaconSummary gains in wave 6"
+    )]
     let beacons = ListBeaconsResponse {
         beacons: vec![
             BeaconSummary {
@@ -92,6 +99,7 @@ fn generate() -> Vec<(&'static str, &'static str, String)> {
                     y: 96,
                     z: 24,
                 }),
+                ..BeaconSummary::default()
             },
             BeaconSummary {
                 beacon_id: "vent-east".to_owned(),
@@ -100,6 +108,7 @@ fn generate() -> Vec<(&'static str, &'static str, String)> {
                     y: 90,
                     z: 22,
                 }),
+                ..BeaconSummary::default()
             },
         ],
         next_cursor: String::new(),
