@@ -14,6 +14,10 @@
 // row commits, so it builds nothing and spends nothing. The wizard asks for
 // the vent, and the built-in operator's suggestion names the one inside your
 // sphere.
+//
+// PLACEHOLDER: the anchor's own value (the map's corner) is a harmless
+// stand-in that the wizard or the operator replaces; what the template ships
+// as its own value is the OWNER's, with T18's suggestions, in run 2.
 {
   "schema_version": {"major": 1, "minor": 0},
   "meta": {
