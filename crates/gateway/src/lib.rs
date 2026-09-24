@@ -57,6 +57,7 @@
 //! | [`feed`] | The event bus, the 60 s digest cadence and the opaque cursors |
 //! | [`viewfeed`] | The view's derived, unhashed state: the generated map, the stamps, the entitled bytes |
 //! | [`serve`] | The host loop: one config line in, one announce line out, one surface behind many connections |
+//! | [`advice`] | What the built-in operator advises a seat it does not play: the safe playbook and the wizard's suggestions |
 //! | [`cache`] | The private match cache: where it goes, and what is in it |
 //! | [`detail`] | The read-method detail budgets, in the fixed salience order |
 //! | [`time`] | The host's tick reaching the gateway, because the gateway has no clock |
@@ -116,6 +117,7 @@
 //!   plus deterministic template prose, pagination uses opaque cursors tied to the
 //!   snapshot, and every result carries a `_status` footer with the phase and timer.
 
+pub mod advice;
 pub mod audit;
 pub mod cache;
 pub mod detail;

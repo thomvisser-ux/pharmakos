@@ -64,6 +64,11 @@
 //!    lines about fog need one to. They are reached by no method, and the
 //!    scenario runner must not grow a dependency on them without the owner's
 //!    word.
+//! 8. **No handler files advice or gives a token a rate.**
+//!    [`no_handler_can_file_advice`]: `Surface::file_advice` and
+//!    `Surface::register_in_process` are host-side (decisions-log item 111,
+//!    decisions C5 and C6), defined in `src/surface.rs`, called from
+//!    `src/serve.rs`, and named nowhere else.
 //!
 //! And then the rule that is about the *schema* rather than the source: a
 //! playbook is data with a closed vocabulary, and no field of that vocabulary
@@ -635,6 +640,80 @@ fn no_wire_method_files_a_voxel_edit_or_a_damage_order() {
         assert!(
             lines.iter().any(|(_, line)| uses(line, needle)),
             "`{needle}` is guarded everywhere and defined nowhere, so this test guards nothing"
+        );
+    }
+}
+
+/// No method handler can file advice, or give a token a rate of its own
+/// (decisions-log item 111, decisions C5 and C6).
+///
+/// `Surface::file_advice` writes a seat's safe playbook and its wizard
+/// suggestions into that seat's private store, and
+/// `Surface::register_in_process` gives a token its own rate limit and a
+/// scratch view feed. Both are **host-side**: the host loop in `serve.rs`
+/// calls them for the tokens it minted for itself, and nothing a client sends
+/// may reach either. So each name may appear in `surface.rs` only on the line
+/// that defines it, in `serve.rs` (the one caller), and nowhere else in the
+/// crate -- not in a handler module, not in `surface/control.rs`, not in a
+/// dispatch arm.
+#[test]
+fn no_handler_can_file_advice() {
+    const HOST_SIDE: &[(&str, &str)] = &[
+        (
+            "file_advice",
+            "the host files a seat's advice; a handler that could would let a client write a \
+             seat's safe playbook",
+        ),
+        (
+            "register_in_process",
+            "the host gives its own tokens their own rate; a handler that could would let a \
+             client give itself one",
+        ),
+    ];
+    const CALLER: &str = "serve.rs";
+    const DEFINER: &str = "surface.rs";
+    let findings = scan_except(HOST_SIDE, &[CALLER, DEFINER]);
+    assert!(
+        findings.is_empty(),
+        "a host-side seam is named outside the host loop:\n{}",
+        findings.join("\n")
+    );
+
+    let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
+    let surface_text = std::fs::read_to_string(source.join(DEFINER)).expect("the surface");
+    let mut definitions = 0_usize;
+    let mut reached: Vec<String> = Vec::new();
+    for (number, line) in code_lines(&surface_text) {
+        for (needle, _) in HOST_SIDE {
+            if !uses(&line, needle) {
+                continue;
+            }
+            if line.trim_start().starts_with("pub fn ") {
+                definitions = definitions.saturating_add(1);
+            } else {
+                reached.push(format!("{DEFINER}:{number}: {}", line.trim()));
+            }
+        }
+    }
+    assert!(
+        reached.is_empty(),
+        "{DEFINER} reaches a host-side seam from inside itself, which is where the dispatch \
+         arms are:\n{}",
+        reached.join("\n")
+    );
+    assert_eq!(
+        definitions,
+        HOST_SIDE.len(),
+        "each seam is defined once in {DEFINER}; a guard over a name nobody defines guards \
+         nothing"
+    );
+
+    let caller = std::fs::read_to_string(source.join(CALLER)).expect("the host loop");
+    let caller_lines = code_lines(&caller);
+    for (needle, _) in HOST_SIDE {
+        assert!(
+            caller_lines.iter().any(|(_, line)| uses(line, needle)),
+            "`{needle}` is never called by {CALLER}, so the exemption is guarding nothing"
         );
     }
 }

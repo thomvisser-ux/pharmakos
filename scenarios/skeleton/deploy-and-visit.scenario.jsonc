@@ -20,7 +20,11 @@
 //           arrives through `submit_plan` like every playbook a player writes;
 //   seat 1  seals NOTHING, so the gateway files the safe playbook for it at
 //           the end of the Lull (spec section 14) -- the `safe` seat kind, and
-//           the only committed scenario that exercises it.
+//           the only committed scenario that exercises it. A scenario run has
+//           no advisor, so what is filed is the gateway's fallback: since T18a
+//           the library's Safe Playbook with nothing raised (move to the
+//           safest beacon, a flee rule, then shadow it), which moved this
+//           file's chain from its first tick.
 //
 // It replaces expand-east.scenario.jsonc, which asserted a `beacon_placed`
 // that item 103 (3) established cannot happen on this map. See the pull
@@ -29,7 +33,7 @@
 {
   "format": "pharmakos.scenario.v1",
   "name": "deploy-and-visit",
-  "summary": "Seat 0 walks eight voxels, deploys a Mine beacon inside its core's sphere, walks home and commits one interface row on the core -- four route steps, all four completed. Seat 1 seals nothing and the gateway files the safe playbook for it, which holds where it stands. Sixty seconds of game time is about twice what the route needs, so the margin is the assertion's and not the tuning's.",
+  "summary": "Seat 0 walks eight voxels, deploys a Mine beacon inside its core's sphere, walks home and commits one interface row on the core -- four route steps, all four completed. Seat 1 seals nothing and the gateway files its fallback safe playbook for it, which walks to the safest beacon and then stays with it. Sixty seconds of game time is about twice what the route needs, so the margin is the assertion's and not the tuning's.",
 
   // The same seed both other scenarios name, so the three are about one map
   // and a map bug shows up in all of them. Seat 0's commander opens at

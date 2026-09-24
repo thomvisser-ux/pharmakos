@@ -221,7 +221,7 @@ impl Surface {
             .iter()
             .skip(from)
             .take(limit)
-            .map(|(id, at)| beacon_summary(*id, *at))
+            .map(|(id, at)| self.beacon_summary(viewer, *id, *at))
             .collect();
         let index = from.min(visible.len()).saturating_add(page.len());
         let next = if index >= visible.len() {
@@ -292,7 +292,7 @@ impl Surface {
         let mandate = view::mandate_from_id(beacons.mandates().get(row).copied().unwrap_or(0));
         let own = viewer == Viewer::Seat(SeatId::new(owner));
         Ok(Json::Object(vec![
-            (String::from("summary"), beacon_summary(id, at)),
+            (String::from("summary"), self.beacon_summary(viewer, id, at)),
             (
                 String::from("prose"),
                 Json::String(strings::beacon(
@@ -337,30 +337,46 @@ impl Surface {
         ]))
     }
 
-    /// `get_economy_forecast`: `$` and kW, with what-ifs.
+    /// `get_economy_forecast`: the seat's own `$` and kW as they stand, with
+    /// what-ifs.
     ///
-    /// **This build answers the envelope and nothing in it, and that is not a
-    /// stub that was forgotten.** `gp.api.v1.GetEconomyForecastResponse`
-    /// reserves 1 to 15 and `gp.api.v1.WhatIf` reserves 1 to 15: the treasury,
-    /// the projected income, the kW supply, draw and headroom and the what-if
-    /// vocabulary are all numbers the **economy** produces, and the economy is
-    /// T14. Inventing field numbers for them here would pick T14's numbering
-    /// for it, which is a contract change wearing a disguise (AGENTS.md
-    /// section 5).
+    /// # The four present-state figures
     ///
-    /// What the method does do is real and is what a client needs from it
-    /// today: it exists, it is scoped and phase-checked like every other read,
-    /// it refuses a what-if that names anything -- because `WhatIf` has no
-    /// field a caller could name -- and it carries the `_status` footer.
+    /// Decisions-log item 111, decision C7, a departure from item 105 (2)
+    /// taken in the open: `treasury_now`, `supply_kw_now`, `draw_kw_now` and
+    /// `headroom_kw_now` are what the sim already reads out
+    /// (`SeatTable::treasuries`, `supplies` and `draws`), **not** a projection.
+    /// They are the seat's **own**, as the world stands: the frozen planning
+    /// world in a Lull or a recap, the live one in a Push — the world is not
+    /// stepped in a Lull or a recap, so the hosted world *is* the frozen one
+    /// then. S1's projection, income and what-ifs land in new fields and never
+    /// redefine these (`gateway.proto`). A subject that is not a seat has no
+    /// economy and is refused, as it is refused a briefing; another seat's
+    /// economy is on no wire at all.
     ///
-    /// PLACEHOLDER: the payload, filled with **T14**'s economy, in the proto
-    /// change that gives `WhatIf` and the response their fields.
-    pub(super) fn get_economy_forecast(&self, request: &Request) -> Result<Json, Error> {
+    /// Whole `$` and whole kW, `int32` on the wire like the `Treasury` and
+    /// `KwHeadroom` predicates a playbook compares them against. A figure past
+    /// `i32` **saturates**: that is a treasury of two billion dollars, which
+    /// no match reaches, and a saturated figure still compares the way a
+    /// playbook's `Treasury` predicate would read it.
+    ///
+    /// PLACEHOLDER: this method answers the **live** world during a Push,
+    /// although its name says "forecast"; spec section 3 allows a seat its own
+    /// score live and does not name `$` or kW. **OWNER**, at **S1**.
+    ///
+    /// # What-ifs
+    ///
+    /// `gp.api.v1.WhatIf` still reserves 1 to 15, so a what-if that names
+    /// anything is refused, and the count is bounded by the detail budget.
+    /// PLACEHOLDER: the what-if vocabulary and its answers are **S1**'s.
+    pub(super) fn get_economy_forecast(
+        &self,
+        subject: crate::token::Subject,
+        request: &Request,
+    ) -> Result<Json, Error> {
         let budget = what_if_budget(detail::of(request)?);
-        // Read for its side effect: a match must be hosted for a forecast to
-        // mean anything, and a client that asked one of the lobby should be
-        // told rather than handed an empty object that looks like an answer.
-        let _ = self.host()?;
+        let seat = Surface::seat_of(subject, "an economy")?;
+        let host = self.host()?;
         if let Some(Json::Array(what_ifs)) = request.param("what_ifs") {
             if what_ifs.len() > budget {
                 return Err(Error::invalid(format!(
@@ -382,7 +398,31 @@ impl Surface {
         } else if request.param("what_ifs").is_some() {
             return Err(Error::invalid("`what_ifs` is an array"));
         }
-        Ok(Json::Object(Vec::new()))
+
+        let seats = host.world().seats();
+        let row = seats
+            .seats()
+            .iter()
+            .position(|held| *held == seat.raw())
+            .ok_or_else(|| Error::not_found(format!("this match has no seat {}", seat.raw())))?;
+        let treasury = seats
+            .treasuries()
+            .get(row)
+            .copied()
+            .unwrap_or_default()
+            .raw();
+        let supply = seats.supplies().get(row).copied().unwrap_or_default().raw();
+        let draw = seats.draws().get(row).copied().unwrap_or_default().raw();
+        let treasury =
+            i32::try_from(treasury).unwrap_or(if treasury < 0 { i32::MIN } else { i32::MAX });
+        let headroom = supply.saturating_sub(draw);
+        let number = |value: i32| Json::Number(value.to_string());
+        Ok(Json::Object(vec![
+            (String::from("treasury_now"), number(treasury)),
+            (String::from("supply_kw_now"), number(supply)),
+            (String::from("draw_kw_now"), number(draw)),
+            (String::from("headroom_kw_now"), number(headroom)),
+        ]))
     }
 
     /// `estimate_route`: item 61's travel estimate, exposed.
@@ -498,6 +538,58 @@ impl Surface {
         }
     }
 
+    /// One `gp.api.v1.BeaconSummary`, as `viewer` may be told it.
+    ///
+    /// `beacon_id`, `at` and `owner` for every beacon a viewer may see. For a
+    /// seat's **own** beacon, also `core`, `priority` and `powered`
+    /// (decisions-log item 111, decision C7): what a client needs to tell
+    /// which of its beacons would brown out first. **Another seat's beacon
+    /// carries its owner and nothing more**, under every fog policy and to
+    /// every viewer that is not its owner — a spectator and the lobby
+    /// included — because its power state and priority are that seat's
+    /// business (spec section 3 names only a seat's own), and a field left
+    /// unset is left out rather than written as a zero a reader would take for
+    /// an answer. The rest of spec section 12's beacon detail — mandate, HP,
+    /// units by role, tags, a sighting's age — stays `reserved 7 to 15`.
+    fn beacon_summary(&self, viewer: Viewer, id: BeaconId, at: Voxel) -> Json {
+        let mut entries = vec![
+            (String::from("beacon_id"), Json::String(view::beacon_id(id))),
+            (
+                String::from("at"),
+                Json::Object(vec![
+                    (String::from("x"), Json::Number(at.x.to_string())),
+                    (String::from("y"), Json::Number(at.y.to_string())),
+                    (String::from("z"), Json::Number(at.z.to_string())),
+                ]),
+            ),
+        ];
+        let Ok(host) = self.host() else {
+            return Json::Object(entries);
+        };
+        let beacons = host.world().beacons();
+        let Some(row) = beacons.ids().iter().position(|held| *held == id.raw()) else {
+            return Json::Object(entries);
+        };
+        let owner = beacons.seats().get(row).copied().unwrap_or_default();
+        entries.push((
+            String::from("owner"),
+            Json::String(crate::token::Subject::Seat(SeatId::new(owner)).render()),
+        ));
+        if viewer != Viewer::Seat(SeatId::new(owner)) {
+            return Json::Object(entries);
+        }
+        let core = core_beacon_of(host.world(), SeatId::new(owner)) == Some(id.raw());
+        let priority = beacons.priorities().get(row).copied().unwrap_or_default();
+        let powered = !beacons.dormant().get(row).copied().unwrap_or(false);
+        entries.push((String::from("core"), Json::Bool(core)));
+        entries.push((
+            String::from("priority"),
+            Json::String(priority_wire_name(priority)),
+        ));
+        entries.push((String::from("powered"), Json::Bool(powered)));
+        Json::Object(entries)
+    }
+
     /// The beacons a viewer may see, own first, then by id.
     fn visible_beacons<V: Vision>(&self, viewer: Viewer, vision: &V) -> Vec<(BeaconId, Voxel)> {
         let Ok(host) = self.host() else {
@@ -556,24 +648,36 @@ fn rows_of(column: &[u8], seat: SeatId) -> u32 {
     })
 }
 
-/// One `gp.api.v1.BeaconSummary`.
+/// A seat's core: **its lowest-numbered beacon**.
 ///
-/// Two fields, which is what the message has: everything else about a beacon --
-/// its mandate, HP, power state, units by role, tags and the sighting age of
-/// one that is not the seat's own -- is `reserved 3 to 15`, waiting for the
-/// systems that produce them.
-fn beacon_summary(id: BeaconId, at: Voxel) -> Json {
-    Json::Object(vec![
-        (String::from("beacon_id"), Json::String(view::beacon_id(id))),
-        (
-            String::from("at"),
-            Json::Object(vec![
-                (String::from("x"), Json::Number(at.x.to_string())),
-                (String::from("y"), Json::Number(at.y.to_string())),
-                (String::from("z"), Json::Number(at.z.to_string())),
-            ]),
-        ),
-    ])
+/// PLACEHOLDER: true of every map the generator makes, because it pre-places
+/// the core first, and the same rule [`Surface::verifier_scope`] marks
+/// `is_core` by, so the wire and the verifier cannot disagree about which
+/// beacon is the core. It becomes a column the day a beacon carries a kind:
+/// **OWNER**, at **S1**, with the grid.
+pub(crate) fn core_beacon_of(world: &pharmakos_sim::world::World, seat: SeatId) -> Option<u32> {
+    let beacons = world.beacons();
+    (0..beacons.ids().len())
+        .filter(|row| beacons.seats().get(*row).copied() == Some(seat.raw()))
+        .filter_map(|row| beacons.ids().get(row).copied())
+        .min()
+}
+
+/// A Quartermaster priority column value as the JSON-RPC wire spells it:
+/// `gp.v1.InterfaceRow.QuartermasterPriority`'s value name, lower case, as
+/// every enum this surface answers with is (decisions-log item 80).
+///
+/// The column holds the enum's wire values (`SeatTable`'s doc), so a value
+/// the enum does not name is the sim and the schema disagreeing; it is spelt
+/// `unspecified` rather than guessed at, which a client reads as "not known".
+fn priority_wire_name(value: u8) -> String {
+    use pharmakos_proto::gp::v1::interface_row::QuartermasterPriority;
+    let named = QuartermasterPriority::try_from(i32::from(value))
+        .unwrap_or(QuartermasterPriority::Unspecified);
+    pharmakos_proto::scope::wire_name(
+        "gp.v1.InterfaceRow.QuartermasterPriority",
+        named.as_str_name(),
+    )
 }
 
 /// One `gp.v1.Voxel` out of a request.

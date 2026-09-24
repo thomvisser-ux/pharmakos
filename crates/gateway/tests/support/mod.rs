@@ -83,6 +83,13 @@ pub fn rules_json() -> String {
     rules().canonical_json().to_owned()
 }
 
+/// The committed template library, `library/` at the workspace root: what
+/// `gamectl host` hands the gateway in a checkout.
+#[must_use]
+pub fn library_folder() -> PathBuf {
+    workspace_root().join(pharmakos_gateway::host::LIBRARY_FOLDER)
+}
+
 /// A hosted match sitting in its opening Lull.
 #[must_use]
 pub fn hosted(seats: u32, segment_ms: i32, round_limit: u32) -> Surface {
@@ -110,6 +117,20 @@ pub fn hosted_as(
     segment_ms: i32,
     round_limit: u32,
 ) -> Surface {
+    hosted_with(match_id, policy, seats, segment_ms, round_limit, None)
+}
+
+/// A hosted match under a given match id and fog policy, reading templates
+/// from `library` when there is one.
+#[must_use]
+pub fn hosted_with(
+    match_id: &str,
+    policy: FogPolicy,
+    seats: u32,
+    segment_ms: i32,
+    round_limit: u32,
+    library: Option<PathBuf>,
+) -> Surface {
     let ids: Vec<SeatId> = (0..seats)
         .filter_map(|raw| u8::try_from(raw).ok())
         .map(SeatId::new)
@@ -126,7 +147,7 @@ pub fn hosted_as(
                 round_limit,
             },
         },
-        None,
+        library,
     )
     .expect("a match");
     surface.attach(host).expect("attached");

@@ -18,9 +18,12 @@
 
 mod support;
 
+use pharmakos_gateway::advice::Advice;
 use pharmakos_gateway::frame::Opcode;
 use pharmakos_gateway::rpc::Request;
-use pharmakos_gateway::serve::{self, Announce, BuiltInSeat, Config, MAX_CONNECTIONS, Setup};
+use pharmakos_gateway::serve::{
+    self, Advisor, Announce, BuiltInSeat, Config, MAX_CONNECTIONS, NoOperators, Operators, Setup,
+};
 use pharmakos_proto::json::{Json, read};
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
@@ -115,7 +118,7 @@ impl Drop for Running {
 }
 
 /// Start a host on an ephemeral loopback port and read its announce line.
-fn start(config: &Config, built_in: Vec<Box<dyn BuiltInSeat>>) -> Running {
+fn start(config: &Config, operators: Box<dyn Operators>) -> Running {
     let (sender, messages) = channel::<Vec<u8>>();
     sender
         .send(config.render().into_bytes())
@@ -124,8 +127,8 @@ fn start(config: &Config, built_in: Vec<Box<dyn BuiltInSeat>>) -> Running {
     let sink = Sink(Arc::clone(&written));
     let setup = Setup {
         rules_json: rules_json(),
-        library: None,
-        built_in,
+        library: Some(support::library_folder()),
+        operators,
     };
     let thread = std::thread::spawn(move || {
         let pipe = ControlPipe {
@@ -388,7 +391,7 @@ fn the_two_lines_are_read_exactly_as_they_were_written() {
 /// which.
 #[test]
 fn the_host_binds_loopback_on_an_ephemeral_port() {
-    let mut running = start(&config("m-t16a-port", Some(0)), Vec::new());
+    let mut running = start(&config("m-t16a-port", Some(0)), Box::new(NoOperators));
     assert_ne!(running.announce.port, 0, "an ephemeral port is a real port");
     assert_eq!(running.announce.match_id, "m-t16a-port");
     assert_eq!(running.announce.admin_token.len(), 64);
@@ -413,7 +416,7 @@ fn the_host_binds_loopback_on_an_ephemeral_port() {
 /// Two connections, one match.
 #[test]
 fn two_connections_share_one_surface() {
-    let mut running = start(&config("m-t16a-two", Some(0)), Vec::new());
+    let mut running = start(&config("m-t16a-two", Some(0)), Box::new(NoOperators));
     let port = running.announce.port;
     let mut lobby = Client::open(port, &running.announce.admin_token);
     let mut camera = Client::open(
@@ -455,46 +458,112 @@ fn two_connections_share_one_surface() {
     running.quit();
 }
 
+/// One JSON-RPC request, as a scripted seat builds it.
+fn ask(method: &str, params: &str) -> Request {
+    pharmakos_gateway::rpc::parse(&format!(
+        r#"{{"jsonrpc":"2.0","id":1,"method":"{method}","params":{params}}}"#
+    ))
+    .expect("well formed")
+}
+
+/// A scripted stand-in for **T18**'s operator: it reads its own status and
+/// says it is ready, through the closure it is handed.
+struct Scripted {
+    seen: Arc<Mutex<Vec<String>>>,
+}
+
+impl BuiltInSeat for Scripted {
+    fn plan(&mut self, seat: u8, call: &mut dyn FnMut(&Request) -> Json) {
+        let status = call(&ask("get_status", "{}"));
+        let ready = call(&ask("set_ready", r#"{"ready":true}"#));
+        if let Ok(mut seen) = self.seen.lock() {
+            seen.push(format!(
+                "seat {seat}: status={}, ready={}",
+                status.get("result").is_some(),
+                ready.get("result").is_some()
+            ));
+        }
+    }
+}
+
+/// A scripted advisor: it reads its own seat's beacons and advises the
+/// gateway's own fallback, so its advice qualifies.
+struct Advising {
+    seen: Arc<Mutex<Vec<String>>>,
+}
+
+impl Advisor for Advising {
+    fn advise(&mut self, seat: u8, call: &mut dyn FnMut(&Request) -> Json) -> Advice {
+        let beacons = call(&ask("list_beacons", "{}"));
+        if let Ok(mut seen) = self.seen.lock() {
+            seen.push(format!(
+                "advise seat {seat}: beacons={}",
+                beacons.get("result").is_some()
+            ));
+        }
+        Advice {
+            safe_playbook_jsonc: String::from(pharmakos_gateway::host::SAFE_PLAYBOOK),
+            suggestions: Vec::new(),
+        }
+    }
+}
+
+/// A factory that plays the seats it is told to, advises every other seat,
+/// and writes down what it was asked, in order.
+struct Factory {
+    plays: Vec<u8>,
+    asked: Arc<Mutex<Vec<String>>>,
+    seen: Arc<Mutex<Vec<String>>>,
+}
+
+impl Factory {
+    fn boxed(
+        plays: &[u8],
+        asked: &Arc<Mutex<Vec<String>>>,
+        seen: &Arc<Mutex<Vec<String>>>,
+    ) -> Box<dyn Operators> {
+        Box::new(Factory {
+            plays: plays.to_vec(),
+            asked: Arc::clone(asked),
+            seen: Arc::clone(seen),
+        })
+    }
+}
+
+impl Operators for Factory {
+    fn built_in(&mut self, seat: u8) -> Option<Box<dyn BuiltInSeat>> {
+        if let Ok(mut asked) = self.asked.lock() {
+            asked.push(format!("built_in {seat}"));
+        }
+        if !self.plays.contains(&seat) {
+            return None;
+        }
+        let played: Box<dyn BuiltInSeat> = Box::new(Scripted {
+            seen: Arc::clone(&self.seen),
+        });
+        Some(played)
+    }
+
+    fn advisor(&mut self, seat: u8) -> Option<Box<dyn Advisor>> {
+        if let Ok(mut asked) = self.asked.lock() {
+            asked.push(format!("advisor {seat}"));
+        }
+        Some(Box::new(Advising {
+            seen: Arc::clone(&self.seen),
+        }))
+    }
+}
+
 /// A built-in seat comes through the same door a socket does.
 #[test]
 fn a_built_in_seat_calls_through_the_same_door_as_a_socket() {
-    /// A scripted stand-in for **T18**'s operator: it reads its own status and
-    /// says it is ready, through the closure it is handed.
-    struct Scripted {
-        seen: Arc<Mutex<Vec<String>>>,
-    }
-
-    impl BuiltInSeat for Scripted {
-        fn plan(&mut self, seat: u8, call: &mut dyn FnMut(&Request) -> Json) {
-            let ask = |method: &str, params: &str| -> Request {
-                pharmakos_gateway::rpc::parse(&format!(
-                    r#"{{"jsonrpc":"2.0","id":1,"method":"{method}","params":{params}}}"#
-                ))
-                .expect("well formed")
-            };
-            let status = call(&ask("get_status", "{}"));
-            let ready = call(&ask("set_ready", r#"{"ready":true}"#));
-            if let Ok(mut seen) = self.seen.lock() {
-                seen.push(format!(
-                    "seat {seat}: status={}, ready={}",
-                    status.get("result").is_some(),
-                    ready.get("result").is_some()
-                ));
-            }
-        }
-    }
-
+    let asked = Arc::new(Mutex::new(Vec::new()));
     let seen = Arc::new(Mutex::new(Vec::new()));
-    let seats: Vec<Box<dyn BuiltInSeat>> = vec![
-        Box::new(Scripted {
-            seen: Arc::clone(&seen),
-        }),
-        Box::new(Scripted {
-            seen: Arc::clone(&seen),
-        }),
-    ];
     // No human seat: both seats are this process's own.
-    let mut running = start(&config("m-t16a-builtin", None), seats);
+    let mut running = start(
+        &config("m-t16a-builtin", None),
+        Factory::boxed(&[0, 1], &asked, &seen),
+    );
     assert_eq!(running.announce.seat_token, None, "no human, no seat token");
 
     let mut lobby = Client::open(running.announce.port, &running.announce.admin_token);
@@ -524,11 +593,50 @@ fn a_built_in_seat_calls_through_the_same_door_as_a_socket() {
     running.quit();
 }
 
+/// Decisions-log item 111, H11: the factory is asked once the config line has
+/// been read, once per seat, and the answer is one operator per seat it plays
+/// and one advisor per other seat -- the human's included, and never a
+/// built-in operator for the human.
+#[test]
+fn the_host_builds_one_operator_per_built_in_seat_and_one_advisor_per_other_seat() {
+    let asked = Arc::new(Mutex::new(Vec::new()));
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let three = Config {
+        seats: 3,
+        ..config("m-t18a-factory", Some(0))
+    };
+    // The factory plays seat 2 only: seat 1 is nobody's, so it is advised
+    // like the human's.
+    let mut running = start(&three, Factory::boxed(&[2], &asked, &seen));
+    let mut lobby = Client::open(running.announce.port, &running.announce.admin_token);
+    let _ = result(&lobby.call("get_status", "{}"), "get_status");
+    running.quit();
+
+    let asked = asked.lock().expect("the factory's record").clone();
+    assert_eq!(
+        asked,
+        ["advisor 0", "built_in 1", "advisor 1", "built_in 2",],
+        "ascending seat id; the human's seat is never offered a built-in operator; a seat \
+         the factory does not play is offered an advisor"
+    );
+    let mut lines = seen.lock().expect("the scripts' record").clone();
+    lines.sort();
+    assert_eq!(
+        lines,
+        [
+            "advise seat 0: beacons=true",
+            "advise seat 1: beacons=true",
+            "seat 2: status=true, ready=true",
+        ],
+        "one fresh instance per seat, each run once in the opening Lull"
+    );
+}
+
 /// A flood of silent sockets fills the pending slots and disturbs nothing that
 /// has authenticated.
 #[test]
 fn a_flood_of_silent_connections_cannot_disturb_a_live_session() {
-    let mut running = start(&config("m-t16a-flood", Some(0)), Vec::new());
+    let mut running = start(&config("m-t16a-flood", Some(0)), Box::new(NoOperators));
     let port = running.announce.port;
     let mut live = Client::open(port, &running.announce.admin_token);
     let _ = result(&live.call("get_status", "{}"), "get_status");
@@ -572,7 +680,7 @@ fn a_flood_of_silent_connections_cannot_disturb_a_live_session() {
 /// End of file on the control pipe ends the host. There is no other shutdown.
 #[test]
 fn the_host_exits_when_its_control_pipe_closes() {
-    let mut running = start(&config("m-t16a-exit", Some(0)), Vec::new());
+    let mut running = start(&config("m-t16a-exit", Some(0)), Box::new(NoOperators));
     let mut client = Client::open(running.announce.port, &running.announce.admin_token);
     let _ = result(&client.call("get_status", "{}"), "get_status");
 
@@ -599,7 +707,15 @@ fn the_host_exits_when_its_control_pipe_closes() {
 /// loud).
 #[test]
 fn a_token_appears_on_the_announce_line_and_nowhere_else_the_host_writes() {
-    let mut running = start(&config("m-t16a-secret", Some(0)), Vec::new());
+    // A scripted operator on seat 1 and a scripted advisor on the human's seat
+    // 0, so that two in-process tokens exist and are used: extended by T18a,
+    // an in-process token appears on no announce line and in no file.
+    let asked = Arc::new(Mutex::new(Vec::new()));
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let mut running = start(
+        &config("m-t16a-secret", Some(0)),
+        Factory::boxed(&[1], &asked, &seen),
+    );
     let port = running.announce.port;
     let admin = running.announce.admin_token.clone();
     let seat = running.announce.seat_token.clone().expect("a human seat");
@@ -646,6 +762,21 @@ fn a_token_appears_on_the_announce_line_and_nowhere_else_the_host_writes() {
         "one announce line and nothing else on standard output"
     );
 
+    // An in-process token cannot be named by a test that never sees it, so
+    // the check is on shape: a rendered token is 64 lower-case hex digits, and
+    // the only two such runs the host may ever write are these two, on the
+    // announce line.
+    assert_eq!(
+        hex_runs(&announced),
+        [admin.clone(), seat.clone()],
+        "the announce line carries the lobby's and the human's tokens and no in-process one"
+    );
+    assert_eq!(
+        seen.lock().expect("the scripts' record").len(),
+        2,
+        "both in-process seats ran, so both of their tokens were used"
+    );
+
     // And nothing else the host wrote does.
     let root = pharmakos_gateway::cache::locate().expect("a data root");
     let folder = root.join("matches").join("m-t16a-secret");
@@ -663,6 +794,12 @@ fn a_token_appears_on_the_announce_line_and_nowhere_else_the_host_writes() {
                 entry.display()
             );
         }
+        assert!(
+            hex_runs(&text).is_empty(),
+            "{} carries 64 hex digits in a row, which is what a rendered token is, the \
+             in-process ones included",
+            entry.display()
+        );
     }
     assert!(
         checked >= 3,
@@ -674,6 +811,23 @@ fn a_token_appears_on_the_announce_line_and_nowhere_else_the_host_writes() {
         log.contains("UNAUTHENTICATED"),
         "and so was the refusal: {log}"
     );
+}
+
+/// Every run of 64 or more lower-case hex digits in `text`, in order.
+fn hex_runs(text: &str) -> Vec<String> {
+    let mut found: Vec<String> = Vec::new();
+    let mut run = String::new();
+    for character in text.chars().chain(std::iter::once(' ')) {
+        if character.is_ascii_digit() || ('a'..='f').contains(&character) {
+            run.push(character);
+            continue;
+        }
+        if run.len() >= 64 {
+            found.push(run.clone());
+        }
+        run.clear();
+    }
+    found
 }
 
 /// Every file under a directory, depth first.

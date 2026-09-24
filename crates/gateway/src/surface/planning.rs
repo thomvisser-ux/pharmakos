@@ -167,14 +167,36 @@ impl Surface {
         ]))
     }
 
-    /// `instantiate_template`: a template plus parameters, as a playbook.
+    /// `instantiate_template`: a template plus parameters, as a playbook, and
+    /// the list of what was filled in.
     ///
     /// The template id is decided on **characters** and never on
     /// `std::path::Component` (`plan-core`'s `library::resolve`, and the lesson
     /// decisions-log item 100's closing note records): a backslash is a
     /// separator on Windows and an ordinary filename byte elsewhere, and the
     /// same hostile id must get the same answer on all three platforms.
-    pub(super) fn instantiate_template(&self, request: &Request) -> Result<Json, Error> {
+    ///
+    /// # `suggested`
+    ///
+    /// Decisions-log item 111, decision C2. With `suggested: true`, every
+    /// parameter the template declares and the caller did not name is
+    /// pre-filled with the built-in operator's suggestion **for the calling
+    /// seat**, where it made one for this template this round, and `why`
+    /// carries its reason. The suggestion is read from the seat's own private
+    /// store through [`Surface::current_advice`], and a subject that is not a
+    /// seat has none, so a seat is only ever told its own
+    /// (`advice_for_one_seat_never_reaches_another`). An explicit value beats
+    /// a suggestion, always.
+    ///
+    /// The reply lists every **declared** parameter, in declaration order,
+    /// with the value applied and whether it was the suggestion
+    /// (`gp.api.v1.FilledParameter`). The arithmetic is `plan-core`'s; this
+    /// handler decides only whose suggestion it may use.
+    pub(super) fn instantiate_template(
+        &self,
+        subject: crate::token::Subject,
+        request: &Request,
+    ) -> Result<Json, Error> {
         let template_id = request
             .string_param("template_id")?
             .ok_or_else(|| Error::invalid("`template_id` names a template"))?;
@@ -184,6 +206,7 @@ impl Surface {
                  percent escapes",
             ));
         }
+        let suggested = request.bool_param("suggested")?.unwrap_or(false);
         let folder = self.host()?.library().ok_or_else(|| {
             Error::not_found(
                 "this gateway has no template folder, so there is nothing to \
@@ -221,12 +244,55 @@ impl Surface {
                 parameters.push(pharmakos_plan_core::library::Parameter { name, value });
             }
         }
-        let playbook = pharmakos_plan_core::instantiate_template(&text, &parameters)
+
+        // Whose suggestion: the calling seat's own, for this template, this
+        // round, and only when asked for.
+        let suggestion = if suggested {
+            subject
+                .seat()
+                .and_then(|seat| self.current_advice(seat))
+                .and_then(|advised| advised.advice.suggestion(template_id))
+        } else {
+            None
+        };
+        let offered: Vec<pharmakos_plan_core::library::Parameter> =
+            suggestion.map_or_else(Vec::new, |suggestion| {
+                suggestion
+                    .parameters
+                    .iter()
+                    .map(|value| pharmakos_plan_core::library::Parameter {
+                        name: value.pointer.clone(),
+                        value: value.value.clone(),
+                    })
+                    .collect()
+            });
+        let why = suggestion.map_or_else(String::new, |suggestion| suggestion.why.clone());
+
+        let made = pharmakos_plan_core::instantiate(&text, &parameters, &offered)
             .map_err(|error| Error::invalid(error.message))?;
-        Ok(Json::Object(vec![(
-            String::from("playbook_jsonc"),
-            Json::String(playbook),
-        )]))
+        let filled: Vec<Json> = made
+            .parameters
+            .iter()
+            .map(|parameter| {
+                Json::Object(vec![
+                    (
+                        String::from("pointer"),
+                        Json::String(parameter.pointer.clone()),
+                    ),
+                    (String::from("label"), Json::String(parameter.label.clone())),
+                    (String::from("value"), Json::String(parameter.value.clone())),
+                    (String::from("suggested"), Json::Bool(parameter.suggested)),
+                ])
+            })
+            .collect();
+        Ok(Json::Object(vec![
+            (
+                String::from("playbook_jsonc"),
+                Json::String(made.playbook_jsonc),
+            ),
+            (String::from("parameters"), Json::Array(filled)),
+            (String::from("why"), Json::String(why)),
+        ]))
     }
 
     /// `verify_plan{depth}`: seal inspection, at the depth the caller asks for.
@@ -394,13 +460,28 @@ impl Surface {
     /// `get_safe_plan`: what would be filed for this seat on a timeout.
     ///
     /// Spec section 14, and item 81's reason for shipping it as a template:
-    /// the editor can render it, so **the cost of a timeout is visible**. See
-    /// [`crate::host::SAFE_PLAYBOOK`] for what it is and the PLACEHOLDER naming
-    /// T18, which replaces the constant with the built-in operator's own.
-    pub(super) fn get_safe_plan(&self) -> Result<Json, Error> {
+    /// the editor can render it, so **the cost of a timeout is visible**.
+    ///
+    /// **The seat's own** (decisions-log item 111, decision C5): the built-in
+    /// operator's safe playbook for the calling seat, as
+    /// [`Surface::file_advice`] verified and filed it this round. A seat no
+    /// operator advises, or whose advice did not qualify, is shown the
+    /// gateway's fallback, [`crate::host::SAFE_PLAYBOOK`] — which is exactly
+    /// what [`Surface::begin_push`] would file for it, so what this answers
+    /// and what a timeout costs are the same playbook.
+    pub(super) fn get_safe_plan(&self, subject: crate::token::Subject) -> Result<Json, Error> {
+        let seat = Surface::seat_of(subject, "a safe playbook")?;
+        let own = self
+            .current_advice(seat)
+            .and_then(|advised| advised.safe.as_ref())
+            .map(|safe| safe.playbook_jsonc.clone());
+        let playbook = match own {
+            Some(playbook) => playbook,
+            None => self.host()?.safe_playbook().to_owned(),
+        };
         Ok(Json::Object(vec![(
             String::from("playbook_jsonc"),
-            Json::String(self.host()?.safe_playbook().to_owned()),
+            Json::String(playbook),
         )]))
     }
 

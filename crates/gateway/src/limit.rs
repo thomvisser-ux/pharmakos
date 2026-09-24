@@ -62,6 +62,32 @@ pub const CALLS_PER_WINDOW: u32 = 600;
 /// PLACEHOLDER: as [`CALLS_PER_TICK`] (OWNER, hardening).
 pub const WINDOW_TICKS: u32 = 200;
 
+/// The caps for a token the host minted for **itself**: a built-in seat's and
+/// an advisor's ([`crate::serve::BuiltInSeat`], [`crate::serve::Advisor`]).
+///
+/// Decisions-log item 111, decision C6, taken on the recommendation as the
+/// owner's question D1: an in-process seat goes through the same door, the
+/// same audit and the same fog as a socket, **with its own rate**. The reason
+/// is H8: the host plans an in-process seat synchronously, right after the
+/// call that opened the Lull, and a Lull's tick moves only when a client
+/// reports its clock -- so every call an operator makes lands on one tick,
+/// and at [`CALLS_PER_TICK`] its ninth would be refused. It is a rate
+/// privilege, never a read privilege: every call is still counted against
+/// these numbers, audited and fog-filtered, and a socket never gets them
+/// (`an_in_process_seat_finishes_a_round_under_its_limits_and_a_socket_does_not_get_them`).
+///
+/// PLACEHOLDER: 128 calls in a tick and 1 200 in a window are working numbers,
+/// sized well above the scripted seats' rounds and above the plan's estimate
+/// of an Easy round (about fifty calls, and an advisor as much again). The
+/// **owner** decided that there is such a thing now (item 111 (4)); the
+/// **numbers** are the owner's at **hardening**, against T18's derived
+/// `EASY_CALL_BUDGET`.
+pub const IN_PROCESS_LIMITS: Limits = Limits {
+    per_tick: 128,
+    per_window: 1_200,
+    window_ticks: WINDOW_TICKS,
+};
+
 /// The two caps, so a test or a host can set them without touching the
 /// constants.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
