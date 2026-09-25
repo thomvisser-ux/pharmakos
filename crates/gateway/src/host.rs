@@ -627,8 +627,9 @@ impl Host {
 /// scout's own vision, Survey-lite's recorded sightings, a Sensor Spire's
 /// reveal. A commander that walks out of its own spheres is still drawn to its
 /// owner -- that is ownership, not sight -- and sees no enemy entity or edit
-/// around it. PLACEHOLDER: **OWNER**, whether scouts join the live view (the
-/// wave-6 notes, section D, question 4), with the sightings at **S3**.
+/// around it. PLACEHOLDER: **OWNER**, now, whether scouts join the live view
+/// (the wave-6 notes, section D, question 4); a sight-radius row per unit and
+/// structure at **S1** at the latest; Survey-lite's sightings at **S3**.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct SphereVision {
     /// The sim's own snapshot of every living beacon's sphere, rebuilt before
