@@ -391,6 +391,25 @@ fn uses(line: &str, needle: &str) -> bool {
     false
 }
 
+/// The name of the method `line` defines, when it is an `impl` block's method
+/// definition (four spaces in, `fn` with or without a visibility).
+fn method_defined_on(line: &str) -> Option<String> {
+    let rest = line.strip_prefix("    ")?;
+    if rest.starts_with(' ') {
+        return None;
+    }
+    let rest = rest
+        .strip_prefix("pub(crate) ")
+        .or_else(|| rest.strip_prefix("pub(super) "))
+        .or_else(|| rest.strip_prefix("pub "))
+        .unwrap_or(rest);
+    let rest = rest.strip_prefix("fn ")?;
+    let end = rest
+        .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .unwrap_or(rest.len());
+    rest.get(..end).map(str::to_owned)
+}
+
 fn scan(needles: &[(&str, &str)]) -> Vec<String> {
     scan_except(needles, &[])
 }
@@ -1162,6 +1181,8 @@ fn no_handler_reads_the_save_or_the_replay() {
         reached.join("\n")
     );
 
+    surface_calls_no_save_seam(&surface_text, SURFACE_SIDE);
+
     // And the guard is over something: the host loop does call them.
     let serve = std::fs::read_to_string(source.join("serve.rs")).expect("the host loop");
     let serve_lines = code_lines(&serve);
@@ -1181,4 +1202,50 @@ fn no_handler_reads_the_save_or_the_replay() {
             "`{needle}` is never called by serve.rs, so the exemption is guarding nothing"
         );
     }
+}
+
+/// Inside surface.rs, where every dispatch arm lives, the surface's host-side
+/// save seams are named only where they are defined, and the host's restore
+/// only inside `Surface::resume` itself (`no_handler_reads_the_save_or_the_replay`).
+fn surface_calls_no_save_seam(surface_text: &str, needles: &[(&str, &str)]) {
+    // The surface's own host-side save calls are exempt from the crate scan
+    // only because they are *defined* there, and `dispatch` -- every wire
+    // method's arm -- lives in the same file. So inside surface.rs a
+    // SURFACE_SIDE name may appear on its own definition line and, for the
+    // host's restore, inside `Surface::resume` itself, and nowhere else: not
+    // in a dispatch arm, not in a handler method the arm calls.
+    let mut method = String::new();
+    let mut defined = 0_usize;
+    let mut called: Vec<String> = Vec::new();
+    for (number, line) in code_lines(surface_text) {
+        let definition = method_defined_on(&line);
+        if let Some(name) = definition.clone() {
+            if ["resume", "take_persistence", "lull_save"].contains(&name.as_str()) {
+                defined = defined.saturating_add(1);
+            }
+            method = name;
+        }
+        for (needle, why) in needles {
+            if !uses(&line, needle) || definition.is_some() {
+                continue;
+            }
+            if method != "resume" {
+                called.push(format!(
+                    "surface.rs:{number} (in `{method}`): `{needle}` -- {why}\n    {}",
+                    line.trim()
+                ));
+            }
+        }
+    }
+    assert!(
+        called.is_empty(),
+        "the surface calls a host-side save seam from inside itself, which is where the \
+         dispatch arms are:\n{}",
+        called.join("\n")
+    );
+    assert_eq!(
+        defined, 3,
+        "`resume`, `take_persistence` and `lull_save` are each defined once in surface.rs; a \
+         guard over a name nobody defines guards nothing"
+    );
 }
