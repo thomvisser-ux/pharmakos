@@ -186,12 +186,35 @@ pub struct SavedMatch {
     /// The round the match is in.
     pub round: u32,
     /// The ticks of host time no sim tick covered, carried so the gateway's
-    /// tick stays monotonic across a resume.
+    /// tick stays monotonic across a resume. A `sealed` save's Push is played
+    /// again from its first tick, so for that one the resume also lifts the
+    /// offset to the audit log's last tick ([`Continuation::last_tick`]).
     pub lull_offset: u32,
     /// The frozen planning snapshot, as the sim encodes it.
     pub snapshot: Vec<u8>,
     /// Every seat of the match, ascending.
     pub seats: Vec<SavedSeat>,
+}
+
+/// What a resume needs from the processes that ran this match before it, read
+/// off the audit log by the host loop before the surface exists
+/// ([`crate::cache::MatchCache::continuation`]).
+///
+/// Not part of the save: the save is written at a Lull boundary, and a
+/// process that was killed mid-Push went on past it. The audit log is the one
+/// file every process of the match appends to as it runs, so it is the one
+/// that knows how far they got.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct Continuation {
+    /// The last audit line's sequence number: a value no earlier process of
+    /// this match minted a view under, folded into the resumed view's id
+    /// ([`crate::viewfeed::ViewFeed::resumed_after`]).
+    pub generation: u64,
+    /// The largest gateway tick the audit log holds. A resumed surface's tick
+    /// starts at no less, so the gateway's tick and the log's stamps stay
+    /// monotonic across a resume -- a `sealed` save's included, whose Push the
+    /// dead process had already played part of.
+    pub last_tick: u32,
 }
 
 /// One seat's seal, for `seats/<seat>/sealed/<round>.jsonc`.
