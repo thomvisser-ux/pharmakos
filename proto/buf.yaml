@@ -64,22 +64,10 @@ breaking:
   except:
     # Nothing. Minor versions add optional fields; a major version comes with a
     # converter that is kept forever.
-  # A change that DISCHARGES a held field number (fills a reserved range with the
-  # field it was held for) trips RESERVED_MESSAGE_NO_DELETE, which buf cannot tell
-  # apart from a genuine un-reservation. That change adds an ignore_only block here
-  # scoped to the files it discharges in, with the justification written out, and
-  # the next proto change that discharges nothing deletes it again, so an
-  # un-reservation nobody intended never passes unnoticed (decisions-log items
-  # 100 (10) and 109).
-  #
-  # T18a (decisions-log item 111, decisions C2 and C7) discharges, in
-  # gp/api/v1/gateway.proto only: BeaconSummary 3-6 (owner, core, priority,
-  # powered; 7-15 stay held) and GetEconomyForecastResponse 1-4 (treasury_now,
-  # supply_kw_now, draw_kw_now, headroom_kw_now; 5-15 stay held). Each number is
-  # filled with the field its reservation was held for and none is renumbered.
-  # buf scopes an exception by rule and file, not by field number, so the block
-  # covers the whole file for one pull request. The harness-docs pull request
-  # after T18a deletes it (skeleton-plan-w6-notes.md section B).
-  ignore_only:
-    RESERVED_MESSAGE_NO_DELETE:
-      - gp/api/v1/gateway.proto
+  # ignore_only: none today. A change that DISCHARGES a held field number (fills a
+  # reserved range with the field it was held for) trips RESERVED_MESSAGE_NO_DELETE,
+  # which buf cannot tell apart from a genuine un-reservation. That change adds an
+  # ignore_only block here scoped to the files it discharges in, with the
+  # justification written out, and the next proto change that discharges nothing
+  # deletes it again, so an un-reservation nobody intended never passes unnoticed
+  # (decisions-log items 100 (10), 109 and 111).
