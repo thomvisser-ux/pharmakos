@@ -261,6 +261,9 @@ fn place(at: [i32; 3]) -> String {
 }
 
 /// The seed line: read, recorded, and unused at Easy (decision C15).
+///
+/// PLACEHOLDER: whether and how Easy uses its (match, seat, round) seed --
+/// "top-k" read as best-of-k with no draw -- is the owner's, at **S5**.
 pub(crate) fn seed_note(situation: &Situation) -> String {
     format!(
         "Easy, seat {}, round {}, seed {} (recorded; Easy draws nothing at random).",

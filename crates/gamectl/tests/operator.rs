@@ -230,6 +230,28 @@ struct Row {
     headroom_kw: i64,
     /// Calls the advisor made.
     advisor_calls: u32,
+    /// The beacons the safe playbook raised, nearest first.
+    raised: Vec<String>,
+}
+
+/// The beacons an advice's safe playbook raises: the `raise_b_NN` steps of
+/// the route it suggests for the Safe Playbook template.
+fn raised_by(advice: &pharmakos_operator::Advice) -> Vec<String> {
+    advice
+        .suggestions
+        .iter()
+        .filter(|suggestion| suggestion.template_id == "safe_playbook")
+        .flat_map(|suggestion| suggestion.parameters.iter())
+        .filter_map(|value| pharmakos_proto::json::read(&value.value).ok())
+        .flat_map(|route| match route {
+            Json::Array(steps) => steps,
+            _ => Vec::new(),
+        })
+        .filter_map(|step| match step.get("label") {
+            Some(Json::String(label)) => label.strip_prefix("raise_").map(str::to_owned),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Plan every seat of the snapshot the surface stands on with Easy, then ask
@@ -302,6 +324,7 @@ fn visit(
             safe_qualifies,
             headroom_kw: number(&forecast, "headroom_kw_now"),
             advisor_calls: advice.calls,
+            raised: raised_by(&advice),
         });
     }
     rows
@@ -428,6 +451,17 @@ fn the_safe_playbook_always_qualifies() {
             .all(|row| row.headroom_kw >= 0),
         "and the committed rules are not"
     );
+    // Never more than two raised. Said plainly, since a reader will look for
+    // the raise path here: on a real grid it does not fire. The first Lull
+    // of the power-short match is short (-3 kW) with no non-core beacon to
+    // raise; by the next Lull the brownout order has shed the expansion and
+    // the headroom reads 0, not below it. So "power is short" (headroom
+    // below zero) and "at risk" (a dark non-core beacon), the two
+    // PLACEHOLDER definitions item 111 chose, never hold on the same
+    // snapshot, and the raise path is exercised by the scripted client
+    // (`the_safe_playbook_raises_at_most_two_beacons_nearest_first` in
+    // crates/operator) alone. The definitions are the owner's at S1.
+    assert!(rows.iter().all(|row| row.raised.len() <= 2), "{rows:#?}");
 }
 
 /// Round one of a three-seat match, every seat Easy: each seat's sealed
