@@ -88,6 +88,7 @@ pub mod programs;
 pub mod rules;
 pub mod runner;
 pub mod seams;
+pub mod sight;
 pub mod snapshot;
 pub mod survey;
 pub mod tables;
@@ -115,6 +116,7 @@ pub use runner::{
     DEFAULT_ROUND_LIMIT, FrozenSnapshot, MatchEndReason, MatchOutcome, MatchPhase, MatchSettings,
     MatchState, PHASE_CYCLE, Runner, TickReport,
 };
+pub use sight::Spheres;
 pub use snapshot::{SNAPSHOT_VERSION, Snapshot, SnapshotError};
 pub use voxels::{CHUNK_EDGE, CHUNK_VOXELS, Material, Richness, VoxelEdit, VoxelStore};
 pub use world::{DamageOrder, DamageTarget, PHASE_ORDER, Phase, World, WorldConfig};
