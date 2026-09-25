@@ -427,6 +427,10 @@ CI; they do not include the owner's review latency, which the float in section 4
   private replay is inputs only (sealed files, per-segment hash files); and the lane carries the vision follow-up
   (`World::in_own_sphere`) and the seat bound (item 110(5)). 6 agent-days. The amendment in full is section A2 of
   `docs/design/skeleton-plan-w6-notes.md`, and it outranks the lines above where they disagree.
+- **Amended 2026-09-24 (item 112).** T17 also adds `get_draft` = 57 (an additive `gp.api.v1` method, so its
+  contract PR regenerates the descriptor), writes `estimate_route`'s `Leg.to` in its declared shape, drops a stale
+  `carried` draft, and fixes `verify_jsonc`'s pointer for a commented out-of-vocabulary file (one function in
+  `crates/plan-core` as a named place). Within the 6 agent-days' slack.
 
 ---
 
@@ -566,10 +570,11 @@ its downside, and its section 0 lists the holes (H1–H16) the lines below close
 - **PLACEHOLDERs:** the string table's file and format (owner, S6); accessibility polish beyond generated names deferred to S6; the segment clock and fits pill are S3/S6 and are not built.
 - **Amended 2026-09-23 (item 111).** Two pull requests across both runs, the split seam reversed. PR 1 (run 1,
   5.5 d): the map route surface, the validation rows, the notes box, draft continuity, submit and ready, on today's
-  wire. PR 2 (run 2, 6.5 d, after T18a): the wizard from `instantiate_template{suggested}`, values shown raw under
+  wire. PR 2 (run 3 by item 112(6), 6.5 d, after T17 and T18): the wizard from `instantiate_template{suggested}`, values shown raw under
   the template's label, the rule list as `render_plan`'s prose lines (chips move to S3), an own `$`/`kW` meter, and
   the lobby's Resume. The two screenshots are render-only until T20 compares them. The amendment in full is
-  section A4 of `docs/design/skeleton-plan-w6-notes.md`, and it outranks the lines above where they disagree.
+  section A4 of `docs/design/skeleton-plan-w6-notes.md`, as item 112(6) amends it, and it outranks the lines above
+  where they disagree.
 
 ---
 
@@ -628,7 +633,7 @@ Days are working days, five to a week. A task's start is the day its last input 
 | W3 | 3.4 – 5.0 | **T7** HPA\* + estimator (8 d, d17–25) | **T9** gateway surface (8 d, d18–26) | **T8** plan-core (10 d, d18–28) | The path-hash file agreeing on three OSes; the estimator's signed-error and sustainability reports; a hand-written JSONC playbook round-tripping and rendering as English prose |
 | W4 | 5.0 – 7.4 | **T10** runner (5 d, d25–30), then **T11** interpreter (8 d, d30–38) | **T13** gateway method slice (9 d, d30–39) | **T12** client bridge (9 d, d28–37) | The spec's 14-call walkthrough passing against a live gateway; the extension loading in Godot on a fresh checkout with zero caught panics |
 | W5 | 7.4 – 9.8 | **T14** economy, Build, Survey-lite, programs (10 d, d38–48) | **T15** gamectl + `scenario run` (8 d, d39–47) | **T16a** view feed, match control, host loop (10 d, run 1, items 106–107); then **T16** vista + watch rig (10 d, run 2) | **Flying over the generated map, craters remeshing**; the watch rig playing a segment at 2–4× and skipping to its end; `gamectl scenario run` as a green `xtask ci` step |
-| W6 | 9.8 – 11.8 | run 2: **T17** save/resume, private replay, vision follow-up (6 d) | run 2: **T18** operator Easy + safe playbook (8 d) | run 1: **T18a** planning wire (8.75 d) and **T19** PR 1, route surface (5.5 d); run 2: **T19** PR 2, wizard (6.5 d) — item 111 | **A sealed playbook walking the commander**: a beacon placed, a Generator built, the treasury and kW meter moving, BMI settled at the recap — and a two-seat match against Easy |
+| W6 | 9.8 – 11.8 | run 2: **T17** save/resume, private replay, vision follow-up (6 d) | run 2: **T18** operator Easy + safe playbook (8 d) | run 1: **T18a** planning wire (8.75 d) and **T19** PR 1, route surface (5.5 d); run 3: **T19** PR 2, wizard (6.5 d) — items 111 and 112 | **A sealed playbook walking the commander**: a beacon placed, a Generator built, the treasury and kW meter moving, BMI settled at the recap — and a two-seat match against Easy |
 | W7 | 11.8 – 12.8 | **T21** packaging (5 d, d59–64) | — | **T20** xtask closing half-week (5 d, d59–64) | A zip that launches on a clean Windows and a clean Linux machine; one `xtask ci` covering §10 items 1–4 with nothing skipped |
 | W8 | 12.8 – 14.2 | — | — | **T22** integration, goldens, demo (6 d, d64–71) | The stage demo of §1.1 |
 | — | **14.2 – 15.5** | **float: 1.3 weeks** | | | |
