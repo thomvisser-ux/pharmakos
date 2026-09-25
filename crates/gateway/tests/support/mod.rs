@@ -499,3 +499,85 @@ pub fn step(surface: &mut Surface, ticks: u32) -> u32 {
 pub const fn opening_tick() -> Tick {
     Tick::ZERO
 }
+
+/// A Rust string as a JSON string literal, through the codec that writes every
+/// other string in this project.
+#[must_use]
+pub fn quote(text: &str) -> String {
+    pharmakos_proto::json::write(&Json::String(text.to_owned()))
+        .trim_end()
+        .to_owned()
+}
+
+/// Where a seat's commander stands, in whole voxels, read from the world.
+#[must_use]
+pub fn commander_voxel(surface: &Surface, seat: u8) -> [i32; 3] {
+    let host = surface.host().expect("a hosted match");
+    let world = host.world();
+    let commander = world.commander_of(SeatId::new(seat));
+    let row = world
+        .units()
+        .ids()
+        .iter()
+        .position(|id| *id == commander.raw())
+        .expect("the commander is in the unit table");
+    let at = pharmakos_gateway::view::voxel_of(
+        world
+            .units()
+            .positions()
+            .get(row)
+            .copied()
+            .expect("a position"),
+    );
+    [at.x, at.y, at.z]
+}
+
+/// A playbook that holds `holds` quarter-seconds and then walks the seat's
+/// commander `east` voxels east of where it stands now, then falls back to
+/// its safest beacon: something that moves hashed state every tick, so a
+/// chain that two runs share is a chain that says something.
+#[must_use]
+pub fn walk_east(surface: &Surface, seat: u8, east: i32, holds: usize) -> String {
+    let [x, y, z] = commander_voxel(surface, seat);
+    let mut steps: Vec<String> = Vec::new();
+    for index in 0..holds {
+        steps.push(format!(
+            "{{\"label\": \"wait{index}\", \"hold\": {{\"ms\": 250}}}}"
+        ));
+    }
+    steps.push(format!(
+        "{{\"label\": \"east\", \"move\": {{\"to\": {{\"voxel\": {{\"x\": {}, \"y\": {y}, \"z\": \
+         {z}}}}}, \"pace\": \"DIRECT\"}}, \"timeout_ms\": 60000, \"on_fail\": {{\"action\": \
+         \"SKIP\"}}}}",
+        x.saturating_add(east)
+    ));
+    format!(
+        concat!(
+            "// Walk east, then stand.\n",
+            "{{\"schema_version\": {{\"major\": 1}},\n",
+            " \"meta\": {{\"title\": \"East\", \"author_kind\": \"HUMAN\"}},\n",
+            " \"declarative\": {{\"route\": [{}]}},\n",
+            " \"on_death\": {{\"on_respawn\": \"CONTINUE\"}},\n",
+            " \"fallback\": {{\"hold\": {{\"at\": {{\"beacon_anchor\": {{\"safest\": {{}}}}}}}}}},\n",
+            " \"kind\": \"PLAYBOOK\"}}\n"
+        ),
+        steps.join(", ")
+    )
+}
+
+/// A private match cache of this test's own: `name` under the test target's
+/// scratch directory, emptied first.
+///
+/// A save outlives its process and a new match under a saved match's id is
+/// refused, and `cargo xtask ci` runs every test twice (with and without the
+/// `research` feature), so a test that hosts a match keeps its matches here
+/// rather than in the machine's real cache, and starts from nothing.
+#[must_use]
+pub fn data_root(name: &str) -> PathBuf {
+    let root = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join("gateway-data-roots")
+        .join(name);
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).expect("a scratch data root");
+    root
+}

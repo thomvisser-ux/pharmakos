@@ -208,6 +208,14 @@ impl AuditLog {
         seq
     }
 
+    /// Number the next entry after `seq`, for a host whose `audit.log`
+    /// already holds lines up to it: a resumed match, or a folder an earlier
+    /// process wrote into ([`crate::cache::MatchCache::last_audit_seq`]).
+    /// Never moves the numbering backwards.
+    pub fn continue_after(&mut self, seq: u64) {
+        self.next_seq = self.next_seq.max(seq.saturating_add(1));
+    }
+
     /// Record a refusal, taking the code from the error.
     pub fn refused(
         &mut self,

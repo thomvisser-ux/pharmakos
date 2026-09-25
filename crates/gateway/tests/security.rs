@@ -596,7 +596,18 @@ fn the_private_match_cache_says_what_it_is() {
         .join("security-cache");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).expect("scratch");
-    let cache = pharmakos_gateway::cache::MatchCache::open(&root, MATCH, SEED).expect("opened");
+    let cache = pharmakos_gateway::cache::MatchCache::open(
+        &root,
+        MATCH,
+        &pharmakos_gateway::cache::Header {
+            match_seed: SEED,
+            seats: 2,
+            segment_lengths_ms: Vec::new(),
+            round_limit: 3,
+            rules_hash: 0,
+        },
+    )
+    .expect("opened");
     let mut readme = String::new();
     std::fs::File::open(cache.directory().join("README.txt"))
         .expect("README.txt")

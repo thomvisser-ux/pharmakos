@@ -50,7 +50,7 @@
 //! |---|---|
 //! | here | `get_status`, `wait_for`, `save_notes`, `set_ready`, `get_segment_feed` |
 //! | [`knowledge`] | `get_briefing`, `get_recap`, `list_beacons`, `get_beacon`, `get_map_summary`, `get_economy_forecast`, `estimate_route` |
-//! | [`planning`] | `get_schema`, `list_templates`, `instantiate_template`, `verify_plan`, `render_plan`, `patch_plan`, `save_draft`, `list_drafts`, `get_safe_plan`, `submit_plan` |
+//! | [`planning`] | `get_schema`, `list_templates`, `instantiate_template`, `verify_plan`, `render_plan`, `patch_plan`, `save_draft`, `list_drafts`, `get_draft`, `get_safe_plan`, `submit_plan` |
 //! | [`watch`] | `get_view` |
 //! | [`control`] | `end_lull`, `advance_push`, `end_recap`, `report_host_clock` |
 //!
@@ -91,6 +91,35 @@
 //! scratch view feed. Both methods are host-side, and `tests/confinement.rs`
 //! holds that no handler names either.
 //!
+//! # Saves, resumes and the private replay (T17)
+//!
+//! Decisions-log item 84; the wave-6 notes, decisions C8 to C11 and section
+//! A2. The surface never touches the disk: [`Surface::begin_push`] builds a
+//! `sealed` save, every seat's seal and, at each segment's end
+//! ([`Surface::step`]), that segment's hash chain into a pending slot, and the
+//! host loop takes it with [`Surface::take_persistence`] and writes it through
+//! [`crate::cache`]. A Lull quit is saved by [`Surface::lull_save`], asked by
+//! the host loop on end of file. [`Surface::resume`] builds a surface over a
+//! save. All three are host-side, and no method handler names any of them
+//! (`tests/confinement.rs`).
+//!
+//! What a resume rebuilds, field by field (the notes, A2):
+//!
+//! * **saved** -- every seat's notebook, drafts and seal, and `lull_offset`;
+//! * **derived** -- `time` (round and phase from the restored runner),
+//!   `host`, `feed_anchor`, the fog policy's eliminations (from the restored
+//!   seat table), `views` (the generated map re-encoded from the pristine
+//!   world, every chunk an edit touched re-marked, the stamp restarting, so
+//!   every cursor and handle from the dead process is stale), and draft
+//!   continuity (the carried draft re-verified against the same snapshot);
+//! * **reset** -- `tokens` (a new process, a new announce line: spec section
+//!   3's "seat tokens are reissued"), `limits` and `limiters`,
+//!   `lull_remaining_ms`, `reported_elapsed_ms` and `phase_elapsed` (the
+//!   client re-reports its clock), every ready flag, the operator's advice
+//!   (the advisor re-runs at a resumed Lull), and `feed`: a replayed Push
+//!   regenerates it, and a resumed Lull's is empty. PLACEHOLDER: the last
+//!   recap's events do not survive a resume -- **OWNER**, at **S7**.
+//!
 //! # Secrecy
 //!
 //! [`Surface::seat_state`] is the **only** way to a seat's notebook, drafts or
@@ -113,6 +142,9 @@ use crate::fog::{Audience, FogFilter, FogPolicy, Viewer, Vision};
 use crate::host::Host;
 use crate::limit::{Limits, RateLimiter};
 use crate::rpc::{self, Request};
+use crate::save::{
+    Boundary, Persistence, SavedMatch, SavedSeal, SavedSeat, SealedFile, SegmentChain,
+};
 use crate::scopes::{self, Scope};
 use crate::time::MatchTime;
 use crate::token::{Grant, Handle, Subject, Token, TokenStore};
@@ -373,6 +405,12 @@ pub struct Surface {
     lull_offset: u32,
     /// The view feed's derived, unhashed state ([`crate::viewfeed`]).
     views: ViewFeed,
+    /// What the host loop has still to write into the private match cache
+    /// ([`Surface::take_persistence`]).
+    pending: Persistence,
+    /// The current segment's per-tick chain, as it is played: the private
+    /// replay's third input, written at the segment's end.
+    chain: Vec<(Tick, u64)>,
 }
 
 impl Surface {
@@ -419,6 +457,240 @@ impl Surface {
             phase_elapsed: 0,
             lull_offset: 0,
             views: ViewFeed::new(),
+            pending: Persistence::default(),
+            chain: Vec::new(),
+        })
+    }
+
+    /// A surface over a **saved** match: the save's planning snapshot put
+    /// into `host`, every seat's private store as it was saved, and the match
+    /// where the save left it.
+    ///
+    /// `host` is freshly opened from the save's own config line
+    /// ([`crate::host::Host::open_from`]), so its world is the pristine one
+    /// the map generator makes; the view encodes its generated map from that
+    /// world **before** the snapshot goes in, which is what keeps an edit made
+    /// before the save fogged for a seat that could not see it.
+    ///
+    /// A `lull` save lands in an ordinary Lull, with its notebooks, drafts and
+    /// any verified submission. A `sealed` save lands **in its Push**: the
+    /// seals are sealed from the restored store through the one path orders
+    /// take into a match ([`Surface::begin_push`]'s), and no Lull is offered,
+    /// so a client killed mid-Push replays that Push to the same chain and
+    /// cannot re-plan what it watched (the wave-6 notes, decision C8).
+    /// PLACEHOLDER: where a resume lands is the owner's question D2, taken on
+    /// the recommendation -- **OWNER**, now.
+    ///
+    /// Every saved seal is **recompiled** and its plan fingerprint recomputed
+    /// and compared with the saved one. Both come from the save, so this
+    /// catches a damaged file and a canonical form that drifted between
+    /// builds, and it does not catch tampering: the cache is plain local state
+    /// (AGENTS.md section 7).
+    ///
+    /// PLACEHOLDER: a resumed Lull's timer starts full, because the Lull timer
+    /// is the client's (decisions-log item 99) and the save does not carry
+    /// what was left, so quitting buys planning time -- **OWNER**, at
+    /// hardening.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::InvalidArgument`] for a save that does not fit
+    /// this match or does not restore: its seats are not this match's, its
+    /// round is not where its snapshot lands, a seal fails its fingerprint or
+    /// will not compile, a store is over its bounds, or a `sealed` save does
+    /// not hold this round's seal for every seat. As [`Surface::new`] and
+    /// [`Surface::attach`] otherwise.
+    pub fn resume(
+        match_id: &str,
+        match_seed: u64,
+        rules: RulesTable,
+        fog: FogPolicy,
+        seats: &[SeatId],
+        host: Host,
+        saved: &SavedMatch,
+    ) -> Result<Surface, Error> {
+        let mut surface = Surface::new(match_id, match_seed, rules, fog, seats)?;
+        surface.attach(host)?;
+        surface.host_mut()?.resume(&saved.snapshot)?;
+        let round = surface.host()?.runner().round();
+        if saved.round != round {
+            return Err(Error::invalid(format!(
+                "this save says it is round {} and its planning snapshot is round {round}: the \
+                 file is damaged",
+                saved.round
+            )));
+        }
+
+        // Derived: the view, over the world the snapshot restored. Every chunk
+        // an edit touched is a modified chunk again, marked at the stamp the
+        // attach opened, and the stamp moves on.
+        let modified = surface.host()?.world().voxels().modified_indices();
+        surface.views.stamp(&modified);
+        surface.views.bump();
+        surface.eliminate_the_fallen();
+
+        // Saved: the offset that keeps the gateway's tick monotonic.
+        surface.lull_offset = saved.lull_offset;
+        surface.sync_time();
+        // A fresh feed: the recap's events are not in the save.
+        surface.begin_segment(round, 0);
+
+        surface.restore_seats(saved)?;
+        surface.derive_continuity(round)?;
+
+        if saved.boundary == Boundary::Sealed {
+            let every_seat_sealed = surface.seats.iter().all(|slot| {
+                slot.sealed
+                    .as_ref()
+                    .is_some_and(|sealed| sealed.round == round)
+            });
+            if !every_seat_sealed {
+                return Err(Error::invalid(
+                    "a save made as a Push began holds that round's seal for every seat, and this \
+                     one does not: the file is damaged",
+                ));
+            }
+            if !surface.seal_and_open_push()? {
+                return Err(Error::invalid(
+                    "this save's match would not leave its Lull into the Push it was saved at",
+                ));
+            }
+        }
+        Ok(surface)
+    }
+
+    /// Put every saved seat's notebook, drafts and seal into its store.
+    fn restore_seats(&mut self, saved: &SavedMatch) -> Result<(), Error> {
+        let ours: Vec<u8> = self.seats.iter().map(|slot| slot.seat.raw()).collect();
+        let theirs: Vec<u8> = saved.seats.iter().map(|seat| seat.seat).collect();
+        if ours != theirs {
+            return Err(Error::invalid(format!(
+                "this save holds seats {theirs:?} and the match it resumes has seats {ours:?}: \
+                 the file is damaged"
+            )));
+        }
+        let rules = self.host()?.rules().clone();
+        let notebook_max = rules
+            .message()
+            .verifier
+            .as_ref()
+            .map_or(0, |verifier| verifier.notebook_max_chars);
+        for held in &saved.seats {
+            let characters = u32::try_from(held.notebook.chars().count()).unwrap_or(u32::MAX);
+            if characters > notebook_max || held.drafts.len() > crate::surface::planning::MAX_DRAFTS
+            {
+                return Err(Error::invalid(format!(
+                    "seat {}'s notebook or drafts in this save are over the bounds a seat may \
+                     hold: the file is damaged",
+                    held.seat
+                )));
+            }
+            let sealed = match held.seal.as_ref() {
+                None => None,
+                Some(seal) => Some(restore_seal(held, seal, &rules)?),
+            };
+            if let Some(slot) = self
+                .seats
+                .iter_mut()
+                .find(|slot| slot.seat.raw() == held.seat)
+            {
+                held.notebook.clone_into(&mut slot.notebook);
+                slot.drafts.clone_from(&held.drafts);
+                slot.sealed = sealed;
+            }
+        }
+        Ok(())
+    }
+
+    /// Draft continuity after a resume: the carried draft, if this round has
+    /// one, re-verified against the same frozen snapshot it was verified
+    /// against when the Lull opened -- so the same report.
+    fn derive_continuity(&mut self, round: u32) -> Result<(), Error> {
+        let seats: Vec<SeatId> = self.seats.iter().map(|slot| slot.seat).collect();
+        for seat in seats {
+            let carried = self
+                .seat_state(Subject::Seat(seat), seat)?
+                .draft(CARRIED_DRAFT_ID)
+                .filter(|draft| draft.round == round)
+                .map(|draft| draft.playbook_jsonc.clone());
+            let Some(playbook) = carried else {
+                continue;
+            };
+            let report = self.verify_for(seat, &playbook, Depth::Full)?;
+            self.seat_state_mut(Subject::Seat(seat), seat)?.continuity = Some(Continuity {
+                draft_id: String::from(CARRIED_DRAFT_ID),
+                qualifies: report.qualifies,
+                diagnostics: u32::try_from(report.diagnostics.len()).unwrap_or(u32::MAX),
+                report_hash: report.report_hash,
+            });
+        }
+        Ok(())
+    }
+
+    /// What the host loop has to write into the private match cache: a
+    /// `sealed` save and every seat's seal when a Push has begun, and the
+    /// chain of every segment that has ended since the last take.
+    ///
+    /// **Host-side**: the host loop takes it after every job and writes it
+    /// through [`crate::cache`]; no method handler names it
+    /// (`tests/confinement.rs`). A host that never takes it -- `gamectl
+    /// scenario run`, the tests -- holds one save and one set of seals at a
+    /// time, replaced each Push, and the chains of the segments it played.
+    pub fn take_persistence(&mut self) -> Persistence {
+        std::mem::take(&mut self.pending)
+    }
+
+    /// A `lull` save of the match as it stands, for the host loop to write
+    /// when the control pipe reaches end of file during a Lull.
+    ///
+    /// **Host-side**, like [`Surface::take_persistence`].
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::PhaseClosed`] outside a Lull -- no saving
+    /// mid-Push (spec section 3) -- and [`crate::error::Code::Internal`] when
+    /// the snapshot will not encode or a seal has no canonical form.
+    pub fn lull_save(&self) -> Result<SavedMatch, Error> {
+        if self.host()?.runner().phase() != MatchPhase::Lull {
+            return Err(Error::phase_closed(
+                "a match is saved at a Lull boundary, and this one is not in a Lull",
+            ));
+        }
+        self.saved_match(Boundary::Lull)
+    }
+
+    /// The match as a save holds it.
+    fn saved_match(&self, boundary: Boundary) -> Result<SavedMatch, Error> {
+        let round = self.host()?.runner().round();
+        let snapshot = self.snapshot_bytes()?;
+        let mut seats: Vec<SavedSeat> = Vec::with_capacity(self.seats.len());
+        for slot in &self.seats {
+            let seal = match slot.sealed.as_ref() {
+                None => None,
+                Some(sealed) => Some(SavedSeal {
+                    playbook_jsonc: sealed.playbook_jsonc.clone(),
+                    round: sealed.round,
+                    filed_by_the_gateway: sealed.filed_by_the_gateway,
+                    report_hash: sealed.report_hash.clone(),
+                    plan_fingerprint: plan_fingerprint(&sealed.playbook_jsonc)?,
+                }),
+            };
+            seats.push(SavedSeat {
+                seat: slot.seat.raw(),
+                notebook: slot.notebook.clone(),
+                drafts: slot.drafts.clone(),
+                seal,
+            });
+        }
+        Ok(SavedMatch {
+            boundary,
+            round,
+            // What this Lull has spent so far is carried too, so a resumed
+            // match's tick starts where this one's stood (the phase's own
+            // clock is reset and re-reported).
+            lull_offset: self.lull_offset.saturating_add(self.phase_elapsed),
+            snapshot,
+            seats,
         })
     }
 
@@ -803,6 +1075,21 @@ impl Surface {
     /// As [`Surface::host`], plus [`crate::error::Code::Internal`] when a
     /// filed safe playbook will not compile or the runner refuses a seal.
     pub fn begin_push(&mut self) -> Result<bool, Error> {
+        self.seal_and_open_push()
+    }
+
+    /// [`Surface::begin_push`]'s body, which [`Surface::resume`] shares for a
+    /// `sealed` save: one path for orders into a match, whether they were
+    /// submitted in this process or saved by the last one.
+    ///
+    /// After the Push opens, the **`sealed` save** and every seat's seal are
+    /// put in the pending slot the host loop writes from (the wave-6 notes,
+    /// decision C8: "after every seal is final and the safe playbooks are
+    /// filed, before the first tick"). A save that cannot be built is an
+    /// audit line and not a refusal: the Push has already begun, and a match
+    /// that would not start because its save would not encode would be a
+    /// worse failure than a missing save.
+    fn seal_and_open_push(&mut self) -> Result<bool, Error> {
         if self.host()?.runner().phase() != MatchPhase::Lull {
             return Ok(false);
         }
@@ -816,10 +1103,45 @@ impl Surface {
         if started {
             self.close_phase();
             self.views.bump();
+            self.persist_push(round);
         }
         self.sync_time();
         self.absorb_events()?;
         Ok(started)
+    }
+
+    /// Put a beginning Push's save and seals in the pending slot, and make
+    /// room for its chain.
+    fn persist_push(&mut self, round: u32) {
+        self.pending.sealed = self
+            .seats
+            .iter()
+            .filter_map(|slot| {
+                slot.sealed
+                    .as_ref()
+                    .filter(|sealed| sealed.round == round)
+                    .map(|sealed| SealedFile {
+                        seat: slot.seat,
+                        round,
+                        playbook_jsonc: sealed.playbook_jsonc.clone(),
+                    })
+            })
+            .collect();
+        match self.saved_match(Boundary::Sealed) {
+            Ok(saved) => self.pending.save = Some(saved),
+            Err(error) => {
+                let tick = self.time.tick;
+                self.audit.refused(tick, None, None, "save sealed", &error);
+            }
+        }
+        // Reserved once, here, so that recording the chain allocates nothing
+        // on the tick's hot path ([`Surface::step`]).
+        let ticks = self.host.as_ref().map_or(0, |host| {
+            host.runner().world().match_state().segment_ticks()
+        });
+        self.chain.clear();
+        self.chain
+            .reserve(usize::try_from(ticks).unwrap_or(0).saturating_add(1));
     }
 
     /// Every seat's sealed plan, in ascending seat id.
@@ -836,18 +1158,15 @@ impl Surface {
     /// what a caller gets before a match has a Lull behind it, and a `None`
     /// there is "nothing to file", not "file nothing".
     ///
-    /// PLACEHOLDER: **this is also what a restore has to call.** A plan is an
-    /// *input* and is not in a snapshot (T11: "the sim is a pure function of
-    /// (map seed, playbooks, rules hash) and an input is not state"), so a
-    /// runner restored from a save file has the interpreter's *state* back and
-    /// no plans behind it — and would play the rest of the segment with every
-    /// commander standing still, which is exactly the bug this task removes.
-    /// The gateway is where the plans still are: this store. Saves and restores
-    /// are **T17**'s and there is no restore path in this crate today, so there
-    /// is nothing here to wire; when T17 adds one it re-seals from this
-    /// function, after the restore and before the first tick, and the plan
-    /// fingerprint T11's `Interpreter::restore` PLACEHOLDER asks for is what
-    /// tells it the save and the store agree. **T17.**
+    /// **This is also what a restore calls** (T17, closing T13b's
+    /// PLACEHOLDER). A plan is an *input* and is not in a snapshot (T11: "the
+    /// sim is a pure function of (map seed, playbooks, rules hash) and an input
+    /// is not state"), so a runner restored from a save has the interpreter's
+    /// *state* back and no plans behind it. [`Surface::resume`] restores every
+    /// saved seal into this store -- recompiled, its plan fingerprint compared
+    /// with the saved one -- and a `sealed` save is then sealed from here,
+    /// after the restore and before the first tick, exactly as a Push begun in
+    /// this process is.
     fn plans_for_round(&self) -> Vec<(SeatId, Plan)> {
         let mut plans: Vec<(SeatId, Plan)> = self
             .seats
@@ -900,6 +1219,18 @@ impl Surface {
         if let Some(report) = report {
             if report.match_ended {
                 self.fog.end_match();
+            }
+            // The private replay's chain (the wave-6 notes, decision C11):
+            // room was reserved when the Push began, so this allocates nothing
+            // until the segment ends and the chain is handed on.
+            self.chain.push((report.tick, report.hash));
+            if report.segment_ended {
+                let round = self
+                    .host
+                    .as_ref()
+                    .map_or(self.time.round, |host| host.runner().round());
+                let ticks = std::mem::take(&mut self.chain);
+                self.pending.chains.push(SegmentChain { round, ticks });
             }
         }
         self.eliminate_the_fallen();
@@ -1585,6 +1916,15 @@ impl Surface {
             .filter(|sealed| !sealed.filed_by_the_gateway)
             .map(|sealed| sealed.playbook_jsonc.clone());
         let Some(playbook) = carried else {
+            // Nothing is carried this round -- the seat sealed nothing, or the
+            // gateway filed its safe playbook -- so last round's carried draft
+            // is last round's and goes, with what its re-verification found
+            // (decisions-log item 112 (3): it outlived its round before).
+            let state = self.seat_state_mut(Subject::Seat(seat), seat)?;
+            state
+                .drafts
+                .retain(|draft| draft.draft_id != CARRIED_DRAFT_ID);
+            state.continuity = None;
             return Ok(());
         };
         let report = self.verify_for(seat, &playbook, Depth::Full)?;
@@ -1999,6 +2339,7 @@ impl Surface {
             Method::PatchPlan => Surface::patch_plan(request),
             Method::SaveDraft => self.save_draft(subject, request),
             Method::ListDrafts => self.list_drafts(subject),
+            Method::GetDraft => self.get_draft(subject, request),
             Method::GetSafePlan => self.get_safe_plan(subject),
             Method::SubmitPlan => self.submit_plan(subject, request),
 
@@ -2259,6 +2600,60 @@ impl Surface {
             ),
         ]))
     }
+}
+
+/// The plan fingerprint of a playbook's canonical form (decisions-log item
+/// 77): what a save carries beside each seal, and what a resume recomputes.
+fn plan_fingerprint(playbook_jsonc: &str) -> Result<u64, Error> {
+    let canonical = pharmakos_plan_core::canonicalise_text(playbook_jsonc).map_err(|error| {
+        Error::internal(format!(
+            "a sealed playbook has no canonical form: {}",
+            error.message
+        ))
+    })?;
+    pharmakos_verifier::hash::plan_fingerprint(&canonical.playbook).ok_or_else(|| {
+        Error::internal("a sealed playbook's canonical form will not encode for its fingerprint")
+    })
+}
+
+/// One saved seal, back in a seat's store: its fingerprint checked, then
+/// recompiled.
+///
+/// The fingerprint first, because it is what says the text is the text that
+/// was saved; a text that compiles and is not is exactly what it catches.
+fn restore_seal(held: &SavedSeat, seal: &SavedSeal, rules: &RulesTable) -> Result<Sealed, Error> {
+    let fingerprint = plan_fingerprint(&seal.playbook_jsonc).map_err(|error| {
+        Error::invalid(format!(
+            "seat {}'s sealed playbook in this save has no canonical form ({}): the file is \
+             damaged",
+            held.seat, error.message
+        ))
+    })?;
+    if fingerprint != seal.plan_fingerprint {
+        return Err(Error::invalid(format!(
+            "seat {}'s sealed playbook in this save does not match the plan fingerprint saved \
+             beside it ({} against {}): the file is damaged, or this build writes a different \
+             canonical form than the one that saved it",
+            held.seat,
+            pharmakos_sim::hex(fingerprint),
+            pharmakos_sim::hex(seal.plan_fingerprint)
+        )));
+    }
+    let plan = crate::surface::planning::compile_playbook(&seal.playbook_jsonc, rules).map_err(
+        |error| {
+            Error::invalid(format!(
+                "seat {}'s sealed playbook in this save will not compile in this build: {}",
+                held.seat, error.message
+            ))
+        },
+    )?;
+    Ok(Sealed {
+        playbook_jsonc: seal.playbook_jsonc.clone(),
+        report_hash: seal.report_hash.clone(),
+        round: seal.round,
+        filed_by_the_gateway: seal.filed_by_the_gateway,
+        plan,
+    })
 }
 
 /// What the audit log records for a call, resolved against the schema.

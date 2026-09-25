@@ -725,10 +725,14 @@ fn a_built_in_seats_sealed_plan_is_the_same_with_and_without_an_advisor_running(
 /// seat's changes; a read on the list is answered.
 #[test]
 fn an_advisor_is_refused_every_method_off_its_allow_list() {
-    const REFUSED: [(&str, &str); 5] = [
+    // `get_draft` joined the list with T17 (decisions-log item 112 (5)): the
+    // advisor never reads a seat's drafts, one at a time any more than all
+    // at once.
+    const REFUSED: [(&str, &str); 6] = [
         ("save_notes", r#"{"notes":"written by the operator"}"#),
         ("save_draft", r#"{"label":"x","playbook_jsonc":"{}"}"#),
         ("list_drafts", "{}"),
+        ("get_draft", r#"{"draft_id":"carried"}"#),
         ("submit_plan", r#"{"playbook_jsonc":"{}"}"#),
         ("set_ready", r#"{"ready":true}"#),
     ];

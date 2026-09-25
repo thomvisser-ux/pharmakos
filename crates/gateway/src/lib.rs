@@ -59,6 +59,7 @@
 //! | [`serve`] | The host loop: one config line in, one announce line out, one surface behind many connections |
 //! | [`advice`] | What the built-in operator advises a seat it does not play: the safe playbook and the wizard's suggestions |
 //! | [`cache`] | The private match cache: where it goes, and what is in it |
+//! | [`save`] | The save container and the private replay's inputs: what a Lull boundary writes, and what a resume reads back |
 //! | [`detail`] | The read-method detail budgets, in the fixed salience order |
 //! | [`time`] | The host's tick reaching the gateway, because the gateway has no clock |
 //! | [`surface`] | Authentication, dispatch, the `_status` footer, the seat's private store |
@@ -131,6 +132,7 @@ pub mod limit;
 pub mod net;
 pub mod routes;
 pub mod rpc;
+pub mod save;
 pub mod schema;
 pub mod scopes;
 pub mod serve;
