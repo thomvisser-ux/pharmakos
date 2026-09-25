@@ -13,14 +13,24 @@ repository.workspace = true
 publish.workspace = true
 
 # No [features] section on purpose: this crate must never define, forward or enable the
-# `research` feature. The operator has no lookahead at any difficulty — that is barred by
-# "no dry runs" — so it must not be able to reach `fork` (spec §14, §15). A CI dependency
-# check fails the build if it can. Any future dependency on pharmakos-sim must read:
-#     pharmakos-sim = { workspace = true, default-features = false }
+# `research` feature. The operator has no lookahead at any difficulty -- that is barred by
+# "no dry runs" -- so it must not be able to reach `fork` (spec section 14, 15). A CI
+# dependency check fails the build if it can.
 
 [dependencies]
-# None yet. Expected: pharmakos-proto, pharmakos-plan-core; it talks to the gateway as an
-# ordinary client rather than linking privileged sim internals.
+# pharmakos-proto and NOTHING ELSE (decisions-log item 111, decision C4; AGENTS.md section 3
+# rule 3). The operator is an ordinary client of the Seat Gateway *by construction*: it
+# drives a call closure over gp.api.v1 JSON-RPC that `gamectl host` binds to the seat's own
+# in-process token, and it reads the public rules text for its tuning rows. With the sim
+# and the gateway off this list, no privileged read is even nameable here --
+# `tests/confinement.rs`'s `the_operator_crate_depends_on_proto_alone` walks
+# `cargo metadata` to keep it that way.
+pharmakos-proto = { workspace = true }
+
+# No [dev-dependencies] either. Item 111 allows a dev-dependency on pharmakos-gateway for
+# tests, and this crate does not take it: its own tests drive it through SCRIPTED client
+# closures, and every test that hosts a real match lives in crates/gamectl/tests, where the
+# adapter is.
 
 [lints]
 workspace = true

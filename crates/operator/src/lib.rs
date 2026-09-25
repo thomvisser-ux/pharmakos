@@ -1,43 +1,63 @@
 // SPDX-FileCopyrightText: 2026 Pharmakos contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The built-in operator. Role from spec §14, listed in spec §15 (Architecture) among the
-//! gateway's clients: it runs in process and uses the same traits as everything else.
+//! The built-in operator (spec section 14): Easy, and the safe playbook.
 //!
-//! Every commander is run by this operator. It does three jobs:
+//! Every commander is run by the built-in operator. It does three jobs: it
+//! **generates** a playbook with the rudimentary tool (templates plus utility
+//! scoring), it **files the safe playbook** when a seat submits nothing
+//! verified before the Lull ends, and it **executes** whatever playbook the
+//! seat sealed. The third job is the sim's playbook interpreter, and the
+//! first two are this crate.
 //!
-//! 1. **Generate** a playbook with the rudimentary tool — templates plus utility scoring.
-//! 2. **File the safe playbook** when a seat submits nothing verified before the Lull ends.
-//! 3. **Execute** whatever playbook the seat sealed — the human's edited playbook and its
-//!    own alike.
+//! # An ordinary client, by construction
 //!
-//! A computer opponent is this operator with no human editing it, plus the built-in
-//! mandates on its beacons and the built-in programs in its units and buildings.
+//! "Same snapshot, same verifier, same submit path, no privileged reads"
+//! (spec section 14; AGENTS.md section 3 rule 3). This crate depends on
+//! `pharmakos-proto` **alone** (decisions-log item 111, decision C4): it names
+//! no gateway type and no sim type, because it cannot. It reaches the match
+//! through one thing, a **call closure** ([`Call`]) -- a JSON-RPC method name
+//! and its params in, the response out -- which `gamectl host` binds to the
+//! seat's own in-process token and adapts twice: as a built-in seat for each
+//! seat the operator plays ([`Easy::play`]) and as an advisor for each seat a
+//! person plays ([`Easy::advise`]). Every read, estimate, verify and submit is
+//! a wire call through the gateway's door, its audit and its fog.
 //!
-//! # It is an ordinary client
+//! The one input that is not a call is the **public rules text** (decision
+//! C17): [`Easy::new`] reads its costs, kW ratings, yields and interface times
+//! from the same `rules/rules.v1.json` the host and every client pin.
 //!
-//! Same snapshot, same verifier, same submit path, no privileged reads (spec §12, §14).
-//! It reads the briefing, beacons, known enemies, economy and capabilities; computes
-//! integer situation features (threat, power headroom, vent sites, expansion sites,
-//! capability and attack opportunities, commander risk); fills template parameters with
-//! the top-k options; composes visit goals by greedy insertion by utility per second until
-//! the route fills its target share of the segment; scores defence + economy + expansion +
-//! capability + attack − risk; adds the standard rules; then runs verify-and-repair up to
-//! four times.
+//! # Deterministic, and budgeted in evaluation units
 //!
-//! Determinism: its seed comes from the match, seat and round, and its budget is measured
-//! in evaluation units rather than wall time.
+//! Its seed is (match, seat, round), and at Easy it draws nothing with it
+//! (decision C15): candidates are enumerated in a total order and ties go to
+//! the lowest id, so the seed is recorded in the playbook's note and unused
+//! until S5. It reads no clock, never the `_status` footer's timer, and keys
+//! nothing on a viewer-scoped handle. Its budget is Easy's evaluation units --
+//! 30 candidates, one estimate each, 1 + 4 verifies -- and the call budget is
+//! derived from them ([`easy::EASY_CALL_BUDGET`]).
 //!
-//! v1 ships the Balanced weighting only, at Easy / Normal / Hard breadth. **No lookahead
-//! at any level** — Hard differs only in breadth and rules. It ignores the seat notebook,
-//! and on a built-in seat it emits one-way engine chatter; it never reads chatter.
+//! **No lookahead at any level**: barred by "no dry runs" (AGENTS.md section 3
+//! rule 2), which is also why this crate has no `[features]` and can never
+//! reach the sim's `research` feature.
 //!
-//! # Rules this crate is held to
+//! # What the skeleton's Easy does not do
 //!
-//! * **No dry runs**, so **no `research` feature**: only `crates/sim` defines it, this
-//!   crate may never enable or transitively reach it, and `cargo xtask ci` enforces that.
-//! * Deterministic like the sim: integer maths, seeded RNG streams, ordered collections,
-//!   no wall-clock time, no float arithmetic.
-//!
-//! Nothing is implemented yet — placeholder. Easy arrives with the walking skeleton;
-//! Normal and Hard are built in stage S5.
+//! Spec section 14's Survey post, Defend guard, chatter and target spread are
+//! not built at Easy (decisions-log item 111, section A6). PLACEHOLDER: owner,
+//! at **S5**, with Normal and Hard.
+
+pub mod easy;
+pub mod wire;
+
+mod candidates;
+mod compose;
+mod playbook;
+mod safe;
+mod situation;
+mod terrain;
+mod tuning;
+
+pub use easy::{Advice, Easy, Played, Submitted, SuggestedValue, Suggestion};
+pub use tuning::RulesError;
+pub use wire::{Call, Refused};
