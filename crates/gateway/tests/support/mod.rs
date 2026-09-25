@@ -34,6 +34,7 @@ use pharmakos_sim::tables::{BeaconId, SeatId};
 use pharmakos_sim::voxels::{CHUNK_EDGE, Material, VoxelEdit};
 use pharmakos_sim::world::{DamageOrder, DamageTarget, WorldConfig};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU32, Ordering};
 
 /// The match id every suite here uses.
 pub const MATCH: &str = "m-0001";
@@ -565,19 +566,33 @@ pub fn walk_east(surface: &Surface, seat: u8, east: i32, holds: usize) -> String
     )
 }
 
-/// A private match cache of this test's own: `name` under the test target's
-/// scratch directory, emptied first.
+/// A private match cache of this run's own: `name`, this process's id and a
+/// per-process counter under the test target's scratch directory, created
+/// fresh.
 ///
 /// A save outlives its process and a new match under a saved match's id is
 /// refused, and `cargo xtask ci` runs every test twice (with and without the
 /// `research` feature), so a test that hosts a match keeps its matches here
-/// rather than in the machine's real cache, and starts from nothing.
+/// rather than in the machine's real cache, and starts from nothing. The
+/// process id is in the name because two test processes can share one target
+/// directory at once (two agents, or a developer and CI, on one machine), and
+/// a root per test name alone let one run's resumed match write into the
+/// other's folders. A live process id is unique, so the only folder that can
+/// already hold this name is a dead process's that had the same id: it is
+/// removed, and the fresh folder is then *created*, never reused, so a clash
+/// fails here and loudly rather than in the middle of a test.
 #[must_use]
 pub fn data_root(name: &str) -> PathBuf {
-    let root = Path::new(env!("CARGO_TARGET_TMPDIR"))
-        .join("gateway-data-roots")
-        .join(name);
-    let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(&root).expect("a scratch data root");
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+    let serial = NEXT.fetch_add(1, Ordering::Relaxed);
+    let parent = Path::new(env!("CARGO_TARGET_TMPDIR")).join("gateway-data-roots");
+    std::fs::create_dir_all(&parent).expect("the scratch data roots' folder");
+    let root = parent.join(format!("{name}-{}-{serial}", std::process::id()));
+    match std::fs::remove_dir_all(&root) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => panic!("a dead run's data root {} stays: {error}", root.display()),
+    }
+    std::fs::create_dir(&root).expect("a fresh scratch data root");
     root
 }

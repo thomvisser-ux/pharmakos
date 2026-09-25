@@ -217,6 +217,15 @@ struct Client {
 impl Client {
     /// Connect, upgrade, and be ready to call.
     fn open(port: u16, token: &str) -> Client {
+        match Client::try_open(port, token) {
+            Ok(client) => client,
+            Err(head) => panic!("the upgrade was refused: {head}"),
+        }
+    }
+
+    /// [`Client::open`], handing back the response head of a refused upgrade
+    /// rather than panicking on it.
+    fn try_open(port: u16, token: &str) -> Result<Client, String> {
         let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("a loopback connection");
         stream
             .set_read_timeout(Some(Duration::from_secs(20)))
@@ -238,11 +247,11 @@ impl Client {
             id: 0,
         };
         let head = client.read_until(b"\r\n\r\n");
-        assert!(
-            head.starts_with("HTTP/1.1 101"),
-            "the upgrade was refused: {head}"
-        );
-        client
+        if head.starts_with("HTTP/1.1 101") {
+            Ok(client)
+        } else {
+            Err(head)
+        }
     }
 
     /// One JSON-RPC call, and the one answer it waits for.
@@ -426,6 +435,14 @@ fn the_two_lines_are_read_exactly_as_they_were_written() {
         let line = format!("{}\t{seventh}\n", plain.render().trim_end());
         let error = ConfigLine::parse(&line).expect_err("not a seventh field");
         assert_eq!(error.code, Code::InvalidArgument, "`{seventh}`");
+    }
+    // And nothing after the seventh: an eighth field is refused, not ignored,
+    // whether the seventh asks for a resume or not.
+    for tail in ["resume\tgarbage", "-\tgarbage", "\t"] {
+        let line = format!("{}\t{tail}\n", plain.render().trim_end());
+        let error = ConfigLine::parse(&line).expect_err("an eighth field");
+        assert_eq!(error.code, Code::InvalidArgument, "`{tail}`");
+        assert!(error.message.contains("at most"), "{}", error.message);
     }
 
     let announce = Announce {
@@ -1162,12 +1179,31 @@ fn a_resume_line_that_disagrees_with_the_save_is_refused() {
             },
         ),
     ];
+    // The match-id variant needs a save under the other id for the line to
+    // disagree *with*: with no folder at all, `MatchCache::reopen` would
+    // refuse it for having nothing to resume, and the test would pass without
+    // `Save::check` ever reading the id. So the saved match's own file is
+    // copied there, and its config still names the original id.
+    let other = folder_of(&root, "m-t17-disagree-other");
+    std::fs::create_dir_all(&other).expect("the other id's folder");
+    std::fs::copy(
+        folder_of(&root, "m-t17-disagree").join("save.json"),
+        other.join("save.json"),
+    )
+    .expect("the saved match's file under the other id");
     for (field, asked) in variants {
         let error = host_and_quit(&root, &resume_line(asked)).expect_err(field);
         assert_eq!(
             error.code,
             Code::InvalidArgument,
             "{field}: {}",
+            error.message
+        );
+        assert!(
+            error
+                .message
+                .contains(&format!("the resume line asks for {field} ")),
+            "the refusal names the field that differs, {field}: {}",
             error.message
         );
     }
@@ -1238,6 +1274,7 @@ fn a_killed_client_mid_push_replays_that_push_to_the_same_chain() {
     // Killed a few ticks in.
     let root = data_root("t17-killed");
     let mut running = start_in(&root, &new_line(line.clone()), Box::new(NoOperators));
+    let killed = running.announce.clone();
     let mut lobby = Client::open(running.announce.port, &running.announce.admin_token);
     let _ = result(&lobby.call("end_lull", "{}"), "end_lull");
     let _ = result(&lobby.call("advance_push", r#"{"ms":300}"#), "advance_push");
@@ -1250,6 +1287,16 @@ fn a_killed_client_mid_push_replays_that_push_to_the_same_chain() {
 
     // Resumed: straight into the Push, with no Lull to re-plan it in.
     let mut running = start_in(&root, &resume_line(line), Box::new(NoOperators));
+    // A new process, a new announce line: spec section 3's "seat tokens are
+    // reissued". Neither of the dead process's tokens is this one's, and its
+    // admin token does not open the resumed host.
+    assert_ne!(running.announce.admin_token, killed.admin_token);
+    assert!(running.announce.seat_token.is_some());
+    assert_ne!(running.announce.seat_token, killed.seat_token);
+    assert!(
+        Client::try_open(running.announce.port, &killed.admin_token).is_err(),
+        "the dead process's admin token is refused by the resumed host"
+    );
     let mut lobby = Client::open(running.announce.port, &running.announce.admin_token);
     let status = result(&lobby.call("get_status", "{}"), "get_status");
     assert_eq!(
