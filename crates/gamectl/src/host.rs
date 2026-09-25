@@ -140,7 +140,7 @@ impl Advisor for EasyAdvisor {
 
 /// The operator's call closure over the gateway's: a method name and params
 /// in, a `Request` to the seat's own door, the answer back as it came.
-pub fn bridge(call: &mut dyn FnMut(&Request) -> Json) -> impl FnMut(&str, Json) -> Json + '_ {
+fn bridge(call: &mut dyn FnMut(&Request) -> Json) -> impl FnMut(&str, Json) -> Json + '_ {
     move |method: &str, params: Json| {
         call(&Request {
             id: Json::Number(String::from("1")),
@@ -152,7 +152,7 @@ pub fn bridge(call: &mut dyn FnMut(&Request) -> Json) -> impl FnMut(&str, Json) 
 
 /// The operator's advice in the gateway's plain types, field for field.
 #[must_use]
-pub fn advice_of(advice: pharmakos_operator::Advice) -> Advice {
+fn advice_of(advice: pharmakos_operator::Advice) -> Advice {
     Advice {
         safe_playbook_jsonc: advice.safe_playbook_jsonc,
         suggestions: advice
