@@ -73,6 +73,18 @@ enum Verify {
     NeverButFixable,
 }
 
+/// How the scripted paged reads page.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Paging {
+    /// One page each, the last and complete.
+    One,
+    /// Every paged read paged to [`PAGES_MAX`].
+    ToTheBound,
+    /// One page each, but `get_view`'s is never complete (and names no page
+    /// after it).
+    ViewNeverComplete,
+}
+
 /// The scripted gateway.
 #[derive(Clone)]
 struct Script {
@@ -90,17 +102,14 @@ struct Script {
     headroom: i64,
     /// Travel from anywhere to a beacon, by id, overriding the distance rule.
     to_beacon_ms: BTreeMap<String, i64>,
-    /// Page every paged read to [`PAGES_MAX`].
-    paged: bool,
+    /// How the paged reads page.
+    paging: Paging,
     verify: Verify,
     accept_submit: bool,
     /// Refuse every call with this code.
     refuse_everything: Option<&'static str>,
     /// Answer `Leg.to` as the bare voxel `main` wrote before T17.
     bare_legs: bool,
-    /// Answer `get_view` with a page that is never complete and names no
-    /// page after it.
-    view_never_complete: bool,
     transcript: Vec<String>,
 }
 
@@ -133,12 +142,11 @@ impl Script {
             treasury: 200,
             headroom: 6,
             to_beacon_ms: BTreeMap::new(),
-            paged: false,
+            paging: Paging::One,
             verify: Verify::Qualifies,
             accept_submit: true,
             refuse_everything: None,
             bare_legs: false,
-            view_never_complete: false,
             transcript: Vec::new(),
         }
     }
@@ -288,7 +296,7 @@ impl Script {
 
     /// The page after `cursor`, or the empty cursor after the last.
     fn next_page(&self, cursor: &str) -> String {
-        if !self.paged {
+        if self.paging != Paging::ToTheBound {
             return String::new();
         }
         let at = cursor.parse::<u32>().unwrap_or(0).saturating_add(1);
@@ -328,7 +336,7 @@ impl Script {
 
     fn get_view(&self, cursor: &str) -> Json {
         let next = self.next_page(cursor);
-        let last = next.is_empty() && !self.view_never_complete;
+        let last = next.is_empty() && self.paging != Paging::ViewNeverComplete;
         let chunks = if cursor.is_empty() {
             self.chunks()
         } else {
@@ -815,7 +823,7 @@ fn a_map_too_large_to_hold_is_a_round_not_read_and_ready_is_still_said() {
 #[test]
 fn an_incomplete_view_is_read_once_and_said_in_the_why() {
     let mut short = Script::busy(0);
-    short.view_never_complete = true;
+    short.paging = Paging::ViewNeverComplete;
     let (script, played) = play(short);
     assert_eq!(
         script
@@ -939,7 +947,7 @@ fn the_operator_reads_no_notebook_and_writes_nothing_but_its_own_seal() {
 #[test]
 fn easy_never_exceeds_its_derived_call_budget() {
     let mut worst = three_dark(1);
-    worst.paged = true;
+    worst.paging = Paging::ToTheBound;
     worst.verify = Verify::NeverButFixable;
     worst.treasury = 10_000;
     for (i, y) in (20..=44).step_by(3).enumerate() {
