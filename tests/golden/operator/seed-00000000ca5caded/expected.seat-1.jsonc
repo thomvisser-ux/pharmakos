@@ -1,0 +1,47 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: MIT OR Apache-2.0
+//
+// expand_and_mine.jsonc: the Expand & Mine template (decisions-log item 81).
+//
+// It teaches the route and the economy: walk out, put a Mine beacon down
+// beside an ore seam, and walk home while its drones dig. Spec section 10's
+// worked example, expand_east, is one filled-in copy of it.
+//
+// This file cannot know where your seams are, so both places below are the
+// safest own beacon, which qualifies and places nothing (a beacon cannot stand
+// on another). The wizard asks for the site, and the built-in operator's
+// suggestion names one at the edge of your own sphere.
+//
+// PLACEHOLDER: the two sites' own values (the safest own beacon) are harmless
+// stand-ins that the wizard or the operator replaces; what the template ships
+// as its own values is the OWNER's, with T18's suggestions, in run 2.
+{
+  "schema_version": {"major": 1, "minor": 0},
+  "meta": {
+    "title": "Expand & Mine",
+    "author_kind": "BUILTIN",
+    "note": "Easy, seat 1, round 1, seed 0x00000000ca5caded (recorded; Easy draws nothing at random). A Mine beacon at (349, 350, 29) beside the standard ore seam at (346, 345, 29): 640 points for 35 s of route (Easy fills 42 s of the segment)."
+  },
+  "kind": "PLAYBOOK",
+  "declarative": {
+    "route": [
+      {"label": "to_site", "move": {"to": {"voxel":{"x":349,"y":350,"z":29}}, "pace": "AVOID_KNOWN_THREATS"}, "timeout_ms": 120000, "on_fail": {"action": "SKIP"}},
+      {"label": "place_mine", "place_beacon": {"at": {"voxel":{"x":349,"y":350,"z":29}}, "tags": ["mine"],
+        // Initial settings are interface rows: each one commits on its own.
+        "initial": {"priority": "NORMAL", "mandate": {"roe": "RETURN_FIRE", "mine": {"dig_max_depth": 4, "flee_on_threat": true}}}},
+       "on_fail": {"action": "SKIP"}},
+      {"label": "back_home", "move": {"to": {"safest": {}}}}
+    ],
+    "handlers": [
+      // Why: bravery is an ordinary rule. Hurt and under fire, the commander
+      // walks back to safety and waits before carrying on.
+      {"id": "flee", "when": {"all": {"items": [{"cmdr_hp_pct": {"cmp": "LE", "pct": 40}}, {"cmdr_took_damage_within": {"ms": 3000}}]}},
+       "body": [{"label": "flee_to_safety", "move": {"to": {"safest": {}}}}, {"label": "flee_wait", "hold": {"ms": 8000}}],
+       "resume": "CONTINUE", "cooldown_ms": 30000, "max_fires": 3}
+    ]
+  },
+  "on_death": {"on_respawn": "CONTINUE", "max_deaths_before_fallback": 2},
+  // Why: an expansion is the most exposed thing a seat does, so the tail waits
+  // at the safest beacon rather than out at the new one.
+  "fallback": {"hold": {"at": {"safest": {}}}}
+}

@@ -102,6 +102,7 @@ named fills it.
 | `schema/` | Generated JSON Schema and `get_schema` output | T13 |
 | `docs/` | Generated documentation output | T15, T20 |
 | `scenarios/` | Hash chains and event logs the scenario runner asserts on | T11, T15 |
+| `operator/` | The playbook the built-in operator seals for each seat, per seed | T18 |
 | `vista/` | The rendered screenshot, compared with a tolerance | T16 |
 
 ## Licences
