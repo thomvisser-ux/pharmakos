@@ -27,12 +27,15 @@ step asserts those bytes are the same on Windows, Linux and macOS.
 | `seed-0102030405060708/` | `expected.seat-0.jsonc`, `expected.seat-1.jsonc`, `expected.seat-2.jsonc` | The determinism golden's seed (`pharmakos_sim::DETERMINISM_MATCH_SEED`), three seats, round 1 |
 | `seed-00000000ca5caded/` | the same three | The scenario files' seed, three seats, round 1 |
 
-Each file is the seat's sealed playbook exactly as `submit_plan` accepted it:
-one of the library's templates, filled through `patch_plan` (so the
-template's comments and layout survive), with `meta.note` saying what Easy
-chose and why, and the seed it recorded and did not use (decision C15). A seat
-with nothing inside its route share seals its own **safe playbook** instead,
-the Safe Playbook template instantiated with nothing raised.
+Each file is the seat's sealed playbook exactly as `submit_plan` accepted it.
+A **composed** plan is one of the library's templates, filled through
+`patch_plan` (so the template's comments and layout survive), with
+`meta.note` saying what Easy chose and why, opening with the seed it recorded
+and did not use (decision C15). A seat with nothing inside its route share
+seals its own **safe playbook** instead: the Safe Playbook template
+instantiated with nothing raised, whose `meta.note` is the template's own and
+carries no seed (Easy records the seed of that round in its "why", which is
+not part of the playbook).
 
 ## What a diff means
 
@@ -49,7 +52,12 @@ Lull**. It moves when any of these moves, and the pull request says which:
   (`get_economy_forecast`), and travel (`estimate_route`). A change to the
   view's fog rule, for instance, moves it only if it changes what a seat sees
   in its own first Lull;
-* **`patch_plan`'s layout** of a replaced or inserted value (plan-core).
+* **`patch_plan`'s layout** of a replaced or inserted value (plan-core);
+* **the producing test's own match settings** in
+  `crates/gamectl/tests/operator.rs`: three seats, a 60 s segment
+  (`SEGMENT_MS`, not the rules table's segment lengths), no units, three
+  rounds. Easy fills 70 % of the segment, so a different segment length
+  changes which goals fit and moves every file.
 
 A diff that appears on one operating system and not the others is a
 determinism bug, in the operator or in something it reads, and is never

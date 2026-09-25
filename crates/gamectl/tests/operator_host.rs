@@ -34,7 +34,8 @@ use std::time::Duration;
 
 use pharmakos_gamectl::host::{EasyOperators, LIBRARY_PATH};
 use pharmakos_gateway::frame::Opcode;
-use pharmakos_gateway::serve::{self, Announce, Config, Setup};
+use pharmakos_gateway::rpc::Request;
+use pharmakos_gateway::serve::{self, Advisor, Announce, BuiltInSeat, Config, Operators, Setup};
 use pharmakos_proto::json::{Json, read, write};
 
 fn root() -> PathBuf {
@@ -101,11 +102,82 @@ impl Write for Sink {
     }
 }
 
+// ---------------------------------------------------------------------------
+// What each built-in seat's own calls were answered (a listening wrapper)
+// ---------------------------------------------------------------------------
+
+/// One answered call of a built-in seat: the seat, the method, and whether
+/// its answer said `accepted: true` (for `submit_plan`) or answered at all.
+#[derive(Clone, Debug)]
+struct Heard {
+    seat: u8,
+    method: String,
+    accepted: bool,
+}
+
+/// `gamectl host`'s own factory, [`EasyOperators`], with one thing added: a
+/// built-in seat's call closure is wrapped so each call and its answer are
+/// written down. The wrapper forwards every request untouched and hands every
+/// answer back untouched, so the seat is played exactly as `gamectl host`
+/// plays it; the test then reads what `submit_plan` answered, which the
+/// audit log cannot tell it (an audit `ok` is "answered", and a submission
+/// the verifier refused is answered too).
+struct Listening {
+    inner: EasyOperators,
+    heard: Arc<Mutex<Vec<Heard>>>,
+}
+
+struct ListeningSeat {
+    inner: Box<dyn BuiltInSeat>,
+    heard: Arc<Mutex<Vec<Heard>>>,
+}
+
+impl BuiltInSeat for ListeningSeat {
+    fn plan(&mut self, seat: u8, call: &mut dyn FnMut(&Request) -> Json) {
+        let heard = Arc::clone(&self.heard);
+        let mut listening = |request: &Request| {
+            let answer = call(request);
+            let result = answer.get("result");
+            let accepted = match request.method.as_str() {
+                "submit_plan" => {
+                    result.and_then(|result| result.get("accepted")) == Some(&Json::Bool(true))
+                }
+                _ => result.is_some(),
+            };
+            if let Ok(mut held) = heard.lock() {
+                held.push(Heard {
+                    seat,
+                    method: request.method.clone(),
+                    accepted,
+                });
+            }
+            answer
+        };
+        self.inner.plan(seat, &mut listening);
+    }
+}
+
+impl Operators for Listening {
+    fn built_in(&mut self, seat: u8) -> Option<Box<dyn BuiltInSeat>> {
+        let inner = self.inner.built_in(seat)?;
+        Some(Box::new(ListeningSeat {
+            inner,
+            heard: Arc::clone(&self.heard),
+        }))
+    }
+
+    fn advisor(&mut self, seat: u8) -> Option<Box<dyn Advisor>> {
+        self.inner.advisor(seat)
+    }
+}
+
 /// A running host.
 struct Running {
     announce: Announce,
     control: Option<Sender<Vec<u8>>>,
     thread: Option<std::thread::JoinHandle<()>>,
+    /// Every call a built-in seat made, and what it was answered.
+    heard: Arc<Mutex<Vec<Heard>>>,
 }
 
 impl Running {
@@ -131,8 +203,12 @@ fn start(config: &Config) -> Running {
     let written = Arc::new(Mutex::new(Vec::new()));
     let sink = Sink(Arc::clone(&written));
     let rules = rules_json();
+    let heard: Arc<Mutex<Vec<Heard>>> = Arc::new(Mutex::new(Vec::new()));
     let setup = Setup {
-        operators: Box::new(EasyOperators::new(&rules).expect("the operator reads the rules")),
+        operators: Box::new(Listening {
+            inner: EasyOperators::new(&rules).expect("the operator reads the rules"),
+            heard: Arc::clone(&heard),
+        }),
         rules_json: rules,
         library: Some(root().join(LIBRARY_PATH)),
     };
@@ -156,6 +232,7 @@ fn start(config: &Config) -> Running {
                 announce: Announce::parse(&line).expect("an announce line"),
                 control: Some(sender),
                 thread: Some(thread),
+                heard,
             };
         }
         std::thread::sleep(Duration::from_millis(10));
@@ -363,6 +440,28 @@ impl Drop for Cache {
 // The test
 // ---------------------------------------------------------------------------
 
+/// The built-in seat's `submit_plan` was **accepted** -- not merely answered
+/// -- so its seal is its own and not the gateway's fallback filed at
+/// `begin_push`; its last call was `set_ready`, answered; and no other seat
+/// was played.
+fn easy_sealed_and_said_ready(heard: &[Heard], seat: u8) {
+    let easy: Vec<&Heard> = heard.iter().filter(|call| call.seat == seat).collect();
+    assert!(
+        easy.iter()
+            .any(|call| call.method == "submit_plan" && call.accepted),
+        "Easy's submission was accepted: {easy:#?}"
+    );
+    assert!(
+        easy.last()
+            .is_some_and(|call| call.method == "set_ready" && call.accepted),
+        "Easy's last call was set_ready, answered: {easy:#?}"
+    );
+    assert!(
+        heard.iter().all(|call| call.seat == seat),
+        "the human's seat is advised, never played: {heard:#?}"
+    );
+}
+
 /// Item 111's acceptance: "a two-seat hosted match against Easy reaches the
 /// recap with both seats sealed and ready", through `serve::run`.
 #[test]
@@ -419,6 +518,7 @@ fn a_two_seat_hosted_match_against_easy_reaches_the_recap_with_both_seats_sealed
 
     // Easy planned, sealed and said ready at the Lull's start, so the
     // lobby's Ready ends the Lull.
+    easy_sealed_and_said_ready(&running.heard.lock().expect("the record"), 1);
     let clock = result(
         &lobby.call(
             "report_host_clock",

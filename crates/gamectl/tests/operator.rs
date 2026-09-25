@@ -22,6 +22,12 @@
 //! on the power-short text, so the rounds after an expansion browns out are in
 //! it too. On every snapshot, for every seat, the corpus records what Easy
 //! sealed, how many calls it made, and whether its safe playbook qualified.
+//!
+//! # Match ids
+//!
+//! Every match here is opened with an id unique to the run ([`match_id`]):
+//! on `main` a `Surface` only validates the id, but after T17 a match id can
+//! carry a save, and item 112 (8) asks every hosting test for its own.
 #![allow(
     clippy::expect_used,
     clippy::unwrap_used,
@@ -68,6 +74,11 @@ fn root() -> PathBuf {
         .nth(2)
         .expect("crates/gamectl sits two levels below the root")
         .to_path_buf()
+}
+
+/// A match id unique to this run: the label, and the test process's id.
+fn match_id(label: &str) -> String {
+    format!("t18-{label}-{}", std::process::id())
 }
 
 /// The committed rules text, which `gamectl host` hands the host and the
@@ -188,19 +199,20 @@ fn all_built_in(surface: &mut Surface, seats: u32, rules: &str) -> InProcessSeat
     InProcessSeats::open(surface, &seat_ids(seats), None, &mut factory).expect("in-process seats")
 }
 
-/// How many calls each seat's in-process token made, from the audit log.
-fn calls_by_seat(entries: &[Entry]) -> Vec<(u8, u32)> {
-    let mut out: Vec<(u8, u32)> = Vec::new();
+/// The methods each seat's in-process token called, in order, from the
+/// audit log.
+fn calls_by_seat(entries: &[Entry]) -> Vec<(u8, Vec<String>)> {
+    let mut out: Vec<(u8, Vec<String>)> = Vec::new();
     for entry in entries {
         let Some(Subject::Seat(seat)) = entry.subject else {
             continue;
         };
-        if !entry.action.starts_with("call ") {
+        let Some(method) = entry.action.strip_prefix("call ") else {
             continue;
-        }
+        };
         match out.iter_mut().find(|(held, _)| *held == seat.raw()) {
-            Some(slot) => slot.1 = slot.1.saturating_add(1),
-            None => out.push((seat.raw(), 1)),
+            Some(slot) => slot.1.push(method.to_owned()),
+            None => out.push((seat.raw(), vec![method.to_owned()])),
         }
     }
     out.sort_unstable();
@@ -211,16 +223,34 @@ fn calls_by_seat(entries: &[Entry]) -> Vec<(u8, u32)> {
 // The corpus
 // ---------------------------------------------------------------------------
 
+/// Whose seal a seat holds after Easy planned it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Seal {
+    /// Easy's own composed plan: this round's, filed by the operator, and
+    /// its note opens with Easy's seed line.
+    Own,
+    /// Easy's own safe playbook: this round's, filed by the operator.
+    Safe,
+    /// Anything else -- nothing this round, or the gateway's fallback: the
+    /// verifier did not accept what Easy submitted.
+    NotEasy,
+}
+
 /// What Easy did for one seat on one snapshot.
 #[derive(Clone, Debug)]
 struct Row {
     snapshot: String,
     seat: u8,
-    /// The seat's seal is this round's, and the operator filed it (not the
-    /// gateway's fallback): the verifier accepted what Easy submitted.
-    sealed_by_easy: bool,
+    /// Whose seal the seat holds this round.
+    seal: Seal,
     /// The sealed playbook's note, which says what Easy chose.
     note: String,
+    /// Easy composed a plan this round: it called `patch_plan` at least once
+    /// (the composition), which only its own plan's path does.
+    composed: bool,
+    /// The `patch_plan` and `verify_plan` calls the built-in seat made.
+    patches: u32,
+    verifies: u32,
     /// Calls the built-in seat made this round.
     calls: u32,
     /// Easy's safe playbook for this seat, as an advisor makes it, verified
@@ -232,6 +262,24 @@ struct Row {
     advisor_calls: u32,
     /// The beacons the safe playbook raised, nearest first.
     raised: Vec<String>,
+    /// The raise path forced through the real verifier (see
+    /// [`forced_raise`]): `None` when the seat has no own non-core beacon on
+    /// this snapshot, else what was raised and whether it qualified FULL.
+    forced: Option<Forced>,
+}
+
+/// What an advisor raised when told power is short and every own non-core
+/// beacon is dark, on a real `Surface`.
+#[derive(Clone, Debug)]
+struct Forced {
+    /// The own non-core beacons the seat has.
+    dark: Vec<String>,
+    /// What the safe playbook raised.
+    raised: Vec<String>,
+    /// The safe playbook it returned, verified FULL through the seat's door.
+    qualifies: bool,
+    /// It carries a `raise_b_NN` step: the raised form, not the fallback.
+    carries_raise: bool,
 }
 
 /// The beacons an advice's safe playbook raises: the `raise_b_NN` steps of
@@ -254,6 +302,110 @@ fn raised_by(advice: &pharmakos_operator::Advice) -> Vec<String> {
         .collect()
 }
 
+/// Every own non-core beacon the seat is shown, ascending by id.
+fn own_non_core(surface: &mut Surface, token: &Token, seat: u8) -> Vec<String> {
+    let beacons = result(
+        &call(surface, token, "list_beacons", params("{}")),
+        "list_beacons",
+    );
+    let own = format!("seat.{seat}");
+    let mut out: Vec<String> = match beacons.get("beacons") {
+        Some(Json::Array(rows)) => rows
+            .iter()
+            .filter(|row| row.get("owner") == Some(&Json::String(own.clone())))
+            .filter(|row| row.get("core") != Some(&Json::Bool(true)))
+            .filter_map(|row| match row.get("beacon_id") {
+                Some(Json::String(id)) => Some(id.clone()),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    out.sort();
+    out
+}
+
+/// Set `key` on an object, replacing it or adding it.
+fn set_member(object: &mut Json, key: &str, value: Json) {
+    if let Json::Object(members) = object {
+        match members.iter_mut().find(|(held, _)| held == key) {
+            Some(slot) => slot.1 = value,
+            None => members.push((key.to_owned(), value)),
+        }
+    }
+}
+
+/// The raise path through the **real** verifier. An advisor for the seat
+/// runs against the real `Surface` through the seat's own token, with every
+/// call forwarded untouched except two answers rewritten: its
+/// `get_economy_forecast` says power is short (`headroom_kw_now` -5), and its
+/// `list_beacons` says every own non-core beacon is browned out. Everything
+/// else -- the estimates, `instantiate_template` with the whole route, the
+/// FULL `verify_plan` -- is the gateway's own answer. `None` when the seat has
+/// no own non-core beacon to raise.
+fn forced_raise(surface: &mut Surface, token: &Token, seat: u8, rules: &str) -> Option<Forced> {
+    let dark = own_non_core(surface, token, seat);
+    if dark.is_empty() {
+        return None;
+    }
+    let own = Json::String(format!("seat.{seat}"));
+    let mut advisor = Easy::new(rules).expect("the rules text");
+    let advice = {
+        let mut rewriting = |method: &str, params: Json| {
+            let mut answer = call(surface, token, method, params);
+            if let Json::Object(members) = &mut answer {
+                if let Some((_, result)) = members.iter_mut().find(|(key, _)| key == "result") {
+                    match method {
+                        "get_economy_forecast" => {
+                            set_member(result, "headroom_kw_now", Json::Number(String::from("-5")));
+                        }
+                        "list_beacons" => {
+                            if let Json::Object(fields) = result {
+                                if let Some((_, Json::Array(rows))) =
+                                    fields.iter_mut().find(|(key, _)| key == "beacons")
+                                {
+                                    for row in rows.iter_mut() {
+                                        if row.get("owner") == Some(&own)
+                                            && row.get("core") != Some(&Json::Bool(true))
+                                        {
+                                            set_member(row, "powered", Json::Bool(false));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            answer
+        };
+        advisor.advise(seat, &mut rewriting)
+    };
+    let verified = call(
+        surface,
+        token,
+        "verify_plan",
+        Json::Object(vec![
+            (
+                String::from("playbook_jsonc"),
+                Json::String(advice.safe_playbook_jsonc.clone()),
+            ),
+            (String::from("depth"), Json::String(String::from("full"))),
+        ]),
+    );
+    let qualifies = result(&verified, "verify_plan")
+        .get("report")
+        .and_then(|report| report.get("qualifies"))
+        == Some(&Json::Bool(true));
+    Some(Forced {
+        dark,
+        raised: raised_by(&advice),
+        qualifies,
+        carries_raise: advice.safe_playbook_jsonc.contains("\"raise_b_"),
+    })
+}
+
 /// Plan every seat of the snapshot the surface stands on with Easy, then ask
 /// an Easy advisor for each seat's safe playbook and verify it.
 fn visit(
@@ -266,6 +418,9 @@ fn visit(
     let _ = surface.audit().take();
     easy.plan(surface);
     let calls = calls_by_seat(&surface.audit().take());
+    let count = |methods: &[String], name: &str| -> u32 {
+        u32::try_from(methods.iter().filter(|method| *method == name).count()).expect("counted")
+    };
     let round = surface.time().round;
     let mut rows: Vec<Row> = Vec::new();
     for seat in seat_ids(seats) {
@@ -312,19 +467,34 @@ fn visit(
             &call(surface, &token, "get_economy_forecast", params("{}")),
             "get_economy_forecast",
         );
+        // A token of its own, so the forced advisor's calls do not share the
+        // advisor's per-tick budget above.
+        let forced_token = in_process_token(surface, seat.raw());
+        let forced = forced_raise(surface, &forced_token, seat.raw(), rules);
+        let methods: Vec<String> = calls
+            .iter()
+            .find(|(held, _)| *held == seat.raw())
+            .map(|(_, methods)| methods.clone())
+            .unwrap_or_default();
+        let methods = methods.as_slice();
         rows.push(Row {
             snapshot: label.to_owned(),
             seat: seat.raw(),
-            sealed_by_easy,
+            seal: match (sealed_by_easy, note.contains("Easy, seat")) {
+                (false, _) => Seal::NotEasy,
+                (true, true) => Seal::Own,
+                (true, false) => Seal::Safe,
+            },
+            composed: count(methods, "patch_plan") > 0,
+            patches: count(methods, "patch_plan"),
+            verifies: count(methods, "verify_plan"),
             note,
-            calls: calls
-                .iter()
-                .find(|(held, _)| *held == seat.raw())
-                .map_or(0, |(_, n)| *n),
+            calls: u32::try_from(methods.len()).expect("counted"),
             safe_qualifies,
             headroom_kw: number(&forecast, "headroom_kw_now"),
             advisor_calls: advice.calls,
             raised: raised_by(&advice),
+            forced,
         });
     }
     rows
@@ -332,7 +502,7 @@ fn visit(
 
 /// A whole match of `rounds` rounds, every seat Easy, visiting every Lull.
 fn play_match(label: &str, seed: u64, seats: u32, rules: &str, rounds: u32) -> Vec<Row> {
-    let mut surface = open(&format!("t18-{label}"), seed, seats, rules, rounds);
+    let mut surface = open(&match_id(label), seed, seats, rules, rounds);
     let mut easy = all_built_in(&mut surface, seats, rules);
     let mut rows: Vec<Row> = Vec::new();
     for round in 1..=rounds {
@@ -369,11 +539,11 @@ fn corpus() -> &'static [Row] {
         let mut rows: Vec<Row> = Vec::new();
         for seats in 1..=3 {
             let label = format!("first-lull-{seats}-seats");
-            let mut surface = open(&format!("t18-{label}"), SEED, seats, &rules, 3);
+            let mut surface = open(&match_id(&label), SEED, seats, &rules, 3);
             let mut easy = all_built_in(&mut surface, seats, &rules);
             rows.extend(visit(&label, &mut surface, seats, &rules, &mut easy));
         }
-        let mut surface = open("t18-first-lull-short", SEED, 2, &short, 3);
+        let mut surface = open(&match_id("first-lull-short"), SEED, 2, &short, 3);
         let mut easy = all_built_in(&mut surface, 2, &short);
         rows.extend(visit(
             "first-lull-2-seats-power-short",
@@ -396,6 +566,14 @@ fn corpus() -> &'static [Row] {
 /// snapshot corpus". On every snapshot, every seat Easy plays seals a
 /// playbook the verifier accepted -- its own plan or its own safe playbook,
 /// never the gateway's fallback -- within its derived call budget.
+///
+/// The seal rate alone would not tell a composer whose plans never qualify
+/// from a good one (it would seal its safe playbook every time), so the
+/// **own-plan** pass rate is asserted separately: every round in which Easy
+/// composed a plan (it called `patch_plan`) sealed that plan, on its first
+/// verify, with no repair and no fallback to its safe playbook. A round
+/// with nothing worth composing seals the safe playbook and is counted as
+/// such, not as a pass of its own plan.
 #[test]
 fn easy_passes_the_verifier_on_every_snapshot_of_the_corpus() {
     let rows = corpus();
@@ -403,10 +581,52 @@ fn easy_passes_the_verifier_on_every_snapshot_of_the_corpus() {
         rows.len() >= 20,
         "the corpus is the fixtures plus two whole matches"
     );
-    let failed: Vec<&Row> = rows.iter().filter(|row| !row.sealed_by_easy).collect();
+    let failed: Vec<&Row> = rows
+        .iter()
+        .filter(|row| row.seal == Seal::NotEasy)
+        .collect();
     assert!(
         failed.is_empty(),
         "Easy sealed nothing of its own on: {failed:#?}"
+    );
+    let composed: Vec<&Row> = rows.iter().filter(|row| row.composed).collect();
+    let fell_back: Vec<&Row> = composed
+        .iter()
+        .copied()
+        .filter(|row| row.seal != Seal::Own)
+        .collect();
+    assert!(
+        fell_back.is_empty(),
+        "Easy composed a plan that did not qualify and fell back to its safe playbook: \
+         {fell_back:#?}"
+    );
+    // Repairs are allowed (spec section 14: "verify and repair up to 4
+    // times"); how many were spent is reported, not asserted.
+    let repairs: u32 = composed
+        .iter()
+        .map(|row| row.patches.saturating_sub(1))
+        .sum();
+    assert!(
+        composed.iter().all(|row| row.verifies == row.patches),
+        "a composed round verifies once after the composition and once per repair: \
+         {composed:#?}"
+    );
+    assert!(
+        rows.iter()
+            .all(|row| (row.seal == Seal::Own) == row.composed),
+        "an own seal is exactly a composed round: {rows:#?}"
+    );
+    let own = composed.len();
+    let safe = rows.len().saturating_sub(own);
+    assert!(
+        own > 0,
+        "Easy sealed at least one plan of its own: {rows:#?}"
+    );
+    // Said in the output of a passing run too, for the PR's numbers.
+    eprintln!(
+        "corpus: {} seat-snapshots; {own} sealed Easy's own plan (own-plan pass rate {own}/{own}, \
+         {repairs} repairs), {safe} sealed its safe playbook with nothing worth composing",
+        rows.len()
     );
     for row in rows {
         assert!(
@@ -464,6 +684,50 @@ fn the_safe_playbook_always_qualifies() {
     assert!(rows.iter().all(|row| row.raised.len() <= 2), "{rows:#?}");
 }
 
+/// The raise path through the **real** verifier ([`forced_raise`]). The
+/// hosted corpus never raises by itself (see above), so on every snapshot
+/// where a seat has an own non-core beacon, an advisor is told power is
+/// short and those beacons are dark, and everything else is the gateway's
+/// own answer. Its safe playbook must raise them -- at most two, which only
+/// happens when `instantiate_template` accepted the whole route and the
+/// raised form qualified FULL, since `safe_playbook` otherwise falls back to
+/// nothing raised -- and must qualify FULL again when verified on its own.
+#[test]
+fn the_safe_playbook_with_beacons_raised_qualifies_through_the_real_verifier() {
+    let forced: Vec<(&Row, &Forced)> = corpus()
+        .iter()
+        .filter_map(|row| row.forced.as_ref().map(|forced| (row, forced)))
+        .collect();
+    assert!(
+        !forced.is_empty(),
+        "some seat of the corpus has an own non-core beacon to raise"
+    );
+    // Said in the output of a passing run too, for the PR's numbers.
+    for (row, forced) in &forced {
+        eprintln!(
+            "forced raise: {} seat {}: dark {:?}, raised {:?}",
+            row.snapshot, row.seat, forced.dark, forced.raised
+        );
+    }
+    for (row, forced) in forced {
+        let what = format!("{} seat {}: {forced:#?}", row.snapshot, row.seat);
+        assert!(
+            !forced.raised.is_empty(),
+            "the raised form did not fall back: {what}"
+        );
+        assert!(forced.raised.len() <= 2, "{what}");
+        assert!(
+            forced.raised.iter().all(|id| forced.dark.contains(id)),
+            "it raised only the seat's own dark beacons: {what}"
+        );
+        assert!(forced.carries_raise, "{what}");
+        assert!(
+            forced.qualifies,
+            "the raised safe playbook qualifies FULL: {what}"
+        );
+    }
+}
+
 /// Round one of a three-seat match, every seat Easy: each seat's sealed
 /// playbook, in seat order.
 fn round_one(seed: u64, match_id: &str) -> Vec<String> {
@@ -502,8 +766,8 @@ fn target_dir() -> PathBuf {
 #[test]
 fn the_operator_is_deterministic_for_a_given_match_seat_round() {
     for seed in [SEED, SCENARIO_SEED] {
-        let first = round_one(seed, "t18-determinism-a");
-        let second = round_one(seed, "t18-determinism-b");
+        let first = round_one(seed, &match_id(&format!("determinism-a-{seed:x}")));
+        let second = round_one(seed, &match_id(&format!("determinism-b-{seed:x}")));
         assert_eq!(
             first, second,
             "seed {seed:#018x}: two hosts, one playbook per seat"
@@ -521,15 +785,28 @@ fn the_operator_is_deterministic_for_a_given_match_seat_round() {
     }
 }
 
-/// It never reads the phase timer the host clock moves: two hosts of one
-/// match whose Lull clocks read differently seal the same playbooks.
+/// It never reads what the host clock moves: hosts of one match whose clock
+/// reports differ seal the same playbooks. Two reports go through
+/// `Surface::set_host_clock`, the path `report_host_clock` takes, and differ
+/// in both figures -- `elapsed`, which moves the tick in every `_status`
+/// footer, and `remaining`, the countdown -- and a third host has only the
+/// countdown set, as the Lull opens.
 #[test]
 fn the_operator_does_not_depend_on_the_host_clock() {
+    use pharmakos_sim::math::quantity::Ms;
     let rules = rules_json();
     let mut sealed: Vec<Vec<String>> = Vec::new();
-    for remaining in [180_000, 1] {
-        let mut surface = open("t18-clock", SEED, 2, &rules, 3);
-        surface.set_phase_remaining_ms(pharmakos_sim::math::quantity::Ms::new(remaining));
+    for (n, report) in [None, Some((250, 179_750)), Some((60_000, 1))]
+        .into_iter()
+        .enumerate()
+    {
+        let mut surface = open(&match_id(&format!("clock-{n}")), SEED, 2, &rules, 3);
+        match report {
+            None => surface.set_phase_remaining_ms(Ms::new(180_000)),
+            Some((elapsed, remaining)) => surface
+                .set_host_clock(Ms::new(elapsed), Ms::new(remaining))
+                .expect("a clock report the gateway takes"),
+        }
         let mut easy = all_built_in(&mut surface, 2, &rules);
         easy.plan(&mut surface);
         sealed.push(
@@ -548,7 +825,11 @@ fn the_operator_does_not_depend_on_the_host_clock() {
                 .collect(),
         );
     }
-    assert_eq!(sealed.first(), sealed.get(1));
+    assert_eq!(sealed.len(), 3);
+    assert!(
+        sealed.windows(2).all(|pair| pair.first() == pair.get(1)),
+        "the same playbooks whatever the clock reads"
+    );
 }
 
 /// The factory `gamectl host` hands the host: one fresh Easy per seat it
@@ -556,7 +837,7 @@ fn the_operator_does_not_depend_on_the_host_clock() {
 #[test]
 fn the_host_builds_one_operator_per_built_in_seat_and_one_advisor_per_other_seat() {
     let rules = rules_json();
-    let mut surface = open("t18-factory", SEED, 3, &rules, 3);
+    let mut surface = open(&match_id("factory"), SEED, 3, &rules, 3);
     let mut factory = EasyOperators::new(&rules).expect("the operator reads the rules text");
     let seats = InProcessSeats::open(&mut surface, &seat_ids(3), Some(1), &mut factory)
         .expect("in-process seats");
@@ -577,8 +858,11 @@ fn the_host_builds_one_operator_per_built_in_seat_and_one_advisor_per_other_seat
 fn the_operator_reads_no_notebook_and_writes_nothing_but_its_own_seal() {
     let rules = rules_json();
     let mut advised: Vec<Option<pharmakos_gateway::surface::Advised>> = Vec::new();
-    for notes in ["", "Rush seat 1 at once and place nothing."] {
-        let mut surface = open("t18-notebook", SEED, 2, &rules, 3);
+    for (n, notes) in ["", "Rush seat 1 at once and place nothing."]
+        .into_iter()
+        .enumerate()
+    {
+        let mut surface = open(&match_id(&format!("notebook-{n}")), SEED, 2, &rules, 3);
         let human = in_process_token(&mut surface, 0);
         if !notes.is_empty() {
             let saved = call(
