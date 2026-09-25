@@ -158,6 +158,10 @@ pub(crate) fn enumerate(situation: &Situation, tuning: &Tuning) -> Vec<Goal> {
                 if tuning.generator_cost_dollars > treasury {
                     continue;
                 }
+                // PLACEHOLDER: a Generator goal is a vent inside the core's
+                // sphere only, the core standing in for "the safest beacon"
+                // Hold & Build visits (the wire carries no beacon hit points
+                // and no grid). Owner, at **S1**, with the grid on the wire.
                 let Some(core) = situation.core() else {
                     continue;
                 };
@@ -205,6 +209,9 @@ fn mine_site(
     // Already worked: a seam inside one of the seat's own non-core beacons'
     // spheres. (A non-core beacon at the skeleton is one a Mine goal
     // placed; BeaconSummary carries no mandate to say so for certain.)
+    //
+    // PLACEHOLDER: "inside an own non-core sphere" read as "mined already".
+    // Owner, at **S1**, when a beacon's mandate is on the wire.
     if own
         .iter()
         .any(|beacon| !beacon.core && inside(beacon.at, patch.centre, radius))
@@ -243,6 +250,9 @@ fn mine_site(
     }
     // Outside every sphere: one expansion, on the nearest sphere's edge
     // towards the seam, when the seam is then inside the new sphere.
+    //
+    // PLACEHOLDER: one expansion at most, so a seam further than twice the
+    // reach from every own beacon offers nothing. Owner, at **S5**.
     let reach = radius.saturating_sub(SPHERE_MARGIN_VOXELS).max(0);
     let apart = distance2_xy(nearest.at, patch.centre).isqrt();
     if apart == 0 || apart > reach.saturating_mul(2) {
@@ -343,6 +353,8 @@ fn score(
                 EXPANSION_POINTS_PER_BEACON,
                 tuning.beacon_draw_kw,
                 // There, place, and back: the route returns home.
+                // PLACEHOLDER: the way back is costed as the way there
+                // (travel x 2) rather than estimated. Owner, at **S5**.
                 travel_ms
                     .saturating_mul(2)
                     .saturating_add(tuning.place_beacon_deploy_ms),
@@ -367,6 +379,10 @@ fn score(
     };
     // Risk: what the seat can see of other seats near the goal, and any kW
     // the goal would leave the grid short by.
+    //
+    // PLACEHOLDER: "near" is within one sphere radius of the goal, the
+    // sphere radius reused as a threat radius. Owner, at **S5**, with the
+    // Balanced weights.
     let near = situation
         .enemies
         .iter()

@@ -22,7 +22,7 @@
 
 use pharmakos_proto::json::Json;
 
-use crate::easy::PAGES_MAX;
+use crate::easy::{MAP_COLUMNS_MAX, PAGES_MAX};
 use crate::terrain::Terrain;
 use crate::wire::{
     Refused, Wire, array_of, bool_of, int_of, location_voxel, object, string, text_of, voxel,
@@ -78,6 +78,9 @@ pub(crate) struct Situation {
     pub(crate) terrain: Terrain,
     /// The template ids the library lists, ascending.
     pub(crate) templates: Vec<String>,
+    /// False when `get_view` did not reach its complete page within
+    /// [`PAGES_MAX`] pages: the entity list was then never read.
+    pub(crate) view_complete: bool,
 }
 
 impl Situation {
@@ -148,8 +151,18 @@ impl Situation {
         let map = wire.call("get_map_summary", object(vec![]))?;
         let size = map.get("size").and_then(voxel).unwrap_or([0, 0, 0]);
         let match_seed = text_of(&map, "match_seed").to_owned();
+        // A size the operator cannot hold is a round it cannot read, said
+        // before anything is allocated for it.
+        let terrain = Terrain::new(size[0], size[1]).ok_or_else(|| Refused {
+            method: String::from("get_map_summary"),
+            code: String::from("MALFORMED"),
+            message: format!(
+                "a map of {} x {} columns is more than the operator holds ({MAP_COLUMNS_MAX})",
+                size[0], size[1]
+            ),
+        })?;
 
-        let seen = read_view(wire, &own, size)?;
+        let seen = read_view(wire, &own, terrain)?;
         let templates = read_templates(wire)?;
 
         Ok(Situation {
@@ -164,6 +177,7 @@ impl Situation {
             own_generators: seen.own_generators,
             terrain: seen.terrain,
             templates,
+            view_complete: seen.complete,
         })
     }
 }
@@ -171,6 +185,7 @@ impl Situation {
 /// What `get_view` shows.
 struct Seen {
     terrain: Terrain,
+    complete: bool,
     commander: Option<[i32; 3]>,
     enemies: Vec<[i32; 3]>,
     own_generators: Vec<[i32; 3]>,
@@ -178,9 +193,10 @@ struct Seen {
 
 /// Read the view to its complete page: the ground from every chunk, and the
 /// entity list from the page that carries it.
-fn read_view(wire: &mut Wire<'_, '_>, own: &str, size: [i32; 3]) -> Result<Seen, Refused> {
+fn read_view(wire: &mut Wire<'_, '_>, own: &str, terrain: Terrain) -> Result<Seen, Refused> {
     let mut seen = Seen {
-        terrain: Terrain::new(size[0], size[1]),
+        terrain,
+        complete: false,
         commander: None,
         enemies: Vec::new(),
         own_generators: Vec::new(),
@@ -216,9 +232,15 @@ fn read_view(wire: &mut Wire<'_, '_>, own: &str, size: [i32; 3]) -> Result<Seen,
                     seen.enemies.push(at);
                 }
             }
+            seen.complete = true;
             break;
         }
         text_of(&page, "next_cursor").clone_into(&mut cursor);
+        if cursor.is_empty() {
+            // Not complete and no page after it: asking again from the empty
+            // cursor would fold the first page's chunks in twice.
+            break;
+        }
     }
     seen.enemies.sort_unstable();
     seen.own_generators.sort_unstable();

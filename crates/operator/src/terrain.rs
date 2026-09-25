@@ -16,6 +16,7 @@
 
 use std::collections::BTreeSet;
 
+use crate::easy::MAP_COLUMNS_MAX;
 use crate::tuning::Richness;
 
 /// A chunk's edge, in voxels (`gp.api.v1.ViewChunk`: 32 x 32 x 32).
@@ -92,15 +93,21 @@ pub(crate) struct Terrain {
 }
 
 impl Terrain {
-    /// An empty map of this size: no column has ground yet.
-    pub(crate) fn new(size_x: i32, size_y: i32) -> Terrain {
-        let size_x = usize::try_from(size_x.max(0)).unwrap_or(0);
-        let size_y = usize::try_from(size_y.max(0)).unwrap_or(0);
-        Terrain {
+    /// An empty map of this size: no column has ground yet. `None` when it
+    /// has more than [`MAP_COLUMNS_MAX`] columns, checked before anything is
+    /// allocated (a negative side reads as zero).
+    pub(crate) fn new(size_x: i32, size_y: i32) -> Option<Terrain> {
+        let columns = i64::from(size_x.max(0)).checked_mul(i64::from(size_y.max(0)))?;
+        if columns > MAP_COLUMNS_MAX {
+            return None;
+        }
+        let size_x = usize::try_from(size_x.max(0)).ok()?;
+        let size_y = usize::try_from(size_y.max(0)).ok()?;
+        Some(Terrain {
             size_x,
             size_y,
-            tops: vec![None; size_x.saturating_mul(size_y)],
-        }
+            tops: vec![None; usize::try_from(columns).ok()?],
+        })
     }
 
     fn index(&self, x: i32, y: i32) -> Option<usize> {
@@ -287,7 +294,7 @@ mod tests {
 
     #[test]
     fn a_patch_is_found_with_its_centre_column() {
-        let mut terrain = Terrain::new(32, 32);
+        let mut terrain = Terrain::new(32, 32).unwrap();
         terrain.add_chunk([0, 0, 0], &chunk());
         let patches = terrain.patches();
         assert_eq!(patches.len(), 2);
@@ -303,5 +310,14 @@ mod tests {
         assert_eq!(vent.centre, [11, 21, 5]);
         assert_eq!(terrain.stand(0, 0), Some([0, 0, 5]));
         assert_eq!(terrain.stand(40, 0), None);
+    }
+
+    #[test]
+    fn a_map_too_large_to_hold_is_refused_before_it_is_allocated() {
+        assert!(Terrain::new(i32::MAX, i32::MAX).is_none());
+        assert!(Terrain::new(100_000, 100_000).is_none());
+        assert!(Terrain::new(1024, 1024).is_some());
+        assert!(Terrain::new(1025, 1024).is_none());
+        assert!(Terrain::new(-5, 64).is_some_and(|empty| empty.tops.is_empty()));
     }
 }

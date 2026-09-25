@@ -5,10 +5,13 @@
 //!
 //! Every commander is run by the built-in operator. It does three jobs: it
 //! **generates** a playbook with the rudimentary tool (templates plus utility
-//! scoring), it **files the safe playbook** when a seat submits nothing
+//! scoring), it has the **safe playbook** filed when a seat submits nothing
 //! verified before the Lull ends, and it **executes** whatever playbook the
-//! seat sealed. The third job is the sim's playbook interpreter, and the
-//! first two are this crate.
+//! seat sealed. This crate is the first job and the making of each seat's
+//! own safe playbook (a built-in seat submits its own; an advisor returns a
+//! human seat's). The filing itself is the gateway's, at `begin_push`, and
+//! the executing is the sim's playbook interpreter (AGENTS.md section 3's
+//! operator row).
 //!
 //! # An ordinary client, by construction
 //!

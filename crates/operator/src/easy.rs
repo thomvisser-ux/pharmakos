@@ -117,6 +117,17 @@ pub const SAFE_ESTIMATES: u32 = 4;
 /// **hardening**, with the rate limits.
 pub const PAGES_MAX: u32 = 4;
 
+/// The most ground columns (`size_x * size_y` from `get_map_summary`) the
+/// operator holds for one round: a bound on what it allocates for the view,
+/// so a size it cannot hold is a round it cannot read -- it then plans
+/// nothing and still says ready -- rather than an allocation that fails on
+/// the surface thread. The committed map is 384 x 384 = 147 456 columns;
+/// this is 1024 x 1024, eight bytes a column.
+///
+/// PLACEHOLDER: a bound the spec does not state, with the map sizes. Owner,
+/// at **S4**, with the symmetric map.
+pub const MAP_COLUMNS_MAX: i64 = 1024 * 1024;
+
 /// How far inside a sphere's radius a place must be for Easy to call it
 /// inside: whole-voxel positions are floored, and the sim measures between
 /// fixed-point positions.
@@ -129,8 +140,21 @@ pub const SPHERE_MARGIN_VOXELS: i64 = 2;
 /// Which three ship is decision 10 (decisions-log item 81).
 pub const EASY_KNOWN_TEMPLATES: [&str; 3] = [EXPAND_AND_MINE, HOLD_AND_BUILD, SAFE_PLAYBOOK];
 
-/// How many templates Easy instantiates: one per template it knows.
-pub const EASY_TEMPLATES: u32 = 3;
+/// How many templates Easy instantiates: one per template it knows, counted
+/// from [`EASY_KNOWN_TEMPLATES`] so a template added there moves the budget.
+pub const EASY_TEMPLATES: u32 = count(&EASY_KNOWN_TEMPLATES);
+
+/// How many entries a list has, as a `u32`, in a `const` context (where
+/// `u32::try_from` cannot be called and an `as` cast is banned).
+const fn count(list: &[&str]) -> u32 {
+    let mut n: u32 = 0;
+    let mut i: usize = 0;
+    while i < list.len() {
+        n = n.saturating_add(1);
+        i = i.saturating_add(1);
+    }
+    n
+}
 
 /// The Expand & Mine template's id in the library.
 pub const EXPAND_AND_MINE: &str = "expand_and_mine";
@@ -355,7 +379,7 @@ impl Easy {
             if let Some(text) = verified(wire, &declared, &composed, &mut round.repairs) {
                 if submit(wire, &text) {
                     round.submitted = Submitted::Own;
-                    round.why = composed
+                    let why = composed
                         .goals
                         .first()
                         .map(|first| {
@@ -367,6 +391,7 @@ impl Easy {
                             )
                         })
                         .unwrap_or_default();
+                    round.why = compose::with_seed(situation, &why);
                     round.playbook_jsonc = Some(text);
                     return;
                 }
@@ -377,7 +402,8 @@ impl Easy {
         if let Some(safe) = safe::safe_playbook(wire, situation, &declared) {
             if submit(wire, &safe.jsonc) {
                 round.submitted = Submitted::Safe;
-                round.why = compose::why_safe(situation, &safe.raised);
+                round.why =
+                    compose::with_seed(situation, &compose::why_safe(situation, &safe.raised));
                 round.playbook_jsonc = Some(safe.jsonc);
             }
         }
@@ -404,9 +430,10 @@ impl Easy {
 /// Fill, verify FULL, and repair up to [`EASY_REPAIRS`] times.
 ///
 /// Returns the qualifying text, or `None` when it never qualified, and counts
-/// the repairs it spent into `repairs` either way. A repair is the verifier's own machine-applicable fix
-/// for its first error when there is one; else taking out the last goal the
-/// greedy insertion added; else there is nothing left to try.
+/// the repairs it spent into `repairs` either way. A repair is the verifier's
+/// own machine-applicable fix for its first error when there is one; else,
+/// while no fix has been applied, taking out the last goal the greedy
+/// insertion added; else there is nothing left to try.
 fn verified(
     wire: &mut Wire<'_, '_>,
     declared: &[Declared],
@@ -437,6 +464,10 @@ fn verified(
         }
         *repairs = repairs.saturating_add(1);
         let next = if let Some(json_patch) = machine_fix(report) {
+            // The removals name route steps by the index they had in the
+            // composed text; a fix may have moved them, so from here on they
+            // are not used (a stale index could take out the wrong step).
+            removals.clear();
             patched_text(wire, &text, &json_patch)
         } else {
             let last = removals.pop()?;
@@ -497,7 +528,13 @@ fn submit(wire: &mut Wire<'_, '_>, text: &str) -> bool {
 }
 
 /// One suggestion per template Easy knows and the library lists, in
-/// declaration order: own beacons and fixed targets only.
+/// declaration order: own beacons and fixed targets only. Each `why` opens
+/// with the seed line (decision C15: recorded, unused).
+///
+/// PLACEHOLDER: which templates the operator suggests for a human (all three
+/// Easy knows) and that a suggestion names only the seat's own beacons and
+/// fixed targets, never another seat's beacon (Easy's row). Owner, at **S5**
+/// (decisions-log item 111, section D).
 fn suggestions(
     situation: &Situation,
     evaluated: &[Candidate],
@@ -563,7 +600,7 @@ fn suggestions(
         out.push(Suggestion {
             template_id: template.template_id.clone(),
             parameters,
-            why,
+            why: compose::with_seed(situation, &why),
         });
     }
     out

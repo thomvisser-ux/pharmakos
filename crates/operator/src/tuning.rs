@@ -13,7 +13,12 @@
 //!
 //! **No tuning value is a constant here** (AGENTS.md section 12): every
 //! number below comes from a row, and a row that is missing is an error
-//! rather than a default.
+//! rather than a default. proto3 JSON reads an absent scalar as zero, so a
+//! scalar row whose zero means nothing -- the sphere radius, both costs, the
+//! seam's size and the three interface times -- is refused at zero too. The
+//! beacon's `draw_kw` is not: a beacon that draws nothing is a rule a table
+//! may state. The by-richness rows are refused only when the whole row is
+//! absent.
 
 use pharmakos_proto::gp::v1::{ByRichness, RulesTable};
 
@@ -91,7 +96,8 @@ impl Tuning {
     /// # Errors
     ///
     /// [`RulesError`] when the text is not a `gp.v1.RulesTable` or a row the
-    /// operator scores with is absent or zero where zero means "missing".
+    /// operator scores with is absent, or is zero where zero means "missing"
+    /// (the rows the module docs name).
     pub(crate) fn read(rules_json: &str) -> Result<Tuning, RulesError> {
         let table: RulesTable = pharmakos_proto::json::decode(rules_json)
             .map_err(|error| RulesError(format!("the rules text does not read: {error}")))?;
@@ -109,8 +115,37 @@ impl Tuning {
         let times = table
             .interface_times
             .ok_or_else(|| missing("interface_times"))?;
-        if beacon.sphere_radius_voxels == 0 {
-            return Err(missing("beacon.sphere_radius_voxels"));
+        // Zero (or, for a time, below it) where zero means nothing: refused.
+        for (row, value) in [
+            (
+                "beacon.sphere_radius_voxels",
+                i64::from(beacon.sphere_radius_voxels),
+            ),
+            (
+                "structures.beacon.cost_dollars",
+                i64::from(beacon_row.cost_dollars),
+            ),
+            (
+                "structures.generator.cost_dollars",
+                i64::from(generator_row.cost_dollars),
+            ),
+            ("economy.seam_voxels", i64::from(economy.seam_voxels)),
+            (
+                "interface_times.visit_handshake_ms",
+                i64::from(times.visit_handshake_ms),
+            ),
+            (
+                "interface_times.build_target_ms",
+                i64::from(times.build_target_ms),
+            ),
+            (
+                "interface_times.place_beacon_deploy_ms",
+                i64::from(times.place_beacon_deploy_ms),
+            ),
+        ] {
+            if value <= 0 {
+                return Err(missing(row));
+            }
         }
         Ok(Tuning {
             sphere_radius_voxels: i64::from(beacon.sphere_radius_voxels),
@@ -138,5 +173,43 @@ impl Tuning {
     /// `economy.ore_yield_per_voxel_dollars` for one grade.
     pub(crate) fn ore_yield(&self, richness: Richness) -> i64 {
         i64::from(richness.pick(&self.ore_yield_per_voxel_dollars))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn committed() -> String {
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../rules/rules.v1.json");
+        std::fs::read_to_string(path).unwrap()
+    }
+
+    #[test]
+    fn the_committed_rules_read() {
+        assert!(Tuning::read(&committed()).is_ok());
+    }
+
+    #[test]
+    fn a_row_whose_zero_means_nothing_is_refused_at_zero() {
+        for (row, from, to) in [
+            (
+                "economy.seam_voxels",
+                "\"seam_voxels\": 150",
+                "\"seam_voxels\": 0",
+            ),
+            (
+                "interface_times.build_target_ms",
+                "\"build_target_ms\": 2500",
+                "\"build_target_ms\": 0",
+            ),
+        ] {
+            let text = committed();
+            let zeroed = text.replacen(from, to, 1);
+            assert_ne!(zeroed, text, "the rules text still carries `{from}`");
+            let error = Tuning::read(&zeroed).unwrap_err();
+            assert!(error.0.contains(row), "{error}");
+        }
     }
 }
