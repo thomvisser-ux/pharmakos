@@ -20,7 +20,9 @@
 use pharmakos_proto::json::Json;
 
 use crate::candidates::{Candidate, Goal};
-use crate::easy::{EASY_ROUTE_FILL_PERCENT, EXPAND_AND_MINE, HOLD_AND_BUILD};
+use crate::easy::{
+    EASY_ROUTE_FILL_PERCENT, EXPAND_AND_MINE, HOLD_AND_BUILD, PAGES_MAX, SAFE_REACH_MS,
+};
 use crate::playbook::{Declared, op, pointer_get, with_member};
 use crate::situation::Situation;
 use crate::terrain::Feature;
@@ -271,6 +273,12 @@ pub(crate) fn seed_note(situation: &Situation) -> String {
     )
 }
 
+/// A "why" with the seed line in front of it: every "why" Easy gives, for a
+/// plan it seals and for each suggestion, records the seed (decision C15).
+pub(crate) fn with_seed(situation: &Situation, why: &str) -> String {
+    format!("{} {why}", seed_note(situation))
+}
+
 /// One sentence for why a goal was chosen.
 ///
 /// PLACEHOLDER: the wording is the operator's, in English, until the one
@@ -328,24 +336,40 @@ pub(crate) fn why_none(feature: Feature) -> String {
 }
 
 /// Why the safe playbook raises what it raises.
+///
+/// When the view did not complete within [`PAGES_MAX`] pages the ground and
+/// the commander were not all read, so nothing was planned from them; the
+/// sentence says so rather than degrading quietly.
 pub(crate) fn why_safe(situation: &Situation, raised: &[String]) -> String {
-    if raised.is_empty() {
+    let why = if raised.is_empty() {
         if situation.economy.headroom_kw < 0 {
-            return format!(
-                "Power is short ({} kW) and no browned-out beacon is within 60 s, so nothing is \
+            format!(
+                "Power is short ({} kW) and no browned-out beacon is within {} s, so nothing is \
                  raised: move to the safest beacon and stay with it.",
-                situation.economy.headroom_kw
-            );
+                situation.economy.headroom_kw,
+                seconds(SAFE_REACH_MS)
+            )
+        } else {
+            String::from(
+                "Power is not short, so nothing is raised: move to the safest beacon and stay \
+                 with it.",
+            )
         }
-        return String::from(
-            "Power is not short, so nothing is raised: move to the safest beacon and stay with it.",
-        );
+    } else {
+        format!(
+            "Power is short ({} kW): raise {} to HIGH, nearest first, so they brown out last.",
+            situation.economy.headroom_kw,
+            raised.join(" and ")
+        )
+    };
+    if situation.view_complete {
+        why
+    } else {
+        format!(
+            "{why} (The view did not complete within {PAGES_MAX} pages, so the ground and the \
+             commander were not all read and nothing else was planned.)"
+        )
     }
-    format!(
-        "Power is short ({} kW): raise {} to HIGH, nearest first, so they brown out last.",
-        situation.economy.headroom_kw,
-        raised.join(" and ")
-    )
 }
 
 /// The compact JSON text of a voxel location, as a parameter value.

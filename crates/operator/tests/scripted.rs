@@ -98,6 +98,9 @@ struct Script {
     refuse_everything: Option<&'static str>,
     /// Answer `Leg.to` as the bare voxel `main` wrote before T17.
     bare_legs: bool,
+    /// Answer `get_view` with a page that is never complete and names no
+    /// page after it.
+    view_never_complete: bool,
     transcript: Vec<String>,
 }
 
@@ -135,6 +138,7 @@ impl Script {
             accept_submit: true,
             refuse_everything: None,
             bare_legs: false,
+            view_never_complete: false,
             transcript: Vec::new(),
         }
     }
@@ -324,7 +328,7 @@ impl Script {
 
     fn get_view(&self, cursor: &str) -> Json {
         let next = self.next_page(cursor);
-        let last = next.is_empty();
+        let last = next.is_empty() && !self.view_never_complete;
         let chunks = if cursor.is_empty() {
             self.chunks()
         } else {
@@ -755,6 +759,76 @@ fn the_safe_playbook_raises_at_most_two_beacons_nearest_first() {
     );
 }
 
+/// Decision C15: the (match, seat, round) seed is read, recorded in the
+/// "why", and unused -- in the why of a safe seal and of every suggestion
+/// too, not only in a composed plan's note.
+#[test]
+fn the_seed_is_recorded_in_every_why() {
+    let (_, played) = play(Script::new(0));
+    assert_eq!(played.submitted, Submitted::Safe, "{played:#?}");
+    assert!(
+        played.why.contains("seed 0x0000000000005eed"),
+        "{}",
+        played.why
+    );
+    let (_, advice) = advise(Script::busy(0));
+    assert_eq!(advice.suggestions.len(), 3);
+    for suggestion in &advice.suggestions {
+        assert!(
+            suggestion.why.contains("seed 0x0000000000005eed"),
+            "{suggestion:#?}"
+        );
+    }
+}
+
+/// A `get_map_summary` size the operator cannot hold is a round it cannot
+/// read: it asks for no view, plans nothing, and still says ready -- rather
+/// than allocating a column per `(x, y)` of a map it was told is 2^31 wide.
+#[test]
+fn a_map_too_large_to_hold_is_a_round_not_read_and_ready_is_still_said() {
+    let mut huge = Script::busy(0);
+    huge.size = [i32::MAX, i32::MAX, 32];
+    let (script, played) = play(huge);
+    assert_eq!(played.submitted, Submitted::Nothing);
+    assert!(played.ready);
+    let methods: Vec<&str> = script
+        .transcript
+        .iter()
+        .map(|line| line.split(' ').next().unwrap_or(""))
+        .collect();
+    assert_eq!(
+        methods,
+        [
+            "get_status",
+            "get_briefing",
+            "list_beacons",
+            "get_economy_forecast",
+            "get_map_summary",
+            "set_ready"
+        ]
+    );
+}
+
+/// A view that never completes and names no page after it is read once, not
+/// again from the empty cursor; with no entity list there is no commander,
+/// so Easy seals its safe playbook and its why says the view was short.
+#[test]
+fn an_incomplete_view_is_read_once_and_said_in_the_why() {
+    let mut short = Script::busy(0);
+    short.view_never_complete = true;
+    let (script, played) = play(short);
+    assert_eq!(
+        script
+            .transcript
+            .iter()
+            .filter(|line| line.starts_with("get_view"))
+            .count(),
+        1
+    );
+    assert_eq!(played.submitted, Submitted::Safe);
+    assert!(played.why.contains("did not complete"), "{}", played.why);
+}
+
 /// Decisions-log item 107 (5): a unit's or a structure's id is a handle
 /// minted per viewer in the order it first saw the thing. Permute every
 /// `u_`/`s_` handle in the view, and the order the view lists them in: the
@@ -989,6 +1063,11 @@ fn easy_fills_a_template_by_the_pointers_it_declares() {
         .and_then(|op| op.get("value").and_then(text))
         .unwrap();
     assert!(note.contains("seed 0x0000000000005eed"), "{note}");
+    assert!(
+        played.why.contains("seed 0x0000000000005eed"),
+        "{}",
+        played.why
+    );
     assert!(
         paths.iter().any(|path| path.ends_with("/place_beacon/at"))
             || paths.iter().any(|path| path.ends_with("/anchor/voxel")),
