@@ -23,11 +23,27 @@
 //! 2. Reads the rules table to **text** — the gateway parses it, so this crate
 //!    names no `pharmakos-sim` type here (item 107 (11)).
 //! 3. Hands text, the template library's folder ([`LIBRARY_PATH`] under
-//!    `--root`) and an operator factory that plays and advises nobody
-//!    (`serve::NoOperators`, until **T18** lands the built-in operator) to
-//!    `serve::run`, with the process's own standard input and standard
-//!    output. It returns when standard input reaches end of file, which is the
-//!    whole of the shutdown protocol: no heartbeat and no clock.
+//!    `--root`) and the built-in operator's factory ([`EasyOperators`], over
+//!    the same rules text) to `serve::run`, with the process's own standard
+//!    input and standard output. It returns when standard input reaches end
+//!    of file, which is the whole of the shutdown protocol: no heartbeat and
+//!    no clock.
+//!
+//! # The operator's adapters (T18)
+//!
+//! `pharmakos-operator` depends on `pharmakos-proto` alone and is driven
+//! through a call closure, `FnMut(&str, Json) -> Json` (decisions-log item
+//! 111, decision C4). The gateway's two seams hand a closure over its own
+//! `Request` instead. The adapters below are the whole of the bridge: they
+//! wrap a method name and its params into a `Request` and hand the answer
+//! back untouched, and they copy the operator's advice into the gateway's
+//! plain types field for field. Nothing here decides anything.
+//!
+//! [`EasyOperators`] is the factory `serve::run` asks once the config line is
+//! read: an Easy **built-in seat** for every seat that is not the human's
+//! (plan, submit, `set_ready`), and an Easy **advisor** for every other seat
+//! (its safe playbook and one suggestion per template). Each is a fresh
+//! `Easy` built from the rules text, so no seat shares state with another.
 //!
 //! # Exit codes
 //!
@@ -53,10 +69,110 @@ use std::io::IsTerminal as _;
 use std::path::Path;
 
 use pharmakos_gateway::Code;
-use pharmakos_gateway::serve::{self, NoOperators, Setup};
+use pharmakos_gateway::advice::{Advice, SuggestedValue, Suggestion};
+use pharmakos_gateway::rpc::Request;
+use pharmakos_gateway::serve::{self, Advisor, BuiltInSeat, Operators, Setup};
+use pharmakos_operator::{Easy, RulesError};
+use pharmakos_proto::json::Json;
 
 use crate::exit::Failure;
 use crate::{rules, strings};
+
+/// The built-in operator's factory: Easy for every seat, as a built-in seat
+/// or as an advisor (see the module docs).
+///
+/// It holds the public rules text and nothing else, and builds a fresh
+/// [`Easy`] from it for every seat it is asked about.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct EasyOperators {
+    rules_json: String,
+}
+
+impl EasyOperators {
+    /// A factory scoring with this rules text: the same text the host is
+    /// handed (`Setup.rules_json`, decision C17).
+    ///
+    /// # Errors
+    ///
+    /// [`RulesError`] when the operator cannot read its rows from the text,
+    /// said once here rather than once per seat.
+    pub fn new(rules_json: &str) -> Result<EasyOperators, RulesError> {
+        let _checked = Easy::new(rules_json)?;
+        Ok(EasyOperators {
+            rules_json: rules_json.to_owned(),
+        })
+    }
+}
+
+impl Operators for EasyOperators {
+    fn built_in(&mut self, _seat: u8) -> Option<Box<dyn BuiltInSeat>> {
+        let easy = Easy::new(&self.rules_json).ok()?;
+        Some(Box::new(EasySeat(easy)))
+    }
+
+    fn advisor(&mut self, _seat: u8) -> Option<Box<dyn Advisor>> {
+        let easy = Easy::new(&self.rules_json).ok()?;
+        Some(Box::new(EasyAdvisor(easy)))
+    }
+}
+
+/// Easy playing a seat.
+#[derive(Debug)]
+struct EasySeat(Easy);
+
+impl BuiltInSeat for EasySeat {
+    fn plan(&mut self, seat: u8, call: &mut dyn FnMut(&Request) -> Json) {
+        let mut bridged = bridge(call);
+        let _played = self.0.play(seat, &mut bridged);
+    }
+}
+
+/// Easy advising a seat.
+#[derive(Debug)]
+struct EasyAdvisor(Easy);
+
+impl Advisor for EasyAdvisor {
+    fn advise(&mut self, seat: u8, call: &mut dyn FnMut(&Request) -> Json) -> Advice {
+        let mut bridged = bridge(call);
+        advice_of(self.0.advise(seat, &mut bridged))
+    }
+}
+
+/// The operator's call closure over the gateway's: a method name and params
+/// in, a `Request` to the seat's own door, the answer back as it came.
+pub fn bridge(call: &mut dyn FnMut(&Request) -> Json) -> impl FnMut(&str, Json) -> Json + '_ {
+    move |method: &str, params: Json| {
+        call(&Request {
+            id: Json::Number(String::from("1")),
+            method: method.to_owned(),
+            params,
+        })
+    }
+}
+
+/// The operator's advice in the gateway's plain types, field for field.
+#[must_use]
+pub fn advice_of(advice: pharmakos_operator::Advice) -> Advice {
+    Advice {
+        safe_playbook_jsonc: advice.safe_playbook_jsonc,
+        suggestions: advice
+            .suggestions
+            .into_iter()
+            .map(|suggestion| Suggestion {
+                template_id: suggestion.template_id,
+                parameters: suggestion
+                    .parameters
+                    .into_iter()
+                    .map(|value| SuggestedValue {
+                        pointer: value.pointer,
+                        value: value.value,
+                    })
+                    .collect(),
+                why: suggestion.why,
+            })
+            .collect(),
+    }
+}
 
 /// The template library, relative to the root: the flat `library/` folder
 /// the gateway reads to list and instantiate templates (decisions-log item
@@ -86,15 +202,22 @@ pub fn run(root: &Path) -> Result<String, Failure> {
             &error.to_string(),
         ))
     })?;
+    let operators = EasyOperators::new(&rules_json).map_err(|error| {
+        Failure::input(strings::unreadable(
+            "rules table",
+            &crate::display(&path),
+            &error.to_string(),
+        ))
+    })?;
     let setup = Setup {
         rules_json,
         // A path, not a check: the gateway reads the folder on every
         // `list_templates` and says so when it cannot, and a checkout always
         // has one.
         library: Some(root.join(LIBRARY_PATH)),
-        // PLACEHOLDER: T18 hands its operator factory here; until then every
-        // seat that seals nothing is filed the gateway's fallback.
-        operators: Box::new(NoOperators),
+        // Easy for every seat: it plays the seats nobody at this machine
+        // plays and advises the human's (T18).
+        operators: Box::new(operators),
     };
     serve::run(setup, std::io::stdin().lock(), std::io::stdout().lock()).map_err(|error| {
         let message = strings::host_refused(&error.to_string());

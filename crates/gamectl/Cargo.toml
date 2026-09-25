@@ -53,6 +53,10 @@ pharmakos-sim       = { workspace = true, default-features = false }
 pharmakos-plan-core = { workspace = true }
 pharmakos-verifier  = { workspace = true }
 pharmakos-gateway   = { workspace = true }
+# The built-in operator (T18; decisions-log items 111 and 112 (7), AGENTS.md section 3's
+# gamectl row): `host` adapts it to the gateway's `serve::Operators` seam. It depends on
+# pharmakos-proto alone, so this edge adds no path to the sim that the gateway's does not.
+pharmakos-operator  = { workspace = true }
 lexopt              = { workspace = true }
 
 [lints]
