@@ -469,13 +469,21 @@ impl Surface {
             .map(|leg| {
                 let ms = leg.estimate.map_or(0, |found| found.ms().raw());
                 Json::Object(vec![
+                    // `gp.api.v1.Leg.to` is a `gp.v1.Location`, so the voxel
+                    // goes under its oneof arm, `{"voxel": {x, y, z}}`, and
+                    // not bare (decisions-log item 112 (3); pinned by
+                    // `a_legs_end_is_written_as_the_location_the_schema_declares`,
+                    // because the walkthrough golden records summaries).
                     (
                         String::from("to"),
-                        Json::Object(vec![
-                            (String::from("x"), Json::Number(leg.to.x.to_string())),
-                            (String::from("y"), Json::Number(leg.to.y.to_string())),
-                            (String::from("z"), Json::Number(leg.to.z.to_string())),
-                        ]),
+                        Json::Object(vec![(
+                            String::from("voxel"),
+                            Json::Object(vec![
+                                (String::from("x"), Json::Number(leg.to.x.to_string())),
+                                (String::from("y"), Json::Number(leg.to.y.to_string())),
+                                (String::from("z"), Json::Number(leg.to.z.to_string())),
+                            ]),
+                        )]),
                     ),
                     (String::from("ms"), Json::Number(ms.to_string())),
                     (String::from("fogged"), Json::Bool(leg.fogged)),

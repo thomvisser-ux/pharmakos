@@ -19,19 +19,23 @@
 mod support;
 
 use pharmakos_gateway::advice::Advice;
+use pharmakos_gateway::error::Code;
 use pharmakos_gateway::frame::Opcode;
 use pharmakos_gateway::rpc::Request;
 use pharmakos_gateway::serve::{
-    self, Advisor, Announce, BuiltInSeat, Config, MAX_CONNECTIONS, NoOperators, Operators, Setup,
+    self, Advisor, Announce, BuiltInSeat, Config, ConfigLine, MAX_CONNECTIONS, NoOperators,
+    Operators, Setup,
 };
 use pharmakos_proto::json::{Json, read};
+use std::fmt::Write as _;
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use support::{SEED, rules_json};
+use support::{SEED, data_root, rules_json};
 
 // ---------------------------------------------------------------------------
 // A control pipe and an announce sink, in process
@@ -99,6 +103,15 @@ struct Running {
     written: Arc<Mutex<Vec<u8>>>,
     control: Option<Sender<Vec<u8>>>,
     thread: Option<std::thread::JoinHandle<()>>,
+    /// The private match cache's root this host keeps its matches under.
+    root: PathBuf,
+}
+
+impl Running {
+    /// This match's folder in the private match cache.
+    fn folder(&self) -> PathBuf {
+        self.root.join("matches").join(&self.announce.match_id)
+    }
 }
 
 impl Running {
@@ -117,12 +130,25 @@ impl Drop for Running {
     }
 }
 
-/// Start a host on an ephemeral loopback port and read its announce line.
+/// Start a host on an ephemeral loopback port and read its announce line,
+/// with a private match cache of the test's own (named for the match), so a
+/// save one run leaves behind is never the next run's refusal.
 fn start(config: &Config, operators: Box<dyn Operators>) -> Running {
+    let line = ConfigLine {
+        config: config.clone(),
+        resume: false,
+    };
+    start_in(&data_root(&config.match_id), &line, operators)
+}
+
+/// [`start`], under a data root the caller keeps between hosts -- which is
+/// what a resume needs -- and with a whole config line.
+fn start_in(root: &Path, line: &ConfigLine, operators: Box<dyn Operators>) -> Running {
     let (sender, messages) = channel::<Vec<u8>>();
     sender
-        .send(config.render().into_bytes())
+        .send(line.render().into_bytes())
         .expect("the config line");
+    let data = root.to_path_buf();
     let written = Arc::new(Mutex::new(Vec::new()));
     let sink = Sink(Arc::clone(&written));
     let setup = Setup {
@@ -136,7 +162,7 @@ fn start(config: &Config, operators: Box<dyn Operators>) -> Running {
             held: Vec::new(),
             at: 0,
         };
-        if let Err(error) = serve::run(setup, pipe, sink) {
+        if let Err(error) = serve::run_in(setup, &data, pipe, sink) {
             // The parent is blocked on the announce line, so a host that
             // refused to start has to say why here or the failure reads as a
             // timeout.
@@ -157,6 +183,7 @@ fn start(config: &Config, operators: Box<dyn Operators>) -> Running {
                 written,
                 control: Some(sender),
                 thread: Some(thread),
+                root: root.to_path_buf(),
             };
         }
         std::thread::sleep(Duration::from_millis(10));
@@ -368,6 +395,37 @@ fn the_two_lines_are_read_exactly_as_they_were_written() {
             Config::parse(wrong).is_err(),
             "`{wrong}` is not a config line and was read as one"
         );
+    }
+
+    // The seventh field (decisions-log item 111, decision C9): `resume`, or
+    // nothing. Anything else is refused rather than read as a new match.
+    let resume = ConfigLine {
+        config: config("m-t16a-lines", Some(1)),
+        resume: true,
+    };
+    assert!(
+        resume.render().ends_with("\tresume\n"),
+        "{:?}",
+        resume.render()
+    );
+    assert_eq!(
+        ConfigLine::parse(&resume.render()).expect("its own line"),
+        resume
+    );
+    let plain = ConfigLine {
+        resume: false,
+        ..resume.clone()
+    };
+    assert_eq!(
+        ConfigLine::parse(&plain.render()).expect("its own line"),
+        plain,
+        "six fields are a new match"
+    );
+    assert_eq!(plain.render(), plain.config.render());
+    for seventh in ["again", "RESUME", "resume please"] {
+        let line = format!("{}\t{seventh}\n", plain.render().trim_end());
+        let error = ConfigLine::parse(&line).expect_err("not a seventh field");
+        assert_eq!(error.code, Code::InvalidArgument, "`{seventh}`");
     }
 
     let announce = Announce {
@@ -749,6 +807,10 @@ fn a_token_appears_on_the_announce_line_and_nowhere_else_the_host_writes() {
     );
     drop(wrong);
     let _ = lobby.call("get_status", "{}");
+    // Extended by T17: end the Lull, so the Push's beginning writes a save and
+    // both seats' sealed playbooks, and the scan below covers them too.
+    let _ = result(&lobby.call("end_lull", "{}"), "end_lull");
+    let _ = lobby.call("get_status", "{}");
     running.quit();
 
     // The announce line carries both, once.
@@ -777,9 +839,10 @@ fn a_token_appears_on_the_announce_line_and_nowhere_else_the_host_writes() {
         "both in-process seats ran, so both of their tokens were used"
     );
 
-    // And nothing else the host wrote does.
-    let root = pharmakos_gateway::cache::locate().expect("a data root");
-    let folder = root.join("matches").join("m-t16a-secret");
+    // And nothing else the host wrote does -- save.json and the sealed
+    // playbooks included (T17).
+    let folder = running.folder();
+    assert_the_push_was_written(&folder);
     let mut checked = 0_u32;
     for entry in walk(&folder) {
         let Ok(bytes) = std::fs::read(&entry) else {
@@ -802,7 +865,7 @@ fn a_token_appears_on_the_announce_line_and_nowhere_else_the_host_writes() {
         );
     }
     assert!(
-        checked >= 3,
+        checked >= 6,
         "the match cache held {checked} files, so the scan would have passed vacuously"
     );
     let log = std::fs::read_to_string(folder.join("audit.log")).expect("an audit log");
@@ -811,6 +874,30 @@ fn a_token_appears_on_the_announce_line_and_nowhere_else_the_host_writes() {
         log.contains("UNAUTHENTICATED"),
         "and so was the refusal: {log}"
     );
+}
+
+/// The files a Push's beginning writes are there, so a scan of the folder
+/// covers them.
+fn assert_the_push_was_written(folder: &Path) {
+    for written in [
+        folder.join("save.json"),
+        folder
+            .join("seats")
+            .join("0")
+            .join("sealed")
+            .join("1.jsonc"),
+        folder
+            .join("seats")
+            .join("1")
+            .join("sealed")
+            .join("1.jsonc"),
+    ] {
+        assert!(
+            written.is_file(),
+            "{} was not written, so the scan would not cover it",
+            written.display()
+        );
+    }
 }
 
 /// Every run of 64 or more lower-case hex digits in `text`, in order.
@@ -856,4 +943,483 @@ fn walk(root: &std::path::Path) -> Vec<std::path::PathBuf> {
     }
     found.sort();
     found
+}
+
+// ---------------------------------------------------------------------------
+// Saves, resumes and the private replay (T17)
+// ---------------------------------------------------------------------------
+
+/// Host a match to its opening Lull and close the pipe at once: the quickest
+/// way to a `lull` save. Returns what `run_in` returned.
+fn host_and_quit(root: &Path, line: &ConfigLine) -> Result<(), pharmakos_gateway::Error> {
+    let setup = Setup {
+        rules_json: rules_json(),
+        library: Some(support::library_folder()),
+        operators: Box::new(NoOperators),
+    };
+    serve::run_in(
+        setup,
+        root,
+        std::io::Cursor::new(line.render().into_bytes()),
+        Vec::new(),
+    )
+}
+
+/// A new match's line.
+fn new_line(config: Config) -> ConfigLine {
+    ConfigLine {
+        config,
+        resume: false,
+    }
+}
+
+/// A resume line.
+fn resume_line(config: Config) -> ConfigLine {
+    ConfigLine {
+        config,
+        resume: true,
+    }
+}
+
+/// The save a match folder holds, parsed.
+fn saved(folder: &Path) -> pharmakos_gateway::save::Save {
+    let text = std::fs::read_to_string(folder.join("save.json")).expect("a save");
+    pharmakos_gateway::save::Save::parse(&text).expect("a save this build reads")
+}
+
+/// A match folder under a data root.
+fn folder_of(root: &Path, match_id: &str) -> PathBuf {
+    root.join("matches").join(match_id)
+}
+
+/// The phase the `_status` footer of an answer names.
+fn phase_of(answer: &Json) -> String {
+    let footer = answer
+        .get("_status")
+        .or_else(|| answer.get("status"))
+        .expect("a status footer");
+    match footer.get("phase") {
+        Some(Json::String(phase)) => phase.clone(),
+        other => panic!("a phase, and it is {other:?}"),
+    }
+}
+
+/// Run the Push to its end through `advance_push`, as the pacer's skip does.
+fn skip_to_recap(lobby: &mut Client) {
+    for _ in 0..100 {
+        let answer = result(
+            &lobby.call("advance_push", r#"{"ms":60000}"#),
+            "advance_push",
+        );
+        if phase_of(&answer) != "push" {
+            return;
+        }
+    }
+    panic!("a Push that never ended");
+}
+
+/// Item 84's second boundary, and C8's rule that there is no saving
+/// mid-Push: end of file in a Lull writes a `lull` save; end of file in a Push
+/// writes nothing, and the `sealed` save its beginning wrote is what stands.
+#[test]
+fn closing_the_pipe_in_a_lull_saves_and_closing_it_in_a_push_does_not() {
+    let root = data_root("t17-close");
+    host_and_quit(&root, &new_line(config("m-t17-close-lull", Some(0))))
+        .expect("a host that opened and was closed");
+    let lull = saved(&folder_of(&root, "m-t17-close-lull"));
+    assert_eq!(lull.state.boundary, pharmakos_gateway::save::Boundary::Lull);
+    assert_eq!(lull.state.round, 1);
+    assert_eq!(lull.config, config("m-t17-close-lull", Some(0)));
+
+    let mut running = start_in(
+        &root,
+        &new_line(config("m-t17-close-push", Some(0))),
+        Box::new(NoOperators),
+    );
+    let mut lobby = Client::open(running.announce.port, &running.announce.admin_token);
+    let _ = result(&lobby.call("end_lull", "{}"), "end_lull");
+    // A call after the one that began the Push, so the flush that followed it
+    // has certainly happened: the surface thread answers in order.
+    let _ = result(&lobby.call("get_status", "{}"), "get_status");
+    let folder = running.folder();
+    let at_the_push = std::fs::read(folder.join("save.json")).expect("the Push's save");
+    let _ = result(&lobby.call("advance_push", r#"{"ms":200}"#), "advance_push");
+    running.quit();
+    assert_eq!(
+        std::fs::read(folder.join("save.json")).expect("still there"),
+        at_the_push,
+        "closing the pipe mid-Push wrote nothing: the Push's own save stands"
+    );
+    assert_eq!(
+        saved(&folder).state.boundary,
+        pharmakos_gateway::save::Boundary::Sealed
+    );
+    let log = std::fs::read_to_string(folder.join("audit.log")).expect("an audit log");
+    assert!(
+        !log.contains("save lull"),
+        "no Lull save was attempted in a Push: {log}"
+    );
+}
+
+/// The wave-6 notes, H16: a save outlives its process, so a new match under
+/// its id is refused -- before a map is generated -- and the save is left as
+/// it was.
+#[test]
+fn a_new_match_cannot_overwrite_a_saved_one() {
+    let root = data_root("t17-overwrite");
+    let line = new_line(config("m-t17-overwrite", Some(0)));
+    host_and_quit(&root, &line).expect("the first match");
+    let folder = folder_of(&root, "m-t17-overwrite");
+    let save = std::fs::read(folder.join("save.json")).expect("a save");
+    let header = std::fs::read(folder.join("match.json")).expect("a header");
+
+    let error = host_and_quit(&root, &line).expect_err("a second new match under the same id");
+    assert_eq!(error.code, Code::InvalidArgument);
+    assert!(error.message.contains("resume"), "{}", error.message);
+    assert_eq!(
+        std::fs::read(folder.join("save.json")).expect("a save"),
+        save
+    );
+    assert_eq!(
+        std::fs::read(folder.join("match.json")).expect("a header"),
+        header
+    );
+
+    // And the resume line is the way back in.
+    host_and_quit(&root, &resume_line(config("m-t17-overwrite", Some(0))))
+        .expect("a resume of the saved match");
+    let log = std::fs::read_to_string(folder.join("audit.log")).expect("an audit log");
+    assert!(log.contains("\tresumed\tok\n"), "{log}");
+    let sequence: Vec<u64> = log
+        .lines()
+        .skip(1)
+        .filter_map(|line| line.split('\t').next()?.parse::<u64>().ok())
+        .collect();
+    assert!(
+        sequence.windows(2).all(|pair| pair.first() < pair.get(1)),
+        "a resumed host numbers its lines after the last one: {sequence:?}"
+    );
+    assert_eq!(
+        std::fs::read(folder.join("match.json")).expect("a header"),
+        header,
+        "a resume does not rewrite match.json"
+    );
+}
+
+/// Decisions-log item 112 (8): a resume line repeats **all six** of the
+/// saved match's values, and one that differs in any of them is refused as
+/// `INVALID_ARGUMENT` -- which `gamectl host` turns into exit code 2 with the
+/// message on stderr.
+#[test]
+fn a_resume_line_that_disagrees_with_the_save_is_refused() {
+    let root = data_root("t17-disagree");
+    let saved_config = Config {
+        segment_lengths_ms: vec![1_000, 2_000],
+        ..config("m-t17-disagree", Some(0))
+    };
+    host_and_quit(&root, &new_line(saved_config.clone())).expect("the saved match");
+    let variants: [(&str, Config); 6] = [
+        (
+            "match id",
+            Config {
+                match_id: String::from("m-t17-disagree-other"),
+                ..saved_config.clone()
+            },
+        ),
+        (
+            "seed",
+            Config {
+                seed: SEED.wrapping_add(1),
+                ..saved_config.clone()
+            },
+        ),
+        (
+            "seat count",
+            Config {
+                seats: 3,
+                ..saved_config.clone()
+            },
+        ),
+        (
+            "human seat",
+            Config {
+                human_seat: Some(1),
+                ..saved_config.clone()
+            },
+        ),
+        (
+            "segment lengths",
+            Config {
+                segment_lengths_ms: vec![1_000],
+                ..saved_config.clone()
+            },
+        ),
+        (
+            "round limit",
+            Config {
+                round_limit: 3,
+                ..saved_config.clone()
+            },
+        ),
+    ];
+    for (field, asked) in variants {
+        let error = host_and_quit(&root, &resume_line(asked)).expect_err(field);
+        assert_eq!(
+            error.code,
+            Code::InvalidArgument,
+            "{field}: {}",
+            error.message
+        );
+    }
+    host_and_quit(&root, &resume_line(saved_config)).expect("the line that agrees resumes");
+}
+
+/// Spec section 3: saves "won't load on a mismatch" of the rules hash or the
+/// verifier version. Both asserted, each by changing only that one stamp in
+/// the file.
+#[test]
+fn a_save_from_a_different_rules_table_or_verifier_is_refused() {
+    let root = data_root("t17-stamp");
+    let line = config("m-t17-stamp", Some(0));
+    host_and_quit(&root, &new_line(line.clone())).expect("the saved match");
+    let folder = folder_of(&root, "m-t17-stamp");
+    let original = std::fs::read_to_string(folder.join("save.json")).expect("a save");
+    let stamp = saved(&folder).stamp;
+
+    let other_rules = original.replace(
+        &format!(
+            "\"rules_hash\": \"{}\"",
+            pharmakos_sim::hex(stamp.rules_hash)
+        ),
+        &format!(
+            "\"rules_hash\": \"{}\"",
+            pharmakos_sim::hex(stamp.rules_hash ^ 1)
+        ),
+    );
+    assert_ne!(other_rules, original, "the rules hash was changed");
+    std::fs::write(folder.join("save.json"), &other_rules).expect("rewritten");
+    let error = host_and_quit(&root, &resume_line(line.clone())).expect_err("another rules table");
+    assert_eq!(error.code, Code::InvalidArgument);
+    assert!(error.message.contains("rules table"), "{}", error.message);
+
+    let other_verifier = original.replace(
+        &format!("\"verifier_version\": \"{}\"", stamp.verifier_version),
+        "\"verifier_version\": \"0.0.0-another\"",
+    );
+    assert_ne!(other_verifier, original, "the verifier version was changed");
+    std::fs::write(folder.join("save.json"), &other_verifier).expect("rewritten");
+    let error = host_and_quit(&root, &resume_line(line.clone())).expect_err("another verifier");
+    assert_eq!(error.code, Code::InvalidArgument);
+    assert!(error.message.contains("verifier"), "{}", error.message);
+
+    std::fs::write(folder.join("save.json"), &original).expect("put back");
+    host_and_quit(&root, &resume_line(line)).expect("the save as written resumes");
+}
+
+/// The wave-6 notes, decision C8: a client killed mid-Push -- its pipe closed
+/// -- resumes into that same Push with the same seals and plays it to the
+/// same chain, tick for tick, as a host that was never interrupted.
+#[test]
+fn a_killed_client_mid_push_replays_that_push_to_the_same_chain() {
+    let line = config("m-t17-killed", Some(0));
+
+    // The uninterrupted run.
+    let reference = data_root("t17-killed-reference");
+    let mut running = start_in(&reference, &new_line(line.clone()), Box::new(NoOperators));
+    let mut lobby = Client::open(running.announce.port, &running.announce.admin_token);
+    let _ = result(&lobby.call("end_lull", "{}"), "end_lull");
+    skip_to_recap(&mut lobby);
+    let _ = result(&lobby.call("get_status", "{}"), "get_status");
+    running.quit();
+    let expected = std::fs::read_to_string(running.folder().join("replay").join("1.hashes.txt"))
+        .expect("the uninterrupted chain");
+    assert_eq!(expected.lines().count(), 20, "1 000 ms at 50 ms a tick");
+
+    // Killed a few ticks in.
+    let root = data_root("t17-killed");
+    let mut running = start_in(&root, &new_line(line.clone()), Box::new(NoOperators));
+    let mut lobby = Client::open(running.announce.port, &running.announce.admin_token);
+    let _ = result(&lobby.call("end_lull", "{}"), "end_lull");
+    let _ = result(&lobby.call("advance_push", r#"{"ms":300}"#), "advance_push");
+    running.quit();
+    let folder = running.folder();
+    assert!(
+        !folder.join("replay").join("1.hashes.txt").exists(),
+        "the killed Push never reached its end"
+    );
+
+    // Resumed: straight into the Push, with no Lull to re-plan it in.
+    let mut running = start_in(&root, &resume_line(line), Box::new(NoOperators));
+    let mut lobby = Client::open(running.announce.port, &running.announce.admin_token);
+    let status = result(&lobby.call("get_status", "{}"), "get_status");
+    assert_eq!(
+        phase_of(&status),
+        "push",
+        "a sealed save resumes into its Push"
+    );
+    let refused = lobby.call("end_lull", "{}");
+    assert!(refused.get("error").is_some(), "there is no Lull to end");
+    skip_to_recap(&mut lobby);
+    let _ = result(&lobby.call("get_status", "{}"), "get_status");
+    running.quit();
+    assert_eq!(
+        std::fs::read_to_string(folder.join("replay").join("1.hashes.txt"))
+            .expect("the resumed chain"),
+        expected,
+        "the same Push, to the same chain"
+    );
+}
+
+/// What `match.json` says, read back as the replay needs it.
+struct MatchHeader {
+    seed: u64,
+    seats: u32,
+    round_limit: u32,
+    lengths: Vec<i32>,
+    rules_hash: String,
+}
+
+impl MatchHeader {
+    fn read(folder: &Path) -> MatchHeader {
+        let header = read(&std::fs::read_to_string(folder.join("match.json")).expect("match.json"))
+            .expect("JSON");
+        let text = |key: &str| match header.get(key) {
+            Some(Json::String(value)) => value.clone(),
+            other => panic!("`{key}` is a string, and it is {other:?}"),
+        };
+        let whole = |key: &str| match header.get(key) {
+            Some(Json::Number(lexeme)) => lexeme.parse::<u32>().expect("a whole number"),
+            other => panic!("`{key}` is a number, and it is {other:?}"),
+        };
+        let lengths: Vec<i32> = match header.get("segment_lengths_ms") {
+            Some(Json::Array(items)) => items
+                .iter()
+                .map(|item| match item {
+                    Json::Number(lexeme) => lexeme.parse::<i32>().expect("a length"),
+                    other => panic!("a length, and it is {other:?}"),
+                })
+                .collect(),
+            other => panic!("the ladder, and it is {other:?}"),
+        };
+        MatchHeader {
+            seed: u64::from_str_radix(text("match_seed").trim_start_matches("0x"), 16)
+                .expect("a seed"),
+            seats: whole("seats"),
+            round_limit: whole("round_limit"),
+            lengths,
+            rules_hash: text("rules_hash"),
+        }
+    }
+}
+
+/// The private replay is inputs only (decision C11): `match.json` for the
+/// seed, settings and rules hash, `seats/<seat>/sealed/<round>.jsonc` for
+/// every seat's orders, `replay/<round>.hashes.txt` for every segment's chain.
+/// Re-hosting a match from those files alone reproduces its chain.
+#[test]
+fn the_replay_files_reproduce_the_matchs_chain() {
+    let line = Config {
+        segment_lengths_ms: vec![1_000, 1_500],
+        ..config("m-t17-replay", Some(0))
+    };
+    let mut running = start_in(
+        &data_root("t17-replay"),
+        &new_line(line),
+        Box::new(NoOperators),
+    );
+    let seat_token = running.announce.seat_token.clone().expect("a human seat");
+    let mut lobby = Client::open(running.announce.port, &running.announce.admin_token);
+    let mut seat = Client::open(running.announce.port, &seat_token);
+    for round in 1..=2_u32 {
+        // The human seat plays its own orders in round 1 and none in round 2,
+        // so the replay holds both a submission and a gateway-filed playbook.
+        if round == 1 {
+            let _ = result(
+                &seat.call(
+                    "submit_plan",
+                    &format!(
+                        r#"{{"playbook_jsonc":{}}}"#,
+                        support::quote(pharmakos_gateway::host::SAFE_PLAYBOOK)
+                    ),
+                ),
+                "submit_plan",
+            );
+        }
+        let _ = result(&lobby.call("end_lull", "{}"), "end_lull");
+        skip_to_recap(&mut lobby);
+        let _ = result(&lobby.call("end_recap", "{}"), "end_recap");
+    }
+    let _ = result(&lobby.call("get_status", "{}"), "get_status");
+    running.quit();
+    let folder = running.folder();
+
+    // Everything below reads the folder and nothing else.
+    let header = MatchHeader::read(&folder);
+    let rules = support::rules();
+    assert_eq!(
+        header.rules_hash,
+        pharmakos_sim::hex(rules.rules_hash()),
+        "match.json names the rules table the replay needs"
+    );
+    let (seed, seats, round_limit, lengths) = (
+        header.seed,
+        header.seats,
+        header.round_limit,
+        header.lengths.clone(),
+    );
+
+    let mut host = pharmakos_gateway::host::Host::open_from(
+        &rules_json(),
+        seed,
+        seats,
+        &pharmakos_gateway::host::Settings {
+            segment_lengths_ms: lengths,
+            round_limit,
+            units_per_seat: 0,
+        },
+        None,
+    )
+    .expect("a match from match.json");
+    for round in 1..=round_limit {
+        let mut plans = Vec::new();
+        for raw in 0..u8::try_from(seats).expect("a seat count") {
+            let path = folder
+                .join("seats")
+                .join(raw.to_string())
+                .join("sealed")
+                .join(format!("{round}.jsonc"));
+            let playbook = std::fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+            let canonical =
+                pharmakos_plan_core::canonicalise_text(&playbook).expect("a canonical form");
+            plans.push((
+                pharmakos_sim::tables::SeatId::new(raw),
+                pharmakos_sim::interpreter::Plan::compile(&canonical.playbook, &rules)
+                    .expect("a plan"),
+            ));
+        }
+        host.seal_plans(plans).expect("sealed in a Lull");
+        assert!(host.begin_push());
+        let mut chain = String::new();
+        while let Some(report) = host.step() {
+            let _ = writeln!(
+                chain,
+                "{}\t{}",
+                report.tick.raw(),
+                pharmakos_sim::hex(report.hash)
+            );
+            if report.segment_ended {
+                break;
+            }
+        }
+        let recorded =
+            std::fs::read_to_string(folder.join("replay").join(format!("{round}.hashes.txt")))
+                .expect("the recorded chain");
+        assert!(!recorded.contains('\r'), "LF endings");
+        assert_eq!(
+            chain, recorded,
+            "round {round}'s chain, re-hosted from its inputs"
+        );
+        assert!(host.end_recap());
+    }
 }

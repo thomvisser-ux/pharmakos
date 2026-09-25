@@ -27,6 +27,15 @@
 //! [`Host::seal_plans`] while the match is still in its Lull. Before that a
 //! hosted match played out with every commander standing still.
 //!
+//! # A resume is here too (T17)
+//!
+//! [`Host::resume`] puts a save's planning snapshot into a freshly opened
+//! match: the one restore this crate does, beside the four driving calls and
+//! under the same rule (`tests/confinement.rs` holds `.restore(` to this
+//! module). The saved orders are not sealed by it; they go back into the
+//! seats' private store and reach the match through [`Host::seal_plans`] like
+//! any other, at [`crate::surface::Surface::begin_push`].
+//!
 //! # The Lull and the recap end on the host's word, not on a clock
 //!
 //! The gateway is not a walled crate, so it reads no clock at all
@@ -51,10 +60,11 @@ use std::path::{Path, PathBuf};
 
 use pharmakos_proto::gp::v1::Voxel;
 use pharmakos_sim::interpreter::Plan;
-use pharmakos_sim::math::fixed::{Fx, Sq};
 use pharmakos_sim::math::quantity::MS_PER_TICK;
 use pharmakos_sim::rules::RulesTable;
 use pharmakos_sim::runner::{MatchPhase, MatchSettings, Runner, TickReport};
+use pharmakos_sim::sight::Spheres;
+use pharmakos_sim::snapshot::Snapshot;
 use pharmakos_sim::tables::SeatId;
 use pharmakos_sim::voxels::VoxelEdit;
 use pharmakos_sim::world::{DamageOrder, World, WorldConfig};
@@ -132,6 +142,16 @@ pub const SAFE_PLAYBOOK: &str = concat!(
 /// folder for a checkout).
 pub const LIBRARY_FOLDER: &str = "library";
 
+/// The most seats a v1 match has.
+///
+/// Not a tuning value: spec section 1 is "up to three seats (at most one
+/// human, the rest built-in)", and AGENTS.md section 11 puts "more than 3
+/// seats" on the list of what v1 does not build. [`Host::open_from`] and
+/// [`crate::serve::Config::parse`] refuse anything outside `1..=MAX_SEATS` as
+/// [`crate::error::Code::InvalidArgument`] (decisions-log item 110 (5)):
+/// before T17 `gamectl host` would host a 99-seat match when asked.
+pub const MAX_SEATS: u32 = 3;
+
 /// What the lobby chose, in plain values.
 ///
 /// The point of this struct is what is **not** in it: no `pharmakos-sim`
@@ -208,6 +228,7 @@ impl Host {
         settings: &Settings,
         library: Option<PathBuf>,
     ) -> Result<Host, Error> {
+        Host::check_seats(seats)?;
         let rules = RulesTable::from_canonical_json(rules_json).map_err(|error| {
             Error::invalid(format!(
                 "this is not a rules table this build reads: {error}"
@@ -224,6 +245,21 @@ impl Host {
             },
         };
         Host::open(&config, library)
+    }
+
+    /// Refuse a seat count v1 does not play: none, or more than
+    /// [`MAX_SEATS`].
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::InvalidArgument`], naming the count asked for.
+    pub fn check_seats(seats: u32) -> Result<(), Error> {
+        if (1..=MAX_SEATS).contains(&seats) {
+            return Ok(());
+        }
+        Err(Error::invalid(format!(
+            "a match has between 1 and {MAX_SEATS} seats, and this asks for {seats}"
+        )))
     }
 
     /// Refuse a lobby setting the sim would silently correct.
@@ -437,6 +473,102 @@ impl Host {
         drained
     }
 
+    /// Resume a saved match: put the saved planning snapshot into this
+    /// freshly opened one.
+    ///
+    /// **The one place a restore happens, and it is here for the reason the
+    /// four driving calls are** (`tests/confinement.rs` holds `.restore(` and
+    /// `.resume(` to this module and the surface's own resume path). The
+    /// caller has just opened this host with [`Host::open_from`] from the
+    /// save's own config line, which regenerates the pristine world -- the map
+    /// is a pure function of seed, rules and seats, so the snapshot carries
+    /// only what an edit changed -- and this restores the snapshot into it.
+    ///
+    /// # Where it lands
+    ///
+    /// A save holds the **frozen** planning snapshot (spec section 3: "from the
+    /// frozen segment-end snapshot"), because that is what every verifier
+    /// report is taken over. After round 1 it was frozen at the tick the
+    /// segment ended, in the recap, so the recap is closed here exactly as the
+    /// host closed it, and the match stands in the same Lull the save was made
+    /// in. Round 1's snapshot was frozen in the opening Lull and needs nothing.
+    ///
+    /// # What it checks
+    ///
+    /// That the snapshot decodes and restores (the sim checks its version, and
+    /// every modified chunk's digest against the store it rebuilds), that it
+    /// lands in a Lull, and that the restored planning snapshot encodes to
+    /// **the saved bytes exactly** -- the verifier hashes those bytes into
+    /// every `report_hash`, so a resume whose planning snapshot moved by a
+    /// byte would give every seat a report different from the one it was
+    /// shown before the restart.
+    ///
+    /// The seats' orders are **not** sealed here. A plan is an input and is not
+    /// in a snapshot; the surface restores every saved seal into the seats'
+    /// private store and seals them from there at
+    /// [`crate::surface::Surface::begin_push`], through
+    /// [`Host::seal_plans`], which is the one path orders take into a match.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::InvalidArgument`] for a snapshot that will not
+    /// decode, restore or land in a Lull, or that does not re-encode to itself
+    /// -- a damaged or foreign save -- and [`crate::error::Code::Internal`] for
+    /// a host that is not freshly opened.
+    pub fn resume(&mut self, snapshot_bytes: &[u8]) -> Result<(), Error> {
+        let fresh = self.runner.phase() == MatchPhase::Lull
+            && self.runner.round() == 1
+            && self.runner.tick().raw() == 0;
+        if !fresh {
+            return Err(Error::internal(
+                "a saved match resumes into a host that has just been opened, and this one has \
+                 already been played",
+            ));
+        }
+        let snapshot = Snapshot::from_bytes(snapshot_bytes).map_err(|error| {
+            Error::invalid(format!(
+                "this save's planning snapshot will not decode: {error}"
+            ))
+        })?;
+        self.runner.restore(&snapshot).map_err(|error| {
+            Error::invalid(format!(
+                "this save's planning snapshot will not restore into the match its config line \
+                 describes: {error}"
+            ))
+        })?;
+        if self.runner.phase() == MatchPhase::Recap {
+            let _ = self.runner.end_recap();
+        }
+        if self.runner.phase() != MatchPhase::Lull {
+            return Err(Error::invalid(format!(
+                "a save is made in a Lull, and this one's planning snapshot lands in the match's \
+                 {}",
+                self.runner.phase().name()
+            )));
+        }
+        let again = self
+            .runner
+            .frozen()
+            .snapshot()
+            .to_bytes()
+            .map_err(|error| {
+                Error::internal(format!(
+                    "the restored planning snapshot would not encode: {error}"
+                ))
+            })?;
+        if again != snapshot_bytes {
+            return Err(Error::invalid(
+                "this save's planning snapshot does not restore to itself, so every report a \
+                 seat was shown before the restart would change after it: the file is damaged, \
+                 or it was written by a build whose snapshot differs",
+            ));
+        }
+        // A resumed match's feed starts empty (the wave-6 notes, A2): the
+        // restore's own events are the host's business, not a seat's.
+        self.runner.clear_events();
+        self.refresh_routes()
+    }
+
     // -----------------------------------------------------------------------
     // The test seam: a host may file this tick's orders, and no wire method may
     // -----------------------------------------------------------------------
@@ -477,78 +609,41 @@ impl Host {
 /// The production [`Vision`]: a seat sees inside the spheres of its own living
 /// beacons.
 ///
-/// # This is a labelled stopgap, and the label is the point
+/// **A call to the sim's own rule**, [`World::in_own_sphere`], and no longer a
+/// second copy of it (decisions-log items 107 (6) and 110 (5); T17). It holds
+/// the owned [`Spheres`] value the sim builds for exactly this -- a host asks
+/// "may this seat see that voxel" many times a call, from code that holds the
+/// surface mutably, so it cannot hold a borrow of the world -- and asks it
+/// through [`Spheres::contains`], which is the one place the rule is written
+/// and which `World::in_own_sphere` asks too. The arithmetic is the
+/// interpreter's `within`: integer squared distance in the sim's fixed point,
+/// no square root (AGENTS.md section 4.2).
+/// `the_view_uses_the_sims_own_sphere_rule` pins the boundary voxel through
+/// both.
 ///
-/// Spec section 6 states one sight rule and the rules table gives it a number:
-/// **spheres give passive vision**, at `beacon.sphere_radius_voxels`. That is
-/// the only sight rule in v1 that is both stated and numbered, so it is the
-/// one the production host computes with — and computing it *here* means the
-/// gateway holds a second definition of "inside a sphere" beside the sim's own
-/// private `within`, which is exactly the kind of duplication this project
-/// does not keep.
-///
-/// **The follow-up is named and sequenced** (decisions-log item 107 (6)): once
-/// T14 merges, a small `crates/sim` change adds a public
-/// `World::in_own_sphere(seat, voxel)` that reuses the sim's own `within`, and
-/// Survey-lite's sightings join it as a second term. This type then becomes a
-/// call to it. Until then the arithmetic is written to be the same arithmetic
-/// — the sim's own [`Fx`] and [`Sq`], integer squared distance, no square root
-/// (AGENTS.md section 4.2), and the beacon's centre never rounded — and
-/// `the_boundary_voxel_of_a_sphere_is_seen_and_the_next_one_is_not` pins the
-/// boundary with the expected answer written out.
-///
-/// What it does **not** model, because nothing states it: a unit's or a
-/// structure's own sight, Survey's far vision, a Sensor Spire's reveal, and
-/// reach memory. A commander that walks out of its own spheres is still drawn
-/// to its owner — that is ownership, not sight — and sees no enemy entity or
-/// edit around it. PLACEHOLDER: **OWNER**, a sight-radius row per unit and
-/// structure, **S1 at the latest**, with Survey-lite's sightings at **S3**.
+/// What it does **not** model, because the owner's answer keeps it out
+/// (decisions-log item 108 (1): enemy units, beacons, structures and edits
+/// "appear only inside own beacon spheres until the match-end unlock"): a
+/// scout's own vision, Survey-lite's recorded sightings, a Sensor Spire's
+/// reveal. A commander that walks out of its own spheres is still drawn to its
+/// owner -- that is ownership, not sight -- and sees no enemy entity or edit
+/// around it. PLACEHOLDER: **OWNER**, whether scouts join the live view (the
+/// wave-6 notes, section D, question 4), with the sightings at **S3**.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct SphereVision {
-    /// One entry per living beacon: the seat that owns it, its centre in the
-    /// sim's fixed point, and the squared sphere radius.
-    ///
-    /// An owned snapshot, rebuilt before each call, so that nothing here can
-    /// be read after the world has moved on.
-    spheres: Vec<(u8, [Fx; 3], Sq)>,
+    /// The sim's own snapshot of every living beacon's sphere, rebuilt before
+    /// each call, so that nothing here can be read after the world has moved
+    /// on.
+    spheres: Spheres,
 }
 
 impl SphereVision {
     /// The spheres of every living beacon in `world`.
     #[must_use]
     pub fn of(world: &World) -> SphereVision {
-        let radius_voxels = world
-            .rules()
-            .message()
-            .beacon
-            .as_ref()
-            .map_or(0, |beacon| beacon.sphere_radius_voxels);
-        let radius = Fx::from_voxels(
-            i16::try_from(radius_voxels)
-                .ok()
-                .filter(|value| *value >= 0)
-                .unwrap_or(0),
-        );
-        let squared = Sq::of_radius(radius);
-
-        let beacons = world.beacons();
-        let mut spheres: Vec<(u8, [Fx; 3], Sq)> = Vec::new();
-        for row in 0..beacons.ids().len() {
-            let alive = beacons
-                .hit_points()
-                .get(row)
-                .copied()
-                .is_some_and(pharmakos_sim::math::quantity::Hp::is_alive);
-            if !alive {
-                continue;
-            }
-            let Some(centre) = beacons.positions().get(row).copied() else {
-                continue;
-            };
-            let seat = beacons.seats().get(row).copied().unwrap_or_default();
-            spheres.push((seat, centre, squared));
+        SphereVision {
+            spheres: world.spheres(),
         }
-        SphereVision { spheres }
     }
 
     /// How many living beacons the snapshot holds.
@@ -556,33 +651,11 @@ impl SphereVision {
     pub fn spheres(&self) -> usize {
         self.spheres.len()
     }
-
-    /// One whole voxel as the fixed-point point a squared distance is taken
-    /// to.
-    ///
-    /// The voxel's own lowest corner, which is the point
-    /// [`crate::view::voxel_of`] floors a position onto — so "the voxel a
-    /// beacon stands in" and "the voxel a sphere reaches" are measured from
-    /// the same place. `None` for a coordinate outside the fixed-point range,
-    /// which is off every map this project makes.
-    fn point_of(at: &Voxel) -> Option<[Fx; 3]> {
-        Some([
-            Fx::from_voxels(i16::try_from(at.x).ok()?),
-            Fx::from_voxels(i16::try_from(at.y).ok()?),
-            Fx::from_voxels(i16::try_from(at.z).ok()?),
-        ])
-    }
 }
 
 impl Vision for SphereVision {
     fn sees(&self, seat: SeatId, at: &Voxel) -> bool {
-        let Some(point) = SphereVision::point_of(at) else {
-            return false;
-        };
-        self.spheres
-            .iter()
-            .filter(|(owner, _, _)| *owner == seat.raw())
-            .any(|(_, centre, squared)| Sq::between(point, *centre) <= *squared)
+        self.spheres.contains(seat, [at.x, at.y, at.z])
     }
 }
 

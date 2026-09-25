@@ -39,16 +39,40 @@
 //!   audit.log                        the access log (crate::audit), header plus one record a line
 //!   seats/<seat>/notebook.txt        the private seat notebook, 4,000 characters   (T13)
 //!   seats/<seat>/drafts/             saved drafts, one JSONC file each             (T13)
-//!   seats/<seat>/sealed/             the sealed playbook per round                 (T13)
-//!   replay/                          the private replay, one file per segment      (T17)
+//!   seats/<seat>/sealed/<round>.jsonc the playbook each seat sealed, per round   (T17)
+//!   replay/<round>.hashes.txt        the segment's per-tick hash chain             (T17)
+//!   save.json                        the latest save, at a Lull boundary           (T17)
 //! ```
 //!
 //! T9 creates the match folder, writes `README.txt` and `match.json`, and
 //! appends to `audit.log`. `seats/` and `replay/` are created empty at
 //! [`MatchCache::open`] so the layout is visible from the first match rather
 //! than appearing a stage at a time; a seat's own `drafts/` and `sealed/` are
-//! made by [`MatchCache::seat_directory`], when that seat first has state. T13
-//! and T17 fill them.
+//! made by [`MatchCache::seat_directory`], when that seat first has state.
+//!
+//! T17 fills the rest (decisions-log item 84; the wave-6 notes, decisions C8
+//! to C11). `match.json` gains the settings and the rules hash, so that with
+//! the sealed files and the hash chains the folder holds the private replay's
+//! inputs -- seed, playbooks, hashes -- and a test re-hosts a match from them
+//! alone ([`crate::save`] says what the replay is not). `save.json` is written
+//! by the host loop through [`MatchCache::write_save`], atomically, and read
+//! back only by a resume, through [`MatchCache::reopen`] and
+//! [`MatchCache::read_save`]. A seat's drafts and notebook are not written as
+//! files of their own: they live in the save, which is the one place a resume
+//! reads them from, and `drafts/` stays empty.
+//!
+//! **A save outlives its process.** [`MatchCache::open`] refuses a match id
+//! whose folder already holds `save.json` (the wave-6 notes, H16): a new match
+//! never overwrites a saved one, and the only way back into that folder is a
+//! resume.
+//!
+//! # Readers
+//!
+//! [`MatchCache::read_save`], [`MatchCache::reopen`] and
+//! [`MatchCache::audit_text`] are host-side. No method handler reaches any of
+//! them (`no_handler_reads_the_save_or_the_replay` in `tests/confinement.rs`),
+//! and no wire method returns a save or a replay in v1, which is what "no
+//! other seat's token can read it" comes to on a local host.
 //!
 //! # The one place the gateway touches the filesystem
 //!
@@ -78,6 +102,29 @@ pub const MATCHES_DIR: &str = "matches";
 
 /// The longest a match id may be.
 pub const MAX_MATCH_ID: usize = 64;
+
+/// The save's file name inside a match folder.
+pub const SAVE_FILE: &str = "save.json";
+
+/// The name a save is written under before it is renamed into place.
+const SAVE_TEMPORARY: &str = "save.json.partial";
+
+/// What `match.json` says about a match: everything needed to host it again
+/// from nothing, the playbooks apart.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Header {
+    /// The match seed, which is also the map seed.
+    pub match_seed: u64,
+    /// How many seats.
+    pub seats: u32,
+    /// The Push lengths in game milliseconds, one per round; empty is the
+    /// rules table's own ladder.
+    pub segment_lengths_ms: Vec<i32>,
+    /// How many rounds at most.
+    pub round_limit: u32,
+    /// The rules table's hash.
+    pub rules_hash: u64,
+}
 
 /// What every match folder says about itself.
 ///
@@ -207,8 +254,8 @@ impl MatchCache {
             })
     }
 
-    /// Open -- and if necessary create -- the folder for one match under
-    /// `data_root`.
+    /// Open -- and if necessary create -- the folder for one **new** match
+    /// under `data_root`.
     ///
     /// Writes [`README_TEXT`] and a `match.json` header, and creates `seats/`
     /// and `replay/` so the layout is visible from the start. The per-seat
@@ -218,20 +265,18 @@ impl MatchCache {
     /// # Errors
     ///
     /// [`crate::error::Code::InvalidArgument`] for a match id
-    /// [`MatchCache::valid_match_id`] refuses, and
-    /// [`crate::error::Code::Internal`] for anything the filesystem refuses.
-    pub fn open(data_root: &Path, match_id: &str, match_seed: u64) -> Result<MatchCache, Error> {
-        if !MatchCache::valid_match_id(match_id) {
+    /// [`MatchCache::valid_match_id`] refuses, and for one whose folder holds a
+    /// save: a new match never overwrites a saved one, and a lobby that meant
+    /// to go on with it asks for a resume. [`crate::error::Code::Internal`] for
+    /// anything the filesystem refuses.
+    pub fn open(data_root: &Path, match_id: &str, header: &Header) -> Result<MatchCache, Error> {
+        let cache = MatchCache::at(data_root, match_id)?;
+        if cache.has_save() {
             return Err(Error::invalid(format!(
-                "`{match_id}` is not a match id: lower-case letters, digits and hyphens only, \
-                 at most {MAX_MATCH_ID} characters"
+                "match `{match_id}` has a save in the private match cache, and a new match does \
+                 not overwrite a saved one: resume it, or start a match with another id"
             )));
         }
-        let directory = data_root.join(MATCHES_DIR).join(match_id);
-        let cache = MatchCache {
-            directory,
-            match_id: match_id.to_owned(),
-        };
 
         for path in [
             cache.directory.clone(),
@@ -244,15 +289,158 @@ impl MatchCache {
         }
 
         cache.write(Path::new("README.txt"), README_TEXT.as_bytes())?;
-        let header = format!(
+        let lengths = header
+            .segment_lengths_ms
+            .iter()
+            .map(i32::to_string)
+            .collect::<Vec<String>>()
+            .join(", ");
+        let text = format!(
             "{{\n  \"match_id\": \"{}\",\n  \"match_seed\": \"0x{:016x}\",\n  \
+             \"seats\": {},\n  \"segment_lengths_ms\": [{lengths}],\n  \
+             \"round_limit\": {},\n  \"rules_hash\": \"{}\",\n  \
              \"gateway_version\": {},\n  \"encrypted\": false\n}}\n",
             cache.match_id,
-            match_seed,
+            header.match_seed,
+            header.seats,
+            header.round_limit,
+            pharmakos_sim::hex(header.rules_hash),
             crate::GATEWAY_VERSION
         );
-        cache.write(Path::new("match.json"), header.as_bytes())?;
+        cache.write(Path::new("match.json"), text.as_bytes())?;
         Ok(cache)
+    }
+
+    /// Open the folder of a **saved** match, to resume it.
+    ///
+    /// Writes nothing: `match.json` is the match's, from the day it was
+    /// opened, and a resume does not rewrite it (the wave-6 notes, H16). The
+    /// host loop appends a `resumed` line to `audit.log` once the match is up.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::InvalidArgument`] for a match id
+    /// [`MatchCache::valid_match_id`] refuses, and for one with no save to
+    /// resume: a lobby's resume line naming a match that was never saved is
+    /// the lobby's mistake to show, not the host's failure.
+    pub fn reopen(data_root: &Path, match_id: &str) -> Result<MatchCache, Error> {
+        let cache = MatchCache::at(data_root, match_id)?;
+        if !cache.has_save() {
+            return Err(Error::invalid(format!(
+                "there is no saved match `{match_id}` to resume"
+            )));
+        }
+        Ok(cache)
+    }
+
+    /// The cache for a match id, validated, without touching the disk.
+    fn at(data_root: &Path, match_id: &str) -> Result<MatchCache, Error> {
+        if !MatchCache::valid_match_id(match_id) {
+            return Err(Error::invalid(format!(
+                "`{match_id}` is not a match id: lower-case letters, digits and hyphens only, \
+                 at most {MAX_MATCH_ID} characters"
+            )));
+        }
+        Ok(MatchCache {
+            directory: data_root.join(MATCHES_DIR).join(match_id),
+            match_id: match_id.to_owned(),
+        })
+    }
+
+    /// True when the match folder holds a save.
+    #[must_use]
+    pub fn has_save(&self) -> bool {
+        self.directory.join(SAVE_FILE).is_file()
+    }
+
+    /// Write the save, replacing any earlier one **atomically**: the text goes
+    /// to a temporary file beside it, which is then renamed over `save.json`,
+    /// so a host that dies mid-write leaves the previous save whole rather
+    /// than half of a new one.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::Internal`] for anything the filesystem refuses.
+    pub fn write_save(&self, text: &str) -> Result<(), Error> {
+        let temporary = self.directory.join(SAVE_TEMPORARY);
+        let path = self.directory.join(SAVE_FILE);
+        fs::write(&temporary, text.as_bytes()).map_err(|error| {
+            Error::internal(format!("writing {}: {error}", temporary.display()))
+        })?;
+        fs::rename(&temporary, &path).map_err(|error| {
+            Error::internal(format!(
+                "moving {} into place as {}: {error}",
+                temporary.display(),
+                path.display()
+            ))
+        })
+    }
+
+    /// The save's text, for a resume.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::InvalidArgument`] when there is no save, or it is
+    /// not text.
+    pub fn read_save(&self) -> Result<String, Error> {
+        let path = self.directory.join(SAVE_FILE);
+        fs::read_to_string(&path).map_err(|error| {
+            Error::invalid(format!(
+                "match `{}` has no save this host can read: {error}",
+                self.match_id
+            ))
+        })
+    }
+
+    /// One seat's sealed playbook for one round, into
+    /// `seats/<seat>/sealed/<round>.jsonc`. Both parts of the name are
+    /// numbers from the sim, never a caller's text.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::Internal`] for anything the filesystem refuses.
+    pub fn write_sealed(
+        &self,
+        seat: SeatId,
+        round: u32,
+        playbook_jsonc: &str,
+    ) -> Result<(), Error> {
+        let path = self
+            .seat_directory(seat)?
+            .join("sealed")
+            .join(format!("{round}.jsonc"));
+        fs::write(&path, playbook_jsonc.as_bytes())
+            .map_err(|error| Error::internal(format!("writing {}: {error}", path.display())))
+    }
+
+    /// One segment's per-tick hash chain, into `replay/<round>.hashes.txt`.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::Internal`] for anything the filesystem refuses.
+    pub fn write_replay(&self, round: u32, hashes: &str) -> Result<(), Error> {
+        let folder = self.directory.join("replay");
+        fs::create_dir_all(&folder)
+            .map_err(|error| Error::internal(format!("creating {}: {error}", folder.display())))?;
+        let path = folder.join(format!("{round}.hashes.txt"));
+        fs::write(&path, hashes.as_bytes())
+            .map_err(|error| Error::internal(format!("writing {}: {error}", path.display())))
+    }
+
+    /// The sequence number of the last line `audit.log` holds, or zero.
+    ///
+    /// A host that resumes a match, or opens a folder an earlier process
+    /// wrote into, numbers its own lines after it: an audit entry's sequence
+    /// number is "never reused" ([`crate::audit::Entry::seq`]).
+    #[must_use]
+    pub fn last_audit_seq(&self) -> u64 {
+        let Ok(text) = fs::read_to_string(self.directory.join("audit.log")) else {
+            return 0;
+        };
+        text.lines()
+            .filter_map(|line| line.split('\t').next()?.parse::<u64>().ok())
+            .max()
+            .unwrap_or(0)
     }
 
     /// The folder itself.
@@ -344,7 +532,7 @@ impl MatchCache {
 
 #[cfg(test)]
 mod tests {
-    use super::{APP_DIR, APP_DIR_LOWER, MatchCache, Os, data_root};
+    use super::{APP_DIR, APP_DIR_LOWER, Header, MatchCache, Os, data_root};
     use crate::audit::{AuditLog, Outcome};
     use crate::error::Code;
     use crate::token::Subject;
@@ -366,6 +554,16 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).expect("scratch");
         base
+    }
+
+    fn header(seed: u64) -> Header {
+        Header {
+            match_seed: seed,
+            seats: 2,
+            segment_lengths_ms: vec![1_000],
+            round_limit: 2,
+            rules_hash: 0x0123_4567_89ab_cdef,
+        }
     }
 
     fn env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
@@ -437,19 +635,88 @@ mod tests {
     #[test]
     fn a_match_folder_says_it_is_not_encrypted() {
         let root = scratch("readme");
-        let cache = MatchCache::open(&root, "m-0001", 0xca5c_aded).expect("opened");
+        let cache = MatchCache::open(&root, "m-0001", &header(0xca5c_aded)).expect("opened");
         let readme = std::fs::read_to_string(cache.directory().join("README.txt")).expect("readme");
         assert!(readme.contains("NOT ENCRYPTED"), "{readme}");
         assert!(readme.contains("playtest bundle"), "{readme}");
         let header = std::fs::read_to_string(cache.directory().join("match.json")).expect("header");
         assert!(header.contains("\"encrypted\": false"), "{header}");
         assert!(header.contains("0x00000000ca5caded"), "{header}");
+        assert!(
+            header.contains("\"rules_hash\": \"0123456789abcdef\""),
+            "the replay's third input: {header}"
+        );
+        assert!(header.contains("\"round_limit\": 2"), "{header}");
+    }
+
+    /// The wave-6 notes, H16: a save outlives its process, and a new match
+    /// under the same id is refused rather than written over it.
+    #[test]
+    fn a_folder_with_a_save_is_reopened_and_never_opened_new() {
+        let root = scratch("reopen");
+        let error = MatchCache::reopen(&root, "m-0004").expect_err("nothing saved yet");
+        assert_eq!(error.code, Code::InvalidArgument);
+
+        let cache = MatchCache::open(&root, "m-0004", &header(4)).expect("opened");
+        assert!(!cache.has_save());
+        cache.write_save("first\n").expect("saved");
+        cache.write_save("second\n").expect("saved again");
+        assert_eq!(cache.read_save().expect("read"), "second\n", "latest wins");
+        assert!(
+            !cache.directory().join("save.json.partial").exists(),
+            "the temporary file was renamed into place"
+        );
+        let match_json =
+            std::fs::read_to_string(cache.directory().join("match.json")).expect("header");
+
+        let error = MatchCache::open(&root, "m-0004", &header(4)).expect_err("saved");
+        assert_eq!(error.code, Code::InvalidArgument);
+        assert!(error.message.contains("resume"), "{}", error.message);
+
+        let again = MatchCache::reopen(&root, "m-0004").expect("reopened");
+        assert_eq!(again.read_save().expect("read"), "second\n");
+        assert_eq!(
+            std::fs::read_to_string(again.directory().join("match.json")).expect("header"),
+            match_json,
+            "a resume does not rewrite match.json"
+        );
+    }
+
+    #[test]
+    fn the_replay_inputs_land_in_the_reserved_layout() {
+        let root = scratch("replay");
+        let cache = MatchCache::open(&root, "m-0005", &header(5)).expect("opened");
+        cache
+            .write_sealed(SeatId::new(1), 2, "{}\n")
+            .expect("a sealed file");
+        cache
+            .write_replay(2, "21\t00000000000000ab\n")
+            .expect("a chain");
+        assert_eq!(
+            std::fs::read_to_string(
+                cache
+                    .directory()
+                    .join("seats")
+                    .join("1")
+                    .join("sealed")
+                    .join("2.jsonc")
+            )
+            .expect("sealed"),
+            "{}\n"
+        );
+        assert!(
+            cache
+                .directory()
+                .join("replay")
+                .join("2.hashes.txt")
+                .is_file()
+        );
     }
 
     #[test]
     fn the_layout_is_visible_from_the_first_match() {
         let root = scratch("layout");
-        let cache = MatchCache::open(&root, "m-0002", 1).expect("opened");
+        let cache = MatchCache::open(&root, "m-0002", &header(1)).expect("opened");
         assert!(cache.directory().join("seats").is_dir());
         assert!(cache.directory().join("replay").is_dir());
         let seat = cache.seat_directory(SeatId::new(1)).expect("seat");
@@ -475,7 +742,7 @@ mod tests {
             "m-\u{00e9}",
         ] {
             assert!(!MatchCache::valid_match_id(id), "`{id}` should be refused");
-            let error = MatchCache::open(&root, id, 0).expect_err("refused");
+            let error = MatchCache::open(&root, id, &header(0)).expect_err("refused");
             assert_eq!(error.code, Code::InvalidArgument, "`{id}`");
         }
         assert!(MatchCache::valid_match_id("m-0001"));
@@ -485,7 +752,7 @@ mod tests {
     #[test]
     fn the_audit_log_is_appended_with_its_header_once() {
         let root = scratch("audit");
-        let cache = MatchCache::open(&root, "m-0003", 3).expect("opened");
+        let cache = MatchCache::open(&root, "m-0003", &header(3)).expect("opened");
         let mut log = AuditLog::new();
         log.record(Tick::ZERO, None, None, "upgrade", Outcome::Ok);
         cache.append_audit(&log.take()).expect("appended");
@@ -499,6 +766,7 @@ mod tests {
         cache.append_audit(&log.take()).expect("appended");
 
         let text = cache.audit_text().expect("read back");
+        assert_eq!(cache.last_audit_seq(), 2, "the last line's sequence number");
         assert_eq!(
             text.matches("seq\ttick").count(),
             1,

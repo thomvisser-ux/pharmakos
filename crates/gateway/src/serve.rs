@@ -19,8 +19,16 @@
 //! **Config, in**, one line on the child's standard input, tab separated:
 //!
 //! ```text
-//! <match id>\t<seed>\t<seats>\t<human seat|->\t<segment lengths|->\t<round limit>
+//! <match id>\t<seed>\t<seats>\t<human seat|->\t<segment lengths|->\t<round limit>[\tresume]
 //! ```
+//!
+//! The seventh field is optional and has one value, `resume` (decisions-log
+//! item 111, decision C9): go on with the match saved under this id rather
+//! than start a new one. A resume line repeats **all six** of the saved
+//! match's values, the round limit included, and one that differs is refused
+//! as [`crate::error::Code::InvalidArgument`] (item 112 (8)); so is a rules
+//! table, verifier or snapshot format that is not the save's. [`ConfigLine`]
+//! reads it.
 //!
 //! **Announce, out**, one line on the child's standard output, tab separated:
 //!
@@ -40,6 +48,24 @@
 //! The parent holds the child's standard input open for the life of the match.
 //! End of file ends the host: [`run`] returns when `control` does. There is no
 //! heartbeat and no clock, because there is nothing here to time.
+//!
+//! # Saves (decisions-log item 84; the wave-6 notes, decision C8)
+//!
+//! Written here, through [`crate::cache`] alone, at the two Lull boundaries:
+//! at `begin_push`, once every seal is final and before the first tick (the
+//! surface builds it into a pending slot and this loop flushes it after the
+//! job that ended the Lull, the pattern the audit log already uses); and when
+//! the control pipe reaches end of file **during a Lull**. Never mid-Push: end
+//! of file in a Push, a recap or an ended match writes no save, and the one
+//! made when that Push began stands. With the save go the private replay's
+//! inputs ([`crate::save`]): each seat's seal at every `begin_push`, and each
+//! segment's hash chain at its end.
+//!
+//! A save outlives its process, so a match id with a save is refused for a new
+//! match ([`crate::cache::MatchCache::open`]); the resume line is the way back
+//! in. [`run`] reads the save **before** it opens the surface (the wave-6
+//! notes, H16), and a resumed match is announced with new tokens, as spec
+//! section 3 requires ("seat tokens are reissued").
 //!
 //! # Why answering in arrival order is safe (AGENTS.md section 4.6)
 //!
@@ -78,9 +104,9 @@
 //!   111, decisions C2 and C5). Its token holds `observe`, `docs` and `plan`
 //!   and never `plan.submit`, and on top of the scopes this module keeps a
 //!   **method allow-list** ([`ADVISOR_METHODS`]): `save_notes`, `save_draft`,
-//!   `list_drafts`, `submit_plan` and `set_ready` -- every write, and the
-//!   drafts -- are answered `FORBIDDEN_SCOPE` and audited, whatever the
-//!   token's scopes would allow. What it advises is filed host-side by
+//!   `list_drafts`, `get_draft`, `submit_plan` and `set_ready` -- every
+//!   write, and the drafts -- are answered `FORBIDDEN_SCOPE` and audited,
+//!   whatever the token's scopes would allow. What it advises is filed host-side by
 //!   [`Surface::file_advice`], which no method handler reaches.
 //!
 //! Both are built by the [`Operators`] factory **after** the config line is
@@ -108,7 +134,7 @@
 //! [`MAX_CONNECTIONS`] carries that sentence and the two ways out of it.
 
 use std::io::{BufRead, BufReader, Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, SyncSender, channel, sync_channel};
@@ -119,11 +145,13 @@ use pharmakos_sim::tables::SeatId;
 use pharmakos_proto::gp::api::v1::Method;
 
 use crate::advice::Advice;
+use crate::cache::MatchCache;
 use crate::error::Error;
 use crate::fog::FogPolicy;
 use crate::host::{Host, Settings, SphereVision};
 use crate::net::Listener;
 use crate::rpc::{self, Request};
+use crate::save::{Save, Stamp};
 use crate::scopes::{Scope, ScopeSet};
 use crate::session::{self, Door};
 use crate::surface::{InProcess, Surface};
@@ -252,9 +280,9 @@ impl Operators for NoOperators {
 /// **A host-side allow-list**, held here rather than in a handler, because it
 /// is about who is calling rather than about the method (decisions-log item
 /// 111, decision C5). The five the design names -- `save_notes`,
-/// `save_draft`, `list_drafts`, `submit_plan` and `set_ready` -- are off it:
-/// an advisor writes nothing into the seat's store and never reads the seat's
-/// drafts. So are the four `admin` methods, which its scopes refuse anyway,
+/// `save_draft`, `list_drafts`, `submit_plan` and `set_ready` -- are off it,
+/// and so is `get_draft` (item 112 (5)): an advisor writes nothing into the
+/// seat's store and never reads the seat's drafts. So are the four `admin` methods, which its scopes refuse anyway,
 /// and the four the schema gives no request and response pair
 /// (`query_area`, `list_known_enemies`, `get_reports`, `get_capabilities`),
 /// which no client is served. Every other method a seat's `observe`, `docs`
@@ -325,14 +353,18 @@ pub struct Config {
 }
 
 impl Config {
-    /// Read one config line.
+    /// Read one config line's first six fields.
+    ///
+    /// A seventh field is not read here: [`ConfigLine::parse`] reads it, and
+    /// is what the host loop uses.
     ///
     /// # Errors
     ///
     /// [`crate::error::Code::InvalidArgument`] for a line with too few fields
-    /// or a field this host cannot read. Nothing here is silently defaulted:
-    /// the lobby is a program, and a host that guessed what it meant would
-    /// start the wrong match.
+    /// or a field this host cannot read, and for a seat count outside `1` to
+    /// [`crate::host::MAX_SEATS`]. Nothing here is silently defaulted: the
+    /// lobby is a program, and a host that guessed what it meant would start
+    /// the wrong match.
     pub fn parse(line: &str) -> Result<Config, Error> {
         let fields: Vec<&str> = line.trim_end_matches(['\r', '\n']).split('\t').collect();
         let field = |index: usize, name: &str| -> Result<String, Error> {
@@ -387,6 +419,9 @@ impl Config {
         let round_limit = field(5, "round limit")?
             .parse::<u32>()
             .map_err(|_| Error::invalid("`round limit` is how many rounds the match runs"))?;
+        // Decisions-log item 110 (5): v1 plays one to three seats, and a lobby
+        // that asked for more is told so here, before a map is generated.
+        Host::check_seats(seats)?;
         if let Some(seat) = human_seat {
             if u32::from(seat) >= seats {
                 return Err(Error::invalid(format!(
@@ -426,6 +461,57 @@ impl Config {
             self.seats,
             self.round_limit
         )
+    }
+}
+
+/// A whole config line: the match's six values, and whether to resume it.
+///
+/// A type of its own rather than a seventh field on [`Config`], so that every
+/// caller that builds a [`Config`] keeps building one (decisions-log item
+/// 111, decision C9: the config line grows, its six values do not change).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct ConfigLine {
+    /// The six values.
+    pub config: Config,
+    /// True for a line whose seventh field is `resume`: go on with the match
+    /// saved under this id.
+    pub resume: bool,
+}
+
+impl ConfigLine {
+    /// Read one config line, with its optional seventh field.
+    ///
+    /// # Errors
+    ///
+    /// As [`Config::parse`], and [`crate::error::Code::InvalidArgument`] for a
+    /// seventh field that is anything but `resume`, `-` or empty.
+    pub fn parse(line: &str) -> Result<ConfigLine, Error> {
+        let config = Config::parse(line)?;
+        let trimmed = line.trim_end_matches(['\r', '\n']);
+        let seventh = trimmed.split('\t').nth(6).unwrap_or("");
+        let resume = match seventh {
+            "" | "-" => false,
+            "resume" => true,
+            other => {
+                return Err(Error::invalid(format!(
+                    "`{other}` is not a seventh config field this host reads: it is `resume`, or \
+                     nothing for a new match"
+                )));
+            }
+        };
+        Ok(ConfigLine { config, resume })
+    }
+
+    /// The line a lobby writes: six fields for a new match, seven for a
+    /// resume.
+    #[must_use]
+    pub fn render(&self) -> String {
+        let line = self.config.render();
+        if self.resume {
+            format!("{}\tresume\n", line.trim_end_matches('\n'))
+        } else {
+            line
+        }
     }
 }
 
@@ -564,22 +650,78 @@ impl Door for RemoteDoor {
     }
 }
 
-/// Host one match until `control` reaches end of file.
+/// Host one match until `control` reaches end of file, keeping its private
+/// cache in the OS-standard per-user data directory ([`crate::cache::locate`]).
 ///
 /// # Errors
 ///
 /// [`crate::error::Code::InvalidArgument`] for a config line this host cannot
-/// read or a lobby setting it refuses, and
-/// [`crate::error::Code::Internal`] when the map will not generate, no
-/// loopback address can be bound, the operating system will not give entropy
-/// for a token, or there is nowhere standard to keep the private match cache
-/// (decisions-log item 98: a missing variable is an error the lobby shows,
-/// never a fallback beside the executable).
-pub fn run<C: Read, A: Write>(setup: Setup, control: C, mut announce: A) -> Result<(), Error> {
+/// read or a lobby setting it refuses, for a new match whose id already has a
+/// save, and for a resume the save refuses (another rules table, verifier or
+/// snapshot format, a config line that is not the saved one, or a damaged
+/// file); and [`crate::error::Code::Internal`] when the map will not generate,
+/// no loopback address can be bound, the operating system will not give
+/// entropy for a token, or there is nowhere standard to keep the private match
+/// cache (decisions-log item 98: a missing variable is an error the lobby
+/// shows, never a fallback beside the executable).
+pub fn run<C: Read, A: Write>(setup: Setup, control: C, announce: A) -> Result<(), Error> {
+    run_in(setup, &crate::cache::locate()?, control, announce)
+}
+
+/// [`run`], keeping the private match cache under `data_root` rather than the
+/// OS-standard directory.
+///
+/// For a host, or a test, that wants its matches somewhere of its own: a save
+/// now outlives its process (a new match under a saved match's id is refused),
+/// so a test that hosts matches under fixed ids keeps them in a folder it owns
+/// rather than in the machine's real cache.
+///
+/// # Errors
+///
+/// As [`run`].
+pub fn run_in<C: Read, A: Write>(
+    setup: Setup,
+    data_root: &Path,
+    control: C,
+    mut announce: A,
+) -> Result<(), Error> {
     let mut lines = BufReader::new(control);
-    let config = read_config(&mut lines)?;
+    let line = read_config(&mut lines)?;
+    let config = line.config.clone();
+    let rules_hash = RulesHash::of(&setup.rules_json)?;
     let mut operators = setup.operators;
-    let (mut surface, seats) = open_surface(&setup.rules_json, setup.library, &config)?;
+
+    // The save is read before the surface is opened (the wave-6 notes, H16),
+    // and a new match is refused before a map is generated if its id already
+    // has one.
+    let (cache, mut surface, seats) = if line.resume {
+        let cache = MatchCache::reopen(data_root, &config.match_id)?;
+        let save = Save::parse(&cache.read_save()?)?;
+        save.check(&config, rules_hash.0)?;
+        let (surface, seats) = resume_surface(&setup.rules_json, setup.library, &config, &save)?;
+        (cache, surface, seats)
+    } else {
+        let cache = MatchCache::open(
+            data_root,
+            &config.match_id,
+            &crate::cache::Header {
+                match_seed: config.seed,
+                seats: config.seats,
+                segment_lengths_ms: config.segment_lengths_ms.clone(),
+                round_limit: config.round_limit,
+                rules_hash: rules_hash.0,
+            },
+        )?;
+        let (surface, seats) = open_surface(&setup.rules_json, setup.library, &config)?;
+        (cache, surface, seats)
+    };
+    surface.audit().continue_after(cache.last_audit_seq());
+    if line.resume {
+        let tick = surface.time().tick;
+        surface
+            .audit()
+            .record(tick, None, None, "resumed", crate::audit::Outcome::Ok);
+    }
 
     let listener = Listener::bind(0)?;
     let port = listener.port();
@@ -602,16 +744,19 @@ pub fn run<C: Read, A: Write>(setup: Setup, control: C, mut announce: A) -> Resu
         .and_then(|()| announce.flush())
         .map_err(|error| Error::internal(format!("writing the announce line: {error}")))?;
 
-    // The private match cache. The audit log is flushed into it as the match
-    // runs, which is also what makes
+    // The private match cache was opened above. The audit log, the saves and
+    // the replay's inputs are flushed into it as the match runs, which is also
+    // what makes
     // `a_token_appears_on_the_announce_line_and_nowhere_else_the_host_writes`
     // a test of something rather than of nothing.
-    let cache =
-        crate::cache::MatchCache::open(&crate::cache::locate()?, &config.match_id, config.seed)?;
-
     let (jobs, work) = sync_channel::<Job>(QUEUE_DEPTH);
+    let writer = Writer {
+        cache,
+        config,
+        rules_hash: rules_hash.0,
+    };
     let surface_thread = std::thread::spawn(move || {
-        serve_surface(&mut surface, &cache, &mut in_process, &work);
+        serve_surface(&mut surface, &writer, &mut in_process, &work);
     });
     let dispatcher = spawn_dispatcher(listener.accept(), policy, jobs.clone());
 
@@ -631,8 +776,23 @@ pub fn run<C: Read, A: Write>(setup: Setup, control: C, mut announce: A) -> Resu
     Ok(())
 }
 
+/// The rules table's hash, read off the text the binary handed over.
+struct RulesHash(u64);
+
+impl RulesHash {
+    fn of(rules_json: &str) -> Result<RulesHash, Error> {
+        pharmakos_sim::rules::RulesTable::from_canonical_json(rules_json)
+            .map(|table| RulesHash(table.rules_hash()))
+            .map_err(|error| {
+                Error::invalid(format!(
+                    "this is not a rules table this build reads: {error}"
+                ))
+            })
+    }
+}
+
 /// Read the one config line the parent writes.
-fn read_config<C: Read>(lines: &mut BufReader<C>) -> Result<Config, Error> {
+fn read_config<C: Read>(lines: &mut BufReader<C>) -> Result<ConfigLine, Error> {
     let mut first = String::new();
     lines
         .read_line(&mut first)
@@ -642,7 +802,7 @@ fn read_config<C: Read>(lines: &mut BufReader<C>) -> Result<Config, Error> {
             "this host is started by one config line on its standard input, and the line was empty",
         ));
     }
-    Config::parse(&first)
+    ConfigLine::parse(&first)
 }
 
 /// Open the match and the surface over it, in its opening Lull.
@@ -680,6 +840,47 @@ fn open_surface(
     )?;
     surface.attach(host)?;
     surface.open_lull()?;
+    Ok((surface, seats))
+}
+
+/// Open a saved match, and the surface over it, where the save left it: in
+/// the Lull it was quit in, or in the Push its seals began.
+///
+/// The pristine world is regenerated from the save's own config line --
+/// [`Host::open_from`], exactly as a new match is opened -- and the surface
+/// puts the save into it ([`Surface::resume`], which calls [`Host::resume`]).
+fn resume_surface(
+    rules_json: &str,
+    library: Option<PathBuf>,
+    config: &Config,
+    save: &Save,
+) -> Result<(Surface, Vec<SeatId>), Error> {
+    let host = Host::open_from(
+        rules_json,
+        config.seed,
+        config.seats,
+        &Settings {
+            segment_lengths_ms: config.segment_lengths_ms.clone(),
+            round_limit: config.round_limit,
+            units_per_seat: 0,
+        },
+        library,
+    )?;
+    let rules = host.rules().clone();
+    let seats: Vec<SeatId> = (0..config.seats)
+        .filter_map(|raw| u8::try_from(raw).ok())
+        .map(SeatId::new)
+        .collect();
+    let surface = Surface::resume(
+        &config.match_id,
+        config.seed,
+        rules,
+        // Fogged, always, as `open_surface` says.
+        FogPolicy::fogged(),
+        &seats,
+        host,
+        &save.state,
+    )?;
     Ok((surface, seats))
 }
 
@@ -993,15 +1194,93 @@ fn spawn_dispatcher(
     })
 }
 
+/// What the surface thread writes into the private match cache, and with.
+struct Writer {
+    cache: MatchCache,
+    config: Config,
+    rules_hash: u64,
+}
+
+impl Writer {
+    /// Write whatever the surface has pending -- the seals and the save a
+    /// Push's beginning left, the chain a segment's end left -- and then the
+    /// audit log, so that a write that failed is itself in the log.
+    fn flush(&self, surface: &mut Surface) {
+        let pending = surface.take_persistence();
+        let mut refused: Vec<(&'static str, Error)> = Vec::new();
+        for file in &pending.sealed {
+            if let Err(error) = self
+                .cache
+                .write_sealed(file.seat, file.round, &file.playbook_jsonc)
+            {
+                refused.push(("write sealed playbook", error));
+            }
+        }
+        for chain in &pending.chains {
+            if let Err(error) = self.cache.write_replay(chain.round, &chain.render()) {
+                refused.push(("write replay chain", error));
+            }
+        }
+        if let Some(state) = pending.save {
+            if let Err(error) = self.write_save(state) {
+                refused.push(("write save", error));
+            }
+        }
+        let tick = surface.time().tick;
+        for (action, error) in &refused {
+            surface.audit().refused(tick, None, None, *action, error);
+        }
+        let _ = self.cache.append_audit(&surface.audit().take());
+    }
+
+    fn write_save(&self, state: crate::save::SavedMatch) -> Result<(), Error> {
+        let save = Save {
+            stamp: Stamp::current(self.rules_hash),
+            config: self.config.clone(),
+            state,
+        };
+        self.cache.write_save(&save.render())
+    }
+
+    /// The control pipe reached end of file: save a Lull, and nothing else.
+    ///
+    /// Item 84's second boundary. A Push, a recap and an ended match are not
+    /// saved here: the save made when the Push began stands, and resuming it
+    /// replays that Push (the wave-6 notes, decision C8).
+    fn close(&self, surface: &mut Surface) {
+        if surface.time().phase == pharmakos_proto::gp::api::v1::status::Phase::Lull {
+            let tick = surface.time().tick;
+            match surface.lull_save() {
+                Ok(state) => match self.write_save(state) {
+                    Ok(()) => surface.audit().record(
+                        tick,
+                        None,
+                        None,
+                        "save lull",
+                        crate::audit::Outcome::Ok,
+                    ),
+                    Err(error) => surface
+                        .audit()
+                        .refused(tick, None, None, "save lull", &error),
+                },
+                Err(error) => surface
+                    .audit()
+                    .refused(tick, None, None, "save lull", &error),
+            };
+        }
+        self.flush(surface);
+    }
+}
+
 /// The one thread that owns the surface.
 fn serve_surface(
     surface: &mut Surface,
-    cache: &crate::cache::MatchCache,
+    writer: &Writer,
     in_process: &mut InProcessSeats,
     work: &Receiver<Job>,
 ) {
     in_process.plan(surface);
-    let _ = cache.append_audit(&surface.audit().take());
+    writer.flush(surface);
     while let Ok(job) = work.recv() {
         match job {
             Job::Open { token, reply } => {
@@ -1041,7 +1320,10 @@ fn serve_surface(
                 };
                 let _ = reply.send(rpc::render(&response));
             }
-            Job::Stop => break,
+            Job::Stop => {
+                writer.close(surface);
+                return;
+            }
             Job::Refused { reason, status } => {
                 let tick = surface.time().tick;
                 let error = match status {
@@ -1054,9 +1336,11 @@ fn serve_surface(
             }
         }
         in_process.plan(surface);
-        let _ = cache.append_audit(&surface.audit().take());
+        writer.flush(surface);
     }
-    let _ = cache.append_audit(&surface.audit().take());
+    // Every sender went away without a `Stop`: the process is going down
+    // anyway, and what the surface holds is still worth the disk.
+    writer.close(surface);
 }
 
 /// What a seat can see right now, rebuilt before every call.

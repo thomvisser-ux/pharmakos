@@ -457,6 +457,43 @@ impl Surface {
         ]))
     }
 
+    /// `get_draft`: one of the seat's own drafts, body and all.
+    ///
+    /// Decisions-log item 112 (5). A listing carries summaries only
+    /// ([`Surface::list_drafts`]); this is the one method that returns a
+    /// draft's playbook, and it is how a client that has restarted -- after a
+    /// resume, a new process with no copy of anything -- opens last round's
+    /// carried draft (spec section 13, "Draft continuity").
+    ///
+    /// **The caller's own drafts and nobody else's.** The lookup is in the
+    /// calling seat's own store, through [`Surface::seat_state`], so another
+    /// seat's draft is simply not there to find: an id that belongs to
+    /// another seat and an id nobody saved get the same `NOT_FOUND`, word for
+    /// word, and the refusal does not echo the id back. Phase-gated like every
+    /// `plan` method, by the scope the schema annotates it with.
+    pub(super) fn get_draft(
+        &self,
+        subject: crate::token::Subject,
+        request: &Request,
+    ) -> Result<Json, Error> {
+        let seat = Surface::seat_of(subject, "drafts")?;
+        let draft_id = request
+            .string_param("draft_id")?
+            .ok_or_else(|| Error::invalid("`draft_id` names one of this seat's drafts"))?;
+        let state = self.seat_state(subject, seat)?;
+        let draft = state
+            .draft(draft_id)
+            .ok_or_else(|| Error::not_found("this seat has no draft by that id"))?;
+        Ok(Json::Object(vec![
+            (
+                String::from("playbook_jsonc"),
+                Json::String(draft.playbook_jsonc.clone()),
+            ),
+            (String::from("label"), Json::String(draft.label.clone())),
+            (String::from("round"), Json::Number(draft.round.to_string())),
+        ]))
+    }
+
     /// `get_safe_plan`: what would be filed for this seat on a timeout.
     ///
     /// Spec section 14, and item 81's reason for shipping it as a template:

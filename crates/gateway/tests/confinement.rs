@@ -230,6 +230,11 @@ const STEPPING: &[(&str, &str)] = &[
          only knew the first would have let `host_mut()?.seal_plans(..)` through a handler \
          untouched -- the review found exactly that hole",
     ),
+    (
+        ".restore(",
+        "restoring a snapshot into the match belongs to the match host (T17's `Host::resume`): \
+         a handler that could restore could put the whole world back to a moment of its choosing",
+    ),
 ];
 
 /// The two modules every method handler lives in.
@@ -1062,6 +1067,118 @@ fn the_manifest_declares_no_feature_and_takes_the_sim_without_default_features()
         assert!(
             !manifest.contains(&format!("\n{banned} ")),
             "`{banned}` is not on the approved list (AGENTS.md section 3 rule 5)"
+        );
+    }
+}
+
+/// No method handler reads the save or the private replay, or reaches the
+/// host-side calls that write them (T17; the wave-6 notes, decision C11).
+///
+/// Spec section 12: the private replay cache never leaves the gateway for
+/// another seat. On a local host that is enforcement, not cryptography, and
+/// the enforcement is here: no wire method returns a save or a replay in v1,
+/// and this test holds that no handler module -- nor `surface/control.rs` --
+/// names a single one of the cache's readers or writers, the surface's
+/// host-side save calls, the save format's reader, or a resume. The names are
+/// allowed where they are defined and in `serve.rs`, the host loop that calls
+/// them.
+#[test]
+fn no_handler_reads_the_save_or_the_replay() {
+    const CACHE_SIDE: &[(&str, &str)] = &[
+        (
+            "read_save",
+            "the save is read by a resume, in the host loop, and by nothing else",
+        ),
+        (
+            "reopen",
+            "a saved match is reopened by a resume, in the host loop",
+        ),
+        ("write_save", "a save is written by the host loop"),
+        (
+            "write_sealed",
+            "the replay's sealed playbooks are written by the host loop",
+        ),
+        (
+            "write_replay",
+            "the replay's hash chains are written by the host loop",
+        ),
+        (
+            "audit_text",
+            "the audit log is read back by a host, never by a seat",
+        ),
+        (
+            "Save::parse",
+            "the save format is read by a resume, in the host loop",
+        ),
+    ];
+    const SURFACE_SIDE: &[(&str, &str)] = &[
+        (
+            "take_persistence",
+            "what a Push's beginning and a segment's end leave for the disk is the host loop's",
+        ),
+        (
+            "lull_save",
+            "a Lull is saved by the host loop, on end of file",
+        ),
+        (
+            "Surface::resume",
+            "a surface is built over a save by the host loop's resume, and by nothing else",
+        ),
+        (".resume(", "a restore belongs to the match host"),
+    ];
+    // Exempted by their path under the crate, as `no_handler_can_file_advice`
+    // does, so a file of the same name in a handler directory is scanned.
+    const DEFINERS_AND_CALLER: &[&str] = &[
+        "src/cache.rs",
+        "src/save.rs",
+        "src/serve.rs",
+        "src/surface.rs",
+        "src/host.rs",
+    ];
+    let mut needles: Vec<(&str, &str)> = CACHE_SIDE.to_vec();
+    needles.extend_from_slice(SURFACE_SIDE);
+    let findings = scan_except(&needles, DEFINERS_AND_CALLER);
+    assert!(
+        findings.is_empty(),
+        "a save or a replay is reachable from outside the host loop:\n{}",
+        findings.join("\n")
+    );
+
+    // The surface, where every dispatch arm lives, reaches the cache not at
+    // all: it builds what is to be written and the host loop writes it.
+    let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
+    let surface_text = std::fs::read_to_string(source.join("surface.rs")).expect("the surface");
+    let mut reached: Vec<String> = Vec::new();
+    for (number, line) in code_lines(&surface_text) {
+        for (needle, why) in CACHE_SIDE {
+            if uses(&line, needle) {
+                reached.push(format!("surface.rs:{number}: `{needle}` -- {why}"));
+            }
+        }
+    }
+    assert!(
+        reached.is_empty(),
+        "the surface reaches the cache itself:\n{}",
+        reached.join("\n")
+    );
+
+    // And the guard is over something: the host loop does call them.
+    let serve = std::fs::read_to_string(source.join("serve.rs")).expect("the host loop");
+    let serve_lines = code_lines(&serve);
+    for needle in [
+        "read_save",
+        "reopen",
+        "write_save",
+        "write_sealed",
+        "write_replay",
+        "take_persistence",
+        "lull_save",
+        "Save::parse",
+        "Surface::resume",
+    ] {
+        assert!(
+            serve_lines.iter().any(|(_, line)| uses(line, needle)),
+            "`{needle}` is never called by serve.rs, so the exemption is guarding nothing"
         );
     }
 }

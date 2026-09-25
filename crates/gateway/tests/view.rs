@@ -167,9 +167,10 @@ fn an_edit_a_seat_can_see_arrives_with_its_current_bytes() {
     );
 }
 
-/// The boundary is pinned with the answer written out, because the arithmetic
-/// is a second definition of "inside a sphere" beside the sim's own private
-/// `within` until the follow-up replaces it (decisions-log item 107 (6)).
+/// The boundary is pinned with the answer written out. Since T17 the
+/// production vision is a call to the sim's own rule, `World::in_own_sphere`
+/// (decisions-log item 107 (6)); `the_view_uses_the_sims_own_sphere_rule`
+/// holds the two together, and this holds the numbers.
 #[test]
 fn the_boundary_voxel_of_a_sphere_is_seen_and_the_next_one_is_not() {
     let surface = hosted(2, SEGMENT_MS, 3);
@@ -195,6 +196,54 @@ fn the_boundary_voxel_of_a_sphere_is_seen_and_the_next_one_is_not() {
         !sight.sees(SeatId::new(1), &at(0)),
         "another seat's sphere is not this seat's"
     );
+}
+
+/// The view draws with the sim's own sphere rule and no copy of it (T17;
+/// decisions-log items 107 (6) and 110 (5)): the production vision and
+/// `World::in_own_sphere` -- the interpreter's `within` -- agree on every voxel
+/// of a square around a beacon's sphere boundary, for the seat that owns it and
+/// for the seat that does not, and the boundary voxel is where the sim says.
+#[test]
+fn the_view_uses_the_sims_own_sphere_rule() {
+    let surface = hosted(2, SEGMENT_MS, 3);
+    let world = surface.host().expect("a match").world();
+    let radius = sphere_radius(&surface);
+    let (_, centre) = core_beacon(&surface, 0);
+    let sight = SphereVision::of(world);
+
+    // The boundary, pinned through the sim: 24 out along an axis is inside
+    // and 25 is not, measured from the beacon's own voxel.
+    let along = |dx: i32| [centre[0].saturating_add(dx), centre[1], centre[2]];
+    assert!(world.in_own_sphere(SeatId::new(0), along(radius)));
+    assert!(!world.in_own_sphere(SeatId::new(0), along(radius.saturating_add(1))));
+
+    let mut compared = 0_u32;
+    for dx in -(radius + 2)..=(radius + 2) {
+        for dy in [-(radius + 1), -radius, -3, 0, 3, radius, radius + 1] {
+            for dz in [-2_i32, 0, 2] {
+                let at = [
+                    centre[0].saturating_add(dx),
+                    centre[1].saturating_add(dy),
+                    centre[2].saturating_add(dz),
+                ];
+                let voxel = Voxel {
+                    x: at[0],
+                    y: at[1],
+                    z: at[2],
+                };
+                for seat in [SeatId::new(0), SeatId::new(1)] {
+                    assert_eq!(
+                        sight.sees(seat, &voxel),
+                        world.in_own_sphere(seat, at),
+                        "seat {} at {at:?}",
+                        seat.raw()
+                    );
+                    compared = compared.saturating_add(1);
+                }
+            }
+        }
+    }
+    assert!(compared > 1_000, "a comparison over nothing proves nothing");
 }
 
 // ---------------------------------------------------------------------------
