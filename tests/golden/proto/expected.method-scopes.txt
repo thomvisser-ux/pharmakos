@@ -27,6 +27,7 @@ patch_plan               plan
 save_draft               plan
 list_drafts              plan
 get_safe_plan            plan
+get_draft                plan
 submit_plan              plan.submit
 set_ready                plan.submit
 get_segment_feed         observe

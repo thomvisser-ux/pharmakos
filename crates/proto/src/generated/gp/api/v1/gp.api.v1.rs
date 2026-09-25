@@ -1171,6 +1171,36 @@ impl ::prost::Name for DraftSummary {
 const NAME: &'static str = "DraftSummary";
 const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.DraftSummary".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.DraftSummary".into() }}
+/// One of the calling seat's own drafts, with its body. A listing carries
+/// summaries only (DraftSummary); this is the one method that returns a
+/// draft's playbook, and only to the seat that saved it. An id that is not
+/// one of the caller's own is NOT_FOUND, exactly as an id nobody saved is: the
+/// answer never says whether another seat holds a draft by that name.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetDraftRequest {
+    #[prost(string, tag="1")]
+    pub draft_id: ::prost::alloc::string::String,
+}
+impl ::prost::Name for GetDraftRequest {
+const NAME: &'static str = "GetDraftRequest";
+const PACKAGE: &'static str = "gp.api.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.GetDraftRequest".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.GetDraftRequest".into() }}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetDraftResponse {
+    /// The playbook as the author saved it: JSONC, comments and all.
+    #[prost(string, tag="1")]
+    pub playbook_jsonc: ::prost::alloc::string::String,
+    /// The author's name for it.
+    #[prost(string, tag="2")]
+    pub label: ::prost::alloc::string::String,
+    /// Which round it was saved in, as DraftSummary.round.
+    #[prost(uint32, tag="3")]
+    pub round: u32,
+}
+impl ::prost::Name for GetDraftResponse {
+const NAME: &'static str = "GetDraftResponse";
+const PACKAGE: &'static str = "gp.api.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.GetDraftResponse".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.GetDraftResponse".into() }}
 /// What the operator would file on a timeout, so a seat can see the cost of one
 /// (spec section 14). Always qualifies.
 ///
@@ -1794,6 +1824,13 @@ pub enum Method {
     /// "get_safe_plan" — what the operator would file on a timeout, so a seat
     /// can see the cost of one (spec section 14).
     GetSafePlan = 56,
+    /// "get_draft" — one of the calling seat's own drafts, body and all: how a
+    /// client that has restarted (after a resume, a new process with no copy of
+    /// anything) opens last round's carried draft (spec section 13, "Draft
+    /// continuity"; decisions-log item 112 (5)). NOT_FOUND for any id that is
+    /// not one of the caller's own, indistinguishable from an id that does not
+    /// exist. Phase-gated like every planning method.
+    GetDraft = 57,
     // --- Commit --------------------------------------------------------------
 
     /// "submit_plan" — always runs FULL. The latest verified submission replaces
@@ -1870,6 +1907,7 @@ impl Method {
             Self::SaveDraft => "METHOD_SAVE_DRAFT",
             Self::ListDrafts => "METHOD_LIST_DRAFTS",
             Self::GetSafePlan => "METHOD_GET_SAFE_PLAN",
+            Self::GetDraft => "METHOD_GET_DRAFT",
             Self::SubmitPlan => "METHOD_SUBMIT_PLAN",
             Self::SetReady => "METHOD_SET_READY",
             Self::GetSegmentFeed => "METHOD_GET_SEGMENT_FEED",
@@ -1907,6 +1945,7 @@ impl Method {
             "METHOD_SAVE_DRAFT" => Some(Self::SaveDraft),
             "METHOD_LIST_DRAFTS" => Some(Self::ListDrafts),
             "METHOD_GET_SAFE_PLAN" => Some(Self::GetSafePlan),
+            "METHOD_GET_DRAFT" => Some(Self::GetDraft),
             "METHOD_SUBMIT_PLAN" => Some(Self::SubmitPlan),
             "METHOD_SET_READY" => Some(Self::SetReady),
             "METHOD_GET_SEGMENT_FEED" => Some(Self::GetSegmentFeed),

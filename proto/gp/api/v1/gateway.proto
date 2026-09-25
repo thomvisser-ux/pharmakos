@@ -232,6 +232,14 @@ enum Method {
   // can see the cost of one (spec section 14).
   METHOD_GET_SAFE_PLAN = 56 [(required_scope) = SCOPE_PLAN];
 
+  // "get_draft" — one of the calling seat's own drafts, body and all: how a
+  // client that has restarted (after a resume, a new process with no copy of
+  // anything) opens last round's carried draft (spec section 13, "Draft
+  // continuity"; decisions-log item 112 (5)). NOT_FOUND for any id that is
+  // not one of the caller's own, indistinguishable from an id that does not
+  // exist. Phase-gated like every planning method.
+  METHOD_GET_DRAFT = 57 [(required_scope) = SCOPE_PLAN];
+
   // --- Commit --------------------------------------------------------------
 
   // "submit_plan" — always runs FULL. The latest verified submission replaces
@@ -1051,6 +1059,26 @@ message DraftSummary {
   string label = 2;
 
   // Which round it was saved in. A draft is bound to a match.
+  uint32 round = 3;
+}
+
+// One of the calling seat's own drafts, with its body. A listing carries
+// summaries only (DraftSummary); this is the one method that returns a
+// draft's playbook, and only to the seat that saved it. An id that is not
+// one of the caller's own is NOT_FOUND, exactly as an id nobody saved is: the
+// answer never says whether another seat holds a draft by that name.
+message GetDraftRequest {
+  string draft_id = 1;
+}
+
+message GetDraftResponse {
+  // The playbook as the author saved it: JSONC, comments and all.
+  string playbook_jsonc = 1;
+
+  // The author's name for it.
+  string label = 2;
+
+  // Which round it was saved in, as DraftSummary.round.
   uint32 round = 3;
 }
 
