@@ -109,8 +109,9 @@
 //! * **derived** -- `time` (round and phase from the restored runner),
 //!   `host`, `feed_anchor`, the fog policy's eliminations (from the restored
 //!   seat table), `views` (the generated map re-encoded from the pristine
-//!   world, every chunk an edit touched re-marked, the stamp restarting, so
-//!   every cursor and handle from the dead process is stale), and draft
+//!   world, every chunk an edit touched re-marked, the stamp restarting, and
+//!   the view's id minted with the resume's generation folded in, so every
+//!   cursor and handle from the dead process is stale), and draft
 //!   continuity (the carried draft re-verified against the same snapshot);
 //! * **reset** -- `tokens` (a new process, a new announce line: spec section
 //!   3's "seat tokens are reissued"), `limits` and `limiters`,
@@ -143,7 +144,7 @@ use crate::host::Host;
 use crate::limit::{Limits, RateLimiter};
 use crate::rpc::{self, Request};
 use crate::save::{
-    Boundary, Persistence, SavedMatch, SavedSeal, SavedSeat, SealedFile, SegmentChain,
+    Boundary, Continuation, Persistence, SavedMatch, SavedSeal, SavedSeat, SealedFile, SegmentChain,
 };
 use crate::scopes::{self, Scope};
 use crate::time::MatchTime;
@@ -500,16 +501,29 @@ impl Surface {
     /// will not compile, a store is over its bounds, or a `sealed` save does
     /// not hold this round's seal for every seat. As [`Surface::new`] and
     /// [`Surface::attach`] otherwise.
+    ///
+    /// `continuation` is what the host loop read off the audit log. Its
+    /// generation goes into the view's identity
+    /// ([`crate::viewfeed::ViewFeed::resumed_after`]), so that no cursor or
+    /// entity handle the dead process issued is read as one of this view's;
+    /// its last tick is the floor the resumed gateway tick starts at.
+    ///
+    /// The rules table is the host's own: a resume regenerates the pristine
+    /// world under the table the save was checked against, and the surface
+    /// reads the same one rather than being handed a second copy that could
+    /// differ.
     pub fn resume(
         match_id: &str,
         match_seed: u64,
-        rules: RulesTable,
         fog: FogPolicy,
         seats: &[SeatId],
         host: Host,
         saved: &SavedMatch,
+        continuation: Continuation,
     ) -> Result<Surface, Error> {
+        let rules = host.rules().clone();
         let mut surface = Surface::new(match_id, match_seed, rules, fog, seats)?;
+        surface.views.resumed_after(continuation.generation);
         surface.attach(host)?;
         surface.host_mut()?.resume(&saved.snapshot)?;
         let round = surface.host()?.runner().round();
@@ -529,9 +543,21 @@ impl Surface {
         surface.views.bump();
         surface.eliminate_the_fallen();
 
-        // Saved: the offset that keeps the gateway's tick monotonic.
+        // Saved: the offset that keeps the gateway's tick monotonic. A `lull`
+        // save's offset already reaches the tick it was quit at; a `sealed`
+        // save's Push is played again from its first tick, and the dead
+        // process may have stamped the audit log well into it, so the offset
+        // is lifted until the tick is no lower than the last one the log
+        // holds.
         surface.lull_offset = saved.lull_offset;
         surface.sync_time();
+        let behind = continuation
+            .last_tick
+            .saturating_sub(surface.time.tick.raw());
+        if behind > 0 {
+            surface.lull_offset = surface.lull_offset.saturating_add(behind);
+            surface.sync_time();
+        }
         // A fresh feed: the recap's events are not in the save.
         surface.begin_segment(round, 0);
 

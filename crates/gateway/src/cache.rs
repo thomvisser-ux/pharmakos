@@ -35,10 +35,11 @@
 //! ```text
 //! <root>/Pharmakos/matches/<match-id>/
 //!   README.txt                       what this folder is, and that it is unencrypted
-//!   match.json                       the match header: id, seed, gateway version
+//!   match.json                       the match header: id, seed, seats, segment lengths,
+//!                                    round limit, rules hash, gateway version       (T17)
 //!   audit.log                        the access log (crate::audit), header plus one record a line
-//!   seats/<seat>/notebook.txt        the private seat notebook, 4,000 characters   (T13)
-//!   seats/<seat>/drafts/             saved drafts, one JSONC file each             (T13)
+//!   seats/<seat>/notebook.txt        reserved and never written: the notebook lives in save.json
+//!   seats/<seat>/drafts/             reserved and left empty: the drafts live in save.json
 //!   seats/<seat>/sealed/<round>.jsonc the playbook each seat sealed, per round   (T17)
 //!   replay/<round>.hashes.txt        the segment's per-tick hash chain             (T17)
 //!   save.json                        the latest save, at a Lull boundary           (T17)
@@ -443,6 +444,28 @@ impl MatchCache {
             .unwrap_or(0)
     }
 
+    /// What a resume needs from the processes that ran this match before it:
+    /// the audit log's last sequence number and its largest tick, both zero
+    /// when there is no log.
+    #[must_use]
+    pub fn continuation(&self) -> crate::save::Continuation {
+        let Ok(text) = fs::read_to_string(self.directory.join("audit.log")) else {
+            return crate::save::Continuation::default();
+        };
+        let mut found = crate::save::Continuation::default();
+        for line in text.lines() {
+            let mut fields = line.split('\t');
+            let Some(seq) = fields.next().and_then(|field| field.parse::<u64>().ok()) else {
+                continue;
+            };
+            found.generation = found.generation.max(seq);
+            if let Some(tick) = fields.next().and_then(|field| field.parse::<u32>().ok()) {
+                found.last_tick = found.last_tick.max(tick);
+            }
+        }
+        found
+    }
+
     /// The folder itself.
     #[must_use]
     pub fn directory(&self) -> &Path {
@@ -767,6 +790,14 @@ mod tests {
 
         let text = cache.audit_text().expect("read back");
         assert_eq!(cache.last_audit_seq(), 2, "the last line's sequence number");
+        assert_eq!(
+            cache.continuation(),
+            crate::save::Continuation {
+                generation: 2,
+                last_tick: 1,
+            },
+            "the last sequence number and the largest tick, the header skipped"
+        );
         assert_eq!(
             text.matches("seq\ttick").count(),
             1,

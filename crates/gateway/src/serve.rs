@@ -484,10 +484,20 @@ impl ConfigLine {
     /// # Errors
     ///
     /// As [`Config::parse`], and [`crate::error::Code::InvalidArgument`] for a
-    /// seventh field that is anything but `resume`, `-` or empty.
+    /// seventh field that is anything but `resume`, `-` or empty, and for a
+    /// line with an eighth field or more: a resume line repeats the saved
+    /// match exactly (decisions-log item 112 (8)), and a field this host does
+    /// not read is not silently dropped.
     pub fn parse(line: &str) -> Result<ConfigLine, Error> {
         let config = Config::parse(line)?;
         let trimmed = line.trim_end_matches(['\r', '\n']);
+        let fields = trimmed.split('\t').count();
+        if fields > 7 {
+            return Err(Error::invalid(format!(
+                "the config line has {fields} tab-separated fields and this host reads at most \
+                 seven: the match's six, and `resume`"
+            )));
+        }
         let seventh = trimmed.split('\t').nth(6).unwrap_or("");
         let resume = match seventh {
             "" | "-" => false,
@@ -698,7 +708,18 @@ pub fn run_in<C: Read, A: Write>(
         let cache = MatchCache::reopen(data_root, &config.match_id)?;
         let save = Save::parse(&cache.read_save()?)?;
         save.check(&config, rules_hash.0)?;
-        let (surface, seats) = resume_surface(&setup.rules_json, setup.library, &config, &save)?;
+        // Read before the surface exists: the view's identity folds in the
+        // log's last sequence number, so that nothing the dead process served
+        // is read as this one's, and the resumed tick starts no lower than the
+        // log's last.
+        let continuation = cache.continuation();
+        let (surface, seats) = resume_surface(
+            &setup.rules_json,
+            setup.library,
+            &config,
+            &save,
+            continuation,
+        )?;
         (cache, surface, seats)
     } else {
         let cache = MatchCache::open(
@@ -805,12 +826,17 @@ fn read_config<C: Read>(lines: &mut BufReader<C>) -> Result<ConfigLine, Error> {
     ConfigLine::parse(&first)
 }
 
-/// Open the match and the surface over it, in its opening Lull.
-fn open_surface(
+/// The pristine match a config line describes, and its seats.
+///
+/// One function for both a new match and a resume, because a resume works
+/// only if the world it restores into is generated exactly as the saved
+/// match's was: two copies of this construction that drifted apart would have
+/// every resume refused at [`Host::resume`]'s restore.
+fn host_for(
     rules_json: &str,
     library: Option<PathBuf>,
     config: &Config,
-) -> Result<(Surface, Vec<SeatId>), Error> {
+) -> Result<(Host, Vec<SeatId>), Error> {
     let host = Host::open_from(
         rules_json,
         config.seed,
@@ -822,11 +848,21 @@ fn open_surface(
         },
         library,
     )?;
-    let rules = host.rules().clone();
     let seats: Vec<SeatId> = (0..config.seats)
         .filter_map(|raw| u8::try_from(raw).ok())
         .map(SeatId::new)
         .collect();
+    Ok((host, seats))
+}
+
+/// Open the match and the surface over it, in its opening Lull.
+fn open_surface(
+    rules_json: &str,
+    library: Option<PathBuf>,
+    config: &Config,
+) -> Result<(Surface, Vec<SeatId>), Error> {
+    let (host, seats) = host_for(rules_json, library, config)?;
+    let rules = host.rules().clone();
     let mut surface = Surface::new(
         &config.match_id,
         config.seed,
@@ -854,32 +890,18 @@ fn resume_surface(
     library: Option<PathBuf>,
     config: &Config,
     save: &Save,
+    continuation: crate::save::Continuation,
 ) -> Result<(Surface, Vec<SeatId>), Error> {
-    let host = Host::open_from(
-        rules_json,
-        config.seed,
-        config.seats,
-        &Settings {
-            segment_lengths_ms: config.segment_lengths_ms.clone(),
-            round_limit: config.round_limit,
-            units_per_seat: 0,
-        },
-        library,
-    )?;
-    let rules = host.rules().clone();
-    let seats: Vec<SeatId> = (0..config.seats)
-        .filter_map(|raw| u8::try_from(raw).ok())
-        .map(SeatId::new)
-        .collect();
+    let (host, seats) = host_for(rules_json, library, config)?;
     let surface = Surface::resume(
         &config.match_id,
         config.seed,
-        rules,
         // Fogged, always, as `open_surface` says.
         FogPolicy::fogged(),
         &seats,
         host,
         &save.state,
+        continuation,
     )?;
     Ok((surface, seats))
 }

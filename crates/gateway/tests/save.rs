@@ -21,14 +21,16 @@ mod support;
 use pharmakos_gateway::error::Code;
 use pharmakos_gateway::fog::FogPolicy;
 use pharmakos_gateway::host::{Host, Settings};
-use pharmakos_gateway::save::{Boundary, Save, SavedMatch, Stamp};
+use pharmakos_gateway::save::{Boundary, Continuation, Save, SavedMatch, Stamp};
 use pharmakos_gateway::serve::Config;
 use pharmakos_gateway::surface::Surface;
 use pharmakos_gateway::token::Subject;
 use pharmakos_proto::gp::api::v1::status::Phase;
 use pharmakos_proto::json::Json;
 use pharmakos_sim::math::quantity::Tick;
+use pharmakos_sim::runner::MatchSettings;
 use pharmakos_sim::tables::SeatId;
+use pharmakos_sim::world::WorldConfig;
 
 use support::{
     LULL_MS, SEED, admin_token, call, call_in_lull, code, hosted_with, quote, result, rules,
@@ -97,17 +99,25 @@ fn pristine() -> Host {
     .expect("a match")
 }
 
+/// What these tests resume with: a generation the host loop could pass (the
+/// audit log's last sequence number), and no tick floor, so the saved offset
+/// alone sets the resumed tick.
+const CONTINUATION: Continuation = Continuation {
+    generation: 1,
+    last_tick: 0,
+};
+
 /// Resume a saved match on a new surface.
 fn resume(match_id: &str, saved: &SavedMatch) -> Result<Surface, pharmakos_gateway::Error> {
     let state = through_the_file(match_id, saved);
     Surface::resume(
         match_id,
         SEED,
-        rules(),
         FogPolicy::fogged(),
         &SEATS,
         pristine(),
         &state,
+        CONTINUATION,
     )
 }
 
@@ -192,20 +202,25 @@ fn play_on(surface: &mut Surface) -> Vec<(Tick, u64)> {
 /// boundary of a three-round match, resumed and played on with the same
 /// submissions, gives the uninterrupted run's chain tick for tick.
 ///
-/// Six saves: each round's `lull` save taken as the Lull opens -- before the
-/// seats submit, so the resumed match has to be planned again, as it is after
-/// a quit -- and each round's `sealed` save taken as its Push begins, which
-/// resumes straight into that Push with the saved seals.
+/// Nine saves, three a round: the `lull` save taken as the Lull opens --
+/// before the seats submit, so the resumed match has to be planned again, as
+/// it is after a quit; a second `lull` save taken once every seat's submission
+/// is verified and before the Push begins, which resumes into a Lull that
+/// already holds them and begins its Push without a single new submission;
+/// and the `sealed` save taken as the Push begins, which resumes straight into
+/// that Push with the saved seals.
 #[test]
 fn a_save_at_every_lull_boundary_of_a_three_round_match_resumes_to_the_same_chain() {
     const MATCH_ID: &str = "m-t17-chain";
     let mut surface = new_match(MATCH_ID);
     let mut lulls: Vec<SavedMatch> = Vec::new();
+    let mut planned: Vec<SavedMatch> = Vec::new();
     let mut sealed: Vec<SavedMatch> = Vec::new();
     let mut segments: Vec<Vec<(Tick, u64)>> = Vec::new();
     while surface.time().phase == Phase::Lull {
         lulls.push(surface.lull_save().expect("a Lull saves"));
         plan_round(&mut surface);
+        planned.push(surface.lull_save().expect("a planned Lull saves"));
         assert!(surface.begin_push().expect("the Push begins"));
         let pending = surface.take_persistence();
         let save = pending.save.expect("a Push's beginning is saved");
@@ -246,6 +261,26 @@ fn a_save_at_every_lull_boundary_of_a_three_round_match_resumes_to_the_same_chai
             play_on(&mut resumed),
             expected,
             "resumed from round {}'s Lull",
+            round + 1
+        );
+
+        // The Lull quit after every seat had submitted: the saved submissions
+        // are what its Push seals, with nothing submitted again.
+        let lull = planned.get(round).expect("a planned lull save");
+        assert_eq!(lull.boundary, Boundary::Lull);
+        let mut resumed = resume(MATCH_ID, lull).expect("a planned Lull resumes");
+        assert_eq!(resumed.time().phase, Phase::Lull, "round {}", round + 1);
+        assert!(
+            resumed.begin_push().expect("the Push begins"),
+            "the saved submissions carry the resumed Lull into its Push"
+        );
+        let mut chain = play_push(&mut resumed);
+        close_round(&mut resumed);
+        chain.extend(play_on(&mut resumed));
+        assert_eq!(
+            chain,
+            expected,
+            "resumed from round {}'s planned Lull, with its saved submissions",
             round + 1
         );
 
@@ -550,6 +585,58 @@ fn a_damaged_seal_in_a_save_is_refused() {
     assert_eq!(error.code, Code::InvalidArgument, "{}", error.message);
 }
 
+/// The notes' A2 classifies `views` as derived, with "every cursor and handle
+/// from the dead process stale". A resumed process builds a fresh feed and
+/// attaches it once, over the same match id, seed and map as the dead
+/// process's first attach, so without the resume's generation in the view's
+/// identity the two views would share an id and the old cursor would be read
+/// as a place in the new view. It is `STALE_SNAPSHOT`, and a keyframe is the
+/// client's way back.
+#[test]
+fn a_cursor_from_the_dead_process_is_stale_on_the_resumed_surface() {
+    const MATCH_ID: &str = "m-t17-stale";
+    let mut surface = new_match(MATCH_ID);
+    let token = seat_token(&mut surface, 0);
+    let mut left = LULL_MS;
+    let page = result(
+        &call_in_lull(
+            &mut surface,
+            &token,
+            &mut left,
+            "get_view",
+            r#"{"cursor":""}"#,
+        ),
+        "get_view",
+    );
+    let cursor = text_of(&page, "next_cursor");
+    let saved = surface.lull_save().expect("a Lull saves");
+
+    let mut resumed = resume(MATCH_ID, &saved).expect("resumed");
+    let token = seat_token(&mut resumed, 0);
+    let mut left = LULL_MS;
+    let response = call_in_lull(
+        &mut resumed,
+        &token,
+        &mut left,
+        "get_view",
+        &format!(r#"{{"cursor":"{cursor}"}}"#),
+    );
+    assert_eq!(
+        code(&response),
+        "STALE_SNAPSHOT",
+        "a cursor the dead process issued is not a place in the resumed view"
+    );
+    let keyframe = call_in_lull(
+        &mut resumed,
+        &token,
+        &mut left,
+        "get_view",
+        r#"{"cursor":""}"#,
+    );
+    let fresh = text_of(&result(&keyframe, "get_view"), "next_cursor");
+    assert_ne!(fresh, cursor, "the resumed view is another view");
+}
+
 /// Decisions-log item 110 (5): v1 has one to three seats, and a lobby that asks
 /// for a fourth -- or none -- is refused before a map is generated.
 #[test]
@@ -576,6 +663,25 @@ fn a_fourth_seat_is_refused() {
             "{}",
             error.message
         );
+        // And the door `gamectl scenario run` and `seat doctor` take, which
+        // is handed a world config rather than a lobby's numbers.
+        let world = WorldConfig {
+            match_seed: SEED,
+            seats,
+            units_per_seat: 0,
+            rules: rules(),
+            match_settings: MatchSettings {
+                segment_lengths_ms: vec![SEGMENT_MS],
+                round_limit: 2,
+            },
+        };
+        let error = Host::open(&world, None).expect_err("refused by Host::open too");
+        assert_eq!(error.code, Code::InvalidArgument, "{seats} seats");
+        assert!(
+            error.message.contains("between 1 and 3"),
+            "{}",
+            error.message
+        );
     }
     let three = Config::parse("m-t17-seats\t0x1\t3\t-\t-\t2\n").expect("three is v1's most");
     assert_eq!(three.seats, 3);
@@ -593,6 +699,54 @@ fn a_fourth_seat_is_refused() {
         )
         .is_ok()
     );
+}
+
+/// A `sealed` save's Push is played again from its first tick, and the dead
+/// process may have stamped the audit log well into it. The resumed gateway
+/// tick starts no lower than the log's last, so the stamps do not go back.
+#[test]
+fn a_sealed_resume_starts_no_lower_than_the_audit_logs_last_tick() {
+    const MATCH_ID: &str = "m-t17-tick-sealed";
+    let mut surface = new_match(MATCH_ID);
+    plan_round(&mut surface);
+    assert!(surface.begin_push().expect("the Push begins"));
+    let save = surface
+        .take_persistence()
+        .save
+        .expect("a Push's beginning is saved");
+    let at_the_push = surface.time().tick;
+    // The dead process played part of that Push and audited as it went.
+    for _ in 0..10 {
+        let _ = surface.step().expect("a tick");
+    }
+    let dead = surface.time().tick;
+    assert!(dead > at_the_push, "the Push moved the gateway's tick");
+
+    let state = through_the_file(MATCH_ID, &save);
+    let floor = Continuation {
+        generation: 7,
+        last_tick: dead.raw(),
+    };
+    let resumed = Surface::resume(
+        MATCH_ID,
+        SEED,
+        FogPolicy::fogged(),
+        &SEATS,
+        pristine(),
+        &state,
+        floor,
+    )
+    .expect("a Push resumes");
+    assert_eq!(resumed.time().phase, Phase::Push);
+    assert_eq!(
+        resumed.time().tick,
+        dead,
+        "the resumed Push stamps from where the dead process's log stopped"
+    );
+    // Without a floor, the saved offset alone puts it back at the Push's
+    // first tick -- which is what the floor is for.
+    let unfloored = resume(MATCH_ID, &save).expect("a Push resumes");
+    assert_eq!(unfloored.time().tick, at_the_push);
 }
 
 /// A Lull's save carries what the Lull has spent, so the gateway's tick -- and

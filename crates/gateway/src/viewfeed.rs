@@ -171,6 +171,11 @@ pub struct ViewFeed {
     /// that a second attach over the same world mints a different one --
     /// which is what makes T17's restore stale every outstanding cursor.
     attaches: u64,
+    /// Set on a resumed match's feed, before its one attach: a value no
+    /// earlier process of this match minted a view with
+    /// ([`ViewFeed::resumed_after`]). `None` for a new match, whose identity
+    /// bytes are exactly what they were before T17.
+    resumed_after: Option<u64>,
     seq: u64,
     /// The generated map, encoded once, one entry per chunk in chunk order.
     generated: Vec<Vec<u8>>,
@@ -189,6 +194,7 @@ impl ViewFeed {
         ViewFeed {
             view_id: 0,
             attaches: 0,
+            resumed_after: None,
             seq: 0,
             generated: Vec::new(),
             changed_at: Vec::new(),
@@ -196,6 +202,23 @@ impl ViewFeed {
             modified_flag: Vec::new(),
             viewers: Vec::new(),
         }
+    }
+
+    /// Mark this feed as a **resumed** match's, before its attach.
+    ///
+    /// The attach count alone is not enough across processes: a resumed
+    /// process builds a fresh feed and attaches it once, over the same match
+    /// id, seed and map as the dead process's first attach, so without this
+    /// the two views would have the same id and a cursor or entity handle from
+    /// the dead process would be read as one of this view's. `generation` is
+    /// a value no earlier process of this match minted a view under: the host
+    /// loop passes the audit log's last sequence number, which every process
+    /// that answered a single call has moved past, because the host loop
+    /// flushes a resumed process's `resumed` line before it serves anything.
+    /// It is still not a clock and not entropy, so a replay of the same inputs
+    /// mints the same id.
+    pub fn resumed_after(&mut self, generation: u64) {
+        self.resumed_after = Some(generation);
     }
 
     /// Take the generated map and open a view over it.
@@ -245,6 +268,14 @@ impl ViewFeed {
         identity.extend_from_slice(&match_seed.to_le_bytes());
         identity.extend_from_slice(&u64::from(count).to_le_bytes());
         identity.extend_from_slice(&self.attaches.to_le_bytes());
+        // A resumed process's views are never the dead process's: see
+        // `resumed_after`. Appended only then, so a new match's identity
+        // bytes -- and every golden that holds a rendered cursor -- are
+        // unchanged.
+        if let Some(generation) = self.resumed_after {
+            identity.push(1);
+            identity.extend_from_slice(&generation.to_le_bytes());
+        }
         self.view_id = pharmakos_sim::digest(&identity) | 1;
         self.seq = 1;
         self.generated = generated;
@@ -727,6 +758,39 @@ mod tests {
         let mut seeded = ViewFeed::new();
         seeded.attach(&store, "m-0001", 8);
         assert_ne!(seeded.view_id(), first);
+    }
+
+    #[test]
+    fn a_resumed_process_never_mints_the_dead_processs_view() {
+        let store = store();
+        // The dead process: a new match, attached once.
+        let mut dead = ViewFeed::new();
+        dead.attach(&store, "m-0001", 7);
+        // The resumed process: a fresh feed, attached once over the same
+        // match, seed and map -- the case the attach count cannot tell apart.
+        let mut resumed = ViewFeed::new();
+        resumed.resumed_after(3);
+        resumed.attach(&store, "m-0001", 7);
+        assert_ne!(
+            resumed.view_id(),
+            dead.view_id(),
+            "a cursor from the dead process is stale in the resumed one"
+        );
+        // A second resume, after the first process wrote more of the log, is
+        // a third view; the same resume replayed is the same view.
+        let mut later = ViewFeed::new();
+        later.resumed_after(9);
+        later.attach(&store, "m-0001", 7);
+        assert_ne!(later.view_id(), resumed.view_id());
+        let mut replayed = ViewFeed::new();
+        replayed.resumed_after(3);
+        replayed.attach(&store, "m-0001", 7);
+        assert_eq!(replayed.view_id(), resumed.view_id());
+        // Even a resume at generation zero is not the new match's view.
+        let mut zero = ViewFeed::new();
+        zero.resumed_after(0);
+        zero.attach(&store, "m-0001", 7);
+        assert_ne!(zero.view_id(), dead.view_id());
     }
 
     #[test]

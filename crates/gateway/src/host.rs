@@ -146,10 +146,12 @@ pub const LIBRARY_FOLDER: &str = "library";
 ///
 /// Not a tuning value: spec section 1 is "up to three seats (at most one
 /// human, the rest built-in)", and AGENTS.md section 11 puts "more than 3
-/// seats" on the list of what v1 does not build. [`Host::open_from`] and
+/// seats" on the list of what v1 does not build. [`Host::open`] (and so
+/// [`Host::open_from`], which goes through it) and
 /// [`crate::serve::Config::parse`] refuse anything outside `1..=MAX_SEATS` as
 /// [`crate::error::Code::InvalidArgument`] (decisions-log item 110 (5)):
-/// before T17 `gamectl host` would host a 99-seat match when asked.
+/// before T17 `gamectl host` would host a 99-seat match when asked, and a
+/// scenario with four seats had the map generator quietly cap the spawns.
 pub const MAX_SEATS: u32 = 3;
 
 /// What the lobby chose, in plain values.
@@ -188,11 +190,13 @@ impl Host {
     ///
     /// # Errors
     ///
-    /// [`crate::error::Code::InvalidArgument`] for a lobby setting
+    /// [`crate::error::Code::InvalidArgument`] for a seat count
+    /// [`Host::check_seats`] refuses and a lobby setting
     /// [`Host::check_settings`] refuses, and [`crate::error::Code::Internal`]
     /// when the map generator or the search graph will not build — neither is
     /// something a caller did.
     pub fn open(config: &WorldConfig, library: Option<PathBuf>) -> Result<Host, Error> {
+        Host::check_seats(config.seats)?;
         Host::check_settings(&config.match_settings)?;
         let world = World::new(config).map_err(|error| {
             Error::internal(format!("this match's map could not be generated: {error}"))
