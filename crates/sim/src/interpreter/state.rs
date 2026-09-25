@@ -463,11 +463,13 @@ impl Interpreter {
     /// save without re-sealing the playbooks resumes a match whose seats have
     /// none — which is a host mistake rather than a sim state.
     ///
-    /// PLACEHOLDER: a save should carry the plan fingerprint (`gp.v1.Meta`,
-    /// item 77) beside the rules hash and the verifier version, so that
-    /// resuming into a *different* playbook is refused at the door rather than
-    /// running a cursor against a route it does not describe. T17 owns the
-    /// save's stamp and owes this field with it (owner, at T17).
+    /// The plan fingerprint (item 77) this needs is carried by the **save**,
+    /// beside the snapshot and never inside it (T17; the wave-6 notes,
+    /// decision C10): the gateway's `save.json` holds each seat's sealed text
+    /// and its fingerprint, and a resume recompiles the text, compares the
+    /// fingerprint and re-seals before the first tick, so resuming into a
+    /// playbook other than the saved one is refused at the door. The snapshot
+    /// format did not move for it.
     ///
     /// Returns `false` and changes nothing when the columns disagree in length,
     /// or when they cover a different number of seats than `seats`.
@@ -537,9 +539,9 @@ impl Interpreter {
         // writes it nowhere — so the handler would fire every 250 ms for the
         // rest of the segment. Short columns degrade to "no fires recorded",
         // which is a resume that loses information rather than one that
-        // silently removes a limit. (The real answer is T17's: a save should
-        // carry the plan fingerprint and refuse to resume into a different
-        // playbook at all — the PLACEHOLDER above.)
+        // silently removes a limit. (A host resuming a save never meets this:
+        // the save carries the plan fingerprint and a resume re-seals the saved
+        // playbook, which resets these counters -- see the doc above.)
         for (seat, state) in states.iter_mut().enumerate() {
             let Some(plan) = self.plans.get(seat).and_then(Option::as_ref) else {
                 continue;

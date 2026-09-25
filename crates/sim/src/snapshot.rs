@@ -45,8 +45,10 @@
 //!
 //! [`SNAPSHOT_VERSION`] is the first field and is checked on restore. A save
 //! from a different version refuses to load rather than producing a world that
-//! is subtly the wrong shape. T17 adds the rules hash and the verifier version
-//! to the same check.
+//! is subtly the wrong shape. The rules hash, the verifier version and the
+//! plan fingerprints are checked by the **save** that carries a snapshot -- the
+//! gateway's `save.json`, whose stamp holds them beside these bytes (T17; the
+//! wave-6 notes, decision C10) -- so this format did not move for them.
 
 use crate::chunks::ChunkDigests;
 use crate::encoding::digest;
@@ -100,8 +102,8 @@ use serde::{Deserialize, Serialize};
 /// The **playbooks themselves are not in the file**, for the reason the rules
 /// table is not: the sim is a pure function of `(map seed, playbooks, rules
 /// hash)` and all three are inputs. A host resumes a save by re-sealing the
-/// playbooks it saved beside it; `crate::interpreter::state::Interpreter::restore`
-/// carries the PLACEHOLDER for the plan fingerprint T17 owes the save's stamp.
+/// playbooks it saved beside it, each checked against the plan fingerprint the
+/// save carries (T17; `crate::interpreter::state::Interpreter::restore`).
 /// **Version 6 is T14's**: it adds the economy. Per unit, the home beacon, the
 /// `$` it is carrying and the tick its timed work finishes at; per beacon, the
 /// Quartermaster priority and the Survey scout count; per structure, the
