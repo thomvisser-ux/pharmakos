@@ -13,8 +13,8 @@ and the full texts live in `LICENSES/` under their canonical SPDX file names.
 
 | Tier | Paths | Licence | Full text |
 | --- | --- | --- | --- |
-| The game | `crates/**` (except `crates/proto/**`), `xtask/**`, `godot/**`, `client/**`, `scenarios/**`, `tests/**` (except the four golden areas in the next row) | `GPL-3.0-or-later` | `LICENSES/GPL-3.0-or-later.txt` |
-| Interfaces and words | `proto/**`, **`crates/proto/**`**, `schemas/**`, `docs/**`, `examples/**`, `library/**`, `rules/**`, **`tests/golden/proto/**`**, **`tests/golden/plan-core/**`**, **`tests/golden/schema/**`**, **`tests/golden/operator/**`**, `llms.txt`, `AGENTS.md`, `CLAUDE.md` | `MIT OR Apache-2.0` | `LICENSES/MIT.txt`, `LICENSES/Apache-2.0.txt` |
+| The game | `crates/**` (except `crates/proto/**`), `xtask/**`, `godot/**`, `client/**`, `scenarios/**`, `tests/**` (except the four golden areas in the next row and `tests/LICENSE`), and the build configuration (`Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, `clippy.toml`, `deny.toml`, `.cargo/**`, `.github/**`, `scripts/**`, `.gitignore`, `.gitattributes`, `README.md`) | `GPL-3.0-or-later` | `LICENSES/GPL-3.0-or-later.txt` |
+| Interfaces and words | `proto/**`, **`crates/proto/**`**, `schemas/**`, `docs/**`, `examples/**`, `library/**`, `rules/**`, **`tests/golden/proto/**`**, **`tests/golden/plan-core/**`**, **`tests/golden/schema/**`**, **`tests/golden/operator/**`**, `llms.txt`, `AGENTS.md`, `CLAUDE.md`, and the repository metadata (`LICENSE`, every per-directory `LICENSE` pointer, `REUSE.toml`, `examples/.gitkeep`) | `MIT OR Apache-2.0` | `LICENSES/MIT.txt`, `LICENSES/Apache-2.0.txt` |
 | Art and audio | `assets/**` | `CC-BY-SA-4.0` | `LICENSES/CC-BY-SA-4.0.txt` |
 
 **The one carve-out inside `crates/`:** `crates/proto` holds the generated
@@ -79,8 +79,8 @@ Apache-2.0 is in the pair for its explicit patent grant; MIT is in the pair
 because some downstreams still prefer the shorter text.
 
 Note the one-way consequence: permissive material can be pulled into the GPL'd
-game, but GPL'd code must not be copied into `proto/`, `schemas/`, `docs/` or
-`examples/`. When in doubt, a `.proto` file must be written from the spec, not
+game, but GPL'd code must not be copied into `proto/`, `schemas/`, `docs/`,
+`examples/`, `library/` or `rules/`. When in doubt, a `.proto` file must be written from the spec, not
 pasted out of a crate.
 
 **Art and audio are CC BY-SA 4.0.** Creative Commons licences are the ones

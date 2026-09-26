@@ -1,6 +1,6 @@
 <!--
 SPDX-FileCopyrightText: 2026 Pharmakos contributors
-SPDX-License-Identifier: GPL-3.0-or-later
+SPDX-License-Identifier: MIT OR Apache-2.0
 -->
 
 # `schema/` — generated schema and `get_schema`
