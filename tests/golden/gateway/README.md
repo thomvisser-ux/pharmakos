@@ -303,16 +303,19 @@ changes entity positions and no terrain at all.
 One whole JSON-RPC response, exactly as the wire carries it: seat 0's
 `instantiate_template{template_id: "hold_and_build", suggested: true}` on the
 golden seed, in the opening Lull, after a **scripted** advisor filed a suggestion
-for the Generator's anchor and none for the hold (decisions-log item 111,
-decision C2). Produced by
+for the walk, the site and the Generator's anchor and none for the hold
+(decisions-log item 111, decision C2; the three places since Hold & Build became
+place-and-build, item 113 (6)). Produced by
 `a_suggested_instantiation_reports_every_declared_parameter_in_order`.
 
 It is a fixture as well as a golden: T19's second pull request copies it byte
 for byte to `godot/fixtures/instantiate_suggested.json`, with a guard that keeps
-the two identical, and builds the wizard's pages from it until T18's real
-operator runs in the headless check. So a diff here is **also a diff in the
-editor's input**, and the pull request that moves it names which of four things
-moved:
+the two identical (`the_wizard_fixture_is_the_gateways_golden`). The real
+operator runs live in the client job's watch check; the copy feeds the
+render-only wizard shot, the page pins in `crates/client-gdext/tests/wizard.rs`,
+and the watch check's Hold & Build byte pin. So a diff here is **also a diff in
+the editor's input**, and the pull request that moves it re-copies the fixture,
+brings those pins up to date, and names which of four things moved:
 
 * **The `parameters` list** — its order is the template's declaration order,
   one entry per declared parameter, with `suggested: true` exactly where the
@@ -323,8 +326,10 @@ moved:
 * **`why`** — the scripted advisor's own sentence, passed through untouched.
 * **`playbook_jsonc`** — `library/hold_and_build.jsonc` itself, instantiated:
   `kind` is `PLAYBOOK`, `meta.parameters` is gone and every comment survives.
-  **It moves whenever the template does**, which is why `library/` is frozen
-  through wave 6's second run (skeleton-plan-w6-notes.md section B).
+  **It moves whenever the template does**: T18b moved it, with every entry of
+  `parameters` and the scripted `why`, when it reshaped Hold & Build to walk to
+  the edge of the core's sphere and place a Build beacon there (decisions-log
+  item 113 (6)).
 
 The `_status` footer is the opening Lull's, with the whole Lull reported left;
 it moving means the footer's shape did.
