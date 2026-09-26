@@ -74,9 +74,9 @@ editor UI. Nothing else executes. Directories are under `crates/`; package names
 | `crates/sim` — `pharmakos-sim` | The deterministic sim: 20 Hz fixed tick, integer maths, SoA tables, 32³ copy-on-write chunks, runner (Lull/Push/recap), playbook interpreter, mandates, programs, Quartermaster, power grid, combat, kill-credit counters, pathing/ETA, map generation, snapshot/restore, replay, per-tick xxh3 state hash. `fork` lives **here and nowhere else**, behind `feature = "research"`. | `pharmakos-proto`, and the determinism crates (`xxh3`, `imbl`, `postcard`/`rkyv`, pathfinding primitives) |
 | `crates/plan-core` — `pharmakos-plan-core` | Playbook core: canonical form, JSONC round-trip (comments survive), JSON Patch, `render_plan` prose, interface-time and `$`/`kW` arithmetic, travel estimates. In process with the gateway. | `pharmakos-proto`, `pharmakos-verifier`, `pharmakos-sim` *only* as `default-features = false` |
 | `crates/verifier` — `pharmakos-verifier` | Seal inspection: decode → structure → resolve → semantics (QUICK) → estimate → lint (FULL). Diagnostic catalogue, `report_hash`. | `pharmakos-proto`, `pharmakos-sim` *only* as `default-features = false` |
-| `crates/operator` — `pharmakos-operator` | The built-in operator: templates + utility scoring, the safe playbook, the wizard's suggestions, Easy/Normal/Hard. An ordinary gateway client with no privileged reads: from T18 it reaches the match only through a call closure over `gp.api.v1` JSON-RPC, which the gateway binds to that seat's own in-process token (`serve::InProcessSeats`) and `gamectl host` adapts to `serve::Operators` — a `BuiltInSeat` plays a seat; an `Advisor` returns a human seat's safe playbook and suggestions, which the host files — and it reads the public rules text for its tuning rows (decisions-log item 111). Filing on a miss is the gateway's (`begin_push`) and executing a sealed playbook is the sim's. | The library: `pharmakos-proto` only. Its tests may add `pharmakos-gateway` as a dev-dependency |
-| `crates/gateway` — `pharmakos-gateway` | Seat Gateway: JSON-RPC over a localhost WebSocket, tokens, scopes, fog filter, rate limits, event bus, snapshots, private match cache, saves. Hosts the match. | `pharmakos-proto`, `pharmakos-plan-core`, `pharmakos-verifier`, `pharmakos-sim` *only* as `default-features = false` |
-| `crates/gamectl` — `pharmakos-gamectl` (bin `gamectl`) | CLI: `verify`, `schema`, `docs`, `scenario run`, `seat doctor`, `host`. No `connect` in v1. `scenario run` hosts a headless match and `host` serves one to the Godot client over its own stdio pipe (the config line in on stdin, the announce line with the port and the tokens out on stdout, exit when stdin ends), which is why the gateway is on the list. From T18, `host` links the built-in operator and adapts its client to the gateway's in-process seats (decisions-log item 111). | `pharmakos-proto`, `pharmakos-plan-core`, `pharmakos-verifier`, `pharmakos-gateway`, `pharmakos-operator`, and `pharmakos-sim` *only* as `default-features = false`, because the gateway's API is written in the sim's types. `gamectl` drives a match only through the gateway's `Host` and `Surface`, never through the sim's `Runner` (decisions-log item 109) |
+| `crates/operator` — `pharmakos-operator` | The built-in operator: templates + utility scoring, the safe playbook, the wizard's suggestions, Easy/Normal/Hard. An ordinary gateway client with no privileged reads: from T18 it reaches the match only through a call closure over `gp.api.v1` JSON-RPC, which the gateway binds to that seat's own in-process token (`serve::InProcessSeats`) and `gamectl host` adapts to `serve::Operators` — a `BuiltInSeat` plays a seat; an `Advisor` returns a human seat's safe playbook and suggestions, which the host files — and it reads the public rules text for its tuning rows (decisions-log item 111). Filing on a miss is the gateway's (`begin_push`) and executing a sealed playbook is the sim's. | The library: `pharmakos-proto` only. Its tests may add `pharmakos-gateway` as a dev-dependency (T18 needed none); a test that hosts a match lives in `crates/gamectl/tests` |
+| `crates/gateway` — `pharmakos-gateway` | Seat Gateway: JSON-RPC over a localhost WebSocket, tokens, scopes, fog filter, rate limits, event bus, snapshots, private match cache, saves and resume, and the private replay's inputs. Hosts the match. | `pharmakos-proto`, `pharmakos-plan-core`, `pharmakos-verifier`, `pharmakos-sim` *only* as `default-features = false` |
+| `crates/gamectl` — `pharmakos-gamectl` (bin `gamectl`) | CLI: `verify`, `schema`, `docs`, `scenario run`, `seat doctor`, `host`. No `connect` in v1. `scenario run` hosts a headless match and `host` serves one to the Godot client over its own stdio pipe (the config line in on stdin, the announce line with the port and the tokens out on stdout, exit when stdin ends), which is why the gateway is on the list. From T18, `host` links the built-in operator and adapts its client to the gateway's in-process seats (decisions-log item 111); from T18b, `scenario run` seats a `builtin` seat with Easy through `serve::InProcessSeats` (decisions-log item 113). | `pharmakos-proto`, `pharmakos-plan-core`, `pharmakos-verifier`, `pharmakos-gateway`, `pharmakos-operator`, and `pharmakos-sim` *only* as `default-features = false`, because the gateway's API is written in the sim's types. `gamectl` drives a match only through the gateway's `Host` and `Surface`, never through the sim's `Runner` (decisions-log item 109) |
 | `crates/mesher` — `pharmakos-mesher` | The **walled** greedy mesher: integer chunk data and `.vox` models in, vertex and index buffers out, under the per-frame upload budget the client applies. Links without gdext, so the headless CPU proxy and the CI geometry check reuse it. | `dot_vox` later; nothing from the sim. Never depended on by `sim`, `plan-core`, `verifier`, `operator`, `gateway` or `gamectl` — `cargo xtask wall-guard` fails the build over it (`WALL_GUARDED_PACKAGES`, §4.9) |
 | `crates/client-gdext` — `pharmakos-client-gdext` | **Thin** gdext bridge (`cdylib` + `rlib`): marshals gateway calls and mesh buffers between Godot 4.7 and Rust. It marshals; it does not decide, and rule 4 names the pieces that schedule or draw without deciding. | `godot` (gdext), `pharmakos-proto`, `pharmakos-mesher` |
 | `xtask` | `cargo xtask ci` and friends. Dev-only, never shipped, std-only, no dependencies. | nothing |
@@ -120,18 +120,23 @@ editor UI. Nothing else executes. Directories are under `crates/`; package names
    (decisions-log item 107). The in-process seats are host-side the same way:
    `Surface::register_in_process` and `Surface::file_advice` are reached only from `serve.rs`,
    through `serve::InProcessSeats`, and the same test's `no_handler_can_file_advice` is the guard
-   (decisions-log item 111).
+   (decisions-log item 111). So is the restore: `Host::resume` is the one restore, and `.restore(`
+   stays in `host.rs`; the save seams — `Save::parse`, `Surface::resume`,
+   `Surface::take_persistence` and `Surface::lull_save` — are reached only from `serve.rs`, and the
+   same test's `no_handler_reads_the_save_or_the_replay` and `surface_calls_no_save_seam` are the
+   guards (decisions-log item 113).
 3. **The operator is not privileged.** `operator` sees the world only through `gp.api.v1` calls —
    same snapshot, same verifier, same submit path as the human — made through a closure the gateway
    binds to that seat's own token, plus the public rules text every client pins. Its library names
    no sim or gateway type and depends on `pharmakos-proto` alone; its tests may use
-   `pharmakos-gateway` as a dev-dependency. An in-process seat (a built-in seat, or the advisor
-   whose safe playbook and suggestions for a human seat the host files) goes through the same door,
-   audit and fog filter as a socket, with its own rate limit (`limit::IN_PROCESS_LIMITS`). An
-   advisor's token is narrower than a seat's twice over: it never holds `plan.submit`, and
-   `serve.rs`'s `ADVISOR_METHODS` allow-list refuses every write and every read of the seat's
-   drafts. Its `get_briefing` still carries the seat's notebook; the operator never reads it, and a
-   test pins that (decisions-log item 111).
+   `pharmakos-gateway` as a dev-dependency, and a test that hosts a match lives in
+   `crates/gamectl/tests` (decisions-log item 113). An in-process seat (a built-in seat, or the
+   advisor whose safe playbook and suggestions for a human seat the host files) goes through the
+   same door, audit and fog filter as a socket, with its own rate limit
+   (`limit::IN_PROCESS_LIMITS`). An advisor's token is narrower than a seat's twice over: it never
+   holds `plan.submit`, and `serve.rs`'s `ADVISOR_METHODS` allow-list refuses every write and every
+   read of the seat's drafts. Its `get_briefing` still carries the seat's notebook; the operator
+   never reads it, and a test pins that (decisions-log item 111).
 4. **The client is thin.** `client-gdext` contains marshalling and nothing else: no rules, no time
    arithmetic, no validation, no gameplay decisions. The editor "runs no validation or time maths of
    its own" — it asks the gateway. GDScript is views and editor UI only. The pieces of this walled
@@ -140,14 +145,16 @@ editor UI. Nothing else executes. Directories are under `crates/`; package names
    the Lull's countdown, the FULL-verify idle timer); the connection scheduling in `rig.rs` (call
    order, a seat's rate budget, Ready waiting behind a submission, `end_lull` once every seat is
    ready or the countdown is spent); the route-target reader in `editor.rs` that finds a route's
-   targets in the player's file to draw them; and the map menu in `godot/scripts/editor.gd`, which
-   routes on the view's own `owner` field. The client may compose a JSON Patch from a click; a
-   verdict, a travel time, a legality answer, a Fix and the patched text (`patch_plan`'s answer)
-   still come from the gateway. The gateway's JSON-RPC answers are not canonical `gp.api.v1` JSON —
-   they carry a `_status` footer and lower-case enum values (decisions-log item 80) — so every
-   client of them, `client-gdext` and the operator alike, strips the footer and translates enum
-   values (`pharmakos_proto::scope::from_wire_name`); canonical proto JSON is the playbook file's
-   format, not the wire's (decisions-log items 110 and 112).
+   targets in the player's file to draw them; the map menu in `godot/scripts/editor.gd`, which
+   routes on the view's own `owner` field; and, from T19 PR 2, the match-id helper in
+   `godot/scripts/host_link.gd`, which reads the clock once to name a match and computes nothing
+   with it (decisions-log item 113). The client may compose a JSON Patch from a click; a verdict, a
+   travel time, a legality answer, a Fix and the patched text (`patch_plan`'s answer) still come
+   from the gateway. The gateway's JSON-RPC answers are not canonical `gp.api.v1` JSON — they carry
+   a `_status` footer and lower-case enum values (decisions-log item 80) — so every client of them,
+   `client-gdext` and the operator alike, strips the footer and translates enum values
+   (`pharmakos_proto::scope::from_wire_name`); canonical proto JSON is the playbook file's format,
+   not the wire's (decisions-log items 110 and 112).
 5. **Banned dependencies.** `bincode` (unmaintained), `cordic`, `hierarchical_pathfinding` (stale),
    `rmcp`, `wasmi`, any scripting engine. Approved: `prost`, `buf` (tooling), `rkyv`/`postcard` (with `serde` as postcard's derive companion only — decisions-log item 88),
    `xxh3`, `imbl`, `dot_vox`, pathfinding primitives under our own HPA\*, `getrandom` (the gateway's seat tokens only — item 99), `lexopt` 0.3 (`gamectl` only — item 105). Adding a dependency that
@@ -376,6 +383,10 @@ to full quality once and changed only with the owner's explicit approval.
   `overflow-checks = true`
 - Determinism code: the state hash, the RNG stream enum, the fixed-point types, the snapshot and
   replay formats, the tick loop, the `research` feature and the `fork` implementation
+- The formats a match leaves on a player's disk: the save container (`save.json`,
+  `crates/gateway/src/save.rs`) and the private replay's files (`seats/<seat>/sealed/<round>.jsonc`,
+  and `replay/<round>.hashes.txt` in the scenario hash-file format, which therefore lives on
+  players' disks as well as under `tests/golden`) (decisions-log item 113)
 - CI: `.github/workflows/**`, `xtask/**`'s definition of what `ci` runs, golden-file *formats*
 - Licensing: `LICENSES/**`, per-directory `LICENSE` files, the REUSE manifest
 - `AGENTS.md`, `CLAUDE.md`, and the design docs under `docs/design/`
