@@ -131,14 +131,18 @@ pub struct SalvageProgram;
 /// PLACEHOLDER: the exception above is **argued, not decided**. Item 10 says a
 /// dormant beacon parks "its bound units ... at 0 kW" without excepting the
 /// commander, and the asymmetry this build ships is the part to put in front
-/// of the owner: the commander keeps drawing `power.kw_per_unit` toward the
-/// very shortfall it is immune to. The two options are (a) as built — the
-/// commander walks through a brownout and still draws, so a seat can always
-/// walk to a beacon and interface on site, whatever that then changes; and
-/// (b) the commander parks like every other unit, which reads the rule
-/// literally and makes a total blackout a lockout the seat cannot walk out of
-/// until the settlement pays it. A third reading — walks but draws nothing —
-/// would need a draw exemption the rules table has no row for. Owner, at S1,
+/// of the owner: the one unit dormancy cannot stop is also the one the grid
+/// still counts as powered down. Draw follows the home beacon, not the unit's
+/// motion ([`crate::power`] counts a unit only while its home is lit), so while
+/// the core is dark the commander walks and draws nothing, like everything
+/// else homed there; while the core is lit it draws `power.kw_per_unit` like
+/// any other unit. The two options are (a) as built — the commander walks
+/// through a brownout, drawing nothing while its home is dark, so a seat can
+/// always walk to a beacon and interface on site, whatever that then changes
+/// (a total blackout's headroom is 0 kW only because the commander drops out
+/// of the draw with the rest); and (b) the commander parks like every other
+/// unit, which reads the rule literally and makes a total blackout a lockout
+/// the seat cannot walk out of until the settlement pays it. Owner, at S1,
 /// with the rest of the grid's tuning.
 ///
 /// PLACEHOLDER: a unit's program is chosen from its **kind** alone and never
