@@ -105,11 +105,23 @@ pub struct SalvageProgram;
 /// That is deliberate and it is the spec's own logic. A dormant beacon keeps
 /// "the seal, the sphere, interfacing and recycling" lit off the key-core (item
 /// 10) precisely so that a brownout is a setback rather than a lockout — and
-/// the way a seat *fixes* a shortfall is to walk the commander to an at-risk
-/// beacon and raise its Quartermaster priority, which is exactly what spec
-/// section 14's safe playbook does. A commander that parked when the lights
-/// went out could not file that fix, and a power shortfall would be
-/// unrecoverable by design.
+/// the only way a seat acts on a shortfall is to walk the commander to a beacon
+/// and interface on site: raise its Quartermaster priority, which is what spec
+/// section 14's safe playbook does, or change its mandate, or recycle it. A
+/// commander that parked when the lights went out could file none of that, and
+/// a brownout would be a lockout by design.
+///
+/// What a raise does on the grid as built is narrower than "fixing" anything:
+/// it moves the beacon later in the brownout order and earlier in the revival
+/// order, and nothing else. It does not relight a dark beacon and it sheds no
+/// lit one in its place, because the power phase sheds only while draw outruns
+/// supply and a revival waits for `power.revive_margin_kw` whatever the
+/// priority (see [`crate::power`]).
+///
+/// PLACEHOLDER: whether a priority raise re-applies the brownout order, so that
+/// a raised dark beacon relights and a lit lower-priority one sheds in its
+/// place. The spec is silent; decisions log item 113 (4) logged it. Owner, at
+/// S1, with the grid.
 ///
 /// Where the commander goes is the playbook's to say and nothing else's
 /// (AGENTS.md §11: "no manual control" cuts the other way too — no program may
@@ -121,8 +133,8 @@ pub struct SalvageProgram;
 /// commander, and the asymmetry this build ships is the part to put in front
 /// of the owner: the commander keeps drawing `power.kw_per_unit` toward the
 /// very shortfall it is immune to. The two options are (a) as built — the
-/// commander walks through a brownout and still draws, so a shortfall is
-/// always recoverable by walking to a beacon and raising its priority; and
+/// commander walks through a brownout and still draws, so a seat can always
+/// walk to a beacon and interface on site, whatever that then changes; and
 /// (b) the commander parks like every other unit, which reads the rule
 /// literally and makes a total blackout a lockout the seat cannot walk out of
 /// until the settlement pays it. A third reading — walks but draws nothing —
