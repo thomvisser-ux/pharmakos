@@ -85,6 +85,18 @@ Because the seat and unit rows are wider from the first tick, **the T14 chain
 diverges from the T13b chain at tick 0** and every line after it. That is the
 encoding covering more, not the sim walking differently.
 
+## What moved it (T14b)
+
+**The key-core rule** (decisions-log item 113 (5)). A live beacon's own base
+draw is netted out by its own key-core, so the power phase stops charging
+`power.beacon_base_draw_kw` for any live beacon, the core included, and a shed
+core's revival is weighed with its deep-bore surplus credited back. Seat supply
+and draw are hashed seat state, so **the chain keeps tick 0** (map generation's
+columns, which already netted the core out) **and diverges at tick 1**, the
+first settle, where each seat's draw now stays at its starting force's 4 kW
+instead of stepping to 6. Nothing is added to the encoding; the chain moved
+because a column's value did.
+
 ## What a diff means
 
 **The sim's behaviour changed.** That is all it can mean: the chain is a pure
