@@ -837,7 +837,7 @@ fn a_beacon_whose_shed_relieves_nothing_is_still_shed_ahead_of_the_core() {
     let order: Vec<u32> = feed
         .iter()
         .filter(|event| event.kind == EventKind::BeaconBrownedOut && event.seat == Some(seat))
-        .filter_map(|event| event.subject.map(|id| id.index()))
+        .filter_map(|event| event.subject.map(pharmakos_sim::knowledge::AssetId::index))
         .collect();
     assert_eq!(
         order,
