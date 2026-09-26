@@ -684,6 +684,40 @@ its downside, and its section 0 lists the holes (H1–H16) the lines below close
 - **Contract PR:** yes.
 - **Agent-days:** 5.
 - **PLACEHOLDERs:** the perf alarm thresholds (decision 23).
+- **Amended 2026-09-26 (item 115).** The CI-time narrowing and item 115 (4)'s docs-only fast path move to
+  `### T20a`, which runs beside T18b in wave 6's run 4; T20 waits for T20a's merge (one xtask PR at a time), keeps the
+  rest of its unit, and takes the `[profile.*]` question only if the Windows leg is still near its limit. The
+  `AGENTS.md` and `CLAUDE.md` text booked to T20 (items 103 (9) with 104 (6)'s clause, 109 (6), 110 (4) and 114 (5))
+  is the main session's, in the pull request that records T20's merge.
+
+---
+
+### T20a — `xtask` + `.github/workflows`: CI time and the docs-only fast path *(item 115)*
+
+- **Crate owned:** `xtask` and `.github/workflows/**` (one xtask PR open at a time). Not `AGENTS.md` or `CLAUDE.md`:
+  the main session writes their sentences in the pull request that records T20a's merge.
+- **Builds:** (a) `cargo xtask ci`'s `test-research` step narrowed to `pharmakos-sim`, the one crate whose code the
+  `research` feature changes (item 113 (9)'s option: about 17–19 min a leg on #37's run, the non-sim share of
+  `test-research`), with clippy's research pass unchanged so every crate still compiles against a research sim;
+  (b) item 115 (4)'s docs-only fast path, its decision an `xtask` command (`cargo xtask ci-scope`, outside the
+  suite's step table) that each `cargo xtask ci`, `client extension` and `vista screenshot (linux)` job runs right
+  after its checkout and toolchain steps, the cross-OS guard taking the legs' answer and the DCO job unchanged;
+  (c) the watch-check step comment at `.github/workflows/ci.yml:615-622`, which still describes T19 PR 1's
+  one-host run (item 114 (5)).
+- **Implements:** items 113 (9) and 115 (4) and (5); AGENTS.md section 9 item 5.
+- **Needs:** nothing unmerged. Runs beside T18b in wave 6's run 4, which touches neither `xtask` nor `.github`.
+- **Acceptance:** the Windows `cargo xtask ci` leg's time on the lane's final CI run against run 3's 67.6–69.7 min;
+  the decision's unit tests, over path lists and over real temporary git repositories: only allow-listed paths,
+  a top-level `README.md` and a deletion inside `docs/` are prose; one other path, `godot/README.md`, a rename from
+  another path into `docs/`, a deletion outside the list, a change under `xtask/` or `.github/workflows/`, an empty
+  diff, an event other than `pull_request`, a HEAD that is not a two-parent merge whose second parent is the pull
+  request's head, and a git error each run the full suite; every required check reporting under its own name on
+  the lane's pull request, and on a draft pull request based on the lane's branch that touches only `docs/`, where
+  they run the fast path. The first prose-only pull request after the merge is the live check, and the main
+  session records its times.
+- **Contract PR:** yes (`xtask`'s definition of `ci`, `.github/workflows/**`).
+- **Agent-days:** 1.5.
+- **PLACEHOLDERs:** none expected; the suite's time budget stays T20's.
 
 ---
 
@@ -692,7 +726,7 @@ its downside, and its section 0 lists the holes (H1–H16) the lines below close
 - **Unit owned:** `godot/export_presets.cfg`, `cargo xtask package`, `.github/workflows/release.yml`.
 - **Builds:** Godot export presets for Windows and Linux with the export templates pinned by version; the staged cdylib beside the executable; `gamectl` shipped alongside; the template and sample folders where T13 expects them; `LICENSES/` and the credits screen's CC-BY attributions (a shipping requirement, not a nicety); the two-line note on opening unsigned builds; and a release workflow cutting both zips from green CI on a tag with a changelog. **No signing, no notarisation, no macOS release** — that is hardening's ~3 wk (item 8).
 - **Implements:** item 8; spec section 15 (Platforms & packaging), section 17.
-- **Needs:** T16, T19; and T18b, because it packages `library/` and `godot/`, which T18b reshapes (item 113). Its `cargo xtask package` and `release.yml` land after T20's xtask PR has merged (AGENTS.md §6).
+- **Needs:** T16, T19; and T18b, because it packages `library/` and `godot/`, which T18b reshapes (item 113). Its `cargo xtask package` and `release.yml` land after T20's xtask PR has merged, which itself follows T20a's (AGENTS.md §6).
 - **Acceptance:** a zip built by CI launches on a clean Windows runner and a clean Linux runner and reaches the lobby (with `--import` run first); `gamectl seat doctor` passes from inside the extracted zip; `reuse` green over the packaged tree; the zip's manifest committed as a golden so its contents cannot drift.
 - **Contract PR:** yes — `.github/workflows/**`.
 - **Agent-days:** 5.
@@ -728,12 +762,12 @@ Days are working days, five to a week. A task's start is the day its last input 
 | W3 | 3.4 – 5.0 | **T7** HPA\* + estimator (8 d, d17–25) | **T9** gateway surface (8 d, d18–26) | **T8** plan-core (10 d, d18–28) | The path-hash file agreeing on three OSes; the estimator's signed-error and sustainability reports; a hand-written JSONC playbook round-tripping and rendering as English prose |
 | W4 | 5.0 – 7.4 | **T10** runner (5 d, d25–30), then **T11** interpreter (8 d, d30–38) | **T13** gateway method slice (9 d, d30–39) | **T12** client bridge (9 d, d28–37) | The spec's 14-call walkthrough passing against a live gateway; the extension loading in Godot on a fresh checkout with zero caught panics |
 | W5 | 7.4 – 9.8 | **T14** economy, Build, Survey-lite, programs (10 d, d38–48) | **T15** gamectl + `scenario run` (8 d, d39–47) | **T16a** view feed, match control, host loop (10 d, run 1, items 106–107); then **T16** vista + watch rig (10 d, run 2) | **Flying over the generated map, craters remeshing**; the watch rig playing a segment at 2–4× and skipping to its end; `gamectl scenario run` as a green `xtask ci` step |
-| W6 | 9.8 – 11.8 | run 2: **T17** save/resume, private replay, vision follow-up (6 d); run 3: **T14b** the key-core on the grid (1.5 d) | run 2: **T18** operator Easy + safe playbook (8 d); run 4: **T18b** the safe playbook's reading, Easy in `scenario run`, Hold & Build that builds (4.5–5 d) | run 1: **T18a** planning wire (8.75 d) and **T19** PR 1, route surface (5.5 d); run 3: **T19** PR 2, wizard (6.5 d) — items 111, 112 and 113 | **A sealed playbook walking the commander**: a beacon placed, a Generator built, the treasury and kW meter moving, BMI settled at the recap — and a two-seat match against Easy |
+| W6 | 9.8 – 11.8 | run 2: **T17** save/resume, private replay, vision follow-up (6 d); run 3: **T14b** the key-core on the grid (1.5 d) | run 2: **T18** operator Easy + safe playbook (8 d); run 4: **T18b** the safe playbook's reading, Easy in `scenario run`, Hold & Build that builds (4.5–5 d) | run 1: **T18a** planning wire (8.75 d) and **T19** PR 1, route surface (5.5 d); run 3: **T19** PR 2, wizard (6.5 d); run 4: **T20a** CI time and the docs-only fast path (1.5 d) — items 111, 112, 113 and 115 | **A sealed playbook walking the commander**: a beacon placed, a Generator built, the treasury and kW meter moving, BMI settled at the recap — and a two-seat match against Easy |
 | W7 | 11.8 – 12.8, after W6's run 4 (item 113) | **T21** packaging (5 d, d59–64), its xtask part after T20's | — | **T20** xtask closing half-week (5 d, d59–64) | A zip that launches on a clean Windows and a clean Linux machine; one `xtask ci` covering §10 items 1–4 with nothing skipped |
 | W8 | 12.8 – 14.2 | — | — | **T22** integration, goldens, demo (6 d, d64–71) | The stage demo of §1.1 |
 | — | **14.2 – 15.5** | **float: 1.3 weeks** | | | |
 
-**Totals.** 24 tasks, **182 agent-days** (T16a added 2026-09-21, item 106; T18a added and T17 and T19 re-estimated 2026-09-23, item 111, which make it 25 tasks and about 194.75 agent-days; T14b and T18b added 2026-09-25, item 113, which make it 27 tasks and about 201 agent-days; the schedule figures that follow predate all three) over 71 working days of schedule. At three slots that is 213
+**Totals.** 24 tasks, **182 agent-days** (T16a added 2026-09-21, item 106; T18a added and T17 and T19 re-estimated 2026-09-23, item 111, which make it 25 tasks and about 194.75 agent-days; T14b and T18b added 2026-09-25, item 113, which make it 27 tasks and about 201 agent-days; T20a added 2026-09-26, item 115, which makes it 28 and about 202.5; the schedule figures that follow predate all four) over 71 working days of schedule. At three slots that is 213
 slot-days, so utilisation is about 80 % — the 20 % is where a contract PR waits for review, and it is
 deliberate. The critical path is **T0 → T2 → T5 → T7 → T10 → T11 → T14 → T18 → T19 → T20 → T22**,
 71 days end to end; the sim alone carries 52 agent-days across six of the eight waves.
