@@ -1,47 +1,77 @@
 // SPDX-FileCopyrightText: 2026 Pharmakos contributors
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //
-// hold_and_build.jsonc: the Hold & Build template (decisions-log item 81).
+// hold_and_build.jsonc: the Hold & Build template (decisions-log items 81 and
+// 113 (6)).
 //
-// It teaches the beacon: walk to one, change it on site ("touch to change"),
-// and let its Build mandate do the work while the commander stays close. The
-// change is one Generator added to the beacon's Build list, which is how a
-// seat's kW supply rises at the skeleton.
+// It teaches the grid: walk out to the edge of your sphere on a heat vent's
+// side, place a Build beacon there whose own sphere holds the vent, give it a
+// Generator on the vent as its first Build target, and hold by it while its
+// drone builds. A Generator stands on a heat vent, and it is how a seat's kW
+// supply rises at the skeleton. The target is an initial setting, and initial
+// settings are interface rows the commander commits on site after the deploy,
+// so this is still touch to change.
 //
-// A Generator stands on a heat vent. This file cannot know where your vents
-// are, so the anchor below is a place-holder at the map's corner. It
-// qualifies, and a target outside the beacon's own sphere is dropped when the
-// row commits, so it builds nothing and spends nothing. The wizard asks for
-// the vent, and the built-in operator's suggestion names the one inside your
-// sphere.
+// Why a new beacon: your starting vent lies outside your core's sphere at every
+// seed (decisions-log items 90 and 95), and a Build target outside its own
+// beacon's sphere is dropped when its row commits. A beacon's site must lie
+// inside one of your own spheres, so the new one stands at the edge of your
+// core's sphere on the vent's side, and the vent lies inside its new sphere.
 //
-// PLACEHOLDER: the anchor's own value (the map's corner) is a harmless
-// stand-in that the wizard or the operator replaces; what the template ships
-// as its own value is the OWNER's, with T18's suggestions, in run 2.
+// Why the walk is a parameter as well as the site: the sim deploys only while
+// the commander stands within its interface range (4 voxels) of the site, and
+// nothing checks the walk before the Push. With the site at the edge and the
+// walk left at the core, this file still qualifies and places nothing. So the
+// wizard asks for the walk, the site and the Generator's anchor, and the
+// built-in operator suggests a walk that ends at the site.
+//
+// This file cannot know where your vents are, so its own values are harmless
+// stand-ins: the walk and the site are the safest own beacon, and the anchor is
+// the map's corner. They qualify. Nothing in the sim keeps one beacon off
+// another's voxel, so they place a second beacon, on Build, where the safest one
+// stands; its Generator target at the corner is outside its sphere and is
+// dropped, so nothing is built.
+//
+// PLACEHOLDER: the place-and-build shape itself -- until decisions-log item
+// 113 (6) this template visited the safest beacon and placed nothing -- is the
+// OWNER's to confirm, before T22's stage demo.
+//
+// PLACEHOLDER: the three places' own values (the safest own beacon, and the
+// map's corner) are harmless stand-ins that the wizard or the operator
+// replaces; what the template ships as its own values is the OWNER's.
 {
   "schema_version": {"major": 1, "minor": 0},
   "meta": {
     "parameters": [
+      // Why: the sim deploys only while the commander stands within its
+      // interface range of the site, so the walk ends at the site.
+      {"pointer": "/declarative/route/0/move/to", "label": "Where to walk to before placing: the site itself"},
+      // Why: a new beacon's site must lie inside one of your own spheres, and
+      // the vent must lie inside the new beacon's.
+      {"pointer": "/declarative/route/1/place_beacon/at", "label": "Where the Build beacon goes: inside one of your spheres, with the heat vent inside its own"},
       // Why: the one choice that decides whether the Generator is ever built.
-      // It has to be a heat vent inside the beacon's own sphere.
-      {"pointer": "/declarative/route/1/interface/rows/0/add_build_target/target/anchor/voxel", "label": "Where the Generator goes: a heat vent inside the beacon's sphere"},
-      // Why: holding keeps the commander inside its own sphere while the build
-      // drones work. A duration is game milliseconds.
-      {"pointer": "/declarative/route/2/hold/ms", "label": "How long to hold at the beacon, in game milliseconds"}
+      // It has to be a heat vent inside the new beacon's sphere.
+      {"pointer": "/declarative/route/1/place_beacon/initial/mandate/build/targets/0/anchor/voxel", "label": "Where the Generator goes: a heat vent inside the new beacon's sphere"},
+      // Why: holding keeps the commander by the new beacon while its build
+      // drone works. A duration is game milliseconds.
+      {"pointer": "/declarative/route/2/hold/ms", "label": "How long to hold by the new beacon, in game milliseconds"}
     ],
     "title": "Hold & Build",
     "author_kind": "BUILTIN",
-    "note": "Stay home and grow the grid: walk to the safest beacon, add a Generator to its Build list, and hold there."
+    "note": "Grow the grid: walk to the edge of your sphere on a heat vent's side, place a Build beacon there with a Generator on the vent as its first target, and hold by it."
   },
   "kind": "TEMPLATE",
   "declarative": {
     "route": [
-      {"label": "to_beacon", "move": {"to": {"safest": {}}, "pace": "DIRECT"}, "timeout_ms": 60000, "on_fail": {"action": "SKIP"}},
-      // Why: the safest own beacon is the core at the start of a match, and the
-      // core is on a Build mandate, so this is a visit that can add a target.
-      {"label": "add_generator", "interface": {"beacon": {"safest": {}}, "rows": [
-        {"add_build_target": {"target": {"blueprint_id": "generator", "anchor": {"voxel": {"x": 0, "y": 0, "z": 0}}, "rotation_quarter_turns": 0, "order": 1}}}
-      ]}, "timeout_ms": 30000, "on_fail": {"action": "SKIP"}},
+      {"label": "to_site", "move": {"to": {"safest": {}}, "pace": "DIRECT"}, "timeout_ms": 60000, "on_fail": {"action": "SKIP"}},
+      {"label": "place_power", "place_beacon": {"at": {"safest": {}}, "tags": ["power"],
+        // Initial settings are interface rows committed on site after the
+        // deploy: choosing the Build mandate is free, and its target list is
+        // one settings field.
+        "initial": {"mandate": {"build": {"targets": [
+          {"blueprint_id": "generator", "anchor": {"voxel": {"x": 0, "y": 0, "z": 0}}, "rotation_quarter_turns": 0, "order": 1}
+        ]}}}},
+       "on_fail": {"action": "SKIP"}},
       {"label": "hold", "hold": {"ms": 30000}}
     ],
     "handlers": [

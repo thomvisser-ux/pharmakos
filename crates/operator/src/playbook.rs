@@ -139,6 +139,33 @@ pub(crate) fn with_member(value: &Json, key: &str, member: Json) -> Json {
     }
 }
 
+/// Replace the value an RFC 6901 JSON Pointer names inside `value`, member
+/// order kept: `None` when the pointer names nothing that is there already.
+pub(crate) fn with_pointer(value: &Json, pointer: &str, member: Json) -> Option<Json> {
+    let Some(rest) = pointer.strip_prefix('/') else {
+        return pointer.is_empty().then_some(member);
+    };
+    let (raw, below) = match rest.split_once('/') {
+        Some((raw, tail)) => (raw, format!("/{tail}")),
+        None => (rest, String::new()),
+    };
+    let token = raw.replace("~1", "/").replace("~0", "~");
+    match value {
+        Json::Object(_) => {
+            let inner = with_pointer(value.get(&token)?, &below, member)?;
+            Some(with_member(value, &token, inner))
+        }
+        Json::Array(items) => {
+            let index = token.parse::<usize>().ok()?;
+            let inner = with_pointer(items.get(index)?, &below, member)?;
+            let mut items = items.clone();
+            *items.get_mut(index)? = inner;
+            Some(Json::Array(items))
+        }
+        _ => None,
+    }
+}
+
 /// One JSON Patch operation.
 pub(crate) fn op(kind: &str, path: &str, value: Option<Json>) -> Json {
     let mut members = vec![("op", string(kind)), ("path", string(path))];
@@ -164,5 +191,19 @@ mod tests {
             Some(&Json::Number(String::from("1")))
         );
         assert_eq!(pointer_get(&root, "/a/2"), None);
+    }
+
+    #[test]
+    fn a_pointer_replaces_in_place_and_names_only_what_is_there() {
+        let root = pharmakos_proto::json::read(r#"{"a":[{"b":1,"c":2}],"d":3}"#).unwrap();
+        let set = with_pointer(&root, "/a/0/b", Json::Number(String::from("9"))).unwrap();
+        assert_eq!(
+            pharmakos_proto::json::write(&set)
+                .split_whitespace()
+                .collect::<String>(),
+            r#"{"a":[{"b":9,"c":2}],"d":3}"#
+        );
+        assert_eq!(with_pointer(&root, "/a/1/b", Json::Null), None);
+        assert_eq!(with_pointer(&root, "/x", Json::Null), None);
     }
 }

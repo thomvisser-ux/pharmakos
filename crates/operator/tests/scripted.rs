@@ -52,6 +52,8 @@ struct Beacon {
     owner: u8,
     core: bool,
     powered: bool,
+    /// The lower-case wire value `list_beacons` answers for an own beacon.
+    priority: &'static str,
 }
 
 /// One entity in the scripted `get_view` answer.
@@ -96,6 +98,8 @@ struct Script {
     size: [i32; 3],
     /// Top material per column, `(x, y)`, beyond the plain dirt.
     features: BTreeMap<(i32, i32), u8>,
+    /// Top voxel per column, `(x, y)`, where it is not [`GROUND`].
+    heights: BTreeMap<(i32, i32), i32>,
     beacons: Vec<Beacon>,
     entities: Vec<Entity>,
     treasury: i64,
@@ -125,12 +129,14 @@ impl Script {
             notes: String::new(),
             size: [64, 64, 32],
             features: BTreeMap::new(),
+            heights: BTreeMap::new(),
             beacons: vec![Beacon {
                 id: String::from("b_01"),
                 at: [32, 32, GROUND + 1],
                 owner: seat,
                 core: true,
                 powered: true,
+                priority: "normal",
             }],
             entities: vec![Entity {
                 id: String::from("u_1"),
@@ -319,7 +325,7 @@ impl Script {
                     ];
                     if beacon.owner == self.seat {
                         row.push(("core", Json::Bool(beacon.core)));
-                        row.push(("priority", Json::String(String::from("normal"))));
+                        row.push(("priority", Json::String(beacon.priority.to_owned())));
                         row.push(("powered", Json::Bool(beacon.powered)));
                     }
                     obj(row)
@@ -461,9 +467,10 @@ impl Script {
                         let x = cx + i32::try_from(lx).unwrap();
                         let y = cy + i32::try_from(ly).unwrap();
                         let top = self.features.get(&(x, y)).copied().unwrap_or(DIRT);
-                        for z in 0..=GROUND {
+                        let height = self.heights.get(&(x, y)).copied().unwrap_or(GROUND);
+                        for z in 0..=height {
                             let at = lx + EDGE * ly + EDGE * EDGE * usize::try_from(z).unwrap();
-                            *voxels.get_mut(at).unwrap() = if z == GROUND { top } else { STONE };
+                            *voxels.get_mut(at).unwrap() = if z == height { top } else { STONE };
                         }
                     }
                 }
@@ -684,6 +691,7 @@ fn three_dark(seat: u8) -> Script {
             owner: seat,
             core: false,
             powered: false,
+            priority: "normal",
         });
         script.to_beacon_ms.insert(id.to_owned(), ms);
     }
@@ -740,8 +748,7 @@ fn the_safe_playbook_raises_at_most_two_beacons_nearest_first() {
         "/declarative/route"
     );
 
-    // Out of reach: past 60 s nothing is raised, and a seat with power to
-    // spare raises nothing whatever is dark.
+    // Out of reach: past 60 s nothing is raised.
     let mut far = three_dark(1);
     for ms in far.to_beacon_ms.values_mut() {
         *ms = 61_000;
@@ -751,19 +758,170 @@ fn the_safe_playbook_raises_at_most_two_beacons_nearest_first() {
         safe_routes(&script.transcript).is_empty(),
         "nothing within 60 s"
     );
+
+    // Nothing dark and the headroom at zero or more: power is not short, so
+    // nothing is raised and nothing is even estimated, and the why is the
+    // one T18 wrote, byte for byte (decisions-log item 113 (4)).
     let mut spare = three_dark(1);
     spare.headroom = 0;
-    let (script, _) = advise(spare);
+    for beacon in &mut spare.beacons {
+        beacon.powered = true;
+    }
+    let (script, advice) = advise(spare);
     assert!(
         safe_routes(&script.transcript).is_empty(),
         "power is not short"
     );
     assert!(
-        !script
-            .transcript
-            .iter()
-            .any(|line| line.starts_with("estimate_route") && line.contains("beacon_anchor")),
+        !beacon_estimated(&script.transcript),
         "and not even estimated"
+    );
+    assert_eq!(
+        safe_why(&advice),
+        format!(
+            "{SEED_LINE} Power is not short, so nothing is raised: move to the safest beacon and \
+             stay with it."
+        )
+    );
+}
+
+/// The seed line every "why" opens with (decision C15).
+const SEED_LINE: &str =
+    "Easy, seat 1, round 1, seed 0x0000000000005eed (recorded; Easy draws nothing at random).";
+
+/// True when the round estimated a route to a beacon: the safe playbook's
+/// estimates are the only ones that end on a `beacon_anchor`.
+fn beacon_estimated(transcript: &[String]) -> bool {
+    transcript
+        .iter()
+        .any(|line| line.starts_with("estimate_route") && line.contains("beacon_anchor"))
+}
+
+/// The why of an advice's Safe Playbook suggestion.
+fn safe_why(advice: &pharmakos_operator::Advice) -> String {
+    advice
+        .suggestions
+        .iter()
+        .find(|suggestion| suggestion.template_id == "safe_playbook")
+        .map(|suggestion| suggestion.why.clone())
+        .expect("a suggestion for the safe template")
+}
+
+/// The labels of the one raised route the round instantiated, or none.
+fn raised_labels(transcript: &[String]) -> Vec<String> {
+    let routes = safe_routes(transcript);
+    let Some(Json::Array(steps)) = routes.first() else {
+        return Vec::new();
+    };
+    steps
+        .iter()
+        .map(|step| step.get("label").and_then(text).unwrap_or("").to_owned())
+        .collect()
+}
+
+/// Decisions-log item 113 (4): a settled grid never shows a headroom below
+/// zero -- `brown_out` sheds until supply covers draw -- so the state a raise
+/// meets in a hosted match is a dark non-core beacon at 0 kW. It is raised,
+/// and the why gives no 0 kW headroom as the reason.
+#[test]
+fn a_dark_non_core_beacon_at_headroom_zero_is_raised() {
+    let mut settled = three_dark(1);
+    settled.headroom = 0;
+    let (script, advice) = advise(settled);
+    assert_eq!(
+        raised_labels(&script.transcript),
+        ["to_safety", "raise_b_05", "raise_b_06"]
+    );
+    let why = safe_why(&advice);
+    assert!(
+        why.contains("Power is short because b_04, b_05 and b_06 are browned out"),
+        "{why}"
+    );
+    assert!(
+        !why.contains("kW"),
+        "no headroom is given as the reason: {why}"
+    );
+}
+
+/// A dark beacon out of reach at 0 kW raises nothing, and the why says why
+/// without saying power is not short.
+#[test]
+fn a_dark_beacon_out_of_reach_at_headroom_zero_raises_nothing_and_says_why() {
+    let mut far = three_dark(1);
+    far.headroom = 0;
+    for ms in far.to_beacon_ms.values_mut() {
+        *ms = 61_000;
+    }
+    let (script, advice) = advise(far);
+    assert!(safe_routes(&script.transcript).is_empty());
+    let why = safe_why(&advice);
+    assert!(!why.contains("Power is not short"), "{why}");
+    assert!(
+        why.contains("no browned-out beacon it may raise is within 60 s"),
+        "{why}"
+    );
+    assert!(!why.contains("kW"), "{why}");
+}
+
+/// A beacon already HIGH is not raised again: the next nearest takes its
+/// place. And a seat whose only dark beacons are HIGH raises nothing, and
+/// estimates nothing, and says so.
+#[test]
+fn a_beacon_already_high_is_not_raised_again() {
+    let mut one_high = three_dark(1);
+    one_high.headroom = 0;
+    for beacon in &mut one_high.beacons {
+        if beacon.id == "b_05" {
+            beacon.priority = "high";
+        }
+    }
+    let (script, _) = advise(one_high);
+    assert_eq!(
+        raised_labels(&script.transcript),
+        ["to_safety", "raise_b_06", "raise_b_04"],
+        "b_05 is HIGH already, so the next two by travel are raised"
+    );
+
+    let mut all_high = three_dark(1);
+    all_high.headroom = 0;
+    for beacon in &mut all_high.beacons {
+        if !beacon.core {
+            beacon.priority = "high";
+        }
+    }
+    let (script, advice) = advise(all_high);
+    assert!(safe_routes(&script.transcript).is_empty(), "nothing raised");
+    assert!(!beacon_estimated(&script.transcript), "nothing estimated");
+    let why = safe_why(&advice);
+    assert!(!why.contains("Power is not short"), "{why}");
+    assert!(
+        why.contains("b_04, b_05 and b_06 are HIGH already"),
+        "{why}"
+    );
+}
+
+/// Only the core is dark at 0 kW: a total blackout, the state the hosted
+/// power-short rows show from round 2 on (decisions-log item 114 (4)). The
+/// core is never raised, so nothing is raised and nothing is estimated, and
+/// the why says power is short because the core is browned out and that the
+/// safe playbook never raises it, giving no kW figure as the shortage.
+#[test]
+fn only_the_core_dark_raises_nothing_and_says_the_core_is_never_raised() {
+    let mut blackout = Script::new(1);
+    blackout.headroom = 0;
+    if let Some(core) = blackout.beacons.first_mut() {
+        core.powered = false;
+    }
+    let (script, advice) = advise(blackout);
+    assert!(safe_routes(&script.transcript).is_empty(), "nothing raised");
+    assert!(!beacon_estimated(&script.transcript), "nothing estimated");
+    assert_eq!(
+        safe_why(&advice),
+        format!(
+            "{SEED_LINE} Power is short because the core b_01 is browned out, and the safe \
+             playbook never raises the core, so nothing is raised: move to the safest beacon and \
+             stay with it."
+        )
     );
 }
 
@@ -966,6 +1124,7 @@ fn easy_never_exceeds_its_derived_call_budget() {
             owner: 1,
             core: false,
             powered: false,
+            priority: "normal",
         });
     }
     let (script, played) = play(worst.clone());
@@ -1133,31 +1292,181 @@ fn easy_inserts_goals_greedily_while_the_share_and_the_treasury_allow() {
     );
 }
 
-/// A heat vent inside the core's sphere and no seam: Easy fills Hold & Build,
-/// its Generator anchor and a hold that fills what is left of the share.
-#[test]
-fn easy_fills_hold_and_build_when_a_vent_is_inside_the_core_sphere() {
-    let mut vent = Script::new(1);
-    vent.features.insert((36, 36), VENT_LEAN);
-    let (script, played) = play(vent);
-    assert_eq!(played.submitted, Submitted::Own, "{:#?}", script.transcript);
-    let ops = composing_ops(&script.transcript);
-    let anchor = ops
-        .iter()
-        .find(|op| {
-            op.get("path")
-                .and_then(text)
-                .is_some_and(|p| p.ends_with("/anchor/voxel"))
+/// A seat on a map wide enough for the band beyond its core's sphere, with a
+/// lean vent 32 voxels east of the core -- beyond the 24-voxel sphere, as the
+/// starting vent is at every seed -- and nothing else.
+fn vent_beyond_the_sphere() -> Script {
+    let mut script = Script::new(1);
+    script.size = [96, 64, 32];
+    for x in 63..=65 {
+        for y in 31..=33 {
+            script.features.insert((x, y), VENT_LEAN);
+        }
+    }
+    script
+}
+
+/// Where the scripted world puts that vent's site and anchor: the site at
+/// the edge of the core's sphere towards the vent, 22 voxels out (the sphere
+/// less Easy's 2-voxel margin), and the anchor the vent's centre column.
+const VENT_SITE: [i32; 3] = [54, 32, GROUND + 1];
+const VENT_ANCHOR: [i32; 3] = [64, 32, GROUND + 1];
+
+/// The whole-voxel squared distance, in 3-D.
+fn distance2(a: [i32; 3], b: [i32; 3]) -> i64 {
+    a.iter()
+        .zip(b)
+        .map(|(p, q)| {
+            let d = i64::from(p - q);
+            d * d
         })
-        .and_then(|op| op.get("value").cloned())
-        .expect("the anchor is filled");
-    assert_eq!(voxel_of(&anchor), [36, 36, GROUND + 1]);
+        .sum()
+}
+
+/// Decisions-log item 113 (6): a vent in the band beyond the core's sphere is
+/// filled. Easy composes the reshaped Hold & Build for its own seat -- one
+/// `patch_plan`, and its own plan is what it submits -- walking to and
+/// placing a Build beacon at a site at the edge of the core's sphere, whose
+/// initial Build target is the Generator on the vent, inside the new
+/// beacon's sphere by 3-D squared distance.
+#[test]
+fn a_vent_beyond_the_core_sphere_is_filled_with_a_build_beacon_at_its_edge() {
+    let (script, played) = play(vent_beyond_the_sphere());
+    assert_eq!(played.submitted, Submitted::Own, "{:#?}", script.transcript);
+    assert_eq!(
+        script
+            .transcript
+            .iter()
+            .filter(|line| line.starts_with("patch_plan"))
+            .count(),
+        1,
+        "patch_plan called once, to compose"
+    );
+    let ops = composing_ops(&script.transcript);
+    let value_at = |suffix: &str| {
+        ops.iter()
+            .find(|op| {
+                op.get("op").and_then(text) == Some("replace")
+                    && op
+                        .get("path")
+                        .and_then(text)
+                        .is_some_and(|p| p.ends_with(suffix))
+            })
+            .and_then(|op| op.get("value").cloned())
+            .unwrap_or_else(|| panic!("{suffix} is filled: {ops:#?}"))
+    };
+    let walk = value_at("/declarative/route/0/move/to");
+    let site = value_at("/declarative/route/1/place_beacon/at");
+    let anchor = value_at("/place_beacon/initial/mandate/build/targets/0/anchor/voxel");
+    assert_eq!(
+        voxel_of(walk.get("voxel").unwrap()),
+        VENT_SITE,
+        "the walk ends at the site"
+    );
+    assert_eq!(voxel_of(site.get("voxel").unwrap()), VENT_SITE);
+    assert_eq!(
+        voxel_of(&anchor),
+        VENT_ANCHOR,
+        "the Generator stands on the vent"
+    );
+    let core = [32, 32, GROUND + 1];
+    assert!(
+        distance2(core, VENT_ANCHOR) > 24 * 24,
+        "the vent is beyond the core's sphere"
+    );
+    assert!(
+        distance2(core, VENT_SITE) <= 24 * 24,
+        "the site is inside the core's sphere"
+    );
+    assert!(
+        distance2(VENT_SITE, VENT_ANCHOR) <= 24 * 24,
+        "the anchor is inside the new beacon's sphere, in 3-D"
+    );
     assert!(
         ops.iter().any(|op| op
             .get("path")
             .and_then(text)
             .is_some_and(|p| p.ends_with("/hold/ms"))),
         "the hold fills the share: {ops:#?}"
+    );
+    assert!(
+        played.why.contains("A Build beacon at (54, 32, 11)"),
+        "{}",
+        played.why
+    );
+}
+
+/// The advisor suggests the same walk, site and anchor for the Hold & Build
+/// page, in the template's declaration order.
+#[test]
+fn the_advisor_suggests_the_same_walk_site_and_anchor_for_hold_and_build() {
+    let (_, advice) = advise(vent_beyond_the_sphere());
+    let page = advice
+        .suggestions
+        .iter()
+        .find(|suggestion| suggestion.template_id == "hold_and_build")
+        .expect("a Hold & Build suggestion");
+    let site = r#"{"voxel":{"x":54,"y":32,"z":11}}"#;
+    let filled: Vec<(&str, &str)> = page
+        .parameters
+        .iter()
+        .map(|value| (value.pointer.as_str(), value.value.as_str()))
+        .collect();
+    assert_eq!(
+        filled.get(..3).unwrap_or_default(),
+        [
+            ("/declarative/route/0/move/to", site),
+            ("/declarative/route/1/place_beacon/at", site),
+            (
+                "/declarative/route/1/place_beacon/initial/mandate/build/targets/0/anchor/voxel",
+                r#"{"x":64,"y":32,"z":11}"#
+            ),
+        ]
+    );
+    assert!(
+        page.why.contains("heat vent at (64, 32, 11)"),
+        "{}",
+        page.why
+    );
+}
+
+/// A vent whose anchor fails the 3-D sphere test from every edge site is not
+/// a goal: the vent's columns stand twenty voxels above the plain, so from
+/// the furthest site the core's sphere allows, the vent's centre is further
+/// than the new sphere reaches (decisions-log item 113 (15)). Nothing is
+/// estimated for it, Easy seals its safe playbook, and the page's why says so.
+#[test]
+fn a_vent_no_edge_site_holds_in_3d_is_not_a_goal_and_the_page_says_why() {
+    let mut raised = vent_beyond_the_sphere();
+    for x in 63..=65 {
+        for y in 31..=33 {
+            raised.heights.insert((x, y), GROUND + 20);
+        }
+    }
+    let (script, played) = play(raised.clone());
+    assert_eq!(played.submitted, Submitted::Safe, "{played:#?}");
+    assert!(
+        !script
+            .transcript
+            .iter()
+            .any(|line| line.starts_with("estimate_route")),
+        "no goal, so no estimate: {:#?}",
+        script.transcript
+    );
+    let (_, advice) = advise(raised);
+    let page = advice
+        .suggestions
+        .iter()
+        .find(|suggestion| suggestion.template_id == "hold_and_build")
+        .expect("a Hold & Build suggestion");
+    assert!(page.parameters.is_empty(), "{page:#?}");
+    assert!(
+        page.why.contains(
+            "No site at the edge of your spheres puts the heat vent at (64, 32, 31) inside the \
+             new beacon's sphere"
+        ),
+        "{}",
+        page.why
     );
 }
 

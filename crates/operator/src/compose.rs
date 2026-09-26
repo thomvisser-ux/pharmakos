@@ -9,21 +9,22 @@
 //! The top-k candidates are walked in rank order and each is inserted when
 //! it is the same template's goal as the first, fits what is left of the
 //! share, and is affordable from the treasury as it stands. The first goal
-//! chooses the template; each further one becomes one more step of it -- one
-//! more walk-and-place for Expand & Mine, one more Build row for Hold &
-//! Build -- written as a JSON Patch the gateway's `patch_plan` applies to the
-//! template's own instantiation, so comments and layout survive.
+//! chooses the template; each further one becomes one more walk-and-place of
+//! it -- a Mine beacon for Expand & Mine, a Build beacon with its Generator
+//! for Hold & Build -- written as a JSON Patch the gateway's `patch_plan`
+//! applies to the template's own instantiation, so comments and layout
+//! survive.
 //!
 //! No lookahead of any kind: a goal is inserted on its own estimate, and
 //! nothing asks what the match would do with it (AGENTS.md section 3 rule 2).
 
 use pharmakos_proto::json::Json;
 
-use crate::candidates::{Candidate, Goal};
+use crate::candidates::{Candidate, Goal, NoVent, Unfit};
 use crate::easy::{
     EASY_ROUTE_FILL_PERCENT, EXPAND_AND_MINE, HOLD_AND_BUILD, PAGES_MAX, SAFE_REACH_MS,
 };
-use crate::playbook::{Declared, op, pointer_get, with_member};
+use crate::playbook::{Declared, op, pointer_get, with_member, with_pointer};
 use crate::situation::Situation;
 use crate::terrain::Feature;
 use crate::wire::{compact, number, string, voxel_json, voxel_location};
@@ -91,11 +92,11 @@ pub(crate) fn compose(
         .find(|held| held.template_id == first.goal.template())?;
     let (template_id, mut patch, removals) = match first.goal {
         Goal::Mine { .. } => {
-            let (patch, removals) = mine_patch(template, &goals)?;
+            let (patch, removals) = place_patch(template, &goals, None)?;
             (EXPAND_AND_MINE, patch, removals)
         }
         Goal::Generator { .. } => {
-            let (patch, removals) = build_patch(template, &goals, fill)?;
+            let (patch, removals) = place_patch(template, &goals, Some(fill))?;
             (HOLD_AND_BUILD, patch, removals)
         }
     };
@@ -128,42 +129,86 @@ fn route_index(pointer: &str) -> Option<usize> {
         .ok()
 }
 
-/// Expand & Mine: the first site into the declared walk and place, and one
-/// more walk-and-place per further site, before the walk home.
-fn mine_patch(template: &Declared, goals: &[Candidate]) -> Option<(Vec<Json>, Vec<Vec<Json>>)> {
+/// The values one goal puts into its walk-and-place: the walk's and the
+/// site's location, and for a Generator the anchor's voxel, each with the
+/// declared pointer it goes to.
+fn values_of(template: &Declared, goal: &Goal) -> Option<Vec<(String, Json)>> {
     let walk = template.pointer_ending("/move/to")?.to_owned();
     let place = template.pointer_ending("/place_beacon/at")?.to_owned();
-    let walk_step = pointer_get(
-        &template.body,
-        &format!("/declarative/route/{}", route_index(&walk)?),
-    )?
-    .clone();
+    match *goal {
+        Goal::Mine { site, .. } => Some(vec![
+            (walk, voxel_location(site)),
+            (place, voxel_location(site)),
+        ]),
+        Goal::Generator { site, anchor, .. } => {
+            let at = template.pointer_ending("/anchor/voxel")?.to_owned();
+            Some(vec![
+                (walk, voxel_location(site)),
+                (place, voxel_location(site)),
+                (at, voxel_json(anchor)),
+            ])
+        }
+    }
+}
+
+/// A copy of a template's route step with each value set at its pointer
+/// below the step, and its label given the goal's number: `to_site` becomes
+/// `to_site_2`.
+fn step_for(step: &Json, prefix: &str, values: &[(String, Json)], n: usize) -> Option<Json> {
+    let label = crate::wire::text_of(step, "label");
+    let mut out = with_member(step, "label", string(&format!("{label}_{n}")));
+    for (pointer, value) in values {
+        if let Some(below) = pointer
+            .strip_prefix(prefix)
+            .filter(|below| below.starts_with('/'))
+        {
+            out = with_pointer(&out, below, value.clone())?;
+        }
+    }
+    Some(out)
+}
+
+/// Both place-a-beacon templates: the first goal into the declared walk,
+/// site and (for Hold & Build) anchor, and one more walk-and-place per
+/// further goal, inserted after the declared place. With `fill`, the declared
+/// hold -- the step after the place -- fills what is left of the share; it is
+/// replaced before any step is inserted ahead of it, since a JSON Patch
+/// applies its operations in order.
+fn place_patch(
+    template: &Declared,
+    goals: &[Candidate],
+    fill: Option<i64>,
+) -> Option<(Vec<Json>, Vec<Vec<Json>>)> {
+    let walk = template.pointer_ending("/move/to")?.to_owned();
+    let place = template.pointer_ending("/place_beacon/at")?.to_owned();
+    let walk_index = route_index(&walk)?;
+    let walk_prefix = format!("/declarative/route/{walk_index}");
+    let walk_step = pointer_get(&template.body, &walk_prefix)?.clone();
     let place_index = route_index(&place)?;
-    let place_step =
-        pointer_get(&template.body, &format!("/declarative/route/{place_index}"))?.clone();
+    let place_prefix = format!("/declarative/route/{place_index}");
+    let place_step = pointer_get(&template.body, &place_prefix)?.clone();
     let mut patch: Vec<Json> = Vec::new();
     let mut removals: Vec<Vec<Json>> = Vec::new();
+    if let (Some(fill), Some(hold)) = (fill, template.pointer_ending("/hold/ms")) {
+        let used = goals
+            .iter()
+            .fold(0_i64, |used, goal| used.saturating_add(goal.time_ms));
+        let left = fill.saturating_sub(used);
+        if left > 0 {
+            patch.push(op("replace", hold, Some(number(left))));
+        }
+    }
     for (k, goal) in goals.iter().enumerate() {
-        let Goal::Mine { site, .. } = goal.goal else {
-            continue;
-        };
-        let at = voxel_location(site);
+        let values = values_of(template, &goal.goal)?;
         if k == 0 {
-            patch.push(op("replace", &walk, Some(at.clone())));
-            patch.push(op("replace", &place, Some(at)));
+            for (pointer, value) in values {
+                patch.push(op("replace", &pointer, Some(value)));
+            }
             continue;
         }
         let n = k.saturating_add(1);
-        let walk_to = with_member(
-            &with_member(&walk_step, "label", string(&format!("to_site_{n}"))),
-            "move",
-            with_member(walk_step.get("move")?, "to", at.clone()),
-        );
-        let place_it = with_member(
-            &with_member(&place_step, "label", string(&format!("place_mine_{n}"))),
-            "place_beacon",
-            with_member(place_step.get("place_beacon")?, "at", at),
-        );
+        let walk_to = step_for(&walk_step, &walk_prefix, &values, n)?;
+        let place_it = step_for(&place_step, &place_prefix, &values, n)?;
         let first_index = place_index
             .saturating_add(1)
             .saturating_add(k.saturating_sub(1).saturating_mul(2));
@@ -186,59 +231,6 @@ fn mine_patch(template: &Declared, goals: &[Candidate]) -> Option<(Vec<Json>, Ve
             ),
             op("remove", &format!("/declarative/route/{first_index}"), None),
         ]);
-    }
-    Some((patch, removals))
-}
-
-/// Hold & Build: the first vent into the declared anchor, one more Build row
-/// per further vent, and the hold filling what is left of the share.
-fn build_patch(
-    template: &Declared,
-    goals: &[Candidate],
-    fill: i64,
-) -> Option<(Vec<Json>, Vec<Vec<Json>>)> {
-    let anchor = template.pointer_ending("/anchor/voxel")?.to_owned();
-    // `.../rows/<j>/add_build_target/target/anchor/voxel`.
-    let (rows, rest) = anchor.split_once("/rows/")?;
-    let row_index = rest.split('/').next()?.parse::<usize>().ok()?;
-    let row = pointer_get(&template.body, &format!("{rows}/rows/{row_index}"))?.clone();
-    let mut patch: Vec<Json> = Vec::new();
-    let mut removals: Vec<Vec<Json>> = Vec::new();
-    let mut used: i64 = 0;
-    for (k, goal) in goals.iter().enumerate() {
-        let Goal::Generator { anchor: at, .. } = goal.goal else {
-            continue;
-        };
-        used = used.saturating_add(goal.time_ms);
-        if k == 0 {
-            patch.push(op("replace", &anchor, Some(voxel_json(at))));
-            continue;
-        }
-        let target = row.get("add_build_target")?.get("target")?;
-        let order = crate::wire::int_of(target, "order").saturating_add(i64::try_from(k).ok()?);
-        let moved = with_member(
-            &with_member(
-                target,
-                "anchor",
-                with_member(target.get("anchor")?, "voxel", voxel_json(at)),
-            ),
-            "order",
-            number(order),
-        );
-        let new_row = with_member(
-            &row,
-            "add_build_target",
-            with_member(row.get("add_build_target")?, "target", moved),
-        );
-        let row_path = format!("{rows}/rows/{}", row_index.saturating_add(k));
-        patch.push(op("add", &row_path, Some(new_row)));
-        removals.push(vec![op("remove", &row_path, None)]);
-    }
-    if let Some(hold) = template.pointer_ending("/hold/ms") {
-        let left = fill.saturating_sub(used);
-        if left > 0 {
-            patch.push(op("replace", hold, Some(number(left))));
-        }
     }
     Some((patch, removals))
 }
@@ -311,12 +303,20 @@ pub(crate) fn why_for(goal: &Goal, candidate: &Candidate, goals: usize, fill: i6
             seconds(fill)
         ),
         Goal::Generator {
+            site,
             anchor,
             richness,
-            core,
+            expands,
         } => format!(
-            "A Generator on the {} heat vent at {} inside {core}'s sphere{}: {} points for {} s \
-             of route (Easy fills {} s of the segment).",
+            "A Build beacon at {}{} whose sphere holds the {} heat vent at {}, with a Generator \
+             on the vent as its first Build target{}: {} points for {} s of route (Easy fills {} \
+             s of the segment).",
+            place(*site),
+            if *expands {
+                ", on the edge of your sphere,"
+            } else {
+                ""
+            },
             richness.name(),
             place(*anchor),
             more,
@@ -335,31 +335,80 @@ pub(crate) fn why_none(feature: Feature) -> String {
     )
 }
 
+/// Why Hold & Build has no suggestion this round, said about the vent
+/// nearest the commander (decisions-log item 113 (15): a vent whose anchor no
+/// site's sphere would hold is said to be one, since nothing else refuses it
+/// before S3's diagnostic).
+pub(crate) fn why_no_vent(no_vent: NoVent) -> String {
+    let why = match no_vent {
+        NoVent::NoCommander => {
+            String::from("Your commander is not in view, so no heat vent was weighed")
+        }
+        NoVent::NoneSeen => String::from("No heat vent is in view"),
+        NoVent::Tapped(at) => format!(
+            "The heat vent at {} has a Generator of yours on it already",
+            place(at)
+        ),
+        NoVent::Poor {
+            at,
+            price,
+            treasury,
+        } => format!(
+            "A Build beacon, its drone and a Generator on the heat vent at {} cost $ {price}, \
+             and the treasury holds $ {treasury}",
+            place(at)
+        ),
+        NoVent::Unfit(at, Unfit::Far) => format!(
+            "The heat vent at {} is more than two sphere reaches from every beacon of yours, so \
+             no new beacon's sphere at the edge of yours would hold it",
+            place(at)
+        ),
+        NoVent::Unfit(at, Unfit::NoSite) => format!(
+            "No site at the edge of your spheres puts the heat vent at {} inside the new \
+             beacon's sphere: the ground between them rises or falls too far, and a Generator \
+             outside its beacon's sphere is never built",
+            place(at)
+        ),
+        NoVent::Dropped(at) => format!(
+            "The heat vent at {} has a site, but no route to it was weighed this round as \
+             reachable and worth something",
+            place(at)
+        ),
+    };
+    format!("{why}, so this template's own values stand.")
+}
+
 /// Why the safe playbook raises what it raises.
+///
+/// It follows the safe playbook's own reading of "short" and "at risk"
+/// ([`crate::safe`]'s PLACEHOLDER, decisions-log item 113 (4)): it never says
+/// power is not short while an own beacon is dark, never gives a headroom of
+/// zero or more as a shortage, and never says no browned-out beacon is in
+/// reach when the only dark beacon is the core. With nothing dark and the
+/// headroom at zero or more, the text is the one T18 wrote.
 ///
 /// When the view did not complete within [`PAGES_MAX`] pages the ground and
 /// the commander were not all read, so nothing was planned from them; the
 /// sentence says so rather than degrading quietly.
 pub(crate) fn why_safe(situation: &Situation, raised: &[String]) -> String {
-    let why = if raised.is_empty() {
-        if situation.economy.headroom_kw < 0 {
-            format!(
-                "Power is short ({} kW) and no browned-out beacon is within {} s, so nothing is \
-                 raised: move to the safest beacon and stay with it.",
-                situation.economy.headroom_kw,
-                seconds(SAFE_REACH_MS)
-            )
-        } else {
-            String::from(
-                "Power is not short, so nothing is raised: move to the safest beacon and stay \
-                 with it.",
-            )
-        }
+    let why = if !crate::safe::power_short(situation) {
+        String::from(
+            "Power is not short, so nothing is raised: move to the safest beacon and stay \
+             with it.",
+        )
+    } else if !raised.is_empty() {
+        format!(
+            "Power is short {}: raise {} to HIGH, nearest first, so they are the first to \
+             revive and the last to brown out.",
+            shortage(situation),
+            raised.join(" and ")
+        )
     } else {
         format!(
-            "Power is short ({} kW): raise {} to HIGH, nearest first, so they brown out last.",
-            situation.economy.headroom_kw,
-            raised.join(" and ")
+            "Power is short {}, and {}, so nothing is raised: move to the safest beacon and \
+             stay with it.",
+            shortage(situation),
+            nothing_raised(situation)
         )
     };
     if situation.view_complete {
@@ -369,6 +418,82 @@ pub(crate) fn why_safe(situation: &Situation, raised: &[String]) -> String {
             "{why} (The view did not complete within {PAGES_MAX} pages, so the ground and the \
              commander were not all read and nothing else was planned.)"
         )
+    }
+}
+
+/// "a and b", "a, b and c": a list for a sentence.
+fn listed(items: &[String]) -> String {
+    match items.split_last() {
+        None => String::new(),
+        Some((last, [])) => last.clone(),
+        Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
+/// "is" or "are", for a list of `count`.
+const fn is_are(count: usize) -> &'static str {
+    if count == 1 { "is" } else { "are" }
+}
+
+/// Why power is short, as a "because" clause: the own beacons that are
+/// browned out, the core named as such, and a headroom only when it is below
+/// zero -- a headroom of zero or more is never given as a shortage.
+fn shortage(situation: &Situation) -> String {
+    let mut dark: Vec<String> = Vec::new();
+    for beacon in situation.own_beacons().filter(|beacon| !beacon.powered) {
+        if beacon.core {
+            dark.insert(0, format!("the core {}", beacon.id));
+        } else {
+            dark.push(beacon.id.clone());
+        }
+    }
+    let headroom = situation.economy.headroom_kw;
+    match (dark.is_empty(), headroom < 0) {
+        (false, false) => format!(
+            "because {} {} browned out",
+            listed(&dark),
+            is_are(dark.len())
+        ),
+        (false, true) => format!(
+            "because {} {} browned out and the headroom is {headroom} kW",
+            listed(&dark),
+            is_are(dark.len())
+        ),
+        _ => format!("because the headroom is {headroom} kW"),
+    }
+}
+
+/// Why nothing is raised although power is short.
+fn nothing_raised(situation: &Situation) -> String {
+    if situation.own_beacons().any(crate::safe::at_risk) {
+        return format!(
+            "no browned-out beacon it may raise is within {} s",
+            seconds(SAFE_REACH_MS)
+        );
+    }
+    let high: Vec<String> = situation
+        .own_beacons()
+        .filter(|beacon| !beacon.core && !beacon.powered && beacon.priority == "HIGH")
+        .map(|beacon| beacon.id.clone())
+        .collect();
+    let core_dark = situation
+        .own_beacons()
+        .any(|beacon| beacon.core && !beacon.powered);
+    let mut reasons: Vec<String> = Vec::new();
+    if !high.is_empty() {
+        reasons.push(format!(
+            "{} {} HIGH already",
+            listed(&high),
+            is_are(high.len())
+        ));
+    }
+    if core_dark {
+        reasons.push(String::from("the safe playbook never raises the core"));
+    }
+    if reasons.is_empty() {
+        String::from("no beacon is browned out")
+    } else {
+        reasons.join(" and ")
     }
 }
 

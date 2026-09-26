@@ -22,11 +22,13 @@
   "meta": {
     "parameters": [
       // Why: the priority raises are the one situational part of the safe
-      // playbook. When power is short, the operator adds one interface step
-      // per own beacon at risk of browning out that it can reach within 60 s,
-      // nearest first and at most two, each setting Quartermaster priority to
-      // HIGH so it browns out last. A seat with power to spare gets the route
-      // as written here: nothing raised.
+      // playbook. When power is short -- an own beacon browned out, or the
+      // headroom below zero -- the operator adds one interface step per own
+      // browned-out beacon that is not the core, is not HIGH already and is
+      // within 60 s, nearest first and at most two, each setting
+      // Quartermaster priority to HIGH so it revives first and browns out
+      // last. A seat with power to spare gets the route as written here:
+      // nothing raised.
       {"pointer": "/declarative/route", "label": "The route: to the safest beacon, then one priority raise per beacon at risk (none by default)"}
     ],
     "title": "Safe playbook",

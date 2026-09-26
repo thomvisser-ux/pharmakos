@@ -419,7 +419,13 @@ impl Easy {
             let declared =
                 playbook::declare(&mut wire, &situation.templates, &EASY_KNOWN_TEMPLATES);
             let safe = safe::safe_playbook(&mut wire, &situation, &declared);
-            advice.suggestions = suggestions(&situation, &evaluated, &declared, safe.as_ref());
+            advice.suggestions = suggestions(
+                &situation,
+                &self.tuning,
+                &evaluated,
+                &declared,
+                safe.as_ref(),
+            );
             advice.safe_playbook_jsonc = safe.map(|plan| plan.jsonc).unwrap_or_default();
         }
         advice.calls = wire.calls();
@@ -537,6 +543,7 @@ fn submit(wire: &mut Wire<'_, '_>, text: &str) -> bool {
 /// (decisions-log item 111, section D).
 fn suggestions(
     situation: &Situation,
+    tuning: &Tuning,
     evaluated: &[Candidate],
     declared: &[Declared],
     safe: Option<&SafePlan>,
@@ -572,7 +579,17 @@ fn suggestions(
             },
             HOLD_AND_BUILD => match candidates::best_for(evaluated, HOLD_AND_BUILD) {
                 Some(best) => {
-                    if let Goal::Generator { anchor, .. } = best.goal {
+                    if let Goal::Generator { site, anchor, .. } = best.goal {
+                        // The walk is the site: the sim deploys only while the
+                        // commander stands within its interface range of it.
+                        put(
+                            template.pointer_ending("/move/to"),
+                            compose::location_text(site),
+                        );
+                        put(
+                            template.pointer_ending("/place_beacon/at"),
+                            compose::location_text(site),
+                        );
                         put(
                             template.pointer_ending("/anchor/voxel"),
                             compose::voxel_text(anchor),
@@ -583,7 +600,7 @@ fn suggestions(
                     }
                     compose::why_for(&best.goal, best, 1, fill)
                 }
-                None => compose::why_none(Feature::Vent),
+                None => compose::why_no_vent(candidates::no_vent(situation, tuning)),
             },
             SAFE_PLAYBOOK => {
                 let raised: &[String] = safe.map_or(&[], |plan| plan.raised.as_slice());
