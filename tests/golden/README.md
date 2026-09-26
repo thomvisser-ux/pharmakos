@@ -113,7 +113,8 @@ carve-out: its files are canonical `gp.v1` JSON and views of the schema — the
 same public surface as `proto/**` — so REUSE.toml puts that directory in the
 permissive tier and its README carries the permissive header. `plan-core/` and
 `schema/` have since joined it on the same argument (decisions-log item
-100 (11)); `docs/` will raise the question again when it lands, and the
+100 (11)), and `operator/`, whose sealed playbooks come from `library/`'s
+permissive templates, joined them (decisions-log item 113); `docs/` will raise the question again when it lands, and the
 PLACEHOLDER in REUSE.toml records it against T20.
 
 Most of these formats cannot carry an SPDX header at all — a hash chain is

@@ -157,6 +157,18 @@ precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 Pharmakos contributors"
 SPDX-License-Identifier = "MIT OR Apache-2.0"
 
+# tests/golden/operator/** is what the built-in operator seals: playbook files
+# instantiated from library/'s templates, each carrying its template's own
+# permissive header through the instantiation. A playbook is the example
+# playbooks' tier, and library/ is permissive (decisions-log item 111, C13), so
+# this area is too, as tests/golden/plan-core/ is for the same reason
+# (decisions-log item 113, taken at T18). AFTER the tests/** block, so it wins.
+[[annotations]]
+path = ["tests/golden/operator/**"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Pharmakos contributors"
+SPDX-License-Identifier = "MIT OR Apache-2.0"
+
 # --- The rules table -------------------------------------------------------
 # rules/rules.v1.json is the canonical JSON of one gp.v1.RulesTable
 # (decisions-log item 78): the shape is schema and the values are data. It is
@@ -228,10 +240,11 @@ SPDX-License-Identifier = "GPL-3.0-or-later"
 # reproductions of material that is MIT OR Apache-2.0 where it lives today —
 # tests/golden/docs/ (generated documentation). docs/LICENSING.md puts that
 # source in the permissive tier, so those goldens arguably belong there too,
-# with the per-directory LICENSE pointers that tier uses. Three cases are
+# with the per-directory LICENSE pointers that tier uses. Four cases are
 # already answered the same way: T1 committed tests/golden/proto/ and gave it
-# its own permissive block above, T8's tests/golden/plan-core/ followed it, and
-# T13's tests/golden/schema/ followed both (decisions-log item 100 (11)). Owner
+# its own permissive block above, T8's tests/golden/plan-core/ followed it,
+# T13's tests/golden/schema/ followed both (decisions-log item 100 (11)), and
+# T18's tests/golden/operator/ followed them (decisions-log item 113). Owner
 # decides at T20, which commits the first golden in the remaining area, and
 # until then the broad tests/** block covers it.
 [[annotations]]
