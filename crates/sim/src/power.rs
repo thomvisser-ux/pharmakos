@@ -17,8 +17,28 @@
 //! Supply is the core's deep-bore surplus plus one Generator per vent at the
 //! vent's richness — the vent's heat is the limit, not the tap, so a second
 //! Generator on a vent that is already tapped adds nothing ([`supply_of`]).
-//! Draw is per fielded item: every beacon its base draw, every unit
-//! `power.kw_per_unit`, every capability structure its own row.
+//! Draw is per fielded item: every unit `power.kw_per_unit`, every capability
+//! structure its own row.
+//!
+//! # A beacon is net zero through its own key-core
+//!
+//! A live beacon draws its base (`power.beacon_base_draw_kw`), and its own
+//! key-core supplies exactly that base (spec section 7's Power supply row;
+//! decisions log section 2.3's key-core decision and item 90), so the two
+//! cancel and **neither column carries either**: [`draw_of`] counts no
+//! beacon's base, the core's included, and [`revive_cost`] does not start from
+//! one. That is the net the tick-0 columns map generation writes already use
+//! (`mapgen`'s `starting_draw`), so a seat's meter does not step at the first
+//! settle, and placing a beacon costs the grid nothing: a beacon with nothing
+//! homed to it is never shed by its own draw (decisions log item 113 (5)).
+//!
+//! PLACEHOLDER: the key-core is **netted out of draw** rather than shown as an
+//! output in supply with the base shown in draw. Spec section 7 gives a
+//! non-core key-core an output of "exactly its own beacon's base draw (net
+//! zero)" and says nothing about which figures the meter shows; item 113 (5)
+//! chose the net figures, as the tick-0 columns already are. The other reading
+//! grows both columns by the base per live beacon and takes a dormant beacon
+//! out of both. Owner, at S1, with the grid.
 //!
 //! # The order is fixed, and it is not the `$` order
 //!
@@ -32,14 +52,24 @@
 //! 2. then **furthest from the core** (or from its former site, which is where
 //!    the core's row still stands even when it is dead);
 //! 3. then **the core last**, because a key-core always powers its own beacon
-//!    and only the extra draw can brown it out;
+//!    and only the load homed to it can brown it out;
 //! 4. ties by **ascending beacon id**, item 62's convention, so the key is
 //!    total.
 //!
 //! A dormant beacon revives only once supply exceeds draw by
 //! `power.revive_margin_kw` **with that beacon's own load added back**, so a
 //! grid on the edge does not oscillate and domes do not flicker. Reviving walks
-//! the same order backwards: highest priority, nearest the core, lowest id.
+//! the same order backwards: the core first, then highest priority, nearest the
+//! core, lowest id. A shed core brings its deep-bore surplus back with it, so
+//! its revival is weighed with that surplus credited, and a core shed by the
+//! load homed to it comes back once that load leaves the margin spare; the
+//! surplus is lost for good only when the core is destroyed (spec section 5,
+//! the Core row).
+//!
+//! A priority raise changes only these two orders: it makes a beacon shed
+//! later and revive sooner. It does not relight a dark beacon and it sheds no
+//! lit one in its place, because [`brown_out`] runs only while draw outruns
+//! supply and a revival waits for the margin whatever the priority.
 //!
 //! Nothing in this module reads a clock and nothing in it divides: every figure
 //! is a sum of integer `kW` rows.
@@ -57,7 +87,11 @@ use crate::world::World;
 ///
 /// A flat copy rather than a borrow of the rules table, because the phase
 /// writes the tables the same table is reached through, and because reading
-/// eleven rows once a tick is cheaper than reading them once a beacon.
+/// ten rows once a tick is cheaper than reading them once a beacon.
+///
+/// `power.beacon_base_draw_kw` is not among them: a live beacon's base is
+/// netted out by its own key-core (see the module docs), so the phase never
+/// reads it. The row stays in the table, where it is contract data.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct PowerRules {
     /// `power.core_surplus_kw`.
@@ -72,8 +106,6 @@ pub struct PowerRules {
     pub per_unit: i32,
     /// `power.revive_margin_kw`.
     pub revive_margin: i32,
-    /// `power.beacon_base_draw_kw`.
-    pub beacon_base: i32,
     /// `structures.autocannon.draw_kw`, read only so the code can say out loud
     /// that it is never charged.
     pub autocannon_draw: i32,
@@ -100,7 +132,6 @@ impl PowerRules {
             generator_rich: by_richness.map_or(0, |by| narrow(by.rich)),
             per_unit: power.map_or(0, |block| narrow(block.kw_per_unit)),
             revive_margin: power.map_or(0, |block| narrow(block.revive_margin_kw)),
-            beacon_base: power.map_or(0, |block| narrow(block.beacon_base_draw_kw)),
             autocannon_draw: structures
                 .and_then(|block| block.autocannon)
                 .map_or(0, |row| narrow(row.draw_kw)),
@@ -294,21 +325,16 @@ pub(crate) fn supply_of(world: &World, seat: SeatId, rules: PowerRules) -> i32 {
     total
 }
 
-/// The seat's draw: every beacon's base, every homed unit, every homed
-/// capability structure.
+/// The seat's draw: every unit and every capability structure homed to a live
+/// beacon.
+///
+/// **No beacon's base is in it**, the core's included: a live beacon's own
+/// key-core supplies exactly its base, so the beacon is net zero and the
+/// column shows the net (see the module docs and their PLACEHOLDER). A beacon
+/// with nothing homed to it adds nothing here.
 #[must_use]
 pub(crate) fn draw_of(world: &World, seat: SeatId, rules: PowerRules) -> i32 {
-    let mut total: i32 = 0;
-    let beacons = world.beacons();
-    let count = usize::try_from(beacons.len()).unwrap_or(0);
-    let mut row: usize = 0;
-    while row < count {
-        if beacons.seats().get(row).copied() == Some(seat.raw()) && beacon_row_is_live(world, row) {
-            total = total.saturating_add(rules.beacon_base);
-        }
-        row = row.saturating_add(1);
-    }
-    total = total.saturating_add(unit_draw_of(world, seat, rules, None));
+    let mut total: i32 = unit_draw_of(world, seat, rules, None);
     let structures = world.structures();
     let count = usize::try_from(structures.len()).unwrap_or(0);
     let mut row: usize = 0;
@@ -446,6 +472,16 @@ pub(crate) fn vent_under(world: &World, at: [crate::math::fixed::Fx; 3]) -> Opti
 }
 
 /// Shed beacons, in the fixed order, until draw no longer outruns supply.
+///
+/// The order is walked **without asking what a shed relieves**. With a
+/// beacon's base netted out by its key-core, shedding a non-core beacon with
+/// nothing homed to it relieves 0 kW, and it is still shed, so a deficit
+/// darkens every such beacon before the core (decisions log item 113 (5)).
+///
+/// PLACEHOLDER: whether the order skips a beacon whose shed relieves nothing.
+/// Spec section 5's Dormant row states the order with no such exception, and
+/// item 113 (5) kept the order as written; the cost is that idle expansions go
+/// dark in any deficit. Owner, at S1, with the grid.
 ///
 /// The candidate list is built **once** and walked in order rather than
 /// re-picked after every shed, which is what bounds the loop: a shed that made
@@ -612,12 +648,22 @@ fn revive_order(world: &World, seat: SeatId, order: &mut Vec<u32>) {
     });
 }
 
-/// What reviving `beacon` would add to the seat's net draw: its own base, its
-/// homed units and its homed structures, less the Generators it would bring
-/// back.
+/// What reviving `beacon` would add to the seat's net draw: its homed units and
+/// its homed structures, less the Generators it would bring back, and less the
+/// core's deep-bore surplus when `beacon` is the seat's core.
+///
+/// The beacon's own base is not in it: its key-core nets it out, as in
+/// [`draw_of`]. The core's surplus is credited back for the same reason the
+/// Generators are: [`supply_of`] counts it only while the core is live, so
+/// reviving the core brings it back. Without that credit a shed core could
+/// never revive, since a total blackout's headroom is 0 and the margin is
+/// positive, and spec section 5 loses the surplus for good only when the core
+/// is **destroyed** (decisions log item 113 (5)).
 fn revive_cost(world: &World, seat: SeatId, rules: PowerRules, beacon: BeaconId) -> i32 {
-    let mut cost = rules.beacon_base;
-    cost = cost.saturating_add(unit_draw_of_dormant(world, seat, rules, beacon));
+    let mut cost = unit_draw_of_dormant(world, seat, rules, beacon);
+    if core_of(world, seat) == Some(beacon) {
+        cost = cost.saturating_sub(rules.core_surplus);
+    }
     let structures = world.structures();
     let count = usize::try_from(structures.len()).unwrap_or(0);
     let mut row: usize = 0;
