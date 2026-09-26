@@ -1,0 +1,70 @@
+# SPDX-FileCopyrightText: 2026 Pharmakos contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# CONTRACT FILE (AGENTS.md section 5).
+#
+# @claude on issues and pull requests, through the Claude GitHub App. Only the owner and
+# collaborators can trigger it (author_association below, on top of the action's own
+# write-access check), so an outside comment never spends the subscription or steers an agent.
+#
+# DCO: the owner decided that commits made here are signed off as the owner, because only the
+# owner can trigger a run — the same footing as the owner's local Claude Code sessions. The
+# instruction is appended to Claude's system prompt; the `dco` job in ci.yml still checks it.
+
+name: claude
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  pull_request_review:
+    types: [submitted]
+  issues:
+    types: [opened, assigned]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: claude-${{ github.event.issue.number || github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  claude:
+    if: |
+      (github.event_name == 'issue_comment'
+        && contains(github.event.comment.body, '@claude')
+        && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) ||
+      (github.event_name == 'pull_request_review_comment'
+        && contains(github.event.comment.body, '@claude')
+        && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) ||
+      (github.event_name == 'pull_request_review'
+        && contains(github.event.review.body, '@claude')
+        && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.review.author_association)) ||
+      (github.event_name == 'issues'
+        && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude'))
+        && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association))
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+      id-token: write
+      actions: read
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Run Claude Code
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          additional_permissions: |
+            actions: read
+          claude_args: |
+            --allowedTools "Bash(cargo fmt:*),Bash(cargo check:*),Bash(cargo clippy:*),Bash(cargo test:*),Bash(cargo xtask ci --quick)"
+            --append-system-prompt "Follow AGENTS.md and CLAUDE.md. Every commit message ends with a Co-Authored-By trailer for Claude followed by the last line 'Signed-off-by: Thom Visser <thom.visser@gmail.com>' (the owner's DCO sign-off, authorised for commits made from this workflow). If a change touches an AGENTS.md section 5 contract path, say so in your reply; never merge."
