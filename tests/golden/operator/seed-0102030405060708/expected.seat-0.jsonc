@@ -38,7 +38,8 @@
 //
 // PLACEHOLDER: the three places' own values (the safest own beacon, and the
 // map's corner) are harmless stand-ins that the wizard or the operator
-// replaces; what the template ships as its own values is the OWNER's.
+// replaces; what the template ships as its own values is the OWNER's, before
+// T22's stage demo.
 {
   "schema_version": {"major": 1, "minor": 0},
   "meta": {
