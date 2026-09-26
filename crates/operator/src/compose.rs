@@ -358,6 +358,11 @@ pub(crate) fn why_no_vent(no_vent: NoVent) -> String {
              and the treasury holds $ {treasury}",
             place(at)
         ),
+        NoVent::Unfit(at, Unfit::NoBeacon) => format!(
+            "You have no beacon, so no site stands inside a sphere of yours to place one whose \
+             sphere would hold the heat vent at {}",
+            place(at)
+        ),
         NoVent::Unfit(at, Unfit::Far) => format!(
             "The heat vent at {} is more than two sphere reaches from every beacon of yours, so \
              no new beacon's sphere at the edge of yours would hold it",
