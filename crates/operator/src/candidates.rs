@@ -13,21 +13,30 @@
 //!
 //! # What a candidate is at the skeleton
 //!
-//! Easy fills two templates' goals, and a candidate is one goal:
+//! Easy fills two templates' goals, and a candidate is one goal. Both place a
+//! beacon, and both find its site the same way (`site_for`): beside the
+//! feature when the feature is inside one of the seat's own spheres already,
+//! so the placement is legal; else one **expansion** out, on the nearest own
+//! sphere's edge on the line towards the feature. Either way the site is
+//! inside an own sphere and the feature's centre is inside the new beacon's
+//! sphere, both by 3-D squared distance less [`SPHERE_MARGIN_VOXELS`], which
+//! is stricter than the sim and never looser. The commander walks to the site
+//! and deploys there, because the sim deploys only while the commander stands
+//! within its interface range of the site.
 //!
-//! * **a Mine site** (Expand & Mine): a place beside an ore seam where a
-//!   Mine beacon may be placed -- inside one of the seat's own spheres, so the
-//!   placement is legal -- whose sphere then holds the seam. A seam already
-//!   inside the sphere of one of the seat's own non-core beacons is taken to
-//!   be mined already and offers nothing. A seam just outside every own
-//!   sphere is still reachable by one **expansion**: the site is then on the
-//!   sphere's edge on the line towards it.
-//! * **a Generator anchor** (Hold & Build): a heat vent inside the seat's
-//!   **core**'s sphere with no own Generator on it. Hold & Build visits the
-//!   safest own beacon, which is the core while every beacon is whole, and a
-//!   target outside the visited beacon's sphere builds nothing; the wire
-//!   carries no beacon hit points, so "the core" is the reading an ordinary
-//!   client can make.
+//! * **a Mine site** (Expand & Mine): a place for a Mine beacon whose sphere
+//!   then holds an ore seam. A seam already inside the sphere of one of the
+//!   seat's own non-core beacons is taken to be mined already and offers
+//!   nothing.
+//! * **a Generator goal** (Hold & Build, place-and-build since decisions-log
+//!   item 113 (6)): a heat vent with no own Generator on it, and a site for a
+//!   **Build** beacon whose initial Build target is the Generator on the vent.
+//!   The vent's anchor must lie inside the new beacon's sphere, because the sim
+//!   holds a Build target to its own beacon's sphere and drops one outside it
+//!   (`crates/sim/src/mandate.rs`'s `inside_sphere`). The starting vent is
+//!   outside the core's sphere at every seed (items 90 and 95), so on the
+//!   committed map this is the expansion case: a site at the edge of the
+//!   core's sphere on the vent's side.
 //!
 //! Every target is a fixed voxel or a fixed own `b_NN` (Easy's row: "fixed
 //! targets only"), and nothing looks ahead: the only evaluation is the
@@ -47,12 +56,21 @@ use crate::easy::{
     RISK_POINTS_PER_ENEMY, SPHERE_MARGIN_VOXELS,
 };
 use crate::situation::Situation;
-use crate::terrain::{Feature, Patch};
+use crate::terrain::{Feature, Patch, Terrain};
 use crate::tuning::{Richness, Tuning};
-use crate::wire::{
-    Wire, array_of, bool_of, int_of, location_voxel, object, string, voxel_location,
-};
+use crate::wire::{Wire, array_of, bool_of, int_of, location_voxel, object, voxel_location};
 use pharmakos_proto::json::Json;
+
+/// What a placed beacon adds to its seat's draw, whole kW, in every goal that
+/// places one.
+///
+/// PLACEHOLDER: zero, because since T14b a placed beacon is net zero on the
+/// grid -- its key-core output equals its own base draw, and the sim's
+/// `draw_of` no longer charges a live beacon its base (decisions-log items 90
+/// and 113 (5)) -- so `structures.beacon.draw_kw` is no longer read as a
+/// placement's added draw. What the grid's figures show a placed beacon as is
+/// the owner's, at **S1**, with the grid.
+const PLACED_BEACON_ADDED_DRAW_KW: i64 = 0;
 
 /// One goal a template can be filled with.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -68,14 +86,18 @@ pub(crate) enum Goal {
         /// True when the seam is outside every own sphere today.
         expands: bool,
     },
-    /// Add a Generator on the vent at `anchor` to the core's Build list.
+    /// Place a Build beacon at `site` whose initial Build target is a
+    /// Generator on the vent at `anchor`.
     Generator {
-        /// The vent's centre column, where the Generator stands.
+        /// Where the beacon goes, and where the commander walks to place it.
+        site: [i32; 3],
+        /// The vent's centre column, where the Generator stands: inside the
+        /// new beacon's sphere.
         anchor: [i32; 3],
         /// The vent's grade.
         richness: Richness,
-        /// The core it is built from, `b_NN`.
-        core: String,
+        /// True when the vent is outside every own sphere today.
+        expands: bool,
     },
 }
 
@@ -88,11 +110,11 @@ impl Goal {
         }
     }
 
-    /// Where the goal is, for the total order and the "why".
+    /// Where the goal is -- the site the commander walks to and places at --
+    /// for the total order.
     pub(crate) const fn at(&self) -> [i32; 3] {
         match self {
-            Goal::Mine { site, .. } => *site,
-            Goal::Generator { anchor, .. } => *anchor,
+            Goal::Mine { site, .. } | Goal::Generator { site, .. } => *site,
         }
     }
 }
@@ -141,6 +163,27 @@ fn inside(centre: [i32; 3], at: [i32; 3], radius: i64) -> bool {
     distance2(centre, at) <= reach.saturating_mul(reach)
 }
 
+/// What a Generator goal spends, whole $: the beacon, the Generator, and the
+/// build drone the new beacon fabricates first because the Generator is its
+/// work and it has no drone -- the rules table's price for the route. (The
+/// Mine goal's price is the beacon's alone, as T18 built it.)
+pub(crate) fn vent_cost(tuning: &Tuning) -> i64 {
+    tuning
+        .beacon_cost_dollars
+        .saturating_add(tuning.generator_cost_dollars)
+        .saturating_add(tuning.build_drone_cost_dollars)
+}
+
+/// True when one of the seat's own Generators stands on the patch.
+fn tapped(situation: &Situation, patch: &Patch) -> bool {
+    situation.own_generators.iter().any(|generator| {
+        patch
+            .columns
+            .iter()
+            .any(|column| column[0] == generator[0] && column[1] == generator[1])
+    })
+}
+
 /// The goals the map offers this seat, before any call: legal, affordable,
 /// and in a total order, nearest the commander first, cut at Easy's
 /// candidate count.
@@ -155,30 +198,23 @@ pub(crate) fn enumerate(situation: &Situation, tuning: &Tuning) -> Vec<Goal> {
     for patch in situation.terrain.patches() {
         match patch.feature {
             Feature::Vent => {
-                if tuning.generator_cost_dollars > treasury {
+                // PLACEHOLDER: a Generator goal always places a new Build
+                // beacon and never adds the Generator to an existing beacon's
+                // Build list, because Hold & Build is place-and-build
+                // (decisions-log item 113 (6)) and the wire carries no beacon
+                // mandate to tell a Build beacon from a Mine one. Owner, at
+                // **S1**, with the grid on the wire.
+                if vent_cost(tuning) > treasury || tapped(situation, &patch) {
                     continue;
                 }
-                // PLACEHOLDER: a Generator goal is a vent inside the core's
-                // sphere only, the core standing in for "the safest beacon"
-                // Hold & Build visits (the wire carries no beacon hit points
-                // and no grid). Owner, at **S1**, with the grid on the wire.
-                let Some(core) = situation.core() else {
-                    continue;
-                };
-                let tapped = situation.own_generators.iter().any(|generator| {
-                    patch
-                        .columns
-                        .iter()
-                        .any(|column| column[0] == generator[0] && column[1] == generator[1])
-                });
-                if tapped || !inside(core.at, patch.centre, radius) {
-                    continue;
+                if let Ok((site, expands)) = site_for(&situation.terrain, &own, &patch, radius) {
+                    goals.push(Goal::Generator {
+                        site,
+                        anchor: patch.centre,
+                        richness: patch.richness,
+                        expands,
+                    });
                 }
-                goals.push(Goal::Generator {
-                    anchor: patch.centre,
-                    richness: patch.richness,
-                    core: core.id.clone(),
-                });
             }
             Feature::Seam => {
                 if tuning.beacon_cost_dollars > treasury {
@@ -194,7 +230,7 @@ pub(crate) fn enumerate(situation: &Situation, tuning: &Tuning) -> Vec<Goal> {
         let at = goal.at();
         (distance2_xy(commander, at), at, goal.template())
     });
-    goals.dedup_by(|a, b| a.at() == b.at());
+    goals.dedup_by(|a, b| a.at() == b.at() && a.template() == b.template());
     goals.truncate(usize::try_from(EASY_CANDIDATES).unwrap_or(usize::MAX));
     goals
 }
@@ -207,8 +243,8 @@ fn mine_site(
     radius: i64,
 ) -> Option<Goal> {
     // Already worked: a seam inside one of the seat's own non-core beacons'
-    // spheres. (A non-core beacon at the skeleton is one a Mine goal
-    // placed; BeaconSummary carries no mandate to say so for certain.)
+    // spheres. (A non-core beacon at the skeleton is one a goal placed;
+    // BeaconSummary carries no mandate to say so for certain.)
     //
     // PLACEHOLDER: "inside an own non-core sphere" read as "mined already".
     // Owner, at **S1**, when a beacon's mandate is on the wire.
@@ -218,63 +254,170 @@ fn mine_site(
     {
         return None;
     }
-    // The own beacon nearest the seam, ties to the lowest id (`own` is
-    // ascending by id and `min_by_key` keeps the first of equals).
-    let nearest = own
-        .iter()
-        .min_by_key(|beacon| distance2_xy(beacon.at, patch.centre))?;
-    let terrain = &situation.terrain;
-    if own
-        .iter()
-        .any(|beacon| inside(beacon.at, patch.centre, radius))
-    {
-        // Inside a sphere today: beside the seam, one column out from its
-        // edge nearest that beacon.
-        let edge = patch
-            .columns
-            .iter()
-            .min_by_key(|column| (distance2_xy(nearest.at, **column), column[0], column[1]))?;
-        let step = |to: i32, from: i32| to.saturating_sub(from).signum();
-        let x = edge[0].saturating_add(step(nearest.at[0], edge[0]));
-        let y = edge[1].saturating_add(step(nearest.at[1], edge[1]));
-        let site = terrain.stand(x, y)?;
-        if !own.iter().any(|beacon| inside(beacon.at, site, radius)) {
-            return None;
-        }
-        return Some(Goal::Mine {
-            site,
-            seam: patch.centre,
-            richness: patch.richness,
-            expands: false,
-        });
-    }
-    // Outside every sphere: one expansion, on the nearest sphere's edge
-    // towards the seam, when the seam is then inside the new sphere.
-    //
-    // PLACEHOLDER: one expansion at most, so a seam further than twice the
-    // reach from every own beacon offers nothing. Owner, at **S5**.
-    let reach = radius.saturating_sub(SPHERE_MARGIN_VOXELS).max(0);
-    let apart = distance2_xy(nearest.at, patch.centre).isqrt();
-    if apart == 0 || apart > reach.saturating_mul(2) {
-        return None;
-    }
-    let along = |from: i32, to: i32| -> Option<i32> {
-        let delta = i64::from(to).saturating_sub(i64::from(from));
-        let moved = delta.saturating_mul(reach).checked_div(apart)?;
-        i32::try_from(i64::from(from).saturating_add(moved)).ok()
-    };
-    let x = along(nearest.at[0], patch.centre[0])?;
-    let y = along(nearest.at[1], patch.centre[1])?;
-    let site = terrain.stand(x, y)?;
-    if !inside(nearest.at, site, radius) || !inside(site, patch.centre, radius) {
-        return None;
-    }
+    let (site, expands) = site_for(&situation.terrain, own, patch, radius).ok()?;
     Some(Goal::Mine {
         site,
         seam: patch.centre,
         richness: patch.richness,
-        expands: true,
+        expands,
     })
+}
+
+/// Why a feature offers no site.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Unfit {
+    /// The seat has no beacon, or the feature is further than two reaches
+    /// from every own beacon.
+    Far,
+    /// No site tried both stands inside an own sphere and holds the
+    /// feature's centre inside its own new sphere.
+    NoSite,
+}
+
+/// Where a new beacon may stand so that its sphere holds `patch`'s centre,
+/// and whether that is an expansion (the patch is outside every own sphere
+/// today).
+///
+/// # Errors
+///
+/// [`Unfit`], saying why no site qualified.
+fn site_for(
+    terrain: &Terrain,
+    own: &[&crate::situation::Beacon],
+    patch: &Patch,
+    radius: i64,
+) -> Result<([i32; 3], bool), Unfit> {
+    // The own beacon nearest the patch, ties to the lowest id (`own` is
+    // ascending by id and `min_by_key` keeps the first of equals).
+    let nearest = own
+        .iter()
+        .min_by_key(|beacon| distance2_xy(beacon.at, patch.centre))
+        .ok_or(Unfit::Far)?;
+    if own
+        .iter()
+        .any(|beacon| inside(beacon.at, patch.centre, radius))
+    {
+        // Inside a sphere today: beside the patch, one column out from its
+        // edge nearest that beacon.
+        let edge = patch
+            .columns
+            .iter()
+            .min_by_key(|column| (distance2_xy(nearest.at, **column), column[0], column[1]))
+            .ok_or(Unfit::NoSite)?;
+        let step = |to: i32, from: i32| to.saturating_sub(from).signum();
+        let x = edge[0].saturating_add(step(nearest.at[0], edge[0]));
+        let y = edge[1].saturating_add(step(nearest.at[1], edge[1]));
+        let site = terrain.stand(x, y).ok_or(Unfit::NoSite)?;
+        if !own.iter().any(|beacon| inside(beacon.at, site, radius))
+            || !inside(site, patch.centre, radius)
+        {
+            return Err(Unfit::NoSite);
+        }
+        return Ok((site, false));
+    }
+    // Outside every sphere: one expansion, on the line from the nearest
+    // beacon towards the patch, as far out as the site can stand inside that
+    // beacon's sphere while its own new sphere holds the patch's centre --
+    // both in 3-D, so a site the ground lifts or drops out of either sphere
+    // is passed over for the next voxel in.
+    //
+    // PLACEHOLDER: one expansion at most, so a feature further than twice the
+    // reach from every own beacon offers nothing. The site check below already
+    // drops every such feature -- a site at most one reach from the beacon
+    // cannot hold a centre more than one reach beyond it -- so raising this
+    // number alone changes no candidate (decisions-log item 113 (7)). Owner,
+    // at **S5**.
+    let reach = radius.saturating_sub(SPHERE_MARGIN_VOXELS).max(0);
+    let apart = distance2_xy(nearest.at, patch.centre).isqrt();
+    if apart == 0 || apart > reach.saturating_mul(2) {
+        return Err(Unfit::Far);
+    }
+    let along = |from: i32, to: i32, out: i64| -> Option<i32> {
+        let delta = i64::from(to).saturating_sub(i64::from(from));
+        let moved = delta.saturating_mul(out).checked_div(apart)?;
+        i32::try_from(i64::from(from).saturating_add(moved)).ok()
+    };
+    for out in (1..=reach).rev() {
+        let (Some(x), Some(y)) = (
+            along(nearest.at[0], patch.centre[0], out),
+            along(nearest.at[1], patch.centre[1], out),
+        ) else {
+            continue;
+        };
+        let Some(site) = terrain.stand(x, y) else {
+            continue;
+        };
+        if inside(nearest.at, site, radius) && inside(site, patch.centre, radius) {
+            return Ok((site, true));
+        }
+    }
+    Err(Unfit::NoSite)
+}
+
+/// Why Hold & Build has no goal this round: the vent nearest the commander
+/// in the ground plane, and what kept it out.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum NoVent {
+    /// The seat's commander is not in view, so nothing was weighed.
+    NoCommander,
+    /// No heat vent is in view.
+    NoneSeen,
+    /// One of the seat's own Generators stands on it already.
+    Tapped([i32; 3]),
+    /// The treasury holds less than the route's price ([`vent_cost`]).
+    Poor {
+        /// The vent's centre column.
+        at: [i32; 3],
+        /// The route's price, whole $.
+        price: i64,
+        /// The treasury, whole $.
+        treasury: i64,
+    },
+    /// No site qualified ([`Unfit`]).
+    Unfit([i32; 3], Unfit),
+    /// It was a goal, and its estimate or its worth dropped it.
+    Dropped([i32; 3]),
+}
+
+/// Why no vent is a goal worth filling Hold & Build with: said about the
+/// vent nearest the commander in the ground plane, ties to the lowest
+/// `(x, y, z)`.
+pub(crate) fn no_vent(situation: &Situation, tuning: &Tuning) -> NoVent {
+    let Some(commander) = situation.commander else {
+        return NoVent::NoCommander;
+    };
+    let Some(patch) = situation
+        .terrain
+        .patches()
+        .into_iter()
+        .filter(|patch| patch.feature == Feature::Vent)
+        .min_by_key(|patch| (distance2_xy(commander, patch.centre), patch.centre))
+    else {
+        return NoVent::NoneSeen;
+    };
+    let at = patch.centre;
+    if tapped(situation, &patch) {
+        return NoVent::Tapped(at);
+    }
+    let price = vent_cost(tuning);
+    let treasury = situation.economy.treasury;
+    if price > treasury {
+        return NoVent::Poor {
+            at,
+            price,
+            treasury,
+        };
+    }
+    let own: Vec<&crate::situation::Beacon> = situation.own_beacons().collect();
+    match site_for(
+        &situation.terrain,
+        &own,
+        &patch,
+        tuning.sphere_radius_voxels,
+    ) {
+        Err(unfit) => NoVent::Unfit(at, unfit),
+        Ok(_) => NoVent::Dropped(at),
+    }
 }
 
 /// Evaluate every goal: one `estimate_route` each from the commander, then
@@ -291,18 +434,12 @@ pub(crate) fn evaluate(
     };
     let mut out: Vec<Candidate> = Vec::new();
     for (id, goal) in goals.into_iter().enumerate() {
-        let destination = match &goal {
-            Goal::Mine { site, .. } => voxel_location(*site),
-            // Hold & Build walks to the beacon and changes it on site; the
-            // drones walk to the vent.
-            Goal::Generator { core, .. } => object(vec![(
-                "beacon_anchor",
-                object(vec![("beacon_id", string(core))]),
-            )]),
-        };
+        // Both goals walk the commander to the site and place there; the
+        // drones walk on to the seam or the vent.
+        let site = goal.at();
         let params = object(vec![(
             "waypoints",
-            Json::Array(vec![voxel_location(commander), destination]),
+            Json::Array(vec![voxel_location(commander), voxel_location(site)]),
         )]);
         let Ok(estimate) = wire.call("estimate_route", params) else {
             continue;
@@ -314,14 +451,12 @@ pub(crate) fn evaluate(
         // estimator would not stand a walker in -- is not a site. `Leg.to`
         // is read in the declared shape, a `gp.v1.Location`, and in the bare
         // voxel `main` answered before T17 fixed it.
-        if let Goal::Mine { site, .. } = &goal {
-            let ends = array_of(&estimate, "legs")
-                .last()
-                .and_then(|leg| leg.get("to"))
-                .and_then(location_voxel);
-            if ends.is_some_and(|to| to[0] != site[0] || to[1] != site[1]) {
-                continue;
-            }
+        let ends = array_of(&estimate, "legs")
+            .last()
+            .and_then(|leg| leg.get("to"))
+            .and_then(location_voxel);
+        if ends.is_some_and(|to| to[0] != site[0] || to[1] != site[1]) {
+            continue;
         }
         let travel = int_of(&estimate, "ms").max(0);
         if let Some(candidate) = score(situation, tuning, id, goal, travel) {
@@ -351,7 +486,7 @@ fn score(
                 cost,
                 ore.saturating_sub(cost),
                 EXPANSION_POINTS_PER_BEACON,
-                tuning.beacon_draw_kw,
+                PLACED_BEACON_ADDED_DRAW_KW,
                 // There, place, and back: the route returns home.
                 // PLACEHOLDER: the way back is costed as the way there
                 // (travel x 2) rather than estimated. Owner, at **S5**.
@@ -361,19 +496,21 @@ fn score(
             )
         }
         Goal::Generator { richness, .. } => {
-            let cost = tuning.generator_cost_dollars;
+            let cost = vent_cost(tuning);
             let power = tuning
                 .generator_kw(*richness)
                 .saturating_mul(DOLLARS_PER_KW);
             (
                 cost,
                 power.saturating_sub(cost),
-                0,
-                0,
-                // There and change it on site; the commander then holds.
+                EXPANSION_POINTS_PER_BEACON,
+                PLACED_BEACON_ADDED_DRAW_KW,
+                // There, place, and commit the initial Build target list --
+                // one settings field -- on site; the commander then holds by
+                // the new beacon while its drone builds.
                 travel_ms
-                    .saturating_add(tuning.visit_handshake_ms)
-                    .saturating_add(tuning.build_target_ms),
+                    .saturating_add(tuning.place_beacon_deploy_ms)
+                    .saturating_add(tuning.edit_settings_base_ms),
             )
         }
     };

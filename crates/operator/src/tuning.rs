@@ -15,10 +15,15 @@
 //! number below comes from a row, and a row that is missing is an error
 //! rather than a default. proto3 JSON reads an absent scalar as zero, so a
 //! scalar row whose zero means nothing -- the sphere radius, both costs, the
-//! seam's size and the three interface times -- is refused at zero too. The
-//! beacon's `draw_kw` is not: a beacon that draws nothing is a rule a table
+//! seam's size and the two interface times -- is refused at zero too. The
+//! build drone's cost is not: a drone that costs nothing is a rule a table
 //! may state. The by-richness rows are refused only when the whole row is
 //! absent.
+//!
+//! `structures.beacon.draw_kw` is **not read**: since T14b a placed beacon is
+//! net zero on the grid (its key-core output equals its own base draw,
+//! decisions-log items 90 and 113 (5)), so no goal charges it
+//! ([`crate::candidates`]'s `PLACED_BEACON_ADDED_DRAW_KW`).
 
 use pharmakos_proto::gp::v1::{ByRichness, RulesTable};
 
@@ -72,20 +77,21 @@ pub(crate) struct Tuning {
     pub(crate) sphere_radius_voxels: i64,
     /// `structures.beacon.cost_dollars`.
     pub(crate) beacon_cost_dollars: i64,
-    /// `structures.beacon.draw_kw`.
-    pub(crate) beacon_draw_kw: i64,
     /// `structures.generator.cost_dollars`.
     pub(crate) generator_cost_dollars: i64,
+    /// `units.build_drone.cost_dollars`: what the Build beacon a vent goal
+    /// places fabricates first, because the Generator is its work and it has
+    /// no drone.
+    pub(crate) build_drone_cost_dollars: i64,
     /// `power.generator_output_kw`, by richness.
     generator_output_kw: ByRichness,
     /// `economy.ore_yield_per_voxel_dollars`, by richness.
     ore_yield_per_voxel_dollars: ByRichness,
     /// `economy.seam_voxels`.
     pub(crate) seam_voxels: i64,
-    /// `interface_times.visit_handshake_ms`.
-    pub(crate) visit_handshake_ms: i64,
-    /// `interface_times.build_target_ms`.
-    pub(crate) build_target_ms: i64,
+    /// `interface_times.edit_settings_base_ms`: a one-field settings row,
+    /// which is what a placed beacon's initial Build target list is.
+    pub(crate) edit_settings_base_ms: i64,
     /// `interface_times.place_beacon_deploy_ms`.
     pub(crate) place_beacon_deploy_ms: i64,
 }
@@ -115,6 +121,10 @@ impl Tuning {
         let times = table
             .interface_times
             .ok_or_else(|| missing("interface_times"))?;
+        let build_drone = table
+            .units
+            .and_then(|units| units.build_drone)
+            .ok_or_else(|| missing("units.build_drone"))?;
         // Zero (or, for a time, below it) where zero means nothing: refused.
         for (row, value) in [
             (
@@ -131,12 +141,8 @@ impl Tuning {
             ),
             ("economy.seam_voxels", i64::from(economy.seam_voxels)),
             (
-                "interface_times.visit_handshake_ms",
-                i64::from(times.visit_handshake_ms),
-            ),
-            (
-                "interface_times.build_target_ms",
-                i64::from(times.build_target_ms),
+                "interface_times.edit_settings_base_ms",
+                i64::from(times.edit_settings_base_ms),
             ),
             (
                 "interface_times.place_beacon_deploy_ms",
@@ -150,8 +156,8 @@ impl Tuning {
         Ok(Tuning {
             sphere_radius_voxels: i64::from(beacon.sphere_radius_voxels),
             beacon_cost_dollars: i64::from(beacon_row.cost_dollars),
-            beacon_draw_kw: i64::from(beacon_row.draw_kw),
             generator_cost_dollars: i64::from(generator_row.cost_dollars),
+            build_drone_cost_dollars: i64::from(build_drone.cost_dollars),
             generator_output_kw: power
                 .generator_output_kw
                 .ok_or_else(|| missing("power.generator_output_kw"))?,
@@ -159,8 +165,7 @@ impl Tuning {
                 .ore_yield_per_voxel_dollars
                 .ok_or_else(|| missing("economy.ore_yield_per_voxel_dollars"))?,
             seam_voxels: i64::from(economy.seam_voxels),
-            visit_handshake_ms: i64::from(times.visit_handshake_ms),
-            build_target_ms: i64::from(times.build_target_ms),
+            edit_settings_base_ms: i64::from(times.edit_settings_base_ms),
             place_beacon_deploy_ms: i64::from(times.place_beacon_deploy_ms),
         })
     }
@@ -200,9 +205,9 @@ mod tests {
                 "\"seam_voxels\": 0",
             ),
             (
-                "interface_times.build_target_ms",
-                "\"build_target_ms\": 2500",
-                "\"build_target_ms\": 0",
+                "interface_times.edit_settings_base_ms",
+                "\"edit_settings_base_ms\": 2000",
+                "\"edit_settings_base_ms\": 0",
             ),
         ] {
             let text = committed();

@@ -20,10 +20,18 @@
 //! template's. Every raise is one interface step with one row, `set_priority`
 //! to `HIGH`: nothing here can recycle, switch a mandate or place.
 //!
-//! PLACEHOLDER: "power is short" is read as the seat's own `headroom_kw_now`
-//! below zero at the frozen snapshot, and an "at-risk" beacon as an own
-//! non-core beacon with `powered = false` (spec section 14 defines neither).
-//! Owner, at **S1**, with the grid.
+//! PLACEHOLDER: spec section 14 defines neither "power is short" nor "at
+//! risk", so both are read here (decisions-log item 113 (4)): **power is
+//! short** when any own beacon is browned out (`powered = false`) or the
+//! seat's own `headroom_kw_now` is below zero at the frozen snapshot, and a
+//! beacon is **at risk** when it is an own non-core beacon that is browned
+//! out and whose priority is not already HIGH. A raise does not relight a
+//! dark beacon on the grid as built: `brown_out` returns early once supply
+//! covers draw, and `revive` needs the headroom less the beacon's cost to
+//! reach the revive margin (`crates/sim/src/power.rs`), so a raise orders the
+//! next revival and the next shed -- the raised beacon revives first and is
+//! shed last -- and nothing more. Whether a raise should re-apply the
+//! brownout order is the owner's question. Owner, at **S1**, with the grid.
 //!
 //! PLACEHOLDER: the rescue rule spec section 14 names is absent, because
 //! nothing can be rescued before combat; it is the template's to gain. Owner,
@@ -34,7 +42,7 @@ use pharmakos_proto::json::Json;
 use crate::candidates::distance2_xy;
 use crate::easy::{SAFE_ESTIMATES, SAFE_MAX_RAISED, SAFE_PLAYBOOK, SAFE_REACH_MS};
 use crate::playbook::{Declared, instantiate};
-use crate::situation::Situation;
+use crate::situation::{Beacon, Situation};
 use crate::wire::{Wire, bool_of, compact, int_of, object, string, voxel_location};
 
 /// The safe playbook this round, and what it raised.
@@ -80,7 +88,7 @@ pub(crate) fn safe_playbook(
         return Some(nothing_raised);
     };
 
-    let raised = at_risk(wire, situation);
+    let raised = to_raise(wire, situation);
     if raised.is_empty() {
         return Some(nothing_raised);
     }
@@ -115,13 +123,25 @@ pub(crate) fn safe_playbook(
     })
 }
 
-/// The beacons to raise: none unless power is short; else the own non-core
-/// beacons that are browned out, the [`SAFE_ESTIMATES`] nearest the
-/// commander in the ground plane estimated from it, those within
-/// [`SAFE_REACH_MS`] kept, nearest by travel first, ties to the lowest id,
-/// at most [`SAFE_MAX_RAISED`].
-fn at_risk(wire: &mut Wire<'_, '_>, situation: &Situation) -> Vec<String> {
-    if situation.economy.headroom_kw >= 0 {
+/// Power is short: any own beacon is browned out, or the seat's own headroom
+/// is below zero (the module docs' PLACEHOLDER).
+pub(crate) fn power_short(situation: &Situation) -> bool {
+    situation.economy.headroom_kw < 0 || situation.own_beacons().any(|beacon| !beacon.powered)
+}
+
+/// A beacon at risk: an own non-core beacon that is browned out and whose
+/// priority is not already HIGH (the module docs' PLACEHOLDER). The core is
+/// never raised, and a beacon already HIGH has nothing left to gain from one.
+pub(crate) fn at_risk(beacon: &Beacon) -> bool {
+    beacon.own && !beacon.core && !beacon.powered && beacon.priority != "HIGH"
+}
+
+/// The beacons to raise: none unless power is short; else the beacons at
+/// risk, the [`SAFE_ESTIMATES`] nearest the commander in the ground plane
+/// estimated from it, those within [`SAFE_REACH_MS`] kept, nearest by travel
+/// first, ties to the lowest id, at most [`SAFE_MAX_RAISED`].
+fn to_raise(wire: &mut Wire<'_, '_>, situation: &Situation) -> Vec<String> {
+    if !power_short(situation) {
         return Vec::new();
     }
     let Some(commander) = situation.commander else {
@@ -129,7 +149,7 @@ fn at_risk(wire: &mut Wire<'_, '_>, situation: &Situation) -> Vec<String> {
     };
     let mut dark: Vec<(i64, &str)> = situation
         .own_beacons()
-        .filter(|beacon| !beacon.core && !beacon.powered)
+        .filter(|beacon| at_risk(beacon))
         .map(|beacon| (distance2_xy(commander, beacon.at), beacon.id.as_str()))
         .collect();
     dark.sort_unstable();

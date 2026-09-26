@@ -41,6 +41,12 @@ pub(crate) struct Beacon {
     pub(crate) core: bool,
     /// Own beacons only: false while it is browned out.
     pub(crate) powered: bool,
+    /// Own beacons only: its Quartermaster priority, by its proto name
+    /// (`"HIGH"`), translated from the lower-case wire value through
+    /// [`Wire::enum_name`] (decisions-log item 80; AGENTS.md section 3 rule
+    /// 4). Another seat's beacon carries no priority on the wire, so this is
+    /// empty for it.
+    pub(crate) priority: String,
 }
 
 /// The seat's own economy as the world stands (`get_economy_forecast`'s
@@ -89,11 +95,6 @@ impl Situation {
         self.beacons.iter().filter(|beacon| beacon.own)
     }
 
-    /// The seat's core, if it still has one.
-    pub(crate) fn core(&self) -> Option<&Beacon> {
-        self.own_beacons().find(|beacon| beacon.core)
-    }
-
     /// Make the fixed reads.
     ///
     /// # Errors
@@ -126,12 +127,21 @@ impl Situation {
                     continue;
                 };
                 let mine = text_of(row, "owner") == own;
+                let priority = Wire::enum_name(
+                    "gp.v1.InterfaceRow.QuartermasterPriority",
+                    row.get("priority"),
+                );
                 beacons.push(Beacon {
                     id: text_of(row, "beacon_id").to_owned(),
                     at,
                     own: mine,
                     core: mine && bool_of(row, "core"),
                     powered: mine && bool_of(row, "powered"),
+                    priority: if mine {
+                        priority.unwrap_or_default()
+                    } else {
+                        String::new()
+                    },
                 });
             }
             text_of(&page, "next_cursor").clone_into(&mut cursor);
