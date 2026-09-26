@@ -363,6 +363,42 @@ CI; they do not include the owner's review latency, which the float in section 4
 - **Contract PR:** yes in part — hashed state extends.
 - **Agent-days:** 10. **Split seam:** `$` and the Quartermaster as PR 1; `kW`, the grid and brownout as PR 2.
 - **PLACEHOLDERs:** every `$` and `kW` number — BMI, starting `$`, structure and unit costs, core surplus, Generator output per richness, revive margin, backlog threshold, sphere radius, placement range, commander speed, ruin salvage value (decision 14, all as rules-table rows, never as constants in code).
+- **Amended 2026-09-25 (item 113).** The grid as built charges every live beacon its base draw, the core included,
+  against section 2.3's key-core decision and item 90 (a beacon is net zero through its own key-core), and a shed
+  core can never revive. T14b fixes both, in wave 6's run 3.
+
+---
+
+### T14b — `crates/sim`: the key-core on the grid
+
+- **Crate owned:** `crates/sim`, with every golden its fix moves (the determinism chain, `economy/`, `interpreter/`,
+  `tests/golden/scenarios/**` and the gateway's event goldens where they move) and the two committed scenario files
+  where an asserted tick moves. Not `tests/golden/vista`, `tests/golden/operator` or the `instantiate_suggested`
+  golden, which cannot move.
+- **Builds:** decisions-log item 113 (5). A live beacon's own base draw is netted out by its own key-core: `draw_of`
+  and `revive_cost` stop counting it, the core included, and `supply_of` is unchanged, so the settled columns agree
+  with map generation's tick-0 columns and a placed beacon costs the grid nothing. `revive_cost` credits the core's
+  surplus back when the beacon revived is the core, so a shed core can come back. The zero-relief shed is kept and
+  pinned. The comments that say a priority raise "fixes a shortfall" are reworded to what the grid does.
+- **Implements:** decisions-log section 2.3's key-core decision and item 90 (a beacon is net zero through its own
+  key-core); spec section 5 (the core's surplus is lost for good only when the core is destroyed) and section 7's
+  Power supply row.
+- **Needs:** T14 and T17, merged, and item 113's pull request. Runs beside T19 PR 2 in wave 6's run 3 and merges
+  before it.
+- **Acceptance:** `a_placed_beacon_adds_no_draw`; a shed core's recovery once its load leaves the revive margin spare,
+  and no shed-and-revive on alternating ticks; the zero-relief shed pinned; the brownout tests keeping their meaning
+  with deficits built from load; the determinism chain and both committed scenario chains re-blessed, each with the
+  first tick it diverges at and this reason; the economy golden's draw column at 4 kW where nothing else changed;
+  `rules_hash`, `SNAPSHOT_VERSION`, the vista, operator, `instantiate_suggested`, verifier, mapgen, pathing and
+  plan-core goldens unmoved.
+- **Contract PR:** no; the chains move, and the PR body says so per chain.
+- **Agent-days:** 1.5.
+- **PLACEHOLDERs:** the key-core netted out of draw rather than shown as supply (owner, S1, with the grid); whether
+  the brownout order skips a beacon whose shed relieves nothing (owner, S1, with the grid); whether a priority raise
+  re-applies the brownout order (owner, S1, with the grid).
+- **Added 2026-09-25 (item 113).** The lane's full brief is item 113 (5) and (14) and the lane's `extras` in the
+  run-3 workflow arguments. It leaves two readers of the beacon's draw behind: Easy's Mine goal (T18b's) and
+  plan-core's projection (S1's, with E0601 and W0601).
 
 ---
 
@@ -555,6 +591,53 @@ its downside, and its section 0 lists the holes (H1–H16) the lines below close
   through run 2; it reads the public rules text for its tuning rows, draws nothing at random at Easy, and derives
   its call budget from its evaluation units. 8 agent-days, run 2. The amendment in full is section A3 of
   `docs/design/skeleton-plan-w6-notes.md`, and it outranks the lines above where they disagree.
+- **Amended 2026-09-25 (item 113).** Merged as PR #33. What its findings leave open — the safe playbook's raise,
+  which never fires under the definitions it was built to; a `builtin` seat in `gamectl scenario run`; Hold &
+  Build, which builds no Generator; Expand & Mine's stale comment — is T18b's, in wave 6's run 4.
+
+---
+
+### T18b — `crates/operator` + `library/` + `crates/gamectl`'s scenario runner: the safe playbook's reading, Easy in `scenario run`, and Hold & Build that builds
+
+- **Crate owned:** `crates/operator` and `library/`; in named places only, `crates/gamectl`'s scenario runner, its
+  strings and doc, `tests/scenarios.rs` and `tests/operator.rs` (never `host.rs`), `crates/gateway/tests/advice.rs`,
+  the `instantiate_suggested` golden and `tests/golden/gateway/README.md`, `godot/fixtures/instantiate_suggested.json`
+  with the client-gdext test that pins its pages and any T19 check that names Hold & Build's old answer, one new
+  scenario with its golden under `tests/golden/scenarios/**`, and `tests/golden/operator/**`.
+- **Builds:** decisions-log item 113 (4): power is short when any own beacon is browned out or the headroom is below
+  zero, and a beacon is at risk when it is an own non-core beacon that is browned out and not already HIGH, with the
+  rest of the rule as T18 built it and the "why" following the same reading. Item 113 (8): a `builtin` seat in
+  `gamectl scenario run`, played by Easy through `serve::InProcessSeats` with no new scenario key, and one committed
+  scenario against Easy. Item 113 (6): Hold & Build reshaped to walk to the edge of the core's sphere on the vent's
+  side and place a Build beacon there whose initial Build target is the Generator; Easy's vent goal, so that the
+  wizard's page is pre-filled, checked to lie inside the new beacon's sphere (item 113 (15)); Expand & Mine's
+  suggestion clause corrected. Item 113 (5)'s reader: a placed beacon adds no net draw in Easy's goals. Item 113 (7)'s
+  sentence in the "one expansion" PLACEHOLDER. The stale "T18 does not exist" texts go.
+- **Implements:** spec section 14 (the safe playbook's raise; the Easy column); spec section 5 (placement, and initial
+  targets as rows committed on site); AGENTS.md §3 rule 3 (the operator's door) and §10 item 4 (a headless match
+  against Easy, on events and hashes).
+- **Needs:** T17, T18, T19 PR 2 and T14b, merged. Wave 6's run 4, alone.
+- **Acceptance:** scripted — nothing dark and headroom ≥ 0 raises and estimates nothing, with the "why" unchanged; a
+  dark non-core beacon at headroom 0 is raised; a dark beacon out of reach at headroom 0 raises nothing and its
+  "why" does not say power is not short; a beacon already HIGH is not raised again; at most two, nearest first
+  (unchanged). Hosted, with no answer rewritten — on every corpus row the safe playbook raises only the seat's own
+  dark, non-core, non-HIGH beacons, and the number of rows that raise is a named expectation, born on T14b's grid.
+  The committed scenario passes on events and hashes, and it proves Easy's own seal by an event the gateway's
+  fallback cannot produce (seat 1's `beacon_placed`). A seat that seals the reshaped Hold & Build gets a
+  `structure_completed` Generator on the vent, and its supply rises by the lean vent's 20 kW (asserted in
+  `crates/gamectl/tests/operator.rs`, which reads the forecast). The two committed scenario chains and the
+  determinism chain do not move; the `instantiate_suggested` golden, its Godot copy and the operator goldens move
+  once, with the reason.
+- **Contract PR:** no. (`scenarios/README.md` is not edited; its sentence on what a `builtin` chain depends on is
+  T20's. A sentence in `tests/golden/scenarios/README.md` on what moves the new chain is content, not its line
+  format.)
+- **Agent-days:** 4.5–5.
+- **PLACEHOLDERs:** the reworded "short" and "at risk" (owner, S1, with the grid); a placed beacon's draw read as net
+  zero in Easy (owner, S1, with the grid); the `operator` scenario key (owner, S5, with a second difficulty); a
+  scenario `safe` seat filing the gateway's fallback rather than an operator-made safe playbook (owner, S5, with the
+  operator key); Hold & Build's place-and-build shape (owner question flagged in item 113 (6)).
+- **Added 2026-09-25 (item 113).** The lane's full brief is item 113 (4) to (9), (14) and (15) and the lane's
+  `extras` in the run-4 workflow arguments, written at run 4's opening from run 3's results.
 
 ---
 
@@ -575,6 +658,9 @@ its downside, and its section 0 lists the holes (H1–H16) the lines below close
   the lobby's Resume. The two screenshots are render-only until T20 compares them. The amendment in full is
   section A4 of `docs/design/skeleton-plan-w6-notes.md`, as item 112(6) amends it, and it outranks the lines above
   where they disagree.
+- **Amended 2026-09-25 (item 113).** PR 2 runs in run 3 beside T14b and merges after it. It also makes the lobby's
+  Resume forget a match once that match ends (113(11)), and names `watch_check`'s match through the same
+  collision-free helper as the lobby's (113(13)).
 
 ---
 
@@ -584,7 +670,7 @@ its downside, and its section 0 lists the holes (H1–H16) the lines below close
 - **Builds:** the cross-OS jobs item 71 promised would replace the deleted spike workflows — the hash chains, the path-hash file and the geometry golden compared across Windows, Linux and macOS in one job; `scenario` and `screenshot` promoted from skipping to required; the `schema` regenerate-and-compare step (AGENTS.md §9 item 8); the demo scenario set; and the perf **alarms** (mesher p99, tick-minus-pathing, allocations per tick) published as `::notice::` annotations, **not gates** — AGENTS.md §9 item 11 puts budgets with the gates that set them, which are S1's and S2's.
   Carrying G3′'s companion lesson: **a number that cannot vary across platforms must not be compared across them.** The three-OS job compares only the columns that can vary — hashes, path hashes, geometry digests — and the perf alarms are per-runner, because a green matrix on a number that reproduces by construction is false reassurance.
 - **Implements:** items 52 (the `frame-time` job stays `if: false` until a GPU runner exists), 71; AGENTS.md §9 items 6, 7, 8, 10, 11; §10 items 1–4.
-- **Needs:** T15, T16, T19.
+- **Needs:** T15, T16, T19; and T14b and T18b, so it starts from settled chains (item 113).
 - **Acceptance:** one `cargo xtask ci` invocation covers AGENTS.md §10 items 1–4 with nothing skipped; the matrix is green on three OSes; a deliberate one-bit change to any golden turns it red with a readable diff.
 - **Contract PR:** yes.
 - **Agent-days:** 5.
@@ -633,12 +719,12 @@ Days are working days, five to a week. A task's start is the day its last input 
 | W3 | 3.4 – 5.0 | **T7** HPA\* + estimator (8 d, d17–25) | **T9** gateway surface (8 d, d18–26) | **T8** plan-core (10 d, d18–28) | The path-hash file agreeing on three OSes; the estimator's signed-error and sustainability reports; a hand-written JSONC playbook round-tripping and rendering as English prose |
 | W4 | 5.0 – 7.4 | **T10** runner (5 d, d25–30), then **T11** interpreter (8 d, d30–38) | **T13** gateway method slice (9 d, d30–39) | **T12** client bridge (9 d, d28–37) | The spec's 14-call walkthrough passing against a live gateway; the extension loading in Godot on a fresh checkout with zero caught panics |
 | W5 | 7.4 – 9.8 | **T14** economy, Build, Survey-lite, programs (10 d, d38–48) | **T15** gamectl + `scenario run` (8 d, d39–47) | **T16a** view feed, match control, host loop (10 d, run 1, items 106–107); then **T16** vista + watch rig (10 d, run 2) | **Flying over the generated map, craters remeshing**; the watch rig playing a segment at 2–4× and skipping to its end; `gamectl scenario run` as a green `xtask ci` step |
-| W6 | 9.8 – 11.8 | run 2: **T17** save/resume, private replay, vision follow-up (6 d) | run 2: **T18** operator Easy + safe playbook (8 d) | run 1: **T18a** planning wire (8.75 d) and **T19** PR 1, route surface (5.5 d); run 3: **T19** PR 2, wizard (6.5 d) — items 111 and 112 | **A sealed playbook walking the commander**: a beacon placed, a Generator built, the treasury and kW meter moving, BMI settled at the recap — and a two-seat match against Easy |
-| W7 | 11.8 – 12.8 | **T21** packaging (5 d, d59–64) | — | **T20** xtask closing half-week (5 d, d59–64) | A zip that launches on a clean Windows and a clean Linux machine; one `xtask ci` covering §10 items 1–4 with nothing skipped |
+| W6 | 9.8 – 11.8 | run 2: **T17** save/resume, private replay, vision follow-up (6 d); run 3: **T14b** the key-core on the grid (1.5 d) | run 2: **T18** operator Easy + safe playbook (8 d); run 4: **T18b** the safe playbook's reading, Easy in `scenario run`, Hold & Build that builds (4.5–5 d) | run 1: **T18a** planning wire (8.75 d) and **T19** PR 1, route surface (5.5 d); run 3: **T19** PR 2, wizard (6.5 d) — items 111, 112 and 113 | **A sealed playbook walking the commander**: a beacon placed, a Generator built, the treasury and kW meter moving, BMI settled at the recap — and a two-seat match against Easy |
+| W7 | 11.8 – 12.8 | **T21** packaging (5 d, d59–64) | — | **T20** xtask closing half-week (5 d, d59–64); W7 starts once W6's run 4 has merged (item 113) | A zip that launches on a clean Windows and a clean Linux machine; one `xtask ci` covering §10 items 1–4 with nothing skipped |
 | W8 | 12.8 – 14.2 | — | — | **T22** integration, goldens, demo (6 d, d64–71) | The stage demo of §1.1 |
 | — | **14.2 – 15.5** | **float: 1.3 weeks** | | | |
 
-**Totals.** 24 tasks, **182 agent-days** (T16a added 2026-09-21, item 106; T18a added and T17 and T19 re-estimated 2026-09-23, item 111, which make it 25 tasks and about 194.75 agent-days; the schedule figures that follow predate both) over 71 working days of schedule. At three slots that is 213
+**Totals.** 24 tasks, **182 agent-days** (T16a added 2026-09-21, item 106; T18a added and T17 and T19 re-estimated 2026-09-23, item 111, which make it 25 tasks and about 194.75 agent-days; T14b and T18b added 2026-09-25, item 113, which make it 27 tasks and about 201 agent-days; the schedule figures that follow predate all three) over 71 working days of schedule. At three slots that is 213
 slot-days, so utilisation is about 80 % — the 20 % is where a contract PR waits for review, and it is
 deliberate. The critical path is **T0 → T2 → T5 → T7 → T10 → T11 → T14 → T18 → T19 → T20 → T22**,
 71 days end to end; the sim alone carries 52 agent-days across six of the eight waves.
