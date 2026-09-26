@@ -638,6 +638,15 @@ its downside, and its section 0 lists the holes (H1–H16) the lines below close
   operator key); Hold & Build's place-and-build shape (owner, before T22's stage demo; the question flagged in item 113 (6)).
 - **Added 2026-09-25 (item 113).** The lane's full brief is item 113 (4) to (9), (14) and (15) and the lane's
   `extras` in the run-4 workflow arguments, written at run 4's opening from run 3's results.
+- **Amended 2026-09-26 (item 114).** Run 3 moved no line item 113 cites in `crates/operator`, `crates/gamectl`,
+  `crates/gateway`, `library/` or `rules/`; its `crates/sim` lines moved with T14b and its `crates/client-gdext`
+  and `godot/` lines with T19 PR 2, so those are found by symbol. The client-gdext test that pins the fixture's
+  pages is `crates/client-gdext/tests/wizard.rs`; `godot/scripts/watch_check.gd` now seats Easy on seat 1, so
+  the lane's Easy also plays live in the client job; every hosted match or scenario the lane adds seats at least
+  two, because a one-seat match is decided at its first Push tick. On T14b's grid the unforced corpus is
+  expected to raise nothing (item 114 (4)), so its named count is 0 and the raise is proved by the scripted
+  tests and `forced_raise`. The scenario's one segment is sized from the run so the Generator completes in it,
+  and Hold & Build's walk is a declared, suggested parameter beside the site and the anchor.
 
 ---
 

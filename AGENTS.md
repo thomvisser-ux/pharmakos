@@ -148,9 +148,11 @@ editor UI. Nothing else executes. Directories are under `crates/`; package names
    order, a seat's rate budget, Ready waiting behind a submission, `end_lull` once every seat is
    ready or the countdown is spent); the route-target reader in `editor.rs` that finds a route's
    targets in the player's file to draw them; the map menu in `godot/scripts/editor.gd`, which
-   routes on the view's own `owner` field; and, from T19 PR 2, the match-id helper in
+   routes on the view's own `owner` field; from T19 PR 2, the match-id helper in
    `godot/scripts/host_link.gd`, which reads the clock once to name a match and computes nothing
-   with it (decisions-log item 113). The client may compose a JSON Patch from a click; a verdict, a
+   with it (decisions-log item 113); and the lobby in `godot/scripts/lobby.gd`, which remembers
+   the config line once the host announces and forgets it when the rig reports the match ended
+   (decisions-log item 114). The client may compose a JSON Patch from a click; a verdict, a
    travel time, a legality answer, a Fix and the patched text (`patch_plan`'s answer) still come
    from the gateway. The gateway's JSON-RPC answers are not canonical `gp.api.v1` JSON — they carry
    a `_status` footer and lower-case enum values (decisions-log item 80) — so every client of them,
@@ -323,7 +325,9 @@ two operating systems disagree. That includes the per-seat kill-credit counters 
 asset) and their largest-remainder apportionment: they are hashed state like everything else.
 Widening the snapshot has one more consequence to plan for: the fixture snapshot is one of
 `report_hash`'s inputs, so every verifier report golden moves with it. Re-bless them in the same
-PR and say why (decisions-log item 109).
+PR and say why (decisions-log item 109). A change to how an existing hashed column is *computed*
+moves the chains just as a new field does, with no field added: the PR re-blesses every chain and
+golden it moves and names the rule that moved them (decisions-log item 114).
 
 For the chunk store there is a **fourth** place: a voxel write must *mark its chunk* so that
 `settle` refreshes the chunk's digest. Miss the mark and the bytes change while the digest does
@@ -391,8 +395,9 @@ to full quality once and changed only with the owner's explicit approval.
   `seats/<seat>/sealed/<round>.jsonc`, and `replay/<round>.hashes.txt` in the scenario hash-file
   format, which therefore lives on players' disks as well as under `tests/golden`; the audit log's
   leading sequence and tick fields, which a resume reads back (`MatchCache::continuation`); and,
-  from T19 PR 2, the config line the lobby remembers in `user://` (`serve::ConfigLine`)
-  (decisions-log item 113)
+  from T19 PR 2, the config line the lobby remembers in `user://last_match.txt`: the six
+  `serve::Config` fields that `serve::ConfigLine` reads, without `resume`, and no token
+  (decisions-log items 113 and 114)
 - CI: `.github/workflows/**`, `xtask/**`'s definition of what `ci` runs, golden-file *formats*
 - Licensing: `LICENSES/**`, per-directory `LICENSE` files, the REUSE manifest
 - `AGENTS.md`, `CLAUDE.md`, and the design docs under `docs/design/`

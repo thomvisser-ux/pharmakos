@@ -26,7 +26,9 @@
 //       lens_b: '...',                        // extra checks for lens B (may be '')
 //       build_resume: '...',                  // optional: only when resuming a run whose builder
 //                                             // died mid-way (what the worktree already holds)
-//       fix_resume: '...',                    // optional: the same for a fix pass that died
+//       fix_resume: '...',                    // optional: the same for a fix pass that died; first
+//                                             // read its PR (head, Review section, checks) and re-run
+//                                             // only what is missing (decisions-log item 114)
 //     }],
 //   }
 //
