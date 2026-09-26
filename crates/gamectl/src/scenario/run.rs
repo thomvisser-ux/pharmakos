@@ -87,7 +87,7 @@ use std::path::Path;
 use pharmakos_gateway::fog::{Audience, Blind, FogPolicy};
 use pharmakos_gateway::host::Host;
 use pharmakos_gateway::scopes::{Scope, ScopeSet};
-use pharmakos_gateway::serve::{self, InProcessSeats};
+use pharmakos_gateway::serve;
 use pharmakos_gateway::surface::Surface;
 use pharmakos_gateway::token::{Subject, Token};
 use pharmakos_proto::json::Json;
@@ -202,11 +202,20 @@ pub fn run(root: &Path, source: &Path) -> Result<String, Failure> {
 pub fn play(root: &Path, scenario: &Scenario) -> Result<Played, Failure> {
     let rules = load_rules(root, scenario)?;
     let rules_hash = rules.rules_hash();
+    // Before the match is opened, so a rules table Easy cannot score with is
+    // refused without generating a map.
+    let mut factory = easy_for_builtin(root, scenario)?;
     let mut surface = open(root, scenario, rules)?;
     let tokens = mint(&mut surface, scenario)?;
     // After the runner's own tokens and before the first `begin_push`: Easy,
     // for the `builtin` seats alone (see the module docs).
-    let mut builtin = seat_builtin(root, scenario, &mut surface)?;
+    let mut builtin = match factory.as_mut() {
+        Some(factory) => Some(
+            serve::InProcessSeats::open(&mut surface, &builtin_seats(scenario), None, factory)
+                .map_err(internal)?,
+        ),
+        None => None,
+    };
 
     let mut played = Played {
         // Reserved, and capped. A line is twenty-four bytes, so the reservation
@@ -323,16 +332,16 @@ fn builtin_seats(scenario: &Scenario) -> Vec<SeatId> {
         .collect()
 }
 
-/// Easy for every `builtin` seat, through the gateway's in-process seats and
-/// with no human seat, so nothing is advised; `None` when the scenario has no
-/// `builtin` seat.
-fn seat_builtin(
-    root: &Path,
-    scenario: &Scenario,
-    surface: &mut Surface,
-) -> Result<Option<InProcessSeats>, Failure> {
-    let seats = builtin_seats(scenario);
-    if seats.is_empty() {
+/// Easy's factory for the `builtin` seats, which [`play`] seats through the
+/// gateway's in-process seats with no human seat, so nothing is advised;
+/// `None` when the scenario has no `builtin` seat.
+///
+/// # Errors
+///
+/// [`Exit::Input`] when the rules text is unreadable or lacks a row Easy
+/// scores with.
+fn easy_for_builtin(root: &Path, scenario: &Scenario) -> Result<Option<EasyOperators>, Failure> {
+    if builtin_seats(scenario).is_empty() {
         return Ok(None);
     }
     // The rules table's own text, the one `load_rules` read: the operator
@@ -346,7 +355,7 @@ fn seat_builtin(
             &error.to_string(),
         ))
     })?;
-    let mut factory = EasyOperators::new(&text).map_err(|error| {
+    let factory = EasyOperators::new(&text).map_err(|error| {
         let index = scenario
             .seats
             .iter()
@@ -358,9 +367,7 @@ fn seat_builtin(
             &error.to_string(),
         ))
     })?;
-    let seated =
-        serve::InProcessSeats::open(surface, &seats, None, &mut factory).map_err(internal)?;
-    Ok(Some(seated))
+    Ok(Some(factory))
 }
 
 /// A hosted match in its opening Lull, at the gateway's own rate limits.
