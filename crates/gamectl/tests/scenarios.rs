@@ -46,7 +46,13 @@ use std::path::{Path, PathBuf};
 /// `cargo xtask ci`'s `scenario` step walks the tree and sorts; this list is
 /// the same set, and `the_committed_list_is_the_whole_set` checks it has not
 /// fallen behind.
-const SCENARIOS: &[&str] = &[COMPLETING, REFUSING];
+const SCENARIOS: &[&str] = &[AGAINST_EASY, COMPLETING, REFUSING];
+
+/// The scenario against the built-in operator: seat 1 is `builtin`, played by
+/// Easy, and seat 0 builds a Generator on its vent (T18b; decisions-log item
+/// 113 (6) and (8)). It is also the `builtin` seat's test: every committed
+/// scenario is played by the test below, so it costs no second match.
+const AGAINST_EASY: &str = "scenarios/skeleton/against-easy.scenario.jsonc";
 
 /// The scenario whose route finishes (decisions-log item 103 (3)).
 const COMPLETING: &str = "scenarios/skeleton/deploy-and-visit.scenario.jsonc";
@@ -155,7 +161,7 @@ fn the_committed_list_is_the_whole_set() {
     // scenario this test does not play and whose fresh output the `golden`
     // step therefore cannot find.
     let dir = root().join("scenarios").join("skeleton");
-    for name in ["deploy-and-visit", "expand-east-segment"] {
+    for name in ["against-easy", "deploy-and-visit", "expand-east-segment"] {
         assert!(
             dir.join(format!("{name}{SUFFIX}")).is_file(),
             "{name} is listed here and is not committed"
@@ -325,32 +331,6 @@ fn a_malformed_scenario_is_refused_with_a_pointer_at_every_problem() {
         "a reserved assertion name says which decision holds it, not `unknown`:\n{}",
         outcome.err
     );
-}
-
-/// A `builtin` seat names the task that will make it playable, rather than
-/// failing with whatever the gateway happened to say.
-#[test]
-fn a_builtin_seat_names_the_task_that_owes_the_operator() {
-    let source = root().join(COMPLETING);
-    let original = std::fs::read_to_string(&source).expect("the committed scenario");
-    let doctored = original
-        .replace(
-            "{ \"seat\": 1, \"kind\": \"safe\" }",
-            "{ \"seat\": 1, \"kind\": \"builtin\" }",
-        )
-        .replace(
-            "\"name\": \"deploy-and-visit\"",
-            "\"name\": \"builtin-seat\"",
-        );
-    let path = scratch("builtin-seat");
-    std::fs::write(&path, doctored.as_bytes()).expect("the scratch file");
-    let named = path.to_string_lossy().into_owned();
-    let outcome = gamectl(&["scenario", "run", &named]);
-    let _ = std::fs::remove_file(&path);
-
-    assert_eq!(outcome.code, Exit::Input, "{}", outcome.err);
-    assert!(outcome.err.contains("T18"), "{}", outcome.err);
-    assert!(outcome.err.contains("/seats/1/kind"), "{}", outcome.err);
 }
 
 /// The sim is a pure function of (map seed, playbooks, rules hash), and a

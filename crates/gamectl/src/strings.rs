@@ -453,13 +453,14 @@ pub fn scenario_chain_moved(
     )
 }
 
-/// A `builtin` seat, which the skeleton has no operator for.
+/// A `builtin` seat that Easy cannot be seated for: the rules text the
+/// scenario names lacks a row the operator scores with.
 #[must_use]
-pub fn scenario_builtin_seat(pointer: &str) -> String {
+pub fn scenario_builtin_unseated(pointer: &str, rules: &str, why: &str) -> String {
     format!(
-        "{pointer}: a `builtin` seat plays the built-in operator, which is T18 and does not \
-         exist in this build. Use `safe`, which files the one playbook that needs no situation \
-         to be safe, or `playbook`."
+        "{pointer}: a `builtin` seat plays the built-in operator, Easy, which cannot score with \
+         the rules table `{rules}` this scenario names: {why}. Name a rules table with the rows \
+         the operator reads, or make the seat `safe` or `playbook`."
     )
 }
 

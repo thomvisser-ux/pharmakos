@@ -88,6 +88,11 @@ that the gateway files the safe playbook for it. Read the two together: this
 one is what the interpreter does when a playbook fits the map, that one is what
 it does when a playbook does not, and neither is the whole picture on its own.
 
+**T18b added `against-easy`**, whose seat 1 is `builtin` and played by the
+built-in operator, Easy, and whose seat 0 seals Hold & Build as Easy fills it,
+so its chain depends on `crates/operator` and `library/` as well as on the map
+seed, the playbooks and the rules hash, and a change to either moves it.
+
 **T14b moved both chains from their first line (tick 1)** and nothing else
 here: the key-core rule (decisions-log item 113 (5)) changed every seat's
 settled `kW` draw, which is hashed seat state, and changed no event these
