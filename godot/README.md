@@ -122,7 +122,8 @@ Pull request 2 adds four things to the panel, each drawn as the gateway answered
   gateway wrote (a duration stays game milliseconds), a mark where the value is the built-in
   operator's suggestion, and the operator's "why" as it came. A value the player sends goes
   exactly as typed, as the one explicit value, so the other pages keep the operator's value
-  and mark; a refusal is shown as the gateway wrote it. **Use** puts the gateway's
+  and mark (the watch check asserts that live for every page the gateway marked, and
+  `tests/wizard.rs` holds the wizard's code to never converting a value); a refusal is shown as the gateway wrote it. **Use** puts the gateway's
   `playbook_jsonc` into the editor byte for byte, as one edit Undo takes back, and QUICK, the
   route, the rule list and FULL follow. Nothing in the client names a template, a pointer or
   a label, so a `library/` change needs no client change (`tests/wizard.rs`).
@@ -145,9 +146,18 @@ six-field config line it wrote, in one `user://` file with no token in it. **Res
 match**, shown only when a line is remembered, writes that line plus `resume`; the gateway
 checks it against the save and resumes into the Push a sealed save began or the Lull a quit
 left. A refusal shows the host's own standard-error text, and nothing is retried. When the
-match ends the lobby forgets it (decisions-log item 113 (11)). The only files the client
-writes are the player's JSONC, that one remembered line, and the watch check's own `user://`
-files.
+match ends the lobby forgets it (decisions-log item 113 (11)), and its status line says so.
+After a refused Resume the chooser stays hidden and the line stays remembered, so picking
+New match means restarting the client (a PLACEHOLDER in `scripts/lobby.gd`, with the
+New/Resume layout, S6). The only files the client writes are the player's JSONC, that one
+remembered line, and the watch check's own `user://` files.
+
+No check drives the lobby with a host: the watch check drives `host_link.gd` directly and
+never touches the remembered line. What the lobby may do is pinned by its source instead
+(`crates/client-gdext/tests/godot_project.rs`: it writes only the remembered line, once the
+host has announced; it names and resumes only through `host_link.gd`'s helpers; it forgets
+on ENDED), and T22's run sheet ("quit in a Lull, resume from the lobby", w6 notes A5) is
+where a person sees it run.
 
 ## The watch check's two hosts, and the folders it leaves
 

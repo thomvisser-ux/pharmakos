@@ -75,7 +75,8 @@ var bridge: Node = null
 var _pid := -1
 var _stdio: FileAccess = null
 var _stderr: FileAccess = null
-## Everything the host wrote on its standard error, which it keeps free of tokens.
+## What the host wrote on its standard error before it announced, which it keeps free of
+## tokens.
 var _stderr_text := ""
 var _announce := PackedByteArray()
 var _port := 0
@@ -169,8 +170,8 @@ func host_pid() -> int:
 	return _pid
 
 
-## What the host wrote on its standard error so far: its own words, token-free, which the
-## lobby shows when the host refuses a line.
+## What the host wrote on its standard error before it announced: its own words,
+## token-free, which the lobby shows when the host refuses a line.
 func host_error() -> String:
 	_drain_stderr()
 	return _stderr_text.strip_edges()
@@ -283,5 +284,8 @@ func _drain_stderr() -> void:
 		if chunk.size() == 0:
 			return
 		var text := chunk.get_string_from_utf8()
-		_stderr_text += text
+		# Kept only until the host announces: it is read on the pre-announce failure path
+		# alone, so a long match does not grow it. Everything is still printed.
+		if _port == 0:
+			_stderr_text += text
 		printerr("[host] ", text.strip_edges())

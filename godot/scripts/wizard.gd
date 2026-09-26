@@ -32,6 +32,8 @@ const Strings := preload("res://scripts/strings.gd")
 const TEXT_WIDTH := 320.0
 ## The mark's colour. PLACEHOLDER: art, OWNER at S6's art pass.
 const MARK_COLOUR := Color(0.55, 0.8, 1.0)
+## The colour a refusal is drawn in. PLACEHOLDER: art, OWNER at S6's art pass.
+const REFUSAL_COLOUR := Color(0.95, 0.4, 0.35)
 ## The gap between two pages, in pixels. PLACEHOLDER: layout, OWNER at S6.
 const PAGE_GAP := 10
 
@@ -76,7 +78,7 @@ static func fill(container: Container, title: String, wizard: Dictionary, on_sen
 		refused.accessibility_name = refusal
 		refused.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		refused.custom_minimum_size = Vector2(TEXT_WIDTH, 0)
-		refused.add_theme_color_override("font_color", Color(0.95, 0.4, 0.35))
+		refused.add_theme_color_override("font_color", REFUSAL_COLOUR)
 		refused.set_meta("refusal", refusal)
 		container.add_child(refused)
 	var buttons := HBoxContainer.new()
