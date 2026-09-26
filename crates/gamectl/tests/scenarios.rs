@@ -333,6 +333,62 @@ fn a_malformed_scenario_is_refused_with_a_pointer_at_every_problem() {
     );
 }
 
+/// A `builtin` seat whose rules table Easy cannot score with is an input
+/// error that names the seat's pointer and the rules path, rather than
+/// whatever the gateway happened to say (the review of T18b: the refusal it
+/// replaced had a test, and this error had none).
+///
+/// The committed scenario plays from a scratch root -- its own file and its
+/// playbook copied byte for byte -- whose `rules/rules.v1.json` is the
+/// committed text with one row Easy reads set to zero
+/// (`interface_times.edit_settings_base_ms`, the row `Tuning`'s own unit test
+/// zeroes). The sim reads that table; the operator refuses it.
+#[test]
+fn a_builtin_seat_easy_cannot_score_for_is_an_input_error() {
+    let repository = root();
+    let scratch_root = pharmakos_gamectl::target_dir()
+        .expect("an integration test runs from a cargo target directory")
+        .join("scratch")
+        .join(format!("builtin-root-{}", std::process::id()));
+    let playbook = "scenarios/skeleton/against-easy.playbook.jsonc";
+    // Named with SCRATCH's suffix, not SUFFIX, for the reason that constant
+    // gives.
+    let doctored = format!("scenarios/skeleton/against-easy{SCRATCH}");
+    std::fs::create_dir_all(scratch_root.join("scenarios/skeleton")).expect("the folder");
+    std::fs::create_dir_all(scratch_root.join("rules")).expect("the folder");
+    std::fs::copy(repository.join(playbook), scratch_root.join(playbook)).expect("the playbook");
+    std::fs::copy(repository.join(AGAINST_EASY), scratch_root.join(&doctored))
+        .expect("the scenario");
+    let rules = std::fs::read_to_string(repository.join("rules/rules.v1.json")).expect("rules");
+    let zeroed = rules.replace(
+        "\"edit_settings_base_ms\": 2000",
+        "\"edit_settings_base_ms\": 0",
+    );
+    assert_ne!(zeroed, rules, "the rules text still carries the row");
+    std::fs::write(scratch_root.join("rules/rules.v1.json"), zeroed).expect("the rules");
+
+    let outcome = pharmakos_gamectl::run(
+        ["scenario", "run", doctored.as_str()]
+            .iter()
+            .map(|arg| (*arg).to_owned()),
+        &scratch_root,
+    );
+    let _ = std::fs::remove_dir_all(&scratch_root);
+
+    assert_eq!(outcome.code, Exit::Input, "{}{}", outcome.out, outcome.err);
+    for expected in [
+        "/seats/1/kind",
+        "rules/rules.v1.json",
+        "edit_settings_base_ms",
+    ] {
+        assert!(
+            outcome.err.contains(expected),
+            "`{expected}` is missing:\n{}",
+            outcome.err
+        );
+    }
+}
+
 /// The sim is a pure function of (map seed, playbooks, rules hash), and a
 /// scenario is that sentence written down. Two runs of one file in one process
 /// is the cheapest test of it there is.

@@ -273,11 +273,9 @@ struct Row {
     advisor_calls: u32,
     /// The beacons the safe playbook raised, nearest first, unforced.
     raised: Vec<String>,
-    /// The seat's own beacons at risk on this snapshot, as `list_beacons`
-    /// answered them, unrewritten: browned out, not the core, not HIGH.
-    at_risk: Vec<String>,
-    /// The seat's core is browned out on this snapshot.
-    core_dark: bool,
+    /// The seat's own power on this snapshot, as `list_beacons` answered it,
+    /// unrewritten.
+    power: OwnPower,
     /// The beacons the advisor estimated a route to (the safe playbook's
     /// estimates are its only ones that end on a beacon), with whether its
     /// own estimate put each within `SAFE_REACH_MS`.
@@ -349,9 +347,19 @@ fn own_non_core(surface: &mut Surface, token: &Token, seat: u8) -> Vec<String> {
     out
 }
 
-/// The seat's own beacons at risk -- browned out, not the core, and not HIGH
-/// -- and whether its core is browned out, as `list_beacons` answers them.
-fn own_power(surface: &mut Surface, token: &Token, seat: u8) -> (Vec<String>, bool) {
+/// What `list_beacons` shows of the seat's own power.
+#[derive(Clone, Debug)]
+struct OwnPower {
+    /// The own beacons at risk -- browned out, not the core, and not HIGH.
+    at_risk: Vec<String>,
+    /// The seat's core is browned out.
+    core_dark: bool,
+    /// Any own beacon is browned out, whatever its priority or kind.
+    any_dark: bool,
+}
+
+/// The seat's own power, as `list_beacons` answers it.
+fn own_power(surface: &mut Surface, token: &Token, seat: u8) -> OwnPower {
     let beacons = result(
         &call(surface, token, "list_beacons", params("{}")),
         "list_beacons",
@@ -376,7 +384,14 @@ fn own_power(surface: &mut Surface, token: &Token, seat: u8) -> (Vec<String>, bo
     let core_dark = rows
         .iter()
         .any(|row| row.get("owner") == Some(&own) && core(row) && dark(row));
-    (at_risk, core_dark)
+    let any_dark = rows
+        .iter()
+        .any(|row| row.get("owner") == Some(&own) && dark(row));
+    OwnPower {
+        at_risk,
+        core_dark,
+        any_dark,
+    }
 }
 
 /// An Easy advisor for the seat, through its own token with no answer
@@ -532,7 +547,7 @@ fn visit(
             .unwrap_or_default();
 
         let token = in_process_token(surface, seat.raw());
-        let (at_risk, core_dark) = own_power(surface, &token, seat.raw());
+        let power = own_power(surface, &token, seat.raw());
         let (advice, estimated) = advise_unforced(surface, &token, seat.raw(), rules);
         let why_safe = advice
             .suggestions
@@ -588,8 +603,7 @@ fn visit(
             headroom_kw: number(&forecast, "headroom_kw_now"),
             advisor_calls: advice.calls,
             raised: raised_by(&advice),
-            at_risk,
-            core_dark,
+            power,
             estimated,
             why_safe,
             supply_kw: number(&forecast, "supply_kw_now"),
@@ -813,22 +827,27 @@ fn the_safe_playbook_raises_only_what_is_at_risk_unforced() {
         let what = format!("{} seat {}: {row:#?}", row.snapshot, row.seat);
         assert!(row.raised.len() <= SAFE_MAX_RAISED, "{what}");
         assert!(
-            row.raised.iter().all(|id| row.at_risk.contains(id)),
+            row.raised.iter().all(|id| row.power.at_risk.contains(id)),
             "raised only the seat's own dark, non-core, non-HIGH beacons: {what}"
         );
         let reachable = row
             .estimated
             .iter()
-            .any(|(id, within)| *within && row.at_risk.contains(id));
+            .any(|(id, within)| *within && row.power.at_risk.contains(id));
         assert!(
             !reachable || !row.raised.is_empty(),
             "a beacon at risk was within reach and nothing was raised: {what}"
         );
         assert!(
-            row.estimated.iter().all(|(id, _)| row.at_risk.contains(id)),
+            row.estimated
+                .iter()
+                .all(|(id, _)| row.power.at_risk.contains(id)),
             "only a beacon at risk is ever estimated: {what}"
         );
-        if row.at_risk.is_empty() && !row.core_dark && row.headroom_kw >= 0 {
+        // The safe playbook's own "power is short" (`crate::safe`'s
+        // `power_short`): any own beacon dark, whatever its priority, or the
+        // headroom below zero.
+        if !row.power.any_dark && row.headroom_kw >= 0 {
             assert!(
                 row.why_safe.contains("Power is not short"),
                 "nothing dark and headroom at zero or more: {what}"
@@ -867,7 +886,7 @@ fn the_safe_playbook_raises_only_what_is_at_risk_unforced() {
     for row in blackout {
         let what = format!("{} seat {}: {row:#?}", row.snapshot, row.seat);
         assert!(
-            row.core_dark && row.headroom_kw == 0,
+            row.power.core_dark && row.headroom_kw == 0,
             "a total blackout: {what}"
         );
         assert!(row.raised.is_empty() && row.estimated.is_empty(), "{what}");
@@ -878,14 +897,54 @@ fn the_safe_playbook_raises_only_what_is_at_risk_unforced() {
             "the core, and no kW figure as the shortage: {what}"
         );
     }
-    // Whether any corpus seat built a Generator, for the pull request: its
-    // supply above the committed core surplus.
-    let generators: Vec<String> = rows
+    // The corpus's own Generator (decisions-log item 113 (6) and (9): the kW
+    // check rides the corpus where it can). On the committed rules a seat's
+    // supply is its core's surplus until a Generator of its own completes, so
+    // a row above it is a Generator; the rows that show one are a named
+    // expectation, and each rose by exactly the lean vent's output, both read
+    // from the rules text.
+    let (core_surplus, lean) = core_surplus_and_lean(&rules_json());
+    let generators: Vec<(&str, u8)> = rows
         .iter()
-        .filter(|row| !row.snapshot.contains("power-short") && row.supply_kw > 10)
-        .map(|row| format!("{} seat {} ({} kW)", row.snapshot, row.seat, row.supply_kw))
+        .filter(|row| !row.snapshot.contains("power-short") && row.supply_kw > core_surplus)
+        .map(|row| (row.snapshot.as_str(), row.seat))
         .collect();
     eprintln!("corpus rows whose supply shows a Generator: {generators:?}");
+    assert_eq!(
+        generators, GENERATOR_ROWS,
+        "the named expectation moved: say which seat built what, and why"
+    );
+    for row in rows
+        .iter()
+        .filter(|row| GENERATOR_ROWS.contains(&(row.snapshot.as_str(), row.seat)))
+    {
+        assert_eq!(
+            row.supply_kw.saturating_sub(core_surplus),
+            lean,
+            "one Generator on a lean vent, and nothing else moved supply: {} seat {}",
+            row.snapshot,
+            row.seat
+        );
+    }
+}
+
+/// The corpus rows on the committed rules whose seat's supply shows a
+/// Generator: seed `0102...` seat 0, which seals Hold & Build in round 1
+/// (`tests/golden/operator/seed-0102030405060708/expected.seat-0.jsonc`) and
+/// shows the Generator on its vent -- a lean one -- by round 3.
+const GENERATOR_ROWS: &[(&str, u8)] = &[("three-rounds/round-3", 0)];
+
+/// The rules text's `power.core_surplus_kw` and the lean vent's
+/// `power.generator_output_kw`, kW.
+fn core_surplus_and_lean(rules: &str) -> (i64, i64) {
+    let table = RulesTable::from_canonical_json(rules).expect("a rules table");
+    let power = table.message().power.as_ref().expect("the power block");
+    let lean = power
+        .generator_output_kw
+        .as_ref()
+        .map(|row| i64::from(row.lean))
+        .expect("power.generator_output_kw");
+    (i64::from(power.core_surplus_kw), lean)
 }
 
 /// The raise path through the **real** verifier ([`forced_raise`]). The
@@ -1187,13 +1246,7 @@ fn open_as_scenario(
     )
     .expect("a match");
     let table = RulesTable::from_canonical_json(rules).expect("a rules table");
-    let lean = table
-        .message()
-        .power
-        .as_ref()
-        .and_then(|power| power.generator_output_kw.as_ref())
-        .map(|row| i64::from(row.lean))
-        .expect("power.generator_output_kw");
+    let (_, lean) = core_surplus_and_lean(rules);
     let mut surface = Surface::new(
         &match_id("against-easy-kw"),
         scenario.seed,
@@ -1287,6 +1340,13 @@ fn committed_as_suggested(
 /// `instantiate_template{suggested}` answer for seat 0, with the scenario
 /// files' header and one comment block in place of the template's first two
 /// lines.
+///
+/// The corpus shows a Generator too (`GENERATOR_ROWS`, asserted in
+/// `the_safe_playbook_raises_only_what_is_at_risk_unforced`), so item 113
+/// (9)'s "rides the corpus where it can" holds for the kW figure. This match
+/// stays because the lane's brief asks for the rise on the scenario's own
+/// setup, and because it is the only check that the committed scenario
+/// playbook is Easy's live answer for seat 0.
 #[test]
 fn the_scenario_generator_raises_supply_by_exactly_the_lean_vent() {
     let scenario = pharmakos_gamectl::scenario::load(&root(), Path::new(AGAINST_EASY))
