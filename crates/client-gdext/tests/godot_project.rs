@@ -375,3 +375,164 @@ fn the_staging_directory_is_in_git_but_its_contents_are_not() {
         );
     }
 }
+
+/// The body of one GDScript function in `text`: its `func` line and every line after it up
+/// to the next line that starts at column zero.
+fn gd_function<'a>(text: &'a str, name: &str) -> Vec<&'a str> {
+    let head = format!("func {name}(");
+    let mut lines = text.lines().skip_while(|line| {
+        !line.starts_with(&head) && !line.starts_with(&format!("static {head}"))
+    });
+    let mut body: Vec<&str> = Vec::new();
+    if let Some(first) = lines.next() {
+        body.push(first);
+        body.extend(
+            lines.take_while(|line| {
+                line.is_empty() || line.starts_with('\t') || line.starts_with(' ')
+            }),
+        );
+    }
+    assert!(!body.is_empty(), "lobby.gd has no `func {name}`");
+    body
+}
+
+/// `lobby.gd`'s lines that are not comments.
+fn lobby_code(text: &str) -> Vec<&str> {
+    text.lines()
+        .filter(|line| !line.trim_start().starts_with('#'))
+        .collect()
+}
+
+// The lobby's New, Resume, remember and forget paths, pinned by their source (w6 notes A4
+// item 2; decisions-log items 111 (C9) and 113 (11)). No test drives the lobby with a host
+// (the watch check drives `host_link.gd` directly and leaves the lobby's remembered line
+// alone), so the three tests below pin what the lobby may do, and T22's run sheet ("quit in
+// a Lull, resume from the lobby", w6 notes A5) is where a person sees it run.
+
+/// The one file the lobby writes is `REMEMBERED`, a `user://` path, and it writes it once
+/// the host has announced, with the line it wrote and nothing else (no token: the tokens
+/// stay in `host_link.gd`'s variables, and the lobby names none).
+#[test]
+fn the_lobby_remembers_one_line_and_no_token() {
+    let text = read("scripts/lobby.gd");
+    let code = lobby_code(&text);
+    assert!(
+        text.contains("const REMEMBERED := \"user://"),
+        "the lobby's remembered line lives in user://"
+    );
+    let writes: Vec<&&str> = code
+        .iter()
+        .filter(|line| line.contains("FileAccess.WRITE") || line.contains("FileAccess.open("))
+        .collect();
+    assert_eq!(writes.len(), 1, "the lobby opens one file: {writes:?}");
+    assert!(
+        writes
+            .iter()
+            .all(|line| line.contains("FileAccess.open(REMEMBERED, FileAccess.WRITE)")),
+        "the one file the lobby writes is REMEMBERED: {writes:?}"
+    );
+    let remember = gd_function(&text, "_remember");
+    assert!(
+        remember
+            .iter()
+            .any(|line| line.contains("store_string(_line")),
+        "the lobby remembers the line it wrote: {remember:?}"
+    );
+    let announced = gd_function(&text, "_on_announced");
+    assert!(
+        announced.iter().any(|line| line.trim() == "_remember()"),
+        "the line is remembered once the host has announced: {announced:?}"
+    );
+    let remembered_where: Vec<&&str> = code
+        .iter()
+        .filter(|line| line.contains("_remember()") && !line.starts_with("func "))
+        .collect();
+    assert_eq!(
+        remembered_where.len(),
+        1,
+        "the line is remembered in one place: {remembered_where:?}"
+    );
+    assert!(
+        !code
+            .iter()
+            .any(|line| line.to_ascii_lowercase().contains("token")),
+        "the lobby names no token"
+    );
+}
+
+/// A new match is named only through `HostLink.match_id`, and a resume line is built only
+/// by `HostLink.resume_line` from the remembered line, so the lobby spells no `resume` of
+/// its own.
+#[test]
+fn the_lobby_names_and_resumes_only_through_host_links_helpers() {
+    let text = read("scripts/lobby.gd");
+    let code = lobby_code(&text);
+    let new_match = gd_function(&text, "new_match");
+    assert!(
+        new_match
+            .iter()
+            .any(|line| line.contains("HostLink.match_id(")),
+        "a new match is named by host_link.gd's helper: {new_match:?}"
+    );
+    let start = gd_function(&text, "_start");
+    assert!(
+        start
+            .iter()
+            .any(|line| line.contains("HostLink.resume_line(")),
+        "a resume line is built by host_link.gd: {start:?}"
+    );
+    assert!(
+        !code
+            .iter()
+            .any(|line| line.contains("\\tresume") || line.contains("\"resume")),
+        "the lobby spells no `resume` of its own"
+    );
+    let resume = gd_function(&text, "resume_match");
+    assert!(
+        resume.iter().any(|line| line.contains("remembered_line()")),
+        "Resume goes on with the remembered line: {resume:?}"
+    );
+}
+
+/// When a footer says the match ENDED, the lobby forgets it: `_forget` removes
+/// `REMEMBERED`, and the status line says so through the string table. A refusal is shown
+/// through the string table with the host's own reason.
+#[test]
+fn the_lobby_forgets_an_ended_match_and_shows_a_refusal_as_the_host_wrote_it() {
+    let text = read("scripts/lobby.gd");
+    let received = gd_function(&text, "_on_received");
+    let ended = received
+        .iter()
+        .position(|line| line.contains("\"ended\""))
+        .expect("the lobby reads the phase `ended`");
+    assert!(
+        received
+            .iter()
+            .skip(ended)
+            .take(4)
+            .any(|line| line.trim() == "_forget()"),
+        "the lobby forgets a match when it ends: {received:?}"
+    );
+    let forget = gd_function(&text, "_forget");
+    assert!(
+        forget.iter().any(|line| line.contains("REMEMBERED"))
+            && forget.iter().any(|line| line.contains("remove_absolute")),
+        "_forget removes the remembered line: {forget:?}"
+    );
+    assert!(
+        text.contains("Strings.text(\"lobby_forgotten\")"),
+        "the lobby says it forgot the match, through the string table"
+    );
+
+    // A refusal is shown with the host's own reason.
+    let failed = gd_function(&text, "_on_failed");
+    assert!(
+        failed
+            .iter()
+            .any(|line| line.contains("lobby_resumed_failed"))
+            && failed
+                .iter()
+                .any(|line| line.contains("\"reason\": reason")),
+        "a refused resume is shown with the host's own words: {failed:?}"
+    );
+}

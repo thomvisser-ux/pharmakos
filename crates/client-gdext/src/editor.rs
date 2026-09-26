@@ -2560,7 +2560,7 @@ mod tests {
         );
         assert!(
             asked_for.contains("\"carried\"") && !asked_for.contains("\"editor\""),
-            "the carried draft is fetched, and the seat's own editor draft is listed, not              opened: {asked_for}"
+            "the carried draft is fetched, and the seat's own editor draft is listed, not opened: {asked_for}"
         );
         assert_eq!(
             editor.bytes(),

@@ -418,3 +418,167 @@ fn the_client_names_no_template() {
         found.join("\n")
     );
 }
+
+/// One line of source with its comment and its string literals removed, except a literal
+/// that is one identifier, which is kept as that word (GDScript reads a dictionary through
+/// such a literal: `page.get("value", "")`). `comment` is the language's line comment.
+fn code_without_prose(line: &str, comment: &str) -> String {
+    let before_comment = if comment == "#" {
+        // A GDScript comment; this scan reads no Rust attribute through this branch.
+        line.split('#').next().unwrap_or("")
+    } else {
+        line.split(comment).next().unwrap_or("")
+    };
+    let mut out = String::new();
+    let mut literal = String::new();
+    let mut in_string = false;
+    let mut characters = before_comment.chars();
+    while let Some(character) = characters.next() {
+        if in_string {
+            if character == '\\' {
+                characters.next();
+            } else if character == '"' {
+                in_string = false;
+                let identifier = literal
+                    .chars()
+                    .next()
+                    .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
+                    && literal
+                        .chars()
+                        .all(|each| each.is_ascii_alphanumeric() || each == '_');
+                if identifier {
+                    out.push(' ');
+                    out.push_str(&literal);
+                    out.push(' ');
+                }
+            } else {
+                literal.push(character);
+            }
+        } else if character == '"' {
+            in_string = true;
+            literal.clear();
+        } else {
+            out.push(character);
+        }
+    }
+    out
+}
+
+/// Whether a line names a wizard value: an identifier one of whose `_`-separated parts is
+/// `value` or `values`.
+fn names_a_value(code: &str) -> bool {
+    code.to_ascii_lowercase()
+        .split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
+        .any(|word| {
+            word.split('_')
+                .any(|part| part == "value" || part == "values")
+        })
+}
+
+/// What converting or computing with a value would take: an arithmetic operator, or a
+/// parse or number conversion.
+fn converts(code: &str) -> Option<&'static str> {
+    const CONVERSIONS: &[&str] = &[
+        "int(",
+        "float(",
+        ".parse",
+        "str_to_var",
+        "from_str",
+        "to_int",
+        "to_float",
+        "json.parse",
+        "parse_string",
+        "as_i64",
+        "as_u64",
+        "as_f64",
+    ];
+    let lowered = code.to_ascii_lowercase();
+    if let Some(found) = CONVERSIONS.iter().find(|each| lowered.contains(**each)) {
+        return Some(found);
+    }
+    let bytes = lowered.as_bytes();
+    for (index, byte) in bytes.iter().enumerate() {
+        let next = bytes.get(index.saturating_add(1));
+        match byte {
+            b'+' | b'*' | b'/' | b'%' => return Some("an arithmetic operator"),
+            b'-' if next != Some(&b'>') => return Some("an arithmetic operator"),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// **The client never parses, checks or converts a wizard value** (w6 notes A4 item 2): a
+/// value travels under the name `value`, which is not a quantity word, so the crate's
+/// arithmetic scanner (`tests/no_arithmetic.rs`) cannot see a unit conversion of a
+/// duration page. This scan can: in `godot/scripts/wizard.gd` and in `src/wizard.rs` outside
+/// its unit tests, no line that names a value carries an arithmetic operator or a parse or
+/// number conversion. A value is shown and sent as the text it is.
+#[test]
+fn the_wizard_never_converts_a_value() {
+    let mut found: Vec<String> = Vec::new();
+    let mut lines_seen = 0_usize;
+    for (path, comment) in [
+        (
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("src")
+                .join("wizard.rs"),
+            "//",
+        ),
+        (root().join("godot").join("scripts").join("wizard.gd"), "#"),
+    ] {
+        let text = fs::read_to_string(&path).expect("a wizard source");
+        let code = if comment == "//" {
+            text.split("#[cfg(test)]").next().unwrap_or("").to_owned()
+        } else {
+            text
+        };
+        for (index, line) in code.lines().enumerate() {
+            let stripped = code_without_prose(line, comment);
+            if !names_a_value(&stripped) {
+                continue;
+            }
+            lines_seen = lines_seen.saturating_add(1);
+            if let Some(what) = converts(&stripped) {
+                found.push(format!(
+                    "{}:{}: {what}: {}",
+                    path.display(),
+                    index.saturating_add(1),
+                    line.trim()
+                ));
+            }
+        }
+    }
+    assert!(
+        lines_seen >= 4,
+        "the scan found almost no line naming a value; has the wizard renamed it?"
+    );
+    assert!(
+        found.is_empty(),
+        "the wizard converts or computes with a value; it shows and sends the text as it is:\n{}",
+        found.join("\n")
+    );
+}
+
+/// The scan above catches what it is for, and passes a line that only moves a value.
+#[test]
+fn the_value_scan_catches_a_conversion() {
+    for planted in [
+        "\treturn int(page.get(\"value\", \"0\")) / 1000",
+        "        p.value.parse::<i64>().ok()",
+        "\tvar shown := page.value - 3600",
+        "\tvar value := str_to_var(field.text)",
+    ] {
+        let comment = if planted.contains("::") { "//" } else { "#" };
+        let code = code_without_prose(planted, comment);
+        assert!(
+            names_a_value(&code) && converts(&code).is_some(),
+            "{planted}"
+        );
+    }
+    let clean = code_without_prose("\tfield.text = String(page.get(\"value\", \"\"))", "#");
+    assert!(names_a_value(&clean) && converts(&clean).is_none());
+    // A value named only in a comment is prose, not code.
+    let prose = code_without_prose("\tvar shown := 1 - 2 # the value", "#");
+    assert!(!names_a_value(&prose));
+}
