@@ -21,6 +21,27 @@
 # right, its route and ghost on the map. It shares the seat connection, and the bridge fits
 # its calls into the seat's rate budget beside the vista's polls.
 #
+# NEW MATCH OR RESUME (T19 pull request 2; decisions-log items 111 (C9), 112 (6) and 113
+# (11)). Nothing starts until the player chooses:
+#   * New match names the match through host_link.gd's one helper, `local-<unix
+#     seconds>-<pid>`, so it cannot collide with an older match whose save is still in the
+#     private match cache, and writes the six-field config line;
+#   * Resume last match, shown only when a line is remembered, writes that same line plus
+#     `resume`. The gateway checks it against the save and decides where the match goes on
+#     (the Push a sealed save began, or the Lull a quit left); a refusal shows the host's
+#     own standard-error text, and nothing is retried with other values.
+# Once the host has announced, the lobby remembers the six-field line it wrote, in ONE
+# `user://` file that holds no token (the tokens stay in host_link.gd's variables).
+# Remembering the whole line rather than the id alone means a resume repeats exactly what
+# the save was made with, even if a constant in host_link.gd changes between builds. When
+# the match ends, the lobby forgets it: an ended match keeps its save and its id stays
+# taken (item 113 (11)), so a finished match's last Push is not replayed from here.
+#
+# PLACEHOLDER: `user://`'s remembered match is a per-machine convenience, not state: the
+# save itself is the gateway's, in the private match cache. OWNER, with the save browser,
+# S6. PLACEHOLDER: forgetting an ended match (item 113 (11)), and the New/Resume layout,
+# OWNER, S6.
+#
 # PLACEHOLDER: the whole layout - a strip of buttons and a text column over the vista -
 # is the skeleton's; the real lobby is S6's.
 
@@ -31,6 +52,9 @@ const Strings := preload("res://scripts/strings.gd")
 
 ## How many event rows the list keeps on screen. PLACEHOLDER, UI, OWNER at S6.
 const EVENT_ROWS := 14
+## The one file the lobby writes: the six-field config line of the last match it started,
+## with no token in it.
+const REMEMBERED := "user://last_match.txt"
 
 @onready var vista: Node3D = $Vista
 @onready var link: Node = $HostLink
@@ -41,6 +65,11 @@ var _events: Label
 var _rows: Array[String] = []
 var _follow: Button
 var _failed := false
+var _started := false
+var _resuming := false
+## The six-field line written to the host, remembered once it announces.
+var _line := ""
+var _chooser: HBoxContainer
 
 
 func _ready() -> void:
@@ -53,15 +82,57 @@ func _ready() -> void:
 	link.received.connect(_on_received)
 	link.announced.connect(_on_announced)
 	editor.setup(vista)
-	var match_id := "local-%d" % OS.get_process_id()
+	_status.text = Strings.text("lobby_choose")
+
+
+## The line the lobby remembered from the last match it started, or "" when none is.
+static func remembered_line() -> String:
+	if not FileAccess.file_exists(REMEMBERED):
+		return ""
+	return FileAccess.get_file_as_string(REMEMBERED).strip_edges()
+
+
+## Starts a new match under a fresh id.
+func new_match() -> void:
+	_start(HostLink.config_line(HostLink.match_id("local"), HostLink.LADDER), false)
+
+
+## Goes on with the remembered match: the same six fields, plus `resume`.
+func resume_match() -> void:
+	var line := remembered_line()
+	if line == "":
+		return
+	_start(line + "\n", true)
+
+
+func _start(line: String, resuming: bool) -> void:
+	if _started:
+		return
+	_started = true
+	_resuming = resuming
+	_line = line.strip_edges()
+	_chooser.visible = false
 	_status.text = Strings.text("lobby_starting")
-	if link.start(HostLink.find_gamectl(), HostLink.find_root(), HostLink.config_line(match_id, HostLink.LADDER)):
+	var written := HostLink.resume_line(line) if resuming else line
+	if link.start(HostLink.find_gamectl(), HostLink.find_root(), written):
 		editor.begin(HostLink.my_seat())
+
+
+func _remember() -> void:
+	var file := FileAccess.open(REMEMBERED, FileAccess.WRITE)
+	if file != null:
+		file.store_string(_line + "\n")
+		file.close()
+
+
+func _forget() -> void:
+	if FileAccess.file_exists(REMEMBERED):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(REMEMBERED))
 
 
 func _process(_delta: float) -> void:
 	link.pump()
-	if _failed:
+	if _failed or not _started:
 		return
 	var state: Dictionary = vista.bridge.watch_state()
 	if state.is_empty():
@@ -86,11 +157,14 @@ func _notification(what: int) -> void:
 
 func _on_announced(_match_id: String) -> void:
 	_status.text = Strings.text("lobby_connected")
+	_remember()
 
 
 func _on_failed(reason: String) -> void:
 	_failed = true
-	_status.text = Strings.text("lobby_failed", {"reason": reason})
+	# A refusal is shown as the host wrote it (host_link.gd hands over its standard error).
+	var key := "lobby_resumed_failed" if _resuming else "lobby_failed"
+	_status.text = Strings.text(key, {"reason": reason})
 
 
 func _on_received(answer: Dictionary) -> void:
@@ -102,6 +176,10 @@ func _on_received(answer: Dictionary) -> void:
 			vista.frame_whole_map()
 	if answer.get("phase_changed", false) and answer.get("phase", "") == "push":
 		_rows.clear()
+	if answer.get("phase_changed", false) and answer.get("phase", "") == "ended":
+		# An ended match keeps its save and its id stays taken (item 113 (11)): the lobby
+		# forgets it, so Resume does not replay its last Push.
+		_forget()
 	for row in answer.get("events", PackedStringArray()):
 		_rows.append(String(row))
 	while _rows.size() > EVENT_ROWS:
@@ -120,6 +198,11 @@ func _build_ui() -> void:
 	layer.add_child(column)
 	_status = Label.new()
 	column.add_child(_status)
+	_chooser = HBoxContainer.new()
+	column.add_child(_chooser)
+	_button(_chooser, Strings.text("lobby_new_match"), new_match)
+	if remembered_line() != "":
+		_button(_chooser, Strings.text("lobby_resume"), resume_match)
 	var buttons := HBoxContainer.new()
 	column.add_child(buttons)
 	# The speed set is the pacer's (crates/client-gdext/src/pacer.rs SPEEDS, a PLACEHOLDER);

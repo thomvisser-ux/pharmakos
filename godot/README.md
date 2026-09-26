@@ -50,12 +50,14 @@ runs `scenes/watch_check.tscn` headless against a real `gamectl host`, and check
 | `fixtures/out_of_vocabulary.json` | the verifier's own E0003 case, byte for byte: the file Load must refuse with a code and a pointer |
 | `fixtures/needs_a_fix.jsonc` | the verifier's own E0108 case: a file with one machine-applicable Fix |
 | `fixtures/rows_report.json` | a `VerifyReport` of four committed verifier diagnostics, for the render-only rows scene |
+| `fixtures/instantiate_suggested.json` | a byte-identical copy of the gateway's `tests/golden/gateway/instantiate_suggested/expected.response.json` (seat 0's `instantiate_template{suggested: true}` answer for Hold & Build), for the render-only wizard scene and the watch check's pin; `crates/client-gdext/tests/wizard.rs` keeps it identical and pins its pages. **The lane that changes `library/` moves that golden and so owns this copy too**: re-copy it, and update the page pins, in the same pull request |
 | `scenes/boot.tscn` | the main scene: `--scene=<res path>` after `--` sends the run there, otherwise to the lobby |
 | `scenes/lobby.tscn` | the game at the skeleton: starts `gamectl host`, watches the match (T16), and edits the seat's orders (T19) |
 | `scenes/vista.tscn` | the vista: the bridge, the camera rig, the entity markers, the Pall |
 | `scenes/vista_shot.tscn` | the vista golden's scene: the keyframe fixture with **no host running** |
-| `scenes/watch_check.tscn` | the headless-driven run against a real `gamectl host` (CI's `client` job): the watch rig and the editor |
+| `scenes/watch_check.tscn` | the headless-driven run against a real `gamectl host` (CI's `client` job): the watch rig, the editor, the wizard, the meter, and a resume by a fresh client |
 | `scenes/rows_shot.tscn` | the validation rows drawn from `fixtures/rows_report.json` with no host: render-only, looked at and not compared until T20 |
+| `scenes/wizard_shot.tscn` | the wizard's first page drawn from `fixtures/instantiate_suggested.json` with no host: render-only, looked at and not compared until T20 |
 | `scenes/client_check.tscn` | T12's headless acceptance scene |
 | `scripts/` | GDScript — **views and editor UI only** (AGENTS.md §3 rule 4) |
 | `.godot/` | Godot's own import cache. Git-ignored, and written by `--import` |
@@ -109,6 +111,93 @@ What the editor sends and when is the bridge's (`crates/client-gdext/src/editor.
 `rig.rs`): the calls share the seat token's rate budget with the vista's polls, and Ready
 waits behind any submission still on its way.
 
+## The editor (T19, pull request 2)
+
+Pull request 2 adds four things to the panel, each drawn as the gateway answered it
+(`docs/design/skeleton-plan-w6-notes.md` section A4, as decisions-log item 112 amends it):
+
+- **The template wizard** (`scripts/wizard.gd`): one button per template `list_templates`
+  lists; the one opened shows one page per parameter `instantiate_template{suggested:
+  true}` lists, in its order, with the template's label, the value as the raw JSON the
+  gateway wrote (a duration stays game milliseconds), a mark where the value is the built-in
+  operator's suggestion, and the operator's "why" as it came. A value the player sends goes
+  exactly as typed, as the one explicit value, so the other pages keep the operator's value
+  and mark; a refusal is shown as the gateway wrote it. **Use** puts the gateway's
+  `playbook_jsonc` into the editor byte for byte, as one edit Undo takes back, and QUICK, the
+  route, the rule list and FULL follow. Nothing in the client names a template, a pointer or
+  a label, so a `library/` change needs no client change (`tests/wizard.rs`).
+- **The rule list** (`scripts/rule_list.gd`): `render_plan`'s prose for the text on screen,
+  one read-only row per line, its accessible name its line. No sentence is parsed; chips are
+  S3's.
+- **The meter**: `get_economy_forecast`'s four numbers (`$`, supply, draw and headroom in
+  `kW`) put into `scripts/strings.gd`'s frame as they came. Headroom is the gateway's, never
+  supply minus draw. The bridge's rig polls it when a Lull opens and whenever the match moved
+  in a Push.
+- **Draft continuity through `get_draft`**: when `list_drafts` shows this round's `carried`
+  draft, the editor fetches it and opens it, every time, so a client that restarted after a
+  resume opens last round's playbook as surely as one that submitted it.
+
+The lobby now asks first: **New match** names the match `local-<unix seconds>-<pid>` through
+`scripts/host_link.gd`'s one helper (the one clock read in the client's scripts, which names a
+match and computes nothing), so it never reuses the id of an older match whose save is
+still in the private match cache. Once the host has announced, the lobby remembers the
+six-field config line it wrote, in one `user://` file with no token in it. **Resume last
+match**, shown only when a line is remembered, writes that line plus `resume`; the gateway
+checks it against the save and resumes into the Push a sealed save began or the Lull a quit
+left. A refusal shows the host's own standard-error text, and nothing is retried. When the
+match ends the lobby forgets it (decisions-log item 113 (11)). The only files the client
+writes are the player's JSONC, that one remembered line, and the watch check's own `user://`
+files.
+
+## The watch check's two hosts, and the folders it leaves
+
+The watch check (above) now plays two seats: this one and seat 1, which the built-in
+operator plays. A one-seat match is decided at its Push's first tick, because the last seat
+standing wins (`crates/sim/src/runner.rs`, `MatchState::decide`), so it would have no round 2
+to quit in and resume. After round 1's recap it continues into round 2's Lull, idles there
+past the gateway's read timeout, closes the host's standard input (the host saves the Lull
+and exits), changes scene so the bridge, its rig and its editor are rebuilt, and starts a
+second host with the same six fields plus `resume`. There is one final `[watch-check] OK`
+line, naming both hosts' process ids.
+
+The check names its match `watch-check-<unix seconds>-<pid>` through the same helper as the
+lobby (decisions-log item 113 (13)): `gamectl host` keeps its matches in the real per-user
+private match cache, and a local re-run that reused a process id would be refused because
+the earlier run's save is still there. **Each local run therefore leaves one match folder
+behind** — `%LOCALAPPDATA%\Pharmakos\matches\watch-check-*` on Windows,
+`$XDG_DATA_HOME/pharmakos/matches/` (default `~/.local/share`) on Linux, and
+`~/Library/Application Support/Pharmakos/matches/` on macOS. The client cannot remove it:
+it has no access to the cache, which is the gateway's (w6 notes, decision C9). Delete old
+`watch-check-*` folders by hand when they pile up; nothing prunes them until S6's save
+browser.
+
+## The wizard shot
+
+```sh
+godot --path godot --resolution 1280x720 -- --scene=res://scenes/wizard_shot.tscn --shot=<png>
+```
+
+Windowed, like the rows shot, and **render-only** at T19: the shot is taken and looked at, and
+T20 commits and compares it (decisions-log item 110 (4); the w6 notes' A5). It draws the
+wizard's first page from `fixtures/instantiate_suggested.json`: the page's label, its raw value in the field, the operator's mark, the why, and Use and Close.
+Headless without `--shot=`, the scene checks the page's, the field's and the mark's
+accessible names and quits.
+
+## GraphEdit in Godot 4.7.2 (spec section 19's open item)
+
+**GraphEdit is not marked experimental in the installed Godot 4.7.2**, and neither are
+`GraphNode`, `GraphElement` or `GraphFrame`, nor any of their members. Evidence, read from the
+engine itself rather than from memory: the editor's own class-reference cache for 4.7
+(`%LOCALAPPDATA%\Godot\editor_doc_cache-4.7.res`, written by the installed
+`4.7.2.stable.official.ed1daf0bf` from the reference compiled into it), loaded by a script
+through `ResourceLoader`, lists 1076 classes; the classes that carry an `experimental` key
+there include `Compositor`, `CompositorEffect` and `SkeletonModification2DPhysicalBones`, and
+the four graph classes carry none, on the class or on any method, property, signal, constant
+or theme item. `godot --headless --doctool` is no evidence either way: run outside the
+engine's source tree it writes the class list with empty descriptions and no marks at all,
+and `--dump-extension-api-with-docs` carries descriptions but has no experimental field.
+Nothing in the client depends on GraphEdit (spec section 19); this is reported, not used.
+
 ## The rows shot
 
 ```sh
@@ -141,6 +230,7 @@ one.
 
 ## What is not here yet
 
-The template wizard, the rule list as prose lines, the `$`/`kW` meter and the lobby's Resume
-are **T19**'s second pull request; the real lobby, the `.vox` models and the art pass are
-S6's. Entities are drawn as placeholder primitives until then.
+Chips on the rule list, drag reordering and the pickers are S3's; unit display of wizard
+values, the typed parameter catalogue, the draft and save browsers and the real lobby are
+S6's; the `.vox` models and the art pass are S6's too. Entities are drawn as placeholder
+primitives until then.

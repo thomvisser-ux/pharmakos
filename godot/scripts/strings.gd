@@ -36,6 +36,11 @@ const TEXT := {
 	"lobby_follow": "Follow",
 	"lobby_whole_map": "Whole map",
 	"lobby_speed_button": "{speed}x",
+	"lobby_new_match": "New match",
+	"lobby_resume": "Resume last match",
+	"lobby_choose": "Start a new match, or go on with the last one.",
+	"lobby_resumed_failed": "The match host would not resume the last match: {reason}",
+	"lobby_forgotten": "The last match has ended, so there is nothing to resume.",
 
 	# --- The editor's panel ------------------------------------------------------
 	"editor_title": "Orders",
@@ -55,6 +60,28 @@ const TEXT := {
 	"draft_row": "{label} (round {round})",
 	"no_drafts": "No drafts yet.",
 	"file_filter": "*.jsonc ; Playbooks",
+
+	# --- The wizard, the rule list and the meter (T19, pull request 2) -------------
+	# A value is shown and typed as the raw JSON the gateway wrote (a duration is game
+	# milliseconds): unit display is S6's (skeleton-plan-w6-notes.md section A4 item 5).
+	"templates_heading": "Start from a template",
+	"no_templates": "No templates.",
+	"template_button": "{title}",
+	"wizard_heading": "Template: {title}",
+	"wizard_waiting": "Asking the gateway...",
+	"wizard_page_value": "{label}",
+	"wizard_mark": "suggested by the built-in operator",
+	"wizard_why": "Why: {why}",
+	"wizard_send": "Send this value",
+	"wizard_use": "Use this playbook",
+	"wizard_close": "Close",
+	"rules_heading": "What the playbook says",
+	"rules_waiting": "Rendering...",
+	"meter_heading": "Your economy",
+	# The four numbers as the gateway sent them. Headroom is the gateway's own figure,
+	# never supply minus draw: nothing here adds or subtracts anything.
+	"meter": "${treasury}   supply {supply} kW   draw {draw} kW   headroom {headroom} kW",
+	"meter_waiting": "Not read yet.",
 
 	# --- What the checks said ----------------------------------------------------
 	"verdict_none": "Not checked yet.",
@@ -89,6 +116,8 @@ const TEXT := {
 	"status_saved_file": "Saved to {path}.",
 	"status_save_failed": "Could not write {path}.",
 	"status_open_failed": "Could not read {path}.",
+	"status_wizard_used": "The template's playbook is in the editor. Undo takes it back.",
+	"status_wizard_refused": "The gateway refused that value: {detail}",
 
 	# --- The route -------------------------------------------------------------
 	# PLACEHOLDER: travel times are shown as the raw game milliseconds the estimator

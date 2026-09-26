@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Pharmakos contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# The playbook editor, pull request 1 of T19: the map route surface, the validation rows,
+# The playbook editor, T19 pull requests 1 and 2: the map route surface, the validation rows,
 # the notebook, draft continuity, Load, Save, Undo and Submit (skeleton plan T19, amended by
 # `docs/design/skeleton-plan-w6-notes.md` section A4).
 #
@@ -26,10 +26,25 @@
 #     prices every leg over the whole generated map and the view agrees
 #     (skeleton-plan-t16a-notes.md section B, "T19" (2)).
 #
-# Files: Load and Save read and write the player's own JSONC file, byte for byte, and
-# nothing else is written. A file is opened only after QUICK has seen it; an
-# out-of-vocabulary construct is refused with the verifier's code and pointer and nothing
-# is stripped (spec section 13).
+# Files: Load and Save read and write the player's own JSONC file, byte for byte. The only
+# files the client writes at all are that JSONC file, the lobby's one remembered config
+# line (`user://`, no token; scripts/lobby.gd) and the headless watch check's own `user://`
+# files. A file is opened only after QUICK has seen it; an out-of-vocabulary construct is
+# refused with the verifier's code and pointer and nothing is stripped (spec section 13).
+#
+# Pull request 2 (skeleton-plan-w6-notes.md section A4, as decisions-log item 112 amends
+# it) adds, all drawn as the gateway answered:
+#   * the TEMPLATE WIZARD (scripts/wizard.gd): the templates `list_templates` offers, and
+#     for the one opened, one page per parameter `instantiate_template{suggested: true}`
+#     lists - label, raw value, the operator's mark and its why. Use puts the gateway's
+#     playbook into the editor byte for byte, as one edit Undo takes back;
+#   * the RULE LIST (scripts/rule_list.gd): `render_plan`'s lines for the text on screen;
+#   * the own $/kW METER: `get_economy_forecast`'s four numbers, as they came, through
+#     strings.gd's frame. Headroom is the gateway's, never supply minus draw. When it is
+#     read is the bridge's rig's scheduling (crates/client-gdext/src/rig.rs).
+#     PLACEHOLDER: the meter's layout and refresh cadence, Tuning, OWNER.
+#   * draft continuity through `get_draft`: the carried draft is fetched and opened every
+#     Lull (the bridge's editor).
 #
 # PLACEHOLDER: the panel's layout, sizes and colours, the menu's wording and the ghost's
 # look are the skeleton's; the real editor's layout is S6's, OWNER (skeleton plan T19).
@@ -44,6 +59,8 @@ extends CanvasLayer
 
 const Strings := preload("res://scripts/strings.gd")
 const Rows := preload("res://scripts/rows.gd")
+const Wizard := preload("res://scripts/wizard.gd")
+const RuleList := preload("res://scripts/rule_list.gd")
 
 ## How close, in screen pixels, a click must land to a beacon to pick it.
 ## PLACEHOLDER: UI, OWNER at S6.
@@ -98,6 +115,15 @@ var _route_mesh: MeshInstance3D
 var _route_labels: Node3D
 var _ghost: MeshInstance3D
 var _notes_loaded := false
+var _meter: Label
+var _meter_answers := -1
+var _templates_box: VBoxContainer
+var _wizard_box: VBoxContainer
+var _rules_status: Label
+var _rules_box: VBoxContainer
+var _templates_drawn := ""
+var _wizard_drawn := ""
+var _rules_drawn := ""
 
 
 ## Builds the panel, the menus and the map's drawing nodes. `vista` is the scene's vista,
@@ -178,8 +204,58 @@ func close_menu() -> void:
 	_visit_menu.hide()
 
 
+## The wizard's pages as drawn, in order (see scripts/wizard.gd, `page_controls`).
+func wizard_page_controls() -> Array[Control]:
+	return Wizard.page_controls(_wizard_box)
+
+
+## The wizard's Use button as drawn, or null.
+func wizard_use_button() -> Button:
+	return Wizard.use_button(_wizard_box)
+
+
+## The wizard's why as drawn.
+func wizard_why_text() -> String:
+	return Wizard.why_text(_wizard_box)
+
+
+## The wizard's refusal as drawn.
+func wizard_refusal_text() -> String:
+	return Wizard.refusal_text(_wizard_box)
+
+
+## The rule list's rows as drawn, in order.
+func rule_controls() -> Array[Control]:
+	return RuleList.row_controls(_rules_box)
+
+
+## The template buttons as drawn, in order: each carries the template's `id` as a meta.
+func template_buttons() -> Array[Button]:
+	var out: Array[Button] = []
+	for child in _templates_box.get_children():
+		if child is Button and child.has_meta("id"):
+			out.append(child)
+	return out
+
+
+## The meter as drawn.
+func meter_text() -> String:
+	return _meter.text
+
+
+## Opens the wizard on template `id`, as its button does.
+func open_template(id: String) -> void:
+	bridge.editor_wizard_open(id)
+
+
+## Sends `text` for the wizard page at `pointer`, as its field and Send button do.
+func wizard_send(pointer: String, text: String) -> void:
+	bridge.editor_wizard_set(pointer, text)
+
+
 ## Called by the lobby every frame: redraws when the bridge says something changed.
 func refresh() -> void:
+	_draw_meter(bridge.watch_meter())
 	var state: Dictionary = bridge.editor_state()
 	if state.is_empty() or int(state.get("changes", 0)) == _changes:
 		return
@@ -310,6 +386,67 @@ func _draw_state(state: Dictionary) -> void:
 	_draw_drafts(state.get("drafts", []))
 	_draw_route(state.get("route", {}), state.get("has_text", false))
 	_draw_ghost(state.get("ghost", {}))
+	_draw_templates(state.get("templates", []))
+	_draw_wizard(state.get("wizard", {}), state.get("templates", []))
+	_draw_rules(state.get("prose", PackedStringArray()), state.get("prose_current", false), state.get("has_text", false))
+
+
+## The meter: the gateway's four numbers put into strings.gd's frame as they came. Redrawn
+## only when a new answer has come.
+func _draw_meter(meter: Dictionary) -> void:
+	if meter.is_empty() or int(meter.get("answers", 0)) == _meter_answers:
+		return
+	_meter_answers = int(meter.get("answers", 0))
+	if _meter_answers == 0:
+		_meter.text = Strings.text("meter_waiting")
+	else:
+		_meter.text = Strings.text("meter", {"treasury": meter.get("treasury_now"), "supply": meter.get("supply_kw_now"), "draw": meter.get("draw_kw_now"), "headroom": meter.get("headroom_kw_now")})
+	_meter.accessibility_name = _meter.text
+
+
+func _draw_templates(templates: Array) -> void:
+	var drawn := var_to_str(templates)
+	if drawn == _templates_drawn:
+		return
+	_templates_drawn = drawn
+	for child in _templates_box.get_children():
+		_templates_box.remove_child(child)
+		child.queue_free()
+	if templates.is_empty():
+		var none := Label.new()
+		none.text = Strings.text("no_templates")
+		_templates_box.add_child(none)
+		return
+	for template in templates:
+		var id := String(template.get("id", ""))
+		var button := _button(_templates_box, "", func() -> void: open_template(id))
+		button.text = Strings.text("template_button", {"title": template.get("title", "")})
+		button.accessibility_name = button.text
+		button.tooltip_text = String(template.get("summary", ""))
+		button.set_meta("id", id)
+
+
+## Redrawn only when the wizard's answer or refusal changed, so a value being typed is not
+## wiped by an unrelated redraw.
+func _draw_wizard(wizard: Dictionary, templates: Array) -> void:
+	var drawn := var_to_str(wizard)
+	if drawn == _wizard_drawn:
+		return
+	_wizard_drawn = drawn
+	var title := String(wizard.get("template_id", ""))
+	for template in templates:
+		if template.get("id", "") == title:
+			title = String(template.get("title", title))
+	Wizard.fill(_wizard_box, title, wizard, Callable(self, "wizard_send"), func() -> void: bridge.editor_wizard_use(), func() -> void: bridge.editor_wizard_close())
+
+
+func _draw_rules(lines: PackedStringArray, current: bool, has_text: bool) -> void:
+	_rules_status.text = Strings.text("rules_waiting") if has_text and not current else ""
+	var drawn := var_to_str(lines)
+	if drawn == _rules_drawn:
+		return
+	_rules_drawn = drawn
+	RuleList.fill(_rules_box, lines)
 
 
 func _draw_notes(state: Dictionary) -> void:
@@ -421,9 +558,24 @@ func _build_panel() -> void:
 	_beacon_label = _label(column)
 	_ghost_label = _label(column)
 
+	_heading(column, "meter_heading")
+	_meter = _label(column)
+	_meter.text = Strings.text("meter_waiting")
+
+	_heading(column, "templates_heading")
+	_templates_box = VBoxContainer.new()
+	column.add_child(_templates_box)
+	_wizard_box = VBoxContainer.new()
+	column.add_child(_wizard_box)
+
 	_heading(column, "checks_heading")
 	_rows = VBoxContainer.new()
 	column.add_child(_rows)
+
+	_heading(column, "rules_heading")
+	_rules_status = _label(column)
+	_rules_box = VBoxContainer.new()
+	column.add_child(_rules_box)
 
 	_heading(column, "route_heading")
 	_route_label = _label(column)

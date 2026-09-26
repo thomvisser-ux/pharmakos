@@ -17,9 +17,16 @@
 # page of the view.
 #
 # THE TOKENS LIVE IN THIS SCRIPT'S VARIABLES AND NOWHERE ELSE: never printed, never
-# logged, never written to a file, a scene or a resource. The announce line is parsed and
-# dropped; the error paths below print the host's standard error, which the host keeps
-# free of tokens (it writes them to standard output only, and only once).
+# logged, never written to a file, a scene or a resource, never put on the config line or
+# the resume line. The announce line is parsed and dropped; the error paths below print the
+# host's standard error and hand it to the lobby to show, which is safe because the host
+# keeps it free of tokens (it writes them to standard output only, and only once).
+#
+# THE MATCH ID (T19 pull request 2; decisions-log item 113 (12) and (13)): `match_id`
+# below is the one helper that names a match, `<prefix>-<unix seconds>-<pid>`, so a new
+# match never reuses the id of an old one whose save is still in the private match cache
+# (a new match under an id with a save is refused). It reads the clock ONCE, to name the
+# match, and computes nothing with it: the seconds are a name, not a time.
 #
 # What each connection SENDS, and when, is not decided here: this script moves text
 # between the sockets and the bridge's watch rig (crates/client-gdext/src/rig.rs), which
@@ -53,9 +60,10 @@ const RECONNECTS := 5
 ## The match the lobby hosts until it has a match-settings screen.
 ##
 ## PLACEHOLDER: the golden seed (so the live vista is the fixture's map), two seats with
-## the human at seat 0 and the other filed the safe playbook by the host, the rules
-## table's own segment ladder, and the spec's default round limit of six. The lobby's
-## settings screen is OWNER's, with T22's stage demo and S1's Probation preset.
+## the human at seat 0 and the other played by the built-in operator (Easy, since T18:
+## it plans, submits and says ready for its seat every round), the rules table's own
+## segment ladder, and the spec's default round limit of six. The lobby's settings screen
+## is OWNER's, with T22's stage demo and S1's Probation preset.
 const MATCH_SEED := "0x00000000ca5caded"
 const MATCH_SEATS := 2
 const HUMAN_SEAT := 0
@@ -67,6 +75,8 @@ var bridge: Node = null
 var _pid := -1
 var _stdio: FileAccess = null
 var _stderr: FileAccess = null
+## Everything the host wrote on its standard error, which it keeps free of tokens.
+var _stderr_text := ""
 var _announce := PackedByteArray()
 var _port := 0
 var _tokens := ["", ""]
@@ -113,6 +123,21 @@ static func config_line(match_id: String, ladder: String, seats: int = MATCH_SEA
 	return "%s\t%s\t%d\t%d\t%s\t%d\n" % [match_id, MATCH_SEED, seats, HUMAN_SEAT, ladder, ROUND_LIMIT]
 
 
+## The resume line for a remembered six-field `line`: the same six fields, a tab and
+## `resume` (decisions-log item 111, decision C9). Nothing else changes, so a refusal says
+## the save and this line disagree, and nothing is retried with other values.
+static func resume_line(line: String) -> String:
+	return line.strip_edges(false, true) + "\tresume\n"
+
+
+## A match id no earlier run can have used: `<prefix>-<unix seconds>-<pid>`, lower-case
+## letters, digits and hyphens, within the gateway's 64 characters. THE ONE CLOCK READ in
+## this script: the seconds name the match and nothing is computed with them (AGENTS.md
+## section 3 rule 4, as decisions-log item 113 (12) words it).
+static func match_id(prefix: String) -> String:
+	return "%s-%d-%d" % [prefix, int(Time.get_unix_time_from_system()), OS.get_process_id()]
+
+
 ## The seat the human plays, spelt as the gateway spells a seat.
 static func my_seat() -> String:
 	return "seat.%d" % HUMAN_SEAT
@@ -142,6 +167,13 @@ func start(gamectl: String, root: String, config_line: String) -> bool:
 ## The host's process id, or -1 before it was started.
 func host_pid() -> int:
 	return _pid
+
+
+## What the host wrote on its standard error so far: its own words, token-free, which the
+## lobby shows when the host refuses a line.
+func host_error() -> String:
+	_drain_stderr()
+	return _stderr_text.strip_edges()
 
 
 ## Whether the host process is still running.
@@ -187,7 +219,10 @@ func _read_announce() -> void:
 	if end < 0:
 		if not host_running():
 			_done = true
-			failed.emit("the host exited before it announced a match")
+			# The host's own words (a refused resume line, a taken match id), as it wrote
+			# them; the generic sentence only when it wrote nothing.
+			var said := host_error()
+			failed.emit(said if said != "" else "the host exited before it announced a match")
 		return
 	var fields := text.substr(0, end).strip_edges().split("\t")
 	_announce = PackedByteArray()
@@ -243,6 +278,10 @@ func _pump_link(link: int) -> void:
 func _drain_stderr() -> void:
 	if _stderr == null:
 		return
-	var chunk := _stderr.get_buffer(4096)
-	if chunk.size() > 0:
-		printerr("[host] ", chunk.get_string_from_utf8().strip_edges())
+	while true:
+		var chunk := _stderr.get_buffer(4096)
+		if chunk.size() == 0:
+			return
+		var text := chunk.get_string_from_utf8()
+		_stderr_text += text
+		printerr("[host] ", text.strip_edges())
