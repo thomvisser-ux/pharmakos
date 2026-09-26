@@ -93,7 +93,7 @@ here: the key-core rule (decisions-log item 113 (5)) changed every seat's
 settled `kW` draw, which is hashed seat state, and changed no event these
 scenarios report. `expand-east-segment`'s event log did not move, and every
 tick `deploy-and-visit` asserts on or quotes (206, 451, 511, 716, 776) is where
-it was. That is the "chain moved but the event log did not" case below, read
+it was. That is the "chain moved but the event log did not" case above, read
 and accepted: the scenarios assert on the route, not on the meter.
 
 `expand-east-segment` carries one more thing worth knowing before its chain is
