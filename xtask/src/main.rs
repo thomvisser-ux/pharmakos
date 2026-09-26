@@ -22,7 +22,7 @@
 //! | `clippy`         | `-D warnings` plus the determinism lint set; walled crates linted separately |
 //! | `profiles`       | overflow checks are on in every profile, release included                    |
 //! | `test`           | `cargo test --workspace` without the `research` feature                      |
-//! | `test-research`  | `cargo test --workspace --features pharmakos-sim/research`                    |
+//! | `test-research`  | `cargo test --package pharmakos-sim --features pharmakos-sim/research`       |
 //! | `research-guard` | plan-core / verifier / operator / gateway must not reach `research`          |
 //! | `wall-guard`     | those crates and `sim` must not depend on a walled presentation/solve crate  |
 //! | `deny`           | `cargo deny check` (licences, advisories, banned crates)                     |
@@ -61,7 +61,29 @@
 //! cargo xtask golden --bless        # accept the fresh outputs as the new goldens
 //! cargo xtask stage-client --check  # build the cdylib, stage, import, run the client check
 //! cargo xtask list                  # list the steps
+//! cargo xtask ci-scope              # CI's docs-only fast path: `full` or `prose`
 //! ```
+//!
+//! # The research tests
+//!
+//! `test-research` runs `pharmakos-sim`'s tests alone with the `research`
+//! feature on, because the sim is the one crate whose code the feature changes
+//! (`pub mod research` in its `lib.rs`, and `tests/fork.rs`); no other crate
+//! reads it, so their tests run once, in `test` (decisions-log item 113 (9),
+//! chosen by item 115 (5)). Every crate is still *compiled* against a research
+//! sim, by `clippy`'s research pass. With `-p`, the step runs when the list
+//! names the sim and skips, with the reason, when it does not.
+//!
+//! # The docs-only fast path
+//!
+//! `cargo xtask ci-scope` is not a step: `ci` and `list` do not know it. Each
+//! CI job that builds runs it after its checkout and toolchain steps; it prints
+//! `full` or `prose` with its reason and appends `prose_only=true|false` to
+//! `$GITHUB_OUTPUT`, and the job's later steps run only when the answer is not
+//! `prose`. It answers `prose` only for a `pull_request` whose merge commit
+//! changes nothing but `docs/**`, `AGENTS.md`, `CLAUDE.md`, `.claude/**` and
+//! top-level `*.md`, and `full` on any error (decisions-log item 115 (4)); see
+//! [`scope`] for the rules and why each holds.
 //!
 //! # The determinism hash file
 //!
@@ -102,6 +124,7 @@ mod annotate;
 mod golden;
 mod png;
 mod scenario;
+mod scope;
 
 // ---------------------------------------------------------------------------
 // Policy constants. These are the knobs; everything below them is machinery.
@@ -380,7 +403,7 @@ const STEPS: &[Step] = &[
     },
     Step {
         name: "test-research",
-        about: "cargo test --workspace, with the research feature",
+        about: "cargo test on pharmakos-sim alone, with the research feature",
         run: step_test_research,
     },
     Step {
@@ -509,6 +532,13 @@ fn run_cli(args: &[String]) -> Result<bool, String> {
                     println!("{:<15} {}", step.name, step.about);
                 }
                 return Ok(true);
+            }
+            // Not a step, and never in `ci`: CI's docs-only fast path asks it
+            // whether the suite runs at all. Every other argument makes it
+            // answer `full`, so nothing typed can force `prose`.
+            "ci-scope" => {
+                let extra: Vec<&String> = args.iter().filter(|arg| *arg != "ci-scope").collect();
+                return Ok(scope::run_from_env(&extra));
             }
             "--quick" => quick = true,
             "--fix" => fix = true,
@@ -661,6 +691,7 @@ fn print_help() {
     println!("    cargo xtask ci [--quick|--fix] [--skip <step>]...");
     println!("    cargo xtask <step> [flags]");
     println!("    cargo xtask list");
+    println!("    cargo xtask ci-scope       CI's docs-only fast path: prints `full` or `prose`");
     println!();
     println!("FLAGS:");
     println!("    --quick            fmt, clippy and tests only — the inner loop");
@@ -878,24 +909,62 @@ fn step_test(ctx: &Ctx) -> Result<Outcome, String> {
 }
 
 fn step_test_research(ctx: &Ctx) -> Result<Outcome, String> {
-    let Some(feature) = research_feature_spec(ctx) else {
-        return Ok(Outcome::Skipped(format!(
+    let sim = ctx
+        .workspace
+        .as_ref()
+        .ok()
+        .and_then(|workspace| workspace.package_with_feature(SIM_PACKAGES, RESEARCH_FEATURE));
+    match research_test_args(sim.as_deref(), &ctx.packages, ctx.locked) {
+        Ok((args, feature)) => {
+            run(ctx, &ctx.cargo, &args)?;
+            Ok(Outcome::Done(format!(
+                "tests pass with {feature}; no other crate's code reads the feature, \
+                 and clippy's research pass compiles every crate against it"
+            )))
+        }
+        Err(reason) => Ok(Outcome::Skipped(reason)),
+    }
+}
+
+/// The `test-research` step's cargo arguments and its `--features` value, or
+/// the reason it skips. Pure, so the three `-p` cases are unit-tested.
+///
+/// `sim` is the package that declares the `research` feature. The step tests
+/// that package alone, because it is the one crate whose code the feature
+/// changes: every other crate's tests would compile and run exactly as they do
+/// in `test`, against a sim they never ship with (decisions-log items 113 (9)
+/// and 115 (5)).
+///
+/// * no `-p`: the sim's tests with the feature on;
+/// * a `-p` list that names the sim: the same, and nothing else;
+/// * a `-p` list that leaves the sim out: skipped, because nothing in it changes.
+fn research_test_args(
+    sim: Option<&str>,
+    packages: &[String],
+    locked: bool,
+) -> Result<(Vec<String>, String), String> {
+    let Some(sim) = sim else {
+        return Err(format!(
             "no crate declares a `{RESEARCH_FEATURE}` feature yet"
-        )));
+        ));
     };
-    // `--features <pkg>/<feature>` is legal from the workspace root because the
-    // package is a workspace member (resolver 2/3).
+    if !packages.is_empty() && !packages.iter().any(|package| package == sim) {
+        return Err(format!(
+            "the {RESEARCH_FEATURE} feature changes only {sim}, which --package leaves out"
+        ));
+    }
+    let feature = format!("{sim}/{RESEARCH_FEATURE}");
     let mut args: Vec<String> = vec![
         "test".to_owned(),
-        "--workspace".to_owned(),
+        "--package".to_owned(),
+        sim.to_owned(),
         "--features".to_owned(),
         feature.clone(),
     ];
-    if ctx.locked {
+    if locked {
         args.push("--locked".to_owned());
     }
-    run(ctx, &ctx.cargo, &args)?;
-    Ok(Outcome::Done(format!("tests pass with {feature}")))
+    Ok((args, feature))
 }
 
 /// `fork` lives behind the `research` feature, and release builds never enable
@@ -2690,6 +2759,65 @@ overflow-checks = true\n";
         assert!(report.contains("line 2"), "{report}");
         assert!(report.contains("beta"), "{report}");
         assert!(report.contains("gamma"), "{report}");
+    }
+
+    fn strings(list: &[&str]) -> Vec<String> {
+        list.iter().map(|item| (*item).to_owned()).collect()
+    }
+
+    #[test]
+    fn research_tests_run_on_the_sim_alone() {
+        let expected = strings(&[
+            "test",
+            "--package",
+            "pharmakos-sim",
+            "--features",
+            "pharmakos-sim/research",
+        ]);
+        // No -p: the sim alone, never --workspace.
+        let (args, feature) = research_test_args(Some("pharmakos-sim"), &[], false).expect("runs");
+        assert_eq!(args, expected);
+        assert_eq!(feature, "pharmakos-sim/research");
+
+        // --locked is passed on as before.
+        let (locked, _) = research_test_args(Some("pharmakos-sim"), &[], true).expect("runs");
+        let mut expected_locked = expected.clone();
+        expected_locked.push("--locked".to_owned());
+        assert_eq!(locked, expected_locked);
+
+        // -p naming the sim, alone or among others: the same command.
+        for packages in [
+            strings(&["pharmakos-sim"]),
+            strings(&["pharmakos-gateway", "pharmakos-sim"]),
+        ] {
+            let (args, _) =
+                research_test_args(Some("pharmakos-sim"), &packages, false).expect("runs");
+            assert_eq!(args, expected, "{packages:?}");
+        }
+
+        // -p leaving the sim out: skipped, with the reason.
+        assert_eq!(
+            research_test_args(
+                Some("pharmakos-sim"),
+                &strings(&["pharmakos-gateway"]),
+                false
+            ),
+            Err(
+                "the research feature changes only pharmakos-sim, which --package leaves out"
+                    .to_owned()
+            )
+        );
+
+        // No crate declares the feature: skipped, as before.
+        assert_eq!(
+            research_test_args(None, &[], false),
+            Err("no crate declares a `research` feature yet".to_owned())
+        );
+    }
+
+    #[test]
+    fn ci_scope_is_not_a_step() {
+        assert!(STEPS.iter().all(|step| step.name != "ci-scope"));
     }
 
     #[test]
