@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: 2026 Pharmakos contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Contract files (AGENTS.md section 5): a PR touching these requests the owner's review.
+# Determinism code has no single path; AGENTS.md section 5 remains the authority for it.
+
+/proto/                 @thomvisser-ux
+/clippy.toml            @thomvisser-ux
+/deny.toml              @thomvisser-ux
+/rustfmt.toml           @thomvisser-ux
+/Cargo.toml             @thomvisser-ux
+/.github/               @thomvisser-ux
+/xtask/                 @thomvisser-ux
+/LICENSES/              @thomvisser-ux
+/REUSE.toml             @thomvisser-ux
+LICENSE                 @thomvisser-ux
+/AGENTS.md              @thomvisser-ux
+/CLAUDE.md              @thomvisser-ux
+/docs/design/           @thomvisser-ux
