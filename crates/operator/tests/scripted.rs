@@ -1470,6 +1470,55 @@ fn a_vent_no_edge_site_holds_in_3d_is_not_a_goal_and_the_page_says_why() {
     );
 }
 
+/// The Hold & Build page's why names the true reason in the two cases the
+/// "two sphere reaches" sentence does not cover (the review of T18b): a vent
+/// straight above the nearest own beacon, outside its sphere, is a vent no
+/// edge site reaches because the ground rises too far; and a seat with no
+/// beacon has no sphere to stand a site in at all.
+#[test]
+fn a_vent_above_the_core_or_a_seat_with_no_beacon_is_said_as_it_is() {
+    // The vent's columns stand twenty voxels above the plain over the core,
+    // and the core is reported at the bottom of the map, so the vent's centre
+    // is further above it than the sphere reaches, in its own column.
+    let mut above = Script::new(1);
+    for x in 31..=33 {
+        for y in 31..=33 {
+            above.features.insert((x, y), VENT_LEAN);
+            above.heights.insert((x, y), GROUND + 20);
+        }
+    }
+    above.beacons.first_mut().expect("the core").at = [32, 32, 1];
+    let (_, advice) = advise(above);
+    let page = advice
+        .suggestions
+        .iter()
+        .find(|suggestion| suggestion.template_id == "hold_and_build")
+        .expect("a Hold & Build suggestion");
+    assert!(page.parameters.is_empty(), "{page:#?}");
+    assert!(
+        page.why
+            .contains("No site at the edge of your spheres puts the heat vent")
+            && !page.why.contains("two sphere reaches"),
+        "{}",
+        page.why
+    );
+
+    let mut bare = vent_beyond_the_sphere();
+    bare.beacons.clear();
+    let (_, advice) = advise(bare);
+    let page = advice
+        .suggestions
+        .iter()
+        .find(|suggestion| suggestion.template_id == "hold_and_build")
+        .expect("a Hold & Build suggestion");
+    assert!(page.parameters.is_empty(), "{page:#?}");
+    assert!(
+        page.why.contains("You have no beacon") && !page.why.contains("two sphere reaches"),
+        "{}",
+        page.why
+    );
+}
+
 /// `estimate_route`'s `Leg.to` is a `gp.v1.Location` as declared; `main`
 /// wrote a bare voxel until T17 fixed it. Easy reads both, and plays the same
 /// round from either.

@@ -266,8 +266,10 @@ fn mine_site(
 /// Why a feature offers no site.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Unfit {
-    /// The seat has no beacon, or the feature is further than two reaches
-    /// from every own beacon.
+    /// The seat has no beacon, so no site stands inside an own sphere.
+    NoBeacon,
+    /// The feature is further than two reaches from every own beacon in the
+    /// ground plane.
     Far,
     /// No site tried both stands inside an own sphere and holds the
     /// feature's centre inside its own new sphere.
@@ -292,7 +294,7 @@ fn site_for(
     let nearest = own
         .iter()
         .min_by_key(|beacon| distance2_xy(beacon.at, patch.centre))
-        .ok_or(Unfit::Far)?;
+        .ok_or(Unfit::NoBeacon)?;
     if own
         .iter()
         .any(|beacon| inside(beacon.at, patch.centre, radius))
@@ -329,7 +331,13 @@ fn site_for(
     // at **S5**.
     let reach = radius.saturating_sub(SPHERE_MARGIN_VOXELS).max(0);
     let apart = distance2_xy(nearest.at, patch.centre).isqrt();
-    if apart == 0 || apart > reach.saturating_mul(2) {
+    // A centre in the nearest beacon's own column but outside its sphere
+    // lies straight above or below it: no site on a line in the ground plane
+    // reaches it, because the ground rises or falls too far.
+    if apart == 0 {
+        return Err(Unfit::NoSite);
+    }
+    if apart > reach.saturating_mul(2) {
         return Err(Unfit::Far);
     }
     let along = |from: i32, to: i32, out: i64| -> Option<i32> {
