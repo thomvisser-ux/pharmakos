@@ -88,6 +88,14 @@ that the gateway files the safe playbook for it. Read the two together: this
 one is what the interpreter does when a playbook fits the map, that one is what
 it does when a playbook does not, and neither is the whole picture on its own.
 
+**T14b moved both chains from their first line (tick 1)** and nothing else
+here: the key-core rule (decisions-log item 113 (5)) changed every seat's
+settled `kW` draw, which is hashed seat state, and changed no event these
+scenarios report. `expand-east-segment`'s event log did not move, and every
+tick `deploy-and-visit` asserts on or quotes (206, 451, 511, 716, 776) is where
+it was. That is the "chain moved but the event log did not" case below, read
+and accepted: the scenarios assert on the route, not on the meter.
+
 `expand-east-segment` carries one more thing worth knowing before its chain is
 read. The playbook it seals **does not qualify against either seat's own frozen
 snapshot** on this map: `E0401` for `b_01`, which is seat 1's core and is not in
