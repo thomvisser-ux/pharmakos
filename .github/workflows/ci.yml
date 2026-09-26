@@ -24,6 +24,31 @@
 # artefacts are absent, and the cross-OS job says so instead of failing. The three lines to
 # flip when the binary lands are marked "FLIP AT G4": `if-no-files-found`, the
 # `continue-on-error` on the download, and the `exit 0` in the compare step.
+#
+# THE DOCS-ONLY FAST PATH (decisions-log item 115 (4)). Every required job runs on every
+# pull request, because the ruleset's eight required checks must report under their own
+# names; a `paths-ignore` filter or a job-level `if:` would leave some of them never
+# reporting. Instead each job that builds — the three `cargo xtask ci` legs, the two
+# `client extension` legs and `vista screenshot (linux)` — runs `cargo xtask ci-scope`
+# right after its checkout and toolchain steps, in a step with `id: scope`. It answers
+# `prose_only=true` only for a `pull_request` whose merge commit changes nothing but
+# `docs/**`, `AGENTS.md`, `CLAUDE.md`, `.claude/**` and top-level `*.md`, and false on every
+# other event and on any error (the rules and their tests are in xtask/src/scope.rs).
+#
+# The rules for editing this file around it:
+#   * every step the fast path skips is gated `steps.scope.outputs.prose_only != 'true'`,
+#     never `== 'false'`, so a failed decision or a misspelt step id runs the step; the
+#     gate is ADDED to an existing condition, never put in its place;
+#   * only a step that runs in prose mode alone tests `== 'true'`: each job's notice, and
+#     the ubuntu leg's `cargo xtask reuse`;
+#   * no job gets a job-level `if:` for it: a skipped job prints no notice, and a skipped
+#     matrix job reports under its unexpanded name;
+#   * the decision is computed in each job, never in a job of its own: a failed `needs:`
+#     job would skip its matrix dependents, with the same unexpanded names;
+#   * the cross-OS guard takes the legs' answer through the `ci` job's outputs, and the
+#     DCO job does not ask at all.
+# So on a prose-only pull request a green `cargo xtask ci (…)` check means the DCO walk
+# and the `reuse` step passed and the suite did not run; the suite runs on main's push.
 
 name: ci
 
@@ -59,6 +84,12 @@ jobs:
     # not a budget. PLACEHOLDER: the suite's own time budget, and which tests pay for it,
     # are T20's to set with xtask's closing half-week (owner).
     timeout-minutes: 90
+    # The docs-only fast path's answer, for the cross-OS guard. A matrix job has one set of
+    # outputs, so this is the last leg's to finish among those that set it. The legs agree
+    # unless one hits an error, which answers false and runs that leg in full; the guard then
+    # compares what exists, which is red after the G4 flip: the safe side.
+    outputs:
+      prose_only: ${{ steps.scope.outputs.prose_only }}
     strategy:
       fail-fast: false
       matrix:
@@ -100,7 +131,37 @@ jobs:
           # local object store, so the whole history has to be here.
           fetch-depth: 0
 
+      - name: Install the Rust toolchain
+        # rust-toolchain.toml pins the channel and the components; this action installs
+        # rustup's stable so that pin resolves. PLACEHOLDER: pin these actions to commit
+        # SHAs before the repository goes public.
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Decide whether anything but prose changed
+        # The docs-only fast path (see this file's header). Builds xtask alone, which has no
+        # dependencies, before the cache is restored. `continue-on-error`, so that a failed
+        # decision leaves the output unset and every `!= 'true'` gate below runs its step.
+        id: scope
+        continue-on-error: true
+        shell: bash
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: cargo xtask ci-scope
+
+      - name: Only prose changed, so the suite does not run
+        if: steps.scope.outputs.prose_only == 'true'
+        shell: bash
+        run: |
+          if [ "${{ matrix.reuse }}" = "true" ]; then
+            echo "::notice title=docs-only fast path::Only prose changed (docs/**, AGENTS.md, CLAUDE.md, .claude/**, top-level *.md), so \`cargo xtask ci\` did not run on this leg: it runs the \`reuse\` step alone, and the DCO job walks the sign-offs. The full suite runs on main's push (decisions-log item 115 (4))."
+          else
+            echo "::notice title=docs-only fast path::Only prose changed (docs/**, AGENTS.md, CLAUDE.md, .claude/**, top-level *.md), so \`cargo xtask ci\` did not run on this leg; the ubuntu leg runs the \`reuse\` step and the DCO job walks the sign-offs. The full suite runs on main's push (decisions-log item 115 (4))."
+          fi
+
       - name: Make `main` available locally
+        if: steps.scope.outputs.prose_only != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -112,20 +173,14 @@ jobs:
             echo "::notice::no main branch on the remote yet — buf breaking will skip"
           fi
 
-      - name: Install the Rust toolchain
-        # rust-toolchain.toml pins the channel and the components; this action installs
-        # rustup's stable so that pin resolves. PLACEHOLDER: pin these actions to commit
-        # SHAs before the repository goes public.
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-
       - name: Cache cargo registry and target
+        if: steps.scope.outputs.prose_only != 'true'
         uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.os }}
 
       - name: Install buf
+        if: steps.scope.outputs.prose_only != 'true'
         uses: bufbuild/buf-setup-action@v1
         with:
           # PINNED, for the same reason protoc-gen-prost is pinned below: crates/proto's
@@ -138,6 +193,7 @@ jobs:
           github_token: ${{ github.token }}
 
       - name: Install protoc-gen-prost
+        if: steps.scope.outputs.prose_only != 'true'
         shell: bash
         # crates/proto's `the_checked_in_tree_matches_a_fresh_generation` regenerates
         # src/generated with `buf generate` and diffs it against what is committed, which
@@ -154,6 +210,7 @@ jobs:
         run: cargo install protoc-gen-prost --version 0.5.0 --locked
 
       - name: Install cargo-deny
+        if: steps.scope.outputs.prose_only != 'true'
         uses: taiki-e/install-action@v2
         with:
           tool: cargo-deny
@@ -169,14 +226,22 @@ jobs:
           # a failure rather than a skip.
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
+      - name: cargo xtask reuse (docs-only fast path)
+        # The one suite step the fast path keeps: a prose change can still add a file
+        # without an SPDX header. It is the suite's own step, which builds nothing but xtask.
+        if: matrix.reuse && steps.scope.outputs.prose_only == 'true'
+        shell: bash
+        run: cargo xtask reuse
+
       - name: cargo xtask ci
+        if: steps.scope.outputs.prose_only != 'true'
         shell: bash
         run: cargo xtask ci ${{ matrix.xtask_args }}
 
       - name: Upload this operating system's hash chain
         # `always()` so a failure in a later step still hands the cross-OS job what the
-        # determinism step produced.
-        if: always()
+        # determinism step produced. Not on the fast path, where nothing was produced.
+        if: always() && steps.scope.outputs.prose_only != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: determinism-hashes-${{ matrix.os }}
@@ -244,7 +309,16 @@ jobs:
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # The docs-only fast path: this job neither checks out nor compiles, because it runs
+    # after the legs and would lengthen every pull request. It takes the legs' answer from
+    # the `ci` job's outputs instead. The download and the compare are gated on it, so the
+    # FLIP AT G4 lines inside them stay skipped on a prose-only pull request after the flip.
     steps:
+      - name: Only prose changed, so there are no hash chains to compare
+        if: needs.ci.outputs.prose_only == 'true'
+        shell: bash
+        run: echo "::notice title=docs-only fast path::Only prose changed, so the \`cargo xtask ci\` legs did not run the suite and produced no hash chains; this guard compared nothing. It runs in full on main's push (decisions-log item 115 (4))."
+
       - name: Download every hash chain
         # Before spike G4 no leg produces a hash chain, and download-artifact fails
         # the step when its pattern matches nothing ("Unable to find any artifacts").
@@ -254,12 +328,14 @@ jobs:
         # FLIP AT G4: remove `continue-on-error` — after G4 a missing artefact means
         # a leg did not produce its chain, which must not read as a pass.
         continue-on-error: true
+        if: needs.ci.outputs.prose_only != 'true'
         uses: actions/download-artifact@v4
         with:
           pattern: determinism-hashes-*
           path: hashes
 
       - name: Compare the three hash chains byte for byte
+        if: needs.ci.outputs.prose_only != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -350,16 +426,35 @@ jobs:
     steps:
       - name: Check out
         uses: actions/checkout@v4
+        with:
+          # Both parents of a pull request's merge commit, for `cargo xtask ci-scope`.
+          fetch-depth: 2
 
       - name: Install the Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Decide whether anything but prose changed
+        # The docs-only fast path (see this file's header), as in the `ci` legs.
+        id: scope
+        continue-on-error: true
+        shell: bash
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: cargo xtask ci-scope
+
+      - name: Only prose changed, so the vista does not run
+        if: steps.scope.outputs.prose_only == 'true'
+        shell: bash
+        run: echo "::notice title=docs-only fast path::Only prose changed (docs/**, AGENTS.md, CLAUDE.md, .claude/**, top-level *.md), so the vista render did not run in this job. It runs in full on main's push (decisions-log item 115 (4))."
+
       - name: Cache cargo registry and target
+        if: steps.scope.outputs.prose_only != 'true'
         uses: Swatinem/rust-cache@v2
         with:
           key: screenshot-ubuntu
 
       - name: Install a virtual display and the software rasteriser
+        if: steps.scope.outputs.prose_only != 'true'
         # `godot --headless` CANNOT take a screenshot: it selects the dummy
         # rendering driver, `RenderingServer.frame_post_draw` never fires, and a
         # screenshot coroutine awaiting it parks for ever — silently, producing
@@ -395,6 +490,7 @@ jobs:
         # The pinned build decisions-log item 73 names, exactly as the `client`
         # job installs it (Linux only here). PHARMAKOS_GODOT is what
         # `cargo xtask stage-client` and `cargo xtask screenshot` run.
+        if: steps.scope.outputs.prose_only != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -418,6 +514,7 @@ jobs:
         # The vista is drawn by the bridge, so the extension has to be built,
         # staged into godot/bin and imported before the scene can load it —
         # `cargo xtask screenshot` imports but does not build or stage.
+        if: steps.scope.outputs.prose_only != 'true'
         shell: bash
         run: cargo xtask stage-client
 
@@ -429,7 +526,7 @@ jobs:
         # leaves the PNG where the upload below finds it. It runs only while
         # tests/golden/vista/expected.vista.png is absent — the same step is how
         # a deliberate re-render starts: delete the golden, push, download, look.
-        if: hashFiles('tests/golden/vista/expected.vista.png') == ''
+        if: steps.scope.outputs.prose_only != 'true' && hashFiles('tests/golden/vista/expected.vista.png') == ''
         shell: bash
         run: |
           set -euo pipefail
@@ -451,11 +548,14 @@ jobs:
         # The comparison's verdict goes out as `::notice::` annotations as well
         # as to the step summary, because GitHub hides job logs and step
         # summaries from logged-out viewers.
+        if: steps.scope.outputs.prose_only != 'true'
         shell: bash
         run: cargo xtask screenshot
 
       - name: Upload the render
-        if: always()
+        # Not on the fast path, where nothing was rendered: `if-no-files-found: error`
+        # would otherwise turn the skip red.
+        if: always() && steps.scope.outputs.prose_only != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: vista-screenshot
@@ -496,11 +596,29 @@ jobs:
     steps:
       - name: Check out
         uses: actions/checkout@v4
+        with:
+          # Both parents of a pull request's merge commit, for `cargo xtask ci-scope`.
+          fetch-depth: 2
 
       - name: Install the Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Decide whether anything but prose changed
+        # The docs-only fast path (see this file's header), as in the `ci` legs.
+        id: scope
+        continue-on-error: true
+        shell: bash
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: cargo xtask ci-scope
+
+      - name: Only prose changed, so the client check does not run
+        if: steps.scope.outputs.prose_only == 'true'
+        shell: bash
+        run: echo "::notice title=docs-only fast path::Only prose changed (docs/**, AGENTS.md, CLAUDE.md, .claude/**, top-level *.md), so the client check and the watch run did not run in this job. It runs in full on main's push (decisions-log item 115 (4))."
+
       - name: Cache cargo registry and target
+        if: steps.scope.outputs.prose_only != 'true'
         uses: Swatinem/rust-cache@v2
         with:
           key: client-${{ matrix.os }}
@@ -514,6 +632,7 @@ jobs:
         # The binary is put on PATH under the name `godot`, because that is what
         # `cargo xtask stage-client` looks for — the same name a developer has
         # locally, so the command is the same one in both places.
+        if: steps.scope.outputs.prose_only != 'true'
         shell: bash
         env:
           GODOT_ASSET: ${{ matrix.godot_asset }}
@@ -577,6 +696,7 @@ jobs:
         # Windows `where` is consulted as well — it resolves against the same
         # PATH a native process gets — and the binary PHARMAKOS_GODOT names is
         # run directly, which is what xtask actually invokes.
+        if: steps.scope.outputs.prose_only != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -601,6 +721,7 @@ jobs:
         #
         # PHARMAKOS_REQUIRE_TOOLS is set for the whole workflow, so a runner that
         # somehow lost its Godot fails here rather than skipping quietly.
+        if: steps.scope.outputs.prose_only != 'true'
         shell: bash
         run: cargo xtask stage-client --check
 
@@ -608,21 +729,36 @@ jobs:
         # The watch run below spawns `gamectl host` as the lobby does (decisions-log
         # item 107 (2), confirmed as item 108 (2)). A debug build, like the staged
         # client, so a panic in the host is a panic rather than an abort.
+        if: steps.scope.outputs.prose_only != 'true'
         shell: bash
         run: cargo build --package pharmakos-gamectl --bin gamectl
 
       - name: Headless watch run against a real gamectl host
-        # T16's live acceptance (docs/design/skeleton-plan-t16a-notes.md section A (4)):
-        # the lobby's host link spawns `gamectl host` with OS.execute_with_pipe, reads
-        # its announce line, opens the admin and seat connections, idles 35 s in the
-        # Lull (longer than the gateway's 30 s READ_TIMEOUT, so a missing keep-alive
-        # drops a connection), ends the Lull, plays the segment at 4x until `_status`
-        # reaches RECAP, and asserts no caught panic, no dropped connection and no
-        # refused call. It then closes the host's standard input and waits for the
-        # child to exit. The scene's exit code is the verdict.
+        # T16's live acceptance, grown by T19 (docs/design/skeleton-plan-t16a-notes.md
+        # section A (4); skeleton-plan-w6-notes.md section A4 as decisions-log item 112
+        # amends it); godot/scripts/watch_check.gd's header is the full list. The lobby's
+        # host link spawns `gamectl host` with OS.execute_with_pipe for a TWO-seat match,
+        # this seat and seat 1, which the host's built-in operator plays with Easy (it
+        # plans, submits and says ready at every Lull's start). In round 1's Lull the
+        # scene drives the editor (Load's refusal, a Fix, the committed playbook saved
+        # back byte for byte, a placement ghost, a map action, QUICK and FULL, the
+        # notebook, a draft, a submission whose bytes are the expected file's), the meter,
+        # the wizard for every template the gateway lists (pages as they came, one value
+        # sent back, Use, a map action, the submission and `gamectl verify`) and the pinned
+        # Hold & Build instantiation. Ready then ends the Lull through `all_ready`, the
+        # Push plays at 4x until `_status` reaches RECAP, and Continue leads into round
+        # 2's Lull, where the carried draft opens through `get_draft`. The idle stretch is
+        # spent there: 35 s, longer than the gateway's 30 s READ_TIMEOUT, so a missing
+        # keep-alive drops a connection. The scene then quits in the Lull (the host saves
+        # it and exits once its standard input closes), changes to a fresh scene, and
+        # resumes the match on a second host: round 2's Lull comes back with the notebook,
+        # the drafts and the carried draft's bytes. Across both hosts it asserts no caught
+        # panic, no dropped connection and no refused call, and that both hosts exited.
+        # The scene's exit code is the verdict, and its one OK line names both hosts' pids.
         #
         # This step is also where OS.execute_with_pipe is confirmed on Linux: the
         # owner measured it on Windows only (item 108 (2)).
+        if: steps.scope.outputs.prose_only != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -648,6 +784,7 @@ jobs:
       - name: No gamectl is left once the client has exited
         # "The child exits when the client does" (item 108 (2)): the watch run has
         # exited, so no host may still be running on this runner.
+        if: steps.scope.outputs.prose_only != 'true'
         shell: bash
         run: |
           set -euo pipefail
