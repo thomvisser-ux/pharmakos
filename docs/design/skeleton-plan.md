@@ -618,16 +618,16 @@ its downside, and its section 0 lists the holes (H1–H16) the lines below close
   against Easy, on events and hashes).
 - **Needs:** T17, T18, T19 PR 2 and T14b, merged. Wave 6's run 4, alone.
 - **Acceptance:** scripted — nothing dark and headroom ≥ 0 raises and estimates nothing, with the "why" unchanged; a
-  dark non-core beacon at headroom 0 is raised; a dark beacon out of reach at headroom 0 raises nothing and its
-  "why" does not say power is not short; a beacon already HIGH is not raised again; at most two, nearest first
-  (unchanged). Hosted, with no answer rewritten — on every corpus row the safe playbook raises only the seat's own
-  dark, non-core, non-HIGH beacons, and the number of rows that raise is a named expectation, born on T14b's grid.
-  The committed scenario passes on events and hashes, and it proves Easy's own seal by an event the gateway's
-  fallback cannot produce (seat 1's `beacon_placed`). A seat that seals the reshaped Hold & Build gets a
-  `structure_completed` Generator on the vent, and its supply rises by the lean vent's 20 kW (asserted in
-  `crates/gamectl/tests/operator.rs`, which reads the forecast). The two committed scenario chains and the
-  determinism chain do not move; the `instantiate_suggested` golden, its Godot copy and the operator goldens move
-  once, with the reason.
+  dark non-core beacon at headroom 0 is raised; a dark beacon out of reach at headroom 0 raises nothing and its "why"
+  does not say power is not short; a beacon already HIGH is not raised again; at most two, nearest first (unchanged).
+  Hosted, with no answer rewritten — on every corpus row the safe playbook raises only the seat's own dark, non-core,
+  non-HIGH beacons, and the number of rows that raise is a named expectation, born on T14b's grid. The committed
+  scenario passes on events and hashes: seat 1's `beacon_placed`, an event the gateway's fallback cannot produce,
+  proves Easy's own seal, and a `structure_completed` Generator on the vent, by a tick, for the seat that seals the
+  reshaped Hold & Build, proves the build (item 113 (6)). The supply's rise by the lean vent's 20 kW is asserted in
+  `crates/gamectl/tests/operator.rs`, which reads the forecast. The two committed scenario chains and the determinism
+  chain do not move; the `instantiate_suggested` golden, its Godot copy and the operator goldens move once, with the
+  reason.
 - **Contract PR:** no. (`scenarios/README.md` is not edited; its sentence on what a `builtin` chain depends on is
   T20's. A sentence in `tests/golden/scenarios/README.md` on what moves the new chain is content, not its line
   format.)
@@ -635,7 +635,7 @@ its downside, and its section 0 lists the holes (H1–H16) the lines below close
 - **PLACEHOLDERs:** the reworded "short" and "at risk" (owner, S1, with the grid); a placed beacon's draw read as net
   zero in Easy (owner, S1, with the grid); the `operator` scenario key (owner, S5, with a second difficulty); a
   scenario `safe` seat filing the gateway's fallback rather than an operator-made safe playbook (owner, S5, with the
-  operator key); Hold & Build's place-and-build shape (owner question flagged in item 113 (6)).
+  operator key); Hold & Build's place-and-build shape (owner, before T22's stage demo; the question flagged in item 113 (6)).
 - **Added 2026-09-25 (item 113).** The lane's full brief is item 113 (4) to (9), (14) and (15) and the lane's
   `extras` in the run-4 workflow arguments, written at run 4's opening from run 3's results.
 
@@ -683,7 +683,7 @@ its downside, and its section 0 lists the holes (H1–H16) the lines below close
 - **Unit owned:** `godot/export_presets.cfg`, `cargo xtask package`, `.github/workflows/release.yml`.
 - **Builds:** Godot export presets for Windows and Linux with the export templates pinned by version; the staged cdylib beside the executable; `gamectl` shipped alongside; the template and sample folders where T13 expects them; `LICENSES/` and the credits screen's CC-BY attributions (a shipping requirement, not a nicety); the two-line note on opening unsigned builds; and a release workflow cutting both zips from green CI on a tag with a changelog. **No signing, no notarisation, no macOS release** — that is hardening's ~3 wk (item 8).
 - **Implements:** item 8; spec section 15 (Platforms & packaging), section 17.
-- **Needs:** T16, T19.
+- **Needs:** T16, T19; and T18b, because it packages `library/` and `godot/`, which T18b reshapes (item 113). Its `cargo xtask package` and `release.yml` land after T20's xtask PR has merged (AGENTS.md §6).
 - **Acceptance:** a zip built by CI launches on a clean Windows runner and a clean Linux runner and reaches the lobby (with `--import` run first); `gamectl seat doctor` passes from inside the extracted zip; `reuse` green over the packaged tree; the zip's manifest committed as a golden so its contents cannot drift.
 - **Contract PR:** yes — `.github/workflows/**`.
 - **Agent-days:** 5.
@@ -720,7 +720,7 @@ Days are working days, five to a week. A task's start is the day its last input 
 | W4 | 5.0 – 7.4 | **T10** runner (5 d, d25–30), then **T11** interpreter (8 d, d30–38) | **T13** gateway method slice (9 d, d30–39) | **T12** client bridge (9 d, d28–37) | The spec's 14-call walkthrough passing against a live gateway; the extension loading in Godot on a fresh checkout with zero caught panics |
 | W5 | 7.4 – 9.8 | **T14** economy, Build, Survey-lite, programs (10 d, d38–48) | **T15** gamectl + `scenario run` (8 d, d39–47) | **T16a** view feed, match control, host loop (10 d, run 1, items 106–107); then **T16** vista + watch rig (10 d, run 2) | **Flying over the generated map, craters remeshing**; the watch rig playing a segment at 2–4× and skipping to its end; `gamectl scenario run` as a green `xtask ci` step |
 | W6 | 9.8 – 11.8 | run 2: **T17** save/resume, private replay, vision follow-up (6 d); run 3: **T14b** the key-core on the grid (1.5 d) | run 2: **T18** operator Easy + safe playbook (8 d); run 4: **T18b** the safe playbook's reading, Easy in `scenario run`, Hold & Build that builds (4.5–5 d) | run 1: **T18a** planning wire (8.75 d) and **T19** PR 1, route surface (5.5 d); run 3: **T19** PR 2, wizard (6.5 d) — items 111, 112 and 113 | **A sealed playbook walking the commander**: a beacon placed, a Generator built, the treasury and kW meter moving, BMI settled at the recap — and a two-seat match against Easy |
-| W7 | 11.8 – 12.8 | **T21** packaging (5 d, d59–64) | — | **T20** xtask closing half-week (5 d, d59–64); W7 starts once W6's run 4 has merged (item 113) | A zip that launches on a clean Windows and a clean Linux machine; one `xtask ci` covering §10 items 1–4 with nothing skipped |
+| W7 | 11.8 – 12.8, after W6's run 4 (item 113) | **T21** packaging (5 d, d59–64), its xtask part after T20's | — | **T20** xtask closing half-week (5 d, d59–64) | A zip that launches on a clean Windows and a clean Linux machine; one `xtask ci` covering §10 items 1–4 with nothing skipped |
 | W8 | 12.8 – 14.2 | — | — | **T22** integration, goldens, demo (6 d, d64–71) | The stage demo of §1.1 |
 | — | **14.2 – 15.5** | **float: 1.3 weeks** | | | |
 

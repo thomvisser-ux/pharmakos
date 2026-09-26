@@ -124,7 +124,7 @@ precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 Pharmakos contributors"
 SPDX-License-Identifier = "GPL-3.0-or-later"
 
-# The proto area is the one carve-out, for the same reason crates/proto is one:
+# The proto area was the first carve-out, for the same reason crates/proto is one:
 # these files are canonical gp.v1 JSON and views of the schema — the same public
 # surface as proto/** — so a third party writing a playbook tool must be able to
 # use them as the reference they are. AFTER the block above, so it wins.
@@ -222,7 +222,7 @@ SPDX-License-Identifier = "GPL-3.0-or-later"
 # seat, a segment list and the assertions over events and hashes. Same tier as
 # the code that runs them.
 #
-# tests/** is covered by the two blocks above, and this block deliberately does
+# tests/** is covered by the blocks above, and this block deliberately does
 # NOT re-list it. A second `tests/**` line here would be the last match for
 # tests/golden/proto/** as well, and would silently revert that directory from
 # the permissive tier back to the GPL — exactly the trap the ORDER MATTERS note

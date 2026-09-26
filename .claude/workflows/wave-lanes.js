@@ -59,9 +59,10 @@ const wt = lane => `${WT_ROOT}/pharmakos-${lane.id}`
 const target = lane => `${BUILD_ROOT}/${lane.id}`
 const bodyPath = lane => `${SCRATCH}/${lane.id}-pr-body.md`
 const ciLog = (lane, who) => `${SCRATCH}/${lane.id}-${who}-ci.log`
-// Each lane's own scratch folder: lanes share SCRATCH, and in wave 6 run 2 one lane's
-// scripts overwrote the other's (decisions-log item 113).
-const laneScratch = lane => `${SCRATCH}/${lane.id}`
+// Each agent's own scratch folder: lanes share SCRATCH, and in wave 6 run 2 one lane's
+// scripts overwrote the other's; a lane's two reviews run at once, so each agent has its
+// own folder inside its lane's (decisions-log item 113).
+const laneScratch = (lane, who) => `${SCRATCH}/${lane.id}/${who}`
 
 function env(lane, who) {
   return `
@@ -72,9 +73,9 @@ ENVIRONMENT (read first)
 - The repository is ${REPO} (branch main). Work ONLY in the worktree ${wt(lane)} on branch ${lane.branch}.
   If the worktree does not exist yet, create it from main:  cd ${REPO} && git worktree add ${wt(lane)} -b ${lane.branch} main
   Never edit files under ${REPO} itself. The spike code is readable at ${WT_ROOT}/pharmakos-spikes/spikes/ (tag spike-end): a reference, never copied, never edited.
-- Target directory: ${target(lane)} and NO other. The builder warms it; reviewers and the fix pass reuse it (a cold workspace build costs ten minutes and hundreds of lines of context; a warm full suite costs two minutes). A probe crate you write under ${laneScratch(lane)} may use ${target(lane)}-probe.
-- Scratch files (scripts, notes, probes) go ONLY under ${laneScratch(lane)}/ (create it); the other lanes share the parent folder, so never write loose files there. The PR body and CI log paths named below are the exceptions.
-- Other lanes build and run CI on this machine at the same time. Never stop, kill or signal a process you did not start yourself: no taskkill /IM, Stop-Process -Name, pkill or killall by image name. To cancel your own run, stop the process you launched by its PID. In wave 6 run 2 a lane that killed every cargo process cut another lane's CI short (decisions-log item 113).
+- Target directory: ${target(lane)} and NO other. The builder warms it; reviewers and the fix pass reuse it (a cold workspace build costs ten minutes and hundreds of lines of context; a warm full suite costs two minutes). A probe crate you write under ${laneScratch(lane, who)} may use ${target(lane)}-probe.
+- Scratch files (scripts, notes, probes) go ONLY under ${laneScratch(lane, who)}/ (create it); the other agents share the parent folders, so never write loose files there. The PR body and CI log paths named below are the exceptions.
+- Other lanes build and run CI on this machine at the same time. Never stop, kill or signal a process you did not start yourself: no taskkill /IM, Stop-Process -Name, pkill or killall by image name. To cancel your own run, stop the process you launched by its PID. In wave 6 run 2 a lane that killed every cargo process probably cut another lane's CI short (decisions-log item 113).
 - CI etiquette: "cargo xtask ci --quick" is the inner loop. Run the FULL suite by writing it to a file and reading only the summary, with the exit code checked separately, because a pipe hides it:
     cargo xtask ci > ${ciLog(lane, who)} 2>&1; echo "exit=$?"; grep -A 20 '== summary' ${ciLog(lane, who)}
   On a red step, grep that step's section of the log; do not paste the whole log into your context.
@@ -158,7 +159,7 @@ const REVIEW_SCHEMA = {
 
 function reviewPrompt(lane, lens, who, build) {
   return env(lane, who) + `
-You are REVIEWING pull request #${build.pr} (branch ${lane.branch}) in the worktree ${wt(lane)}, which another agent created and committed. Do NOT create, edit or commit anything in it; you only read and run checks, and you may write scratch files under ${laneScratch(lane)}/.
+You are REVIEWING pull request #${build.pr} (branch ${lane.branch}) in the worktree ${wt(lane)}, which another agent created and committed. Do NOT create, edit or commit anything in it; you only read and run checks, and you may write scratch files under ${laneScratch(lane, who)}/.
 The diff: git -C ${wt(lane)} diff main...HEAD
 The builder's report: ${JSON.stringify(build)}
 The brief the builder worked from is the plan: read skeleton-plan.md section 3's "### ${lane.task} " section and decisions-log items ${lane.items} before you start.
