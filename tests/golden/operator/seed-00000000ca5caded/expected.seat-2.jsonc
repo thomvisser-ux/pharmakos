@@ -8,9 +8,10 @@
 // worked example, expand_east, is one filled-in copy of it.
 //
 // This file cannot know where your seams are, so both places below are the
-// safest own beacon, which qualifies and places nothing (a beacon cannot stand
-// on another). The wizard asks for the site, and the built-in operator's
-// suggestion names one at the edge of your own sphere.
+// safest own beacon, which qualifies. Nothing in the sim keeps one beacon off
+// another's voxel, so they place a Mine beacon where the safest one stands.
+// The wizard asks for the site, and the built-in operator suggests one whose
+// new sphere holds a seam.
 //
 // PLACEHOLDER: the two sites' own values (the safest own beacon) are harmless
 // stand-ins that the wizard or the operator replaces; what the template ships

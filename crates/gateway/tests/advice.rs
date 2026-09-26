@@ -165,19 +165,43 @@ fn without_clock_or_notes(response: &Json) -> String {
     pharmakos_proto::json::write(&strip(response))
 }
 
-/// The Hold & Build suggestion every reading advisor below makes.
+/// The Hold & Build pointers a suggestion fills since the template became
+/// place-and-build (decisions-log item 113 (6)): the walk, the site, and the
+/// Generator's anchor, in the template's declaration order.
+const HOLD_AND_BUILD_WALK: &str = "/declarative/route/0/move/to";
+const HOLD_AND_BUILD_SITE: &str = "/declarative/route/1/place_beacon/at";
+const HOLD_AND_BUILD_ANCHOR: &str =
+    "/declarative/route/1/place_beacon/initial/mandate/build/targets/0/anchor/voxel";
+
+/// The Hold & Build suggestion every reading advisor below makes: the walk
+/// and the site twelve voxels along y from the anchor, and the Generator's
+/// anchor.
 fn hold_and_build(anchor: [i32; 3], why: &str) -> Suggestion {
+    let site = format!(
+        r#"{{"voxel":{{"x":{},"y":{},"z":{}}}}}"#,
+        anchor[0],
+        anchor[1].saturating_add(12),
+        anchor[2]
+    );
     Suggestion {
         template_id: String::from("hold_and_build"),
-        parameters: vec![SuggestedValue {
-            pointer: String::from(
-                "/declarative/route/1/interface/rows/0/add_build_target/target/anchor/voxel",
-            ),
-            value: format!(
-                r#"{{"x":{},"y":{},"z":{}}}"#,
-                anchor[0], anchor[1], anchor[2]
-            ),
-        }],
+        parameters: vec![
+            SuggestedValue {
+                pointer: String::from(HOLD_AND_BUILD_WALK),
+                value: site.clone(),
+            },
+            SuggestedValue {
+                pointer: String::from(HOLD_AND_BUILD_SITE),
+                value: site,
+            },
+            SuggestedValue {
+                pointer: String::from(HOLD_AND_BUILD_ANCHOR),
+                value: format!(
+                    r#"{{"x":{},"y":{},"z":{}}}"#,
+                    anchor[0], anchor[1], anchor[2]
+                ),
+            },
+        ],
         why: why.to_owned(),
     }
 }
@@ -291,7 +315,8 @@ fn a_suggested_instantiation_reports_every_declared_parameter_in_order() {
                 safe_playbook_jsonc: String::from(SAFE_PLAYBOOK),
                 suggestions: vec![hold_and_build(
                     [150, 13, 118],
-                    "The heat vent nearest your core is inside its sphere.",
+                    "A Build beacon at the edge of your core's sphere holds the heat vent nearest \
+                     your core in its own.",
                 )],
             }),
         ),
@@ -319,9 +344,17 @@ fn a_suggested_instantiation_reports_every_declared_parameter_in_order() {
         seen,
         [
             (
-                String::from(
-                    "/declarative/route/1/interface/rows/0/add_build_target/target/anchor/voxel"
-                ),
+                String::from(HOLD_AND_BUILD_WALK),
+                String::from(r#"{"voxel":{"x":150,"y":25,"z":118}}"#),
+                true,
+            ),
+            (
+                String::from(HOLD_AND_BUILD_SITE),
+                String::from(r#"{"voxel":{"x":150,"y":25,"z":118}}"#),
+                true,
+            ),
+            (
+                String::from(HOLD_AND_BUILD_ANCHOR),
                 String::from(r#"{"x":150,"y":13,"z":118}"#),
                 true,
             ),
@@ -342,7 +375,8 @@ fn a_suggested_instantiation_reports_every_declared_parameter_in_order() {
     );
     assert_eq!(
         text_of(&answer, "why"),
-        "The heat vent nearest your core is inside its sphere."
+        "A Build beacon at the edge of your core's sphere holds the heat vent nearest your core \
+         in its own."
     );
     let playbook = text_of(&answer, "playbook_jsonc");
     assert!(playbook.contains(r#""x":150,"y":13,"z":118"#), "{playbook}");
@@ -426,19 +460,22 @@ fn an_explicit_parameter_beats_a_suggestion() {
             &human,
             "instantiate_template",
             r#"{"template_id":"hold_and_build","suggested":true,"parameters":[
-                 {"name":"/declarative/route/1/interface/rows/0/add_build_target/target/anchor/voxel",
+                 {"name":"/declarative/route/1/place_beacon/initial/mandate/build/targets/0/anchor/voxel",
                   "value":"{\"x\":7,\"y\":8,\"z\":9}"}]}"#,
         ),
         "instantiate_template",
     );
-    let first = support::array_of(&answer, "parameters")
-        .first()
-        .cloned()
-        .expect("the first declaration");
-    assert_eq!(text_of(&first, "value"), r#"{"x":7,"y":8,"z":9}"#);
-    assert_eq!(first.get("suggested"), Some(&Json::Bool(false)));
+    let anchor = support::array_of(&answer, "parameters")
+        .into_iter()
+        .find(|parameter| text_of(parameter, "pointer") == HOLD_AND_BUILD_ANCHOR)
+        .expect("the anchor's declaration");
+    assert_eq!(text_of(&anchor, "value"), r#"{"x":7,"y":8,"z":9}"#);
+    assert_eq!(anchor.get("suggested"), Some(&Json::Bool(false)));
     let playbook = text_of(&answer, "playbook_jsonc");
-    assert!(!playbook.contains("150"), "the suggestion lost: {playbook}");
+    assert!(
+        !playbook.contains(r#""x":150,"y":13,"z":118"#),
+        "the suggested anchor lost: {playbook}"
+    );
     assert_eq!(
         text_of(&answer, "why"),
         "Because.",
@@ -500,9 +537,9 @@ fn advice_for_one_seat_never_reaches_another() {
             assert_eq!(text_of(&made, "why"), format!("For seat {seat} alone."));
             let value = text_of(
                 &support::array_of(&made, "parameters")
-                    .first()
-                    .cloned()
-                    .expect("a parameter"),
+                    .into_iter()
+                    .find(|parameter| text_of(parameter, "pointer") == HOLD_AND_BUILD_ANCHOR)
+                    .expect("the anchor's parameter"),
                 "value",
             );
             assert_eq!(

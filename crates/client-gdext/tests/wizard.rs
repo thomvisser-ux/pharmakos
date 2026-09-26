@@ -135,30 +135,41 @@ fn the_pages_are_the_fixtures_parameters_as_they_came() {
 
     // The pins: what this fixture is today. They move when the golden does (the lane that
     // changes library/ or the operator re-copies the fixture and updates them).
+    // Hold & Build is place-and-build since T18b (decisions-log item 113 (6)): the walk,
+    // the site and the Generator's anchor are declared before the hold.
     let marks: Vec<bool> = instance.pages.iter().map(|page| page.suggested).collect();
     assert_eq!(
         marks,
-        [true, false],
-        "the anchor is the operator's, the hold the template's"
+        [true, true, true, false],
+        "the walk, the site and the anchor are the operator's, the hold the template's"
     );
     let values: Vec<&str> = instance
         .pages
         .iter()
         .map(|page| page.value.as_str())
         .collect();
-    assert_eq!(values, [r#"{"x":150,"y":13,"z":118}"#, "30000"]);
     assert_eq!(
-        instance.pages.first().map(|page| page.label.as_str()),
-        Some("Where the Generator goes: a heat vent inside the beacon's sphere")
+        values,
+        [
+            r#"{"voxel":{"x":150,"y":25,"z":118}}"#,
+            r#"{"voxel":{"x":150,"y":25,"z":118}}"#,
+            r#"{"x":150,"y":13,"z":118}"#,
+            "30000"
+        ]
     );
     assert_eq!(
-        instance.pages.get(1).map(|page| page.label.as_str()),
-        Some("How long to hold at the beacon, in game milliseconds"),
+        instance.pages.get(2).map(|page| page.label.as_str()),
+        Some("Where the Generator goes: a heat vent inside the new beacon's sphere")
+    );
+    assert_eq!(
+        instance.pages.last().map(|page| page.label.as_str()),
+        Some("How long to hold by the new beacon, in game milliseconds"),
         "a duration stays game milliseconds: unit display is S6's"
     );
     assert_eq!(
         instance.why,
-        "The heat vent nearest your core is inside its sphere."
+        "A Build beacon at the edge of your core's sphere holds the heat vent nearest your core \
+         in its own."
     );
 }
 
@@ -187,7 +198,9 @@ fn an_edited_value_is_sent_exactly_as_typed_and_alone() {
         .and_then(|wizard| wizard.instance.as_ref())
         .map(|instance| instance.pages.clone())
         .expect("pages");
-    let hold = pages.get(1).expect("a second page");
+    // The hold is the last page: Hold & Build declares the walk, the site and the anchor
+    // before it since T18b.
+    let hold = pages.last().expect("a last page, the hold");
     // Typed with spaces and in a form the client does not understand: it is not parsed,
     // checked or converted, only sent.
     let typed = " 45 000ms ";
