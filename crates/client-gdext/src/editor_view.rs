@@ -7,7 +7,9 @@
 //! Marshalling only, kept out of `bridge.rs` so the `#[func]`s there stay three lines each:
 //! take Godot's types apart, call [`crate::editor`], put Godot's types back together.
 
-use godot::builtin::{GString, PackedInt64Array, VarArray, VarDictionary, Variant, Vector3i};
+use godot::builtin::{
+    GString, PackedInt64Array, PackedStringArray, VarArray, VarDictionary, Variant, Vector3i,
+};
 use godot::meta::ToGodot;
 
 use pharmakos_proto::gp::api::v1::VerifyReport;
@@ -15,6 +17,8 @@ use pharmakos_proto::json;
 
 use crate::editor::{Editor, Row, Selector, Target, rows_of};
 use crate::error::BridgeError;
+use crate::rig::Meter;
+use crate::wizard::{Instance, Wizard};
 
 /// The menu's target, from the dictionary GDScript builds: `voxel` (a `Vector3i` in the
 /// sim's axes), or `selector` (`nearest`, `weakest`, `safest`, `most_threatened`), or
@@ -145,7 +149,104 @@ pub(crate) fn state_dictionary(editor: &Editor) -> VarDictionary {
     put("status_key", editor.status().key.to_variant());
     put("status_detail", editor.status().detail.to_variant());
     put("refusals", i64::from(editor.refusals()).to_variant());
+
+    let mut templates = VarArray::new();
+    for template in editor.templates() {
+        let mut one = VarDictionary::new();
+        one.set(&"id".to_variant(), &template.id.to_variant());
+        one.set(&"title".to_variant(), &template.title.to_variant());
+        one.set(&"summary".to_variant(), &template.summary.to_variant());
+        templates.push(&one.to_variant());
+    }
+    put("templates", templates.to_variant());
+    put("templates_known", editor.templates_known().to_variant());
+    put("wizard", wizard_dictionary(editor.wizard()).to_variant());
+    let mut prose = PackedStringArray::new();
+    for line in editor.prose() {
+        prose.push(line.as_str());
+    }
+    put("prose", prose.to_variant());
+    put("prose_current", editor.prose_current().to_variant());
     state
+}
+
+/// The wizard as a dictionary: empty when it is closed; otherwise `template_id`, `current`
+/// (the pages answer the newest ask, so Use may be pressed), `answered` (an answer has come),
+/// `refusal` (the gateway's, as it came; empty when none), and the instance's `pages`, `why`
+/// and `playbook_jsonc` ([`instance_dictionary`]) once one has come.
+#[must_use]
+pub(crate) fn wizard_dictionary(wizard: Option<&Wizard>) -> VarDictionary {
+    let Some(wizard) = wizard else {
+        return VarDictionary::new();
+    };
+    let mut out = wizard
+        .instance
+        .as_ref()
+        .map(instance_dictionary)
+        .unwrap_or_default();
+    out.set(
+        &"template_id".to_variant(),
+        &wizard.template_id.to_variant(),
+    );
+    out.set(&"current".to_variant(), &wizard.current().to_variant());
+    out.set(
+        &"answered".to_variant(),
+        &wizard.instance.is_some().to_variant(),
+    );
+    out.set(
+        &"refusal".to_variant(),
+        &wizard.refusal.clone().unwrap_or_default().to_variant(),
+    );
+    out
+}
+
+/// One `instantiate_template` answer: `pages` (an array of `{pointer, label, value,
+/// suggested}`, in the gateway's order), `why` and `playbook_jsonc`, each as it came.
+#[must_use]
+pub(crate) fn instance_dictionary(instance: &Instance) -> VarDictionary {
+    let mut out = VarDictionary::new();
+    let mut pages = VarArray::new();
+    for page in &instance.pages {
+        let mut one = VarDictionary::new();
+        one.set(&"pointer".to_variant(), &page.pointer.to_variant());
+        one.set(&"label".to_variant(), &page.label.to_variant());
+        one.set(&"value".to_variant(), &page.value.to_variant());
+        one.set(&"suggested".to_variant(), &page.suggested.to_variant());
+        pages.push(&one.to_variant());
+    }
+    out.set(&"pages".to_variant(), &pages.to_variant());
+    out.set(&"why".to_variant(), &instance.why.to_variant());
+    out.set(
+        &"playbook_jsonc".to_variant(),
+        &instance.playbook_jsonc.to_variant(),
+    );
+    out
+}
+
+/// The meter as a dictionary: `answers` (zero before the first), `phase` (the phase the
+/// last answer was served in), and the four fields under their wire names, as they came.
+#[must_use]
+pub(crate) fn meter_dictionary(meter: Meter) -> VarDictionary {
+    let mut out = VarDictionary::new();
+    out.set(&"answers".to_variant(), &counter(meter.answers));
+    out.set(&"phase".to_variant(), &meter.phase.name().to_variant());
+    out.set(
+        &"treasury_now".to_variant(),
+        &i64::from(meter.treasury_now).to_variant(),
+    );
+    out.set(
+        &"supply_kw_now".to_variant(),
+        &i64::from(meter.supply_kw_now).to_variant(),
+    );
+    out.set(
+        &"draw_kw_now".to_variant(),
+        &i64::from(meter.draw_kw_now).to_variant(),
+    );
+    out.set(
+        &"headroom_kw_now".to_variant(),
+        &i64::from(meter.headroom_kw_now).to_variant(),
+    );
+    out
 }
 
 fn counter(value: u64) -> Variant {

@@ -2,7 +2,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! **An editing burst is not rate limited under the default limits** — T19's acceptance
-//! (`docs/design/skeleton-plan-w6-notes.md` section A4), with no engine and no host.
+//! (`docs/design/skeleton-plan-w6-notes.md` section A4), with no engine and no host. Pull
+//! request 2 adds its calls to the burst: the template list, the wizard's
+//! `instantiate_template` (opened, one page typed, then used), `render_plan` for every new
+//! text, `get_draft` for the carried draft, and the meter's `get_economy_forecast`.
 //!
 //! The seat token's budget is the gateway's: `CALLS_PER_TICK` calls per gateway tick and
 //! `CALLS_PER_WINDOW` per `WINDOW_TICKS`, and in a Lull the gateway's tick moves only when
@@ -193,9 +196,7 @@ impl Gateway {
                     .to_owned()
             }
             "get_briefing" => r#"{"notes":""}"#.to_owned(),
-            "list_drafts" => r#"{"drafts":[]}"#.to_owned(),
-            "save_notes" => r#"{"characters":5}"#.to_owned(),
-            _ => "{}".to_owned(),
+            other => pr2_answer(other),
         };
         let body = result
             .trim_end()
@@ -225,6 +226,48 @@ impl Gateway {
 }
 
 const EXPAND_EAST: &str = include_str!("../../../examples/playbooks/expand_east.jsonc");
+
+/// The stand-in's answers to pull request 2's calls, and "{}" for anything else: the
+/// carried draft listed and fetched, the template list, the wizard's instantiation, the
+/// rule list and the meter.
+fn pr2_answer(method: &str) -> String {
+    match method {
+        // Last round's playbook is listed as carried, so the editor fetches it.
+        "list_drafts" => {
+            r#"{"drafts":[{"draft_id":"carried","label":"carried","round":1}]}"#.to_owned()
+        }
+        "get_draft" => json::write(&Json::Object(vec![
+            (
+                "playbook_jsonc".to_owned(),
+                Json::String(EXPAND_EAST.to_owned()),
+            ),
+            ("label".to_owned(), Json::String("carried".to_owned())),
+            ("round".to_owned(), Json::Number("1".to_owned())),
+        ])),
+        "save_notes" => r#"{"characters":5}"#.to_owned(),
+        "list_templates" => {
+            r#"{"templates":[{"template_id":"t","title":"T","summary":"s"}]}"#.to_owned()
+        }
+        "instantiate_template" => json::write(&Json::Object(vec![
+            (
+                "playbook_jsonc".to_owned(),
+                Json::String(EXPAND_EAST.to_owned()),
+            ),
+            (
+                "parameters".to_owned(),
+                json::read(r#"[{"pointer":"/p","label":"P","value":"0","suggested":true}]"#)
+                    .expect("json"),
+            ),
+            ("why".to_owned(), Json::String("w".to_owned())),
+        ])),
+        "render_plan" => r#"{"prose":"Playbook"}"#.to_owned(),
+        "get_economy_forecast" => {
+            r#"{"treasury_now":200,"supply_kw_now":10,"draw_kw_now":6,"headroom_kw_now":4}"#
+                .to_owned()
+        }
+        _ => "{}".to_owned(),
+    }
+}
 
 /// How a frame's requests reach the gateway: in the order the rig wrote them (admin
 /// first), or seat first, which is the order that lets a seat call land after a clock
@@ -257,6 +300,8 @@ fn burst(edits: usize, order: Order, latency: usize) -> (Gateway, Rig) {
     let mut loading = false;
     let mut started = false;
     let mut ready_asked = false;
+    let mut typed = false;
+    let mut used = false;
     for frame in 0..6_000_usize {
         now += FRAME_US;
         if !loading && rig.phase() == Phase::Lull {
@@ -274,12 +319,29 @@ fn burst(edits: usize, order: Order, latency: usize) -> (Gateway, Rig) {
                 };
                 assert!(rig.editor_mut().act(Action::Go, &target));
             }
+            rig.editor_mut().wizard_open("t");
+        }
+        // The wizard, as a player uses it: one page typed once its answer is on screen, then
+        // Use once the answer to that is.
+        let wizard_current = rig
+            .editor()
+            .wizard()
+            .is_some_and(pharmakos_client_gdext::wizard::Wizard::current);
+        if started && wizard_current && !typed {
+            typed = rig.editor_mut().wizard_set("/p", "1");
+        } else if started && wizard_current && typed && !used {
+            used = rig.editor_mut().wizard_use();
+        }
+        if started
+            && used
+            && !ready_asked
+            && rig.editor().revision() > u64::try_from(edits).expect("small")
+        {
+            // Submit what the wizard and the burst left, save a note, and be ready: Ready
+            // waits behind both.
+            ready_asked = true;
             assert!(rig.editor_mut().submit());
             rig.editor_mut().save_notes("burst");
-        }
-        if started && !ready_asked && rig.editor().revision() > u64::try_from(edits).expect("small")
-        {
-            ready_asked = true;
             rig.ready();
         }
         let mut sent = rig.poll(now);
@@ -361,6 +423,18 @@ fn an_editing_burst_is_not_rate_limited_under_the_default_limits() {
                 gateway.methods.get("verify_plan").copied().unwrap_or(0) >= 2,
                 "{context}: the load check and at least one QUICK of the edited text"
             );
+            // Pull request 2's calls share the same budget: the template list, the wizard's
+            // two instantiations, the rule list, the carried draft and the meter.
+            let count = |method: &str| gateway.methods.get(method).copied().unwrap_or(0);
+            assert_eq!(count("list_templates"), 1, "{context}");
+            assert!(
+                count("instantiate_template") >= 2,
+                "{context}: {:?}",
+                gateway.methods
+            );
+            assert!(count("render_plan") >= 1, "{context}");
+            assert_eq!(count("get_draft"), 1, "{context}: {:?}", gateway.methods);
+            assert!(count("get_economy_forecast") >= 1, "{context}");
         }
     }
 }

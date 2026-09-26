@@ -1,0 +1,28 @@
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "playbook_jsonc": "// SPDX-FileCopyrightText: 2026 Pharmakos contributors\n// SPDX-License-Identifier: MIT OR Apache-2.0\n//\n// hold_and_build.jsonc: the Hold & Build template (decisions-log item 81).\n//\n// It teaches the beacon: walk to one, change it on site (\"touch to change\"),\n// and let its Build mandate do the work while the commander stays close. The\n// change is one Generator added to the beacon's Build list, which is how a\n// seat's kW supply rises at the skeleton.\n//\n// A Generator stands on a heat vent. This file cannot know where your vents\n// are, so the anchor below is a place-holder at the map's corner. It\n// qualifies, and a target outside the beacon's own sphere is dropped when the\n// row commits, so it builds nothing and spends nothing. The wizard asks for\n// the vent, and the built-in operator's suggestion names the one inside your\n// sphere.\n//\n// PLACEHOLDER: the anchor's own value (the map's corner) is a harmless\n// stand-in that the wizard or the operator replaces; what the template ships\n// as its own value is the OWNER's, with T18's suggestions, in run 2.\n{\n  \"schema_version\": {\"major\": 1, \"minor\": 0},\n  \"meta\": {\n    \"title\": \"Hold & Build\",\n    \"author_kind\": \"BUILTIN\",\n    \"note\": \"Stay home and grow the grid: walk to the safest beacon, add a Generator to its Build list, and hold there.\"\n  },\n  \"kind\": \"PLAYBOOK\",\n  \"declarative\": {\n    \"route\": [\n      {\"label\": \"to_beacon\", \"move\": {\"to\": {\"safest\": {}}, \"pace\": \"DIRECT\"}, \"timeout_ms\": 60000, \"on_fail\": {\"action\": \"SKIP\"}},\n      // Why: the safest own beacon is the core at the start of a match, and the\n      // core is on a Build mandate, so this is a visit that can add a target.\n      {\"label\": \"add_generator\", \"interface\": {\"beacon\": {\"safest\": {}}, \"rows\": [\n        {\"add_build_target\": {\"target\": {\"blueprint_id\": \"generator\", \"anchor\": {\"voxel\": {\"x\":150,\"y\":13,\"z\":118}}, \"rotation_quarter_turns\": 0, \"order\": 1}}}\n      ]}, \"timeout_ms\": 30000, \"on_fail\": {\"action\": \"SKIP\"}},\n      {\"label\": \"hold\", \"hold\": {\"ms\": 30000}}\n    ],\n    \"handlers\": [\n      // Why: bravery is an ordinary rule. Hurt and under fire, the commander\n      // walks back to safety and waits before carrying on.\n      {\"id\": \"flee\", \"when\": {\"all\": {\"items\": [{\"cmdr_hp_pct\": {\"cmp\": \"LE\", \"pct\": 40}}, {\"cmdr_took_damage_within\": {\"ms\": 3000}}]}},\n       \"body\": [{\"label\": \"flee_to_safety\", \"move\": {\"to\": {\"safest\": {}}}}, {\"label\": \"flee_wait\", \"hold\": {\"ms\": 8000}}],\n       \"resume\": \"CONTINUE\", \"cooldown_ms\": 30000, \"max_fires\": 3}\n    ]\n  },\n  \"on_death\": {\"on_respawn\": \"CONTINUE\"},\n  // Why: after the hold, stay with the safest beacon and its drones.\n  \"fallback\": {\"shadow\": {\"beacon\": {\"safest\": {}}}}\n}\n",
+    "parameters": [
+      {
+        "pointer": "/declarative/route/1/interface/rows/0/add_build_target/target/anchor/voxel",
+        "label": "Where the Generator goes: a heat vent inside the beacon's sphere",
+        "value": "{\"x\":150,\"y\":13,\"z\":118}",
+        "suggested": true
+      },
+      {
+        "pointer": "/declarative/route/2/hold/ms",
+        "label": "How long to hold at the beacon, in game milliseconds",
+        "value": "30000",
+        "suggested": false
+      }
+    ],
+    "why": "The heat vent nearest your core is inside its sphere.",
+    "_status": {
+      "phase": "lull",
+      "phase_remaining_ms": 180000,
+      "segment_length_ms": 1000,
+      "round": 1
+    }
+  }
+}

@@ -46,6 +46,8 @@
 //! | a `get_view` result | chunks on the drain queue, the entity list | [`view`] |
 //! | a gateway answer | the next JSON-RPC frame for each connection | [`rig`] |
 //! | a click on the map, a Load, a Fix | the editor's next planning call, and its rows | [`editor`] |
+//! | a template's instantiation, a plan's prose | the wizard's pages and the rule list | [`wizard`] |
+//! | a `get_economy_forecast` answer | the meter's four numbers, as they came | [`rig`] |
 //! | the wall clock | game milliseconds asked for, the host clock reported | [`pacer`] |
 //!
 //! Each of those is a copy or a lookup. The places where something is *decided* are all
@@ -97,12 +99,21 @@
 //! is the gateway's; the editor's one timer, FULL after 600 ms idle, is the pacer's
 //! ([`pacer::IdleTimer`]).
 //!
+//! # The wizard, the rule list, the meter and Resume (T19, pull request 2)
+//!
+//! The wizard's pages are `instantiate_template{suggested: true}`'s parameters as they came,
+//! and the rule list is `render_plan`'s lines as they came ([`wizard`]); both ride the
+//! editor's queue. The own `$`/`kW` meter is `get_economy_forecast`, polled by [`rig`] inside
+//! the seat's rate budget when a Lull opens and whenever the match moved in a Push, and shown
+//! as the gateway's four numbers with nothing computed from them. The lobby's Resume is
+//! GDScript plumbing (`godot/scripts/host_link.gd` and `lobby.gd`): the config line gains
+//! `resume`, and the gateway decides the rest.
+//!
 //! # What is not here yet
 //!
-//! T19's pull request 2: the template wizard with `instantiate_template`'s suggestions,
-//! the prose rule list, the `$`/`kW` meter and the lobby's Resume. The `.vox` models:
-//! entities are drawn as placeholder primitives by GDScript until S6, and `dot_vox` arrives
-//! with the models rather than here (decisions log item 101).
+//! Chips and drag reordering (S3), unit display of values (S6), the `.vox` models: entities
+//! are drawn as placeholder primitives by GDScript until S6, and `dot_vox` arrives with the
+//! models rather than here (decisions log item 101).
 
 pub mod api;
 pub mod chunks;
@@ -116,6 +127,7 @@ pub mod rules;
 pub mod surface;
 pub mod upload;
 pub mod view;
+pub mod wizard;
 
 mod bridge;
 mod editor_view;

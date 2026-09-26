@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! The playbook editor's half of the seat connection: which planning call goes out next,
-//! and what each answer means (skeleton plan T19, pull request 1).
+//! and what each answer means (skeleton plan T19, pull requests 1 and 2).
 //!
 //! The editor is **one more client of the Seat Gateway** (spec section 12), and a thin one.
 //! Every verdict it shows is the verifier's, every travel time is the estimator's, every
@@ -15,7 +15,8 @@
 //! * choosing the next call, one at a time, on the seat connection the vista already holds
 //!   (`docs/design/skeleton-plan-t16a-notes.md` section B, "T19" (5)), in an order that
 //!   keeps what the player sees about the text they are looking at;
-//! * reading each answer into rows, a route, a ghost, the notes, the drafts.
+//! * reading each answer into rows, a route, a ghost, the notes, the drafts, the wizard's
+//!   pages ([`crate::wizard`]) and the rule list.
 //!
 //! **When** a call may go out is not decided here: the watch rig ([`crate::rig`]) holds the
 //! seat connection's rate budget and the phase, and the pacer's idle timer
@@ -30,9 +31,14 @@
 //!    spec section 13; an edit a newer edit replaced before its check went out is not
 //!    checked separately, so the rows always describe the text on screen);
 //! 3. the **route estimate** for the newest text;
-//! 4. everything else the player asked for, in order: submit, the notes, the drafts, a
-//!    beacon's description;
-//! 5. **FULL**, once the editor has been left alone for 600 ms.
+//! 4. the **rule list**: `render_plan`'s prose for the newest text;
+//! 5. everything else the player asked for, in order: submit, the notes, the drafts, a
+//!    beacon's description, the template list and the wizard's instantiations;
+//! 6. **FULL**, once the editor has been left alone for 600 ms.
+//!
+//! An edit is anything that changes the text on screen: a Load, a map action, a Fix, an
+//! Undo, a placement preview, the wizard's playbook put into the editor, and the carried
+//! draft opened through `get_draft`.
 //!
 //! # What the editor reads out of the playbook itself
 //!
@@ -47,14 +53,15 @@ use std::collections::VecDeque;
 use pharmakos_proto::gp::api::v1::diagnostic::Severity;
 use pharmakos_proto::gp::api::v1::patch_suggestion::Applicability;
 use pharmakos_proto::gp::api::v1::{
-    GetBeaconResponse, GetBriefingResponse, ListDraftsResponse, PatchPlanResponse,
-    SaveNotesResponse, SubmitPlanResponse, VerifyPlanResponse, VerifyReport,
+    GetBeaconResponse, GetBriefingResponse, GetDraftResponse, ListDraftsResponse,
+    PatchPlanResponse, SaveNotesResponse, SubmitPlanResponse, VerifyPlanResponse, VerifyReport,
 };
 use pharmakos_proto::json::{self, Json};
 
 use crate::enums;
 use crate::error::BridgeError;
 use crate::view::{Entity, EntityKind, split_footer};
+use crate::wizard::{self, Instance, TemplateRow, Wizard};
 
 /// The verifier codes on which Load refuses a file rather than opening it.
 ///
@@ -457,6 +464,19 @@ enum Job {
     Beacon {
         id: String,
     },
+    /// `list_templates`.
+    Templates,
+    /// `instantiate_template` for the wizard's newest ask, rendered from the wizard as it
+    /// is when the job goes out.
+    Instantiate,
+    /// The wizard's playbook, put into the editor as one edit.
+    UseWizard {
+        text: String,
+    },
+    /// `get_draft`: open the draft `id` (the carried one) as the text.
+    GetDraft {
+        id: String,
+    },
 }
 
 impl Job {
@@ -470,8 +490,20 @@ impl Job {
                 | Self::Undo
                 | Self::Preview { .. }
                 | Self::PreviewCheck
+                | Self::UseWizard { .. }
+                | Self::GetDraft { .. }
         )
     }
+}
+
+/// What Undo takes back.
+#[derive(Clone, PartialEq, Eq, Debug)]
+enum Undo {
+    /// The inverse patch `patch_plan` handed back for an edit.
+    Patch(String),
+    /// The text as it was before the wizard's playbook replaced it (`None`: there was no
+    /// text), restored as it was, byte for byte, with no call.
+    Restore(Option<String>),
 }
 
 /// The call in flight, with what the answer is needed for.
@@ -516,6 +548,17 @@ enum Sent {
     Beacon {
         id: String,
     },
+    Render {
+        revision: u64,
+    },
+    Templates,
+    Instantiate {
+        asked: u64,
+    },
+    GetDraft {
+        id: String,
+        round: u32,
+    },
 }
 
 /// One call to send: the method and its params.
@@ -545,6 +588,7 @@ struct Owed {
 struct Known {
     notes: bool,
     drafts: bool,
+    templates: bool,
 }
 
 /// The editor: the draft's text, its undo stack, the queue of calls it owes, and what the
@@ -554,7 +598,7 @@ pub struct Editor {
     seat: String,
     text: Option<String>,
     revision: u64,
-    undo: Vec<String>,
+    undo: Vec<Undo>,
     queue: VecDeque<Job>,
     in_flight: Option<Sent>,
     owed: Owed,
@@ -579,6 +623,15 @@ pub struct Editor {
     status: Status,
     refusals: u32,
     changes: u64,
+    templates: Vec<TemplateRow>,
+    wizard: Option<Wizard>,
+    /// Every wizard ask so far, so an answer to an older ask (of any template) is known.
+    wizard_asks: u64,
+    /// The rule list: `render_plan`'s lines for the text at `prose_revision`.
+    prose: Vec<String>,
+    prose_revision: Option<u64>,
+    /// The rule list (`render_plan`) is owed for the newest text.
+    render_owed: bool,
 }
 
 impl Editor {
@@ -688,7 +741,7 @@ impl Editor {
             });
         if ready {
             if let Some(preview) = self.preview.take() {
-                self.undo.push(preview.inverse);
+                self.undo.push(Undo::Patch(preview.inverse));
                 self.accept_text(preview.patched);
                 if let Some((rows, qualifies)) = preview.checked {
                     self.rows = rows;
@@ -782,22 +835,105 @@ impl Editor {
         self.touch();
     }
 
+    // --- The wizard (T19, pull request 2) -------------------------------------------------
+
+    /// Ask for the template list again (it is read once, at the first Lull, on its own).
+    pub fn list_templates(&mut self) {
+        self.queue.retain(|job| !matches!(job, Job::Templates));
+        self.queue.push_back(Job::Templates);
+        self.touch();
+    }
+
+    /// Open the wizard on `template_id`: `instantiate_template{suggested: true}` with no
+    /// explicit value, whose answer's parameters are the pages.
+    pub fn wizard_open(&mut self, template_id: &str) {
+        self.wizard_asks = self.wizard_asks.wrapping_add(1);
+        self.wizard = Some(Wizard::new(template_id, self.wizard_asks));
+        self.ask_wizard();
+    }
+
+    /// The player typed `text` on the page at `pointer`: it is sent exactly as typed, as an
+    /// explicit value, with `suggested` still true, so every other page keeps the
+    /// operator's value and mark. Returns whether that page is on screen.
+    pub fn wizard_set(&mut self, pointer: &str, text: &str) -> bool {
+        let asks = self.wizard_asks.wrapping_add(1);
+        let Some(wizard) = self.wizard.as_mut() else {
+            return false;
+        };
+        if !wizard.set(pointer, text) {
+            return false;
+        }
+        wizard.asked = asks;
+        wizard.refusal = None;
+        self.wizard_asks = asks;
+        self.ask_wizard();
+        true
+    }
+
+    /// Put the wizard's playbook into the editor, byte for byte, as one edit Undo takes
+    /// back. Refused while the pages on screen do not answer the newest ask.
+    pub fn wizard_use(&mut self) -> bool {
+        let text = match self.wizard.as_ref() {
+            Some(wizard) if wizard.current() => wizard
+                .instance
+                .as_ref()
+                .map(|instance| instance.playbook_jsonc.clone()),
+            _ => None,
+        };
+        let waiting = self.queue.iter().any(|job| matches!(job, Job::Instantiate))
+            || matches!(self.in_flight, Some(Sent::Instantiate { .. }));
+        let Some(text) = text.filter(|_| !waiting) else {
+            return false;
+        };
+        self.queue.push_back(Job::UseWizard { text });
+        self.touch();
+        true
+    }
+
+    /// Close the wizard; nothing it showed is kept.
+    pub fn wizard_close(&mut self) {
+        self.wizard = None;
+        self.queue.retain(|job| !matches!(job, Job::Instantiate));
+        self.touch();
+    }
+
+    fn ask_wizard(&mut self) {
+        self.queue.retain(|job| !matches!(job, Job::Instantiate));
+        self.queue.push_back(Job::Instantiate);
+        self.touch();
+    }
+
     // --- What the rig tells the editor --------------------------------------------------
 
-    /// A Lull opened, in `round`. The notes and the drafts are read again, and a text the
-    /// editor already holds is checked again against the new snapshot.
+    /// A Lull opened, in `round`. The notes and the drafts are read again, the template list
+    /// the first time, and a text the editor already holds is checked and rendered again
+    /// against the new snapshot; an open wizard asks again, because the operator's
+    /// suggestion is made afresh at each Lull's start.
     pub fn lull_opened(&mut self, round: u32) {
         let new_round = round != self.round;
         self.round = round;
         if !self.known.notes {
             self.queue.push_back(Job::Briefing);
         }
+        if !self.known.templates {
+            self.queue.push_back(Job::Templates);
+        }
         self.queue.push_back(Job::Drafts);
         if new_round && self.text.is_some() {
             self.owed.quick = true;
             self.owed.estimate = true;
+            self.render_owed = true;
             self.full_done = None;
             self.owed.edited = true;
+        }
+        if new_round && self.wizard.is_some() {
+            let asks = self.wizard_asks.wrapping_add(1);
+            self.wizard_asks = asks;
+            if let Some(wizard) = self.wizard.as_mut() {
+                wizard.asked = asks;
+                wizard.refusal = None;
+            }
+            self.ask_wizard();
         }
         self.touch();
     }
@@ -855,13 +991,25 @@ impl Editor {
                 return Some(call);
             }
         }
-        // 4. Everything else, in order.
+        // 4. The rule list, for the newest text.
+        if self.render_owed {
+            self.render_owed = false;
+            if let Some(text) = self.text.clone() {
+                let revision = self.revision;
+                return Some(self.send(
+                    Sent::Render { revision },
+                    "render_plan",
+                    object(vec![("playbook_jsonc", Json::String(text))]),
+                ));
+            }
+        }
+        // 5. Everything else, in order.
         while let Some(job) = self.queue.pop_front() {
             if let Some(call) = self.render(job) {
                 return Some(call);
             }
         }
-        // 5. FULL, once the editor has been left alone.
+        // 6. FULL, once the editor has been left alone.
         if full_due && self.full_done != Some(self.revision) {
             if let Some(text) = self.text.clone() {
                 let revision = self.revision;
@@ -896,15 +1044,20 @@ impl Editor {
                         | Sent::Undo { .. }
                         | Sent::Preview { .. }
                         | Sent::PreviewCheck
+                        | Sent::GetDraft { .. }
                 )
             )
     }
 
-    /// Whether the checks of the text on screen are all answered: no edit, QUICK or route
-    /// estimate waiting.
+    /// Whether the checks of the text on screen are all answered: no edit, QUICK, route
+    /// estimate or rule list waiting.
     #[must_use]
     pub fn settled(&self) -> bool {
-        !self.busy() && !self.owed.quick && !self.owed.estimate && self.in_flight.is_none()
+        !self.busy()
+            && !self.owed.quick
+            && !self.owed.estimate
+            && !self.render_owed
+            && self.in_flight.is_none()
     }
 
     /// Whether an edit landed since the last call: the rig restarts the idle timer.
@@ -973,6 +1126,22 @@ impl Editor {
             }
             Sent::Notes { notes } => self.queue.push_front(Job::Notes { notes }),
             Sent::Beacon { id } => self.queue.push_front(Job::Beacon { id }),
+            Sent::Render { .. } => self.render_owed = true,
+            Sent::Templates => self.queue.push_front(Job::Templates),
+            Sent::Instantiate { asked } => {
+                if self
+                    .wizard
+                    .as_ref()
+                    .is_some_and(|wizard| wizard.asked == asked)
+                {
+                    self.queue.push_front(Job::Instantiate);
+                }
+            }
+            Sent::GetDraft { id, round } => {
+                if round == self.round {
+                    self.queue.push_front(Job::GetDraft { id });
+                }
+            }
         }
         self.touch();
     }
@@ -1095,6 +1264,36 @@ impl Editor {
         self.changes
     }
 
+    /// The templates `list_templates` offered, in its order.
+    #[must_use]
+    pub fn templates(&self) -> &[TemplateRow] {
+        &self.templates
+    }
+
+    /// Whether the template list has been read.
+    #[must_use]
+    pub const fn templates_known(&self) -> bool {
+        self.known.templates
+    }
+
+    /// The wizard, when it is open.
+    #[must_use]
+    pub const fn wizard(&self) -> Option<&Wizard> {
+        self.wizard.as_ref()
+    }
+
+    /// The rule list: `render_plan`'s lines, as they came.
+    #[must_use]
+    pub fn prose(&self) -> &[String] {
+        &self.prose
+    }
+
+    /// Whether the rule list describes the text on screen.
+    #[must_use]
+    pub fn prose_current(&self) -> bool {
+        self.text.is_some() && self.prose_revision == Some(self.revision)
+    }
+
     // --- Inside ----------------------------------------------------------------------
 
     fn touch(&mut self) {
@@ -1155,15 +1354,7 @@ impl Editor {
                     params,
                 )
             }
-            Job::Undo => {
-                let patch = self.undo.last()?.clone();
-                let playbook = current?;
-                self.send(
-                    Sent::Undo { base: revision },
-                    "patch_plan",
-                    patch_params(&playbook, &patch),
-                )
-            }
+            Job::Undo => return self.render_undo(),
             Job::Preview { at } => {
                 let playbook = current?;
                 let label = fresh_label(&playbook, Action::Place.stem());
@@ -1221,7 +1412,62 @@ impl Editor {
                 let params = object(vec![("beacon_id", Json::String(id.clone()))]);
                 self.send(Sent::Beacon { id }, "get_beacon", params)
             }
+            job @ (Job::Templates
+            | Job::Instantiate
+            | Job::UseWizard { .. }
+            | Job::GetDraft { .. }) => return self.render_pr2(job),
         })
+    }
+
+    /// Undo: the inverse patch through `patch_plan`, or, for the wizard's playbook, the text
+    /// before it put back as it was, with no call.
+    fn render_undo(&mut self) -> Option<Call> {
+        let patch = match self.undo.last()? {
+            Undo::Patch(patch) => patch.clone(),
+            Undo::Restore(_) => {
+                if let Some(Undo::Restore(before)) = self.undo.pop() {
+                    self.drop_settled_ghost();
+                    self.restore(before);
+                }
+                return None;
+            }
+        };
+        let playbook = self.text.clone()?;
+        let revision = self.revision;
+        Some(self.send(
+            Sent::Undo { base: revision },
+            "patch_plan",
+            patch_params(&playbook, &patch),
+        ))
+    }
+
+    /// Pull request 2's jobs: the template list, the wizard's instantiation, its playbook
+    /// put into the editor, and the carried draft fetched.
+    fn render_pr2(&mut self, job: Job) -> Option<Call> {
+        match job {
+            Job::Templates => {
+                Some(self.send(Sent::Templates, "list_templates", object(Vec::new())))
+            }
+            Job::Instantiate => {
+                let wizard = self.wizard.as_ref()?;
+                let (asked, params) = (wizard.asked, wizard.params());
+                Some(self.send(Sent::Instantiate { asked }, "instantiate_template", params))
+            }
+            Job::UseWizard { text } => {
+                let before = self.text.clone();
+                self.undo.push(Undo::Restore(before));
+                self.drop_settled_ghost();
+                self.accept_text(text);
+                self.say("wizard_used", "");
+                None
+            }
+            Job::GetDraft { id } => {
+                let round = self.round;
+                let params = object(vec![("draft_id", Json::String(id.clone()))]);
+                Some(self.send(Sent::GetDraft { id, round }, "get_draft", params))
+            }
+            other => self.render(other),
+        }
     }
 
     /// The route estimate for the text on screen, when there is a route to price and a
@@ -1258,7 +1504,7 @@ impl Editor {
             Sent::Edit { base, retry: _ } => {
                 let answer = patch_of(result)?;
                 if base == self.revision {
-                    self.undo.push(answer.inverse_json_patch);
+                    self.undo.push(Undo::Patch(answer.inverse_json_patch));
                     self.drop_settled_ghost();
                     self.accept_text(answer.playbook_jsonc);
                 }
@@ -1346,6 +1592,51 @@ impl Editor {
                     json::decode_json(&body(result, "gp.api.v1.GetBeaconResponse"))?;
                 self.beacon_prose = response.prose;
             }
+            sent @ (Sent::Render { .. }
+            | Sent::Templates
+            | Sent::Instantiate { .. }
+            | Sent::GetDraft { .. }) => self.settle_pr2(sent, result)?,
+        }
+        Ok(())
+    }
+
+    /// Pull request 2's answers: the rule list, the template list, the wizard's
+    /// instantiation and the carried draft.
+    fn settle_pr2(&mut self, sent: Sent, result: &Json) -> Result<(), BridgeError> {
+        match sent {
+            Sent::Render { revision } => {
+                let prose = wizard::prose_of(result)?;
+                if revision == self.revision {
+                    self.prose = prose;
+                    self.prose_revision = Some(revision);
+                }
+            }
+            Sent::Templates => {
+                self.templates = wizard::templates_of(result)?;
+                self.known.templates = true;
+            }
+            Sent::Instantiate { asked } => {
+                let instance: Instance = wizard::instance_of(result)?;
+                if let Some(wizard) = self.wizard.as_mut() {
+                    if wizard.asked == asked {
+                        wizard.instance = Some(instance);
+                        wizard.answered = asked;
+                        wizard.refusal = None;
+                    }
+                }
+            }
+            Sent::GetDraft { id: _, round } => {
+                let response: GetDraftResponse =
+                    json::decode_json(&body(result, "gp.api.v1.GetDraftResponse"))?;
+                if round == self.round {
+                    self.undo.clear();
+                    self.preview = None;
+                    self.ghost = None;
+                    self.accept_text(response.playbook_jsonc);
+                    self.say("carried", &response.label);
+                }
+            }
+            other => return self.settle(other, result),
         }
         Ok(())
     }
@@ -1407,43 +1698,60 @@ impl Editor {
     /// Draft continuity (spec section 13): "each Lull opens with last round's playbook
     /// pre-loaded as an editable draft, re-verified against the new snapshot".
     ///
-    /// The gateway pre-loads the sealed playbook as the `carried` draft and re-verifies it
-    /// when the Lull opens; `list_drafts` says it is there. Its **body** is not on the wire
-    /// (`gp.api.v1.DraftSummary` carries none, on purpose), so the text the editor opens is
-    /// its own copy of what it submitted and the gateway sealed — the same bytes — and the
-    /// checks run again at once against the new snapshot.
-    ///
-    /// PLACEHOLDER: a client that did not submit the carried playbook itself (a restarted
-    /// client resuming a match) has no copy of it and needs the draft's body from the
-    /// gateway. OWNER, with T17's resume and T19's pull request 2, which is when a client
-    /// can first be restarted mid-match.
+    /// The gateway pre-loads the sealed playbook as the `carried` draft when the Lull opens,
+    /// and `list_drafts` says it is there. The editor **fetches it with `get_draft` and opens
+    /// it, every time**: one path, with the gateway's copy as the authority, whether this
+    /// client submitted it or is a new process that resumed the match and holds no copy of
+    /// anything (decisions-log item 112 (5); T19 pull request 2, closing pull request 1's
+    /// PLACEHOLDER). It costs one more seat call per Lull. The checks run again at once
+    /// against the new snapshot, because opening it is an edit.
     ///
     /// Only a `carried` draft saved in **this** round counts. The gateway carries nothing
     /// forward after a round whose playbook it filed itself (the safe playbook on a miss),
-    /// and an older `carried` draft can still be listed then; opening the editor's copy
-    /// over it would call a playbook from two rounds ago "last round's". The status line
-    /// names the draft by the gateway's own label.
+    /// and an older `carried` draft can still be listed then; opening it would call a
+    /// playbook from two rounds ago "last round's". The status line names the draft by the
+    /// gateway's own label.
+    ///
+    /// PLACEHOLDER: a resumed Lull opens `carried`, as spec section 13's continuity says,
+    /// and the seat's own `editor` draft of this round is listed, not opened. Opening it when
+    /// present is a preference the spec does not state; a click that opens any listed draft
+    /// is a small draft browser ahead of S6's. OWNER, at S6, with the draft browser.
     fn carry_forward(&mut self) {
-        let Some(label) = self
+        let carried = self
             .drafts
             .iter()
-            .find(|draft| draft.id == CARRIED_DRAFT_ID && draft.round == self.round)
-            .map(|draft| draft.label.clone())
-        else {
-            return;
-        };
-        if self.carried_round == self.round {
+            .any(|draft| draft.id == CARRIED_DRAFT_ID && draft.round == self.round);
+        if !carried || self.carried_round == self.round {
             return;
         }
-        let Some(sealed) = self.sealed.clone() else {
-            return;
-        };
         self.carried_round = self.round;
-        self.undo.clear();
-        self.preview = None;
-        self.ghost = None;
-        self.accept_text(sealed);
-        self.say("carried", &label);
+        self.queue
+            .retain(|job| !matches!(job, Job::GetDraft { .. }));
+        self.queue.push_back(Job::GetDraft {
+            id: CARRIED_DRAFT_ID.to_owned(),
+        });
+        self.touch();
+    }
+
+    /// Undo of the wizard's playbook: the text before it, as it was (`None`: no text).
+    fn restore(&mut self, before: Option<String>) {
+        if let Some(text) = before {
+            self.accept_text(text);
+            return;
+        }
+        self.text = None;
+        self.revision = self.revision.wrapping_add(1);
+        self.rows.clear();
+        self.verdict = None;
+        self.qualifies = false;
+        self.route = Route::default();
+        self.prose.clear();
+        self.prose_revision = None;
+        self.owed = Owed {
+            edited: true,
+            ..Owed::default()
+        };
+        self.touch();
     }
 
     /// An edit landed: a ghost already answered describes the text before it and goes. A
@@ -1466,6 +1774,7 @@ impl Editor {
         self.revision = self.revision.wrapping_add(1);
         self.owed.quick = true;
         self.owed.estimate = true;
+        self.render_owed = true;
         self.owed.edited = true;
         self.route.current = false;
         self.touch();
@@ -1527,6 +1836,16 @@ impl Editor {
                 self.ghost = None;
                 self.preview = None;
                 self.say("gateway_refused", &detail);
+            }
+            Sent::Instantiate { asked } => {
+                // Shown as the gateway wrote it; the value stays as typed, for the player
+                // to change. Nothing is retried with another value.
+                if let Some(wizard) = self.wizard.as_mut() {
+                    if wizard.asked == *asked {
+                        wizard.refusal = Some(detail.clone());
+                    }
+                }
+                self.say("wizard_refused", &detail);
             }
             _ => self.say("gateway_refused", &detail),
         }
@@ -2027,7 +2346,14 @@ mod tests {
         editor.answered(Ok(&quick_report("", true))).expect("reads");
         assert_eq!(editor.verdict(), Verdict::Quick);
         assert!(editor.rows_current());
-        // The patched text has no route, so there is nothing to price and no call.
+        // The patched text has no route, so there is nothing to price; the rule list is
+        // rendered for it.
+        assert_eq!(method_of(editor.next_call(false)), "render_plan");
+        editor
+            .answered(Ok(&read(r#"{"prose":"Playbook\n\nRoute\n"}"#)))
+            .expect("reads");
+        assert_eq!(editor.prose(), ["Playbook", "", "Route"]);
+        assert!(editor.prose_current());
         assert!(
             editor.next_call(false).is_none(),
             "FULL waits for the idle timer"
@@ -2117,7 +2443,12 @@ mod tests {
     }
 
     /// Answers every call the editor makes with something unremarkable, until it is quiet.
+    /// `get_draft` answers with `carried` as its body.
     fn drain(editor: &mut Editor, drafts: &str) {
+        drain_with(editor, drafts, EXPAND_EAST);
+    }
+
+    fn drain_with(editor: &mut Editor, drafts: &str, carried: &str) {
         for _ in 0..32 {
             let Some(call) = editor.next_call(false) else {
                 return;
@@ -2125,7 +2456,21 @@ mod tests {
             let answer = match call.method {
                 "get_briefing" => read(r#"{"notes":"remember the vent"}"#),
                 "list_drafts" => read(drafts),
+                "list_templates" => read(r#"{"templates":[]}"#),
                 "estimate_route" => read(r#"{"reachable":true}"#),
+                "render_plan" => read(r#"{"prose":"Playbook\n"}"#),
+                "get_draft" => {
+                    assert!(
+                        json::write(&call.params).contains("\"carried\""),
+                        "only the carried draft is opened: {}",
+                        json::write(&call.params)
+                    );
+                    object(vec![
+                        ("playbook_jsonc", Json::String(carried.to_owned())),
+                        ("label", text("carried from round 1")),
+                        ("round", Json::Number("2".to_owned())),
+                    ])
+                }
                 _ => quick_report("", true),
             };
             editor.answered(Ok(&answer)).expect("reads");
@@ -2162,12 +2507,73 @@ mod tests {
         assert_eq!(
             editor.bytes(),
             EXPAND_EAST.as_bytes(),
-            "last round's sealed playbook"
+            "last round's sealed playbook, as get_draft returned it"
         );
         assert_eq!(editor.status().key, "carried");
+        assert_eq!(editor.status().detail, "carried from round 1");
         assert!(
             editor.rows_current(),
             "and checked against the new snapshot at once"
+        );
+        assert!(editor.prose_current(), "and rendered again");
+    }
+
+    #[test]
+    fn a_restarted_editor_opens_the_carried_draft_through_get_draft() {
+        // A new process after a resume: no text, nothing submitted, nothing sealed.
+        let mut editor = Editor::new("seat.0");
+        editor.lull_opened(2);
+        let mut methods: Vec<&'static str> = Vec::new();
+        let mut asked_for = String::new();
+        for _ in 0..32 {
+            let Some(call) = editor.next_call(false) else {
+                break;
+            };
+            methods.push(call.method);
+            let answer = match call.method {
+                "get_briefing" => read(r#"{"notes":"remember the vent"}"#),
+                "list_templates" => read(r#"{"templates":[]}"#),
+                "list_drafts" => read(
+                    r#"{"drafts":[{"draft_id":"editor","label":"Saved from the editor","round":2},{"draft_id":"carried","label":"carried from round 1","round":2}]}"#,
+                ),
+                "get_draft" => {
+                    asked_for = json::write(&call.params);
+                    object(vec![
+                        ("playbook_jsonc", Json::String(EXPAND_EAST.to_owned())),
+                        ("label", text("carried from round 1")),
+                        ("round", Json::Number("2".to_owned())),
+                    ])
+                }
+                "render_plan" => read(r#"{"prose":"Playbook\n"}"#),
+                "estimate_route" => read(r#"{"reachable":true}"#),
+                _ => quick_report("", true),
+            };
+            editor.answered(Ok(&answer)).expect("reads");
+        }
+        assert_eq!(
+            methods
+                .iter()
+                .filter(|method| **method == "get_draft")
+                .count(),
+            1,
+            "one get_draft: {methods:?}"
+        );
+        assert!(
+            asked_for.contains("\"carried\"") && !asked_for.contains("\"editor\""),
+            "the carried draft is fetched, and the seat's own editor draft is listed, not              opened: {asked_for}"
+        );
+        assert_eq!(
+            editor.bytes(),
+            EXPAND_EAST.as_bytes(),
+            "the gateway's copy, byte for byte"
+        );
+        assert_eq!(editor.status().key, "carried");
+        assert!(editor.rows_current(), "checked against the new snapshot");
+        assert_eq!(editor.drafts().len(), 2, "both drafts are listed");
+        assert_eq!(
+            editor.undo_depth(),
+            0,
+            "opening the carried draft is not an undoable edit"
         );
     }
 
