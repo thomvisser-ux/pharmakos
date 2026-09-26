@@ -1256,11 +1256,17 @@ fn committed_as_suggested(
          and the file is derived from it as its own header says",
         fresh.display()
     );
+    // The scenario files' header is deploy-and-visit's playbook's first two
+    // lines, read rather than written here: a licence line spelt out in this
+    // file would be one more licence expression for `reuse` to parse.
+    let scenario_header: String =
+        std::fs::read_to_string(root().join("scenarios/skeleton/deploy-and-visit.playbook.jsonc"))
+            .expect("the committed scenario playbook")
+            .split_inclusive('\n')
+            .take(2)
+            .collect();
     assert!(
-        header.starts_with(
-            "// SPDX-FileCopyrightText: 2026 Pharmakos contributors\n\
-             // SPDX-License-Identifier: GPL-3.0-or-later\n"
-        ) && header.lines().all(|line| line.starts_with("//")),
+        header.starts_with(&scenario_header) && header.lines().all(|line| line.starts_with("//")),
         "the scenario files' header, then comments only: {header}"
     );
     committed
