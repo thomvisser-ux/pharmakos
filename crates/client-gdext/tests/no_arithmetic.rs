@@ -493,15 +493,27 @@ fn the_editor_makes_no_time_arithmetic_of_its_own() {
     );
 }
 
+/// The clock words an editor script may not use.
+const CLOCKS: &[&str] = &["time.", "timer", "get_ticks", "unix_time", "create_tween"];
+
 /// The editor's scripts read no clock: the pacer (`src/pacer.rs`) is the client's one wall
 /// clock, and the editor's one timer — FULL after 600 ms idle — is kept there
 /// (`pacer::IdleTimer`). A `Timer` node or a `Time.get_ticks_*` in an editor script would
-/// be a second clock deciding when to ask the gateway something.
+/// be a second clock deciding when to ask the gateway something. Pull request 2's editor
+/// scripts are on the list too: the wizard's pages, the rule list and the wizard's
+/// render-only scene. (The lobby shows the pacer's countdown and names a match only
+/// through `host_link.gd`'s helper, which the next test holds to its one clock read.)
 #[test]
 fn the_editor_scripts_read_no_clock_of_their_own() {
-    const CLOCKS: &[&str] = &["time.", "timer", "get_ticks", "unix_time", "create_tween"];
     let mut found: Vec<String> = Vec::new();
-    for name in ["editor.gd", "rows.gd", "strings.gd"] {
+    for name in [
+        "editor.gd",
+        "rows.gd",
+        "strings.gd",
+        "wizard.gd",
+        "rule_list.gd",
+        "wizard_shot.gd",
+    ] {
         let path = godot_root().join("scripts").join(name);
         let text =
             fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
@@ -517,4 +529,69 @@ fn the_editor_scripts_read_no_clock_of_their_own() {
         "an editor script reads a clock; timing is the pacer's (src/pacer.rs):\n{}",
         found.join("\n")
     );
+}
+
+/// **The match-id helper reads the clock once, and computes nothing with it** (decisions-log
+/// item 113 (12): from T19 pull request 2, "the match-id helper in
+/// `godot/scripts/host_link.gd`, which reads the clock once to name a match and computes
+/// nothing with it" joins AGENTS.md section 3 rule 4's list).
+///
+/// In `host_link.gd`, the only line that names a clock is the helper's one `return`, which
+/// formats the seconds into the id; and the only scripts that ask for a match id go
+/// through the helper, so no second id format and no second clock read can appear.
+#[test]
+fn the_match_id_helper_is_the_one_clock_read_and_computes_nothing() {
+    let path = godot_root().join("scripts").join("host_link.gd");
+    let text =
+        fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+    let lines: Vec<&str> = text.lines().collect();
+    let reads: Vec<(usize, &str)> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| {
+            let code = code_of(line).to_ascii_lowercase();
+            CLOCKS.iter().any(|clock| code.contains(clock))
+        })
+        .map(|(index, line)| (index, *line))
+        .collect();
+    assert_eq!(
+        reads.len(),
+        1,
+        "host_link.gd reads a clock in more than one place, or in none: {reads:?}"
+    );
+    let (index, line) = reads.first().copied().expect("one read");
+    let helper = lines
+        .get(..index)
+        .and_then(|before| {
+            before
+                .iter()
+                .rev()
+                .find(|line| line.starts_with("static func "))
+        })
+        .copied()
+        .unwrap_or_default();
+    assert!(
+        helper.starts_with("static func match_id("),
+        "the clock is read outside the match-id helper, in `{helper}`"
+    );
+    let code = code_of(line);
+    assert!(
+        code.trim_start().starts_with("return ")
+            && !code.contains('+')
+            && !code.contains('*')
+            && !code.contains('/')
+            && !code.contains(" - "),
+        "the helper computes with the clock instead of only naming the match with it: {line}"
+    );
+    for name in ["lobby.gd", "watch_check.gd"] {
+        let script = fs::read_to_string(godot_root().join("scripts").join(name)).expect("a script");
+        assert!(
+            script.contains("HostLink.match_id("),
+            "{name} names its match without the helper"
+        );
+        assert!(
+            !script.contains("get_process_id()"),
+            "{name} builds a match id of its own"
+        );
+    }
 }

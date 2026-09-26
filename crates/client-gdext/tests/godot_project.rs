@@ -261,10 +261,13 @@ const SCRIPTS: &[&str] = &[
     "mesher_rules.gd",
     "rows.gd",
     "rows_shot.gd",
+    "rule_list.gd",
     "strings.gd",
     "vista.gd",
     "vista_shot.gd",
     "watch_check.gd",
+    "wizard.gd",
+    "wizard_shot.gd",
 ];
 
 /// Every script is on [`SCRIPTS`], and every scene names scripts and scenes that exist.
@@ -306,6 +309,7 @@ fn every_script_is_listed_and_every_scene_names_files_that_exist() {
         "scenes/vista.tscn",
         "scenes/vista_shot.tscn",
         "scenes/watch_check.tscn",
+        "scenes/wizard_shot.tscn",
     ] {
         let text = read(scene);
         for line in text.lines().filter(|line| line.contains("path=\"res://")) {

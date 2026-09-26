@@ -72,7 +72,10 @@ use pharmakos_proto::json;
 use crate::api;
 use crate::chunks;
 use crate::editor::Action;
-use crate::editor_view::{rows_array, rows_of_report_text, state_dictionary, target_of};
+use crate::editor_view::{
+    instance_dictionary, meter_dictionary, rows_array, rows_of_report_text, state_dictionary,
+    target_of,
+};
 use crate::engine::ChunkRenderer;
 use crate::error::BridgeError;
 use crate::pacer::WallClock;
@@ -694,7 +697,7 @@ impl PharmakosBridge {
             .unwrap_or_default()
     }
 
-    // --- The editor (T19, pull request 1) ----------------------------------------------
+    // --- The editor (T19, pull requests 1 and 2) ---------------------------------------
     //
     // The editor lives in the watch rig, because it shares the seat connection and its rate
     // budget with the vista's polls; so every call below needs `watch_begin` first, and
@@ -866,6 +869,97 @@ impl PharmakosBridge {
         };
         self.panics
             .guard("editor_state", || state_dictionary(rig.editor()))
+            .unwrap_or_default()
+    }
+
+    // --- The wizard, the rule list and the meter (T19, pull request 2) ----------------------
+
+    /// Ask for the template list again.
+    #[func]
+    fn editor_list_templates(&mut self) {
+        if let Some(rig) = self.rig.as_mut() {
+            let _ = self.panics.guard("editor_list_templates", || {
+                rig.editor_mut().list_templates();
+            });
+        }
+    }
+
+    /// Open the wizard on the template `template_id`, as `list_templates` named it.
+    #[func]
+    fn editor_wizard_open(&mut self, template_id: GString) {
+        let template_id = template_id.to_string();
+        if let Some(rig) = self.rig.as_mut() {
+            let _ = self.panics.guard("editor_wizard_open", || {
+                rig.editor_mut().wizard_open(&template_id);
+            });
+        }
+    }
+
+    /// The player typed `text` on the wizard page whose pointer is `pointer`: it goes to
+    /// the gateway exactly as typed. Returns whether that page is on screen.
+    #[func]
+    fn editor_wizard_set(&mut self, pointer: GString, text: GString) -> bool {
+        let Some(rig) = self.rig.as_mut() else {
+            return false;
+        };
+        let (pointer, text) = (pointer.to_string(), text.to_string());
+        self.panics
+            .guard("editor_wizard_set", || {
+                rig.editor_mut().wizard_set(&pointer, &text)
+            })
+            .unwrap_or(false)
+    }
+
+    /// Put the wizard's playbook into the editor, as one edit Undo takes back.
+    #[func]
+    fn editor_wizard_use(&mut self) -> bool {
+        let Some(rig) = self.rig.as_mut() else {
+            return false;
+        };
+        self.panics
+            .guard("editor_wizard_use", || rig.editor_mut().wizard_use())
+            .unwrap_or(false)
+    }
+
+    /// Close the wizard.
+    #[func]
+    fn editor_wizard_close(&mut self) {
+        if let Some(rig) = self.rig.as_mut() {
+            let _ = self
+                .panics
+                .guard("editor_wizard_close", || rig.editor_mut().wizard_close());
+        }
+    }
+
+    /// One `instantiate_template` answer's text (a whole JSON-RPC answer, or its result),
+    /// with no gateway behind it: `pages`, `why` and `playbook_jsonc`, as the render-only
+    /// wizard scene and the watch check's pin read them. An empty dictionary means the
+    /// reason is in the log.
+    #[func]
+    fn editor_wizard_of_response(&mut self, text: GString) -> VarDictionary {
+        let text = text.to_string();
+        match self.panics.guard("editor_wizard_of_response", || {
+            crate::wizard::instance_of_text(&text)
+        }) {
+            Some(Ok(instance)) => instance_dictionary(&instance),
+            Some(Err(error)) => {
+                godot_error!("[pharmakos] editor_wizard_of_response: {error}");
+                VarDictionary::new()
+            }
+            None => VarDictionary::new(),
+        }
+    }
+
+    /// The own `$`/`kW` meter: `answers`, `phase`, and `treasury_now`, `supply_kw_now`,
+    /// `draw_kw_now` and `headroom_kw_now` exactly as the gateway last answered them. Empty
+    /// before `watch_begin`.
+    #[func]
+    fn watch_meter(&mut self) -> VarDictionary {
+        let Some(rig) = self.rig.as_ref() else {
+            return VarDictionary::new();
+        };
+        self.panics
+            .guard("watch_meter", || meter_dictionary(rig.meter()))
             .unwrap_or_default()
     }
 

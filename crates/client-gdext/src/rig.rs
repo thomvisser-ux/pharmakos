@@ -34,9 +34,10 @@
 //! |---|---|
 //! | `get_status` until the phase is known | a keyframe, or the next page of one |
 //! | `end_lull` once the Lull is ready to end | `set_ready`, once the human says so |
-//! | `end_recap` once the human continues | `get_view` from the cursor after the match moved |
-//! | `advance_push`, when the pacer says | `get_segment_feed` after the match moved |
-//! | `report_host_clock`, outside a Push | the editor's planning calls, in a Lull |
+//! | `end_recap` once the human continues | the editor's planning calls, in a Lull |
+//! | `advance_push`, when the pacer says | `get_economy_forecast`, for the meter |
+//! | `report_host_clock`, outside a Push | `get_view` from the cursor after the match moved |
+//! | | `get_segment_feed` after the match moved |
 //! | a keep-alive `get_status` | a keep-alive `get_status` |
 //!
 //! "Ready ends the Lull": the host clock's answer carries `all_ready`, and when it is true
@@ -57,8 +58,26 @@
 //! connection, at most one more can land in the same gateway tick, the one that was already
 //! on its way when the clock moved, which keeps the seat under the gateway's limit however
 //! fast the player edits (`tests/rate_budget.rs`).
+//!
+//! # The meter
+//!
+//! The own `$`/`kW` meter (T19, pull request 2) is `get_economy_forecast` on the seat
+//! connection, inside the same budget: due when a Lull opens (a resumed one too) and whenever
+//! the match moved in a Push, as the view and the feed are. Its four fields are kept exactly
+//! as the gateway answered them ([`Meter`]); headroom is the gateway's, never supply minus
+//! draw. When to poll is scheduling, which is this file's; what the numbers are is the
+//! gateway's.
+//!
+//! PLACEHOLDER: the meter's refresh cadence (once a Lull, once per advance in a Push) and
+//! its layout are the skeleton's. OWNER, Tuning, with the real lobby.
+//!
+//! # A first phase of Push
+//!
+//! A match resumed from a `sealed` save starts in its Push with no Lull (decisions-log item
+//! 111, decision C8). The rig takes whatever phase the first admin footer names: a Push is
+//! paced from its first answer, and the editor waits for the next Lull.
 
-use pharmakos_proto::gp::api::v1::{GetSegmentFeedResponse, status};
+use pharmakos_proto::gp::api::v1::{GetEconomyForecastResponse, GetSegmentFeedResponse, status};
 use pharmakos_proto::json::{self, Json};
 
 use crate::editor::Editor;
@@ -141,6 +160,42 @@ enum Purpose {
     Ready,
     /// One of the editor's planning calls ([`crate::editor`]).
     Plan,
+    /// `get_economy_forecast`, for the meter.
+    Meter,
+}
+
+/// The own `$`/`kW` meter: the last `get_economy_forecast` answer, field for field, and
+/// which phase it was served in.
+///
+/// Nothing here is computed: each number is the one the gateway wrote, so a headroom that
+/// is not supply minus draw is shown as the headroom the gateway sent.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Meter {
+    /// How many answers the meter has taken; zero before the first.
+    pub answers: u64,
+    /// The phase the last answer was served in, as its own footer says.
+    pub phase: Phase,
+    /// `treasury_now`, whole `$`.
+    pub treasury_now: i32,
+    /// `supply_kw_now`, whole `kW`.
+    pub supply_kw_now: i32,
+    /// `draw_kw_now`, whole `kW`.
+    pub draw_kw_now: i32,
+    /// `headroom_kw_now`, whole `kW`, as the gateway wrote it.
+    pub headroom_kw_now: i32,
+}
+
+impl Default for Meter {
+    fn default() -> Self {
+        Self {
+            answers: 0,
+            phase: Phase::Unknown,
+            treasury_now: 0,
+            supply_kw_now: 0,
+            draw_kw_now: 0,
+            headroom_kw_now: 0,
+        }
+    }
 }
 
 /// One connection's state.
@@ -225,6 +280,10 @@ pub struct Rig {
     ready_sent: bool,
     /// The playbook editor.
     editor: Editor,
+    /// The own `$`/`kW` meter.
+    meter: Meter,
+    /// A `get_economy_forecast` is owed, because a Lull opened or the match moved in a Push.
+    meter_due: bool,
 }
 
 impl Default for Rig {
@@ -259,6 +318,8 @@ impl Rig {
             seat_budget: SEAT_CALLS_PER_REFILL,
             ready_sent: false,
             editor: Editor::default(),
+            meter: Meter::default(),
+            meter_due: false,
         }
     }
 
@@ -317,6 +378,7 @@ impl Rig {
             Some((_, Purpose::Advance)) => self.timing.pacer.refused(),
             Some((_, Purpose::Clock)) => self.timing.clock.refused(),
             Some((_, Purpose::Plan)) => self.editor.dropped(),
+            Some((_, Purpose::Meter)) => self.meter_due = true,
             _ => {}
         }
     }
@@ -424,6 +486,12 @@ impl Rig {
                 return Some((Purpose::Plan, call.method, call.params));
             }
         }
+        // The meter goes ahead of the view and the feed: in a Push all three fall due at
+        // every advance, and a debug host can take longer than the pacer's period over a
+        // view page, so a meter behind them would never be asked. It is one small call.
+        if self.meter_due {
+            return Some((Purpose::Meter, "get_economy_forecast", object(Vec::new())));
+        }
         if self.due.view {
             let cursor = self.view_cursor.clone();
             return Some((Purpose::View, "get_view", cursor_params(&cursor)));
@@ -458,6 +526,7 @@ impl Rig {
         match purpose {
             Purpose::View => self.due.view = false,
             Purpose::Feed => self.due.feed = false,
+            Purpose::Meter => self.meter_due = false,
             _ => {}
         }
         let text = json::write(&object(vec![
@@ -584,6 +653,7 @@ impl Rig {
                 if ran > 0 {
                     self.due.view = true;
                     self.due.feed = true;
+                    self.meter_due = true;
                     // The Push moved the gateway's clock, and with it every token's budget.
                     self.seat_budget = SEAT_CALLS_PER_REFILL;
                 }
@@ -601,6 +671,28 @@ impl Rig {
             Purpose::EndRecap => self.wants.end_recap = false,
             Purpose::Ready => self.wants.ready = false,
             Purpose::Plan => self.editor.answered(Ok(result))?,
+            Purpose::Meter => {
+                let (body, footer) = split_footer(result);
+                let forecast: GetEconomyForecastResponse = json::decode_json(&enums::canonical(
+                    "gp.api.v1.GetEconomyForecastResponse",
+                    &body,
+                ))?;
+                // Which phase the numbers are from: the answer's own footer, which says when
+                // the gateway served it. It labels the meter and moves nothing (only the
+                // admin connection's footers move the rig's phase).
+                let served = footer
+                    .as_ref()
+                    .and_then(|footer| read_status(footer).ok())
+                    .map_or(self.phase, |status| Phase::of(status.phase));
+                self.meter = Meter {
+                    answers: self.meter.answers.saturating_add(1),
+                    phase: served,
+                    treasury_now: forecast.treasury_now,
+                    supply_kw_now: forecast.supply_kw_now,
+                    draw_kw_now: forecast.draw_kw_now,
+                    headroom_kw_now: forecast.headroom_kw_now,
+                };
+            }
             Purpose::Status => {}
         }
         Ok(())
@@ -641,7 +733,7 @@ impl Rig {
                 self.wants.ready = false;
                 self.ready_sent = false;
             }
-            Purpose::Plan | Purpose::Status => {}
+            Purpose::Plan | Purpose::Status | Purpose::Meter => {}
         }
     }
 
@@ -668,6 +760,7 @@ impl Rig {
             }
             Phase::Lull => {
                 self.ready_sent = false;
+                self.meter_due = true;
                 self.editor.lull_opened(footer.round);
                 self.timing.pacer.stop();
                 // A footer that already shows a countdown is one this client reported
@@ -794,6 +887,12 @@ impl Rig {
     pub const fn view_refusals(&self) -> u32 {
         self.view_refusals
     }
+
+    /// The own `$`/`kW` meter, as the gateway last answered it.
+    #[must_use]
+    pub const fn meter(&self) -> Meter {
+        self.meter
+    }
 }
 
 /// The event list's rows for one `get_segment_feed` page, in the feed's order.
@@ -912,8 +1011,12 @@ mod tests {
 
     /// Answers every call the rig makes at `now` with an unremarkable result, until it
     /// has nothing left to send.
+    ///
+    /// Time passes between two rounds of answers as far as the gateway's budget is
+    /// concerned: the seat's budget is refilled each round, as a clock report would.
     fn settle(rig: &mut Rig, now: u64) {
         for _ in 0..16 {
+            rig.seat_budget = SEAT_CALLS_PER_REFILL;
             let sent = rig.poll(now);
             if sent.is_empty() {
                 return;
@@ -981,7 +1084,16 @@ mod tests {
             &answer(id_of(advance), r#"{"advanced_ms":400}"#, "push"),
         )
         .expect("reads");
+        // The meter first (one small call), then the view.
         let sent = rig.poll(2 + PACER_PERIOD_US);
+        let meter = sent
+            .iter()
+            .find(|frame| frame.link == SEAT)
+            .expect("a seat call");
+        assert_eq!(method_of(meter), "get_economy_forecast");
+        rig.receive(SEAT, &answer(id_of(meter), "{}", "push"))
+            .expect("reads");
+        let sent = rig.poll(3 + PACER_PERIOD_US);
         assert!(
             sent.iter()
                 .any(|frame| frame.link == SEAT && method_of(frame) == "get_view"),
@@ -1205,6 +1317,18 @@ mod tests {
         )
         .expect("reads");
         assert!(rig.editor().has_text());
+        // The rule list for the loaded text.
+        let sent = rig.poll(2);
+        let render = sent
+            .iter()
+            .find(|frame| frame.link == SEAT)
+            .expect("the rule list");
+        assert_eq!(method_of(render), "render_plan");
+        rig.receive(
+            SEAT,
+            &answer(id_of(render), r#"{"prose":"Playbook\n"}"#, "lull"),
+        )
+        .expect("reads");
         rig
     }
 
@@ -1298,6 +1422,134 @@ mod tests {
         assert!(
             seat_calls <= SEAT_CALLS_PER_REFILL,
             "{seat_calls} seat calls with the gateway's clock standing still"
+        );
+    }
+
+    #[test]
+    fn the_meter_shows_the_gateways_numbers_as_they_came() {
+        let mut rig = Rig::new();
+        rig.opened(ADMIN);
+        rig.opened(SEAT);
+        let sent = rig.poll(0);
+        let status = sent.first().expect("admin first");
+        let view = sent.get(1).expect("seat second");
+        rig.receive(ADMIN, &answer(id_of(status), "{}", "lull"))
+            .expect("reads");
+        rig.receive(
+            SEAT,
+            &answer(
+                id_of(view),
+                r#"{"next_cursor":"c1","complete":true}"#,
+                "lull",
+            ),
+        )
+        .expect("reads");
+        // The Lull opened: the meter is due on the seat connection. Its headroom is NOT
+        // supply minus draw, on purpose: the meter shows the gateway's number, not a sum.
+        let mut read = false;
+        for step in 1..16_u64 {
+            // A clock report every step, so the seat's budget refills as it would live.
+            let now = CLOCK_REPORT_US.saturating_mul(step);
+            for frame in rig.poll(now) {
+                let result = match method_of(&frame).as_str() {
+                    "get_economy_forecast" => {
+                        assert_eq!(frame.link, SEAT, "the meter rides the seat connection");
+                        read = true;
+                        r#"{"treasury_now":200,"supply_kw_now":10,"draw_kw_now":4,"headroom_kw_now":-3}"#
+                    }
+                    "get_view" => r#"{"next_cursor":"c9","complete":true}"#,
+                    "get_segment_feed" => r#"{"events":[],"next_cursor":"f1"}"#,
+                    _ => "{}",
+                };
+                rig.receive(frame.link, &answer(id_of(&frame), result, "lull"))
+                    .expect("reads");
+            }
+        }
+        assert!(read, "the meter was asked for when the Lull opened");
+        let meter = rig.meter();
+        assert_eq!(meter.answers, 1, "once per Lull, not in a loop");
+        assert_eq!(meter.phase, Phase::Lull);
+        assert_eq!(
+            (
+                meter.treasury_now,
+                meter.supply_kw_now,
+                meter.draw_kw_now,
+                meter.headroom_kw_now
+            ),
+            (200, 10, 4, -3),
+            "each field exactly as it came; headroom is the gateway's, never supply minus draw"
+        );
+    }
+
+    #[test]
+    fn the_meter_follows_the_match_in_a_push() {
+        let mut rig = in_push();
+        let before = rig.meter().answers;
+        let sent = rig.poll(1 + PACER_PERIOD_US);
+        let advance = sent
+            .iter()
+            .find(|frame| frame.link == ADMIN)
+            .expect("an advance");
+        rig.receive(
+            ADMIN,
+            &answer(id_of(advance), r#"{"advanced_ms":400}"#, "push"),
+        )
+        .expect("reads");
+        settle(&mut rig, 2 + PACER_PERIOD_US);
+        assert_eq!(
+            rig.meter().answers,
+            before + 1,
+            "read again after the match moved"
+        );
+        assert_eq!(rig.meter().phase, Phase::Push);
+    }
+
+    #[test]
+    fn a_resumed_push_is_paced_with_no_lull() {
+        // A match resumed from a sealed save: the first footer the rig ever reads says PUSH.
+        let mut rig = Rig::new();
+        rig.opened(ADMIN);
+        rig.opened(SEAT);
+        let sent = rig.poll(0);
+        let status = sent.first().expect("admin first");
+        let view = sent.get(1).expect("seat second");
+        let got = rig
+            .receive(ADMIN, &answer(id_of(status), "{}", "push"))
+            .expect("reads");
+        assert!(got.phase_changed);
+        assert_eq!(rig.phase(), Phase::Push);
+        rig.receive(
+            SEAT,
+            &answer(
+                id_of(view),
+                r#"{"next_cursor":"c1","complete":true}"#,
+                "push",
+            ),
+        )
+        .expect("reads");
+        assert!(rig.set_speed(4));
+        settle(&mut rig, 1);
+        let sent = rig.poll(1 + PACER_PERIOD_US);
+        let admin: Vec<String> = sent
+            .iter()
+            .filter(|frame| frame.link == ADMIN)
+            .map(method_of)
+            .collect();
+        assert_eq!(
+            admin,
+            vec!["advance_push".to_owned()],
+            "paced from its first answer"
+        );
+        assert!(
+            !sent
+                .iter()
+                .any(|frame| method_of(frame) == "end_lull"
+                    || method_of(frame) == "report_host_clock"),
+            "no Lull is waited for or ended: {sent:?}"
+        );
+        assert!(
+            !rig.editor().has_pending_jobs(),
+            "the editor waits for the next Lull and asks nothing in the Push"
         );
     }
 }
