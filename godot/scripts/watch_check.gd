@@ -371,6 +371,12 @@ func _template(id: String) -> bool:
 	var first: Control = editor.wizard_page_controls()[0]
 	var pointer := String(first.get_meta("pointer"))
 	var shown: String = (first.get_meta("field") as LineEdit).text
+	# The pages the gateway marked as the operator's, other than the one re-sent: they are
+	# not named in the request, so they keep their suggestion - mark and value - through it.
+	var kept := {}
+	for page in pages:
+		if String(page.get("pointer", "")) != pointer and bool(page.get("suggested", false)):
+			kept[String(page.get("pointer", ""))] = String(page.get("value", ""))
 	(first.get_meta("send") as Button).pressed.emit()
 	if not await _editor_until(func(s: Dictionary) -> bool: return s.get("wizard", {}).get("current", false) and not bool(_page_of(s.get("wizard", {}), pointer).get("suggested", true)), "%s: the explicit value never came back" % id):
 		return false
@@ -380,6 +386,12 @@ func _template(id: String) -> bool:
 		_failures.append("%s: the re-sent page still carries the operator's mark" % id)
 	if (resent.get_meta("field") as LineEdit).text != shown:
 		_failures.append("%s: the re-sent page shows `%s`, not what was sent, `%s`" % [id, (resent.get_meta("field") as LineEdit).text, shown])
+	var after: Dictionary = _editor()["wizard"]
+	for kept_pointer in kept:
+		var page := _page_of(after, String(kept_pointer))
+		if not bool(page.get("suggested", false)) or String(page.get("value", "")) != String(kept[kept_pointer]):
+			_failures.append("%s: an untouched page lost its suggestion when another was re-sent: %s" % [id, kept_pointer])
+	print("[watch-check] %s: %d untouched suggested page(s) kept their suggestion through the re-send" % [id, kept.size()])
 
 	# Use, through its own button: the gateway's playbook, byte for byte, as one edit.
 	var text := String(_editor()["wizard"].get("playbook_jsonc", ""))

@@ -40,7 +40,9 @@
 # PLACEHOLDER: `user://`'s remembered match is a per-machine convenience, not state: the
 # save itself is the gateway's, in the private match cache. OWNER, with the save browser,
 # S6. PLACEHOLDER: forgetting an ended match (item 113 (11)), and the New/Resume layout,
-# OWNER, S6.
+# OWNER, S6. That layout includes what a refused Resume leaves: the refusal is shown, the
+# chooser stays hidden and the line stays remembered, so the player restarts the client to
+# pick New match, and the next launch offers the same Resume again. Nothing is retried.
 #
 # PLACEHOLDER: the whole layout - a strip of buttons and a text column over the vista -
 # is the skeleton's; the real lobby is S6's.
@@ -70,6 +72,8 @@ var _resuming := false
 ## The six-field line written to the host, remembered once it announces.
 var _line := ""
 var _chooser: HBoxContainer
+## Whether the lobby forgot the match because it ended; the status line then says so.
+var _forgotten := false
 
 
 func _ready() -> void:
@@ -128,6 +132,7 @@ func _remember() -> void:
 func _forget() -> void:
 	if FileAccess.file_exists(REMEMBERED):
 		DirAccess.remove_absolute(ProjectSettings.globalize_path(REMEMBERED))
+	_forgotten = true
 
 
 func _process(_delta: float) -> void:
@@ -146,6 +151,8 @@ func _process(_delta: float) -> void:
 		parts.append(Strings.text("lobby_skipping"))
 	if state.get("all_ready", false):
 		parts.append(Strings.text("lobby_all_ready"))
+	if _forgotten:
+		parts.append(Strings.text("lobby_forgotten"))
 	_status.text = "  ".join(parts)
 
 
