@@ -566,7 +566,9 @@ fn shed_order(world: &World, seat: SeatId, order: &mut Vec<u32>) {
 /// The margin is spec section 5's: a beacon revives "only once supply exceeds
 /// draw by a margin", and the margin is measured **with that beacon's own load
 /// added back**, so a beacon cannot revive into a deficit it immediately causes
-/// and then be shed again next tick. That is the whole anti-flicker rule.
+/// and then be shed again next tick. That is the whole anti-flicker rule, and
+/// it holds only because [`revive_cost`] measures that load with the same
+/// [`supply_of`] and [`draw_of`] the next settle sheds by.
 fn revive(world: &mut World, seat: SeatId, rules: PowerRules, order: &mut Vec<u32>) {
     let mut guard: u32 = 0;
     let limit = world.beacons().len();
@@ -648,77 +650,46 @@ fn revive_order(world: &World, seat: SeatId, order: &mut Vec<u32>) {
     });
 }
 
-/// What reviving `beacon` would add to the seat's net draw: its homed units and
-/// its homed structures, less the Generators it would bring back, and less the
-/// core's deep-bore surplus when `beacon` is the seat's core.
+/// What reviving `beacon` would add to the seat's net draw, **measured rather
+/// than modelled**: the seat's headroom now, less its headroom with `beacon`
+/// awake.
+///
+/// The beacon is woken, [`supply_of`] and [`draw_of`] are read, and its flag
+/// is put back before anything else runs, so every rule those two apply is
+/// weighed once and in one place: the units and structures homed to it, the
+/// Generators it would bring back **only where their vent is not already
+/// tapped** (a Generator on a vent an earlier live one taps adds nothing, and
+/// waking the earlier one moves the tap rather than adding one), and the
+/// core's deep-bore surplus when `beacon` is the seat's core. A cost summed by
+/// hand from the homed rows credited a Generator on a tapped vent with output
+/// it would not add, so a beacon revived into a deficit and was shed again at
+/// the next settle, every tick.
 ///
 /// The beacon's own base is not in it: its key-core nets it out, as in
-/// [`draw_of`]. The core's surplus is credited back for the same reason the
-/// Generators are: [`supply_of`] counts it only while the core is live, so
-/// reviving the core brings it back. Without that credit a shed core could
-/// never revive, since a total blackout's headroom is 0 and the margin is
-/// positive, and spec section 5 loses the surplus for good only when the core
-/// is **destroyed** (decisions log item 113 (5)).
-fn revive_cost(world: &World, seat: SeatId, rules: PowerRules, beacon: BeaconId) -> i32 {
-    let mut cost = unit_draw_of_dormant(world, seat, rules, beacon);
-    if core_of(world, seat) == Some(beacon) {
-        cost = cost.saturating_sub(rules.core_surplus);
-    }
-    let structures = world.structures();
-    let count = usize::try_from(structures.len()).unwrap_or(0);
-    let mut row: usize = 0;
-    while row < count {
-        let mine = structures.seats().get(row).copied() == Some(seat.raw());
-        let standing = structures
-            .hit_points()
-            .get(row)
-            .is_some_and(|hp| hp.is_alive())
-            && structures.building().get(row).copied() == Some(false);
-        let homed = structures.homes().get(row).copied() == Some(beacon.raw());
-        if mine && standing && homed {
-            let kind = structures
-                .kinds()
-                .get(row)
-                .copied()
-                .and_then(StructureKind::from_id);
-            match kind {
-                Some(StructureKind::Generator) => {
-                    let grade = structures
-                        .positions()
-                        .get(row)
-                        .copied()
-                        .and_then(|at| vent_under(world, at));
-                    if let Some(grade) = grade {
-                        cost = cost.saturating_sub(rules.generator_output(grade));
-                    }
-                }
-                Some(kind) => cost = cost.saturating_add(rules.structure_draw(kind)),
-                None => {}
-            }
-        }
-        row = row.saturating_add(1);
-    }
-    cost
-}
-
-/// What the units homed to a *dormant* `beacon` would draw once it woke.
+/// [`draw_of`]. The core's surplus counts for the same reason the Generators
+/// do: [`supply_of`] counts it only while the core is live, so reviving the
+/// core brings it back. Without that a shed core could never revive, since a
+/// total blackout's headroom is 0 and the margin is positive, and spec section
+/// 5 loses the surplus for good only when the core is **destroyed** (decisions
+/// log item 113 (5)).
 ///
-/// Separate from [`unit_draw_of`] because that one counts only units whose home
-/// is already live, which is the right answer for the live draw and the wrong
-/// one for the question "what would this cost".
-fn unit_draw_of_dormant(world: &World, seat: SeatId, rules: PowerRules, beacon: BeaconId) -> i32 {
-    let mut total: i32 = 0;
-    let units = world.units();
-    let count = usize::try_from(units.len()).unwrap_or(0);
-    let mut row: usize = 0;
-    while row < count {
-        let mine = units.seats().get(row).copied() == Some(seat.raw());
-        let alive = units.hit_points().get(row).is_some_and(|hp| hp.is_alive());
-        let homed = units.homes().get(row).copied() == Some(beacon.raw());
-        if mine && alive && homed {
-            total = total.saturating_add(rules.per_unit);
-        }
-        row = row.saturating_add(1);
+/// Nothing observes the world between the flip and the flip back: no event is
+/// emitted, no hash is taken and no other seat's grid is read, so the
+/// measurement leaves the world exactly as it found it.
+fn revive_cost(world: &mut World, seat: SeatId, rules: PowerRules, beacon: BeaconId) -> i32 {
+    let now = supply_of(world, seat, rules).saturating_sub(draw_of(world, seat, rules));
+    let Ok(row) = usize::try_from(beacon.raw()) else {
+        return 0;
+    };
+    let Some(was) = world.beacons().dormant().get(row).copied() else {
+        return 0;
+    };
+    if let Some(slot) = world.beacons_mut().dormant_mut().get_mut(row) {
+        *slot = false;
     }
-    total
+    let awake = supply_of(world, seat, rules).saturating_sub(draw_of(world, seat, rules));
+    if let Some(slot) = world.beacons_mut().dormant_mut().get_mut(row) {
+        *slot = was;
+    }
+    now.saturating_sub(awake)
 }

@@ -24,7 +24,7 @@ use pharmakos_sim::tables::{
     BeaconId, PRIORITY_HIGH, PRIORITY_LOW, PRIORITY_NORMAL, SeatId, StructureId, StructureKind,
     TargetKind, UnitKind,
 };
-use pharmakos_sim::voxels::Material;
+use pharmakos_sim::voxels::{Material, Richness};
 use pharmakos_sim::world::{DamageOrder, DamageTarget, World, WorldConfig};
 use pharmakos_sim::{MatchSettings, RulesTable, default_rules_path};
 use std::fmt::Write as _;
@@ -473,8 +473,9 @@ fn a_dormant_beacon_powers_down_everything_homed_to_it() {
     // walk the commander to a beacon and interface on site, so a commander
     // that went dark with the grid would make a brownout a lockout. (What a
     // priority raise then does is narrower than fixing it: the beacon sheds
-    // later and revives sooner, and nothing relights; whether a raise should
-    // re-apply the brownout order is a PLACEHOLDER there, owner at S1.)
+    // later and revives sooner, and the raise itself relights nothing;
+    // whether a raise should re-apply the brownout order is a PLACEHOLDER
+    // there, owner at S1.)
     let commander = world.commander_of(seat);
     let mut parked = 0;
     for unit in 0..world.units().len() {
@@ -980,6 +981,111 @@ fn only_one_generator_per_vent_adds_to_the_supply() {
 }
 
 #[test]
+fn a_generator_on_a_tapped_vent_does_not_buy_its_beacon_a_revival() {
+    // The anti-flicker rule weighs a revival by what the beacon would add to
+    // the grid, and a Generator on a vent an earlier live one already taps
+    // adds nothing (the test above). So a beacon whose own Generator stands
+    // on a tapped vent is weighed on its load alone: once shed for that load,
+    // it stays dark, rather than reviving into the same deficit and being shed
+    // again at the next settle, every tick.
+    //
+    // The arrangement: a Generator homed to the core taps the zone's vent
+    // (the lower structure id, so its tap is the one that counts); an
+    // expansion stands a second Generator on the same vent and fields
+    // Mortars, the fewest whose draw outruns the grid.
+    let rules = rules();
+    let grid = Grid::of(&rules);
+    let mut runner = Runner::new(world(&[20_000]));
+    let seat = SeatId::new(0);
+    let core = core_of(runner.world(), seat);
+    let at = runner
+        .world()
+        .beacons()
+        .positions()
+        .get(usize::try_from(core.raw()).unwrap_or(0))
+        .copied()
+        .unwrap_or_default();
+    let (first, second) = vent_stands(runner.world(), at);
+    let output = vent_output(runner.world(), &rules, first, second);
+    assert!(output > grid.margin, "a vent worth tapping: {output} kW");
+
+    let tap = runner
+        .world_mut()
+        .raise_structure(seat, core, StructureKind::Generator, first)
+        .unwrap_or_else(|| panic!("room for the core's Generator"));
+    let expansion = runner
+        .world_mut()
+        .place_beacon_directly(seat, offset(at, 6), MandateKind::None, PRIORITY_NORMAL)
+        .unwrap_or_else(|| panic!("room for a beacon"));
+    let stacked = runner
+        .world_mut()
+        .raise_structure(seat, expansion, StructureKind::Generator, second)
+        .unwrap_or_else(|| panic!("room for the stacked Generator"));
+    assert!(
+        tap.raw() < stacked.raw(),
+        "the core's Generator is the earlier tap"
+    );
+    // The fewest Mortars whose draw outruns the core's surplus and the one
+    // tap over the starting force's load.
+    let spare = grid
+        .surplus
+        .saturating_add(output)
+        .saturating_sub(grid.starting_load());
+    assert!(grid.mortar > 0, "a Mortar draws: {grid:?}");
+    let mut mortars: i32 = 0;
+    let mut offset_by: i16 = 8;
+    while mortars.saturating_mul(grid.mortar) <= spare {
+        runner
+            .world_mut()
+            .raise_structure(
+                seat,
+                expansion,
+                StructureKind::Mortar,
+                offset(at, offset_by),
+            )
+            .unwrap_or_else(|| panic!("room for a Mortar"));
+        mortars = mortars.saturating_add(1);
+        offset_by = offset_by.saturating_add(1);
+    }
+    // The case the rule has to see: crediting the stacked Generator's output
+    // would have met the margin, so a cost summed from the homed rows revived
+    // the expansion straight back into its deficit.
+    assert!(
+        spare.saturating_sub(mortars.saturating_mul(grid.mortar).saturating_sub(output))
+            >= grid.margin,
+        "the fixture is the case a hand-summed cost gets wrong: {grid:?}, \
+         {mortars} Mortars, {output} kW"
+    );
+
+    let mut feed: Vec<Event> = Vec::new();
+    assert!(runner.begin_push(), "the Push begins");
+    for tick in 0..20 {
+        runner.step();
+        feed.extend_from_slice(runner.events());
+        runner.clear_events();
+        let (supply, draw) = supply_and_draw(runner.world(), seat);
+        assert!(
+            supply.raw() >= draw.raw(),
+            "tick {tick}: the settle ends with no deficit: {supply:?} < {draw:?}"
+        );
+    }
+    assert_eq!(
+        ticks_of(&feed, EventKind::BeaconBrownedOut, expansion).len(),
+        1,
+        "the overloaded expansion is shed once"
+    );
+    assert!(
+        ticks_of(&feed, EventKind::BeaconRevived, expansion).is_empty(),
+        "and its stacked Generator does not buy it a revival"
+    );
+    assert!(dormant(runner.world(), expansion), "it stays dark");
+    assert!(
+        !dormant(runner.world(), core),
+        "and the core, whose tap is the one that counts, stays lit"
+    );
+}
+
+#[test]
 fn one_anchor_is_one_building() {
     // "Paid means yours" charges at commit (item 23), so a second Build target
     // on ground a target already claims would buy the same building twice and
@@ -1097,6 +1203,39 @@ fn vent_stands(world: &World, at: [Fx; 3]) -> ([Fx; 3], [Fx; 3]) {
         }
     }
     (stand(here), stand(here))
+}
+
+/// What one Generator on the vent under `first` supplies, read from the
+/// table by the vent's grade, after checking that `second` stands on the same
+/// grade.
+fn vent_output(world: &World, rules: &RulesTable, first: [Fx; 3], second: [Fx; 3]) -> i32 {
+    let below = |stand: [Fx; 3]| {
+        let x = stand.first().map_or(0, |value| value.floor_voxels());
+        let y = stand.get(1).map_or(0, |value| value.floor_voxels());
+        let z = stand.get(2).map_or(0, |value| value.floor_voxels());
+        world
+            .voxels()
+            .get([x, y, z.saturating_sub(1)])
+            .and_then(Material::vent_richness)
+            .unwrap_or_else(|| panic!("a vent under {stand:?}"))
+    };
+    assert_eq!(
+        below(first),
+        below(second),
+        "two stands on one vent share its grade"
+    );
+    let by_grade = rules
+        .message()
+        .power
+        .as_ref()
+        .and_then(|block| block.generator_output_kw)
+        .unwrap_or_else(|| panic!("a generator output row"));
+    i32::try_from(match below(first) {
+        Richness::Lean => by_grade.lean,
+        Richness::Standard => by_grade.standard,
+        Richness::Rich => by_grade.rich,
+    })
+    .unwrap_or(i32::MAX)
 }
 
 /// A place `voxels` east of `at`, on the ground.
