@@ -537,8 +537,10 @@ fn the_editor_scripts_read_no_clock_of_their_own() {
 /// nothing with it" joins AGENTS.md section 3 rule 4's list).
 ///
 /// In `host_link.gd`, the only line that names a clock is the helper's one `return`, which
-/// formats the seconds into the id; and the only scripts that ask for a match id go
-/// through the helper, so no second id format and no second clock read can appear.
+/// formats the seconds into the id and carries no arithmetic operator (the format string
+/// and its `%` are stripped as prose, so `-3600` or `+ 1` on the clock still trips it); and
+/// the scripts that name a match go through the helper. The next test holds every other
+/// script to reading no clock at all, so no second clock read can appear anywhere.
 #[test]
 fn the_match_id_helper_is_the_one_clock_read_and_computes_nothing() {
     let path = godot_root().join("scripts").join("host_link.gd");
@@ -576,11 +578,7 @@ fn the_match_id_helper_is_the_one_clock_read_and_computes_nothing() {
     );
     let code = code_of(line);
     assert!(
-        code.trim_start().starts_with("return ")
-            && !code.contains('+')
-            && !code.contains('*')
-            && !code.contains('/')
-            && !code.contains(" - "),
+        code.trim_start().starts_with("return ") && !has_arithmetic(&code),
         "the helper computes with the clock instead of only naming the match with it: {line}"
     );
     for name in ["lobby.gd", "watch_check.gd"] {
@@ -594,4 +592,63 @@ fn the_match_id_helper_is_the_one_clock_read_and_computes_nothing() {
             "{name} builds a match id of its own"
         );
     }
+}
+
+/// The readers of a clock, as they appear in GDScript once lower-cased: `Time.*`, the
+/// engine's tick counters, a `Timer` node, a scene-tree timer and a tween.
+const CLOCK_READERS: &[&str] = &[
+    "time.",
+    "get_ticks",
+    "unix_time",
+    "create_timer",
+    "timer.new",
+    "create_tween",
+];
+
+/// **No script under `godot/` reads a clock, but the named two** (AGENTS.md section 3 rule
+/// 4, and decisions-log item 113 (12)): the client's wall clock is the pacer's
+/// (`src/pacer.rs`), and a script's only clock read is `host_link.gd`'s match-id helper,
+/// which the test above holds to its one line. The other exception is `watch_check.gd`'s
+/// `create_timer` waits: the check is a test driver, and a wait is how it gives a real host
+/// time; it reads no other clock. Every other `.gd` under `godot/` — the lobby that names
+/// and remembers matches included — reads none. (The word `timer` alone is not a reader:
+/// the lobby shows the pacer's countdown under that dictionary key.)
+#[test]
+fn no_script_reads_a_clock_but_the_id_helper_and_the_checks_waits() {
+    let mut scripts: Vec<PathBuf> = Vec::new();
+    collect(&godot_root(), "gd", &mut scripts);
+    scripts.sort();
+    assert!(
+        scripts.len() >= 10,
+        "the scan found the scripts: {scripts:?}"
+    );
+    let mut found: Vec<String> = Vec::new();
+    for path in &scripts {
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default();
+        if name == "host_link.gd" {
+            continue; // the_match_id_helper_is_the_one_clock_read_and_computes_nothing
+        }
+        let text =
+            fs::read_to_string(path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+        for (index, line) in text.lines().enumerate() {
+            let code = code_of(line).to_ascii_lowercase();
+            let readers: Vec<&&str> = CLOCK_READERS
+                .iter()
+                .filter(|reader| code.contains(**reader))
+                .collect();
+            let allowed = name == "watch_check.gd" && readers.iter().all(|r| **r == "create_timer");
+            if !readers.is_empty() && !allowed {
+                found.push(format!("{}:{}: {}", path.display(), index + 1, line.trim()));
+            }
+        }
+    }
+    assert!(
+        found.is_empty(),
+        "a script reads a clock; the pacer (src/pacer.rs) is the client's clock, and \
+         host_link.gd's match_id is the one read that names a match:\n{}",
+        found.join("\n")
+    );
 }

@@ -765,6 +765,9 @@ impl Rig {
                 self.timing.pacer.stop();
                 // A footer that already shows a countdown is one this client reported
                 // before a reconnect; otherwise the Lull is as long as the rules say.
+                // PLACEHOLDER: a resumed Lull restarts its timer in full, because the
+                // timer is the client's (w6 notes A2, decisions-log item 99), so quitting
+                // in a Lull buys planning time. OWNER, at hardening.
                 let shown = u64::try_from(footer.phase_remaining_ms).unwrap_or(0);
                 let total = if shown > 0 { shown } else { self.lull_length };
                 self.timing
