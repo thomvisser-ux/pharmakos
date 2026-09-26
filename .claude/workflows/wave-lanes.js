@@ -15,6 +15,10 @@
 //     repo: 'C:/Users/PC/pharmakos',          // default shown
 //     worktree_root: 'C:/Users/PC',           // default shown; worktrees are <root>/pharmakos-<id>
 //     build_root: 'D:/build',                 // default shown; CARGO_TARGET_DIR is <root>/<id>
+//     docs_ref: 'origin/docs/wave7-open',     // optional: the docs PR's branch, when the run
+//                                             // launches before that PR merges (item 115); keep
+//                                             // it unchanged on a resume, even after that PR has
+//                                             // merged, or every finished agent re-runs
 //     lanes: [{
 //       id: 't7',                             // short id: worktree, target dir, PR-body file
 //       task: 'T7',                           // the `### T7 —` section of skeleton-plan.md §3
@@ -49,6 +53,10 @@ const BUILD_ROOT = (args && args.build_root) || 'D:/build'
 const SCRATCH = args && args.scratch
 const WAVE = (args && args.wave) || 'wave'
 const LANES = (args && args.lanes) || []
+// Design docs ahead of main (decisions-log item 115): a run launches once its docs PR and lane
+// briefs pass review, while that docs PR is still in CI. docs_ref names its branch, and every
+// agent reads the design files it adds or changes from there rather than from its worktree.
+const DOCS_REF = args && args.docs_ref
 if (!SCRATCH) throw new Error('args.scratch is required (the session scratchpad path)')
 if (!LANES.length) throw new Error('args.lanes is empty')
 for (const l of LANES) {
@@ -77,7 +85,10 @@ ENVIRONMENT (read first)
   Never edit files under ${REPO} itself. The spike code is readable at ${WT_ROOT}/pharmakos-spikes/spikes/ (tag spike-end): a reference, never copied, never edited.
 - Target directory: ${target(lane)} and NO other. The builder warms it; reviewers and the fix pass reuse it (a cold workspace build costs ten minutes and hundreds of lines of context; a warm full suite costs two minutes). A probe crate you write under ${laneScratch(lane, who)} may use ${target(lane)}-probe.
 - Scratch files (scripts, notes, probes) go ONLY under ${laneScratch(lane, who)}/ (create it); the other agents share the parent folders, so never write loose files there. The PR body and CI log paths named below are the exceptions.
-- Other lanes build and run CI on this machine at the same time. Never stop, kill or signal a process you did not start yourself: no taskkill /IM, Stop-Process -Name, pkill or killall by image name. To cancel your own run, stop the process you launched by its PID. In wave 6 run 2 a lane that killed every cargo process probably cut another lane's CI short (decisions-log item 113).
+${DOCS_REF ? `- The design docs for this run are ahead of main: the main session's docs PR is still in CI on ${DOCS_REF} (decisions-log item 115). Copy every file it adds or changes under AGENTS.md, CLAUDE.md and docs/design/, keeping its path:
+    git -C ${REPO} fetch -q --prune origin; d=${laneScratch(lane, who)}/docs; mkdir -p $d; for f in $(git -C ${REPO} diff --no-renames --name-only --diff-filter=AM origin/main...${DOCS_REF} -- AGENTS.md CLAUDE.md docs/design); do mkdir -p $d/$(dirname $f) && git -C ${REPO} show ${DOCS_REF}:$f > $d/$f; done; ls -R $d
+  then read each copy in place of your worktree's file at the same path; where they differ, the copy wins. If ${DOCS_REF} no longer exists, the docs PR has merged: read those files from origin/main instead (git -C ${REPO} show origin/main:<path>). Never commit AGENTS.md, CLAUDE.md or anything under docs/; they reach your branch when the main session's merge train rebases it.
+` : ''}- Other lanes build and run CI on this machine at the same time. Never stop, kill or signal a process you did not start yourself: no taskkill /IM, Stop-Process -Name, pkill or killall by image name. To cancel your own run, stop the process you launched by its PID. In wave 6 run 2 a lane that killed every cargo process probably cut another lane's CI short (decisions-log item 113).
 - CI etiquette: "cargo xtask ci --quick" is the inner loop. Run the FULL suite by writing it to a file and reading only the summary, with the exit code checked separately, because a pipe hides it:
     cargo xtask ci > ${ciLog(lane, who)} 2>&1; echo "exit=$?"; grep -A 20 '== summary' ${ciLog(lane, who)}
   On a red step, grep that step's section of the log; do not paste the whole log into your context.
