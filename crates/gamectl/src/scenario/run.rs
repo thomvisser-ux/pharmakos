@@ -57,6 +57,29 @@
 //! but it is still a contract path, so the **owner** decides, at the stage that
 //! first needs it. Today neither is variable and a file that could set them
 //! would be a knob nothing turns.
+//!
+//! # A `builtin` seat plays Easy (T18b)
+//!
+//! Decisions-log item 113 (8): a `builtin` seat is seated exactly as
+//! `gamectl host` seats a seat nobody at the machine plays — the built-in
+//! operator's factory, [`EasyOperators`], built from the **text** of the rules
+//! table the scenario names (decision C17), handed to
+//! [`serve::InProcessSeats::open`] with the scenario's `builtin` seats and no
+//! human seat, so no seat is advised and a `safe` seat still gets the
+//! gateway's fallback. It then plans in every Lull through its seat's own
+//! in-process token — the same door, audit and fog as a socket — and submits
+//! and says ready like any client. The host opens the repository's template
+//! library ([`crate::host::LIBRARY_PATH`]) only when the scenario has a
+//! `builtin` seat, because Easy instantiates its templates there; a scenario
+//! with none opens exactly as it did before, so its chain cannot move.
+//!
+//! A chain from a scenario with a `builtin` seat is therefore a claim about
+//! the operator (`crates/operator`) and the templates (`library/`) as well as
+//! about the map seed, the playbooks and the rules hash, and moves when
+//! either does (`tests/golden/scenarios/README.md`).
+//!
+//! PLACEHOLDER: a `builtin` seat plays Easy, and the `operator` scenario key
+//! that would name another difficulty waits for one. **Owner**, at **S5**.
 
 use std::fmt::Write as _;
 use std::path::Path;
@@ -64,6 +87,7 @@ use std::path::Path;
 use pharmakos_gateway::fog::{Audience, Blind, FogPolicy};
 use pharmakos_gateway::host::Host;
 use pharmakos_gateway::scopes::{Scope, ScopeSet};
+use pharmakos_gateway::serve::{self, InProcessSeats};
 use pharmakos_gateway::surface::Surface;
 use pharmakos_gateway::token::{Subject, Token};
 use pharmakos_proto::json::Json;
@@ -74,6 +98,7 @@ use pharmakos_sim::tables::SeatId;
 use pharmakos_sim::world::WorldConfig;
 
 use crate::exit::{Exit, Failure};
+use crate::host::EasyOperators;
 use crate::scenario::{Assertion, Scenario, SeatKind, ticks_of};
 use crate::strings;
 
@@ -171,13 +196,17 @@ pub fn run(root: &Path, source: &Path) -> Result<String, Failure> {
 /// # Errors
 ///
 /// [`Exit::Input`] for an input the scenario names and this build cannot use
-/// (a `builtin` seat, a playbook the verifier refuses), and [`Exit::Internal`]
-/// for anything the gateway refuses that no scenario could have caused.
+/// (a playbook the verifier refuses and cannot compile, a rules table Easy
+/// cannot score with for a `builtin` seat), and [`Exit::Internal`] for
+/// anything the gateway refuses that no scenario could have caused.
 pub fn play(root: &Path, scenario: &Scenario) -> Result<Played, Failure> {
     let rules = load_rules(root, scenario)?;
     let rules_hash = rules.rules_hash();
-    let mut surface = open(scenario, rules)?;
+    let mut surface = open(root, scenario, rules)?;
     let tokens = mint(&mut surface, scenario)?;
+    // After the runner's own tokens and before the first `begin_push`: Easy,
+    // for the `builtin` seats alone (see the module docs).
+    let mut builtin = seat_builtin(root, scenario, &mut surface)?;
 
     let mut played = Played {
         // Reserved, and capped. A line is twenty-four bytes, so the reservation
@@ -205,6 +234,16 @@ pub fn play(root: &Path, scenario: &Scenario) -> Result<Played, Failure> {
         // every line of it belongs to.
         let standing = surface_tick(&surface)?;
         drain(&surface, &mut seen, standing, &mut played.events);
+
+        // The `builtin` seats plan first, then the playbook seats submit: the
+        // order `gamectl host` has, whose surface thread plans its in-process
+        // seats as a Lull opens and before any client's call is served. Neither
+        // can see the other's work -- each seat's submission is its own, and
+        // nothing is sealed until `begin_push` -- so the order is a convention
+        // kept for parity rather than a dependency. No `builtin` seat, no call.
+        if let Some(seats) = builtin.as_mut() {
+            seats.plan(&mut surface);
+        }
 
         for (seat, token) in scenario.seats.iter().zip(&tokens) {
             if let SeatKind::Playbook(relative) = &seat.kind {
@@ -274,20 +313,70 @@ fn load_rules(root: &Path, scenario: &Scenario) -> Result<RulesTable, Failure> {
     })
 }
 
+/// The seats the scenario gives the built-in operator, ascending.
+fn builtin_seats(scenario: &Scenario) -> Vec<SeatId> {
+    scenario
+        .seats
+        .iter()
+        .filter(|seat| seat.kind == SeatKind::Builtin)
+        .map(|seat| SeatId::new(seat.seat))
+        .collect()
+}
+
+/// Easy for every `builtin` seat, through the gateway's in-process seats and
+/// with no human seat, so nothing is advised; `None` when the scenario has no
+/// `builtin` seat.
+fn seat_builtin(
+    root: &Path,
+    scenario: &Scenario,
+    surface: &mut Surface,
+) -> Result<Option<InProcessSeats>, Failure> {
+    let seats = builtin_seats(scenario);
+    if seats.is_empty() {
+        return Ok(None);
+    }
+    // The rules table's own text, the one `load_rules` read: the operator
+    // reads its rows from the public rules text (decision C17), as it does
+    // under `gamectl host`.
+    let path = root.join(&scenario.rules);
+    let text = std::fs::read_to_string(&path).map_err(|error| {
+        Failure::input(strings::unreadable(
+            "rules table",
+            &crate::display(&path),
+            &error.to_string(),
+        ))
+    })?;
+    let mut factory = EasyOperators::new(&text).map_err(|error| {
+        let index = scenario
+            .seats
+            .iter()
+            .position(|seat| seat.kind == SeatKind::Builtin)
+            .unwrap_or_default();
+        Failure::input(strings::scenario_builtin_unseated(
+            &format!("/seats/{index}/kind"),
+            &scenario.rules,
+            &error.to_string(),
+        ))
+    })?;
+    let seated =
+        serve::InProcessSeats::open(surface, &seats, None, &mut factory).map_err(internal)?;
+    Ok(Some(seated))
+}
+
 /// A hosted match in its opening Lull, at the gateway's own rate limits.
-fn open(scenario: &Scenario, rules: RulesTable) -> Result<Surface, Failure> {
+fn open(root: &Path, scenario: &Scenario, rules: RulesTable) -> Result<Surface, Failure> {
     let seats: Vec<SeatId> = scenario
         .seats
         .iter()
         .map(|seat| SeatId::new(seat.seat))
         .collect();
-    for (index, seat) in scenario.seats.iter().enumerate() {
-        if seat.kind == SeatKind::Builtin {
-            return Err(Failure::input(strings::scenario_builtin_seat(&format!(
-                "/seats/{index}/kind"
-            ))));
-        }
-    }
+    // The template library only for a scenario with a `builtin` seat, whose
+    // operator instantiates its templates there. A scenario that names its
+    // playbooks as files never instantiates one, and a host handed a folder
+    // it does not read is a path in a message that means nothing -- so such
+    // a scenario opens exactly as it did before T18b.
+    let library =
+        (!builtin_seats(scenario).is_empty()).then(|| root.join(crate::host::LIBRARY_PATH));
     let count = u32::try_from(scenario.seats.len())
         .map_err(|_| Failure::internal("a match of more seats than a u32 can count"))?;
     let host = Host::open(
@@ -305,10 +394,7 @@ fn open(scenario: &Scenario, rules: RulesTable) -> Result<Surface, Failure> {
                 round_limit: DEFAULT_ROUND_LIMIT,
             },
         },
-        // No template library: a scenario names its playbooks as files and
-        // never instantiates one, and a host handed a folder it does not read
-        // is a path in a message that means nothing.
-        None,
+        library,
     )
     .map_err(|error| {
         Failure::input(format!(

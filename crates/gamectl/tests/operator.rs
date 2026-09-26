@@ -19,9 +19,18 @@
 //! through a rules-text change (`power.core_surplus_kw` 10 -> 1, so the grid
 //! is short from the first tick); and every round's snapshot of a hosted
 //! three-round match -- here two of them, one on the committed rules and one
-//! on the power-short text, so the rounds after an expansion browns out are in
-//! it too. On every snapshot, for every seat, the corpus records what Easy
-//! sealed, how many calls it made, and whether its safe playbook qualified.
+//! on the power-short text, whose core is shed at the Push's first settle. On
+//! every snapshot, for every seat, the corpus records what Easy sealed, how
+//! many calls it made, whether its safe playbook qualified, and what that safe
+//! playbook raised unforced (T18b; decisions-log items 113 (4) and 114 (4)).
+//!
+//! # The scenario's Generator
+//!
+//! `scenarios/skeleton/against-easy.scenario.jsonc` asserts that seat 0's
+//! Generator is completed, and the scenario format cannot state a kW figure.
+//! The figure is asserted here, from `get_economy_forecast`, in one short
+//! match that replays the scenario's own setup
+//! ([`the_scenario_generator_raises_supply_by_exactly_the_lean_vent`]).
 //!
 //! # Match ids
 //!
@@ -48,7 +57,9 @@ use pharmakos_gateway::serve::InProcessSeats;
 use pharmakos_gateway::surface::{InProcess, Surface};
 use pharmakos_gateway::token::{Subject, Token};
 use pharmakos_operator::Easy;
-use pharmakos_operator::easy::{EASY_ADVISOR_CALL_BUDGET, EASY_CALL_BUDGET};
+use pharmakos_operator::easy::{
+    EASY_ADVISOR_CALL_BUDGET, EASY_CALL_BUDGET, SAFE_MAX_RAISED, SAFE_REACH_MS,
+};
 use pharmakos_proto::json::Json;
 use pharmakos_sim::rules::RulesTable;
 use pharmakos_sim::tables::SeatId;
@@ -260,8 +271,21 @@ struct Row {
     headroom_kw: i64,
     /// Calls the advisor made.
     advisor_calls: u32,
-    /// The beacons the safe playbook raised, nearest first.
+    /// The beacons the safe playbook raised, nearest first, unforced.
     raised: Vec<String>,
+    /// The seat's own beacons at risk on this snapshot, as `list_beacons`
+    /// answered them, unrewritten: browned out, not the core, not HIGH.
+    at_risk: Vec<String>,
+    /// The seat's core is browned out on this snapshot.
+    core_dark: bool,
+    /// The beacons the advisor estimated a route to (the safe playbook's
+    /// estimates are its only ones that end on a beacon), with whether its
+    /// own estimate put each within `SAFE_REACH_MS`.
+    estimated: Vec<(String, bool)>,
+    /// The advisor's "why" for the Safe Playbook page.
+    why_safe: String,
+    /// The seat's `supply_kw_now` on this snapshot.
+    supply_kw: i64,
     /// The raise path forced through the real verifier (see
     /// [`forced_raise`]): `None` when the seat has no own non-core beacon on
     /// this snapshot, else what was raised and whether it qualified FULL.
@@ -325,6 +349,77 @@ fn own_non_core(surface: &mut Surface, token: &Token, seat: u8) -> Vec<String> {
     out
 }
 
+/// The seat's own beacons at risk -- browned out, not the core, and not HIGH
+/// -- and whether its core is browned out, as `list_beacons` answers them.
+fn own_power(surface: &mut Surface, token: &Token, seat: u8) -> (Vec<String>, bool) {
+    let beacons = result(
+        &call(surface, token, "list_beacons", params("{}")),
+        "list_beacons",
+    );
+    let own = Json::String(format!("seat.{seat}"));
+    let rows = match beacons.get("beacons") {
+        Some(Json::Array(rows)) => rows.clone(),
+        _ => Vec::new(),
+    };
+    let dark = |row: &Json| row.get("powered") == Some(&Json::Bool(false));
+    let core = |row: &Json| row.get("core") == Some(&Json::Bool(true));
+    let mut at_risk: Vec<String> = rows
+        .iter()
+        .filter(|row| row.get("owner") == Some(&own) && dark(row) && !core(row))
+        .filter(|row| row.get("priority") != Some(&Json::String(String::from("high"))))
+        .filter_map(|row| match row.get("beacon_id") {
+            Some(Json::String(id)) => Some(id.clone()),
+            _ => None,
+        })
+        .collect();
+    at_risk.sort();
+    let core_dark = rows
+        .iter()
+        .any(|row| row.get("owner") == Some(&own) && core(row) && dark(row));
+    (at_risk, core_dark)
+}
+
+/// An Easy advisor for the seat, through its own token with no answer
+/// rewritten, and the beacons it estimated a route to, each with whether its
+/// own estimate put it within `SAFE_REACH_MS`.
+fn advise_unforced(
+    surface: &mut Surface,
+    token: &Token,
+    seat: u8,
+    rules: &str,
+) -> (pharmakos_operator::Advice, Vec<(String, bool)>) {
+    let mut advisor = Easy::new(rules).expect("the rules text");
+    let mut estimated: Vec<(String, bool)> = Vec::new();
+    let advice = {
+        let mut bridged = |method: &str, params: Json| {
+            let target = beacon_target(method, &params);
+            let answer = call(surface, token, method, params);
+            if let (Some(beacon), Some(found)) = (target, answer.get("result")) {
+                let within = found.get("reachable") == Some(&Json::Bool(true))
+                    && number(found, "ms") <= SAFE_REACH_MS;
+                estimated.push((beacon, within));
+            }
+            answer
+        };
+        advisor.advise(seat, &mut bridged)
+    };
+    (advice, estimated)
+}
+
+/// The beacon an `estimate_route` call ends on, if it ends on one.
+fn beacon_target(method: &str, params: &Json) -> Option<String> {
+    if method != "estimate_route" {
+        return None;
+    }
+    let Some(Json::Array(waypoints)) = params.get("waypoints") else {
+        return None;
+    };
+    match waypoints.last()?.get("beacon_anchor")?.get("beacon_id")? {
+        Json::String(id) => Some(id.clone()),
+        _ => None,
+    }
+}
+
 /// Set `key` on an object, replacing it or adding it.
 fn set_member(object: &mut Json, key: &str, value: Json) {
     if let Json::Object(members) = object {
@@ -337,12 +432,13 @@ fn set_member(object: &mut Json, key: &str, value: Json) {
 
 /// The raise path through the **real** verifier. An advisor for the seat
 /// runs against the real `Surface` through the seat's own token, with every
-/// call forwarded untouched except two answers rewritten: its
-/// `get_economy_forecast` says power is short (`headroom_kw_now` -5), and its
-/// `list_beacons` says every own non-core beacon is browned out. Everything
-/// else -- the estimates, `instantiate_template` with the whole route, the
-/// FULL `verify_plan` -- is the gateway's own answer. `None` when the seat has
-/// no own non-core beacon to raise.
+/// call forwarded untouched except one answer rewritten: its `list_beacons`
+/// says every own non-core beacon is browned out. That alone is enough since
+/// T18b, because a dark own beacon is itself "power is short" (decisions-log
+/// item 113 (4)), so the forecast is no longer rewritten. Everything else --
+/// the forecast, the estimates, `instantiate_template` with the whole route,
+/// the FULL `verify_plan` -- is the gateway's own answer. `None` when the seat
+/// has no own non-core beacon to raise.
 fn forced_raise(surface: &mut Surface, token: &Token, seat: u8, rules: &str) -> Option<Forced> {
     let dark = own_non_core(surface, token, seat);
     if dark.is_empty() {
@@ -353,28 +449,23 @@ fn forced_raise(surface: &mut Surface, token: &Token, seat: u8, rules: &str) -> 
     let advice = {
         let mut rewriting = |method: &str, params: Json| {
             let mut answer = call(surface, token, method, params);
+            if method != "list_beacons" {
+                return answer;
+            }
             if let Json::Object(members) = &mut answer {
-                if let Some((_, result)) = members.iter_mut().find(|(key, _)| key == "result") {
-                    match method {
-                        "get_economy_forecast" => {
-                            set_member(result, "headroom_kw_now", Json::Number(String::from("-5")));
-                        }
-                        "list_beacons" => {
-                            if let Json::Object(fields) = result {
-                                if let Some((_, Json::Array(rows))) =
-                                    fields.iter_mut().find(|(key, _)| key == "beacons")
-                                {
-                                    for row in rows.iter_mut() {
-                                        if row.get("owner") == Some(&own)
-                                            && row.get("core") != Some(&Json::Bool(true))
-                                        {
-                                            set_member(row, "powered", Json::Bool(false));
-                                        }
-                                    }
-                                }
+                if let Some((_, Json::Object(fields))) =
+                    members.iter_mut().find(|(key, _)| key == "result")
+                {
+                    if let Some((_, Json::Array(rows))) =
+                        fields.iter_mut().find(|(key, _)| key == "beacons")
+                    {
+                        for row in rows.iter_mut() {
+                            if row.get("owner") == Some(&own)
+                                && row.get("core") != Some(&Json::Bool(true))
+                            {
+                                set_member(row, "powered", Json::Bool(false));
                             }
                         }
-                        _ => {}
                     }
                 }
             }
@@ -441,11 +532,14 @@ fn visit(
             .unwrap_or_default();
 
         let token = in_process_token(surface, seat.raw());
-        let mut advisor = Easy::new(rules).expect("the rules text");
-        let advice = {
-            let mut bridged = |method: &str, params: Json| call(surface, &token, method, params);
-            advisor.advise(seat.raw(), &mut bridged)
-        };
+        let (at_risk, core_dark) = own_power(surface, &token, seat.raw());
+        let (advice, estimated) = advise_unforced(surface, &token, seat.raw(), rules);
+        let why_safe = advice
+            .suggestions
+            .iter()
+            .find(|suggestion| suggestion.template_id == "safe_playbook")
+            .map(|suggestion| suggestion.why.clone())
+            .unwrap_or_default();
         let verified = call(
             surface,
             &token,
@@ -494,6 +588,11 @@ fn visit(
             headroom_kw: number(&forecast, "headroom_kw_now"),
             advisor_calls: advice.calls,
             raised: raised_by(&advice),
+            at_risk,
+            core_dark,
+            estimated,
+            why_safe,
+            supply_kw: number(&forecast, "supply_kw_now"),
             forced,
         });
     }
@@ -672,16 +771,121 @@ fn the_safe_playbook_always_qualifies() {
         "and the committed rules are not"
     );
     // Never more than two raised. Said plainly, since a reader will look for
-    // the raise path here: on a real grid it does not fire. The first Lull
-    // of the power-short match is short (-3 kW) with no non-core beacon to
-    // raise; by the next Lull the brownout order has shed the expansion and
-    // the headroom reads 0, not below it. So "power is short" (headroom
-    // below zero) and "at risk" (a dark non-core beacon), the two
-    // PLACEHOLDER definitions item 111 chose, never hold on the same
-    // snapshot, and the raise path is exercised by the scripted client
-    // (`the_safe_playbook_raises_at_most_two_beacons_nearest_first` in
-    // crates/operator) alone. The definitions are the owner's at S1.
+    // the raise path here: on a real grid it does not fire, and the
+    // conclusion T18 drew stands though its mechanism has changed. Since
+    // T14b (decisions-log items 113 (5) and 114 (4)) a placed beacon adds no
+    // draw to the grid, so the committed rules never run short, and the
+    // power-short match's only dark beacon is its core: shed at the Push's
+    // first settle (1 kW of surplus against the starting force's 4 kW) and
+    // never revived (its revival costs 3 kW against 0 kW of headroom and a
+    // 2 kW margin), after which supply and draw are both 0 and a beacon Easy
+    // places later is pushed awake, adds no draw, meets no deficit and stays
+    // lit. The safe playbook never raises the core, so no corpus row holds a
+    // beacon at risk. `the_safe_playbook_raises_only_what_is_at_risk_unforced`
+    // below proves the gate and its why on this grid; `forced_raise` and the
+    // scripted client (crates/operator/tests/scripted.rs) remain the proof
+    // that a raise is composed. The definitions are the owner's at S1.
     assert!(rows.iter().all(|row| row.raised.len() <= 2), "{rows:#?}");
+}
+
+/// How many corpus rows the safe playbook raises anything on, unforced.
+///
+/// **Zero**, and expected so (decisions-log item 114 (4), which corrects item
+/// 113 (5)'s premise): on T14b's grid no corpus row holds a dark non-core
+/// beacon (see the note in `the_safe_playbook_always_qualifies`). A row that
+/// raises means the grid or the corpus changed; the mechanism is said before
+/// this number is.
+const ROWS_THAT_RAISE: usize = 0;
+
+/// Decisions-log item 113 (4), hosted and unforced, on every corpus row with
+/// no answer rewritten: the advisor's safe playbook raises only the seat's own
+/// dark, non-core, non-HIGH beacons, at most `SAFE_MAX_RAISED`, and at least
+/// one whenever such a beacon is within `SAFE_REACH_MS` by the advisor's own
+/// estimate; and on every power-short row from round 2 on -- the core dark at
+/// 0 kW -- it raises and estimates nothing, and its why says power is short.
+///
+/// This proves the new gate and its why on a real grid, not that a raise
+/// fires: `forced_raise` stays the hosted proof that one is composed.
+#[test]
+fn the_safe_playbook_raises_only_what_is_at_risk_unforced() {
+    let rows = corpus();
+    for row in rows {
+        let what = format!("{} seat {}: {row:#?}", row.snapshot, row.seat);
+        assert!(row.raised.len() <= SAFE_MAX_RAISED, "{what}");
+        assert!(
+            row.raised.iter().all(|id| row.at_risk.contains(id)),
+            "raised only the seat's own dark, non-core, non-HIGH beacons: {what}"
+        );
+        let reachable = row
+            .estimated
+            .iter()
+            .any(|(id, within)| *within && row.at_risk.contains(id));
+        assert!(
+            !reachable || !row.raised.is_empty(),
+            "a beacon at risk was within reach and nothing was raised: {what}"
+        );
+        assert!(
+            row.estimated.iter().all(|(id, _)| row.at_risk.contains(id)),
+            "only a beacon at risk is ever estimated: {what}"
+        );
+        if row.at_risk.is_empty() && !row.core_dark && row.headroom_kw >= 0 {
+            assert!(
+                row.why_safe.contains("Power is not short"),
+                "nothing dark and headroom at zero or more: {what}"
+            );
+        } else {
+            assert!(
+                !row.why_safe.contains("Power is not short"),
+                "an own beacon is dark or the headroom is below zero: {what}"
+            );
+        }
+    }
+    let raising = rows.iter().filter(|row| !row.raised.is_empty()).count();
+    eprintln!(
+        "unforced: {raising} of {} corpus rows raise anything",
+        rows.len()
+    );
+    assert_eq!(
+        raising, ROWS_THAT_RAISE,
+        "the named expectation moved: say which seat, round and beacon, and the mechanism"
+    );
+
+    // The power-short match from round 2 on: a total blackout, the core dark
+    // and the headroom 0. Asserted as the precondition first, so a rules or
+    // grid change fails loudly here rather than quietly passing below.
+    let blackout: Vec<&Row> = rows
+        .iter()
+        .filter(|row| {
+            row.snapshot.starts_with("three-rounds-power-short/")
+                && !row.snapshot.ends_with("round-1")
+        })
+        .collect();
+    assert!(
+        !blackout.is_empty(),
+        "the power-short match has rounds 2 and 3"
+    );
+    for row in blackout {
+        let what = format!("{} seat {}: {row:#?}", row.snapshot, row.seat);
+        assert!(
+            row.core_dark && row.headroom_kw == 0,
+            "a total blackout: {what}"
+        );
+        assert!(row.raised.is_empty() && row.estimated.is_empty(), "{what}");
+        assert!(row.why_safe.contains("Power is short"), "{what}");
+        assert!(!row.why_safe.contains("Power is not short"), "{what}");
+        assert!(
+            row.why_safe.contains("never raises the core") && !row.why_safe.contains(" kW"),
+            "the core, and no kW figure as the shortage: {what}"
+        );
+    }
+    // Whether any corpus seat built a Generator, for the pull request: its
+    // supply above the committed core surplus.
+    let generators: Vec<String> = rows
+        .iter()
+        .filter(|row| !row.snapshot.contains("power-short") && row.supply_kw > 10)
+        .map(|row| format!("{} seat {} ({} kW)", row.snapshot, row.seat, row.supply_kw))
+        .collect();
+    eprintln!("corpus rows whose supply shows a Generator: {generators:?}");
 }
 
 /// The raise path through the **real** verifier ([`forced_raise`]). The
@@ -948,4 +1152,190 @@ fn easy_fits_the_in_process_limits() {
         assert!(EASY_ADVISOR_CALL_BUDGET <= IN_PROCESS_LIMITS.per_tick);
         assert!(EASY_CALL_BUDGET <= IN_PROCESS_LIMITS.per_window);
     }
+}
+
+// ---------------------------------------------------------------------------
+// The scenario's Generator, in kW
+// ---------------------------------------------------------------------------
+
+/// The committed scenario whose seat 0 seals Hold & Build against Easy.
+const AGAINST_EASY: &str = "scenarios/skeleton/against-easy.scenario.jsonc";
+
+/// A match hosted as the scenario's: its seed, its seat count and its one
+/// segment's length, round limit 2, no units, and the template library.
+/// Answers the surface in its opening Lull and the lean vent's output.
+fn open_as_scenario(
+    scenario: &pharmakos_gamectl::scenario::Scenario,
+    rules: &str,
+) -> (Surface, i64) {
+    let seats = u32::try_from(scenario.seats.len()).expect("a seat count");
+    let length = scenario
+        .segments
+        .first()
+        .map(|segment| segment.length_ms)
+        .expect("one segment");
+    let host = Host::open_from(
+        rules,
+        scenario.seed,
+        seats,
+        &Settings {
+            segment_lengths_ms: vec![length],
+            round_limit: 2,
+            units_per_seat: 0,
+        },
+        Some(root().join(LIBRARY_PATH)),
+    )
+    .expect("a match");
+    let table = RulesTable::from_canonical_json(rules).expect("a rules table");
+    let lean = table
+        .message()
+        .power
+        .as_ref()
+        .and_then(|power| power.generator_output_kw.as_ref())
+        .map(|row| i64::from(row.lean))
+        .expect("power.generator_output_kw");
+    let mut surface = Surface::new(
+        &match_id("against-easy-kw"),
+        scenario.seed,
+        table,
+        FogPolicy::fogged(),
+        &seat_ids(seats),
+    )
+    .expect("a surface");
+    surface.attach(host).expect("attached");
+    surface.open_lull().expect("the opening Lull");
+    (surface, lean)
+}
+
+/// The scenario's committed playbook for seat 0, held to Easy's
+/// `instantiate_template{suggested}` answer for seat 0: that answer with the
+/// scenario files' header and one comment block in place of its first two
+/// lines. The fresh answer is written to the target directory either way.
+fn committed_as_suggested(
+    surface: &mut Surface,
+    token: &Token,
+    scenario: &pharmakos_gamectl::scenario::Scenario,
+) -> String {
+    let answer = result(
+        &call(
+            surface,
+            token,
+            "instantiate_template",
+            params(r#"{"template_id":"hold_and_build","suggested":true}"#),
+        ),
+        "instantiate_template{suggested}",
+    );
+    let suggested = match answer.get("playbook_jsonc") {
+        Some(Json::String(text)) => text.clone(),
+        other => panic!("no playbook_jsonc: {other:?}"),
+    };
+    let playbook_path = scenario
+        .seats
+        .iter()
+        .find_map(|seat| match &seat.kind {
+            pharmakos_gamectl::scenario::SeatKind::Playbook(path) if seat.seat == 0 => {
+                Some(path.clone())
+            }
+            _ => None,
+        })
+        .expect("seat 0 seals a playbook file");
+    let committed = std::fs::read_to_string(root().join(&playbook_path)).expect("the playbook");
+    let fresh = target_dir()
+        .join("golden")
+        .join("against-easy.suggested.jsonc");
+    std::fs::create_dir_all(target_dir().join("golden")).expect("the folder");
+    std::fs::write(&fresh, &suggested).expect("the fresh answer");
+    let below = suggested
+        .splitn(3, '\n')
+        .nth(2)
+        .expect("the template's header");
+    let (header, rest) = committed.split_at(committed.len().saturating_sub(below.len()));
+    assert!(
+        rest == below,
+        "{playbook_path} is not Easy's suggestion below its header; the fresh answer is at {}, \
+         and the file is derived from it as its own header says",
+        fresh.display()
+    );
+    assert!(
+        header.starts_with(
+            "// SPDX-FileCopyrightText: 2026 Pharmakos contributors\n\
+             // SPDX-License-Identifier: GPL-3.0-or-later\n"
+        ) && header.lines().all(|line| line.starts_with("//")),
+        "the scenario files' header, then comments only: {header}"
+    );
+    committed
+}
+
+/// Decisions-log item 113 (6): the scenario proves seat 0's Generator is
+/// completed, and this proves what it gives. One short match replays the
+/// scenario's own setup -- its seed, its seats (seat 0 a playbook, the rest
+/// Easy's) and its segment length, read from the file -- with round limit 2,
+/// so a second Lull opens and no second Push is played. Seat 0 submits the
+/// scenario's committed playbook through `submit_plan`; in the next Lull its
+/// `supply_kw_now` has risen by exactly the lean vent's `generator_output_kw`,
+/// read from the rules text, and not by more.
+///
+/// Seat 0 is advised by Easy here as well, which the scenario runner never
+/// does (an advisor writes nothing but advice, and seat 0 submits), so that
+/// the committed playbook is held to what it says it is: Easy's
+/// `instantiate_template{suggested}` answer for seat 0, with the scenario
+/// files' header and one comment block in place of the template's first two
+/// lines.
+#[test]
+fn the_scenario_generator_raises_supply_by_exactly_the_lean_vent() {
+    let scenario = pharmakos_gamectl::scenario::load(&root(), Path::new(AGAINST_EASY))
+        .expect("the committed scenario");
+    let rules = std::fs::read_to_string(root().join(&scenario.rules)).expect("its rules text");
+    let (mut surface, lean) = open_as_scenario(&scenario, &rules);
+    let seats = u32::try_from(scenario.seats.len()).expect("a seat count");
+    let mut factory = EasyOperators::new(&rules).expect("the operator reads the rules text");
+    let mut easy = InProcessSeats::open(&mut surface, &seat_ids(seats), Some(0), &mut factory)
+        .expect("in-process seats");
+    assert_eq!(easy.advised_seats(), [0], "seat 0 is the playbook seat");
+    easy.plan(&mut surface);
+    let token = in_process_token(&mut surface, 0);
+    let committed = committed_as_suggested(&mut surface, &token, &scenario);
+
+    let supply = |surface: &mut Surface| {
+        number(
+            &result(
+                &call(surface, &token, "get_economy_forecast", params("{}")),
+                "get_economy_forecast",
+            ),
+            "supply_kw_now",
+        )
+    };
+    let before = supply(&mut surface);
+    let submitted = result(
+        &call(
+            &mut surface,
+            &token,
+            "submit_plan",
+            Json::Object(vec![(
+                String::from("playbook_jsonc"),
+                Json::String(committed),
+            )]),
+        ),
+        "submit_plan",
+    );
+    assert_eq!(
+        submitted.get("accepted"),
+        Some(&Json::Bool(true)),
+        "{submitted:?}"
+    );
+    assert!(surface.begin_push().expect("the Push opens"));
+    while let Some(report) = surface.step().expect("a tick") {
+        if report.segment_ended {
+            break;
+        }
+    }
+    surface.end_recap().expect("the recap closes");
+    surface.open_lull().expect("round 2's Lull");
+    let after = supply(&mut surface);
+    eprintln!("seat 0's supply: {before} kW in round 1's Lull, {after} kW in round 2's");
+    assert_eq!(
+        after.saturating_sub(before),
+        lean,
+        "the Generator on the lean vent adds exactly its output, and nothing else moved supply"
+    );
 }

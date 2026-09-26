@@ -1,0 +1,101 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// against-easy.playbook.jsonc: seat 0's orders in against-easy.scenario.jsonc.
+//
+// EVERY BYTE BELOW THIS BLOCK IS instantiate_template'S ANSWER for
+// library/hold_and_build.jsonc with the built-in operator's suggestion
+// applied -- {"template_id": "hold_and_build", "suggested": true} -- asked by
+// seat 0 in the opening Lull of the scenario's own match (seed
+// 0x00000000ca5caded, two seats, one 80 000 ms segment), with seat 0 advised
+// by Easy and seat 1 played by it. The only changes are these two header
+// lines, which replace the template's own two (its permissive SPDX header) so
+// that REUSE records one licence for a scenario file, and this comment block.
+//
+// The values are Easy's for seat 0, whose core b_00 stands at (358, 24, 36)
+// on this map and whose starting lean vent is centred on (324, 16, 35):
+//
+//   the walk    /declarative/route/0/move/to          the site below;
+//   the site    /declarative/route/1/place_beacon/at  (337, 20, 36), at the
+//               edge of the core's sphere on the line to the vent, and the
+//               vent inside the new beacon's sphere;
+//   the anchor  .../build/targets/0/anchor/voxel      (324, 16, 35), the vent;
+//   the hold    /declarative/route/2/hold/ms          11 200 ms, what is left of
+//               Easy's 70 % share of the segment after the route.
+//
+// crates/gamectl/tests/operator.rs's
+// the_scenario_generator_raises_supply_by_exactly_the_lean_vent holds this
+// file to that answer, so a change to the template or to Easy's suggestion
+// fails there until this file is derived again the same way.
+//
+// hold_and_build.jsonc: the Hold & Build template (decisions-log items 81 and
+// 113 (6)).
+//
+// It teaches the grid: walk out to the edge of your sphere on a heat vent's
+// side, place a Build beacon there whose own sphere holds the vent, give it a
+// Generator on the vent as its first Build target, and hold by it while its
+// drone builds. A Generator stands on a heat vent, and it is how a seat's kW
+// supply rises at the skeleton. The target is an initial setting, and initial
+// settings are interface rows the commander commits on site after the deploy,
+// so this is still touch to change.
+//
+// Why a new beacon: your starting vent lies outside your core's sphere at every
+// seed (decisions-log items 90 and 95), and a Build target outside its own
+// beacon's sphere is dropped when its row commits. A beacon's site must lie
+// inside one of your own spheres, so the new one stands at the edge of your
+// core's sphere on the vent's side, and the vent lies inside its new sphere.
+//
+// Why the walk is a parameter as well as the site: the sim deploys only while
+// the commander stands within its interface range (4 voxels) of the site, and
+// nothing checks the walk before the Push. With the site at the edge and the
+// walk left at the core, this file still qualifies and places nothing. So the
+// wizard asks for the walk, the site and the Generator's anchor, and the
+// built-in operator suggests a walk that ends at the site.
+//
+// This file cannot know where your vents are, so its own values are harmless
+// stand-ins: the walk and the site are the safest own beacon, and the anchor is
+// the map's corner. They qualify. Nothing in the sim keeps one beacon off
+// another's voxel, so they place a second beacon, on Build, where the safest one
+// stands; its Generator target at the corner is outside its sphere and is
+// dropped, so nothing is built.
+//
+// PLACEHOLDER: the place-and-build shape itself -- until decisions-log item
+// 113 (6) this template visited the safest beacon and placed nothing -- is the
+// OWNER's to confirm, before T22's stage demo.
+//
+// PLACEHOLDER: the three places' own values (the safest own beacon, and the
+// map's corner) are harmless stand-ins that the wizard or the operator
+// replaces; what the template ships as its own values is the OWNER's.
+{
+  "schema_version": {"major": 1, "minor": 0},
+  "meta": {
+    "title": "Hold & Build",
+    "author_kind": "BUILTIN",
+    "note": "Grow the grid: walk to the edge of your sphere on a heat vent's side, place a Build beacon there with a Generator on the vent as its first target, and hold by it."
+  },
+  "kind": "PLAYBOOK",
+  "declarative": {
+    "route": [
+      {"label": "to_site", "move": {"to": {"voxel":{"x":337,"y":20,"z":36}}, "pace": "DIRECT"}, "timeout_ms": 60000, "on_fail": {"action": "SKIP"}},
+      {"label": "place_power", "place_beacon": {"at": {"voxel":{"x":337,"y":20,"z":36}}, "tags": ["power"],
+        // Initial settings are interface rows committed on site after the
+        // deploy: choosing the Build mandate is free, and its target list is
+        // one settings field.
+        "initial": {"mandate": {"build": {"targets": [
+          {"blueprint_id": "generator", "anchor": {"voxel": {"x":324,"y":16,"z":35}}, "rotation_quarter_turns": 0, "order": 1}
+        ]}}}},
+       "on_fail": {"action": "SKIP"}},
+      {"label": "hold", "hold": {"ms": 11200}}
+    ],
+    "handlers": [
+      // Why: bravery is an ordinary rule. Hurt and under fire, the commander
+      // walks back to safety and waits before carrying on.
+      {"id": "flee", "when": {"all": {"items": [{"cmdr_hp_pct": {"cmp": "LE", "pct": 40}}, {"cmdr_took_damage_within": {"ms": 3000}}]}},
+       "body": [{"label": "flee_to_safety", "move": {"to": {"safest": {}}}}, {"label": "flee_wait", "hold": {"ms": 8000}}],
+       "resume": "CONTINUE", "cooldown_ms": 30000, "max_fires": 3}
+    ]
+  },
+  "on_death": {"on_respawn": "CONTINUE"},
+  // Why: after the hold, stay with the safest beacon and its drones.
+  "fallback": {"shadow": {"beacon": {"safest": {}}}}
+}

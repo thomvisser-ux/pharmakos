@@ -116,9 +116,22 @@ const MAX_SEATS: usize = 3;
 pub enum SeatKind {
     /// It seals the named file, as a path from the repository root.
     Playbook(String),
-    /// It files the safe playbook — the one the operator files on a timeout.
+    /// It seals nothing, so the gateway files a safe playbook for it at the
+    /// end of the Lull (spec §14). A scenario run advises no seat, so what is
+    /// filed is the gateway's fallback — the library's Safe Playbook with
+    /// nothing raised — and never a safe playbook the operator made for it.
+    ///
+    /// PLACEHOLDER: a `safe` seat filing the gateway's fallback rather than an
+    /// operator-made safe playbook. **Owner**, at **S5**, with the `operator`
+    /// scenario key.
     Safe,
-    /// It plays the built-in operator. **T18**; this build has none.
+    /// It plays the built-in operator: Easy, seated by the runner through
+    /// `serve::InProcessSeats` as `gamectl host` seats it, which plans, submits
+    /// and says ready in every Lull (T18b; decisions-log item 113 (8)).
+    ///
+    /// PLACEHOLDER: a `builtin` seat plays Easy, the one difficulty the
+    /// skeleton ships, and the scenario format has no `operator` key to name
+    /// another; the key waits for a second difficulty. **Owner**, at **S5**.
     Builtin,
 }
 
