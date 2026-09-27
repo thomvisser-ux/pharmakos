@@ -31,8 +31,10 @@ it in one go with `git rebase --signoff <base>`.
 
 ## Licences
 
-Pharmakos is multi-licensed by directory, REUSE-style: every file carries an SPDX header, every
-directory carries a `LICENSE`, and a manifest lists the exceptions.
+Pharmakos is multi-licensed by directory, REUSE-style: every file carries an SPDX header or is
+covered by `REUSE.toml`, the manifest, which lists the exceptions; the root, `assets/`, `docs/`,
+`examples/`, `library/`, `proto/`, `rules/` and `tests/` carry a `LICENSE` pointer
+(decisions-log item 119 (6)).
 
 | What | Licence | SPDX identifier |
 |---|---|---|

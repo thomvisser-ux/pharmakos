@@ -520,8 +520,10 @@ of that premise.
   `.github/workflows/ci.yml` walks every commit in the pull request and fails without it. No
   sign-off, no merge.
 - **SPDX headers on every file**, REUSE-style, with `REUSE.toml` as the manifest and a `LICENSE`
-  pointer at the root and in each top-level directory whose files are not in the game code's tier
-  (decisions-log item 119 (6)):
+  pointer at the root, in each top-level directory outside the game code's tier (`assets/`,
+  `docs/`, `examples/`, `library/`, `proto/`, `rules/`), and in `tests/`, whose pointer names its
+  permissive golden areas; the game tier's other directories have none (decisions-log item
+  119 (6)):
 
   <!-- REUSE-IgnoreStart: an example header, not this file's own -->
   ```rust
@@ -596,7 +598,7 @@ cargo xtask ci --fix      # rustfmt and the machine-applicable clippy fixes
    generated JSON Schema joins it with v1.1. The `buf` step fails, rather than skipping `breaking`,
    when there is no local `main` to compare against (decisions-log item 116 (6)(g) and (p)).
 9. **Licensing** — REUSE check: every file has an SPDX header or a `REUSE.toml` entry, and the
-   manifest is complete; the `LICENSE` pointers are §8's.
+   manifest is complete; the `LICENSE` pointers are §8's rule, which no step checks.
 10. **Scenarios** — the `scenario` step validates every committed scenario file and plays each with
     `gamectl scenario run` (map seed + playbooks + assertions on events and hashes). The
     `screenshot` step renders the vista, the diagnostic rows and the wizard's first page windowed
