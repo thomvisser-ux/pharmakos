@@ -5,7 +5,7 @@ SPDX-License-Identifier: MIT OR Apache-2.0
 
 # The docs tree
 
-Two kinds of document live here, and they are not equal.
+Two kinds of document live here, and they are not of equal standing.
 
 - **`spec/`** is what the game *is*. One current specification, superseding everything else.
 - **`design/`** is how it got there: the decisions, their reasoning, the investigations
