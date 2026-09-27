@@ -34,7 +34,8 @@ use pharmakos_sim::{RulesError, RulesTable, World, WorldConfig};
 /// The tick count `cargo xtask ci` runs the determinism binary at.
 ///
 /// PLACEHOLDER: raised from 1 200 once the real sim carries a segment (owner,
-/// at T20). Keep it in step with `DETERMINISM_TICKS` in `xtask/src/main.rs`.
+/// at S1; decisions-log item 116 (6)(e)). Keep it in step with `DETERMINISM_TICKS`
+/// in `xtask/src/main.rs`.
 const GOLDEN_TICKS: u32 = 1_200;
 
 /// The repository root, found by probing relative paths.

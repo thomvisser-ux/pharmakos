@@ -3979,7 +3979,7 @@ fn fill_unit_table(
     // narrow the determinism chain's coverage on the very pull request that
     // adds four tables to it. So the walkers stay, and the constant is deleted
     // with `DETERMINISM_SEGMENT_LENGTHS_MS` when `DETERMINISM_TICKS` is raised
-    // to a real segment (owner, at T20).
+    // to a real segment (owner, at S1; decisions-log item 116 (6)(e)).
     //
     // They are homed to **nobody** ([`BeaconId::NONE`]): a unit with no home
     // beacon draws no kW, no mandate drives it and no dormancy parks it, which
