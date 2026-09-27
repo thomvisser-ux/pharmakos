@@ -7,8 +7,10 @@
 ; `crates/client-gdext` under AGENTS.md section 6 (item 72): exactly one agent holds both
 ; at a time, because GDScript has no compiler to catch a merge. `godot/bin/` is the
 ; staging target the `.gdextension` points at, and `godot/.godot/` is git-ignored, which
-; is why `godot --headless --path godot --import` runs FIRST in every CI job and every
-; packaging step — see `godot/README.md`.
+; is why `godot --headless --path <project> --import` runs FIRST in every CI job that
+; runs the project and in every packaging step (`cargo xtask package` imports its staged
+; copy); the `clean launch (<os>)` jobs hold only an export and run none — see
+; `godot/README.md`.
 ;
 ; The four settings below are not preferences. They are the ones spike G1 found decide
 ; whether a frame number means anything, carried into the product by item 56's

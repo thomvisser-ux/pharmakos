@@ -282,8 +282,9 @@ fn schema_prints_the_same_document_get_schema_serves() {
 #[test]
 fn seat_doctor_passes_in_a_checkout() {
     // T21's acceptance line is "gamectl seat doctor passes from inside the
-    // extracted zip"; a checkout is the only installation that exists today,
-    // and a doctor that could not pass here could not pass there either.
+    // extracted zip"; CI's `clean launch (<os>)` jobs run it there
+    // (decisions-log item 117 (8)), and this is the checkout's side of it: a
+    // doctor that could not pass here could not pass there either.
     let outcome = gamectl(&["seat", "doctor"]);
     assert_eq!(outcome.code, Exit::Ok, "{}", outcome.out);
     for check in [
