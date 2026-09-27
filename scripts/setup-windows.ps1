@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Pharmakos contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
 # Pharmakos — Windows developer toolchain setup (run in an elevated PowerShell).
 # Idempotent: winget skips packages that are already installed; the VS step uses "modify",
 # which only adds what is missing.
