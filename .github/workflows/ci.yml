@@ -46,7 +46,12 @@
 #   * the decision is computed in each job, never in a job of its own: a failed `needs:`
 #     job would skip its matrix dependents, with the same unexpanded names;
 #   * the cross-OS guard takes the legs' answer through the `ci` job's outputs, and the
-#     DCO job does not ask at all.
+#     DCO job does not ask at all;
+#   * the scope step answers full in bash, before it builds xtask, whenever the commit
+#     changes xtask/, .github/ or .cargo/: a pull request that breaks the decider must not
+#     be judged by the broken copy, whose tests are among the steps it would skip. What
+#     this cannot cover is a pull request that edits this file to remove the check; that
+#     is a workflow change, which review reads by hand in any case.
 # So on a prose-only pull request a green `cargo xtask ci (…)` check means the DCO walk
 # and the `reuse` step passed and the suite did not run; the suite runs on main's push.
 
@@ -86,8 +91,11 @@ jobs:
     timeout-minutes: 90
     # The docs-only fast path's answer, for the cross-OS guard. A matrix job has one set of
     # outputs, so this is the last leg's to finish among those that set it. The legs agree
-    # unless one hits an error, which answers false and runs that leg in full; the guard then
-    # compares what exists, which is red after the G4 flip: the safe side.
+    # unless one hits an error. An error inside the decision answers false and runs that leg
+    # in full; if that leg finishes last, the guard compares what exists, which is red after
+    # the G4 flip: the safe side. A scope step that fails before it answers (rustup, or
+    # xtask failing to build) leaves that leg's output unset, so the guard follows the other
+    # legs; that leg still runs in full, since every gate on it reads `!= 'true'`.
     outputs:
       prose_only: ${{ steps.scope.outputs.prose_only }}
     strategy:
@@ -148,7 +156,17 @@ jobs:
         shell: bash
         env:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: cargo xtask ci-scope
+        run: |
+          # A change to the decider itself (xtask/, the workflows, or the `cargo xtask`
+          # alias under .cargo/) is never judged by its own copy: that copy could be the
+          # broken one, and the tests that would catch it are among the steps it skips.
+          # `git diff --quiet` exits 1 on a difference and 128 on an error; both answer full.
+          if ! git diff --quiet --no-renames HEAD^1 HEAD -- xtask .github .cargo; then
+            echo "full: the commit changes xtask/, .github/ or .cargo/ (or git failed), so the decider does not judge its own change"
+            echo "prose_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          cargo xtask ci-scope
 
       - name: Only prose changed, so the suite does not run
         if: steps.scope.outputs.prose_only == 'true'
@@ -440,7 +458,17 @@ jobs:
         shell: bash
         env:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: cargo xtask ci-scope
+        run: |
+          # A change to the decider itself (xtask/, the workflows, or the `cargo xtask`
+          # alias under .cargo/) is never judged by its own copy: that copy could be the
+          # broken one, and the tests that would catch it are among the steps it skips.
+          # `git diff --quiet` exits 1 on a difference and 128 on an error; both answer full.
+          if ! git diff --quiet --no-renames HEAD^1 HEAD -- xtask .github .cargo; then
+            echo "full: the commit changes xtask/, .github/ or .cargo/ (or git failed), so the decider does not judge its own change"
+            echo "prose_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          cargo xtask ci-scope
 
       - name: Only prose changed, so the vista does not run
         if: steps.scope.outputs.prose_only == 'true'
@@ -610,7 +638,17 @@ jobs:
         shell: bash
         env:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: cargo xtask ci-scope
+        run: |
+          # A change to the decider itself (xtask/, the workflows, or the `cargo xtask`
+          # alias under .cargo/) is never judged by its own copy: that copy could be the
+          # broken one, and the tests that would catch it are among the steps it skips.
+          # `git diff --quiet` exits 1 on a difference and 128 on an error; both answer full.
+          if ! git diff --quiet --no-renames HEAD^1 HEAD -- xtask .github .cargo; then
+            echo "full: the commit changes xtask/, .github/ or .cargo/ (or git failed), so the decider does not judge its own change"
+            echo "prose_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          cargo xtask ci-scope
 
       - name: Only prose changed, so the client check does not run
         if: steps.scope.outputs.prose_only == 'true'
