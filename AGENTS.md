@@ -520,7 +520,8 @@ of that premise.
   `.github/workflows/ci.yml` walks every commit in the pull request and fails without it. No
   sign-off, no merge.
 - **SPDX headers on every file**, REUSE-style, with `REUSE.toml` as the manifest and a `LICENSE`
-  pointer at the root, in each top-level directory outside the game code's tier (`assets/`,
+  pointer at the root, in each top-level directory outside the game code's tier other than
+  `LICENSES/` (`assets/`,
   `docs/`, `examples/`, `library/`, `proto/`, `rules/`), and in `tests/`, whose pointer names its
   permissive golden areas; the game tier's other directories have none (decisions-log item
   119 (6)):
