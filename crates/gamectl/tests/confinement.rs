@@ -275,23 +275,17 @@ fn nothing_here_writes_a_committed_golden() {
     );
 }
 
-/// The research-feature ban, as far as this crate can enforce it on itself.
+/// The research-feature ban, as far as this crate can enforce it on itself: a
+/// second guard beside the research guard's walk.
 ///
-/// **Weaker than what the other four crates get, and said so out loud.**
-/// `cargo xtask ci`'s research guard walks `cargo tree -e features` for
-/// `plan-core`, `verifier`, `operator` and `gateway`; `gamectl` is on neither
-/// that list nor the wall guard's, so what stands in for them here is a read of
-/// the manifest text. A manifest read cannot see a *transitive* enablement —
-/// some future dependency turning `research` on further down the graph would
-/// pass this test and fail the walk. There is no live violation today
-/// (`cargo tree -e features -p pharmakos-gamectl` mentions `research` nowhere),
-/// and the real fix is one line in `xtask/src/main.rs`: `gamectl` added to
-/// `GUARDED_PACKAGES` and to `WALL_GUARDED_PACKAGES`.
-///
-/// PLACEHOLDER: that one-line change. `xtask`'s definition of what `ci` runs is
-/// a contract path (AGENTS.md §5) and this lane does not own it. Decisions-log
-/// item 109 moved it forward from T20: the main session's harness pull request
-/// that follows this one makes it, and this test stays as a second guard.
+/// `cargo xtask ci`'s research guard walks `cargo tree -e features` for every
+/// crate on `GUARDED_PACKAGES` in `xtask/src/main.rs`, and `gamectl` joined that
+/// list and `WALL_GUARDED_PACKAGES` at decisions-log item 109, so the walk is
+/// what catches a *transitive* enablement (some dependency turning `research`
+/// on further down the graph), which a manifest read cannot see. This test
+/// reads the manifest text only: it keeps the sim edge in the form AGENTS.md
+/// section 3 rule 1 names, and a developer running `cargo test` meets it before
+/// the suite's `research-guard` step.
 #[test]
 fn the_crate_takes_the_sim_with_default_features_off() {
     let manifest = std::fs::read_to_string(crate_root().join("Cargo.toml")).expect("the manifest");

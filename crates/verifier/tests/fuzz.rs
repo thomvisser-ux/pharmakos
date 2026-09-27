@@ -16,12 +16,11 @@
 //! ```
 //!
 //! It is `#[ignore]`d because ten thousand verifications do not belong in the
-//! inner loop. **T20 wires it into `.github/workflows/nightly-scenarios.yml`**,
-//! behind that workflow's existing variable gate: `.github/workflows/**` is a
-//! contract path (AGENTS.md section 5) and belongs to no wave-2 agent, so this
-//! task ships the target and T20 ships the call. `the_generator_still_produces_
-//! shapes_the_verifier_reads` runs a small slice of the same generator on every
-//! ordinary `cargo test`, so the generator cannot rot between now and then.
+//! inner loop. `.github/workflows/nightly-scenarios.yml`'s `fuzz` job runs it,
+//! as above with `--locked`, behind that workflow's variable gate (decisions-log
+//! item 116 (6)(j)). `the_generator_still_produces_shapes_the_verifier_reads`
+//! runs a small slice of the same generator on every ordinary `cargo test`, so
+//! the generator cannot rot between two nightly runs.
 //!
 //! # Seeded, not random
 //!
@@ -638,7 +637,7 @@ fn the_generator_still_produces_shapes_the_verifier_reads() {
 }
 
 #[test]
-#[ignore = "ten thousand verifications; the nightly workflow calls it at T20"]
+#[ignore = "ten thousand verifications; nightly-scenarios.yml's fuzz job calls it"]
 fn ten_thousand_playbooks_come_back_as_reports() {
     let rules = rules();
     let scope = scope();

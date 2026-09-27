@@ -8,9 +8,13 @@
 //! * `the_wizard_fixture_is_the_gateways_golden` — Godot cannot load a file outside
 //!   `res://`, so `godot/fixtures/instantiate_suggested.json` is a byte-identical copy of
 //!   the gateway's `tests/golden/gateway/instantiate_suggested/expected.response.json`, the
-//!   render-only wizard scene draws it, and this test keeps it a copy. **The lane that
-//!   changes `library/` moves that golden, and so owns the copy too**: re-copy it in the same
-//!   pull request, and this file's page pins with it.
+//!   hostless wizard scene draws it, `cargo xtask screenshot` compares that drawing with
+//!   `tests/golden/vista/expected.wizard.png`, and this test keeps it a copy. **The lane
+//!   that changes `library/` moves that golden, and so owns the copy too**: re-copy it in
+//!   the same pull request, and this file's page pins with it. The PNG golden is
+//!   re-rendered from that pull request's CI run (`tests/golden/vista/README.md`) only when
+//!   something the first page draws moved (its label, value, mark or why); a change to the
+//!   template's comments alone moves none of them.
 //! * the pages built from that fixture: order, labels, raw values, marks and the why, each
 //!   exactly as the gateway wrote them;
 //! * an edited value's request: sent exactly as typed, as the one explicit value, with

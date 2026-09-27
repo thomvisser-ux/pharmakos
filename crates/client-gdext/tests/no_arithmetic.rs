@@ -501,7 +501,7 @@ const CLOCKS: &[&str] = &["time.", "timer", "get_ticks", "unix_time", "create_tw
 /// (`pacer::IdleTimer`). A `Timer` node or a `Time.get_ticks_*` in an editor script would
 /// be a second clock deciding when to ask the gateway something. Pull request 2's editor
 /// scripts are on the list too: the wizard's pages, the rule list and the wizard's
-/// render-only scene. (The lobby shows the pacer's countdown and names a match only
+/// hostless scene. (The lobby shows the pacer's countdown and names a match only
 /// through `host_link.gd`'s helper, which the next test holds to its one clock read.)
 #[test]
 fn the_editor_scripts_read_no_clock_of_their_own() {

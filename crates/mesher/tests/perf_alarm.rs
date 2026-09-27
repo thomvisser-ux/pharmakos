@@ -21,15 +21,18 @@
 //!   figure is reported beside it so the gap — which is preemption — is visible rather than
 //!   hidden.
 //!
-//! This test is `#[ignore]`d, so `cargo test --workspace` does not pay for it. **T20 wires
-//! it into CI** as
+//! This test is `#[ignore]`d, so `cargo test --workspace` does not pay for it. The
+//! `perf alarms (<os>)` jobs run it on all three operating systems through
+//! `cargo xtask perf-alarms`, as
 //!
 //! ```sh
 //! cargo test --release -p pharmakos-mesher --test perf_alarm -- --ignored --nocapture
 //! ```
 //!
-//! and lets the `::notice::` line through to the job summary; until then, running it by
-//! hand is what it is for. **`--release` is not optional.** A debug build of this crate
+//! (with `--locked` in CI), and its `::notice::` lines reach the run's annotations. It has
+//! no threshold and is never compared across runners: the jobs are not required, and a
+//! failed measurement is a `::warning::` that leaves the job green (decisions-log item
+//! 116 (6)(b)). Run by hand, it prints the same lines. **`--release` is not optional.** A debug build of this crate
 //! measures about 9 900 microseconds p99 against the same 672 in release on the owner's
 //! machine — overflow checks, bounds checks and no inlining — so a debug figure is not a
 //! slow version of the real one, it is a different number entirely.
@@ -126,7 +129,7 @@ fn percentile(sorted: &[u128], percent: u128) -> u128 {
 }
 
 #[test]
-#[ignore = "a performance alarm, not a gate: T20 runs it with --ignored and publishes the ::notice:: line"]
+#[ignore = "a performance alarm, not a gate: cargo xtask perf-alarms runs it with --ignored"]
 fn per_chunk_mesh_cpu_p99() {
     let grid = ChunkGrid::new(1, 1, 1).expect("a one-chunk grid is legal");
     let params = LightParams::new(15, 1).expect("the committed rules-table rows");

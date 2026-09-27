@@ -311,11 +311,16 @@ place-and-build, item 113 (6)). Produced by
 It is a fixture as well as a golden: T19's second pull request copies it byte
 for byte to `godot/fixtures/instantiate_suggested.json`, with a guard that keeps
 the two identical (`the_wizard_fixture_is_the_gateways_golden`). The real
-operator runs live in the client job's watch check; the copy feeds the
-render-only wizard shot, the page pins in `crates/client-gdext/tests/wizard.rs`,
-and the watch check's Hold & Build byte pin. So a diff here is **also a diff in
-the editor's input**, and the pull request that moves it re-copies the fixture,
-brings those pins up to date, and names which of four things moved:
+operator runs live in the client job's watch check; the copy feeds the wizard
+shot, which `cargo xtask screenshot` compares with
+`tests/golden/vista/expected.wizard.png`, the page pins in
+`crates/client-gdext/tests/wizard.rs`, and the watch check's Hold & Build byte
+pin. So a diff here is **also a diff in the editor's input**, and the pull
+request that moves it re-copies the fixture, brings those pins up to date,
+re-renders the PNG golden from its own CI run (`tests/golden/vista/README.md`)
+when something the wizard's first page draws moved (its label, value, mark or
+why; a comment in the template is none of them), and names which of four
+things moved:
 
 * **The `parameters` list** — its order is the template's declaration order,
   one entry per declared parameter, with `suggested: true` exactly where the

@@ -13,8 +13,10 @@
 //!
 //! The obvious tidy-up is for one of the two to trust the other. Neither can:
 //! `xtask` is dev-only, std-only and has no dependencies at all (AGENTS.md §3),
-//! so it cannot call into this crate; and this binary is run by hand, by a
-//! nightly workflow and by T20's demo set, none of which go through `xtask`.
+//! so it cannot call into this crate; and this binary is run by hand and by a
+//! nightly workflow, and `tests/scenarios.rs` plays every committed file (the
+//! demo, `scenarios/skeleton/against-easy-three-rounds.scenario.jsonc`, among
+//! them) through this library, none of which go through `xtask`.
 //! A runner that trusted its input would answer a malformed scenario with a
 //! panic or, worse, with a pass — and a scenario that passes by not running is
 //! the single failure the whole harness exists to prevent
