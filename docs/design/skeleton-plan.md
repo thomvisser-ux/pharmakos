@@ -756,6 +756,10 @@ its downside, and its section 0 lists the holes (H1–H16) the lines below close
 - **Contract PR:** yes — `.github/workflows/**`.
 - **Agent-days:** 5.
 - **PLACEHOLDERs:** zip contents, version string and tag scheme are settled by item 117 (2), (10) and (13); the product name, icon, company and copyright fields in the export preset and the repository URL stay the owner's, once the org exists (item 117 (6) and (12)).
+- **Amended 2026-09-27 (item 121).** Merged as PR #52. The unit grew with item 117 beyond the three paths above: the
+  smoke check, the Credits overlay and `host_link.gd`'s root and guard in `godot/`, `packaging/`, `CHANGELOG.md`,
+  `tests/golden/package/`, `[profile.release-client]` and four `ci.yml` jobs; the pull request's body lists every path.
+  What it leaves open — the dry dispatch and the first tag, and its PLACEHOLDERs — is item 121's.
 
 ---
 

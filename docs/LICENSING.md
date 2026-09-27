@@ -14,7 +14,7 @@ and the full texts live in `LICENSES/` under their canonical SPDX file names.
 | Tier | Paths | Licence | Full text |
 | --- | --- | --- | --- |
 | The game | `crates/**` (except `crates/proto/**`), `xtask/**`, `godot/**`, `client/**`, `scenarios/**`, `tests/**` (except the four golden areas in the next row and `tests/LICENSE`), and the build configuration (`Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, `clippy.toml`, `deny.toml`, `.cargo/**`, `.github/**`, `scripts/**`, `.gitignore`, `.gitattributes`, `README.md`) | `GPL-3.0-or-later` | `LICENSES/GPL-3.0-or-later.txt` |
-| Interfaces and words | `proto/**`, **`crates/proto/**`**, `schemas/**`, `docs/**`, `examples/**`, `library/**`, `rules/**`, **`tests/golden/proto/**`**, **`tests/golden/plan-core/**`**, **`tests/golden/schema/**`**, **`tests/golden/operator/**`**, `llms.txt`, `AGENTS.md`, `CLAUDE.md`, and the repository metadata (`LICENSE`, every per-directory `LICENSE` pointer, `REUSE.toml`, `examples/.gitkeep`) | `MIT OR Apache-2.0` | `LICENSES/MIT.txt`, `LICENSES/Apache-2.0.txt` |
+| Interfaces and words | `proto/**`, **`crates/proto/**`**, `schemas/**`, `docs/**`, `examples/**`, `library/**`, `rules/**`, `packaging/**` (but for its two licence texts, below), **`tests/golden/proto/**`**, **`tests/golden/plan-core/**`**, **`tests/golden/schema/**`**, **`tests/golden/operator/**`**, `llms.txt`, `AGENTS.md`, `CLAUDE.md`, `CHANGELOG.md`, and the repository metadata (`LICENSE`, every per-directory `LICENSE` pointer, `REUSE.toml`, `examples/.gitkeep`) | `MIT OR Apache-2.0` | `LICENSES/MIT.txt`, `LICENSES/Apache-2.0.txt` |
 | Art and audio | `assets/**` | `CC-BY-SA-4.0` | `LICENSES/CC-BY-SA-4.0.txt` |
 
 **The one carve-out inside `crates/`:** `crates/proto` holds the generated
@@ -49,10 +49,17 @@ files, data a player copies and changes, and nothing in it executes, so it takes
 the example playbooks' licence (decisions log §2.7 item 111). The files carry
 the header themselves, and `library/LICENSE` is the pointer.
 
-Two paths are **not** covered by any tier: `docs/DCO.txt`, which is the Linux
-Foundation's document and keeps its own verbatim-copy terms (see
-[Contributions](#contributions-dco-sign-off) below), and any third-party asset,
-which keeps its upstream licence in a `.license` sidecar.
+**`packaging/`** is `MIT OR Apache-2.0` like the documentation: it holds what
+`cargo xtask package` writes into the unsigned zips from templates, and
+`packaging/LICENSE` is the pointer (decisions log §2.7 item 117 (11)). See
+[What a zip carries](#what-a-zip-carries) below.
+
+Three kinds of path are **not** covered by any tier: `docs/DCO.txt`, which is
+the Linux Foundation's document and keeps its own verbatim-copy terms (see
+[Contributions](#contributions-dco-sign-off) below); the canonical MPL-2.0 and
+BSL-1.0 texts in `packaging/` (`LICENSE-MPL-2.0.txt`, `LICENSE-BSL-1.0.txt`),
+which keep their own terms and are there only to be copied into the zips; and
+any third-party asset, which keeps its upstream licence in a `.license` sidecar.
 
 <!-- REUSE-IgnoreStart: prose, not a copyright notice; this file's own is its header -->
 Copyright holder: **Pharmakos contributors**. Copyright year: **2026**.
@@ -226,15 +233,53 @@ By signing off you agree that your contribution is licensed under the tier of
 the directory it lands in, as listed in the table above, with no additional
 terms.
 
+## What a zip carries
+
+`cargo xtask package` builds the unsigned zips (decisions log §2.7 items 117 (11)
+and 121), and each carries its own licensing, which the command checks with
+`reuse lint` inside the extracted zip before CI uploads it:
+
+- **Its own `REUSE.toml`**, written from `packaging/REUSE.toml.in`, which is
+  named `.in` so that this repository's `reuse` does not read it as a nested
+  manifest. The game executable is Godot's export template, so it is recorded
+  as MIT with the Godot Engine contributors' own lines; the engine's
+  third-party components are the ones the Credits screen draws from the engine
+  itself (`Engine.get_copyright_info`, `Engine.get_license_info`). The `.pck`,
+  the game's scenes and compiled scripts, is `GPL-3.0-or-later`. The client
+  library and `gamectl` are recorded with `GPL-3.0-or-later` and the licences of
+  the crates compiled into each, computed from `cargo tree`. `rules/`,
+  `library/`, the note (`README.txt`), `CHANGELOG.md` and the notices file are
+  `MIT OR Apache-2.0`.
+- **A `LICENSES/`** holding exactly the licences those records name, because
+  `reuse` fails an unused one: Apache-2.0, GPL-3.0-or-later and MIT from this
+  repository's `LICENSES/`, and MPL-2.0 (the godot-rust crates in the client
+  library) and BSL-1.0 (xxhash-rust in `gamectl`) from `packaging/`. `reuse`
+  ignores `LICENSE*` names, so this repository neither lints those two texts
+  nor counts them as licences it uses, and nothing is added to its own
+  `LICENSES/`.
+- **`THIRD-PARTY-NOTICES.txt`**, generated from `cargo tree` over the crates
+  linked into the two binaries, and the godot-rust build-time crates whose
+  generated code is compiled in: each crate's name, version, licence and
+  source, then its own licence and notice files as its package ships them, but
+  with LF line endings and without trailing blank lines. The godot-rust crates
+  ship no licence file, so their entries name MPL-2.0 and say where the source
+  is (MPL-2.0 section 3.2). The file also names Rust's standard library and, on
+  Windows, the statically linked C runtime.
+
+The note's source line names the commit a zip was built from; the repository's
+public address joins it before a release is published (a PLACEHOLDER in
+`packaging/README.md`, the owner's, with the org).
+
 ## Changing the licensing
 
 The licence files, `REUSE.toml` and the per-directory `LICENSE` pointers are
 **contract files**: they change only with owner approval, the same as `.proto`
 files, the lint set and the determinism rules. Adding a new top-level directory
 means adding a `REUSE.toml` entry for it in the same change, and a `LICENSE`
-pointer too when its files are not in the game tier. `tests/`, in the game tier,
-has one as well, naming its permissive golden areas; `crates/`, `godot/`,
-`scenarios/`, `scripts/`, `xtask/`, the dot-directories and `LICENSES/` have
-none. Adding a new licence to `LICENSES/` means checking that it is compatible
+pointer too when its files are not in the game tier: the root, `assets/`,
+`docs/`, `examples/`, `library/`, `packaging/`, `proto/` and `rules/` have one.
+`tests/`, in the game tier, has one as well, naming its permissive golden areas;
+`crates/`, `godot/`, `scenarios/`, `scripts/`, `xtask/`, the dot-directories and
+`LICENSES/` have none. Adding a new licence to `LICENSES/` means checking that it is compatible
 with the tier it will sit beside — for the game tier, that means compatible with
 GPL-3.0-or-later.

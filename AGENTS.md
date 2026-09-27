@@ -430,7 +430,13 @@ to full quality once and changed only with the owner's explicit approval.
   `serve::Config` fields that `serve::ConfigLine` reads, without `resume`, and no token
   (decisions-log items 113 and 114)
 - CI: `.github/workflows/**`, `xtask/**`'s definition of what `ci` runs, golden-file *formats*
+  (including `tests/golden/package/`, the zips' manifests)
 - Licensing: `LICENSES/**`, per-directory `LICENSE` files, the REUSE manifest
+- Packaging: `packaging/REUSE.toml.in`, the zips' own REUSE manifest, and the licence texts
+  `packaging/LICENSE-MPL-2.0.txt` and `packaging/LICENSE-BSL-1.0.txt`, which `cargo xtask package`
+  copies into each zip's `LICENSES/`; `[profile.release-client]` and
+  `.github/workflows/release.yml` are contract paths already, as a `[profile.*]` block and a
+  workflow (decisions-log items 117 and 121)
 - `AGENTS.md`, `CLAUDE.md`, and the design docs under `docs/design/`
 
 **The rule for an agent:** if your change touches one of these paths, make the change on a branch,
@@ -521,9 +527,9 @@ of that premise.
   sign-off, no merge.
 - **SPDX headers on every file**, REUSE-style, with `REUSE.toml` as the manifest and a `LICENSE`
   pointer at the root, in each top-level directory outside the game code's tier other than
-  `LICENSES/` (`assets/`, `docs/`, `examples/`, `library/`, `proto/`, `rules/`), and in `tests/`,
-  whose pointer names its permissive golden areas; the game tier's other directories have none
-  (decisions-log item 119 (6)):
+  `LICENSES/` (`assets/`, `docs/`, `examples/`, `library/`, `packaging/`, `proto/`, `rules/`), and
+  in `tests/`, whose pointer names its permissive golden areas; the game tier's other directories
+  have none (decisions-log items 119 (6) and 121):
 
   <!-- REUSE-IgnoreStart: an example header, not this file's own -->
   ```rust
@@ -537,7 +543,7 @@ of that premise.
   | Directory | Licence |
   |---|---|
   | game code — sim, client, operator, gateway, gamectl, xtask | `GPL-3.0-or-later` |
-  | `proto/`, generated JSON Schema, `docs/`, `llms.txt`, example playbooks, the template library `library/` | `MIT OR Apache-2.0` |
+  | `proto/`, generated JSON Schema, `docs/`, `llms.txt`, example playbooks, the template library `library/`, `packaging/` (the zips' note and manifest templates; its two licence texts keep their own terms), `CHANGELOG.md` | `MIT OR Apache-2.0` |
   | art and audio assets | `CC-BY-SA-4.0` |
 
   Third-party assets keep their own SPDX line and their entry in the credits screen (CC-BY
@@ -626,6 +632,26 @@ decider never judges its own change; otherwise `cargo xtask ci-scope` decides, a
 any event but `pull_request` and on any error. Nothing can force it. The `perf alarms (…)` jobs,
 which are not required, follow the same pattern. The full suite runs on `main`'s push
 (decisions-log items 115 (4) and 116).
+
+**The package.** `cargo xtask package` is not a step either: `cargo xtask ci` never runs it, and it
+runs alone (decisions-log item 117). It builds this platform's unsigned zip: the client library
+with `[profile.release-client]` and `gamectl` with `--release`, both for the host triple (on Windows
+with `+crt-static`, and a byte scan of both for the C runtime's names); a copy of `godot/` with the
+library staged into it, imported; the shipped smoke check, run once in that copy under the editor;
+the export; a byte scan of the `.pck` for test files; the zip, whose entry list it compares with
+`tests/golden/package/` (`--bless` rewrites the list); `reuse lint` over the extracted zip; and every
+committed scenario, replayed by the packaged `gamectl` against its golden chain. It fails rather
+than skips when Godot, the export templates, `reuse` or (on Linux) `objdump` is missing, and it
+refuses on macOS, which has no package. CI's `package (windows-latest)` and `package (ubuntu-24.04)`
+jobs run it and upload the zip; `clean launch (windows-latest)` and `clean launch (ubuntu-24.04)`
+extract that zip on a runner with no checkout and no toolchain, and run `gamectl seat doctor`
+inside it and the smoke check from the parent folder. The four have been required checks since T21
+merged (items 119 (1) and 121), and they take the fast path: the package jobs decide as the
+building jobs do, and each clean-launch job reads its package job's answer. A lane that changes
+`library/`, `rules/`, `packaging/`, `LICENSES/`, `REUSE.toml` or `godot/` changes what ships, so it
+runs `cargo xtask package` locally. The command keeps the smoke run's user folders under
+`<target>/package/data/` itself, and reads the export templates from Godot's own folder, where they
+must be installed.
 
 Nightly, additionally: the three adversarial scenarios (§10) on a fixed seed set, and the fuzzer
 (10 000 generated playbooks, no panic). Both are jobs in `.github/workflows/nightly-scenarios.yml`
