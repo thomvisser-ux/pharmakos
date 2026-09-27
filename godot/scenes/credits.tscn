@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/credits.gd" id="1_about"]
+
+[node name="About" type="CanvasLayer"]
+script = ExtResource("1_about")

@@ -31,11 +31,15 @@ a fresh checkout, which is every CI runner, the extension's classes instantiate 
 **placeholders** and the first call on one fails. Locally this never shows, because the
 editor has opened the project once. Spike G1 lost four runs to it (§10.12).
 
-So every CI job and every packaging step runs `godot --headless --path godot --import`
-first. `cargo xtask stage-client` does it for you, and `.github/workflows/ci.yml`'s client leg
-stages the project with that command and nothing else. The same leg then builds `gamectl`,
-runs `scenes/watch_check.tscn` headless against a real `gamectl host`, and checks that no
-`gamectl` process outlives the client.
+So every CI job that runs the project, and every packaging step, runs
+`godot --headless --path <project> --import` first. `cargo xtask stage-client` does it for
+you, and `.github/workflows/ci.yml`'s client leg stages the project with that command and
+nothing else. The same leg then builds `gamectl`, runs `scenes/watch_check.tscn` headless
+against a real `gamectl host`, and checks that no `gamectl` process outlives the client.
+`cargo xtask package` imports its staged copy of the project before it exports it. The
+`clean launch (<os>)` jobs run no `--import`, on purpose: they hold no project, only the
+exported build, whose extension list the package job's import wrote (decisions-log item
+117 (8)).
 
 ## Layout
 
@@ -44,7 +48,7 @@ runs `scenes/watch_check.tscn` headless against a real `gamectl host`, and check
 | `project.godot` | the four settings G1 found decide whether a frame number means anything; the main scene is `scenes/boot.tscn` |
 | `pharmakos.gdextension` | item 73's shape: `gdext_rust_init`, `compatibility_minimum = 4.7`, `reloadable = false`, explicit Windows and Linux paths |
 | `bin/` | the staging target. Git-ignored except for its `.gitkeep`; nothing built is committed |
-| `fixtures/view_keyframe.jsonl` | a byte-identical copy of the gateway's keyframe golden, for the hostless vista shot; `crates/client-gdext/tests/vista_fixture.rs` keeps it identical. Excluded from any export preset (T21) |
+| `fixtures/view_keyframe.jsonl` | a byte-identical copy of the gateway's keyframe golden, for the hostless vista shot; `crates/client-gdext/tests/vista_fixture.rs` keeps it identical. Excluded from both export presets, with every fixture (T21) |
 | `fixtures/editor_check.jsonc` | the committed playbook the headless watch check opens, edits and submits: plan-core's canonical form, qualifying both on the golden seed's seat 0 and against `gamectl verify`'s reference seat |
 | `fixtures/editor_check.expected.jsonc` | what the watch check must submit: `editor_check.jsonc` with the check's one map action appended, as plan-core's `patch_text` (the function behind `patch_plan`) writes it |
 | `fixtures/out_of_vocabulary.json` | the verifier's own E0003 case, byte for byte: the file Load must refuse with a code and a pointer |
@@ -59,6 +63,9 @@ runs `scenes/watch_check.tscn` headless against a real `gamectl host`, and check
 | `scenes/rows_shot.tscn` | the validation rows drawn from `fixtures/rows_report.json` with no host; `cargo xtask screenshot` compares it with `tests/golden/vista/expected.rows.png` |
 | `scenes/wizard_shot.tscn` | the wizard's first page drawn from `fixtures/instantiate_suggested.json` with no host; `cargo xtask screenshot` compares it with `tests/golden/vista/expected.wizard.png` |
 | `scenes/client_check.tscn` | T12's headless acceptance scene |
+| `scenes/smoke_check.tscn` | the shipped smoke check (T21): the real lobby idles, opens and closes the credits overlay, starts a New match and reaches the Lull; the one check the export keeps |
+| `scenes/credits.tscn` | the credits overlay the lobby's Credits button adds: the licences by area, the notices file's name, the CC BY attributions (none yet) and Godot's notices from the engine |
+| `export_presets.cfg` | the Windows Desktop and Linux export presets (T21); see "The export" below |
 | `scripts/` | GDScript — **views and editor UI only** (AGENTS.md §3 rule 4) |
 | `.godot/` | Godot's own import cache. Git-ignored, and written by `--import` |
 
@@ -152,12 +159,70 @@ New match means restarting the client (a PLACEHOLDER in `scripts/lobby.gd`, with
 New/Resume layout, S6). The only files the client writes are the player's JSONC, that one
 remembered line, and the watch check's own `user://` files.
 
-No check drives the lobby with a host: the watch check drives `host_link.gd` directly and
-never touches the remembered line. What the lobby may do is pinned by its source instead
+One check drives the lobby with a host: the shipped smoke check (below), which presses New
+match and never Resume. The watch check drives `host_link.gd` directly and never touches the
+remembered line. What the lobby may do with a remembered match is pinned by its source
 (`crates/client-gdext/tests/godot_project.rs`: it writes only the remembered line, once the
 host has announced; it names and resumes only through `host_link.gd`'s helpers; it forgets
 on ENDED), and T22's run sheet ("quit in a Lull, resume from the lobby", w6 notes A5) is
 where a person sees it run.
+
+## The export (T21)
+
+`cargo xtask package` (decisions-log item 117) builds this platform's unsigned zip: the
+client library with `--profile release-client` and `gamectl` with `--release` (on Windows
+with `+crt-static`), a copy of this project without `.godot/` and `bin/`, the library staged
+into the copy, `--import` on the copy, the smoke check in the copy under the editor, then
+
+```sh
+godot --headless --path <copy> --export-release "Windows Desktop" <out>/Pharmakos.exe
+godot --headless --path <copy> --export-release Linux <out>/Pharmakos.x86_64
+```
+
+with Godot 4.7.2's release export templates installed. `export_presets.cfg` holds two
+presets, x86_64, release, `embed_pck` off, so the export writes the executable, its `.pck`
+and the client library beside it. Its exclude filter names `fixtures/*`, `*_shot.tscn`,
+`*_shot.gd` and the client and watch checks' scenes and scripts by name, never a `*_check`
+wildcard: Godot applies the exclude filter after the include filter, so a wildcard would
+drop the smoke check and no include could bring it back. `godot_project.rs` pins that, and
+`package` byte-scans the `.pck` for it. The Windows preset has Godot edit the executable's
+resources itself (`application/modify_resources`, no rcedit): product name and file
+description the lockup, product version `0.1.0-dev+skeleton`, file version `0.1.0.0`.
+
+Godot rewrites `export_presets.cfg` when the editor saves presets, so the file keeps no
+comment, and its PLACEHOLDERs live here:
+
+- PLACEHOLDER: the product name and file description are the lockup, *PHARMAKOS: THE
+  SEALED ORDER*, until the owner confirms the name (plan T21); `config/name` stays
+  `Pharmakos`, so the window title is the bare word and `user://` does not move. OWNER,
+  with the org.
+- PLACEHOLDER: the icon (Godot's own until the art pass), the company name and the
+  copyright field are empty. OWNER, with the org, before the owner publishes a release.
+
+The smoke check runs the same way from the editor and from the export:
+
+```sh
+godot --headless --path <project> -- --scene=res://scenes/smoke_check.tscn \
+    --gamectl=<gamectl> --root=<repository>
+Pharmakos/Pharmakos.exe --headless -- --scene=res://scenes/smoke_check.tscn
+```
+
+It lets the real lobby idle for ten frames, opens the credits overlay through the Credits
+button and closes it with Back, presses New match, waits for the host's announce and the
+Lull, checks the bridge is the real class and caught no panic, frees the lobby and waits
+for the host to exit, then prints one `[smoke] OK` line (or `[smoke] FAIL <reason>`) and
+exits 0 or 1. An exported build finds `gamectl` beside the executable, and its root — the
+folder holding `rules/` and `library/` — is the executable's folder
+(`host_link.gd`'s `find_root`). Like the watch check, a run is a real New match: it writes
+`user://last_match.txt` and leaves a match folder in the private match cache, so a local run
+points `APPDATA` and `LOCALAPPDATA` (on Linux `XDG_DATA_HOME` and `HOME`) at a scratch
+folder.
+
+Before T21 the exported lobby crashed on its second idle frame: the lobby pumps its host
+link every frame, and before New match the link read a pipe that did not exist yet, which
+the editor's debug VM logs as a SCRIPT ERROR per frame and the release template's VM does
+not survive. `host_link.gd`'s `pump()` now reads nothing before `start()` has spawned the
+host, and `godot_project.rs` pins it.
 
 ## The watch check's two hosts, and the folders it leaves
 

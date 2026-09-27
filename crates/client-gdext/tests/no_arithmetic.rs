@@ -608,9 +608,10 @@ const CLOCK_READERS: &[&str] = &[
 /// **No script under `godot/` reads a clock, but the named two** (AGENTS.md section 3 rule
 /// 4, and decisions-log item 113 (12)): the client's wall clock is the pacer's
 /// (`src/pacer.rs`), and a script's only clock read is `host_link.gd`'s match-id helper,
-/// which the test above holds to its one line. The other exception is `watch_check.gd`'s
-/// `create_timer` waits: the check is a test driver, and a wait is how it gives a real host
-/// time; it reads no other clock. Every other `.gd` under `godot/` — the lobby that names
+/// which the test above holds to its one line. The other exception is the two checks'
+/// `create_timer` waits, `watch_check.gd`'s and the shipped `smoke_check.gd`'s (decisions-log
+/// item 117 (7)): a check is a test driver, a wait is how it gives a real host time, and its
+/// waits are bounded; neither reads any other clock. Every other `.gd` under `godot/` — the lobby that names
 /// and remembers matches included — reads none. (The word `timer` alone is not a reader:
 /// the lobby shows the pacer's countdown under that dictionary key.)
 #[test]
@@ -639,7 +640,8 @@ fn no_script_reads_a_clock_but_the_id_helper_and_the_checks_waits() {
                 .iter()
                 .filter(|reader| code.contains(**reader))
                 .collect();
-            let allowed = name == "watch_check.gd" && readers.iter().all(|r| **r == "create_timer");
+            let allowed = (name == "watch_check.gd" || name == "smoke_check.gd")
+                && readers.iter().all(|r| **r == "create_timer");
             if !readers.is_empty() && !allowed {
                 found.push(format!("{}:{}: {}", path.display(), index + 1, line.trim()));
             }

@@ -51,6 +51,8 @@ extends Node
 
 const HostLink := preload("res://scripts/host_link.gd")
 const Strings := preload("res://scripts/strings.gd")
+## The credits overlay the chooser's Credits button adds (decisions-log item 117 (11)).
+const AboutScene := preload("res://scenes/credits.tscn")
 
 ## How many event rows the list keeps on screen. PLACEHOLDER, UI, OWNER at S6.
 const EVENT_ROWS := 14
@@ -210,6 +212,7 @@ func _build_ui() -> void:
 	_button(_chooser, Strings.text("lobby_new_match"), new_match)
 	if remembered_line() != "":
 		_button(_chooser, Strings.text("lobby_resume"), resume_match)
+	_button(_chooser, Strings.text("lobby_about"), _show_about)
 	var buttons := HBoxContainer.new()
 	column.add_child(buttons)
 	# The speed set is the pacer's (crates/client-gdext/src/pacer.rs SPEEDS, a PLACEHOLDER);
@@ -234,6 +237,18 @@ func _button(parent: Node, text: String, pressed: Callable) -> Button:
 	button.pressed.connect(pressed)
 	parent.add_child(button)
 	return button
+
+
+## The Credits button: the overlay covers the chooser until its Back, and is never a scene
+## change (freeing the lobby ends its host). The button is in the chooser alone, which is
+## hidden once a match has started, so no overlay opens while a host runs.
+func _show_about() -> void:
+	if _started:
+		return
+	var overlay: CanvasLayer = AboutScene.instantiate()
+	overlay.closed.connect(func() -> void: _chooser.visible = true)
+	_chooser.visible = false
+	add_child(overlay)
 
 
 func _toggle_follow() -> void:

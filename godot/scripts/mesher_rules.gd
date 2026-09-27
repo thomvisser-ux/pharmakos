@@ -20,8 +20,10 @@
 # compared: it is the whole table's version and moves whenever any lane adds a row
 # anywhere in it.
 #
-# PLACEHOLDER: where a shipped client reads the rules table from - packaging's question
-# with the host's own rules file; OWNER, at T21.
+# A shipped client keeps this inline copy (decisions-log item 117 (3)): the host reads
+# `rules/` beside `gamectl` in the extracted zip, and the client reads no file for these
+# rows, so the zip's note says `rules/` is not for editing (an edited table would move the
+# host's Lull without this countdown).
 
 extends RefCounted
 

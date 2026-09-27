@@ -41,6 +41,24 @@ const TEXT := {
 	"lobby_choose": "Start a new match, or go on with the last one.",
 	"lobby_resumed_failed": "The match host would not resume the last match: {reason}",
 	"lobby_forgotten": "The last match has ended, so there is nothing to resume.",
+	"lobby_about": "Credits",
+
+	# --- The credits overlay (scripts/credits.gd; decisions-log item 117 (11)) ------
+	# The game's licences by area are written here, never read from files at run time.
+	"about_back": "Back",
+	"about_lockup": "PHARMAKOS: THE SEALED ORDER",
+	"about_licences_heading": "Licences",
+	"about_licence_game": "The game - its scripts, the client library and gamectl: GPL-3.0-or-later.",
+	"about_licence_data": "The rules table (rules/) and the template library (library/): MIT OR Apache-2.0.",
+	"about_licence_art": "Art and audio: CC-BY-SA-4.0.",
+	"about_notices_file": "The notices of the Rust crates compiled into the client library and gamectl are in THIRD-PARTY-NOTICES.txt beside the game.",
+	"about_attribution_heading": "Attributions (CC BY)",
+	"about_attribution_none": "None yet: this build ships no third-party art or audio.",
+	"about_godot_heading": "Godot Engine",
+	"about_godot_intro": "This game runs on the Godot Engine. Its licence, and the notices of the third-party components it contains, follow as the engine reports them.",
+	"about_godot_component": "{name}",
+	"about_godot_part": "  {copyright} - {license}",
+	"about_godot_licence": "--- {name} ---",
 
 	# --- The editor's panel ------------------------------------------------------
 	"editor_title": "Orders",

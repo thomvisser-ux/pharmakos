@@ -13,9 +13,8 @@
 # --- Godot 4.7 client ---
 .godot/
 /client/.godot/
-# Godot export output and the per-machine editor state
+# Godot export output. godot/export_presets.cfg is committed (decisions-log item 117 (6))
 /export/
-export_presets.cfg
 *.translation
 .import/
 
