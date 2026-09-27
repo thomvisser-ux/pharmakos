@@ -54,7 +54,9 @@ Foundation's document and keeps its own verbatim-copy terms (see
 [Contributions](#contributions-dco-sign-off) below), and any third-party asset,
 which keeps its upstream licence in a `.license` sidecar.
 
+<!-- REUSE-IgnoreStart: prose, not a copyright notice; this file's own is its header -->
 Copyright holder: **Pharmakos contributors**. Copyright year: **2026**.
+<!-- REUSE-IgnoreEnd -->
 
 ## Why this split
 
@@ -175,10 +177,12 @@ contract file: changing the allow-list needs owner approval.
 Every text file that can hold a comment carries a two-line header, so a file
 that has been copied out of the tree still says what it is:
 
+<!-- REUSE-IgnoreStart: an example header, not this file's own -->
 ```rust
 // SPDX-FileCopyrightText: 2026 Pharmakos contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 ```
+<!-- REUSE-IgnoreEnd -->
 
 The identifier must match the tier for that path. Files that cannot hold a
 comment use a `.license` sidecar. Generated files inherit the tier of the

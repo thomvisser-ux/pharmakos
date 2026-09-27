@@ -48,10 +48,12 @@ verbatim-copy terms.
 
 Header every new file:
 
+<!-- REUSE-IgnoreStart: an example header, not this file's own -->
 ```rust
 // SPDX-FileCopyrightText: 2026 Pharmakos contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 ```
+<!-- REUSE-IgnoreEnd -->
 
 Rules that follow from the split:
 
