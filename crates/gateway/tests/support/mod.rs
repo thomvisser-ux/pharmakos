@@ -571,10 +571,10 @@ pub fn walk_east(surface: &Surface, seat: u8, east: i32, holds: usize) -> String
 /// fresh.
 ///
 /// A save outlives its process and a new match under a saved match's id is
-/// refused, and a test can run more than once against one target (`cargo xtask
-/// ci`'s `test` step, a developer's own `cargo test`, the `scenario` step), so a
-/// test that hosts a match keeps its matches here
-/// rather than in the machine's real cache, and starts from nothing. The
+/// refused, and a test can run more than once against one target (a second
+/// `cargo xtask ci`, or a developer's own `cargo test` beside it), so a test
+/// that hosts a match keeps its matches here rather than in the machine's real
+/// cache, and starts from nothing. The
 /// process id is in the name because two test processes can share one target
 /// directory at once (two agents, or a developer and CI, on one machine), and
 /// a root per test name alone let one run's resumed match write into the
