@@ -41,11 +41,15 @@
 # A lane falls back to rebase, push and a full matrix when its own changes touch output that
 # only the three legs produce, each on its own OS, or that no local run executes: the
 # determinism code (crates/sim/), the walled float crates (crates/mesher/,
-# crates/client-gdext/), godot/, the workflows (.github/), and the hashed or rendered goldens
-# (tests/golden/determinism|scenarios|pathing|mapgen|mesher|vista/). It also falls back
-# when GitHub reports the PR as BEHIND (the ruleset requiring up-to-date branches). A base
-# that moved only by prose (docs/, .claude/, AGENTS.md, CLAUDE.md, a top-level *.md) needs
-# no check. A branch with merge commits stops the train: a rebase would drop what they carry.
+# crates/client-gdext/), godot/, the workflows (.github/), the hashed or rendered goldens
+# (tests/golden/determinism|scenarios|pathing|mapgen|mesher|vista/), and what the zip ships
+# or is built by, which only the package and clean-launch jobs exercise (library/, rules/,
+# packaging/, LICENSES/, REUSE.toml, xtask/src/package.rs and zip.rs, and the zips'
+# manifests in tests/golden/package/; decisions-log items 119 (1) and 121 (5)). It also
+# falls back when GitHub reports the PR as BEHIND (the ruleset requiring up-to-date
+# branches). A base that moved only by prose (docs/, .claude/, AGENTS.md, CLAUDE.md, a
+# top-level *.md) needs no check. A branch with merge commits stops the train: a rebase
+# would drop what they carry.
 #
 # The script is the owner's session merging under decisions-log items 85 and 115 (7); it
 # only does what a green PR has already earned, and it halts on anything else so a person
@@ -134,7 +138,11 @@ PROSE='^(docs/|\.claude/|AGENTS\.md$|CLAUDE\.md$|[^/]+\.md$)'
 # True when a path list (one per line) names anything but prose; an empty list names nothing.
 has_non_prose() { [ -n "$1" ] && grep -qvE "$PROSE" <<<"$1"; }
 # Output only the three legs produce, each on its own OS, or that no local run executes.
-MATRIX_ONLY='^(crates/sim/|crates/mesher/|crates/client-gdext/|godot/|\.github/|tests/golden/(determinism|scenarios|pathing|mapgen|mesher|vista)/)'
+# Its paths after the golden areas are what ships in the zip, or what builds it, which only
+# CI's package and clean-launch jobs exercise, because the local check runs `cargo xtask ci`
+# and never `cargo xtask package`. CHANGELOG.md is not on it: the zip's manifest pins its
+# path and not its bytes, and PROSE above calls it prose.
+MATRIX_ONLY='^(crates/sim/|crates/mesher/|crates/client-gdext/|godot/|\.github/|tests/golden/(determinism|scenarios|pathing|mapgen|mesher|vista)/|library/|rules/|packaging/|LICENSES/|REUSE\.toml$|xtask/src/(package|zip)\.rs$|tests/golden/package/)'
 
 # What the train checked for the current lane (set by verify_lane).
 checked_head="" checked_main="" checked_tree=""
