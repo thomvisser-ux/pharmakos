@@ -19,8 +19,9 @@ Read that file before your first edit. What follows is only the Claude Code-spec
    PR. Every step is required: a step whose input is missing fails with the reason, and only the
    platform skips (`screenshot` off Linux, `stage-client` on macOS) and `test-research`'s
    `--package` filter remain (decisions-log item 116 (6)(g)); a missing tool (buf, cargo-deny,
-   reuse, godot, xvfb-run) skips locally and fails under `--require-tools`, which CI and the merge
-   train's local check set. The `PLACEHOLDER` rule is unchanged: mark every guessed value
+   reuse, godot, xvfb-run, and inside the `test` step buf and `protoc-gen-prost`) skips locally and
+   fails under `PHARMAKOS_REQUIRE_TOOLS=1`, which CI and the merge train's local check set; the
+   `--require-tools` flag covers the steps' own tools only. The `PLACEHOLDER` rule is unchanged: mark every guessed value
    `// PLACEHOLDER: <what, who decides, when>` and list it in your PR.
 2. **Check the design precedence before implementing a rule**: `docs/design/decisions-log.md` §2.7 >
    the spec (`docs/spec/pharmakos-spec-v0.6.html`) > `docs/design/co-design-gameplan-api.md`. See
