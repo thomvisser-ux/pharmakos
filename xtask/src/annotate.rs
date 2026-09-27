@@ -21,10 +21,11 @@
 //! Outside GitHub Actions the same text is simply printed, so a local run of
 //! `cargo xtask ci` shows exactly what CI would publish.
 //!
-//! This module is deliberately generic: T16's vista job and T20's perf alarms
-//! (skeleton-plan section 7 decision 23, recommended and not yet logged —
-//! annotations with no threshold at this stage) both
-//! publish through it rather than each inventing an escaping routine.
+//! This module is deliberately generic: the screenshot step's verdicts publish
+//! through it rather than each inventing an escaping routine. The perf alarms
+//! (skeleton-plan section 7 decision 23, logged as decisions-log item
+//! 116 (6)(b) — annotations with no threshold, per runner) are one-line notices
+//! printed as they are, by the mesher's test and by `cargo xtask perf-alarms`.
 
 use std::fs::OpenOptions;
 use std::io::Write as _;
