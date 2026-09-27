@@ -137,9 +137,9 @@ pub const SAFE_PLAYBOOK: &str = concat!(
 /// library, relative to the workspace root: the flat `library/` folder
 /// (decisions-log item 111, decision C13).
 ///
-/// PLACEHOLDER: where the library lives beside a **shipped** binary is
-/// packaging's question, **T21** (`gamectl`'s `LIBRARY_PATH` names this same
-/// folder for a checkout).
+/// Beside a **shipped** binary it is the same folder: the zip is laid out like
+/// the repository, with `library/` next to `gamectl` (decisions-log item
+/// 117 (3); `gamectl`'s `LIBRARY_PATH` names this same folder).
 pub const LIBRARY_FOLDER: &str = "library";
 
 /// The most seats a v1 match has.
@@ -335,11 +335,11 @@ impl Host {
 
     /// The template folder, when the host was given one.
     ///
-    /// PLACEHOLDER: **where** that folder is on each platform is the owner's,
-    /// with packaging at **T21** — the skeleton plan's own T13 PLACEHOLDER. The
-    /// gateway takes the path it is handed and reads it; it never writes to it
-    /// and never stores anything from it (spec section 13, "Local-first
-    /// library").
+    /// **Where** that folder is on each platform was settled by packaging
+    /// (decisions-log item 117 (3)): the zip's `library/`, beside `gamectl`,
+    /// which the host is handed through its root. The gateway takes the path it
+    /// is handed and reads it; it never writes to it and never stores anything
+    /// from it (spec section 13, "Local-first library").
     #[must_use]
     pub fn library(&self) -> Option<&Path> {
         self.library.as_deref()

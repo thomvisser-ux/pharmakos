@@ -18,11 +18,12 @@
 //!
 //! `catch_unwind` catches nothing under `panic = "abort"`, and the workspace's
 //! `[profile.release]` sets exactly that. A debug or `release-checked` build unwinds and
-//! the counter works; a release build would abort the whole engine process instead. That
-//! is a **contract question for the owner**, not something this crate may decide
-//! (`[profile.*]` is an AGENTS.md section 5 path) — it is raised in T12's pull request,
-//! and until it is answered `cargo xtask stage-client` stages the debug library, where the
-//! guard is real.
+//! the counter works; a plain release build would abort the whole engine process instead.
+//! So this crate is never shipped from `[profile.release]`: the packaged library is built
+//! with `[profile.release-client]`, which inherits `release` with `panic = "unwind"`
+//! (decisions-log item 102 (1), named by item 117 (4)), and the shipped smoke check asserts
+//! the counter at zero in that build. `cargo xtask stage-client` and CI's `client
+//! extension` job keep the debug library, where the guard is real and the inner loop fast.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 

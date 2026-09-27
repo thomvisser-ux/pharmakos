@@ -60,10 +60,11 @@
 //! command has to say goes to standard error, which is where the lobby's
 //! "host failed to start" message reads it from.
 //!
-//! PLACEHOLDER: the rules table and the template library are both read from
-//! `--root`, as every other command reads the rules. Where both live beside a
-//! shipped binary is packaging's question (T13's and `crate::rules`'
-//! PLACEHOLDER); **T21** decides it.
+//! The rules table and the template library are both read from `--root`, as
+//! every other command reads the rules. Beside a shipped binary they are the
+//! zip's `rules/` and `library/`, laid out like the repository's, and the
+//! exported lobby passes the executable's folder as `--root` (decisions-log
+//! item 117 (3)).
 
 use std::io::IsTerminal as _;
 use std::path::Path;
@@ -178,8 +179,9 @@ fn advice_of(advice: pharmakos_operator::Advice) -> Advice {
 /// the gateway reads to list and instantiate templates (decisions-log item
 /// 111, decision C13), beside [`crate::rules::RULES_PATH`].
 ///
-/// PLACEHOLDER: where the library lives beside a shipped binary is packaging's
-/// question, **T21**.
+/// Beside a shipped binary it is the zip's `library/`, next to `gamectl` and
+/// `rules/`, as in a checkout (decisions-log item 117 (3)); the zip's manifest
+/// golden pins the three templates' paths.
 pub const LIBRARY_PATH: &str = "library";
 
 /// Host one match until standard input closes.
