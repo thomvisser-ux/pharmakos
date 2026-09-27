@@ -5,7 +5,12 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # `scenarios/` — what the scenario runner asserts on
 
-**Filled by T11** (the first full-segment hash chain) and T15 (the runner).
+**Filled by T11** (the first full-segment hash chain) and T15 (the runner);
+T18b added `against-easy` and T20 the demo scenario, `against-easy-three-rounds`:
+three rounds against Easy, whose 6 000-line chain pins every tick of all three
+(its scenario file's header says what it depends on, including `crates/operator`
+and `library/`). Every chain here is also compared across Windows, Linux and
+macOS by the `cross-OS determinism guard` job.
 
 One directory per scenario, named after its `name` key:
 

@@ -111,7 +111,7 @@ that asserts something the build cannot do teaches the wrong thing twice over.)
 | `map.generator` | yes | The generator's name, so a scenario written against one generation rule is not silently replayed against another. |
 | `rules` | no | The rules table, repository-relative. Defaults to `rules/rules.v1.json` — see below. |
 | `seats` | yes | One to three seats (spec §3), `seat` counting from 0 in array order. |
-| `seats[].kind` | yes | `playbook` (seals the named file), `safe` (files the safe playbook), `builtin` (the built-in operator). |
+| `seats[].kind` | yes | `playbook` (seals the named file), `safe` (files the safe playbook), `builtin` (the built-in operator, playing Easy). |
 | `seats[].playbook` | with `playbook` | Repository-relative path, forward slashes, no `..`. |
 | `segments` | yes | One or more, `index` counting from 0. |
 | `segments[].length_ms` | yes | Game milliseconds, a positive `int32` bare integer (item 46). |
@@ -181,9 +181,28 @@ Three names are **reserved** for the one extension **decisions-log item 97**
 real events": `event_count_in_range`, `state_hash_at_tick`, `terminal_hash`.
 Item 97 says *by at most* those three, and T15 — the task that met the real
 events — took **none** of them: `hash_chain_equals` already pins every tick, and
-neither committed scenario needs a count range. Using one today is an error
+no committed scenario needs a count range. Using one today is an error
 naming the decision that holds it. The vocabulary is *data inside* the format,
 so adding to it is not a format break; removing one would be.
+
+### What a chain depends on
+
+The triple — map seed, playbooks, rules hash — is the whole input only when
+every seat is a `playbook` or `safe` seat. **A chain from a scenario with a
+`builtin` seat also depends on the built-in operator (`crates/operator`) and on
+the template library (`library/`)**: that seat's orders in every Lull are
+whatever Easy composes from them, so a change to either moves the chain, and
+the pull request that moves it says which (decisions-log item 113 (8)).
+
+### Seat two, by convention
+
+A scenario whose Push must run past its first tick — to build anything, or to
+reach round 2 — seats **at least two**. A one-seat match is decided at its
+first Push tick, because the last seat standing wins (decisions-log item
+114 (2)), so a one-seat scenario plays a single tick of one round and asserts
+next to nothing. This is a convention, not a format rule: the key table's "one
+to three seats" is what both validators enforce, and a one-seat file is still a
+valid one.
 
 ### Writing conventions
 
