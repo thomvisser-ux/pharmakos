@@ -39,7 +39,7 @@ covered by `REUSE.toml`, the manifest, which lists the exceptions; the root, `as
 | What | Licence | SPDX identifier |
 |---|---|---|
 | Game code — sim, client, operator, gateway, gamectl, xtask | GNU GPL v3 or later | `GPL-3.0-or-later` |
-| Schemas (`.proto`, generated JSON Schema) **and the `crates/proto` crate that holds the generated types**, docs, `llms.txt`, example playbooks | MIT or Apache-2.0, at your option | `MIT OR Apache-2.0` |
+| Schemas (`.proto`, generated JSON Schema) **and the `crates/proto` crate that holds the generated types**, docs, `llms.txt`, example playbooks, `library/`, `rules/`, `packaging/` (but for its two licence texts), `CHANGELOG.md` | MIT or Apache-2.0, at your option | `MIT OR Apache-2.0` |
 | Art and audio assets | Creative Commons BY-SA 4.0 | `CC-BY-SA-4.0` |
 
 `crates/proto` is the one permissive crate under `crates/`: it is the same public surface as the

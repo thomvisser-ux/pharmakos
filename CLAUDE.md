@@ -14,9 +14,10 @@ Read that file before your first edit. What follows is only the Claude Code-spec
 ## Before you touch anything
 
 1. **The toolchain is installed and `cargo xtask ci` is green.** rustc 1.98.1 (MSVC host), `protoc`
-   36, `buf` 1.73, `cargo-deny`, `reuse` and Godot 4.7.2 are all present, so compile your work and
-   run `cargo xtask ci --quick` as the inner loop and the full `cargo xtask ci` before you open a
-   PR. Every step is required: a step whose input is missing fails with the reason, and only the
+   36, `buf` 1.73, `cargo-deny`, `reuse` and Godot 4.7.2 with its export templates are all present,
+   so compile your work and run `cargo xtask ci --quick` as the inner loop and the full
+   `cargo xtask ci` before you open a PR. Every step is required: a step whose input is missing
+   fails with the reason, and only the
    platform skips (`screenshot` off Linux, `stage-client` on macOS) and `test-research`'s
    `--package` filter remain (decisions-log item 116 (6)(g)); a missing tool (buf, cargo-deny,
    reuse, godot, xvfb-run, and inside the `test` step buf and `protoc-gen-prost`) skips locally and
@@ -36,8 +37,8 @@ Open a PR and stop — do not merge, do not work around it — when a task takes
 
 - a contract file: `proto/**`, `buf.*`, `clippy.toml`, workspace `[lints]`, `[profile.*]`,
   determinism code (state hash, RNG streams, fixed-point types, snapshot/replay format, tick loop,
-  the `research` feature), `.github/workflows/**`, `xtask`'s definition of `ci`, licence files,
-  or these harness docs (AGENTS.md §5);
+  the `research` feature), `.github/workflows/**`, `xtask`'s definition of `ci` and of `package`,
+  licence files, or these harness docs (AGENTS.md §5);
 - adding a dependency that is not on the approved list (AGENTS.md §3);
 - anything on the "what not to build in v1" list (AGENTS.md §11) — script runtimes, MCP, an SDK, a
   published API, AI seats, manual control, playbook flags/branch/repeat;
@@ -80,7 +81,7 @@ launches), for the duration of the walking skeleton, and are revoked by the owne
 
 ```sh
 cargo fmt --all           # rustfmt defaults for edition 2024; the tree is formatted
-cargo xtask ci            # the whole check suite — what CI runs, and it is green
+cargo xtask ci            # the whole check suite — what CI's legs run, and it is green
 cargo xtask ci --quick    # fmt, clippy, unit tests — the inner loop
 cargo xtask ci --fix      # rustfmt plus machine-applicable clippy fixes
 cargo xtask package       # the unsigned zip for this platform (T21); --bless its manifest
@@ -88,11 +89,13 @@ git commit -s             # DCO sign-off is mandatory on every commit
 git worktree add ../pharmakos-<task> -b feat/<crate>-<task>
 ```
 
-`cargo xtask ci` is the single entry point. A prose-only pull request (one that changes nothing but
+`cargo xtask ci` is the single entry point for the suite; the required `package` jobs run
+`cargo xtask package` instead, and the `clean launch` jobs run its zip (AGENTS.md §9).
+A prose-only pull request (one that changes nothing but
 `docs/**`, `AGENTS.md`, `CLAUDE.md`, `.claude/**` and top-level `*.md`) runs the DCO walk and the
 `reuse` step in place of the suite, so for it "CI's checks are green on the branch" means those two
 passed, and `main`'s push runs everything (decisions-log item 115 (4)).
-If something is green locally and red in CI, that is an
+If `cargo xtask ci` is green locally and a `cargo xtask ci` leg is red in CI, that is an
 `xtask` bug worth fixing, not a reason to run a different command. It is complete for harness parts
 1 and 2 (`xtask/src/main.rs`, fifteen steps, covering AGENTS.md §9 items 1–10) and green; a failure
 in it is a bug to fix rather than a reason to reach for another command. `cargo xtask ci-scope`,
