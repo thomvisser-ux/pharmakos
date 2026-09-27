@@ -61,17 +61,19 @@ use std::fmt::Write as _;
 /// 1 500× looser: at that gate a missing chunk passes, and a gate a missing
 /// chunk passes is a green tick that means nothing.
 ///
-/// PLACEHOLDER: skeleton-plan section 7 decision 22 (recommended, not yet
-/// logged) names these two numbers; the owner re-ratifies them at T16 against
-/// the first real vista, and T20 promotes this step from skipping to required.
-/// Keep both in one place so the change is one line and one PR.
+/// Skeleton-plan section 7 decision 22, logged as decisions-log item
+/// 116 (6)(a), names these two numbers: G1's shape, a regression alarm rather
+/// than a certification. They held at zero pixels on the first real vista
+/// (item 110 (6)). They apply to every shot the `screenshot` step compares —
+/// the vista, the diagnostic rows and the wizard's first page. Keep both in one
+/// place so a change is one line and one PR.
 pub(crate) const MAX_MEAN_THOUSANDTHS: u64 = 4;
 
 /// Share of pixels allowed to differ by more than [`HARD_DELTA`] on any
 /// channel, in parts per million. Zero: G1 measured 1.14 % of pixels differing
 /// *at all* between a Quadro and lavapipe, and **none at all** by more than 32.
 /// A rasteriser tie-break does not move a channel by 33 levels, so one pixel
-/// that does is news. Re-ratified with the mean above at T16.
+/// that does is news. Logged with the mean above as decision 22.
 pub(crate) const MAX_HARD_PPM: u64 = 0;
 
 /// A per-channel difference above this counts as a *hard* difference: a
@@ -82,11 +84,13 @@ pub(crate) const HARD_DELTA: u8 = 32;
 /// Floor on the red channel's variance. Below it the frame is blank or
 /// near-uniform and nothing was drawn.
 ///
-/// PLACEHOLDER: owner/T16 re-ratifies this floor against the first real render.
-/// 200 is chosen only so that the committed blank fixture (variance 0) fails and
-/// the committed gradient fixture passes; the world is destructible voxels under
-/// a permanent ash sky, so a legitimately low-contrast vista is not far-fetched
-/// and a floor set too high fails a good render.
+/// 200 was chosen so that the committed blank fixture (variance 0) fails and
+/// the committed gradient fixture passes, and the real vista clears it. It
+/// guards the vista and is never lowered for another shot: a shot of flat UI
+/// panels that measures under it gets a named floor of its own beside this one.
+/// The world is destructible voxels under a permanent ash sky, so a
+/// legitimately low-contrast vista is not far-fetched and a floor set too high
+/// fails a good render.
 pub(crate) const MIN_VARIANCE: u64 = 200;
 
 // ---------------------------------------------------------------------------
@@ -213,7 +217,7 @@ impl Diff {
         let mean = self.mean_thousandths();
         let hard = self.hard_ppm();
         Err(format!(
-            "the vista differs from its golden: mean {} of 255 (limit {}), {} of {} pixels ({} %, \
+            "the render differs from its golden: mean {} of 255 (limit {}), {} of {} pixels ({} %, \
              limit {} %) over {HARD_DELTA}, worst channel delta {}.\n      Look for cracks, \
              missing faces or inverted winding before regenerating the golden — a rasteriser \
              tie-break moves the mean, not the worst delta.",
@@ -897,8 +901,8 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
-    /// The committed fixtures. `vista-fixture.png` stands in for a rendered
-    /// vista until T16 produces one; `vista-fixture-doctored.png` is the same
+    /// The committed fixtures. `vista-fixture.png` is a small stand-in for a
+    /// rendered vista; `vista-fixture-doctored.png` is the same
     /// image with one patch of pixels moved, which is what a missing face or an
     /// inverted winding looks like to this comparator.
     fn fixture(name: &str) -> Vec<u8> {
@@ -1047,7 +1051,7 @@ mod tests {
         // 20 of 1000 pixels = 2 %.
         assert_eq!(diff.hard_ppm(), 20_000);
         // The limits are passed in rather than taken from the constants, so that
-        // re-ratifying the shipped thresholds at T16 does not quietly change
+        // changing the shipped thresholds does not quietly change
         // what this test is asserting.
         assert!(
             diff.check(1_000, 20_000).is_ok(),
@@ -1069,8 +1073,7 @@ mod tests {
         assert!(report.contains("2.0000 %"), "{report}");
     }
 
-    /// The boundary the shipped thresholds actually stand on, pinned before
-    /// T16 makes the step live.
+    /// The boundary the shipped thresholds actually stand on.
     ///
     /// `hard_ppm()` is a truncating division, so at the vista's own resolution
     /// (1920×1080 = 2 073 600 pixels) one hard pixel is 0 ppm and two are 0 ppm
@@ -1123,7 +1126,8 @@ mod tests {
 
     #[test]
     fn the_shipped_thresholds_are_g1s_measured_shape() {
-        // skeleton-plan section 7 decision 22 (recommended, not yet logged):
+        // skeleton-plan section 7 decision 22, logged as decisions-log item
+        // 116 (6)(a):
         // mean 0.004 of 255 and zero pixels over 32. A guard so that loosening
         // them is a deliberate edit to this test as well as to the constants.
         assert_eq!(MAX_MEAN_THOUSANDTHS, 4);

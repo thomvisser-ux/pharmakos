@@ -8,47 +8,73 @@
 //! here is clever, and nothing here has a dependency (std only), so a cold
 //! checkout can run it before a single third-party crate is fetched.
 //!
-//! Steps, in order — this is the harness-part-1 subset of AGENTS.md section 9,
-//! in code. It is a subset on purpose: section 9 item 10 (`gamectl scenario
-//! run` and the headless Godot screenshots) lives in
-//! `.github/workflows/nightly-scenarios.yml` until harness part 2 builds it,
-//! and item 11 (the G3′ tick budget and the P1 verifier budgets) arrives with
-//! the gates that set those numbers. AGENTS.md section 9 marks both. Everything
-//! else section 9 lists is below.
+//! Steps, in order — AGENTS.md section 9 items 1 to 10, in code. Item 11 (the
+//! G3′ tick budget and the P1 verifier budgets) arrives with the gates that
+//! set those numbers, S1's and S2's; until then performance is published, never
+//! gated, by `cargo xtask perf-alarms` (below), which is not a step.
 //!
-//! | step             | what it does                                                                |
-//! |------------------|-----------------------------------------------------------------------------|
-//! | `fmt`            | `cargo fmt --all --check`                                                    |
-//! | `clippy`         | `-D warnings` plus the determinism lint set; walled crates linted separately |
-//! | `profiles`       | overflow checks are on in every profile, release included                    |
-//! | `test`           | `cargo test --workspace` without the `research` feature                      |
-//! | `test-research`  | `cargo test --package pharmakos-sim --features pharmakos-sim/research`       |
-//! | `research-guard` | plan-core / verifier / operator / gateway must not reach `research`          |
-//! | `wall-guard`     | those crates and `sim` must not depend on a walled presentation/solve crate  |
-//! | `deny`           | `cargo deny check` (licences, advisories, banned crates)                     |
-//! | `buf`            | `buf lint` and `buf breaking --against .git#branch=main`                     |
-//! | `golden`         | `tests/golden/**/expected.*` against the fresh `target/golden/**/actual.*`   |
-//! | `determinism`    | runs the determinism binary and checks its per-tick hash chain               |
-//! | `reuse`          | REUSE licence-manifest check                                                 |
+//! | step             | what it does                                                                 |
+//! |------------------|------------------------------------------------------------------------------|
+//! | `fmt`            | `cargo fmt --all --check`                                                     |
+//! | `clippy`         | `-D warnings` plus the determinism lint set; walled crates linted separately  |
+//! | `profiles`       | overflow checks are on in every profile, release included                     |
+//! | `test`           | `cargo test --workspace` without the `research` feature                       |
+//! | `test-research`  | `cargo test --package pharmakos-sim --features pharmakos-sim/research`        |
+//! | `research-guard` | plan-core / verifier / operator / gateway / gamectl must not reach `research` |
+//! | `wall-guard`     | those crates and `sim` never reach a walled crate; the client never the core  |
+//! | `deny`           | `cargo deny check` (licences, advisories, banned crates)                      |
+//! | `buf`            | `buf lint` and `buf breaking --against .git#branch=main`                      |
+//! | `golden`         | `tests/golden/**/expected.*` against the fresh `target/golden/**/actual.*`    |
+//! | `determinism`    | runs the determinism binary and compares its per-tick hash chain              |
+//! | `reuse`          | REUSE licence-manifest check                                                  |
+//! | `scenario`       | validates `scenarios/**`, then plays each with `gamectl scenario run`         |
+//! | `screenshot`     | stages the client, renders the three shots under xvfb + lavapipe, compares    |
+//! | `stage-client`   | builds the gdext cdylib, stages it into `godot/bin` and imports the project   |
 //!
-//! A step that cannot run yet — a tool that is not installed, a crate that does
-//! not exist — reports `skipped` with the reason. A step never reports `ok` for
-//! work it did not do.
+//! The formats of the last three — the scenario file ([`scenario`]), the
+//! golden-file convention ([`golden`]) and the screenshot comparison ([`png`])
+//! — were frozen before their producers existed (decisions-log item 75), so
+//! that every task delivered *into* a format rather than inventing one.
 //!
-//! Two further steps are **harness part 2's**, landed here before the things
-//! they check exist (decisions-log item 75, plan section 5). Both skip with a
-//! named reason and self-activate the moment their producer lands, which is how
-//! `step_determinism` already behaves:
+//! # Required means required
 //!
-//! | step         | what it does                                                             |
-//! |--------------|--------------------------------------------------------------------------|
-//! | `scenario`   | validates `scenarios/**` today; shells `gamectl scenario run` from T15    |
-//! | `screenshot` | renders the vista under xvfb + lavapipe and compares it to a golden PNG   |
+//! A step whose input is missing — no scenario files, no `gamectl`, no
+//! committed golden, no determinism chain, no `deny.toml`, no buf config, no
+//! workspace metadata — **fails** with the reason (decisions-log item
+//! 116 (6)(g)). A step never reports `ok` for work it did not do. Three skips
+//! remain, and each is a statement about the platform or the caller rather than
+//! a missing producer:
 //!
-//! Their formats — the scenario file ([`scenario`]), the golden-file convention
-//! ([`golden`]) and the screenshot comparison ([`png`]) — are frozen now so
-//! that every later task delivers *into* a format rather than inventing one,
-//! and no golden's shape is renegotiated under deadline.
+//! * `screenshot` off Linux: the PNG goldens are rendered under xvfb and
+//!   lavapipe on Linux only (skeleton-plan section 7 decision 22, logged as
+//!   decisions-log item 116 (6)(a));
+//! * `stage-client` on macOS: `godot/pharmakos.gdextension` declares no macOS
+//!   library (decisions-log item 73);
+//! * `test-research` when `--package` leaves `pharmakos-sim` out: a filter the
+//!   caller chose.
+//!
+//! A missing *tool* (buf, cargo-deny, reuse, godot, xvfb-run) is a skip
+//! locally and a failure under `--require-tools`, which CI sets.
+//!
+//! # Where AGENTS.md section 9 item 8's regenerate-and-compare runs
+//!
+//! Not in the `buf` step, and not twice. The prost tree and its descriptor set
+//! are regenerated and diffed by `crates/proto/tests/generated.rs`; the
+//! `get_schema` answer by `crates/gateway/tests/methods.rs`; `gamectl docs` by
+//! `crates/gamectl/tests/docs.rs` — all three through the `test` step, and the
+//! last two write fresh outputs the `golden` step compares. Generated JSON
+//! Schema is v1.1's (decisions-log item 116 (6)(p)).
+//!
+//! # The perf alarms
+//!
+//! `cargo xtask perf-alarms` is not a step: `ci` and `list` do not know it. It
+//! runs the mesher's p99 alarm exactly as `crates/mesher/tests/perf_alarm.rs`
+//! says (`--release`, `--ignored`, `--nocapture`), which prints its own
+//! `::notice::` lines, and publishes the allocations per tick as a notice
+//! naming the test that asserts it. It has no threshold, compares nothing
+//! across operating systems, and never exits non-zero: a failed measurement is
+//! a `::warning::` (skeleton-plan section 7 decision 23, logged as
+//! decisions-log item 116 (6)(b)).
 //!
 //! Usage:
 //!
@@ -62,6 +88,7 @@
 //! cargo xtask stage-client --check  # build the cdylib, stage, import, run the client check
 //! cargo xtask list                  # list the steps
 //! cargo xtask ci-scope              # CI's docs-only fast path: `full` or `prose`
+//! cargo xtask perf-alarms           # the per-runner perf notices; never fails
 //! ```
 //!
 //! # The research tests
@@ -89,7 +116,9 @@
 //! # The determinism hash file
 //!
 //! This is a contract: `.github/workflows/ci.yml` uploads exactly this path per
-//! operating system and a later job byte-compares the three.
+//! operating system, beside the fresh scenario chains, the path hashes and the
+//! mesher, mapgen and vista geometry digests, and the `cross-OS determinism
+//! guard` job byte-compares each of them across the three.
 //!
 //! * path: `target/determinism/hashes.txt`, relative to the workspace root;
 //! * one line per simulated tick, in tick order, starting at tick 0;
@@ -97,8 +126,9 @@
 //!   hex digits>`;
 //! * `\n` endings — never `\r\n`, because the file is byte-compared across
 //!   Windows, Linux and macOS — and a trailing newline at end of file;
-//! * when `tests/golden/determinism/expected.hashes.txt` exists, the fresh file
-//!   must equal it byte for byte (spike G4's committed hash chain).
+//! * the fresh file must equal `tests/golden/determinism/expected.hashes.txt`
+//!   byte for byte; a missing committed chain is a failure, and
+//!   `cargo xtask determinism --bless` is how one is written.
 //!
 //! Nothing here may use floats, `as` casts, `HashMap`/`HashSet` or wall-clock
 //! time: xtask is linted by the same set it enforces, which is also why `ci`
@@ -253,6 +283,28 @@ const WALL_GUARDED_PACKAGES: &[&str] = &[
     "gamectl",
 ];
 
+/// The client side of the wall: walled crates that may never reach the named
+/// deterministic crates, transitively included (decisions-log item 102 (3),
+/// taken as item 116 (6)(d)).
+///
+/// `wall-guard`'s second relation. The first keeps the deterministic crates
+/// away from the float, cast, hash-map and clock allowance; this one keeps the
+/// thin client away from the rules. `client-gdext` marshals and decides nothing
+/// (AGENTS.md section 3 rule 4), so it reaches neither the sim nor the crates
+/// that hold a rule, a verdict or a socket; the mesher takes integer chunk data
+/// in and "nothing from the sim". Each entry is a walled crate by name, and a
+/// future walled crate joins by adding its own line. It is deliberately NOT
+/// "no walled crate reaches the sim": that would forbid the walled harness
+/// AGENTS.md section 4.5 sanctions, a walled crate driving the sim from
+/// outside to put a millisecond figure on it. Names are bare, as in
+/// [`WALLED_PACKAGES`], and matched with and without the `pharmakos-` prefix.
+/// `crates/client-gdext/tests/no_sim.rs` checks the client's line from
+/// `Cargo.lock` as well; the two agree by construction.
+const CLIENT_WALL: &[(&str, &[&str])] = &[
+    ("client-gdext", &["sim", "verifier", "plan-core", "gateway"]),
+    ("mesher", &["sim"]),
+];
+
 /// Candidate names for the one crate that owns the `research` feature.
 const SIM_PACKAGES: &[&str] = &["sim"];
 
@@ -271,9 +323,14 @@ const HASH_GOLDEN: &str = "tests/golden/determinism/expected.hashes.txt";
 /// The binary the `determinism` step runs once it exists.
 const DETERMINISM_BIN: &str = "determinism";
 
-/// PLACEHOLDER: 1 200 ticks is one minute at 20 Hz — a smoke run. Raise it to
-/// G4's bar (10 matches × 9 600 ticks) once the sim can carry it; a long run
-/// belongs in the nightly workflow rather than in every pull request.
+/// PLACEHOLDER: 1 200 ticks is one minute at 20 Hz — a smoke run of the sim's
+/// harness segment list. It stays until S1 (owner, at S1): the full-segment
+/// chain T10 asked for is the demo scenario's, `scenarios/skeleton/
+/// against-easy-three-rounds`, whose three rounds are played and compared on
+/// all three operating systems, so lengthening this run would add leg time and
+/// a `crates/sim` determinism change for no new coverage (decisions-log item
+/// 116 (6)(e)). G4's bar (10 matches × 9 600 ticks) belongs in the nightly
+/// workflow rather than in every pull request.
 const DETERMINISM_TICKS: &str = "1200";
 
 /// The profile the determinism run uses: release optimisation with debug
@@ -283,13 +340,12 @@ const DETERMINISM_PROFILE: &str = "release-checked";
 /// The inner-loop subset, as documented in AGENTS.md and CLAUDE.md.
 const QUICK_STEPS: &[&str] = &["fmt", "clippy", "test"];
 
-// --- harness part 2 (AGENTS.md section 9 items 10 and 11) ------------------
+// --- harness part 2 (AGENTS.md section 9 item 10) ---------------------------
 //
-// These constants are the *formats* the skeleton freezes in wave 1. The
-// producers arrive later: `gamectl scenario run` at T15, the Godot vista at
-// T16, and T20 promotes both steps from skipping to required. Keep each
-// constant's comment naming the task that fills it, so a skip is never
-// mistaken for a pass that happens to be quiet.
+// These constants are the *formats* the skeleton froze in wave 1, now with
+// their producers: `gamectl scenario run` (T15), the Godot vista (T16) and the
+// editor's rows and wizard shots (T19). Both steps are required: a missing
+// input is a failure, and only the screenshot's platform statement skips.
 
 /// The binary that runs a scenario, and the subcommand it must carry.
 const SCENARIO_BIN: &str = "gamectl";
@@ -299,11 +355,49 @@ const SCENARIO_SUBCOMMAND: &str = "scenario";
 /// repository root, one ownable unit with `crates/client-gdext`).
 const GODOT_PROJECT_DIR: &str = "godot";
 
-/// The vista golden the `screenshot` step compares against, and where the fresh
-/// render is written. The golden is committed by T16; until it exists the step
-/// skips with that reason.
-const VISTA_GOLDEN: &str = "tests/golden/vista/expected.vista.png";
-const VISTA_ACTUAL: &str = "golden/vista/actual.vista.png";
+/// One screenshot the `screenshot` step renders and compares.
+struct Shot {
+    /// The name the notices and the report use.
+    name: &'static str,
+    /// The scene, passed as `--scene=` after `--`; the project's main scene
+    /// routes on it.
+    scene: &'static str,
+    /// The committed golden, relative to the workspace root.
+    golden: &'static str,
+    /// Where the fresh render goes, relative to Cargo's target directory.
+    actual: &'static str,
+    /// The red-channel variance under which the frame counts as blank.
+    min_variance: u64,
+}
+
+/// Every shot, in the order it is rendered. All three go through the bridge, so
+/// all three need the staged extension. The vista is the geometry alarm (T16);
+/// the rows and the wizard's first page are the editor's pictures of the
+/// verifier's diagnostics and of Easy's suggestion (T19; decisions-log items
+/// 110 (4) and 116 (6)(h)).
+const SHOTS: &[Shot] = &[
+    Shot {
+        name: "vista",
+        scene: "res://scenes/vista_shot.tscn",
+        golden: "tests/golden/vista/expected.vista.png",
+        actual: "golden/vista/actual.vista.png",
+        min_variance: png::MIN_VARIANCE,
+    },
+    Shot {
+        name: "rows",
+        scene: "res://scenes/rows_shot.tscn",
+        golden: "tests/golden/vista/expected.rows.png",
+        actual: "golden/vista/actual.rows.png",
+        min_variance: png::MIN_VARIANCE,
+    },
+    Shot {
+        name: "wizard",
+        scene: "res://scenes/wizard_shot.tscn",
+        golden: "tests/golden/vista/expected.wizard.png",
+        actual: "golden/vista/actual.wizard.png",
+        min_variance: png::MIN_VARIANCE,
+    },
+];
 
 /// The render the screenshot step asks Godot for, and the xvfb screen it runs
 /// on. 1280 × 720 is G1's geometry resolution. The two must agree: a windowed
@@ -312,11 +406,6 @@ const VISTA_ACTUAL: &str = "golden/vista/actual.vista.png";
 /// the comparison for the wrong reason.
 const VISTA_RESOLUTION: &str = "1280x720";
 const VISTA_SCREEN: &str = "-screen 0 1280x720x24";
-
-/// PLACEHOLDER: the scene the vista job loads and the flag that makes it take
-/// one shot and quit are T16's to name — the vista does not exist yet. When it
-/// does, this becomes the scene path passed to `godot --path godot`. Owner/T16.
-const VISTA_SCENE: &str = "res://scenes/vista_shot.tscn";
 
 // --- the client extension (T12) --------------------------------------------
 //
@@ -375,9 +464,12 @@ struct Step {
 enum Outcome {
     /// The step ran and passed.
     Done(String),
-    /// The step could not run yet, and that is expected: a tool that is not
-    /// installed, or a part of the tree that does not exist. Never used to
-    /// paper over a real failure.
+    /// The step does not run here, for a reason that is not a missing input: a
+    /// platform that cannot run it (`screenshot` off Linux, `stage-client` on
+    /// macOS), a `--package` filter that leaves its crate out, or a tool that is
+    /// not installed on a run without `--require-tools`. A missing input — a
+    /// file, a crate, a golden — is a failure, never this (decisions-log item
+    /// 116 (6)(g)); `only_the_named_skips_remain` pins the list.
     Skipped(String),
 }
 
@@ -414,7 +506,7 @@ const STEPS: &[Step] = &[
     },
     Step {
         name: "wall-guard",
-        about: "those crates and sim must not depend on a walled crate",
+        about: "those crates and sim never reach a walled crate; the client never the core",
         run: step_wall_guard,
     },
     Step {
@@ -442,20 +534,21 @@ const STEPS: &[Step] = &[
         about: "REUSE licence-manifest check",
         run: step_reuse,
     },
-    // Harness part 2. Both skip with a named reason until their producer
-    // exists, and both self-activate the moment it does.
+    // Harness part 2. Both are required: a missing input fails, and only the
+    // screenshot's platform statement (Linux only) skips.
     Step {
         name: "scenario",
-        about: "validate scenarios/**, then run them once gamectl can",
+        about: "validate scenarios/**, then play each with gamectl scenario run",
         run: step_scenario,
     },
     Step {
         name: "screenshot",
-        about: "render the vista headless and compare it to its golden PNG",
+        about: "stage the client, render the vista, rows and wizard shots, compare each PNG",
         run: step_screenshot,
     },
-    // The client extension. Like the two above it needs a tool the deterministic
-    // crates do not, so it skips with a named reason where Godot is absent.
+    // The client extension. It needs Godot, which the deterministic crates do
+    // not, so a missing Godot goes through `skip_or_fail`; on macOS it skips,
+    // because there is no macOS library to stage.
     Step {
         name: "stage-client",
         about: "build the gdext cdylib, stage it into godot/bin and import the project",
@@ -540,6 +633,13 @@ fn run_cli(args: &[String]) -> Result<bool, String> {
             "ci-scope" => {
                 let extra: Vec<&String> = args.iter().filter(|arg| *arg != "ci-scope").collect();
                 return Ok(scope::run_from_env(&extra));
+            }
+            // Not a step either: the per-runner perf notices of decision 23.
+            // It always answers success, so the job that runs it can never go
+            // red (decisions-log item 116 (6)(b)).
+            "perf-alarms" => {
+                perf_alarms();
+                return Ok(true);
             }
             "--quick" => quick = true,
             "--fix" => fix = true,
@@ -693,6 +793,7 @@ fn print_help() {
     println!("    cargo xtask <step> [flags]");
     println!("    cargo xtask list");
     println!("    cargo xtask ci-scope       CI's docs-only fast path: prints `full` or `prose`");
+    println!("    cargo xtask perf-alarms    per-runner perf notices, no threshold; never fails");
     println!();
     println!("FLAGS:");
     println!("    --quick            fmt, clippy and tests only — the inner loop");
@@ -820,10 +921,8 @@ fn step_clippy(ctx: &Ctx) -> Result<Outcome, String> {
 /// profile that switches the check off fails the build.
 fn step_profiles(ctx: &Ctx) -> Result<Outcome, String> {
     let manifest_path = ctx.root.join("Cargo.toml");
-    let Ok(manifest) = fs::read_to_string(&manifest_path) else {
-        let display = manifest_path.display();
-        return Ok(Outcome::Skipped(format!("cannot read {display}")));
-    };
+    let manifest = fs::read_to_string(&manifest_path)
+        .map_err(|error| format!("cannot read {}: {error}", manifest_path.display()))?;
     let (release_checked, mut offenders) = scan_profiles(&manifest);
 
     // A cargo config can override the manifest's profiles, so it is checked too
@@ -915,20 +1014,30 @@ fn step_test_research(ctx: &Ctx) -> Result<Outcome, String> {
         .as_ref()
         .ok()
         .and_then(|workspace| workspace.package_with_feature(SIM_PACKAGES, RESEARCH_FEATURE));
-    match research_test_args(sim.as_deref(), &ctx.packages, ctx.locked) {
-        Ok((args, feature)) => {
+    match research_test_args(sim.as_deref(), &ctx.packages, ctx.locked)? {
+        ResearchTests::Run { args, feature } => {
             run(ctx, &ctx.cargo, &args)?;
             Ok(Outcome::Done(format!(
                 "tests pass with {feature}; no other crate's code reads the feature, \
                  and clippy's research pass compiles every non-walled crate against it"
             )))
         }
-        Err(reason) => Ok(Outcome::Skipped(reason)),
+        ResearchTests::Filtered(reason) => Ok(Outcome::Skipped(reason)),
     }
 }
 
-/// The `test-research` step's cargo arguments and its `--features` value, or
-/// the reason it skips. Pure, so the three `-p` cases are unit-tested.
+/// What the `test-research` step does.
+#[derive(Debug, PartialEq, Eq)]
+enum ResearchTests {
+    /// Run cargo with these arguments; `feature` is the `--features` value.
+    Run { args: Vec<String>, feature: String },
+    /// Skip, because `--package` leaves the sim out: a filter the caller chose.
+    Filtered(String),
+}
+
+/// The `test-research` step's cargo arguments and its `--features` value, the
+/// reason it skips, or — when no crate declares the feature, which the stage
+/// has — the reason it fails. Pure, so the three `-p` cases are unit-tested.
 ///
 /// `sim` is the package that declares the `research` feature. The step tests
 /// that package alone, because it is the one crate whose code the feature
@@ -938,7 +1047,9 @@ fn step_test_research(ctx: &Ctx) -> Result<Outcome, String> {
 ///
 /// * no `-p`: the sim's tests with the feature on;
 /// * a `-p` list that names the sim: the same, and nothing else;
-/// * a `-p` list that leaves the sim out: skipped, because nothing in it changes.
+/// * a `-p` list that leaves the sim out: skipped, because nothing in it changes;
+/// * no crate declaring the feature: a failure, because `fork` lives behind it
+///   and the stage has it (decisions-log item 116 (6)(g)).
 ///
 /// A `-p` value counts as naming the sim when [`package_spec_may_name`] says
 /// it may: cargo also takes `name@version`, package-id URLs and globs there,
@@ -947,10 +1058,11 @@ fn research_test_args(
     sim: Option<&str>,
     packages: &[String],
     locked: bool,
-) -> Result<(Vec<String>, String), String> {
+) -> Result<ResearchTests, String> {
     let Some(sim) = sim else {
         return Err(format!(
-            "no crate declares a `{RESEARCH_FEATURE}` feature yet"
+            "no crate declares a `{RESEARCH_FEATURE}` feature; `pharmakos-sim` defines it, \
+             and `fork` lives behind it"
         ));
     };
     if !packages.is_empty()
@@ -958,9 +1070,9 @@ fn research_test_args(
             .iter()
             .any(|package| package_spec_may_name(package, sim))
     {
-        return Err(format!(
+        return Ok(ResearchTests::Filtered(format!(
             "the {RESEARCH_FEATURE} feature changes only {sim}, which --package leaves out"
-        ));
+        )));
     }
     let feature = format!("{sim}/{RESEARCH_FEATURE}");
     let mut args: Vec<String> = vec![
@@ -973,7 +1085,7 @@ fn research_test_args(
     if locked {
         args.push("--locked".to_owned());
     }
-    Ok((args, feature))
+    Ok(ResearchTests::Run { args, feature })
 }
 
 /// Whether a `--package` value may select the package called `name`: the name
@@ -996,16 +1108,15 @@ fn package_spec_may_name(spec: &str, name: &str) -> bool {
 /// AGENTS.md ban on `--all-features` is about compiling, where it would enable
 /// `research` everywhere and hide this very check.
 fn step_research_guard(ctx: &Ctx) -> Result<Outcome, String> {
-    let workspace = match &ctx.workspace {
-        Ok(workspace) => workspace,
-        Err(reason) => return Ok(Outcome::Skipped(format!("no metadata: {reason}"))),
-    };
+    let workspace = metadata(ctx)?;
 
     let present = workspace.present(GUARDED_PACKAGES);
     if present.is_empty() {
-        return Ok(Outcome::Skipped(
-            "none of plan-core, verifier, operator, gateway, gamectl exist yet".to_owned(),
-        ));
+        return Err(
+            "none of plan-core, verifier, operator, gateway, gamectl exist, so there is nothing \
+             to guard; the workspace lost its crates or the metadata is wrong"
+                .to_owned(),
+        );
     }
 
     for package in &present {
@@ -1058,60 +1169,133 @@ fn step_research_guard(ctx: &Ctx) -> Result<Outcome, String> {
     )))
 }
 
-/// The wall is a crate boundary. Floats, `as` casts and hash maps are legal
-/// inside the walled crates, so nothing deterministic may depend on them —
-/// otherwise the allowance leaks into hashed state. "Nothing deterministic" is
-/// [`WALL_GUARDED_PACKAGES`]: the guarded crates and the sim itself.
+/// The wall is a crate boundary, checked in both directions.
+///
+/// 1. Floats, `as` casts and hash maps are legal inside the walled crates, so
+///    nothing deterministic may depend on them — otherwise the allowance leaks
+///    into hashed state. "Nothing deterministic" is [`WALL_GUARDED_PACKAGES`]:
+///    the guarded crates and the sim itself.
+/// 2. The thin client never reaches the core: each walled crate named in
+///    [`CLIENT_WALL`] never reaches the crates its line forbids (decisions-log
+///    item 102 (3)).
+///
+/// Both relations read the same listing, `cargo tree --package <p>
+/// --all-features --prefix none --format {p}`, and are judged by one pure
+/// function, [`first_reached`], which the unit tests break both ways.
 fn step_wall_guard(ctx: &Ctx) -> Result<Outcome, String> {
-    let workspace = match &ctx.workspace {
-        Ok(workspace) => workspace,
-        Err(reason) => return Ok(Outcome::Skipped(format!("no metadata: {reason}"))),
-    };
+    let workspace = metadata(ctx)?;
 
     let walled = workspace.present(WALLED_PACKAGES);
     let guarded = workspace.present(WALL_GUARDED_PACKAGES);
     if walled.is_empty() || guarded.is_empty() {
-        return Ok(Outcome::Skipped(
-            "the walled crates or the guarded crates do not exist yet".to_owned(),
+        return Err(format!(
+            "the walled crates ({}) or the guarded crates ({}) are missing from the workspace, \
+             so the wall has nothing to separate; the metadata is wrong or a crate was removed",
+            if walled.is_empty() { "none" } else { "present" },
+            if guarded.is_empty() {
+                "none"
+            } else {
+                "present"
+            },
         ));
     }
 
     for package in &guarded {
-        let mut args: Vec<String> = vec![
-            "tree".to_owned(),
-            "--package".to_owned(),
-            package.clone(),
-            "--all-features".to_owned(),
-            "--prefix".to_owned(),
-            "none".to_owned(),
-            "--format".to_owned(),
-            "{p}".to_owned(),
-        ];
-        if ctx.locked {
-            args.push("--locked".to_owned());
-        }
-        let tree = capture(ctx, &ctx.cargo, &args)?;
-        for line in tree.lines() {
-            let name = line.split_whitespace().next().unwrap_or("");
-            if walled.iter().any(|walled_name| walled_name == name) {
-                return Err(format!(
-                    "`{package}` depends on the walled crate `{name}`; floats and unordered \
-                     collections are legal there and must not reach the deterministic crates"
-                ));
-            }
+        let tree = dependency_listing(ctx, package)?;
+        if let Some(name) = first_reached(package, &tree, &walled) {
+            return Err(format!(
+                "`{package}` depends on the walled crate `{name}`; floats and unordered \
+                 collections are legal there and must not reach the deterministic crates"
+            ));
         }
     }
 
+    let mut client_notes: Vec<String> = Vec::new();
+    for (client, forbidden_bare) in CLIENT_WALL {
+        let present = workspace.present(&[*client]);
+        let Some(package) = present.first() else {
+            return Err(format!(
+                "`{client}` is named in CLIENT_WALL and is not in the workspace; remove its line \
+                 in the same pull request that removes the crate"
+            ));
+        };
+        let forbidden = workspace.present(forbidden_bare);
+        let tree = dependency_listing(ctx, package)?;
+        if let Some(name) = first_reached(package, &tree, &forbidden) {
+            return Err(format!(
+                "`{package}` reaches `{name}`. The client side of the wall marshals and decides \
+                 nothing (AGENTS.md section 3 rule 4; decisions-log item 102 (3)): a walled \
+                 crate with an edge to the core has the rules, a verdict or the sim's stepping \
+                 API within reach"
+            ));
+        }
+        client_notes.push(format!(
+            "{package} reaches none of {}",
+            forbidden.join(", ")
+        ));
+    }
+
     Ok(Outcome::Done(format!(
-        "{} do not depend on {}",
+        "{} do not depend on {}; {}",
         guarded.join(", "),
-        walled.join(", ")
+        walled.join(", "),
+        client_notes.join("; ")
     )))
+}
+
+/// `cargo tree --package <p> --all-features --prefix none --format {p}`: every
+/// package `package` reaches, one per line, itself first. `--all-features` so
+/// that no feature of the package can bring an edge in later; this is a query,
+/// not a build.
+fn dependency_listing(ctx: &Ctx, package: &str) -> Result<String, String> {
+    let mut args: Vec<String> = vec![
+        "tree".to_owned(),
+        "--package".to_owned(),
+        package.to_owned(),
+        "--all-features".to_owned(),
+        "--prefix".to_owned(),
+        "none".to_owned(),
+        "--format".to_owned(),
+        "{p}".to_owned(),
+    ];
+    if ctx.locked {
+        args.push("--locked".to_owned());
+    }
+    capture(ctx, &ctx.cargo, &args)
+}
+
+/// The first name in a `cargo tree --prefix none --format {p}` listing that is
+/// one of `forbidden`, skipping `package` itself. Pure: both of `wall-guard`'s
+/// relations are this function over a listing, so both are unit-tested on
+/// synthetic listings. A line is `<name> v<version>[ (<path>)][ (*)]`; the name
+/// is its first word.
+fn first_reached<'a>(package: &str, listing: &'a str, forbidden: &[String]) -> Option<&'a str> {
+    listing
+        .lines()
+        .filter_map(|line| line.split_whitespace().next())
+        .filter(|name| *name != package)
+        .find(|name| {
+            forbidden
+                .iter()
+                .any(|forbidden_name| forbidden_name == name)
+        })
+}
+
+/// The workspace metadata, or the failure that says why it is missing. Every
+/// step that needs it fails without it (decisions-log item 116 (6)(g)).
+fn metadata(ctx: &Ctx) -> Result<&Workspace, String> {
+    ctx.workspace
+        .as_ref()
+        .map_err(|reason| format!("no workspace metadata: {reason}"))
 }
 
 fn step_deny(ctx: &Ctx) -> Result<Outcome, String> {
     if !ctx.root.join("deny.toml").is_file() {
-        return Ok(Outcome::Skipped("no deny.toml".to_owned()));
+        return Err(
+            "no deny.toml at the workspace root; the licence, advisory and banned-crate policy \
+             lives there (AGENTS.md section 3 rule 5)"
+                .to_owned(),
+        );
     }
     if !cargo_subcommand_available(&ctx.cargo, "deny") {
         return skip_or_fail(
@@ -1127,9 +1311,11 @@ fn step_deny(ctx: &Ctx) -> Result<Outcome, String> {
 
 fn step_buf(ctx: &Ctx) -> Result<Outcome, String> {
     let Some(config_dir) = buf_config_dir(&ctx.root) else {
-        return Ok(Outcome::Skipped(
-            "no buf.yaml / buf.work.yaml yet".to_owned(),
-        ));
+        return Err(
+            "no buf.yaml / buf.work.yaml at the root or under proto/; the schema step has \
+             nothing to lint"
+                .to_owned(),
+        );
     };
     if !tool_available("buf") {
         return skip_or_fail(
@@ -1159,13 +1345,16 @@ fn step_buf(ctx: &Ctx) -> Result<Outcome, String> {
     run(ctx, "buf", &["lint".to_owned(), input.clone()])?;
 
     // `buf breaking` compares against the base branch in the local object
-    // store, so CI checks out with fetch-depth: 0 and fetches main. A fresh
-    // clone that has no main yet simply skips the comparison rather than
-    // inventing a baseline.
+    // store, so CI checks out with fetch-depth: 0 and fetches main. Without a
+    // local main the comparison cannot run, and an `ok` that did not compare is
+    // the failure this harness exists to prevent (decisions-log item
+    // 116 (6)(g) and (p)).
     if !git_ref_exists(ctx, "refs/heads/main") {
-        return Ok(Outcome::Done(
-            "buf lint clean; breaking skipped (no local `main` to compare against)".to_owned(),
-        ));
+        return Err(
+            "buf lint is clean, but there is no local `main` for `buf breaking` to compare \
+             against; fetch it (`git fetch origin main:main`) and run the step again"
+                .to_owned(),
+        );
     }
 
     let against = if input == "." {
@@ -1189,7 +1378,11 @@ fn step_buf(ctx: &Ctx) -> Result<Outcome, String> {
     // the branch comparison catches churn, the tag comparison catches a
     // released-schema break (AGENTS.md section 9, item 8).
     Ok(Outcome::Done(
-        "buf lint clean; no breaking changes against main".to_owned(),
+        "buf lint clean; no breaking changes against main. The regenerate-and-compare half \
+         of AGENTS.md section 9 item 8 runs as tests (crates/proto/tests/generated.rs, \
+         crates/gateway/tests/methods.rs, crates/gamectl/tests/docs.rs) through `test` and \
+         `golden`; generated JSON Schema is v1.1's"
+            .to_owned(),
     ))
 }
 
@@ -1212,13 +1405,12 @@ fn step_buf(ctx: &Ctx) -> Result<Outcome, String> {
 /// otherwise fail this step's "a missing fresh output is a failure" rule on a
 /// clean checkout, on every operating system.
 ///
-/// The step self-activates as areas fill: it skips while nothing it compares is
-/// committed, and compares whatever is. T1 turned it on — `crates/proto`'s
-/// tests write four `actual.*` files into `<target>/golden/proto/` as they run.
-/// The other producing sides (plan-core's canonical form and JSONC round-trip,
-/// verifier `report_hash`, `render_plan` prose, the mapgen and mesher digests)
-/// join it the same way, by writing their fresh output where this step looks
-/// and committing the `expected.*` beside the area's README.
+/// Every area the producing tasks filled is compared: `tests/golden` missing,
+/// or holding no case this step compares, is a failure rather than a skip
+/// (decisions-log item 116 (6)(g)) — the stage has goldens, so a tree without
+/// them is a tree that lost them. Producers join by writing their fresh output
+/// where this step looks and committing the `expected.*` beside the area's
+/// README.
 fn step_golden(ctx: &Ctx) -> Result<Outcome, String> {
     let golden_root = ctx.root.join("tests").join("golden");
     let target_dir = match &ctx.workspace {
@@ -1226,21 +1418,23 @@ fn step_golden(ctx: &Ctx) -> Result<Outcome, String> {
         Err(_) => ctx.root.join("target"),
     };
     if !golden_root.is_dir() {
-        return Ok(Outcome::Skipped(
-            "no golden files yet (tests/golden does not exist)".to_owned(),
-        ));
+        return Err(
+            "tests/golden does not exist, so no golden is compared; the stage's goldens live \
+             there (tests/golden/README.md)"
+                .to_owned(),
+        );
     }
-    // Before the skip, not after it: a tree whose only goldens belong to the
-    // steps that own them still has bytes, and rule 3 is about the tree.
+    // Before the check below, not after it: a tree whose only goldens belong
+    // to the steps that own them still has bytes, and rule 3 is about the tree.
     golden::check_endings(&golden_root)?;
 
     if !golden::has_goldens(&golden_root)? {
-        return Ok(Outcome::Skipped(format!(
-            "the tests/golden area layout is committed but no case this step compares has an \
-             expected.* file yet (the producing tasks fill them; see tests/golden/README.md). \
-             {} are compared by the steps that own them",
+        return Err(format!(
+            "no case this step compares has an expected.* file under tests/golden (only {} \
+             hold goldens, and they are compared by the steps that own them); the stage's \
+             goldens are missing",
             golden::SELF_COMPARED_AREAS.join(" and ")
-        )));
+        ));
     }
 
     let report = golden::compare_tree(&golden_root, &target_dir.join("golden"), ctx.bless)?;
@@ -1266,20 +1460,17 @@ fn step_golden(ctx: &Ctx) -> Result<Outcome, String> {
 }
 
 /// Runs the sim's determinism binary, validates the per-tick hash chain it
-/// writes, and compares it with the committed chain when there is one. CI
-/// uploads the chain per operating system and a later job diffs the three.
-///
-/// PLACEHOLDER: the binary arrives with spike G4, so until then this reports
-/// and passes.
+/// writes, and compares it with the committed chain. CI uploads the chain per
+/// operating system and the `cross-OS determinism guard` job compares the
+/// three. A missing binary, a missing committed chain or missing metadata is a
+/// failure (decisions-log item 116 (6)(g)); `--bless` writes the chain.
 fn step_determinism(ctx: &Ctx) -> Result<Outcome, String> {
-    let workspace = match &ctx.workspace {
-        Ok(workspace) => workspace,
-        Err(reason) => return Ok(Outcome::Skipped(format!("no metadata: {reason}"))),
-    };
+    let workspace = metadata(ctx)?;
     let Some(owner) = workspace.package_with_bin(DETERMINISM_BIN) else {
-        return Ok(Outcome::Skipped(format!(
-            "no `{DETERMINISM_BIN}` binary in the workspace yet (it arrives with spike G4)"
-        )));
+        return Err(format!(
+            "no `{DETERMINISM_BIN}` binary in the workspace; `pharmakos-sim` builds it \
+             (crates/sim/src/bin/determinism.rs)"
+        ));
     };
 
     let hash_path = workspace.target_dir.join(HASH_FILE);
@@ -1314,43 +1505,75 @@ fn step_determinism(ctx: &Ctx) -> Result<Outcome, String> {
 
     let ticks = validate_hash_file(&hash_path)?;
 
-    // Compare with the committed chain when one exists.
     let golden_path = ctx.root.join(HASH_GOLDEN);
-    if golden_path.is_file() {
-        let golden = fs::read(&golden_path)
-            .map_err(|error| format!("reading {}: {error}", golden_path.display()))?;
-        let fresh = fs::read(&hash_path)
-            .map_err(|error| format!("reading {}: {error}", hash_path.display()))?;
-        if golden != fresh {
-            if ctx.bless {
-                fs::write(&golden_path, &fresh)
-                    .map_err(|error| format!("writing {}: {error}", golden_path.display()))?;
-                return Ok(Outcome::Done(format!(
-                    "{ticks} ticks; hash chain re-baselined — say in the PR why the hashes moved"
-                )));
-            }
-            return Err(format!(
-                "the hash chain moved: {} differs from {}\n{}\n      A moved hash chain is a \
-                 behaviour change. Explain it in the pull request; never re-bless it to get a \
-                 red build to green.",
-                HASH_FILE,
-                HASH_GOLDEN,
-                first_difference(&golden, &fresh)
-            ));
-        }
-        return Ok(Outcome::Done(format!(
+    let golden = if golden_path.is_file() {
+        Some(
+            fs::read(&golden_path)
+                .map_err(|error| format!("reading {}: {error}", golden_path.display()))?,
+        )
+    } else {
+        None
+    };
+    let fresh = fs::read(&hash_path)
+        .map_err(|error| format!("reading {}: {error}", hash_path.display()))?;
+    match chain_verdict(golden.as_deref(), &fresh, ctx.bless) {
+        ChainVerdict::Matches => Ok(Outcome::Done(format!(
             "{ticks} ticks; hash chain matches {HASH_GOLDEN}"
-        )));
+        ))),
+        ChainVerdict::Bless => {
+            fs::write(&golden_path, &fresh)
+                .map_err(|error| format!("writing {}: {error}", golden_path.display()))?;
+            Ok(Outcome::Done(format!(
+                "{ticks} ticks; hash chain written to {HASH_GOLDEN} — say in the PR why the \
+                 hashes moved"
+            )))
+        }
+        ChainVerdict::Missing => Err(format!(
+            "{ticks} per-tick hashes written to {HASH_FILE}, and there is no committed chain at \
+             {HASH_GOLDEN} to compare them with. A chain that compares nothing checks nothing; \
+             `cargo xtask determinism --bless` writes it, and the pull request says why"
+        )),
+        ChainVerdict::Moved => Err(format!(
+            "the hash chain moved: {} differs from {}\n{}\n      A moved hash chain is a \
+             behaviour change. Explain it in the pull request; never re-bless it to get a \
+             red build to green.",
+            HASH_FILE,
+            HASH_GOLDEN,
+            first_difference(golden.as_deref().unwrap_or_default(), &fresh)
+        )),
     }
+}
 
-    Ok(Outcome::Done(format!(
-        "{ticks} per-tick hashes written to {HASH_FILE} (no committed chain to compare yet)"
-    )))
+/// What the `determinism` step makes of the fresh chain.
+#[derive(Debug, PartialEq, Eq)]
+enum ChainVerdict {
+    /// The committed chain equals the fresh one.
+    Matches,
+    /// `--bless`: write the fresh chain as the committed one.
+    Bless,
+    /// No committed chain, and no `--bless`: a failure.
+    Missing,
+    /// The committed chain differs, and no `--bless`: a failure.
+    Moved,
+}
+
+/// The `determinism` step's decision, pure so that "a missing committed chain
+/// fails" is unit-tested rather than asserted in prose.
+fn chain_verdict(golden: Option<&[u8]>, fresh: &[u8], bless: bool) -> ChainVerdict {
+    match golden {
+        Some(golden) if golden == fresh => ChainVerdict::Matches,
+        _ if bless => ChainVerdict::Bless,
+        Some(_) => ChainVerdict::Moved,
+        None => ChainVerdict::Missing,
+    }
 }
 
 fn step_reuse(ctx: &Ctx) -> Result<Outcome, String> {
     if !ctx.root.join("REUSE.toml").is_file() {
-        return Ok(Outcome::Skipped("no REUSE.toml".to_owned()));
+        return Err(
+            "no REUSE.toml at the workspace root; it is the licence manifest `reuse lint` reads"
+                .to_owned(),
+        );
     }
     if !tool_available("reuse") {
         return skip_or_fail(
@@ -1368,24 +1591,25 @@ fn step_reuse(ctx: &Ctx) -> Result<Outcome, String> {
 ///
 /// A scenario is a headless match written down — map seed, one playbook per
 /// seat, the segment list, and assertions on events **and** on the hash chain
-/// (AGENTS.md section 9 item 10, section 10 item 4). `gamectl scenario run`
-/// executes one and arrives at T15; T20 promotes this step from skipping to
-/// required.
+/// (AGENTS.md section 9 item 10, section 10 item 4). Every committed scenario
+/// file is first validated against the frozen format — unknown keys rejected,
+/// seeds and durations checked, playbook paths resolved, the assertion
+/// vocabulary enforced — and then played by `gamectl scenario run`, whose exit
+/// status is the verdict.
 ///
-/// Until then the step is not idle. Every committed scenario file is parsed and
-/// validated against the frozen format — unknown keys rejected, seeds and
-/// durations checked, playbook paths resolved, the assertion vocabulary
-/// enforced — so a malformed scenario is a red build today rather than a
-/// surprise at T15. A file that fails validation is an **error**; the absence
-/// of a runner is a **skip**, with the reason and the task named.
+/// Required (decisions-log items 75 and 116 (6)(g)): no scenario files, no
+/// metadata, no `gamectl` binary or no `scenario` subcommand is a **failure**
+/// with the reason, never a skip, because section 10 item 4 is not met by a
+/// step that played nothing.
 fn step_scenario(ctx: &Ctx) -> Result<Outcome, String> {
     let files = scenario::collect(&ctx.root)?;
     if files.is_empty() {
-        return Ok(Outcome::Skipped(
-            "no scenario files yet (scenarios/**/*.scenario.jsonc matched nothing); \
+        return Err(
+            "no scenario files (scenarios/**/*.scenario.jsonc matched nothing), so no headless \
+             match was played; AGENTS.md section 10 item 4 needs the stage's scenarios, and \
              scenarios/README.md documents the format"
                 .to_owned(),
-        ));
+        );
     }
 
     let mut valid: Vec<scenario::Scenario> = Vec::new();
@@ -1417,28 +1641,22 @@ fn step_scenario(ctx: &Ctx) -> Result<Outcome, String> {
         names.join(", ")
     );
 
-    let workspace = match &ctx.workspace {
-        Ok(workspace) => workspace,
-        Err(reason) => {
-            return Ok(Outcome::Skipped(format!(
-                "{checked}; no metadata: {reason}"
-            )));
-        }
-    };
+    let workspace = ctx.workspace.as_ref().map_err(|reason| {
+        format!("{checked}; no workspace metadata to find the runner: {reason}")
+    })?;
     let Some(owner) = workspace.package_with_bin(SCENARIO_BIN) else {
-        return Ok(Outcome::Skipped(format!(
-            "{checked}; there is no `{SCENARIO_BIN}` binary in the workspace yet — \
-             `{SCENARIO_BIN} {SCENARIO_SUBCOMMAND} run` arrives with T15, and this step turns \
-             itself on when it does"
-        )));
+        return Err(format!(
+            "{checked}; there is no `{SCENARIO_BIN}` binary in the workspace, so none of them \
+             was played (`{SCENARIO_BIN} {SCENARIO_SUBCOMMAND} run` is the runner, T15)"
+        ));
     };
 
     let probe = cargo_run_args(ctx, &owner, &[SCENARIO_SUBCOMMAND, "--help"]);
     if !command_succeeds(&ctx.root, &ctx.cargo, &probe) {
-        return Ok(Outcome::Skipped(format!(
-            "{checked}; `{SCENARIO_BIN}` exists but has no `{SCENARIO_SUBCOMMAND}` subcommand yet \
-             — T15 fills it"
-        )));
+        return Err(format!(
+            "{checked}; `{SCENARIO_BIN} {SCENARIO_SUBCOMMAND} --help` did not succeed, so the \
+             runner is missing or does not build, and none of them was played"
+        ));
     }
 
     for item in &valid {
@@ -1456,57 +1674,61 @@ fn step_scenario(ctx: &Ctx) -> Result<Outcome, String> {
     )))
 }
 
-/// Harness part 2, half two: the vista screenshot.
+/// Harness part 2, half two: the screenshots.
 ///
 /// The obvious shape of this step — run Godot, upload the PNG — asserts
 /// nothing; the comparison in [`png`] is the assertion, and its report goes out
 /// through [`annotate`] because GitHub hides logs and step summaries from
 /// logged-out viewers (G1 section 10.12).
 ///
-/// Four preconditions, each a named skip rather than a quiet pass:
+/// In this order, and nothing builds or stages before the platform check, so
+/// the Windows and macOS legs and a local `--local-verify` run keep their plain
+/// skip:
 ///
-/// * the Godot project exists (T16 builds it);
-/// * a golden PNG is committed (T16 commits the first one, after eyeballing it
-///   for cracks, missing faces and inverted winding);
-/// * the platform is Linux — the golden is rendered under **xvfb + lavapipe**,
-///   and a second rasteriser's output would make the alarm permanently red
-///   (skeleton-plan section 7 decision 22, recommended and not yet logged; G1
-///   measured 1.14 % of pixels differing between a Quadro and lavapipe on
-///   identical geometry);
-/// * `godot` and `xvfb-run` are installed.
+/// 1. the Godot project exists (a failure if not);
+/// 2. the platform is Linux — the goldens are rendered under **xvfb +
+///    lavapipe**, and a second rasteriser's output would make the alarm
+///    permanently red (skeleton-plan section 7 decision 22, logged as
+///    decisions-log item 116 (6)(a); G1 measured 1.14 % of pixels differing
+///    between a Quadro and lavapipe on identical geometry). The one skip;
+/// 3. `godot` answers `--version` and `xvfb-run` is on `PATH` — found by path,
+///    because `xvfb-run` has no `--version` and exits non-zero on it
+///    (decisions-log item 110 (4)). Through `skip_or_fail`;
+/// 4. the staging pre-step: the cdylib is built and staged exactly as
+///    `stage-client` stages it ([`stage_library`]), because every shot draws
+///    through the bridge;
+/// 5. `godot --headless --path godot --import` ([`import_project`]). A
+///    non-editor Godot run loads GDExtensions only from
+///    `res://.godot/extension_list.cfg`, which the editor writes and git
+///    ignores, so on a fresh checkout the extension's classes are placeholders
+///    until the import has run. G1 lost four runs to this;
+/// 6. every shot in [`SHOTS`] is rendered windowed under xvfb and its actual
+///    written, and a `::notice title=<shot> render::` line gives its size and
+///    red-channel variance — before any floor or golden check, so a first run
+///    carries the figures a variance floor is set from;
+/// 7. per shot: the variance floor, then a missing golden **fails** (the
+///    render-only path: the actual is written and uploaded, to be looked at
+///    and committed, decisions-log item 105 (5)) and a present one is compared
+///    with the tolerance. Every shot is judged before the step answers.
 ///
-/// And one pre-step that is not optional: `godot --headless --path godot
-/// --import`. A non-editor Godot run loads GDExtensions only from
-/// `res://.godot/extension_list.cfg`, which the editor writes when it scans the
-/// project and which is git-ignored — so on a fresh checkout, every CI runner,
-/// the extension's classes instantiate as placeholders and the first call on
-/// them fails. G1 lost four runs to this.
-///
-/// Note that `--headless` is used **only** for the import. It selects the dummy
-/// rendering driver, under which `frame_post_draw` never fires and a screenshot
-/// coroutine parks for ever — silently, producing no PNG and no error. The
-/// render itself runs windowed under xvfb.
+/// `--headless` is used **only** for the import. It selects the dummy
+/// rendering driver, under which `frame_post_draw` never fires and a
+/// screenshot coroutine parks for ever — silently, producing no PNG and no
+/// error.
 fn step_screenshot(ctx: &Ctx) -> Result<Outcome, String> {
     let project = ctx.root.join(GODOT_PROJECT_DIR);
     if !project.join("project.godot").is_file() {
-        return Ok(Outcome::Skipped(format!(
-            "no {GODOT_PROJECT_DIR}/project.godot yet — the Godot project and the vista arrive \
-             with T16, and this step turns itself on when they do"
-        )));
-    }
-    let golden_path = ctx.root.join(VISTA_GOLDEN);
-    if !golden_path.is_file() {
-        return Ok(Outcome::Skipped(format!(
-            "no committed vista golden at {VISTA_GOLDEN} yet — T16 commits the first one after \
-             eyeballing it for cracks, missing faces and inverted winding"
-        )));
+        return Err(format!(
+            "no {GODOT_PROJECT_DIR}/project.godot, so there is no project to render; the \
+             screenshots are required (decisions-log item 116 (6)(g))"
+        ));
     }
     if !cfg!(target_os = "linux") {
         return Ok(Outcome::Skipped(
-            "the vista golden is rendered under xvfb + lavapipe on Linux only (skeleton-plan \
-             section 7 decision 22, recommended and not yet logged); comparing a second \
-             platform's rasteriser against it would be permanently red and would say nothing \
-             about the geometry"
+            "the PNG goldens are rendered under xvfb + lavapipe on Linux only (skeleton-plan \
+             section 7 decision 22, logged as decisions-log item 116 (6)(a)); comparing a \
+             second platform's rasteriser against them would be permanently red and would say \
+             nothing about the geometry"
                 .to_owned(),
         ));
     }
@@ -1515,68 +1737,95 @@ fn step_screenshot(ctx: &Ctx) -> Result<Outcome, String> {
         return skip_or_fail(
             ctx,
             &format!(
-                "`{godot}` is not installed (the CI job installs the pinned 4.7.2 build; \n                 $PHARMAKOS_GODOT overrides the name)"
+                "`{godot}` is not installed (the CI job installs the pinned 4.7.2 build; \
+                 $PHARMAKOS_GODOT overrides the name)"
             ),
         );
     }
-    if !tool_available("xvfb-run") {
+    let Some(xvfb_run) = find_on_path("xvfb-run") else {
         return skip_or_fail(
             ctx,
-            "xvfb-run is not installed (`apt-get install xvfb`); `godot --headless` is not a \
+            "xvfb-run is not on PATH (`apt-get install xvfb`); `godot --headless` is not a \
              substitute — it selects the dummy driver and cannot take a screenshot",
         );
+    };
+    let xvfb_run = xvfb_run.to_string_lossy().into_owned();
+
+    // The staging pre-step: every shot draws through the bridge.
+    let workspace = metadata(ctx)?;
+    let (library, staged_bytes) = stage_library(ctx, workspace, &project)?;
+    let import_note = import_project(ctx, &godot, &project)?;
+    println!("   {library} staged ({staged_bytes} bytes); {import_note}");
+
+    // Render every shot first, so each actual is on disk for the upload even
+    // when an earlier shot fails its check.
+    let mut rendered: Vec<(&Shot, Result<png::Image, String>)> = Vec::new();
+    for shot in SHOTS {
+        let actual_path = workspace.target_dir.join(shot.actual);
+        let image = render_shot(ctx, &godot, &xvfb_run, shot, &actual_path);
+        match &image {
+            Ok(image) => {
+                let variance = image.red_variance()?;
+                println!(
+                    "::notice title={} render::{}x{}, red-channel variance {variance} (floor {})",
+                    shot.name, image.width, image.height, shot.min_variance
+                );
+            }
+            Err(error) => println!("::error title={} render::{error}", shot.name),
+        }
+        rendered.push((shot, image));
     }
 
-    // The pre-step every fresh checkout needs. Without it the extension's
-    // classes are placeholders and the scene fails on its first call.
-    run(
-        ctx,
-        &godot,
-        &[
-            "--headless".to_owned(),
-            "--path".to_owned(),
-            GODOT_PROJECT_DIR.to_owned(),
-            "--import".to_owned(),
-        ],
-    )?;
+    let mut failures: Vec<String> = Vec::new();
+    let mut passed: Vec<String> = Vec::new();
+    for (shot, image) in rendered {
+        match judge_shot(ctx, shot, image) {
+            Ok(note) => passed.push(note),
+            Err(error) => failures.push(format!("{}: {error}", shot.name)),
+        }
+    }
+    if failures.is_empty() {
+        Ok(Outcome::Done(passed.join("; ")))
+    } else {
+        Err(failures.join("\n      "))
+    }
+}
 
-    let target_dir = match &ctx.workspace {
-        Ok(workspace) => workspace.target_dir.clone(),
-        Err(_) => ctx.root.join("target"),
-    };
-    let actual_path = target_dir.join(VISTA_ACTUAL);
+/// Renders one shot to `actual_path` and decodes it. A stale PNG from an
+/// earlier run is removed first, so it can never pass for this one.
+fn render_shot(
+    ctx: &Ctx,
+    godot: &str,
+    xvfb_run: &str,
+    shot: &Shot,
+    actual_path: &Path,
+) -> Result<png::Image, String> {
     if let Some(parent) = actual_path.parent() {
         fs::create_dir_all(parent)
             .map_err(|error| format!("creating {}: {error}", parent.display()))?;
     }
-    // A stale PNG from a previous run must not be able to pass for this one.
     if actual_path.exists() {
-        fs::remove_file(&actual_path)
+        fs::remove_file(actual_path)
             .map_err(|error| format!("removing {}: {error}", actual_path.display()))?;
     }
-
-    // PLACEHOLDER: the scene name and the "take one shot and quit" flag are
-    // T16's — the project does not exist yet, so this command line has never
-    // run. Owner/T16 ratifies it with the first real vista.
     run(
         ctx,
-        "xvfb-run",
+        xvfb_run,
         &[
             "-a".to_owned(),
             "-s".to_owned(),
             VISTA_SCREEN.to_owned(),
-            godot.clone(),
+            godot.to_owned(),
             "--path".to_owned(),
             GODOT_PROJECT_DIR.to_owned(),
             "--resolution".to_owned(),
             VISTA_RESOLUTION.to_owned(),
             "--".to_owned(),
-            format!("--scene={VISTA_SCENE}"),
+            format!("--scene={}", shot.scene),
             format!("--shot={}", actual_path.to_string_lossy()),
         ],
     )?;
-
-    let shot_bytes = fs::read(&actual_path).map_err(|error| {
+    let bytes = fs::read(actual_path).map_err(|error| {
         format!(
             "{} was not produced ({error}). Godot rendered nothing — check that the run was \
              windowed under xvfb rather than `--headless`, which selects the dummy driver and \
@@ -1584,37 +1833,50 @@ fn step_screenshot(ctx: &Ctx) -> Result<Outcome, String> {
             actual_path.display()
         )
     })?;
-    let shot =
-        png::decode(&shot_bytes).map_err(|error| format!("{}: {error}", actual_path.display()))?;
-    let variance = shot.red_variance()?;
-    if variance < png::MIN_VARIANCE {
+    png::decode(&bytes).map_err(|error| format!("{}: {error}", actual_path.display()))
+}
+
+/// One shot's verdict: its variance floor, then its golden — missing is a
+/// failure after the render, present is compared with the tolerance.
+fn judge_shot(ctx: &Ctx, shot: &Shot, image: Result<png::Image, String>) -> Result<String, String> {
+    let image = image?;
+    let variance = image.red_variance()?;
+    if variance < shot.min_variance {
         return Err(format!(
-            "the vista is blank or near-uniform (red-channel variance {variance}, floor {}); \
+            "the render is blank or near-uniform (red-channel variance {variance}, floor {}); \
              nothing was drawn",
-            png::MIN_VARIANCE
+            shot.min_variance
         ));
     }
-
+    let golden_path = ctx.root.join(shot.golden);
+    if !golden_path.is_file() {
+        return Err(format!(
+            "rendered ({}x{}, variance {variance}), and there is no committed golden at {} to \
+             compare it with. The render is the job's `vista-screenshot` artefact: look at it, \
+             commit it there and say in tests/golden/vista/README.md what it shows and which run \
+             rendered it (decisions-log item 105 (5))",
+            image.width, image.height, shot.golden
+        ));
+    }
     let golden_bytes = fs::read(&golden_path)
         .map_err(|error| format!("reading {}: {error}", golden_path.display()))?;
     let golden_image =
-        png::decode(&golden_bytes).map_err(|error| format!("{VISTA_GOLDEN}: {error}"))?;
-    let diff = png::compare(&shot, &golden_image)?;
-
+        png::decode(&golden_bytes).map_err(|error| format!("{}: {error}", shot.golden))?;
+    let diff = png::compare(&image, &golden_image)?;
     let report = format!(
-        "{} ({}x{}, red-channel variance {variance})\nvs {VISTA_GOLDEN}\n{}",
-        actual_path.display(),
-        shot.width,
-        shot.height,
+        "{} ({}x{}, red-channel variance {variance})\nvs {}\n{}",
+        shot.actual,
+        image.width,
+        image.height,
+        shot.golden,
         diff.describe()
     );
-    annotate::notice("vista-screenshot", &report);
+    annotate::notice(&format!("{}-screenshot", shot.name), &report);
     diff.check(png::MAX_MEAN_THOUSANDTHS, png::MAX_HARD_PPM)?;
-
-    Ok(Outcome::Done(format!(
-        "the vista matches {VISTA_GOLDEN} ({} of {} pixels differ at all)",
-        diff.differing, diff.pixels
-    )))
+    Ok(format!(
+        "{} matches {} ({} of {} pixels differ at all)",
+        shot.name, shot.golden, diff.differing, diff.pixels
+    ))
 }
 
 /// Builds the gdext cdylib, stages it where Godot can load it, and runs the
@@ -1646,12 +1908,16 @@ fn step_screenshot(ctx: &Ctx) -> Result<Outcome, String> {
 /// is the step's: that is where T12's "assert the caught-panic count is 0"
 /// lives, and where paths A and B are compared inside the engine rather than
 /// only under `cargo test`.
+///
+/// A missing project, missing metadata or a workspace without the client crate
+/// is a failure (decisions-log item 116 (6)(g)); macOS is the one skip.
 fn step_stage_client(ctx: &Ctx) -> Result<Outcome, String> {
     let project = ctx.root.join(GODOT_PROJECT_DIR);
     if !project.join("project.godot").is_file() {
-        return Ok(Outcome::Skipped(format!(
-            "no {GODOT_PROJECT_DIR}/project.godot yet"
-        )));
+        return Err(format!(
+            "no {GODOT_PROJECT_DIR}/project.godot, so there is no project to stage the client \
+             into"
+        ));
     }
     // macOS is not a skip for want of a tool; it is a skip because there is
     // nothing to stage. `pharmakos.gdextension` declares windows.x86_64 and
@@ -1665,19 +1931,77 @@ fn step_stage_client(ctx: &Ctx) -> Result<Outcome, String> {
         )));
     }
 
-    let workspace = match &ctx.workspace {
-        Ok(workspace) => workspace,
-        Err(reason) => return Ok(Outcome::Skipped(format!("no metadata: {reason}"))),
-    };
-    if workspace.present(&[CLIENT_PACKAGE]).is_empty()
-        && !workspace
-            .packages
-            .iter()
-            .any(|package| package.name == CLIENT_PACKAGE)
-    {
-        return Ok(Outcome::Skipped(format!(
-            "`{CLIENT_PACKAGE}` is not a member of this workspace"
+    let workspace = metadata(ctx)?;
+    let (library, staged_bytes) = stage_library(ctx, workspace, &project)?;
+
+    let godot = godot_program();
+    if !tool_available(&godot) {
+        return skip_or_fail(
+            ctx,
+            &format!(
+                "the library is staged in {}, but `{godot}` is not installed, so the import that \
+                 a fresh checkout needs could not run (the `client` job in \
+                 .github/workflows/ci.yml installs the pinned 4.7.2 build; $PHARMAKOS_GODOT \
+                 overrides the name)",
+                project.join(CLIENT_STAGE_DIR).display()
+            ),
+        );
+    }
+
+    // The pre-step every fresh checkout needs; see this function's doc comment.
+    let import_note = import_project(ctx, &godot, &project)?;
+
+    if !ctx.client_check {
+        return Ok(Outcome::Done(format!(
+            "{library} staged ({staged_bytes} bytes, carries `{ENTRY_SYMBOL}`); {import_note}; \
+             `--check` also runs the headless client check"
         )));
+    }
+
+    run(
+        ctx,
+        &godot,
+        &[
+            "--headless".to_owned(),
+            "--path".to_owned(),
+            GODOT_PROJECT_DIR.to_owned(),
+            CLIENT_CHECK_SCENE.to_owned(),
+        ],
+    )
+    .map_err(|error| {
+        format!(
+            "{error}\n      The client check failed inside Godot. Its own report is above: a \
+             non-zero caught-panic count means gdext caught a panic at a `#[func]` boundary and \
+             turned it into a healthy-looking result, which is the failure the counter exists \
+             to make visible (spike G1 section 10.12)."
+        )
+    })?;
+
+    Ok(Outcome::Done(format!(
+        "{library} staged ({staged_bytes} bytes, carries `{ENTRY_SYMBOL}`); {import_note}; the \
+         headless client check passed with no caught panics"
+    )))
+}
+
+/// Steps 1 to 3 of [`step_stage_client`]: build the cdylib, check the
+/// extension file names it, copy it into `godot/bin` and byte-scan the staged
+/// copy for the entry symbol. Returns the library's file name and its size.
+/// `screenshot` runs the same function as its staging pre-step, so the two
+/// can never stage differently.
+fn stage_library(
+    ctx: &Ctx,
+    workspace: &Workspace,
+    project: &Path,
+) -> Result<(String, usize), String> {
+    if !workspace
+        .packages
+        .iter()
+        .any(|package| package.name == CLIENT_PACKAGE)
+    {
+        return Err(format!(
+            "`{CLIENT_PACKAGE}` is not a member of this workspace, so there is no client to \
+             stage"
+        ));
     }
 
     let mut args: Vec<String> = vec![
@@ -1746,55 +2070,7 @@ fn step_stage_client(ctx: &Ctx) -> Result<Outcome, String> {
             staged.display()
         ));
     }
-    let staged_bytes = bytes.len();
-
-    let godot = godot_program();
-    if !tool_available(&godot) {
-        return skip_or_fail(
-            ctx,
-            &format!(
-                "the library is staged at {}, but `{godot}` is not installed, so the import that \
-                 a fresh checkout needs could not run (the `client` job in \
-                 .github/workflows/ci.yml installs the pinned 4.7.2 build; $PHARMAKOS_GODOT \
-                 overrides the name)",
-                staged.display()
-            ),
-        );
-    }
-
-    // The pre-step every fresh checkout needs; see this function's doc comment.
-    let import_note = import_project(ctx, &godot, &project)?;
-
-    if !ctx.client_check {
-        return Ok(Outcome::Done(format!(
-            "{library} staged ({staged_bytes} bytes, carries `{ENTRY_SYMBOL}`); {import_note}; \
-             `--check` also runs the headless client check"
-        )));
-    }
-
-    run(
-        ctx,
-        &godot,
-        &[
-            "--headless".to_owned(),
-            "--path".to_owned(),
-            GODOT_PROJECT_DIR.to_owned(),
-            CLIENT_CHECK_SCENE.to_owned(),
-        ],
-    )
-    .map_err(|error| {
-        format!(
-            "{error}\n      The client check failed inside Godot. Its own report is above: a \
-             non-zero caught-panic count means gdext caught a panic at a `#[func]` boundary and \
-             turned it into a healthy-looking result, which is the failure the counter exists \
-             to make visible (spike G1 section 10.12)."
-        )
-    })?;
-
-    Ok(Outcome::Done(format!(
-        "{library} staged ({staged_bytes} bytes, carries `{ENTRY_SYMBOL}`); {import_note}; the \
-         headless client check passed with no caught panics"
-    )))
+    Ok((library, bytes.len()))
 }
 
 /// `godot --headless --path godot --import`, and the check that it produced what
@@ -1925,6 +2201,85 @@ fn skip_or_fail(ctx: &Ctx, message: &str) -> Result<Outcome, String> {
     } else {
         Ok(Outcome::Skipped(format!("{message} — step skipped")))
     }
+}
+
+// ---------------------------------------------------------------------------
+// The perf alarms (not a step)
+// ---------------------------------------------------------------------------
+
+/// The package and test target of the mesher's p99 alarm.
+const MESHER_PACKAGE: &str = "pharmakos-mesher";
+const MESHER_PERF_TEST: &str = "perf_alarm";
+
+/// `cargo xtask perf-alarms`: skeleton-plan section 7 decision 23, logged as
+/// decisions-log item 116 (6)(b). Per runner, never compared, no threshold,
+/// and it never fails — the job that runs it is not required, and
+/// `scripts/merge-train.sh` stops on any check that is not pass or skipping,
+/// so a failed measurement is a `::warning::` and the command still answers
+/// success.
+///
+/// * **mesher p99**: `crates/mesher/tests/perf_alarm.rs`, run exactly as its
+///   header says (`--release` is not optional; `--ignored`; `--nocapture`, so
+///   its own `::notice::` lines reach the annotations).
+/// * **allocations per tick**: a notice naming the test that asserts it. The
+///   count is zero by construction — `crates/sim/tests/allocations.rs` fails
+///   otherwise, in every leg's `test` step — so it is published, not
+///   measured again and never compared.
+///
+/// The third alarm the plan named, the tick-minus-pathing mean, is not built:
+/// a millisecond figure for the sim comes only from a walled crate driving it
+/// from outside (AGENTS.md section 4.5), none exists, and it moves to S2's
+/// G3′-real gate. The budgets come with S1's P1 and S2's G3′-real gates.
+/// xtask itself reads no clock; the mesher's test does, behind the wall.
+fn perf_alarms() {
+    let cargo = env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
+    let root = match workspace_root() {
+        Ok(root) => root,
+        Err(error) => {
+            println!("::warning title=perf alarms::no measurement: {error}");
+            return;
+        }
+    };
+    let os = env::consts::OS;
+    let args: Vec<String> = [
+        "test",
+        "--release",
+        "--package",
+        MESHER_PACKAGE,
+        "--test",
+        MESHER_PERF_TEST,
+        "--",
+        "--ignored",
+        "--nocapture",
+    ]
+    .iter()
+    .map(|arg| (*arg).to_owned())
+    .collect();
+    println!("   $ {}", render_command(&cargo, &args));
+    let status = Command::new(&cargo).args(&args).current_dir(&root).status();
+    match status {
+        Ok(status) if status.success() => {}
+        Ok(status) => println!(
+            "::warning title=mesher p99::not measured on {os}: `{}` failed ({}); an alarm, not a \
+             gate, so this job stays green",
+            render_command(&cargo, &args),
+            describe_exit(status)
+        ),
+        Err(error) => println!(
+            "::warning title=mesher p99::not measured on {os}: could not launch `{cargo}`: \
+             {error}"
+        ),
+    }
+    println!("{}", allocations_notice(os));
+}
+
+/// The allocations-per-tick notice, word for word. Pure, so its text is pinned.
+fn allocations_notice(os: &str) -> String {
+    format!(
+        "::notice title=allocations per tick::0 on {os}: asserted by \
+         crates/sim/tests/allocations.rs::a_tick_allocates_nothing in this commit's test step; \
+         zero by construction, never compared"
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -2532,8 +2887,29 @@ fn godot_program() -> String {
 /// name a developer has locally.
 const GODOT_DEFAULT_PROGRAM: &str = "godot";
 
+/// Where `program` is on `PATH`, found by looking rather than by running it.
+///
+/// For a tool with no `--version`: `xvfb-run` prints its usage and exits
+/// non-zero on it, so [`tool_available`] reported it missing on a runner where
+/// it was installed and CI carried a shim until T20 (decisions-log item
+/// 110 (4)). Only `screenshot` uses this, on Linux.
+fn find_on_path(program: &str) -> Option<PathBuf> {
+    let path = env::var_os("PATH")?;
+    let dirs: Vec<PathBuf> = env::split_paths(&path).collect();
+    find_in_dirs(program, &dirs)
+}
+
+/// The first `dir/program` among `dirs` that is a file. Pure over the
+/// filesystem it is given, so it is unit-tested on a temporary directory.
+fn find_in_dirs(program: &str, dirs: &[PathBuf]) -> Option<PathBuf> {
+    dirs.iter()
+        .map(|dir| dir.join(program))
+        .find(|candidate| candidate.is_file())
+}
+
 /// True when the tool answers `--version`. On Windows this finds `tool.exe` but
-/// not a `tool.cmd` shim, which is why CI installs buf as a real binary.
+/// not a `tool.cmd` shim, which is why CI installs buf as a real binary. A tool
+/// with no `--version` (`xvfb-run`) is found with [`find_on_path`] instead.
 fn tool_available(program: &str) -> bool {
     Command::new(program)
         .arg("--version")
@@ -2795,25 +3171,34 @@ overflow-checks = true\n";
             "--features",
             "pharmakos-sim/research",
         ]);
+        let run = |args: Vec<String>| ResearchTests::Run {
+            args,
+            feature: "pharmakos-sim/research".to_owned(),
+        };
         // No -p: the sim alone, never --workspace.
-        let (args, feature) = research_test_args(Some("pharmakos-sim"), &[], false).expect("runs");
-        assert_eq!(args, expected);
-        assert_eq!(feature, "pharmakos-sim/research");
+        assert_eq!(
+            research_test_args(Some("pharmakos-sim"), &[], false),
+            Ok(run(expected.clone()))
+        );
 
         // --locked is passed on as before.
-        let (locked, _) = research_test_args(Some("pharmakos-sim"), &[], true).expect("runs");
         let mut expected_locked = expected.clone();
         expected_locked.push("--locked".to_owned());
-        assert_eq!(locked, expected_locked);
+        assert_eq!(
+            research_test_args(Some("pharmakos-sim"), &[], true),
+            Ok(run(expected_locked))
+        );
 
         // -p naming the sim, alone or among others: the same command.
         for packages in [
             strings(&["pharmakos-sim"]),
             strings(&["pharmakos-gateway", "pharmakos-sim"]),
         ] {
-            let (args, _) =
-                research_test_args(Some("pharmakos-sim"), &packages, false).expect("runs");
-            assert_eq!(args, expected, "{packages:?}");
+            assert_eq!(
+                research_test_args(Some("pharmakos-sim"), &packages, false),
+                Ok(run(expected.clone())),
+                "{packages:?}"
+            );
         }
 
         // A -p value cargo resolves to the sim, or one this cannot rule out:
@@ -2824,28 +3209,254 @@ overflow-checks = true\n";
             "pharmakos-si?",
             "path+file:///repo/crates/sim#0.1.0",
         ] {
-            let (args, _) =
-                research_test_args(Some("pharmakos-sim"), &strings(&[spec]), false).expect(spec);
-            assert_eq!(args, expected, "{spec}");
+            assert_eq!(
+                research_test_args(Some("pharmakos-sim"), &strings(&[spec]), false),
+                Ok(run(expected.clone())),
+                "{spec}"
+            );
         }
 
-        // -p leaving the sim out: skipped, with the reason.
+        // -p leaving the sim out: skipped, with the reason (a filter the
+        // caller chose, the one skip this step keeps).
         assert_eq!(
             research_test_args(
                 Some("pharmakos-sim"),
                 &strings(&["pharmakos-gateway"]),
                 false
             ),
-            Err(
+            Ok(ResearchTests::Filtered(
                 "the research feature changes only pharmakos-sim, which --package leaves out"
                     .to_owned()
-            )
+            ))
         );
 
-        // No crate declares the feature: skipped, as before.
+        // No crate declares the feature: a failure now, not a skip
+        // (decisions-log item 116 (6)(g)).
+        let missing = research_test_args(None, &[], false).expect_err("fails");
+        assert!(
+            missing.contains("no crate declares a `research` feature"),
+            "{missing}"
+        );
+    }
+
+    /// A synthetic `cargo tree --prefix none --format {p}` listing.
+    const LISTING: &str = "\
+pharmakos-client-gdext v0.1.0 (/repo/crates/client-gdext)
+godot v0.5.5
+pharmakos-mesher v0.1.0 (/repo/crates/mesher)
+pharmakos-proto v0.1.0 (/repo/crates/proto)
+prost v0.14.1
+pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
+";
+
+    #[test]
+    fn wall_guard_relation_one_catches_a_deterministic_crate_reaching_the_wall() {
+        let walled = strings(&["pharmakos-client-gdext", "pharmakos-mesher"]);
+        // The gateway's listing, clean.
+        let clean =
+            "pharmakos-gateway v0.1.0 (/r)\npharmakos-sim v0.1.0 (/r)\nxxhash-rust v0.8.15\n";
+        assert_eq!(first_reached("pharmakos-gateway", clean, &walled), None);
+        // The same with the mesher pulled in through a third crate.
+        let broken = format!("{clean}some-helper v1.0.0\npharmakos-mesher v0.1.0 (/r)\n");
         assert_eq!(
-            research_test_args(None, &[], false),
-            Err("no crate declares a `research` feature yet".to_owned())
+            first_reached("pharmakos-gateway", &broken, &walled),
+            Some("pharmakos-mesher")
+        );
+    }
+
+    #[test]
+    fn wall_guard_relation_two_catches_the_client_reaching_the_core() {
+        let forbidden = |bare: &[&str]| -> Vec<String> {
+            bare.iter()
+                .map(|name| format!("pharmakos-{name}"))
+                .collect()
+        };
+        let (client, client_forbidden) = CLIENT_WALL
+            .iter()
+            .find(|(name, _)| *name == "client-gdext")
+            .expect("the client's line");
+        assert_eq!(*client, "client-gdext");
+        let client_forbidden = forbidden(client_forbidden);
+        // Today's shape: gdext, the mesher and proto. Clean.
+        assert_eq!(
+            first_reached("pharmakos-client-gdext", LISTING, &client_forbidden),
+            None
+        );
+        // Each forbidden crate, reached directly or through another, is caught.
+        for name in [
+            "pharmakos-sim",
+            "pharmakos-verifier",
+            "pharmakos-plan-core",
+            "pharmakos-gateway",
+        ] {
+            let broken = format!("{LISTING}{name} v0.1.0 (/repo)\n");
+            assert_eq!(
+                first_reached("pharmakos-client-gdext", &broken, &client_forbidden),
+                Some(name),
+                "{name}"
+            );
+        }
+        // The mesher may reach nothing of the sim.
+        let (_, mesher_forbidden) = CLIENT_WALL
+            .iter()
+            .find(|(name, _)| *name == "mesher")
+            .expect("the mesher's line");
+        let mesher_forbidden = forbidden(mesher_forbidden);
+        let mesher = "pharmakos-mesher v0.1.0 (/r)\nxxhash-rust v0.8.15\n";
+        assert_eq!(
+            first_reached("pharmakos-mesher", mesher, &mesher_forbidden),
+            None
+        );
+        let mesher_broken = format!("{mesher}pharmakos-sim v0.1.0 (/r)\n");
+        assert_eq!(
+            first_reached("pharmakos-mesher", &mesher_broken, &mesher_forbidden),
+            Some("pharmakos-sim")
+        );
+        // A crate is never its own offence, and a prefix is not a name.
+        assert_eq!(
+            first_reached(
+                "pharmakos-sim",
+                "pharmakos-sim v0.1.0\npharmakos-simulator v1.0.0\n",
+                &strings(&["pharmakos-sim"])
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn the_client_wall_names_walled_crates_only() {
+        // Every line is a walled crate by name, and names no walled crate as
+        // forbidden: the relation is client to core, never inside the wall.
+        for (client, forbidden) in CLIENT_WALL {
+            assert!(WALLED_PACKAGES.contains(client), "{client} is not walled");
+            for name in *forbidden {
+                assert!(!WALLED_PACKAGES.contains(name), "{name} is walled");
+                assert!(
+                    WALL_GUARDED_PACKAGES.contains(name),
+                    "{name} is not a deterministic crate"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_missing_committed_chain_fails_and_bless_writes_it() {
+        assert_eq!(
+            chain_verdict(Some(b"0\ta\n"), b"0\ta\n", false),
+            ChainVerdict::Matches
+        );
+        assert_eq!(
+            chain_verdict(Some(b"0\ta\n"), b"0\ta\n", true),
+            ChainVerdict::Matches
+        );
+        assert_eq!(
+            chain_verdict(Some(b"0\ta\n"), b"0\tb\n", false),
+            ChainVerdict::Moved
+        );
+        assert_eq!(
+            chain_verdict(Some(b"0\ta\n"), b"0\tb\n", true),
+            ChainVerdict::Bless
+        );
+        // The old `ok` with "no committed chain to compare yet" is a failure.
+        assert_eq!(chain_verdict(None, b"0\ta\n", false), ChainVerdict::Missing);
+        assert_eq!(chain_verdict(None, b"0\ta\n", true), ChainVerdict::Bless);
+    }
+
+    #[test]
+    fn a_tool_is_found_by_path_without_running_it() {
+        let dir = env::temp_dir().join("pharmakos-xtask-find-on-path");
+        let empty = dir.join("empty");
+        let full = dir.join("full");
+        fs::create_dir_all(&empty).expect("temp dir");
+        fs::create_dir_all(&full).expect("temp dir");
+        // A file that would fail if run: the probe must not run it.
+        fs::write(full.join("xvfb-run"), "#!/bin/sh\nexit 2\n").expect("write");
+        assert_eq!(
+            find_in_dirs("xvfb-run", &[empty.clone(), full.clone()]),
+            Some(full.join("xvfb-run"))
+        );
+        assert_eq!(find_in_dirs("xvfb-run", std::slice::from_ref(&empty)), None);
+        // A directory of that name is not the tool.
+        fs::create_dir_all(empty.join("godot")).expect("temp dir");
+        assert_eq!(find_in_dirs("godot", &[empty]), None);
+    }
+
+    #[test]
+    fn the_allocations_notice_is_word_for_word() {
+        assert_eq!(
+            allocations_notice("linux"),
+            "::notice title=allocations per tick::0 on linux: asserted by \
+             crates/sim/tests/allocations.rs::a_tick_allocates_nothing in this commit's test \
+             step; zero by construction, never compared"
+        );
+    }
+
+    #[test]
+    fn perf_alarms_is_not_a_step() {
+        assert!(STEPS.iter().all(|step| step.name != "perf-alarms"));
+    }
+
+    #[test]
+    fn every_shot_is_a_png_golden_under_vista() {
+        let mut names: Vec<&str> = Vec::new();
+        for shot in SHOTS {
+            assert!(
+                shot.golden.starts_with("tests/golden/vista/expected."),
+                "{}",
+                shot.golden
+            );
+            assert!(
+                Path::new(shot.golden)
+                    .extension()
+                    .is_some_and(|extension| extension == "png"),
+                "{}",
+                shot.golden
+            );
+            assert!(
+                shot.actual.starts_with("golden/vista/actual."),
+                "{}",
+                shot.actual
+            );
+            assert_eq!(
+                shot.golden
+                    .trim_start_matches("tests/golden/vista/expected."),
+                shot.actual.trim_start_matches("golden/vista/actual."),
+                "a shot's golden and actual share their name"
+            );
+            assert!(shot.scene.starts_with("res://scenes/"), "{}", shot.scene);
+            assert!(shot.min_variance > 0, "{}", shot.name);
+            names.push(shot.name);
+        }
+        assert_eq!(names, ["vista", "rows", "wizard"]);
+    }
+
+    /// Decisions-log item 116 (6)(g): every skip that stood for a missing input
+    /// is a failure, and exactly three skips remain — `screenshot` off Linux,
+    /// `stage-client` on macOS and `test-research`'s `--package` filter — plus
+    /// `skip_or_fail`'s missing tool, which `--require-tools` turns into a
+    /// failure. Counted over this file's own text, so a new skip is a red test
+    /// that names this decision rather than a quiet addition.
+    #[test]
+    fn only_the_named_skips_remain() {
+        let source = include_str!("main.rs");
+        let needle = ["Outcome::", "Skipped("].concat();
+        // run_cli's match arm reads a skip; it does not make one.
+        let arm = ["Ok(", needle.as_str(), "note))"].concat();
+        let mut constructions = 0_usize;
+        for line in source.lines() {
+            let code = line.trim_start();
+            if code.starts_with("//") || code.starts_with(&arm) {
+                continue;
+            }
+            constructions += code.matches(needle.as_str()).count();
+        }
+        // step_screenshot's platform skip, step_stage_client's macOS skip,
+        // step_test_research's filter and skip_or_fail.
+        assert_eq!(
+            constructions, 4,
+            "a new `Outcome::Skipped` was added or one was removed; a missing input is a \
+             failure (decisions-log item 116 (6)(g)), and only the platform statements, the \
+             --package filter and a missing tool skip"
         );
     }
 

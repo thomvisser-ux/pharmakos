@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! The scenario file format, and the checks `cargo xtask ci`'s `scenario` step
-//! can make before a runner exists.
+//! makes before it plays a file.
 //!
 //! A scenario is a headless match written down: **a map seed, the rules table,
 //! one playbook per seat, the segment list, and assertions on events *and* on
@@ -12,10 +12,13 @@
 //! chain a claim about the sim rather than about whatever was on disk that
 //! afternoon.
 //!
-//! `gamectl scenario run` executes one; it arrives at T15. This module is the
-//! format, frozen first, so that every later task delivers *into* a format
-//! rather than inventing one — which is the whole reason harness part 2's
-//! formats are pulled into wave 1 (decisions-log item 75).
+//! `gamectl scenario run` executes one (T15), and `cargo xtask ci`'s
+//! `scenario` step validates every file here before it plays each with that
+//! runner. This module is the format, frozen first, so that every later task
+//! delivered *into* a format rather than inventing one — which is the whole
+//! reason harness part 2's formats were pulled into wave 1 (decisions-log item
+//! 75). gamectl's own validator (`crates/gamectl/src/scenario.rs`) reads the
+//! same format and is stricter in two places `scenarios/README.md` names.
 //!
 //! `scenarios/README.md` is the prose specification and is the file to read
 //! first. The rules enforced here are its machine-checkable half; where the two
@@ -64,16 +67,18 @@ pub(crate) const FORMAT: &str = "pharmakos.scenario.v1";
 
 /// The assertion vocabulary, in full.
 ///
-/// PLACEHOLDER: skeleton-plan section 7 decision 16 (recommended, not yet
-/// logged) extends this **once**, at T15, when the runner meets real events —
-/// the named candidates are `event_count_in_range`, `state_hash_at_tick` and
-/// `terminal_hash`. Owner decides at T15. The vocabulary is data inside the
-/// format, not the format, so adding to it is not a format break; removing one
-/// would be.
+/// Decisions-log item 97 (skeleton-plan section 7 decision 16, taken
+/// 2026-09-14) authorised one extension "when `scenario run` meets real
+/// events", by *at most* `event_count_in_range`, `state_hash_at_tick` and
+/// `terminal_hash`; T15 took none of the three, and the owner has the question
+/// (`crates/gamectl/src/scenario.rs` says why). The vocabulary is data inside
+/// the format, not the format, so adding to it is not a format break; removing
+/// one would be.
 pub(crate) const ASSERTIONS: &[&str] = &["event_fired", "hash_chain_equals"];
 
-/// Names held for decision 16's extension. Naming one today is an error that
-/// says which task adds it, rather than "unknown assertion".
+/// Names held for decisions-log item 97's extension. Naming one today is an
+/// error that names the decision holding it, rather than "unknown assertion",
+/// in the words gamectl's own validator uses.
 const RESERVED_ASSERTIONS: &[&str] = &[
     "event_count_in_range",
     "state_hash_at_tick",
@@ -106,8 +111,9 @@ const MAP_KEYS: &[&str] = &["seed", "generator"];
 /// does not document it — and a key that is accepted, undocumented and unchecked
 /// is the same failure as a silently stripped one in miniature: a scenario could
 /// carry `"operator": "whatever"` and have it neither honoured nor refused.
-/// T18 adds it with the operator that reads it; adding a key is additive, so
-/// that is not a format break.
+/// A `builtin` seat plays Easy, and the key that would name another difficulty
+/// waits for one: owner, at S5 (decisions-log item 113 (8)). Adding a key is
+/// additive, so that is not a format break.
 const SEAT_KEYS: &[&str] = &["seat", "kind", "playbook"];
 const SEGMENT_KEYS: &[&str] = &["index", "length_ms", "note"];
 const SEAT_KINDS: &[&str] = &["playbook", "safe", "builtin"];
@@ -117,7 +123,7 @@ const SEAT_KINDS: &[&str] = &["playbook", "safe", "builtin"];
 const MAX_SEATS: usize = 3;
 
 /// What a valid scenario file told us, for the step's summary line and for the
-/// runner's command line once T15 exists.
+/// runner's command line.
 #[derive(Debug)]
 pub(crate) struct Scenario {
     /// The file it came from, relative to the workspace root.
@@ -126,7 +132,8 @@ pub(crate) struct Scenario {
     pub(crate) name: String,
     /// The rules table this scenario runs against, relative to the workspace
     /// root: the `rules` key when it names one, [`DEFAULT_RULES`] otherwise.
-    /// The runner passes it on T15's command line.
+    /// The runner reads the same key from the file; the step names it in its
+    /// summary line when it is not the default.
     pub(crate) rules: String,
     /// Seat count.
     pub(crate) seats: usize,
@@ -486,9 +493,9 @@ fn check_assertions(root: &Path, json: &Json, problems: &mut Vec<Problem>) -> us
             problems.push(Problem::new(
                 &format!("{base}/assert"),
                 format!(
-                    "`{kind}` is reserved for the vocabulary extension skeleton-plan section 7 \
-                     decision 16 (recommended, not yet logged) schedules for T15, when the \
-                     runner meets real events; it is not in {FORMAT} yet"
+                    "`{kind}` is reserved for the vocabulary extension decisions-log item 97 \
+                     authorises (plan §7 decision 16); T15 took none of the three and the owner \
+                     has the question (see crates/gamectl/src/scenario.rs). It is not in {FORMAT}."
                 ),
             ));
             continue;
@@ -967,13 +974,13 @@ mod tests {
     }
 
     #[test]
-    fn a_reserved_assertion_names_the_task_that_adds_it() {
+    fn a_reserved_assertion_names_the_decision_that_holds_it() {
         let dir = scratch("reserved");
         let path = write(&dir, &GOOD.replace("\"event_fired\"", "\"terminal_hash\""));
         let report = validate(&dir, &path).expect_err("rejected");
-        assert!(report.contains("decision 16"), "{report}");
-        assert!(report.contains("not yet logged"), "{report}");
-        assert!(report.contains("T15"), "{report}");
+        assert!(report.contains("decisions-log item 97"), "{report}");
+        assert!(report.contains("T15 took none"), "{report}");
+        assert!(!report.contains("not yet logged"), "{report}");
     }
 
     /// Inserts a `rules` key into [`GOOD`], which has none.
