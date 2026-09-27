@@ -83,6 +83,7 @@ cargo fmt --all           # rustfmt defaults for edition 2024; the tree is forma
 cargo xtask ci            # the whole check suite — what CI runs, and it is green
 cargo xtask ci --quick    # fmt, clippy, unit tests — the inner loop
 cargo xtask ci --fix      # rustfmt plus machine-applicable clippy fixes
+cargo xtask package       # the unsigned zip for this platform (T21); --bless its manifest
 git commit -s             # DCO sign-off is mandatory on every commit
 git worktree add ../pharmakos-<task> -b feat/<crate>-<task>
 ```
@@ -94,8 +95,9 @@ passed, and `main`'s push runs everything (decisions-log item 115 (4)).
 If something is green locally and red in CI, that is an
 `xtask` bug worth fixing, not a reason to run a different command. It is complete for harness parts
 1 and 2 (`xtask/src/main.rs`, fifteen steps, covering AGENTS.md §9 items 1–10) and green; a failure
-in it is a bug to fix rather than a reason to reach for another command. `cargo xtask ci-scope` and
-`cargo xtask perf-alarms` sit outside the step table, and `perf-alarms` never fails.
+in it is a bug to fix rather than a reason to reach for another command. `cargo xtask ci-scope`,
+`cargo xtask perf-alarms` and `cargo xtask package` sit outside the step table; `perf-alarms` never
+fails, and `package` runs alone (AGENTS.md §9).
 
 ## When you finish
 
