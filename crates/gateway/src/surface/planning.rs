@@ -114,10 +114,11 @@ impl Surface {
     /// is what "stores none of it" means in code, and nothing in it executes.
     ///
     /// A host with **no** library configured lists nothing rather than failing:
-    /// where the folder lives on each platform is the owner's, with packaging
-    /// at T21 (the plan's own T13 PLACEHOLDER), and a wizard that could not
-    /// open because a path was unset would be worse than one with no templates
-    /// in it.
+    /// a wizard that could not open because a path was unset would be worse
+    /// than one with no templates in it. The shipped host is configured with
+    /// the zip's `library/`, beside `gamectl` (decisions-log item 117 (3)),
+    /// whose paths the zip's manifest golden pins, so an empty list from a
+    /// packaged build means the folder was removed.
     pub(super) fn list_templates(&self, request: &Request) -> Result<Json, Error> {
         let tag = request.string_param("tag")?.unwrap_or_default();
         let Some(folder) = self.host()?.library() else {

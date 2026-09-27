@@ -39,10 +39,12 @@ use std::thread::JoinHandle;
 
 /// The port the lobby binds when it has no reason to choose another.
 ///
-/// PLACEHOLDER: no port is registered and the spec names none. OWNER picks one
-/// at packaging, or the lobby passes `0` and lets the operating system choose --
-/// which is what a single-machine game with a lobby that already knows the port
-/// should probably do, and what the tests here use.
+/// PLACEHOLDER: unused. The host binds an ephemeral loopback port and the
+/// lobby reads it from the announce line (`serve.rs`), which is what a
+/// single-machine game with a lobby that already knows the port does, and
+/// what the tests here use; packaging kept that and chose no port
+/// (decisions-log item 117 (3)). Removing the constant is gateway code, for
+/// hardening, OWNER.
 pub const DEFAULT_PORT: u16 = 9500;
 
 /// A loopback listener: one socket per address family.

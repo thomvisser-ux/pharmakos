@@ -37,12 +37,13 @@
 //! written that way rather than against a hash literal.
 //!
 //! PLACEHOLDER: verifying against a **real** match's frozen snapshot — the one
-//! the gateway hands the editor — needs a running match to verify against, so
-//! it arrives with the lobby and packaging work (`gamectl` shipped beside the
-//! client, **T21**) or with the editor's own integration (**T19**), whichever
-//! first gives a shell command a match to point at. The owner decides which,
-//! and until then the reference view is what a shell answer is *about* and
-//! [`crate::strings::verify_footer`] says so in the output.
+//! the gateway hands the editor. The owner answered on 2026-09-27
+//! (decisions-log item 117 (1)): a shipped `gamectl verify` **keeps this
+//! reference view**. The live check at `submit_plan` is the authority, so a
+//! file placing a beacon outside the reference view's spheres gets E0403 from
+//! the command line although the game accepts it; [`crate::strings::verify_footer`]
+//! says the view is the reference one, and the zip's note says the rest. The
+//! question is revisited at S3 (Save/Load), OWNER.
 
 use pharmakos_proto::gp::v1::Voxel;
 use pharmakos_proto::gp::v1::beacon_filter::MandateKind;

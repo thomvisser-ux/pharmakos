@@ -10,13 +10,13 @@
 //! anything without saying which table produced it — which is why every command
 //! that needs one loads it through here and why `seat doctor` prints its hash.
 //!
-//! PLACEHOLDER: **where the table lives beside a shipped binary** is packaging's
-//! question, and packaging is **T21** (skeleton plan §3: "`gamectl` shipped
-//! alongside; the template and sample folders where T13 expects them"). Until
-//! then it is read from the repository, relative to `--root` or the working
-//! directory — which is what `cargo xtask ci` gives it and what a developer in
-//! a checkout has. T21 decides whether a shipped `gamectl` carries the table,
-//! reads it from an install directory, or refuses without `--root`.
+//! **Where the table lives beside a shipped binary** (decisions-log item
+//! 117 (3)): the zip is laid out like the repository, so a shipped `gamectl`
+//! reads `rules/rules.v1.json` beside itself exactly as a checkout's does,
+//! relative to `--root` or the working directory. `gamectl seat doctor` passes
+//! when run from the extracted folder, and from anywhere else it needs `--root`
+//! (the zip's note says so); the lobby passes the executable's folder as the
+//! root. `gamectl`'s default root stays the working directory (item 117 (14)).
 
 use std::path::Path;
 
