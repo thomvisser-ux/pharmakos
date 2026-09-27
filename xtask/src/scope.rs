@@ -39,6 +39,14 @@
 //! allow-list allows rather than denies, so a path wrongly counted as prose is
 //! the only way this can skip the suite, and the tests below pin the list.
 //!
+//! Those tests do not guard a pull request that breaks this file, though: CI
+//! runs the merge commit's own copy of the decider, and the tests that would
+//! catch the break are among the steps a `prose` answer skips. So each scope
+//! step in `.github/workflows/ci.yml` answers `full` in bash, before it builds
+//! xtask, whenever the commit changes `xtask/`, `.github/` or `.cargo/` (the
+//! `cargo xtask` alias). A change to this file therefore always runs the full
+//! suite, whatever this file says about it.
+//!
 //! The decision ([`decide`]) is a function of the event, the pull request's
 //! head and a repository directory, and runs the real git commands; only
 //! [`run_from_env`] reads the environment and writes `$GITHUB_OUTPUT`, so the
