@@ -64,10 +64,12 @@ launches), for the duration of the walking skeleton, and are revoked by the owne
   `cargo xtask ci --locked --require-tools --check` is green on its rebase onto `main`, with `main`'s
   push run watched after the merge (decisions-log item 116 (2)) — and the two adversarial reviews
   have been applied; the owner reviews the stage demo (AGENTS.md §10 item 8) rather than each PR.
-  Every merge is still a PR whose body names the contract paths it touches. Sub-agents still open a
-  PR and stop. Dependabot's pull requests merge the same way (decisions-log item 120): their two
-  reviews read the release notes and the change between the two versions, and because Dependabot
-  writes the body, the main session names the contract paths in a comment before it merges.
+  Every merge is still a PR whose body names the contract paths it touches, except Dependabot's,
+  which the main session merges the same way (decisions-log item 120): for an action pinned by SHA
+  the two reviews read the release notes and the diff between the two SHAs, and for a Cargo
+  security update the advisory and the crate's diff; a comment names the contract paths and the
+  head the reviews read, the merge is pinned to that head, and the main session asks
+  `@dependabot rebase` rather than rebasing the branch itself. Sub-agents still open a PR and stop.
 - The owner accepts **bypass-permissions mode** in that same session and in the sub-agents and
   workflow agents it launches, which inherit the mode (decisions-log item 116 (9)). Sub-agents still
   open a PR and stop; for them the contract-file rule is held by the lane's brief, the two adversarial
