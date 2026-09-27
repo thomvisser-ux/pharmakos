@@ -153,6 +153,40 @@ The terrain reads as one flat colour because every open voxel is lit to
 placeholder palette and shading (mesher `PALETTE`, `FACE_SHADE_256`, and
 `client-gdext`'s `view::palette_of`), all art PLACEHOLDERs for S6.
 
+### What the rows and wizard goldens show
+
+Both committed from the `vista screenshot (linux)` job of workflow run
+36298943791 (pull request #47's first run; xvfb + lavapipe, llvmpipe under
+Vulkan 1.4, Godot 4.7.2), taken from its `vista-screenshot` artefact, looked at
+before they were committed and again by the main session before the merge. The
+same run's notices gave their red-channel variance: **742** for the rows and
+**612** for the wizard, against `png::MIN_VARIANCE` = 200 (the vista measured
+2491), so neither needs a floor of its own.
+
+* `expected.rows.png` — `rows_shot.tscn` drawing `godot/fixtures/rows_report.json`
+  through the bridge's row decode and `scripts/rows.gd`: a dark panel at the
+  left of a grey 1280 x 720 frame holding four rows, top to bottom — **Error**
+  E0003 at `/declarative/route/0/set_flag` ("This is a word the game keeps for
+  later…", no Fix), **Error** E0108 at `/declarative/handlers/0/cooldown_ms`
+  with a "Fix: Set the cooldown to 5000 ms" button, **Warning** E0008 at
+  `/meta/fingerprint` with a "Fix: Remove the stale fingerprint" button, and
+  **Error** E0403 at `/declarative/route/0/place_beacon/at/voxel` (no Fix). Each
+  row has its coloured severity square, the severity in words, the plain
+  sentence, and the code and pointer; a Fix button appears only for the two
+  machine-applicable patches.
+* `expected.wizard.png` — `wizard_shot.tscn` drawing
+  `godot/fixtures/instantiate_suggested.json` through the bridge's wizard decode
+  and `scripts/wizard.gd`: the same panel holding the Hold & Build wizard's first
+  page — the label "Where to walk to before placing: the site itself", the raw
+  value `{"voxel":{"x":150,"y":25,"z":118}}` in the field with a "Send this
+  value" button, the mark "suggested by the built-in operator", the why ("A
+  Build beacon at the edge of your core's sphere holds the heat vent nearest
+  your core in its own."), and "Use this playbook" and "Close". No heading: a
+  hostless scene has no `list_templates` title.
+
+Both are flat UI panels on the placeholder theme, so a font, theme or layout
+change in Godot moves them as surely as a change to their input does.
+
 ### What a diff in the PNG means
 
 The comparator prints both statistics and the worst single-channel delta, and
