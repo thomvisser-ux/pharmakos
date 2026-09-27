@@ -51,15 +51,23 @@ contract-file rule depends on approval prompts actually happening; bypass mode r
 mechanism rather than speeding it up.
 
 **Owner's delegation for the walking skeleton (decisions-log §2.7 items 85 and 86, 2026-09-14).**
-Two relaxations apply to the owner's own Claude Code session only, for the duration of the
-walking skeleton, and are revoked by the owner's word at any time:
+Two relaxations apply to the owner's own Claude Code session only (the second also to the agents it
+launches), for the duration of the walking skeleton, and are revoked by the owner's word at any time:
 
-- The main assistant session may **merge** a skeleton PR, contract PRs included, once `cargo xtask
-  ci` is green on the branch and the two adversarial reviews have been applied; the owner reviews
-  the stage demo (AGENTS.md §10 item 8) rather than each PR. Every merge is still a PR whose body
-  names the contract paths it touches. Sub-agents still open a PR and stop.
-- The owner accepts **bypass-permissions mode** in that same session. The ban above stays in force
-  for every sub-agent and for any session that touches a real seat.
+- The main assistant session may **merge** a skeleton PR, contract PRs included, once CI's checks
+  are green on the branch — or, for a lane that `scripts/merge-train.sh --local-verify` checks
+  locally (its base moved by more than prose, and it touches none of the paths the script sends back
+  to the three-OS matrix), once CI's checks are green on its pre-rebase head and the script's
+  `cargo xtask ci --locked --require-tools --check` is green on its rebase onto `main`, with `main`'s
+  push run watched after the merge (decisions-log item 116 (2)) — and the two adversarial reviews
+  have been applied; the owner reviews the stage demo (AGENTS.md §10 item 8) rather than each PR.
+  Every merge is still a PR whose body names the contract paths it touches. Sub-agents still open a
+  PR and stop.
+- The owner accepts **bypass-permissions mode** in that same session and in the sub-agents and
+  workflow agents it launches, which inherit the mode (decisions-log item 116 (9)). Sub-agents still
+  open a PR and stop; for them the contract-file rule is held by the lane's brief, the two adversarial
+  reviews and the main session's reading of every PR before it merges, rather than by prompts. The
+  ban above stays in force for any session or agent that touches a real seat.
 
 ## Commands
 
@@ -72,7 +80,11 @@ git commit -s             # DCO sign-off is mandatory on every commit
 git worktree add ../pharmakos-<task> -b feat/<crate>-<task>
 ```
 
-`cargo xtask ci` is the single entry point. If something is green locally and red in CI, that is an
+`cargo xtask ci` is the single entry point. A prose-only pull request (one that changes nothing but
+`docs/**`, `AGENTS.md`, `CLAUDE.md`, `.claude/**` and top-level `*.md`) runs the DCO walk and the
+`reuse` step in place of the suite, so for it "CI's checks are green on the branch" means those two
+passed, and `main`'s push runs everything (decisions-log item 115 (4)).
+If something is green locally and red in CI, that is an
 `xtask` bug worth fixing, not a reason to run a different command. It is complete for harness part 1
 (`xtask/src/main.rs`, twelve steps, covering AGENTS.md §9 items 1–9) and green — ten `ok`, two
 `skipped` with reasons; a failure in it is a bug to fix rather than a reason to reach for another

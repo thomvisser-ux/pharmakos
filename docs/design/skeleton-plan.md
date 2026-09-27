@@ -70,7 +70,7 @@ limit or the one-tick rule, with the full map unlocked.
 | 3. Golden playbooks round-trip byte-identically, verify identically (same `report_hash`), render identically | `tests/golden/plan-core/**`, `tests/golden/verifier/**` | T6, T8 |
 | 4. Headless scenario runs pass on assertions over events **and** hashes | `gamectl scenario run` over `scenarios/**`, wired into `xtask ci` | T3, T15, T20 |
 | 5. The three nightly adversarial scenarios | **Not this stage** — they start at S2 (spec section 15). `nightly-scenarios.yml` stays gated off | — |
-| 6. The stage's named depth task and its gate, or a deliberate written fallback | The skeleton has no named depth task in section 17's row; gates P1, P6, P2, G3′-real belong to S1, S3, S5 and S2. What this stage owes is that each of those gates' *shape* exists and is measured as a baseline, not certified | T6, T7, T19 |
+| 6. The stage's named depth task and its gate, or a deliberate written fallback | The skeleton has no named depth task in section 17's row; gates P1, P6, P2, G3′-real belong to S1, S3, S5 and S2. What this stage owes is that each of those gates' *shape* exists and is measured as a baseline, not certified; the P1 (T6's QUICK p99) and G3′-real baselines have no legal producer in this stage and are deferred to S1 and S2 (item 116 (6)(b)) | T6, T7, T19 |
 | 7. Docs updated in the same PR | Every task states which doc moves with it | all |
 | 8. The owner reviews the stage demo | §1.1 | T22 |
 
@@ -105,7 +105,7 @@ AGENTS.md, not a judgement call.
 | 49 | postcard 1.1.3 (`default-features = false`, `use-std`), fixed-width fields, sentinel `Option`, `SNAPSHOT_VERSION` in the bytes and checked on restore; the LEB128 `Vec`-length bend documented at the encoder | T2; save/resume in T17 |
 | 50 | Counter-based stateless RNG, `GOLDEN = 0x9E3779B97F4A7C15`, SplitMix64 finaliser; stream ids `Combat = 1`, `Spawn = 2`, `Map = 3`, additive only | T2; `Map` used by T5 |
 | 51 | The determinism rule set (no floats, no `as`, no `HashMap`/`HashSet`, no clock, overflow checks on in every profile, every sort key ends in a unique id, no recursion) | Already in `[workspace.lints]` and `clippy.toml`; T2 adds the **source-text confinement test** G2 and G3′ both recommend copying |
-| 52 | The single-platform frame-time GO is accepted; the Linux frame-time half stays unmeasured until a GPU runner exists | T20 leaves the `frame-time` job `if: false`; nothing in this stage claims a Linux frame number |
+| 52 | The single-platform frame-time GO is accepted; the Linux frame-time half stays unmeasured until a GPU runner exists | No `frame-time` job exists: it left with the spike workflows at T0 (item 71), and none is added until a GPU runner exists (item 116); nothing in this stage claims a Linux frame number |
 | 53 | Path B (`RenderingServer` RIDs) with path A (`ArrayMesh`) kept as a build-time switch, and the four guards that are the price of path B | T12 |
 | 54 | K = 4 surfaces / B = 512 KiB per frame, drain order (older than 2 frames, then nearest-camera, ties by chunk index, coalesce at the earliest issue frame, first chunk always through), as rules-table data | T4; the rules-table home is decision 7 |
 | 55 | 32³ chunks, single-voxel destruction, no rung of the G1 fallback ladder | T4, T5 |
@@ -678,17 +678,30 @@ its downside, and its section 0 lists the holes (H1–H16) the lines below close
 - **Crate owned:** `xtask` and `.github/workflows/**` (one xtask PR open at a time).
 - **Builds:** the cross-OS jobs item 71 promised would replace the deleted spike workflows — the hash chains, the path-hash file and the geometry golden compared across Windows, Linux and macOS in one job; `scenario` and `screenshot` promoted from skipping to required; the `schema` regenerate-and-compare step (AGENTS.md §9 item 8); the demo scenario set; and the perf **alarms** (mesher p99, tick-minus-pathing, allocations per tick) published as `::notice::` annotations, **not gates** — AGENTS.md §9 item 11 puts budgets with the gates that set them, which are S1's and S2's.
   Carrying G3′'s companion lesson: **a number that cannot vary across platforms must not be compared across them.** The three-OS job compares only the columns that can vary — hashes, path hashes, geometry digests — and the perf alarms are per-runner, because a green matrix on a number that reproduces by construction is false reassurance.
-- **Implements:** items 52 (the `frame-time` job stays `if: false` until a GPU runner exists), 71; AGENTS.md §9 items 6, 7, 8, 10, 11; §10 items 1–4.
+- **Implements:** items 52 (no `frame-time` job until a GPU runner exists; the spike's left at T0), 71; AGENTS.md §9 items 6, 7, 8, 10, 11; §10 items 1–4.
 - **Needs:** T15, T16, T19; and T14b and T18b, so it starts from settled chains (item 113).
 - **Acceptance:** one `cargo xtask ci` invocation covers AGENTS.md §10 items 1–4 with nothing skipped; the matrix is green on three OSes; a deliberate one-bit change to any golden turns it red with a readable diff.
 - **Contract PR:** yes.
 - **Agent-days:** 5.
-- **PLACEHOLDERs:** the perf alarm thresholds (decision 23).
+- **PLACEHOLDERs:** none for the alarms, which carry no threshold (decision 23 as item 116 (6)(b) logs it); the suite's time budget (`ci.yml`'s PLACEHOLDER, owner).
 - **Amended 2026-09-26 (item 115).** The CI-time narrowing and item 115 (4)'s docs-only fast path move to
   `### T20a`, which runs beside T18b in wave 6's run 4; T20 waits for T20a's merge (one xtask PR at a time), keeps the
   rest of its unit, and takes the `[profile.*]` question only if the Windows leg is still near its limit. The
   `AGENTS.md` and `CLAUDE.md` text booked to T20 (items 103 (9) with 104 (6)'s clause, 109 (6), 110 (4) and 114 (5))
   is the main session's, in the pull request that records T20's merge.
+- **Amended 2026-09-27 (item 116).** T20 runs alone as W7's run 1, and T21 follows whole in run 2. Item 116 (6)
+  settles the unit's open questions, and they bind the lane: decisions 22 and 23 logged (the alarms are the
+  mesher p99 and the allocations count in a job the ruleset does not require; the tick-minus-pathing mean has
+  no legal producer and moves to S2's G3′-real); the demo set is one new three-round scenario against a
+  `builtin` Easy seat (180, 60 and 60 s, each beat asserted at its first occurrence), and T20 adds its three lines
+  to `crates/gamectl/tests/scenarios.rs` (the `SCENARIOS` entry, its path constant and its name in the
+  committed-list test), its one named place in a crate; the client-to-sim check names its crates; `DETERMINISM_TICKS` and the sim's harness
+  constants stay, re-staged to S1; no `[profile.*]` change; a skip for a missing input becomes a failure and a
+  platform skip stays; the rows and wizard shots are committed under `tests/golden/vista/`; REUSE's garbled and
+  three-licence records get one narrow override block and `tests/golden/docs/` stays GPL; the fuzzer is wired
+  into `nightly-scenarios.yml` behind its gate; the DCO job walks on `workflow_dispatch`; the cross-OS
+  comparison extends `cross-OS determinism guard` under its name; the actions are pinned to commit SHAs; and
+  the casual fog phase term is not T20's.
 
 ---
 
@@ -717,7 +730,7 @@ its downside, and its section 0 lists the holes (H1–H16) the lines below close
   session records its times.
 - **Contract PR:** yes (`xtask`'s definition of `ci`, `.github/workflows/**`).
 - **Agent-days:** 1.5.
-- **PLACEHOLDERs:** none expected; the suite's time budget stays T20's.
+- **PLACEHOLDERs:** none expected; the suite's time budget went to T20, which leaves it to the owner (item 116 (6)(f)).
 
 ---
 
@@ -727,6 +740,10 @@ its downside, and its section 0 lists the holes (H1–H16) the lines below close
 - **Builds:** Godot export presets for Windows and Linux with the export templates pinned by version; the staged cdylib beside the executable; `gamectl` shipped alongside; the template and sample folders where T13 expects them; `LICENSES/` and the credits screen's CC-BY attributions (a shipping requirement, not a nicety); the two-line note on opening unsigned builds; and a release workflow cutting both zips from green CI on a tag with a changelog. **No signing, no notarisation, no macOS release** — that is hardening's ~3 wk (item 8).
 - **Implements:** item 8; spec section 15 (Platforms & packaging), section 17.
 - **Needs:** T16, T19; and T18b, because it packages `library/` and `godot/`, which T18b reshapes (item 113). Its `cargo xtask package` and `release.yml` land after T20's xtask PR has merged, which itself follows T20a's (AGENTS.md §6).
+- **Amended 2026-09-27 (item 116).** T21 runs whole, as one pull request, in W7's run 2, which launches after T20's
+  merge; nothing of it is built beside T20. The owner allowed its one question at W7's opening, the Godot 4.7.2 export
+  templates' download, and they are installed (item 116 (9)); the rest, including the PLACEHOLDERs marked owner at T21 and item 114 (2)'s
+  `gamectl verify` against a real match, are taken on the recommendation when its brief is written, and logged then.
 - **Acceptance:** a zip built by CI launches on a clean Windows runner and a clean Linux runner and reaches the lobby (with `--import` run first); `gamectl seat doctor` passes from inside the extracted zip; `reuse` green over the packaged tree; the zip's manifest committed as a golden so its contents cannot drift.
 - **Contract PR:** yes — `.github/workflows/**`.
 - **Agent-days:** 5.
@@ -763,14 +780,17 @@ Days are working days, five to a week. A task's start is the day its last input 
 | W4 | 5.0 – 7.4 | **T10** runner (5 d, d25–30), then **T11** interpreter (8 d, d30–38) | **T13** gateway method slice (9 d, d30–39) | **T12** client bridge (9 d, d28–37) | The spec's 14-call walkthrough passing against a live gateway; the extension loading in Godot on a fresh checkout with zero caught panics |
 | W5 | 7.4 – 9.8 | **T14** economy, Build, Survey-lite, programs (10 d, d38–48) | **T15** gamectl + `scenario run` (8 d, d39–47) | **T16a** view feed, match control, host loop (10 d, run 1, items 106–107); then **T16** vista + watch rig (10 d, run 2) | **Flying over the generated map, craters remeshing**; the watch rig playing a segment at 2–4× and skipping to its end; `gamectl scenario run` as a green `xtask ci` step |
 | W6 | 9.8 – 11.8 | run 2: **T17** save/resume, private replay, vision follow-up (6 d); run 3: **T14b** the key-core on the grid (1.5 d) | run 2: **T18** operator Easy + safe playbook (8 d); run 4: **T18b** the safe playbook's reading, Easy in `scenario run`, Hold & Build that builds (4.5–5 d) | run 1: **T18a** planning wire (8.75 d) and **T19** PR 1, route surface (5.5 d); run 3: **T19** PR 2, wizard (6.5 d); run 4: **T20a** CI time and the docs-only fast path (1.5 d) — items 111, 112, 113 and 115 | **A sealed playbook walking the commander**: a beacon placed, a Generator built, the treasury and kW meter moving, BMI settled at the recap — and a two-seat match against Easy |
-| W7 | 11.8 – 12.8, after W6's run 4 (item 113) | **T21** packaging (5 d, d59–64), its xtask part after T20's | — | **T20** xtask closing half-week (5 d, d59–64) | A zip that launches on a clean Windows and a clean Linux machine; one `xtask ci` covering §10 items 1–4 with nothing skipped |
+| W7 | 11.8 – 12.8, after W6's run 4 (item 113) | run 2: **T21** packaging (5 d), whole, after T20's merge (item 116) | — | run 1: **T20** xtask closing half-week (5 d), alone (item 116) | A zip that launches on a clean Windows and a clean Linux machine; one `xtask ci` covering §10 items 1–4 with nothing skipped |
 | W8 | 12.8 – 14.2 | — | — | **T22** integration, goldens, demo (6 d, d64–71) | The stage demo of §1.1 |
 | — | **14.2 – 15.5** | **float: 1.3 weeks** | | | |
 
 **Totals.** 24 tasks, **182 agent-days** (T16a added 2026-09-21, item 106; T18a added and T17 and T19 re-estimated 2026-09-23, item 111, which make it 25 tasks and about 194.75 agent-days; T14b and T18b added 2026-09-25, item 113, which make it 27 tasks and about 201 agent-days; T20a added 2026-09-26, item 115, which makes it 28 and about 202.5; the schedule figures that follow predate all four) over 71 working days of schedule. At three slots that is 213
 slot-days, so utilisation is about 80 % — the 20 % is where a contract PR waits for review, and it is
 deliberate. The critical path is **T0 → T2 → T5 → T7 → T10 → T11 → T14 → T18 → T19 → T20 → T22**,
-71 days end to end; the sim alone carries 52 agent-days across six of the eight waves.
+71 days end to end; the sim alone carries 52 agent-days across six of the eight waves. Item 116
+made W7 serial, T20 then T21: on this table's day count W7 ends about a week later and the
+critical path runs T20 → T21 → T22, which the float absorbs; in run hours, which item 116 (5)
+weighed, the difference is about half an hour.
 
 **Two consequences, stated plainly.**
 
@@ -824,10 +844,12 @@ item 100), `interpreter/`,
 event logs, and the vista PNGs. Later stages add *files*, never formats.
 
 **Deliberately not in harness part 2:** the three adversarial scenarios and their alarm bands (S2 —
-`nightly-scenarios.yml` stays gated off); the 10 000-playbook fuzzer's CI leg (the target exists at
-T6; the nightly run starts when the generator does); the perf **budget** steps (AGENTS.md §9 item 11
+`nightly-scenarios.yml` stays gated off); the perf **budget** steps (AGENTS.md §9 item 11
 — they arrive with the gates that set them, and a number guessed now is a number to unpick later);
-and G1's `frame-time` job, which stays `if: false` until a GPU runner exists (item 52).
+and G1's `frame-time` job, which left with the spike workflows at T0 and is not added until a GPU
+runner exists (items 52 and 116). The fuzzer's nightly job is wired at T20 behind the workflow's
+variable gate, so it runs once S2 enables the nightly workflow (item 116 (6)(j); the generator
+exists since T6).
 
 ---
 

@@ -467,7 +467,9 @@ of that premise.
 - **Never run an agent in bypass-permissions mode against a real seat**, and do not use it in this
   repository. The contract-file rule in §5 depends on approval prompts actually happening. Game
   tools are reached through pre-approved allow rules; bypass mode is not a shortcut, it is the
-  removal of the mechanism.
+  removal of the mechanism. The owner's one exception, for the walking skeleton only, is in
+  CLAUDE.md: bypass mode in the owner's own session and the agents it launches, never against a
+  real seat (decisions-log items 86 and 116 (9)).
 - Rate limits and an audit log on the gateway are part of the feature, not a later hardening task.
 
 ## 8. Commits
@@ -528,7 +530,10 @@ cargo xtask ci --fix      # rustfmt and the machine-applicable clippy fixes
    the no-dry-runs ban (`plan-core` and `verifier` never enable `research` and never reach the sim's
    stepping API); the banned-crate list; `cargo deny` for licences and advisories.
 4. **Profiles** — `overflow-checks = true` in every profile, release included.
-5. **Tests** — `cargo test --workspace`, with and without `research`.
+5. **Tests** — `cargo test --workspace` without `research`, and `pharmakos-sim`'s own tests with it
+   (`cargo test --package pharmakos-sim --features pharmakos-sim/research`): the sim is the one crate
+   whose code the feature changes, and clippy's research pass (item 2) still compiles every
+   non-walled crate against a research sim (decisions-log items 113 (9) and 115 (5)).
 6. **Determinism** — replay a fixed set of seeded matches headless and compare the full per-tick
    xxh3 hash chain against golden files; save/restore round-trips hash-identically; in the research
    build, fork equivalence. The CI matrix runs Windows, Linux and macOS and compares the chains
@@ -550,6 +555,16 @@ cargo xtask ci --fix      # rustfmt and the machine-applicable clippy fixes
 11. **Perf budgets** *(added per gate, not in `cargo xtask ci` today)* — the G3′ CI budget check
     (tick p99 within budget) lands with S2's exit measurement, and the verifier's QUICK ≤5 ms p99 and
     FULL ≤50 ms p99 at the playbook size budget (P1) land with the verifier's gate.
+
+**The docs-only fast path.** A pull request whose merge commit changes only `docs/**`, `AGENTS.md`,
+`CLAUDE.md`, `.claude/**` and top-level `*.md` runs the DCO walk and the `reuse` step in place of the
+suite; either can still fail it. Every other required job skips its remaining steps and reports
+success; each job that builds, and the cross-OS guard, says so in a `::notice::`. Each building
+job's scope step decides: it answers `full` in bash,
+before it builds `xtask`, for a merge commit that changes `xtask/`, `.github/` or `.cargo/`, so the
+decider never judges its own change; otherwise `cargo xtask ci-scope` decides, and answers `full` on
+any event but `pull_request` and on any error. Nothing can force it. The full suite runs on `main`'s
+push (decisions-log items 115 (4) and 116).
 
 Nightly, additionally: the three adversarial scenarios (§10) on a fixed seed set, and the fuzzer
 (10 000 generated playbooks, no panic).
