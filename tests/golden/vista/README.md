@@ -3,23 +3,28 @@ SPDX-FileCopyrightText: 2026 Pharmakos contributors
 SPDX-License-Identifier: GPL-3.0-or-later
 -->
 
-# `vista/` — the rendered screenshot, and the client's two text goldens
+# `vista/` — the rendered screenshots, and the client's two text goldens
 
-**Filled by T16** (`godot/` and `crates/client-gdext`), promoted from skipping to
-required by T20.
+**Filled by T16** (`godot/` and `crates/client-gdext`); the diagnostic rows and
+the wizard's first page (T19's shots) were committed and compared by T20, when
+the `screenshot` step became required.
 
-Three files, and none of them is compared by the `golden` step
+Five files, and none of them is compared by the `golden` step
 (`xtask/src/golden.rs` lists `vista/` in `SELF_COMPARED_AREAS`):
 
 | File | Compared by | Re-baselined with |
 | --- | --- | --- |
 | `expected.vista.png` | `cargo xtask screenshot`, with a tolerance, on the Linux leg | a deliberate re-render (below) |
+| `expected.rows.png` | the same | the same |
+| `expected.wizard.png` | the same | the same |
 | `expected.geometry.txt` | `crates/client-gdext/tests/vista_fixture.rs`, byte for byte, on every leg | `PHARMAKOS_BLESS_VISTA=1 cargo test -p pharmakos-client-gdext` |
 | `expected.events.txt` | `crates/client-gdext/tests/event_list.rs`, byte for byte, on every leg | the same |
 
 The two text goldens write their fresh output to
 `<target>/golden/vista/actual.*.txt` whether they pass or not, so a red run
-leaves the new file on disk to be diffed.
+leaves the new file on disk to be diffed. `actual.geometry.txt` is also uploaded
+by every `cargo xtask ci` leg and byte-compared across Windows, Linux and macOS
+by the `cross-OS determinism guard` job.
 
 ## `expected.geometry.txt` — the client's geometry for the keyframe fixture
 
@@ -96,12 +101,35 @@ the frame back — so the shot is taken on a frame outside any measured series
 framing, looking from the north-east (the corner at the map's largest x and
 north coordinates is nearest the camera).
 
-Decisions-log item 105 (5): the golden is rendered by CI's Linux leg, not on a
-developer's machine. With no `expected.vista.png` committed, the `screenshot`
-job's bootstrap step renders with the same command line and uploads the PNG as
-the `vista-screenshot` artefact; somebody looks at it, commits it here and
-writes below what it shows. A deliberate re-render starts the same way: delete
-the golden, push, download, look.
+Decisions-log item 105 (5): every PNG golden here is rendered by CI's Linux
+run, never on a developer's machine. `cargo xtask screenshot` stages the
+extension, renders all three shots and only then checks them, so a shot whose
+golden is missing is still rendered, its `actual.*.png` is uploaded in the
+`vista screenshot (linux)` job's `vista-screenshot` artefact, and the step fails
+naming it. Each shot's size and red-channel variance goes out first, as a
+`::notice title=<shot> render::` annotation.
+
+**Re-rendering a golden** — deliberately, or because its input moved:
+
+1. delete the golden (`git rm tests/golden/vista/expected.<shot>.png`) and push;
+2. the `vista screenshot (linux)` job goes red naming the missing golden, and
+   its `vista-screenshot` artefact carries the fresh render
+   (`gh run download <run id> -n vista-screenshot`);
+3. look at it, for the bug classes below, and commit it as
+   `expected.<shot>.png`;
+4. write below what it shows and which run rendered it.
+
+**When each shot moves.** The vista moves with the gateway's keyframe fixture,
+the mesher and the client's view decode (above). The **wizard** shot moves
+whenever Easy's suggestion or `library/`'s Hold & Build template moves, because
+its input, `godot/fixtures/instantiate_suggested.json`, is a copy of the
+gateway's `instantiate_suggested` golden (decisions-log item 113 (14)): the pull
+request that moves that golden re-copies the fixture and re-renders this PNG
+from its own CI run. The **rows** shot moves whenever the verifier's committed
+diagnostics that `godot/fixtures/rows_report.json` carries move
+(`crates/client-gdext/tests/editor_fixtures.rs` keeps the fixture honest), or
+the editor's row drawing (`godot/scripts/rows.gd`) does; that pull request
+re-renders it the same way.
 
 ### What the golden shows
 
@@ -157,12 +185,12 @@ byte comparison would replace the tolerance below with exactly the equality test
 G1 measured as permanently red. `cargo xtask screenshot` is what compares it, and
 what re-renders it.
 
-PLACEHOLDER: the thresholds shipped today are G1's *measured* shape — mean at
-most 0.004/255 (G1 measured 0.0039, rounded up to the next thousandth) and
-**zero** pixels over 32 — which is what skeleton-plan §7
-decision 22 (recommended, not yet logged) names. The spike's own
+The thresholds are G1's *measured* shape — mean at most 0.004/255 (G1
+measured 0.0039, rounded up to the next thousandth) and **zero** pixels over
+32 — which is skeleton-plan §7 decision 22, logged as decisions-log item
+116 (6)(a): a regression alarm rather than a certification. They held at zero
+pixels on the first real vista (item 110 (6)), and the same two constants in
+`xtask/src/png.rs` apply to the rows and wizard shots. The spike's own
 `compare_vista.py` shipped with a gate roughly 1 500× looser (6.0/255, 2 % over
 32); at 2 % of a 1280 x 720 frame a missing chunk covering ~18 000 pixels passes,
-which is a green tick that means nothing. Owner re-ratifies both numbers at T16
-against the first real vista; they are two named constants in
-`xtask/src/png.rs`.
+which is a green tick that means nothing.

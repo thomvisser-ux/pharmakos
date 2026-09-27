@@ -49,15 +49,15 @@ runs `scenes/watch_check.tscn` headless against a real `gamectl host`, and check
 | `fixtures/editor_check.expected.jsonc` | what the watch check must submit: `editor_check.jsonc` with the check's one map action appended, as plan-core's `patch_text` (the function behind `patch_plan`) writes it |
 | `fixtures/out_of_vocabulary.json` | the verifier's own E0003 case, byte for byte: the file Load must refuse with a code and a pointer |
 | `fixtures/needs_a_fix.jsonc` | the verifier's own E0108 case: a file with one machine-applicable Fix |
-| `fixtures/rows_report.json` | a `VerifyReport` of four committed verifier diagnostics, for the render-only rows scene |
-| `fixtures/instantiate_suggested.json` | a byte-identical copy of the gateway's `tests/golden/gateway/instantiate_suggested/expected.response.json` (seat 0's `instantiate_template{suggested: true}` answer for Hold & Build), for the render-only wizard scene and the watch check's pin; `crates/client-gdext/tests/wizard.rs` keeps it identical and pins its pages. **The lane that changes `library/` moves that golden and so owns this copy too**: re-copy it, and update the page pins, in the same pull request |
+| `fixtures/rows_report.json` | a `VerifyReport` of four committed verifier diagnostics, for the rows scene; the pull request that moves this fixture re-renders `tests/golden/vista/expected.rows.png` from CI's Linux run, as `tests/golden/vista/README.md` says |
+| `fixtures/instantiate_suggested.json` | a byte-identical copy of the gateway's `tests/golden/gateway/instantiate_suggested/expected.response.json` (seat 0's `instantiate_template{suggested: true}` answer for Hold & Build), for the wizard scene and the watch check's pin (the pull request that moves it re-renders `tests/golden/vista/expected.wizard.png` from CI's Linux run, as `tests/golden/vista/README.md` says); `crates/client-gdext/tests/wizard.rs` keeps it identical and pins its pages. **The lane that changes `library/` moves that golden and so owns this copy too**: re-copy it, and update the page pins, in the same pull request |
 | `scenes/boot.tscn` | the main scene: `--scene=<res path>` after `--` sends the run there, otherwise to the lobby |
 | `scenes/lobby.tscn` | the game at the skeleton: starts `gamectl host`, watches the match (T16), and edits the seat's orders (T19) |
 | `scenes/vista.tscn` | the vista: the bridge, the camera rig, the entity markers, the Pall |
 | `scenes/vista_shot.tscn` | the vista golden's scene: the keyframe fixture with **no host running** |
 | `scenes/watch_check.tscn` | the headless-driven run against a real `gamectl host` (CI's `client` job): the watch rig, the editor, the wizard, the meter, and a resume by a fresh client |
-| `scenes/rows_shot.tscn` | the validation rows drawn from `fixtures/rows_report.json` with no host: render-only, looked at and not compared until T20 |
-| `scenes/wizard_shot.tscn` | the wizard's first page drawn from `fixtures/instantiate_suggested.json` with no host: render-only, looked at and not compared until T20 |
+| `scenes/rows_shot.tscn` | the validation rows drawn from `fixtures/rows_report.json` with no host; `cargo xtask screenshot` compares it with `tests/golden/vista/expected.rows.png` |
+| `scenes/wizard_shot.tscn` | the wizard's first page drawn from `fixtures/instantiate_suggested.json` with no host; `cargo xtask screenshot` compares it with `tests/golden/vista/expected.wizard.png` |
 | `scenes/client_check.tscn` | T12's headless acceptance scene |
 | `scripts/` | GDScript — **views and editor UI only** (AGENTS.md §3 rule 4) |
 | `.godot/` | Godot's own import cache. Git-ignored, and written by `--import` |
@@ -187,8 +187,9 @@ browser.
 godot --path godot --resolution 1280x720 -- --scene=res://scenes/wizard_shot.tscn --shot=<png>
 ```
 
-Windowed, like the rows shot, and **render-only** at T19: the shot is taken and looked at, and
-T20 commits and compares it (decisions-log item 110 (4); the w6 notes' A5). It draws the
+Windowed, like the rows shot. `cargo xtask screenshot` renders it on CI's Linux run and
+compares it with `tests/golden/vista/expected.wizard.png` (decisions-log items 110 (4) and
+116 (6)(h)). It draws the
 wizard's first page from `fixtures/instantiate_suggested.json`: the page's label, its raw value in the field, the operator's mark, the why, and Use and Close.
 Headless without `--shot=`, the scene checks the page's, the field's and the mark's
 accessible names and quits.
@@ -214,8 +215,9 @@ Nothing in the client depends on GraphEdit (spec section 19); this is reported, 
 godot --path godot --resolution 1280x720 -- --scene=res://scenes/rows_shot.tscn --shot=<png>
 ```
 
-Windowed, like the vista shot. It is **render-only** at T19: the shot is taken and looked at,
-and T20 commits and compares it (decisions-log item 110 (4)). Headless without `--shot=`, the
+Windowed, like the vista shot. `cargo xtask screenshot` renders it on CI's Linux run and
+compares it with `tests/golden/vista/expected.rows.png` (decisions-log items 110 (4) and
+116 (6)(h)). Headless without `--shot=`, the
 scene draws the rows, checks each row's accessible name is its sentence, and quits.
 
 ## The vista shot

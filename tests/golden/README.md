@@ -72,7 +72,7 @@ cargo xtask golden --bless    # accepts the fresh outputs as the new goldens
 | Area | Compared by | Re-baselined with |
 | --- | --- | --- |
 | `determinism/` | the `determinism` step, which runs the sim, validates the chain's format line by line and says which tick first diverged | `cargo xtask determinism --bless` |
-| `vista/` | the `screenshot` step, through `xtask/src/png.rs`, with a tolerance | a deliberate re-render at T16; see `vista/README.md` |
+| `vista/` | the `screenshot` step, through `xtask/src/png.rs`, with a tolerance: the vista, the diagnostic rows and the wizard's first page | a deliberate re-render from CI's Linux run; see `vista/README.md` |
 
 Rule 1 is what makes this necessary rather than tidy. The `golden` step runs
 *before* both, so on a clean checkout neither has produced anything yet, and "a
@@ -100,10 +100,10 @@ named fills it.
 | `mapgen/` | Per-seed map digests | T5 |
 | `mesher/` | Per-chunk vertex and index digests | T4 |
 | `schema/` | Generated JSON Schema and `get_schema` output | T13 |
-| `docs/` | Generated documentation output | T15, T20 |
-| `scenarios/` | Hash chains and event logs the scenario runner asserts on | T11, T15 |
+| `docs/` | Generated documentation output | T15 |
+| `scenarios/` | Hash chains and event logs the scenario runner asserts on | T11, T15, T18b, T20 |
 | `operator/` | The playbook the built-in operator seals for each seat, per seed | T18 |
-| `vista/` | The rendered screenshot, compared with a tolerance | T16 |
+| `vista/` | The rendered screenshots, compared with a tolerance, and the client's geometry and event-list goldens | T16, T19, T20 |
 
 ## Licences
 
@@ -114,8 +114,12 @@ same public surface as `proto/**` — so REUSE.toml puts that directory in the
 permissive tier and its README carries the permissive header. `plan-core/` and
 `schema/` have since joined it on the same argument (decisions-log item
 100 (11)), and `operator/`, whose sealed playbooks come from `library/`'s
-permissive templates, joined them (decisions-log item 113); `docs/` will raise the question again when it lands, and the
-PLACEHOLDER in REUSE.toml records it against T20.
+permissive templates, joined them (decisions-log item 113). `docs/` stays in
+the game's tier: three of its four sources are GPL code (decisions-log item
+116 (6)(i)). One file inside a permissive area is GPL, `plan-core/awkward/
+expected.jsonc`, because it carries its GPL fixture's header through the round
+trip; `REUSE.toml`'s override block records it, with the gateway's
+`instantiate_suggested` answer, which embeds a permissive template's header.
 
 Most of these formats cannot carry an SPDX header at all — a hash chain is
 `<tick>\t<hash>` per line and nothing else, and a PNG has nowhere to put one —
@@ -126,6 +130,13 @@ so REUSE.toml covers them and only the READMEs carry headers of their own.
 Perf numbers. A figure that cannot vary across platforms must not be compared
 across them, and a figure that *can* vary is not a golden — G3′ §9.17's warning
 about a green matrix that means nothing. Performance is published as
-`::notice::` annotations per runner, with no threshold at this stage
-(skeleton-plan §7 decision 23, recommended and not yet logged; AGENTS.md §9
-item 11 puts budgets with the gates that set them).
+`::notice::` annotations per runner, with no threshold at this stage, by the
+`perf alarms` job, which is not required and never goes red (skeleton-plan §7
+decision 23, logged as decisions-log item 116 (6)(b); AGENTS.md §9 item 11 puts
+budgets with the gates that set them, S1's and S2's).
+
+What *is* compared across the three operating systems is the goldens whose
+bytes must agree: the `cross-OS determinism guard` job byte-compares each
+leg's determinism chain, scenario chains, path hashes and mesher, mapgen and
+vista geometry digests, whole files, counts included (decisions-log item
+116 (6)(n)).
