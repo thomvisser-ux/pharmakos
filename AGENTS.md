@@ -17,8 +17,8 @@ and say so in your PR rather than guessing.
 fifteen steps, every one required. A missing input is a failure, and only three skips remain, each
 a statement about the platform or the caller (`screenshot` off Linux, `stage-client` on macOS,
 `test-research` when `--package` leaves the sim out); a missing tool skips locally and fails under
-`--require-tools`, which CI and the merge train's local check set (decisions-log item
-116 (6)(g)). The three-OS matrix runs on every pull request, and the `cross-OS determinism guard`
+`PHARMAKOS_REQUIRE_TOOLS=1`, which CI and the merge train's local check set (decisions-log item
+116 (6)(g)); the `--require-tools` flag alone covers the steps' own tools, not a test's. The three-OS matrix runs on every pull request, and the `cross-OS determinism guard`
 job byte-compares every leg's determinism chain, scenario chains, path hashes and mesher, mapgen
 and vista geometry digests, so §10's "all three operating systems agree on the hash chains" is
 checked on every pull request that changes more than prose and on `main`'s push (item
@@ -117,10 +117,13 @@ editor UI. Nothing else executes. Directories are under `crates/`; package names
    model enemy behaviour, or evaluate rule conditions over a projected future. Prefer depending on
    the sim's snapshot and knowledge types only; if you find yourself wanting its stepping API, the
    design is wrong — stop and ask. The gateway, which hosts the match, is held to the same rule:
-   its read methods answer from the frozen snapshot and the rules table, and `submit_plan`
-   *compiles* the playbook (`Plan::compile`, in `surface/planning.rs`), a pure function of the
-   playbook and the rules table that steps nothing — compiling a playbook is not driving a match
-   (decisions-log items 103 (9) and 104 (6)). The match itself is stepped and sealed in one module,
+   its planning methods (`verify_plan`, `render_plan`, `patch_plan`, `instantiate_template`)
+   answer from the frozen snapshot and the rules table, its knowledge and view reads read the
+   frozen snapshot or the live world through the fog filter, and none of them steps anything;
+   `submit_plan` *compiles* the playbook (the sim's `Plan::compile`, called once, from
+   `compile_playbook` in `surface/planning.rs`), a pure function of the playbook and the rules
+   table that steps nothing — compiling a playbook is not driving a match (decisions-log items
+   103 (9) and 104 (6)). The match itself is stepped and sealed in one module,
    the gateway's `host.rs`. No handler steps or seals, *except* the admin-scoped control handlers in
    `crates/gateway/src/surface/control.rs`, which drive only the live match through `Surface`'s
    driving methods and may name none of `Runner`, `Host`, `World`, `host_mut`, `seal_plans`,
@@ -286,11 +289,12 @@ one, that is a contract change, and §5 says how to raise it.
 
 The gateway reads no clock either, so the host must give it ticks in every phase the sim does not
 advance — a Lull, a recap, an ended match: the client reports its clock through the admin-scoped
-`report_host_clock`, and `gamectl`'s in-process hosts give a Lull's remaining time through
-`Surface::set_phase_remaining_ms`. Without that, the rate limits, the audit log's stamps and token
-expiry, which count in the gateway's ticks, would stand still for the whole phase; a reported clock
-that runs backwards or jumps too far is refused, never clamped (decisions-log items 99, 103 (8) and
-103 (9)).
+`report_host_clock`, and `gamectl scenario run` and `gamectl seat doctor`, which host a match with
+no client and spend no host time in a Lull, pass each Lull's whole length to
+`Surface::set_phase_remaining_ms`, a host-side call no seat can reach. Without that, the rate
+limits, the audit log's stamps and token expiry, which count in the gateway's ticks, would stand
+still for the whole phase; a reported clock that runs backwards or jumps too far is refused, never
+clamped (decisions-log items 99, 103 (8) and (9), and 107 (3)).
 
 ### 4.6 Ordered iteration, always
 
@@ -380,12 +384,12 @@ per-path allow-list, so the mechanism is this and nothing else:
   to protect. That dependency edge is what makes the allowance safe, and it is only visible to CI
   because the wall is a crate.
 - `wall-guard`'s second relation keeps the client side of the wall away from the core:
-  `CLIENT_WALL` in `xtask/src/main.rs` names each walled crate and what it may never reach,
-  transitively included (`client-gdext`: the sim, the verifier, plan-core and the gateway;
+  `CLIENT_WALL` in `xtask/src/main.rs` pairs a walled crate, line by line, with what it may never
+  reach, transitively included (`client-gdext`: the sim, the verifier, plan-core and the gateway;
   `mesher`: the sim), and fails too when a crate a line names has left the workspace.
-  `crates/client-gdext/tests/no_sim.rs` checks the client's line from `Cargo.lock` as well. The
-  operator joins the client's line in both, by the owner's decision (decisions-log item 118 (4)),
-  in the first pull request after T21 that may edit them. A future walled crate joins by adding
+  `crates/client-gdext/tests/no_sim.rs` checks the client's line from `Cargo.lock` as well. By the
+  owner's decision (decisions-log item 118 (5)), the operator is to join the client's line in both;
+  the change lands in the comments lane after T21, the first pull request that may edit them. A future walled crate joins by adding
   its own line; the rule is not "no walled crate reaches the sim", which would forbid the walled
   harness §4.5 sanctions (decisions-log items 102 (3) and 116 (6)(d)).
 - Adding a crate to `WALLED_PACKAGES` widens the allowance for that whole crate, so it is a contract
@@ -459,7 +463,8 @@ machine can run.
   sequenced — do not "just add a small helper" over there. A task granted a *named place* in a
   crate it does not own (a module, or a few named lines) is granted that crate's confinement-test
   line with it wherever the test lists the crate's sources by name, and the grant says so:
-  `every_module_is_checked` in `crates/gamectl/tests/confinement.rs` fails on a `pub mod` missing
+  `every_module_is_checked` in `crates/gamectl/tests/confinement.rs` (and its twin in
+  `crates/operator/tests/confinement.rs`) fails on a `pub mod` in `src/lib.rs` that is missing
   from its `SOURCES` (decisions-log item 110 (4)).
 - Rebase on `main` before opening a PR. Never force-push `main`, never rewrite a pushed branch
   someone else is reviewing.
@@ -548,8 +553,10 @@ cargo xtask ci --fix      # rustfmt and the machine-applicable clippy fixes
 ```
 
 > **Status.** `xtask/src/main.rs` is green, and its fifteen steps cover items 1–10 below. Every step
-> is required: a step whose input is missing fails rather than skips, and no step reports `ok` for
-> work it did not do (decisions-log item 116 (6)(g)). Item 11's budgets arrive with the gates that
+> is required: a step whose input is missing fails rather than skips (decisions-log item
+> 116 (6)(g)). A test that needs a tool (`crates/proto/tests/generated.rs` needs buf and
+> `protoc-gen-prost`) still skips, and lets its step report `ok`, unless
+> `PHARMAKOS_REQUIRE_TOOLS=1` is set, as it is in CI and in the merge train's local check. Item 11's budgets arrive with the gates that
 > set them, S1's P1 and S2's G3′-real; until then performance is published, never gated. The owner
 > signs off the final step list, and the numeric budgets are Tuning values that the gates in spec
 > section 16 set.
@@ -580,12 +587,12 @@ cargo xtask ci --fix      # rustfmt and the machine-applicable clippy fixes
 8. **Schema** — `buf lint`, and `buf breaking` against `main` in `WIRE_JSON` mode (both run from the
    workspace root with `proto` as the input, because buf resolves a `.git#…` reference relative to
    the invocation directory); a second comparison against the last release tag is added when v1.1
-   publishes `gp.api.v1`. Generated JSON Schema and `get_schema`/docs output are regenerated and
-   must match what is committed (so they cannot drift). The `buf` step fails, rather than skipping
-   `breaking`, when there is no local `main` to compare against. The regenerate-and-compare half
-   runs as tests through the `test` and `golden` steps (`crates/proto/tests/generated.rs`,
+   publishes `gp.api.v1`. The generated prost tree, `get_schema`'s answer and `gamectl docs`
+   output are regenerated and must match what is committed (so they cannot drift); that half runs
+   as tests through the `test` and `golden` steps (`crates/proto/tests/generated.rs`,
    `crates/gateway/tests/methods.rs`, `crates/gamectl/tests/docs.rs`), not in the `buf` step, and
-   generated JSON Schema is v1.1's (decisions-log item 116 (6)(g) and (p)).
+   generated JSON Schema joins it with v1.1. The `buf` step fails, rather than skipping `breaking`,
+   when there is no local `main` to compare against (decisions-log item 116 (6)(g) and (p)).
 9. **Licensing** — REUSE check: every file has an SPDX header, every directory a `LICENSE`, the
    manifest is complete.
 10. **Scenarios** — the `scenario` step validates every committed scenario file and plays each with
@@ -593,8 +600,8 @@ cargo xtask ci --fix      # rustfmt and the machine-applicable clippy fixes
     `screenshot` step renders the vista, the diagnostic rows and the wizard's first page windowed
     under xvfb with lavapipe, on Linux only (in CI, the `vista screenshot (linux)` job), and
     compares each with its PNG golden (skeleton-plan decision 22; decisions-log item 116 (6)(a) and
-    (h)); `--headless` selects Godot's dummy renderer, which cannot take a screenshot, so it is used
-    only for the import. The adversarial scenarios are nightly (below) and gated off until S2.
+    (h)); `--headless` selects Godot's dummy renderer, which cannot take a screenshot, so the step uses
+    it only for the import. The adversarial scenarios are nightly (below) and gated off until S2.
 11. **Perf budgets** *(added per gate, not in `cargo xtask ci` today)* — the G3′ CI budget check
     (tick p99 within budget) lands with S2's exit measurement, and the verifier's QUICK ≤5 ms p99 and
     FULL ≤50 ms p99 at the playbook size budget (P1) land with the verifier's gate. Until then,
@@ -603,7 +610,7 @@ cargo xtask ci --fix      # rustfmt and the machine-applicable clippy fixes
     runner, with no threshold and never compared across operating systems, in the `perf alarms (…)`
     jobs, which are not required and turn a failed measurement into a `::warning::` rather than a
     red check (decisions-log item 116 (6)(b)). The tick-minus-pathing mean has no legal producer
-    until a walled harness drives the sim from outside (§4.5), which is S2's G3′-real.
+    until a walled harness drives the sim from outside (§4.5); it moves to S2's G3′-real gate.
 
 **The docs-only fast path.** A pull request whose merge commit changes only `docs/**`, `AGENTS.md`,
 `CLAUDE.md`, `.claude/**` and top-level `*.md` runs the DCO walk and the `reuse` step in place of the
@@ -619,7 +626,7 @@ which are not required, follow the same pattern. The full suite runs on `main`'s
 Nightly, additionally: the three adversarial scenarios (§10) on a fixed seed set, and the fuzzer
 (10 000 generated playbooks, no panic). Both are jobs in `.github/workflows/nightly-scenarios.yml`
 behind its `NIGHTLY_SCENARIOS_ENABLED` variable, which stays unset until S2 (decisions-log item
-116 (6)(j)).
+116 (6)(j)); a manual run's `force` input runs them regardless.
 
 ## 10. Definition of done for a stage
 
