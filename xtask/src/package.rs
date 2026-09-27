@@ -1712,7 +1712,13 @@ fn reuse_check(
         log,
     )?;
     let text = read_text(log)?;
-    let json = crate::Json::parse(&text).map_err(|error| {
+    // Standard error shares the log, so a warning reuse prints there may sit
+    // around the report: parse the one JSON object it wrote.
+    let report = match (text.find('{'), text.rfind('}')) {
+        (Some(start), Some(end)) if start < end => text.get(start..=end).unwrap_or_default(),
+        _ => text.as_str(),
+    };
+    let json = crate::Json::parse(report).map_err(|error| {
         format!(
             "reuse printed no JSON ({error}); its output is in {}",
             log.display()
