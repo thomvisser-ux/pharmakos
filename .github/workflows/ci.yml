@@ -1096,10 +1096,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          tpz="$RUNNER_TEMP/Godot_v4.7.2-stable_export_templates.tpz"
+          # The runner's temporary folder is on the work drive, which has room for the
+          # 1.28 GB archive; spelt the way this shell reads it.
+          tmp="$(cygpath -u "$RUNNER_TEMP")"
+          tpz="$tmp/Godot_v4.7.2-stable_export_templates.tpz"
           curl --fail --location --silent --show-error --output "$tpz" \
             "https://github.com/godotengine/godot/releases/download/4.7.2-stable/Godot_v4.7.2-stable_export_templates.tpz"
-          (cd "$RUNNER_TEMP" && echo "ca4d71c4d7b81dfc15d1a98baa07534aa95b03fdda78a0075b06672e1648d2e5f40980c9adc28d23e1b92e732ee7bf3461997aa804af74ec2fcd7a93ccb84079  Godot_v4.7.2-stable_export_templates.tpz" | sha512sum -c -)
+          (cd "$tmp" && echo "ca4d71c4d7b81dfc15d1a98baa07534aa95b03fdda78a0075b06672e1648d2e5f40980c9adc28d23e1b92e732ee7bf3461997aa804af74ec2fcd7a93ccb84079  Godot_v4.7.2-stable_export_templates.tpz" | sha512sum -c -)
           7z l "$tpz"
           dir="$HOME/AppData/Roaming/Godot/export_templates/4.7.2.stable"
           mkdir -p "$dir"
@@ -1127,8 +1130,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          pipx install reuse==6.2.0
-          echo "$(cygpath -w "$HOME/.local/bin")" >> "$GITHUB_PATH"
+          # pipx is a native program, so its bin folder is named natively, and the same
+          # folder goes on PATH.
+          export PIPX_BIN_DIR="$(cygpath -w "$HOME/.local/bin")"
+          if command -v pipx > /dev/null 2>&1; then
+            pipx install reuse==6.2.0
+          else
+            python -m pip install --user pipx
+            python -m pipx install reuse==6.2.0
+          fi
+          echo "${PIPX_BIN_DIR}" >> "$GITHUB_PATH"
 
       - name: reuse is on PATH for a native spawn
         if: steps.scope.outputs.prose_only != 'true'
