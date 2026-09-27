@@ -1,0 +1,197 @@
+# SPDX-FileCopyrightText: 2026 Pharmakos contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# CONTRACT FILE (AGENTS.md section 5): changes to how a release is cut need owner approval.
+#
+# Cuts a DRAFT release from green CI (skeleton plan T21; decisions-log item 117 (13)). On a
+# pushed `v*` tag it:
+#   1. checks the tag's shape, and resolves it to a commit through the API (annotated and
+#      lightweight tags alike);
+#   2. checks the commit is on main;
+#   3. finds ci.yml's push run for that exact commit and requires it to have succeeded:
+#      "cut from green CI" means no rebuild, so no toolchain drift;
+#   4. downloads that run's `pharmakos-windows` and `pharmakos-linux` zips, renames them
+#      pharmakos-<tag>-<os>-x86_64.zip and writes SHA256SUMS.txt;
+#   5. takes the notes from CHANGELOG.md's `## 0.1.0-dev+skeleton` section at that commit,
+#      adding the tag and the commit;
+#   6. creates a DRAFT with `gh release create --verify-tag`, a prerelease when the tag has
+#      a `-` suffix. The owner publishes it; nothing here publishes anything.
+#
+# A workflow_dispatch with `tag` and an optional `sha` (default: main's head) runs steps 1 to
+# 5 as a dry run and prints what it would upload; the create step's only condition is a
+# pushed `v*` tag. The skeleton's tags are `v0.1.0-dev.<n>` from 1, and the gate's is
+# `v0.1.0` (item 117 (13)).
+#
+# Security: no permissions at the top, `contents: write` and `actions: read` on the one job;
+# no checkout and no third-party action; the tag and every input reach the shell only
+# through `env:`, never through an expression inside `run:`, and are checked against their
+# patterns before anything uses them.
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "The tag to cut, as v<major>.<minor>.<patch>[-<suffix>] (a dry run: nothing is created)"
+        required: true
+        type: string
+      sha:
+        description: "The 40-hex commit to cut from (default: main's head)"
+        required: false
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: draft release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      actions: read
+    env:
+      GH_REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check the tag and the commit's shape
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          PUSHED_TAG: ${{ github.ref_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_SHA: ${{ inputs.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "push" ]; then
+            tag="$PUSHED_TAG"
+          else
+            tag="$INPUT_TAG"
+          fi
+          if ! [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+            echo "::error::the tag is not v<major>.<minor>.<patch>[-<suffix>]"
+            exit 1
+          fi
+          if [ "$EVENT" = "push" ]; then
+            ref="$tag"
+          elif [ -n "$INPUT_SHA" ]; then
+            if ! [[ "$INPUT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::error::sha is not a 40-hex commit"
+              exit 1
+            fi
+            ref="$INPUT_SHA"
+          else
+            ref="main"
+          fi
+          echo "TAG=$tag" >> "$GITHUB_ENV"
+          echo "REF=$ref" >> "$GITHUB_ENV"
+          echo "tag $tag, resolving $ref"
+
+      - name: Resolve the commit and check it is on main
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha=$(gh api "repos/$GH_REPO/commits/$REF" --jq .sha)
+          if ! [[ "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::$REF did not resolve to a commit"
+            exit 1
+          fi
+          status=$(gh api "repos/$GH_REPO/compare/main...$sha" --jq .status)
+          case "$status" in
+            identical|behind) ;;
+            *) echo "::error::$sha is not on main (compare says $status); tag a commit on main"; exit 1 ;;
+          esac
+          echo "SHA=$sha" >> "$GITHUB_ENV"
+          echo "commit $sha is on main ($status)"
+
+      - name: Find ci.yml's push run for that commit, and require it green
+        shell: bash
+        run: |
+          set -euo pipefail
+          run=$(gh api "repos/$GH_REPO/actions/workflows/ci.yml/runs?head_sha=$SHA&event=push&per_page=1" \
+            --jq '.workflow_runs[0] | [.id, .status, (.conclusion // "none")] | @tsv')
+          if [ -z "$run" ]; then
+            echo "::error::ci.yml has no push run for $SHA; tag main's head once its run is green"
+            exit 1
+          fi
+          IFS=$'\t' read -r id status conclusion <<< "$run"
+          if [ "$status" != "completed" ]; then
+            echo "::error::the push run for $SHA is still running; tag again once it is green (run $id)"
+            exit 1
+          fi
+          if [ "$conclusion" != "success" ]; then
+            echo "::error::the push run for $SHA concluded $conclusion (run $id); re-run it with \`gh run rerun $id\`, or tag main's head once its run is green"
+            exit 1
+          fi
+          echo "RUN_ID=$id" >> "$GITHUB_ENV"
+          echo "push run $id for $SHA succeeded"
+
+      - name: Download the two zips and write their checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p download release
+          for os in windows linux; do
+            gh run download "$RUN_ID" --name "pharmakos-$os" --dir "download/$os"
+            if [ ! -f "download/$os/pharmakos-$os-x86_64.zip" ]; then
+              echo "::error::run $RUN_ID's pharmakos-$os artefact holds no pharmakos-$os-x86_64.zip (expired after 90 days, or never uploaded)"
+              exit 1
+            fi
+            mv "download/$os/pharmakos-$os-x86_64.zip" "release/pharmakos-$TAG-$os-x86_64.zip"
+          done
+          (cd release && sha256sum "pharmakos-$TAG-windows-x86_64.zip" "pharmakos-$TAG-linux-x86_64.zip" > SHA256SUMS.txt)
+          ls -la release
+          cat release/SHA256SUMS.txt
+
+      - name: Take the notes from CHANGELOG.md at that commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          heading="0.1.0-dev+skeleton"
+          gh api "repos/$GH_REPO/contents/CHANGELOG.md?ref=$SHA" --jq .content | base64 -d > changelog.md
+          if ! grep -qxF "## $heading" changelog.md; then
+            echo "::error::CHANGELOG.md at $SHA has no \`## $heading\` section"
+            exit 1
+          fi
+          {
+            echo "Tag: $TAG"
+            echo "Commit: $SHA"
+            echo
+            awk -v h="## $heading" '$0 == h { on = 1; next } on && /^## / { exit } on { print }' changelog.md
+          } > notes.md
+          echo "VERSION=$heading" >> "$GITHUB_ENV"
+          cat notes.md
+
+      - name: Create the draft release
+        # The only condition is a positive one: a pushed v* tag. A dispatch never gets here.
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          set -euo pipefail
+          prerelease=()
+          if [[ "$TAG" == *-* ]]; then
+            prerelease=(--prerelease)
+          fi
+          gh release create "$TAG" --draft --verify-tag "${prerelease[@]}" \
+            --title "$TAG ($VERSION)" --notes-file notes.md \
+            "release/pharmakos-$TAG-windows-x86_64.zip" \
+            "release/pharmakos-$TAG-linux-x86_64.zip" \
+            release/SHA256SUMS.txt
+
+      - name: Dry run - what a tag would upload
+        if: github.event_name != 'push'
+        shell: bash
+        run: |
+          set -euo pipefail
+          prerelease=""
+          if [[ "$TAG" == *-* ]]; then
+            prerelease=" --prerelease"
+          fi
+          echo "::notice title=release dry run::a pushed $TAG would create a draft$prerelease titled \"$TAG ($VERSION)\" from run $RUN_ID of $SHA, with pharmakos-$TAG-windows-x86_64.zip, pharmakos-$TAG-linux-x86_64.zip and SHA256SUMS.txt"

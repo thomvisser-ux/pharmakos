@@ -51,6 +51,11 @@
 #     job would skip its matrix dependents, with the same unexpanded names;
 #   * the cross-OS guard takes the legs' answer through the `ci` job's outputs, and the
 #     DCO job does not ask at all;
+#   * the two `clean launch (<os>)` jobs take their own platform's `package (<os>)` job's
+#     answer through that job's `prose_only` output, as the guard does, and have no
+#     job-level `if:`: they run whenever their package job succeeded, which it does on a
+#     prose-only pull request, print the notice, and skip every other step (decisions-log
+#     item 117 (8)). The package jobs compute their own answer like the building jobs;
 #   * the `perf alarms` job, which is not required, copies the pattern: it skips its
 #     steps and prints the notice on a prose-only pull request;
 #   * the scope step answers full in bash, before it builds xtask, whenever the commit
@@ -974,3 +979,513 @@ jobs:
         timeout-minutes: 20
         shell: bash
         run: cargo xtask perf-alarms
+
+  # ---------------------------------------------------------------------------------------
+  # T21: the unsigned zips (skeleton plan T21; decisions-log item 117 (8)). Four plain jobs,
+  # not a matrix, because a `needs:` cannot name one leg of a matrix. None of the four is a
+  # required check (the ruleset is the owner's); scripts/merge-train.sh stops on any check
+  # that is not pass or skipping, so a red one still blocks a merge.
+  #
+  # `package (<os>)` runs `cargo xtask package` and nothing else of substance: every check is
+  # in xtask, where it also runs locally (the build, the C-runtime and .pck scans, the import
+  # and the in-editor smoke check, the export, the manifest golden, reuse over the extracted
+  # zip, and every scenario replayed by the packaged gamectl). The YAML only installs Godot,
+  # its export templates and reuse, runs the command, and uploads. It needs no other job, so
+  # it runs beside the suite rather than after it, and takes the docs-only fast path like
+  # the building jobs. No Swatinem cache: the repository's cache store is past its 10 GB, and
+  # the job builds two release binaries and nothing else of the workspace.
+  #
+  # `clean launch (<os>)` holds no checkout, no Rust, no Godot and no Python: it downloads
+  # the zip its package job uploaded, extracts it with the platform's own tool, runs
+  # `gamectl seat doctor` inside it (acceptance (b)) and the shipped smoke check from the
+  # parent folder (acceptance (a): the root can only come from the executable's folder),
+  # checks no gamectl is left, and fails if a log holds a 64-hex run, the shape of a seat
+  # token. It runs no `--import`: it holds no project, only an export whose extension list
+  # the package job's import wrote.
+  # ---------------------------------------------------------------------------------------
+
+  package-windows:
+    name: package (windows-latest)
+    runs-on: windows-latest
+    # A hang guard, not a budget: a cold build of the two release binaries, the import, the
+    # smoke check, the export and the replays take well under it.
+    timeout-minutes: 60
+    outputs:
+      prose_only: ${{ steps.scope.outputs.prose_only }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # Both parents of a pull request's merge commit, for `cargo xtask ci-scope`.
+          fetch-depth: 2
+
+      - name: Install the Rust toolchain
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable (branch)
+
+      - name: Decide whether anything but prose changed
+        # The docs-only fast path (see this file's header), as in the `ci` legs.
+        id: scope
+        continue-on-error: true
+        shell: bash
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # A change to the decider itself (xtask/, the workflows, or the `cargo xtask`
+          # alias under .cargo/) is never judged by its own copy: that copy could be the
+          # broken one, and the tests that would catch it are among the steps it skips.
+          # `git diff --quiet` exits 1 on a difference and 128 on an error; both answer full.
+          if ! git diff --quiet --no-renames HEAD^1 HEAD -- xtask .github .cargo; then
+            echo "full: the commit changes xtask/, .github/ or .cargo/ (or git failed), so the decider does not judge its own change"
+            echo "prose_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          cargo xtask ci-scope
+
+      - name: Only prose changed, so nothing is packaged
+        if: steps.scope.outputs.prose_only == 'true'
+        shell: bash
+        run: echo "::notice title=docs-only fast path::Only prose changed (docs/**, AGENTS.md, CLAUDE.md, .claude/**, top-level *.md), so no zip was built in this job, and its clean-launch job has nothing to launch. It runs in full on main's push (decisions-log item 115 (4))."
+
+      - name: Install Godot 4.7.2, checked against Godot's SHA-512
+        # The pinned build decisions-log item 73 names, installed as the `client` job does,
+        # with the archive checked first against its line in Godot's published
+        # SHA512-SUMS.txt for 4.7.2-stable (decisions-log item 117 (6)).
+        if: steps.scope.outputs.prose_only != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/godot"
+          curl --fail --location --silent --show-error \
+            --output "$HOME/godot/Godot_v4.7.2-stable_win64.exe.zip" \
+            "https://github.com/godotengine/godot/releases/download/4.7.2-stable/Godot_v4.7.2-stable_win64.exe.zip"
+          (cd "$HOME/godot" && echo "83decd58fdf67b9d657958a1ae6bf1929c20785315a81effe245874cdc57acb709bf868e00778a96984338c1b29dafdb453c6847747694621c6ecf5da2259993  Godot_v4.7.2-stable_win64.exe.zip" | sha512sum -c -)
+          7z x -y -o"$HOME/godot" "$HOME/godot/Godot_v4.7.2-stable_win64.exe.zip" > /dev/null
+          mv "$HOME/godot/Godot_v4.7.2-stable_win64.exe" "$HOME/godot/godot.exe"
+          # A native spelling for PATH and for PHARMAKOS_GODOT, as the `client` job explains.
+          echo "$(cygpath -w "$HOME/godot")" >> "$GITHUB_PATH"
+          echo "PHARMAKOS_GODOT=$(cygpath -m "$HOME/godot/godot.exe")" >> "$GITHUB_ENV"
+
+      - name: Godot reports the pinned version
+        if: steps.scope.outputs.prose_only != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmd //c where godot
+          version=$("${PHARMAKOS_GODOT}" --version | head -n 1)
+          echo "godot: ${version} (PHARMAKOS_GODOT=${PHARMAKOS_GODOT})"
+          case "${version}" in
+            4.7.2.stable*) ;;
+            *) echo "::error::expected Godot 4.7.2.stable, got ${version}"; exit 1 ;;
+          esac
+
+      - name: Restore the export templates
+        # Keyed on the templates archive's SHA-512 and the platform. A pull request's cache
+        # is scoped to that pull request, so its first run misses by construction.
+        if: steps.scope.outputs.prose_only != 'true'
+        id: templates
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4 (v4.3.0)
+        with:
+          path: ~/AppData/Roaming/Godot/export_templates/4.7.2.stable
+          key: godot-templates-ca4d71c4d7b81dfc15d1a98baa07534aa95b03fdda78a0075b06672e1648d2e5f40980c9adc28d23e1b92e732ee7bf3461997aa804af74ec2fcd7a93ccb84079-windows
+
+      - name: Install the export templates, checked against Godot's SHA-512
+        # Godot_v4.7.2-stable_export_templates.tpz (1 281 349 702 bytes), checked against its
+        # line in Godot's SHA512-SUMS.txt, then only the release template and version.txt
+        # are extracted, without folders. Git for Windows has no unzip; 7-Zip is on the image.
+        if: steps.scope.outputs.prose_only != 'true' && steps.templates.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          tpz="$RUNNER_TEMP/Godot_v4.7.2-stable_export_templates.tpz"
+          curl --fail --location --silent --show-error --output "$tpz" \
+            "https://github.com/godotengine/godot/releases/download/4.7.2-stable/Godot_v4.7.2-stable_export_templates.tpz"
+          (cd "$RUNNER_TEMP" && echo "ca4d71c4d7b81dfc15d1a98baa07534aa95b03fdda78a0075b06672e1648d2e5f40980c9adc28d23e1b92e732ee7bf3461997aa804af74ec2fcd7a93ccb84079  Godot_v4.7.2-stable_export_templates.tpz" | sha512sum -c -)
+          7z l "$tpz"
+          dir="$HOME/AppData/Roaming/Godot/export_templates/4.7.2.stable"
+          mkdir -p "$dir"
+          7z e -y "$tpz" -o"$dir" templates/windows_release_x86_64.exe templates/version.txt > /dev/null
+          rm -f "$tpz"
+          ls -la "$dir"
+
+      - name: Check the installed template against its pinned SHA-512
+        # On every run, cache hit or miss: the per-file hash of the release template inside
+        # the verified archive (the owner's install matched it, item 117 (6)).
+        if: steps.scope.outputs.prose_only != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$HOME/AppData/Roaming/Godot/export_templates/4.7.2.stable"
+          echo "5b3d39315848983e45400a64662dad4a782636015cf6f659956194e3f196d72e7117a5ad9c94528361f6e1f229ed20c09a1dc740506eb1bcba2fba6bbb727981  windows_release_x86_64.exe" | sha512sum -c -
+          [ "$(cat version.txt)" = "4.7.2.stable" ]
+          echo "::notice title=export templates::cache ${{ steps.templates.outputs.cache-hit == 'true' && 'hit' || 'miss' }}; windows_release_x86_64.exe matches its pinned SHA-512"
+
+      - name: Install reuse
+        # Pinned: the zip's licence check is acceptance (c), and its counts are checked
+        # against reuse 6.2.0's JSON. On Windows the PATH entry is written natively, and the
+        # next step asks the question a native spawn will ask, as the client job does for godot.
+        if: steps.scope.outputs.prose_only != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          pipx install reuse==6.2.0
+          echo "$(cygpath -w "$HOME/.local/bin")" >> "$GITHUB_PATH"
+
+      - name: reuse is on PATH for a native spawn
+        if: steps.scope.outputs.prose_only != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmd //c where reuse
+          reuse --version | head -n 1
+
+      - name: cargo xtask package
+        if: steps.scope.outputs.prose_only != 'true'
+        shell: bash
+        run: cargo xtask package
+
+      - name: Upload the zip
+        # 14 days from a pull request, 90 from a push to main: release.yml reads push runs.
+        if: steps.scope.outputs.prose_only != 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: pharmakos-windows
+          path: target/package/dist/pharmakos-windows-x86_64.zip
+          if-no-files-found: error
+          retention-days: ${{ github.event_name == 'push' && 90 || 14 }}
+
+      - name: Upload the diagnostics
+        # Always, so a failed run carries what the next fix needs: the export's output, the
+        # in-editor smoke log, reuse's report, the note, the notices, the zip's REUSE.toml and
+        # its manifest.
+        if: always() && steps.scope.outputs.prose_only != 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: package-diagnostics-windows
+          path: |
+            target/package/logs/
+            target/golden/package/actual.windows.txt
+          if-no-files-found: warn
+          retention-days: 14
+
+  package-linux:
+    name: package (ubuntu-24.04)
+    # ubuntu-24.04, not -latest: the glibc floor the note states moves only on purpose.
+    runs-on: ubuntu-24.04
+    # A hang guard, not a budget.
+    timeout-minutes: 60
+    outputs:
+      prose_only: ${{ steps.scope.outputs.prose_only }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # Both parents of a pull request's merge commit, for `cargo xtask ci-scope`.
+          fetch-depth: 2
+
+      - name: Install the Rust toolchain
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable (branch)
+
+      - name: Decide whether anything but prose changed
+        # The docs-only fast path (see this file's header), as in the `ci` legs.
+        id: scope
+        continue-on-error: true
+        shell: bash
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # A change to the decider itself (xtask/, the workflows, or the `cargo xtask`
+          # alias under .cargo/) is never judged by its own copy: that copy could be the
+          # broken one, and the tests that would catch it are among the steps it skips.
+          # `git diff --quiet` exits 1 on a difference and 128 on an error; both answer full.
+          if ! git diff --quiet --no-renames HEAD^1 HEAD -- xtask .github .cargo; then
+            echo "full: the commit changes xtask/, .github/ or .cargo/ (or git failed), so the decider does not judge its own change"
+            echo "prose_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          cargo xtask ci-scope
+
+      - name: Only prose changed, so nothing is packaged
+        if: steps.scope.outputs.prose_only == 'true'
+        shell: bash
+        run: echo "::notice title=docs-only fast path::Only prose changed (docs/**, AGENTS.md, CLAUDE.md, .claude/**, top-level *.md), so no zip was built in this job, and its clean-launch job has nothing to launch. It runs in full on main's push (decisions-log item 115 (4))."
+
+      - name: Install Godot 4.7.2, checked against Godot's SHA-512
+        if: steps.scope.outputs.prose_only != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/godot"
+          curl --fail --location --silent --show-error \
+            --output "$HOME/godot/Godot_v4.7.2-stable_linux.x86_64.zip" \
+            "https://github.com/godotengine/godot/releases/download/4.7.2-stable/Godot_v4.7.2-stable_linux.x86_64.zip"
+          (cd "$HOME/godot" && echo "9aa00f7a605200940bce3027a567b782f49bd8e940dd06ae9e987bd65aee1b1467edd56ed84fcdcbdd44354bf613bdbb4e5d2913e925850368e150c59ed54c65  Godot_v4.7.2-stable_linux.x86_64.zip" | sha512sum -c -)
+          unzip -q -o "$HOME/godot/Godot_v4.7.2-stable_linux.x86_64.zip" -d "$HOME/godot"
+          mv "$HOME/godot/Godot_v4.7.2-stable_linux.x86_64" "$HOME/godot/godot"
+          chmod +x "$HOME/godot/godot"
+          echo "$HOME/godot" >> "$GITHUB_PATH"
+          echo "PHARMAKOS_GODOT=$HOME/godot/godot" >> "$GITHUB_ENV"
+
+      - name: Godot reports the pinned version
+        if: steps.scope.outputs.prose_only != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v godot
+          version=$("${PHARMAKOS_GODOT}" --version | head -n 1)
+          echo "godot: ${version} (PHARMAKOS_GODOT=${PHARMAKOS_GODOT})"
+          case "${version}" in
+            4.7.2.stable*) ;;
+            *) echo "::error::expected Godot 4.7.2.stable, got ${version}"; exit 1 ;;
+          esac
+
+      - name: Restore the export templates
+        # Keyed on the templates archive's SHA-512 and the platform. A pull request's cache
+        # is scoped to that pull request, so its first run misses by construction.
+        if: steps.scope.outputs.prose_only != 'true'
+        id: templates
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4 (v4.3.0)
+        with:
+          path: ~/.local/share/godot/export_templates/4.7.2.stable
+          key: godot-templates-ca4d71c4d7b81dfc15d1a98baa07534aa95b03fdda78a0075b06672e1648d2e5f40980c9adc28d23e1b92e732ee7bf3461997aa804af74ec2fcd7a93ccb84079-linux
+
+      - name: Install the export templates, checked against Godot's SHA-512
+        if: steps.scope.outputs.prose_only != 'true' && steps.templates.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          tpz="$RUNNER_TEMP/Godot_v4.7.2-stable_export_templates.tpz"
+          curl --fail --location --silent --show-error --output "$tpz" \
+            "https://github.com/godotengine/godot/releases/download/4.7.2-stable/Godot_v4.7.2-stable_export_templates.tpz"
+          (cd "$RUNNER_TEMP" && echo "ca4d71c4d7b81dfc15d1a98baa07534aa95b03fdda78a0075b06672e1648d2e5f40980c9adc28d23e1b92e732ee7bf3461997aa804af74ec2fcd7a93ccb84079  Godot_v4.7.2-stable_export_templates.tpz" | sha512sum -c -)
+          unzip -l "$tpz"
+          dir="$HOME/.local/share/godot/export_templates/4.7.2.stable"
+          mkdir -p "$dir"
+          unzip -j "$tpz" templates/linux_release.x86_64 templates/version.txt -d "$dir"
+          rm -f "$tpz"
+          ls -la "$dir"
+
+      - name: Check the installed template against its pinned SHA-512
+        if: steps.scope.outputs.prose_only != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$HOME/.local/share/godot/export_templates/4.7.2.stable"
+          echo "08be8a6ab54c9dbadad046ab526f22e351bed43a92b3ad19436f53a9dd44267a8a96338252ebc28f31047dd23d3e27a89a9dd0a7aefede0b3a61fb2ac66fb08c  linux_release.x86_64" | sha512sum -c -
+          [ "$(cat version.txt)" = "4.7.2.stable" ]
+          echo "::notice title=export templates::cache ${{ steps.templates.outputs.cache-hit == 'true' && 'hit' || 'miss' }}; linux_release.x86_64 matches its pinned SHA-512"
+
+      - name: Install reuse
+        if: steps.scope.outputs.prose_only != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          pipx install reuse==6.2.0
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: reuse and objdump are on PATH
+        if: steps.scope.outputs.prose_only != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v reuse objdump
+          reuse --version | head -n 1
+
+      - name: cargo xtask package
+        if: steps.scope.outputs.prose_only != 'true'
+        shell: bash
+        run: cargo xtask package
+
+      - name: Upload the zip
+        # 14 days from a pull request, 90 from a push to main: release.yml reads push runs.
+        if: steps.scope.outputs.prose_only != 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: pharmakos-linux
+          path: target/package/dist/pharmakos-linux-x86_64.zip
+          if-no-files-found: error
+          retention-days: ${{ github.event_name == 'push' && 90 || 14 }}
+
+      - name: Upload the diagnostics
+        if: always() && steps.scope.outputs.prose_only != 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: package-diagnostics-linux
+          path: |
+            target/package/logs/
+            target/golden/package/actual.linux.txt
+          if-no-files-found: warn
+          retention-days: 14
+
+  clean-launch-windows:
+    name: clean launch (windows-latest)
+    needs: package-windows
+    # No job-level `if:` (this file's header): it runs whenever the package job succeeded,
+    # and on a prose-only pull request it prints the notice and skips every other step.
+    runs-on: windows-latest
+    # A hang guard, not a budget.
+    timeout-minutes: 15
+    steps:
+      - name: Only prose changed, so there is no zip to launch
+        if: needs.package-windows.outputs.prose_only == 'true'
+        shell: bash
+        run: echo "::notice title=docs-only fast path::Only prose changed, so the package job built no zip and this job launched nothing. It runs in full on main's push (decisions-log item 115 (4))."
+
+      - name: Download the zip
+        if: needs.package-windows.outputs.prose_only != 'true'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: pharmakos-windows
+          path: download
+
+      - name: Extract it with Windows' own tool
+        if: needs.package-windows.outputs.prose_only != 'true'
+        shell: pwsh
+        run: Expand-Archive -Path download/pharmakos-windows-x86_64.zip -DestinationPath .
+
+      - name: gamectl seat doctor passes inside the extracted folder (acceptance (b))
+        if: needs.package-windows.outputs.prose_only != 'true'
+        shell: bash
+        run: |
+          set -uo pipefail
+          (cd Pharmakos && ./gamectl.exe seat doctor) > doctor.log 2>&1
+          status=$?
+          if grep -Eq '(^|[^0-9a-f])[0-9a-f]{64}([^0-9a-f]|$)' doctor.log; then
+            echo "doctor.log holds a 64-hex run and is not printed; the last step names its lines"
+          else
+            cat doctor.log
+          fi
+          exit "${status}"
+
+      - name: The shipped smoke check reaches the lobby, run from the parent folder (acceptance (a))
+        # From a bash step: Windows PowerShell 5.1 does not wait for a GUI executable. Run by
+        # path from the parent folder, so the root can only come from the executable's
+        # folder, and with no `--import`: an export cannot import, and its extension list is
+        # the package job's.
+        if: needs.package-windows.outputs.prose_only != 'true'
+        shell: bash
+        run: |
+          set -uo pipefail
+          ./Pharmakos/Pharmakos.exe --headless -- --scene=res://scenes/smoke_check.tscn > smoke.log 2>&1
+          status=$?
+          if grep -Eq '(^|[^0-9a-f])[0-9a-f]{64}([^0-9a-f]|$)' smoke.log; then
+            echo "smoke.log holds a 64-hex run and is not printed; the last step names its lines"
+          else
+            cat smoke.log
+          fi
+          if [ "${status}" -ne 0 ]; then
+            echo "::error::the smoke check failed (exit ${status})"
+            exit "${status}"
+          fi
+          grep -q '^\[smoke\] OK' smoke.log
+
+      - name: No gamectl is left once the game has exited
+        if: needs.package-windows.outputs.prose_only != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sleep 2
+          if tasklist //FI "IMAGENAME eq gamectl.exe" | grep -qi gamectl; then
+            echo "::error::a gamectl process outlived the game"; tasklist //FI "IMAGENAME eq gamectl.exe"; exit 1
+          fi
+          echo "no gamectl process is running"
+
+      - name: No seat token in the logs
+        # A seat token is 64 hex digits (decisions-log item 107 (2)). Only line numbers are
+        # printed, never the line.
+        if: always() && needs.package-windows.outputs.prose_only != 'true'
+        shell: bash
+        run: |
+          set -uo pipefail
+          if grep -Enq '(^|[^0-9a-f])[0-9a-f]{64}([^0-9a-f]|$)' smoke.log doctor.log; then
+            echo "::error::a log holds a 64-hex run, the shape of a seat token"
+            grep -En '(^|[^0-9a-f])[0-9a-f]{64}([^0-9a-f]|$)' smoke.log doctor.log | cut -d: -f1,2
+            exit 1
+          fi
+          echo "no 64-hex run in smoke.log or doctor.log"
+
+  clean-launch-linux:
+    name: clean launch (ubuntu-24.04)
+    needs: package-linux
+    # No job-level `if:` (this file's header).
+    runs-on: ubuntu-24.04
+    # A hang guard, not a budget.
+    timeout-minutes: 15
+    steps:
+      - name: Only prose changed, so there is no zip to launch
+        if: needs.package-linux.outputs.prose_only == 'true'
+        shell: bash
+        run: echo "::notice title=docs-only fast path::Only prose changed, so the package job built no zip and this job launched nothing. It runs in full on main's push (decisions-log item 115 (4))."
+
+      - name: Download the zip
+        if: needs.package-linux.outputs.prose_only != 'true'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: pharmakos-linux
+          path: download
+
+      - name: Extract it with unzip, keeping the modes the zip records
+        # No chmod anywhere in this job: it proves a tester's unzip leaves both executables
+        # runnable and every folder enterable.
+        if: needs.package-linux.outputs.prose_only != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          unzip -q download/pharmakos-linux-x86_64.zip -d .
+          ls -ld Pharmakos Pharmakos/*
+
+      - name: gamectl seat doctor passes inside the extracted folder (acceptance (b))
+        if: needs.package-linux.outputs.prose_only != 'true'
+        shell: bash
+        run: |
+          set -uo pipefail
+          (cd Pharmakos && ./gamectl seat doctor) > doctor.log 2>&1
+          status=$?
+          if grep -Eq '(^|[^0-9a-f])[0-9a-f]{64}([^0-9a-f]|$)' doctor.log; then
+            echo "doctor.log holds a 64-hex run and is not printed; the last step names its lines"
+          else
+            cat doctor.log
+          fi
+          exit "${status}"
+
+      - name: The shipped smoke check reaches the lobby, run from the parent folder (acceptance (a))
+        if: needs.package-linux.outputs.prose_only != 'true'
+        shell: bash
+        run: |
+          set -uo pipefail
+          ./Pharmakos/Pharmakos.x86_64 --headless -- --scene=res://scenes/smoke_check.tscn > smoke.log 2>&1
+          status=$?
+          if grep -Eq '(^|[^0-9a-f])[0-9a-f]{64}([^0-9a-f]|$)' smoke.log; then
+            echo "smoke.log holds a 64-hex run and is not printed; the last step names its lines"
+          else
+            cat smoke.log
+          fi
+          if [ "${status}" -ne 0 ]; then
+            echo "::error::the smoke check failed (exit ${status})"
+            exit "${status}"
+          fi
+          grep -q '^\[smoke\] OK' smoke.log
+
+      - name: No gamectl is left once the game has exited
+        if: needs.package-linux.outputs.prose_only != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sleep 2
+          if pgrep -x gamectl > /dev/null; then
+            echo "::error::a gamectl process outlived the game"; pgrep -a gamectl; exit 1
+          fi
+          echo "no gamectl process is running"
+
+      - name: No seat token in the logs
+        # A seat token is 64 hex digits (decisions-log item 107 (2)). Only line numbers are
+        # printed, never the line.
+        if: always() && needs.package-linux.outputs.prose_only != 'true'
+        shell: bash
+        run: |
+          set -uo pipefail
+          if grep -Enq '(^|[^0-9a-f])[0-9a-f]{64}([^0-9a-f]|$)' smoke.log doctor.log; then
+            echo "::error::a log holds a 64-hex run, the shape of a seat token"
+            grep -En '(^|[^0-9a-f])[0-9a-f]{64}([^0-9a-f]|$)' smoke.log doctor.log | cut -d: -f1,2
+            exit 1
+          fi
+          echo "no 64-hex run in smoke.log or doctor.log"
