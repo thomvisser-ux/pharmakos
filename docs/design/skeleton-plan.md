@@ -769,41 +769,49 @@ its downside, and its section 0 lists the holes (H1–H16) the lines below close
   if its investigation finds a fix, and (d)'s and (e)'s in `xtask`. Not `crates/sim`, `crates/gateway`,
   `crates/operator` or `crates/plan-core` source, and not `proto/**`.
 - **Builds:** (a) first, `MATRIX_ONLY`'s new paths in `scripts/merge-train.sh` (item 119 (1)): `library/`, `rules/`,
-  `packaging/`, `LICENSES/`, `REUSE.toml`, `tests/golden/package/`, and, weighed from T21's proposal, `xtask/src/package.rs`,
-  `xtask/src/zip.rs` and `CHANGELOG.md` (item 121 (5)); (b) T20's comment on #47, items 1–10, the stale comments in
-  `crates/verifier/tests/fuzz.rs`, `crates/mesher/tests/perf_alarm.rs`, `crates/client-gdext` (`tests/no_sim.rs`,
-  `tests/wizard.rs`, `tests/editor_fixtures.rs`, `tests/no_arithmetic.rs`, `src/bridge.rs`, `src/wizard.rs`),
-  `tests/golden/gateway/README.md`, `crates/gamectl/src/scenario.rs` and `crates/gamectl/tests/confinement.rs`, with the
-  texts the comment proposes, checked against the code; (c) its items 11–12, the two `gamectl` test hazards, with the
-  fixes it proposes (the moved-chain test writes no actual where the golden step reads one; the doctored copy's golden
-  lives outside `tests/golden/scenarios/`); (d) the owner's decision on its item 13 (item 118 (5)): `operator` on the
-  `client-gdext` line of `CLIENT_WALL` in `xtask/src/main.rs` and in `crates/client-gdext/tests/no_sim.rs`'s forbidden
-  list; (e) `xtask`'s two stale strings and three finds (item 118 (4)): the missing-metadata note, `Ctx::require_tools`'s
-  doc, `--require-tools` exporting `PHARMAKOS_REQUIRE_TOOLS` to what it runs (with `crates/proto/tests/generated.rs`'s
-  doc), `no_sim.rs`'s module doc and `clippy.toml`'s `wall-guard` list; (f) `docs/LICENSING.md`'s example sidecar hidden
-  from reuse and `LICENSES/CC0-1.0.txt` deleted in one commit (item 119 (7)); (g) `.github/dependabot.yml` and the `dco`
-  job's exemption for `dependabot[bot]`, as items 119 (4) and 120 decide it, with AGENTS.md section 8 and
-  `docs/CONTRIBUTING.md` saying so; (h) `ci.yml`'s budget PLACEHOLDER resolved to 75 minutes on Windows (item 119 (5));
-  (i) the two templates' PLACEHOLDERs in `library/` reworded to record item 119 (9) and (10), with the nine committed
-  copies of their text (item 119 (10)) moved in the same commit; (j) `scripts/setup-windows.ps1`'s SPDX header
-  (item 119 (6)); (k) T21's stale-text finds (item 121 (5)): `godot/project.godot`'s header, `crates/gamectl/tests/cli.rs`
-  and `crates/gamectl/src/lib.rs`'s `target_dir` doc; `ci.yml`'s header and its T21 section, which still count eight
-  required checks; `/packaging/` in `.github/CODEOWNERS`; `packaging/LICENSE` in `REUSE.toml`'s list of pointers;
-  (l) the watch check's flake (item 121 (4)): which connection's call the gateway refused as over its per-tick limit,
-  and whether the rig's seat budget (`rig.rs`'s `SEAT_CALLS_PER_REFILL`) or the check's pacing let it through, fixed
-  where the cause is, a fix in `rig.rs` being shipped client code the pull request names.
-- **Implements:** items 118 (4) and (5), 119 (1) and (4) to (10), 120, 121 (4) and (5).
+  `packaging/`, `LICENSES/`, `REUSE.toml`, `tests/golden/package/`, and, weighed from T21's proposal (both modules,
+  and not `CHANGELOG.md`, top-level prose whose path the zip's manifest pins and whose bytes it does not),
+  `xtask/src/package.rs`, `xtask/src/zip.rs` and `CHANGELOG.md` (items 119 (1) and 121 (5)); (b) T20's comment on #47,
+  items 1–10, the stale comments in `crates/verifier/tests/fuzz.rs`, `crates/mesher/tests/perf_alarm.rs`,
+  `crates/client-gdext` (`tests/no_sim.rs`, `tests/wizard.rs`, `tests/editor_fixtures.rs`, `tests/no_arithmetic.rs`,
+  `src/bridge.rs`, `src/wizard.rs`), `tests/golden/gateway/README.md`, `crates/gamectl/src/scenario.rs` and
+  `crates/gamectl/tests/confinement.rs`, with the texts the comment proposes, checked against the code; (c) its items
+  11–12, the two `gamectl` test hazards, with the fixes it proposes (the moved-chain test writes no actual where the
+  golden step reads one; the doctored copy's golden lives outside `tests/golden/scenarios/`); (d) the owner's decision
+  on its item 13 (item 118 (5)): `operator` on the `client-gdext` line of `CLIENT_WALL` in `xtask/src/main.rs` and in
+  `crates/client-gdext/tests/no_sim.rs`'s forbidden list, with AGENTS.md section 4.9's sentence that the operator "is
+  to join" them brought up to date; (e) `xtask`'s two stale strings and three finds (item 118 (4)): the
+  missing-metadata note, `Ctx::require_tools`'s doc, `--require-tools` exporting `PHARMAKOS_REQUIRE_TOOLS` to what it
+  runs (with `crates/proto/tests/generated.rs`'s doc), `no_sim.rs`'s module doc and `clippy.toml`'s `wall-guard` list;
+  (f) `docs/LICENSING.md`'s example sidecar hidden from reuse and `LICENSES/CC0-1.0.txt` deleted in one commit (item
+  119 (7)); (g) `.github/dependabot.yml` (items 119 (4), 120 and 122 (4)), with the `dco` job's walk unchanged because
+  Dependabot signs off its own commits (item 122 (4)), and AGENTS.md section 8 and `docs/CONTRIBUTING.md` saying that
+  Dependabot's own sign-off is accepted for its own commits; (h) `ci.yml`'s budget PLACEHOLDER resolved to 75 minutes
+  on Windows (item 119 (5)); (i) the two templates' PLACEHOLDERs in `library/` reworded to record item 119 (9) and
+  (10), with the nine committed copies of their text (item 119 (10)) moved in the same commit; (j)
+  `scripts/setup-windows.ps1`'s SPDX header (item 119 (6)); (k) T21's stale-text finds (item 121 (5)):
+  `godot/project.godot`'s header, `crates/gamectl/tests/cli.rs` and `crates/gamectl/src/lib.rs`'s `target_dir` doc;
+  `ci.yml`'s header, which still counts eight required checks and leaves the package jobs out of those that take the
+  scope decision, and its T21 section, which says none of the four jobs is required; `/packaging/` in
+  `.github/CODEOWNERS`; `packaging/LICENSE` in `REUSE.toml`'s list of pointers; (l) the watch check's flake (item 121
+  (4)): which connection's call the gateway refused as over its per-tick limit, and whether the rig's seat budget
+  (`rig.rs`'s `SEAT_CALLS_PER_REFILL`) or the check's pacing let it through, fixed where the cause is (`rig.rs` or the
+  watch check, `godot/scripts/watch_check.gd`), a fix in `rig.rs` being shipped client code the pull request names; a
+  cause in the gateway is written down, not fixed.
+- **Implements:** items 118 (4) and (5), 119 (1), (4) to (7), (9) and (10), 120, 121 (4) and (5), 122 (4).
 - **Needs:** T21 (merged). Runs alone as W7's run 3, before T22, and is the one xtask pull request open while it runs.
 - **Acceptance:** each part's source text checked against the code at the lane's base and quoted in the pull request
   with its replacement; (c)'s two hazards each shown by a test that fails on `main` and passes on the branch, or by a
   written reason it cannot; (d) a unit test in `xtask` naming the operator for a client edge to it, and `no_sim.rs`'s
   list; (e) a unit test that `--require-tools` reaches a child's environment; (f) `reuse lint` green with the text
-  gone and LICENSING.md's record without CC0-1.0 or the example's author; (g) the exemption's logic shown on commit
-  lists (a Dependabot pull request's own commits pass, another author's unsigned commit on its branch fails, a pull
-  request from anyone else is unchanged), and `dependabot.yml` read against GitHub's schema; the first Dependabot pull
-  request is the live check, and the main session records it; (i) every golden and chain that moved named with why
-  (comment bytes that reach a hashed input move it; the pull request says which do); (l) the refused call named from
-  the failing run's log or a reproduction, and the fix tested, or the reason none is safe written down; every required
+  gone and LICENSING.md's record without CC0-1.0 or the example's author; (g) the unchanged walk shown passing a real
+  Dependabot commit message (its `---` and `...` lines included) and failing the same message without its last line,
+  and `dependabot.yml` read against GitHub's schema; the first Dependabot pull request is the live check, and the main
+  session records it; (i) only text goldens move, each named with why (the verifier, the plan fingerprint and the sim
+  see the canonical form, without comments), and `tests/golden/vista/expected.wizard.png` is not re-rendered, because
+  the wizard's first page draws no header comment; a moved chain, digest or `report_hash`, or a red `vista screenshot
+  (linux)`, stops the lane, which names the input that carried the comment bytes; (l) the refused call named from the
+  failing run's log or a reproduction, and the fix tested, or the reason none is safe written down; every required
   check green on the lane's final run.
 - **Contract PR:** yes — `xtask/**`, `.github/**`, `clippy.toml`, `LICENSES/**`, `REUSE.toml`, AGENTS.md, and the
   goldens (i) moves.
@@ -841,11 +849,11 @@ Days are working days, five to a week. A task's start is the day its last input 
 | W4 | 5.0 – 7.4 | **T10** runner (5 d, d25–30), then **T11** interpreter (8 d, d30–38) | **T13** gateway method slice (9 d, d30–39) | **T12** client bridge (9 d, d28–37) | The spec's 14-call walkthrough passing against a live gateway; the extension loading in Godot on a fresh checkout with zero caught panics |
 | W5 | 7.4 – 9.8 | **T14** economy, Build, Survey-lite, programs (10 d, d38–48) | **T15** gamectl + `scenario run` (8 d, d39–47) | **T16a** view feed, match control, host loop (10 d, run 1, items 106–107); then **T16** vista + watch rig (10 d, run 2) | **Flying over the generated map, craters remeshing**; the watch rig playing a segment at 2–4× and skipping to its end; `gamectl scenario run` as a green `xtask ci` step |
 | W6 | 9.8 – 11.8 | run 2: **T17** save/resume, private replay, vision follow-up (6 d); run 3: **T14b** the key-core on the grid (1.5 d) | run 2: **T18** operator Easy + safe playbook (8 d); run 4: **T18b** the safe playbook's reading, Easy in `scenario run`, Hold & Build that builds (4.5–5 d) | run 1: **T18a** planning wire (8.75 d) and **T19** PR 1, route surface (5.5 d); run 3: **T19** PR 2, wizard (6.5 d); run 4: **T20a** CI time and the docs-only fast path (1.5 d) — items 111, 112, 113 and 115 | **A sealed playbook walking the commander**: a beacon placed, a Generator built, the treasury and kW meter moving, BMI settled at the recap — and a two-seat match against Easy |
-| W7 | 11.8 – 12.8, after W6's run 4 (item 113) | run 2: **T21** packaging (5 d), whole, after T20's merge (item 116) | — | run 1: **T20** xtask closing half-week (5 d), alone (item 116) | A zip that launches on a clean Windows and a clean Linux machine; one `xtask ci` covering §10 items 1–4 with nothing skipped |
+| W7 | 11.8 – 12.8, after W6's run 4 (item 113) | run 2: **T21** packaging (5 d), whole, after T20's merge (item 116) | — | run 1: **T20** xtask closing half-week (5 d), alone (item 116); run 3: **T21b** the comments lane (2 d), alone (item 122) | A zip that launches on a clean Windows and a clean Linux machine; one `xtask ci` covering §10 items 1–4 with nothing skipped |
 | W8 | 12.8 – 14.2 | — | — | **T22** integration, goldens, demo (6 d, d64–71) | The stage demo of §1.1 |
 | — | **14.2 – 15.5** | **float: 1.3 weeks** | | | |
 
-**Totals.** 24 tasks, **182 agent-days** (T16a added 2026-09-21, item 106; T18a added and T17 and T19 re-estimated 2026-09-23, item 111, which make it 25 tasks and about 194.75 agent-days; T14b and T18b added 2026-09-25, item 113, which make it 27 tasks and about 201 agent-days; T20a added 2026-09-26, item 115, which makes it 28 and about 202.5; the schedule figures that follow predate all four) over 71 working days of schedule. At three slots that is 213
+**Totals.** 24 tasks, **182 agent-days** (T16a added 2026-09-21, item 106; T18a added and T17 and T19 re-estimated 2026-09-23, item 111, which make it 25 tasks and about 194.75 agent-days; T14b and T18b added 2026-09-25, item 113, which make it 27 tasks and about 201 agent-days; T20a added 2026-09-26, item 115, which makes it 28 and about 202.5; T21b added 2026-09-27, item 122, which makes it 29 and about 204.5; the schedule figures that follow predate all five) over 71 working days of schedule. At three slots that is 213
 slot-days, so utilisation is about 80 % — the 20 % is where a contract PR waits for review, and it is
 deliberate. The critical path is **T0 → T2 → T5 → T7 → T10 → T11 → T14 → T18 → T19 → T20 → T22**,
 71 days end to end; the sim alone carries 52 agent-days across six of the eight waves. Item 116
