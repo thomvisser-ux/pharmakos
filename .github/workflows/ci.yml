@@ -97,11 +97,12 @@ jobs:
     runs-on: ${{ matrix.os }}
     # 90, not 45 (decisions-log item 109): windows-latest ran the suite in 41 minutes at T14
     # and ran out of time once T15 added its headless matches. The limit is a hang guard,
-    # not a budget (item 109 (8)). PLACEHOLDER: the suite's own time budget, and which tests
-    # pay for it, is not set: the owner has not set one, and T20 left it unset rather than
-    # invent a number (decisions-log item 116 (6)(f)); the legs' measured times are in each
-    # xtask pull request. Owner, when a leg approaches the guard (item 116 (6)(f) takes the
-    # `[profile.*]` question at 75 minutes on Windows).
+    # not a budget (item 109 (8)), and it stays one. The suite's own budget is the owner's
+    # (decisions-log item 119 (5)): a pull request that takes the Windows `cargo xtask ci`
+    # leg past 75 minutes moves or narrows its own slowest tests (to nightly, or to fewer
+    # seeds) in the same pull request. Item 116 (6)(f)'s `[profile.*]` question falls due at
+    # the same 75 minutes and stays the owner's, a contract change (AGENTS.md section 5),
+    # not a way out of the rule. The legs' measured times are in each xtask pull request.
     timeout-minutes: 90
     # The docs-only fast path's answer, for the cross-OS guard. A matrix job has one set of
     # outputs, so this is the last leg's to finish among those that set it. The legs agree
