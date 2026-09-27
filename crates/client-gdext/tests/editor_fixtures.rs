@@ -4,7 +4,7 @@
 //! The editor's fixtures under `godot/fixtures/` are what they say they are.
 //!
 //! The headless watch check (`godot/scripts/watch_check.gd`) opens, edits and submits
-//! these files against a real `gamectl host`, and the render-only rows scene draws one of
+//! these files against a real `gamectl host`, and the hostless rows scene draws one of
 //! them. Each is a copy of, or is made from, something another crate owns, and a copy that
 //! nothing compares drifts in silence — so each is compared here:
 //!
@@ -18,7 +18,10 @@
 //!   output, which the live check compares byte for byte on the Windows and Linux legs;
 //! * `out_of_vocabulary.json` is the verifier's own E0003 case, byte for byte;
 //! * `needs_a_fix.jsonc` is the verifier's own E0108 case, comments aside;
-//! * `rows_report.json` carries the verifier's own committed diagnostics for four cases.
+//! * `rows_report.json` carries the verifier's own committed diagnostics for four cases;
+//!   the rows scene draws it and `cargo xtask screenshot` compares that drawing with
+//!   `tests/golden/vista/expected.rows.png`, so the pull request that moves those
+//!   diagnostics re-renders the PNG golden (`tests/golden/vista/README.md`).
 
 #![allow(
     clippy::expect_used,

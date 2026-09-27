@@ -189,7 +189,7 @@ pub fn instance_of(result: &Json) -> Result<Instance, BridgeError> {
 }
 
 /// An [`Instance`] from a whole JSON-RPC answer's text, or from its `result` alone: what the
-/// render-only wizard scene draws from `godot/fixtures/instantiate_suggested.json` with no
+/// hostless wizard scene draws from `godot/fixtures/instantiate_suggested.json` with no
 /// gateway behind it.
 ///
 /// # Errors

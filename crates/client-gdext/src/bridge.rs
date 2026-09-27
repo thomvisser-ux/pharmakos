@@ -932,7 +932,7 @@ impl PharmakosBridge {
     }
 
     /// One `instantiate_template` answer's text (a whole JSON-RPC answer, or its result),
-    /// with no gateway behind it: `pages`, `why` and `playbook_jsonc`, as the render-only
+    /// with no gateway behind it: `pages`, `why` and `playbook_jsonc`, as the hostless
     /// wizard scene and the watch check's pin read them. An empty dictionary means the
     /// reason is in the log.
     #[func]
@@ -964,7 +964,7 @@ impl PharmakosBridge {
     }
 
     /// Validation rows from a `gp.api.v1.VerifyReport` JSON text, with no gateway behind
-    /// them: what the render-only rows scene draws. An empty array means the reason is in
+    /// them: what the hostless rows scene draws. An empty array means the reason is in
     /// the log.
     #[func]
     fn editor_rows_of_report(&mut self, report_json: GString) -> VarArray {
