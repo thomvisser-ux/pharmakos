@@ -232,7 +232,8 @@ The licence files, `REUSE.toml` and the per-directory `LICENSE` pointers are
 **contract files**: they change only with owner approval, the same as `.proto`
 files, the lint set and the determinism rules. Adding a new top-level directory
 means adding a `REUSE.toml` entry for it in the same change, and a `LICENSE`
-pointer too when its files are not in the game tier (the game-tier directories,
-`crates/`, `godot/`, `scenarios/`, `scripts/` and `xtask/`, have none). Adding a new licence to `LICENSES/` means checking that it is
-compatible with the tier it will sit beside — for the game tier, that means
+pointer too when its files are not in the game tier. `tests/`, in the game tier,
+has one as well, naming its permissive golden areas; `crates/`, `godot/`,
+`scenarios/`, `scripts/`, `xtask/` and the dot-directories have none. Adding a
+new licence to `LICENSES/` means checking that it is compatible with the tier it will sit beside — for the game tier, that means
 compatible with GPL-3.0-or-later.
