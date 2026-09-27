@@ -3,9 +3,11 @@
 #
 # CONTRACT FILE (AGENTS.md section 5): changes to what CI checks need owner approval.
 #
-# One command runs on three operating systems — `cargo xtask ci` — and a final job
-# byte-compares the per-tick hash chains the three produced. That comparison is gate G4
-# in the flesh: "identical hashes on 3 operating systems".
+# One command runs on three operating systems — `cargo xtask ci` — and a final job,
+# `cross-OS determinism guard`, byte-compares what the three produced: the determinism
+# binary's per-tick hash chain, every scenario's chain, the path-hash file, and the
+# mesher, mapgen and vista geometry digests (decisions-log items 71 and 116 (6)(n)). That
+# comparison is gate G4 in the flesh: "identical hashes on 3 operating systems".
 #
 # Hash chain path convention (also documented in xtask/src/main.rs):
 #
@@ -14,16 +16,18 @@
 #         "<tick in decimal>\t<xxh3-64 state hash as 16 lowercase hex digits>"
 #         \n endings, trailing newline, no \r anywhere
 #
-# Each matrix leg uploads that file as the artefact `determinism-hashes-<os>`; the
-# `determinism-cross-os` job downloads all three and compares them byte for byte.
+# Each matrix leg uploads that file and the fresh `actual.*` files under
+# target/golden/{scenarios/*,pathing,mesher,mapgen}/ and target/golden/vista/
+# actual.geometry.txt as ONE artefact, `cross-os-<os>`. The guard downloads all three and
+# requires every file any leg uploaded on all three legs, the fixed kinds named in its
+# script, and at least one scenario chain; it compares each whole, byte for byte. No perf
+# figure is uploaded or compared: a number that cannot vary across platforms must not be
+# compared across them, and a figure that can is published per runner by the `perf
+# alarms` job instead. The three G4 lines are flipped: an empty upload is an error, a
+# failed download is a failure, and a missing copy of any kind is red.
 #
-# PLACEHOLDER: the workspace compiles and `cargo xtask ci` is green, but there is still no
-# determinism binary — spike G4 is closed and its findings are written up, and the binary
-# itself lands with the walking skeleton's sim. Until it does, the matrix legs pass with
-# the `determinism` and `golden` steps reporting "skipped" with a reason, the hash
-# artefacts are absent, and the cross-OS job says so instead of failing. The three lines to
-# flip when the binary lands are marked "FLIP AT G4": `if-no-files-found`, the
-# `continue-on-error` on the download, and the `exit 0` in the compare step.
+# Every `uses:` is pinned to a full commit SHA with its ref in a trailing comment
+# (decisions-log item 116 (6)(o)); a ref marked `(branch)` has no tag of that name.
 #
 # THE DOCS-ONLY FAST PATH (decisions-log item 115 (4)). Every required job runs on every
 # pull request, because the ruleset's eight required checks must report under their own
@@ -47,6 +51,8 @@
 #     job would skip its matrix dependents, with the same unexpanded names;
 #   * the cross-OS guard takes the legs' answer through the `ci` job's outputs, and the
 #     DCO job does not ask at all;
+#   * the `perf alarms` job, which is not required, copies the pattern: it skips its
+#     steps and prints the notice on a prose-only pull request;
 #   * the scope step answers full in bash, before it builds xtask, whenever the commit
 #     changes xtask/, .github/ or .cargo/: a pull request that breaks the decider must not
 #     be judged by the broken copy, whose tests are among the steps it would skip. What
@@ -86,8 +92,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     # 90, not 45 (decisions-log item 109): windows-latest ran the suite in 41 minutes at T14
     # and ran out of time once T15 added its headless matches. The limit is a hang guard,
-    # not a budget. PLACEHOLDER: the suite's own time budget, and which tests pay for it,
-    # are T20's to set with xtask's closing half-week (owner).
+    # not a budget (item 109 (8)). PLACEHOLDER: the suite's own time budget, and which tests
+    # pay for it, is not set: the owner has not set one, and T20 left it unset rather than
+    # invent a number (decisions-log item 116 (6)(f)); the legs' measured times are in each
+    # xtask pull request. Owner, when a leg approaches the guard (item 116 (6)(f) takes the
+    # `[profile.*]` question at 75 minutes on Windows).
     timeout-minutes: 90
     # The docs-only fast path's answer, for the cross-OS guard. A matrix job has one set of
     # outputs, so this is the last leg's to finish among those that set it. The legs agree
@@ -105,13 +114,14 @@ jobs:
           # The REUSE licence check is platform-independent, so it runs once, on Linux.
           #
           # `--skip screenshot` on the ubuntu leg is REQUIRED, not an optimisation. The
-          # `screenshot` step's preconditions are project → golden → Linux → godot →
-          # xvfb-run, and the last two go through `skip_or_fail`, which is a hard failure
-          # under PHARMAKOS_REQUIRE_TOOLS. godot and xvfb are installed only in the
-          # `screenshot` job below, so the moment T16 commits `godot/project.godot` and
-          # the first vista golden, this leg would pass the first three preconditions and
-          # then fail on a tool it was never given. The render belongs to that job, which
-          # installs what it needs; this leg would also be doing it twice.
+          # `screenshot` step's order is project → Linux → godot → xvfb-run → staging →
+          # render, and the two tool checks go through `skip_or_fail`, which is a hard
+          # failure under PHARMAKOS_REQUIRE_TOOLS. godot and xvfb are installed only in the
+          # `screenshot` job below, so this leg would pass the first two checks and then
+          # fail on a tool it was never given. The render belongs to that job, which
+          # installs what it needs; this leg would also be doing it twice. The windows and
+          # macOS legs keep the step, which skips there before it builds or stages anything:
+          # the PNG goldens are Linux-only (decision 22, logged as item 116 (6)(a)).
           #
           # `--skip stage-client` on the ubuntu and windows legs is REQUIRED for the same
           # reason. `stage-client` builds the gdext cdylib, stages it and then runs
@@ -133,7 +143,7 @@ jobs:
             reuse: false
     steps:
       - name: Check out the full history
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           # `buf breaking --against .git#branch=main` reads the base branch out of the
           # local object store, so the whole history has to be here.
@@ -141,9 +151,9 @@ jobs:
 
       - name: Install the Rust toolchain
         # rust-toolchain.toml pins the channel and the components; this action installs
-        # rustup's stable so that pin resolves. PLACEHOLDER: pin these actions to commit
-        # SHAs before the repository goes public.
-        uses: dtolnay/rust-toolchain@stable
+        # rustup's stable so that pin resolves. The action's `stable` is a branch, not a
+        # tag, and its action.yml at the pinned commit defaults `toolchain` to stable.
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable (branch)
         with:
           components: rustfmt, clippy
 
@@ -193,13 +203,13 @@ jobs:
 
       - name: Cache cargo registry and target
         if: steps.scope.outputs.prose_only != 'true'
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           key: ${{ matrix.os }}
 
       - name: Install buf
         if: steps.scope.outputs.prose_only != 'true'
-        uses: bufbuild/buf-setup-action@v1
+        uses: bufbuild/buf-setup-action@a47c93e0b1648d5651a065437926377d060baa99 # v1 (branch; the repository is archived)
         with:
           # PINNED, for the same reason protoc-gen-prost is pinned below: crates/proto's
           # generated-tree check is a byte-for-byte comparison, and buf's own release
@@ -229,7 +239,7 @@ jobs:
 
       - name: Install cargo-deny
         if: steps.scope.outputs.prose_only != 'true'
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2
         with:
           tool: cargo-deny
 
@@ -251,36 +261,60 @@ jobs:
         shell: bash
         run: cargo xtask reuse
 
+      - name: Clear what an earlier run left in target/
+        # The cache step above restores target/, and the cross-OS artefact below is read
+        # out of it: a chain or a digest left by an earlier run must not pass for this
+        # one's when this leg stops before producing its own.
+        if: steps.scope.outputs.prose_only != 'true'
+        shell: bash
+        run: rm -rf target/golden target/determinism
+
       - name: cargo xtask ci
         if: steps.scope.outputs.prose_only != 'true'
         shell: bash
         run: cargo xtask ci ${{ matrix.xtask_args }}
 
-      - name: Upload this operating system's hash chain
-        # `always()` so a failure in a later step still hands the cross-OS job what the
-        # determinism step produced. Not on the fast path, where nothing was produced.
+      - name: Upload what the cross-OS guard compares
+        # One artefact per leg: the determinism step's chain, and every fresh output the
+        # `test` step wrote for the kinds that must agree across operating systems —
+        # each scenario's chain (and expand-east-segment's event log), the path hashes,
+        # and the mesher, mapgen and vista geometry digests. The actuals come from the
+        # `test` step and the chain from `determinism`, so `always()` hands the guard
+        # whatever a leg produced before a later step failed; a leg that failed before
+        # `test` uploads nothing, the upload is an error, and the guard is red, which is
+        # right. Not on the fast path, where nothing was produced.
         if: always() && steps.scope.outputs.prose_only != 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: determinism-hashes-${{ matrix.os }}
-          path: target/determinism/hashes.txt
-          # FLIP AT G4: make this `error`, so a leg that produces no hash chain fails
-          # here rather than silently reducing the cross-OS comparison to two files.
-          if-no-files-found: warn
+          name: cross-os-${{ matrix.os }}
+          path: |
+            target/determinism/hashes.txt
+            target/golden/scenarios/*/actual.*
+            target/golden/pathing/**/actual.*
+            target/golden/mesher/**/actual.*
+            target/golden/mapgen/**/actual.*
+            target/golden/vista/actual.geometry.txt
+          # Flipped at G4 (decisions-log item 116 (6)(n)): a leg that produced nothing
+          # fails here rather than silently reducing the comparison.
+          if-no-files-found: error
           retention-days: 14
 
   dco:
     name: DCO sign-off
-    # Pull requests only: the check is "every commit this PR adds carries a
-    # Signed-off-by trailer", and on a push to main the range would be empty or the
-    # whole history. AGENTS.md section 8 and docs/CONTRIBUTING.md both point here, so
-    # this job is what makes "CI checks it" true.
-    if: github.event_name == 'pull_request'
+    # The check is "every commit this branch adds carries a Signed-off-by trailer".
+    # On a pull request the range is base..head. On a `workflow_dispatch` the range is
+    # origin/main..HEAD, so a dispatch run on a branch walks that branch's sign-offs
+    # rather than posting a skipped required check, which the ruleset counts as
+    # satisfied (decisions-log item 116 (6)(m)); a dispatch of main itself has an empty
+    # range and passes. It still skips on main's push, where the range would be empty or
+    # the whole history. AGENTS.md section 8 and docs/CONTRIBUTING.md both point here,
+    # so this job is what makes "CI checks it" true.
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Check out the full history
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
 
@@ -291,12 +325,20 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            # A dispatch has no pull request: walk what the dispatched ref adds to main.
+            git fetch --no-tags --quiet origin +refs/heads/main:refs/remotes/origin/main
+            range="origin/main..HEAD"
+          else
+            range="${BASE_SHA}..${HEAD_SHA}"
+          fi
+          echo "walking ${range}"
           missing=0
           # `%(trailers:key=...)` prints nothing when the commit has no such trailer,
           # so an empty value is the failure. Command substitution rather than a pipe:
           # a pipe under `pipefail` would make grep's "no match" exit status abort the
           # loop instead of reporting the commit.
-          for sha in $(git rev-list "$BASE_SHA..$HEAD_SHA"); do
+          for sha in $(git rev-list "$range"); do
             signoff=$(git show -s --format='%(trailers:key=Signed-off-by,valueonly)' "$sha")
             if [ -z "${signoff//[[:space:]]/}" ]; then
               subject=$(git show -s --format='%s' "$sha")
@@ -330,126 +372,181 @@ jobs:
     # The docs-only fast path: this job neither checks out nor compiles, because it runs
     # after the legs and would lengthen every pull request. It takes the legs' answer from
     # the `ci` job's outputs instead. The download and the compare are gated on it, so the
-    # FLIP AT G4 lines inside them stay skipped on a prose-only pull request after the flip.
+    # flipped G4 lines inside them stay skipped on a prose-only pull request. Otherwise a
+    # leg that uploads nothing turns this job red, the safe side (decisions-log items
+    # 115 (4) and 116 (6)(n)); there is no leg-count leniency.
     steps:
       - name: Only prose changed, so there are no hash chains to compare
         if: needs.ci.outputs.prose_only == 'true'
         shell: bash
         run: echo "::notice title=docs-only fast path::Only prose changed, so the \`cargo xtask ci\` legs did not run the suite and produced no hash chains; this guard compared nothing. It runs in full on main's push (decisions-log item 115 (4))."
 
-      - name: Download every hash chain
-        # Before spike G4 no leg produces a hash chain, and download-artifact fails
-        # the step when its pattern matches nothing ("Unable to find any artifacts").
-        # That would go red on the placeholder path, where the compare step below is
-        # written to report the skip and exit 0. The compare step handles zero files
-        # (`shopt -s nullglob`), so tolerating the empty download is safe.
-        # FLIP AT G4: remove `continue-on-error` — after G4 a missing artefact means
-        # a leg did not produce its chain, which must not read as a pass.
-        continue-on-error: true
+      - name: Download every leg's artefact
+        # Flipped at G4: no `continue-on-error`. A missing artefact means a leg did not
+        # produce what it must, which must not read as a pass.
         if: needs.ci.outputs.prose_only != 'true'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          pattern: determinism-hashes-*
-          path: hashes
+          pattern: cross-os-*
+          path: legs
 
-      - name: Compare the three hash chains byte for byte
+      - name: Compare every kind byte for byte across the three
+        # The kinds are the union of the relative paths the three legs uploaded, plus the
+        # fixed ones named once below; each is required on all three legs and compared
+        # whole, parsing no columns — the counts inside the digest and path-hash lines
+        # come from the same deterministic computation as their hashes. No scenario is
+        # named, so a new scenario needs no edit here. On a difference it names the
+        # operating system that differs, the file and the first differing line.
         if: needs.ci.outputs.prose_only != 'true'
         shell: bash
         run: |
           set -euo pipefail
-          shopt -s nullglob
-
-          files=(hashes/*/hashes.txt)
-          count=${#files[@]}
-
-          if [ "$count" -lt 3 ]; then
-            echo "::notice::${count}/3 hash chains present — the determinism binary arrives with spike G4"
-            {
-              echo "### Cross-OS determinism"
-              echo
-              echo "Skipped: ${count}/3 hash chains present (placeholder until spike G4)."
-            } >> "$GITHUB_STEP_SUMMARY"
-            # FLIP AT G4: `exit 1` here. Three chains are the gate; fewer than three means
-            # the guard did not run, which must not read as a pass.
-            exit 0
-          fi
-
-          reference="${files[0]}"
+          export LC_ALL=C
+          # Where download-artifact put the three legs, one folder per leg. A variable so
+          # the script can be run by hand over synthetic folders (the pull request that
+          # wrote it shows three such runs).
+          legs_dir="${CROSS_OS_DIR:-legs}"
+          legs=(ubuntu-latest windows-latest macos-latest)
+          # The kinds every leg must produce whatever else it produces, named once, here.
+          # Scenario chains are not listed: every scenario's files are required on all
+          # three legs through the union below, and at least one scenario chain is.
+          fixed=(
+            determinism/hashes.txt
+            golden/pathing/actual.path-hashes.txt
+            golden/mesher/actual.digests.txt
+            golden/mapgen/actual.digests.txt
+            golden/vista/actual.geometry.txt
+          )
+          summary="${GITHUB_STEP_SUMMARY:-/dev/null}"
           status=0
-          {
-            echo "### Cross-OS determinism"
-            echo
-            echo "Reference: \`${reference}\` ($(wc -l < "$reference") ticks)"
-            echo
-          } >> "$GITHUB_STEP_SUMMARY"
+          fail() { echo "::error::$1"; echo "- ❌ $1" >> "$summary"; status=1; }
 
-          for file in "${files[@]:1}"; do
-            if cmp -s "$reference" "$file"; then
-              echo "match: $file"
-              echo "- ✅ \`${file}\` matches" >> "$GITHUB_STEP_SUMMARY"
-            else
-              status=1
-              first=$(cmp "$reference" "$file" 2>&1 || true)
-              echo "::error::hash chains differ: $reference vs $file ($first)"
-              {
-                echo "- ❌ \`${file}\` differs — ${first}"
-                echo
-                echo '```diff'
-                # `diff` exits 1 precisely when the files differ, which is the case
-                # we are in — without the `|| true` the pipeline fails, `pipefail`
-                # and `set -e` abort the script here, and the closing fence plus the
-                # whole explanation below never get written. The diagnostic is the
-                # entire point of this branch, so it must not be the thing that dies.
-                { diff -u "$reference" "$file" || true; } | head -n 20
-                echo '```'
-              } >> "$GITHUB_STEP_SUMMARY"
+          { echo "### Cross-OS determinism"; echo; } >> "$summary"
+
+          for os in "${legs[@]}"; do
+            if [ ! -d "$legs_dir/cross-os-$os" ]; then
+              fail "the $os leg uploaded nothing (no cross-os-$os artefact): its suite stopped before the test step, or the upload failed"
             fi
           done
 
+          # The kinds: every relative path any leg uploaded, plus the fixed ones.
+          kinds=$(
+            {
+              for os in "${legs[@]}"; do
+                if [ -d "$legs_dir/cross-os-$os" ]; then
+                  (cd "$legs_dir/cross-os-$os" && find . -type f | sed 's|^\./||')
+                fi
+              done
+              printf '%s\n' "${fixed[@]}"
+            } | sort -u
+          )
+          if ! printf '%s\n' "$kinds" | grep -q '^golden/scenarios/[^/]*/actual\.hashes\.txt$'; then
+            fail "no leg uploaded a scenario chain (golden/scenarios/<name>/actual.hashes.txt)"
+          fi
+
+          compared=0
+          while IFS= read -r kind; do
+            [ -n "$kind" ] || continue
+            present=()
+            for os in "${legs[@]}"; do
+              if [ -f "$legs_dir/cross-os-$os/$kind" ]; then
+                present+=("$os")
+              else
+                fail "$kind is missing on $os"
+              fi
+            done
+            [ "${#present[@]}" -ge 2 ] || continue
+            # The odd one out: a leg that matches no other leg, when two others agree.
+            differs=()
+            for os in "${present[@]}"; do
+              matches=0
+              for other in "${present[@]}"; do
+                if [ "$other" != "$os" ] && cmp -s "$legs_dir/cross-os-$os/$kind" "$legs_dir/cross-os-$other/$kind"; then
+                  matches=$((matches + 1))
+                fi
+              done
+              [ "$matches" -gt 0 ] || differs+=("$os")
+            done
+            if [ "${#differs[@]}" -eq 0 ]; then
+              compared=$((compared + 1))
+              echo "match: $kind (${present[*]})"
+              continue
+            fi
+            for os in "${differs[@]}"; do
+              # Against a leg that is not odd, when there is one; otherwise every leg
+              # differs from every other and the first present one is the reference.
+              reference=""
+              for other in "${present[@]}"; do
+                odd=0
+                for d in "${differs[@]}"; do [ "$d" = "$other" ] && odd=1; done
+                if [ "$odd" -eq 0 ]; then reference="$other"; break; fi
+              done
+              if [ -z "$reference" ]; then
+                [ "$os" = "${present[0]}" ] && continue
+                reference="${present[0]}"
+              fi
+              a="$legs_dir/cross-os-$reference/$kind"
+              b="$legs_dir/cross-os-$os/$kind"
+              report=$(cmp "$a" "$b" 2>&1 || true)
+              line=$(printf '%s\n' "$report" | sed -n 's/.* line \([0-9][0-9]*\).*/\1/p' | head -n 1)
+              if [ -z "$line" ] || printf '%s' "$report" | grep -q EOF; then
+                # One file is a prefix of the other: cmp reports EOF on the shorter one,
+                # so the first differing line is the first one past its end.
+                line=$(( $(wc -l < "$a") < $(wc -l < "$b") ? $(wc -l < "$a") + 1 : $(wc -l < "$b") + 1 ))
+              fi
+              fail "$kind differs on $os from $reference at line $line"
+              echo "  $reference: $(sed -n "${line}p" "$a" | head -c 200)"
+              echo "  $os: $(sed -n "${line}p" "$b" | head -c 200)"
+            done
+          done <<< "$kinds"
+
+          echo "$compared kind(s) byte-identical on every leg that has them"
+          echo "- $compared kind(s) byte-identical across the legs" >> "$summary"
           if [ "$status" -ne 0 ]; then
             echo
-            echo "The same binary produced different per-tick state hashes on different"
-            echo "operating systems. Bisect by tick from the first differing line above;"
-            echo "the usual suspects are unordered iteration, an unchecked cast, a"
-            echo "non-total sort comparator, or usize/isize reaching hashed state."
-            echo "Do not re-baseline the golden chain to make this green."
+            echo "The same commit produced different bytes on different operating systems, or a"
+            echo "leg produced less than the others. Bisect a chain by tick from the first"
+            echo "differing line above; the usual suspects are unordered iteration, an unchecked"
+            echo "cast, a non-total sort comparator, or usize/isize reaching hashed state. Do not"
+            echo "re-bless a golden to make this green."
           fi
           exit "$status"
 
   screenshot:
     name: vista screenshot (linux)
-    # Linux only, and deliberately so. The golden is rendered under xvfb with
+    # Linux only, and deliberately so. The goldens are rendered under xvfb with
     # the lavapipe software rasteriser; comparing a second platform's rasteriser
-    # against it would be permanently red and would say nothing about the
-    # geometry (skeleton-plan §7 decision 22, recommended and not yet logged —
-    # G1 measured 1.14 % of pixels differing between a Quadro and lavapipe on
-    # identical geometry). The stronger of the two geometry checks is the
-    # client's and the mesher's digests, which need no GPU and run on every leg.
+    # against them would be permanently red and would say nothing about the
+    # geometry (skeleton-plan §7 decision 22, logged as decisions-log item
+    # 116 (6)(a) — G1 measured 1.14 % of pixels differing between a Quadro and
+    # lavapipe on identical geometry). The stronger of the two geometry checks is
+    # the client's and the mesher's digests, which need no GPU, run on every leg
+    # and are compared across the three by the cross-OS guard.
     #
-    # This job is the ONLY place the vista is rendered: godot and xvfb are
+    # This job is the ONLY place the shots are rendered: godot and xvfb are
     # installed here and nowhere else, which is why the ubuntu `ci` leg above
     # passes `--skip screenshot`.
     #
-    # FILLED BY T16. The scene is res://scenes/vista_shot.tscn: the committed
-    # keyframe fixture (godot/fixtures/view_keyframe.jsonl, a byte-identical copy
-    # of the gateway's golden) drawn through the client's live decode entry with
-    # NO host running. The install steps run whether or not a golden is
-    # committed, because the first golden is rendered HERE (decisions-log item
-    # 105 (5)): with no tests/golden/vista/expected.vista.png the bootstrap step
-    # below renders the vista anyway and the artefact carries it, to be looked
-    # at and committed; with one, `cargo xtask screenshot` renders and compares.
-    # T20 promotes the step from skipping to required.
+    # Three shots, each drawn through the bridge with NO host running
+    # (xtask/src/main.rs, `SHOTS`): the vista (res://scenes/vista_shot.tscn, the
+    # committed keyframe fixture, T16), the diagnostic rows (rows_shot.tscn) and
+    # the wizard's first page (wizard_shot.tscn), T19's, compared since T20.
+    # `cargo xtask screenshot` stages the extension itself, renders every shot
+    # and then compares each with its golden; a shot with no golden still renders
+    # and its actual is uploaded, and the step fails naming it. That is how a
+    # first golden is made and how a deliberate re-render starts (decisions-log
+    # item 105 (5)): delete the golden, push, download the artefact, look, commit.
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
       - name: Check out
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           # Both parents of a pull request's merge commit, for `cargo xtask ci-scope`.
           fetch-depth: 2
 
       - name: Install the Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable (branch)
 
       - name: Decide whether anything but prose changed
         # The docs-only fast path (see this file's header), as in the `ci` legs.
@@ -477,7 +574,7 @@ jobs:
 
       - name: Cache cargo registry and target
         if: steps.scope.outputs.prose_only != 'true'
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           key: screenshot-ubuntu
 
@@ -500,24 +597,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends xvfb mesa-vulkan-drivers vulkan-tools
           vulkaninfo --summary || echo "::notice::vulkaninfo failed; the render step will report what it selected"
-          # `cargo xtask screenshot` asks whether a tool is installed by running it with
-          # `--version` (xtask/src/main.rs, `tool_available`), and xvfb-run has no such
-          # option: it prints its usage and exits non-zero, so the step reported
-          # "xvfb-run is not installed" on a runner where it was. That is an xtask bug and
-          # the fix belongs in xtask (T16's pull request reports it for T20); until then
-          # this shim answers `--version` and hands every other invocation to the real
-          # xvfb-run untouched.
-          mkdir -p "$HOME/shims"
-          printf '%s\n' '#!/bin/sh' \
-            'if [ "$1" = "--version" ]; then echo "xvfb-run (version probe shim)"; exit 0; fi' \
-            'exec /usr/bin/xvfb-run "$@"' > "$HOME/shims/xvfb-run"
-          chmod +x "$HOME/shims/xvfb-run"
-          echo "$HOME/shims" >> "$GITHUB_PATH"
+          # No shim: `cargo xtask screenshot` finds xvfb-run on PATH by looking, not by
+          # running it with `--version`, which xvfb-run lacks (decisions-log item 110 (4)).
 
       - name: Install Godot 4.7.2
         # The pinned build decisions-log item 73 names, exactly as the `client`
         # job installs it (Linux only here). PHARMAKOS_GODOT is what
-        # `cargo xtask stage-client` and `cargo xtask screenshot` run.
+        # `cargo xtask screenshot` runs.
         if: steps.scope.outputs.prose_only != 'true'
         shell: bash
         run: |
@@ -538,40 +624,16 @@ jobs:
             *) echo "::error::expected Godot 4.7.2.stable, got ${version}"; exit 1 ;;
           esac
 
-      - name: Stage the client library
-        # The vista is drawn by the bridge, so the extension has to be built,
-        # staged into godot/bin and imported before the scene can load it —
-        # `cargo xtask screenshot` imports but does not build or stage.
-        if: steps.scope.outputs.prose_only != 'true'
-        shell: bash
-        run: cargo xtask stage-client
-
-      - name: Render a first vista (no golden committed yet)
-        # The bootstrap for decisions-log item 105 (5): the first golden is this
-        # leg's render, looked at by a person and committed. `cargo xtask
-        # screenshot` skips before rendering when there is no golden to compare
-        # with, so this step renders with the same command line it would use and
-        # leaves the PNG where the upload below finds it. It runs only while
-        # tests/golden/vista/expected.vista.png is absent — the same step is how
-        # a deliberate re-render starts: delete the golden, push, download, look.
-        if: steps.scope.outputs.prose_only != 'true' && hashFiles('tests/golden/vista/expected.vista.png') == ''
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p target/golden/vista
-          xvfb-run -a -s "-screen 0 1280x720x24" "${PHARMAKOS_GODOT}" --path godot \
-            --resolution 1280x720 -- --scene=res://scenes/vista_shot.tscn \
-            "--shot=$PWD/target/golden/vista/actual.vista.png"
-          test -s target/golden/vista/actual.vista.png
-
       - name: cargo xtask screenshot
-        # The step runs `godot --headless --path godot --import` itself before
-        # rendering. That pre-step is not optional: a non-editor Godot run loads
-        # GDExtensions only from `res://.godot/extension_list.cfg`, which the
-        # editor writes when it scans the project and which is git-ignored — so
-        # on a fresh checkout the extension's classes instantiate as
-        # placeholders and the first call on them fails. G1 lost four runs to
-        # this.
+        # The step stages the client library itself (the same function as
+        # `cargo xtask stage-client`) and runs `godot --headless --path godot
+        # --import` before rendering. The import is not optional: a non-editor
+        # Godot run loads GDExtensions only from `res://.godot/extension_list.cfg`,
+        # which the editor writes when it scans the project and which is
+        # git-ignored — so on a fresh checkout the extension's classes instantiate
+        # as placeholders and the first call on them fails. G1 lost four runs to
+        # this. Each shot's size and red-channel variance goes out as a
+        # `::notice title=<shot> render::` line before any check.
         #
         # The comparison's verdict goes out as `::notice::` annotations as well
         # as to the step summary, because GitHub hides job logs and step
@@ -580,16 +642,19 @@ jobs:
         shell: bash
         run: cargo xtask screenshot
 
-      - name: Upload the render
-        # Not on the fast path, where nothing was rendered: `if-no-files-found: error`
-        # would otherwise turn the skip red.
+      - name: Upload the renders
+        # All three shots, whether or not their checks passed: a shot with no golden, or
+        # one that moved, is looked at from here. Not on the fast path, where nothing was
+        # rendered: `if-no-files-found: error` would otherwise turn the skip red.
         if: always() && steps.scope.outputs.prose_only != 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: vista-screenshot
-          path: target/golden/vista/actual.vista.png
-          # Flipped at T16: the vista exists, so a leg that produced no PNG
-          # rendered nothing, and that must not read as a pass.
+          path: |
+            target/golden/vista/actual.vista.png
+            target/golden/vista/actual.rows.png
+            target/golden/vista/actual.wizard.png
+          # A job that rendered nothing must not read as a pass.
           if-no-files-found: error
           retention-days: 14
 
@@ -623,13 +688,13 @@ jobs:
             godot_binary: Godot_v4.7.2-stable_win64.exe
     steps:
       - name: Check out
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           # Both parents of a pull request's merge commit, for `cargo xtask ci-scope`.
           fetch-depth: 2
 
       - name: Install the Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable (branch)
 
       - name: Decide whether anything but prose changed
         # The docs-only fast path (see this file's header), as in the `ci` legs.
@@ -657,7 +722,7 @@ jobs:
 
       - name: Cache cargo registry and target
         if: steps.scope.outputs.prose_only != 'true'
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           key: client-${{ matrix.os }}
 
@@ -837,3 +902,72 @@ jobs:
             fi
           fi
           echo "no gamectl process is running"
+
+  perf-alarms:
+    name: perf alarms (${{ matrix.os }})
+    # Skeleton-plan section 7 decision 23, logged as decisions-log item 116 (6)(b):
+    # performance is published per runner as `::notice::` annotations with NO threshold,
+    # and never compared across operating systems. This job is NOT in the ruleset and must
+    # not be asked to be: nothing gates on it. It must also never go red, because
+    # scripts/merge-train.sh stops on any check that is not pass or skipping, required or
+    # not; so its measuring step continues on error, and `cargo xtask perf-alarms` turns
+    # a failed measurement into a `::warning::` and still exits 0.
+    #
+    # What it publishes: the mesher p99 (crates/mesher/tests/perf_alarm.rs, run with
+    # `--release`, `--ignored` and `--nocapture` as its header says), and the allocations
+    # per tick as a notice only — crates/sim/tests/allocations.rs asserts zero in every
+    # leg's `test` step, so it is not run again here. The tick-minus-pathing mean is not
+    # built: a millisecond figure for the sim may come only from a walled crate driving it
+    # from outside (AGENTS.md section 4.5), none exists, and it moves to S2's G3′-real
+    # gate. The budgets come with S1's P1 and S2's G3′-real gates, which set them.
+    #
+    # No cache step: the repository's cache store is past GitHub's 10 GB cap already, and
+    # the mesher's release test build is small. It follows the docs-only fast path like the
+    # building jobs: a prose-only pull request skips its steps and prints the notice.
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - name: Check out
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # Both parents of a pull request's merge commit, for `cargo xtask ci-scope`.
+          fetch-depth: 2
+
+      - name: Install the Rust toolchain
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable (branch)
+
+      - name: Decide whether anything but prose changed
+        # The docs-only fast path (see this file's header), as in the `ci` legs.
+        id: scope
+        continue-on-error: true
+        shell: bash
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # A change to the decider itself (xtask/, the workflows, or the `cargo xtask`
+          # alias under .cargo/) is never judged by its own copy: that copy could be the
+          # broken one, and the tests that would catch it are among the steps it skips.
+          # `git diff --quiet` exits 1 on a difference and 128 on an error; both answer full.
+          if ! git diff --quiet --no-renames HEAD^1 HEAD -- xtask .github .cargo; then
+            echo "full: the commit changes xtask/, .github/ or .cargo/ (or git failed), so the decider does not judge its own change"
+            echo "prose_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          cargo xtask ci-scope
+
+      - name: Only prose changed, so nothing is measured
+        if: steps.scope.outputs.prose_only == 'true'
+        shell: bash
+        run: echo "::notice title=docs-only fast path::Only prose changed (docs/**, AGENTS.md, CLAUDE.md, .claude/**, top-level *.md), so the perf alarms did not run in this job. They run in full on main's push (decisions-log item 115 (4))."
+
+      - name: cargo xtask perf-alarms
+        # An alarm, not a gate: continue on error, so even a failure to build cannot turn
+        # this job red.
+        if: steps.scope.outputs.prose_only != 'true'
+        continue-on-error: true
+        shell: bash
+        run: cargo xtask perf-alarms

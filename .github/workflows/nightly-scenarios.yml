@@ -17,8 +17,14 @@
 #     balance", and the job says so in its summary rather than blocking a merge;
 #   * results are uploaded as JSON so a tuning task can diff nights.
 #
-# The nightly fuzzer (10 000 generated playbooks, no panic) belongs here too and is added
-# in the authoring stage, when the generator exists.
+# The nightly fuzzer (10 000 generated playbooks, no panic; AGENTS.md section 9, "Nightly")
+# is the `fuzz` job below: crates/verifier/tests/fuzz.rs's ignored target, whose generator
+# exists and runs a small slice on every ordinary `cargo test`. It sits behind the same
+# variable gate as the scenarios (decisions-log item 116 (6)(j)), so it runs nightly from
+# the day NIGHTLY_SCENARIOS_ENABLED is set, or on a manual run with `force`.
+#
+# Every `uses:` is pinned to a full commit SHA with its ref in a trailing comment
+# (decisions-log item 116 (6)(o)); a ref marked `(branch)` has no tag of that name.
 
 name: nightly-scenarios
 
@@ -60,13 +66,13 @@ jobs:
       matrix:
         scenario: [rusher, turtle, hunter]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Install the Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable (branch)
 
       - name: Cache cargo registry and target
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           key: nightly-scenarios
 
@@ -74,11 +80,13 @@ jobs:
         run: cargo build --release --package pharmakos-gamectl --bin gamectl
 
       - name: Run the scenario over the seed set
-        # PLACEHOLDER — the exact flags are fixed when `gamectl scenario run` is built at
-        # the end of the walking skeleton (harness part 2). What the command must do is
-        # settled: take a scenario file (map seed + playbooks + assertions on events and
-        # hashes), run it against the Balanced built-in operator over a fixed seed set,
-        # and write a machine-readable result.
+        # PLACEHOLDER: none of the flags below exist. T15 built `gamectl scenario run
+        # <file>` with no options (crates/gamectl/src/cli.rs), and the seed set, the
+        # Balanced operator's selection and the machine-readable result are S2's, when the
+        # nightly scenarios are enabled (owner, at S2; decisions-log item 116 (6)(j)).
+        # What the command must do is settled: take a scenario file (map seed + playbooks +
+        # assertions on events and hashes), run it against the Balanced built-in operator
+        # over a fixed seed set, and write a machine-readable result.
         run: |
           set -euo pipefail
           mkdir -p target/scenario
@@ -128,12 +136,35 @@ jobs:
 
       - name: Upload the scenario result
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: scenario-${{ matrix.scenario }}
           path: target/scenario/${{ matrix.scenario }}.json
           if-no-files-found: warn
           retention-days: 30
+
+  fuzz:
+    name: verifier fuzz (10 000 playbooks)
+    # The 10 000-playbook fuzz target (crates/verifier/tests/fuzz.rs; gate P1's fourth
+    # clause, "10k fuzzed playbooks with no panic"), run exactly as that file's header
+    # gives it. Seeded, so a failing iteration is reproducible from its index alone.
+    # Behind the scenarios' variable gate (decisions-log item 116 (6)(j)).
+    if: ${{ vars.NIGHTLY_SCENARIOS_ENABLED == 'true' || inputs.force }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install the Rust toolchain
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable (branch)
+
+      - name: Cache cargo registry and target
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          key: nightly-fuzz
+
+      - name: Ten thousand generated playbooks come back as reports
+        run: cargo test --locked -p pharmakos-verifier --test fuzz -- --ignored --nocapture
 
   not-yet-enabled:
     name: nightly scenarios (not yet enabled)
@@ -147,6 +178,7 @@ jobs:
             echo
             echo "Not enabled yet. They start at **S2 (destruction and combat)**, once"
             echo "\`gamectl scenario run\`, the Rusher/Turtle/Hunter playbooks and the seed"
-            echo "set exist. To enable: set the repository variable"
+            echo "set exist. The 10 000-playbook verifier fuzz job waits behind the same"
+            echo "gate. To enable both: set the repository variable"
             echo "\`NIGHTLY_SCENARIOS_ENABLED\` to \`true\`."
           } >> "$GITHUB_STEP_SUMMARY"
