@@ -125,9 +125,11 @@ use pharmakos_proto::gp;
 
 /// The match seed the determinism harness runs on.
 ///
-/// Arbitrary and pinned. It is a *harness* seed, not a game constant: T20
-/// replaces the harness run with a real segment and re-baselines the chain,
-/// explaining the movement in that pull request.
+/// Arbitrary and pinned. It is a *harness* seed, not a game constant: the pull
+/// request that replaces the harness run with a real segment re-baselines the
+/// chain and explains the movement (owner, at S1: decisions-log item 116 (6)(e)
+/// kept the harness run through T20, because the demo scenario's chain is the
+/// full-segment chain).
 pub const DETERMINISM_MATCH_SEED: u64 = 0x0102_0304_0506_0708;
 
 /// Seats the determinism harness runs.
@@ -152,7 +154,8 @@ pub const DETERMINISM_UNITS_PER_SEAT: u32 = 50;
 /// the committed chain covers `push → recap → lull → push` three times over.
 ///
 /// Deleted when `DETERMINISM_TICKS` is raised from 1 200 to a real segment
-/// (owner, at T20 — the same PLACEHOLDER T2 left in `xtask`). Whoever raises it
+/// (owner, at S1 — the same PLACEHOLDER T2 left in `xtask`; decisions-log item
+/// 116 (6)(e) kept the harness run through T20). Whoever raises it
 /// should know what is waiting on it: the plan's T10 acceptance line asks for
 /// "a golden hash chain over a full segment", and the committed chain covers
 /// three whole segments of *this* list rather than one of item 68's real
@@ -271,7 +274,8 @@ pub fn determinism_world(rules_path: &std::path::Path) -> Result<World, WorldErr
 /// (`scenarios/skeleton/expand-east-segment.scenario.jsonc`).
 ///
 /// Deleted when `DETERMINISM_TICKS` is raised to a real segment and the chain
-/// covers a real playbook (owner, at T20, with `DETERMINISM_SEGMENT_LENGTHS_MS`).
+/// covers a real playbook (owner, at S1, with `DETERMINISM_SEGMENT_LENGTHS_MS`;
+/// decisions-log item 116 (6)(e)).
 #[must_use]
 pub fn determinism_playbook() -> gp::v1::Playbook {
     use gp::v1::{

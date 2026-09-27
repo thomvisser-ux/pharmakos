@@ -5,8 +5,8 @@
 //!
 //! The whole file is behind the feature, so `cargo test --workspace` without
 //! `--features research` compiles nothing here. `cargo xtask ci` runs the
-//! workspace's tests in both configurations, which is what stops either one
-//! rotting.
+//! workspace's tests without the feature and this crate's tests with it
+//! (`test-research`), which is what stops either one rotting.
 //!
 //! G4 asserted 20 of 20 forks equivalent with 10 of 10 parents unperturbed on a
 //! toy sim. This re-asserts it against the real world type, which is the point
