@@ -1247,8 +1247,12 @@ pub(crate) fn binary_expression(crates: &[Crate]) -> String {
 }
 
 fn cargo_tree(ctx: &Ctx, package: &str, edges: &str, triple: &str) -> Result<String, String> {
+    // `--color never`: CI sets CARGO_TERM_COLOR=always, and a captured listing
+    // must hold names and licences, not escape sequences.
     let args: Vec<String> = [
         "tree",
+        "--color",
+        "never",
         "--offline",
         "--locked",
         "-e",
@@ -1548,13 +1552,32 @@ pub(crate) fn licence_ids(manifest: &str) -> Result<Vec<String>, String> {
                          yet ship"
                     ));
                 }
-                id => ids.push(id.to_owned()),
+                id if is_licence_id(id) => ids.push(id.to_owned()),
+                id => {
+                    return Err(format!(
+                        "`{}` in the zip's REUSE manifest is not a licence identifier; the \
+                         licence expressions come from `cargo tree`, whose output must be \
+                         plain text",
+                        id.escape_debug()
+                    ));
+                }
             }
         }
     }
     ids.sort();
     ids.dedup();
     Ok(ids)
+}
+
+/// Whether `id` has the shape of an SPDX licence identifier: letters, digits,
+/// `.`, `-` and `+`, starting with a letter.
+pub(crate) fn is_licence_id(id: &str) -> bool {
+    id.chars()
+        .next()
+        .is_some_and(|first| first.is_ascii_alphabetic())
+        && id.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '+')
+        })
 }
 
 /// Copies exactly the licences named into the zip's `LICENSES/`: the
@@ -1924,6 +1947,13 @@ SPDX-License-Identifier = \"MIT\"
             licence_ids("SPDX-License-Identifier = \"GPL-2.0 WITH Classpath-exception-2.0\"")
                 .is_err()
         );
+        // A coloured listing's escape sequence is refused, and named (CI sets
+        // CARGO_TERM_COLOR=always; `cargo tree` runs with `--color never`).
+        let coloured = licence_ids("SPDX-License-Identifier = \"MIT AND \u{1b}[33m\"")
+            .expect_err("an escape sequence is not a licence");
+        assert!(coloured.contains("not a licence identifier"), "{coloured}");
+        assert!(is_licence_id("GPL-3.0-or-later") && is_licence_id("BSL-1.0"));
+        assert!(!is_licence_id("(MIT") && !is_licence_id(""));
     }
 
     #[test]

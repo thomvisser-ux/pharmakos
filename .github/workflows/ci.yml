@@ -1134,11 +1134,16 @@ jobs:
           # folder goes on PATH.
           export PIPX_BIN_DIR="$(cygpath -w "$HOME/.local/bin")"
           if command -v pipx > /dev/null 2>&1; then
-            pipx install reuse==6.2.0
+            pipx=(pipx)
           else
             python -m pip install --user pipx
-            python -m pipx install reuse==6.2.0
+            pipx=(python -m pipx)
           fi
+          "${pipx[@]}" install reuse==6.2.0
+          # reuse needs a module to detect file encodings. On Linux python-magic finds the
+          # system's libmagic; Windows has none, so reuse stops with NoEncodingModuleError
+          # until charset-normalizer is in its environment (pinned, as the local check ran).
+          "${pipx[@]}" inject reuse charset-normalizer==3.4.4
           echo "${PIPX_BIN_DIR}" >> "$GITHUB_PATH"
 
       - name: reuse is on PATH for a native spawn
