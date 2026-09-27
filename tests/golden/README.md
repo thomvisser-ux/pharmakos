@@ -103,7 +103,7 @@ named fills it.
 | `docs/` | Generated documentation output | T15 |
 | `scenarios/` | Hash chains and event logs the scenario runner asserts on | T11, T15, T18b, T20 |
 | `operator/` | The playbook the built-in operator seals for each seat, per seed | T18 |
-| `vista/` | The rendered screenshots, compared with a tolerance, and the client's geometry and event-list goldens | T16, T19, T20 |
+| `vista/` | The rendered screenshots, compared with a tolerance, and the client's geometry and event-list goldens | T16, T20 (T19's scenes) |
 
 ## Licences
 
