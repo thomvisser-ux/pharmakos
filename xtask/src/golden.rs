@@ -116,10 +116,10 @@ pub(crate) struct Report {
 /// READMEs are checked alongside the goldens, not exempted. They live under the
 /// same `-text` exemption, and rule 3 is about the tree.
 ///
-/// Called by [`compare_tree`] and, separately, by the step *before* the
-/// "nothing to compare yet" skip — a tree whose only goldens are self-compared
-/// still has bytes, and a skip that skipped this check would be the quiet pass
-/// rule 1 is about.
+/// Called by [`compare_tree`] and, separately, by the step *before* its
+/// no-goldens failure — a tree whose only goldens are self-compared still has
+/// bytes, and a failure that skipped this check would hide a second defect
+/// behind the first.
 pub(crate) fn check_endings(golden_root: &Path) -> Result<(), String> {
     let mut files: Vec<PathBuf> = Vec::new();
     crate::walk(golden_root, &mut files)
@@ -285,7 +285,8 @@ pub(crate) fn compare_tree(
 }
 
 /// True when the tree holds at least one committed golden **this step compares**.
-/// Used by the step to tell "nothing to check yet" from "nothing matched".
+/// Used by the step to fail a tree that holds no golden it compares
+/// (decisions-log item 116 (6)(g)).
 ///
 /// Goldens in [`SELF_COMPARED_AREAS`] do not count: a tree holding only the
 /// committed hash chain and the vista PNG has nothing for this step to do, and

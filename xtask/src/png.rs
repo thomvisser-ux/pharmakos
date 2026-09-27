@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Pharmakos contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The vista screenshot comparator: a minimal PNG reader and a golden compare.
+//! The screenshot comparator (the vista, the diagnostic rows and the wizard's
+//! first page): a minimal PNG reader and a golden compare.
 //!
 //! This is the assertion the `screenshot` step is *for*. The obvious shape of
 //! that step — "run Godot, upload the PNG as an artefact" — asserts nothing:
