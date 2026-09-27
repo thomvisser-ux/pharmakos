@@ -101,11 +101,15 @@ static func find_gamectl() -> String:
 	return OS.get_executable_path().get_base_dir().path_join(binary)
 
 
-## The repository root the host reads `rules/rules.v1.json` from: `--root=` after `--`,
-## then PHARMAKOS_ROOT, then the folder above this project.
+## The root the host reads `rules/rules.v1.json` and `library/` from: `--root=` after `--`,
+## then PHARMAKOS_ROOT, then - in an exported build - the executable's own folder, and
+## otherwise (the editor, a `--path` run) the folder above this project.
 ##
-## PLACEHOLDER: a packaged build has no repository; where the host finds its rules file
-## there is packaging's decision, OWNER at T21 (the gamectl `host` command's own note).
+## Decisions-log item 117 (3): the packaged zip is laid out like the repository, with
+## `rules/` and `library/` beside the executable and `gamectl`, so an exported build's root
+## is the executable's folder. An export has no `res://` on disk
+## (`ProjectSettings.globalize_path("res://")` is empty there), which is why the export
+## asks `OS.has_feature("template")` rather than falling through to the project's folder.
 static func find_root() -> String:
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with("--root="):
@@ -113,6 +117,8 @@ static func find_root() -> String:
 	var named := OS.get_environment("PHARMAKOS_ROOT")
 	if named != "":
 		return named
+	if OS.has_feature("template"):
+		return OS.get_executable_path().get_base_dir()
 	return ProjectSettings.globalize_path("res://").trim_suffix("/").get_base_dir()
 
 
@@ -185,8 +191,13 @@ func host_running() -> bool:
 
 ## One frame of plumbing: read the pipes until the announce line is in, then move text
 ## between the two sockets and the bridge.
+##
+## Nothing is read before `start()` has spawned the host: the lobby pumps every frame,
+## including every frame it waits for New match, and reading the null pipe then is a SCRIPT
+## ERROR each frame in the editor and a crash on the second frame in an exported build
+## (decisions-log item 117 (3)). `crates/client-gdext/tests/godot_project.rs` pins it.
 func pump() -> void:
-	if _done:
+	if _done or _stdio == null:
 		return
 	_drain_stderr()
 	if _port == 0:
