@@ -12,9 +12,10 @@
 # those diagnostics: an icon and the severity in words, the plain sentence, the code and the
 # pointer, and a Fix button for each machine-applicable patch only.
 #
-# RENDER-ONLY: the shot is taken and looked at, and NOT compared. `cargo xtask screenshot`
-# compares the vista alone, and decisions-log item 110 (4) books a render-only mode to T20,
-# which commits this shot as a golden and compares it.
+# COMPARED: `cargo xtask screenshot` renders this scene on CI's Linux run and compares the
+# PNG with tests/golden/vista/expected.rows.png, with the vista's tolerance (decisions-log
+# items 110 (4) and 116 (6)(h)). A change to the fixture or to the row drawing re-renders
+# that golden, as tests/golden/vista/README.md says.
 #
 # `--shot=<png>` names where the PNG goes; it is taken windowed, never `--headless`, for
 # the same reason as the vista's shot (scripts/vista_shot.gd). Without `--shot=` the scene

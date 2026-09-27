@@ -43,10 +43,11 @@ to have done. Two cases are meant to pass:
   example). If this case ever gains a diagnostic, either the verifier or the
   spec's example is wrong, and the pull request has to say which.
 * `budget_128` — a playbook that sits **exactly on** the size budget, for a
-  walled bench harness to time later. QUICK's p99 is "measured and reported, not
-  gated" (skeleton plan T6), and wall-clock time is illegal in
-  `crates/verifier`, so nothing here times anything: **T20's walled harness
-  does**, against this fixture.
+  walled bench harness to time later. Wall-clock time is illegal in
+  `crates/verifier`, so nothing here times anything: the QUICK and FULL timings
+  against this fixture are **S1's P1 gate's**, which builds the walled harness
+  that measures them and sets their budgets (decisions-log item 116 (6)(b);
+  AGENTS.md section 9 item 11). No producer exists in the walking skeleton.
 
 ## One `path` that is not a node pointer
 

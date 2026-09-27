@@ -12,9 +12,10 @@
 # page with its label, its raw value in the field and the operator's mark, the why as it
 # came, and Use and Close.
 #
-# RENDER-ONLY: the shot is taken and looked at, and NOT compared or committed. Decisions-log
-# item 110 (4) and the w6 notes' A5 book the render-only mode's comparison to T20, which
-# commits this shot as a golden beside the rows shot.
+# COMPARED: `cargo xtask screenshot` renders this scene on CI's Linux run and compares the
+# PNG with tests/golden/vista/expected.wizard.png, with the vista's tolerance (decisions-log
+# items 110 (4) and 116 (6)(h)). It moves whenever Easy's suggestion or library/ moves, and
+# that pull request re-renders the golden, as tests/golden/vista/README.md says.
 #
 # `--shot=<png>` names where the PNG goes; it is taken windowed, never `--headless`, for the
 # same reason as the vista's shot (scripts/vista_shot.gd). Without `--shot=` the scene draws
