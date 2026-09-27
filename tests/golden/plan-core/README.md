@@ -62,7 +62,12 @@ pins both halves.
 
 ## Licensing
 
-The whole area is `MIT OR Apache-2.0`. `REUSE.toml`'s
+The whole area is `MIT OR Apache-2.0` but one file,
+`awkward/expected.jsonc`, which is `GPL-3.0-or-later`: it is the round trip of
+plan-core's own `awkward` fixture and carries that fixture's GPL header through
+byte for byte, so a permissive record would contradict the file's own header
+(`REUSE.toml`'s override block, decisions-log item 116 (6)(i));
+`awkward/expected.canonical.json` has no header and stays permissive. `REUSE.toml`'s
 `tests/golden/plan-core/**` block puts it in the permissive tier, as
 `tests/golden/proto/` is, because these files are the canonical form an
 alternative tool has to reproduce (decisions-log item 100 (11)); this README

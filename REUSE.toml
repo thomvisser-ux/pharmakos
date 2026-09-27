@@ -10,8 +10,10 @@
 # throughout: a header in a file is combined with the entry below, so a file
 # that states its own copyright keeps it, and a file that cannot carry a header
 # (a .vox model, an .ogg, a binary golden file) is covered by this manifest.
-# One block breaks that rule on purpose — docs/DCO.txt, which is somebody
-# else's document and uses precedence = "override".
+# Two blocks break that rule on purpose, each with precedence = "override":
+# docs/DCO.txt, which is somebody else's document, and the three files whose
+# own bytes quote another file's SPDX header (the last block below, decisions
+# log item 116 (6)(i)).
 #
 # ORDER MATTERS. When two blocks match the same path the LAST one wins, so the
 # narrow blocks (crates/proto/**, the per-directory LICENSE pointers,
@@ -56,11 +58,19 @@ precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 Pharmakos contributors"
 SPDX-License-Identifier = "GPL-3.0-or-later"
 
-# godot/fixtures/view_keyframe.jsonl is a byte-identical copy of the gateway's keyframe
-# golden, tests/golden/gateway/view_keyframe/expected.keyframe.jsonl, so Godot can load
-# it from res:// for the hostless vista shot (T16). It cannot carry a header of its own
-# without ceasing to be a copy, so its licence is stated here, and it is the licence of
-# the file it copies. crates/client-gdext/tests/vista_fixture.rs keeps the two identical.
+# godot/fixtures/ holds byte-identical copies of gateway goldens, so Godot can load them
+# from res:// for the hostless shots, and a report the rows shot draws. A copy cannot
+# carry a header of its own without ceasing to be a copy, so its licence is stated here,
+# and it is the licence of the file it copies:
+#   * view_keyframe.jsonl copies tests/golden/gateway/view_keyframe/expected.keyframe.jsonl
+#     (the vista shot, T16); crates/client-gdext/tests/vista_fixture.rs keeps the two
+#     identical;
+#   * instantiate_suggested.json copies tests/golden/gateway/instantiate_suggested/
+#     expected.response.json (the wizard shot, T19), a gateway answer that EMBEDS a
+#     permissive template — library/hold_and_build.jsonc, header and all — inside a JSON
+#     string. The answer is the gateway's output and stays GPL (decisions-log item
+#     113 (10)); because the embedded header would otherwise be read as the file's own,
+#     the pair is recorded by the override block at the end of this file (item 114 (5)).
 [[annotations]]
 path = ["godot/fixtures/**"]
 precedence = "aggregate"
@@ -236,17 +246,13 @@ SPDX-License-Identifier = "GPL-3.0-or-later"
 # tests/golden/README.md and scenarios/README.md carry their own headers and
 # are unaffected, and so do the JSONC scenario files, which have comments.
 #
-# PLACEHOLDER: one golden area still to come will hold byte-for-byte
-# reproductions of material that is MIT OR Apache-2.0 where it lives today —
-# tests/golden/docs/ (generated documentation). docs/LICENSING.md puts that
-# source in the permissive tier, so those goldens arguably belong there too,
-# with the per-directory LICENSE pointers that tier uses. Four cases are
-# already answered the same way: T1 committed tests/golden/proto/ and gave it
-# its own permissive block above, T8's tests/golden/plan-core/ followed it,
-# T13's tests/golden/schema/ followed both (decisions-log item 100 (11)), and
-# T18's tests/golden/operator/ followed them (decisions-log item 113). Owner
-# decides at T20, which commits the first golden in the remaining area, and
-# until then the broad tests/** block covers it.
+# tests/golden/docs/ (T15's `gamectl docs` reference) STAYS in the game tier, under
+# the broad tests/** block, and has no block of its own (decisions-log item
+# 116 (6)(i)). Unlike proto/, plan-core/, schema/ and operator/ above, it is not
+# a reproduction of permissive material: three of its four sources are GPL code
+# — gamectl's command table and its exit codes (crates/gamectl) and the
+# verifier's diagnostic catalogue and string table (crates/verifier) — and only
+# the vocabulary comes from the permissive gp.v1 descriptor set.
 [[annotations]]
 path = ["scenarios/**"]
 precedence = "aggregate"
@@ -289,8 +295,8 @@ SPDX-License-Identifier = "MIT OR Apache-2.0"
 # docs/DCO.txt is the DCO 1.1, reproduced verbatim. It is copyright The Linux
 # Foundation and may be copied verbatim but not changed, so the docs/** block
 # above must not be allowed to put our copyright and our licence on it.
-# `precedence = "override"` says the manifest is the last word for this path,
-# and it is the only override in this file. docs/LICENSE says the same thing in
+# `precedence = "override"` says the manifest is the last word for this path;
+# the block below is the file's other override. docs/LICENSE says the same thing in
 # prose; docs/DCO.txt.license repeats it beside the file for anyone who copies
 # the file out of the tree. The terms are in LICENSES/LicenseRef-DCO-1.1.txt.
 [[annotations]]
@@ -298,3 +304,34 @@ path = ["docs/DCO.txt"]
 precedence = "override"
 SPDX-FileCopyrightText = "2004, 2006 The Linux Foundation and its contributors"
 SPDX-License-Identifier = "LicenseRef-DCO-1.1"
+
+# --- Files whose bytes quote another file's header ---------------------------
+# Three files carry, inside their own bytes, text that `reuse` reads as their
+# own header, and in each case that text is not their licence:
+#   * tests/golden/gateway/instantiate_suggested/expected.response.json and its
+#     byte-identical Godot copy godot/fixtures/instantiate_suggested.json are the
+#     gateway's answer to instantiate_template, which embeds library/'s permissive
+#     Hold & Build template, header included, inside a JSON string. `reuse spdx`
+#     recorded the whole embedded template, escapes and all, as the files'
+#     copyright text. The answer is the gateway's output: GPL (decisions-log item
+#     113 (10)).
+#   * tests/golden/plan-core/awkward/expected.jsonc is the round trip of
+#     plan-core's own `awkward` fixture, whose GPL-3.0-or-later header it carries
+#     through byte for byte, as expand_east's golden carries the example's
+#     permissive one; the permissive plan-core/ block above would add a second and
+#     third licence to a file that states its own. It is plan-core/'s one GPL file;
+#     awkward/expected.canonical.json has no header and stays permissive (item 100).
+# precedence = "override": the manifest is the last word for exactly these paths.
+# Its downside: an override also stops reading any header these files carry in
+# future, so a change of licence here is an edit to this block. AFTER every block
+# that matches them (godot/**, godot/fixtures/**, tests/**, tests/golden/plan-core/**),
+# so it is the last match (decisions-log item 116 (6)(i)).
+[[annotations]]
+path = [
+    "godot/fixtures/instantiate_suggested.json",
+    "tests/golden/gateway/instantiate_suggested/expected.response.json",
+    "tests/golden/plan-core/awkward/expected.jsonc",
+]
+precedence = "override"
+SPDX-FileCopyrightText = "2026 Pharmakos contributors"
+SPDX-License-Identifier = "GPL-3.0-or-later"
