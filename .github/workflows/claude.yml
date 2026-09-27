@@ -3,9 +3,23 @@
 #
 # CONTRACT FILE (AGENTS.md section 5).
 #
-# @claude on issues and pull requests, through the Claude GitHub App. Only the owner and
-# collaborators can trigger it (author_association below, on top of the action's own
-# write-access check), so an outside comment never spends the subscription or steers an agent.
+# @claude on issues and pull requests, through the Claude GitHub App. Only the owner can
+# trigger it (author_association OWNER below, on top of the action's own write-access check),
+# so an outside comment never starts a run or spends the subscription. A run the owner starts
+# still reads the thread, so outside text can reach Claude; the limits below bound what it can
+# then do.
+#
+# What a run can do: the action exchanges this job's OIDC token (`id-token: write`) for the
+# Claude App's token, which can write contents, pull requests and issues. With it Claude posts
+# its replies and pushes branches; it cannot push `main` (the ruleset) or change a workflow
+# (the App asks for no `workflows` permission). The job's own `contents: read` limits only the
+# checkout's token.
+#
+# Hardening (decisions-log item 119 (8)): a pull request from a fork never runs, because the
+# action checks out the head it is asked about and Claude's commands would run that code with
+# the tokens above in reach; the Bash tools are exact commands, since a prefix rule such as
+# `cargo test:*` also admits `--config` and so any shell; subprocesses get a scrubbed
+# environment; and Claude reads only the owner's comments and its own.
 #
 # DCO: the owner decided that commits made here are signed off as the owner, because only the
 # owner can trigger a run — the same footing as the owner's local Claude Code sessions. The
@@ -21,30 +35,32 @@ on:
   pull_request_review:
     types: [submitted]
   issues:
-    types: [opened, assigned]
+    types: [opened]
 
 permissions:
   contents: read
-
-concurrency:
-  group: claude-${{ github.event.issue.number || github.event.pull_request.number }}
-  cancel-in-progress: false
 
 jobs:
   claude:
     if: |
       (github.event_name == 'issue_comment'
         && contains(github.event.comment.body, '@claude')
-        && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) ||
+        && github.event.comment.author_association == 'OWNER') ||
       (github.event_name == 'pull_request_review_comment'
         && contains(github.event.comment.body, '@claude')
-        && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) ||
+        && github.event.comment.author_association == 'OWNER'
+        && github.event.pull_request.head.repo.full_name == github.repository) ||
       (github.event_name == 'pull_request_review'
         && contains(github.event.review.body, '@claude')
-        && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.review.author_association)) ||
+        && github.event.review.author_association == 'OWNER'
+        && github.event.pull_request.head.repo.full_name == github.repository) ||
       (github.event_name == 'issues'
         && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude'))
-        && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association))
+        && github.event.issue.author_association == 'OWNER')
+    # Job-level, so a run the `if` skips never joins the group and displaces a waiting request.
+    concurrency:
+      group: claude-${{ github.event.issue.number || github.event.pull_request.number }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -53,18 +69,34 @@ jobs:
       issues: read
       id-token: write
       actions: read
+    env:
+      CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
     steps:
+      # An issue comment on a pull request carries no head repository, so ask for it.
+      - name: Refuse pull requests from forks
+        if: github.event_name == 'issue_comment' && github.event.issue.pull_request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.issue.number }}
+        run: |
+          fork=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json isCrossRepository --jq .isCrossRepository)
+          if [ "$fork" != "false" ]; then
+            echo "::error::@claude does not run on a pull request from a fork"
+            exit 1
+          fi
+
       - name: Check out the repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 1
 
       - name: Run Claude Code
-        uses: anthropics/claude-code-action@cfc3eb22bfed5c26ef66e3223c982af27e4524de # v1.0.231 (the newest release at least 7 days old on 2026-09-27)
+        uses: anthropics/claude-code-action@cfc3eb22bfed5c26ef66e3223c982af27e4524de # v1.0.231
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          include_comments_by_actor: "thomvisser-ux,claude[bot]"
           additional_permissions: |
             actions: read
           claude_args: |
-            --allowedTools "Bash(cargo fmt:*),Bash(cargo check:*),Bash(cargo clippy:*),Bash(cargo test:*),Bash(cargo xtask ci --quick)"
-            --append-system-prompt "Follow AGENTS.md and CLAUDE.md. Every commit message ends with a Co-Authored-By trailer for Claude followed by the last line 'Signed-off-by: Thom Visser <thom.visser@gmail.com>' (the owner's DCO sign-off, authorised for commits made from this workflow). If a change touches an AGENTS.md section 5 contract path, say so in your reply; never merge."
+            --allowedTools "Bash(cargo fmt --all),Bash(cargo check --workspace --all-targets),Bash(cargo xtask ci --quick)"
+            --append-system-prompt "Follow AGENTS.md and CLAUDE.md. Every commit message ends with a Co-Authored-By trailer for Claude followed by the last line 'Signed-off-by: Thom Visser <thom.visser@gmail.com>' (the owner's DCO sign-off, authorised for commits made from this workflow); write that line into the message yourself and never pass -s or --signoff, which would sign off as the bot. If a change touches an AGENTS.md section 5 contract path, say so in your reply; never merge."
