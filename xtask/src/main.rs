@@ -70,9 +70,10 @@
 //! feature on, because the sim is the one crate whose code the feature changes
 //! (`pub mod research` in its `lib.rs`, and `tests/fork.rs`); no other crate
 //! reads it, so their tests run once, in `test` (decisions-log item 113 (9),
-//! chosen by item 115 (5)). Every crate is still *compiled* against a research
-//! sim, by `clippy`'s research pass. With `-p`, the step runs when the list
-//! names the sim and skips, with the reason, when it does not.
+//! chosen by item 115 (5)). Every non-walled crate is still *compiled* against
+//! a research sim, by `clippy`'s research pass on an unscoped run. With `-p`,
+//! the step runs when the list may name the sim (its name, `name@version`, a
+//! glob or a package-id URL) and skips, with the reason, when it cannot.
 //!
 //! # The docs-only fast path
 //!
@@ -919,7 +920,7 @@ fn step_test_research(ctx: &Ctx) -> Result<Outcome, String> {
             run(ctx, &ctx.cargo, &args)?;
             Ok(Outcome::Done(format!(
                 "tests pass with {feature}; no other crate's code reads the feature, \
-                 and clippy's research pass compiles every crate against it"
+                 and clippy's research pass compiles every non-walled crate against it"
             )))
         }
         Err(reason) => Ok(Outcome::Skipped(reason)),
@@ -938,6 +939,10 @@ fn step_test_research(ctx: &Ctx) -> Result<Outcome, String> {
 /// * no `-p`: the sim's tests with the feature on;
 /// * a `-p` list that names the sim: the same, and nothing else;
 /// * a `-p` list that leaves the sim out: skipped, because nothing in it changes.
+///
+/// A `-p` value counts as naming the sim when [`package_spec_may_name`] says
+/// it may: cargo also takes `name@version`, package-id URLs and globs there,
+/// and a value this cannot rule out runs the step rather than skip it.
 fn research_test_args(
     sim: Option<&str>,
     packages: &[String],
@@ -948,7 +953,11 @@ fn research_test_args(
             "no crate declares a `{RESEARCH_FEATURE}` feature yet"
         ));
     };
-    if !packages.is_empty() && !packages.iter().any(|package| package == sim) {
+    if !packages.is_empty()
+        && !packages
+            .iter()
+            .any(|package| package_spec_may_name(package, sim))
+    {
         return Err(format!(
             "the {RESEARCH_FEATURE} feature changes only {sim}, which --package leaves out"
         ));
@@ -965,6 +974,18 @@ fn research_test_args(
         args.push("--locked".to_owned());
     }
     Ok((args, feature))
+}
+
+/// Whether a `--package` value may select the package called `name`: the name
+/// itself, `name@version`, or any value this does not parse: a glob (`*`,
+/// `?`, `[`) or a package-id URL (`#`, `:`, `/`, `\`). Errs towards `true`,
+/// because a wrong `true` runs a step that could have skipped and a wrong
+/// `false` skips one that should have run.
+fn package_spec_may_name(spec: &str, name: &str) -> bool {
+    if spec.contains(['*', '?', '[', '#', ':', '/', '\\']) {
+        return true;
+    }
+    spec.split_once('@').map_or(spec, |(before, _)| before) == name
 }
 
 /// `fork` lives behind the `research` feature, and release builds never enable
@@ -2795,6 +2816,19 @@ overflow-checks = true\n";
             assert_eq!(args, expected, "{packages:?}");
         }
 
+        // A -p value cargo resolves to the sim, or one this cannot rule out:
+        // the same command, never a skip with the wrong reason.
+        for spec in [
+            "pharmakos-sim@0.1.0",
+            "pharmakos-*",
+            "pharmakos-si?",
+            "path+file:///repo/crates/sim#0.1.0",
+        ] {
+            let (args, _) =
+                research_test_args(Some("pharmakos-sim"), &strings(&[spec]), false).expect(spec);
+            assert_eq!(args, expected, "{spec}");
+        }
+
         // -p leaving the sim out: skipped, with the reason.
         assert_eq!(
             research_test_args(
@@ -2813,6 +2847,23 @@ overflow-checks = true\n";
             research_test_args(None, &[], false),
             Err("no crate declares a `research` feature yet".to_owned())
         );
+    }
+
+    #[test]
+    fn package_specs_name_the_sim_or_leave_it_out() {
+        let sim = "pharmakos-sim";
+        for spec in ["pharmakos-sim", "pharmakos-sim@0.1.0", "x*", "[p]", "a#b"] {
+            assert!(package_spec_may_name(spec, sim), "{spec}");
+        }
+        for spec in [
+            "pharmakos-gateway",
+            "pharmakos-gateway@0.1.0",
+            "pharmakos-sim-extra",
+            "pharmakos",
+            "",
+        ] {
+            assert!(!package_spec_may_name(spec, sim), "{spec}");
+        }
     }
 
     #[test]
