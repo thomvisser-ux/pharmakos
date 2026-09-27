@@ -8,35 +8,49 @@
 #     scripts/merge-train.sh --local-verify t18b:39 t20a:40
 #
 # Each argument is <lane>:<pr>: the lane's worktree is ../pharmakos-<lane> (a sibling of
-# this checkout) and <pr> is its pull request number. For every pair, in order:
+# this checkout) and <pr> is its pull request number. The train first fast-forwards this
+# checkout's main to origin/main and stops if it cannot. Then, for every pair, in order:
 #
 #   1. wait for the PR's checks (the three-OS matrix, the DCO check, the cross-OS guard)
 #      and stop unless every one of them passed;
-#   2. with --local-verify only: if main has moved past the PR's branch point with anything
-#      but prose, check the tree that will actually merge (see below);
+#   2. with --local-verify only: check the tree that will merge if main has moved (below);
 #   3. remove the lane's worktree (it must be clean and fully pushed), so the branch can be
 #      deleted after the merge;
 #   4. rebase-merge the PR and delete its branch, then fast-forward this checkout's main;
 #   5. without --local-verify: rebase the NEXT lane's worktree onto the new main and push it
 #      with --force-with-lease, so its checks re-run on the tree that will actually merge.
-#      A rebase conflict aborts the rebase and stops the train.
 #
-# --local-verify (decisions-log item 116, the owner's answer to item 115 (7)). A lane whose
-# base has moved is checked on this machine instead of by a second three-OS matrix: its
-# worktree is rebased onto main locally, the full `cargo xtask ci` runs there on the lane's
-# own target (TRAIN_BUILD_ROOT/<lane>, default D:/build), and the worktree is put back on its
-# pushed head. The PR's green checks on that head still gate the merge, and GitHub rebases it
-# onto the same main when it merges, so the tree the suite checked is the tree that lands;
-# main's own push run is the three-OS check of the combination. The lane falls back to the
-# old way (rebase, push, wait for the matrix) when its rebase conflicts, or when it touches
-# the determinism code or a hash chain (crates/sim/, tests/golden/determinism/,
-# tests/golden/scenarios/), whose cross-OS agreement only the matrix shows. A base that moved
-# only by prose (docs/, .claude/, AGENTS.md, CLAUDE.md, a top-level *.md) needs no check.
+# A rebase conflict always stops the train: resolve it by hand, push (the matrix then runs
+# on the resolved branch), and restart from that lane.
 #
-# The script is the owner's session merging under decisions-log item 85; it only does what a
-# green PR has already earned, and it halts on anything else so a person looks. Run it from
-# the repository root or anywhere inside it. Git Bash on Windows is enough: bash, git, gh
-# (signed in), awk, grep, and cargo on PATH for --local-verify.
+# --local-verify (decisions-log item 115 (7), taken by the owner on 2026-09-26 and recorded
+# in item 116). A lane whose base main has moved past, by anything but prose, is checked on
+# this machine instead of by a second three-OS matrix: its worktree is rebased onto
+# origin/main, `cargo xtask ci --locked --require-tools --check` runs there on the lane's own
+# target (TRAIN_BUILD_ROOT/<lane>, default D:/build), and the worktree is put back on its
+# pushed head (also on any exit, by a trap). The lane's green checks on that head still gate
+# the merge, which is pinned to that head (--match-head-commit); the train stops if
+# origin/main moved by anything but prose during the check, and after the merge it compares
+# main's tree with the tree it checked. That local run is one Windows `cargo xtask ci` leg
+# with the headless client check: it does not reproduce the Linux and macOS legs, the
+# watch-check run or the Linux vista render. So once the train has merged anything on a local
+# check, it watches main's own push run of the train's last commit and stops loudly unless
+# it is green; ci.yml's concurrency group cancels the push runs of the train's earlier
+# commits, so that run is the three-OS check of the whole combination.
+#
+# A lane falls back to rebase, push and a full matrix when its own changes touch output that
+# only the three legs produce, each on its own OS, or that no local run executes: the
+# determinism code (crates/sim/), the walled float crates (crates/mesher/,
+# crates/client-gdext/), godot/, the workflows (.github/), and the hashed or rendered goldens
+# (tests/golden/determinism|scenarios|pathing|mapgen|mesher|vista/). It also falls back
+# when GitHub reports the PR as BEHIND (the ruleset requiring up-to-date branches). A base
+# that moved only by prose (docs/, .claude/, AGENTS.md, CLAUDE.md, a top-level *.md) needs
+# no check. A branch with merge commits stops the train: a rebase would drop what they carry.
+#
+# The script is the owner's session merging under decisions-log items 85 and 115 (7); it
+# only does what a green PR has already earned, and it halts on anything else so a person
+# looks. Run it from the repository root or anywhere inside it. Git Bash on Windows is
+# enough: bash, git, gh (signed in), awk, grep, tr, and cargo on PATH for --local-verify.
 
 set -euo pipefail
 
@@ -63,8 +77,10 @@ done
 
 [ "$(git branch --show-current)" = "main" ] || fail "this checkout is not on main"
 [ -z "$(git status --porcelain)" ] || fail "this checkout is not clean"
-# Start from origin's main, so a check against main is a check against what the PR merges onto.
-git pull -q --ff-only || fail "cannot fast-forward this checkout's main to origin/main"
+git fetch -q origin main || fail "cannot fetch origin/main"
+git merge -q --ff-only origin/main || fail "cannot fast-forward this checkout's main to origin/main"
+[ "$(git rev-parse main)" = "$(git rev-parse origin/main)" ] \
+  || fail "this checkout's main is not origin/main (unpushed commits, or another upstream)"
 if [ "$local_verify" = 1 ]; then
   command -v cargo >/dev/null 2>&1 || fail "--local-verify needs cargo on PATH"
 fi
@@ -76,7 +92,7 @@ checks_green() {
   local pr="$1" states
   states="$(gh pr checks "$pr" 2>/dev/null | awk -F'\t' 'NF >= 2 { print $2 }')" || return 1
   [ -n "$states" ] || return 1
-  ! printf '%s\n' "$states" | grep -qvE '^(pass|skipping)$'
+  ! grep -qvE '^(pass|skipping)$' <<<"$states"
 }
 
 wait_for_checks() {
@@ -109,48 +125,92 @@ rebase_lane() {
   git -C "$wt" push --force-with-lease
 }
 
-# Paths that are prose: nothing the suite reads (decisions-log item 115 (4)'s allow-list).
-PROSE='^(docs/|\.claude/|AGENTS\.md$|CLAUDE\.md$|[^/]+\.md$)'
-# Paths whose cross-OS agreement only the three-OS matrix shows.
-CHAINS='^(crates/sim/|tests/golden/determinism/|tests/golden/scenarios/)'
+# The paths two commits differ by, one per line: NUL-separated from git so no name is
+# quoted, and --no-renames so both sides of a rename are listed.
+paths_between() { git diff --no-renames --name-only -z "$1" "$2" | tr '\0' '\n'; }
 
-# With --local-verify: check the tree that will merge when main has moved past the lane's
-# branch point with anything but prose. Returns after the worktree is back on its pushed head.
+# Prose: nothing the suite reads (decisions-log item 115 (4)'s allow-list).
+PROSE='^(docs/|\.claude/|AGENTS\.md$|CLAUDE\.md$|[^/]+\.md$)'
+# True when a path list (one per line) names anything but prose; an empty list names nothing.
+has_non_prose() { [ -n "$1" ] && grep -qvE "$PROSE" <<<"$1"; }
+# Output only the three legs produce, each on its own OS, or that no local run executes.
+MATRIX_ONLY='^(crates/sim/|crates/mesher/|crates/client-gdext/|godot/|\.github/|tests/golden/(determinism|scenarios|pathing|mapgen|mesher|vista)/)'
+
+# What the train checked for the current lane (set by verify_lane).
+checked_head="" checked_main="" checked_tree=""
+merged_on_local_check=""
+
+# Rebase the lane onto main, push it, wait until GitHub's PR head is the pushed commit, and
+# wait for the full matrix on it.
+rematrix() {
+  local lane="$1" pr="$2" wt="$parent/pharmakos-$1" pushed tries=0
+  rebase_lane "$lane"
+  pushed="$(git -C "$wt" rev-parse HEAD)"
+  until [ "$(gh pr view "$pr" --json headRefOid --jq .headRefOid)" = "$pushed" ]; do
+    tries=$((tries + 1))
+    [ "$tries" -le 60 ] || fail "#$pr's head did not become $pushed within five minutes"
+    sleep 5
+  done
+  wait_for_checks "$pr"
+  checked_head="$pushed"
+  checked_main="$(git rev-parse main)"
+  checked_tree=""
+}
+
+# With --local-verify: decide what the lane needs, and check it. On return, checked_head is
+# the head the merge is pinned to, checked_main the main it was checked against, and
+# checked_tree the tree a local check verified (empty when none ran).
 verify_lane() {
-  local lane="$1" pr="$2" branch="$3" wt="$parent/pharmakos-$1" base moved own log code
-  [ -d "$wt" ] || fail "worktree $wt does not exist"
-  [ -z "$(git -C "$wt" status --porcelain)" ] || fail "worktree $wt is not clean"
-  git -C "$wt" fetch -q origin "$branch"
-  [ "$(git -C "$wt" rev-parse HEAD)" = "$(git -C "$wt" rev-parse "origin/$branch")" ] \
-    || fail "worktree $wt is not at origin/$branch; push or reset it, then restart from $lane"
+  local lane="$1" pr="$2" branch="$3" wt="$parent/pharmakos-$1" base moved own log code dirty
+  git fetch -q origin main "$branch" || fail "cannot fetch origin/main and origin/$branch"
+  git merge -q --ff-only origin/main || fail "cannot fast-forward main to origin/main"
+  checked_main="$(git rev-parse main)"
+  checked_head="$(git rev-parse "origin/$branch")"
+  checked_tree=""
+  [ "$(gh pr view "$pr" --json headRefOid --jq .headRefOid)" = "$checked_head" ] \
+    || fail "#$pr's head is not origin/$branch; restart from $lane"
   base="$(git merge-base main "origin/$branch")"
-  moved="$(git diff --no-renames --name-only "$base" main)"
-  if [ -z "$moved" ] || ! printf '%s\n' "$moved" | grep -qvE "$PROSE"; then
+  [ -z "$(git rev-list --merges "$base..origin/$branch")" ] \
+    || fail "#$pr's branch has merge commits, which a rebase would drop; rebase it linearly, push, and restart from $lane"
+  moved="$(paths_between "$base" main)"
+  if [ -z "$moved" ]; then
+    printf '== %s: up to date with main; its checks stand\n' "$lane"
+    return 0
+  fi
+  if ! has_non_prose "$moved"; then
     printf '== %s: main moved only by prose since its branch point; its checks stand\n' "$lane"
     return 0
   fi
-  own="$(git diff --no-renames --name-only "$base" "origin/$branch")"
-  if printf '%s\n' "$own" | grep -qE "$CHAINS"; then
-    printf '== %s: touches the determinism code or a hash chain; re-running the matrix\n' "$lane"
-    rebase_lane "$lane"
-    wait_for_checks "$pr"
+  own="$(paths_between "$base" "origin/$branch")"
+  if grep -qE "$MATRIX_ONLY" <<<"$own"; then
+    printf '== %s: touches output only the three-OS matrix shows; re-running it\n' "$lane"
+    rematrix "$lane" "$pr"
     return 0
   fi
+  if [ ! -d "$wt" ]; then
+    git worktree add -q -B "$branch" "$wt" "origin/$branch"
+  fi
+  [ -z "$(git -C "$wt" status --porcelain)" ] || fail "worktree $wt is not clean"
+  [ "$(git -C "$wt" rev-parse HEAD)" = "$checked_head" ] \
+    || fail "worktree $wt is not at origin/$branch; reset it with: git -C $wt reset --hard origin/$branch (never push it), then restart from $lane"
+  # Put the worktree back on its pushed head whatever happens from here.
+  trap "git -C '$wt' rebase --abort >/dev/null 2>&1 || true; git -C '$wt' reset -q --hard '$checked_head' >/dev/null 2>&1 || true" EXIT
   printf '== %s: rebasing onto main locally to check the tree that will merge\n' "$lane"
   if ! git -C "$wt" rebase -q main; then
-    git -C "$wt" rebase --abort || true
-    printf '== %s: the local rebase conflicts; re-running the matrix instead\n' "$lane"
-    rebase_lane "$lane"
-    wait_for_checks "$pr"
-    return 0
+    fail "rebase of $lane onto main conflicts; resolve it by hand, push (its matrix then runs on the resolved branch), and restart from $lane"
   fi
   log="${TMPDIR:-/tmp}/merge-train-$lane-ci.log"
   printf '== %s: cargo xtask ci on %s (log %s)\n' "$lane" "$(git -C "$wt" log --oneline -1)" "$log"
   code=0
-  ( cd "$wt" && CARGO_TARGET_DIR="$build_root/$lane" cargo xtask ci ) > "$log" 2>&1 || code=$?
+  ( cd "$wt" && CARGO_TARGET_DIR="$build_root/$lane" PHARMAKOS_REQUIRE_TOOLS=1 \
+      cargo xtask ci --locked --require-tools --check ) > "$log" 2>&1 || code=$?
   grep -A 20 '== summary' "$log" || true
-  git -C "$wt" reset -q --hard "origin/$branch"
+  dirty="$(git -C "$wt" status --porcelain)"
+  checked_tree="$(git -C "$wt" rev-parse 'HEAD^{tree}')"
+  git -C "$wt" reset -q --hard "$checked_head"
+  trap - EXIT
   [ "$code" = 0 ] || fail "cargo xtask ci failed on $lane rebased onto main (exit $code); see $log"
+  [ -z "$dirty" ] || fail "cargo xtask ci changed files in $lane's rebased tree: $dirty"
   printf '== %s: green on main; merging on its checks\n' "$lane"
 }
 
@@ -166,8 +226,20 @@ for pair in "$@"; do
   [ "$state" = "OPEN" ] || fail "PR #$pr is $state, not OPEN"
 
   wait_for_checks "$pr"
+  merge_args=(--rebase --delete-branch)
   if [ "$local_verify" = 1 ]; then
     verify_lane "$lane" "$pr" "$branch"
+    if [ -n "$checked_tree" ] \
+       && [ "$(gh pr view "$pr" --json mergeStateStatus --jq .mergeStateStatus)" = "BEHIND" ]; then
+      printf '== %s: GitHub requires #%s to be up to date; re-running the matrix\n' "$lane" "$pr"
+      rematrix "$lane" "$pr"
+    fi
+    # Nothing but prose may land on main between the check and the merge.
+    git fetch -q origin main || fail "cannot fetch origin/main"
+    if has_non_prose "$(paths_between "$checked_main" origin/main)"; then
+      fail "origin/main moved by more than prose while $lane was being checked; restart from $lane"
+    fi
+    merge_args+=(--match-head-commit "$checked_head")
   fi
 
   if [ -d "$wt" ]; then
@@ -178,10 +250,18 @@ for pair in "$@"; do
   fi
 
   printf '== %s: merging #%s (%s)\n' "$lane" "$pr" "$branch"
-  gh pr merge "$pr" --rebase --delete-branch
+  gh pr merge "$pr" "${merge_args[@]}"
   git pull --ff-only
   git branch -D "$branch" >/dev/null 2>&1 || true
   printf '== %s: merged; main is %s\n' "$lane" "$(git log --oneline -1)"
+
+  if [ -n "$checked_tree" ]; then
+    # What landed must be the tree the suite checked, give or take prose that landed beside it.
+    if has_non_prose "$(paths_between "$checked_tree" HEAD)"; then
+      fail "main's tree after merging #$pr differs from the tree checked for $lane by more than prose; look before the next merge"
+    fi
+    merged_on_local_check="$merged_on_local_check #$pr"
+  fi
 
   if [ "$local_verify" = 0 ] && [ "$i" -lt "$total" ]; then
     next="${@:$((i + 1)):1}"
@@ -190,4 +270,22 @@ for pair in "$@"; do
 done
 
 git fetch --prune >/dev/null 2>&1 || true
+
+if [ -n "$merged_on_local_check" ]; then
+  # main's push run of the train's last commit is the three-OS check of the combination.
+  sha="$(git rev-parse HEAD)"
+  printf '== main: waiting for the push run of %s (merged on a local check:%s)\n' "$sha" "$merged_on_local_check"
+  run_id="" tries=0
+  until [ -n "$run_id" ]; do
+    run_id="$(gh run list --workflow ci.yml --branch main --event push --commit "$sha" --json databaseId --jq '.[0].databaseId // empty' 2>/dev/null || true)"
+    [ -n "$run_id" ] && break
+    tries=$((tries + 1))
+    [ "$tries" -le 40 ] || fail "no push run of ci.yml appeared for $sha within ten minutes; check main by hand"
+    sleep 15
+  done
+  gh run watch "$run_id" --exit-status --interval 60 >/dev/null \
+    || fail "main's push run $run_id for $sha is not green after merging$merged_on_local_check on a local check; revert or fix before the next run"
+  printf '== main: push run %s is green\n' "$run_id"
+fi
+
 printf '\n== merge-train: done; main is %s\n' "$(git log --oneline -1)"
