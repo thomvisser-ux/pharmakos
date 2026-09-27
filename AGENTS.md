@@ -13,8 +13,9 @@ the precedence order in `docs/design/README.md` (decisions-log §2.7 > spec v0.6
 and say so in your PR rather than guessing.
 
 **Status of this repository:** the toolchain is installed — rustc 1.98.1 (MSVC host on Windows),
-`protoc` 36, `buf` 1.73, `cargo-deny`, `reuse`, Godot 4.7.2 — and `cargo xtask ci` is green:
-fifteen steps, every one required. A missing input is a failure, and only three skips remain, each
+`protoc` 36, `buf` 1.73, `cargo-deny`, `reuse`, Godot 4.7.2 and its export templates — and
+`cargo xtask ci` is green: fifteen steps, every one required. A missing input is a failure, and
+only three skips remain, each
 a statement about the platform or the caller (`screenshot` off Linux, `stage-client` on macOS,
 `test-research` when `--package` leaves the sim out); a missing tool skips locally and fails under
 `PHARMAKOS_REQUIRE_TOOLS=1`, which CI and the merge train's local check set (decisions-log item
@@ -429,7 +430,8 @@ to full quality once and changed only with the owner's explicit approval.
   from T19 PR 2, the config line the lobby remembers in `user://last_match.txt`: the six
   `serve::Config` fields that `serve::ConfigLine` reads, without `resume`, and no token
   (decisions-log items 113 and 114)
-- CI: `.github/workflows/**`, `xtask/**`'s definition of what `ci` runs, golden-file *formats*
+- CI: `.github/workflows/**`, `xtask/**`'s definition of what `ci` runs and of what
+  `cargo xtask package` checks (`xtask/src/package.rs`, `xtask/src/zip.rs`), golden-file *formats*
   (including `tests/golden/package/`, the zips' manifests)
 - Licensing: `LICENSES/**`, per-directory `LICENSE` files, the REUSE manifest
 - Packaging: `packaging/REUSE.toml.in`, the zips' own REUSE manifest, and the licence texts
@@ -553,8 +555,9 @@ of that premise.
 
 ## 9. `cargo xtask ci`
 
-One command. If it is green locally it is green in CI; if it is not, that is a bug in `xtask`, not a
-reason to run something else.
+One command for the suite. If it is green locally, CI's `cargo xtask ci` legs are green; if they are
+not, that is a bug in `xtask`, not a reason to run something else. CI's required package jobs run a
+second command, `cargo xtask package` (below), which `ci` never runs.
 
 ```sh
 cargo xtask ci            # everything below

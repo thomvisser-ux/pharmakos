@@ -89,7 +89,7 @@ because some downstreams still prefer the shorter text.
 
 Note the one-way consequence: permissive material can be pulled into the GPL'd
 game, but GPL'd code must not be copied into `proto/`, `schemas/`, `docs/`,
-`examples/`, `library/` or `rules/`. When in doubt, a `.proto` file must be written from the spec, not
+`examples/`, `library/`, `packaging/` or `rules/`. When in doubt, a `.proto` file must be written from the spec, not
 pasted out of a crate.
 
 **Art and audio are CC BY-SA 4.0.** Creative Commons licences are the ones
