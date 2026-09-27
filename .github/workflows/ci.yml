@@ -1079,8 +1079,8 @@ jobs:
           esac
 
       - name: Restore the export templates
-        # Keyed on the templates archive's SHA-512 and the platform. A pull request's cache
-        # is scoped to that pull request, so its first run misses by construction.
+        # Keyed on the templates archive's SHA-512 and the platform. A pull request restores
+        # its own caches and main's; the first run on a branch with neither misses.
         if: steps.scope.outputs.prose_only != 'true'
         id: templates
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4 (v4.3.0)
@@ -1115,12 +1115,15 @@ jobs:
         # the verified archive (the owner's install matched it, item 117 (6)).
         if: steps.scope.outputs.prose_only != 'true'
         shell: bash
+        env:
+          CACHE_HIT: ${{ steps.templates.outputs.cache-hit }}
         run: |
           set -euo pipefail
           cd "$HOME/AppData/Roaming/Godot/export_templates/4.7.2.stable"
           echo "5b3d39315848983e45400a64662dad4a782636015cf6f659956194e3f196d72e7117a5ad9c94528361f6e1f229ed20c09a1dc740506eb1bcba2fba6bbb727981  windows_release_x86_64.exe" | sha512sum -c -
           [ "$(cat version.txt)" = "4.7.2.stable" ]
-          echo "::notice title=export templates::cache ${{ steps.templates.outputs.cache-hit == 'true' && 'hit' || 'miss' }}; windows_release_x86_64.exe matches its pinned SHA-512"
+          if [ "$CACHE_HIT" = "true" ]; then cache=hit; else cache=miss; fi
+          echo "::notice title=export templates::cache $cache; windows_release_x86_64.exe matches its pinned SHA-512"
 
       - name: Install reuse
         # Pinned: the zip's licence check is acceptance (c), and its counts are checked
@@ -1255,8 +1258,8 @@ jobs:
           esac
 
       - name: Restore the export templates
-        # Keyed on the templates archive's SHA-512 and the platform. A pull request's cache
-        # is scoped to that pull request, so its first run misses by construction.
+        # Keyed on the templates archive's SHA-512 and the platform. A pull request restores
+        # its own caches and main's; the first run on a branch with neither misses.
         if: steps.scope.outputs.prose_only != 'true'
         id: templates
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4 (v4.3.0)
@@ -1283,12 +1286,15 @@ jobs:
       - name: Check the installed template against its pinned SHA-512
         if: steps.scope.outputs.prose_only != 'true'
         shell: bash
+        env:
+          CACHE_HIT: ${{ steps.templates.outputs.cache-hit }}
         run: |
           set -euo pipefail
           cd "$HOME/.local/share/godot/export_templates/4.7.2.stable"
           echo "08be8a6ab54c9dbadad046ab526f22e351bed43a92b3ad19436f53a9dd44267a8a96338252ebc28f31047dd23d3e27a89a9dd0a7aefede0b3a61fb2ac66fb08c  linux_release.x86_64" | sha512sum -c -
           [ "$(cat version.txt)" = "4.7.2.stable" ]
-          echo "::notice title=export templates::cache ${{ steps.templates.outputs.cache-hit == 'true' && 'hit' || 'miss' }}; linux_release.x86_64 matches its pinned SHA-512"
+          if [ "$CACHE_HIT" = "true" ]; then cache=hit; else cache=miss; fi
+          echo "::notice title=export templates::cache $cache; linux_release.x86_64 matches its pinned SHA-512"
 
       - name: Install reuse
         if: steps.scope.outputs.prose_only != 'true'
