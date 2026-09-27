@@ -16,9 +16,11 @@ Read that file before your first edit. What follows is only the Claude Code-spec
 1. **The toolchain is installed and `cargo xtask ci` is green.** rustc 1.98.1 (MSVC host), `protoc`
    36, `buf` 1.73, `cargo-deny`, `reuse` and Godot 4.7.2 are all present, so compile your work and
    run `cargo xtask ci --quick` as the inner loop and the full `cargo xtask ci` before you open a
-   PR. Most crates are still empty placeholders, so a step whose input does not exist yet reports
-   `skipped` with a reason — that is the harness working, not a failure to work around. The
-   `PLACEHOLDER` rule is unchanged: mark every guessed value
+   PR. Every step is required: a step whose input is missing fails with the reason, and only the
+   platform skips (`screenshot` off Linux, `stage-client` on macOS) and `test-research`'s
+   `--package` filter remain (decisions-log item 116 (6)(g)); a missing tool (buf, cargo-deny,
+   reuse, godot, xvfb-run) skips locally and fails under `--require-tools`, which CI and the merge
+   train's local check set. The `PLACEHOLDER` rule is unchanged: mark every guessed value
    `// PLACEHOLDER: <what, who decides, when>` and list it in your PR.
 2. **Check the design precedence before implementing a rule**: `docs/design/decisions-log.md` §2.7 >
    the spec (`docs/spec/pharmakos-spec-v0.6.html`) > `docs/design/co-design-gameplan-api.md`. See
@@ -85,10 +87,10 @@ git worktree add ../pharmakos-<task> -b feat/<crate>-<task>
 `reuse` step in place of the suite, so for it "CI's checks are green on the branch" means those two
 passed, and `main`'s push runs everything (decisions-log item 115 (4)).
 If something is green locally and red in CI, that is an
-`xtask` bug worth fixing, not a reason to run a different command. It is complete for harness part 1
-(`xtask/src/main.rs`, twelve steps, covering AGENTS.md §9 items 1–9) and green — ten `ok`, two
-`skipped` with reasons; a failure in it is a bug to fix rather than a reason to reach for another
-command.
+`xtask` bug worth fixing, not a reason to run a different command. It is complete for harness parts
+1 and 2 (`xtask/src/main.rs`, fifteen steps, covering AGENTS.md §9 items 1–10) and green; a failure
+in it is a bug to fix rather than a reason to reach for another command. `cargo xtask ci-scope` and
+`cargo xtask perf-alarms` sit outside the step table, and `perf-alarms` never fails.
 
 ## When you finish
 
