@@ -59,7 +59,7 @@ chosen so that the 1 200-tick run covers `push → recap → lull → push` thre
 times rather than sitting inside the first three-minute Push of item 68's real
 ladder. It is a **host** setting (item 40 makes the per-round list one), it is a
 PLACEHOLDER, and it goes when `DETERMINISM_TICKS` is raised to a real segment at
-T20.
+S1 (owner; decisions-log item 116 (6)(e)).
 
 So a diff that starts exactly at tick 400, 700 or 1 000 is a segment-boundary
 change — the close, the round increment, or the coming segment's length — and a

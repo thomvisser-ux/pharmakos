@@ -128,8 +128,8 @@ use pharmakos_proto::gp;
 /// Arbitrary and pinned. It is a *harness* seed, not a game constant: the pull
 /// request that replaces the harness run with a real segment re-baselines the
 /// chain and explains the movement (owner, at S1: decisions-log item 116 (6)(e)
-/// kept the harness run through T20, because the demo scenario's chain is the
-/// full-segment chain).
+/// kept the harness run through T20, because T20's demo scenario, item 116
+/// (6)(c), carries the full-segment chain the plan's T10 line asks for).
 pub const DETERMINISM_MATCH_SEED: u64 = 0x0102_0304_0506_0708;
 
 /// Seats the determinism harness runs.
@@ -154,14 +154,14 @@ pub const DETERMINISM_UNITS_PER_SEAT: u32 = 50;
 /// the committed chain covers `push → recap → lull → push` three times over.
 ///
 /// Deleted when `DETERMINISM_TICKS` is raised from 1 200 to a real segment
-/// (owner, at S1 — the same PLACEHOLDER T2 left in `xtask`; decisions-log item
-/// 116 (6)(e) kept the harness run through T20). Whoever raises it
-/// should know what is waiting on it: the plan's T10 acceptance line asks for
-/// "a golden hash chain over a full segment", and the committed chain covers
-/// three whole segments of *this* list rather than one of item 68's real
-/// ladder, whose first round alone is 3 600 ticks. Raising `DETERMINISM_TICKS`
-/// and deleting this constant is what turns that substitution into the real
-/// thing.
+/// (owner, at S1; decisions-log item 116 (6)(e) kept the harness run through
+/// T20, and `DETERMINISM_TICKS` in `xtask/src/main.rs` carries its own
+/// PLACEHOLDER). The plan's T10 acceptance line asks for "a golden hash chain
+/// over a full segment". This chain covers three whole segments of *this* list
+/// rather than one of item 68's real ladder, whose first round alone is 3 600
+/// ticks; item 116 (6)(e) takes T20's demo scenario chain (item 116 (6)(c), a
+/// 180 s first round compared across the three operating systems) as that
+/// full-segment chain, so the raise is not what T10's line waits on.
 pub const DETERMINISM_SEGMENT_LENGTHS_MS: [i32; 2] = [20_000, 15_000];
 
 /// Find `rules/rules.v1.json` from wherever the caller happens to stand.
