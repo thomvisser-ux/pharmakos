@@ -763,6 +763,55 @@ its downside, and its section 0 lists the holes (H1–H16) the lines below close
 
 ---
 
+### T21b — the comments lane: what T20, T21 and the owner's interview left *(item 122)*
+
+- **Unit owned:** the fixes below, each in the file its source names; no crate's behaviour changes except (l)'s,
+  if its investigation finds a fix, and (d)'s and (e)'s in `xtask`. Not `crates/sim`, `crates/gateway`,
+  `crates/operator` or `crates/plan-core` source, and not `proto/**`.
+- **Builds:** (a) first, `MATRIX_ONLY`'s new paths in `scripts/merge-train.sh` (item 119 (1)): `library/`, `rules/`,
+  `packaging/`, `LICENSES/`, `REUSE.toml`, `tests/golden/package/`, and, weighed from T21's proposal, `xtask/src/package.rs`,
+  `xtask/src/zip.rs` and `CHANGELOG.md` (item 121 (5)); (b) T20's comment on #47, items 1–10, the stale comments in
+  `crates/verifier/tests/fuzz.rs`, `crates/mesher/tests/perf_alarm.rs`, `crates/client-gdext` (`tests/no_sim.rs`,
+  `tests/wizard.rs`, `tests/editor_fixtures.rs`, `tests/no_arithmetic.rs`, `src/bridge.rs`, `src/wizard.rs`),
+  `tests/golden/gateway/README.md`, `crates/gamectl/src/scenario.rs` and `crates/gamectl/tests/confinement.rs`, with the
+  texts the comment proposes, checked against the code; (c) its items 11–12, the two `gamectl` test hazards, with the
+  fixes it proposes (the moved-chain test writes no actual where the golden step reads one; the doctored copy's golden
+  lives outside `tests/golden/scenarios/`); (d) the owner's decision on its item 13 (item 118 (5)): `operator` on the
+  `client-gdext` line of `CLIENT_WALL` in `xtask/src/main.rs` and in `crates/client-gdext/tests/no_sim.rs`'s forbidden
+  list; (e) `xtask`'s two stale strings and three finds (item 118 (4)): the missing-metadata note, `Ctx::require_tools`'s
+  doc, `--require-tools` exporting `PHARMAKOS_REQUIRE_TOOLS` to what it runs (with `crates/proto/tests/generated.rs`'s
+  doc), `no_sim.rs`'s module doc and `clippy.toml`'s `wall-guard` list; (f) `docs/LICENSING.md`'s example sidecar hidden
+  from reuse and `LICENSES/CC0-1.0.txt` deleted in one commit (item 119 (7)); (g) `.github/dependabot.yml` and the `dco`
+  job's exemption for `dependabot[bot]`, as items 119 (4) and 120 decide it, with AGENTS.md section 8 and
+  `docs/CONTRIBUTING.md` saying so; (h) `ci.yml`'s budget PLACEHOLDER resolved to 75 minutes on Windows (item 119 (5));
+  (i) the two templates' PLACEHOLDERs in `library/` reworded to record item 119 (9) and (10), with the nine committed
+  copies of their text (item 119 (10)) moved in the same commit; (j) `scripts/setup-windows.ps1`'s SPDX header
+  (item 119 (6)); (k) T21's stale-text finds (item 121 (5)): `godot/project.godot`'s header, `crates/gamectl/tests/cli.rs`
+  and `crates/gamectl/src/lib.rs`'s `target_dir` doc; `ci.yml`'s header and its T21 section, which still count eight
+  required checks; `/packaging/` in `.github/CODEOWNERS`; `packaging/LICENSE` in `REUSE.toml`'s list of pointers;
+  (l) the watch check's flake (item 121 (4)): which connection's call the gateway refused as over its per-tick limit,
+  and whether the rig's seat budget (`rig.rs`'s `SEAT_CALLS_PER_REFILL`) or the check's pacing let it through, fixed
+  where the cause is, a fix in `rig.rs` being shipped client code the pull request names.
+- **Implements:** items 118 (4) and (5), 119 (1) and (4) to (10), 120, 121 (4) and (5).
+- **Needs:** T21 (merged). Runs alone as W7's run 3, before T22, and is the one xtask pull request open while it runs.
+- **Acceptance:** each part's source text checked against the code at the lane's base and quoted in the pull request
+  with its replacement; (c)'s two hazards each shown by a test that fails on `main` and passes on the branch, or by a
+  written reason it cannot; (d) a unit test in `xtask` naming the operator for a client edge to it, and `no_sim.rs`'s
+  list; (e) a unit test that `--require-tools` reaches a child's environment; (f) `reuse lint` green with the text
+  gone and LICENSING.md's record without CC0-1.0 or the example's author; (g) the exemption's logic shown on commit
+  lists (a Dependabot pull request's own commits pass, another author's unsigned commit on its branch fails, a pull
+  request from anyone else is unchanged), and `dependabot.yml` read against GitHub's schema; the first Dependabot pull
+  request is the live check, and the main session records it; (i) every golden and chain that moved named with why
+  (comment bytes that reach a hashed input move it; the pull request says which do); (l) the refused call named from
+  the failing run's log or a reproduction, and the fix tested, or the reason none is safe written down; every required
+  check green on the lane's final run.
+- **Contract PR:** yes — `xtask/**`, `.github/**`, `clippy.toml`, `LICENSES/**`, `REUSE.toml`, AGENTS.md, and the
+  goldens (i) moves.
+- **Agent-days:** 2.
+- **PLACEHOLDERs:** none expected; each part closes one.
+
+---
+
 ### T22 — Integration, goldens and the stage demo
 
 - **Owned:** whatever crate each fix lands in, one at a time.
