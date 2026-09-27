@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # Contract files (AGENTS.md section 5): a PR touching these requests the owner's review.
-# Determinism code has no single path; AGENTS.md section 5 remains the authority for it.
+# The determinism code and the on-disk formats are listed by their files below, but the list
+# is not complete; AGENTS.md section 5 remains the authority.
 
 /proto/                 @thomvisser-ux
 /clippy.toml            @thomvisser-ux
@@ -17,3 +18,21 @@ LICENSE                 @thomvisser-ux
 /AGENTS.md              @thomvisser-ux
 /CLAUDE.md              @thomvisser-ux
 /docs/design/           @thomvisser-ux
+/rust-toolchain.toml    @thomvisser-ux
+/.cargo/                @thomvisser-ux
+/crates/proto/src/generated/ @thomvisser-ux
+/tests/golden/          @thomvisser-ux
+
+# Determinism code (AGENTS.md section 5): the fixed-point types, the RNG streams, the
+# canonical encoding, snapshot and replay, the tick loop and the research feature.
+/crates/sim/Cargo.toml          @thomvisser-ux
+/crates/sim/src/math/           @thomvisser-ux
+/crates/sim/src/math.rs         @thomvisser-ux
+/crates/sim/src/encoding.rs     @thomvisser-ux
+/crates/sim/src/snapshot.rs     @thomvisser-ux
+/crates/sim/src/runner.rs       @thomvisser-ux
+/crates/sim/src/research.rs     @thomvisser-ux
+
+# The formats a match leaves on a player's disk.
+/crates/gateway/src/save.rs     @thomvisser-ux
+/crates/gateway/src/cache.rs    @thomvisser-ux
