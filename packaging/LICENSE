@@ -1,0 +1,22 @@
+SPDX-FileCopyrightText: 2026 Pharmakos contributors
+SPDX-License-Identifier: MIT OR Apache-2.0
+
+Everything in packaging/ that is ours - the templates `cargo xtask package`
+turns into the unsigned zips' README.txt and REUSE.toml, and this directory's
+README.md - is licensed under either of
+
+  * MIT License            (../LICENSES/MIT.txt)
+  * Apache License, 2.0    (../LICENSES/Apache-2.0.txt)
+
+at your option, like the documentation.
+
+Two files in this directory are quoted verbatim from elsewhere and keep their
+own terms: LICENSE-MPL-2.0.txt is the Mozilla Public License 2.0 and
+LICENSE-BSL-1.0.txt the Boost Software License 1.0, the canonical texts from
+the SPDX licence list. They are here because crates compiled into the shipped
+binaries are under those licences (THIRD-PARTY-NOTICES.txt in each zip names
+them), and each zip's LICENSES/ carries them. This repository's own code uses
+neither, which is why they are not in ../LICENSES/.
+
+The repository-wide scheme is described in ../LICENSE and in
+../docs/LICENSING.md; the machine-readable manifest is ../REUSE.toml.

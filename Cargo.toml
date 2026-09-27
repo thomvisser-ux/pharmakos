@@ -161,3 +161,9 @@ overflow-checks = true
 inherits = "release"
 debug-assertions = true
 panic = "unwind"                 # so determinism tests can catch and report a divergence
+
+# The packaged client library (decisions-log item 102 (1), named by item 117 (4)): release
+# optimisation, unwinding so the bridge's caught-panic counter works; `cargo xtask package`.
+[profile.release-client]
+inherits = "release"
+panic = "unwind"

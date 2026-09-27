@@ -34,10 +34,10 @@
 //!    skeleton plans for is the vista PNG, which is compared by
 //!    [`crate::png`] with a tolerance rather than byte for byte.
 //!
-//! # The two areas this step does not compare
+//! # The three areas this step does not compare
 //!
 //! [`SELF_COMPARED_AREAS`] names them, and it is the only place they are named.
-//! Both own a comparison of their own, and running a second one here would be
+//! Each owns a comparison of its own, and running a second one here would be
 //! wrong rather than redundant:
 //!
 //! * `determinism/` — the `determinism` step runs the sim, writes the fresh
@@ -50,11 +50,17 @@
 //!   differing at all between a Quadro and lavapipe on identical geometry), and
 //!   because the fresh render exists only on the Linux leg that produced it.
 //!   Byte equality here would be permanently red on every platform.
+//! * `package/` — `cargo xtask package` ([`crate::package`]) writes the zip's
+//!   manifest to `<target>/golden/package/actual.<platform>.txt` and compares it
+//!   there, in CI's `package (<os>)` jobs, which are the only place a zip is
+//!   built (it needs Godot and its export templates, which the `ci` legs do not
+//!   install); each job has only its own platform's list. Re-bless it with
+//!   `cargo xtask package --bless` (decisions-log item 117 (10)).
 //!
 //! Rule 1 is what makes the exemption necessary rather than tidy: a missing
 //! fresh output is a failure, so an area whose producer runs in a later step —
 //! or on one operating system only — must not be compared here at all. Rule 2
-//! still holds for both: each carries its README, and this step still fails an
+//! still holds for all three: each carries its README, and this step still fails an
 //! area that does not.
 //!
 //! # Areas
@@ -73,8 +79,10 @@ use std::path::{Path, PathBuf};
 ///
 /// Adding a name silently removes an area from this step's byte comparison, so
 /// it is reviewed like any other golden-format change (AGENTS.md section 5) and
-/// `tests/golden/README.md` names the same two.
-pub(crate) const SELF_COMPARED_AREAS: &[&str] = &["determinism", "vista"];
+/// `tests/golden/README.md` names the same three. `package` is compared by
+/// `cargo xtask package`, which CI's `package (windows-latest)` and
+/// `package (ubuntu-24.04)` jobs run (decisions-log item 117 (10)).
+pub(crate) const SELF_COMPARED_AREAS: &[&str] = &["determinism", "vista", "package"];
 
 /// True when `relative`'s first component is one of [`SELF_COMPARED_AREAS`].
 fn self_compared(relative: &Path) -> bool {

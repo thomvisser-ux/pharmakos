@@ -1,0 +1,37 @@
+PHARMAKOS: THE SEALED ORDER - version @VERSION@, Windows x86_64
+Build: @BUILD@
+
+THIS BUILD IS UNSIGNED. If Windows SmartScreen says "Windows protected your
+PC", choose "More info", then "Run anyway". Where Smart App Control is on, it
+blocks an unsigned build and cannot be overridden for it.
+
+Extract the whole zip before running anything, keep the files together, then
+run Pharmakos.exe.
+
+- If the lobby says the match host could not start, check whether antivirus
+  quarantined gamectl.exe: the game starts it from this folder.
+- The game needs a Vulkan-capable GPU (Godot's Forward+ renderer).
+- Saves and the private match cache are in %LOCALAPPDATA%\Pharmakos. A save
+  resumes only in a build with the same rules table and verifier as the build
+  that wrote it. The remembered last match and the game's log are in
+  %APPDATA%\Godot\app_userdata\Pharmakos.
+- rules\ is not for editing: an edited rules.v1.json changes the rules hash, so
+  older saves refuse to load, and it moves the host's Lull without the game's
+  own countdown. library\ holds the templates the wizard and the built-in
+  opponent read.
+
+gamectl.exe, the command-line tool:
+- Run it from this folder: "gamectl seat doctor" checks this install (all six
+  checks pass here; from anywhere else pass --root <this folder>).
+- "gamectl verify <file>" checks a playbook against gamectl's reference seat
+  view, not your match. The live check when you submit in the game is the
+  authority, so a file that places a beacon outside the reference view's
+  spheres gets E0403 from the command line although the game accepts it.
+- "gamectl --version" prints 0.0.0; the build line above identifies this build.
+
+Licences: LICENSES\, REUSE.toml, THIRD-PARTY-NOTICES.txt and the game's Credits
+screen. Changes: CHANGELOG.md.
+
+Source: this build is commit @COMMIT@ of the game's repository (its public
+address is set before a release is published). A release also carries the
+tag's source archive on its release page.
