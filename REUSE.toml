@@ -300,6 +300,7 @@ path = [
     "docs/LICENSE",
     "examples/LICENSE",
     "library/LICENSE",
+    "packaging/LICENSE",
     "proto/LICENSE",
     "rules/LICENSE",
     "tests/LICENSE",

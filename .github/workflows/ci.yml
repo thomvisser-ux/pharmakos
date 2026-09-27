@@ -30,11 +30,12 @@
 # (decisions-log item 116 (6)(o)); a ref marked `(branch)` has no tag of that name.
 #
 # THE DOCS-ONLY FAST PATH (decisions-log item 115 (4)). Every required job runs on every
-# pull request, because the ruleset's eight required checks must report under their own
-# names; a `paths-ignore` filter or a job-level `if:` would leave some of them never
-# reporting. Instead each job that builds — the three `cargo xtask ci` legs, the two
-# `client extension` legs and `vista screenshot (linux)` — runs `cargo xtask ci-scope`
-# right after its checkout and toolchain steps, in a step with `id: scope`. It answers
+# pull request, because the ruleset's twelve required checks must report under their own
+# names (decisions-log item 121 (3)); a `paths-ignore` filter or a job-level `if:` would
+# leave some of them never reporting. Instead each job that builds — the three
+# `cargo xtask ci` legs, the two `client extension` legs, `vista screenshot (linux)` and
+# the two `package (<os>)` jobs — runs `cargo xtask ci-scope` right after its checkout and
+# toolchain steps, in a step with `id: scope`. It answers
 # `prose_only=true` only for a `pull_request` whose merge commit changes nothing but
 # `docs/**`, `AGENTS.md`, `CLAUDE.md`, `.claude/**` and top-level `*.md`, and false on every
 # other event and on any error (the rules and their tests are in xtask/src/scope.rs).
@@ -983,9 +984,10 @@ jobs:
 
   # ---------------------------------------------------------------------------------------
   # T21: the unsigned zips (skeleton plan T21; decisions-log item 117 (8)). Four plain jobs,
-  # not a matrix, because a `needs:` cannot name one leg of a matrix. None of the four is a
-  # required check (the ruleset is the owner's); scripts/merge-train.sh stops on any check
-  # that is not pass or skipping, so a red one still blocks a merge.
+  # not a matrix, because a `needs:` cannot name one leg of a matrix. All four are required
+  # checks in the ruleset (main-protection) since T21 merged (decisions-log items 119 (1)
+  # and 121 (3)), so a red one blocks a merge at GitHub as well as in
+  # scripts/merge-train.sh, which stops on any check that is not pass or skipping.
   #
   # `package (<os>)` runs `cargo xtask package` and nothing else of substance: every check is
   # in xtask, where it also runs locally (the build, the C-runtime and .pck scans, the import

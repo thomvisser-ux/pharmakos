@@ -142,9 +142,12 @@ pub fn display(path: &Path) -> String {
 /// integration test. The `deps` component is what tells them apart, which is
 /// more honest than counting parents and hoping.
 ///
-/// `None` when the executable is somewhere neither shape describes — a
-/// packaged build, for instance. A caller treats that as "there is nowhere to
-/// write a fresh output", never as a silent success.
+/// `None` only when the executable's path cannot be read or has no grandparent
+/// folder. A packaged build is not an exception: `<dir>/Pharmakos/gamectl`
+/// answers `<dir>`, so its fresh outputs land in `<dir>/golden/`, beside the
+/// extracted folder and outside it, which `cargo xtask package`'s replay relies
+/// on. A caller treats `None` as "there is nowhere to write a fresh output",
+/// never as a silent success.
 #[must_use]
 pub fn target_dir() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
