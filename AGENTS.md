@@ -14,16 +14,20 @@ and say so in your PR rather than guessing.
 
 **Status of this repository:** the toolchain is installed — rustc 1.98.1 (MSVC host on Windows),
 `protoc` 36, `buf` 1.73, `cargo-deny`, `reuse`, Godot 4.7.2 — and `cargo xtask ci` is green:
-twelve steps, ten `ok` and two `skipped` with reasons (no goldens, no determinism binary yet),
-verified on Windows. The three-OS matrix runs on every pull request and has no hash chains to
-compare until the determinism binary lands, so §10's "all three operating systems agree on the
-hash chains" is not yet a claim anyone can make. The four stack spikes are closed, frozen at the
-`spike-end` tag and deleted from `main`;
+fifteen steps, every one required. A missing input is a failure, and only three skips remain, each
+a statement about the platform or the caller (`screenshot` off Linux, `stage-client` on macOS,
+`test-research` when `--package` leaves the sim out); a missing tool skips locally and fails under
+`--require-tools`, which CI and the merge train's local check set (decisions-log item
+116 (6)(g)). The three-OS matrix runs on every pull request, and the `cross-OS determinism guard`
+job byte-compares every leg's determinism chain, scenario chains, path hashes and mesher, mapgen
+and vista geometry digests, so §10's "all three operating systems agree on the hash chains" is
+checked on every pull request that changes more than prose and on `main`'s push (item
+116 (6)(n); a prose-only pull request takes the fast path of §9, item 115 (4)). The four stack
+spikes are closed, frozen at the `spike-end` tag and deleted from `main`;
 their measured results and their lessons for the skeleton live under `docs/spikes/`, and reading the
-spike code means `git worktree add ../pharmakos-spikes spike-end`. The walking skeleton is open.
-Most crates are still empty placeholders: write files that will be correct when the crate around
-them exists, and mark any value you had to guess with a `PLACEHOLDER` comment naming who fixes it
-and when.
+spike code means `git worktree add ../pharmakos-spikes spike-end`. The walking skeleton is open,
+and every crate in §3 has code; mark any value you had to guess with a `PLACEHOLDER` comment naming
+who fixes it and when.
 
 ---
 
@@ -112,12 +116,18 @@ editor UI. Nothing else executes. Directories are under `crates/`; package names
    coverage. They may never step or fork the sim, run mandates, programs, combat or construction,
    model enemy behaviour, or evaluate rule conditions over a projected future. Prefer depending on
    the sim's snapshot and knowledge types only; if you find yourself wanting its stepping API, the
-   design is wrong — stop and ask. The match itself is stepped and sealed in one module, the
-   gateway's `host.rs`. No handler steps or seals, *except* the admin-scoped control handlers in
+   design is wrong — stop and ask. The gateway, which hosts the match, is held to the same rule:
+   its read methods answer from the frozen snapshot and the rules table, and `submit_plan`
+   *compiles* the playbook (`Plan::compile`, in `surface/planning.rs`), a pure function of the
+   playbook and the rules table that steps nothing — compiling a playbook is not driving a match
+   (decisions-log items 103 (9) and 104 (6)). The match itself is stepped and sealed in one module,
+   the gateway's `host.rs`. No handler steps or seals, *except* the admin-scoped control handlers in
    `crates/gateway/src/surface/control.rs`, which drive only the live match through `Surface`'s
    driving methods and may name none of `Runner`, `Host`, `World`, `host_mut`, `seal_plans`,
    `seal_playbook`, `snapshot` or `.clone()`; `crates/gateway/tests/confinement.rs` is the guard
-   (decisions-log item 107). The in-process seats are host-side the same way:
+   (decisions-log item 107), and its
+   `a_handler_may_compile_a_playbook_and_may_never_seal_or_step_one` holds the compile to one call
+   in the handler modules. The in-process seats are host-side the same way:
    `Surface::register_in_process` and `Surface::file_advice` are reached only from `serve.rs`,
    through `serve::InProcessSeats`, and the same test's `no_handler_can_file_advice` is the guard
    (decisions-log item 111). So is the restore: `Host::resume` is the one restore, and `.restore(`
@@ -274,6 +284,14 @@ millisecond figure comes from a walled crate driving the sim from outside (see `
 reason strings). There is no `perf` feature and no per-module escape hatch — if you think you need
 one, that is a contract change, and §5 says how to raise it.
 
+The gateway reads no clock either, so the host must give it ticks in every phase the sim does not
+advance — a Lull, a recap, an ended match: the client reports its clock through the admin-scoped
+`report_host_clock`, and `gamectl`'s in-process hosts give a Lull's remaining time through
+`Surface::set_phase_remaining_ms`. Without that, the rate limits, the audit log's stamps and token
+expiry, which count in the gateway's ticks, would stand still for the whole phase; a reported clock
+that runs backwards or jumps too far is refused, never clamped (decisions-log items 99, 103 (8) and
+103 (9)).
+
 ### 4.6 Ordered iteration, always
 
 ```rust
@@ -361,6 +379,15 @@ per-path allow-list, so the mechanism is this and nothing else:
   the wall's list because it is the crate that owns hashed state, so it is the one the wall exists
   to protect. That dependency edge is what makes the allowance safe, and it is only visible to CI
   because the wall is a crate.
+- `wall-guard`'s second relation keeps the client side of the wall away from the core:
+  `CLIENT_WALL` in `xtask/src/main.rs` names each walled crate and what it may never reach,
+  transitively included (`client-gdext`: the sim, the verifier, plan-core and the gateway;
+  `mesher`: the sim), and fails too when a crate a line names has left the workspace.
+  `crates/client-gdext/tests/no_sim.rs` checks the client's line from `Cargo.lock` as well. The
+  operator joins the client's line in both, by the owner's decision (decisions-log item 118 (4)),
+  in the first pull request after T21 that may edit them. A future walled crate joins by adding
+  its own line; the rule is not "no walled crate reaches the sim", which would forbid the walled
+  harness §4.5 sanctions (decisions-log items 102 (3) and 116 (6)(d)).
 - Adding a crate to `WALLED_PACKAGES` widens the allowance for that whole crate, so it is a contract
   change (§5) and needs owner approval.
 
@@ -429,7 +456,11 @@ machine can run.
 
 - **One crate, one agent.** Two agents never edit the same crate at the same time. If your task
   needs a change in a crate another agent owns right now, stop and ask for the change to be
-  sequenced — do not "just add a small helper" over there.
+  sequenced — do not "just add a small helper" over there. A task granted a *named place* in a
+  crate it does not own (a module, or a few named lines) is granted that crate's confinement-test
+  line with it wherever the test lists the crate's sources by name, and the grant says so:
+  `every_module_is_checked` in `crates/gamectl/tests/confinement.rs` fails on a `pub mod` missing
+  from its `SOURCES` (decisions-log item 110 (4)).
 - Rebase on `main` before opening a PR. Never force-push `main`, never rewrite a pushed branch
   someone else is reviewing.
 - State in the PR which crates you touched, so the next agent can pick a disjoint set.
@@ -516,12 +547,12 @@ cargo xtask ci --quick    # fmt, clippy, unit tests — the inner loop
 cargo xtask ci --fix      # rustfmt and the machine-applicable clippy fixes
 ```
 
-> **Status.** `xtask/src/main.rs` has been run and is green: its twelve steps cover items 1–9 below,
-> and the steps whose inputs do not exist yet (goldens, the determinism binary) report `skipped`
-> with a reason rather than `ok`. Items 10 and 11 are **not** in `xtask` today: scenarios are
-> harness part 2 and currently live only in `.github/workflows/nightly-scenarios.yml`, and the perf
-> budgets arrive with the gates that set them. The owner signs off the final step list, and the
-> numeric budgets are Tuning values that the gates in spec section 16 set.
+> **Status.** `xtask/src/main.rs` is green, and its fifteen steps cover items 1–10 below. Every step
+> is required: a step whose input is missing fails rather than skips, and no step reports `ok` for
+> work it did not do (decisions-log item 116 (6)(g)). Item 11's budgets arrive with the gates that
+> set them, S1's P1 and S2's G3′-real; until then performance is published, never gated. The owner
+> signs off the final step list, and the numeric budgets are Tuning values that the gates in spec
+> section 16 set.
 
 1. **Format** — `cargo fmt --all --check`.
 2. **Lints** — `cargo clippy --workspace --all-targets -- -D warnings`, run once with default
@@ -539,7 +570,10 @@ cargo xtask ci --fix      # rustfmt and the machine-applicable clippy fixes
 6. **Determinism** — replay a fixed set of seeded matches headless and compare the full per-tick
    xxh3 hash chain against golden files; save/restore round-trips hash-identically; in the research
    build, fork equivalence. The CI matrix runs Windows, Linux and macOS and compares the chains
-   across all three (gate G4).
+   across all three (gate G4): the `cross-OS determinism guard` job compares, byte for byte, each
+   leg's determinism chain, every scenario chain (and `expand-east-segment`'s event log), the
+   path-hash file and the mesher, mapgen and vista geometry digests, requires each on all three
+   legs, and compares no perf figure (decisions-log item 116 (6)(n)).
 7. **Goldens** — JSONC playbooks round-trip byte-for-byte through `plan-core`'s canonical form
    with comments intact; verifier `report_hash` goldens; the diagnostic catalogue; `render_plan`
    prose. Golden diffs must be human-readable.
@@ -547,16 +581,29 @@ cargo xtask ci --fix      # rustfmt and the machine-applicable clippy fixes
    workspace root with `proto` as the input, because buf resolves a `.git#…` reference relative to
    the invocation directory); a second comparison against the last release tag is added when v1.1
    publishes `gp.api.v1`. Generated JSON Schema and `get_schema`/docs output are regenerated and
-   must match what is committed (so they cannot drift).
+   must match what is committed (so they cannot drift). The `buf` step fails, rather than skipping
+   `breaking`, when there is no local `main` to compare against. The regenerate-and-compare half
+   runs as tests through the `test` and `golden` steps (`crates/proto/tests/generated.rs`,
+   `crates/gateway/tests/methods.rs`, `crates/gamectl/tests/docs.rs`), not in the `buf` step, and
+   generated JSON Schema is v1.1's (decisions-log item 116 (6)(g) and (p)).
 9. **Licensing** — REUSE check: every file has an SPDX header, every directory a `LICENSE`, the
    manifest is complete.
-10. **Scenarios** *(harness part 2 — not in `cargo xtask ci` today)* — `gamectl scenario run` over
-    the committed scenario files (map seed + playbooks + assertions on events and hashes). Headless
-    Godot screenshots for the visual checks. Until `gamectl scenario run` exists, the only scenario
-    runner is `.github/workflows/nightly-scenarios.yml`, which is itself gated off until S2.
+10. **Scenarios** — the `scenario` step validates every committed scenario file and plays each with
+    `gamectl scenario run` (map seed + playbooks + assertions on events and hashes). The
+    `screenshot` step renders the vista, the diagnostic rows and the wizard's first page windowed
+    under xvfb with lavapipe, on Linux only (in CI, the `vista screenshot (linux)` job), and
+    compares each with its PNG golden (skeleton-plan decision 22; decisions-log item 116 (6)(a) and
+    (h)); `--headless` selects Godot's dummy renderer, which cannot take a screenshot, so it is used
+    only for the import. The adversarial scenarios are nightly (below) and gated off until S2.
 11. **Perf budgets** *(added per gate, not in `cargo xtask ci` today)* — the G3′ CI budget check
     (tick p99 within budget) lands with S2's exit measurement, and the verifier's QUICK ≤5 ms p99 and
-    FULL ≤50 ms p99 at the playbook size budget (P1) land with the verifier's gate.
+    FULL ≤50 ms p99 at the playbook size budget (P1) land with the verifier's gate. Until then,
+    `cargo xtask perf-alarms`, which is not a step, publishes the mesher p99 and the allocations per
+    tick (the count `crates/sim/tests/allocations.rs` asserts) as `::notice::` annotations per
+    runner, with no threshold and never compared across operating systems, in the `perf alarms (…)`
+    jobs, which are not required and turn a failed measurement into a `::warning::` rather than a
+    red check (decisions-log item 116 (6)(b)). The tick-minus-pathing mean has no legal producer
+    until a walled harness drives the sim from outside (§4.5), which is S2's G3′-real.
 
 **The docs-only fast path.** A pull request whose merge commit changes only `docs/**`, `AGENTS.md`,
 `CLAUDE.md`, `.claude/**` and top-level `*.md` runs the DCO walk and the `reuse` step in place of the
@@ -565,11 +612,14 @@ success; each job that builds, and the cross-OS guard, says so in a `::notice::`
 job's scope step decides: it answers `full` in bash,
 before it builds `xtask`, for a merge commit that changes `xtask/`, `.github/` or `.cargo/`, so the
 decider never judges its own change; otherwise `cargo xtask ci-scope` decides, and answers `full` on
-any event but `pull_request` and on any error. Nothing can force it. The full suite runs on `main`'s
-push (decisions-log items 115 (4) and 116).
+any event but `pull_request` and on any error. Nothing can force it. The `perf alarms (…)` jobs,
+which are not required, follow the same pattern. The full suite runs on `main`'s push
+(decisions-log items 115 (4) and 116).
 
 Nightly, additionally: the three adversarial scenarios (§10) on a fixed seed set, and the fuzzer
-(10 000 generated playbooks, no panic).
+(10 000 generated playbooks, no panic). Both are jobs in `.github/workflows/nightly-scenarios.yml`
+behind its `NIGHTLY_SCENARIOS_ENABLED` variable, which stays unset until S2 (decisions-log item
+116 (6)(j)).
 
 ## 10. Definition of done for a stage
 
