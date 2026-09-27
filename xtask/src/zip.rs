@@ -425,15 +425,30 @@ pub(crate) fn data<'a>(bytes: &'a [u8], entry: &Listed) -> Result<&'a [u8], Stri
     Ok(data)
 }
 
+/// Whether an entry's name stays inside the folder it is extracted into: a
+/// relative path of plain parts, with no backslash, no drive or root, and no
+/// empty, `.` or `..` part. A colon is refused on every platform, because on
+/// Windows `C:x` joined onto a folder replaces it.
+fn stays_inside(name: &str) -> bool {
+    use std::path::Component;
+    let trimmed = name.strip_suffix('/').unwrap_or(name);
+    !trimmed.is_empty()
+        && !name.contains('\\')
+        && !name.contains(':')
+        && trimmed
+            .split('/')
+            .all(|part| !part.is_empty() && part != "." && part != "..")
+        && Path::new(trimmed)
+            .components()
+            .all(|component| matches!(component, Component::Normal(_)))
+}
+
 /// Extracts every entry of `bytes` under `destination`, which must exist.
-/// Names are checked to stay inside it.
+/// Names are checked to stay inside it ([`stays_inside`]).
 pub(crate) fn extract(bytes: &[u8], destination: &Path) -> Result<usize, String> {
     let entries = list(bytes)?;
     for entry in &entries {
-        if entry.name.starts_with('/')
-            || entry.name.contains('\\')
-            || entry.name.split('/').any(|part| part == "..")
-        {
+        if !stays_inside(&entry.name) {
             return Err(format!("zip entry `{}` would leave the folder", entry.name));
         }
         let target = destination.join(entry.name.trim_end_matches('/'));
@@ -575,6 +590,28 @@ mod tests {
 
     #[test]
     fn an_entry_that_would_leave_the_folder_is_refused() {
+        for name in [
+            "../evil",
+            "Pharmakos/../../evil",
+            "/evil",
+            "C:evil",
+            "C:/evil",
+            "Pharmakos/C:/evil",
+            "Pharmakos\\evil",
+            "Pharmakos/./evil",
+            "Pharmakos//evil",
+            "",
+            "/",
+        ] {
+            assert!(!stays_inside(name), "{name}");
+        }
+        for name in [
+            "Pharmakos/",
+            "Pharmakos/rules/rules.v1.json",
+            "Pharmakos/gamectl.exe",
+        ] {
+            assert!(stays_inside(name), "{name}");
+        }
         let bytes = write(&[("../evil".to_owned(), Kind::File, b"x".to_vec())]).expect("writes");
         let root =
             std::env::temp_dir().join(format!("pharmakos-xtask-unzip-{}", std::process::id()));

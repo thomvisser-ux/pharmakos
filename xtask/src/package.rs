@@ -30,7 +30,11 @@
 //! 5. run the smoke check once in the imported copy with the editor binary,
 //!    failing on a non-zero exit, a missing `[smoke] OK`, any `SCRIPT ERROR`
 //!    line (the debug VM reports what the release VM crashes on) or a line
-//!    holding a 64-hex run, the shape of a seat token;
+//!    holding a 64-hex run, the shape of a seat token. The smoke check is a
+//!    real New match, which writes `user://last_match.txt` and leaves a match
+//!    folder in the private match cache, so this run's user folders point at
+//!    the emptied `<target>/package/data/` ([`smoke_env`]; item 117 (7)) and
+//!    never at the developer's own game;
 //! 6. export the platform's preset headless into an emptied folder, requiring
 //!    exit 0 (a failed export leaves files behind), except for Godot's crash at
 //!    exit after its `savepack` line with all three outputs present, which is a
@@ -232,7 +236,8 @@ pub(crate) fn run_package(ctx: &Ctx) -> Result<String, String> {
     let check = base.join("check");
     let logs = base.join("logs");
     let dist = base.join("dist");
-    for folder in [&stage, &check, &logs, &dist] {
+    let data = base.join("data");
+    for folder in [&stage, &check, &logs, &dist, &data] {
         reset_dir(&base, folder)?;
     }
     let mut summary = Summary { lines: Vec::new() };
@@ -271,8 +276,12 @@ pub(crate) fn run_package(ctx: &Ctx) -> Result<String, String> {
     let import_note = import_project(ctx, &godot, &project)?;
     summary.note(format!("{} staged and {import_note}", platform.library));
 
-    // 5. The smoke check in the editor.
+    // 5. The smoke check in the editor, with its user folders under `data`.
     let smoke_log = logs.join("smoke-editor.log");
+    let smoke_environment = smoke_env(platform, &data);
+    for (_, folder) in &smoke_environment {
+        fs::create_dir_all(folder).map_err(|error| format!("creating {folder}: {error}"))?;
+    }
     let status = run_logged(
         &godot,
         &[
@@ -285,7 +294,7 @@ pub(crate) fn run_package(ctx: &Ctx) -> Result<String, String> {
             format!("--root={}", path_arg(&ctx.root)),
         ],
         &ctx.root,
-        &[],
+        &smoke_environment,
         &smoke_log,
     )?;
     let smoke = judge_smoke(status, &read_text(&smoke_log)?)?;
@@ -631,6 +640,28 @@ fn template_dir() -> Result<PathBuf, String> {
         }
     };
     Ok(base.join("export_templates").join(TEMPLATE_VERSION))
+}
+
+/// The in-editor smoke run's user folders, all under `data` (an emptied
+/// folder inside `<target>/package/`): Godot's `user://`, and the private match
+/// cache the host writes, which it inherits from Godot. The import and the
+/// export keep the real ones, because the export reads its template from them
+/// ([`template_dir`]).
+fn smoke_env(platform: &Platform, data: &Path) -> Vec<(String, String)> {
+    let at = |name: &str| data.join(name).to_string_lossy().into_owned();
+    if platform.name == "windows" {
+        vec![
+            ("APPDATA".to_owned(), at("appdata")),
+            ("LOCALAPPDATA".to_owned(), at("localappdata")),
+        ]
+    } else {
+        vec![
+            ("HOME".to_owned(), at("home")),
+            ("XDG_CACHE_HOME".to_owned(), at("cache")),
+            ("XDG_CONFIG_HOME".to_owned(), at("config")),
+            ("XDG_DATA_HOME".to_owned(), at("data")),
+        ]
+    }
 }
 
 fn pck_name(platform: &Platform) -> String {
@@ -1337,7 +1368,8 @@ fn registry_src() -> Result<PathBuf, String> {
     Ok(home.join("registry").join("src"))
 }
 
-/// A crate's licence, copying and notice files, verbatim, sorted by name.
+/// A crate's licence, copying and notice files as its package ships them,
+/// sorted by name: the text unchanged but for line endings, read as LF.
 // `fs::read_dir` is on clippy.toml's disallowed-methods list because its order
 // differs between filesystems; both listings here are sorted before use, which
 // is the remedy the ban asks for.
@@ -1397,7 +1429,8 @@ fn notices_text(
         "This file lists what is compiled into the two Rust binaries in this folder,\n\
          {} and {}, besides the game's own code, which is\n\
          GPL-3.0-or-later (LICENSES/GPL-3.0-or-later.txt). Each crate's own licence\n\
-         and notice files follow at the end, verbatim, as its package ships them.\n\n",
+         and notice files follow at the end as its package ships them, but with LF\n\
+         line endings and without trailing blank lines.\n\n",
         platform.gamectl, platform.library
     ));
     out.push(format!(
@@ -1981,6 +2014,86 @@ SPDX-License-Identifier = \"MIT\"
         ];
         // CHANGELOG.md, Pharmakos.exe, THIRD-PARTY-NOTICES.txt, rules.v1.json.
         assert_eq!(expected_lint_count(&listed), 4);
+    }
+
+    #[test]
+    fn the_smoke_run_writes_its_user_folders_under_the_package_folder() {
+        let base = Path::new("D:/build/x/package");
+        let data = base.join("data");
+        for (platform, names) in [
+            (&WINDOWS, &["APPDATA", "LOCALAPPDATA"][..]),
+            (
+                &LINUX,
+                &["HOME", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME"][..],
+            ),
+        ] {
+            let environment = smoke_env(platform, &data);
+            let keys: Vec<&str> = environment.iter().map(|(key, _)| key.as_str()).collect();
+            assert_eq!(keys, names, "{}", platform.name);
+            for (key, value) in &environment {
+                assert!(
+                    is_strictly_inside(&data, Path::new(value)),
+                    "{key}={value} is outside {}",
+                    data.display()
+                );
+            }
+        }
+        assert!(is_strictly_inside(base, &data));
+    }
+
+    #[test]
+    fn a_line_changed_in_a_committed_manifest_fails_with_a_readable_diff() {
+        let area = GOLDEN_AREA.iter().fold(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join(".."),
+            |path, part| path.join(part),
+        );
+        let mut shapes = Vec::new();
+        for platform in [&WINDOWS, &LINUX] {
+            let path = area.join(format!("expected.{}.txt", platform.name));
+            let committed = fs::read_to_string(&path).expect("the committed manifest");
+            assert!(
+                manifest_verdict(Some(committed.as_bytes()), committed.as_bytes(), &path).is_ok()
+            );
+            let lines: Vec<&str> = committed.lines().collect();
+            let changed = lines.get(5).expect("a sixth line");
+            let moved: String = lines
+                .iter()
+                .enumerate()
+                .map(|(index, line)| {
+                    if index == 5 {
+                        format!("{line}.moved\n")
+                    } else {
+                        format!("{line}\n")
+                    }
+                })
+                .collect();
+            let error = manifest_verdict(Some(committed.as_bytes()), moved.as_bytes(), &path)
+                .expect_err("a moved line");
+            assert!(error.contains("line 6"), "{error}");
+            assert!(error.contains(&format!("{changed}.moved")), "{error}");
+            let mut shape: Vec<String> = lines
+                .iter()
+                .map(|line| {
+                    [platform.executable, platform.library, platform.gamectl]
+                        .iter()
+                        .zip(["<executable>", "<library>", "<gamectl>"])
+                        .fold((*line).to_owned(), |line, (name, mark)| {
+                            if line == format!("{FOLDER}/{name}") {
+                                format!("{FOLDER}/{mark}")
+                            } else {
+                                line
+                            }
+                        })
+                })
+                .collect();
+            shape.sort();
+            shapes.push(shape);
+        }
+        assert_eq!(
+            shapes.first(),
+            shapes.get(1),
+            "the two manifests differ by more than the platform's three file names"
+        );
     }
 
     #[test]
