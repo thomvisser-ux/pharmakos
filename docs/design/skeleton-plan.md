@@ -803,8 +803,9 @@ its downside, and its section 0 lists the holes (H1–H16) the lines below close
 - **Acceptance:** each part's source text checked against the code at the lane's base and quoted in the pull request
   with its replacement; (c)'s two hazards each shown by a test that fails on `main` and passes on the branch, or by a
   written reason it cannot; (d) a unit test in `xtask` naming the operator for a client edge to it, and `no_sim.rs`'s
-  list; (e) a unit test that `--require-tools` reaches a child's environment; (f) `reuse lint` green with the text
-  gone and LICENSING.md's record without CC0-1.0 or the example's author; (g) the unchanged walk shown passing a real
+  list; (e) a unit test showing, on the built `Command` (`Command::get_envs`, no subprocess),
+  `PHARMAKOS_REQUIRE_TOOLS` set under `--require-tools` and removed under `--no-require-tools`; (f) `reuse lint` green
+  with the text gone and LICENSING.md's record without CC0-1.0 or the example's author; (g) the unchanged walk shown passing a real
   Dependabot commit message (its `---` and `...` lines included) and failing the same message without its last line,
   and `dependabot.yml` read against GitHub's schema; the first Dependabot pull request is the live check, and the main
   session records it; (i) only text goldens move, each named with why (the verifier, the plan fingerprint and the sim
