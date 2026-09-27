@@ -32,11 +32,12 @@
 #     `-A clippy::disallowed_methods`. The three `cast_*` allowances are there because
 #     converting float vertex data to integers is the reason the wall exists; without them
 #     `[workspace.lints.clippy]` would still deny the conversion and pass 2 could not pass;
-#   * `cargo xtask wall-guard` then fails the build if sim, plan-core, verifier, operator
-#     or gateway depends on a walled crate, transitively included — which is what keeps
-#     the allowance from leaking into hashed state. That list is `WALL_GUARDED_PACKAGES`
-#     in xtask/src/main.rs; it is the research guard's list plus `sim`, which cannot join
-#     the research guard because `sim` is the crate that defines the `research` feature.
+#   * `cargo xtask wall-guard` then fails the build if sim, plan-core, verifier, operator,
+#     gateway or gamectl depends on a walled crate, transitively included — which is
+#     what keeps the allowance from leaking into hashed state. That list is
+#     `WALL_GUARDED_PACKAGES` in xtask/src/main.rs; it is the research guard's list plus
+#     `sim`, which cannot join the research guard because `sim` is the crate that defines
+#     the `research` feature.
 #
 # The allow-list of walled crates lives in one place, `WALLED_PACKAGES` in
 # xtask/src/main.rs. Today it reads:

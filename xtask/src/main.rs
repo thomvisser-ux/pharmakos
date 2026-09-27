@@ -594,10 +594,11 @@ struct Ctx {
     cargo: String,
     /// `--bless`: rewrite golden files from the fresh outputs.
     bless: bool,
-    /// `--require-tools` (or `PHARMAKOS_REQUIRE_TOOLS=1`): fail instead of
-    /// skipping when buf, cargo-deny or reuse is missing. The CI workflow
-    /// passes it after installing all three, so a runner that lost a tool goes
-    /// red rather than quietly green.
+    /// `--require-tools` (or `PHARMAKOS_REQUIRE_TOOLS` set): fail instead of
+    /// skipping when buf, cargo-deny, reuse, godot or xvfb-run is missing
+    /// ([`skip_or_fail`]). CI sets the variable for the whole workflow after
+    /// installing each tool its job needs, so a runner that lost a tool goes red
+    /// rather than quietly green.
     require_tools: bool,
     /// `--locked`: pass `--locked` to cargo. On by default in CI, but only once
     /// a `Cargo.lock` is committed — `--locked` with no lock file is an error,
@@ -705,7 +706,7 @@ fn run_cli(args: &[String]) -> Result<bool, String> {
     let workspace = load_workspace(&cargo, &root);
     if let Err(reason) = &workspace {
         println!("note: workspace metadata unavailable ({reason})");
-        println!("note: steps that need it will report as skipped");
+        println!("note: the steps that need it will fail (decisions-log item 116 (6)(g))");
     }
     let ctx = Ctx {
         root,
