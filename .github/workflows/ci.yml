@@ -198,7 +198,7 @@ jobs:
           elif git fetch --no-tags --quiet origin +refs/heads/main:refs/heads/main; then
             echo "fetched origin/main for the breaking-change comparison"
           else
-            echo "::notice::no main branch on the remote yet — buf breaking will skip"
+            echo "::notice::could not fetch main from the remote — the buf step will fail: buf breaking has no local main to compare against"
           fi
 
       - name: Cache cargo registry and target
@@ -966,8 +966,11 @@ jobs:
 
       - name: cargo xtask perf-alarms
         # An alarm, not a gate: continue on error, so even a failure to build cannot turn
-        # this job red.
+        # this job red. Its own timeout sits below the job's: a job that reaches its
+        # timeout-minutes concludes as failure, while a step that times out under
+        # continue-on-error leaves the job green.
         if: steps.scope.outputs.prose_only != 'true'
         continue-on-error: true
+        timeout-minutes: 20
         shell: bash
         run: cargo xtask perf-alarms
