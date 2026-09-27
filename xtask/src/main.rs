@@ -1220,6 +1220,15 @@ fn step_wall_guard(ctx: &Ctx) -> Result<Outcome, String> {
             ));
         };
         let forbidden = workspace.present(forbidden_bare);
+        let missing = missing_names(forbidden_bare, &forbidden);
+        if !missing.is_empty() {
+            return Err(format!(
+                "CLIENT_WALL forbids `{client}` to reach {}, which are not in the workspace; \
+                 remove them from its line in the same pull request that removes the crates, \
+                 so the check never guards fewer crates than it names",
+                missing.join(", ")
+            ));
+        }
         let tree = dependency_listing(ctx, package)?;
         if let Some(name) = first_reached(package, &tree, &forbidden) {
             return Err(format!(
@@ -1279,6 +1288,21 @@ fn first_reached<'a>(package: &str, listing: &'a str, forbidden: &[String]) -> O
                 .iter()
                 .any(|forbidden_name| forbidden_name == name)
         })
+}
+
+/// The bare names in `wanted` that no package in `found` answers to, with or
+/// without the `pharmakos-` prefix, in `wanted`'s order. Pure: `wall-guard`
+/// fails when the client relation would guard fewer crates than it names.
+fn missing_names<'a>(wanted: &[&'a str], found: &[String]) -> Vec<&'a str> {
+    wanted
+        .iter()
+        .copied()
+        .filter(|bare| {
+            !found.iter().any(|name| {
+                name.as_str() == *bare || name.strip_prefix("pharmakos-") == Some(*bare)
+            })
+        })
+        .collect()
 }
 
 /// The workspace metadata, or the failure that says why it is missing. Every
@@ -2241,20 +2265,27 @@ fn perf_alarms() {
         }
     };
     let os = env::consts::OS;
-    let args: Vec<String> = [
-        "test",
-        "--release",
-        "--package",
-        MESHER_PACKAGE,
-        "--test",
-        MESHER_PERF_TEST,
-        "--",
-        "--ignored",
-        "--nocapture",
-    ]
-    .iter()
-    .map(|arg| (*arg).to_owned())
-    .collect();
+    // Frozen install in CI, as every other cargo call xtask makes there: a
+    // lockfile mismatch is then the usual warning below, and the job stays green.
+    let locked: &[&str] = if env::var_os("CI").is_some() {
+        &["--locked"]
+    } else {
+        &[]
+    };
+    let args: Vec<String> = ["test", "--release"]
+        .iter()
+        .chain(locked)
+        .chain(&[
+            "--package",
+            MESHER_PACKAGE,
+            "--test",
+            MESHER_PERF_TEST,
+            "--",
+            "--ignored",
+            "--nocapture",
+        ])
+        .map(|arg| (*arg).to_owned())
+        .collect();
     println!("   $ {}", render_command(&cargo, &args));
     let status = Command::new(&cargo).args(&args).current_dir(&root).status();
     match status {
@@ -3321,6 +3352,24 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
             ),
             None
         );
+    }
+
+    #[test]
+    fn a_forbidden_crate_that_left_the_workspace_is_named() {
+        let all = strings(&[
+            "pharmakos-gateway",
+            "pharmakos-plan-core",
+            "pharmakos-sim",
+            "pharmakos-verifier",
+        ]);
+        let wanted: &[&str] = &["sim", "verifier", "plan-core", "gateway"];
+        assert!(missing_names(wanted, &all).is_empty());
+        // `pharmakos-verifier` renamed: the relation must not quietly guard three.
+        let renamed = strings(&["pharmakos-gateway", "pharmakos-plan-core", "pharmakos-sim"]);
+        assert_eq!(missing_names(wanted, &renamed), vec!["verifier"]);
+        // A prefix is not a name.
+        let prefixed = strings(&["pharmakos-simulator"]);
+        assert_eq!(missing_names(&["sim"], &prefixed), vec!["sim"]);
     }
 
     #[test]
