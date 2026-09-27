@@ -65,7 +65,9 @@ launches), for the duration of the walking skeleton, and are revoked by the owne
   push run watched after the merge (decisions-log item 116 (2)) — and the two adversarial reviews
   have been applied; the owner reviews the stage demo (AGENTS.md §10 item 8) rather than each PR.
   Every merge is still a PR whose body names the contract paths it touches. Sub-agents still open a
-  PR and stop.
+  PR and stop. Dependabot's pull requests merge the same way (decisions-log item 120): their two
+  reviews read the release notes and the change between the two versions, and because Dependabot
+  writes the body, the main session names the contract paths in a comment before it merges.
 - The owner accepts **bypass-permissions mode** in that same session and in the sub-agents and
   workflow agents it launches, which inherit the mode (decisions-log item 116 (9)). Sub-agents still
   open a PR and stop; for them the contract-file rule is held by the lane's brief, the two adversarial
