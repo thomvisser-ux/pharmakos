@@ -744,10 +744,18 @@ its downside, and its section 0 lists the holes (H1–H16) the lines below close
   merge; nothing of it is built beside T20. The owner allowed its one question at W7's opening, the Godot 4.7.2 export
   templates' download, and they are installed (item 116 (9)); the rest, including the PLACEHOLDERs marked owner at T21 and item 114 (2)'s
   `gamectl verify` against a real match, are taken on the recommendation when its brief is written, and logged then.
+- **Amended 2026-09-27 (item 117).** Item 117 settles T21's unit: decision 24 as recommended, with the version
+  string and the commit in the zip's note and the workspace left at `0.0.0`; the zip laid out like the repository,
+  the packaged root the executable's folder; item 102 (1)'s `[profile.release-client]`; `+crt-static` on Windows;
+  a shipped smoke check through the lobby, run from clean runners; the manifest golden under `tests/golden/package/`;
+  honest licence records and third-party notices in the zip; and `v0.1.0-dev.<n>` tags cut by `release.yml` into a
+  draft prerelease the owner publishes. The owner answered item 114 (2) (item 117 (1)): `gamectl verify` keeps its
+  reference view. The review's export of the project found that the exported lobby crashes on its second idle frame
+  (`godot/scripts/host_link.gd` reads a null pipe), which T21 fixes and pins.
 - **Acceptance:** a zip built by CI launches on a clean Windows runner and a clean Linux runner and reaches the lobby (with `--import` run first); `gamectl seat doctor` passes from inside the extracted zip; `reuse` green over the packaged tree; the zip's manifest committed as a golden so its contents cannot drift.
 - **Contract PR:** yes — `.github/workflows/**`.
 - **Agent-days:** 5.
-- **PLACEHOLDERs:** zip contents, version string and tag scheme (decision 24); the product name in the export preset and the repository URL (owner, once the org exists).
+- **PLACEHOLDERs:** zip contents, version string and tag scheme are settled by item 117 (2), (10) and (13); the product name, icon, company and copyright fields in the export preset and the repository URL stay the owner's, once the org exists (item 117 (6) and (12)).
 
 ---
 
