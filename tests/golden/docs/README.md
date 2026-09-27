@@ -25,6 +25,12 @@ Produced by `crates/gamectl/tests/docs.rs` during `cargo test`, compared by
 `cargo xtask ci`'s `golden` step, re-blessed with **`cargo xtask golden
 --bless`**.
 
+The area is `GPL-3.0-or-later`, under `REUSE.toml`'s broad `tests/**` block,
+and has no permissive carve-out of its own: three of its four sources are GPL
+code (the command table and the exit codes, and the verifier's catalogue and
+string table) and only the vocabulary comes from the permissive descriptor set
+(decisions-log item 116 (6)(i)).
+
 `gp.api.v1` is deliberately absent, and a test asserts it: the method surface
 is the transport rather than the vocabulary, and v1 publishes nothing
 (AGENTS.md §11 — `llms.txt`, the agent guide and the published schema docs ship
