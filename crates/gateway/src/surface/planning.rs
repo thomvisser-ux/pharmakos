@@ -117,8 +117,9 @@ impl Surface {
     /// a wizard that could not open because a path was unset would be worse
     /// than one with no templates in it. The shipped host is configured with
     /// the zip's `library/`, beside `gamectl` (decisions-log item 117 (3)),
-    /// whose paths the zip's manifest golden pins, so an empty list from a
-    /// packaged build means the folder was removed.
+    /// whose paths the zip's manifest golden pins. So from a packaged build a
+    /// missing folder is an INTERNAL error, and an empty list means its
+    /// templates were removed or no longer parse.
     pub(super) fn list_templates(&self, request: &Request) -> Result<Json, Error> {
         let tag = request.string_param("tag")?.unwrap_or_default();
         let Some(folder) = self.host()?.library() else {

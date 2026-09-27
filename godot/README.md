@@ -214,9 +214,10 @@ for the host to exit, then prints one `[smoke] OK` line (or `[smoke] FAIL <reaso
 exits 0 or 1. An exported build finds `gamectl` beside the executable, and its root — the
 folder holding `rules/` and `library/` — is the executable's folder
 (`host_link.gd`'s `find_root`). Like the watch check, a run is a real New match: it writes
-`user://last_match.txt` and leaves a match folder in the private match cache, so a local run
-points `APPDATA` and `LOCALAPPDATA` (on Linux `XDG_DATA_HOME` and `HOME`) at a scratch
-folder.
+`user://last_match.txt` and leaves a match folder in the private match cache.
+`cargo xtask package` points its own in-editor run's user folders at the emptied
+`<target>/package/data/`; a run by hand points `APPDATA` and `LOCALAPPDATA` (on Linux
+`XDG_DATA_HOME` and `HOME`) at a scratch folder.
 
 Before T21 the exported lobby crashed on its second idle frame: the lobby pumps its host
 link every frame, and before New match the link read a pipe that did not exist yet, which
