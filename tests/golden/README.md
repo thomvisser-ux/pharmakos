@@ -63,23 +63,27 @@ cargo xtask golden --bless    # accepts the fresh outputs as the new goldens
    behaviour change that moved it (AGENTS.md §5). `--bless` prints a reminder;
    the pull request is where it is honoured.
 
-## The two areas the `golden` step does not compare
+## The three areas the `golden` step does not compare
 
-`determinism/` and `vista/` are compared by the steps that produce them, and the
-`golden` step leaves both alone. The list is `SELF_COMPARED_AREAS` in
-`xtask/src/golden.rs`, and it is the only place they are named.
+`determinism/`, `vista/` and `package/` are compared by the commands that produce
+them, and the `golden` step leaves all three alone. The list is
+`SELF_COMPARED_AREAS` in `xtask/src/golden.rs`, and it is the only place they are
+named.
 
 | Area | Compared by | Re-baselined with |
 | --- | --- | --- |
 | `determinism/` | the `determinism` step, which runs the sim, validates the chain's format line by line and says which tick first diverged | `cargo xtask determinism --bless` |
 | `vista/` | the `screenshot` step, through `xtask/src/png.rs`, with a tolerance: the vista, the diagnostic rows and the wizard's first page | a deliberate re-render from CI's Linux run; see `vista/README.md` |
+| `package/` | `cargo xtask package`, which CI's `package (windows-latest)` and `package (ubuntu-24.04)` jobs run (not a step of `cargo xtask ci`): each compares its own platform's list of the zip's entries | `cargo xtask package --bless`, after reading the diff; see `package/README.md` |
 
 Rule 1 is what makes this necessary rather than tidy. The `golden` step runs
-*before* both, so on a clean checkout neither has produced anything yet, and "a
-missing fresh output is a failure" would fail on all three operating systems —
-permanently so for `vista/`, which is rendered on the Linux leg alone. Rule 2
-still holds for both: each carries its README, and the `golden` step still fails
-an area that does not.
+*before* the first two, so on a clean checkout neither has produced anything
+yet, and "a missing fresh output is a failure" would fail on all three operating
+systems — permanently so for `vista/`, which is rendered on the Linux leg alone.
+`package/` is produced only where Godot and its export templates are installed,
+which the `cargo xtask ci` legs do not do, and each package job produces one
+platform's list. Rule 2 still holds for all three: each carries its README, and
+the `golden` step still fails an area that does not.
 
 ## The areas, and who fills each
 
@@ -104,6 +108,7 @@ named fills it.
 | `scenarios/` | Hash chains and event logs the scenario runner asserts on | T11, T15, T18b, T20 |
 | `operator/` | The playbook the built-in operator seals for each seat, per seed | T18 |
 | `vista/` | The rendered screenshots, compared with a tolerance, and the client's geometry and event-list goldens | T16, T20 (T19's scenes) |
+| `package/` | The unsigned zips' manifests: every entry's path, per platform | T21 |
 
 ## Licences
 

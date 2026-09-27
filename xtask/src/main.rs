@@ -89,6 +89,7 @@
 //! cargo xtask list                  # list the steps
 //! cargo xtask ci-scope              # CI's docs-only fast path: `full` or `prose`
 //! cargo xtask perf-alarms           # the per-runner perf notices; never fails
+//! cargo xtask package               # the unsigned zip for this platform (T21)
 //! ```
 //!
 //! # The research tests
@@ -112,6 +113,17 @@
 //! changes nothing but `docs/**`, `AGENTS.md`, `CLAUDE.md`, `.claude/**` and
 //! top-level `*.md`, and `full` on any error (decisions-log item 115 (4)); see
 //! [`scope`] for the rules and why each holds.
+//!
+//! # The package
+//!
+//! `cargo xtask package` is not a step either: `ci` and `list` do not know it.
+//! It builds, exports, checks and zips this platform's unsigned build — the
+//! Windows or Linux zip — and every check it makes runs here as in CI's
+//! `package (<os>)` jobs, which run it and nothing else of substance
+//! (skeleton plan T21; decisions-log item 117). See [`package`] for its steps
+//! and [`zip`] for the zip format; `--bless` rewrites its manifest golden,
+//! `tests/golden/package/expected.<platform>.txt`, which the `golden` step
+//! leaves to it ([`golden::SELF_COMPARED_AREAS`]).
 //!
 //! # The determinism hash file
 //!
@@ -153,9 +165,11 @@ use std::process::{Command, ExitCode, ExitStatus, Stdio};
 // stays readable and so that a task working on one of them touches one file.
 mod annotate;
 mod golden;
+mod package;
 mod png;
 mod scenario;
 mod scope;
+mod zip;
 
 // ---------------------------------------------------------------------------
 // Policy constants. These are the knobs; everything below them is machinery.
@@ -440,15 +454,16 @@ const ENTRY_SYMBOL: &str = "gdext_rust_init";
 /// disagreed.
 const CLIENT_CHECK_SCENE: &str = "res://scenes/client_check.tscn";
 
-/// The profile the client is staged from.
+/// The profile `stage-client` and `screenshot` stage the client from.
 ///
-/// Debug, and deliberately. `[profile.release]` sets `panic = "abort"`, under
-/// which `catch_unwind` catches nothing — so the bridge's caught-panic counter,
-/// which is what T12's acceptance asserts on, would be dead in a release build
-/// and a panic would take the whole engine process down instead. `[profile.*]`
-/// is a contract path (AGENTS.md §5), so this staging step takes the profile
-/// where the instrument works and T12's pull request raises the release
-/// question with the owner rather than answering it.
+/// Debug, and deliberately: the guard is real there and the inner loop fast.
+/// `[profile.release]` sets `panic = "abort"`, under which `catch_unwind`
+/// catches nothing, so the bridge's caught-panic counter would be dead. The
+/// packaged library is built with `[profile.release-client]` instead, which
+/// inherits `release` with `panic = "unwind"` (decisions-log item 102 (1),
+/// named by item 117 (4)); `cargo xtask package` builds it, and its smoke
+/// check asserts the counter at zero in the packaged build. CI's `client
+/// extension` job keeps the debug library, as this does.
 const CLIENT_PROFILE_DIR: &str = "debug";
 
 // ---------------------------------------------------------------------------
@@ -709,6 +724,22 @@ fn run_cli(args: &[String]) -> Result<bool, String> {
         return run_fix(&ctx).map(|()| true);
     }
 
+    // Not a step: the unsigned zip, which CI's package jobs build. It needs the
+    // parsed flags (`--locked`, `--bless`), so it is dispatched here, once the
+    // context exists, and it runs alone.
+    if commands.iter().any(|name| name == "package") {
+        if commands.len() != 1 {
+            return Err("`package` runs alone; it is not a step of `ci`".to_owned());
+        }
+        println!();
+        println!("== package — the unsigned zip for this platform (T21)");
+        let summary = package::run_package(&ctx)?;
+        println!();
+        println!("== package: ok");
+        println!("      {summary}");
+        return Ok(true);
+    }
+
     let mut plan: Vec<&Step> = Vec::new();
     for name in &commands {
         if name == "ci" {
@@ -794,6 +825,9 @@ fn print_help() {
     println!("    cargo xtask list");
     println!("    cargo xtask ci-scope       CI's docs-only fast path: prints `full` or `prose`");
     println!("    cargo xtask perf-alarms    per-runner perf notices, no threshold; never fails");
+    println!(
+        "    cargo xtask package        the unsigned zip for this platform; --bless its manifest"
+    );
     println!();
     println!("FLAGS:");
     println!("    --quick            fmt, clippy and tests only — the inner loop");
@@ -1421,13 +1455,15 @@ fn step_buf(ctx: &Ctx) -> Result<Outcome, String> {
 /// fixture produces a readable first-difference report all live in
 /// [`golden`]; this function is the step wrapper around them.
 ///
-/// Two areas are not this step's to compare —
+/// Three areas are not this step's to compare —
 /// [`golden::SELF_COMPARED_AREAS`]. `determinism/` is compared by
 /// [`step_determinism`], which runs the sim and validates the chain's format
 /// line by line; `vista/` is compared with a tolerance by [`png`] from
-/// [`step_screenshot`], which runs after this step and only on Linux. Both would
-/// otherwise fail this step's "a missing fresh output is a failure" rule on a
-/// clean checkout, on every operating system.
+/// [`step_screenshot`], which runs after this step and only on Linux; and
+/// `package/` by `cargo xtask package` ([`package`]), which CI's package jobs
+/// run and `ci` does not. Each would otherwise fail this step's "a missing
+/// fresh output is a failure" rule on a clean checkout, on every operating
+/// system.
 ///
 /// Every area the producing tasks filled is compared: `tests/golden` missing,
 /// or holding no case this step compares, is a failure rather than a skip
@@ -2097,8 +2133,11 @@ fn stage_library(
     Ok((library, bytes.len()))
 }
 
-/// `godot --headless --path godot --import`, and the check that it produced what
-/// it is run for.
+/// `godot --headless --path <project> --import`, and the check that it produced
+/// what it is run for. The project path is passed as given, absolute, so the
+/// same function imports `godot/` for `stage-client` and `screenshot` and the
+/// staged copy for `package` (Godot resolves a relative `--path` against the
+/// working directory).
 ///
 /// **Godot 4.7.2 segfaults at the end of a COLD import when a GDExtension
 /// registering a class is present.** Measured on Windows against gdext 0.5.5:
@@ -2121,7 +2160,7 @@ fn import_project(ctx: &Ctx, godot: &str, project: &Path) -> Result<String, Stri
     let import_args: Vec<String> = vec![
         "--headless".to_owned(),
         "--path".to_owned(),
-        GODOT_PROJECT_DIR.to_owned(),
+        project.to_string_lossy().replace('\\', "/"),
         "--import".to_owned(),
     ];
     let first = run(ctx, godot, &import_args);
@@ -2176,12 +2215,18 @@ fn client_library_name() -> String {
 /// A library is not text, so this is a plain window scan rather than anything
 /// that would have to decide an encoding first.
 fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+    find_bytes(haystack, needle).is_some()
+}
+
+/// Where `needle` first occurs in `haystack`, byte for byte: the scan behind
+/// [`contains_bytes`], for the scans that report an offset.
+fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     if needle.is_empty() || haystack.len() < needle.len() {
-        return false;
+        return None;
     }
     haystack
         .windows(needle.len())
-        .any(|window| window == needle)
+        .position(|window| window == needle)
 }
 
 /// The `cargo run` argument list for one of the workspace's own binaries.
@@ -3524,6 +3569,35 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
         ] {
             assert!(!package_spec_may_name(spec, sim), "{spec}");
         }
+    }
+
+    #[test]
+    fn package_is_not_a_step() {
+        assert!(STEPS.iter().all(|step| step.name != "package"));
+    }
+
+    /// Decisions-log item 117 (4): the client's own profile passes `profiles`,
+    /// which fails only a profile that switches overflow checks off.
+    #[test]
+    fn the_release_client_profile_passes_the_profiles_step() {
+        let manifest = include_str!("../../Cargo.toml");
+        assert_eq!(scan_profiles(manifest), (true, Vec::new()));
+        let block: Vec<&str> = manifest
+            .lines()
+            .skip_while(|line| line.trim() != "[profile.release-client]")
+            .skip(1)
+            .take_while(|line| !line.trim().starts_with('['))
+            .map(str::trim)
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+            .collect();
+        assert_eq!(block, ["inherits = \"release\"", "panic = \"unwind\""]);
+        // And the step would still catch the profile switching them off.
+        let broken = "[profile.release]\noverflow-checks = true\n[profile.release-client]\n\
+                      inherits = \"release\"\noverflow-checks = false\n";
+        assert_eq!(
+            scan_profiles(broken),
+            (true, vec!["profile.release-client".to_owned()])
+        );
     }
 
     #[test]

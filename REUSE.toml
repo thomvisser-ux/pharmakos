@@ -110,6 +110,25 @@ precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 Pharmakos contributors"
 SPDX-License-Identifier = "MIT OR Apache-2.0"
 
+# --- Packaging: the zip's note, manifest template and changelog ------------
+# packaging/ holds what `cargo xtask package` puts into the unsigned zips beside
+# the build (decisions-log item 117 (11) and (12)): the note's per-platform
+# templates, which carry no header because the note they become takes its licence
+# from the zip's own manifest; the zip's REUSE manifest template, named
+# REUSE.toml.in so that this repository's reuse does not read it as a nested
+# manifest (a file named REUSE.toml anywhere in the tree would be), and whose
+# quoted Godot copyright lines sit between REUSE-IgnoreStart and REUSE-IgnoreEnd so
+# they are not attributed to the template; and the canonical MPL-2.0 and BSL-1.0
+# texts under LICENSE-prefixed names, which reuse ignores, so they are copied into
+# the zip's LICENSES/ without being licences this repository uses. The changelog
+# at the top level carries its own header as well. Documentation tier, with
+# packaging/LICENSE, like the other permissive directories.
+[[annotations]]
+path = ["packaging/**", "CHANGELOG.md"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Pharmakos contributors"
+SPDX-License-Identifier = "MIT OR Apache-2.0"
+
 # --- The schema crate: permissive, unlike the rest of crates/ --------------
 # crates/proto holds the generated gp.v1 / gp.api.v1 types, which are the same
 # public surface as proto/**: a third party writing a tool against the API must

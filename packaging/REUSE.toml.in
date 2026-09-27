@@ -1,0 +1,80 @@
+# The REUSE manifest of one Pharmakos zip (decisions-log item 117 (11)).
+#
+# `cargo xtask package` writes it from the repository's packaging/REUSE.toml.in,
+# filling in the file names of this platform's build and the licence expressions
+# of the two Rust binaries, which it computes from the crates compiled into each
+# (THIRD-PARTY-NOTICES.txt lists them). `reuse lint` in this folder checks it.
+#
+# The licence texts every record below names are in LICENSES/; the files under
+# rules/ and library/ and CHANGELOG.md also carry their own headers.
+
+version = 1
+
+SPDX-PackageName = "Pharmakos"
+SPDX-PackageSupplier = "Pharmakos contributors"
+SPDX-PackageDownloadLocation = "NOASSERTION"
+
+# The game executable is Godot Engine's export template, so it is recorded under
+# Godot's own licence and copyright lines, as in Godot's LICENSE.txt. The engine
+# also contains third-party components; their notices are the ones the game's
+# Credits screen draws from the engine itself (Engine.get_copyright_info and
+# get_license_info), which is Godot's own compliance route.
+[[annotations]]
+path = "@EXECUTABLE@"
+precedence = "override"
+# REUSE-IgnoreStart
+SPDX-FileCopyrightText = [
+    "Copyright (c) 2014-present Godot Engine contributors",
+    "Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur",
+]
+# REUSE-IgnoreEnd
+SPDX-License-Identifier = "MIT"
+
+# The game's scenes and compiled scripts.
+[[annotations]]
+path = "@PCK@"
+precedence = "override"
+SPDX-FileCopyrightText = "2026 Pharmakos contributors"
+SPDX-License-Identifier = "GPL-3.0-or-later"
+
+# The client library: the game's code and the crates compiled into it.
+[[annotations]]
+path = "@LIBRARY@"
+precedence = "override"
+SPDX-FileCopyrightText = [
+    "2026 Pharmakos contributors",
+    "The authors of the crates THIRD-PARTY-NOTICES.txt lists for this library",
+]
+SPDX-License-Identifier = "@CLIENT_LICENCE@"
+
+# gamectl: the game's code and the crates compiled into it.
+[[annotations]]
+path = "@GAMECTL@"
+precedence = "override"
+SPDX-FileCopyrightText = [
+    "2026 Pharmakos contributors",
+    "The authors of the crates THIRD-PARTY-NOTICES.txt lists for gamectl",
+]
+SPDX-License-Identifier = "@GAMECTL_LICENCE@"
+
+# The rules table and the template library: data, permissive.
+[[annotations]]
+path = ["rules/**", "library/**"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Pharmakos contributors"
+SPDX-License-Identifier = "MIT OR Apache-2.0"
+
+# The note and the changelog.
+[[annotations]]
+path = ["README.txt", "CHANGELOG.md"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Pharmakos contributors"
+SPDX-License-Identifier = "MIT OR Apache-2.0"
+
+# The third-party notices: the list is ours, and the licence texts quoted in it
+# are the crates' own, so a tag inside a quoted text is not this file's claim.
+[[annotations]]
+path = "THIRD-PARTY-NOTICES.txt"
+precedence = "override"
+SPDX-FileCopyrightText = "2026 Pharmakos contributors"
+SPDX-License-Identifier = "MIT OR Apache-2.0"
