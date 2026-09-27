@@ -234,6 +234,7 @@ files, the lint set and the determinism rules. Adding a new top-level directory
 means adding a `REUSE.toml` entry for it in the same change, and a `LICENSE`
 pointer too when its files are not in the game tier. `tests/`, in the game tier,
 has one as well, naming its permissive golden areas; `crates/`, `godot/`,
-`scenarios/`, `scripts/`, `xtask/` and the dot-directories have none. Adding a
-new licence to `LICENSES/` means checking that it is compatible with the tier it will sit beside — for the game tier, that means
-compatible with GPL-3.0-or-later.
+`scenarios/`, `scripts/`, `xtask/`, the dot-directories and `LICENSES/` have
+none. Adding a new licence to `LICENSES/` means checking that it is compatible
+with the tier it will sit beside — for the game tier, that means compatible with
+GPL-3.0-or-later.
