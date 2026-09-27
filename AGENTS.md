@@ -485,10 +485,12 @@ of that premise.
   sign-off, no merge.
 - **SPDX headers on every file**, REUSE-style, with a per-directory `LICENSE` and a manifest:
 
+  <!-- REUSE-IgnoreStart: an example header, not this file's own -->
   ```rust
   // SPDX-FileCopyrightText: 2026 Pharmakos contributors
   // SPDX-License-Identifier: GPL-3.0-or-later
   ```
+  <!-- REUSE-IgnoreEnd -->
 
   Which licence a file gets depends on where it lives:
 
