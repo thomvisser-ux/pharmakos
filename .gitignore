@@ -25,7 +25,9 @@
 !**/*.gdextension
 
 # --- Private match cache (spec §15: deterministic replays, saves, drafts, notebooks) ---
-# Placeholder paths: the real on-disk location is decided when the host is built.
+# The cache lives outside the repository, in the per-user data directory
+# (<data dir>/Pharmakos/matches/<match-id>/; crates/gateway/src/cache.rs, decisions-log
+# item 98). The patterns below are a guard against a copy landing in a checkout.
 # These files are per-seat secrets and must never be committed.
 /match-cache/
 **/match-cache/
