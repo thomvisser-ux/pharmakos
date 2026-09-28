@@ -9,9 +9,17 @@
 # 107 (5)); the camera holds no visibility rule of its own and has no way to show more.
 #
 # Free-look: WASD or the arrow keys pan over the ground, Q and E lower and raise, the mouse
-# wheel zooms, and the right mouse button held down turns the view. F toggles following
-# the commander. All of it is presentation - floats, easing and a camera - and none of it
-# reaches the match.
+# wheel zooms, and the right mouse button held down turns the view. The lobby's Follow
+# button (`lobby.gd`'s `_toggle_follow`) toggles following the commander; no key does. All
+# of it is presentation - floats, easing and a camera - and none of it reaches the match.
+#
+# The keys are the camera's only while no GUI control has keyboard focus (decisions-log
+# item 123 (2) 8): while the player types a note or a wizard value (or a file name in an
+# embedded dialog), W, A, S, D, Q, E and the arrows are text, not camera moves. A mouse
+# press on the 3D view that no control takes - a right-click, a wheel notch, or a
+# left-click that `editor.gd` does not take as a beacon or ground click - releases that
+# focus, so the keys come back without a restart. Godot 4.7 keeps a text field's focus
+# through a click on empty space, which is why the rig releases it.
 
 extends Node3D
 
@@ -74,27 +82,50 @@ func _process(delta: float) -> void:
 		focus = focus.lerp(target.global_position, weight)
 	else:
 		target = null
-		var move := Vector3.ZERO
-		if Input.is_key_pressed(KEY_W) or Input.is_key_pressed(KEY_UP):
-			move.z -= 1.0
-		if Input.is_key_pressed(KEY_S) or Input.is_key_pressed(KEY_DOWN):
-			move.z += 1.0
-		if Input.is_key_pressed(KEY_A) or Input.is_key_pressed(KEY_LEFT):
-			move.x -= 1.0
-		if Input.is_key_pressed(KEY_D) or Input.is_key_pressed(KEY_RIGHT):
-			move.x += 1.0
-		if Input.is_key_pressed(KEY_E):
-			move.y += 1.0
-		if Input.is_key_pressed(KEY_Q):
-			move.y -= 1.0
+		var move := _key_move()
 		if move != Vector3.ZERO:
 			var scale_now := distance / 420.0
 			focus += move.rotated(Vector3.UP, yaw) * PAN_RATE * scale_now * delta
 	_place()
 
 
+## The free-look keys held down, as a direction in the rig's frame; nothing while a GUI
+## control has keyboard focus.
+func _key_move() -> Vector3:
+	var move := Vector3.ZERO
+	if _keys_taken():
+		return move
+	if Input.is_key_pressed(KEY_W) or Input.is_key_pressed(KEY_UP):
+		move.z -= 1.0
+	if Input.is_key_pressed(KEY_S) or Input.is_key_pressed(KEY_DOWN):
+		move.z += 1.0
+	if Input.is_key_pressed(KEY_A) or Input.is_key_pressed(KEY_LEFT):
+		move.x -= 1.0
+	if Input.is_key_pressed(KEY_D) or Input.is_key_pressed(KEY_RIGHT):
+		move.x += 1.0
+	if Input.is_key_pressed(KEY_E):
+		move.y += 1.0
+	if Input.is_key_pressed(KEY_Q):
+		move.y -= 1.0
+	return move
+
+
+## Whether a GUI control holds keyboard focus, in this viewport or in an embedded window
+## open in it (the editor's Load and Save dialogs), so the keys are text, not moves.
+func _keys_taken() -> bool:
+	var viewport := get_viewport()
+	if viewport.gui_get_focus_owner() != null:
+		return true
+	for window in viewport.get_embedded_subwindows():
+		if window.gui_get_focus_owner() != null:
+			return true
+	return false
+
+
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.pressed:
+		# A press on the view that no control took gives the keys back to the camera.
+		get_viewport().gui_release_focus()
 		if event.button_index == MOUSE_BUTTON_WHEEL_UP:
 			distance = clampf(distance / ZOOM_STEP, NEAREST, FARTHEST)
 		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
