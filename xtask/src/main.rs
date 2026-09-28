@@ -317,7 +317,9 @@ const WALL_GUARDED_PACKAGES: &[&str] = &[
 /// outside to put a millisecond figure on it. Names are bare, as in
 /// [`WALLED_PACKAGES`], and matched with and without the `pharmakos-` prefix.
 /// `crates/client-gdext/tests/no_sim.rs` checks the client's line from
-/// `Cargo.lock` as well; the two agree by construction.
+/// `Cargo.lock` as well, and its
+/// `forbidden_names_the_crates_on_client_walls_client_line` reads this line
+/// out of this file and fails when its own list names other crates.
 const CLIENT_WALL: &[(&str, &[&str])] = &[
     (
         "client-gdext",
@@ -603,9 +605,9 @@ struct Ctx {
     bless: bool,
     /// `--require-tools` (or `PHARMAKOS_REQUIRE_TOOLS` set): fail instead of
     /// skipping when buf, cargo-deny, reuse, godot or xvfb-run is missing
-    /// ([`skip_or_fail`]). CI sets the variable for the whole workflow after
-    /// installing each tool its job needs, so a runner that lost a tool goes red
-    /// rather than quietly green. Every child `run`, `run_in` and `capture`
+    /// ([`skip_or_fail`]). CI sets the variable for the whole workflow (ci.yml's
+    /// top-level `env`) and installs each tool its job needs, so a runner that
+    /// lost a tool goes red rather than quietly green. Every child `run`, `run_in` and `capture`
     /// start inherits the answer through [`REQUIRE_TOOLS_VAR`]
     /// ([`child_command`]), so a test that needs a tool fails with it too.
     require_tools: bool,
@@ -715,7 +717,9 @@ fn run_cli(args: &[String]) -> Result<bool, String> {
     let workspace = load_workspace(&cargo, &root);
     if let Err(reason) = &workspace {
         println!("note: workspace metadata unavailable ({reason})");
-        println!("note: the steps that need it will fail (decisions-log item 116 (6)(g))");
+        println!(
+            "note: most steps that need it will fail (decisions-log item 116 (6)(g));              golden falls back to <root>/target, and clippy lints the walled crates              with the full deny set and skips its research pass"
+        );
     }
     let ctx = Ctx {
         root,
