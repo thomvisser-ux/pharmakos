@@ -140,9 +140,11 @@ has_non_prose() { [ -n "$1" ] && grep -qvE "$PROSE" <<<"$1"; }
 # Output only the three legs produce, each on its own OS, or that no local run executes.
 # Its paths after the golden areas are what ships in the zip, or what builds it, which only
 # CI's package and clean-launch jobs exercise, because the local check runs `cargo xtask ci`
-# and never `cargo xtask package`. CHANGELOG.md is not on it: the zip's manifest pins its
-# path and not its bytes, and PROSE above calls it prose.
-MATRIX_ONLY='^(crates/sim/|crates/mesher/|crates/client-gdext/|godot/|\.github/|tests/golden/(determinism|scenarios|pathing|mapgen|mesher|vista)/|library/|rules/|packaging/|LICENSES/|REUSE\.toml$|xtask/src/(package|zip)\.rs$|tests/golden/package/)'
+# and never `cargo xtask package`. The root Cargo.toml and .cargo/ are on it for their
+# profiles: the package builds the client with [profile.release-client] and gamectl with
+# --release, and no local run builds either profile. CHANGELOG.md is not on it: the zip's
+# manifest pins its path and not its bytes, and PROSE above calls it prose.
+MATRIX_ONLY='^(crates/sim/|crates/mesher/|crates/client-gdext/|godot/|\.github/|tests/golden/(determinism|scenarios|pathing|mapgen|mesher|vista)/|library/|rules/|packaging/|LICENSES/|REUSE\.toml$|xtask/src/(package|zip)\.rs$|tests/golden/package/|Cargo\.toml$|\.cargo/)'
 
 # What the train checked for the current lane (set by verify_lane).
 checked_head="" checked_main="" checked_tree=""
