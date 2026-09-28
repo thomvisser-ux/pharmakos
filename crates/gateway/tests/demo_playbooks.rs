@@ -7,8 +7,12 @@
 //!
 //! Five playbooks: the three templates in `library/`, each instantiated for
 //! seat 0 with its own values (`instantiate_template` with `template_id`
-//! alone, as the wizard's plain page and `templates.rs` ask for it), and the
-//! two scenario playbooks under `scenarios/skeleton/`. For each one this suite
+//! alone, as `templates.rs` asks for it), and the two scenario playbooks under
+//! `scenarios/skeleton/`. The wizard itself always asks with `suggested: true`,
+//! and in the lobby the live Easy advisor fills those suggestions; that answer
+//! is not goldened here, because the real operator is reachable only from
+//! `crates/gamectl/tests`. `against-easy.playbook.jsonc` is Hold & Build as
+//! Easy fills it. For each one this suite
 //! asserts the byte round trip through plan-core (`Document::parse(text)
 //! .to_text() == text`, no golden), and commits two goldens in the gateway's
 //! `expected.response.json` kind: the whole `verify_plan{depth: "full"}`
@@ -148,8 +152,8 @@ fn verify_and_render(surface: &mut Surface, case: &str, text: &str) {
     write_golden(&format!("demo_{case}_render"), &rpc::render(&rendered));
 }
 
-/// The template `template_id` as seat 0's wizard is handed it with its own
-/// values, then verified and rendered.
+/// The template `template_id` instantiated for seat 0 with its own values
+/// (nothing suggested), then verified and rendered.
 fn template_case(template_id: &str) {
     let mut surface = lobby_match();
     let token = support::seat_token(&mut surface, SEAT);
@@ -185,17 +189,17 @@ fn scenario_case(case: &str, file: &str) {
 }
 
 #[test]
-fn hold_and_build_as_the_wizard_opens_it_qualifies_and_renders_in_the_lobbys_lull() {
+fn hold_and_build_with_its_own_values_qualifies_and_renders_in_the_lobbys_lull() {
     template_case("hold_and_build");
 }
 
 #[test]
-fn expand_and_mine_as_the_wizard_opens_it_qualifies_and_renders_in_the_lobbys_lull() {
+fn expand_and_mine_with_its_own_values_qualifies_and_renders_in_the_lobbys_lull() {
     template_case("expand_and_mine");
 }
 
 #[test]
-fn the_safe_playbook_as_the_wizard_opens_it_qualifies_and_renders_in_the_lobbys_lull() {
+fn the_safe_playbook_with_its_own_values_qualifies_and_renders_in_the_lobbys_lull() {
     template_case("safe_playbook");
 }
 
@@ -211,10 +215,12 @@ fn the_deploy_and_visit_playbook_qualifies_and_renders_in_the_lobbys_lull() {
 
 /// Write the fresh answer and compare it with the committed golden.
 ///
-/// The answers carry no playbook text: a report names codes, pointers and
-/// hashes, and prose is the renderer's own English. So no golden here carries
-/// a template's permissive header or a scenario file's text, and the files
-/// sit in this area's `GPL-3.0-or-later` tier as they are.
+/// The answers carry no header and no comment: a report names codes, pointers
+/// and hashes, and the prose is the renderer's English, which quotes the
+/// playbook's meta title and summary and its step labels. So no golden here
+/// carries a licence header, and the files sit in this area's
+/// `GPL-3.0-or-later` tier as they are (a gateway answer that embeds a
+/// template's strings stays GPL, decisions-log item 113 (10)).
 fn write_golden(case: &str, rendered: &str) {
     let file = "response.json";
     assert!(!rendered.contains('\r') && rendered.ends_with('\n'));

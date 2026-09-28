@@ -37,7 +37,7 @@ The next three are T16a's, the ninth is T18a's, and the last ten are T22a's.
 | `view_keyframe/` | `expected.keyframe.jsonl`, `expected.keyframe.txt` | Seat 0's whole-map keyframe on the golden seed — **the fixture T16 renders from** |
 | `walkthrough_watch/` | `expected.watch.txt` | A watch session: keyframe, clock, `end_lull`, speed, skip, `end_recap` |
 | `instantiate_suggested/` | `expected.response.json` | One `instantiate_template{suggested: true}` answer on the wire — **the fixture T19's wizard reads** |
-| `demo_hold_and_build_verify/` | `expected.response.json` | Seat 0's `verify_plan{depth: "full"}` answer for Hold & Build as the wizard opens it (its own values), in the lobby's round 1 Lull — its `report_hash` |
+| `demo_hold_and_build_verify/` | `expected.response.json` | Seat 0's `verify_plan{depth: "full"}` answer for Hold & Build with its own values (nothing suggested), in the lobby's round 1 Lull — its `report_hash` |
 | `demo_hold_and_build_render/` | `expected.response.json` | The same playbook's `render_plan` answer — its prose |
 | `demo_expand_and_mine_verify/` | `expected.response.json` | As above, for Expand & Mine |
 | `demo_expand_and_mine_render/` | `expected.response.json` | As above, for Expand & Mine |
@@ -358,9 +358,13 @@ item 123 (2) 10): each one verifies identically (the same `report_hash`) and
 renders identically (the same prose). Five playbooks, two cases each, produced
 by `crates/gateway/tests/demo_playbooks.rs`: the three templates in `library/`,
 each instantiated for seat 0 with `template_id` alone (its own values, nothing
-suggested: the operator's suggestions are live and are pinned elsewhere, in
-`instantiate_suggested`), and the two scenario playbooks under
-`scenarios/skeleton/` as committed. The same test asserts each text's byte
+suggested, as `templates.rs` asks), and the two scenario playbooks under
+`scenarios/skeleton/` as committed. The wizard itself always asks with
+`suggested: true`, and in the lobby the live Easy advisor fills those values;
+that answer has no report or prose golden, because the real operator is
+reachable only from `crates/gamectl/tests` (`instantiate_suggested` pins the
+page's shape with a scripted advisor). `demo_against_easy_*` is Hold & Build
+as Easy fills it. The same test asserts each text's byte
 round trip through plan-core (`Document::parse(text).to_text() == text`) and
 that each FULL report qualifies; neither has a file here.
 
