@@ -1,0 +1,23 @@
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "report": {
+      "qualifies": true,
+      "depth": "full",
+      "diagnostics": [],
+      "report_hash": "4YytR8ah7Lw=",
+      "rules_hash": "sx2NB4nrIHw=",
+      "plan_fingerprint": "NykoZsTcoXY=",
+      "verifier_version": "0.1.0-skeleton",
+      "size_units": 4,
+      "size_budget": 128
+    },
+    "_status": {
+      "phase": "lull",
+      "phase_remaining_ms": 180000,
+      "segment_length_ms": 180000,
+      "round": 1
+    }
+  }
+}
