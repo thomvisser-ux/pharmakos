@@ -13,9 +13,11 @@
 // The wizard asks for the site, and the built-in operator suggests one whose
 // new sphere holds a seam.
 //
-// PLACEHOLDER: the two sites' own values (the safest own beacon) are harmless
-// stand-ins that the wizard or the operator replaces; what the template ships
-// as its own values is the OWNER's, before T22's stage demo.
+// The two sites' own values above are the values it ships with, by the
+// owner's choice at decisions-log item 119 (10): they qualify on any map, and
+// the wizard or the operator replaces them. The golden seed's suggested sites
+// were not taken instead, because they are right for one map and E0403 on any
+// other.
 {
   "schema_version": {"major": 1, "minor": 0},
   "meta": {
