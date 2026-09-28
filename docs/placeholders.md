@@ -31,7 +31,7 @@ From 588 lines to 256 rows, one step at a time:
 | Step | Lines | Left |
 |---|---|---|
 | Raw count | | 588 |
-| Generated copies under `crates/proto/src/generated` (`gp/v1/gp.v1.rs` 91, `gp/api/v1/gp.api.v1.rs` 11); each is a copy of a `proto/**` comment | −102 | 486 |
+| Generated lines under `crates/proto/src/generated` (`gp/v1/gp.v1.rs` 91, `gp/api/v1/gp.api.v1.rs` 11): 100 copies of a `proto/**` comment, and the `HAS_PLACEHOLDERS` enum's two code lines in `gp.api.v1.rs` (`as_str_name` and `from_str_name`) | −102 | 486 |
 | The enum value `HAS_PLACEHOLDERS`, not a guess (`gateway.proto`'s `Applicability`, `crates/verifier/src/structure.rs`'s `on_death_stub` doc, and three verifier report goldens) | −5 | 481 |
 | Rule text: `AGENTS.md` 3, `CLAUDE.md` 3, `.claude/workflows/wave-lanes.js` 4 | −10 | 471 |
 | References and tombstones: 27 lines that mention another entry or the word without making a guess of their own, and 11 that say a PLACEHOLDER was discharged | −38 | 433 |
@@ -86,7 +86,7 @@ that.
 | D-17 | `map.spawn_separation_pushes_numerator` = 3 | `rules.proto` `Map.spawn_separation_pushes_numerator`; same README row | item 90 |
 | D-18 | `map.spawn_separation_pushes_denominator` = 2 | `rules.proto` `Map.spawn_separation_pushes_denominator`; same README row | item 90 |
 | D-19 | `structures.beacon` = 60 `$` / 800 HP / 2 kW (its comment's net-draw sentence is carry-forward S1-04) | `rules.proto` `Structures.beacon`; `rules/README.md` row `structures.beacon` | item 90 |
-| D-20 | The default round limit, 6 (spec section 3), which "the owner ratifies with the lobby at T22". The lobby no longer uses it: its `ROUND_LIMIT` is decided at 3 (item 123 (2) 3; S1-40, with T22a). Once ruled, the comment is the next sim lane's to reword (item 123 (4)) | `crates/sim/src/runner.rs` `DEFAULT_ROUND_LIMIT` | items 100 (7), 123 (2) 3 |
+| D-20 | The default round limit, 6 (spec section 3), which "the owner ratifies with the lobby at T22". The lobby names its own limit (`godot/scripts/host_link.gd` `ROUND_LIMIT`, 6 at the base, 3 with T22a; item 123 (2) 3; S1-40) and so never reaches this default; `gamectl scenario run`, `gamectl seat doctor` and the sim's determinism binary do. Once ruled, the comment is the next sim lane's to reword (item 123 (4)) | `crates/sim/src/runner.rs` `DEFAULT_ROUND_LIMIT` | items 100 (7), 123 (2) 3 |
 | D-21 | The camera's speeds, easing, zoom limits and starting pose (walled floats) | `godot/scripts/camera_rig.gd` `PAN_RATE`, and by pointer `ZOOM_STEP`, `TURN_RATE`, `FOLLOW_RATE`, `NEAREST` (whose pointer is split across two lines; see "Unmarked"), `yaw`, `pitch`, `distance` | plan T16 |
 | D-22 | The camera's field of view and far plane | `godot/scenes/vista.tscn` node `Camera` | plan T16 |
 | D-23 | `PICK_REACH` = 4096, a pick ray's reach, "with the camera's other numbers at the demo review" | `crates/client-gdext/src/view.rs` `PICK_REACH` | — |
@@ -466,37 +466,50 @@ Each entry's only "when" is a task that has closed. The stage and the who are th
 proposal. Stale copies that belong to a live row are listed in that row instead (S1-13, S1-26,
 S1-42, S1-46).
 
+### The owner
+
 | ID | What | Anchors | Proposed | Source |
 |---|---|---|---|---|
 | X-01 | The real fix for `CHAIN_RESERVE_CAP`: a `length_ms` cap in the scenario format, "in this task's pull request" (T15) | `crates/gamectl/src/scenario/run.rs` `CHAIN_RESERVE_CAP` | owner, S1, with S1-41 (both touch the format, an `xtask` contract path) | plan T15 |
-| X-02 | The per-method salience order, "OWNER settles it with T13" | `crates/gateway/src/detail.rs` module doc | owner, hardening, with H-07 and H-08 | plan T9, T13 |
 | X-03 | The standing sentence, "OWNER/T14 fills the sentence in with the economy" | `crates/gateway/src/strings.rs` `standing` | owner, S1, with the recap's settlement lines | plan T14 |
 | X-04 | Whether `normals` are uploaded at all, "T12's decision … owner signs it off then" | `crates/mesher/src/lib.rs` `MeshBuffers` | owner, S6's art pass, with S6-05 | plan T12 |
 | X-05 | Whether a deploy pays the visit handshake, "the owner settles it at T14" | `crates/plan-core/src/interface.rs` `place_beacon_ms` | owner, S1, with the full mandate contract (S1-23) | plan T14 |
-| X-06 | The sighting catalogue grows: "kill credit and the economy at T14 and radio at S4" | `crates/sim/src/knowledge.rs` module doc | the sim lane of each producing stage; radio at S4 | plan T5, T14 |
-| X-07 | The router key's beacon half is `BeaconId::NONE`, "owner, at T11" | `crates/sim/src/pathing/router.rs` module doc | the next sim lane, S1: check whether T11 and T14 gave it a value, and reword | plan T11 |
 | X-08 | The winner of a round-limit or no-survivor end is decided by the final audit, "(owner, at T14)"; both carry `winner: None` | `crates/sim/src/runner.rs` `MatchOutcome` | owner, S1, with the audit | plan T14 |
 | X-09 | The recap's settlement is not done in `end_recap`, "(owner, at T14)" | `crates/sim/src/runner.rs` `end_recap` | owner, S1, with the recap's settlement lines (w6 notes A6) | plan T14 |
-| X-10 | An intent carries only its addressing: "the intent vocabulary is T11's" | `crates/sim/src/seams.rs` `Intent::kind` | the next sim lane, S1: reword or delete | plan T11 |
-| X-11 | The `PlaybookInterpreter` signature, "(owner, at T11)" | `crates/sim/src/seams.rs` `PlaybookInterpreter` | the next sim lane, S1: reword or delete | plan T11 |
 | X-12 | The `$` a placed beacon costs is not charged in `place_beacon`, "(owner, at T14)". Nothing else charges it either: `World::beacon_cost` is read only for a recycle's refund, held value and kill credit, and the interpreter's deploy (`crates/sim/src/interpreter/exec.rs`) calls `place_beacon` and pays nothing, so a placed beacon is free at the skeleton | `crates/sim/src/world.rs` `place_beacon` | owner, S1, with the Quartermaster | plan T14 |
-| X-13 | "T8 (plan-core) owns the text-preserving layer"; if the canonical encoder must emit a written default, the owner decides | `examples/README.md` "Open points for the owner" | resolved by T8's round-trip goldens; the examples lane rewords it | item 74 |
 | X-14 | The six error codes are a proposal, ratified "at the latest when T13 fills the gateway payloads" | `proto/gp/api/v1/gateway.proto` `Code` | owner, S1's first contract pull request | plan T13 |
 | X-15 | `GetBriefingResponse`'s structured payload, "Filled by T13" (5 to 15 still reserved) | `gateway.proto` `GetBriefingResponse` | owner, S1's first contract pull request: name the stage that fills it | plan T13 |
 | X-16 | `GetRecapResponse`'s settlement lines, "Filled by T13 once T14's economy produces them" | `gateway.proto` `GetRecapResponse` | owner, S1 (w6 notes A6) | plan T13 |
 | X-17 | `GetBeaconResponse`'s per-beacon detail, "Filled by T13" | `gateway.proto` `GetBeaconResponse` | owner, S1's first contract pull request: name the stage that fills it | plan T13 |
 | X-18 | `Event`'s per-kind structured payload, "Filled by T13" | `gateway.proto` `Event` | owner, S1's first contract pull request: name the stage that fills it | plan T13 |
 
+### The owner at hardening
+
+| ID | What | Anchors | Proposed | Source |
+|---|---|---|---|---|
+| X-02 | The per-method salience order, "OWNER settles it with T13" | `crates/gateway/src/detail.rs` module doc | owner, hardening, with H-07 and H-08 | plan T9, T13 |
+
+### A named lane
+
+| ID | What | Anchors | Proposed | Source |
+|---|---|---|---|---|
+| X-06 | The sighting catalogue grows: "kill credit and the economy at T14 and radio at S4" | `crates/sim/src/knowledge.rs` module doc | the sim lane of each producing stage; radio at S4 | plan T5, T14 |
+| X-07 | The router key's beacon half is `BeaconId::NONE`, "owner, at T11" | `crates/sim/src/pathing/router.rs` module doc | the next sim lane, S1: check whether T11 and T14 gave it a value, and reword | plan T11 |
+| X-10 | An intent carries only its addressing: "the intent vocabulary is T11's" | `crates/sim/src/seams.rs` `Intent::kind` | the next sim lane, S1: reword or delete | plan T11 |
+| X-11 | The `PlaybookInterpreter` signature, "(owner, at T11)" | `crates/sim/src/seams.rs` `PlaybookInterpreter` | the next sim lane, S1: reword or delete | plan T11 |
+| X-13 | "T8 (plan-core) owns the text-preserving layer"; if the canonical encoder must emit a written default, the owner decides | `examples/README.md` "Open points for the owner" | resolved by T8's round-trip goldens; the examples lane rewords it | item 74 |
+
 ---
 
 ## Malformed: no who or no when
+
+### The owner
 
 | ID | What | Anchors | Proposed | Source |
 |---|---|---|---|---|
 | M-01 | `win_rate_percent` is an integer field on the scenario result (no who, no when) | `.github/workflows/nightly-scenarios.yml` the alarm-band step | owner, S2, with S2-01 | item 116 (6)(j) |
 | M-02 | `WALLED_PACKAGES` names `presentation` and `solve`, which do not exist (no who, no when) | `clippy.toml` header wall list; `xtask/src/main.rs` `WALLED_PACKAGES` | owner, whenever either crate is proposed, as a section 5 change, or never (plan T0) | plan T0 |
 | M-03 | The `disallowed-methods` entries held back until their paths resolve (no who, no when) | `clippy.toml` held-back list | owner, S1's first contract pull request | — |
-| M-04 | `BACKLOG_BOUND_MS` = 5 000 ("Tuning, OWNER", no when) | `crates/client-gdext/src/pacer.rs` `BACKLOG_BOUND_MS` | owner, hardening, with H-01 | T16a notes, B6 |
 | M-05 | The scenario assertion vocabulary: the owner confirms that taking none of item 97's three is right, or names one (no when) | `crates/gamectl/src/scenario.rs` `ASSERTIONS` | owner, at this demo's review or S1 with S1-41 | item 97; plan T3 |
 | M-06 | `deny.toml`'s five empty slots: licence carve-outs, `[[licenses.clarify]]`, accepted duplicates, dev-only skip-trees, accepted advisories (fill-in slots, no who, no when) | `deny.toml` `[licenses]` exceptions and clarify, `[bans]` skip and skip-tree, `[advisories]` ignore | owner, as each case arises (a section 5 change) | — |
 | M-07 | Marker easing: `EASE_RATE` = 6 and `TURN_AFTER` = 0.05 ("Tuning", no who in the constants, no when) | `godot/scripts/vista.gd` `EASE_RATE`, `TURN_AFTER` | owner, S6, with S6-30 | T16a notes, B6 |
@@ -510,29 +523,51 @@ S1-42, S1-46).
 | M-15 | `BuiltinOperator.builtin_id` is a string until section 14's operator catalogue is written (no who, no when) | `seams.proto` `BuiltinOperator` | owner, S5, with Normal and Hard | — |
 | M-16 | Whether the mapgen golden should carry `(seed, seats)` lines, "when a later stage wants a map digest without a match behind it" (no stage) | `tests/golden/mapgen/README.md` "The format" | owner, S4, which re-derives map generation | — |
 
+### The owner at hardening
+
+| ID | What | Anchors | Proposed | Source |
+|---|---|---|---|---|
+| M-04 | `BACKLOG_BOUND_MS` = 5 000 ("Tuning, OWNER", no when) | `crates/client-gdext/src/pacer.rs` `BACKLOG_BOUND_MS` | owner, hardening, with H-01 | T16a notes, B6 |
+
 ---
 
 ## Unmarked: guesses the grep cannot see
 
 Seven rows, each added by hand because no line says PLACEHOLDER:
 
+### The owner
+
 | ID | What | Anchors | Proposed | Source |
 |---|---|---|---|---|
-| U-01 | `.gitignore`'s "Placeholder paths: the real on-disk location is decided when the host is built", stale since `crates/gateway/src/cache.rs` fixed the location. **T22a rewrites it** | `.gitignore` the private-cache comment | resolved by T22a | item 98; item 123 (3) |
-| U-02 | Unauthenticated calls are not counted; a per-connection budget the session holds would need per-connection state ("OWNER, at hardening, with the numbers") | `crates/gateway/src/limit.rs` module doc "What it does not count" | owner, hardening | — |
-| U-03 | The casual fog policy has no phase term, so a casual match is unfogged in the Lull too: a known defect on `main` with no marker | `crates/gateway/src/fog.rs` `FogPolicy::unfogged` | hardening or the next gateway lane | items 107 (6), 116 (6)(k) |
 | U-04 | `interface_times.*` are spec section 5's values, and "all of section 5 is marked Tuning", with no who or when | `rules/README.md` Settled? row `interface_times.*` | owner, S1, with the full mandate contract | plan T11 |
 | U-05 | No pause button, and whether a minimised window keeps pacing (a stalled client is a pause) | none in the code; the T16a notes, section D | owner; no stage proposed | T16a notes, section D |
 | U-06 | Entity ids are opaque per-viewer handles; revisited if v1.1 agents or S7's recordings need two seats to agree | none in the code; the T16a notes, section D | owner, v1.1 | T16a notes, section D |
 | U-07 | The full predicate catalogue is S3's, and the plan asked `playbook.proto` to say so in a stub; no stub names it | `proto/gp/v1/playbook.proto` (no entry) | owner, S3 | plan T1 |
 
-Copies the grep cannot see, belonging to rows above (not counted again):
+### The owner at hardening
+
+| ID | What | Anchors | Proposed | Source |
+|---|---|---|---|---|
+| U-02 | Unauthenticated calls are not counted; a per-connection budget the session holds would need per-connection state ("OWNER, at hardening, with the numbers") | `crates/gateway/src/limit.rs` module doc "What it does not count" | owner, hardening | — |
+
+### A named lane
+
+| ID | What | Anchors | Proposed | Source |
+|---|---|---|---|---|
+| U-01 | `.gitignore`'s "Placeholder paths: the real on-disk location is decided when the host is built", stale since `crates/gateway/src/cache.rs` fixed the location. **T22a rewrites it** | `.gitignore` the private-cache comment | resolved by T22a | item 98; item 123 (3) |
+| U-03 | The casual fog policy has no phase term, so a casual match is unfogged in the Lull too: a known defect on `main` with no marker | `crates/gateway/src/fog.rs` `FogPolicy::unfogged` | hardening or the next gateway lane | items 107 (6), 116 (6)(k) |
+
+### Copies of the rows above that a plain search misses
+
+Each belongs to a row above and is not counted again; a plain search misses it or sees it only in
+part:
 
 - `packaging/README.md` "## PLACEHOLDERs": the heading is a grep hit (a reference) and its two
   bullets are unmarked: the repository's public address (G-01) and the export preset's fields (a
   pointer to G-03 and G-04).
-- `godot/scripts/camera_rig.gd` `NEAREST`: its pointer is split across two lines, "PLACEHOLDER, as"
-  and "above.", so a search for the pointer's whole form misses it (D-21).
+- `godot/scripts/camera_rig.gd` `NEAREST`: the header's grep sees it, and Appendix B counts it among
+  the 23 pointers; it is listed here only because its pointer is split across two lines,
+  "PLACEHOLDER, as" and "above.", so a search for the pointer's whole form misses it (D-21).
 - `xtask/src/scenario.rs` `SEAT_KEYS`: "owner, at S5" with no marker (S5-02).
 - `crates/sim/src/lib.rs` `DETERMINISM_MATCH_SEED`: "owner, at S1" with no marker (S1-26).
 - `godot/scripts/mesher_rules.gd` `RULES_JSON`: the client's inline copy of `match.lull_ms` (D-01).
@@ -545,7 +580,7 @@ still empty placeholders", which T22a rewrites.
 ## Appendix A: cross-check against skeleton-plan section 3
 
 `grep -c '^- \*\*PLACEHOLDERs:\*\*'` counts 28 lines in `docs/design/skeleton-plan.md` at the base
-(T0 to T21b) and 30 on `origin/docs/w8-run1`, which adds T22a's and T22b's. This appendix checks the
+(T0 to T21b) and 30 at `a80fb72` (`main` after item 123's docs pull request, which added T22a's and T22b's). This appendix checks the
 30. Each item is **found** (the row that carries it), **resolved** (the decisions-log item that
 settled it) or **missing** from the code.
 
@@ -581,8 +616,8 @@ settled it) or **missing** from the code.
 | T9 | the private match cache's location (decision 20) | resolved, item 98 |
 | T9 | the detail budgets | found, H-07, H-08, H-17 |
 | T10 | the respawn delay curve | found, S2 delegation (`commander.respawn_*`) |
-| T11 | interface times as rules-table data | found, U-04 |
-| T11 | the condition families the templates do not use stay stubs naming their stage | found, S2-04, S3-07, S3-08, S3-09 |
+| T11 | interface times as rules-table data | missing (U-04: the rules row carries no marker) |
+| T11 | the condition families the templates do not use stay stubs naming their stage | found: the stubs are `PlanError::NotAtThisStage`'s stage list in `crates/sim/src/interpreter.rs` (`beacon_under_attack` and `most_threatened` at S2, the tag and `ENEMY_KNOWN` filters at S3), which carries no marker; the marked rows are S2-04 and S3-07 |
 | T12 | the surface format's vertex layout | found, S6-05 |
 | T12 | the `unsafe_code` scoped allow (decision 12) | resolved, item 83 |
 | T13 | the digest payload's exact contents | found, S7-01 |
@@ -632,7 +667,7 @@ settled it) or **missing** from the code.
 | T22a | the camera's tuning values stay, for the owner at the review | found, D-21, D-22, D-23 |
 | T22b | none of its own; the grammar and the `xtask` check are S1 contract items | found, S1-10 |
 
-**Totals:** 80 items on the 30 lines (an item is one row of this table): 59 found, 15 resolved, 2
+**Totals:** 80 items on the 30 lines (an item is one row of this table): 58 found, 15 resolved, 3
 missing from the code, and 4 lines that book none.
 
 ### The T16a notes' eight
