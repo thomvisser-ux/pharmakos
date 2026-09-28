@@ -74,7 +74,7 @@ because with no combat until S2 the one-tick rule cannot end a two-seat match (i
 | 3. Golden playbooks round-trip byte-identically, verify identically (same `report_hash`), render identically | `tests/golden/plan-core/**`, `tests/golden/verifier/**` | T6, T8 |
 | 4. Headless scenario runs pass on assertions over events **and** hashes | `gamectl scenario run` over `scenarios/**`, wired into `xtask ci` | T3, T15, T20 |
 | 5. The three nightly adversarial scenarios | **Not this stage** — they start at S2 (spec section 15). `nightly-scenarios.yml` stays gated off | — |
-| 6. The stage's named depth task and its gate, or a deliberate written fallback | The skeleton has no named depth task in section 17's row; gates P1, P6, P2, G3′-real belong to S1, S3, S5 and S2. What this stage owes is that each of those gates' *shape* exists and is measured as a baseline, not certified; the P1 (T6's QUICK p99) and G3′-real baselines have no legal producer in this stage and are deferred to S1 and S2 (item 116 (6)(b)) | T6, T7, T19 |
+| 6. The stage's named depth task and its gate, or a deliberate written fallback | The skeleton has no named depth task in section 17's row; gates P1, P6, P2, G3′-real belong to S1, S3, S5 and S2. What this stage owes is that each of those gates' *shape* exists and is measured as a baseline, not certified; the P1 (T6's QUICK p99) and G3′-real baselines have no legal producer in this stage and are deferred to S1 and S2 (item 116 (6)(b)); P2's safe-playbook latency baseline is deferred to S5 with P2, and P6's editor targets are measured with the gate at S3's playtest (item 123 (2) 11, amended 2026-09-28) | T6, T7, T19 |
 | 7. Docs updated in the same PR | Every task states which doc moves with it | all |
 | 8. The owner reviews the stage demo | §1.1 | T22 |
 
@@ -677,10 +677,10 @@ its downside, and its section 0 lists the holes (H1–H16) the lines below close
 - **Amended 2026-09-25 (item 113).** PR 2 runs in run 3 beside T14b and merges after it. It also makes the lobby's
   Resume forget a match once that match ends (113(11)), and names `watch_check`'s match through the same
   collision-free helper as the lobby's (113(13)).
-- **Amended 2026-09-28 (item 123).** P6's targets are human timings, so no baseline is measured at the skeleton:
-  they are measured with the gate at S3's playtest (item 123 (2) 11, which supersedes the acceptance line's
-  sentence on P6). The Builds line's dashed fogged legs are not built at the skeleton (item 107 (1); item
-  123 (2) 1).
+- **Amended 2026-09-28 (item 123).** No P6 baseline is measured at the skeleton: P6's targets are human timings,
+  measured with the gate at S3's playtest (item 123 (2) 11, which amends §1.2 row 6; the acceptance line above
+  already leaves P6's targets to S3). The Builds line's dashed fogged legs are not built at the skeleton (item
+  107 (1); item 123 (2) 1).
 
 ---
 
@@ -853,7 +853,8 @@ delegation of items 85, 86, 116 (2) and 120, which the skeleton's end returns to
 
 - **Unit owned:** branch `fix/stage-demo-t22a`, worktree `C:/Users/PC/pharmakos-t22a`, target `D:/build/t22a`.
   Paths: `godot/scripts/host_link.gd`; `godot/scripts/camera_rig.gd`; their source pins and tests
-  (`crates/client-gdext/tests/**`); a new test file under `crates/sim/tests/`; new golden cases under
+  (`crates/client-gdext/tests/**`, and `godot/scripts/watch_check.gd` for a headless camera-focus check only); a
+  new test file under `crates/sim/tests/`; new golden cases under
   `tests/golden/plan-core/**`, `tests/golden/verifier/**` or `tests/golden/gateway/**`, with their tests in
   `crates/plan-core/tests`, `crates/verifier/tests` or `crates/gateway/tests` and their areas' READMEs; and the
   stale texts (e) names. Not `proto/**`, `xtask/**`, `.github/**`, `crates/sim/src`, `crates/gateway/src`,
@@ -864,15 +865,17 @@ delegation of items 85, 86, 116 (2) and 120, which the skeleton's end returns to
   the owner's at S1; the sim's `DEFAULT_ROUND_LIMIT` (6) is not changed, and the config line's format is unchanged
   (its `round_limit` field carries 3, so a remembered `last_match.txt` still parses); (b) the camera ignores keys
   while a GUI control has keyboard focus (the viewport's `gui_get_focus_owner`, or the equivalent), so typing a
-  note or a wizard value no longer moves it, and `camera_rig.gd`'s header, which promises that F toggles following
+  note or a wizard value no longer moves it, and the keys return to the camera once the player leaves the field, and `camera_rig.gd`'s header, which promises that F toggles following
   the commander, names the lobby's Follow button instead; no key is added (item 123 (2) 8); (c) a sim test for the
   Quartermaster stub's hold: it builds a draw above supply through the Quartermaster, not around it, and asserts
   that the fabricator order is held and then filled once supply returns (item 123 (2) 7); (d) the demo playbooks'
   goldens (item 123 (2) 10): for each of the three templates instantiated for seat 0 of the golden seed (the
   gateway's instantiate path, as `crates/gateway/tests/templates.rs` already uses) and for each
   `scenarios/skeleton/*.playbook.jsonc`, a byte-for-byte round trip through plan-core, a `report_hash` golden and a
-  `render_plan` prose golden, in the existing golden formats; the lane picks the harness (plan-core and verifier
-  tests over a committed instantiated file, or a gateway test) and says why; (e) the stale texts outside
+  `render_plan` prose golden, in the existing golden formats, each verified and rendered in the context the game
+  uses (seat 0's frozen snapshot in round 1's Lull of a match hosted as the lobby hosts it, on the golden seed), each
+  FULL report qualifying, and the byte round trip asserted in the test; the lane picks the harness (plan-core and
+  verifier tests, or a gateway test) and says why; (e) the stale texts outside
   `docs/design/`: the root `README.md` ("most crates are still empty placeholders"); `.gitignore`'s "Placeholder
   paths"; `godot/README.md`'s `fixtures/instantiate_suggested.json` row and `tests/golden/vista/README.md`'s "When
   each shot moves", brought to the wizard-PNG rule T21b wrote in `tests/golden/gateway/README.md` and
@@ -889,8 +892,8 @@ delegation of items 85, 86, 116 (2) and 120, which the skeleton's end returns to
   and passes after it, where a headless check can express one, and otherwise a source pin in
   `crates/client-gdext/tests/godot_project.rs`, the existing pattern for `godot/` sources; no F binding; (c) the new
   test in `crates/sim/tests/` passes, fails with the hold taken out, and needs no change to `crates/sim/src`; (d)
-  the new round-trip, `report_hash` and prose goldens are committed with their tests, and the golden area's README
-  names each new row; (e) each stale text rewritten against the code at the lane's base and quoted in the pull
+  the new `report_hash` and prose goldens are committed with their tests, which assert each byte round trip and
+  that each FULL report qualifies in the game's context, and the golden area's README names each new row; (e) each stale text rewritten against the code at the lane's base and quoted in the pull
   request with its replacement. Every golden that moves is named with why. **A determinism chain, a scenario chain,
   a digest or an existing `report_hash` that moves is a stop:** the lane names the input that moved it and does
   not re-bless. Every required check green on the lane's final run; the pull request takes the full matrix
@@ -925,19 +928,23 @@ delegation of items 85, 86, 116 (2) and 120, which the skeleton's end returns to
   (c) **The demo run sheet**, `docs/demo/skeleton-run-sheet.md`, for §1.1, written against `main` at the lane's
   base plus T22a's decided changes (item 123 (2) 3, 5 and 8): §1.1's Lull beats spread over the three Lulls (the
   wizard and submit in round 1; the Fix button, the notes box and the carried draft in round 2; save and resume in
-  round 3's Lull), with a timeout filing the safe playbook as §1.1's "cost of a timeout" (item 123 (2) 4); the Fix
+  round 3's Lull), with each Lull's beats before its Ready, which is final and, since Easy is always ready, ends the
+  Lull at once; the safe playbook a timeout files, for a seat that has sealed nothing that round, is §1.1's "cost of
+  a timeout", shown by rendering the wizard's Safe playbook template (item 123 (2) 4 and 6); the Fix
   button reached by saving the playbook, editing its `cooldown_ms` by hand into the E0108 case and loading it (item
   123 (2) 5); the `report_hash` and the safe playbook shown by the tests item 123 (2) 6 names; the Quartermaster's
   hold not expected in the default match, with T22a's test named (item 123 (2) 7); every item and wording item 123
   (2) 9 lists; Hold & Build's shape and both templates' stand-in values, which the owner confirmed (item 119 (9)
   and (10)); the watch check's match folders, pruned by hand; and a section, "Deviations from section 1.1", listing item 123
   (2) 1–8 plainly for the owner.
-- **Implements:** AGENTS.md §10 as a checklist; item 123 (2) 4–6, 9, 11 and 13, and (3); items 113 (7) and (15),
+- **Implements:** AGENTS.md §10 as a checklist; item 123 (2) 1–13 on the run sheet and in the register (1–8 as its
+  "Deviations from section 1.1", 12 as the zip it names), and (3); items 113 (7) and (15),
   114 (5), 117 (1), 118 (1), 119 (9) and (10) and 121 (1) on the run sheet.
 - **Needs:** T21b (merged). Runs beside T22a and merges after it; the main session reconciles the two at the merge.
 - **Acceptance:** (a) every §10 item present with its evidence, item 1 left for the main session to fill; (b) the
   register's header stamps the commit, the exact grep command and its raw count, and how the count became the
-  distinct rows; the register is cross-checked against the 28 per-task "PLACEHOLDERs:" lines of this section, each
+  distinct rows; the register is cross-checked against the 28 per-task "PLACEHOLDERs:" lines of T0 to T21b in this section (T22a's and T22b's own, added by
+  item 123, make 30), each
   found in the code, resolved with its item, or named as missing from the code; nothing is reworded in code
   (rewording is the owning lanes', and contract paths' pull requests'); (c) every run-sheet step quotes the UI's
   real strings (`godot/scripts/strings.gd`, `lobby.gd`) and says what to click and what to see, and names the test
