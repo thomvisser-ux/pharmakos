@@ -13,8 +13,10 @@
 //! `PHARMAKOS_REQUIRE_TOOLS=1` turns a missing tool into a failure instead of
 //! a skip. CI sets that variable globally (`.github/workflows/ci.yml`), so a
 //! runner that has lost `buf` or `protoc-gen-prost` reddens the build rather
-//! than going green over an unchecked tree. Without the switch — a developer
-//! without `buf` — the run is still green.
+//! than going green over an unchecked tree, and `cargo xtask ci
+//! --require-tools` sets it on every child it runs, this test's `cargo test`
+//! included (and removes it under `--no-require-tools`). Without the switch —
+//! a developer without `buf` — the run is still green.
 //!
 //! That is not a detail. `cargo xtask ci` reads the variable for its own
 //! steps, but this is a plain `cargo test`, so before the check below the
@@ -45,10 +47,10 @@ fn tool_available(name: &str) -> bool {
         .is_ok_and(|output| output.status.success())
 }
 
-/// `PHARMAKOS_REQUIRE_TOOLS=1`, the switch `cargo xtask ci` reads (its
-/// `--require-tools` flag sets the same thing): in CI every tool is installed
-/// on purpose, so a missing one is a broken runner rather than a reason to
-/// skip a check.
+/// `PHARMAKOS_REQUIRE_TOOLS=1`, the switch `cargo xtask ci` reads, and which
+/// its `--require-tools` flag sets on every child it runs, this test's
+/// `cargo test` included: in CI every tool is installed on purpose, so a
+/// missing one is a broken runner rather than a reason to skip a check.
 fn tools_required() -> bool {
     env::var_os("PHARMAKOS_REQUIRE_TOOLS").is_some()
 }

@@ -605,7 +605,9 @@ struct Ctx {
     /// skipping when buf, cargo-deny, reuse, godot or xvfb-run is missing
     /// ([`skip_or_fail`]). CI sets the variable for the whole workflow after
     /// installing each tool its job needs, so a runner that lost a tool goes red
-    /// rather than quietly green.
+    /// rather than quietly green. Every child `run`, `run_in` and `capture`
+    /// start inherits the answer through [`REQUIRE_TOOLS_VAR`]
+    /// ([`child_command`]), so a test that needs a tool fails with it too.
     require_tools: bool,
     /// `--locked`: pass `--locked` to cargo. On by default in CI, but only once
     /// a `Cargo.lock` is committed — `--locked` with no lock file is an error,
@@ -629,7 +631,7 @@ fn run_cli(args: &[String]) -> Result<bool, String> {
     let mut client_check = false;
     let mut quick = false;
     let mut fix = false;
-    let mut require_tools = env::var_os("PHARMAKOS_REQUIRE_TOOLS").is_some();
+    let mut require_tools = env::var_os(REQUIRE_TOOLS_VAR).is_some();
     // `None` until a flag says otherwise; resolved below, once the root is known.
     let mut locked: Option<bool> = None;
 
@@ -2886,11 +2888,31 @@ fn run(ctx: &Ctx, program: &str, args: &[String]) -> Result<(), String> {
     run_in(ctx, program, args, &root)
 }
 
-fn run_in(_ctx: &Ctx, program: &str, args: &[String], cwd: &Path) -> Result<(), String> {
+/// The environment variable that asks for the tools: set, it turns a missing
+/// tool from a skip into a failure, in xtask ([`Ctx::require_tools`]) and in the
+/// tests that need one (`crates/proto/tests/generated.rs` needs buf and
+/// `protoc-gen-prost`). CI sets it for the whole workflow.
+const REQUIRE_TOOLS_VAR: &str = "PHARMAKOS_REQUIRE_TOOLS";
+
+/// A child process as xtask starts every step's: `program args` in `cwd`, with
+/// [`REQUIRE_TOOLS_VAR`] set to `1` when the run requires its tools and removed
+/// when it does not. So `--require-tools` alone makes a test that needs a tool
+/// fail on a missing one, and `--no-require-tools` reaches the children too,
+/// even from a shell that exported the variable (decisions-log item 118 (4)).
+fn child_command(require_tools: bool, program: &str, args: &[String], cwd: &Path) -> Command {
+    let mut command = Command::new(program);
+    command.args(args).current_dir(cwd);
+    if require_tools {
+        command.env(REQUIRE_TOOLS_VAR, "1");
+    } else {
+        command.env_remove(REQUIRE_TOOLS_VAR);
+    }
+    command
+}
+
+fn run_in(ctx: &Ctx, program: &str, args: &[String], cwd: &Path) -> Result<(), String> {
     println!("   $ {}", render_command(program, args));
-    let status = Command::new(program)
-        .args(args)
-        .current_dir(cwd)
+    let status = child_command(ctx.require_tools, program, args, cwd)
         .status()
         .map_err(|error| format!("failed to launch `{program}`: {error}"))?;
     if status.success() {
@@ -2906,9 +2928,7 @@ fn run_in(_ctx: &Ctx, program: &str, args: &[String], cwd: &Path) -> Result<(), 
 
 fn capture(ctx: &Ctx, program: &str, args: &[String]) -> Result<String, String> {
     println!("   $ {}", render_command(program, args));
-    let output = Command::new(program)
-        .args(args)
-        .current_dir(&ctx.root)
+    let output = child_command(ctx.require_tools, program, args, &ctx.root)
         .stderr(Stdio::piped())
         .output()
         .map_err(|error| format!("failed to launch `{program}`: {error}"))?;
@@ -3126,6 +3146,7 @@ fn line_at(bytes: &[u8], offset: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsStr;
 
     #[test]
     fn reads_names_features_and_bins_from_metadata() {
@@ -3424,6 +3445,34 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
         // A prefix is not a name.
         let prefixed = strings(&["pharmakos-simulator"]);
         assert_eq!(missing_names(&["sim"], &prefixed), vec!["sim"]);
+    }
+
+    #[test]
+    fn require_tools_reaches_every_child_and_its_absence_does_too() {
+        let args = ["test".to_owned(), "--workspace".to_owned()];
+        let cwd = Path::new(".");
+        let required = child_command(true, "cargo", &args, cwd);
+        let set: Vec<_> = required.get_envs().collect();
+        assert_eq!(
+            set,
+            vec![(OsStr::new(REQUIRE_TOOLS_VAR), Some(OsStr::new("1")))],
+            "--require-tools sets the variable on the child"
+        );
+        let not_required = child_command(false, "cargo", &args, cwd);
+        let removed: Vec<_> = not_required.get_envs().collect();
+        assert_eq!(
+            removed,
+            vec![(OsStr::new(REQUIRE_TOOLS_VAR), None)],
+            "--no-require-tools removes it, so an exported one does not leak through"
+        );
+        // The command itself is untouched.
+        assert_eq!(required.get_program(), OsStr::new("cargo"));
+        assert_eq!(
+            required.get_args().collect::<Vec<_>>(),
+            vec![OsStr::new("test"), OsStr::new("--workspace")]
+        );
+        assert_eq!(required.get_current_dir(), Some(cwd));
+        assert_eq!(REQUIRE_TOOLS_VAR, "PHARMAKOS_REQUIRE_TOOLS");
     }
 
     #[test]
