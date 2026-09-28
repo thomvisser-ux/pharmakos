@@ -41,9 +41,9 @@
 // orders in every round are whatever Easy composes from them, and seat 0's
 // playbook is the Hold & Build template as Easy fills it (its header says so,
 // and crates/gamectl/tests/operator.rs holds it to that). Hold & Build's shape
-// is the owner's decision of decisions-log item 119 (9), recorded in
-// library/hold_and_build.jsonc's header. A change to either moves this chain,
-// and the pull request that moves it says which.
+// and its own values are the owner's decisions of decisions-log items 119 (9)
+// and (10), recorded in library/hold_and_build.jsonc's header. A change to
+// either moves this chain, and the pull request that moves it says which.
 {
   "format": "pharmakos.scenario.v1",
   "name": "against-easy-three-rounds",
