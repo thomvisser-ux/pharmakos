@@ -27,7 +27,9 @@
 # failed download is a failure, and a missing copy of any kind is red.
 #
 # Every `uses:` is pinned to a full commit SHA with its ref in a trailing comment
-# (decisions-log item 116 (6)(o)); a ref marked `(branch)` has no tag of that name.
+# (decisions-log item 116 (6)(o)); a ref marked `(branch)` has no tag of that name. The
+# comment is the SHA's most specific tag (`# v2.9.2`, not `# v2` or `# v4 (v4.3.0)`): that
+# is the form Dependabot rewrites when it moves the SHA, so a bump never leaves a stale one.
 #
 # THE DOCS-ONLY FAST PATH (decisions-log item 115 (4)). Every required job runs on every
 # pull request, because the ruleset's twelve required checks must report under their own
@@ -210,7 +212,7 @@ jobs:
 
       - name: Cache cargo registry and target
         if: steps.scope.outputs.prose_only != 'true'
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: ${{ matrix.os }}
 
@@ -246,7 +248,7 @@ jobs:
 
       - name: Install cargo-deny
         if: steps.scope.outputs.prose_only != 'true'
-        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2
+        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
         with:
           tool: cargo-deny
 
@@ -583,7 +585,7 @@ jobs:
 
       - name: Cache cargo registry and target
         if: steps.scope.outputs.prose_only != 'true'
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: screenshot-ubuntu
 
@@ -731,7 +733,7 @@ jobs:
 
       - name: Cache cargo registry and target
         if: steps.scope.outputs.prose_only != 'true'
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: client-${{ matrix.os }}
 

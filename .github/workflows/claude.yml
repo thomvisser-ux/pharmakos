@@ -13,7 +13,7 @@
 # Claude App's token, which can write contents, pull requests and issues. With it Claude posts
 # its replies and pushes branches; it cannot push `main` (the ruleset) or change a workflow
 # (the App asks for no `workflows` permission). The job's own `contents: read` limits only the
-# checkout's token.
+# job token, which the fork check's `gh` call uses; the checkout persists none.
 #
 # Hardening (decisions-log item 119 (8)): a pull request from a fork never runs, because the
 # action checks out the head it is asked about and Claude's commands would run that code with
@@ -86,8 +86,12 @@ jobs:
           fi
 
       # No persisted credentials: claude-code-action brings its own App token. From checkout
-      # v6 the job's read-only token would sit in a RUNNER_TEMP file that git includes, which
-      # the action does not remove, so git would send it beside the App token on every push.
+      # v6 the job's read-only token sits in a RUNNER_TEMP file pulled in by an
+      # `includeIf.gitdir` entry; claude-code-action v1.0.231 clears the header from
+      # .git/config and `include.path` files only, so git would keep sending that token ahead
+      # of the App token and a push would be refused. Keep this line even if a later action
+      # handles `includeIf`: nothing here needs the token. The action's first fetches run
+      # before it sets its own remote and rely on the repository being public.
       - name: Check out the repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:

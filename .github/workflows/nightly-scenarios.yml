@@ -24,7 +24,8 @@
 # the day NIGHTLY_SCENARIOS_ENABLED is set, or on a manual run with `force`.
 #
 # Every `uses:` is pinned to a full commit SHA with its ref in a trailing comment
-# (decisions-log item 116 (6)(o)); a ref marked `(branch)` has no tag of that name.
+# (decisions-log item 116 (6)(o)); a ref marked `(branch)` has no tag of that name. The
+# comment is the SHA's most specific tag, the form Dependabot rewrites (ci.yml's header).
 
 name: nightly-scenarios
 
@@ -72,7 +73,7 @@ jobs:
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable (branch)
 
       - name: Cache cargo registry and target
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: nightly-scenarios
 
@@ -159,7 +160,7 @@ jobs:
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable (branch)
 
       - name: Cache cargo registry and target
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: nightly-fuzz
 
