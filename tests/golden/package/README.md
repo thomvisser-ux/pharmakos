@@ -27,9 +27,9 @@ ending in `/`; LF endings and a trailing newline. `package` writes the fresh lis
 missing or different file prints the list and fails, naming the first differing line.
 
 **Paths only, and why.** The builds are not reproducible (Rust and Godot both), and
-`library/`'s and `rules/`'s bytes move for reasons of their own (the templates'
-own-values PLACEHOLDERs, before T22's demo), so sizes or hashes here would move with every
-such change and say nothing about the zip. What the list does pin is what a tester gets:
+`library/`'s and `rules/`'s bytes move for reasons of their own (a template's text or a
+tuning row), so sizes or hashes here would move with every such change and say nothing about
+the zip. What the list does pin is what a tester gets:
 the executable and its `.pck`, the client library beside it, `gamectl`, `rules/` and
 `library/` as the repository has them (the three templates Easy instantiates by id among
 them), `LICENSES/` with exactly the licences the zip's `REUSE.toml` names, the note, the
