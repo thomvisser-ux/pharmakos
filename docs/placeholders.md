@@ -22,7 +22,9 @@ a row.
 - **Command:** `git grep -n -I PLACEHOLDER -- ':!docs'`, run from the repository root.
 - **Raw count:** 588 lines in 116 files. For reference, the same command over the whole tree prints
   752 lines, and 753 without `-I` (the extra line is a binary match in
-  `crates/proto/src/generated/descriptor.binpb`).
+  `crates/proto/src/generated/descriptor.binpb`). At `a80fb72`, where `main` stood when this
+  register was written (item 123's docs pull request on top of the base, which changed
+  `docs/design/` alone), the command prints the same 588.
 
 From 588 lines to 256 rows, one step at a time:
 
