@@ -62,12 +62,13 @@ const RECONNECTS := 5
 ## PLACEHOLDER: the golden seed (so the live vista is the fixture's map), two seats with
 ## the human at seat 0 and the other played by the built-in operator (Easy, since T18:
 ## it plans, submits and says ready for its seat every round), the rules table's own
-## segment ladder, and the spec's default round limit of six. The lobby's settings screen
-## is OWNER's, with T22's stage demo and S1's Probation preset.
+## segment ladder, and three rounds, the Probation-shaped match of skeleton-plan section
+## 1.1 (decisions-log item 123 (2) 3; the sim's own default stays the spec's six). The
+## lobby's settings screen and the Probation preset are OWNER's, at S1.
 const MATCH_SEED := "0x00000000ca5caded"
 const MATCH_SEATS := 2
 const HUMAN_SEAT := 0
-const ROUND_LIMIT := 6
+const ROUND_LIMIT := 3
 const LADDER := "-"
 
 var bridge: Node = null
