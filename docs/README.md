@@ -48,7 +48,9 @@ the stage order and what each stage's definition of done is.
 Written by their own assignments, not by this index, and listed here so the tree reads
 whole: `CONTRIBUTING.md` and `DCO.txt` (how to contribute and the sign-off), `LICENSING.md`
 (which licence covers which directory, and the REUSE manifest), and `spikes/` (the stack
-spike write-ups — G4 determinism first).
+spike write-ups — G4 determinism first), `placeholders.md` (the register of every `PLACEHOLDER`
+in the tree, by the stage that settles it) and `demo/` (the stage demos' run sheets, first the
+walking skeleton's).
 
 ## Where new documents go
 

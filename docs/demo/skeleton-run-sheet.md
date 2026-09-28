@@ -215,8 +215,8 @@ on the status line. Watch round 1 at 1× or 2× so each beat is seen.
 14. **Watch with the camera.** Use the free-look keys, the wheel and the right mouse button as in
     step 3. "Follow" toggles following the commander; it is a button, and there is no F key
     **(with T22a**, whose header comment names the button). Typing in a field no longer moves the
-    camera, and the keys come back once you leave the field **(with T22a**, whose pull request names
-    the action).
+    camera, and the keys come back once you leave the field with a right-click on the 3D view
+    **(with T22a**, pull request #64).
     - Proof: `crates/client-gdext/tests/pacer.rs` `speed_changes_only_how_much_game_time_the_pacer_asks_for`;
       `control.rs` `skipping_to_segment_end_yields_the_same_terminal_hash_as_playing_it_out`; T22a's
       camera-focus check **(with T22a)**. The camera itself: by hand only.
@@ -249,7 +249,9 @@ on the status line. Watch round 1 at 1× or 2× so each beat is seen.
 18. **The Quartermaster's hold is not expected here.** The stub holds a fabricator order when draw
     outruns supply, and a placed beacon adds no draw, so the default match probably never shows a
     hold (item 123 (2) 7).
-    - Proof: T22a's Quartermaster hold test **(with T22a)**.
+    - Proof: T22a's Quartermaster hold test, `crates/sim/tests/economy.rs`
+      `a_fabricator_order_the_headroom_cannot_run_is_held_until_a_generator_brings_supply_back`
+      **(with T22a)**.
 
 19. **Your own ore reaches the treasury.**
     - See: "ore_delivered  A mining drone of seat 0 delivered ore worth $ N." and the treasury rising
@@ -314,8 +316,10 @@ on the status line. Watch round 1 at 1× or 2× so each beat is seen.
     Press "Save notes".
     - See: "Notebook saved (N characters)."
     - Then: the buttons take no keyboard focus, so the notes box keeps it after "Save notes", and
-      the free-look keys stay off until you leave the field by the action T22a's pull request names
-      **(with T22a)**. Leave it now, before round 2's Push (step 30).
+      the free-look keys stay off until you leave the field **(with T22a)**. Leave it now, before
+      round 2's Push (step 30): right-click on the 3D view (a wheel notch there, or a left-click on
+      the sky, works too). A left-click on the ground or on a beacon opens the map menu and leaves
+      the notes box focused.
     - Proof: the watch check's `_edit` (`save_notes`); `methods.rs`
       `a_second_seats_token_sees_neither_playbook_nor_draft_nor_notebook_nor_replay`.
 
@@ -515,12 +519,14 @@ Found by T22b, not decided:
   beginner where the verifier gives one (`crates/client-gdext/src/editor.rs` `rows_of`), so the row
   reads "A rule waits a while between firings, so put at least the minimum here.", not the golden's
   message (step 26).
-- **The notes box keeps keyboard focus after "Save notes".** Every panel button is built with
-  `focus_mode = Control.FOCUS_NONE` (`godot/scripts/editor.gd`, `lobby.gd`, `wizard.gd`), so pressing
-  one does not take focus from the notes box, and with T22a's change the free-look keys stay off
-  until the player leaves the field. Steps 25 and 30 say so; the action that leaves the field is the
-  one T22a's pull request names **(with T22a)**, and if it names none, this is a deviation for the
-  owner (item 123 (2) 8).
+- **The notes box keeps keyboard focus after "Save notes".** Every panel button but a diagnostic
+  row's Fix is built with `focus_mode = Control.FOCUS_NONE` (`godot/scripts/editor.gd`, `lobby.gd`,
+  `wizard.gd`; `rows.gd`'s Fix is freed by the redraw after a Fix), so pressing one does not take
+  focus from the notes box, and with T22a's change the free-look keys stay off until the player
+  leaves the field. Steps 25 and 30 say so. The way back is a mouse press the GUI does not take: a
+  right-click or a wheel notch on the 3D view, or a left-click on the sky. A left-click on the
+  ground or on a beacon is taken by `editor.gd` for the map menu first and keeps the focus; that is
+  a carry-forward for the next `editor.gd` lane (pull request #64; item 123 (2) 8).
 
 ## For developers
 
