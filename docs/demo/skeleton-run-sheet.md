@@ -11,9 +11,12 @@ click, what to see, and which test or scenario also proves the step, or "by hand
 does.
 
 It is written against `main` at `640d5b9` plus the changes T22a makes beside it, which decisions-log
-item 123 (2) 3, 7 and 8 decide; each place that depends on them says **(with T22a)**. The words in
-quotation marks are the interface's own, from `godot/scripts/strings.gd` and
-`godot/scripts/lobby.gd`, or the gateway's, as the client shows them. Where the demo differs from
+item 123 (2) 3, 7 and 8 decide; each place that depends on them says **(with T22a)**. Item 123 (3)
+and the plan's T22b section cite "(2) 3, 5 and 8": (2) 5, the Fix button reached by a hand edit,
+changes nothing in T22a and is checked here by hand (steps 22 and 26), and (2) 7 is T22a's
+Quartermaster test (step 18). The words in quotation marks are the interface's own, from
+`godot/scripts/strings.gd` and `godot/scripts/lobby.gd`, or the gateway's, as the client shows
+them. Where the demo differs from
 section 1.1, the step says so, and "Deviations from section 1.1" at the end lists each difference
 for the owner's ruling. Row IDs such as D-20 are rows of the PLACEHOLDER register,
 `docs/placeholders.md`.
@@ -93,12 +96,19 @@ only a person at a real machine sees, so look for each and note what you saw:
      inside your own spheres until the match ends (T16a notes). The panel on the right, "Orders",
      shows "Your economy": "$200   supply 10 kW   draw 4 kW   headroom 6 kW" (two rounds of BMI;
      the core's surplus; one kW for each of the four units, the core's own base netted out by T14b,
-     so not the "6 kW" item 113 (5) recorded before it).
-   - Proof: `crates/gateway/tests/view.rs` `a_fogged_seat_never_receives_an_unseen_entity`;
+     so not the "6 kW" item 113 (5) recorded before it). The map is about 384 × 384 × 64 voxels
+     (D-08 to D-10), and Easy's spawn zone lies at least the spawn-distance rule away, about one and
+     a half early Pushes' travel (D-17, D-18), far outside your spheres. Your core is on a Build
+     mandate; no view shows a beacon's mandate, so only a test shows it.
+   - Proof: `crates/sim/tests/mapgen.rs` `spawn_distance_holds_for_every_seed_in_the_set` (the golden
+     seed is in its seed set); `crates/sim/tests/determinism.rs`
+     `the_wire_ids_of_the_new_enums_are_dense_and_unique` ("every pre-placed core is on a Build
+     mandate"); `crates/gateway/tests/view.rs` `a_fogged_seat_never_receives_an_unseen_entity`;
      `tests/golden/economy/expected.settlement.txt` (supply 10 and draw 4 on every row of a seat that
      built nothing), from `crates/sim/tests/economy.rs` `the_settlement_ledger_matches_its_golden`;
      `crates/gateway/tests/advice.rs` `a_seat_is_told_its_own_economy_and_never_another_seats`; the
-     watch check's `_meter`. The camera: by hand only.
+     watch check's `_meter`. The camera, and the map's size and the distance on screen: by hand
+     only.
 
 ## Round 1's Lull: the wizard, a parameter, the route, the checks, submit
 
@@ -291,8 +301,9 @@ on the status line. Watch round 1 at 1× or 2× so each beat is seen.
 24. **Continue opens round 2's Lull.**
     - See: "Round 2 - LULL  3:00  speed 1x". The editor opens last round's playbook by itself, checked
       again against the new map: "Last round's orders are loaded again and checked against the new
-      map (carried from round 1)." and "Quick check - Ready to seal." "Drafts" lists "carried from
-      round 1 (round 2)". Easy, from round 2 on, seals its safe playbook at every seed and still says
+      map (carried from round 1)." and "Quick check - Ready to seal.", then, about 600 ms later,
+      "Full check - Ready to seal." (opening the carried draft restarts the idle timer). "Drafts"
+      lists "carried from round 1 (round 2)". Easy, from round 2 on, seals its safe playbook at every seed and still says
       ready (item 113 (7)); you cannot see its seat.
     - Proof: `methods.rs` `a_lull_opens_with_last_rounds_playbook_carried_and_re_verified`;
       `editor.rs` `the_carried_draft_is_last_rounds_sealed_playbook_checked_again`; the watch check's
@@ -302,6 +313,9 @@ on the status line. Watch round 1 at 1× or 2× so each beat is seen.
     Only you see it.") and type a line. The camera does not move while you type **(with T22a)**.
     Press "Save notes".
     - See: "Notebook saved (N characters)."
+    - Then: the buttons take no keyboard focus, so the notes box keeps it after "Save notes", and
+      the free-look keys stay off until you leave the field by the action T22a's pull request names
+      **(with T22a)**. Leave it now, before round 2's Push (step 30).
     - Proof: the watch check's `_edit` (`save_notes`); `methods.rs`
       `a_second_seats_token_sees_neither_playbook_nor_draft_nor_notebook_nor_replay`.
 
@@ -309,8 +323,10 @@ on the status line. Watch round 1 at 1× or 2× so each beat is seen.
     - See: "Opened." It replaces the carried draft on screen and clears Undo. "Checks" holds one
       row: the word "Error", the sentence "A rule waits a while between firings, so put at least the
       minimum here.", "E0108 at /declarative/handlers/0/cooldown_ms" and the button "Fix: Set the
-      cooldown to 5000 ms". The verdict reads "Quick check - Cannot be sealed yet." The row shows the verifier's plain sentence for a beginner; the
-      golden's message, "`cooldown_ms` is 1000 ms; the minimum is 5000 ms.", is not drawn.
+      cooldown to 5000 ms". The verdict reads "Quick check - Cannot be sealed yet.", then, about
+      600 ms later (Load restarts the idle timer), "Full check - Cannot be sealed yet." The row shows
+      the verifier's plain sentence for a beginner; the golden's message, "`cooldown_ms` is 1000 ms;
+      the minimum is 5000 ms.", is not drawn.
     - Proof: `tests/golden/verifier/e0108_cooldown_below_minimum/expected.report.json` (the code, the
       pointer, the plain sentence and the Fix's title); the watch check's `_edit` loads
       `godot/fixtures/needs_a_fix.jsonc`, the verifier's own E0108 case, and presses its Fix, in the
@@ -330,17 +346,21 @@ on the status line. Watch round 1 at 1× or 2× so each beat is seen.
 
 29. **Press "Submit", then "Ready".**
     - See: as steps 11 and 13, then "Round 2 - PUSH".
+    - Proof: as steps 11 and 13.
 
 ## Round 2's Push
 
-30. **Watch or skip.** The Push runs five minutes at 1×; "4x" or "Skip" shortens it. At the recap,
-    read the `settled` row and press "Continue".
+30. **Watch or skip.** The Push runs five minutes at 1×; "4x" or "Skip" shortens it. If the camera
+    keys do nothing, the notes box still has focus: leave it as step 25 says **(with T22a)**. At the
+    recap, read the `settled` row and press "Continue".
     - Proof: as steps 14 to 21.
 
 ## Round 3's Lull: save and resume
 
 31. **Continue opens round 3's Lull.**
     - See: "Round 3 - LULL  3:00  speed 1x", the carried draft "carried from round 2".
+    - Proof: `methods.rs` `a_lull_opens_with_last_rounds_playbook_carried_and_re_verified`; the watch
+      check's `_carried`.
 
 32. **Quit in the Lull.** Close the game's window. No button saves the match: the host saves at every
     Lull boundary by itself, and quitting in a Lull closes its standard input, so it saves the Lull
@@ -387,13 +407,18 @@ on the status line. Watch round 1 at 1× or 2× so each beat is seen.
       hand only.
 
 37. **The last recap.** Read the `settled` row and press "Continue". The last recap waits for it too.
+    - Proof: `crates/sim/tests/runner.rs` `the_round_limit_ends_the_match_when_the_last_recap_closes`
+      (the match ends when the last recap closes, not before); pressing it: by hand only.
 
 38. **The match ends on the round limit.**
     - See: "Round 3 - ENDED  speed Nx  The last match has ended, so there is nothing to resume.",
       and "match_ended  The match ended." The fog lifts on the server by itself: Easy's beacons, units
       and edits appear. Press "Whole map" to frame the camera on all of it. The lobby has forgotten
       the match, so the next launch offers no Resume. The skeleton ends on the round limit, because
-      with no combat before S2 the one-tick rule cannot end a two-seat match (item 123 (2) 2).
+      with no combat before S2 the one-tick rule cannot end a two-seat match (item 123 (2) 2). For
+      the same reason no demo reaches the fog's other unlock, an elimination (the T16a notes' two-seat
+      match that ends by elimination); `crates/gateway/tests/security.rs`
+      `elimination_lifts_fog_without_reissuing_a_token` alone proves it until S2.
     - Proof: `crates/sim/tests/runner.rs` `the_round_limit_ends_the_match_when_the_last_recap_closes`;
       `view.rs` `the_full_map_unlock_comes_from_a_server_side_policy_change` and its client half,
       `crates/client-gdext/tests/unlock.rs` of the same name; `godot_project.rs`
@@ -406,13 +431,16 @@ on the status line. Watch round 1 at 1× or 2× so each beat is seen.
     In the private match cache, rename that match's `save.json` (in the newest `local-*` folder) to
     `save.json.bak`. Relaunch and press "Resume last match".
     - See: "The match host would not resume the last match: " followed by the host's own words (a
-      missing save is refused as "there is no saved match `<id>` to resume"). The chooser stays hidden, so "New match" cannot be reached
-      without restarting the game, and the next launch offers the same Resume again (S6-22, owner at
+      missing save is refused as "there is no saved match `<id>` to resume"). The chooser stays
+      hidden, so "New match" cannot be reached without restarting the game, and the next launch
+      offers the same Resume again (S6-22, owner at
       S6). Rename the file back to resume that match, or delete `last_match.txt` to forget it.
-    - Proof: `godot_project.rs`
-      `the_lobby_forgets_an_ended_match_and_shows_a_refusal_as_the_host_wrote_it` (source pins);
-      `host_loop.rs` `a_resume_line_that_disagrees_with_the_save_is_refused`. By hand only in the
-      lobby.
+    - Proof: `crates/gateway/src/cache.rs` `a_folder_with_a_save_is_reopened_and_never_opened_new`
+      (a match with no save is refused, not opened new); `godot_project.rs`
+      `the_lobby_forgets_an_ended_match_and_shows_a_refusal_as_the_host_wrote_it` (source pins: the
+      lobby shows the host's words). `host_loop.rs`
+      `a_resume_line_that_disagrees_with_the_save_is_refused` is another refusal the lobby shows the
+      same way. By hand only in the lobby.
 
 ## Deviations from section 1.1
 
@@ -487,6 +515,12 @@ Found by T22b, not decided:
   beginner where the verifier gives one (`crates/client-gdext/src/editor.rs` `rows_of`), so the row
   reads "A rule waits a while between firings, so put at least the minimum here.", not the golden's
   message (step 26).
+- **The notes box keeps keyboard focus after "Save notes".** Every panel button is built with
+  `focus_mode = Control.FOCUS_NONE` (`godot/scripts/editor.gd`, `lobby.gd`, `wizard.gd`), so pressing
+  one does not take focus from the notes box, and with T22a's change the free-look keys stay off
+  until the player leaves the field. Steps 25 and 30 say so; the action that leaves the field is the
+  one T22a's pull request names **(with T22a)**, and if it names none, this is a deviation for the
+  owner (item 123 (2) 8).
 
 ## For developers
 
