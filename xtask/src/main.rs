@@ -299,13 +299,17 @@ const WALL_GUARDED_PACKAGES: &[&str] = &[
 
 /// The client side of the wall: walled crates that may never reach the named
 /// deterministic crates, transitively included (decisions-log item 102 (3),
-/// taken as item 116 (6)(d)).
+/// taken as item 116 (6)(d); the operator on the client's line by the owner's
+/// decision, item 118 (5)).
 ///
 /// `wall-guard`'s second relation. The first keeps the deterministic crates
 /// away from the float, cast, hash-map and clock allowance; this one keeps the
 /// thin client away from the rules. `client-gdext` marshals and decides nothing
 /// (AGENTS.md section 3 rule 4), so it reaches neither the sim nor the crates
-/// that hold a rule, a verdict or a socket; the mesher takes integer chunk data
+/// that hold a rule, a verdict, a socket or a gameplay decision: the verifier,
+/// plan-core, the gateway, and the operator, the crate of templates and utility
+/// scoring, whose library depends on `pharmakos-proto` alone and so would pass
+/// every other check if the client reached it; the mesher takes integer chunk data
 /// in and "nothing from the sim". Each entry is a walled crate by name, and a
 /// future walled crate joins by adding its own line. It is deliberately NOT
 /// "no walled crate reaches the sim": that would forbid the walled harness
@@ -315,7 +319,10 @@ const WALL_GUARDED_PACKAGES: &[&str] = &[
 /// `crates/client-gdext/tests/no_sim.rs` checks the client's line from
 /// `Cargo.lock` as well; the two agree by construction.
 const CLIENT_WALL: &[(&str, &[&str])] = &[
-    ("client-gdext", &["sim", "verifier", "plan-core", "gateway"]),
+    (
+        "client-gdext",
+        &["sim", "verifier", "plan-core", "gateway", "operator"],
+    ),
     ("mesher", &["sim"]),
 ];
 
@@ -3365,6 +3372,7 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
             "pharmakos-verifier",
             "pharmakos-plan-core",
             "pharmakos-gateway",
+            "pharmakos-operator",
         ] {
             let broken = format!("{LISTING}{name} v0.1.0 (/repo)\n");
             assert_eq!(

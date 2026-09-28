@@ -386,12 +386,11 @@ per-path allow-list, so the mechanism is this and nothing else:
   because the wall is a crate.
 - `wall-guard`'s second relation keeps the client side of the wall away from the core:
   `CLIENT_WALL` in `xtask/src/main.rs` pairs a walled crate, line by line, with what it may never
-  reach, transitively included (`client-gdext`: the sim, the verifier, plan-core and the gateway;
-  `mesher`: the sim), and fails too when a crate a line names has left the workspace.
-  `crates/client-gdext/tests/no_sim.rs` checks the client's line from `Cargo.lock` as well. By the
-  owner's decision (decisions-log item 118 (5)), the operator is to join the client's line in both;
-  the change lands in the comments lane after T21, the first pull request that may edit them. A future walled crate joins by adding
-  its own line; the rule is not "no walled crate reaches the sim", which would forbid the walled
+  reach, transitively included (`client-gdext`: the sim, the verifier, plan-core, the gateway and
+  the operator, the crate of gameplay decisions, on the owner's decision of decisions-log item
+  118 (5); `mesher`: the sim), and fails too when a crate a line names has left the workspace.
+  `crates/client-gdext/tests/no_sim.rs` checks the client's line from `Cargo.lock` as well. A
+  future walled crate joins by adding its own line; the rule is not "no walled crate reaches the sim", which would forbid the walled
   harness §4.5 sanctions (decisions-log items 102 (3) and 116 (6)(d)).
 - Adding a crate to `WALLED_PACKAGES` widens the allowance for that whole crate, so it is a contract
   change (§5) and needs owner approval.

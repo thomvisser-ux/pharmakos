@@ -7,17 +7,18 @@
 //! surface, "and nothing else". The sim is the crate that owns hashed state; this one is
 //! walled, so floats, `as` casts, hash maps and clocks are legal inside it. An edge
 //! between them in either direction is the thing the wall exists to prevent, and
-//! `cargo xtask wall-guard` checks the direction that matters most — that no
-//! deterministic crate depends on a walled one. It does **not** check this direction,
-//! because a walled crate depending on the sim would not be a lint failure anywhere: it
-//! would be an ordinary Cargo edit that quietly put the determinism crate's stepping API
-//! within the bridge's reach.
+//! `cargo xtask wall-guard` checks both directions now: that no deterministic crate
+//! depends on a walled one, and, through its second relation, `CLIENT_WALL` in
+//! `xtask/src/main.rs`, that this crate reaches none of the five crates below
+//! (decisions-log items 102 (3), 116 (6)(d) and 118 (5)). A walled crate depending on
+//! the sim would not be a lint failure anywhere: it would be an ordinary Cargo edit that
+//! quietly put the determinism crate's stepping API within the bridge's reach.
 //!
-//! So this file checks it, and it checks the **transitive** closure rather than the
-//! manifest alone — a direct edge is the easy case, and an edge arriving through a third
-//! crate is the one that would go unnoticed. The closure is read out of the committed
-//! `Cargo.lock`, which is the resolved graph CI builds from, with no subprocess and no
-//! second resolver.
+//! This file checks the same thing, and it checks the **transitive** closure rather than
+//! the manifest alone — a direct edge is the easy case, and an edge arriving through a
+//! third crate is the one that would go unnoticed. The closure is read out of the
+//! committed `Cargo.lock`, which is the resolved graph CI builds from, with no subprocess
+//! and no second resolver, so a developer running `cargo test` meets it first.
 
 #![allow(
     clippy::expect_used,
@@ -37,14 +38,19 @@ const SELF: &str = "pharmakos-client-gdext";
 
 /// Names that must not appear anywhere in this crate's dependency closure.
 ///
-/// `pharmakos-sim` is the crate map's rule and T12's acceptance. The other three are the
+/// `pharmakos-sim` is the crate map's rule and T12's acceptance. The other four are the
 /// crates the map does not grant this one either — an edge to any of them would mean the
-/// thin client had started reaching for a rule, a verdict or a socket.
+/// thin client had started reaching for a rule, a verdict, a socket or a gameplay
+/// decision. The last is the operator, the crate of templates and utility scoring: its
+/// library depends on `pharmakos-proto` alone, so nothing else would catch the edge
+/// (decisions-log item 118 (5), the owner's decision). `CLIENT_WALL`'s client line in
+/// `xtask/src/main.rs` names the same five.
 const FORBIDDEN: &[&str] = &[
     "pharmakos-sim",
     "pharmakos-verifier",
     "pharmakos-plan-core",
     "pharmakos-gateway",
+    "pharmakos-operator",
 ];
 
 fn workspace_root() -> PathBuf {
