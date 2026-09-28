@@ -8,10 +8,12 @@ SPDX-License-Identifier: GPL-3.0-or-later
 What the Seat Gateway does, written down: who sees which event, what a
 60-second digest says, what the audit log records, which opening handshakes the
 gateway accepts, what the spec's own worked session answers call by call, and —
-since T16a — what a **camera** is shown, and since T18a what the editor's
-**wizard** is handed. Produced by `crates/gateway/tests/goldens.rs`,
-`crates/gateway/tests/methods.rs`, `crates/gateway/tests/view.rs` and
-`crates/gateway/tests/advice.rs`; compared by `cargo xtask ci`'s `golden` step;
+since T16a — what a **camera** is shown, since T18a what the editor's
+**wizard** is handed, and since T22a what the stage demo's own playbooks verify
+and render to. Produced by `crates/gateway/tests/goldens.rs`,
+`crates/gateway/tests/methods.rs`, `crates/gateway/tests/view.rs`,
+`crates/gateway/tests/advice.rs` and `crates/gateway/tests/demo_playbooks.rs`;
+compared by `cargo xtask ci`'s `golden` step;
 re-blessed with `cargo xtask golden --bless`, which a pull request then has to
 explain (AGENTS.md §5).
 
@@ -20,9 +22,9 @@ The first four exist because the surface is the thing the whole roadmap inherits
 the rule *does*, in a table a reviewer can read without running anything — and
 it is the shape of that table, not any one line of it, that v1.1 publishes. The
 fifth is T13's, and is the method slice answering the session spec §12 prints.
-The next three are T16a's, and the ninth is T18a's.
+The next three are T16a's, the ninth is T18a's, and the last ten are T22a's.
 
-## The nine cases
+## The nineteen cases
 
 | Case | File | What it pins |
 | --- | --- | --- |
@@ -35,6 +37,16 @@ The next three are T16a's, and the ninth is T18a's.
 | `view_keyframe/` | `expected.keyframe.jsonl`, `expected.keyframe.txt` | Seat 0's whole-map keyframe on the golden seed — **the fixture T16 renders from** |
 | `walkthrough_watch/` | `expected.watch.txt` | A watch session: keyframe, clock, `end_lull`, speed, skip, `end_recap` |
 | `instantiate_suggested/` | `expected.response.json` | One `instantiate_template{suggested: true}` answer on the wire — **the fixture T19's wizard reads** |
+| `demo_hold_and_build_verify/` | `expected.response.json` | Seat 0's `verify_plan{depth: "full"}` answer for Hold & Build as the wizard opens it (its own values), in the lobby's round 1 Lull — its `report_hash` |
+| `demo_hold_and_build_render/` | `expected.response.json` | The same playbook's `render_plan` answer — its prose |
+| `demo_expand_and_mine_verify/` | `expected.response.json` | As above, for Expand & Mine |
+| `demo_expand_and_mine_render/` | `expected.response.json` | As above, for Expand & Mine |
+| `demo_safe_playbook_verify/` | `expected.response.json` | As above, for the Safe Playbook template |
+| `demo_safe_playbook_render/` | `expected.response.json` | As above, for the Safe Playbook template |
+| `demo_against_easy_verify/` | `expected.response.json` | As above, for `scenarios/skeleton/against-easy.playbook.jsonc` as committed |
+| `demo_against_easy_render/` | `expected.response.json` | As above, for `scenarios/skeleton/against-easy.playbook.jsonc` as committed |
+| `demo_deploy_and_visit_verify/` | `expected.response.json` | As above, for `scenarios/skeleton/deploy-and-visit.playbook.jsonc` as committed |
+| `demo_deploy_and_visit_render/` | `expected.response.json` | As above, for `scenarios/skeleton/deploy-and-visit.playbook.jsonc` as committed |
 
 ## What a diff means, case by case
 
@@ -338,6 +350,57 @@ things moved:
 
 The `_status` footer is the opening Lull's, with the whole Lull reported left;
 it moving means the footer's shape did.
+
+### `demo_<playbook>_verify/` and `demo_<playbook>_render/`
+
+AGENTS.md section 10 item 3 for the stage demo's own playbooks (decisions-log
+item 123 (2) 10): each one verifies identically (the same `report_hash`) and
+renders identically (the same prose). Five playbooks, two cases each, produced
+by `crates/gateway/tests/demo_playbooks.rs`: the three templates in `library/`,
+each instantiated for seat 0 with `template_id` alone (its own values, nothing
+suggested: the operator's suggestions are live and are pinned elsewhere, in
+`instantiate_suggested`), and the two scenario playbooks under
+`scenarios/skeleton/` as committed. The same test asserts each text's byte
+round trip through plan-core (`Document::parse(text).to_text() == text`) and
+that each FULL report qualifies; neither has a file here.
+
+**The verification context is the game's**: seat 0's frozen snapshot and scope
+in round 1's Lull of a match opened as `gamectl host` opens the lobby's
+(`godot/scripts/host_link.gd`: seed `0x00000000ca5caded`, two seats, the rules
+table's own segment ladder, three rounds), through the `Host::open_from`,
+fogged `Surface::new`, `attach` and `open_lull` that `serve.rs` takes, with the
+client's first clock report (the whole Lull left). No in-process seat is
+registered, because neither the built-in operator nor the advisor steps
+anything, so seat 0's frozen snapshot is the same without them. That is why
+`segment_length_ms` in the footer is the ladder's first Push, not the one-second
+segment of `instantiate_suggested`'s footer, and why these are not the
+verifier's fixture scope (`crates/verifier/tests/verifier.rs`), which holds none of the voxels the
+scenario playbooks name.
+
+What moves a demo case, and what a diff means:
+
+* **The playbook moved.** A template in `library/` or a scenario playbook was
+  edited: its `plan_fingerprint`, `report_hash` and `size_units` move, and its
+  prose moves with any change a player would read. Say which file and why; a
+  comment-only edit to a template moves nothing here, because neither answer
+  carries a comment.
+* **The instantiation moved** (the three template cases only): the gateway's
+  `instantiate_template`, or the template's own values.
+* **The context moved** (item 109): the golden seed's map, the rules table (its
+  `rules_hash` is in every report, so a tuning change moves every `_verify`
+  case), the segment ladder the footer names, or the frozen snapshot's shape. A
+  widened snapshot moves every `report_hash` here with the verifier's own
+  goldens, and the pull request re-blesses both and says why.
+* **The verifier or the renderer moved.** A new diagnostic, a changed lint or a
+  changed `verifier_version` moves the `_verify` cases; a template string in
+  `render_plan` moves every `_render` case. A report that stops qualifying is
+  not re-blessed: the test asserts `qualifies: true`, and a demo playbook the
+  game refuses is a demo that cannot be played.
+
+The answers carry no file's text but what the renderer quotes: a report names
+codes, pointers and hashes, and the prose quotes the playbook's own `meta`
+title and summary and its step labels. No licence header or comment reaches
+them, so these files take this area's `GPL-3.0-or-later` without an override.
 
 ## Conventions
 
