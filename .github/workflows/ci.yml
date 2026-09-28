@@ -315,7 +315,9 @@ jobs:
     # satisfied (decisions-log item 116 (6)(m)); a dispatch of main itself has an empty
     # range and passes. It still skips on main's push, where the range would be empty or
     # the whole history. AGENTS.md section 8 and docs/CONTRIBUTING.md both point here,
-    # so this job is what makes "CI checks it" true.
+    # so this job is what makes "CI checks it" true. Dependabot signs off its own commits
+    # (`Signed-off-by: dependabot[bot] <support@github.com>`), so the walk accepts them
+    # unchanged and needs no exemption (decisions-log item 122 (4)).
     if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 5

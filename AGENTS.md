@@ -525,7 +525,10 @@ of that premise.
 - **DCO sign-off on every commit.** `git commit -s` adds
   `Signed-off-by: Name <email>`; keep it as the last line. The `dco` job in
   `.github/workflows/ci.yml` walks every commit in the pull request and fails without it. No
-  sign-off, no merge.
+  sign-off, no merge. Dependabot's own commits carry its sign-off line,
+  `dependabot[bot] <support@github.com>`, which is accepted for them in place of a person's
+  (decisions-log items 119 (4), 120 and 122 (4)); a commit anyone else adds to its branch still
+  needs its own.
 - **SPDX headers on every file**, REUSE-style, with `REUSE.toml` as the manifest and a `LICENSE`
   pointer at the root, in each top-level directory outside the game code's tier other than
   `LICENSES/` (`assets/`, `docs/`, `examples/`, `library/`, `packaging/`, `proto/`, `rules/`), and

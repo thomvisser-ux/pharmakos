@@ -1,0 +1,48 @@
+# SPDX-FileCopyrightText: 2026 Pharmakos contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# CONTRACT FILE (AGENTS.md section 5, `.github/**`).
+#
+# Dependabot, as the owner decided it (decisions-log items 119 (4), 120 and 122 (4)):
+#
+#   * GitHub Actions: weekly version updates, every action in ONE pull request, and only
+#     releases at least seven days old (the supply-chain cooldown). Every `uses:` here is
+#     pinned by SHA (item 116 (6)(o)), so GitHub raises no Dependabot alert for an action
+#     and this weekly update is the only way a fix to one arrives. GitHub supports no
+#     semver-specific cooldown for Actions, so `default-days` alone.
+#   * Cargo: NO version updates. `open-pull-requests-limit: 0` is GitHub's documented way
+#     to keep them off; a bump of xxhash-rust, postcard or prost can move every golden.
+#     The entry exists for Cargo's security updates, which the repository's settings turn
+#     on, which that limit does not hold back, and which follow this entry's
+#     commit-message option. Raising the limit turns version updates on.
+#
+# Subjects come out as conventional commits (AGENTS.md section 8): `ci(deps): …` for the
+# Actions and `build(deps): …` for Cargo. Dependabot signs off its own commits
+# (`Signed-off-by: dependabot[bot] <support@github.com>`), which the `dco` job's walk in
+# ci.yml accepts as it stands (item 122 (4)). Who merges these pull requests, and how,
+# is item 120's.
+
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: "ci"
+      include: "scope"
+
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 0
+    commit-message:
+      prefix: "build"
+      include: "scope"
