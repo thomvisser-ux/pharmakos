@@ -9,6 +9,10 @@
 //! data (AGENTS.md §12) and a test that pinned one would fail on every tuning
 //! pull request without telling anybody anything.
 //!
+//! One test joined them at T22a: the Quartermaster holding a fabricator order
+//! while the headroom cannot run it, then filling it once a Generator brings
+//! the supply back (decisions-log item 123 (2) 7).
+//!
 //! The one golden here, `tests/golden/economy/expected.settlement.txt`, is the
 //! exception and is meant to be: it is a fixed three-round match read line by
 //! line, so a tuning change *does* move it, and `tests/golden/economy/README.md`
@@ -1346,6 +1350,240 @@ fn no_beacon_starves_another_within_a_band() {
         cursors, served,
         "the Quartermaster cursor follows the beacon it just paid"
     );
+}
+
+#[test]
+fn a_fabricator_order_the_headroom_cannot_run_is_held_until_a_generator_brings_supply_back() {
+    // Spec section 7: the Quartermaster "balances power: when draw exceeds
+    // supply, it holds fabricator orders, then applies the brownout order"
+    // (decisions-log item 123 (2) 7). The draw is built **through** the
+    // Quartermaster, not around it: a Survey beacon's fabricator asks for a
+    // scout, a real unit order the seat can pay for in `$`, whose
+    // `power.kw_per_unit` the settled headroom cannot run. The supply comes
+    // back by the sim's own paths too: the core's Build mandate buys a
+    // Generator on the zone's vent, a build drone raises it, and once it
+    // stands the held order is filled. [`HeldOrder`] is the arrangement and
+    // [`HeldOrder::watch`] asserts the hold on every tick it lasts.
+    let fixture = HeldOrder::new();
+    let (grid, output) = (fixture.grid, fixture.output);
+    let watched = fixture.watch();
+
+    assert!(
+        watched.generator_paid,
+        "the core's Build mandate bought the Generator"
+    );
+    assert!(
+        watched.held > 1,
+        "the order was held on more than one decision tick before supply came back: {}",
+        watched.held
+    );
+    let (supply, draw, left) = watched
+        .filled
+        .unwrap_or_else(|| panic!("the held order was filled once supply came back"));
+    assert_eq!(
+        supply.raw(),
+        watched.first_supply.raw().saturating_add(output),
+        "the supply that came back is the Generator's tap"
+    );
+    assert!(
+        supply.raw().saturating_sub(draw.raw()) >= grid.per_unit,
+        "and the headroom the Quartermaster read runs the scout: {supply:?} - {draw:?}"
+    );
+    assert_eq!(
+        left,
+        Money::ZERO,
+        "the scout was charged when it was filled"
+    );
+}
+
+/// The arrangement of the Quartermaster hold test: a lit grid whose headroom
+/// is one kilowatt short of a unit's draw, a Survey beacon that wants one
+/// scout, a core that builds a Generator on the zone's vent, and money for
+/// exactly those two orders, so "not charged" is an equality.
+struct HeldOrder {
+    runner: Runner,
+    grid: Grid,
+    seat: SeatId,
+    survey: BeaconId,
+    output: i32,
+    scout_cost: Money,
+    generator_cost: Money,
+}
+
+/// What [`HeldOrder::watch`] saw.
+struct Watched {
+    /// Decision ticks on which the order was asked, payable and not filled.
+    held: u32,
+    /// Whether the Generator's order was paid.
+    generator_paid: bool,
+    /// Supply, draw and treasury at the end of the tick the scout was filled.
+    filled: Option<(Kw, Kw, Money)>,
+    /// The supply at the end of the Push's first tick.
+    first_supply: Kw,
+}
+
+impl HeldOrder {
+    fn new() -> HeldOrder {
+        // The core's surplus is cut to one kilowatt short of a unit's draw
+        // over the starting force's load, so the grid is lit (draw below
+        // supply, no brownout) and the headroom is `power.kw_per_unit` less
+        // one.
+        let grid = Grid::of(&rules());
+        assert!(grid.per_unit > 0, "a unit draws: {grid:?}");
+        let surplus = grid
+            .starting_load()
+            .saturating_add(grid.per_unit)
+            .saturating_sub(1);
+        let rules = rules_with_core_surplus(u32::try_from(surplus).unwrap_or(0));
+        // A long segment: the build drone has to walk to the vent and raise
+        // the Generator inside it (at the committed table, about 51 of these
+        // 120 s).
+        let mut world = world_with(rules.clone(), &[120_000]);
+        let seat = SeatId::new(0);
+        let core = core_of(&world, seat);
+        let at = world
+            .beacons()
+            .positions()
+            .get(usize::try_from(core.raw()).unwrap_or(0))
+            .copied()
+            .unwrap_or_default();
+        let (vent, _) = vent_stands(&world, at);
+        let output = vent_output(&world, &rules, vent, vent);
+        assert!(output > 0, "a vent worth tapping: {output} kW");
+
+        // The writs are set before their settings, because setting a writ
+        // clears them.
+        world.set_writ(core, MandateKind::Build);
+        assert!(
+            world.add_target(
+                core,
+                TargetKind::Build,
+                StructureKind::Generator.id(),
+                vent,
+                0
+            ),
+            "the Generator's target fits"
+        );
+        let survey = world
+            .place_beacon_directly(seat, offset(at, 6), MandateKind::Survey, PRIORITY_NORMAL)
+            .unwrap_or_else(|| panic!("room for a beacon"));
+        world.set_writ(survey, MandateKind::Survey);
+        world.set_scouts(survey, 1);
+        let scout_cost = world.unit_cost(UnitKind::Scout);
+        let generator_cost = world.structure_cost(StructureKind::Generator);
+        assert!(
+            scout_cost.raw() > 0 && generator_cost.raw() > 0,
+            "both orders cost `$`: {scout_cost:?}, {generator_cost:?}"
+        );
+        world.set_treasury(
+            seat,
+            Money::new(scout_cost.raw().saturating_add(generator_cost.raw())),
+        );
+        HeldOrder {
+            runner: Runner::new(world),
+            grid,
+            seat,
+            survey,
+            output,
+            scout_cost,
+            generator_cost,
+        }
+    }
+
+    /// Plays the Push until the scout is filled or the segment ends,
+    /// asserting on every tick before the fill that the order is held.
+    fn watch(mut self) -> Watched {
+        let asking = pharmakos_sim::mandate::mandate_for(MandateKind::Survey)
+            .unwrap_or_else(|| panic!("the Survey mandate runs at the skeleton"));
+        let seat = self.seat;
+        let is_seat = |event: &Event, kind: EventKind, value: u8| {
+            event.kind == kind && event.seat == Some(seat) && event.value == i64::from(value)
+        };
+        assert!(self.runner.begin_push(), "the Push begins");
+        self.runner.clear_events();
+        let mut watched = Watched {
+            held: 0,
+            generator_paid: false,
+            filled: None,
+            first_supply: Kw::ZERO,
+        };
+        let mut first = true;
+        while let Some(report) = self.runner.step() {
+            let events = self.runner.events().to_vec();
+            self.runner.clear_events();
+            let world = self.runner.world();
+            let (supply, draw) = supply_and_draw(world, seat);
+            if first {
+                watched.first_supply = supply;
+                first = false;
+            }
+            watched.generator_paid |= events.iter().any(|event| {
+                is_seat(
+                    event,
+                    EventKind::StructureQueued,
+                    StructureKind::Generator.id(),
+                )
+            });
+            let scouts = events
+                .iter()
+                .filter(|event| is_seat(event, EventKind::UnitFabricated, UnitKind::Scout.id()))
+                .count();
+            if scouts > 0 {
+                assert_eq!(scouts, 1, "one order, one scout");
+                assert!(
+                    world.is_decision_tick(),
+                    "an order is filled on a decision tick"
+                );
+                watched.filled = Some((supply, draw, treasury(world, seat)));
+                break;
+            }
+            // The fabricator still wants the scout: the Survey mandate asks
+            // again on every decision tick, and nothing queues an order
+            // between them.
+            let request = asking
+                .request(world, self.survey)
+                .unwrap_or_else(|| panic!("the fabricator still wants its scout"));
+            assert_eq!(
+                (request.cost, request.draw),
+                (self.scout_cost, Kw::new(self.grid.per_unit)),
+                "the order is a scout at the table's price and draw"
+            );
+            // Orders are gathered on a decision tick only
+            // (`World::is_decision_tick`, the tick just stepped). On one, an
+            // order the seat can pay for that was not filled was held, and
+            // only for the headroom the power phase had just settled, which is
+            // what the Quartermaster read.
+            if world.is_decision_tick() {
+                assert!(
+                    supply.raw().saturating_sub(draw.raw()) < self.grid.per_unit,
+                    "held only while the headroom is short: {supply:?} - {draw:?}"
+                );
+                assert!(
+                    supply.raw() >= draw.raw(),
+                    "the grid is lit, so the hold is the Quartermaster's, not a brownout's"
+                );
+                watched.held = watched.held.saturating_add(1);
+            }
+            let expected = if watched.generator_paid {
+                self.scout_cost
+            } else {
+                Money::new(
+                    self.scout_cost
+                        .raw()
+                        .saturating_add(self.generator_cost.raw()),
+                )
+            };
+            assert_eq!(
+                treasury(world, seat),
+                expected,
+                "a held order charges nothing"
+            );
+            if report.segment_ended {
+                break;
+            }
+        }
+        watched
+    }
 }
 
 #[test]
