@@ -29,10 +29,14 @@ Three kinds of golden live here, and they fail for different reasons:
 * **The prose moved.** Either a template string changed (say so; it is the one
   the player reads) or the plan itself renders differently, which is a semantic
   change wearing a typographic disguise. The prose says **nothing** about the
-  coming segment's length today: `Snapshot` does not carry one yet, and
-  `crates/plan-core/src/context.rs` says so in a PLACEHOLDER against T10. From
-  T10 onwards, when that field exists and `render_plan` reads it, a prose diff
-  after a segment ladder change becomes expected and should be stated.
+  coming segment's length. The frozen snapshot carries it since T10
+  (`Snapshot::coming_segment_ms`, which `crates/plan-core/src/context.rs` reads,
+  saying its PLACEHOLDER against T10 is discharged), but `render_plan`
+  (`crates/plan-core/src/render.rs`) reads nothing from the context it is
+  handed, and its test `nothing_is_claimed_about_the_segments_length` keeps the
+  word out of the prose. So a segment ladder change alone moves no prose here;
+  a prose diff that follows one means the renderer started reading the segment's
+  length, which is a rule change to state, not a golden to re-bless.
 
 ## The cases
 
