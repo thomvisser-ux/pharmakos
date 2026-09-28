@@ -120,12 +120,15 @@ naming it. Each shot's size and red-channel variance goes out first, as a
 4. write below what it shows and which run rendered it.
 
 **When each shot moves.** The vista moves with the gateway's keyframe fixture,
-the mesher and the client's view decode (above). The **wizard** shot moves
-whenever Easy's suggestion or `library/`'s Hold & Build template moves, because
-its input, `godot/fixtures/instantiate_suggested.json`, is a copy of the
-gateway's `instantiate_suggested` golden (decisions-log item 113 (14)): the pull
-request that moves that golden re-copies the fixture and re-renders this PNG
-from its own CI run. The **rows** shot moves whenever the verifier's committed
+the mesher and the client's view decode (above). The **wizard** shot's input,
+`godot/fixtures/instantiate_suggested.json`, moves whenever Easy's suggestion or
+`library/`'s Hold & Build template moves, because it is a copy of the gateway's
+`instantiate_suggested` golden (decisions-log item 113 (14)): the pull
+request that moves that golden always re-copies the fixture, and re-renders this
+PNG from its own CI run only when something the wizard's first page draws moved
+(its label, value, mark or why; a comment in the template is none of them), as
+`tests/golden/gateway/README.md` and `crates/client-gdext/tests/wizard.rs` say.
+The **rows** shot moves whenever the verifier's committed
 diagnostics that `godot/fixtures/rows_report.json` carries move
 (`crates/client-gdext/tests/editor_fixtures.rs` keeps the fixture honest), or
 the editor's row drawing (`godot/scripts/rows.gd`) does; that pull request
