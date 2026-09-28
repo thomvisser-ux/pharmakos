@@ -51,13 +51,24 @@
 //! The editor shares the seat connection with the vista's polls
 //! (`docs/design/skeleton-plan-t16a-notes.md` section B, "T19" (5)), and the seat token's
 //! budget is the gateway's: `pharmakos_gateway::limit::CALLS_PER_TICK` calls per gateway
-//! tick. That tick moves only when the match's clock does: in a Lull, when the admin
+//! tick. That tick moves only when the match's clock does: outside a Push, when the admin
 //! connection's `report_host_clock` is answered, about four times a second; in a Push, when
 //! an `advance_push` ran any game time (section B, "T19" (3)). So the rig spends at most
 //! [`SEAT_CALLS_PER_REFILL`] seat calls between two such answers. With one call in flight per
 //! connection, at most one more can land in the same gateway tick, the one that was already
 //! on its way when the clock moved, which keeps the seat under the gateway's limit however
 //! fast the player edits (`tests/rate_budget.rs`).
+//!
+//! **Not every clock answer moves the clock** (decisions-log item 121 (4), the watch check's
+//! flake). The gateway floors a phase's reported time to whole ticks, keeps it as a
+//! high-water mark, and starts every phase's clock again from zero, carrying what the last
+//! one spent; so a phase change moves no tick, and neither does a phase's first report,
+//! which goes out at once with almost nothing spent. The rig refills only on a report that
+//! carries the phase's clock at least one report interval ([`CLOCK_REPORT_US`]) past the one
+//! that last refilled it, which every report but a phase's first does, and which moves the
+//! gateway's tick as long as a tick is shorter than a report interval. Before, every answer
+//! refilled, and at a Lull that follows a recap the calls left from the recap's last refill
+//! and six more could all land in one tick (`tests/phase_budget.rs`).
 //!
 //! # The meter
 //!
@@ -97,6 +108,13 @@ use crate::view::{read_status, split_footer};
 /// PLACEHOLDER: the margin is the client's; the numbers are OWNER's at hardening with the
 /// gateway's rate limits, and this follows them.
 pub const SEAT_CALLS_PER_REFILL: u32 = 6;
+
+/// A report interval in milliseconds: how far a phase's reported clock must move past
+/// the report that last refilled the seat's budget before an answer refills it again.
+const CLOCK_REPORT_MS: u64 = match CLOCK_REPORT_US.checked_div(1_000) {
+    Some(ms) => ms,
+    None => 0,
+};
 
 /// The admin connection's index.
 pub const ADMIN: usize = 0;
@@ -272,6 +290,11 @@ pub struct Rig {
     keyframe_not_before_us: u64,
     /// Seat calls left before the gateway's clock next moves.
     seat_budget: u32,
+    /// The `elapsed_ms` of the clock report in flight.
+    clock_in_flight_ms: Option<u64>,
+    /// The `elapsed_ms` of this phase's report that last refilled the seat's budget; zero
+    /// when the phase has had none.
+    refilled_at_ms: u64,
     /// Whether `set_ready` has gone out this Lull: the seat's orders are final, and the
     /// editor sends nothing more until the next Lull.
     ///
@@ -316,6 +339,8 @@ impl Rig {
             view_refusals: 0,
             keyframe_not_before_us: 0,
             seat_budget: SEAT_CALLS_PER_REFILL,
+            clock_in_flight_ms: None,
+            refilled_at_ms: 0,
             ready_sent: false,
             editor: Editor::default(),
             meter: Meter::default(),
@@ -376,7 +401,10 @@ impl Rig {
         state.open = false;
         match state.in_flight.take() {
             Some((_, Purpose::Advance)) => self.timing.pacer.refused(),
-            Some((_, Purpose::Clock)) => self.timing.clock.refused(),
+            Some((_, Purpose::Clock)) => {
+                self.timing.clock.refused();
+                self.clock_in_flight_ms = None;
+            }
             Some((_, Purpose::Plan)) => self.editor.dropped(),
             Some((_, Purpose::Meter)) => self.meter_due = true,
             _ => {}
@@ -441,6 +469,7 @@ impl Rig {
             }
         }
         if let Some((spent, countdown)) = self.timing.clock.next_report() {
+            self.clock_in_flight_ms = Some(u64::try_from(spent).unwrap_or(0));
             return Some((
                 Purpose::Clock,
                 "report_host_clock",
@@ -660,8 +689,15 @@ impl Rig {
             }
             Purpose::Clock => {
                 self.timing.clock.answered();
-                // The report moved the gateway's clock, and with it every token's budget.
-                self.seat_budget = SEAT_CALLS_PER_REFILL;
+                // Only a report a whole interval on moved the gateway's clock, and with it
+                // every token's budget (the module doc's "Not every clock answer moves the
+                // clock").
+                if let Some(spent) = self.clock_in_flight_ms.take() {
+                    if spent >= self.refilled_at_ms.saturating_add(CLOCK_REPORT_MS) {
+                        self.refilled_at_ms = spent;
+                        self.seat_budget = SEAT_CALLS_PER_REFILL;
+                    }
+                }
                 self.all_ready = matches!(result.get("all_ready"), Some(Json::Bool(true)));
                 if self.all_ready && self.phase == Phase::Lull {
                     self.wants.end_lull = true;
@@ -715,7 +751,10 @@ impl Rig {
     fn refused(&mut self, purpose: Purpose, code: &str) {
         match purpose {
             Purpose::Advance => self.timing.pacer.refused(),
-            Purpose::Clock => self.timing.clock.refused(),
+            Purpose::Clock => {
+                self.timing.clock.refused();
+                self.clock_in_flight_ms = None;
+            }
             Purpose::View => {
                 // A cursor from before an attach, or any other refusal: start again from
                 // a keyframe, which is what the feed asks of a client that lost its place.
@@ -745,6 +784,9 @@ impl Rig {
             return false;
         }
         self.phase = phase;
+        // The new phase's clock starts from zero at the gateway, and so does the mark its
+        // reports refill against; the change itself moved no tick, so nothing is refilled.
+        self.refilled_at_ms = 0;
         self.wants.end_lull = false;
         self.wants.end_recap = false;
         self.all_ready = false;
@@ -1426,6 +1468,54 @@ mod tests {
             seat_calls <= SEAT_CALLS_PER_REFILL,
             "{seat_calls} seat calls with the gateway's clock standing still"
         );
+    }
+
+    /// The gateway's clock outside a Push, as `Surface::sync_time` keeps it: the phase's
+    /// reported milliseconds floored to whole 50 ms ticks, a high-water mark, started again
+    /// from zero at every phase change. Answers `(tick, refilled)` for one report.
+    fn report(rig: &mut Rig, gateway_ms: &mut u64, elapsed_ms: u64) -> (u64, bool) {
+        *gateway_ms = (*gateway_ms).max(elapsed_ms);
+        let tick = gateway_ms.checked_div(50).unwrap_or(0);
+        rig.seat_budget = 0;
+        rig.clock_in_flight_ms = Some(elapsed_ms);
+        let result = json::read(r#"{"all_ready":false}"#).expect("json");
+        rig.settle(Purpose::Clock, &result, &mut Answer::default())
+            .expect("settles");
+        (tick, rig.seat_budget == SEAT_CALLS_PER_REFILL)
+    }
+
+    #[test]
+    fn only_a_clock_answer_that_moved_the_gateways_tick_refills_the_seat() {
+        let mut rig = in_lull();
+        // The Lull's first report goes out at once, with almost nothing spent: the
+        // gateway's tick stays where the phase change left it, so nothing refills.
+        let mut gateway_ms = 0_u64;
+        rig.refilled_at_ms = 0;
+        let (tick, refilled) = report(&mut rig, &mut gateway_ms, 12);
+        assert_eq!(tick, 0);
+        assert!(
+            !refilled,
+            "a first report that moved no tick refilled the budget"
+        );
+        // A report interval later the tick has moved, and the budget refills.
+        let (tick, refilled) = report(&mut rig, &mut gateway_ms, 262);
+        assert!(tick > 0);
+        assert!(refilled);
+        let (_, refilled) = report(&mut rig, &mut gateway_ms, 512);
+        assert!(refilled);
+        // A phase change moves no tick either, and the next phase's clock, like the
+        // gateway's, starts again from zero: its first report refills nothing.
+        let footer = pharmakos_proto::gp::api::v1::Status {
+            phase: pharmakos_proto::gp::api::v1::status::Phase::Recap.into(),
+            ..Default::default()
+        };
+        assert!(rig.observe(&footer));
+        let mut gateway_ms = 0_u64;
+        let (tick, refilled) = report(&mut rig, &mut gateway_ms, 3);
+        assert_eq!(tick, 0);
+        assert!(!refilled, "the recap's first report refilled the budget");
+        let (_, refilled) = report(&mut rig, &mut gateway_ms, 253);
+        assert!(refilled);
     }
 
     #[test]
