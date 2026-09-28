@@ -844,8 +844,9 @@ the demo needs, and **T22b**, the checklist pull request, the PLACEHOLDER regist
 T22a first (its train runs the full matrix), then T22b (prose; its train rebases it). The main session fills T22b's
 item 1 with `main`'s push run for the final head before merging it, then cuts `v0.1.0-dev.2` (item 123 (2) 12) and
 hands the owner the run sheet and the zip. The owner's review (AGENTS.md §10 item 8) ends the stage; at it the owner
-also rules on the register's "at this demo" rows, this plan's PROPOSED mark (item 87), the §1.1 deviations and the
-delegation of items 85, 86, 116 (2) and 120, which the skeleton's end returns to the owner.
+also rules on the register's "at this demo" rows, this plan's PROPOSED mark (item 87), the §1.1 deviations, the
+deferral of P2's baseline to S5 and P6's to S3's playtest (item 123 (2) 11) and the delegation of items 85, 86, 116
+(2) and 120, which the skeleton's end returns to the owner.
 
 ---
 
@@ -854,7 +855,7 @@ delegation of items 85, 86, 116 (2) and 120, which the skeleton's end returns to
 - **Unit owned:** branch `fix/stage-demo-t22a`, worktree `C:/Users/PC/pharmakos-t22a`, target `D:/build/t22a`.
   Paths: `godot/scripts/host_link.gd`; `godot/scripts/camera_rig.gd`; their source pins and tests
   (`crates/client-gdext/tests/**`, and `godot/scripts/watch_check.gd` for a headless camera-focus check only); a
-  new test file under `crates/sim/tests/`; new golden cases under
+  new test in `crates/sim/tests/` (in `economy.rs` beside the power tests, or one new file); new golden cases under
   `tests/golden/plan-core/**`, `tests/golden/verifier/**` or `tests/golden/gateway/**`, with their tests in
   `crates/plan-core/tests`, `crates/verifier/tests` or `crates/gateway/tests` and their areas' READMEs; and the
   stale texts (e) names. Not `proto/**`, `xtask/**`, `.github/**`, `crates/sim/src`, `crates/gateway/src`,
@@ -865,25 +866,25 @@ delegation of items 85, 86, 116 (2) and 120, which the skeleton's end returns to
   the owner's at S1; the sim's `DEFAULT_ROUND_LIMIT` (6) is not changed, and the config line's format is unchanged
   (its `round_limit` field carries 3, so a remembered `last_match.txt` still parses); (b) the camera ignores keys
   while a GUI control has keyboard focus (the viewport's `gui_get_focus_owner`, or the equivalent), so typing a
-  note or a wizard value no longer moves it, and the keys return to the camera once the player leaves the field, and `camera_rig.gd`'s header, which promises that F toggles following
-  the commander, names the lobby's Follow button instead; no key is added (item 123 (2) 8); (c) a sim test for the
-  Quartermaster stub's hold: it builds a draw above supply through the Quartermaster, not around it, and asserts
-  that the fabricator order is held and then filled once supply returns (item 123 (2) 7); (d) the demo playbooks'
-  goldens (item 123 (2) 10): for each of the three templates instantiated for seat 0 of the golden seed (the
-  gateway's instantiate path, as `crates/gateway/tests/templates.rs` already uses) and for each
-  `scenarios/skeleton/*.playbook.jsonc`, a byte-for-byte round trip through plan-core, a `report_hash` golden and a
-  `render_plan` prose golden, in the existing golden formats, each verified and rendered in the context the game
-  uses (seat 0's frozen snapshot in round 1's Lull of a match hosted as the lobby hosts it, on the golden seed), each
-  FULL report qualifying, and the byte round trip asserted in the test; the lane picks the harness (plan-core and
-  verifier tests, or a gateway test) and says why; (e) the stale texts outside
-  `docs/design/`: the root `README.md` ("most crates are still empty placeholders"); `.gitignore`'s "Placeholder
-  paths"; `godot/README.md`'s `fixtures/instantiate_suggested.json` row and `tests/golden/vista/README.md`'s "When
-  each shot moves", brought to the wizard-PNG rule T21b wrote in `tests/golden/gateway/README.md` and
+  note or a wizard value no longer moves it, and the keys return to the camera once the player leaves the field, and
+  `camera_rig.gd`'s header, which promises that F toggles following the commander, names the lobby's Follow button
+  instead; no key is added (item 123 (2) 8); (c) a sim test for the Quartermaster stub's hold: it builds a draw above
+  supply through the Quartermaster, not around it, and asserts that the fabricator order is held and then filled once
+  supply returns (item 123 (2) 7); (d) the demo playbooks' goldens (item 123 (2) 10): for each of the three templates
+  instantiated for seat 0 of the golden seed (the gateway's instantiate path, as `crates/gateway/tests/templates.rs`
+  already uses) and for each `scenarios/skeleton/*.playbook.jsonc`, a byte-for-byte round trip through plan-core, a
+  `report_hash` golden and a `render_plan` prose golden, in the existing golden formats, each verified and rendered
+  in the context the game uses (seat 0's frozen snapshot in round 1's Lull of a match hosted as the lobby hosts it,
+  on the golden seed), each FULL report qualifying, and the byte round trip asserted in the test; the lane picks the
+  harness (plan-core and verifier tests, or a gateway test) and says why; (e) the stale texts outside `docs/design/`:
+  the root `README.md` ("most crates are still empty placeholders"); `.gitignore`'s "Placeholder paths";
+  `godot/README.md`'s `fixtures/instantiate_suggested.json` row and `tests/golden/vista/README.md`'s "When each shot
+  moves", brought to the wizard-PNG rule T21b wrote in `tests/golden/gateway/README.md` and
   `crates/client-gdext/tests/wizard.rs` (re-rendered only when something the first page draws moved);
   `tests/golden/package/README.md`'s sentence on the templates' own-values PLACEHOLDERs, which T21b removed;
   `tests/golden/plan-core/README.md`'s pointer to a PLACEHOLDER against T10 that is discharged; and
-  `scenarios/skeleton/against-easy-three-rounds.scenario.jsonc`'s "the owner's pending Hold & Build decision",
-  which item 119 (9) and (10) settled (a comment, so no chain moves).
+  `scenarios/skeleton/against-easy-three-rounds.scenario.jsonc`'s "the owner's pending Hold & Build decision", which
+  item 119 (9) and (10) settled (a comment, so no chain moves).
 - **Implements:** item 123 (2) 3, 7, 8 and 10, and (3); AGENTS.md §10 items 3 and 7.
 - **Needs:** T21b (merged). Runs beside T22b, which writes its run sheet against this lane's decided changes; it
   needs nothing from T22b.
@@ -893,11 +894,11 @@ delegation of items 85, 86, 116 (2) and 120, which the skeleton's end returns to
   `crates/client-gdext/tests/godot_project.rs`, the existing pattern for `godot/` sources; no F binding; (c) the new
   test in `crates/sim/tests/` passes, fails with the hold taken out, and needs no change to `crates/sim/src`; (d)
   the new `report_hash` and prose goldens are committed with their tests, which assert each byte round trip and
-  that each FULL report qualifies in the game's context, and the golden area's README names each new row; (e) each stale text rewritten against the code at the lane's base and quoted in the pull
-  request with its replacement. Every golden that moves is named with why. **A determinism chain, a scenario chain,
-  a digest or an existing `report_hash` that moves is a stop:** the lane names the input that moved it and does
-  not re-bless. Every required check green on the lane's final run; the pull request takes the full matrix
-  (`godot/`, the client's tests, the sim's tests).
+  that each FULL report qualifies in the game's context, and the golden area's README names each new row; (e) each
+  stale text rewritten against the code at the lane's base and quoted in the pull request with its replacement. Every
+  golden that moves is named with why. **A determinism chain, a scenario chain, a digest or an existing `report_hash`
+  that moves is a stop:** the lane names the input that moved it and does not re-bless. Every required check green on
+  the lane's final run; the pull request takes the full matrix (`godot/`, the client's tests, the sim's tests).
 - **Contract PR:** no. A new case in an existing golden area is not a golden-format change, and the config line's
   format does not move.
 - **Agent-days:** 2.5.
@@ -935,22 +936,21 @@ delegation of items 85, 86, 116 (2) and 120, which the skeleton's end returns to
   123 (2) 5); the `report_hash` and the safe playbook shown by the tests item 123 (2) 6 names; the Quartermaster's
   hold not expected in the default match, with T22a's test named (item 123 (2) 7); every item and wording item 123
   (2) 9 lists; Hold & Build's shape and both templates' stand-in values, which the owner confirmed (item 119 (9)
-  and (10)); the watch check's match folders, pruned by hand; and a section, "Deviations from section 1.1", listing item 123
-  (2) 1–8 plainly for the owner.
+  and (10)); the watch check's match folders, pruned by hand; and a section, "Deviations from section 1.1", listing
+  item 123 (2) 1–8 plainly for the owner.
 - **Implements:** AGENTS.md §10 as a checklist; item 123 (2) 1–13 on the run sheet and in the register (1–8 as its
   "Deviations from section 1.1", 12 as the zip it names), and (3); items 113 (7) and (15),
   114 (5), 117 (1), 118 (1), 119 (9) and (10) and 121 (1) on the run sheet.
 - **Needs:** T21b (merged). Runs beside T22a and merges after it; the main session reconciles the two at the merge.
 - **Acceptance:** (a) every §10 item present with its evidence, item 1 left for the main session to fill; (b) the
   register's header stamps the commit, the exact grep command and its raw count, and how the count became the
-  distinct rows; the register is cross-checked against the 28 per-task "PLACEHOLDERs:" lines of T0 to T21b in this section (T22a's and T22b's own, added by
-  item 123, make 30), each
-  found in the code, resolved with its item, or named as missing from the code; nothing is reworded in code
-  (rewording is the owning lanes', and contract paths' pull requests'); (c) every run-sheet step quotes the UI's
-  real strings (`godot/scripts/strings.gd`, `lobby.gd`) and says what to click and what to see, and names the test
-  or scenario that also proves it or says "by hand only"; the E0108 edit is checked against the verifier's golden
-  (`tests/golden/verifier/e0108_cooldown_below_minimum`); `reuse lint` green; the pull request's diff touches the
-  two new files alone.
+  distinct rows; the register is cross-checked against the 28 per-task "PLACEHOLDERs:" lines of T0 to T21b in this
+  section (T22a's and T22b's own, added by item 123, make 30), each found in the code, resolved with its item, or
+  named as missing from the code; nothing is reworded in code (rewording is the owning lanes', and contract paths'
+  pull requests'); (c) every run-sheet step quotes the UI's real strings (`godot/scripts/strings.gd`, `lobby.gd`) and
+  says what to click and what to see, and names the test or scenario that also proves it or says "by hand only"; the
+  E0108 edit is checked against the verifier's golden (`tests/golden/verifier/e0108_cooldown_below_minimum`);
+  `reuse lint` green; the pull request's diff touches the two new files alone.
 - **Contract PR:** no — `docs/**` outside `docs/design/`.
 - **Agent-days:** 3.5.
 - **PLACEHOLDERs:** none of its own; the register lists the stage's. A strict one-line grammar and an `xtask`
