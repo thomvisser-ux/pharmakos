@@ -122,6 +122,57 @@ fn scratch(name: &str) -> PathBuf {
     dir.join(format!("{name}{SCRATCH}"))
 }
 
+/// Where a doctored `hash_chain_equals` golden points: outside `tests/golden/`.
+///
+/// T20's review found two hazards in the chain tests (decisions-log item
+/// 118 (4), T20's items 11 and 12). The moved-chain test checked a doctored
+/// chain against the committed golden, so the runner wrote the doctored chain
+/// to `<target>/golden/scenarios/deploy-and-visit/actual.hashes.txt`, the path
+/// `every_committed_scenario_passes_on_its_events_and_its_hashes` writes in
+/// parallel and the `golden` step reads afterwards; and the missing-chain case
+/// pointed its golden at `tests/golden/scenarios/doctored-missing-chain/`, so its
+/// fresh chain landed among the scenario kinds the cross-OS guard uploads and
+/// compares, where it alone would satisfy "at least one scenario chain".
+///
+/// Both now load the scenario, repoint its chain assertion here, and call
+/// `scenario::run::check` directly. `actual_for` answers `None` for a path
+/// outside `tests/golden/`, so nothing is written under `<target>/golden/`; the
+/// loader, which refuses such a path in a file, is not asked.
+fn scratch_golden(name: &str) -> PathBuf {
+    let dir = pharmakos_gamectl::target_dir()
+        .expect("an integration test runs from a cargo target directory")
+        .join("scratch")
+        .join("scenarios");
+    std::fs::create_dir_all(&dir)
+        .unwrap_or_else(|error| panic!("creating {}: {error}", dir.display()));
+    dir.join(format!("{name}.hashes.txt"))
+}
+
+/// The scenario at `source`, loaded, with its one chain assertion pointed at
+/// `golden`.
+fn with_chain_golden(source: &str, golden: &Path) -> scenario::Scenario {
+    let mut loaded = scenario::load(&root(), Path::new(source)).expect("a valid scenario");
+    let mut repointed = 0_usize;
+    for assertion in &mut loaded.assertions {
+        if let scenario::Assertion::HashChainEquals { golden: path } = assertion {
+            *path = golden.to_string_lossy().into_owned();
+            repointed = repointed.saturating_add(1);
+        }
+    }
+    assert_eq!(repointed, 1, "{source} has exactly one chain assertion");
+    loaded
+}
+
+/// The fresh chain a committed scenario's golden is compared with.
+fn committed_actual(name: &str) -> PathBuf {
+    pharmakos_gamectl::target_dir()
+        .expect("an integration test runs from a cargo target directory")
+        .join("golden")
+        .join("scenarios")
+        .join(name)
+        .join("actual.hashes.txt")
+}
+
 fn gamectl(args: &[&str]) -> pharmakos_gamectl::Outcome {
     pharmakos_gamectl::run(args.iter().map(|arg| (*arg).to_owned()), &root())
 }
@@ -188,10 +239,12 @@ fn the_committed_list_is_the_whole_set() {
 /// The acceptance line: "a deliberately doctored assertion produces a readable
 /// diff and a non-zero exit".
 ///
-/// Three doctorings, one per way a scenario can be wrong about the run: an
-/// event that never fires, an event that fires too late, and a hash chain that
-/// moved. Each is written to a scratch file beside the real one so the real one
-/// is never touched.
+/// Two doctorings of the file, one per way a scenario's events can be wrong
+/// about the run: an event that never fires, and an event that fires too late.
+/// Each is written to a scratch file outside the tree, so the real one is never
+/// touched. The two ways its chain can be wrong, missing and moved, are the two
+/// tests after this one, which doctor the loaded scenario rather than the file
+/// ([`scratch_golden`] says why).
 #[test]
 fn a_doctored_assertion_fails_readably_and_exits_non_zero() {
     let source = root().join(COMPLETING);
@@ -209,17 +262,6 @@ fn a_doctored_assertion_fails_readably_and_exits_non_zero() {
             "\"event\": \"beacon_placed\", \"seat\": 0, \"by_tick\": 550",
             "\"event\": \"beacon_placed\", \"seat\": 0, \"by_tick\": 10",
             &["first fired at tick", "which is after tick 10"],
-        ),
-        // Named for what it asserts, which a review found it was not: this
-        // repoints `golden` at a path nothing is committed at, so the branch
-        // it exercises is `scenario_chain_missing`. A chain that *moved* is
-        // `a_moved_chain_names_the_first_tick_that_disagrees` below, which
-        // doctors the bytes rather than the path.
-        (
-            "doctored-missing-chain",
-            "tests/golden/scenarios/deploy-and-visit/expected.hashes.txt",
-            "tests/golden/scenarios/doctored-missing-chain/expected.hashes.txt",
-            &["nothing is committed", "cargo xtask golden --bless"],
         ),
     ];
 
@@ -253,11 +295,57 @@ fn a_doctored_assertion_fails_readably_and_exits_non_zero() {
     }
 }
 
+/// A chain assertion whose golden is missing says that nothing is committed
+/// there and how to commit it, and writes no fresh chain anywhere the `golden`
+/// step or the cross-OS guard reads (T20's item 12, [`scratch_golden`]).
+#[test]
+fn a_missing_chain_says_nothing_is_committed_and_writes_no_actual() {
+    // The by-product the old version of this case left in a warm target
+    // directory; it must not come back.
+    let stray = committed_actual("doctored-missing-chain");
+    if let Some(dir) = stray.parent() {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+    let golden = scratch_golden("doctored-missing-chain");
+    let _ = std::fs::remove_file(&golden);
+    let scenario = with_chain_golden(COMPLETING, &golden);
+    let played = scenario::run::play(&root(), &scenario).expect("it plays");
+
+    let (report, failed) = scenario::run::check(&root(), &scenario, &played).expect("a report");
+    assert_eq!(failed, 1, "only the chain assertion fails:\n{report}");
+    for phrase in ["nothing is committed", "cargo xtask golden --bless"] {
+        assert!(
+            report.contains(phrase),
+            "the diff has to be readable, and `{phrase}` is not in it:\n{report}"
+        );
+    }
+    assert!(
+        stray.parent().is_none_or(|dir| !dir.exists()),
+        "a doctored chain was written among the scenario kinds, under {}",
+        stray.display()
+    );
+}
+
 /// A chain that moved by one line names the line, both sides of it, and the
-/// two lengths — which is the whole of "a readable diff" for a hash chain.
+/// two lengths — which is the whole of "a readable diff" for a hash chain. The
+/// doctored chain is checked against a copy of the committed one outside
+/// `tests/golden/`, so it is never written where the committed scenario's
+/// fresh chain goes (T20's item 11, [`scratch_golden`]).
 #[test]
 fn a_moved_chain_names_the_first_tick_that_disagrees() {
-    let scenario = scenario::load(&root(), Path::new(COMPLETING)).expect("a valid scenario");
+    let committed = std::fs::read(
+        root()
+            .join("tests")
+            .join("golden")
+            .join("scenarios")
+            .join("deploy-and-visit")
+            .join("expected.hashes.txt"),
+    )
+    .expect("deploy-and-visit's committed chain");
+    let golden = scratch_golden("deploy-and-visit.moved");
+    std::fs::write(&golden, &committed)
+        .unwrap_or_else(|error| panic!("writing {}: {error}", golden.display()));
+    let scenario = with_chain_golden(COMPLETING, &golden);
     let mut played = scenario::run::play(&root(), &scenario).expect("it plays");
     // One line, deliberately wrong, in the middle: a comparison that only ever
     // looked at the first or the last line would pass this.
@@ -277,6 +365,17 @@ fn a_moved_chain_names_the_first_tick_that_disagrees() {
     played.chain = format!("{}\n", doctored.join("\n"));
 
     let (report, failed) = scenario::run::check(&root(), &scenario, &played).expect("a report");
+    let _ = std::fs::remove_file(&golden);
+    // Nothing doctored reached the fresh chain the `golden` step compares with
+    // the committed one. Before, this test wrote the doctored chain there.
+    let actual = committed_actual("deploy-and-visit");
+    if let Ok(fresh) = std::fs::read_to_string(&actual) {
+        assert!(
+            !fresh.contains("601\t0000000000000000"),
+            "the doctored chain was written to {}",
+            actual.display()
+        );
+    }
     assert_eq!(failed, 1, "only the chain assertion moved:\n{report}");
     assert!(
         report.contains(&format!("line {}", at.saturating_add(1))),
