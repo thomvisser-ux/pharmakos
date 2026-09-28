@@ -148,11 +148,13 @@ Third-party files keep their own copyright and licence; the blanket
 Because a `.vox` or an `.ogg` cannot carry a comment header, REUSE's sidecar
 convention is used: next to `shot.ogg`, add `shot.ogg.license` containing
 
+<!-- REUSE-IgnoreStart: an example sidecar, not this file's own -->
 ```
 SPDX-FileCopyrightText: 2019 Some Author <https://freesound.org/people/someauthor/>
 SPDX-License-Identifier: CC0-1.0
 SPDX-FileComment: https://freesound.org/s/123456/ — trimmed to 0.4 s, normalised.
 ```
+<!-- REUSE-IgnoreEnd -->
 
 and add the licence text to `LICENSES/` if it is not there yet (`CC0-1.0.txt`
 for CC0 material, `CC-BY-4.0.txt` for CC BY material). Every CC-BY asset must
