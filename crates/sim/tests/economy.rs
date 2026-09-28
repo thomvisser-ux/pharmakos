@@ -1534,6 +1534,12 @@ impl HeldOrder {
                     world.is_decision_tick(),
                     "an order is filled on a decision tick"
                 );
+                // The scout fielded is the one the Survey fabricator asked
+                // for: once it is filled, that fabricator asks for nothing.
+                assert!(
+                    asking.request(world, self.survey).is_none(),
+                    "the filled scout is the Survey fabricator's order"
+                );
                 watched.filled = Some((supply, draw, treasury(world, seat)));
                 break;
             }
