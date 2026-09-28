@@ -44,7 +44,8 @@ const SELF: &str = "pharmakos-client-gdext";
 /// decision. The last is the operator, the crate of templates and utility scoring: its
 /// library depends on `pharmakos-proto` alone, so nothing else would catch the edge
 /// (decisions-log item 118 (5), the owner's decision). `CLIENT_WALL`'s client line in
-/// `xtask/src/main.rs` names the same five.
+/// `xtask/src/main.rs` names the same five, which
+/// `forbidden_names_the_crates_on_client_walls_client_line` holds.
 const FORBIDDEN: &[&str] = &[
     "pharmakos-sim",
     "pharmakos-verifier",
@@ -213,5 +214,54 @@ version = \"0.1.0\"\n";
         reachable.contains("forbidden"),
         "the reader must follow an edge two hops out, which is the case this file exists \
          for: {reachable:?}"
+    );
+}
+
+/// The names on `CLIENT_WALL`'s `client-gdext` line in `xtask/src/main.rs`, with the
+/// `pharmakos-` prefix this file's names carry.
+fn client_wall_line(source: &str) -> Vec<String> {
+    let wall = source
+        .split("const CLIENT_WALL")
+        .nth(1)
+        .expect("xtask/src/main.rs defines CLIENT_WALL");
+    let line = wall
+        .split("\"client-gdext\",")
+        .nth(1)
+        .and_then(|rest| rest.split(']').next())
+        .expect("CLIENT_WALL has a client-gdext line");
+    line.split('"')
+        .skip(1)
+        .step_by(2)
+        .map(|name| format!("pharmakos-{name}"))
+        .collect()
+}
+
+#[test]
+fn forbidden_names_the_crates_on_client_walls_client_line() {
+    // `cargo xtask wall-guard` checks this direction through `CLIENT_WALL`; this file
+    // checks it again from `Cargo.lock`. The two lists are literals in two files, so this
+    // holds them equal: a crate added to one and not the other fails here.
+    let path = workspace_root().join("xtask").join("src").join("main.rs");
+    let source = fs::read_to_string(&path).expect("xtask/src/main.rs");
+    let mut wall = client_wall_line(&source);
+    wall.sort();
+    let mut forbidden: Vec<String> = FORBIDDEN.iter().map(|name| (*name).to_owned()).collect();
+    forbidden.sort();
+    assert_eq!(
+        forbidden, wall,
+        "no_sim.rs's FORBIDDEN and CLIENT_WALL's client-gdext line in xtask/src/main.rs name \
+         different crates"
+    );
+}
+
+#[test]
+fn the_wall_reader_reads_the_client_line_and_no_other() {
+    // A negative control for the reader: it must take the client's line, stop at its end,
+    // and not run on into the mesher's.
+    let sample = "const CLIENT_WALL: &[(&str, &[&str])] = &[\n    (\n        \"client-gdext\",\n        \
+                  &[\"sim\", \"operator\"],\n    ),\n    (\"mesher\", &[\"sim\", \"x\"]),\n];\n";
+    assert_eq!(
+        client_wall_line(sample),
+        vec!["pharmakos-sim".to_owned(), "pharmakos-operator".to_owned()]
     );
 }
