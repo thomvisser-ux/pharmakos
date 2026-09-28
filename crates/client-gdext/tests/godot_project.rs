@@ -773,6 +773,45 @@ fn an_exported_build_finds_its_root_beside_the_executable() {
     );
 }
 
+/// **The lobby hosts three rounds** (decisions-log item 123 (2) 3): skeleton-plan section
+/// 1.1's Probation-shaped match. The config line carries the value in its sixth field and
+/// keeps its six tab-separated fields, so a remembered `last_match.txt` still parses; the
+/// PLACEHOLDER above the constants records the decision and keeps the settings screen and
+/// the Probation preset the owner's, at S1.
+#[test]
+fn the_lobby_hosts_a_three_round_match() {
+    let text = read("scripts/host_link.gd");
+    let limits: Vec<&str> = text
+        .lines()
+        .filter(|line| line.starts_with("const ROUND_LIMIT"))
+        .collect();
+    assert_eq!(
+        limits,
+        ["const ROUND_LIMIT := 3"],
+        "the lobby hosts three rounds"
+    );
+    let block: String = text
+        .lines()
+        .skip_while(|line| !line.starts_with("## The match the lobby hosts"))
+        .take_while(|line| line.starts_with("##"))
+        .collect::<Vec<&str>>()
+        .join(" ");
+    for needle in ["PLACEHOLDER", "item 123 (2) 3", "Probation preset", "at S1"] {
+        assert!(
+            block.contains(needle),
+            "the round limit's PLACEHOLDER names `{needle}`: {block:?}"
+        );
+    }
+    let line = gd_function(&text, "config_line");
+    assert!(
+        line.iter().any(|row| row.contains(
+            "\"%s\\t%s\\t%d\\t%d\\t%s\\t%d\\n\" % [match_id, MATCH_SEED, seats, HUMAN_SEAT, \
+             ladder, ROUND_LIMIT]"
+        )),
+        "the config line keeps its six fields, the round limit last: {line:?}"
+    );
+}
+
 /// **The Credits button** (decisions-log item 117 (11)): in the pre-match chooser only, it
 /// adds the credits overlay as a child and hides the chooser until Back; it never changes
 /// the scene (freeing the lobby ends its host) and does nothing once a match has started.
