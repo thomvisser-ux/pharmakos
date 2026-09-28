@@ -59,14 +59,17 @@
 // stands; its Generator target at the corner is outside its sphere and is
 // dropped, so nothing is built.
 //
-// PLACEHOLDER: the place-and-build shape itself -- until decisions-log item
-// 113 (6) this template visited the safest beacon and placed nothing -- is the
-// OWNER's to confirm, before T22's stage demo.
+// The place-and-build shape is the owner's, confirmed at decisions-log item
+// 119 (9): until item 113 (6) this template visited the safest beacon and
+// placed nothing, which committed a row and built no Generator. It overlaps
+// Expand & Mine, and on hilly ground a vent at the far edge of the band can
+// fail the sphere test.
 //
-// PLACEHOLDER: the three places' own values (the safest own beacon, and the
-// map's corner) are harmless stand-ins that the wizard or the operator
-// replaces; what the template ships as its own values is the OWNER's, before
-// T22's stage demo.
+// The three places' own values above are the values it ships with, by the
+// owner's choice at decisions-log item 119 (10): they qualify on any map, and
+// the wizard or the operator replaces them. The golden seed's suggested places
+// were not taken instead, because they are right for one map and E0403 on any
+// other.
 {
   "schema_version": {"major": 1, "minor": 0},
   "meta": {
