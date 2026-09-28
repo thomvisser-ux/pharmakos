@@ -26,7 +26,10 @@ Signed-off-by: Ada Lovelace <ada@example.org>
 ```
 
 The `dco` job in `.github/workflows/ci.yml` walks every commit in the pull request and fails if one
-is missing the trailer. No sign-off, no merge. There is no CLA. If a branch is already written, fix
+is missing the trailer. No sign-off, no merge. Dependabot's own commits carry its sign-off line,
+`dependabot[bot] <support@github.com>`, which is accepted for them in place of a person's
+(decisions-log items 119 (4), 120 and 122 (4)); a commit anyone else adds to its branch still needs
+its own. There is no CLA. If a branch is already written, fix
 it in one go with `git rebase --signoff <base>`.
 
 ## Licences
