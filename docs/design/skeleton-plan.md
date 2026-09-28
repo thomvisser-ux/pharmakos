@@ -37,14 +37,17 @@ compiles its own work and runs `cargo xtask ci` before its PR opens. Spike code 
 
 One unsigned Windows zip (the same build on Linux) opens into a lobby. The owner starts a
 Probation-shaped match — two seats, themselves and one Easy built-in operator, three rounds on the
-per-round length list 3 / 5 / 8 minutes — on a seeded map about 384 × 384 × 64 whose two occupied
-spawn zones sit at least the spawn-distance rule apart, each with a pre-placed fortified core beacon
-on a Build mandate, a commander, two build drones, a mining drone, a reachable heat vent a short
-walk away and `$` equal to two rounds of BMI.
+per-round length list 3 / 5 / 8 minutes (the lobby's round limit, three from T22a; item 123 (2) 3) —
+on a seeded map about 384 × 384 × 64 whose two occupied spawn zones sit at least the spawn-distance
+rule apart, each with a pre-placed fortified core beacon (high HP; its autocannon arrives with combat
+at S2, item 123 (2) 2) on a Build mandate, a commander, two build drones, a mining drone, a reachable
+heat vent a short walk away and `$` equal to two rounds of BMI.
 
 The first Lull opens the editor wizard on three templates. The owner fills a parameter or two,
-watches the route draw as a polyline with a travel time on each leg (fogged legs dashed and labelled
-as a bound, never as an ETA), sees QUICK diagnostics appear on every edit as icons and plain
+watches the route draw as a polyline with a travel time on each leg (no leg is dashed at the
+skeleton: terrain is served whole and the estimator prices every leg under clear fog, so fogged legs
+dashed and labelled as a bound, never as an ETA, come with S3's one fog mask; item 107 (1), amended
+2026-09-28 by item 123 (2) 1), sees QUICK diagnostics appear on every edit as icons and plain
 sentences with Fix buttons, writes a line in the notes box, and submits. The verifier runs FULL,
 `render_plan` prints the playbook as English prose, and the `report_hash` at submit equals the one
 from the FULL pre-check. The built-in operator has already filed the other seat's playbook, and
@@ -59,7 +62,8 @@ fabricator orders when draw outruns supply, ore is credited to the single treasu
 voxels the demo edits remesh in the vista inside the K = 4 / B = 512 KiB per-frame budget. The recap
 settles BMI by standing. The next Lull pre-loads last round's playbook as a re-verified draft, and
 the host can save from that frozen snapshot and resume from the lobby. The match ends on the round
-limit or the one-tick rule, with the full map unlocked.
+limit or the one-tick rule, with the full map unlocked; the skeleton's demo reaches the round limit,
+because with no combat until S2 the one-tick rule cannot end a two-seat match (item 123 (2) 2).
 
 ### 1.2 The machine-checkable half — AGENTS.md §10, item by item
 
@@ -594,6 +598,9 @@ its downside, and its section 0 lists the holes (H1–H16) the lines below close
 - **Amended 2026-09-25 (item 113).** Merged as PR #33. What its findings leave open — the safe playbook's raise,
   which never fires under the definitions it was built to; a `builtin` seat in `gamectl scenario run`; Hold &
   Build, which builds no Generator; Expand & Mine's stale comment — is T18b's, in wave 6's run 4.
+- **Amended 2026-09-28 (item 123).** The acceptance line's "the safe playbook's latency is measured as a baseline
+  only" is superseded by item 123 (2) 11: that baseline is a wall-clock figure, which has no legal producer
+  outside a walled harness (item 116 (6)(b)'s reason for P1 and G3′-real), so it is deferred to S5 with P2.
 
 ---
 
@@ -653,7 +660,7 @@ its downside, and its section 0 lists the holes (H1–H16) the lines below close
 ### T19 — `godot/` + `crates/client-gdext`: the editor wizard, the notes box, submit
 
 - **Unit owned:** `godot/` + `crates/client-gdext`, same author as T12 and T16.
-- **Builds:** the parameter wizard over three templates, each page pre-filled with the operator's suggestion and a "why" note; the map route surface (click a beacon for Visit & change / Go here / Recycle; click ground for Go here / Place beacon with a live legality ghost; Alt-click turns a fixed target into a selector); routes as polylines with travel estimates, **fogged legs dashed and labelled as bounds, never as ETAs**; the rule list as sentences with parameter chips; QUICK on every edit and FULL after 600 ms idle, rows showing icons and plain sentences with Fix buttons applying the verifier's machine-applicable patches; Load rejecting an out-of-vocabulary construct with the code and pointer rather than stripping it; the notes box over `save_notes`; draft continuity; submit and `set_ready`. **The editor runs no validation and no time maths of its own** — it asks the gateway.
+- **Builds:** the parameter wizard over three templates, each page pre-filled with the operator's suggestion and a "why" note; the map route surface (click a beacon for Visit & change / Go here / Recycle; click ground for Go here / Place beacon with a live legality ghost; Alt-click turns a fixed target into a selector); routes as polylines with travel estimates, **fogged legs dashed and labelled as bounds, never as ETAs** (not at the skeleton, by item 107 (1): terrain is served whole, the estimator prices every leg under clear fog, and dashed legs come with S3's one fog mask; amended 2026-09-28 by item 123 (2) 1); the rule list as sentences with parameter chips; QUICK on every edit and FULL after 600 ms idle, rows showing icons and plain sentences with Fix buttons applying the verifier's machine-applicable patches; Load rejecting an out-of-vocabulary construct with the code and pointer rather than stripping it; the notes box over `save_notes`; draft continuity; submit and `set_ready`. **The editor runs no validation and no time maths of its own** — it asks the gateway.
 - **Implements:** spec section 13 (the skeleton's slice), section 12 (the editor is one more client); items 57, 61.
 - **Needs:** T13, T16, T18 (its `instantiate_template` response shape is frozen in T1, so the wizard is built against a committed fixture response until T18 merges).
 - **Acceptance:** a headless-driven run per template — wizard → parameters → patch → verify → submit — asserting that the editor's bytes equal `plan-core`'s canonical bytes and that `gamectl verify` accepts the file; a byte-identical round-trip of a file opened and saved in the editor; `the_editor_makes_no_time_arithmetic_of_its_own`, a source-text test over `godot/**.gd` for arithmetic on `$`, `kW` or durations; screenshot goldens for the wizard's first page and the diagnostic rows; accessible names generated from the rendered sentences on all three templates; a written note answering spec section 19's open item — **whether GraphEdit is still experimental in Godot 4.7** — reported, not depended on. **P6's ≤ 2 min / ≤ 5 min targets are S3's gate and are not asserted here.**
@@ -670,6 +677,10 @@ its downside, and its section 0 lists the holes (H1–H16) the lines below close
 - **Amended 2026-09-25 (item 113).** PR 2 runs in run 3 beside T14b and merges after it. It also makes the lobby's
   Resume forget a match once that match ends (113(11)), and names `watch_check`'s match through the same
   collision-free helper as the lobby's (113(13)).
+- **Amended 2026-09-28 (item 123).** P6's targets are human timings, so no baseline is measured at the skeleton:
+  they are measured with the gate at S3's playtest (item 123 (2) 11, which supersedes the acceptance line's
+  sentence on P6). The Builds line's dashed fogged legs are not built at the skeleton (item 107 (1); item
+  123 (2) 1).
 
 ---
 
@@ -823,12 +834,120 @@ its downside, and its section 0 lists the holes (H1–H16) the lines below close
 
 ### T22 — Integration, goldens and the stage demo
 
-- **Owned:** whatever crate each fix lands in, one at a time.
-- **Builds:** nothing new. Closes AGENTS.md §10 as a checklist in one PR: `cargo xtask ci` green on all three OSes with the chains agreeing; every golden committed and every movement explained in the PR that moved it; the golden playbooks round-tripping, verifying and rendering identically; `gamectl scenario run` passing the stage's scenario files on events **and** hashes; docs updated; the collected list of every `PLACEHOLDER` the stage left, grouped by who resolves it and when; and the demo run sheet for §1.1.
-- **Needs:** everything.
-- **Acceptance:** the definition of done, item by item, ticked in the PR.
-- **Contract PR:** no, except where a fix lands in one — then it is its own PR.
-- **Agent-days:** 6.
+T22 builds nothing new. It closes AGENTS.md §10 as a checklist: `cargo xtask ci` green on all three OSes with the
+chains agreeing; every golden committed and every movement explained in the PR that moved it; the golden
+playbooks round-tripping, verifying and rendering identically; `gamectl scenario run` passing the stage's scenario
+files on events **and** hashes; docs updated; the collected list of every `PLACEHOLDER` the stage left, grouped by
+who resolves it and when; and the demo run sheet for §1.1. It needs everything, and its 6 agent-days are unchanged.
+**It runs as two lanes in parallel, W8's run 1 (item 123 (3)),** on disjoint paths: **T22a**, the fixes and goldens
+the demo needs, and **T22b**, the checklist pull request, the PLACEHOLDER register and the run sheet. Merge order:
+T22a first (its train runs the full matrix), then T22b (prose; its train rebases it). The main session fills T22b's
+item 1 with `main`'s push run for the final head before merging it, then cuts `v0.1.0-dev.2` (item 123 (2) 12) and
+hands the owner the run sheet and the zip. The owner's review (AGENTS.md §10 item 8) ends the stage; at it the owner
+also rules on the register's "at this demo" rows, this plan's PROPOSED mark (item 87), the §1.1 deviations and the
+delegation of items 85, 86, 116 (2) and 120, which the skeleton's end returns to the owner.
+
+---
+
+### T22a — the stage demo's fixes and goldens *(item 123)*
+
+- **Unit owned:** branch `fix/stage-demo-t22a`, worktree `C:/Users/PC/pharmakos-t22a`, target `D:/build/t22a`.
+  Paths: `godot/scripts/host_link.gd`; `godot/scripts/camera_rig.gd`; their source pins and tests
+  (`crates/client-gdext/tests/**`); a new test file under `crates/sim/tests/`; new golden cases under
+  `tests/golden/plan-core/**`, `tests/golden/verifier/**` or `tests/golden/gateway/**`, with their tests in
+  `crates/plan-core/tests`, `crates/verifier/tests` or `crates/gateway/tests` and their areas' READMEs; and the
+  stale texts (e) names. Not `proto/**`, `xtask/**`, `.github/**`, `crates/sim/src`, `crates/gateway/src`,
+  `crates/operator`, `crates/plan-core/src`, `crates/verifier/src`, `library/` or `rules/`, and nothing under
+  `docs/`.
+- **Builds:** (a) the lobby's `ROUND_LIMIT` in `host_link.gd` becomes 3, matching §1.1's Probation-shaped match,
+  and its PLACEHOLDER is reworded to record item 123 (2) 3 and to keep the settings screen and the Probation preset
+  the owner's at S1; the sim's `DEFAULT_ROUND_LIMIT` (6) is not changed, and the config line's format is unchanged
+  (its `round_limit` field carries 3, so a remembered `last_match.txt` still parses); (b) the camera ignores keys
+  while a GUI control has keyboard focus (the viewport's `gui_get_focus_owner`, or the equivalent), so typing a
+  note or a wizard value no longer moves it, and `camera_rig.gd`'s header, which promises that F toggles following
+  the commander, names the lobby's Follow button instead; no key is added (item 123 (2) 8); (c) a sim test for the
+  Quartermaster stub's hold: it builds a draw above supply through the Quartermaster, not around it, and asserts
+  that the fabricator order is held and then filled once supply returns (item 123 (2) 7); (d) the demo playbooks'
+  goldens (item 123 (2) 10): for each of the three templates instantiated for seat 0 of the golden seed (the
+  gateway's instantiate path, as `crates/gateway/tests/templates.rs` already uses) and for each
+  `scenarios/skeleton/*.playbook.jsonc`, a byte-for-byte round trip through plan-core, a `report_hash` golden and a
+  `render_plan` prose golden, in the existing golden formats; the lane picks the harness (plan-core and verifier
+  tests over a committed instantiated file, or a gateway test) and says why; (e) the stale texts outside
+  `docs/design/`: the root `README.md` ("most crates are still empty placeholders"); `.gitignore`'s "Placeholder
+  paths"; `godot/README.md`'s `fixtures/instantiate_suggested.json` row and `tests/golden/vista/README.md`'s "When
+  each shot moves", brought to the wizard-PNG rule T21b wrote in `tests/golden/gateway/README.md` and
+  `crates/client-gdext/tests/wizard.rs` (re-rendered only when something the first page draws moved);
+  `tests/golden/package/README.md`'s sentence on the templates' own-values PLACEHOLDERs, which T21b removed;
+  `tests/golden/plan-core/README.md`'s pointer to a PLACEHOLDER against T10 that is discharged; and
+  `scenarios/skeleton/against-easy-three-rounds.scenario.jsonc`'s "the owner's pending Hold & Build decision",
+  which item 119 (9) and (10) settled (a comment, so no chain moves).
+- **Implements:** item 123 (2) 3, 7, 8 and 10, and (3); AGENTS.md §10 items 3 and 7.
+- **Needs:** T21b (merged). Runs beside T22b, which writes its run sheet against this lane's decided changes; it
+  needs nothing from T22b.
+- **Acceptance:** (a) `ROUND_LIMIT` is 3 and its PLACEHOLDER names item 123 (2) 3 and S1, pinned where the client's
+  tests already pin `host_link.gd`; `DEFAULT_ROUND_LIMIT` is untouched; (b) a check that fails before the focus fix
+  and passes after it, where a headless check can express one, and otherwise a source pin in
+  `crates/client-gdext/tests/godot_project.rs`, the existing pattern for `godot/` sources; no F binding; (c) the new
+  test in `crates/sim/tests/` passes, fails with the hold taken out, and needs no change to `crates/sim/src`; (d)
+  the new round-trip, `report_hash` and prose goldens are committed with their tests, and the golden area's README
+  names each new row; (e) each stale text rewritten against the code at the lane's base and quoted in the pull
+  request with its replacement. Every golden that moves is named with why. **A determinism chain, a scenario chain,
+  a digest or an existing `report_hash` that moves is a stop:** the lane names the input that moved it and does
+  not re-bless. Every required check green on the lane's final run; the pull request takes the full matrix
+  (`godot/`, the client's tests, the sim's tests).
+- **Contract PR:** no. A new case in an existing golden area is not a golden-format change, and the config line's
+  format does not move.
+- **Agent-days:** 2.5.
+- **PLACEHOLDERs:** `host_link.gd`'s, reworded as (a) says (the settings screen and the Probation preset, owner at
+  S1); the camera's tuning values stay as they are, for the owner at the review; any new one is listed in the pull
+  request.
+
+---
+
+### T22b — the closing checklist, the PLACEHOLDER register and the demo run sheet *(item 123)*
+
+- **Unit owned:** branch `docs/stage-close-t22b`, worktree `C:/Users/PC/pharmakos-t22b`, target `D:/build/t22b`
+  (which it barely uses). Paths: `docs/placeholders.md` (new) and `docs/demo/skeleton-run-sheet.md` (new), each
+  with the SPDX header `docs/` files carry (`MIT OR Apache-2.0`), and nothing else: no code, no README outside those
+  two, no `docs/design/**`, no AGENTS.md, no CLAUDE.md. Its pull request is prose-only (`docs/**`), so it takes the
+  docs-only fast path.
+- **Builds:** (a) **the checklist**: the pull request body is AGENTS.md §10 as a checklist, item by item, each
+  with evidence at the lane's base and what T22a changes: item 1 with `main`'s push run for the final head, which
+  the main session fills in when it merges; item 3 with T22a's goldens; item 5 not this stage (from S2); item 6
+  with the deferrals of items 116 (6)(b) and 123 (2) 11; item 7 with the docs; item 8 the owner's. (b) **The
+  PLACEHOLDER register**, `docs/placeholders.md` (item 123 (2) 13): hand-curated, one row per distinct decision
+  (about 300–345, not the raw grep lines), anchored by file plus symbol or heading and never by line, every copy of
+  a decision listed in its row; the tuning rows delegated to `rules/README.md`'s "Settled?" table, one line per
+  stage; sections in this order: "at this demo" (the 19 `rules.proto` rows "at the walking skeleton's demo", the
+  round limit, the camera, the pacer speeds, the "now" ones), S1 to S7, hardening, the v0.1 gate, v1.1+, "stale:
+  names a closed task", "malformed: no who or no when", "unmarked: guesses the grep cannot see"
+  (`packaging/README.md`'s PLACEHOLDERs heading, `.gitignore`'s "Placeholder paths"); within each, grouped by who.
+  (c) **The demo run sheet**, `docs/demo/skeleton-run-sheet.md`, for §1.1, written against `main` at the lane's
+  base plus T22a's decided changes (item 123 (2) 3, 5 and 8): §1.1's Lull beats spread over the three Lulls (the
+  wizard and submit in round 1; the Fix button, the notes box and the carried draft in round 2; save and resume in
+  round 3's Lull), with a timeout filing the safe playbook as §1.1's "cost of a timeout" (item 123 (2) 4); the Fix
+  button reached by saving the playbook, editing its `cooldown_ms` by hand into the E0108 case and loading it (item
+  123 (2) 5); the `report_hash` and the safe playbook shown by the tests item 123 (2) 6 names; the Quartermaster's
+  hold not expected in the default match, with T22a's test named (item 123 (2) 7); every item and wording item 123
+  (2) 9 lists; Hold & Build's shape and both templates' stand-in values, which the owner confirmed (item 119 (9)
+  and (10)); the watch check's match folders, pruned by hand; and a section, "Deviations from section 1.1", listing item 123
+  (2) 1–8 plainly for the owner.
+- **Implements:** AGENTS.md §10 as a checklist; item 123 (2) 4–6, 9, 11 and 13, and (3); items 113 (7) and (15),
+  114 (5), 117 (1), 118 (1), 119 (9) and (10) and 121 (1) on the run sheet.
+- **Needs:** T21b (merged). Runs beside T22a and merges after it; the main session reconciles the two at the merge.
+- **Acceptance:** (a) every §10 item present with its evidence, item 1 left for the main session to fill; (b) the
+  register's header stamps the commit, the exact grep command and its raw count, and how the count became the
+  distinct rows; the register is cross-checked against the 28 per-task "PLACEHOLDERs:" lines of this section, each
+  found in the code, resolved with its item, or named as missing from the code; nothing is reworded in code
+  (rewording is the owning lanes', and contract paths' pull requests'); (c) every run-sheet step quotes the UI's
+  real strings (`godot/scripts/strings.gd`, `lobby.gd`) and says what to click and what to see, and names the test
+  or scenario that also proves it or says "by hand only"; the E0108 edit is checked against the verifier's golden
+  (`tests/golden/verifier/e0108_cooldown_below_minimum`); `reuse lint` green; the pull request's diff touches the
+  two new files alone.
+- **Contract PR:** no — `docs/**` outside `docs/design/`.
+- **Agent-days:** 3.5.
+- **PLACEHOLDERs:** none of its own; the register lists the stage's. A strict one-line grammar and an `xtask`
+  check that collects the register are S1 contract items (item 123 (4)).
 
 ---
 
@@ -851,10 +970,10 @@ Days are working days, five to a week. A task's start is the day its last input 
 | W5 | 7.4 – 9.8 | **T14** economy, Build, Survey-lite, programs (10 d, d38–48) | **T15** gamectl + `scenario run` (8 d, d39–47) | **T16a** view feed, match control, host loop (10 d, run 1, items 106–107); then **T16** vista + watch rig (10 d, run 2) | **Flying over the generated map, craters remeshing**; the watch rig playing a segment at 2–4× and skipping to its end; `gamectl scenario run` as a green `xtask ci` step |
 | W6 | 9.8 – 11.8 | run 2: **T17** save/resume, private replay, vision follow-up (6 d); run 3: **T14b** the key-core on the grid (1.5 d) | run 2: **T18** operator Easy + safe playbook (8 d); run 4: **T18b** the safe playbook's reading, Easy in `scenario run`, Hold & Build that builds (4.5–5 d) | run 1: **T18a** planning wire (8.75 d) and **T19** PR 1, route surface (5.5 d); run 3: **T19** PR 2, wizard (6.5 d); run 4: **T20a** CI time and the docs-only fast path (1.5 d) — items 111, 112, 113 and 115 | **A sealed playbook walking the commander**: a beacon placed, a Generator built, the treasury and kW meter moving, BMI settled at the recap — and a two-seat match against Easy |
 | W7 | 11.8 – 12.8, after W6's run 4 (item 113) | run 2: **T21** packaging (5 d), whole, after T20's merge (item 116) | — | run 1: **T20** xtask closing half-week (5 d), alone (item 116); run 3: **T21b** the comments lane (2 d), alone (item 122) | A zip that launches on a clean Windows and a clean Linux machine; one `xtask ci` covering §10 items 1–4 with nothing skipped |
-| W8 | 12.8 – 14.2 | — | — | **T22** integration, goldens, demo (6 d, d64–71) | The stage demo of §1.1 |
+| W8 | 12.8 – 14.2 | — | — | **T22** integration, goldens, demo (6 d, d64–71), as run 1: **T22a** the stage demo's fixes and goldens (2.5 d) and **T22b** the closing checklist, the PLACEHOLDER register and the run sheet (3.5 d), in parallel (item 123) | The stage demo of §1.1 |
 | — | **14.2 – 15.5** | **float: 1.3 weeks** | | | |
 
-**Totals.** 24 tasks, **182 agent-days** (T16a added 2026-09-21, item 106; T18a added and T17 and T19 re-estimated 2026-09-23, item 111, which make it 25 tasks and about 194.75 agent-days; T14b and T18b added 2026-09-25, item 113, which make it 27 tasks and about 201 agent-days; T20a added 2026-09-26, item 115, which makes it 28 and about 202.5; T21b added 2026-09-27, item 122, which makes it 29 and about 204.5; the schedule figures that follow predate all five) over 71 working days of schedule. At three slots that is 213
+**Totals.** 24 tasks, **182 agent-days** (T16a added 2026-09-21, item 106; T18a added and T17 and T19 re-estimated 2026-09-23, item 111, which make it 25 tasks and about 194.75 agent-days; T14b and T18b added 2026-09-25, item 113, which make it 27 tasks and about 201 agent-days; T20a added 2026-09-26, item 115, which makes it 28 and about 202.5; T21b added 2026-09-27, item 122, which makes it 29 and about 204.5; T22 split into T22a and T22b 2026-09-28, item 123, which makes it 30 tasks with the agent-days unchanged at about 204.5; the schedule figures that follow predate all six) over 71 working days of schedule. At three slots that is 213
 slot-days, so utilisation is about 80 % — the 20 % is where a contract PR waits for review, and it is
 deliberate. The critical path is **T0 → T2 → T5 → T7 → T10 → T11 → T14 → T18 → T19 → T20 → T22**,
 71 days end to end; the sim alone carries 52 agent-days across six of the eight waves. Item 116
