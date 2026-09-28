@@ -396,7 +396,7 @@ fn gd_function<'a>(text: &'a str, name: &str) -> Vec<&'a str> {
             }),
         );
     }
-    assert!(!body.is_empty(), "lobby.gd has no `func {name}`");
+    assert!(!body.is_empty(), "the script has no `func {name}`");
     body
 }
 
@@ -771,6 +771,75 @@ fn an_exported_build_finds_its_root_beside_the_executable() {
         template < project,
         "the export's case comes first: {root:?}"
     );
+}
+
+/// **The camera's keys are text while a GUI control has keyboard focus** (decisions-log item
+/// 123 (2) 8). `camera_rig.gd` polls its free-look keys only when no control holds focus,
+/// and a mouse press on the 3D view that no control took releases focus, so typing a note
+/// or a wizard value never pans the camera and the keys come back without a restart. The
+/// behaviour is checked headless by `watch_check.gd`'s `_camera_keys` (ci.yml's `client
+/// extension` jobs); this pins the source on every leg. Following is the lobby's Follow
+/// button: no key binds it.
+#[test]
+fn the_camera_ignores_its_keys_while_a_control_has_focus() {
+    let text = read("scripts/camera_rig.gd");
+    let taken = gd_function(&text, "_keys_taken");
+    assert!(
+        taken
+            .iter()
+            .any(|line| line.contains("viewport.gui_get_focus_owner() != null")),
+        "the keys are taken while a control has focus: {taken:?}"
+    );
+    let keys = gd_function(&text, "_key_move");
+    let first_poll = keys
+        .iter()
+        .position(|line| line.contains("Input.is_key_pressed("))
+        .expect("_key_move polls the keys");
+    let guard = keys
+        .iter()
+        .position(|line| line.trim() == "if _keys_taken():")
+        .expect("_key_move asks whether the keys are taken");
+    assert!(
+        guard < first_poll
+            && keys
+                .get(guard + 1)
+                .is_some_and(|line| line.trim() == "return move"),
+        "no key is polled while a control has focus: {keys:?}"
+    );
+    let polls = text
+        .lines()
+        .filter(|line| line.contains("Input.is_key_pressed("))
+        .count();
+    let polls_in_key_move = keys
+        .iter()
+        .filter(|line| line.contains("Input.is_key_pressed("))
+        .count();
+    assert_eq!(polls, polls_in_key_move, "every key poll is in _key_move");
+    let unhandled = gd_function(&text, "_unhandled_input");
+    let press = unhandled
+        .iter()
+        .position(|line| line.contains("event is InputEventMouseButton and event.pressed"))
+        .expect("_unhandled_input reads a mouse press");
+    assert!(
+        unhandled
+            .iter()
+            .skip(press)
+            .take(3)
+            .any(|line| line.trim() == "get_viewport().gui_release_focus()"),
+        "a press on the view releases the GUI focus: {unhandled:?}"
+    );
+    assert!(
+        !text.contains("F toggles") && text.contains("Follow"),
+        "the header names the lobby's Follow button, not an F key"
+    );
+    for script in [
+        "scripts/camera_rig.gd",
+        "scripts/lobby.gd",
+        "scripts/editor.gd",
+        "scripts/vista.gd",
+    ] {
+        assert!(!read(script).contains("KEY_F)"), "{script} binds no F key");
+    }
 }
 
 /// **The lobby hosts three rounds** (decisions-log item 123 (2) 3): skeleton-plan section

@@ -59,6 +59,13 @@
 #     never written here) is the fixture's `playbook_jsonc` byte for byte. An explicit value
 #     beats a suggestion, so the live operator cannot move it. It is instantiated only,
 #     never used or submitted: its anchor is off the map, so QUICK would say E0402;
+#   * THE CAMERA'S KEYS (decisions-log item 123 (2) 8), in round 1's Lull with follow off:
+#     with the notes box focused, a held W (fed through Input.parse_input_event, as a
+#     keyboard would) leaves the camera rig's focus where it was; a right-click on the 3D
+#     view, which no control takes, releases the GUI focus, and the same W then moves the
+#     rig, so the check is not vacuous. The window has the project's size while it runs
+#     (a headless one is 64 pixels square, all editor panel), and the notes box's text and
+#     the window's size are put back afterwards;
 #   * Ready (`set_ready`) ends the Lull: the host is a two-seat match whose other seat the
 #     built-in operator plays and readies at every Lull's start (T18), so this seat's Ready
 #     completes every seat's, the host clock's answer says `all_ready`, and the admin
@@ -214,6 +221,9 @@ func _run() -> void:
 		_finish()
 		return
 	if not await _pin():
+		_finish()
+		return
+	if not await _camera_keys():
 		_finish()
 		return
 	var sealed: PackedByteArray = vista.bridge.editor_sealed_bytes()
@@ -576,6 +586,78 @@ func _check_rule_names(what: String) -> void:
 	for index in rows.size():
 		if rows[index].accessibility_name != lines[index] or String(rows[index].get_meta("line")) != lines[index]:
 			_failures.append("%s: rule-list row %d's accessible name is `%s`, its line `%s`" % [what, index, rows[index].accessibility_name, lines[index]])
+
+
+## How many frames a key is held down, or a click is left to settle, in the camera check.
+const KEY_FRAMES := 5
+
+
+## The camera's keys belong to the text while a GUI control has keyboard focus, and come
+## back to the camera once a click on the 3D view has released it (camera_rig.gd's header).
+## Returns false when a step failed, with the reason recorded.
+##
+## A headless window is 64 pixels square, which the editor's panel covers whole, so the
+## check gives the window the project's own size while it runs and puts it back after.
+func _camera_keys() -> bool:
+	var rig: Node3D = vista.rig
+	if rig.target != null:
+		_failures.append("the camera check needs free-look, but the rig follows %s" % rig.target)
+		return false
+	var window_size := get_window().size
+	get_window().size = Vector2i(ProjectSettings.get_setting("display/window/size/viewport_width"), ProjectSettings.get_setting("display/window/size/viewport_height"))
+	await get_tree().process_frame
+	var notes: TextEdit = editor._notes
+	var kept := notes.text
+	notes.grab_focus()
+	await get_tree().process_frame
+	var focused := get_viewport().gui_get_focus_owner()
+	var before: Vector3 = rig.focus
+	await _hold_key(KEY_W)
+	var typed: Vector3 = rig.focus
+	# The player's way back: a right-click on the view, left of the editor's panel, which
+	# no control takes, so it reaches the rig's _unhandled_input.
+	var click := InputEventMouseButton.new()
+	click.button_index = MOUSE_BUTTON_RIGHT
+	click.pressed = true
+	click.position = get_viewport().get_visible_rect().size * Vector2(0.25, 0.5)
+	click.global_position = click.position
+	Input.parse_input_event(click)
+	var release: InputEventMouseButton = click.duplicate()
+	release.pressed = false
+	Input.parse_input_event(release)
+	for _frame in KEY_FRAMES:
+		await get_tree().process_frame
+	var holder := get_viewport().gui_get_focus_owner()
+	await _hold_key(KEY_W)
+	var moved: Vector3 = rig.focus
+	notes.text = kept
+	get_window().size = window_size
+	await get_tree().process_frame
+	if focused != notes:
+		_failures.append("the notes box did not take keyboard focus: %s" % focused)
+	if typed != before:
+		_failures.append("W typed into the notes box moved the camera from %s to %s" % [before, typed])
+	if holder != null:
+		_failures.append("a right-click on the 3D view left the keyboard focus on %s" % holder)
+	if moved == typed:
+		_failures.append("W did not move the camera once the notes box had lost focus")
+	print("[watch-check] the camera's keys: W in the notes box left the camera at %s; after a right-click on the view W moved it to %s" % [typed, moved])
+	return _failures.is_empty()
+
+
+## Holds `key` down for KEY_FRAMES frames, as a keyboard would, and lets it go.
+func _hold_key(key: Key) -> void:
+	var down := InputEventKey.new()
+	down.keycode = key
+	down.physical_keycode = key
+	down.pressed = true
+	Input.parse_input_event(down)
+	for _frame in KEY_FRAMES:
+		await get_tree().process_frame
+	var up: InputEventKey = down.duplicate()
+	up.pressed = false
+	Input.parse_input_event(up)
+	await get_tree().process_frame
 
 
 ## The editor's half of the run (pull request 1). Returns false when a step failed, with the
