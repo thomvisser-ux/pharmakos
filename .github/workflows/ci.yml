@@ -1088,7 +1088,7 @@ jobs:
         # its own caches and main's; the first run on a branch with neither misses.
         if: steps.scope.outputs.prose_only != 'true'
         id: templates
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4 (v4.3.0)
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/AppData/Roaming/Godot/export_templates/4.7.2.stable
           key: godot-templates-ca4d71c4d7b81dfc15d1a98baa07534aa95b03fdda78a0075b06672e1648d2e5f40980c9adc28d23e1b92e732ee7bf3461997aa804af74ec2fcd7a93ccb84079-windows
@@ -1267,7 +1267,7 @@ jobs:
         # its own caches and main's; the first run on a branch with neither misses.
         if: steps.scope.outputs.prose_only != 'true'
         id: templates
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4 (v4.3.0)
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.local/share/godot/export_templates/4.7.2.stable
           key: godot-templates-ca4d71c4d7b81dfc15d1a98baa07534aa95b03fdda78a0075b06672e1648d2e5f40980c9adc28d23e1b92e732ee7bf3461997aa804af74ec2fcd7a93ccb84079-linux
