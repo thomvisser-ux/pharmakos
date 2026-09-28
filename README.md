@@ -21,17 +21,17 @@ seats (v1.2) are roadmap, reserved now only as proto seams.
 
 **Status: the walking skeleton is open.** The toolchain is installed — rustc 1.98.1, `protoc` 36,
 `buf` 1.73, `cargo-deny`, `reuse`, Godot 4.7.2 — the tree is formatted, and `cargo xtask ci` is
-green: twelve steps, ten `ok` and two `skipped` with reasons, because the goldens and the
-determinism binary do not exist yet. All four stack spikes (G4 cross-OS determinism with
+green: fifteen steps, every one required, where a missing input fails and the only skips left are
+the platform's and the caller's that `AGENTS.md` section 9 lists. All four stack spikes (G4 cross-OS determinism with
 save/restore and fork equivalence, G1 mesher and remesh in Godot 4.7, G2+P3 pathing, G3′ synthetic
 tick) are closed: their measured results and lessons are written up in
 [`docs/spikes/`](docs/spikes/), their decisions are in the decisions log, and the throwaway spike
 code is frozen at the `spike-end` tag and deleted from `main` — read it with
 `git worktree add ../pharmakos-spikes spike-end`. What this repository holds today is the
-specification, the design record, harness part 1 (`AGENTS.md` / `CLAUDE.md`, `cargo xtask ci` in
+specification, the design record, the harness (`AGENTS.md` / `CLAUDE.md`, `cargo xtask ci` in
 `xtask/src/main.rs`, the lint configuration, the CI workflows, the golden-file and determinism
-conventions) and the workspace skeleton below — in which most crates are still empty placeholders.
-The next step is the walking skeleton.
+conventions) and the workspace below, in which every crate has code: the walking skeleton, which
+its last task, T22, is closing. The skeleton ends when the owner has reviewed its stage demo.
 
 ## Repository layout
 
