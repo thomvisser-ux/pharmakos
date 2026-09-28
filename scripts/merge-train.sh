@@ -45,7 +45,8 @@
 # (tests/golden/determinism|scenarios|pathing|mapgen|mesher|vista/), and what the zip ships
 # or is built by, which only the package and clean-launch jobs exercise (library/, rules/,
 # packaging/, LICENSES/, REUSE.toml, xtask/src/package.rs and zip.rs, and the zips'
-# manifests in tests/golden/package/; decisions-log items 119 (1) and 121 (5)). It also
+# manifests in tests/golden/package/; decisions-log items 119 (1) and 121 (5)), with the
+# root Cargo.toml and .cargo/ for the release profiles the package builds with. It also
 # falls back when GitHub reports the PR as BEHIND (the ruleset requiring up-to-date
 # branches). A base that moved only by prose (docs/, .claude/, AGENTS.md, CLAUDE.md, a
 # top-level *.md) needs no check. A branch with merge commits stops the train: a rebase
