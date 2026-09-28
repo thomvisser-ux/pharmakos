@@ -262,6 +262,19 @@ struct Wants {
     ready: bool,
 }
 
+/// Where a phase's clock reports stand, for the seat's budget: a phase's first report
+/// moves no gateway tick, and every later one does (the module doc's "Not every clock
+/// answer moves the clock").
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum ClockReports {
+    /// The phase has sent no report yet.
+    Unsent,
+    /// The phase's first report is in flight; its answer refills nothing.
+    FirstOut,
+    /// The phase's first report has gone out; the answer to any later one refills.
+    Refilling,
+}
+
 /// The watch rig: the two connections' state, the view and feed cursors, the timing, and
 /// the editor that shares the seat connection.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -285,11 +298,8 @@ pub struct Rig {
     keyframe_not_before_us: u64,
     /// Seat calls left before the gateway's clock next moves.
     seat_budget: u32,
-    /// Whether this phase's first clock report has gone out.
-    clock_reported: bool,
-    /// Whether the clock report in flight refills the seat's budget once it is answered:
-    /// every report but a phase's first does.
-    clock_refills: bool,
+    /// Where this phase's clock reports stand, for the seat's budget.
+    clock_reports: ClockReports,
     /// Whether `set_ready` has gone out this Lull: the seat's orders are final, and the
     /// editor sends nothing more until the next Lull.
     ///
@@ -334,8 +344,7 @@ impl Rig {
             view_refusals: 0,
             keyframe_not_before_us: 0,
             seat_budget: SEAT_CALLS_PER_REFILL,
-            clock_reported: false,
-            clock_refills: false,
+            clock_reports: ClockReports::Unsent,
             ready_sent: false,
             editor: Editor::default(),
             meter: Meter::default(),
@@ -398,7 +407,7 @@ impl Rig {
             Some((_, Purpose::Advance)) => self.timing.pacer.refused(),
             Some((_, Purpose::Clock)) => {
                 self.timing.clock.refused();
-                self.clock_refills = false;
+                self.clock_reports = ClockReports::Refilling;
             }
             Some((_, Purpose::Plan)) => self.editor.dropped(),
             Some((_, Purpose::Meter)) => self.meter_due = true,
@@ -464,8 +473,10 @@ impl Rig {
             }
         }
         if let Some((spent, countdown)) = self.timing.clock.next_report() {
-            self.clock_refills = self.clock_reported;
-            self.clock_reported = true;
+            self.clock_reports = match self.clock_reports {
+                ClockReports::Unsent => ClockReports::FirstOut,
+                ClockReports::FirstOut | ClockReports::Refilling => ClockReports::Refilling,
+            };
             return Some((
                 Purpose::Clock,
                 "report_host_clock",
@@ -688,9 +699,10 @@ impl Rig {
                 // Every report but a phase's first moved the gateway's clock, and with it
                 // every token's budget (the module doc's "Not every clock answer moves the
                 // clock").
-                if std::mem::take(&mut self.clock_refills) {
+                if self.clock_reports == ClockReports::Refilling {
                     self.seat_budget = SEAT_CALLS_PER_REFILL;
                 }
+                self.clock_reports = ClockReports::Refilling;
                 self.all_ready = matches!(result.get("all_ready"), Some(Json::Bool(true)));
                 if self.all_ready && self.phase == Phase::Lull {
                     self.wants.end_lull = true;
@@ -746,7 +758,7 @@ impl Rig {
             Purpose::Advance => self.timing.pacer.refused(),
             Purpose::Clock => {
                 self.timing.clock.refused();
-                self.clock_refills = false;
+                self.clock_reports = ClockReports::Refilling;
             }
             Purpose::View => {
                 // A cursor from before an attach, or any other refusal: start again from
@@ -779,7 +791,7 @@ impl Rig {
         self.phase = phase;
         // The new phase's clock starts from zero at the gateway, so its first report moves
         // no tick; the change itself moved none either, so nothing is refilled.
-        self.clock_reported = false;
+        self.clock_reports = ClockReports::Unsent;
         self.wants.end_lull = false;
         self.wants.end_recap = false;
         self.all_ready = false;
