@@ -620,7 +620,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$HOME/godot"
-          curl --fail --location --silent --show-error \
+          # Retried as the `client` job's Godot step explains; TLS checks stay on.
+          curl --fail --location --silent --show-error --retry 5 --retry-all-errors --retry-delay 10 \
             --output "$HOME/godot/godot.zip" \
             "https://github.com/godotengine/godot/releases/download/4.7.2-stable/Godot_v4.7.2-stable_linux.x86_64.zip"
           unzip -q -o "$HOME/godot/godot.zip" -d "$HOME/godot"
@@ -746,6 +747,16 @@ jobs:
         # The binary is put on PATH under the name `godot`, because that is what
         # `cargo xtask stage-client` looks for — the same name a developer has
         # locally, so the command is the same one in both places.
+        #
+        # Every Godot and export-template download in this file retries: five times, ten
+        # seconds apart, on any error (`--retry-all-errors`, curl 7.71 and later, which
+        # every runner image's curl is). Run 36501101891's `package (windows-latest)` lost
+        # a required check to one transient TLS failure, `curl: (35) schannel ...
+        # CRYPT_E_REVOCATION_OFFLINE`: the certificate revocation server was unreachable,
+        # and a re-run passed (decisions-log item 124 (5)(a)). The retry rides such an
+        # outage out; nothing turns a TLS check off (no `--ssl-no-revoke`, no
+        # `--insecure`), and a retry rewrites the file from its start, which the SHA-512
+        # checks in the package jobs still verify whole.
         if: steps.scope.outputs.prose_only != 'true'
         shell: bash
         env:
@@ -754,7 +765,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$HOME/godot"
-          curl --fail --location --silent --show-error \
+          curl --fail --location --silent --show-error --retry 5 --retry-all-errors --retry-delay 10 \
             --output "$HOME/godot/godot.zip" \
             "https://github.com/godotengine/godot/releases/download/4.7.2-stable/${GODOT_ASSET}"
           # `unzip` is on the Linux image and is NOT part of Git for Windows; 7-Zip is on
@@ -858,16 +869,19 @@ jobs:
         # back byte for byte, a placement ghost, a map action, QUICK and FULL, the
         # notebook, a draft, a submission whose bytes are the expected file's), the meter,
         # the wizard for every template the gateway lists (pages as they came, one value
-        # sent back, Use, a map action, the submission and `gamectl verify`) and the pinned
-        # Hold & Build instantiation. Ready then ends the Lull through `all_ready`, the
-        # Push plays at 4x until `_status` reaches RECAP, and Continue leads into round
-        # 2's Lull, where the carried draft opens through `get_draft`. The idle stretch is
-        # spent there: 35 s, longer than the gateway's 30 s READ_TIMEOUT, so a missing
-        # keep-alive drops a connection. The scene then quits in the Lull (the host saves
-        # it and exits once its standard input closes), changes to a fresh scene, and
-        # resumes the match on a second host: round 2's Lull comes back with the notebook,
-        # the drafts and the carried draft's bytes. Across both hosts it asserts no caught
-        # panic, no dropped connection and no refused call, and that both hosts exited.
+        # sent back, Use, a map action, the submission and `gamectl verify`), the pinned
+        # Hold & Build instantiation, and the camera's keys (`_camera_keys`, T22a's #64,
+        # decisions-log item 123 (2) 8: W held in the focused notes box leaves the camera
+        # where it was, and after a right-click on the 3D view the same W moves it). Ready
+        # then ends the Lull through `all_ready`, the Push plays at 4x until `_status`
+        # reaches RECAP, and Continue leads into round 2's Lull, where the carried draft
+        # opens through `get_draft`. The idle stretch is spent there: 35 s, longer than
+        # the gateway's 30 s READ_TIMEOUT, so a missing keep-alive drops a connection.
+        # The scene then quits in the Lull (the host saves it and exits once its standard
+        # input closes), changes to a fresh scene, and resumes the match on a second host:
+        # round 2's Lull comes back with the notebook, the drafts and the carried draft's
+        # bytes. Across both hosts it asserts no caught panic, no dropped connection and no
+        # refused call, and that both hosts exited.
         # The scene's exit code is the verdict, and its one OK line names both hosts' pids.
         #
         # This step is also where OS.execute_with_pipe is confirmed on Linux: the
@@ -1062,7 +1076,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$HOME/godot"
-          curl --fail --location --silent --show-error \
+          # Retried as the `client` job's Godot step explains; TLS checks stay on.
+          curl --fail --location --silent --show-error --retry 5 --retry-all-errors --retry-delay 10 \
             --output "$HOME/godot/Godot_v4.7.2-stable_win64.exe.zip" \
             "https://github.com/godotengine/godot/releases/download/4.7.2-stable/Godot_v4.7.2-stable_win64.exe.zip"
           (cd "$HOME/godot" && echo "83decd58fdf67b9d657958a1ae6bf1929c20785315a81effe245874cdc57acb709bf868e00778a96984338c1b29dafdb453c6847747694621c6ecf5da2259993  Godot_v4.7.2-stable_win64.exe.zip" | sha512sum -c -)
@@ -1107,7 +1122,9 @@ jobs:
           # 1.28 GB archive; spelt the way this shell reads it.
           tmp="$(cygpath -u "$RUNNER_TEMP")"
           tpz="$tmp/Godot_v4.7.2-stable_export_templates.tpz"
-          curl --fail --location --silent --show-error --output "$tpz" \
+          # Retried as the `client` job's Godot step explains; TLS checks stay on.
+          curl --fail --location --silent --show-error --retry 5 --retry-all-errors --retry-delay 10 \
+            --output "$tpz" \
             "https://github.com/godotengine/godot/releases/download/4.7.2-stable/Godot_v4.7.2-stable_export_templates.tpz"
           (cd "$tmp" && echo "ca4d71c4d7b81dfc15d1a98baa07534aa95b03fdda78a0075b06672e1648d2e5f40980c9adc28d23e1b92e732ee7bf3461997aa804af74ec2fcd7a93ccb84079  Godot_v4.7.2-stable_export_templates.tpz" | sha512sum -c -)
           7z l "$tpz"
@@ -1241,7 +1258,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$HOME/godot"
-          curl --fail --location --silent --show-error \
+          # Retried as the `client` job's Godot step explains; TLS checks stay on.
+          curl --fail --location --silent --show-error --retry 5 --retry-all-errors --retry-delay 10 \
             --output "$HOME/godot/Godot_v4.7.2-stable_linux.x86_64.zip" \
             "https://github.com/godotengine/godot/releases/download/4.7.2-stable/Godot_v4.7.2-stable_linux.x86_64.zip"
           (cd "$HOME/godot" && echo "9aa00f7a605200940bce3027a567b782f49bd8e940dd06ae9e987bd65aee1b1467edd56ed84fcdcbdd44354bf613bdbb4e5d2913e925850368e150c59ed54c65  Godot_v4.7.2-stable_linux.x86_64.zip" | sha512sum -c -)
@@ -1280,7 +1298,9 @@ jobs:
         run: |
           set -euo pipefail
           tpz="$RUNNER_TEMP/Godot_v4.7.2-stable_export_templates.tpz"
-          curl --fail --location --silent --show-error --output "$tpz" \
+          # Retried as the `client` job's Godot step explains; TLS checks stay on.
+          curl --fail --location --silent --show-error --retry 5 --retry-all-errors --retry-delay 10 \
+            --output "$tpz" \
             "https://github.com/godotengine/godot/releases/download/4.7.2-stable/Godot_v4.7.2-stable_export_templates.tpz"
           (cd "$RUNNER_TEMP" && echo "ca4d71c4d7b81dfc15d1a98baa07534aa95b03fdda78a0075b06672e1648d2e5f40980c9adc28d23e1b92e732ee7bf3461997aa804af74ec2fcd7a93ccb84079  Godot_v4.7.2-stable_export_templates.tpz" | sha512sum -c -)
           unzip -l "$tpz"
