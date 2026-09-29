@@ -85,6 +85,36 @@ jobs:
             exit 1
           fi
 
+      # CLAUDE_CODE_SUBPROCESS_ENV_SCRUB above makes Claude Code run its subprocesses under
+      # bubblewrap, and Claude Code 2.1.278, which the pinned v1.0.231 installs, refuses to
+      # start without it: run 36432629735 failed in "Run Claude Code" with "bubblewrap is
+      # required for subprocess env scrubbing and isolation" (decisions-log item 124 (5)(d)).
+      # The fix keeps the isolation rather than opting out of it. These are the steps the
+      # action runs itself, in its "Install subprocess isolation dependencies" step, when it
+      # scrubs for `allowed_non_write_users` (an input this workflow does not set, since it
+      # would widen who can start a run): bubblewrap and socat from the image's apt sources,
+      # then the sysctl below.
+      #
+      # The sysctl: Ubuntu 24.04 (ubuntu-latest) sets
+      # kernel.apparmor_restrict_unprivileged_userns=1, which denies the unprivileged user
+      # namespace bwrap needs, and Ubuntu's bwrap is not setuid. Turning it off lasts only
+      # for this job's VM, which is thrown away afterwards, and it removes no boundary the
+      # job had: the runner user has passwordless sudo already. Ubuntu's narrower
+      # `bwrap-userns-restrict` profile (package apparmor-profiles, not loaded on the image)
+      # was not chosen: the action does not use it, and on such a VM it bounds nothing
+      # more, while it adds a profile to keep working. The last line proves bwrap
+      # can make its namespaces, so a failure shows here and not inside the action.
+      - name: Install bubblewrap for Claude Code's subprocess isolation
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends bubblewrap socat
+          if [ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          bwrap --version
+          bwrap --ro-bind / / --unshare-pid true
+
       # No persisted credentials: claude-code-action brings its own App token. From checkout
       # v6 the job's read-only token sits in a RUNNER_TEMP file pulled in by an
       # `includeIf.gitdir` entry; claude-code-action v1.0.231 clears the header from
