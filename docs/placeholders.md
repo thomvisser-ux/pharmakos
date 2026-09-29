@@ -61,10 +61,9 @@ no section goes to the nearest one with a note saying so.
 The owner rules on these at the stage demo's review (decisions-log item 123 (3)). **Ruled on
 2026-09-29 (item 126 (2) (b)): every row stands as it is for now, and no rules row is re-tuned, so
 S1-09 carries nothing.** The comments of D-20 to D-27 are reworded by the next lane that owns each
-file. A tuning value the
-owner changes is a `rules.proto` and `rules/rules.v1.json` change that moves the rules hash and every
-chain, so it goes to S1's first contract pull request (item 123 (4)); the carry-forward S1-09 books
-that.
+file. A tuning value the owner changes is a `rules.proto` and `rules/rules.v1.json` change that
+moves the rules hash and every chain, so it goes to S1's first contract pull request (item 123 (4));
+the carry-forward S1-09 would have booked that.
 
 ### The owner
 
@@ -122,7 +121,7 @@ Each goes to S1's first contract pull request (AGENTS.md section 5).
 | S1-06 | `PHARMAKOS_REQUIRE_TOOLS=0` still means on: the variable is read as set or unset | `xtask/src/main.rs` `REQUIRE_TOOLS_VAR` and its readers; `crates/proto/tests/generated.rs` module doc and its require-tools reader | item 123 (4) |
 | S1-07 | The children that bypass `child_command`, so `--require-tools` does not reach them: `perf-alarms`, `load_workspace`'s `cargo metadata`, the tool probes and `xtask/src/package.rs`'s children | `xtask/src/main.rs` `child_command`, `perf_alarms`, `load_workspace`; `xtask/src/package.rs` | item 123 (4) |
 | S1-08 | The premise of `REUSE.toml`'s pointer-block comment ("so each listed pointer resolves here"): `reuse` ignores files named `LICENSE*` | `REUSE.toml` block "Licence pointers and directory placeholders" | items 123 (1), 123 (4) |
-| S1-09 | The rules rows due at this demo that the owner re-tunes at the review (D-01 to D-19): a change re-blesses every chain | see "At this demo" | item 123 (4) |
+| S1-09 | The rules rows due at this demo that the owner re-tunes at the review (D-01 to D-19): a change re-blesses every chain. **Ruled 2026-09-29: none re-tuned (item 126 (2) (b)); nothing to carry.** | see "At this demo" | item 123 (4) |
 | S1-10 | A strict one-line PLACEHOLDER grammar and an `xtask` check that collects this register | this file; `xtask` | items 123 (2) 13, 123 (4) |
 
 ### The owner

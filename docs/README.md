@@ -49,8 +49,8 @@ Written by their own assignments, not by this index, and listed here so the tree
 whole: `CONTRIBUTING.md` and `DCO.txt` (how to contribute and the sign-off), `LICENSING.md`
 (which licence covers which directory, and the REUSE manifest), and `spikes/` (the stack
 spike write-ups — G4 determinism first), `placeholders.md` (the register of every `PLACEHOLDER`
-in the tree, by the stage that settles it) and `demo/` (the stage demos' run sheets and the records of
-their reviews, first the walking skeleton's).
+in the tree, by the stage that settles it) and `demo/` (the stage demos' run sheets and the
+records of their reviews, first the walking skeleton's).
 
 ## Where new documents go
 
