@@ -86,34 +86,47 @@ jobs:
           fi
 
       # CLAUDE_CODE_SUBPROCESS_ENV_SCRUB above makes Claude Code run its subprocesses under
-      # bubblewrap, and Claude Code 2.1.278, which the pinned v1.0.231 installs, refuses to
-      # start without it: run 36432629735 failed in "Run Claude Code" with "bubblewrap is
-      # required for subprocess env scrubbing and isolation" (decisions-log item 124 (5)(d)).
-      # The fix keeps the isolation rather than opting out of it. These are the steps the
-      # action runs itself, in its "Install subprocess isolation dependencies" step, when it
-      # scrubs for `allowed_non_write_users` (an input this workflow does not set, since it
-      # would widen who can start a run): bubblewrap and socat from the image's apt sources,
-      # then the sysctl below.
+      # bubblewrap, and Claude Code 2.1.278 (agent SDK 0.3.278, which v1.0.231's lockfile
+      # pins at the pinned SHA; re-check both on a bump) refuses to start without it: run
+      # 36432629735 failed in "Run Claude Code" with "bubblewrap is required for subprocess
+      # env scrubbing and isolation" (decisions-log item 124 (5)(d)). The fix keeps the
+      # isolation rather than opting out of it. These are the steps the action runs itself,
+      # in its "Install subprocess isolation dependencies" step, when it scrubs for
+      # `allowed_non_write_users` (an input this workflow does not set, since it would widen
+      # who can start a run): bubblewrap and socat from the image's apt sources, three
+      # attempts, then the sysctl below. One difference: the action's step is
+      # continue-on-error, and this one is not. `command -v bwrap` after the loop fails the
+      # job when every attempt failed, here, rather than inside the action.
       #
       # The sysctl: Ubuntu 24.04 (ubuntu-latest) sets
       # kernel.apparmor_restrict_unprivileged_userns=1, which denies the unprivileged user
-      # namespace bwrap needs, and Ubuntu's bwrap is not setuid. Turning it off lasts only
-      # for this job's VM, which is thrown away afterwards, and it removes no boundary the
-      # job had: the runner user has passwordless sudo already. Ubuntu's narrower
-      # `bwrap-userns-restrict` profile (package apparmor-profiles, not loaded on the image)
-      # was not chosen: the action does not use it, and on such a VM it bounds nothing
-      # more, while it adds a profile to keep working. The last line proves bwrap
-      # can make its namespaces, so a failure shows here and not inside the action.
+      # namespace bwrap needs, and Ubuntu's bwrap is not setuid. Turning it off does lift a
+      # boundary: bwrap sets no_new_privs, so a sandboxed subprocess cannot use the runner's
+      # passwordless sudo, and with the restriction off for the whole VM it can make nested
+      # user namespaces again. It is accepted because the action makes the same change
+      # itself, and it lasts only for this job's VM, which is thrown away afterwards.
+      # Ubuntu's narrower `bwrap-userns-restrict` AppArmor profile (package
+      # apparmor-profiles, copied from /usr/share/apparmor/extra-profiles/ into
+      # /etc/apparmor.d and loaded with `apparmor_parser -r`, with the sysctl left at 1)
+      # would grant the namespace to bwrap alone. It is a follow-up to try in a live run,
+      # not part of this change: the action's socat proxy may not work under the profile's
+      # unprivileged-bwrap confinement. The last line proves bwrap can make every namespace
+      # the sandbox asks for, so a failure shows here and not inside the action.
       - name: Install bubblewrap for Claude Code's subprocess isolation
         run: |
           set -euo pipefail
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends bubblewrap socat
+          for i in 1 2 3; do
+            sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends bubblewrap socat && break
+            echo "apt-get attempt $i failed, retrying..."
+            sleep 5
+          done
+          command -v bwrap
+          command -v socat
           if [ -f /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           fi
           bwrap --version
-          bwrap --ro-bind / / --unshare-pid true
+          bwrap --ro-bind / / --dev /dev --proc /proc --unshare-all --die-with-parent true
 
       # No persisted credentials: claude-code-action brings its own App token. From checkout
       # v6 the job's read-only token sits in a RUNNER_TEMP file pulled in by an
@@ -138,3 +151,45 @@ jobs:
           claude_args: |
             --allowedTools "Bash(cargo fmt --all),Bash(cargo check --workspace --all-targets),Bash(cargo xtask ci --quick)"
             --append-system-prompt "Follow AGENTS.md and CLAUDE.md. Every commit message ends with a Co-Authored-By trailer for Claude followed by the last line 'Signed-off-by: Thom Visser <thom.visser@gmail.com>' (the owner's DCO sign-off, authorised for commits made from this workflow); write that line into the message yourself and never pass -s or --signoff, which would sign off as the bot. If a change touches an AGENTS.md section 5 contract path, say so in your reply; never merge."
+
+      # The action's own hardening for a scrubbed run (its "Pin bun binary for post-steps",
+      # "Prepend system bin dirs to PATH" and "Re-prepend system bin dirs to PATH" steps at
+      # the pinned SHA) is gated on `allowed_non_write_users`, which this workflow does not
+      # set, so none of it runs. A subprocess of Claude's that writes the runner's
+      # $GITHUB_ENV or $GITHUB_PATH file could otherwise steer every later step. What a
+      # workflow can copy is the re-prepend and reset, after the action and `if: always()`:
+      # this step puts /usr/bin and /bin first again and clears BASH_ENV, LD_PRELOAD,
+      # LD_LIBRARY_PATH and the DYLD_* variables, as the action's step does, for the steps
+      # that follow it, which here are the checkout's post step (its `token` input is the
+      # job's read-only token). What a workflow cannot reach: the action's own steps after
+      # "Run Claude Code Action" ("Post buffered inline comments", which holds the App
+      # token, and "Revoke app token") run inside the action before any step here can, and
+      # the bun pin copies bun into the action's own folder after the action's own Install
+      # Bun step. Those two stay open until the action runs its hardening without
+      # `allowed_non_write_users`, or this workflow finds a way to set it that does not
+      # widen who can start a run. The pre-run "Prepend" step is not copied: a PATH entry
+      # written before the run cannot outrank one written during it.
+      - name: Reset PATH and the loader variables after Claude Code
+        if: always()
+        shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+        env:
+          BASH_ENV: ""
+          LD_PRELOAD: ""
+          LD_LIBRARY_PATH: ""
+          NODE_OPTIONS: ""
+          DYLD_INSERT_LIBRARIES: ""
+          DYLD_PRELOAD: ""
+          DYLD_LIBRARY_PATH: ""
+          DYLD_FRAMEWORK_PATH: ""
+        run: |
+          echo "/usr/bin" >> "$GITHUB_PATH"
+          echo "/bin" >> "$GITHUB_PATH"
+          {
+            echo "BASH_ENV="
+            echo "LD_PRELOAD="
+            echo "LD_LIBRARY_PATH="
+            echo "DYLD_INSERT_LIBRARIES="
+            echo "DYLD_PRELOAD="
+            echo "DYLD_LIBRARY_PATH="
+            echo "DYLD_FRAMEWORK_PATH="
+          } >> "$GITHUB_ENV"
