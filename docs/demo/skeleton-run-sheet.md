@@ -529,10 +529,10 @@ Found by T22b, not decided:
   a carry-forward for the next `editor.gd` lane (pull request #64; item 123 (2) 8).
 
 **Ruled at the review (2026-09-29, decisions-log item 126 (2)).** The deviations above are
-accepted, the smaller differences with them. Of the three findings, the free beacon (X-12) is fixed
+accepted, all eight, with the smaller differences. Of the three findings, the free beacon (X-12) is fixed
 in S1; the E0108 row's beginner sentence is intended; and the notes box keeping focus is acceptable
 with the right-click way back. The delegation named in this section's first paragraph is item
-124 (4)'s list, with 116 (9), and it is renewed for S1. What the review saw is in
+124 (4)'s list, which added 116 (9) to item 123 (3)'s, and it is renewed for S1. What the review saw is in
 [`skeleton-demo-record.md`](skeleton-demo-record.md).
 
 ## For developers

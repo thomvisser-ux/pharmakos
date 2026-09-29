@@ -19,7 +19,8 @@ touches is data.** Playbooks and templates are JSONC files, edited in the in-gam
 or by hand. Opponents are the built-in operator. External scripting (v1.1) and live AI
 seats (v1.2) are roadmap, reserved now only as proto seams.
 
-**Status: the walking skeleton is open.** The toolchain is installed — rustc 1.98.1, `protoc` 36,
+**Status: the walking skeleton is closed (decisions-log item 126, 2026-09-29); S1, the economy, is
+next.** The toolchain is installed — rustc 1.98.1, `protoc` 36,
 `buf` 1.73, `cargo-deny`, `reuse`, Godot 4.7.2 — the tree is formatted, and `cargo xtask ci` is
 green: fifteen steps, every one required, where a missing input fails. The skips left are the
 platform's and the caller's that `AGENTS.md`'s status paragraph names, and, locally, a missing
@@ -31,8 +32,8 @@ code is frozen at the `spike-end` tag and deleted from `main` — read it with
 `git worktree add ../pharmakos-spikes spike-end`. What this repository holds today is the
 specification, the design record, the harness (`AGENTS.md` / `CLAUDE.md`, `cargo xtask ci` in
 `xtask/src/main.rs`, the lint configuration, the CI workflows, the golden-file and determinism
-conventions) and the workspace below, in which every crate has code: the walking skeleton, which
-its last task, T22, is closing. The skeleton ends when the owner has reviewed its stage demo.
+conventions) and the workspace below, in which every crate has code: the walking skeleton, closed at
+the owner's review of its stage demo on 2026-09-29.
 
 ## Repository layout
 

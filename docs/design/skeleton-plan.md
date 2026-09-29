@@ -5,7 +5,7 @@
 
 **Approved and closed.** The owner lifted this plan's PROPOSED mark (item 87) at the stage demo's
 review on 2026-09-29, which closed the walking skeleton (decisions-log item 126). The plan is now
-the record of how the skeleton was built; S1 has a plan of its own.
+the record of how the skeleton was built; S1 gets a plan of its own (the handoff's NEXT 1).
 
 Precedence followed throughout: `docs/design/decisions-log.md` §2.7 > `docs/spec/pharmakos-spec-v0.6.html`
 > `docs/design/co-design-gameplan-api.md` (`docs/design/README.md`). Where the two higher sources
