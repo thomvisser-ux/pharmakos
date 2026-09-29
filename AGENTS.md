@@ -26,9 +26,9 @@ checked on every pull request that changes more than prose and on `main`'s push 
 116 (6)(n); a prose-only pull request takes the fast path of §9, item 115 (4)). The four stack
 spikes are closed, frozen at the `spike-end` tag and deleted from `main`;
 their measured results and their lessons for the skeleton live under `docs/spikes/`, and reading the
-spike code means `git worktree add ../pharmakos-spikes spike-end`. The walking skeleton is open,
-and every crate in §3 has code; mark any value you had to guess with a `PLACEHOLDER` comment naming
-who fixes it and when.
+spike code means `git worktree add ../pharmakos-spikes spike-end`. The walking skeleton is closed
+(decisions-log item 126, 2026-09-29), S1 is next, and every crate in §3 has code; mark any value
+you had to guess with a `PLACEHOLDER` comment naming who fixes it and when.
 
 ---
 
@@ -510,9 +510,9 @@ of that premise.
 - **Never run an agent in bypass-permissions mode against a real seat**, and do not use it in this
   repository. The contract-file rule in §5 depends on approval prompts actually happening. Game
   tools are reached through pre-approved allow rules; bypass mode is not a shortcut, it is the
-  removal of the mechanism. The owner's one exception, for the walking skeleton only, is in
-  CLAUDE.md: bypass mode in the owner's own session and the agents it launches, never against a
-  real seat (decisions-log items 86 and 116 (9)).
+  removal of the mechanism. The owner's one exception, for the walking skeleton and S1 only, is
+  in CLAUDE.md: bypass mode in the owner's own session and the agents it launches, never against a
+  real seat (decisions-log items 86, 116 (9) and 126).
 - Rate limits and an audit log on the gateway are part of the feature, not a later hardening task.
 
 ## 8. Commits
