@@ -58,7 +58,10 @@ no section goes to the nearest one with a note saying so.
 
 ## At this demo
 
-The owner rules on these at the stage demo's review (decisions-log item 123 (3)). A tuning value the
+The owner rules on these at the stage demo's review (decisions-log item 123 (3)). **Ruled on
+2026-09-29 (item 126 (2) (b)): every row stands as it is for now, and no rules row is re-tuned, so
+S1-09 carries nothing.** The comments of D-20 to D-27 are reworded by the next lane that owns each
+file. A tuning value the
 owner changes is a `rules.proto` and `rules/rules.v1.json` change that moves the rules hash and every
 chain, so it goes to S1's first contract pull request (item 123 (4)); the carry-forward S1-09 books
 that.
@@ -95,11 +98,11 @@ that.
 | D-26 | **Now:** that an in-process seat has a rate limit of its own at all, taken on the recommendation. Its numbers, 128 calls a tick and 1 200 a window, are the owner's at hardening with the rate limits (and H-06) | `crates/gateway/src/limit.rs` `IN_PROCESS_LIMITS` | item 111 (4); w6 notes D question 1 |
 | D-27 | **Now:** where a resume lands (a Push save resumes into the same Push; a Lull save into its Lull), taken on the recommendation | `crates/gateway/src/surface.rs` `Surface::resume` doc | w6 notes D question 2, decision C8 |
 
-Also ruled on at the review, and not PLACEHOLDERs (item 123 (3)): the skeleton plan's PROPOSED mark
-(item 87); the section 1.1 deviations, which the run sheet lists
-(`docs/demo/skeleton-run-sheet.md`); the deferral of P2's baseline to S5 and P6's to S3's playtest
-(item 123 (2) 11); and the delegation of items 85, 86, 116 (2) and 120, which the skeleton's end
-returns to the owner.
+Also ruled on at the review, and not PLACEHOLDERs (item 123 (3), with item 124 (4)'s correction):
+the skeleton plan's PROPOSED mark (item 87), lifted; the section 1.1 deviations, which the run sheet
+lists (`docs/demo/skeleton-run-sheet.md`), accepted; the deferral of P2's baseline to S5 and P6's
+to S3's playtest (item 123 (2) 11), accepted; and the delegation of items 85, 86, 116 (2) and (9),
+and 120, which the skeleton's end returned to the owner, renewed for S1 (item 126 (2)).
 
 ---
 

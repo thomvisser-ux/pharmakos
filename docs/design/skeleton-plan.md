@@ -3,8 +3,9 @@
 
 # Walking skeleton — plan for spec section 17, the wk-18.5 row (15.5 weeks)
 
-**PROPOSED — for the owner's approval. Nothing in section 6 is decided; nothing in section 3 starts
-until the decisions in section 6 that gate it are answered.**
+**Approved and closed.** The owner lifted this plan's PROPOSED mark (item 87) at the stage demo's
+review on 2026-09-29, which closed the walking skeleton (decisions-log item 126). The plan is now
+the record of how the skeleton was built; S1 has a plan of its own.
 
 Precedence followed throughout: `docs/design/decisions-log.md` §2.7 > `docs/spec/pharmakos-spec-v0.6.html`
 > `docs/design/co-design-gameplan-api.md` (`docs/design/README.md`). Where the two higher sources
