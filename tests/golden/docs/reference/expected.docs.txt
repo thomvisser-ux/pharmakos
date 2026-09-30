@@ -384,7 +384,8 @@ gp.v1.RulesTable.Economy
   ore_yield_per_voxel_dollars  9   gp.v1.ByRichness
   seam_voxels                  10  uint32
   mining_ms_per_voxel          11  int32
-  reserved 12 to 15
+  mining_carry_voxels          12  uint32
+  reserved 13 to 15
 
 gp.v1.RulesTable.InterfaceTimes
   visit_handshake_ms           1   int32
@@ -434,6 +435,7 @@ gp.v1.RulesTable.Match
   segment_lengths_ms           1   repeated int32
   lull_ms                      2   int32
   decision_tick_ms             3   int32
+  first_lull_ms                4   int32
 
 gp.v1.RulesTable.Mesher
   surfaces_per_frame           1   uint32
@@ -466,6 +468,7 @@ gp.v1.RulesTable.Structures
   resonance_spire              6   gp.v1.RulesTable.StructureKind
   wall_cost_per_voxel          7   uint32
   demolition_charge_cost_dollars 8   uint32
+  build_hp_per_second          9   uint32
 
 gp.v1.RulesTable.UnitKind
   cost_dollars                 1   uint32

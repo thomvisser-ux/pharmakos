@@ -69,7 +69,7 @@ const SEGMENT_MS: i32 = 1_000;
 
 /// `rules.match.lull_ms`, which is what a client counts down and what the
 /// gateway derives its Lull tick from.
-const LULL_MS: i32 = 180_000;
+const LULL_MS: i32 = 300_000;
 
 // ---------------------------------------------------------------------------
 // A gateway with a match behind it

@@ -115,11 +115,17 @@ message RulesTable {
     // value comes from.
     repeated int32 segment_lengths_ms = 1;
 
-    // The Lull's planning timer, in game milliseconds. Read by the host and
-    // the editor, never by the sim: the Lull timer is a UI and host concern
-    // (AGENTS.md section 4.5).
+    // The planning timer of every Lull after the first, in game milliseconds:
+    // spec section 3's five minutes (decisions-log item 127 (2), which
+    // re-rules D-01's 180 000 for S1). The first Lull's is `first_lull_ms`
+    // below. Read by the host and the editor, never by the sim: the Lull
+    // timer is a UI and host concern (AGENTS.md section 4.5). Ready still
+    // ends a Lull at once.
     //
-    // PLACEHOLDER: value is Tuning — owner, at the walking skeleton's demo.
+    // Until the gateway and `gamectl` read `first_lull_ms` for the opening
+    // Lull (S1's economy surfaces), they time every Lull with this row.
+    //
+    // PLACEHOLDER: value is Tuning — owner, at S1's demo.
     int32 lull_ms = 2;
 
     // The interpreter's decision tick, in game milliseconds: how often a
@@ -127,8 +133,18 @@ message RulesTable {
     // 90). 250 ms is exactly five sim ticks at 20 Hz, so it divides the tick
     // rate and no decision lands between ticks.
     //
-    // PLACEHOLDER: tuning, owner, S3.
+    // PLACEHOLDER: tuning — owner, S3.
     int32 decision_tick_ms = 3;
+
+    // The first Lull's planning timer, in game milliseconds: spec section 3's
+    // ten minutes, the time a seat has to read the map and write its first
+    // playbook (decisions-log item 127 (2); S1's plan, decision 10). A row of
+    // its own because `lull_ms` is one value and the spec gives the first
+    // Lull a different one. Read by the host and the editor, never by the
+    // sim, like `lull_ms`.
+    //
+    // PLACEHOLDER: value is Tuning — owner, at S1's demo.
+    int32 first_lull_ms = 4;
   }
 
   // Locomotion and pathing (item 59, item 69).
@@ -156,9 +172,8 @@ message RulesTable {
     // which unit repaths on which tick, so it has to be the same number
     // everywhere.
     //
-    // PLACEHOLDER: 16 is item 69's value, to be re-derived at S2's exit once
-    // the burst frequency is a measurement rather than a spike's estimate —
-    // owner, at S2 exit.
+    // PLACEHOLDER: 16 is item 69's value — owner, at S2's exit, re-derived once
+    // the burst frequency is a measurement rather than a spike's estimate.
     uint32 repath_cap_per_tick = 5;
 
     // Fog multiplier on an abstract edge, as a fraction: an unseen edge costs
@@ -185,18 +200,18 @@ message RulesTable {
     // keeps item 59's ceiling property — an estimate is never optimistic
     // (item 61).
     //
-    // PLACEHOLDER: tuning, owner, at the walking skeleton's demo.
+    // PLACEHOLDER: tuning, stood at the skeleton's demo — owner, at S1's demo.
     uint32 commander_cost_per_second = 9;    // item 90: 10 — 1.0 voxels/s
 
     // Build, mining and repair-reclaim drones all walk at the same speed.
     //
-    // PLACEHOLDER: tuning, owner, S1.
+    // PLACEHOLDER: tuning — owner, S1.
     uint32 drone_cost_per_second = 10;       // item 90: 10
 
-    // PLACEHOLDER: tuning, owner, S2.
+    // PLACEHOLDER: tuning — owner, S2.
     uint32 raider_cost_per_second = 11;      // item 90: 12
 
-    // PLACEHOLDER: tuning, owner, S2.
+    // PLACEHOLDER: tuning — owner, S2.
     uint32 scout_cost_per_second = 12;       // item 90: 20 — 2.0 voxels/s
   }
 
@@ -230,8 +245,8 @@ message RulesTable {
   message Mesher {
     // K: surfaces uploaded per frame.
     //
-    // PLACEHOLDER: Tuning — no measured frame-time reason separates K = 4
-    // from K = 8 on the spike machine (item 54). Owner, at S6's art pass.
+    // PLACEHOLDER: Tuning — owner, at S6's art pass: no measured frame-time
+    // reason separates K = 4 from K = 8 on the spike machine (item 54).
     uint32 surfaces_per_frame = 1;
 
     // B: bytes uploaded per frame. Item 54: 512 KiB.
@@ -243,8 +258,7 @@ message RulesTable {
     // many frames drains before the nearest-camera rule applies. Item 54's
     // "older than 2 frames".
     //
-    // PLACEHOLDER: ships untested by measurement and is labelled insurance
-    // (item 54) — owner, at S6's art pass.
+    // PLACEHOLDER: untested insurance (item 54) — owner, at S6's art pass.
     uint32 age_frames = 3;
 
     // Light bake. LIGHT_MAX is the brightest sky value, LIGHT_ATTEN the fall
@@ -260,73 +274,94 @@ message RulesTable {
   // `Structures`). Spec section 7; the numbers are item 90's. Each one is
   // Tuning and none of them may become a constant in code.
   //
-  // Field numbers 12-15 stay held so the next four rows keep the one-byte tag
-  // range, the reason the stub reserved 1 to 15 in the first place.
+  // Field numbers 13-15 stay held so the next three rows keep the one-byte tag
+  // range, the reason the stub reserved 1 to 15 in the first place. Field 12
+  // was held the same way and is discharged by `mining_carry_voxels` (S1's
+  // first contract pull request; `proto/buf.yaml`'s scoped `ignore_only` says
+  // why buf is told about it).
   message Economy {
-    reserved 12 to 15;
+    reserved 13 to 15;
 
     // Base Maintenance Indemnity: the `$` a seat is paid per settlement
     // (spec section 7).
     //
-    // PLACEHOLDER: tuning, owner, S1.
+    // PLACEHOLDER: tuning — owner, S1.
     uint32 bmi_dollars = 1;                        // item 90: 100
 
     // Starting `$` as a MULTIPLE of the BMI, so the spec's rule — "starting
     // money is two indemnities" — stays a rule rather than being flattened
     // into a second number that can drift away from the first.
     //
-    // PLACEHOLDER: tuning, owner, S1.
+    // PLACEHOLDER: tuning — owner, S1.
     uint32 starting_bmi_multiplier = 2;            // item 90: 2, so $ 200
 
     // Settlement scaling by standing (spec section 7): last place is paid
     // this many percent more, the leader this many percent less, linear
     // between.
     //
-    // PLACEHOLDER: tuning, owner, S1.
+    // PLACEHOLDER: tuning — owner, S1.
     uint32 scaling_last_place_bonus_percent = 3;   // item 90: 10
-    // PLACEHOLDER: tuning, owner, S1.
+    // PLACEHOLDER: tuning — owner, S1.
     uint32 scaling_leader_malus_percent = 4;       // item 90: 5
 
     // The award fund, as a percentage of one BMI per settlement (S4's
     // licences and awards).
     //
-    // PLACEHOLDER: tuning, owner, S4.
+    // PLACEHOLDER: tuning — owner, S4.
     uint32 award_fund_percent_of_bmi = 5;          // item 90: 50
 
     // Recycling a standing asset refunds this percentage of its REMAINING
     // value (spec section 7).
     //
-    // PLACEHOLDER: tuning, owner, S1.
+    // PLACEHOLDER: tuning — owner, S1.
     uint32 recycle_refund_percent = 6;             // item 90: 50
 
     // A wreck or a ruin salvages this percentage of the thing's build cost
     // (S2's destruction).
     //
-    // PLACEHOLDER: tuning, owner, S2.
+    // PLACEHOLDER: tuning — owner, S2.
     uint32 salvage_percent = 7;                    // item 90: 25
 
     // The fabricator's backlog warning: outstanding work items per available
     // drone, above which the Quartermaster reports a backlog.
     //
-    // PLACEHOLDER: tuning, owner, S1.
+    // PLACEHOLDER: tuning — owner, S1.
     uint32 backlog_threshold_per_drone = 8;        // item 90: 2
 
     // Ore yield in `$` per mined voxel, by the richness of the seam it came
     // out of (item 90). With `seam_voxels` below, a seam is worth 300 / 600 /
     // 1 200 `$`.
     //
-    // PLACEHOLDER: tuning, owner, S1.
+    // PLACEHOLDER: tuning — owner, S1.
     ByRichness ore_yield_per_voxel_dollars = 9;    // item 90: 2 / 4 / 8
 
     // Ore voxels in one scrap seam, whatever its richness.
     //
-    // PLACEHOLDER: tuning, owner, S1.
+    // PLACEHOLDER: tuning — owner, S1.
     uint32 seam_voxels = 10;                       // item 90: 150
 
     // Game milliseconds one mining drone spends per ore voxel.
     //
-    // PLACEHOLDER: tuning, owner, S1.
+    // PLACEHOLDER: tuning — owner, S1.
     int32 mining_ms_per_voxel = 11;                // item 90: 2000
+
+    // Ore voxels a mining drone carries before it walks its load home, where
+    // the delivered ore is credited at once (spec sections 6 and 7). No row
+    // said how much a drone carries, so the sim held it as a named constant;
+    // this is that constant's row (the register's S1-25; S1's plan, decisions
+    // 10 and 13), at the constant's own value, so a table that carries it
+    // moves no chain. Sixteen makes a `seam_voxels` = 150 seam about nine
+    // round trips rather than one or a hundred and fifty. The sim reads it
+    // from the S1 lane that swaps its constant for the row (the sim's
+    // `MINING_LOAD_VOXELS`).
+    //
+    // `carry`, not the register's proposed `mining_load_voxels`: a field name
+    // is permanent under WIRE_JSON, and `crates/gateway/tests/confinement.rs`
+    // refuses any `gp.*` field named with the word `load`, which reads as
+    // loading code or a file (AGENTS.md section 7).
+    //
+    // PLACEHOLDER: tuning — owner, at S1's demo.
+    uint32 mining_carry_voxels = 12;               // S1-25: 16
   }
 
   // Every `kW` row (spec section 7; items 65, 90 and 91). Per-item draw is in
@@ -341,25 +376,25 @@ message RulesTable {
     // The pre-placed key core's deep-bore surplus: supply a seat has before
     // it builds anything.
     //
-    // PLACEHOLDER: tuning, owner, S1.
+    // PLACEHOLDER: tuning — owner, S1.
     uint32 core_surplus_kw = 1;                    // item 90: 10
 
     // A Generator's output, by the richness of the heat vent it sits on.
     //
-    // PLACEHOLDER: tuning, owner, S1.
+    // PLACEHOLDER: tuning — owner, S1.
     ByRichness generator_output_kw = 2;            // item 90: 20 / 30 / 40
 
     // Draw per fielded unit, every kind (item 91). Every per-kind `draw_kw`
     // row in `Units` is this same 1, so item 65's average and the per-kind
     // draws agree at the skeleton.
     //
-    // PLACEHOLDER: tuning, owner, at S2's exit (item 91 moves all three of
+    // PLACEHOLDER: tuning — owner, at S2's exit (item 91 moves all three of
     // this, `reserve_percent` and `map_ceiling_kw` together).
     uint32 kw_per_unit = 3;                        // item 91: 1
 
     // The headroom item 65 keeps free inside the ceiling, as a percentage.
     //
-    // PLACEHOLDER: tuning, owner, at S2's exit (item 91).
+    // PLACEHOLDER: tuning — owner, at S2's exit (item 91).
     uint32 reserve_percent = 4;                    // item 91: 40
 
     // The per-map supply ceiling, in kW.
@@ -372,19 +407,19 @@ message RulesTable {
     // total against this row: three seats supply 3 x 10 + 3 x 20 + 2 x 30 +
     // 40 = 190 kW, exactly the ceiling; two seats, 160.
     //
-    // PLACEHOLDER: tuning, owner, at S2's exit (item 91).
+    // PLACEHOLDER: tuning — owner, at S2's exit (item 91).
     uint32 map_ceiling_kw = 5;                     // item 91: 190
 
     // Headroom a dormant asset needs before it may revive, so a grid on the
     // edge does not oscillate.
     //
-    // PLACEHOLDER: tuning, owner, S1.
+    // PLACEHOLDER: tuning — owner, S1.
     uint32 revive_margin_kw = 6;                   // item 90: 2
 
     // A beacon's own draw. Net zero through its own key-core, which is why it
     // is stated rather than assumed (item 90, spec section 5).
     //
-    // PLACEHOLDER: tuning, owner, S1.
+    // PLACEHOLDER: tuning — owner, S1.
     uint32 beacon_base_draw_kw = 7;                // item 90: 2
   }
 
@@ -392,37 +427,44 @@ message RulesTable {
   // only thing that can change a sealed order, and so the only thing whose
   // walking speed is felt directly by the player.
   message Commander {
-    // PLACEHOLDER: tuning, owner, S2.
+    // PLACEHOLDER: tuning — owner, S2.
     uint32 hp = 1;                                 // item 90: 300
 
     // Cost units per second, the same unit as `locomotion.*_cost_per_second`
     // and repeated here because the commander is not a unit kind.
     //
-    // PLACEHOLDER: tuning, owner, at the walking skeleton's demo.
+    // PLACEHOLDER: tuning, stood at the skeleton's demo — owner, at S1's demo.
     uint32 cost_per_second = 2;                    // item 90: 10
 
     // Respawn after a death: `respawn_base_ms` plus `respawn_growth_ms` per
     // earlier death in the same Push, always completing by segment end (the
     // spec's "for example 30 s, growing with each death").
     //
-    // PLACEHOLDER: tuning, owner, S2.
+    // PLACEHOLDER: tuning — owner, S2.
     int32 respawn_base_ms = 3;                     // item 90: 30000
-    // PLACEHOLDER: tuning, owner, S2.
+    // PLACEHOLDER: tuning — owner, S2.
     int32 respawn_growth_ms = 4;                   // item 90: 15000
 
     // How close a walked route has to get before it counts as arrived.
     //
-    // PLACEHOLDER: tuning, owner, at the walking skeleton's demo.
+    // PLACEHOLDER: tuning, stood at the skeleton's demo — owner, at S1's demo.
     uint32 arrive_radius_voxels = 5;               // item 90: 2
 
     // How far from the commander a new beacon may be placed.
     //
-    // PLACEHOLDER: tuning, owner, at the walking skeleton's demo.
+    // SUPERSEDED by walk-in (decisions-log item 127 (12), which amends item
+    // 11): `place_beacon` walks the commander to its site before it deploys,
+    // so there is no range left to check once targeting's behaviour lands in
+    // S1. The row stays in the schema, as `locomotion.move_cost_per_tick`
+    // does, because deleting a field is a `buf breaking` failure in WIRE_JSON
+    // mode; the sim reads it until that lane retires the check.
+    //
+    // PLACEHOLDER: tuning, stood at the skeleton's demo — owner, at S1's demo.
     uint32 placement_range_voxels = 6;             // item 90: 12
 
     // Item 11's "roughly 4-voxel" interface range: touch to change.
     //
-    // PLACEHOLDER: tuning, owner, at the walking skeleton's demo.
+    // PLACEHOLDER: tuning, stood at the skeleton's demo — owner, at S1's demo.
     uint32 interface_range_voxels = 7;             // item 90: 4
   }
 
@@ -433,13 +475,13 @@ message RulesTable {
   message Beacon {
     // The sphere of authority around a beacon, in voxels.
     //
-    // PLACEHOLDER: tuning, owner, at the walking skeleton's demo.
+    // PLACEHOLDER: tuning, stood at the skeleton's demo — owner, at S1's demo.
     uint32 sphere_radius_voxels = 1;               // item 90: 24
 
     // The pre-placed key core's HP. Not purchasable, so it is not a
     // `Structures` row.
     //
-    // PLACEHOLDER: tuning, owner, S2.
+    // PLACEHOLDER: tuning — owner, S2.
     uint32 core_hp = 2;                            // item 90: 3000
   }
 
@@ -449,19 +491,19 @@ message RulesTable {
   message Map {
     // Map extent in voxels. 384 x 384 x 64 — twelve chunks square, two high.
     //
-    // PLACEHOLDER: tuning, owner, at the walking skeleton's demo.
+    // PLACEHOLDER: tuning, stood at the skeleton's demo — owner, at S1's demo.
     uint32 size_x = 1;                             // item 90: 384
-    // PLACEHOLDER: tuning, owner, at the walking skeleton's demo.
+    // PLACEHOLDER: tuning, stood at the skeleton's demo — owner, at S1's demo.
     uint32 size_y = 2;                             // item 90: 384
-    // PLACEHOLDER: tuning, owner, at the walking skeleton's demo.
+    // PLACEHOLDER: tuning, stood at the skeleton's demo — owner, at S1's demo.
     uint32 size_z = 3;                             // item 90: 64
 
     // Spawn zones generated, and their radius. Only OCCUPIED zones are
     // realised — an unoccupied zone is terrain and nothing else.
     //
-    // PLACEHOLDER: tuning, owner, at the walking skeleton's demo.
+    // PLACEHOLDER: tuning, stood at the skeleton's demo — owner, at S1's demo.
     uint32 spawn_zones = 4;                        // item 90: 3
-    // PLACEHOLDER: tuning, owner, at the walking skeleton's demo.
+    // PLACEHOLDER: tuning, stood at the skeleton's demo — owner, at S1's demo.
     uint32 spawn_zone_radius_voxels = 5;           // item 90: 24
 
     // The one heat vent in an occupied spawn zone: its grade, and how far
@@ -482,31 +524,31 @@ message RulesTable {
     // the band against 2 x sphere_radius_voxels, not against the placement
     // range.
     //
-    // PLACEHOLDER: tuning, owner, S1.
+    // PLACEHOLDER: tuning — owner, S1.
     ByRichness.Richness start_vent_richness = 6;   // item 90: LEAN
-    // PLACEHOLDER: tuning, owner, at the walking skeleton's demo.
+    // PLACEHOLDER: tuning, stood at the skeleton's demo — owner, at S1's demo.
     uint32 vent_min_distance_voxels = 7;           // item 90: 28
-    // PLACEHOLDER: tuning, owner, at the walking skeleton's demo.
+    // PLACEHOLDER: tuning, stood at the skeleton's demo — owner, at S1's demo.
     uint32 vent_max_distance_voxels = 8;           // item 90: 44
 
     // The one starting scrap seam in an occupied spawn zone. Inside the
     // core's sphere, so the starting mining drone digs from tick one.
     //
-    // PLACEHOLDER: tuning, owner, S1.
+    // PLACEHOLDER: tuning — owner, S1.
     ByRichness.Richness start_seam_richness = 9;   // item 90: STANDARD
-    // PLACEHOLDER: tuning, owner, at the walking skeleton's demo.
+    // PLACEHOLDER: tuning, stood at the skeleton's demo — owner, at S1's demo.
     uint32 seam_min_distance_voxels = 10;          // item 90: 8
-    // PLACEHOLDER: tuning, owner, at the walking skeleton's demo.
+    // PLACEHOLDER: tuning, stood at the skeleton's demo — owner, at S1's demo.
     uint32 seam_max_distance_voxels = 11;          // item 90: 20
 
     // Contested features, toward the centre of the map: what expansion is
     // for.
     //
-    // PLACEHOLDER: tuning, owner, S1.
+    // PLACEHOLDER: tuning — owner, S1.
     uint32 contested_standard_vents = 12;          // item 90: 2
-    // PLACEHOLDER: tuning, owner, S1.
+    // PLACEHOLDER: tuning — owner, S1.
     uint32 contested_rich_vents = 13;              // item 90: 1
-    // PLACEHOLDER: tuning, owner, S1.
+    // PLACEHOLDER: tuning — owner, S1.
     uint32 contested_rich_seams = 14;              // item 90: 3
 
     // Minimum separation between any two occupied spawn centres, as a
@@ -525,9 +567,9 @@ message RulesTable {
     // segment rather than to 3/2 of it; 3 240 is the separation's number, not
     // one segment's.)
     //
-    // PLACEHOLDER: tuning, owner, at the walking skeleton's demo.
+    // PLACEHOLDER: tuning, stood at the skeleton's demo — owner, at S1's demo.
     uint32 spawn_separation_pushes_numerator = 15;    // item 90: 3
-    // PLACEHOLDER: tuning, owner, at the walking skeleton's demo.
+    // PLACEHOLDER: tuning, stood at the skeleton's demo — owner, at S1's demo.
     uint32 spawn_separation_pushes_denominator = 16;  // item 90: 2
   }
 
@@ -553,29 +595,29 @@ message RulesTable {
   // occupied seat has exactly one of each by the spec's design, not by
   // tuning.
   message Units {
-    // PLACEHOLDER: tuning, owner, S1.
+    // PLACEHOLDER: tuning — owner, S1.
     UnitKind build_drone = 1;    // item 90: 20 / 100 / 1 / 10
-    // PLACEHOLDER: tuning, owner, S1.
+    // PLACEHOLDER: tuning — owner, S1.
     UnitKind mining_drone = 2;   // item 90: 20 / 100 / 1 / 10
 
     // Item 90's "repair-reclaim drone" under its short name. There is no
     // sixth unit kind; the field name is the JSON key and `buf breaking`
     // makes it permanent, so the equivalence is stated rather than inferred.
     //
-    // PLACEHOLDER: tuning, owner, S2.
+    // PLACEHOLDER: tuning — owner, S2.
     UnitKind repair_drone = 3;   // item 90: 25 / 100 / 1 / 10
-    // PLACEHOLDER: tuning, owner, S2.
+    // PLACEHOLDER: tuning — owner, S2.
     UnitKind raider = 4;         // item 90: 30 / 120 / 1 / 12
-    // PLACEHOLDER: tuning, owner, S2.
+    // PLACEHOLDER: tuning — owner, S2.
     UnitKind scout = 5;          // item 90: 10 / 60 / 1 / 20
 
     // Build drones each occupied seat starts with (item 95: 2).
     //
-    // PLACEHOLDER: tuning, owner, S1.
+    // PLACEHOLDER: tuning — owner, S1.
     uint32 starting_build_drones = 6;
     // Mining drones each occupied seat starts with (item 95: 1).
     //
-    // PLACEHOLDER: tuning, owner, S1.
+    // PLACEHOLDER: tuning — owner, S1.
     uint32 starting_mining_drones = 7;
   }
 
@@ -594,7 +636,14 @@ message RulesTable {
     // so the block reads as one structure; the two are the same number and
     // move together.
     //
-    // PLACEHOLDER: tuning, owner, at the walking skeleton's demo.
+    // That `draw_kw` is the beacon's GROSS draw, and a placed beacon adds no
+    // NET draw to its seat's grid: its own key-core supplies exactly its base
+    // draw, so the two cancel (decisions-log section 2.3's key-core rule, item
+    // 90, and item 113 (5), which found the sim charging it and had it netted
+    // out). A reader pricing a new beacon's effect on headroom counts 0 kW,
+    // not this row.
+    //
+    // PLACEHOLDER: tuning, stood at the skeleton's demo — owner, at S1's demo.
     StructureKind beacon = 1;           // item 90: 60 / 800 / 2
 
     // The Generator draws nothing: it is the thing that supplies. Its
@@ -603,27 +652,41 @@ message RulesTable {
     // than three — the decoded row is still 80 / 600 / 0. First zero-valued
     // row in the table, so it is said once here and once in rules/README.md.
     //
-    // PLACEHOLDER: tuning, owner, S1.
+    // PLACEHOLDER: tuning — owner, S1.
     StructureKind generator = 2;        // item 90: 80 / 600 / 0
-    // PLACEHOLDER: tuning, owner, S2.
+    // PLACEHOLDER: tuning — owner, S2.
     StructureKind autocannon = 3;       // item 90: 60 / 500 / 2
-    // PLACEHOLDER: tuning, owner, S2.
+    // PLACEHOLDER: tuning — owner, S2.
     StructureKind mortar = 4;           // item 90: 90 / 400 / 3
-    // PLACEHOLDER: tuning, owner, S1.
+    // PLACEHOLDER: tuning — owner, S1.
     StructureKind survey_post = 5;      // item 90: 30 / 200 / 1
-    // PLACEHOLDER: tuning, owner, S3.
+    // PLACEHOLDER: tuning — owner, S3.
     StructureKind resonance_spire = 6;  // item 90: 120 / 500 / 3
 
     // Wall, priced per voxel; HP is by material rather than by structure,
     // which is why a wall is not a `StructureKind`.
     //
-    // PLACEHOLDER: tuning, owner, S2.
+    // PLACEHOLDER: tuning — owner, S2.
     uint32 wall_cost_per_voxel = 7;     // item 90: 1
 
     // One demolition charge.
     //
-    // PLACEHOLDER: tuning, owner, S2.
+    // PLACEHOLDER: tuning — owner, S2.
     uint32 demolition_charge_cost_dollars = 8;  // item 90: 15
+
+    // Hit points one working build drone adds to the structure it is raising,
+    // per second of game time. Spec section 5 prices queueing a structure at
+    // "5 s, plus fabricator construction time", so construction time is not
+    // an interface time, and no row carried it: the sim held it as a named
+    // constant (item 105 (1)), and this is that constant's row (the register's
+    // S1-24; S1's plan, decisions 10 and 13), at the constant's own value, so
+    // a table that carries it moves no chain. Sixty divides the tick rate: 3
+    // hit points a tick at 20 Hz, so construction needs no accumulator, and a
+    // 600 HP Generator goes up in ten seconds on one drone. The sim reads it
+    // from the S1 lane that swaps its constant for the row.
+    //
+    // PLACEHOLDER: tuning — owner, at S1's demo.
+    uint32 build_hp_per_second = 9;             // S1-24: 60
   }
 
   // The verifier's and the interpreter's limits (spec sections 10 and 11;
@@ -638,30 +701,30 @@ message RulesTable {
     // The worked example (`expand_east`) is 6 units and the three templates
     // are of that order, so 128 is roomy on purpose.
     //
-    // PLACEHOLDER: tuning, owner, at S3's exit — P1 sets the real number from
+    // PLACEHOLDER: tuning — owner, at S3's exit: P1 sets the real number from
     // the measured per-rule cost per decision tick (item 94).
     uint32 size_budget_units = 1;                  // item 94: 128
 
     // The floor under a handler's cooldown: a playbook asking for less is
     // rejected.
     //
-    // PLACEHOLDER: tuning, owner, S3.
+    // PLACEHOLDER: tuning — owner, S3.
     int32 handler_cooldown_min_ms = 2;             // item 90: 5000
 
     // The ceiling on a handler's `max_fires`.
     //
-    // PLACEHOLDER: tuning, owner, S3.
+    // PLACEHOLDER: tuning — owner, S3.
     uint32 max_fires_max = 3;                      // item 90: 8
 
     // The seat notebook's size, in characters.
     //
-    // PLACEHOLDER: tuning, owner, S3.
+    // PLACEHOLDER: tuning — owner, S3.
     uint32 notebook_max_chars = 4;                 // item 90: 4000
 
     // How long a seat remembers a reached place or a seen thing, in game
     // milliseconds.
     //
-    // PLACEHOLDER: tuning, owner, S3 — item 90 marks this one S2/S3.
+    // PLACEHOLDER: tuning — owner, S3 (item 90 marks this one S2/S3).
     int32 reach_memory_ms = 5;                     // item 90: 180000
   }
 }

@@ -47,11 +47,11 @@
 //! that would be a dependency edge into the sim, which is what `wall-guard` forbids — so
 //! they arrive as [`DrainBudget`], filled by `pharmakos-client-gdext` (T12).
 //!
-//! PLACEHOLDER: K = 4 and B = 512 KiB carry item 54's own caveat — *no measured frame-time
-//! reason separates K = 4 from K = 8 on the spike machine, so the choice is structural, a
-//! bound on per-frame work*; and B is one doubling above the point where B stopped binding,
-//! a margin for a heavier vertex format rather than an optimum. Owner re-derives both at
-//! S2's exit with the real world under load.
+//! PLACEHOLDER: K = 4 and B = 512 KiB — owner, at S6's art pass, as their `rules.proto`
+//! rows say. Both carry item 54's own caveat — *no measured frame-time reason separates
+//! K = 4 from K = 8 on the spike machine, so the choice is structural, a bound on per-frame
+//! work*; and B is one doubling above the point where B stopped binding, a margin for a
+//! heavier vertex format rather than an optimum.
 
 use std::collections::BTreeMap;
 

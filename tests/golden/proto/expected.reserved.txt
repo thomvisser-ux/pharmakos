@@ -73,7 +73,7 @@ gp.v1.Playbook
   names:   dispatch
 
 gp.v1.RulesTable.Economy
-  numbers: 12-15
+  numbers: 13-15
 
 gp.v1.RulesTable.Power
   numbers: 8-15

@@ -404,7 +404,11 @@ What moves a demo case, and what a diff means:
 The answers carry no file's text but what the renderer quotes: a report names
 codes, pointers and hashes, and the prose quotes the playbook's own `meta`
 title and summary and its step labels. No licence header or comment reaches
-them, so these files take this area's `GPL-3.0-or-later` without an override.
+them. The `_verify` cases and the two scenario cases take this area's
+`GPL-3.0-or-later`; the three template `_render` cases quote `library/`'s
+permissive titles, summaries and labels, so `REUSE.toml` records them as
+`GPL-3.0-or-later AND (MIT OR Apache-2.0)` (decisions-log item 124 (5) (e),
+taken by S1's plan's decision 9).
 
 ## Conventions
 

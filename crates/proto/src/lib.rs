@@ -43,9 +43,9 @@
 //! `tests/generated.rs` runs both into a scratch directory and diffs the
 //! result against what is committed, so the tree cannot drift. It skips with a
 //! named reason when `buf` or the plugin is not installed — but **fails**
-//! instead when `PHARMAKOS_REQUIRE_TOOLS` is set, which CI sets globally, so a
+//! instead when `PHARMAKOS_REQUIRE_TOOLS=1`, which CI sets globally, so a
 //! runner missing a tool reddens the build rather than going green over an
-//! unchecked tree.
+//! unchecked tree (`0` or unset is off, and any other value fails the test).
 //!
 //! # The file format, in one paragraph
 //!

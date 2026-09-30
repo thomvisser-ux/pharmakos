@@ -162,14 +162,11 @@ pub mod gateway_error {
         // client whether to fix the request, fix the token or try again — and the
         // set is closed, so a client has nothing else to read.
         //
-        // PLACEHOLDER: the six are the schema's proposal, not a ratified
-        // decision. OWNER ratifies or cuts them with an entry in
-        // docs/design/decisions-log.md section 2.7, at the latest when T13 fills
-        // the gateway payloads and becomes the first code that raises one — that
-        // is the first point at which the choice is testable rather than
-        // theoretical. Cutting one afterwards is a contract change and its number
-        // stays reserved either way; nothing in the schema depends on the six, so
-        // the cost of holding the question open to T13 is a comment.
+        // RATIFIED, all six, by the owner (decisions-log item 128, which rules
+        // S1's plan's decision 9: the register's X-14). They were the schema's
+        // proposal until then; T13 made them testable, and five of them fire and
+        // are tested (item 103 (7)). Cutting one now is a contract change, and
+        // its number stays reserved either way.
 
         /// Missing, malformed, expired or revoked token, or a failed Host/Origin
         /// check. Per-seat 256-bit tokens are tied to the match and the seat and
@@ -531,10 +528,12 @@ pub struct BeaconSummary {
     #[prost(string, tag="3")]
     pub owner: ::prost::alloc::string::String,
     /// OWN beacons only: true for the seat's core, the beacon the map pre-places
-    /// for it. PLACEHOLDER: read today as "the seat's lowest-numbered beacon",
-    /// which is true of every map the generator makes because it places the core
-    /// first, and the same rule the verifier's scope uses; it becomes a column
-    /// the day a beacon carries a kind (OWNER, S1).
+    /// for it.
+    ///
+    /// PLACEHOLDER: the core read as the lowest-numbered beacon — owner, S1, a
+    /// column the day a beacon carries a kind. True of every map the generator
+    /// makes, because it places the core first, and the same rule the verifier's
+    /// scope uses.
     #[prost(bool, tag="4")]
     pub core: bool,
     /// OWN beacons only: the Quartermaster priority, which orders brownouts
@@ -628,9 +627,9 @@ impl ::prost::Name for GetEconomyForecastRequest {
 const NAME: &'static str = "GetEconomyForecastRequest";
 const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.GetEconomyForecastRequest".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.GetEconomyForecastRequest".into() }}
-/// PLACEHOLDER STUB - the what-if vocabulary (place a beacon here, queue this
-/// structure, field these units). Filled by T13 with T14's economy; 1-15 are
-/// held.
+/// PLACEHOLDER: the what-if vocabulary — owner, S3 (decisions-log item 128,
+/// S1's plan's decision 12): place a beacon here, queue this structure, field
+/// these units. 1-15 are held.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct WhatIf {
 }
@@ -659,8 +658,12 @@ pub struct GetEconomyForecastResponse {
     /// The seat's power draw, whole kW.
     #[prost(int32, tag="3")]
     pub draw_kw_now: i32,
-    /// Supply minus draw, whole kW. Negative means the grid is short and the
-    /// brownout order is running — the KwHeadroom predicate's own number.
+    /// Supply minus draw, whole kW — the KwHeadroom predicate's own number.
+    /// Never negative after the first settle: every settle runs the brownout
+    /// order, which sheds until supply covers draw, so a short grid shows here as
+    /// dormant beacons (`BeaconSummary.powered`), not as a negative number. Only
+    /// map generation's tick-0 columns, before any settle, can read below zero
+    /// (decisions-log item 113 (4)).
     #[prost(int32, tag="4")]
     pub headroom_kw_now: i32,
 }
@@ -804,7 +807,7 @@ impl ::prost::Name for InstantiateTemplateRequest {
 const NAME: &'static str = "InstantiateTemplateRequest";
 const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.InstantiateTemplateRequest".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.InstantiateTemplateRequest".into() }}
-/// PLACEHOLDER STUB - a typed parameter catalogue is S6's, with the editor and
+/// PLACEHOLDER: a typed parameter catalogue — owner, S6, with the editor and
 /// the template library. Name and text value until then: the template declares
 /// what it accepts (gp.v1.Meta.parameters) and the verifier rejects what does
 /// not fit, so the wire shape does not have to carry the type.
@@ -835,8 +838,10 @@ pub struct InstantiateTemplateResponse {
     pub parameters: ::prost::alloc::vec::Vec<FilledParameter>,
     /// Why the operator suggested what it did: one sentence, English. Empty when
     /// `suggested` was not asked for or there is no suggestion for this seat and
-    /// template. PLACEHOLDER: the wording is the operator's, from the one string
-    /// table (OWNER, S6).
+    /// template.
+    ///
+    /// PLACEHOLDER: the wording — owner, S6, the operator's, from the one string
+    /// table.
     #[prost(string, tag="3")]
     pub why: ::prost::alloc::string::String,
 }
@@ -855,8 +860,9 @@ pub struct FilledParameter {
     pub label: ::prost::alloc::string::String,
     /// The JSON that was applied, as compact text. A duration is game
     /// milliseconds: the wire carries no unit display, and the editor may not
-    /// convert one itself (AGENTS.md section 3 rule 4). PLACEHOLDER: unit display
-    /// is OWNER's, at S6, with the typed catalogue.
+    /// convert one itself (AGENTS.md section 3 rule 4).
+    ///
+    /// PLACEHOLDER: unit display — owner, S6, with the typed catalogue.
     #[prost(string, tag="3")]
     pub value: ::prost::alloc::string::String,
     /// True when `value` is the operator's suggestion rather than an explicit
@@ -1309,10 +1315,11 @@ pub struct Event {
     /// Game milliseconds since the start of the segment.
     #[prost(int32, tag="1")]
     pub at_ms: i32,
-    /// PLACEHOLDER STUB - the event-kind catalogue is T10's event bus and grows
-    /// with every stage, so it is a string here rather than an enum that would
-    /// have to be re-cut at S1, S2 and S4. It becomes an enum when the catalogue
-    /// stops moving; until then the golden feed files are what pin it.
+    /// PLACEHOLDER: `kind` as a string — owner, after S4, the last stage that
+    /// adds kinds (the register's M-09), when the catalogue stops moving. The
+    /// catalogue is T10's event bus and grows with every stage, so it is a string
+    /// here rather than an enum that would have to be re-cut at S1, S2 and S4;
+    /// until it is an enum the golden feed files are what pin it.
     #[prost(string, tag="2")]
     pub kind: ::prost::alloc::string::String,
     /// English, from the one string table. Engine chatter is a line of this kind
@@ -1422,10 +1429,10 @@ pub struct GetViewResponse {
     /// arrives, as a new field of GetViewRequest that a client opts into, so that
     /// the meaning of this field never changes under a client that did not ask.
     ///
-    /// PLACEHOLDER: a full entity list per view is 20-30 KB a poll at S2's 300
-    /// units, which is the point at which the opt-in delta mode has to be
-    /// decided rather than deferred — OWNER, S2. The other half of the same
-    /// question, ViewEntity.at's whole-voxel positions, is OWNER, S7, with
+    /// PLACEHOLDER: the opt-in delta mode for entities — owner, S2, when a full
+    /// entity list per view is 20-30 KB a poll at S2's 300 units and has to be
+    /// decided rather than deferred. The other half of the same question,
+    /// ViewEntity.at's whole-voxel positions, is the owner's at S7, with
     /// recording-grade positions.
     #[prost(message, repeated, tag="3")]
     pub entities: ::prost::alloc::vec::Vec<ViewEntity>,
@@ -1518,9 +1525,9 @@ pub struct ViewEntity {
     /// Where it stands, in WHOLE voxels, floored on every axis. Finer-than-voxel
     /// positions are a recording's concern and are held at 6 to 15 with the rest.
     ///
-    /// PLACEHOLDER: whole voxels are enough for a camera and are not enough for
-    /// a recording that has to interpolate — OWNER, S7, with the recording
-    /// format.
+    /// PLACEHOLDER: whole-voxel positions — owner, S7, with the recording
+    /// format. Whole voxels are enough for a camera and are not enough for a
+    /// recording that has to interpolate.
     #[prost(message, optional, tag="5")]
     pub at: ::core::option::Option<super::super::v1::Voxel>,
 }

@@ -47,7 +47,7 @@ pub const SEED: u64 = 0x0000_0000_ca5c_aded;
 pub const SEGMENT_MS: i32 = 1_000;
 
 /// `rules.match.lull_ms`, which is what a client counts down.
-pub const LULL_MS: i32 = 180_000;
+pub const LULL_MS: i32 = 300_000;
 
 /// How much of the Lull a client reports having spent between two calls.
 pub const CLIENT_FRAME_MS: i32 = 50;

@@ -22,17 +22,14 @@
 # `buf` step runs the first two of those, from the root
 # (xtask/src/main.rs, `step_buf`); examples/README.md quotes the same form.
 #
-# NOTE: no toolchain is installed on the authoring machine yet — buf, protoc
-# and cargo are absent, so nothing here has been executed. The file is written
-# to be correct once the toolchain exists.
 
 version: v2
 
 modules:
   - path: .
-    # PLACEHOLDER: no BSR module is published and none is planned for v1
-    # (nothing is published in v1 — spec section 12). Add `name:` here only if
-    # the schemas are ever pushed to a registry.
+    # PLACEHOLDER: no BSR module is named — owner, v1.1, only if the schemas
+    # are ever pushed to a registry. Nothing is published in v1 (spec section
+    # 12); add `name:` here then.
 
 lint:
   use:
@@ -64,10 +61,28 @@ breaking:
   except:
     # Nothing. Minor versions add optional fields; a major version comes with a
     # converter that is kept forever.
-  # ignore_only: none today. A change that DISCHARGES a held field number (fills a
-  # reserved range with the field it was held for) trips RESERVED_MESSAGE_NO_DELETE,
-  # which buf cannot tell apart from a genuine un-reservation. That change adds an
-  # ignore_only block here scoped to the files it discharges in, with the
-  # justification written out, and the next proto change that discharges nothing
-  # deletes it again, so an un-reservation nobody intended never passes unnoticed
-  # (decisions-log items 100 (10), 109 and 111).
+  # A change that DISCHARGES a held field number (fills a reserved range with the
+  # field it was held for) trips RESERVED_MESSAGE_NO_DELETE, which buf cannot tell
+  # apart from a genuine un-reservation. That change adds an ignore_only block here
+  # scoped to the files it discharges in, with the justification written out, and
+  # the next proto change that discharges nothing deletes it again, so an
+  # un-reservation nobody intended never passes unnoticed (decisions-log items
+  # 100 (10), 109 and 111).
+  ignore_only:
+    # S1's first contract pull request (S1's plan, task con1). One rule, one file.
+    #
+    # Why it is here. `RulesTable.Economy` held field numbers 12 to 15 so its next
+    # rows keep the one-byte tag range. `economy.mining_carry_voxels` (the
+    # register's S1-25, a row at the sim's own constant) takes 12, so the range
+    # narrows to 13-15; buf sees the old range [12, 15] go away and cannot tell
+    # that the number was discharged for the row it was held for rather than
+    # un-reserved. tests/golden/proto/expected.reserved.txt shows the narrowing
+    # (`RulesTable.Economy` 13-15), which is the reviewable half.
+    #
+    # Inert once this change is on main: from then on both sides of the
+    # comparison say `reserved 13 to 15`. The next proto pull request (`con2`,
+    # the targeting proto) replaces this block with its own, or deletes it if it
+    # discharges nothing, so a later un-reservation in rules.proto cannot pass
+    # behind it.
+    RESERVED_MESSAGE_NO_DELETE:
+      - gp/v1/rules.proto

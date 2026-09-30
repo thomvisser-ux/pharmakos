@@ -1,14 +1,15 @@
 {
-  "revision": 3,
-  "note": "Walking skeleton. Values from decisions-log items 54, 59, 68 and 69 and spec section 5; everything the log has not fixed is a PLACEHOLDER named in rules/README.md. Revision 2: broadphase.cell_size_voxels 8 -> 16, the edge spike G3' actually measured; still item 67's PLACEHOLDER. Revision 3: the wave-2 rows, from items 90 (the first tuning seed set), 91 (kW per unit and the reserve inside the 190 kW ceiling) and 94 (the playbook size budget) - the per-kind walking speeds, the decision tick, the whole economy and power blocks, and the new commander, beacon, map, units, structures and verifier blocks. Every one of them is a PLACEHOLDER re-derived at the stage its comment names.",
+  "revision": 4,
+  "note": "Walking skeleton. Values from decisions-log items 54, 59, 68 and 69 and spec section 5; everything the log has not fixed is a PLACEHOLDER named in rules/README.md. Revision 2: broadphase.cell_size_voxels 8 -> 16, the edge spike G3' actually measured; still item 67's PLACEHOLDER. Revision 3: the wave-2 rows, from items 90 (the first tuning seed set), 91 (kW per unit and the reserve inside the 190 kW ceiling) and 94 (the playbook size budget) - the per-kind walking speeds, the decision tick, the whole economy and power blocks, and the new commander, beacon, map, units, structures and verifier blocks. Every one of them is a PLACEHOLDER re-derived at the stage its comment names. Revision 4: S1's first contract pull request (decisions-log items 127 (2) and 128) - match.lull_ms 180000 -> 300000 and the new match.first_lull_ms 600000, the spec's five and ten minutes; and the new structures.build_hp_per_second 60 and economy.mining_carry_voxels 16, the sim's two named constants given rows at their own values. Each is a PLACEHOLDER, the owner's at S1's demo.",
   "match": {
     "segment_lengths_ms": [
       180000,
       300000,
       480000
     ],
-    "lull_ms": 180000,
-    "decision_tick_ms": 250
+    "lull_ms": 300000,
+    "decision_tick_ms": 250,
+    "first_lull_ms": 600000
   },
   "locomotion": {
     "step_cost_cardinal": 10,
@@ -61,7 +62,8 @@
       "rich": 8
     },
     "seam_voxels": 150,
-    "mining_ms_per_voxel": 2000
+    "mining_ms_per_voxel": 2000,
+    "mining_carry_voxels": 16
   },
   "power": {
     "core_surplus_kw": 10,
@@ -172,7 +174,8 @@
       "draw_kw": 3
     },
     "wall_cost_per_voxel": 1,
-    "demolition_charge_cost_dollars": 15
+    "demolition_charge_cost_dollars": 15,
+    "build_hp_per_second": 60
   },
   "verifier": {
     "size_budget_units": 128,

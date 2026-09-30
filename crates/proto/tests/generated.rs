@@ -9,9 +9,10 @@
 //! that stops it: it regenerates into a scratch directory and compares.
 //!
 //! It **skips with a named reason** when the tools are not installed, the way
-//! `cargo xtask ci`'s own steps do — and it honours the same switch they do:
-//! `PHARMAKOS_REQUIRE_TOOLS=1` turns a missing tool into a failure instead of
-//! a skip. CI sets that variable globally (`.github/workflows/ci.yml`), so a
+//! `cargo xtask ci`'s own steps do — and it honours the same switch they do,
+//! read the same way: `PHARMAKOS_REQUIRE_TOOLS=1` turns a missing tool into a
+//! failure instead of a skip, `0` or unset leaves it a skip, and any other
+//! value fails the test. CI sets that variable globally (`.github/workflows/ci.yml`), so a
 //! runner that has lost `buf` or `protoc-gen-prost` reddens the build rather
 //! than going green over an unchecked tree, and `cargo xtask ci
 //! --require-tools` sets it on every child it runs, this test's `cargo test`
@@ -51,8 +52,24 @@ fn tool_available(name: &str) -> bool {
 /// its `--require-tools` flag sets on every child it runs, this test's
 /// `cargo test` included: in CI every tool is installed on purpose, so a
 /// missing one is a broken runner rather than a reason to skip a check.
+///
+/// Read by xtask's rule (S1's plan, decision 9, ruling the register's S1-06):
+/// `1` is on, unset or `0` is off, and any other value fails the test with
+/// the variable named, rather than being guessed at. Before it, the variable
+/// was read as set or unset, so `PHARMAKOS_REQUIRE_TOOLS=0` meant on.
 fn tools_required() -> bool {
-    env::var_os("PHARMAKOS_REQUIRE_TOOLS").is_some()
+    match env::var_os("PHARMAKOS_REQUIRE_TOOLS")
+        .as_deref()
+        .map(std::ffi::OsStr::to_str)
+    {
+        None | Some(Some("0")) => false,
+        Some(Some("1")) => true,
+        Some(other) => panic!(
+            "PHARMAKOS_REQUIRE_TOOLS is `{}`; it is `1` (a missing tool fails), or `0` or unset \
+             (a missing tool skips), and nothing else",
+            other.unwrap_or("<not UTF-8>")
+        ),
+    }
 }
 
 /// Skip, or fail if the run demanded the tools. `false` means "stop here".

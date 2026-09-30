@@ -996,6 +996,42 @@ fn the_rules_table_carries_item_90s_unit_structure_and_verifier_numbers() {
     assert_eq!(verifier.reach_memory_ms, 180_000, "item 90: S2/S3");
 }
 
+/// Revision 4's rows (S1's first contract pull request): the Lull lengths item
+/// 127 (2) ruled, and the two rows S1's plan's decisions 10 and 13 made of the
+/// sim's named constants, at those constants' values, so that the table can
+/// carry them without moving a chain.
+#[test]
+fn the_rules_table_carries_s1s_first_contract_rows() {
+    let table = committed_rules_table();
+    assert_eq!(
+        table.revision, 4,
+        "rules.proto: `revision` is bumped whenever a value changes, and revision 4 moved \
+         `match.lull_ms`"
+    );
+
+    let matched = table.r#match.expect("the match block");
+    assert_eq!(
+        matched.first_lull_ms, 600_000,
+        "item 127 (2): the spec's ten-minute first Lull"
+    );
+    assert_eq!(
+        matched.lull_ms, 300_000,
+        "item 127 (2): the spec's five-minute later Lulls, re-ruling D-01's 180 000"
+    );
+
+    let structures = table.structures.expect("the structures block");
+    assert_eq!(
+        structures.build_hp_per_second, 60,
+        "S1-24: the sim's BUILD_HP_PER_SECOND, as a row at its own value"
+    );
+
+    let economy = table.economy.expect("the economy block");
+    assert_eq!(
+        economy.mining_carry_voxels, 16,
+        "S1-25: the sim's MINING_LOAD_VOXELS, as a row at its own value"
+    );
+}
+
 #[test]
 fn the_map_supply_adds_up_to_the_ceiling() {
     // Item 90 and item 91 state the sum out loud — three seats supply

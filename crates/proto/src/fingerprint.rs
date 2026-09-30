@@ -27,21 +27,17 @@
 //! have two homes and the determinism contract two authors.
 //!
 //! So `crates/proto` owns the **rule** — the domain separator, the byte order,
-//! and what is hashed — and `pharmakos-sim` owns the **arithmetic**. T2 (the
-//! sim's determinism core) fills in a function of exactly this shape:
+//! and what is hashed — and the arithmetic lives beside the sim's hash: the
+//! verifier's `hash::plan_fingerprint` computes it today, xxh3-64 under the
+//! sim's `STATE_HASH_SEED` over [`PLAN_FINGERPRINT_DOMAIN`] followed by
+//! [`canonical_input`]'s bytes, and stores [`to_field`]'s bytes in
+//! `Meta.fingerprint`; the gateway calls it for what a save carries beside
+//! each seal.
 //!
-//! ```ignore
-//! /// xxh3-64 under STATE_HASH_SEED over PLAN_FINGERPRINT_DOMAIN || bytes.
-//! pub fn plan_fingerprint(canonical_json: &[u8]) -> u64;
-//! ```
-//!
-//! and the verifier (T6) calls it with [`canonical_input`]'s output and stores
-//! [`to_field`]'s bytes in `Meta.fingerprint`.
-//!
-//! **PLACEHOLDER — `pharmakos_sim::hash::plan_fingerprint`, T2.** Until it
-//! exists, nothing in the tree computes a fingerprint; the field is defined,
-//! the rule is written down, and [`from_field`] / [`to_field`] are ready for
-//! it. This is the one PLACEHOLDER in this crate that another task closes.
+//! PLACEHOLDER: the arithmetic's home, the sim's `hash` module — owner, S1, the
+//! next time `crates/sim` is open, with the value unmoved (the register's
+//! S1-42, decisions-log item 77). Until then the verifier's copy is the one to
+//! call, and this crate's rule is what both copies are held to.
 
 use crate::gp::v1::Playbook;
 use crate::json;
