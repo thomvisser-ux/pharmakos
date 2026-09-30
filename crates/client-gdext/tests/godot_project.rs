@@ -145,7 +145,9 @@ fn the_project_pins_the_settings_item_56_rests_on() {
         ),
         (
             "run/flush_stdout_on_print=true",
-            "F3 (decisions-log item 126 (3)): a release build otherwise flushes its log only on              an error or a clean exit, so an instance that hangs and is ended by hand leaves              an empty log, as the demo's hung second instance did",
+            "F3 (decisions-log item 126 (3)): a release build otherwise flushes its log only on \
+             an error or a clean exit, so an instance that hangs and is ended by hand leaves \
+             an empty log, as the demo's hung second instance did",
         ),
         (
             "common/physics_jitter_fix=0.0",
@@ -1062,9 +1064,10 @@ fn the_first_click_on_the_panel_reaches_its_handler() {
     for container in ["column", "_chooser", "buttons"] {
         assert!(
             lobby.contains(&format!(
-                "	{container}.mouse_filter = Control.MOUSE_FILTER_IGNORE"
+                "\t{container}.mouse_filter = Control.MOUSE_FILTER_IGNORE"
             )),
-            "the lobby's `{container}` is drawn over the editor's panel and must not take its              clicks"
+            "the lobby's `{container}` is drawn over the editor's panel and must not take its \
+             clicks"
         );
     }
 

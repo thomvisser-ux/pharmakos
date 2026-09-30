@@ -1640,7 +1640,6 @@ impl Editor {
         Ok(())
     }
 
-    /// Load's QUICK answer: refuse the file with the code and the pointer, or open it.
     /// An edit's patched text: taken when the text it was patched against is still the one on
     /// screen. A Fix's lands with "fixed" on the status line, after the "fixing" its click
     /// put there.
@@ -1657,6 +1656,7 @@ impl Editor {
         Ok(())
     }
 
+    /// Load's QUICK answer: refuse the file with the code and the pointer, or open it.
     fn settle_load(&mut self, candidate: String, report: &VerifyReport) {
         let refusal = report.diagnostics.iter().find(|diagnostic| {
             diagnostic.severity() == Severity::Error

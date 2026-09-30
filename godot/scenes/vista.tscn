@@ -23,7 +23,7 @@ script = ExtResource("1_vista")
 [node name="CameraRig" type="Node3D" parent="."]
 script = ExtResource("2_rig")
 
-; PLACEHOLDER: the camera's field of view and far plane are Tuning - OWNER; ruled at the demo to stand as they are for now (decisions-log item 126 (2) (b); register D-22).
+; PLACEHOLDER: the camera's field of view and far plane — OWNER, ruled at the demo to stand for now. They are Tuning (decisions-log item 126 (2) (b); register D-22).
 [node name="Camera" type="Camera3D" parent="CameraRig"]
 current = true
 fov = 50.0

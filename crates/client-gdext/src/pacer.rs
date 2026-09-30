@@ -47,9 +47,9 @@ use std::time::Instant;
 
 /// The speeds the watch rig offers: 1x, 2x and 4x.
 ///
-/// PLACEHOLDER: the spec says "2-4x" and does not say whether 3x is a speed. Tuning - OWNER;
-/// ruled at the demo to stand as they are for now (decisions-log item 126 (2) (b); register
-/// D-24; skeleton-plan-t16a-notes.md section D).
+/// PLACEHOLDER: the watch speeds 1x, 2x and 4x — OWNER, ruled at the demo to stand for now.
+/// They are Tuning: the spec says "2-4x" and does not say whether 3x is a speed
+/// (decisions-log item 126 (2) (b); register D-24; skeleton-plan-t16a-notes.md section D).
 pub const SPEEDS: [u32; 3] = [1, 2, 4];
 
 /// How often, at most, the pacer asks for game time: 100 ms of wall time.

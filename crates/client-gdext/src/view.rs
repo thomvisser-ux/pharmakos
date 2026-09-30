@@ -299,9 +299,9 @@ pub const WHOLE_BAKE_ABOVE: usize = 16;
 /// How many voxel boundaries a pick ray crosses before it gives up: longer than the
 /// camera's farthest reach across the whole map.
 ///
-/// PLACEHOLDER: a presentation bound with no rule behind it - OWNER; ruled at the demo, with
-/// the camera's other numbers, to stand as it is for now (decisions-log item 126 (2) (b);
-/// register D-23).
+/// PLACEHOLDER: the pick reach — OWNER, ruled at the demo to stand for now.
+/// It is a presentation bound with no rule behind it, ruled with the camera's other numbers
+/// (decisions-log item 126 (2) (b); register D-23).
 pub const PICK_REACH: usize = 4096;
 
 /// The whole map as this client holds it, once a keyframe has established it.

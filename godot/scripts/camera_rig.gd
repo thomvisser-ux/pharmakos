@@ -25,8 +25,8 @@ extends Node3D
 
 ## Pan speed over the ground, in voxels per second at the default zoom.
 ##
-## PLACEHOLDER: camera speeds and easing are Tuning (walled floats) - OWNER; ruled at the
-## demo to stand as they are for now (decisions-log item 126 (2) (b); register D-21).
+## PLACEHOLDER: camera speeds and easing — OWNER, ruled at the demo to stand for now.
+## They are Tuning, and walled floats (decisions-log item 126 (2) (b); register D-21).
 const PAN_RATE := 90.0
 ## How much one wheel notch zooms, as a factor on the distance. PLACEHOLDER, as above.
 const ZOOM_STEP := 1.12
