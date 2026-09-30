@@ -96,8 +96,9 @@ pub const VIEW_PAGE_BYTES: usize = 256 * 1024;
 ///
 /// The feed takes it as a pair of plain numbers rather than reaching for a
 /// world, because the day the sim answers "what changed about this seat's
-/// sight" (when units get a sight radius -- PLACEHOLDER, **OWNER**, S1/S3)
-/// this is the value that stops being recomputed from scratch.
+/// sight" (when units get a sight radius -- PLACEHOLDER, **OWNER**, at S2,
+/// with scouting: decision 13 of S1's plan, register S1-34) this is the value
+/// that stops being recomputed from scratch.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct Sight {
     /// True when the fog policy has lifted for this viewer, so every voxel of

@@ -45,7 +45,13 @@ pub fn event_text(event: &Event) -> String {
         ),
         EventKind::SegmentEnded => format!("The Push ended after {} ticks.", event.value),
         EventKind::RecapOpened => String::from("The recap opened: the Ledger settles."),
-        EventKind::MatchEnded => String::from("The match ended."),
+        // `seat` is the winner when one seat won: the last standing, or the
+        // final audit's; a shared win names nobody here, and the recap names
+        // every seat it ties.
+        EventKind::MatchEnded => event.seat.map_or_else(
+            || String::from("The match ended."),
+            |winner| format!("The match ended: seat {} won.", winner.raw()),
+        ),
         EventKind::BeaconDestroyed => format!("A beacon of {seat} was destroyed."),
         EventKind::StructureRuined => {
             format!("A structure of {seat} became a neutral ruin.")
@@ -66,9 +72,14 @@ pub fn event_text(event: &Event) -> String {
         // is the seat's own commander's orders, so `Surface::audience_of`
         // keeps the line private to that seat: a step or a rule is named by
         // its index here and is still never shown to anybody else.
+        // The count agrees with itself ("1 route step"), the demo's F5.
         EventKind::PlanSealed => format!(
-            "The playbook of {seat} was sealed: {} route steps.",
-            event.value
+            "The playbook of {seat} was sealed: {}.",
+            count(
+                u32::try_from(event.value).unwrap_or(u32::MAX),
+                "route step",
+                "route steps"
+            )
         ),
         EventKind::StepStarted => format!("Step {} started.", event.value),
         EventKind::StepCompleted => format!("Step {} completed.", event.value),
@@ -126,12 +137,31 @@ pub fn event_text(event: &Event) -> String {
         EventKind::KillCredited => {
             format!("{seat} was credited $ {} of a destruction.", event.value)
         }
-        EventKind::FallbackEngaged => format!(
-            "The route ended and the fallback took over, posture code {}.",
-            event.value
+        EventKind::FallbackEngaged => fallback_engaged(event.value),
+        EventKind::FinalAudit => format!("The final audit scored {seat} at $ {}.", event.value),
+    }
+}
+
+/// `fallback_engaged`'s line: the posture by name, never its wire code (the
+/// demo's F5).
+fn fallback_engaged(value: i64) -> String {
+    match u8::try_from(value)
+        .ok()
+        .and_then(pharmakos_sim::interpreter::Posture::name_of_id)
+    {
+        Some(posture) => format!("The route ended and the fallback took over: {posture}."),
+        None => format!(
+            "The route ended and the fallback took over, in a posture this build does not \
+             name (code {value})."
         ),
     }
 }
+
+/// The line a seat's own feed carries when the gateway filed its playbook for
+/// it: the Lull ran out with nothing sealed, and the safe playbook was filed
+/// (spec section 14). Decision 8 of S1's plan, ruled by item 128, and the
+/// demo's F5: a timeout's filing used to read like the player's own seal.
+pub const SAFE_PLAYBOOK_FILED: &str = "The Lull ran out, so the safe playbook was filed for you.";
 
 /// `get_briefing`'s prose.
 ///
@@ -158,21 +188,36 @@ pub fn briefing(
 }
 
 /// `get_recap`'s prose.
+///
+/// `outcome` is the reason and **every** winner, in seat order: the last seat
+/// standing, the final audit's single winner, or the seats a shared win ties
+/// (spec section 3: "only an exact tie on every term is recorded as a shared
+/// win"). The recap names each of them.
 #[must_use]
-pub fn recap(round: u32, ticks: u32, outcome: Option<(MatchEndReason, Option<u8>)>) -> String {
+pub fn recap(round: u32, ticks: u32, outcome: Option<(MatchEndReason, &[u8])>) -> String {
     let segment = format!("Round {round} ran {ticks} ticks.");
-    match outcome {
-        None => format!("{segment} The match continues."),
-        Some((reason, None)) => format!(
-            "{segment} The match ended: {}. The final audit decides the standing.",
-            reason.name()
+    let Some((reason, winners)) = outcome else {
+        return format!("{segment} The match continues.");
+    };
+    let ended = format!("{segment} The match ended: {}.", reason.name());
+    match (reason, winners) {
+        (MatchEndReason::LastSeatStanding, [seat, ..]) => format!("{ended} Seat {seat} stands."),
+        (_, []) => format!("{ended} The final audit names no winner."),
+        (_, [seat]) => format!("{ended} The final audit names seat {seat} the winner."),
+        (_, several) => format!(
+            "{ended} The final audit ties {} on every term: a shared win.",
+            seats_prose(several)
         ),
-        Some((reason, Some(seat))) => {
-            format!(
-                "{segment} The match ended: {}. Seat {seat} stands.",
-                reason.name()
-            )
-        }
+    }
+}
+
+/// `seats 0 and 1`, `seats 0, 1 and 2`.
+fn seats_prose(seats: &[u8]) -> String {
+    let names: Vec<String> = seats.iter().map(u8::to_string).collect();
+    match names.split_last() {
+        None => String::from("no seats"),
+        Some((last, [])) => format!("seat {last}"),
+        Some((last, rest)) => format!("seats {} and {last}", rest.join(", ")),
     }
 }
 
@@ -207,11 +252,12 @@ pub const UNRENDERABLE: &str = "This file has no canonical form yet, so there is
 /// been built.
 ///
 /// PLACEHOLDER: the score and the rank are the full audit score of spec
-/// section 3, which is T14's (the economy settles it at each recap). Until
-/// then the standing carries the one number this build actually knows -- how
-/// many seats are still standing -- and says so rather than showing a zero a
-/// player would read as a rank. OWNER/T14 fills the sentence in with the
-/// economy.
+/// section 3. The audit now exists (`pharmakos_sim::audit`, which names a
+/// round-limit winner), but a seat's own live score and rank on the briefing
+/// are the economy's surfaces, S1's `econ` lane's (owner, at S1). Until then
+/// the standing carries the one number this surface shows -- how many seats
+/// are still standing -- and says so rather than showing a zero a player would
+/// read as a rank.
 #[must_use]
 pub fn standing(living: u32) -> String {
     format!(
@@ -341,11 +387,21 @@ mod tests {
     #[test]
     fn the_recap_says_whether_the_match_is_over() {
         assert!(recap(1, 3_600, None).ends_with("The match continues."));
-        let ended = recap(3, 100, Some((MatchEndReason::RoundLimit, None)));
+        let ended = recap(3, 100, Some((MatchEndReason::RoundLimit, &[2])));
         assert!(ended.contains("round_limit"), "{ended}");
-        assert!(ended.contains("final audit"), "{ended}");
-        let won = recap(3, 100, Some((MatchEndReason::LastSeatStanding, Some(1))));
+        assert!(
+            ended.ends_with("The final audit names seat 2 the winner."),
+            "{ended}"
+        );
+        let won = recap(3, 100, Some((MatchEndReason::LastSeatStanding, &[1])));
         assert!(won.contains("Seat 1 stands."), "{won}");
+        let shared = recap(6, 100, Some((MatchEndReason::RoundLimit, &[0, 2])));
+        assert!(
+            shared.ends_with("The final audit ties seats 0 and 2 on every term: a shared win."),
+            "the recap names every winner: {shared}"
+        );
+        let three = recap(6, 100, Some((MatchEndReason::NoSurvivor, &[0, 1, 2])));
+        assert!(three.contains("seats 0, 1 and 2"), "{three}");
     }
 
     #[test]
@@ -354,6 +410,30 @@ mod tests {
         assert!(prose.contains("384 by 384 by 64"), "{prose}");
         assert!(prose.contains("0x00000000ca5caded"), "{prose}");
         assert!(standing(2).starts_with("2 seats still standing."));
+    }
+
+    #[test]
+    fn a_one_step_seal_reads_one_route_step() {
+        assert_eq!(
+            event_text(&event(EventKind::PlanSealed, Some(0), 1)),
+            "The playbook of seat 0 was sealed: 1 route step."
+        );
+        assert_eq!(
+            event_text(&event(EventKind::PlanSealed, Some(0), 4)),
+            "The playbook of seat 0 was sealed: 4 route steps."
+        );
+    }
+
+    #[test]
+    fn fallback_engaged_names_its_posture() {
+        for (id, posture) in [(1, "Hold"), (2, "Shadow"), (3, "Patrol")] {
+            let text = event_text(&event(EventKind::FallbackEngaged, Some(0), id));
+            assert_eq!(
+                text,
+                format!("The route ended and the fallback took over: {posture}.")
+            );
+            assert!(!text.contains("code"), "{text}");
+        }
     }
 
     #[test]

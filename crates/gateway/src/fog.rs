@@ -158,6 +158,13 @@ impl FogPolicy {
     }
 
     /// True when this seat sees the world without fog.
+    ///
+    /// PLACEHOLDER: the casual policy has **no phase term**, so a casual match
+    /// is unfogged in its Lull too, which is a known defect (items 107 (6) and
+    /// 116 (6) (k); register U-03). It cannot show in S1, because `serve.rs`
+    /// always fogs and the settings screen that would offer a casual match is
+    /// S6's; the fix is deferred to **hardening** (owner), and this is its
+    /// marker (S1's plan, the `fixs` lane).
     #[must_use]
     pub fn unfogged(&self, seat: SeatId) -> bool {
         self.mode == Mode::NoFog || self.ended || self.unlocked.contains(&seat.raw())

@@ -144,9 +144,9 @@ impl Surface {
     /// the world wrote -- which is how a beacon placed, a beacon lost and an
     /// elimination all reach the camera without a special case each.
     ///
-    /// PLACEHOLDER: when units gain a sight radius (**OWNER**, S1 at the
-    /// latest) this key moves every tick, and "recompute everything on a
-    /// change" stops being cheap. That is the moment the sim has to report
+    /// PLACEHOLDER: when units gain a sight radius (**OWNER**, at S2, with
+    /// scouting: decision 13 of S1's plan, register S1-34) this key moves every
+    /// tick, and "recompute everything on a change" stops being cheap. That is the moment the sim has to report
     /// *what* changed about a seat's sight rather than the gateway deriving
     /// it; the key is where that answer arrives.
     ///

@@ -80,9 +80,9 @@ pub const WINDOW_TICKS: u32 = 200;
 /// sized well above the scripted seats' rounds and above the plan's estimate
 /// of an Easy round (about fifty calls, and an advisor as much again). That an
 /// in-process seat has a rate of its own at all was **taken on the
-/// recommendation** (item 111 (4), the owner's question D1) and is open to the
-/// **owner**'s overrule **now**; the **numbers** are the owner's at
-/// **hardening**, against T18's derived `EASY_CALL_BUDGET`.
+/// recommendation** (item 111 (4), the owner's question D1) and **ruled at the
+/// demo** (item 126 (2) (b), register D-26); the **numbers** are the owner's
+/// at **hardening**, against T18's derived `EASY_CALL_BUDGET`.
 pub const IN_PROCESS_LIMITS: Limits = Limits {
     per_tick: 128,
     per_window: 1_200,

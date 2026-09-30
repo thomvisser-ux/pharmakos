@@ -55,8 +55,12 @@ pub const HEADING_BUDGET: &str = "Budget";
 pub const UNTITLED: &str = "Untitled playbook";
 /// `meta.author_kind` = HUMAN.
 pub const AUTHOR_HUMAN: &str = "Written by hand.";
-/// `meta.author_kind` = BUILTIN.
-pub const AUTHOR_BUILTIN: &str = "Filed by the built-in operator.";
+/// `meta.author_kind` = BUILTIN: every playbook instantiated from the
+/// library, the player's included, and the safe playbook the gateway files.
+/// It used to read "Filed by the built-in operator.", which showed on a
+/// playbook the player chose and edited (the demo's F5); decision 8 of S1's
+/// plan, ruled by item 128, is this sentence, true of Easy's too.
+pub const AUTHOR_BUILTIN: &str = "Written from a built-in template.";
 /// `meta.author_kind` = SCRIPT, which the verifier rejects in v1.
 pub const AUTHOR_SCRIPT: &str = "Written by a script, which v1 does not accept.";
 /// `meta.author_kind` unset, which the verifier rejects.
