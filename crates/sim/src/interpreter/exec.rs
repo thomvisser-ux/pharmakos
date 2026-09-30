@@ -92,7 +92,7 @@ pub(crate) fn decide(world: &mut World, seat_index: usize, plan: &Plan, state: &
                 None,
                 i64::from(StepFailure::CommanderDead.id()),
             );
-            state.clear_step();
+            drop_step(world, seat, state);
         }
         state.reflex_active = false;
         return;
@@ -173,7 +173,7 @@ fn run_reflex(world: &mut World, seat: SeatId, seat_index: usize, state: &mut Pl
                 i64::from(state.visit_row),
             );
         }
-        state.clear_step();
+        drop_step(world, seat, state);
         emit(world, tick, EventKind::ReflexFired, seat, None, None, pct);
         let target = {
             let seen = view(world, seat, seat_index, state);
@@ -221,7 +221,7 @@ fn run_reflex(world: &mut World, seat: SeatId, seat_index: usize, state: &mut Pl
     });
     if arrived || gone || sealed_in(world, seat) {
         state.reflex_active = false;
-        state.clear_step();
+        drop_step(world, seat, state);
         emit(world, tick, EventKind::ReflexCleared, seat, None, None, pct);
         return false;
     }
@@ -271,7 +271,7 @@ fn try_fire(
     // the commander somewhere else makes the old step's pinned target and its
     // elapsed time meaningless, and `CONTINUE` then means "carry on with that
     // step", which restarts it.
-    state.clear_step();
+    drop_step(world, seat, state);
     state.rule = index;
     state.rule_step = 0;
     emit(
@@ -311,14 +311,14 @@ fn advance_body(
     match outcome {
         Outcome::Running => {}
         Outcome::Complete | Outcome::Skipped => {
-            state.clear_step();
+            drop_step(world, seat, state);
             state.rule_step = state.rule_step.saturating_add(1);
             if usize::try_from(state.rule_step).unwrap_or(usize::MAX) >= body_len {
                 end_body(world, seat, state, plan, resume);
             }
         }
         Outcome::Failed(_) => {
-            state.clear_step();
+            drop_step(world, seat, state);
             match step.on_fail {
                 FailAction::Skip => {
                     state.rule_step = state.rule_step.saturating_add(1);
@@ -343,7 +343,7 @@ fn end_body(world: &mut World, seat: SeatId, state: &mut PlanState, plan: &Plan,
     let tick = world.tick();
     state.rule = NO_INDEX;
     state.rule_step = 0;
-    state.clear_step();
+    drop_step(world, seat, state);
     let mut ended = false;
     match resume {
         Resume::Continue => {}
@@ -402,7 +402,7 @@ fn advance_route(
             FailAction::JumpForward(target) => Some(target.max(index.saturating_add(1))),
         },
     };
-    state.clear_step();
+    drop_step(world, seat, state);
     match next {
         Some(cursor) if usize::try_from(cursor).unwrap_or(usize::MAX) < plan.route().len() => {
             state.cursor = cursor;
@@ -553,6 +553,18 @@ fn start_step(
             let commander = commander_at(world, seat).ok_or(StepFailure::CommanderDead)?;
             if !site_is_legal(world, seat, commander, site) {
                 return Err(StepFailure::IllegalSite);
+            }
+            // Spec section 7: "`$` leaves the treasury the moment an order
+            // commits: deploy starts". Charged last, after every test that can
+            // refuse the step, so a step that fails to start has paid nothing;
+            // and a treasury that cannot cover it fails the step like any other
+            // failure (decision 7 of S1's plan, id 12). From here until the
+            // beacon is in the ground the stage is `Deploying`, and that stage
+            // is the only record of the charge: every way out of it that is not
+            // the placement refunds it in full ([`drop_step`], and
+            // [`abandon_deploys`] at segment end).
+            if !world.charge_deploy(seat) {
+                return Err(StepFailure::Unaffordable);
             }
             state.stage = VisitState::Deploying;
             state.visit_due = tick.raw().saturating_add(ticks_of(deploy_ms(world)));
@@ -984,7 +996,7 @@ fn enter_fallback(world: &mut World, seat: SeatId, state: &mut PlanState, plan: 
     state.rule = NO_INDEX;
     state.rule_step = 0;
     state.cursor = NO_INDEX;
-    state.clear_step();
+    drop_step(world, seat, state);
     if announce {
         emit(
             world,
@@ -1001,6 +1013,47 @@ fn enter_fallback(world: &mut World, seat: SeatId, state: &mut PlanState, plan: 
 // ---------------------------------------------------------------------------
 // The small helpers
 // ---------------------------------------------------------------------------
+
+/// Forget the step in progress, refunding a deploy that had not yet placed its
+/// beacon.
+///
+/// Spec section 5, Placement: "death, leaving, or an illegal site aborts the
+/// deploy and refunds it in full". Every way a step is forgotten goes through
+/// here — a failure and its `on_fail`, the commander's death, the reflex
+/// walking it away, a rule firing, the route ending — so the refund cannot be
+/// missed by one of them. The stage is the whole of the bookkeeping:
+/// [`VisitState::Deploying`] means "charged at deploy start and not yet
+/// placed", because [`start_step`] charges on the way in and [`run_deploy`]
+/// leaves the stage the moment the beacon is placed. Nothing new is hashed.
+fn drop_step(world: &mut World, seat: SeatId, state: &mut PlanState) {
+    if state.stage == VisitState::Deploying {
+        world.refund_deploy(seat);
+    }
+    state.clear_step();
+}
+
+/// Refund every deploy still running as the segment closes, and forget that
+/// step. Every other seat's state is left exactly as it was.
+///
+/// The playbook stops at segment end (spec section 10), so a deploy that has
+/// not placed its beacon by the segment's last tick never will: the commander
+/// cannot "stay for all of it". That is an aborted deploy, and spec section 5
+/// refunds an aborted deploy in full. Done inside the tick that closes the
+/// segment and before the Ledger settles, so the settlement, the frozen
+/// snapshot and the final audit all read the refunded treasury.
+pub(crate) fn abandon_deploys(world: &mut World, interpreter: &mut crate::interpreter::state::Interpreter) {
+    let seats = interpreter.len();
+    let mut index: usize = 0;
+    while index < seats {
+        let seat = world.seats().seats().get(index).copied().map(SeatId::new);
+        if let (Some(seat), Some(state)) = (seat, interpreter.state_mut(index))
+            && state.stage == VisitState::Deploying
+        {
+            drop_step(world, seat, state);
+        }
+        index = index.saturating_add(1);
+    }
+}
 
 fn view<'a>(world: &'a World, seat: SeatId, seat_index: usize, state: &'a PlanState) -> View<'a> {
     View {

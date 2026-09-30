@@ -213,6 +213,73 @@ fn play_segment(runner: &mut Runner, feed: &mut Vec<Event>) {
 // `$`: value, the refund, and "paid means yours"
 // ---------------------------------------------------------------------------
 
+/// The demo's F2, reproduced (item 126 (3); S1's plan, the `fixs` lane): a
+/// seat mining its starting seam delivers ore in round 1 and nothing after,
+/// with the same carried playbook. The cause is the skeleton's dig rule: a
+/// drone digs only the **exposed** ore voxel of a column, standing level with
+/// it on undisturbed dirt (`World::dig_stand`), so once a seam's top layer is
+/// gone no stand is level with the next and `World::ore_in_sphere` answers
+/// nothing while ore is still in the ground. At the demo that was 24 voxels,
+/// the $ 64 and $ 32 of round 1.
+///
+/// The cure is the Mine rule — `dig_max_depth`, `pillar_spacing` and "never
+/// under structures" (S1-38, item 127 (9), decision 6) — which is the `mine`
+/// lane's in wave 3, so this test is committed red and ignored until then.
+#[test]
+#[ignore = "red until the mine lane (S1-38)"]
+fn a_starting_seam_yields_more_than_its_exposed_rim() {
+    let mut fixture = world(&[180_000]);
+    let seat = SeatId::new(0);
+    let core = core_of(&fixture, seat);
+    fixture.set_writ(core, MandateKind::Mine);
+    let mut runner = Runner::new(fixture);
+    let mut delivered: Vec<usize> = Vec::new();
+    for _ in 0..3 {
+        let mut feed = Vec::new();
+        play_segment(&mut runner, &mut feed);
+        delivered.push(
+            feed.iter()
+                .filter(|event| event.kind == EventKind::OreDelivered && event.seat == Some(seat))
+                .count(),
+        );
+        assert!(runner.end_recap(), "the recap closes into the next Lull");
+    }
+    let world = runner.world();
+    let row = usize::try_from(core.raw()).unwrap_or(usize::MAX);
+    let centre = world
+        .beacons()
+        .positions()
+        .get(row)
+        .copied()
+        .unwrap_or_else(|| panic!("the core has a place"));
+    let radius = world.sphere_radius();
+    let reach = radius.floor_voxels();
+    let limit = pharmakos_sim::math::fixed::Sq::of_radius(radius);
+    let [cx, cy, _] = centre.map(Fx::floor_voxels);
+    let mut left: u32 = 0;
+    for y in cy.saturating_sub(reach)..=cy.saturating_add(reach) {
+        for x in cx.saturating_sub(reach)..=cx.saturating_add(reach) {
+            for z in 0..64 {
+                let at = [x, y, z].map(|axis| Fx::from_voxels(i16::try_from(axis).unwrap_or(0)));
+                if pharmakos_sim::math::fixed::Sq::between(at, centre) <= limit
+                    && world
+                        .voxels()
+                        .get([x, y, z])
+                        .and_then(Material::ore_richness)
+                        .is_some()
+                {
+                    left = left.saturating_add(1);
+                }
+            }
+        }
+    }
+    assert!(
+        left == 0 || world.ore_in_sphere(core).is_some(),
+        "{left} ore voxels are still in the core's sphere and none of them can be dug; ore \
+         deliveries per round: {delivered:?}"
+    );
+}
+
 /// The latent restore bug the S1 plan names (`fixs`): `World::unit_limit` is
 /// documented as derived from the **starting** count, and a restore used to
 /// derive it from the **restored** count, so a match saved after fabricating

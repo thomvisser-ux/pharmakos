@@ -826,11 +826,13 @@ impl World {
     /// the caller reports as a step failure rather than growing a column inside
     /// a tick.
     ///
-    /// PLACEHOLDER: the `$` a beacon costs (`structures.beacon.cost_dollars`)
-    /// is **not** charged here, and an aborted deploy therefore refunds
-    /// nothing. Spending is "paid means yours" (item 23) and belongs to the
-    /// Quartermaster, which is T14's; charging it here without the treasury
-    /// rules around it would be half an economy (owner, at T14).
+    /// The `$` is **not** charged here, because it was charged already: spec
+    /// section 7 has it leave the treasury "the moment an order commits:
+    /// deploy starts", twelve seconds before this call, and the interpreter
+    /// charges it then ([`World::charge_deploy`]) and refunds it on an abort
+    /// ([`World::refund_deploy`]). Placing the beacon is where the paid-for
+    /// asset appears, not where it is paid for (register X-12, item 124 (5)
+    /// (f), fixed in S1 by item 126 (2) (f)).
     pub(crate) fn place_beacon(
         &mut self,
         seat: SeatId,
@@ -1445,6 +1447,43 @@ impl World {
             *slot = here;
         }
         self.router.clear(unit);
+    }
+
+    /// Charge a seat a placed beacon's build cost as its deploy starts.
+    ///
+    /// Spec section 7: "`$` leaves the treasury the moment an order commits:
+    /// deploy starts", and "an order the treasury cannot cover fails like any
+    /// other step". So this is all or nothing: `false`, and nothing charged,
+    /// when the seat's `$` is short of `structures.beacon.cost_dollars`; the
+    /// interpreter then fails the step with `unaffordable`. The treasury never
+    /// goes negative through a deploy.
+    ///
+    /// The deploy is not a mandate's request and does not queue at the
+    /// Quartermaster: the Quartermaster orders what beacons ask for tick by
+    /// tick, and a deploy is the commander's own order, committed on the
+    /// decision tick the step starts on.
+    pub(crate) fn charge_deploy(&mut self, seat: SeatId) -> bool {
+        let cost = self.beacon_cost();
+        let Some(index) = self.seat_row(seat) else {
+            return false;
+        };
+        let Some(slot) = self.seats.treasuries_mut().get_mut(index) else {
+            return false;
+        };
+        if slot.raw() < cost.raw() {
+            return false;
+        }
+        *slot = Money::new(slot.raw().saturating_sub(cost.raw()));
+        true
+    }
+
+    /// Refund a deploy that was aborted before its beacon was placed: the whole
+    /// build cost, back into the treasury it left (spec section 5, Placement:
+    /// "death, leaving, or an illegal site aborts the deploy and refunds it in
+    /// full").
+    pub(crate) fn refund_deploy(&mut self, seat: SeatId) {
+        let cost = self.beacon_cost();
+        self.credit_treasury(seat, cost);
     }
 
     /// Pay `amount` into a seat's single treasury.
@@ -2546,6 +2585,15 @@ impl World {
         }
     }
 
+    /// Refund every deploy still running as the segment closes (spec
+    /// section 5: an aborted deploy refunds in full; section 10: the playbook
+    /// stops at segment end). See [`crate::interpreter::exec::abandon_deploys`].
+    fn abandon_deploys(&mut self) {
+        let mut interpreter = core::mem::take(&mut self.interpreter);
+        crate::interpreter::exec::abandon_deploys(self, &mut interpreter);
+        self.interpreter = interpreter;
+    }
+
     /// The interpreter's decision tick (T11).
     ///
     /// One decision per seat per `match.decision_tick_ms` of game time — 250 ms,
@@ -3214,6 +3262,7 @@ impl World {
         // end. An eliminated seat's does not, because `settle_respawns` skips
         // a seat that is out.
         self.settle_respawns(true);
+        self.abandon_deploys();
         let tick = self.tick;
         let ran = tick.since(self.match_state.segment_started());
         let (reason, winner) = match last {
@@ -3254,6 +3303,7 @@ impl World {
         // Item 21, in one line: the respawn always completes by segment end,
         // so every Lull snapshot has a live commander at a known place.
         self.settle_respawns(true);
+        self.abandon_deploys();
         let tick = self.tick;
         self.emit(
             tick,
@@ -3761,6 +3811,12 @@ impl World {
     /// cannot skip the version check.
     pub(crate) fn restore_tables(&mut self, restored: RestoredTables) -> bool {
         let unit_count = restored.units.len();
+        // A match never holds more units than its ceiling, and the ceiling is
+        // this world's own (see the `unit_limit` note below): a file that does
+        // was saved under another configuration.
+        if unit_count > self.unit_limit {
+            return false;
+        }
         let extent = self.rules.map_size_voxels();
         let Some(broadphase) = Csr::new(
             [0, 0],
@@ -3769,7 +3825,7 @@ impl World {
                 extent.get(1).copied().unwrap_or(0),
             ],
             self.rules.csr_cell_size_voxels(),
-            unit_count.saturating_add(UNIT_TABLE_ROOM),
+            self.unit_limit,
         ) else {
             return false;
         };
@@ -3791,16 +3847,23 @@ impl World {
         self.tick = restored.tick;
         self.seats = restored.seats;
         self.units = restored.units;
-        // The ceiling is derived from the **restored** count by the same
-        // expression construction uses, for exactly the reason `beacon_limit`
-        // is (see `World::unit_limit`): a ceiling of "however many units there
-        // are now, plus three hundred" would hand a resumed match a fresh three
-        // hundred rows, so a saved-and-restored run could fabricate a drone the
-        // unbroken run held, and the two chains would part with nothing red to
-        // show for it.
-        self.unit_limit = unit_count.saturating_add(UNIT_TABLE_ROOM);
-        self.units.reserve(UNIT_TABLE_ROOM);
-        self.router.reserve(UNIT_TABLE_ROOM);
+        // The ceiling is **kept**, not recomputed: this world was built by
+        // `World::new` from the match's own configuration, which set
+        // `unit_limit` from the starting count exactly as `World::unit_limit`
+        // documents, and a restore only replaces the tables. It used to be
+        // recomputed here from the *restored* count, which is "however many
+        // units there are now, plus three hundred": a match saved after
+        // fabricating then resumed with more room than the unbroken run, could
+        // fabricate a drone the unbroken run held, and the two chains would
+        // part with nothing red to show for it
+        // (`a_restored_match_keeps_the_unbroken_runs_unit_limit`). A file
+        // holding more units than this world's ceiling was saved under another
+        // configuration, and is refused above rather than restored into a
+        // table it would overflow.
+        self.units
+            .reserve(self.unit_limit.saturating_sub(unit_count));
+        self.router
+            .reserve(self.unit_limit.saturating_sub(unit_count));
         self.commanders = commander_index(&self.units, self.seats.len());
         self.beacons = restored.beacons;
         // Room for the beacons the resumed match may still deploy, reserved on
@@ -3838,9 +3901,7 @@ impl World {
         self.surface.refresh_all(&self.voxels);
         self.clusters.rebuild_all(&self.surface, &mut self.scratch);
         self.repairer = Repairer::new(self.clusters.cluster_count());
-        self.arrivals = Vec::with_capacity(
-            usize::try_from(unit_count.saturating_add(UNIT_TABLE_ROOM)).unwrap_or(0),
-        );
+        self.arrivals = Vec::with_capacity(usize::try_from(self.unit_limit).unwrap_or(0));
         self.repair_report = RepairReport::default();
         self.serve_report = ServeReport::default();
         self.edits.clear();
@@ -3857,9 +3918,7 @@ impl World {
         self.touched = Vec::with_capacity(usize::try_from(self.voxels.chunk_count()).unwrap_or(0));
         // The query scratch is sized the same way, and for the same reason: a
         // query that has to grow its buffer is an allocation inside a tick.
-        self.candidates = Vec::with_capacity(
-            usize::try_from(unit_count.saturating_add(UNIT_TABLE_ROOM)).unwrap_or(0),
-        );
+        self.candidates = Vec::with_capacity(usize::try_from(self.unit_limit).unwrap_or(0));
         // The three phase scratch buffers are re-reserved from the **restored**
         // counts for the same reason the tables are: they were sized at
         // construction from the config's seat count, and a snapshot of a match
