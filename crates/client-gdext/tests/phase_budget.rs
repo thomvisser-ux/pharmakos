@@ -11,9 +11,8 @@
 //! call on the **seat** connection was refused (its editor state read `gateway_refused`,
 //! one refusal), not the admin connection's.
 //!
-//! `tests/rate_budget.rs`'s stand-in moves its tick to the whole 50 ms steps of the
-//! reported elapsed time and never starts a phase's clock again, so it cannot show this.
-//! The real gateway's clock is `crates/gateway/src/surface.rs`'s `sync_time`: the sim's
+//! A stand-in that moved its tick to the whole 50 ms steps of the reported elapsed time and
+//! never started a phase's clock again could not show this. The real gateway's clock is `crates/gateway/src/surface.rs`'s `sync_time`: the sim's
 //! tick, plus `lull_offset`, plus `phase_elapsed`, the phase's reported elapsed time
 //! floored to whole ticks and kept as a high-water mark; and `close_phase` folds
 //! `phase_elapsed` into `lull_offset` and starts the next phase's clock from zero. So a
@@ -22,9 +21,9 @@
 //! every clock answer, that first one included: the calls left from the recap's last
 //! refill and the six after the Lull's first report could all land in one gateway tick.
 //!
-//! The stand-in below models exactly that clock, and counts the seat token's calls against
-//! the gateway's own default limits, read out of `crates/gateway/src/limit.rs` as
-//! `tests/rate_budget.rs` reads them.
+//! The stand-in gateway in `tests/common/mod.rs`, shared with `tests/rate_budget.rs`
+//! (register S1-45), models exactly that clock, and counts the seat token's calls against
+//! the gateway's own default limits, read out of `crates/gateway/src/limit.rs`.
 
 #![allow(
     clippy::expect_used,
@@ -35,257 +34,22 @@
               report (clippy.toml's own wording)."
 )]
 
-use std::collections::BTreeMap;
-use std::path::PathBuf;
+mod common;
 
+use common::{Gateway, limits};
 use pharmakos_client_gdext::editor::{Action, Selector, Target};
-use pharmakos_client_gdext::rig::{ADMIN, Outgoing, Phase, Rig, SEAT};
+use pharmakos_client_gdext::rig::{ADMIN, Phase, Rig, SEAT};
 use pharmakos_client_gdext::view::{Entity, EntityKind};
-use pharmakos_proto::json::{self, Json};
 
 /// One frame of a fast headless client, in wall microseconds: a headless Godot draws as
 /// fast as it can, so the seat's calls go out close together.
 const FRAME_US: u64 = 4_000;
 
-/// The gateway's step: 20 Hz, so 50 game milliseconds a tick.
-const MS_PER_TICK: i64 = 50;
-
-/// The gateway's per-token limits, read from its source.
-#[derive(Clone, Copy, Debug)]
-struct Limits {
-    per_tick: u32,
-    per_window: u32,
-    window_ticks: i64,
-}
-
-fn limits() -> Limits {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("gateway")
-        .join("src")
-        .join("limit.rs");
-    let text = std::fs::read_to_string(&path).expect("crates/gateway/src/limit.rs");
-    let constant = |name: &str| -> u32 {
-        let line = text
-            .lines()
-            .find(|line| line.starts_with(&format!("pub const {name}: u32 = ")))
-            .unwrap_or_else(|| panic!("{name} is not a `pub const {name}: u32` in limit.rs"));
-        line.trim_end_matches(';')
-            .rsplit(' ')
-            .next()
-            .and_then(|value| value.replace('_', "").parse().ok())
-            .unwrap_or_else(|| panic!("{name} is not a number: {line}"))
-    };
-    Limits {
-        per_tick: constant("CALLS_PER_TICK"),
-        per_window: constant("CALLS_PER_WINDOW"),
-        window_ticks: i64::from(constant("WINDOW_TICKS")),
-    }
-}
-
-/// A stand-in gateway whose clock is `Surface::sync_time`'s, phase by phase.
-struct Gateway {
-    limits: Limits,
-    phase: &'static str,
-    round: u32,
-    /// Ticks carried from every closed phase (`lull_offset`).
-    offset: i64,
-    /// This phase's reported elapsed ticks, a high-water mark (`phase_elapsed`).
-    phase_elapsed: i64,
-    all_ready: bool,
-    /// The seat token's calls, by gateway tick.
-    in_tick: BTreeMap<i64, u32>,
-    /// The seat token's calls, by gateway tick, from the Lull's opening on.
-    in_tick_since_lull: BTreeMap<i64, u32>,
-    window_start: i64,
-    in_window: u32,
-    rate_limited: u32,
-    methods: BTreeMap<String, u32>,
-}
-
-impl Gateway {
-    fn new() -> Self {
-        Self {
-            limits: limits(),
-            phase: "recap",
-            round: 1,
-            offset: 0,
-            phase_elapsed: 0,
-            all_ready: false,
-            in_tick: BTreeMap::new(),
-            in_tick_since_lull: BTreeMap::new(),
-            window_start: 0,
-            in_window: 0,
-            rate_limited: 0,
-            methods: BTreeMap::new(),
-        }
-    }
-
-    /// `MatchTime::tick` outside a Push: no sim tick runs here.
-    fn tick(&self) -> i64 {
-        self.offset + self.phase_elapsed
-    }
-
-    /// `Surface::close_phase`: carry what the phase spent, and start the next from zero.
-    fn close_phase(&mut self) {
-        self.offset += self.phase_elapsed;
-        self.phase_elapsed = 0;
-    }
-
-    fn busiest_tick(&self) -> u32 {
-        self.in_tick.values().copied().max().unwrap_or(0)
-    }
-
-    fn serve(&mut self, frame: &Outgoing) -> String {
-        let request = json::read(&frame.text).expect("a request");
-        let id = match request.get("id") {
-            Some(Json::Number(id)) => id.clone(),
-            other => panic!("a request id, not {other:?}"),
-        };
-        let method = match request.get("method") {
-            Some(Json::String(method)) => method.clone(),
-            other => panic!("a method, not {other:?}"),
-        };
-        let params = request.get("params").cloned().unwrap_or(Json::Null);
-        *self.methods.entry(method.clone()).or_insert(0) += 1;
-
-        if frame.link == SEAT && !self.admit() {
-            self.rate_limited += 1;
-            return format!(
-                r#"{{"jsonrpc":"2.0","id":{id},"error":{{"code":-32000,"message":"over {} calls in one tick","data":{{"code":"RATE_LIMITED"}}}}}}"#,
-                self.limits.per_tick
-            );
-        }
-        let result = match method.as_str() {
-            "report_host_clock" => {
-                if let Some(Json::Number(spent)) = params.get("elapsed_ms") {
-                    let spent: i64 = spent.parse().expect("a number");
-                    // `to_ticks_floor`, kept as a high-water mark.
-                    self.phase_elapsed = self
-                        .phase_elapsed
-                        .max(spent.checked_div(MS_PER_TICK).unwrap_or(0));
-                }
-                format!(r#"{{"all_ready":{}}}"#, self.all_ready)
-            }
-            "end_recap" => {
-                self.close_phase();
-                self.phase = "lull";
-                self.round += 1;
-                self.all_ready = false;
-                "{}".to_owned()
-            }
-            "set_ready" => {
-                self.all_ready = true;
-                "{}".to_owned()
-            }
-            "end_lull" => {
-                self.close_phase();
-                self.phase = "push";
-                "{}".to_owned()
-            }
-            "get_view" => r#"{"next_cursor":"c1","complete":true}"#.to_owned(),
-            "get_segment_feed" => r#"{"events":[],"next_cursor":"f1"}"#.to_owned(),
-            "verify_plan" => r#"{"report":{"qualifies":true,"depth":"quick"}}"#.to_owned(),
-            "submit_plan" => {
-                r#"{"report":{"qualifies":true,"depth":"full"},"accepted":true}"#.to_owned()
-            }
-            "patch_plan" => patched(&params),
-            "estimate_route" => {
-                r#"{"reachable":true,"ms":1000,"legs":[{"to":{"voxel":{"x":1}},"ms":1000}]}"#
-                    .to_owned()
-            }
-            "get_briefing" => r#"{"notes":""}"#.to_owned(),
-            // Last round's sealed playbook, carried into this round's Lull.
-            "list_drafts" => format!(
-                r#"{{"drafts":[{{"draft_id":"carried","label":"carried","round":{}}}]}}"#,
-                self.round
-            ),
-            "get_draft" => json::write(&Json::Object(vec![
-                (
-                    "playbook_jsonc".to_owned(),
-                    Json::String(EXPAND_EAST.to_owned()),
-                ),
-                ("label".to_owned(), Json::String("carried".to_owned())),
-                ("round".to_owned(), Json::Number(self.round.to_string())),
-            ])),
-            "list_templates" => {
-                r#"{"templates":[{"template_id":"t","title":"T","summary":"s"}]}"#.to_owned()
-            }
-            "render_plan" => r#"{"prose":"Playbook"}"#.to_owned(),
-            "get_economy_forecast" => {
-                r#"{"treasury_now":200,"supply_kw_now":10,"draw_kw_now":6,"headroom_kw_now":4}"#
-                    .to_owned()
-            }
-            _ => "{}".to_owned(),
-        };
-        let body = result
-            .trim_end()
-            .strip_suffix('}')
-            .expect("a result is an object");
-        let separator = if body.len() > 1 { "," } else { "" };
-        format!(
-            r#"{{"jsonrpc":"2.0","id":{id},"result":{body}{separator}"_status":{{"phase":"{}","round":{}}}}}}}"#,
-            self.phase, self.round
-        )
-    }
-
-    /// `RateLimiter::admit`, for the seat token.
-    fn admit(&mut self) -> bool {
-        let tick = self.tick();
-        if tick - self.window_start >= self.limits.window_ticks {
-            self.window_start = tick;
-            self.in_window = 0;
-        }
-        let in_tick = self.in_tick.entry(tick).or_insert(0);
-        if *in_tick >= self.limits.per_tick || self.in_window >= self.limits.per_window {
-            return false;
-        }
-        *in_tick += 1;
-        self.in_window += 1;
-        if self.phase == "lull" {
-            *self.in_tick_since_lull.entry(tick).or_insert(0) += 1;
-        }
-        true
-    }
-}
-
-/// `patch_plan`'s answer: the text with the new step's label in a trailing comment, as
-/// `tests/rate_budget.rs`'s stand-in answers it.
-fn patched(params: &Json) -> String {
-    let text = match params.get("playbook_jsonc") {
-        Some(Json::String(text)) => text.clone(),
-        other => panic!("a playbook, not {other:?}"),
-    };
-    let patch = match params.get("json_patch") {
-        Some(Json::String(patch)) => patch.clone(),
-        other => panic!("a patch, not {other:?}"),
-    };
-    let label = patch
-        .split("\"label\":")
-        .nth(1)
-        .and_then(|rest| rest.trim_start().strip_prefix('"'))
-        .and_then(|rest| rest.split('"').next())
-        .expect("a map action's step carries a label")
-        .to_owned();
-    json::write(&Json::Object(vec![
-        (
-            "playbook_jsonc".to_owned(),
-            Json::String(format!("{text}\n// \"{label}\"\n")),
-        ),
-        (
-            "inverse_json_patch".to_owned(),
-            Json::String("[]".to_owned()),
-        ),
-    ]))
-}
-
-const EXPAND_EAST: &str = include_str!("../../../examples/playbooks/expand_east.jsonc");
-
 /// Plays a recap, Continue, and a burst of edits the moment round 2's Lull has opened the
 /// carried draft, as the watch check's round 2 does, answering after `latency` frames; Continue is pressed `continue_after` frames into the
 /// recap. Returns the gateway and the rig.
 fn recap_then_burst(continue_after: usize, latency: usize, seat_first: bool) -> (Gateway, Rig) {
-    let mut gateway = Gateway::new();
+    let mut gateway = Gateway::new("recap");
     let mut rig = Rig::new();
     rig.set_lull_length(0);
     rig.opened(ADMIN);
@@ -324,11 +88,7 @@ fn recap_then_burst(continue_after: usize, latency: usize, seat_first: bool) -> 
             }
         }
         // Submit and be ready once every edit has been answered.
-        if started
-            && !ready_asked
-            && gateway.methods.get("patch_plan") == Some(&24)
-            && rig.editor().settled()
-        {
+        if started && !ready_asked && gateway.count("patch_plan") == 24 && rig.editor().settled() {
             ready_asked = true;
             assert!(rig.editor_mut().submit());
             rig.ready();
@@ -384,12 +144,12 @@ fn a_burst_as_the_lull_after_a_recap_opens_is_not_rate_limited() {
                     gateway.busiest_tick(),
                     limits.per_tick,
                     gateway.methods,
-                    gateway.in_tick_since_lull
+                    gateway.in_tick_in_lull
                 );
                 assert_eq!(rig.editor().refusals(), 0, "{context}");
                 assert_eq!(
-                    gateway.methods.get("get_draft").copied(),
-                    Some(1),
+                    gateway.count("get_draft"),
+                    1,
                     "{context}: the carried draft was fetched once"
                 );
             }
