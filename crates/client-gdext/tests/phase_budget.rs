@@ -12,14 +12,15 @@
 //! one refusal), not the admin connection's.
 //!
 //! A stand-in that moved its tick to the whole 50 ms steps of the reported elapsed time and
-//! never started a phase's clock again could not show this. The real gateway's clock is `crates/gateway/src/surface.rs`'s `sync_time`: the sim's
-//! tick, plus `lull_offset`, plus `phase_elapsed`, the phase's reported elapsed time
-//! floored to whole ticks and kept as a high-water mark; and `close_phase` folds
-//! `phase_elapsed` into `lull_offset` and starts the next phase's clock from zero. So a
-//! phase change moves no tick, and neither does a phase's first clock report, which the
-//! pacer sends at once with about 0 ms spent. The rig used to refill the seat's budget on
-//! every clock answer, that first one included: the calls left from the recap's last
-//! refill and the six after the Lull's first report could all land in one gateway tick.
+//! never started a phase's clock again could not show this. The real gateway's clock is
+//! `crates/gateway/src/surface.rs`'s `sync_time`: the sim's tick, plus `lull_offset`, plus
+//! `phase_elapsed`, the phase's reported elapsed time floored to whole ticks and kept as a
+//! high-water mark; and `close_phase` folds `phase_elapsed` into `lull_offset` and starts
+//! the next phase's clock from zero. So a phase change moves no tick, and neither does a
+//! phase's first clock report, which the pacer sends at once with about 0 ms spent. The rig
+//! used to refill the seat's budget on every clock answer, that first one included: the
+//! calls left from the recap's last refill and the six after the Lull's first report could
+//! all land in one gateway tick.
 //!
 //! The stand-in gateway in `tests/common/mod.rs`, shared with `tests/rate_budget.rs`
 //! (register S1-45), models exactly that clock, and counts the seat token's calls against

@@ -34,8 +34,8 @@ const ZOOM_STEP := 1.12
 const TURN_RATE := 0.005
 ## How quickly the camera closes on what it follows, per second. PLACEHOLDER, as above.
 const FOLLOW_RATE := 4.0
-## The nearest and farthest the camera sits from its focus, in voxels. PLACEHOLDER, as
-## above.
+## The nearest and farthest the camera sits from its focus, in voxels.
+## PLACEHOLDER, as above.
 const NEAREST := 12.0
 const FARTHEST := 900.0
 

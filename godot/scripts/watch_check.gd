@@ -71,7 +71,11 @@
 #     Input.parse_input_event, as a mouse would send it, on each of Submit, a Fix button and
 #     Save, in three cases each - with the rows redrawn between the press and the release,
 #     with a map menu open, and after a scroll of the panel - reaches that button's handler
-#     exactly once (the editor's own counts of `button_down` and `pressed`). A press on the
+#     exactly once (the editor's own counts of `button_down` and `pressed`). In the scroll
+#     case a Fix button is clicked with the panel left scrolled; Submit and Save sit at the
+#     panel's top, so the scroll takes them out of sight and the panel is wheeled back to
+#     0 px before they are clicked: for those two the case is a scroll down and back up,
+#     clicked at rest, not a click on a panel left scrolled. A press on the
 #     panel closes the menu; Save with no file opens Save as...; the Fix is applied and the
 #     submission is accepted;
 #   * Ready (`set_ready`) ends the Lull: the host is a two-seat match whose other seat the

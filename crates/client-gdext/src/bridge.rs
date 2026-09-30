@@ -385,7 +385,9 @@ impl PharmakosBridge {
     /// The refusal is the answer, and the caller reads it from the empty array, so its
     /// reason is printed as a note rather than as an `ERROR`: the client check's negative
     /// probe asks for exactly this refusal, and its log line read as an error in a player's
-    /// log, which the game and the checks share (F6, decisions-log item 126 (3)).
+    /// log, which the game and the checks share (F6, decisions-log item 126 (3)). Only the
+    /// client check calls this today; a caller in play must report the refusal itself (for
+    /// example with `push_error`), or a real failure goes by as a plain note.
     #[func]
     fn transpose_chunk(&mut self, sim_order: PackedByteArray) -> PackedByteArray {
         let mut out = std::mem::take(&mut self.transposed);
@@ -431,7 +433,9 @@ impl PharmakosBridge {
     /// Anything the schema rejects comes back as `null` with the reason and its JSON
     /// Pointer in the log: an unknown field is refused here, never stripped. The `null` is
     /// the refusal, so the reason is printed as a note, not an `ERROR`, for the reason
-    /// `transpose_chunk` gives.
+    /// `transpose_chunk` gives. Only the client check calls this today; a caller in play
+    /// must report the refusal itself (for example with `push_error`), or schema drift
+    /// between the client and the gateway goes by as a plain note.
     #[func]
     fn decode_result(&mut self, method: GString, result_json: GString) -> Variant {
         let wire = method.to_string();
