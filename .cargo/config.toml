@@ -32,9 +32,12 @@ overflow-checks = true
 # rustflags = ["-D", "warnings"]
 
 [build]
-# PLACEHOLDER: no target-dir override, no shared cache and no linker choice yet. The G4
-# determinism spike decides whether the build needs pinned codegen flags for cross-OS hash
-# equality; if it does, they belong here with a comment naming the spike result.
+# No codegen flags, and none are needed: G4 closed GO with the default flags, its per-tick
+# hash chain byte-identical on Windows, Linux and macOS at the pinned 1.98.1
+# (docs/spikes/G4-determinism.md section 9), so the toolchain pin in rust-toolchain.toml is
+# the whole of what cross-OS hash equality asked of the build (S1-02). No target-dir
+# override, no shared cache and no linker choice either: each is a developer's own, set in
+# their environment or a user-level config, never here.
 
 [net]
 git-fetch-with-cli = true

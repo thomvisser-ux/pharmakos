@@ -51,13 +51,27 @@
 # alone today. Adding a name to that list widens the float, cast, hash-map and clock
 # allowance for a whole crate, so it is a contract change too.
 #
-# PLACEHOLDER: `pharmakos-client-gdext` and `pharmakos-mesher` of the four exist so far.
+# PLACEHOLDER: `presentation` and `solve`, named and not created — owner, if either is proposed.
+# `pharmakos-client-gdext` and `pharmakos-mesher` of the four exist (the register's M-02).
 #
 # Inside a walled crate, keep the float surface at the edge: marshal to and from integer
 # types as early as possible, and never hand a float back to anything the sim hashes.
 
 # Minimum supported Rust version, so clippy does not suggest newer APIs than we compile on.
-# PLACEHOLDER: keep in step with rust-toolchain.toml and [workspace.package] rust-version.
+# [workspace.package] rust-version carries the same number, and xtask's
+# `the_toolchain_is_pinned_once_everywhere` holds the two equal and at or below the
+# version rust-toolchain.toml pins.
+#
+# PLACEHOLDER: the MSRV stays 1.85 below the 1.98.1 pin — owner, S1, in a sweep when no
+# lane holds a crate. S1's plan (task con1, S1-01) raises it to 1.98 with the pin, and the
+# first contract pull request found it cannot: clippy's lints follow the MSRV, and 1.98
+# turns on the let-chain form of `collapsible_if` (let chains are stable from 1.88), the
+# constant-chunk-size and manual-implementation lints: 69 `collapsible_if` warnings and a
+# dozen others at that pull request's base, across all ten crates, eight of them outside
+# that lane's paths (AGENTS.md section 6).
+# Raising it is one mechanical pass of `cargo xtask ci --fix` over the whole tree, which
+# only a moment with no lane open can take; until then the lints stay at the 1.85 floor
+# and the code compiles on the pinned 1.98.1 as before.
 msrv = "1.85"
 
 # Nothing here is a published crate, so clippy may suggest API-breaking improvements.
@@ -152,17 +166,35 @@ reason = "wall-clock read, and not monotonic. Not permitted inside anything the 
 path = "std::fs::read_dir"
 reason = "directory order differs between ext4, NTFS and APFS, so a listing that feeds a golden run or a template list is platform-dependent. Collect, sort, then use — and if you do exactly that, allow the lint locally with a comment saying so."
 
-# PLACEHOLDER — entries held back until their path is known to resolve on the pinned
-# toolchain. An unresolvable path in this file is itself a warning, and warnings are errors
-# in CI, so each of these goes in only once it has been checked (the slice methods) or once
-# the crate that owns it exists (the rest).
+# The four entries once held back here until their paths resolved (the register's M-03),
+# each decided by its path in S1's first contract pull request (S1's plan, decision 9,
+# ruled by decisions-log item 128). None is added, and each for a reason of its own:
 #
-# slice `sort_unstable_by`                — no guarantee for equal elements, so an
-#                                           incomplete comparator reorders silently. The
-#                                           standing rule stays either way: end every sort
-#                                           key with a unique id so the order is total.
-# `Iterator::sum`                         — no overflow story of its own; fold $ and kW
-#                                           with checked arithmetic so an overflow is a
-#                                           result rather than a wrap.
-# rand::random, rand::thread_rng          — unseeded RNG; the sim uses split seeded streams
-# godot::prelude::Time::get_ticks_msec    — engine wall clock reaching the client bridge
+# slice `sort_unstable_by`                — a ban on one spelling is the hole the sim's own
+#                                           guard was built to close: `crates/sim/tests/
+#                                           confinement.rs`'s SORT_SPELLINGS lists nine
+#                                           caller-keyed sort and search spellings and refuses
+#                                           every one
+#                                           in the crate that owns hashed state unless the
+#                                           line carries the item-62 marker saying its key
+#                                           ends in a unique id. That rule stands everywhere.
+# `Iterator::sum`                         — overflow checks are on in every profile, release
+#                                           included (spec section 15), and the standard
+#                                           library's integer `Sum` carries them, so an
+#                                           overflowing sum panics rather than wraps; the ban
+#                                           would also fire on counts in the gateway, the
+#                                           operator and their tests, where no `$` or kW is
+#                                           summed. `$` and kW keep folding with checked
+#                                           arithmetic, so an overflow is a result.
+# rand::random, rand::thread_rng          — `rand` is not a dependency and not on the
+#                                           approved list (AGENTS.md section 3 rule 5), so the
+#                                           path cannot resolve; the sim's confinement test
+#                                           refuses `thread_rng` by name, and a pull request
+#                                           adding `rand` is an owner decision that brings its
+#                                           ban with it.
+# godot::prelude::Time::get_ticks_msec    — only `pharmakos-client-gdext` reaches the `godot`
+#                                           crate, and it is walled: its pass lifts
+#                                           `disallowed_methods` on the command line
+#                                           (WALL_ALLOW), so the entry could never fire, and
+#                                           the pacer's clock there is sanctioned (AGENTS.md
+#                                           section 3 rule 4).

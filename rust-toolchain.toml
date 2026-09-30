@@ -6,10 +6,15 @@
 # changing this file is a contract change and needs owner approval.
 
 [toolchain]
-channel = "stable"
-# PLACEHOLDER: pin the exact version (e.g. channel = "1.85.0") the first time the spikes
-# produce a golden determinism hash, so a toolchain bump becomes a deliberate, reviewed
-# step with a hash re-baseline rather than a surprise on someone's machine.
+# Pinned to the exact version G4 produced its golden hash with (docs/spikes/G4-determinism.md
+# section 9: rustc 1.98.1, the chain byte-identical on Windows, Linux and macOS), so a
+# toolchain bump is a deliberate, reviewed step with a hash re-baseline rather than a
+# surprise on someone's machine (decisions-log item 123 (4); S1's plan, decision 9, ruling
+# the register's S1-01). The `toolchain:` input of every Rust install step in
+# .github/workflows/ names the same version, and `[workspace.package] rust-version` and
+# clippy.toml's `msrv` sit at or below it (clippy.toml says why they are not raised with
+# it yet); xtask's `the_toolchain_is_pinned_once_everywhere` holds all of them to that.
+channel = "1.98.1"
 components = ["rustfmt", "clippy"]
 targets = [
     "x86_64-pc-windows-msvc",

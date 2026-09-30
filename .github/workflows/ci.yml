@@ -159,11 +159,14 @@ jobs:
           fetch-depth: 0
 
       - name: Install the Rust toolchain
-        # rust-toolchain.toml pins the channel and the components; this action installs
-        # rustup's stable so that pin resolves. The action's `stable` is a branch, not a
-        # tag, and its action.yml at the pinned commit defaults `toolchain` to stable.
+        # rust-toolchain.toml pins the channel (1.98.1, S1-01) and the components; this
+        # action installs that exact toolchain, so rustup resolves the pin without a second
+        # download. The action's `stable` is a branch, not a tag, and its `toolchain` input
+        # is what it installs; every Rust install step in .github/workflows/ names the same
+        # version, and xtask's `the_toolchain_is_pinned_once_everywhere` holds them equal.
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable (branch)
         with:
+          toolchain: 1.98.1
           components: rustfmt, clippy
 
       - name: Decide whether anything but prose changed
@@ -558,6 +561,8 @@ jobs:
 
       - name: Install the Rust toolchain
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable (branch)
+        with:
+          toolchain: 1.98.1
 
       - name: Decide whether anything but prose changed
         # The docs-only fast path (see this file's header), as in the `ci` legs.
@@ -712,6 +717,8 @@ jobs:
 
       - name: Install the Rust toolchain
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable (branch)
+        with:
+          toolchain: 1.98.1
 
       - name: Decide whether anything but prose changed
         # The docs-only fast path (see this file's header), as in the `ci` legs.
@@ -975,6 +982,8 @@ jobs:
 
       - name: Install the Rust toolchain
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable (branch)
+        with:
+          toolchain: 1.98.1
 
       - name: Decide whether anything but prose changed
         # The docs-only fast path (see this file's header), as in the `ci` legs.
@@ -1053,6 +1062,8 @@ jobs:
 
       - name: Install the Rust toolchain
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable (branch)
+        with:
+          toolchain: 1.98.1
 
       - name: Decide whether anything but prose changed
         # The docs-only fast path (see this file's header), as in the `ci` legs.
@@ -1238,6 +1249,8 @@ jobs:
 
       - name: Install the Rust toolchain
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable (branch)
+        with:
+          toolchain: 1.98.1
 
       - name: Decide whether anything but prose changed
         # The docs-only fast path (see this file's header), as in the `ci` legs.
