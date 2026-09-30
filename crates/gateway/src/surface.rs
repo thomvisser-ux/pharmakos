@@ -217,6 +217,11 @@ pub struct Sealed {
     pub plan: Plan,
 }
 
+/// The feed kind of the line a seat reads when the gateway filed its playbook
+/// ([`crate::strings::SAFE_PLAYBOOK_FILED`]). A gateway kind, beside the sim's
+/// bus: filing is the gateway's act, not the match's.
+pub const SAFE_PLAYBOOK_FILED_KIND: &str = "safe_playbook_filed";
+
 /// Last round's playbook, pre-loaded as a draft and **re-verified against the
 /// new snapshot**.
 ///
@@ -479,8 +484,9 @@ impl Surface {
     /// take into a match ([`Surface::begin_push`]'s), and no Lull is offered,
     /// so a client killed mid-Push replays that Push to the same chain and
     /// cannot re-plan what it watched (the wave-6 notes, decision C8).
-    /// PLACEHOLDER: where a resume lands is the owner's question D2, taken on
-    /// the recommendation -- **OWNER**, now.
+    /// Where a resume lands is the owner's question D2, taken on the
+    /// recommendation and **ruled at the demo** (item 126 (2) (b), register
+    /// D-27).
     ///
     /// Every saved seal is **recompiled** and its plan fingerprint recomputed
     /// and compared with the saved one. Both come from the save, so this
@@ -1123,6 +1129,7 @@ impl Surface {
         let round = self.host()?.runner().round();
         self.file_safe_playbooks(round)?;
         self.begin_segment(round, 0);
+        self.announce_filings(round)?;
         let plans = self.plans_for_round();
         self.host_mut()?.seal_plans(plans)?;
         let started = self.host_mut()?.begin_push();
@@ -1134,6 +1141,37 @@ impl Surface {
         self.sync_time();
         self.absorb_events()?;
         Ok(started)
+    }
+
+    /// Tell each seat the gateway filed a playbook for this round, in that
+    /// seat's own feed: the first line of the segment, just above the
+    /// `plan_sealed` the seal itself reports.
+    ///
+    /// Decision 8 of S1's plan (ruled by item 128) and the demo's F5: a
+    /// timeout's filing used to read exactly like the player's own seal. A
+    /// gateway-originated line rather than a sim event, because filing is the
+    /// gateway's act (spec section 14) and the sim never knows who wrote a
+    /// plan; private, because whether a seat planned is its own business.
+    fn announce_filings(&mut self, round: u32) -> Result<(), Error> {
+        let filed: Vec<SeatId> = self
+            .seats
+            .iter()
+            .filter(|slot| {
+                slot.sealed
+                    .as_ref()
+                    .is_some_and(|sealed| sealed.round == round && sealed.filed_by_the_gateway)
+            })
+            .map(|slot| slot.seat)
+            .collect();
+        for seat in filed {
+            self.feed.publish(Event {
+                at_ms: Ms::ZERO,
+                kind: Kind::new(SAFE_PLAYBOOK_FILED_KIND)?,
+                text: crate::strings::SAFE_PLAYBOOK_FILED.to_owned(),
+                audience: Audience::Private(seat),
+            })?;
+        }
+        Ok(())
     }
 
     /// Put a beginning Push's save and seals in the pending slot, and make
@@ -1310,13 +1348,15 @@ impl Surface {
     pub fn end_recap(&mut self) -> Result<bool, Error> {
         let ended = self.host_mut()?.end_recap();
         if ended && self.host()?.runner().phase() == MatchPhase::Ended {
-            // Spec section 12 unlocks the fog at match end, and a match that
-            // runs out of rounds ends **here** rather than on a tick:
-            // `MatchState::close_recap` is what calls `decide` for
-            // `RoundLimit`, so the last tick of the last segment reports
-            // `match_ended: false` and [`Surface::step`]'s unlock never fires.
-            // Found by T16a's own acceptance test; the one-tick rule's path
-            // (a match decided *during* a Push) was already covered.
+            // Spec section 12 unlocks the fog at match end. Since S1's `fixs`
+            // lane the round limit is decided at the last round's final tick
+            // by the final audit, so [`Surface::step`]'s unlock has already
+            // fired for it, as it always did for the one-tick rule's ends.
+            // This is kept for a world restored into its last recap
+            // undecided (a snapshot taken there by an earlier build), whose
+            // round limit the sim still decides when that recap closes;
+            // `end_match` is idempotent. (Found by T16a's own
+            // acceptance test, when every round-limit end came through here.)
             self.fog.end_match();
         }
         if ended {
@@ -1590,7 +1630,12 @@ impl Surface {
             | EventKind::SegmentEnded
             | EventKind::RecapOpened
             | EventKind::MatchEnded
-            | EventKind::SeatEliminated => Ok(Audience::Public),
+            | EventKind::SeatEliminated
+            // The final audit's lines are emitted only as the audit decides
+            // the match, which is the moment every seat's standing becomes
+            // everybody's (spec section 3 keeps a seat's own score private
+            // only while the match runs).
+            | EventKind::FinalAudit => Ok(Audience::Public),
             EventKind::BeaconDestroyed
             | EventKind::StructureRuined
             | EventKind::CommanderDied
@@ -2022,7 +2067,8 @@ impl Surface {
     /// knowledge store at **S3**; `is_core` is decided here by "the seat's
     /// lowest-numbered beacon", which is true of every map the generator makes
     /// because it pre-places the core first, and becomes a column the day a
-    /// beacon has a kind (owner, at T14 with the Build mandate).
+    /// beacon has a kind (owner, at S1, with the grid, as
+    /// `crate::surface::knowledge::core_beacon_of` says).
     ///
     /// # Errors
     ///

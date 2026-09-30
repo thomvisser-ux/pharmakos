@@ -84,8 +84,8 @@ use crate::routes::RouteAdapter;
 /// does not play, and [`crate::surface::Surface::file_advice`] verifies and
 /// files that seat's own. **This constant is what is filed when there is no
 /// such advice** — a host with no advisor installed (`gamectl scenario run`,
-/// the tests, a hosted match until T18 lands the operator) — and when an
-/// advice does not qualify, which the audit log then says.
+/// the tests, a seat the operator does not advise) — and when an advice does
+/// not qualify, which the audit log then says.
 ///
 /// It is the spec's safe playbook in the one situation that needs no reading
 /// of the seat's own economy (decision C16): move to the safest beacon, raise
@@ -583,8 +583,9 @@ impl Host {
     /// **A host-side seam, reached by no wire method, and that is the whole of
     /// its design.** Three of T16a's acceptance lines are about what a seat
     /// may see of an edit and of an elimination, and on `main` nothing in a
-    /// hosted match edits a voxel or kills a seat: combat's craters are S2's
-    /// and construction's sets are T14's. `Runner::world_mut`'s own doc names
+    /// hosted match kills a seat, and the only voxel writes are a mining
+    /// drone's (T14's): combat's craters are S2's. `Runner::world_mut`'s own
+    /// doc names
     /// exactly this — "what a host files this tick's orders through — a voxel
     /// edit, a damage order" — so the seam is that sentence and nothing more.
     ///
@@ -631,9 +632,11 @@ impl Host {
 /// scout's own vision, Survey-lite's recorded sightings, a Sensor Spire's
 /// reveal. A commander that walks out of its own spheres is still drawn to its
 /// owner -- that is ownership, not sight -- and sees no enemy entity or edit
-/// around it. PLACEHOLDER: **OWNER**, now, whether scouts join the live view
-/// (the wave-6 notes, section D, question 4); a sight-radius row per unit and
-/// structure at **S1** at the latest; Survey-lite's sightings at **S3**.
+/// around it. Whether scouts join the live view was **ruled at the demo**:
+/// spheres only, for now (item 126 (2) (b), register D-25). PLACEHOLDER: a
+/// sight-radius row per unit and structure is the **owner**'s at **S2**, with
+/// scouting (decision 13 of S1's plan, register S1-34); Survey-lite's
+/// sightings join at **S3**.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct SphereVision {
     /// The sim's own snapshot of every living beacon's sphere, rebuilt before

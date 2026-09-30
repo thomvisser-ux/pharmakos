@@ -766,7 +766,7 @@ mod tests {
     fn the_envelope_and_the_blocks_are_rendered() {
         let text = prose(MINIMAL);
         assert!(
-            text.starts_with("Hold\nFiled by the built-in operator.\n"),
+            text.starts_with("Hold\nWritten from a built-in template.\n"),
             "{text}"
         );
         assert!(text.contains("1. wait: hold for 1:30."), "{text}");

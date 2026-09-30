@@ -8,7 +8,10 @@
 //! compares it with `tests/golden/gateway/<case>/expected.<ext>`;
 //! `cargo xtask ci`'s `golden` step compares the same pair, and
 //! `cargo xtask golden --bless` accepts a move. `tests/golden/gateway/README.md`
-//! says what a diff in each of the four means.
+//! says what a diff in each of the area's nineteen cases means. This file
+//! writes four of them (the fog filter, the digest, the audit log and the
+//! handshake); `methods.rs`, `view.rs`, `demo_playbooks.rs` and `advice.rs`
+//! write the other fifteen (item 124 (5) (k)).
 //!
 //! Every file here is text, one record per line, LF endings, with a trailing
 //! newline -- `tests/golden/README.md` rule 3, enforced by the `golden` step

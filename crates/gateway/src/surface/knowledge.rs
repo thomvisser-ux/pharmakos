@@ -40,6 +40,7 @@
 use pharmakos_proto::gp::v1::Voxel;
 use pharmakos_proto::json::Json;
 use pharmakos_sim::math::quantity::Ms;
+use pharmakos_sim::runner::MatchEndReason;
 use pharmakos_sim::tables::{BeaconId, SeatId};
 
 use crate::detail::{self, Detail};
@@ -177,13 +178,33 @@ impl Surface {
         let host = self.host()?;
         let state = host.world().match_state();
         let ticks = host.runner().tick().since(state.segment_started());
-        let outcome = host
-            .runner()
-            .outcome()
-            .map(|outcome| (outcome.reason, outcome.winner.map(SeatId::raw)));
+        // Every winner: the last seat standing, or whoever the final audit
+        // names, read from the world by the sim's one audit function rather
+        // than stored, which is what lets a shared win name all its seats
+        // while the outcome keeps its one winner byte (register X-08).
+        let outcome = host.runner().outcome().map(|outcome| {
+            let winners: Vec<u8> = match (outcome.reason, outcome.winner) {
+                (MatchEndReason::LastSeatStanding, winner) => {
+                    winner.map(SeatId::raw).into_iter().collect()
+                }
+                _ => pharmakos_sim::audit::final_audit(host.world())
+                    .winners
+                    .into_iter()
+                    .map(SeatId::raw)
+                    .collect(),
+            };
+            (outcome.reason, winners)
+        });
+        let prose = strings::recap(
+            host.runner().round(),
+            ticks,
+            outcome
+                .as_ref()
+                .map(|(reason, winners)| (*reason, winners.as_slice())),
+        );
         Ok(Json::Object(vec![(
             String::from("prose"),
-            Json::String(strings::recap(host.runner().round(), ticks, outcome)),
+            Json::String(prose),
         )]))
     }
 
@@ -503,48 +524,69 @@ impl Surface {
 
     /// One `gp.v1.Location` as the voxel it names.
     ///
-    /// Three of the oneof's arms exist, and only the two that need no knowledge
-    /// store are answered here: a literal voxel, and a beacon the seat's own
-    /// scope carries (`beacon_anchor{beacon_id}` and the `safest` shorthand,
-    /// which is own beacons only). A **selector** -- nearest, weakest, most
-    /// threatened -- resolves at step start over the beacons that pass its
-    /// filter, which is the interpreter's job at run time and not a question
-    /// an estimate can answer at plan time.
+    /// Three of the oneof's arms exist and all three are answered: a literal
+    /// voxel; a `beacon_anchor`, fixed (`b_NN`) or a **selector** (`nearest`,
+    /// `weakest`, `safest`); and the `safest` shorthand. A beacon is resolved
+    /// over the **frozen planning snapshot** by the sim's own selector
+    /// catalogue (`pharmakos_sim::interpreter::resolve_beacon_in`), which is
+    /// the answer a decision taken on that world would give: the same own
+    /// living beacons, the same ranking, the same tie to the lowest id. It
+    /// used to send every ranked leg to the seat's first beacon, so a
+    /// `nearest` leg was estimated to a beacon the commander would never walk
+    /// to (S1's plan, the `fixs` lane). A selector the interpreter refuses at
+    /// this stage (`most_threatened`, an enemy or tag filter) is refused here
+    /// with the interpreter's own reason, and one that resolves to nothing is
+    /// `NOT_FOUND`, as it would be a step failure at run time. Nothing is
+    /// stepped: a selector ranks what the snapshot already holds.
     fn place_of(&self, seat: SeatId, waypoint: &Json, index: usize) -> Result<Voxel, Error> {
+        use pharmakos_sim::interpreter::{BeaconSpec, beacon_spec_of, resolve_beacon_in};
         let at = format!("waypoint {index}");
         if let Some(voxel) = waypoint.get("voxel") {
             return read_voxel(voxel, &at);
         }
-        let beacon_ref = waypoint
-            .get("beacon_anchor")
-            .or_else(|| waypoint.get("safest"));
-        let Some(beacon_ref) = beacon_ref else {
+        let host = self.host()?;
+        let spec = if let Some(reference) = waypoint.get("beacon_anchor") {
+            let reference: pharmakos_proto::gp::v1::BeaconRef =
+                pharmakos_proto::json::decode_json(reference).map_err(|error| {
+                    Error::invalid(format!(
+                        "{at}: `beacon_anchor` is a `gp.v1.BeaconRef`: {error}"
+                    ))
+                })?;
+            beacon_spec_of(&reference, host.rules())
+                .map_err(|error| Error::invalid(format!("{at}: {error}")))?
+        } else if waypoint.get("safest").is_some() {
+            BeaconSpec::Safest
+        } else {
             return Err(Error::invalid(format!(
-                "{at} names no place: a waypoint is a `voxel` or a `beacon_anchor`"
+                "{at} names no place: a waypoint is a `voxel`, a `beacon_anchor` or `safest`"
             )));
         };
-        let scope = self.verifier_scope(seat)?;
-        // `safest` and `beacon_anchor{safest}` are the same place and are own
-        // beacons only, so "the seat's first own beacon" is the whole of what
-        // this build can answer without the threat model S2 brings.
-        let named = beacon_ref.get("beacon_id").and_then(|value| match value {
-            Json::String(text) => Some(text.clone()),
-            _ => None,
-        });
-        match named {
-            Some(beacon_id) => scope
-                .beacon(&beacon_id)
-                .map(|known| known.at)
-                .ok_or_else(|| {
-                    Error::not_found(format!("{at} names `{beacon_id}`, which this seat has not"))
-                }),
-            None => scope
-                .own_beacons()
-                .next()
-                .map(|known| known.at)
-                .ok_or_else(|| {
-                    Error::not_found(format!("{at} is a beacon of this seat's, and it has none"))
-                }),
+        let snapshot = host.runner().frozen().snapshot();
+        let Some(beacon) = resolve_beacon_in(snapshot, host.rules(), seat, spec) else {
+            return Err(Error::not_found(match spec {
+                BeaconSpec::Id(id) => format!(
+                    "{at} names `{}`, which this seat has not",
+                    view::beacon_id(id)
+                ),
+                _ => format!("{at} is a beacon of this seat's, and none answers its selector"),
+            }));
+        };
+        let row = snapshot
+            .beacon_id
+            .iter()
+            .position(|held| *held == beacon.raw())
+            .ok_or_else(|| Error::internal(format!("{at}: the resolved beacon has no row")))?;
+        let axis = |offset: usize| {
+            row.checked_mul(3)
+                .and_then(|base| base.checked_add(offset))
+                .and_then(|slot| snapshot.beacon_pos.get(slot).copied())
+                .map(pharmakos_sim::math::fixed::Fx::from_raw)
+        };
+        match (axis(0), axis(1), axis(2)) {
+            (Some(x), Some(y), Some(z)) => Ok(view::voxel_of([x, y, z])),
+            _ => Err(Error::internal(format!(
+                "{at}: the resolved beacon has no anchor"
+            ))),
         }
     }
 
