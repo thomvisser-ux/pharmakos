@@ -60,7 +60,8 @@ no section goes to the nearest one with a note saying so.
 
 The owner rules on these at the stage demo's review (decisions-log item 123 (3)). **Ruled on
 2026-09-29 (item 126 (2) (b)): every row stands as it is for now, and no rules row is re-tuned, so
-S1-09 carries nothing.** The comments of D-20 to D-27 are reworded by the next lane that owns each
+S1-09 carries nothing.** D-01 is re-ruled for S1 by item 127 (2): the spec's 10-minute first Lull
+and 5-minute later ones, with a first-Lull row, in S1's first contract pull request. The comments of D-20 to D-27 are reworded by the next lane that owns each
 file. A tuning value the owner changes is a `rules.proto` and `rules/rules.v1.json` change that
 moves the rules hash and every chain, so it goes to S1's first contract pull request (item 123 (4));
 the carry-forward S1-09 would have booked that.

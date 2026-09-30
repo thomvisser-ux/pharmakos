@@ -37,6 +37,7 @@ inventing it (`AGENTS.md` §12).
 | `decisions-log.md` | Every decision from the interview passes, in sections. **§2.7 (items 1–45) is current.** | **Authoritative** |
 | `../spec/pharmakos-spec-v0.6.html` | Design specification draft 6 (v0.6, 2026-09-13), 19 sections, published. | **Authoritative** below §2.7 |
 | `co-design-gameplan-api.md` | Playbook schema, verifier, gateway API and editor UX, co-designed in depth. | Normative in shape; superseded where §2.7 conflicts |
+| `targeting.md` | How a playbook names where and what: names and descriptions, the three reading rules, "nearest", sites, the S1 slice (decisions-log item 127 (12)). | Current; the later decision where the spec differs |
 | `handoff.md` | State of the design at the end of pass 6: what is decided, what is next, working conventions, the build plan in one line. Start here for orientation. | Current |
 | `6c-language-investigation.md` | The 36-agent investigation into the plan format and script language that produced the v1 simplification (JSONC now; TypeScript-family scripts run externally in v1.1; no embedded runtime). | Input to §2.7; roadmap material for v1.1 |
 | `review-agenda-draft5.md` | The draft-5 review agenda: 30 items, the editorial fixes applied, and the moot and rejected lists. | Historical |
