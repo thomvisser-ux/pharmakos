@@ -24,14 +24,18 @@
 //!
 //! # Who is audited
 //!
-//! The seats still in the match: a seat that has been eliminated is out of it,
-//! and the audit decides between the seats it is choosing a winner from. When
+//! The seats still in the match (`World::is_in_match`, the predicate the
+//! one-tick rule counts by): a seat that has been eliminated is out of it, and
+//! a seat that was never placed was never in it, so neither is audited. When
 //! no seat is still in (item 16's no-survivor end), the seats that fell on the
 //! latest elimination tick are the ones the audit decides between — the seats
-//! that were still in until the tick that ended the match. Neither sentence is
-//! spelled out in the spec; both are the reading that keeps an eliminated seat
-//! from winning a match it was already out of, and the pull request that
-//! introduced this module names them for the owner.
+//! that were still in until the tick that ended the match.
+//!
+//! PLACEHOLDER: who the audit decides between (the seats still in; on a
+//! no-survivor end, the seats that fell on the latest elimination tick). The
+//! spec does not spell it out; this is the reading that keeps an eliminated or
+//! never-placed seat from winning a match it was not in. The owner confirms or
+//! rules otherwise at S1's stage demo.
 //!
 //! # The terms, in order
 //!
@@ -39,6 +43,12 @@
 //!    ([`World::held_value`], the same number the Ledger ranks on) plus enemy
 //!    value destroyed. "Unsmoothed" is the raw figure, not a displayed
 //!    standing.
+//!
+//!    PLACEHOLDER: "unsmoothed net worth" read as the audit score (held plus
+//!    destroyed) rather than as held value alone. The two readings agree while
+//!    [`destroyed_value`] is zero and rank score-tied seats in opposite
+//!    directions once it is not, so the owner rules on it at S2, with the
+//!    kill-credit split.
 //! 2. **Enemy value destroyed.** See [`destroyed_value`]: zero until S2.
 //! 3. **Fewer beacons lost**: [`beacons_lost`], read from the beacon table,
 //!    which keeps a dead beacon's row for the whole match at zero hit points —
@@ -47,7 +57,7 @@
 //! 4. **A shared win**: every seat tied on all three.
 
 use crate::math::quantity::Money;
-use crate::tables::SeatId;
+use crate::tables::{NOT_ELIMINATED, SeatId};
 use crate::world::World;
 
 /// One seat's line of the final audit.
@@ -219,13 +229,23 @@ fn seat_count(world: &World) -> usize {
 
 /// The tick of the most recent elimination, when no seat is still in the
 /// match; `None` while one is.
+///
+/// "Still in" is `World::is_in_match`, the one-tick rule's own predicate, so
+/// a seat that was never placed (no beacon row, never eliminated) neither keeps
+/// the audit on the survivors nor counts as a survivor itself; and only an
+/// eliminated seat's tick is read, never [`NOT_ELIMINATED`].
 fn latest_fall(world: &World) -> Option<u32> {
-    let seats = world.seats();
     let count = seat_count(world);
-    if (0..count).any(|index| seats.is_alive(index)) {
+    if (0..count).any(|index| world.is_in_match(index)) {
         return None;
     }
-    seats.eliminated_at().iter().copied().max()
+    world
+        .seats()
+        .eliminated_at()
+        .iter()
+        .copied()
+        .filter(|at| *at != NOT_ELIMINATED)
+        .max()
 }
 
 /// The seat at `index`, when the audit decides between it and the others.
@@ -233,7 +253,7 @@ fn audited(world: &World, index: usize, latest: Option<u32>) -> Option<SeatId> {
     let seats = world.seats();
     let seat = SeatId::new(seats.seats().get(index).copied()?);
     let counted = match latest {
-        None => seats.is_alive(index),
+        None => world.is_in_match(index),
         Some(tick) => seats.eliminated_at().get(index).copied() == Some(tick),
     };
     counted.then_some(seat)

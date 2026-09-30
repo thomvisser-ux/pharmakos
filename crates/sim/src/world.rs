@@ -3268,7 +3268,7 @@ impl World {
         let mut index: usize = 0;
         while index < seats {
             let raw = self.seats.seats().get(index).copied().unwrap_or(0);
-            if self.seats.is_alive(index) && self.seat_standing(raw) == SeatStanding::Standing {
+            if self.is_in_match(index) {
                 remaining = remaining.saturating_add(1);
                 last = Some(SeatId::new(raw));
             }
@@ -3455,6 +3455,17 @@ impl World {
         }
         ladder.clear();
         self.settlement = ladder;
+    }
+
+    /// Whether the seat at `index` is still in the match: not eliminated, and
+    /// holding at least one living beacon. The one predicate the one-tick rule
+    /// ([`World::check_match_end`]) and the final audit (`crate::audit`) both
+    /// count by, so a seat that was never placed is in neither.
+    pub(crate) fn is_in_match(&self, index: usize) -> bool {
+        let Some(raw) = self.seats.seats().get(index).copied() else {
+            return false;
+        };
+        self.seats.is_alive(index) && self.seat_standing(raw) == SeatStanding::Standing
     }
 
     /// Whether a seat is standing, has fallen, or was never placed.

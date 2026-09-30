@@ -314,3 +314,90 @@ fn a_lost_beacons_row_survives_save_and_restore() {
     );
     assert_eq!(resumed.state_hash(), runner.world().state_hash());
 }
+
+/// Four seats on the committed map's three spawn zones: seat 3 is seated and
+/// never placed, as in the determinism harness's world.
+fn four_seat_world() -> World {
+    World::new(&WorldConfig {
+        match_seed: pharmakos_sim::DETERMINISM_MATCH_SEED,
+        seats: 4,
+        units_per_seat: 0,
+        rules: flat_rules(),
+        match_settings: MatchSettings {
+            segment_lengths_ms: vec![2_000],
+            round_limit: 1,
+        },
+    })
+    .expect("the rules table describes a map")
+}
+
+fn core_of(world: &World, of: SeatId) -> BeaconId {
+    let beacons = world.beacons();
+    (0..beacons.ids().len())
+        .find(|row| beacons.seats().get(*row).copied() == Some(of.raw()))
+        .and_then(|row| beacons.ids().get(row).copied())
+        .map(BeaconId::new)
+        .expect("a placed seat has a core")
+}
+
+#[test]
+fn a_seat_that_was_never_placed_is_not_audited_at_the_round_limit() {
+    let mut base = four_seat_world();
+    assert!(
+        (0..base.beacons().ids().len())
+            .all(|row| base.beacons().seats().get(row).copied() != Some(3)),
+        "the fixture's seat 3 has no beacon"
+    );
+    base.set_treasury(seat(3), Money::new(1_000_000));
+    let mut runner = Runner::new(base);
+    assert!(runner.begin_push());
+    play_to_the_last_tick(&mut runner);
+    hold(runner.world_mut(), [1_000, 1_500, 900]);
+    let _ = finish(&mut runner);
+
+    let outcome = runner.outcome().expect("the round limit ended the match");
+    assert_eq!(outcome.reason, MatchEndReason::RoundLimit);
+    assert_eq!(
+        outcome.winner,
+        Some(seat(1)),
+        "a seat that was never in the match cannot win it, whatever it holds"
+    );
+    let audit = final_audit(runner.world());
+    assert_eq!(
+        audit.lines.iter().map(|line| line.seat).collect::<Vec<_>>(),
+        vec![seat(0), seat(1), seat(2)]
+    );
+}
+
+#[test]
+fn a_seat_that_was_never_placed_does_not_survive_a_no_survivor_end() {
+    let mut base = four_seat_world();
+    base.set_treasury(seat(1), Money::new(500_000));
+    base.set_treasury(seat(3), Money::new(1_000_000));
+    let cores = [
+        core_of(&base, seat(0)),
+        core_of(&base, seat(1)),
+        core_of(&base, seat(2)),
+    ];
+    let mut runner = Runner::new(base);
+    assert!(runner.begin_push());
+    for core in cores {
+        destroy(&mut runner, core);
+    }
+    let report = runner.step().expect("a Push tick");
+    assert!(report.match_ended, "{report:?}");
+
+    let outcome = runner.outcome().expect("every placed seat fell on one tick");
+    assert_eq!(outcome.reason, MatchEndReason::NoSurvivor);
+    assert_eq!(
+        outcome.winner,
+        Some(seat(1)),
+        "the audit decides between the seats that fell on the final tick"
+    );
+    let audit = final_audit(runner.world());
+    assert_eq!(
+        audit.lines.iter().map(|line| line.seat).collect::<Vec<_>>(),
+        vec![seat(0), seat(1), seat(2)],
+        "and a seat that was never placed is not among them"
+    );
+}
