@@ -1,0 +1,62 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// S1's `fixs` lane: a deploy the treasury cannot cover fails its step, and the
+// step's `on_fail` takes it (spec section 7: "an order the treasury cannot
+// cover fails like any other step"; register X-12; decision 7 of S1's plan,
+// ruled by item 128: failure id 12, `unaffordable`).
+//
+//   seat 0  seals scenarios/s1/unaffordable-deploy.playbook.jsonc: four deploys
+//           beside its core, each on `on_fail: SKIP`, then a five-second hold.
+//           Its treasury opens at $ 200 (two BMIs) and a beacon costs $ 60,
+//           charged when its deploy starts, so the first three are paid for
+//           ($ 20 is left) and the fourth, starting at tick 856, fails at once
+//           with `unaffordable`; the route skips to the hold, which completes
+//           at tick 961, and the fallback takes over;
+//   seat 1  seals nothing, so the gateway files the safe playbook for it.
+//
+// The playbook passes the verifier: the `$` projection that would warn about
+// the fourth deploy at plan time (E0601, W06xx) is S1's economy work, not yet
+// built, and a verifier never runs the Quartermaster ahead (AGENTS.md section
+// 3 rule 2).
+//
+// `event_fired` has no value predicate (register M-05, with S1-41), so the
+// failure's id is pinned by the chain and by crates/sim/tests/deploy.rs's
+// `a_deploy_the_treasury_cannot_cover_fails_its_step`, which reads it.
+{
+  "format": "pharmakos.scenario.v1",
+  "name": "unaffordable-deploy",
+  "summary": "Seat 0 deploys three beacons beside its core, which spends its opening treasury, and its fourth deploy fails with `unaffordable` as it starts; `on_fail: SKIP` moves the route on to a hold, which completes before the fallback takes over. Seat 1 holds on its safe playbook.",
+
+  "map": {
+    "seed": "0x00000000ca5caded",
+    "generator": "skeleton"
+  },
+
+  "rules": "rules/rules.v1.json",
+
+  "seats": [
+    { "seat": 0, "kind": "playbook", "playbook": "scenarios/s1/unaffordable-deploy.playbook.jsonc" },
+    { "seat": 1, "kind": "safe" }
+  ],
+
+  "segments": [
+    { "index": 0, "length_ms": 60000, "note": "20 Hz x 60 s = 1 200 ticks: three twelve-second deploys, their rows, the failure and the hold." }
+  ],
+
+  "assertions": [
+    { "assert": "event_fired", "event": "beacon_placed", "seat": 0, "by_tick": 900,
+      "note": "The three affordable deploys land at ticks 241, 526 and 811." },
+    { "assert": "event_fired", "event": "step_failed", "seat": 0, "by_tick": 900,
+      "note": "The fourth deploy fails as it starts, at tick 856, with failure id 12, `unaffordable`: $ 20 is left and a beacon is $ 60. It is the route's only failure." },
+    { "assert": "event_fired", "event": "step_completed", "seat": 0, "by_tick": 300,
+      "note": "The first deploy's step completes at tick 281, once its initial setting has committed." },
+    { "assert": "event_fired", "event": "fallback_engaged", "seat": 0, "by_tick": 1000,
+      "note": "The failed step's `on_fail: SKIP` took it: the route went on to the five-second hold, which completed at tick 961, and the route ran out into the fallback on the same tick. A failure `on_fail` did not take would have left no route to finish." },
+    { "assert": "event_fired", "event": "segment_ended", "by_tick": 1200,
+      "note": "The segment ends on the tick, not near it." },
+    { "assert": "hash_chain_equals",
+      "golden": "tests/golden/scenarios/unaffordable-deploy/expected.hashes.txt",
+      "note": "Byte-identical on Windows, Linux and macOS. Re-blessed with `cargo xtask golden --bless`, and never to turn a red build green." }
+  ]
+}

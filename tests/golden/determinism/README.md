@@ -97,6 +97,21 @@ first settle, where each seat's draw now stays at its starting force's 4 kW
 instead of stepping to 6. Nothing is added to the encoding; the chain moved
 because a column's value did.
 
+## What moved it (S1's `fixs`)
+
+**A deploy is charged when it starts** (register X-12; decisions-log items
+124 (5) (f) and 126 (2) (f); spec section 7: "`$` leaves the treasury the
+moment an order commits: deploy starts"). The harness playbook's route deploys
+a beacon, so every seat's treasury now drops by `structures.beacon.cost_dollars`
+($ 60) on the decision tick its deploy step starts, and an aborted deploy is
+refunded in full. The treasury is hashed seat state, so **the chain keeps ticks
+0 to 30 and diverges at tick 31**, the harness deploy's first decision. Nothing
+is added to the encoding: the charge is recorded by the interpreter's existing
+`Deploying` stage, and the chain moved because a column's value did. The same
+lane made the final audit name a round-limit winner at the match's final tick;
+the 1 200-tick run never reaches the default six rounds, so that does not
+reach this chain.
+
 ## What a diff means
 
 **The sim's behaviour changed.** That is all it can mean: the chain is a pure

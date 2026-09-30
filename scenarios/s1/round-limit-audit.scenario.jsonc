@@ -1,0 +1,75 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// S1's `fixs` lane: a match played to its round limit, whose winner the final
+// audit names (register X-08; spec section 3; decisions-log items 4 and 16).
+//
+// The scenario runner plays the lobby-less default of six rounds
+// (`DEFAULT_ROUND_LIMIT`, register D-20; the format has no round-limit key),
+// so this file has six segments, and the sixth segment's last tick is the
+// match's final tick: the Ledger settles, the final audit reads every seat's
+// net worth after that settlement, and the round limit ends the match in the
+// same tick. Deciding it in the tick is what puts the winner in the chain --
+// the match state's winner byte was always hashed, and it now carries the
+// audit's answer at tick 3600 -- and what puts the audit's lines on the bus
+// with a tick a scenario can assert on.
+//
+//   seat 0  seals scenarios/s1/round-limit-audit.playbook.jsonc every round:
+//           it deploys a beacon beside its core (charged $ 60 when the deploy
+//           starts) and recycles it on site for half its value, so it gives
+//           away $ 30 a round and books a beacon lost each time;
+//   seat 1  seals nothing, so the gateway files the safe playbook for it.
+//
+// At the final audit seat 0 holds $ 896 with six beacons lost and seat 1
+// holds $ 986 with none, so seat 1 wins on the first term. The settlement's
+// catch-up dial pays seat 0 the last-place bonus every round and seat 1 the
+// leader's malus, which narrows the gap and does not close it.
+//
+// What a scenario cannot assert, said here so nobody reads it into the file:
+// `final_audit` and `match_ended` are match-wide lines, which the runner
+// records with no seat, and `event_fired` has no value predicate (register
+// M-05, with S1-41), so the winner itself is pinned by the chain -- tick
+// 3600's hash covers the winner byte -- and by crates/sim/tests/audit.rs,
+// which asserts the audit's winner, its tie-break order and its shared win.
+{
+  "format": "pharmakos.scenario.v1",
+  "name": "round-limit-audit",
+  "summary": "Six rounds to the round limit: seat 0 deploys and recycles a beacon every round and seat 1 holds on its safe playbook, so at the final tick the final audit scores seat 1 above seat 0 and names it the winner, which the chain carries in the match state's winner byte.",
+
+  "map": {
+    "seed": "0x00000000ca5caded",
+    "generator": "skeleton"
+  },
+
+  "rules": "rules/rules.v1.json",
+
+  "seats": [
+    { "seat": 0, "kind": "playbook", "playbook": "scenarios/s1/round-limit-audit.playbook.jsonc" },
+    { "seat": 1, "kind": "safe" }
+  ],
+
+  "segments": [
+    { "index": 0, "length_ms": 30000, "note": "Round 1: 600 ticks, long enough to deploy and recycle." },
+    { "index": 1, "length_ms": 30000, "note": "Round 2." },
+    { "index": 2, "length_ms": 30000, "note": "Round 3." },
+    { "index": 3, "length_ms": 30000, "note": "Round 4." },
+    { "index": 4, "length_ms": 30000, "note": "Round 5." },
+    { "index": 5, "length_ms": 30000, "note": "Round 6, the last: its final tick, 3600, is the match's." }
+  ],
+
+  "assertions": [
+    { "assert": "event_fired", "event": "beacon_placed", "seat": 0, "by_tick": 300,
+      "note": "Round 1's deploy lands at tick 241, twelve seconds after the first decision." },
+    { "assert": "event_fired", "event": "beacon_recycled", "seat": 0, "by_tick": 550,
+      "note": "And it is recycled on site, for $ 30, half its value (item 18)." },
+    { "assert": "event_fired", "event": "settled", "by_tick": 600,
+      "note": "Round 1's recap settles on the tick its Push ends." },
+    { "assert": "event_fired", "event": "final_audit", "by_tick": 3600,
+      "note": "The final audit's lines, one per seat, at the final tick and not before: seat 0 at $ 896, seat 1 at $ 986." },
+    { "assert": "event_fired", "event": "match_ended", "by_tick": 3600,
+      "note": "The round limit ends the match at its final tick, after the audit; the sim's line names seat 1, which the runner does not record for a match-wide line." },
+    { "assert": "hash_chain_equals",
+      "golden": "tests/golden/scenarios/round-limit-audit/expected.hashes.txt",
+      "note": "All 3 600 ticks of the six rounds; the last line covers the audit's winner. Re-blessed with `cargo xtask golden --bless`, and never to turn a red build green." }
+  ]
+}

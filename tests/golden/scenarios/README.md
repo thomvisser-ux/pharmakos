@@ -9,8 +9,15 @@ SPDX-License-Identifier: GPL-3.0-or-later
 T18b added `against-easy` and T20 the demo scenario, `against-easy-three-rounds`:
 three rounds against Easy, whose 6 000-line chain pins every tick of all three
 (its scenario file's header says what it depends on, including `crates/operator`
-and `library/`). Every chain here is also compared across Windows, Linux and
-macOS by the `cross-OS determinism guard` job.
+and `library/`). S1's `fixs` lane added the first two of `scenarios/s1/`:
+`round-limit-audit`, six rounds to the round limit whose final tick carries the
+final audit's winner in the match state's winner byte, and
+`unaffordable-deploy`, whose fourth deploy fails with `unaffordable` (failure
+id 12) because the first three spent the treasury; and it moved every chain
+that places a beacon, because a deploy is now charged its `$` when it starts
+(register X-12; `determinism/README.md` says where each first diverged). Every
+chain here is also compared across Windows, Linux and macOS by the
+`cross-OS determinism guard` job.
 
 One directory per scenario, named after its `name` key:
 
