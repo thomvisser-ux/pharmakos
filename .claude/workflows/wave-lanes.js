@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Pharmakos contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// One wave of the walking skeleton as a Claude Code workflow: every lane is built by one
+// One wave of a stage's plan as a Claude Code workflow: every lane is built by one
 // agent in its own worktree, reviewed by two adversarial agents with different lenses, and
 // fixed by a fourth, as a pipeline (lane B's review does not wait for lane A's build).
 //
@@ -11,6 +11,9 @@
 //
 //   {
 //     wave: 'wave3',                          // label only
+//     plan: 'docs/design/s1-plan.md',         // default shown: the stage's plan, whose section 3
+//                                             // holds one section per task
+//     stage: 'S1',                            // default shown: the stage's name in the prompts
 //     scratch: 'C:/.../scratchpad',           // REQUIRED: where PR bodies and CI logs land
 //     repo: 'C:/Users/PC/pharmakos',          // default shown
 //     worktree_root: 'C:/Users/PC',           // default shown; worktrees are <root>/pharmakos-<id>
@@ -20,11 +23,18 @@
 //                                             // it unchanged on a resume, even after that PR has
 //                                             // merged, or every finished agent re-runs
 //     lanes: [{
-//       id: 't7',                             // short id: worktree, target dir, PR-body file
-//       task: 'T7',                           // the `### T7 —` section of skeleton-plan.md §3
-//       branch: 'feat/sim-hpa-estimator',
+//       id: 'fixs',                           // short id: worktree, target dir, PR-body file
+//       task: 'fixs',                         // the plan's task id: its section 3 heading carries
+//                                             // it in backticks ("### `fixs` —"; two tasks may
+//                                             // share one: "### `tgtv` → `proj` —")
+//       branch: 'fix/sim-demo-findings',
 //       owns: 'crates/sim (all of it), tests/golden/pathing, plus Cargo.lock',
-//       items: '57, 58, 59, 60, 61, 62, 69',  // decisions-log §2.7 items to read
+//       items: '124, 126, 127, 128',          // decisions-log §2.7 items to read: the task's
+//                                             // Implements line, plus the plan's own item
+//       bless_determinism: true,              // optional: the plan says this task moves the
+//                                             // determinism chain (its re-bless ledger)
+//       new_crate: 'crates/bench',            // optional: the one new workspace member the
+//                                             // plan's task section adds
 //       extras: '...',                        // wave-specific emphasis for the builder (may be '')
 //       lens_a: '...',                        // extra checks for lens A (may be '')
 //       lens_b: '...',                        // extra checks for lens B (may be '')
@@ -43,7 +53,7 @@
 
 export const meta = {
   name: 'wave-lanes',
-  description: 'One wave of the walking skeleton: each lane built in its own worktree, reviewed by two adversarial lenses, fixed, and left as an open pull request for the main session to merge in order',
+  description: 'One wave of a stage plan: each lane built in its own worktree, reviewed by two adversarial lenses, fixed, and left as an open pull request for the main session to merge in order',
   phases: [{ title: 'Build' }, { title: 'Review' }, { title: 'Fix' }],
 }
 
@@ -52,6 +62,8 @@ const WT_ROOT = (args && args.worktree_root) || 'C:/Users/PC'
 const BUILD_ROOT = (args && args.build_root) || 'D:/build'
 const SCRATCH = args && args.scratch
 const WAVE = (args && args.wave) || 'wave'
+const PLAN = (args && args.plan) || 'docs/design/s1-plan.md'
+const STAGE = (args && args.stage) || 'S1'
 const LANES = (args && args.lanes) || []
 // Design docs ahead of main (decisions-log item 115): a run launches once its docs PR and lane
 // briefs pass review, while that docs PR is still in CI. docs_ref names its branch, and every
@@ -92,8 +104,8 @@ ${DOCS_REF ? `- The design docs for this run are ahead of main: the main session
 - CI etiquette: "cargo xtask ci --quick" is the inner loop. Run the FULL suite by writing it to a file and reading only the summary, with the exit code checked separately, because a pipe hides it:
     cargo xtask ci > ${ciLog(lane, who)} 2>&1; echo "exit=$?"; grep -A 20 '== summary' ${ciLog(lane, who)}
   On a red step, grep that step's section of the log; do not paste the whole log into your context.
-- You own exactly these crates/paths: ${lane.owns}. Do not edit any other crate; another agent owns it right now (AGENTS.md section 6). A dependency line in your own crate's Cargo.toml comes only from the approved list (AGENTS.md section 3 rule 5) and only via an existing [workspace.dependencies] entry (uncommenting one in the root Cargo.toml is allowed; adding a new crate to the workspace list is not). Cargo.lock changes are expected and fine.
-- Toolchain present: rustc/cargo 1.98.1 (MSVC), protoc 36, buf 1.73.0, protoc-gen-prost 0.5.0, cargo-deny, reuse, gh (signed in). "cargo xtask ci" is the single check suite; "cargo xtask golden --bless" accepts fresh outputs under tests/golden for the areas the golden step compares; "cargo xtask determinism --bless" re-baselines the determinism chain and is ONLY for the sim lane, with the movement explained in the PR body.
+- You own exactly these crates/paths: ${lane.owns}. Do not edit any other crate; another agent owns it right now (AGENTS.md section 6). A dependency line in your own crate's Cargo.toml comes only from the approved list (AGENTS.md section 3 rule 5) and only via an existing [workspace.dependencies] entry (uncommenting one in the root Cargo.toml is allowed; adding a new crate to the workspace list is not${lane.new_crate ? `, except ${lane.new_crate}, which this lane's plan section adds: its members line, its Cargo.toml and the lists its section names` : ''}). Cargo.lock changes are expected and fine.
+- Toolchain present: rustc/cargo 1.98.1 (MSVC), protoc 36, buf 1.73.0, protoc-gen-prost 0.5.0, cargo-deny, reuse, gh (signed in). "cargo xtask ci" is the single check suite; "cargo xtask golden --bless" accepts fresh outputs under tests/golden for the areas the golden step compares; "cargo xtask determinism --bless" re-baselines the determinism chain and is only for a lane whose plan section says the determinism chain moves (${lane.bless_determinism ? 'this lane is one' : 'this lane is NOT one: never run it'}), with the movement explained in the PR body.
 - Goldens: read tests/golden/README.md first. A producing test writes actual.<ext> under $CARGO_TARGET_DIR/golden/<area>/... and the golden step compares it with tests/golden/<area>/...; LF endings, trailing newline, no carriage return. Every area's README.md says what a diff means; keep it accurate. A golden that moves is a behaviour change: say which in the PR body, never re-bless to make a red test green without the reason.
 - Determinism rules are not advisory (AGENTS.md section 4): no floats outside walled crates, no as-casts outside the sim's audited math module, no HashMap/HashSet, no wall clock, ordered iteration, integer newtypes, overflow checks on, clippy pedantic plus the deny set with -D warnings; never add #[allow] on a determinism lint. Sim state added goes into the state hash, the snapshot round-trip and the goldens in the same PR - four places for a voxel write, which must mark its chunk. Every guessed value is a "// PLACEHOLDER: <what, who decides, when>" comment listed in the PR body. Tuning values come from the rules table (rules/rules.v1.json via pharmakos_sim::rules::RulesTable; RulesTable::message() reaches the whole decoded table), never from constants; a tuning value with no row yet is a named constant carrying a PLACEHOLDER (AGENTS.md section 12).
 - Commits: conventional-commit subject with your crate as scope, DCO sign-off via "git commit -s", and the line "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" ABOVE the Signed-off-by line. Write each message to a file and commit with -F. Several commits are fine. Never amend or rewrite a pushed commit; never merge anything.
@@ -104,10 +116,10 @@ ${DOCS_REF ? `- The design docs for this run are ahead of main: the main session
 
 function brief(lane) {
   return `
-WHAT TO BUILD - task ${lane.task} of the walking skeleton (${WAVE}).
+WHAT TO BUILD - task ${lane.task} of ${STAGE} (${WAVE}).
 The brief is the plan itself, not a restatement of it. Read, in this order, before editing:
-1. docs/design/skeleton-plan.md section 3, the "### ${lane.task} " section in full: its Builds, Implements, Needs, Acceptance, Contract PR and PLACEHOLDERs lines are the deliverables and the tests, line by line; then section 2 (what the spikes fixed) and every section 6/7 decision that section names, whose answers are in the decisions log.
-2. docs/design/decisions-log.md section 2.7 items ${lane.items}, and the last entries of the file (the wave's opening entry and the decisions taken for it). The decisions log outranks the spec, which outranks the co-design doc (docs/design/README.md).
+1. ${PLAN} section 3, the task section whose "### " heading carries \`${lane.task}\` in backticks, in full: its lines (Builds, Implements, Needs, Acceptance, Contract PR, PLACEHOLDERs, and whatever else it names: Owns, named places, the order it merges in) are the deliverables and the tests, line by line; then that plan's section 2 (what the decisions log settled for the stage) and every section 6/7 decision the task section names, whose answers are in the decisions log. Where the task section and another part of the plan disagree, the task section and the decisions log win; say so in the PR.
+2. docs/design/decisions-log.md section 2.7 items ${lane.items}, and the register rows the task's Implements line names, in docs/placeholders.md; then the last entries of the log (the wave's opening entry and the decisions taken for it). The decisions log outranks the spec, which outranks the co-design doc (docs/design/README.md).
 3. The spec sections the plan section cites, in docs/spec/pharmakos-spec-v0.6.html (search the HTML for the section title).
 4. Every source file of the crate you own, in full, and its tests; the goldens' READMEs under tests/golden; rules/rules.v1.json and proto/gp/v1/rules.proto for the rows you read; the spike modules the plan section names, as references.
 ${lane.extras ? '\nWAVE-SPECIFIC EMPHASIS:\n' + lane.extras + '\n' : ''}
@@ -128,7 +140,7 @@ function lensA(lane) {
 }
 
 function lensB(lane) {
-  return `LENS B: the plan's acceptance lines and the decisions. Adversarially compare the branch, line by line, with skeleton-plan.md section 3's "### ${lane.task} " section (Builds, Acceptance, PLACEHOLDERs) and decisions-log items ${lane.items}: every deliverable present, every acceptance test present and testing what its name claims (read the test bodies, not the names), every number read from the rules table rather than a constant (grep numeric literals in the crate's src and challenge each), every guessed value carrying a PLACEHOLDER that is also in the PR body, every README under tests/golden this lane touched accurate, module docs describing what now exists, no other crate edited (git diff main...HEAD --stat), DCO and co-author trailers on every commit, SPDX headers on new files, doc comments on public items, and the PR body's claims true. Report each gap with file and line.${lane.lens_b ? '\nALSO FOR THIS LANE: ' + lane.lens_b : ''}`
+  return `LENS B: the plan's acceptance lines and the decisions. Adversarially compare the branch, line by line, with ${PLAN} section 3's task section whose heading carries \`${lane.task}\` in backticks (Builds, Acceptance, PLACEHOLDERs, Owns and named places) and decisions-log items ${lane.items}: every deliverable present, every acceptance test present and testing what its name claims (read the test bodies, not the names), every number read from the rules table rather than a constant (grep numeric literals in the crate's src and challenge each), every guessed value carrying a PLACEHOLDER that is also in the PR body, every README under tests/golden this lane touched accurate, module docs describing what now exists, no other crate edited (git diff main...HEAD --stat), DCO and co-author trailers on every commit, SPDX headers on new files, doc comments on public items, and the PR body's claims true. Report each gap with file and line.${lane.lens_b ? '\nALSO FOR THIS LANE: ' + lane.lens_b : ''}`
 }
 
 const BUILD_SCHEMA = {
@@ -175,7 +187,7 @@ function reviewPrompt(lane, lens, who, build) {
 You are REVIEWING pull request #${build.pr} (branch ${lane.branch}) in the worktree ${wt(lane)}, which another agent created and committed. Do NOT create, edit or commit anything in it; you only read and run checks, and you may write scratch files under ${laneScratch(lane, who)}/.
 The diff: git -C ${wt(lane)} diff main...HEAD
 The builder's report: ${JSON.stringify(build)}
-The brief the builder worked from is the plan: read skeleton-plan.md section 3's "### ${lane.task} " section and decisions-log items ${lane.items} before you start.
+The brief the builder worked from is the plan: read ${PLAN} section 3's task section whose heading carries \`${lane.task}\` in backticks, and decisions-log items ${lane.items}, before you start.
 The three-OS matrix is already running on the PR: read its state with "gh pr checks ${build.pr}" (and "gh run view <run-id> --log-failed" if a leg is red) instead of running the full suite yourself; run the targeted tests you need with "cargo test -p <crate> <name>" in the lane's target directory. Everything the builder claims about CI is checked that way, not by repeating it.
 ` + lens + `
 Report nothing you cannot evidence with a file and line or a command's output. Return findings (each with severity, file, line if known, the claim, the evidence, the fix) and a one-paragraph verdict. If you find nothing, say so with what you checked.`
