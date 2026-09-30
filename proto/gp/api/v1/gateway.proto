@@ -415,14 +415,11 @@ message GatewayError {
     // client whether to fix the request, fix the token or try again — and the
     // set is closed, so a client has nothing else to read.
     //
-    // PLACEHOLDER: the six are the schema's proposal, not a ratified
-    // decision. OWNER ratifies or cuts them with an entry in
-    // docs/design/decisions-log.md section 2.7, at the latest when T13 fills
-    // the gateway payloads and becomes the first code that raises one — that
-    // is the first point at which the choice is testable rather than
-    // theoretical. Cutting one afterwards is a contract change and its number
-    // stays reserved either way; nothing in the schema depends on the six, so
-    // the cost of holding the question open to T13 is a comment.
+    // RATIFIED, all six, by the owner (decisions-log item 128, which rules
+    // S1's plan's decision 9: the register's X-14). They were the schema's
+    // proposal until then; T13 made them testable, and five of them fire and
+    // are tested (item 103 (7)). Cutting one now is a contract change, and
+    // its number stays reserved either way.
 
     // Missing, malformed, expired or revoked token, or a failed Host/Origin
     // check. Per-seat 256-bit tokens are tied to the match and the seat and
@@ -564,10 +561,11 @@ message GetBriefingResponse {
   // structured JSON plus prose).
   string prose = 4;
 
-  // PLACEHOLDER STUB - the structured knowledge payload, truncated in the
-  // fixed salience order the detail budget sets. Filled by T13 (the gateway's
-  // method slice) against the seat's frozen snapshot; 5-15 are held so its
-  // first fields stay in the one-byte tag range.
+  // PLACEHOLDER: the structured knowledge payload — owner, S3 (decisions-log
+  // item 128, S1's plan's decision 9). Truncated in the fixed salience order
+  // the detail budget sets, against the seat's frozen snapshot; 5-15 are held
+  // so its first fields stay in the one-byte tag range. T13 filled the prose
+  // above and left this half for the stage that names its fields.
   reserved 5 to 15;
 }
 
@@ -586,8 +584,8 @@ message GetRecapRequest {
 message GetRecapResponse {
   string prose = 1;
 
-  // PLACEHOLDER STUB - the settlement lines of spec section 7. Filled by T13
-  // once T14's economy produces them.
+  // PLACEHOLDER: the settlement lines of spec section 7 — owner, S1, with
+  // the recap's settlement lines, now that T14's economy produces them.
   reserved 2 to 15;
 }
 
@@ -626,10 +624,12 @@ message BeaconSummary {
   string owner = 3;
 
   // OWN beacons only: true for the seat's core, the beacon the map pre-places
-  // for it. PLACEHOLDER: read today as "the seat's lowest-numbered beacon",
-  // which is true of every map the generator makes because it places the core
-  // first, and the same rule the verifier's scope uses; it becomes a column
-  // the day a beacon carries a kind (OWNER, S1).
+  // for it.
+  //
+  // PLACEHOLDER: the core read as the lowest-numbered beacon — owner, S1, a
+  // column the day a beacon carries a kind. True of every map the generator
+  // makes, because it places the core first, and the same rule the verifier's
+  // scope uses.
   bool core = 4;
 
   // OWN beacons only: the Quartermaster priority, which orders brownouts
@@ -640,9 +640,9 @@ message BeaconSummary {
   // OWN beacons only: false while the beacon is browned out (dormant).
   bool powered = 6;
 
-  // PLACEHOLDER STUB - mandate, HP, units by role, tags, and the sighting age
-  // for a beacon that is not the seat's own. What a seat may see of an ENEMY
-  // beacon beyond its owner is S2's, with combat.
+  // PLACEHOLDER: an enemy beacon's detail — owner, S2, with combat: its
+  // mandate, HP, units by role, tags and sighting age. What a seat may see of
+  // an ENEMY beacon beyond its owner is a rule the spec does not state yet.
   reserved 7 to 15;
 }
 
@@ -655,7 +655,8 @@ message GetBeaconResponse {
   BeaconSummary summary = 1;
   string prose = 2;
 
-  // PLACEHOLDER STUB - the per-beacon detail. Filled by T13.
+  // PLACEHOLDER: the per-beacon detail — owner, S3 (decisions-log item 128,
+  // S1's plan's decision 9).
   reserved 3 to 15;
 }
 
@@ -688,9 +689,9 @@ message GetMapSummaryResponse {
   // the scenario file a reader will compare it against.
   string match_seed = 4;
 
-  // PLACEHOLDER STUB - vents, seams and terrain summary, fog-filtered. Filled
-  // over T5's generated map at S1, with the economy that gives a vent and a
-  // seam something to report.
+  // PLACEHOLDER: a fog-filtered vent, seam and terrain summary — owner, S1,
+  // over T5's generated map, with the economy that gives a vent and a seam
+  // something to report.
   reserved 5 to 15;
 }
 
@@ -704,9 +705,9 @@ message GetEconomyForecastRequest {
   repeated WhatIf what_ifs = 2;
 }
 
-// PLACEHOLDER STUB - the what-if vocabulary (place a beacon here, queue this
-// structure, field these units). Filled by T13 with T14's economy; 1-15 are
-// held.
+// PLACEHOLDER: the what-if vocabulary — owner, S3 (decisions-log item 128,
+// S1's plan's decision 12): place a beacon here, queue this structure, field
+// these units. 1-15 are held.
 message WhatIf {
   reserved 1 to 15;
 }
@@ -731,16 +732,22 @@ message GetEconomyForecastResponse {
   // The seat's power draw, whole kW.
   int32 draw_kw_now = 3;
 
-  // Supply minus draw, whole kW. Negative means the grid is short and the
-  // brownout order is running — the KwHeadroom predicate's own number.
+  // Supply minus draw, whole kW — the KwHeadroom predicate's own number.
+  // Never negative after the first settle: every settle runs the brownout
+  // order, which sheds until supply covers draw, so a short grid shows here as
+  // dormant beacons (`BeaconSummary.powered`), not as a negative number. Only
+  // map generation's tick-0 columns, before any settle, can read below zero
+  // (decisions-log item 113 (4)).
   int32 headroom_kw_now = 4;
 
-  // PLACEHOLDER STUB - projected income, the projection, and one answer per
-  // what-if. S1, with the economy's review; filled additively.
+  // PLACEHOLDER: the next BMI and the committed spend — owner, S1, filled
+  // additively with the economy's surfaces; the per-what-if answers are S3's
+  // (decisions-log item 128, S1's plan's decision 12).
   //
-  // PLACEHOLDER: this method answers the LIVE world during a Push, although
-  // its name says "forecast": spec section 3 allows a seat its own score live
-  // and does not name $ or kW. OWNER, at S1.
+  // This method answers the LIVE world during a Push, although its name says
+  // "forecast". Ruled for S1 by the owner (item 128, decision 12, the
+  // register's S1-12): a seat's own economy is its own knowledge, so the live
+  // answer stays.
   reserved 5 to 15;
 }
 
@@ -832,7 +839,7 @@ message InstantiateTemplateRequest {
   bool suggested = 3;
 }
 
-// PLACEHOLDER STUB - a typed parameter catalogue is S6's, with the editor and
+// PLACEHOLDER: a typed parameter catalogue — owner, S6, with the editor and
 // the template library. Name and text value until then: the template declares
 // what it accepts (gp.v1.Meta.parameters) and the verifier rejects what does
 // not fit, so the wire shape does not have to carry the type.
@@ -857,8 +864,10 @@ message InstantiateTemplateResponse {
 
   // Why the operator suggested what it did: one sentence, English. Empty when
   // `suggested` was not asked for or there is no suggestion for this seat and
-  // template. PLACEHOLDER: the wording is the operator's, from the one string
-  // table (OWNER, S6).
+  // template.
+  //
+  // PLACEHOLDER: the wording — owner, S6, the operator's, from the one string
+  // table.
   string why = 3;
 }
 
@@ -872,8 +881,9 @@ message FilledParameter {
 
   // The JSON that was applied, as compact text. A duration is game
   // milliseconds: the wire carries no unit display, and the editor may not
-  // convert one itself (AGENTS.md section 3 rule 4). PLACEHOLDER: unit display
-  // is OWNER's, at S6, with the typed catalogue.
+  // convert one itself (AGENTS.md section 3 rule 4).
+  //
+  // PLACEHOLDER: unit display — owner, S6, with the typed catalogue.
   string value = 3;
 
   // True when `value` is the operator's suggestion rather than an explicit
@@ -1147,10 +1157,11 @@ message Event {
   // Game milliseconds since the start of the segment.
   int32 at_ms = 1;
 
-  // PLACEHOLDER STUB - the event-kind catalogue is T10's event bus and grows
-  // with every stage, so it is a string here rather than an enum that would
-  // have to be re-cut at S1, S2 and S4. It becomes an enum when the catalogue
-  // stops moving; until then the golden feed files are what pin it.
+  // PLACEHOLDER: `kind` as a string — owner, after S4, the last stage that
+  // adds kinds (the register's M-09), when the catalogue stops moving. The
+  // catalogue is T10's event bus and grows with every stage, so it is a string
+  // here rather than an enum that would have to be re-cut at S1, S2 and S4;
+  // until it is an enum the golden feed files are what pin it.
   string kind = 2;
 
   // English, from the one string table. Engine chatter is a line of this kind
@@ -1160,7 +1171,8 @@ message Event {
   // Where it happened, when it happened somewhere.
   gp.v1.Voxel at = 4;
 
-  // PLACEHOLDER STUB - the per-kind structured payload. Filled by T13.
+  // PLACEHOLDER: the per-kind structured payload — owner, after S4, with
+  // `kind`'s enum above (decisions-log item 128, S1's plan's decision 9).
   reserved 5 to 15;
 }
 
@@ -1241,10 +1253,10 @@ message GetViewResponse {
   // arrives, as a new field of GetViewRequest that a client opts into, so that
   // the meaning of this field never changes under a client that did not ask.
   //
-  // PLACEHOLDER: a full entity list per view is 20-30 KB a poll at S2's 300
-  // units, which is the point at which the opt-in delta mode has to be
-  // decided rather than deferred — OWNER, S2. The other half of the same
-  // question, ViewEntity.at's whole-voxel positions, is OWNER, S7, with
+  // PLACEHOLDER: the opt-in delta mode for entities — owner, S2, when a full
+  // entity list per view is 20-30 KB a poll at S2's 300 units and has to be
+  // decided rather than deferred. The other half of the same question,
+  // ViewEntity.at's whole-voxel positions, is the owner's at S7, with
   // recording-grade positions.
   repeated ViewEntity entities = 3;
 
@@ -1333,18 +1345,18 @@ message ViewEntity {
   // Where it stands, in WHOLE voxels, floored on every axis. Finer-than-voxel
   // positions are a recording's concern and are held at 6 to 15 with the rest.
   //
-  // PLACEHOLDER: whole voxels are enough for a camera and are not enough for
-  // a recording that has to interpolate — OWNER, S7, with the recording
-  // format.
+  // PLACEHOLDER: whole-voxel positions — owner, S7, with the recording
+  // format. Whole voxels are enough for a camera and are not enough for a
+  // recording that has to interpolate.
   gp.v1.Voxel at = 5;
 
   // RESERVED — hit points, power state, heading, build progress, and
   // sub-voxel position. See the message comment.
   //
-  // PLACEHOLDER: what a seat may see of an ENEMY asset beyond where it is —
-  // hit points, power state, heading, build progress — is a rule the spec
-  // does not state, so these numbers are held rather than guessed at.
-  // OWNER, S2, with the stage that makes any of them matter.
+  // PLACEHOLDER: an enemy asset's detail beyond where it is — owner, S2,
+  // with the stage that makes any of it matter. What a seat may see of hit
+  // points, power state, heading and build progress is a rule the spec does
+  // not state, so these numbers are held rather than guessed at.
   reserved 6 to 15;
 
   enum Kind {

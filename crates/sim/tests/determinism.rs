@@ -761,10 +761,14 @@ fn the_rules_hash_is_pinned_to_the_committed_table() {
     // `the_rules_table_is_not_in_the_state_encoding` below is what makes that
     // a fact rather than a hope. It moved again within the same revision, from
     // 34c3f2152cb440e5, when item 95 added the two starting-force rows to
-    // `units` before that revision reached `main`.
+    // `units` before that revision reached `main`. It moved from
+    // b31d8d0789eb207c with revision 4 (S1's first contract pull request):
+    // `match.lull_ms` 300 000 and the new `match.first_lull_ms`,
+    // `structures.build_hp_per_second` and `economy.mining_carry_voxels`
+    // rows, none of which the tick reads, so the chain did not move with it.
     assert_eq!(
         hex(rules().rules_hash()),
-        "b31d8d0789eb207c",
+        "a75406a0f798a3a7",
         "the rules hash moved; say in the pull request which row changed and why"
     );
 }

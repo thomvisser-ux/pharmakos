@@ -6,8 +6,8 @@
       "qualifies": true,
       "depth": "full",
       "diagnostics": [],
-      "report_hash": "HjHsgcyHhSA=",
-      "rules_hash": "sx2NB4nrIHw=",
+      "report_hash": "GAFj20l4YBM=",
+      "rules_hash": "p1QGoPeYo6c=",
       "plan_fingerprint": "HsSv5nrPa8Y=",
       "verifier_version": "0.1.0-skeleton",
       "size_units": 4,
@@ -15,7 +15,7 @@
     },
     "_status": {
       "phase": "lull",
-      "phase_remaining_ms": 180000,
+      "phase_remaining_ms": 300000,
       "segment_length_ms": 180000,
       "round": 1
     }

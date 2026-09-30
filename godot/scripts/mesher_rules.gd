@@ -27,4 +27,4 @@
 
 extends RefCounted
 
-const RULES_JSON := '{"revision":1,"mesher":{"surfacesPerFrame":4,"bytesPerFrame":524288,"ageFrames":2,"lightMax":15,"lightAtten":1},"match":{"lullMs":180000},"map":{"sizeX":384,"sizeY":384,"sizeZ":64}}'
+const RULES_JSON := '{"revision":1,"mesher":{"surfacesPerFrame":4,"bytesPerFrame":524288,"ageFrames":2,"lightMax":15,"lightAtten":1},"match":{"lullMs":300000},"map":{"sizeX":384,"sizeY":384,"sizeZ":64}}'
