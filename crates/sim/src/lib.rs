@@ -72,6 +72,7 @@
 //! the per-tick chain that `cargo xtask ci`'s `determinism` step compares
 //! against `tests/golden/determinism/expected.hashes.txt`.
 
+pub mod audit;
 pub mod chunks;
 pub mod credit;
 pub mod economy;

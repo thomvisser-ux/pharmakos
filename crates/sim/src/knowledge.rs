@@ -27,12 +27,16 @@
 //! condition over a projected future (AGENTS.md §3 rule 2). Nothing in this
 //! module exposes a step.
 //!
-//! PLACEHOLDER: the sighting catalogue grows with the stages that produce it.
-//! T5 resolved the first half of it — beacons, structures and wrecks exist as
-//! tables and [`AssetId`] carries a kind tag for them — and what is still open
-//! is kill credit and the economy at T14 and radio at S4. Each addition is an
-//! ordinary extension of [`SeatKnowledge`]; none of it changes the shape a
-//! client compiles against.
+//! The catalogue grows with the stages that produce it. T5 resolved the first
+//! half of it: beacons, structures and wrecks exist as tables and [`AssetId`]
+//! carries a kind tag for them. T14 built the next: a seat's own economy
+//! ([`SeatEconomy`]: its treasury, supply and draw) and Survey-lite's
+//! sightings ([`Sighting`], one row per thing a seat has seen, with the tick it
+//! was seen at). What is still open is what a seat learns from kill credit,
+//! which is S2's with combat and the credit split, and what radio carries,
+//! which is S4's with the Radio Mast (register X-06, reworded by S1's `fixs`
+//! lane). Each addition is an ordinary extension of [`SeatKnowledge`]; none of
+//! it changes the shape a client compiles against.
 
 use crate::math::fixed::Fx;
 use crate::math::quantity::{Kw, Money, Ms, Tick};

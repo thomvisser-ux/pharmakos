@@ -46,9 +46,10 @@ use crate::world::World;
 /// `beacon.sphere_radius_voxels` for the first of those and nothing at all for
 /// the second. Nothing in T14's acceptance asserts the number — Survey-lite
 /// needs a scout to see *something*, not to see exactly this far — so the row
-/// is proposed by the stage that makes reach matter: **S2**, where Defend's
-/// engagement radius and Attack's freshness test both read it (owner, at S2, as
-/// `units.vision_radius_voxels`).
+/// is proposed by the stage that makes reach matter: **S2**, with scouting,
+/// where Defend's engagement radius and Attack's freshness test both read it
+/// (owner, at S2, as `units.vision_radius_voxels`). Every copy of this stage
+/// says S2 (decision 13 of S1's plan, ruled by item 128; register S1-34).
 ///
 /// Eight, a third of `beacon.sphere_radius_voxels`, so a scout adds reach by
 /// moving rather than by standing.

@@ -96,6 +96,7 @@ use crate::seams::MandateKind;
 use crate::tables::BeaconId;
 use pharmakos_proto::gp;
 
+pub use cond::resolve_beacon_in;
 pub use state::{Interpreter, PlanParts, PlanState, StepFailure, VisitState};
 
 /// The self-preservation reflex's threshold, in whole percent of the
@@ -489,6 +490,20 @@ impl Posture {
             Posture::Hold(_) => 1,
             Posture::Shadow(_) => 2,
             Posture::Patrol(_) => 3,
+        }
+    }
+
+    /// The posture a [`Posture::id`] names, as the editor and a feed line
+    /// spell it (`Hold`, `Shadow`, `Patrol`), or `None` for an id this build
+    /// does not define. What a reader of `fallback_engaged` is shown instead
+    /// of the raw code (the demo's F5).
+    #[must_use]
+    pub const fn name_of_id(id: u8) -> Option<&'static str> {
+        match id {
+            1 => Some("Hold"),
+            2 => Some("Shadow"),
+            3 => Some("Patrol"),
+            _ => None,
         }
     }
 }
@@ -1195,6 +1210,31 @@ fn compile_beacon_ref(
         }),
         None => Err(PlanError::MissingBlock("beacon.ref")),
     }
+}
+
+/// A `gp.v1.BeaconRef` as the selector the interpreter would run.
+///
+/// What [`Plan::compile`] makes of a beacon reference, for a caller that has a
+/// reference and no playbook: the gateway's `estimate_route` compiles a
+/// waypoint's `beacon_anchor` with this and resolves it with
+/// [`resolve_beacon_in`], so a plan-time estimate and the run agree on which
+/// beacon a selector names.
+///
+/// # Errors
+///
+/// As [`Plan::compile`] refuses the same reference: an unknown `b_NN`
+/// spelling, a construct that is not at this stage (`most_threatened`, an
+/// enemy or tag filter), or an unset one.
+pub fn beacon_spec_of(
+    reference: &gp::v1::BeaconRef,
+    rules: &RulesTable,
+) -> Result<BeaconSpec, PlanError> {
+    let names = Names {
+        labels: &[],
+        handlers: &[],
+        extent: rules.map_size_voxels(),
+    };
+    compile_beacon_ref(Some(reference), &names)
 }
 
 /// `b_NN` to a beacon id.

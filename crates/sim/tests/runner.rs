@@ -527,14 +527,20 @@ fn the_round_limit_ends_the_match_when_the_last_recap_closes() {
         assert!(runner.begin_push());
         assert_eq!(play(&mut runner, 20), 20);
         assert_eq!(runner.phase(), MatchPhase::Recap);
+        assert_eq!(
+            runner.outcome().is_some(),
+            round == 2,
+            "the round limit is decided at the last round's final tick, and only then"
+        );
         assert!(runner.end_recap());
     }
     assert_eq!(runner.phase(), MatchPhase::Ended);
     let outcome = runner.outcome().expect("the round limit ended it");
     assert_eq!(outcome.reason, MatchEndReason::RoundLimit);
     assert_eq!(
-        outcome.winner, None,
-        "the final audit that names a winner is the economy's (T14)"
+        outcome.winner,
+        pharmakos_sim::audit::final_audit(runner.world()).winner(),
+        "the final audit names the winner (register X-08)"
     );
     assert!(has(runner.events(), EventKind::MatchEnded));
 }

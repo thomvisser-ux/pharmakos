@@ -73,7 +73,10 @@
 //! pins. If no seat survives that tick the final audit at that tick decides, so
 //! the outcome carries [`MatchEndReason::NoSurvivor`] and no winner rather than
 //! a draw state. The match also ends at the host-set round limit, which is
-//! decided when the last round's recap closes.
+//! decided at the last round's final tick by the final audit ([`crate::audit`];
+//! spec section 3: "the final tick is the last tick of the last Push, before
+//! the recap"), so the recap that follows is already the match's last and
+//! closing it ends the match.
 
 use crate::encoding::Enc;
 use crate::events::{Emission, Event, EventKind};
@@ -87,9 +90,11 @@ use crate::world::World;
 /// The round limit a host gets when it names none (spec section 3: "default 6,
 /// about 75 min").
 ///
-/// PLACEHOLDER: the round limit is a lobby setting and has no rules-table row,
-/// because it is not tuning — the host picks it per match. The *default* is the
-/// spec's, and the owner ratifies it with the lobby at T22.
+/// The round limit is a lobby setting and has no rules-table row, because it
+/// is not tuning: the host picks it per match. The *default* is the spec's,
+/// and it was **ruled at the demo** (item 126 (2) (b), register D-20): six
+/// stands beside the lobby's own three, until S1-40's settings screen and
+/// Probation preset revisit both.
 pub const DEFAULT_ROUND_LIMIT: u32 = 6;
 
 /// The three phases of a round, in the order they run.
@@ -201,17 +206,20 @@ impl MatchEndReason {
 
 /// How a match ended.
 ///
-/// PLACEHOLDER: the winner of a [`MatchEndReason::RoundLimit`] or
-/// [`MatchEndReason::NoSurvivor`] end is decided by the **final audit** — value
-/// held after the final settlement plus enemy value destroyed, with item 4's
-/// tie-break order — and the audit is the economy's, which is T14's. Until then
-/// both carry `winner: None` and the runner records the reason and the tick
-/// honestly rather than inventing a standing (owner, at T14).
+/// The winner of a [`MatchEndReason::RoundLimit`] or
+/// [`MatchEndReason::NoSurvivor`] end is the **final audit's**
+/// ([`crate::audit`]): value held after the final settlement plus enemy value
+/// destroyed, with spec section 3's tie-break order down to a shared win
+/// (register X-08). A shared win is `winner: None`, since there is no draw
+/// state, and the tied seats are read again from the world by
+/// [`crate::audit::final_audit`] rather than stored, so this stays the one
+/// hashed byte it always was.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct MatchOutcome {
     /// Why it ended.
     pub reason: MatchEndReason,
-    /// Who won, when the rule that ended it names somebody.
+    /// Who won: the last seat standing, or the final audit's single winner.
+    /// `None` on a shared win.
     pub winner: Option<SeatId>,
     /// The tick it ended on. For the one-tick rule this is the tick the
     /// condition first held, not the segment's last tick.
@@ -431,14 +439,15 @@ impl MatchState {
     ///
     /// `false` when the match is over — either because the one-tick rule
     /// already decided it during the Push, or because this was the last round
-    /// the host set.
-    pub(crate) fn close_recap(&mut self, tick: Tick) -> bool {
+    /// the host set. `audited` is the final audit's winner, which the world
+    /// reads for a round-limit end (`crate::audit`); `None` is a shared win.
+    pub(crate) fn close_recap(&mut self, tick: Tick, audited: Option<SeatId>) -> bool {
         if self.outcome.is_some() {
             self.phase = MatchPhase::Ended;
             return false;
         }
         if self.round >= self.round_limit {
-            self.decide(MatchEndReason::RoundLimit, None, tick);
+            self.decide(MatchEndReason::RoundLimit, audited, tick);
             self.phase = MatchPhase::Ended;
             return false;
         }
@@ -893,12 +902,13 @@ impl Runner {
     ///
     /// `false` when the match is not in a recap.
     ///
-    /// PLACEHOLDER: the recap's **settlement** is not done here. Item 19: at
-    /// each recap the Ledger credits BMI plus the fixed award fund to the
-    /// treasury and shows it as a recap line, and during a Push the only income
-    /// is mining and salvage. All of that is the economy's, which is T14's; T10
-    /// opens the phase it happens in and says so rather than crediting a number
-    /// nobody has decided (owner, at T14).
+    /// The recap's **settlement** is not done here, and that is the design
+    /// rather than a gap: item 19's Ledger settles **inside the tick that opens
+    /// the recap** (`World::settle_ledger`), because a recap consumes no tick,
+    /// and a treasury credited here would move hashed state with no tick to
+    /// record it (register X-09, reworded by S1's `fixs` lane). What this does
+    /// at the last round's recap is the round limit's end, whose winner the
+    /// final audit names ([`crate::audit`]).
     pub fn end_recap(&mut self) -> bool {
         if self.phase() != MatchPhase::Recap {
             return false;
@@ -917,13 +927,13 @@ impl Runner {
             // froze; re-freezing here would hand the Lull a world one recap
             // older or newer than the one the seats were shown.
         } else if !announced {
-            let reason = self
-                .outcome()
-                .map_or(MatchEndReason::RoundLimit, |outcome| outcome.reason);
-            self.world.emit(
-                tick,
-                Emission::of(EventKind::MatchEnded).value(i64::from(reason.id())),
-            );
+            let outcome = self.outcome();
+            let reason = outcome.map_or(MatchEndReason::RoundLimit, |outcome| outcome.reason);
+            let mut emission = Emission::of(EventKind::MatchEnded).value(i64::from(reason.id()));
+            if let Some(seat) = outcome.and_then(|outcome| outcome.winner) {
+                emission = emission.seat(seat);
+            }
+            self.world.emit(tick, emission);
         }
         true
     }

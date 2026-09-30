@@ -172,8 +172,10 @@ pub struct BeaconMandate {
 
 /// One instruction a seat's operator hands back to the sim.
 ///
-/// Deliberately thin: the vocabulary is T11's, and filling it here would be
-/// guessing at the interpreter's shape (AGENTS.md §12, "don't invent rules").
+/// Deliberately thin, and not read: T11 built the playbook interpreter without
+/// intents ([`crate::interpreter`]'s decision writes its own seat's commander,
+/// beacons and state directly, in seat order), so this is the reserved shape of
+/// the seam and nothing more.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Intent {
     /// Which seat issued it. Ties break to the lowest seat id.
@@ -182,9 +184,10 @@ pub struct Intent {
     pub unit: UnitId,
     /// The tick it was issued on.
     pub issued: Tick,
-    /// PLACEHOLDER: the intent vocabulary is T11's (the playbook interpreter at
-    /// the v1 vocabulary). Until then an intent carries only its addressing, so
-    /// that the trait below can be written against a stable shape.
+    /// Not read. T11 needed no intent vocabulary (see the type's doc), so an
+    /// intent carries only its addressing; a vocabulary is the script arm's to
+    /// define when it opens (AGENTS.md section 2; register X-10, reworded by
+    /// S1's `fixs` lane).
     pub kind: u16,
 }
 
@@ -274,12 +277,14 @@ pub struct LocalView<'a> {
 ///   implementation of this trait is Rust, compiled in, and reads that data.
 /// * **No clock.** A budget is [`WorkCounter`] units, never wall time.
 ///
-/// PLACEHOLDER: the parameter list is the shape [`Operator`] already has,
-/// because a decision needs the same three things — a fog-limited view, the
-/// mandate in force, and somewhere to put intents. T11 settles the signature
-/// when the vocabulary it has to carry exists, and **T11 is also free to widen
-/// it**; nothing in this crate calls it yet, so widening it costs one
-/// implementation and no call site (owner, at T11).
+/// The parameter list is the shape [`Operator`] already has, because a
+/// decision needs the same three things: a fog-limited view, the mandate in
+/// force, and somewhere to put intents. **T11 did not use it**: the built-in
+/// interpreter is [`crate::interpreter`], which the decision phase calls
+/// directly, so nothing implements this trait and nothing calls it. It stays
+/// as the reserved seam spec section 15 keeps for later; reshaping or deleting
+/// it is the call of the stage that opens the script arm (AGENTS.md section 2;
+/// register X-11, reworded by S1's `fixs` lane).
 pub trait PlaybookInterpreter {
     /// Run one decision tick for one seat.
     ///
