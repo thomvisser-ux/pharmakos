@@ -1,0 +1,26 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// S1's `fixs` lane: a seat that throws value away every round, so the final
+// audit has a clear answer. Deploy a beacon beside the core (charged its $ 60
+// when the deploy starts, register X-12), then walk back on to it and recycle
+// it on site, which refunds half its remaining value (item 18) and books it as
+// a beacon lost. Sealed again every round by round-limit-audit.scenario.jsonc.
+{
+  "schema_version": {"major": 1, "minor": 0},
+  "meta": {"title": "Deploy and recycle", "author_kind": "HUMAN"},
+  "kind": "PLAYBOOK",
+  "declarative": {
+    "route": [
+      {"label": "deploy", "place_beacon": {"at": {"voxel": {"x": 360, "y": 22, "z": 36}},
+        "initial": {"mandate": {"roe": "RETURN_FIRE", "survey": {}}}},
+        "timeout_ms": 30000, "on_fail": {"action": "ABORT_ROUTE"}},
+      {"label": "recycle", "interface": {"beacon": {"nearest": {"filter": {"mandate": "SURVEY"}}},
+        "rows": [{"recycle": {}}]},
+        "timeout_ms": 30000, "on_fail": {"action": "ABORT_ROUTE"}}
+    ],
+    "handlers": []
+  },
+  "on_death": {"on_respawn": "CONTINUE"},
+  "fallback": {"hold": {"at": {"voxel": {"x": 358, "y": 22, "z": 36}}}}
+}

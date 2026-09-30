@@ -1,0 +1,34 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// S1's `fixs` lane: four deploys beside the core, one after another, on a
+// treasury that pays for three. Each deploy is charged when it starts (spec
+// section 7, register X-12), so the fourth finds the treasury short and fails
+// its step with `unaffordable` (failure id 12, decision 7 of S1's plan), and
+// its `on_fail: SKIP` moves the route on to the hold. See
+// unaffordable-deploy.scenario.jsonc for what is asserted.
+{
+  "schema_version": {"major": 1, "minor": 0},
+  "meta": {"title": "Four deploys on a three-deploy treasury", "author_kind": "HUMAN"},
+  "kind": "PLAYBOOK",
+  "declarative": {
+    "route": [
+      {"label": "first", "place_beacon": {"at": {"voxel": {"x": 358, "y": 22, "z": 36}},
+        "initial": {"mandate": {"roe": "RETURN_FIRE", "survey": {}}}},
+        "timeout_ms": 30000, "on_fail": {"action": "SKIP"}},
+      {"label": "second", "place_beacon": {"at": {"voxel": {"x": 360, "y": 22, "z": 36}},
+        "initial": {"mandate": {"roe": "RETURN_FIRE", "survey": {}}}},
+        "timeout_ms": 30000, "on_fail": {"action": "SKIP"}},
+      {"label": "third", "place_beacon": {"at": {"voxel": {"x": 356, "y": 22, "z": 36}},
+        "initial": {"mandate": {"roe": "RETURN_FIRE", "survey": {}}}},
+        "timeout_ms": 30000, "on_fail": {"action": "SKIP"}},
+      {"label": "fourth", "place_beacon": {"at": {"voxel": {"x": 358, "y": 20, "z": 36}},
+        "initial": {"mandate": {"roe": "RETURN_FIRE", "survey": {}}}},
+        "timeout_ms": 30000, "on_fail": {"action": "SKIP"}},
+      {"label": "after", "hold": {"ms": 5000}}
+    ],
+    "handlers": []
+  },
+  "on_death": {"on_respawn": "CONTINUE"},
+  "fallback": {"hold": {"at": {"voxel": {"x": 358, "y": 22, "z": 36}}}}
+}
