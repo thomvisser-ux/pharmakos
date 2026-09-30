@@ -14,7 +14,7 @@
 #     30-second READ_TIMEOUT: in a Lull the seat connection has nothing to ask, so what
 #     keeps it alive is the keep-alive, and what keeps the admin connection alive is the
 #     host clock it reports four times a second. The stretch is spent in round 2's Lull,
-#     so round 1's 180-second Lull timer is left whole for the editing below;
+#     so round 1's Lull timer is left whole for the editing below;
 #   * THE EDITOR (T19, pull request 1), on the same seat connection:
 #       - Load REFUSES an out-of-vocabulary file (`fixtures/out_of_vocabulary.json`) with
 #         the verifier's code and JSON Pointer, opens nothing, and strips nothing; the
@@ -66,6 +66,14 @@
 #     rig, so the check is not vacuous. The window has the project's size while it runs
 #     (a headless one is 64 pixels square, all editor panel), and the notes box's text and
 #     the window's size are put back afterwards;
+#   * THE FIRST CLICK LANDS (F1, decisions-log item 126 (3); `_first_click_lands`), in round
+#     1's Lull at the project's window size: one click injected through
+#     Input.parse_input_event, as a mouse would send it, on each of Submit, a Fix button and
+#     Save, in three cases each - with the rows redrawn between the press and the release,
+#     with a map menu open, and after a scroll of the panel - reaches that button's handler
+#     exactly once (the editor's own counts of `button_down` and `pressed`). A press on the
+#     panel closes the menu; Save with no file opens Save as...; the Fix is applied and the
+#     submission is accepted;
 #   * Ready (`set_ready`) ends the Lull: the host is a two-seat match whose other seat the
 #     built-in operator plays and readies at every Lull's start (T18), so this seat's Ready
 #     completes every seat's, the host clock's answer says `all_ready`, and the admin
@@ -224,6 +232,9 @@ func _run() -> void:
 		_finish()
 		return
 	if not await _camera_keys():
+		_finish()
+		return
+	if not await _first_click_lands():
 		_finish()
 		return
 	var sealed: PackedByteArray = vista.bridge.editor_sealed_bytes()
@@ -658,6 +669,167 @@ func _hold_key(key: Key) -> void:
 	up.pressed = false
 	Input.parse_input_event(up)
 	await get_tree().process_frame
+
+
+## The buttons F1 names, and the three cases each is clicked in.
+const CLICKED := ["fix", "save", "submit"]
+const CASES := ["redraw", "menu", "scroll"]
+## How many wheel notches one scroll of the panel is.
+const NOTCHES := 3
+## Where the map menu is opened for the menu case: on the 3D view, clear of the panel.
+const MENU_AT := Vector2(300, 300)
+
+
+## **The first click lands** (F1, decisions-log item 126 (3); S1's plan, task `fixc`): one
+## injected click on Submit, a Fix button and Save reaches its handler exactly once, with
+## the rows redrawn between its press and its release, with a map menu open, and after a
+## scroll of the panel. Submit goes last, on the committed playbook, so the Lull's sealed
+## order is one QUICK and FULL accept. Returns false when a step failed, with the reason
+## recorded.
+func _first_click_lands() -> bool:
+	var window_size := get_window().size
+	get_window().size = Vector2i(ProjectSettings.get_setting("display/window/size/viewport_width"), ProjectSettings.get_setting("display/window/size/viewport_height"))
+	await get_tree().process_frame
+	var kept_path: String = editor.file_path
+	# Save with no file opens Save as... (F6: "Save with no file does nothing visible").
+	editor.file_path = ""
+	var ok := true
+	for name in CLICKED:
+		for case in CASES:
+			if not await _one_click(name, case):
+				ok = false
+				break
+		if not ok:
+			break
+	editor.file_path = kept_path
+	editor.close_menu()
+	get_window().size = window_size
+	await get_tree().process_frame
+	return ok and _failures.is_empty()
+
+
+## Opens what `name`'s button needs (a Fix needs the file with a Fix), sets up `case`, clicks
+## the button once, and checks its handler ran exactly once.
+func _one_click(name: String, case: String) -> bool:
+	var what := "%s, %s" % [name, case]
+	var file := NEEDS_A_FIX if name == "fix" else COMMITTED
+	# Opened from its bytes, as a carried draft is, so the editor has no file to Save to.
+	editor.load_bytes(FileAccess.get_file_as_bytes(file))
+	if not await _editor_until(func(s: Dictionary) -> bool: return s.get("has_text", false) and s.get("rows_current", false) and not s.get("busy", true) and not s.get("pending", false), "%s: %s never opened" % [what, file]):
+		return false
+	await get_tree().process_frame
+	if name == "fix" and editor.panel_button("fix") == null:
+		_failures.append("%s: no Fix button was drawn for %s" % [what, file])
+		return false
+	var revision := int(_editor().get("revision", 0))
+	if case == "menu":
+		var commander: Vector3i = vista.my_commander_at()
+		editor._on_ground_clicked(Vector3i(commander.x - 8, commander.y, commander.z), MENU_AT)
+		if not await _editor_until(func(s: Dictionary) -> bool: return s.get("ghost", {}).get("state", "waiting") != "waiting" and not s.get("busy", true), "%s: the ghost under the menu never came back" % what):
+			return false
+		if not editor.menu_open():
+			_failures.append("%s: the map menu did not open" % what)
+			return false
+	elif case == "scroll":
+		if not await _scroll_panel(what, name):
+			return false
+	var button: Button = editor.panel_button(name)
+	if button == null or button.disabled:
+		_failures.append("%s: the button is not there to click (%s)" % [what, button])
+		return false
+	var before: Dictionary = editor.click_counts()[name]
+	var at := button.get_global_rect().get_center()
+	var scrolled: int = editor.panel_scroll().scroll_vertical
+	_mouse_move(at)
+	_mouse_button(at, MOUSE_BUTTON_LEFT, true)
+	await get_tree().process_frame
+	if case == "redraw":
+		# Something the gateway answers changes the editor's state, and the panel redraws
+		# while the button is held: the rows as they were must keep their buttons.
+		var saved := int(_editor().get("notes_saved", -1))
+		vista.bridge.editor_save_notes(NOTES)
+		if not await _editor_until(func(s: Dictionary) -> bool: return int(s.get("notes_saved", -1)) == NOTES.length() and not s.get("pending", false), "%s: the redraw's answer never came (%d before)" % [what, saved]):
+			return false
+		for _frame in KEY_FRAMES:
+			await get_tree().process_frame
+	_mouse_button(at, MOUSE_BUTTON_LEFT, false)
+	for _frame in KEY_FRAMES:
+		await get_tree().process_frame
+	var after: Dictionary = editor.click_counts()[name]
+	var downs := int(after["down"]) - int(before["down"])
+	var handled := int(after["pressed"]) - int(before["pressed"])
+	print("[watch-check] first click, %s: button_down %d, pressed %d (clicked at %s with the panel scrolled %d px)" % [what, downs, handled, at, scrolled])
+	if downs != 1 or handled != 1:
+		_failures.append("%s: one click reached button_down %d time(s) and its handler %d time(s), not once each" % [what, downs, handled])
+		return false
+	if case == "menu" and editor.menu_open():
+		_failures.append("%s: the map menu stayed open after a click on the panel" % what)
+		return false
+	match name:
+		"fix":
+			if not await _editor_until(func(s: Dictionary) -> bool: return int(s.get("revision", 0)) > revision and String(s.get("status_key", "")) == "fixed" and s.get("rows_current", false) and not s.get("busy", true), "%s: the Fix was never applied" % what):
+				return false
+		"save":
+			var dialog: FileDialog = editor.save_dialog()
+			if not dialog.visible:
+				_failures.append("%s: Save with no file did not open Save as..." % what)
+				return false
+			dialog.hide()
+			await get_tree().process_frame
+		"submit":
+			if not await _editor_until(func(s: Dictionary) -> bool: return String(s.get("status_key", "")) in ["submitted", "submit_refused"] and not s.get("pending", true), "%s: the submission never came back" % what):
+				return false
+			if not _editor().get("accepted", false):
+				_failures.append("%s: the submission was not accepted: %s" % [what, _editor().get("rows", [])])
+				return false
+	editor.panel_scroll().scroll_vertical = 0
+	await get_tree().process_frame
+	return true
+
+
+## Scrolls the panel with the wheel, as a mouse would: NOTCHES notches down, and back up
+## again only if that scrolled `name`'s button out of sight (Submit and Save sit at the
+## panel's top), so a Fix button is clicked where the scroll left it. The panel must have
+## moved. The layout settles for KEY_FRAMES frames before the button is found, as it has by
+## the time a person sees where the button went.
+func _scroll_panel(what: String, name: String) -> bool:
+	var inside: Vector2 = editor.panel_rect().get_center()
+	_mouse_move(inside)
+	await _wheel(inside, MOUSE_BUTTON_WHEEL_DOWN)
+	if editor.panel_scroll().scroll_vertical <= 0:
+		_failures.append("%s: the wheel did not scroll the panel" % what)
+		return false
+	var button: Button = editor.panel_button(name)
+	var seen := get_viewport().get_visible_rect()
+	if button == null or not seen.has_point(button.get_global_rect().get_center()):
+		await _wheel(inside, MOUSE_BUTTON_WHEEL_UP)
+	return true
+
+
+## NOTCHES notches of the wheel `button` at `at`, then KEY_FRAMES frames for the layout.
+func _wheel(at: Vector2, button: MouseButton) -> void:
+	for _notch in NOTCHES:
+		_mouse_button(at, button, true)
+		_mouse_button(at, button, false)
+		await get_tree().process_frame
+	for _frame in KEY_FRAMES:
+		await get_tree().process_frame
+
+
+func _mouse_move(at: Vector2) -> void:
+	var motion := InputEventMouseMotion.new()
+	motion.position = at
+	motion.global_position = at
+	Input.parse_input_event(motion)
+
+
+func _mouse_button(at: Vector2, button: MouseButton, pressed: bool) -> void:
+	var event := InputEventMouseButton.new()
+	event.button_index = button
+	event.pressed = pressed
+	event.position = at
+	event.global_position = at
+	Input.parse_input_event(event)
 
 
 ## The editor's half of the run (pull request 1). Returns false when a step failed, with the

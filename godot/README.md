@@ -59,7 +59,7 @@ exported build, whose extension list the package job's import wrote (decisions-l
 | `scenes/lobby.tscn` | the game at the skeleton: starts `gamectl host`, watches the match (T16), and edits the seat's orders (T19) |
 | `scenes/vista.tscn` | the vista: the bridge, the camera rig, the entity markers, the Pall |
 | `scenes/vista_shot.tscn` | the vista golden's scene: the keyframe fixture with **no host running** |
-| `scenes/watch_check.tscn` | the headless-driven run against a real `gamectl host` (CI's `client` job): the watch rig, the editor, the wizard, the meter, the camera's keys (`_camera_keys`: W held in the focused notes box leaves the camera still, and moves it once a right-click on the view has released the focus), and a resume by a fresh client |
+| `scenes/watch_check.tscn` | the headless-driven run against a real `gamectl host` (CI's `client` job): the watch rig, the editor, the wizard, the meter, the camera's keys (`_camera_keys`: W held in the focused notes box leaves the camera still, and moves it once a right-click on the view has released the focus), the first click on the panel (`_first_click_lands`: one injected click on Submit, a Fix button and Save reaches its handler exactly once, with the rows redrawn under the press, with a map menu open and after a panel scroll), and a resume by a fresh client |
 | `scenes/rows_shot.tscn` | the validation rows drawn from `fixtures/rows_report.json` with no host; `cargo xtask screenshot` compares it with `tests/golden/vista/expected.rows.png` |
 | `scenes/wizard_shot.tscn` | the wizard's first page drawn from `fixtures/instantiate_suggested.json` with no host; `cargo xtask screenshot` compares it with `tests/golden/vista/expected.wizard.png` |
 | `scenes/client_check.tscn` | T12's headless acceptance scene |
@@ -117,6 +117,45 @@ too. Every sentence the client writes itself is in `scripts/strings.gd`.
 What the editor sends and when is the bridge's (`crates/client-gdext/src/editor.rs` and
 `rig.rs`): the calls share the seat token's rate budget with the vista's polls, and Ready
 waits behind any submission still on its way.
+
+## The demo's findings F1, F3 and F6 (S1's plan, task `fixc`)
+
+**F1, the first click.** At the skeleton's demo the first click on Fix or Submit after the
+panel had changed or scrolled did nothing, and the second worked (decisions-log item 126
+(3)). Reproduced headless, with injected input: the editor redrew its rows on every change
+the bridge reported, so a Fix button pressed while an answer came back was freed before its
+release, and the click reached no handler (`button_down` once, `pressed` never). The rows are
+now rebuilt only when they change; a press on the panel closes the map menus; a click the
+map takes releases the GUI focus; the lobby's containers, drawn over the panel, ignore the
+mouse; and Submit and Fix say "Submitting..." and "Fixing..." at once. The watch check's
+`_first_click_lands` holds all of it. To reproduce by hand, with the window focused:
+
+```sh
+godot --path godot -- --log-input --gamectl=<target>/debug/gamectl[.exe] --root=<repository>
+Pharmakos.exe -- --log-input      # the packaged game
+```
+
+The editor then prints `[editor] <button>: button_down` for every press and `[editor]
+<button>: pressed` for every click its handler took, on Submit, Fix and Save, and the lobby
+prints `[lobby] _input: ...` for every mouse button it sees. A swallowed click shows as a
+press with no `pressed` after it, or as a click the lobby saw and no button did.
+
+**F3, a second instance.** A second `Pharmakos.exe` hung at the demo with an empty log. The
+empty log is explained: a release build flushed its standard output and
+`user://logs/godot.log` only on an error or a clean exit, so any instance ended by hand
+leaves an empty log. `project.godot` now sets `application/run/flush_stdout_on_print`, so
+the next hang leaves the lines printed before it. The hang itself was not reproduced (the
+pull request of task `fixc` records every attempt), so it has no fix yet (S1's plan,
+decision 19). Two instances do share `user://`: the second renames the first's live
+`godot.log` aside when it starts, and both then write the new one.
+
+**F6.** The chooser alone shows before a match: the watch strip and the editor's panel appear
+once the host has announced one, and the status line names the speed only in a Push. The
+client check's two expected refusals (`decode_result` of an unknown field and
+`transpose_chunk` of a short chunk) print a note, not an `ERROR`. They are the two `ERROR`
+lines the demo found: the smoke check has no negative probe and prints none, run from the
+editor or from an export, while the client check printed exactly these two; and the project's
+name is the game's, so a developer's checks and the packaged game share one `user://logs/`.
 
 ## The editor (T19, pull request 2)
 

@@ -10,6 +10,15 @@
 # button hands the row and fix index back to the editor, which asks the gateway to apply
 # the verifier's own patch.
 #
+# THE ROWS ARE REBUILT ONLY WHEN THEY CHANGE (F1, decisions-log item 126 (3); S1's plan,
+# task `fixc`). The editor redraws on every change the bridge reports, and most of those -
+# a check answered, a note saved, the route priced - leave the rows as they were. Rebuilding
+# them anyway freed the Fix buttons under the cursor: a click whose press landed on one
+# button and whose release landed on its replacement reached no handler, which is the
+# swallowed first click of the demo. So `fill` keeps the controls it drew while the rows are
+# the same, and only sets whether their Fix buttons are enabled. A Fix button takes no
+# keyboard focus, like every other button on the panel.
+#
 # Accessibility (spec section 13): each row's accessible name is its plain sentence, the
 # icon's is its severity word, and a Fix button's is its label - names generated from the
 # rendered text, not written beside it. Icons plus text: the colour is never the only
@@ -32,12 +41,27 @@ const ICON_SIZE := Vector2(14, 14)
 const SENTENCE_WIDTH := 300.0
 ## The gap between two rows, in pixels. PLACEHOLDER: layout, OWNER at S6.
 const ROW_GAP := 12
+## The meta a container keeps the rows it drew under, and the one a Fix button carries.
+const DRAWN := "drawn_rows"
+const FIX := "fix"
 
 
 ## Replaces the rows in `container` with `rows` (the bridge's row dictionaries). `on_fix`
 ## is called with the row index and the fix index when a Fix button is pressed; the
 ## buttons are disabled when `fixes_enabled` is false (the rows describe an older text).
-static func fill(container: Container, rows: Array, on_fix: Callable, fixes_enabled: bool) -> void:
+## `on_fix_down`, when given, is called with the same two indices when a Fix button is
+## pressed down (the editor's `--log-input` logging).
+##
+## When `rows` are the rows already drawn, nothing is rebuilt: only the Fix buttons'
+## enabled state is set, so a button under the cursor is never freed by a redraw that
+## changed nothing it shows.
+static func fill(container: Container, rows: Array, on_fix: Callable, fixes_enabled: bool, on_fix_down: Callable = Callable()) -> void:
+	var drawn := var_to_str(rows)
+	if container.has_meta(DRAWN) and String(container.get_meta(DRAWN)) == drawn:
+		for button in fix_buttons(container):
+			button.disabled = not fixes_enabled
+		return
+	container.set_meta(DRAWN, drawn)
 	container.add_theme_constant_override("separation", ROW_GAP)
 	for child in container.get_children():
 		container.remove_child(child)
@@ -49,7 +73,17 @@ static func fill(container: Container, rows: Array, on_fix: Callable, fixes_enab
 		container.add_child(nothing)
 		return
 	for index in rows.size():
-		container.add_child(_row(rows[index], index, on_fix, fixes_enabled))
+		container.add_child(_row(rows[index], index, on_fix, fixes_enabled, on_fix_down))
+
+
+## The Fix buttons `container` holds, in row order.
+static func fix_buttons(container: Container) -> Array[Button]:
+	var out: Array[Button] = []
+	for row in row_controls(container):
+		for child in row.find_children("*", "Button", true, false):
+			if child.has_meta(FIX):
+				out.append(child)
+	return out
 
 
 ## The rows `container` holds, in order: what a check reads the accessible names from.
@@ -61,7 +95,7 @@ static func row_controls(container: Container) -> Array[Control]:
 	return out
 
 
-static func _row(row: Dictionary, index: int, on_fix: Callable, fixes_enabled: bool) -> Control:
+static func _row(row: Dictionary, index: int, on_fix: Callable, fixes_enabled: bool, on_fix_down: Callable) -> Control:
 	var severity := String(row.get("severity", "error"))
 	var sentence := String(row.get("sentence", ""))
 	var line := HBoxContainer.new()
@@ -105,7 +139,11 @@ static func _row(row: Dictionary, index: int, on_fix: Callable, fixes_enabled: b
 		button.text = Strings.text("fix", {"title": fix.get("title", "")})
 		button.accessibility_name = button.text
 		button.disabled = not fixes_enabled
+		button.focus_mode = Control.FOCUS_NONE
 		var which := int(fix.get("index", 0))
+		button.set_meta(FIX, [index, which])
 		button.pressed.connect(func() -> void: on_fix.call(index, which))
+		if on_fix_down.is_valid():
+			button.button_down.connect(func() -> void: on_fix_down.call(index, which))
 		body.add_child(button)
 	return line

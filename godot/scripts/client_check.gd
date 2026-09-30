@@ -82,7 +82,8 @@ func _ready() -> void:
 			configured.get("attached", false), configured.get("reason", "")])
 
 	# 3. A gateway result decodes through the schema, and a field the schema does not
-	#    declare is refused rather than stripped.
+	#    declare is refused rather than stripped. The refusal prints a note, not an ERROR
+	#    (F6, decisions-log item 126 (3)): it is the answer this probe asks for.
 	var status: Variant = bridge.decode_result("get_status", '{"status":{"phase":"LULL","round":1}}')
 	if typeof(status) != TYPE_DICTIONARY:
 		failures.append("decode_result(get_status) did not return a dictionary")
@@ -92,7 +93,7 @@ func _ready() -> void:
 	if refused != null:
 		failures.append("an unknown field was accepted; it must be refused with a pointer")
 
-	# 4. The chunk transposition, on a length the mesher would refuse.
+	# 4. The chunk transposition, on a length the mesher would refuse (a note, not an ERROR).
 	var short := PackedByteArray()
 	short.resize(16)
 	if bridge.transpose_chunk(short).size() != 0:

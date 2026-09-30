@@ -766,6 +766,10 @@ impl Editor {
 
     /// Apply the `fix`th Fix of row `row`. Refused while the rows describe an older text
     /// than the one on screen, because the verifier's patch points into the text it saw.
+    ///
+    /// A Fix taken says so at once ("fixing"), and again when the patched text lands
+    /// ("fixed"): the answer takes a round trip, and a click with nothing to show for it
+    /// until then reads as a click that was lost (F1, decisions-log item 126 (3)).
     pub fn fix(&mut self, row: usize, fix: usize) -> bool {
         if !self.rows_current() || self.busy() {
             return false;
@@ -779,7 +783,7 @@ impl Editor {
             return false;
         };
         self.queue.push_back(Job::Edit { patch });
-        self.touch();
+        self.say("fixing", "");
         true
     }
 
@@ -793,14 +797,16 @@ impl Editor {
         true
     }
 
-    /// Submit the text on screen (spec section 12: `submit_plan` always runs FULL).
+    /// Submit the text on screen (spec section 12: `submit_plan` always runs FULL). A
+    /// submission taken says so at once ("submitting"), before its answer, for the reason
+    /// [`Editor::fix`] gives.
     pub fn submit(&mut self) -> bool {
         if self.text.is_none() {
             self.say("no_playbook", "");
             return false;
         }
         self.queue.push_back(Job::Submit);
-        self.touch();
+        self.say("submitting", "");
         true
     }
 
@@ -1501,14 +1507,7 @@ impl Editor {
     fn settle(&mut self, sent: Sent, result: &Json) -> Result<(), BridgeError> {
         match sent {
             Sent::Load { candidate } => self.settle_load(candidate, &report_of(result)?),
-            Sent::Edit { base, retry: _ } => {
-                let answer = patch_of(result)?;
-                if base == self.revision {
-                    self.undo.push(Undo::Patch(answer.inverse_json_patch));
-                    self.drop_settled_ghost();
-                    self.accept_text(answer.playbook_jsonc);
-                }
-            }
+            Sent::Edit { base, retry } => self.settle_edit(base, &retry, result)?,
             Sent::Undo { base } => {
                 let answer = patch_of(result)?;
                 if base == self.revision {
@@ -1642,6 +1641,22 @@ impl Editor {
     }
 
     /// Load's QUICK answer: refuse the file with the code and the pointer, or open it.
+    /// An edit's patched text: taken when the text it was patched against is still the one on
+    /// screen. A Fix's lands with "fixed" on the status line, after the "fixing" its click
+    /// put there.
+    fn settle_edit(&mut self, base: u64, job: &Job, result: &Json) -> Result<(), BridgeError> {
+        let answer = patch_of(result)?;
+        if base == self.revision {
+            self.undo.push(Undo::Patch(answer.inverse_json_patch));
+            self.drop_settled_ghost();
+            self.accept_text(answer.playbook_jsonc);
+            if matches!(job, Job::Edit { .. }) {
+                self.say("fixed", "");
+            }
+        }
+        Ok(())
+    }
+
     fn settle_load(&mut self, candidate: String, report: &VerifyReport) {
         let refusal = report.diagnostics.iter().find(|diagnostic| {
             diagnostic.severity() == Severity::Error
@@ -2386,11 +2401,46 @@ mod tests {
             "only the machine-applicable one is a Fix button"
         );
         assert!(editor.fix(0, 0));
+        assert_eq!(editor.status().key, "fixing", "a Fix taken says so at once");
         let call = editor.next_call(false).expect("the fix");
         assert_eq!(call.method, "patch_plan");
         assert!(json::write(&call.params).contains("cooldown_ms"));
         assert!(!editor.fix(0, 0), "not while the edit is in flight");
         assert!(!editor.fix(0, 1), "no such fix");
+        editor
+            .answered(Ok(&patched("{\"fixed\": 1}", "[]")))
+            .expect("reads");
+        assert_eq!(editor.status().key, "fixed", "and again when it lands");
+    }
+
+    #[test]
+    fn a_submission_says_it_was_taken_before_its_answer() {
+        let mut editor = loaded(EXPAND_EAST);
+        let changes = editor.changes();
+        assert!(editor.submit());
+        assert_eq!(editor.status().key, "submitting");
+        assert!(
+            editor.changes() > changes,
+            "the status line is redrawn at once"
+        );
+        // The checks the loaded text still owes go first; the submission follows them.
+        let mut method = method_of(editor.next_call(false));
+        for _ in 0..8 {
+            if method == "submit_plan" {
+                break;
+            }
+            editor
+                .answered(Err(("INTERNAL", "not this test's call")))
+                .expect("reads");
+            method = method_of(editor.next_call(false));
+        }
+        assert_eq!(method, "submit_plan");
+        editor
+            .answered(Ok(&read(
+                r#"{"report":{"qualifies":true,"depth":"full"},"accepted":true}"#,
+            )))
+            .expect("reads");
+        assert_eq!(editor.status().key, "submitted");
     }
 
     #[test]

@@ -36,6 +36,13 @@
 ;
 ; msaa_3d = 0 is G1's too, and it is the reason the mesher's T-junctions have never shown:
 ; every vertex coordinate is a small exact integer in f32 with MSAA off.
+;
+; run/flush_stdout_on_print = true is F3's (decisions-log item 126 (3); S1's plan, task
+; `fixc`): an exported (release) build otherwise flushes its standard output and its
+; `user://logs/godot.log` only on an error or at a clean exit, so an instance that hangs and
+; is ended by hand leaves an EMPTY log - which is what the demo's hung second instance left,
+; and what every session ended by `taskkill` leaves. Flushed on every print, the next hang
+; leaves the lines it printed before it hung. The game prints little, so the cost is small.
 
 config_version=5
 
@@ -48,6 +55,7 @@ config/features=PackedStringArray("4.7", "Forward Plus")
 config/quit_on_go_back=true
 run/disable_stderr=false
 run/delta_smoothing=false
+run/flush_stdout_on_print=true
 
 [debug]
 
