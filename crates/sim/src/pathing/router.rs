@@ -18,14 +18,16 @@
 //! from a cursor that is itself hashed state. The queue is not a container —
 //! it is a `waiting` flag per unit plus that cursor, scanned in table order.
 //! Units are stored seat-major with dense ids, so table order *is*
-//! `(seat, unit)`; the beacon key is the middle of the three and is
-//! constant today.
+//! `(seat, unit)`; the beacon key is the middle of the three.
 //!
-//! PLACEHOLDER: the beacon half of the key is [`crate::tables::BeaconId::NONE`]
-//! for every unit, because nothing assigns a unit to a beacon yet. T11's
-//! interpreter and T14's mandates are what give it a value, and the order below
-//! becomes `(seat, beacon, unit)` in full then without moving this code —
-//! owner, at T11.
+//! **The beacon term is not read.** T14 gave every unit a home beacon (the unit
+//! table's home column) and T11's interpreter drives the commander, but the
+//! serve order still scans the table, so it is `(seat, unit)` in practice: a
+//! unit's home does not move it in the queue. No rule asks for more, and
+//! serving by home beacon would reorder the repath queue, which is hashed
+//! state, so it would be a determinism change (AGENTS.md section 5) rather
+//! than a comment's to make (register X-07, checked and reworded by S1's
+//! `fixs` lane).
 //!
 //! # "Sealed in" is a designed state
 //!

@@ -126,12 +126,13 @@ pub struct RulesTable {
     /// `mesher.surfaces_per_frame`.
     ///
     /// PLACEHOLDER: `tuning, owner — no measured frame-time reason separates
-    /// K = 4 from K = 8 on the spike machine (item 54)`.
+    /// K = 4 from K = 8 on the spike machine (item 54)`; owner, at S6's art
+    /// pass, as `rules.proto` says (item 124 (5) (m)).
     mesher_drain_surfaces: u32,
     /// Bytes the mesher may drain per frame. `B = 512 KiB` (item 54). From
     /// `mesher.bytes_per_frame`.
     ///
-    /// PLACEHOLDER: as above.
+    /// PLACEHOLDER: as above, owner, at S6's art pass.
     mesher_drain_bytes: u32,
     /// Cost of a cardinal step. `10` (item 59). From
     /// `locomotion.step_cost_cardinal`.

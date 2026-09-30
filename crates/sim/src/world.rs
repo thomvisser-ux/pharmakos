@@ -268,9 +268,10 @@ pub struct WorldConfig {
     /// unplaced (see [`crate::mapgen`]).
     pub seats: u32,
     /// PLACEHOLDER (harness): how many extra walking units each seat fields on
-    /// top of its starting force, so that the hash chain covers a wide table
-    /// before T11 and T14 fill one honestly. A real match passes zero. Deleted
-    /// when T14 fabricates units for real (owner, at T14).
+    /// top of its starting force, so that the hash chain covers a wide table.
+    /// A real match passes zero. T14 fabricates units for real and kept this for
+    /// the determinism harness; it goes with S1-26's real determinism segment
+    /// (owner, at S1, the `tune` lane; decision 16 of S1's plan).
     pub units_per_seat: u32,
     /// The rules table, an **input** to the sim and never hashed state.
     pub rules: RulesTable,
@@ -2105,8 +2106,9 @@ impl World {
 
     /// This tick's work counter, to charge against.
     ///
-    /// Nothing in the tick charges it yet — the phases that will are T11's and
-    /// S5's. It is reachable now so that
+    /// Nothing in the tick charges it yet: T11's interpreter did not need a
+    /// budget, and the phase that will is S5's operator budget. It is
+    /// reachable now so that
     /// `tests/determinism.rs`'s `the_work_counter_is_not_in_the_state_encoding`
     /// can prove the counter stays out of the hash.
     pub const fn work_mut(&mut self) -> &mut WorkCounter {
@@ -2118,9 +2120,9 @@ impl World {
     /// **The order a filler owes.** The queue is applied in the order it was
     /// filled, so a phase that fills it must do so in an order that is itself
     /// deterministic — every sort key ending in a unique id, as everywhere else
-    /// (item 62). Nothing fills it yet: combat's craters are S2's and
-    /// construction's sets are T14's, and each of those phases already walks its
-    /// own table in id order, which is the order the queue will inherit.
+    /// (item 62). A mining drone taking an ore voxel fills it (T14's program,
+    /// walked in unit-id order), and combat's craters are S2's; each walks its
+    /// own table in id order, which is the order the queue inherits.
     ///
     /// A full queue drops nothing silently: the `false` is the report, and a
     /// caller that cannot afford to lose an edit must handle it.
@@ -2204,8 +2206,28 @@ impl World {
 
     /// Close the recap at `tick`. `false` when that ended the match.
     /// Crate-internal for the same reason [`World::open_push`] is.
+    ///
+    /// A round-limit end is decided at the last round's final tick
+    /// (`close_segment_if_over`), so a recap closed here normally finds the
+    /// outcome already set. The audit below is the fallback for a world that
+    /// reached its last recap undecided (a snapshot written before S1's
+    /// `fixs` lane): the world is exactly as the last Push's last tick left
+    /// it, because a recap consumes no tick, so it is the same audit, read
+    /// from the same state. Its lines go on the bus before the runner's
+    /// `match_ended`.
     pub(crate) fn close_recap(&mut self, tick: Tick) -> bool {
-        self.match_state.close_recap(tick)
+        let audited = self.match_state.outcome().is_none()
+            && self.match_state.round() >= self.match_state.round_limit();
+        let winner = if audited {
+            crate::audit::audit_winner(self)
+        } else {
+            None
+        };
+        let continues = self.match_state.close_recap(tick, winner);
+        if audited {
+            crate::audit::emit_lines(self, tick);
+        }
+        continues
     }
 
     /// Advance one tick and return the tick's state hash.
@@ -2867,13 +2889,11 @@ impl World {
     /// The edge is spotted against [`World::beacon_alive`], so this fires on
     /// the tick the beacon died and not on every tick after it.
     ///
-    /// **Two halves of item 20 are not here**, and are owed rather than
-    /// forgotten. The spec's local elimination also says *the mandate ends* and
-    /// *bound units retreat, then re-home to the nearest friendly beacon and
-    /// keep their role*. Neither can be written yet: a mandate has no lifecycle
-    /// until the Build mandate lands, and a unit has no home column to re-point.
-    /// Both are T14's, with the mandate and the unit table it fills. The plan's
-    /// T10 line asks for the ruin half only, which is what this is.
+    /// The spec's local elimination also says *the mandate ends* and *bound
+    /// units retreat, then re-home to the nearest friendly beacon and keep
+    /// their role*. T10 built the ruin half; T14 added the other two, once a
+    /// mandate had a lifecycle and a unit a home column (`end_mandate` and
+    /// `rehome_units`, below).
     fn settle_beacon_deaths(&mut self) {
         let tick = self.tick;
         let count = usize::try_from(self.beacons.len()).unwrap_or(0);
@@ -3238,9 +3258,9 @@ impl World {
     /// and the Push halts at the first tick where fewer than two seats remain.
     ///
     /// `true` when this tick ended the match. If no seat survives that tick the
-    /// final audit at that tick decides, so the outcome is
-    /// [`MatchEndReason::NoSurvivor`] with no winner — there is no draw state,
-    /// and the audit that would name a winner is T14's.
+    /// final audit at that tick decides ([`crate::audit`], register X-08): the
+    /// outcome is [`MatchEndReason::NoSurvivor`] with the audit's winner, or
+    /// with none on a shared win. There is no draw state.
     fn check_match_end(&mut self) -> bool {
         let mut remaining: u32 = 0;
         let mut last: Option<SeatId> = None;
@@ -3265,15 +3285,10 @@ impl World {
         self.abandon_deploys();
         let tick = self.tick;
         let ran = tick.since(self.match_state.segment_started());
-        let (reason, winner) = match last {
-            Some(seat) => (MatchEndReason::LastSeatStanding, Some(seat)),
-            None => (MatchEndReason::NoSurvivor, None),
-        };
         self.emit(
             tick,
             Emission::of(EventKind::SegmentEnded).value(i64::from(ran)),
         );
-        self.match_state.decide(reason, winner, tick);
         let round = self.match_state.round();
         self.emit(
             tick,
@@ -3282,8 +3297,20 @@ impl World {
         // A match the one-tick rule ends still opens a recap, and the Ledger
         // still settles it: item 19 says "at each recap", not "at each recap
         // but the last", and the final audit reads "value held after the final
-        // settlement" (spec section 7).
+        // settlement" (spec section 7), which is why the outcome is decided
+        // after the settlement rather than before it.
         self.settle_ledger();
+        // Item 16: the last seat standing wins; if no seat survives this tick,
+        // the final audit at this tick decides, and there is no draw state:
+        // `None` here is a shared win on every term (`crate::audit`).
+        let (reason, winner) = match last {
+            Some(seat) => (MatchEndReason::LastSeatStanding, Some(seat)),
+            None => (MatchEndReason::NoSurvivor, crate::audit::audit_winner(self)),
+        };
+        self.match_state.decide(reason, winner, tick);
+        if reason == MatchEndReason::NoSurvivor {
+            crate::audit::emit_lines(self, tick);
+        }
         let mut emission = Emission::of(EventKind::MatchEnded).value(i64::from(reason.id()));
         if let Some(seat) = winner {
             emission = emission.seat(seat);
@@ -3316,6 +3343,26 @@ impl World {
             Emission::of(EventKind::RecapOpened).value(i64::from(round)),
         );
         self.settle_ledger();
+        // The last round's segment end is the match's **final tick** (spec
+        // section 3: "the last tick of the last Push, before the recap"), so
+        // the round limit is decided here, after the final settlement, by the
+        // final audit (register X-08). Deciding it in the tick rather than
+        // when the recap closes puts the winner in this tick's hash (the match
+        // state's winner byte, which was always hashed) and its lines on the
+        // bus with the tick they belong to, exactly as the one-tick rule's
+        // no-survivor end does.
+        if round >= self.match_state.round_limit() {
+            let winner = crate::audit::audit_winner(self);
+            self.match_state
+                .decide(MatchEndReason::RoundLimit, winner, tick);
+            crate::audit::emit_lines(self, tick);
+            let mut emission = Emission::of(EventKind::MatchEnded)
+                .value(i64::from(MatchEndReason::RoundLimit.id()));
+            if let Some(seat) = winner {
+                emission = emission.seat(seat);
+            }
+            self.emit(tick, emission);
+        }
     }
 
     /// The Ledger settles (item 19; spec section 7, "Settlement").

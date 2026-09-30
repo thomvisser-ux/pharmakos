@@ -8,17 +8,29 @@
 //! nothing here reads a clock: `segment_elapsed` is game milliseconds counted
 //! from the segment's own start tick.
 //!
-//! # Selectors resolve once, at step start
+//! # When a selector resolves
 //!
-//! [`resolve_beacon`] is the whole selector catalogue. Every arm of it — the
-//! three ranked selectors **and a fixed `b_NN` id** — answers over the seat's
+//! [`resolve_beacon`] is the whole selector catalogue. Every arm of it (the
+//! three ranked selectors **and a fixed `b_NN` id**) answers over the seat's
 //! **living own** beacons and nothing else, because spec section 10's
 //! conditions "read only the seat's knowledge store" and there is no knowledge
 //! store to read another seat's beacon through. A ranked selector ties to the
-//! lowest beacon id (item 62's convention, and AGENTS.md §4.6's "ties to the
-//! lowest id"), and resolving to nothing is a step failure rather than a silent
-//! skip. The executor calls it once, when a step starts, and pins the answer
-//! for that step.
+//! lowest beacon id (item 62's convention, and AGENTS.md section 4.6's "ties to
+//! the lowest id"), and resolving to nothing is a step failure rather than a
+//! silent skip.
+//!
+//! **A step resolves its selector once, when it starts, and pins the answer for
+//! that step. A condition resolves its selector at every evaluation**:
+//! `beacon_hp_pct` and `beacon_powered` name a beacon by a selector, and a
+//! handler's condition, a `skip_if` guard or a `wait_until` re-reads it on
+//! every decision it is evaluated on, so the beacon a condition is about can
+//! change from one decision to the next. (This module's doc used to say every
+//! selector resolves once, at step start, which was true of steps only; S1's
+//! plan, the `fixs` lane, corrected it.)
+//!
+//! The same catalogue answers over a frozen planning snapshot through
+//! [`resolve_beacon_in`], which is how the gateway's `estimate_route` sends a
+//! selector leg where a decision would, without stepping anything.
 //!
 //! What each selector ranks by:
 //!
@@ -43,6 +55,8 @@ use crate::interpreter::{BeaconSpec, Cond, Filter};
 use crate::math::fixed::Fx;
 use crate::math::quantity::Hp;
 use crate::math::quantity::{Ms, Tick};
+use crate::rules::RulesTable;
+use crate::snapshot::Snapshot;
 use crate::tables::{BeaconId, SeatId};
 use crate::world::World;
 
@@ -185,11 +199,6 @@ impl View<'_> {
         percent(hp, self.beacon_max_hp(row))
     }
 
-    /// Whether a beacon row belongs to this seat.
-    pub(crate) fn owns(&self, row: usize) -> bool {
-        self.world.beacons().seats().get(row).copied() == Some(self.seat.raw())
-    }
-
     /// Whether a beacon is alive.
     pub(crate) fn beacon_alive(&self, row: usize) -> bool {
         self.world
@@ -284,14 +293,227 @@ fn took_damage_within(view: &View<'_>, ms: i32) -> bool {
     i64::from(Ms::from_ticks(since).raw()) <= i64::from(ms)
 }
 
-/// Resolve a beacon reference against the seat's own living beacons.
+/// What a selector reads: one seat's own beacons and its commander.
+///
+/// Two boards implement it, so the selector catalogue is written once: the
+/// live world a decision reads ([`View`]), and the **frozen planning snapshot**
+/// a gateway estimate or `resolve_refs` reads ([`SnapshotBoard`], behind
+/// [`resolve_beacon_in`]). A plan-time answer and the run-time answer are then
+/// the same function of the same kind of data, and cannot drift apart the way
+/// `estimate_route`'s own "the seat's first beacon" did.
+pub(crate) trait Board {
+    /// Whose selector it is.
+    fn seat(&self) -> SeatId;
+    /// How many beacon rows there are.
+    fn beacon_rows(&self) -> usize;
+    /// One row's beacon id.
+    fn row_id(&self, row: usize) -> Option<u32>;
+    /// One row's seat.
+    fn row_seat(&self, row: usize) -> Option<u8>;
+    /// One row's writ byte.
+    fn row_mandate(&self, row: usize) -> u8;
+    /// One row's anchor.
+    fn row_at(&self, row: usize) -> Option<[Fx; 3]>;
+    /// One row's hit points.
+    fn row_hp(&self, row: usize) -> i64;
+    /// The rules table the maxima and the step costs come from.
+    fn rules(&self) -> &RulesTable;
+    /// Where the seat's commander stands, when it has one.
+    fn commander_at(&self) -> Option<[Fx; 3]>;
+
+    /// Whether a row's beacon is alive.
+    fn row_alive(&self, row: usize) -> bool {
+        self.row_hp(row) > 0
+    }
+
+    /// The row a beacon id names. Rows are dense and in id order, so the id is
+    /// the row; checked rather than assumed.
+    fn row_of(&self, beacon: BeaconId) -> Option<usize> {
+        let index = usize::try_from(beacon.raw()).ok()?;
+        if self.row_id(index) == Some(beacon.raw()) {
+            return Some(index);
+        }
+        (0..self.beacon_rows()).find(|row| self.row_id(*row) == Some(beacon.raw()))
+    }
+
+    /// A row's maximum hit points: `beacon.core_hp` for a seat's core, its
+    /// lowest-id beacon (spec section 3), and `structures.beacon.hp` for any
+    /// other.
+    fn row_max_hp(&self, row: usize) -> i64 {
+        let seat = self.row_seat(row);
+        let mut core: Option<(u32, usize)> = None;
+        let mut at: usize = 0;
+        while at < self.beacon_rows() {
+            if self.row_seat(at) == seat {
+                let id = self.row_id(at).unwrap_or(u32::MAX);
+                if core.is_none_or(|(found, _)| id < found) {
+                    core = Some((id, at));
+                }
+            }
+            at = at.saturating_add(1);
+        }
+        let message = self.rules().message();
+        if core.map(|(_, found)| found) == Some(row) {
+            return message
+                .beacon
+                .as_ref()
+                .map_or(0, |block| i64::from(block.core_hp));
+        }
+        message
+            .structures
+            .as_ref()
+            .and_then(|block| block.beacon)
+            .map_or(0, |beacon| i64::from(beacon.hp))
+    }
+
+    /// A row's hit points as a whole percentage of its maximum.
+    fn row_hp_pct(&self, row: usize) -> i64 {
+        percent(self.row_hp(row), self.row_max_hp(row))
+    }
+}
+
+impl Board for View<'_> {
+    fn seat(&self) -> SeatId {
+        self.seat
+    }
+    fn beacon_rows(&self) -> usize {
+        usize::try_from(self.world.beacons().len()).unwrap_or(0)
+    }
+    fn row_id(&self, row: usize) -> Option<u32> {
+        self.world.beacons().ids().get(row).copied()
+    }
+    fn row_seat(&self, row: usize) -> Option<u8> {
+        self.world.beacons().seats().get(row).copied()
+    }
+    fn row_mandate(&self, row: usize) -> u8 {
+        self.world
+            .beacons()
+            .mandates()
+            .get(row)
+            .copied()
+            .unwrap_or(0)
+    }
+    fn row_at(&self, row: usize) -> Option<[Fx; 3]> {
+        self.world.beacons().positions().get(row).copied()
+    }
+    fn row_hp(&self, row: usize) -> i64 {
+        self.world
+            .beacons()
+            .hit_points()
+            .get(row)
+            .map_or(0, |hp| i64::from(hp.raw()))
+    }
+    fn rules(&self) -> &RulesTable {
+        self.world.rules()
+    }
+    fn commander_at(&self) -> Option<[Fx; 3]> {
+        View::commander_at(self)
+    }
+}
+
+/// One seat's view of a frozen planning snapshot, for a selector.
+struct SnapshotBoard<'a> {
+    snapshot: &'a Snapshot,
+    rules: &'a RulesTable,
+    seat: SeatId,
+}
+
+impl Board for SnapshotBoard<'_> {
+    fn seat(&self) -> SeatId {
+        self.seat
+    }
+    fn beacon_rows(&self) -> usize {
+        self.snapshot.beacon_id.len()
+    }
+    fn row_id(&self, row: usize) -> Option<u32> {
+        self.snapshot.beacon_id.get(row).copied()
+    }
+    fn row_seat(&self, row: usize) -> Option<u8> {
+        self.snapshot.beacon_seat.get(row).copied()
+    }
+    fn row_mandate(&self, row: usize) -> u8 {
+        self.snapshot.beacon_mandate.get(row).copied().unwrap_or(0)
+    }
+    fn row_at(&self, row: usize) -> Option<[Fx; 3]> {
+        point_at(&self.snapshot.beacon_pos, row)
+    }
+    fn row_hp(&self, row: usize) -> i64 {
+        self.snapshot
+            .beacon_hp
+            .get(row)
+            .map_or(0, |hp| i64::from(*hp))
+    }
+    fn rules(&self) -> &RulesTable {
+        self.rules
+    }
+    /// The seat's commander: its first commander row in unit-id order, the
+    /// same rule the world's own index keeps (one per occupied seat, spec
+    /// section 4). `None` when it is dead, as the live view answers.
+    fn commander_at(&self) -> Option<[Fx; 3]> {
+        let commander = crate::tables::UnitKind::Commander.id();
+        let row = self
+            .snapshot
+            .unit_kind
+            .iter()
+            .zip(&self.snapshot.unit_seat)
+            .position(|(kind, seat)| *kind == commander && *seat == self.seat.raw())?;
+        if self.snapshot.unit_hp.get(row).is_none_or(|hp| *hp <= 0) {
+            return None;
+        }
+        point_at(&self.snapshot.unit_pos, row)
+    }
+}
+
+/// Point `row` of a snapshot's flattened `[x, y, z]` column.
+fn point_at(axes: &[i32], row: usize) -> Option<[Fx; 3]> {
+    let base = row.checked_mul(3)?;
+    Some([
+        Fx::from_raw(*axes.get(base)?),
+        Fx::from_raw(*axes.get(base.checked_add(1)?)?),
+        Fx::from_raw(*axes.get(base.checked_add(2)?)?),
+    ])
+}
+
+/// Resolve a beacon reference against the seat's own living beacons, in the
+/// live world a decision reads.
 ///
 /// `None` is a **step failure** at the call site, never a silent skip (spec
 /// section 10, "Late-bound selectors").
 pub(crate) fn resolve_beacon(view: &View<'_>, spec: BeaconSpec) -> Option<BeaconId> {
+    resolve_on(view, spec)
+}
+
+/// Resolve a beacon reference for `seat` over a **frozen planning snapshot**:
+/// the answer [`resolve_beacon`] would give a decision taken on that world.
+///
+/// The one snapshot-level resolver the sim exports. The gateway's
+/// `estimate_route` sends a selector leg where the run would (S1's plan, the
+/// `fixs` lane: it used to send every ranked leg to the seat's first beacon),
+/// and the targeting lane's `resolve_refs` reuses it. It reads, it never steps
+/// (AGENTS.md section 3 rule 2): a selector is a ranking over what the
+/// snapshot already holds.
+#[must_use]
+pub fn resolve_beacon_in(
+    snapshot: &Snapshot,
+    rules: &RulesTable,
+    seat: SeatId,
+    spec: BeaconSpec,
+) -> Option<BeaconId> {
+    resolve_on(
+        &SnapshotBoard {
+            snapshot,
+            rules,
+            seat,
+        },
+        spec,
+    )
+}
+
+/// The selector catalogue, over any [`Board`].
+fn resolve_on<B: Board>(board: &B, spec: BeaconSpec) -> Option<BeaconId> {
     match spec {
         BeaconSpec::Id(id) => {
-            let row = view.beacon_row(id)?;
+            let row = board.row_of(id)?;
             // **Own beacons only, fixed ids included.** Spec section 10 says
             // conditions read only the seat's knowledge store and lists "own
             // beacon" as the family; the verifier resolves a fixed `beacon_id`
@@ -302,15 +524,15 @@ pub(crate) fn resolve_beacon(view: &View<'_>, spec: BeaconSpec) -> Option<Beacon
             // `beacon_hp_pct` and `beacon_powered` from that seat's live state —
             // a knowledge store nobody built, read through the one selector
             // that skips ranking.
-            if view.owns(row) && view.beacon_alive(row) {
+            if board.row_seat(row) == Some(board.seat().raw()) && board.row_alive(row) {
                 Some(id)
             } else {
                 None
             }
         }
-        BeaconSpec::Safest => rank(view, Filter::default(), Rank::Safest),
-        BeaconSpec::Weakest(filter) => rank(view, filter, Rank::Weakest),
-        BeaconSpec::Nearest(filter) => rank(view, filter, Rank::Nearest),
+        BeaconSpec::Safest => rank(board, Filter::default(), Rank::Safest),
+        BeaconSpec::Weakest(filter) => rank(board, filter, Rank::Weakest),
+        BeaconSpec::Nearest(filter) => rank(board, filter, Rank::Nearest),
     }
 }
 
@@ -330,32 +552,32 @@ enum Rank {
 /// One scan, no allocation and no sort: a tick allocates nothing (G3′ §9.17),
 /// and a running minimum over `(key, id)` is a total order because the id is
 /// unique (item 62).
-fn rank(view: &View<'_>, filter: Filter, rank: Rank) -> Option<BeaconId> {
-    let beacons = view.world.beacons();
-    let count = usize::try_from(beacons.len()).unwrap_or(0);
-    let from = view.commander_at();
+fn rank<B: Board>(board: &B, filter: Filter, rank: Rank) -> Option<BeaconId> {
+    let count = board.beacon_rows();
+    let from = board.commander_at();
+    let cardinal = i64::from(board.rules().step_cardinal());
+    let diagonal = i64::from(board.rules().step_diagonal());
     let mut best: Option<(i64, u32)> = None;
     let mut row: usize = 0;
     while row < count {
-        let id = beacons.ids().get(row).copied().unwrap_or(u32::MAX);
-        if beacons.seats().get(row).copied() != Some(view.seat.raw()) || !view.beacon_alive(row) {
+        let id = board.row_id(row).unwrap_or(u32::MAX);
+        if board.row_seat(row) != Some(board.seat().raw()) || !board.row_alive(row) {
             row = row.saturating_add(1);
             continue;
         }
-        if let Some(wanted) = filter.mandate {
-            let carried = beacons.mandates().get(row).copied().unwrap_or(0);
-            if carried != wanted.id() {
-                row = row.saturating_add(1);
-                continue;
-            }
+        if let Some(wanted) = filter.mandate
+            && board.row_mandate(row) != wanted.id()
+        {
+            row = row.saturating_add(1);
+            continue;
         }
         let key = match rank {
             // A running *minimum* over the key, so "safest" negates the
             // percentage rather than needing a second comparison.
-            Rank::Safest => view.beacon_hp_pct(row).saturating_neg(),
-            Rank::Weakest => view.beacon_hp_pct(row),
-            Rank::Nearest => match (from, beacons.positions().get(row).copied()) {
-                (Some(a), Some(b)) => octile(view.world, a, b),
+            Rank::Safest => board.row_hp_pct(row).saturating_neg(),
+            Rank::Weakest => board.row_hp_pct(row),
+            Rank::Nearest => match (from, board.row_at(row)) {
+                (Some(a), Some(b)) => octile(cardinal, diagonal, a, b),
                 _ => i64::MAX,
             },
         };
@@ -371,8 +593,8 @@ fn rank(view: &View<'_>, filter: Filter, rank: Rank) -> Option<BeaconId> {
 ///
 /// `cardinal * (long - short) + diagonal * short` at the rules table's own step
 /// costs (item 59's 10 / 14). A lower bound on any walked path, which is what
-/// makes it an admissible stand-in for "least travel" — see the module docs.
-pub(crate) fn octile(world: &World, a: [Fx; 3], b: [Fx; 3]) -> i64 {
+/// makes it an admissible stand-in for "least travel" (see the module docs).
+fn octile(cardinal: i64, diagonal: i64, a: [Fx; 3], b: [Fx; 3]) -> i64 {
     let axis = |point: &[Fx; 3], at: usize| -> i64 {
         point
             .get(at)
@@ -382,8 +604,6 @@ pub(crate) fn octile(world: &World, a: [Fx; 3], b: [Fx; 3]) -> i64 {
     let dy = axis(&a, 1).saturating_sub(axis(&b, 1)).saturating_abs();
     let short = dx.min(dy);
     let long = dx.max(dy);
-    let cardinal = i64::from(world.rules().step_cardinal());
-    let diagonal = i64::from(world.rules().step_diagonal());
     cardinal
         .saturating_mul(long.saturating_sub(short))
         .saturating_add(diagonal.saturating_mul(short))

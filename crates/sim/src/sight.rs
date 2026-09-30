@@ -36,9 +36,10 @@
 //! question asked of the world, never an input to it. It does **not** include a
 //! scout's own vision ([`crate::programs::UNIT_VISION_RADIUS_VOXELS`]) or
 //! Survey-lite's recorded sightings ([`crate::survey`]). Item 108 (1) keeps
-//! both out of the live view; whether scouts join it is the owner's question
-//! (the wave-6 notes, section D, question 4). PLACEHOLDER: **OWNER**, now,
-//! with S3's knowledge store for the sightings.
+//! both out of the live view, and that was **ruled at the demo** (item 126 (2)
+//! (b), register D-25): spheres only, for now. A unit's sight radius is S2's,
+//! with scouting (decision 13 of S1's plan, register S1-34), and the sightings
+//! join with S3's knowledge store.
 
 use crate::interpreter::cond::within;
 use crate::math::fixed::Fx;

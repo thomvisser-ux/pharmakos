@@ -251,7 +251,9 @@ fn an_aborted_deploy_refunds_the_beacon_in_full() {
             moves.push(unexplained);
         }
         assert!(!has(&events, EventKind::BeaconPlaced));
-        ended = events.iter().any(|event| event.kind == EventKind::SegmentEnded);
+        ended = events
+            .iter()
+            .any(|event| event.kind == EventKind::SegmentEnded);
     }
     assert!(ended, "the Push ran out");
     assert_eq!(

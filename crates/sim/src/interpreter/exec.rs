@@ -1041,7 +1041,10 @@ fn drop_step(world: &mut World, seat: SeatId, state: &mut PlanState) {
 /// refunds an aborted deploy in full. Done inside the tick that closes the
 /// segment and before the Ledger settles, so the settlement, the frozen
 /// snapshot and the final audit all read the refunded treasury.
-pub(crate) fn abandon_deploys(world: &mut World, interpreter: &mut crate::interpreter::state::Interpreter) {
+pub(crate) fn abandon_deploys(
+    world: &mut World,
+    interpreter: &mut crate::interpreter::state::Interpreter,
+) {
     let seats = interpreter.len();
     let mut index: usize = 0;
     while index < seats {

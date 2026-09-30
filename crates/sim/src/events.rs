@@ -126,9 +126,10 @@ pub enum EventKind {
     /// runs between, which is enough for a transcript and for item 97's "event
     /// count in range". It is not enough for an assertion that wants to name
     /// one step, so a second field, or a `rule_step_started` kind beside this
-    /// one, is the additive answer when T15's scenario assertions ask for it
-    /// (owner, at T15). The same holds of `step_completed`, `step_skipped` and
-    /// `step_failed`.
+    /// one, is the additive answer when a scenario assertion asks for it. T15's
+    /// did not; the owner decides with the assertion vocabulary (register M-05,
+    /// which went to S1 with S1-41). The same holds of `step_completed`,
+    /// `step_skipped` and `step_failed`.
     StepStarted,
     /// A step completed. `value` carries its index.
     StepCompleted,
@@ -213,11 +214,17 @@ pub enum EventKind {
     /// with ties to the lowest seat id (item 17). `value` carries the share, in
     /// `$` of the destroyed thing's full build cost.
     KillCredited,
+    /// One seat's line of the final audit (spec section 3; `crate::audit`).
+    /// `seat` is the audited seat and `value` its audit score in whole `$`.
+    /// Emitted when the audit decides a match, a round-limit end or a
+    /// no-survivor end, once per audited seat in seat order, just before
+    /// `match_ended`.
+    FinalAudit,
 }
 
 impl EventKind {
     /// Every kind, in ascending [`EventKind::id`] order.
-    pub const ALL: [EventKind; 36] = [
+    pub const ALL: [EventKind; 37] = [
         EventKind::MatchStarted,
         EventKind::LullOpened,
         EventKind::PushStarted,
@@ -254,6 +261,7 @@ impl EventKind {
         EventKind::BeaconRecycled,
         EventKind::Settled,
         EventKind::KillCredited,
+        EventKind::FinalAudit,
     ];
 
     /// The wire id. Additive only: never reuse, never renumber.
@@ -296,6 +304,7 @@ impl EventKind {
             EventKind::BeaconRecycled => 34,
             EventKind::Settled => 35,
             EventKind::KillCredited => 36,
+            EventKind::FinalAudit => 37,
         }
     }
 
@@ -339,6 +348,7 @@ impl EventKind {
             34 => Some(EventKind::BeaconRecycled),
             35 => Some(EventKind::Settled),
             36 => Some(EventKind::KillCredited),
+            37 => Some(EventKind::FinalAudit),
             _ => None,
         }
     }
@@ -385,6 +395,7 @@ impl EventKind {
             EventKind::BeaconRecycled => "beacon_recycled",
             EventKind::Settled => "settled",
             EventKind::KillCredited => "kill_credited",
+            EventKind::FinalAudit => "final_audit",
         }
     }
 
