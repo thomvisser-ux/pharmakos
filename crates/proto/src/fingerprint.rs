@@ -35,7 +35,7 @@
 //! each seal.
 //!
 //! PLACEHOLDER: the arithmetic's home, the sim's `hash` module — owner, S1, the
-//! next time `crates/sim` is open, with the value unmoved (the register's
+//! `build` lane (S1's plan), with the value unmoved (the register's
 //! S1-42, decisions-log item 77). Until then the verifier's copy is the one to
 //! call, and this crate's rule is what both copies are held to.
 
