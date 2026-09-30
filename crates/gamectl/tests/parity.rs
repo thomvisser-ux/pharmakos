@@ -112,6 +112,56 @@ fn the_headless_runners_chain_equals_the_client_paths_for_the_same_seed() {
 }
 
 // ---------------------------------------------------------------------------
+// Parity of the two scenario readers
+// ---------------------------------------------------------------------------
+
+/// The value of a `pub(crate) const NAME: i64 = <n>;` line in
+/// `xtask/src/scenario.rs`, which is std-only and cannot be linked from here.
+fn xtask_constant(source: &str, name: &str) -> i64 {
+    let prefix = format!("pub(crate) const {name}: i64 = ");
+    let line = source
+        .lines()
+        .find_map(|line| line.strip_prefix(&prefix))
+        .unwrap_or_else(|| panic!("xtask/src/scenario.rs declares no `{prefix}...;`"));
+    line.trim_end_matches(';')
+        .replace('_', "")
+        .parse()
+        .unwrap_or_else(|error| panic!("`{name}` in xtask/src/scenario.rs: {error}"))
+}
+
+/// `gamectl`'s reader and `xtask`'s refuse the same files, so the numbers they
+/// refuse by are the same numbers: the longest segment, which is also the top
+/// of the rules table's `match.segment_lengths_ms` ladder (spec §3's eight
+/// minutes); the most walkers a seat may field; and the round limit a file
+/// that names none plays to, the sim's `DEFAULT_ROUND_LIMIT`. A re-tune of the
+/// ladder's top fails here rather than having both readers refuse a scenario
+/// that plays the real longest segment.
+#[test]
+fn the_two_scenario_readers_refuse_by_the_same_numbers() {
+    let source = std::fs::read_to_string(root().join("xtask/src/scenario.rs"))
+        .expect("xtask/src/scenario.rs");
+    assert_eq!(
+        xtask_constant(&source, "MAX_SEGMENT_MS"),
+        i64::from(scenario::MAX_SEGMENT_MS)
+    );
+    assert_eq!(
+        xtask_constant(&source, "MAX_UNITS_PER_SEAT"),
+        i64::from(scenario::MAX_UNITS_PER_SEAT)
+    );
+    assert_eq!(
+        xtask_constant(&source, "DEFAULT_ROUND_LIMIT"),
+        i64::from(DEFAULT_ROUND_LIMIT)
+    );
+
+    let rules = RulesTable::load(&root().join("rules/rules.v1.json")).expect("the rules table");
+    assert_eq!(
+        rules.segment_lengths_ms().iter().copied().max(),
+        Some(scenario::MAX_SEGMENT_MS),
+        "the format's segment cap is the top of `match.segment_lengths_ms`"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // The client path
 // ---------------------------------------------------------------------------
 

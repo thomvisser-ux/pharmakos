@@ -112,6 +112,22 @@ const TOP_LEVEL_KEYS: &[&str] = &[
 /// the same files.
 pub(crate) const MAX_SEGMENT_MS: i64 = 480_000;
 
+/// The most harness walkers a scenario may give one seat, for the reason
+/// [`MAX_SEGMENT_MS`] exists: the sim sizes its unit table from the key before
+/// the first tick, so an unbounded count asked the runner for gigabytes and
+/// aborted it with no pointer. `gamectl`'s reader holds the same number, and
+/// `crates/gamectl/tests/parity.rs` pins the pair.
+// PLACEHOLDER: 256 harness walkers per seat — owner, at S1's demo
+// A guess well above the determinism harness's 50; the cap goes with the
+// walkers when they go.
+pub(crate) const MAX_UNITS_PER_SEAT: i64 = 256;
+
+/// The round a match ends on when a scenario names none: the sim's
+/// `DEFAULT_ROUND_LIMIT` (spec section 3's six rounds). xtask is std-only and
+/// cannot read the sim's constant, so `crates/gamectl/tests/parity.rs` pins
+/// this copy to it.
+pub(crate) const DEFAULT_ROUND_LIMIT: i64 = 6;
+
 /// The rules table a scenario runs against when it does not name one.
 ///
 /// `rules/rules.v1.json` is the canonical JSON of one `gp.v1.RulesTable`
@@ -497,33 +513,53 @@ fn check_segments(json: &Json, problems: &mut Vec<Problem>) -> usize {
 /// moves no chain.
 fn check_match_settings(json: &Json, segments: usize, problems: &mut Vec<Problem>) {
     if let Some(value) = json.get("units_per_seat") {
-        if integer(Some(value)).is_none_or(|number| u32::try_from(number).is_err()) {
-            problems.push(Problem::new(
+        match integer(Some(value)) {
+            Some(number) if u32::try_from(number).is_err() => problems.push(Problem::new(
                 "/units_per_seat",
                 "optional, but when present it is the walkers each seat fields: an integer of 0 \
                  or more",
-            ));
-        }
-    }
-    if let Some(value) = json.get("round_limit") {
-        match integer(Some(value)) {
-            Some(number) if number >= 1 && u32::try_from(number).is_ok() => {
-                if usize::try_from(number).is_ok_and(|limit| limit < segments) {
-                    problems.push(Problem::new(
-                        "/round_limit",
-                        format!(
-                            "the match ends on round {number}, and the file plays {segments} \
-                             segments; a scenario plays no round past its limit"
-                        ),
-                    ));
-                }
-            }
-            _ => problems.push(Problem::new(
-                "/round_limit",
-                "optional, but when present it is the round the match ends on: an integer of 1 \
+            )),
+            Some(number) if number > MAX_UNITS_PER_SEAT => problems.push(Problem::new(
+                "/units_per_seat",
+                format!(
+                    "a seat fields at most {MAX_UNITS_PER_SEAT} harness walkers; found {number}"
+                ),
+            )),
+            Some(_) => {}
+            None => problems.push(Problem::new(
+                "/units_per_seat",
+                "optional, but when present it is the walkers each seat fields: an integer of 0 \
                  or more",
             )),
         }
+    }
+    // The limit the match plays to, named or the default, never falls below
+    // the file's segment count: a scenario plays no round past its limit.
+    let limit = match json.get("round_limit") {
+        None => Some(DEFAULT_ROUND_LIMIT),
+        Some(value) => match integer(Some(value)) {
+            Some(number) if number >= 1 && u32::try_from(number).is_ok() => Some(number),
+            _ => {
+                problems.push(Problem::new(
+                    "/round_limit",
+                    "optional, but when present it is the round the match ends on: an integer of \
+                     1 or more",
+                ));
+                None
+            }
+        },
+    };
+    if let Some(number) =
+        limit.filter(|number| usize::try_from(*number).is_ok_and(|limit| limit < segments))
+    {
+        problems.push(Problem::new(
+            "/round_limit",
+            format!(
+                "the match ends on round {number}, and the file plays {segments} segments; a \
+                 scenario plays no round past its limit (absent, the limit is the sim's default \
+                 of {DEFAULT_ROUND_LIMIT})"
+            ),
+        ));
     }
 }
 
@@ -1067,6 +1103,7 @@ mod tests {
             ("  \"units_per_seat\": -1,\n", "/units_per_seat"),
             ("  \"units_per_seat\": \"50\",\n", "/units_per_seat"),
             ("  \"units_per_seat\": 4294967296,\n", "/units_per_seat"),
+            ("  \"units_per_seat\": 257,\n", "/units_per_seat"),
             ("  \"round_limit\": 0,\n", "/round_limit"),
             ("  \"round_limit\": 1.5,\n", "/round_limit"),
         ] {
@@ -1087,6 +1124,28 @@ mod tests {
         let report = validate(&dir, &path).expect_err("rejected");
         assert!(report.contains("/round_limit"), "{report}");
         assert!(report.contains("plays 2 segments"), "{report}");
+    }
+
+    /// The default limit holds a file to its segment count as a named one
+    /// does: seven segments and no `round_limit` would play past round 6.
+    #[test]
+    fn the_default_round_limit_is_checked_against_the_segment_count() {
+        let dir = scratch("round-limit-default");
+        let segments: Vec<String> = (0..7)
+            .map(|index| format!("{{ \"index\": {index}, \"length_ms\": 180000 }}"))
+            .collect();
+        let one = "[ { \"index\": 0, \"length_ms\": 180000 } ]";
+        let path = write(
+            &dir,
+            &GOOD.replace(one, &format!("[ {} ]", segments.join(", "))),
+        );
+        let report = validate(&dir, &path).expect_err("rejected");
+        assert!(report.contains("/round_limit"), "{report}");
+        assert!(report.contains("plays 7 segments"), "{report}");
+
+        let six = segments.get(..6).expect("seven segments").join(", ");
+        let path = write(&dir, &GOOD.replace(one, &format!("[ {six} ]")));
+        validate(&dir, &path).expect("six segments fit the default limit");
     }
 
     #[test]

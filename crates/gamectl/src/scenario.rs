@@ -120,6 +120,19 @@ pub const MAX_SEGMENT_MS: i32 = 480_000;
 /// Harness walkers per seat when a scenario names none: none, which is what
 /// every chain committed before the key existed was produced with.
 pub const DEFAULT_UNITS_PER_SEAT: u32 = 0;
+
+/// The most harness walkers a scenario may give one seat. The cap is the
+/// format's, for the reason [`MAX_SEGMENT_MS`] is: the sim sizes its unit table
+/// from the key before the first tick, so an unbounded count asked the runner
+/// for gigabytes and aborted it with no pointer. The determinism harness fields
+/// 50 (`pharmakos_sim::DETERMINISM_UNITS_PER_SEAT`), and the walkers are
+/// scaffolding due to go with it. `xtask/src/scenario.rs`'s
+/// `MAX_UNITS_PER_SEAT` holds the same number, and `tests/parity.rs` pins the
+/// pair.
+// PLACEHOLDER: 256 harness walkers per seat — owner, at S1's demo
+// A guess well above the determinism harness's 50; the cap goes with the
+// walkers when they go.
+pub const MAX_UNITS_PER_SEAT: u32 = 256;
 const SEAT_KEYS: &[&str] = &["seat", "kind", "playbook"];
 const SEGMENT_KEYS: &[&str] = &["index", "length_ms", "note"];
 const EVENT_FIRED_KEYS: &[&str] = &["assert", "event", "seat", "by_tick", "note"];
@@ -604,7 +617,17 @@ fn read_match_settings(json: &Json, segments: usize, problems: &mut Problems) ->
         None => DEFAULT_UNITS_PER_SEAT,
         Some(value) => {
             if let Some(Ok(units)) = integer_as::<u32>(Some(value)) {
-                units
+                if units > MAX_UNITS_PER_SEAT {
+                    problems.at(
+                        "/units_per_seat",
+                        format!(
+                            "a seat fields at most {MAX_UNITS_PER_SEAT} harness walkers; found {units}"
+                        ),
+                    );
+                    DEFAULT_UNITS_PER_SEAT
+                } else {
+                    units
+                }
             } else {
                 problems.at(
                     "/units_per_seat",
@@ -617,31 +640,34 @@ fn read_match_settings(json: &Json, segments: usize, problems: &mut Problems) ->
     };
     let default_limit = pharmakos_sim::runner::DEFAULT_ROUND_LIMIT;
     let round_limit = match json.get("round_limit") {
-        None => default_limit,
+        None => Some(default_limit),
         Some(value) => match integer_as::<u32>(Some(value)) {
-            Some(Ok(limit)) if limit >= 1 => limit,
+            Some(Ok(limit)) if limit >= 1 => Some(limit),
             _ => {
                 problems.at(
                     "/round_limit",
                     "optional, but when present it is the round the match ends on: an integer of \
                      1 or more",
                 );
-                default_limit
+                None
             }
         },
     };
-    if json.get("round_limit").is_some()
-        && usize::try_from(round_limit).is_ok_and(|limit| limit < segments)
+    // The limit the match plays to, named or the default, never falls below
+    // the file's segment count: a scenario plays no round past its limit.
+    if let Some(limit) =
+        round_limit.filter(|limit| usize::try_from(*limit).is_ok_and(|limit| limit < segments))
     {
         problems.at(
             "/round_limit",
             format!(
-                "the match ends on round {round_limit}, and the file plays {segments} segments; a \
-                 scenario plays no round past its limit"
+                "the match ends on round {limit}, and the file plays {segments} segments; a \
+                 scenario plays no round past its limit (absent, the limit is the sim's default \
+                 of {default_limit})"
             ),
         );
     }
-    (units_per_seat, round_limit)
+    (units_per_seat, round_limit.unwrap_or(default_limit))
 }
 
 fn read_assertions(root: &Path, json: &Json, problems: &mut Problems) -> Vec<Assertion> {
@@ -920,8 +946,8 @@ fn check_path(
 #[cfg(test)]
 mod tests {
     use super::{
-        ASSERTIONS, DEFAULT_UNITS_PER_SEAT, Json, MAX_SEGMENT_MS, Problems, RESERVED_ASSERTIONS,
-        parse_seed, read_match_settings, read_segments, ticks_of,
+        ASSERTIONS, DEFAULT_UNITS_PER_SEAT, Json, MAX_SEGMENT_MS, MAX_UNITS_PER_SEAT, Problems,
+        RESERVED_ASSERTIONS, parse_seed, read_match_settings, read_segments, ticks_of,
     };
 
     fn object(text: &str) -> Json {
@@ -968,6 +994,8 @@ mod tests {
         for (text, pointer) in [
             (r#"{"units_per_seat": -1}"#, "/units_per_seat"),
             (r#"{"units_per_seat": "50"}"#, "/units_per_seat"),
+            (r#"{"units_per_seat": 257}"#, "/units_per_seat"),
+            (r#"{"units_per_seat": 4294967295}"#, "/units_per_seat"),
             (r#"{"round_limit": 0}"#, "/round_limit"),
             (r#"{"round_limit": 2}"#, "/round_limit"), // below the 3 segments
         ] {
@@ -975,6 +1003,24 @@ mod tests {
             let _ = read_match_settings(&object(text), 3, &mut problems);
             assert_eq!(pointers(&problems), vec![pointer], "{text}");
         }
+        let mut problems = Problems(Vec::new());
+        assert_eq!(
+            read_match_settings(&object(r#"{"units_per_seat": 256}"#), 3, &mut problems).0,
+            MAX_UNITS_PER_SEAT
+        );
+        assert!(problems.0.is_empty());
+    }
+
+    /// The default round limit holds a file to its segment count as a named
+    /// one does: seven segments and no `round_limit` would play past round 6.
+    #[test]
+    fn the_default_round_limit_is_checked_against_the_segment_count() {
+        let default = usize::try_from(pharmakos_sim::runner::DEFAULT_ROUND_LIMIT).unwrap();
+        let mut problems = Problems(Vec::new());
+        let _ = read_match_settings(&object("{}"), default, &mut problems);
+        assert!(problems.0.is_empty());
+        let _ = read_match_settings(&object("{}"), default + 1, &mut problems);
+        assert_eq!(pointers(&problems), vec!["/round_limit"]);
     }
 
     /// The register's X-01: the format caps a segment at spec §3's eight
