@@ -213,6 +213,62 @@ fn play_segment(runner: &mut Runner, feed: &mut Vec<Event>) {
 // `$`: value, the refund, and "paid means yours"
 // ---------------------------------------------------------------------------
 
+/// The latent restore bug the S1 plan names (`fixs`): `World::unit_limit` is
+/// documented as derived from the **starting** count, and a restore used to
+/// derive it from the **restored** count, so a match saved after fabricating
+/// resumed with more room than the unbroken run and could fabricate a unit the
+/// unbroken run held. Written red first, against the old expression.
+#[test]
+fn a_restored_match_keeps_the_unbroken_runs_unit_limit() {
+    // A Mine beacon beside seat 0's core asks the Quartermaster for its
+    // drones, which is what puts fabricated rows in the unit table.
+    let mut fixture = world(&[60_000]);
+    let seat = SeatId::new(0);
+    let core = core_of(&fixture, seat);
+    let at = fixture
+        .beacons()
+        .positions()
+        .get(usize::try_from(core.raw()).unwrap_or(usize::MAX))
+        .copied()
+        .unwrap_or_else(|| panic!("the core has a place"));
+    fixture
+        .place_beacon_directly(seat, offset(at, 6), MandateKind::Mine, PRIORITY_NORMAL)
+        .unwrap_or_else(|| panic!("the beacon table has room"));
+    let mut runner = Runner::new(fixture);
+    let starting = runner.world().units().len();
+    let limit = runner.world().unit_limit();
+    let mut feed = Vec::new();
+    play_segment(&mut runner, &mut feed);
+    let fabricated = runner.world().units().len();
+    assert!(
+        fabricated > starting,
+        "the fixture has to fabricate for the bug to show: {starting} units before the Push, \
+         {fabricated} after"
+    );
+    assert_eq!(
+        runner.world().unit_limit(),
+        limit,
+        "the unbroken run's ceiling does not move as it fabricates"
+    );
+
+    let saved = pharmakos_sim::snapshot::Snapshot::capture(runner.world());
+    let mut resumed = world(&[60_000]);
+    saved
+        .restore_into(&mut resumed)
+        .unwrap_or_else(|error| panic!("the save restores: {error}"));
+    assert_eq!(
+        resumed.unit_limit(),
+        limit,
+        "a resumed match has exactly the room the unbroken run has left, not a fresh \
+         allowance on top of what it had already fabricated"
+    );
+    assert_eq!(
+        resumed.state_hash(),
+        runner.world().state_hash(),
+        "and it is the same world"
+    );
+}
+
 #[test]
 fn value_follows_condition_at_the_audit_and_at_the_recycle_refund() {
     let mut world = world(&[20_000]);
