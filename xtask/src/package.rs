@@ -55,12 +55,13 @@
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitStatus, Stdio};
+use std::process::{ExitStatus, Stdio};
 
 use crate::{
     CLIENT_PACKAGE, CLIENT_STAGE_DIR, Ctx, ENTRY_SYMBOL, GDEXTENSION_FILE, GODOT_PROJECT_DIR,
-    SCENARIO_BIN, contains_bytes, describe_exit, find_bytes, first_difference, godot_program,
-    import_project, metadata, render_command, run, scenario, tool_available, walk, zip,
+    SCENARIO_BIN, child_command, contains_bytes, describe_exit, find_bytes, first_difference,
+    godot_program, import_project, metadata, render_command, run, scenario, tool_available, walk,
+    zip,
 };
 
 /// The version string of every zip until the wk-35.5 release (item 117 (2)).
@@ -180,7 +181,7 @@ pub(crate) fn run_package(ctx: &Ctx) -> Result<String, String> {
     } else {
         &LINUX
     };
-    let host = host_triple()?;
+    let host = host_triple(ctx)?;
     if host != platform.triple {
         return Err(format!(
             "the host triple is {host}; `package` builds {} only (item 117 (2): Windows and \
@@ -201,7 +202,7 @@ pub(crate) fn run_package(ctx: &Ctx) -> Result<String, String> {
     }
 
     let godot = godot_program();
-    if !tool_available(&godot) {
+    if !tool_available(ctx, &godot) {
         return Err(format!(
             "`{godot}` is not installed ($PHARMAKOS_GODOT overrides the name); the package is \
              Godot's export and cannot be made without it"
@@ -215,14 +216,14 @@ pub(crate) fn run_package(ctx: &Ctx) -> Result<String, String> {
             template.display()
         ));
     }
-    if !tool_available("reuse") {
+    if !tool_available(ctx, "reuse") {
         return Err(
             "the reuse tool is not installed (`pipx install reuse==6.2.0`); the zip's licence \
              check is acceptance (c) and cannot be skipped"
                 .to_owned(),
         );
     }
-    if platform.name == "linux" && !tool_available("objdump") {
+    if platform.name == "linux" && !tool_available(ctx, "objdump") {
         return Err(
             "objdump is not installed (binutils); the note states the glibc floor it reads"
                 .to_owned(),
@@ -283,6 +284,7 @@ pub(crate) fn run_package(ctx: &Ctx) -> Result<String, String> {
         fs::create_dir_all(folder).map_err(|error| format!("creating {folder}: {error}"))?;
     }
     let status = run_logged(
+        ctx.require_tools,
         &godot,
         &[
             "--headless".to_owned(),
@@ -305,6 +307,7 @@ pub(crate) fn run_package(ctx: &Ctx) -> Result<String, String> {
     reset_dir(&base, &out)?;
     let export_log = logs.join("export.log");
     let status = run_logged(
+        ctx.require_tools,
         &godot,
         &[
             "--headless".to_owned(),
@@ -396,11 +399,14 @@ pub(crate) fn run_package(ctx: &Ctx) -> Result<String, String> {
     copy_file(&ctx.root.join(CHANGELOG_FILE), &tree.join(CHANGELOG_FILE))?;
 
     let glibc = if platform.name == "linux" {
-        let floor = glibc_floor(&[
-            tree.join(platform.executable),
-            tree.join(platform.library),
-            tree.join(platform.gamectl),
-        ])?;
+        let floor = glibc_floor(
+            ctx,
+            &[
+                tree.join(platform.executable),
+                tree.join(platform.library),
+                tree.join(platform.gamectl),
+            ],
+        )?;
         summary.note(format!("glibc floor: GLIBC_{floor}"));
         Some(floor)
     } else {
@@ -408,7 +414,7 @@ pub(crate) fn run_package(ctx: &Ctx) -> Result<String, String> {
     };
 
     let licences = licences(ctx, platform)?;
-    let notices = notices_text(platform, &commit, &licences)?;
+    let notices = notices_text(ctx, platform, &commit, &licences)?;
     write_text(&tree.join(NOTICES_FILE), &notices)?;
     let manifest = render_manifest(ctx, platform, &licences)?;
     write_text(&tree.join("REUSE.toml"), &manifest)?;
@@ -455,7 +461,13 @@ pub(crate) fn run_package(ctx: &Ctx) -> Result<String, String> {
     // 10. reuse over the extracted zip.
     let extracted = zip::extract(&bytes, &check)?;
     let reuse_log = logs.join("reuse.json");
-    let (reuse_total, expected) = reuse_check(&base, &check.join(FOLDER), &listed, &reuse_log)?;
+    let (reuse_total, expected) = reuse_check(
+        ctx.require_tools,
+        &base,
+        &check.join(FOLDER),
+        &listed,
+        &reuse_log,
+    )?;
     summary.note(format!(
         "reuse: {reuse_total} file(s) linted, all with copyright and licence information; the \
          manifest's {} file entries less those reuse never lints is {expected} ({extracted} \
@@ -676,10 +688,9 @@ fn pck_name(platform: &Platform) -> String {
 // Building
 // ---------------------------------------------------------------------------
 
-fn host_triple() -> Result<String, String> {
+fn host_triple(ctx: &Ctx) -> Result<String, String> {
     let rustc = env::var("RUSTC").unwrap_or_else(|_| "rustc".to_owned());
-    let output = Command::new(&rustc)
-        .arg("-vV")
+    let output = child_command(ctx.require_tools, &rustc, &["-vV"], &ctx.root)
         .output()
         .map_err(|error| format!("failed to run `{rustc} -vV`: {error}"))?;
     let text = String::from_utf8_lossy(&output.stdout);
@@ -689,10 +700,9 @@ fn host_triple() -> Result<String, String> {
         .ok_or_else(|| format!("`{rustc} -vV` printed no host line"))
 }
 
-fn rustc_version() -> Result<String, String> {
+fn rustc_version(ctx: &Ctx) -> Result<String, String> {
     let rustc = env::var("RUSTC").unwrap_or_else(|_| "rustc".to_owned());
-    let output = Command::new(&rustc)
-        .arg("-V")
+    let output = child_command(ctx.require_tools, &rustc, &["-V"], &ctx.root)
         .output()
         .map_err(|error| format!("failed to run `{rustc} -V`: {error}"))?;
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
@@ -742,8 +752,8 @@ fn build(ctx: &Ctx, platform: &Platform, target: &Path) -> Result<(PathBuf, Path
         client.push("--locked".to_owned());
         host.push("--locked".to_owned());
     }
-    run_with_env(&ctx.root, &ctx.cargo, &client, &environment)?;
-    run_with_env(&ctx.root, &ctx.cargo, &host, &environment)?;
+    run_with_env(ctx, &ctx.cargo, &client, &environment)?;
+    run_with_env(ctx, &ctx.cargo, &host, &environment)?;
     let library = target
         .join(platform.triple)
         .join("release-client")
@@ -765,7 +775,7 @@ fn build(ctx: &Ctx, platform: &Platform, target: &Path) -> Result<(PathBuf, Path
 }
 
 fn run_with_env(
-    cwd: &Path,
+    ctx: &Ctx,
     program: &str,
     args: &[String],
     environment: &[(String, String)],
@@ -775,8 +785,7 @@ fn run_with_env(
         .map(|(key, value)| format!("{key}=\"{value}\" "))
         .collect();
     println!("   $ {}{}", prefix.concat(), render_command(program, args));
-    let mut command = Command::new(program);
-    command.args(args).current_dir(cwd);
+    let mut command = child_command(ctx.require_tools, program, args, &ctx.root);
     for (key, value) in environment {
         command.env(key, value);
     }
@@ -796,6 +805,7 @@ fn run_with_env(
 
 /// Runs a command with its standard output and error both written to `log`.
 fn run_logged(
+    require_tools: bool,
     program: &str,
     args: &[String],
     cwd: &Path,
@@ -812,10 +822,8 @@ fn run_logged(
     let error_file = file
         .try_clone()
         .map_err(|error| format!("{}: {error}", log.display()))?;
-    let mut command = Command::new(program);
+    let mut command = child_command(require_tools, program, args, cwd);
     command
-        .args(args)
-        .current_dir(cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::from(file))
         .stderr(Stdio::from(error_file));
@@ -1042,11 +1050,10 @@ fn print_tail(text: &str, count: usize) {
 
 /// The highest `GLIBC_<n>.<m>[.<p>]` any of `files` asks for, read with
 /// `objdump -T`; `GLIBC_PRIVATE` is ignored.
-fn glibc_floor(files: &[PathBuf]) -> Result<String, String> {
+fn glibc_floor(ctx: &Ctx, files: &[PathBuf]) -> Result<String, String> {
     let mut best: Option<Vec<u32>> = None;
     for file in files {
-        let output = Command::new("objdump")
-            .arg("-T")
+        let output = child_command(ctx.require_tools, "objdump", &["-T"], &ctx.root)
             .arg(file)
             .output()
             .map_err(|error| format!("failed to run objdump: {error}"))?;
@@ -1110,9 +1117,7 @@ fn commit_stamp(ctx: &Ctx) -> Result<Commit, String> {
     let full = match env::var("GITHUB_SHA") {
         Ok(sha) if !sha.trim().is_empty() => sha.trim().to_owned(),
         _ => {
-            let output = Command::new("git")
-                .args(["rev-parse", "HEAD"])
-                .current_dir(&ctx.root)
+            let output = child_command(ctx.require_tools, "git", &["rev-parse", "HEAD"], &ctx.root)
                 .output()
                 .map_err(|error| format!("failed to run `git rev-parse HEAD`: {error}"))?;
             String::from_utf8_lossy(&output.stdout).trim().to_owned()
@@ -1414,6 +1419,7 @@ fn licence_files(registry: &Path, item: &Crate) -> Result<Vec<(String, String)>,
 }
 
 fn notices_text(
+    ctx: &Ctx,
     platform: &Platform,
     commit: &Commit,
     licences: &Licences,
@@ -1444,7 +1450,7 @@ fn notices_text(
         "Rust's standard library (std, core, alloc and the crates they are built\n\
          from) is statically linked into both binaries: MIT OR Apache-2.0, built\n\
          with {}.\n",
-        rustc_version()?
+        rustc_version(ctx)?
     ));
     if platform.name == "windows" {
         out.push(
@@ -1749,6 +1755,7 @@ pub(crate) fn expected_lint_count(listed: &[zip::Listed]) -> usize {
 }
 
 fn reuse_check(
+    require_tools: bool,
     base: &Path,
     root: &Path,
     listed: &[zip::Listed],
@@ -1761,6 +1768,7 @@ fn reuse_check(
         "--json".to_owned(),
     ];
     let status = run_logged(
+        require_tools,
         "reuse",
         &args,
         base,

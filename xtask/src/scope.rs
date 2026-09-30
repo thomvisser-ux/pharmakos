@@ -57,7 +57,7 @@ use std::env;
 use std::fs::OpenOptions;
 use std::io::Write as _;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 /// The one event whose checkout can take the fast path.
 const PULL_REQUEST: &str = "pull_request";
@@ -238,13 +238,16 @@ fn is_object_name(text: &str) -> bool {
 }
 
 /// Runs git in `repository` and returns its standard output, or why it failed.
+///
+/// Through [`crate::child_command`], as every child of xtask is (S1-07). The
+/// require-tools answer is read the way `ci` reads it; a value the reader
+/// refuses is an error here, which the caller answers `full` on, like every
+/// other error.
 fn git(repository: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
-    let mut command = Command::new("git");
-    command
-        .args(args)
-        .current_dir(repository)
-        .stdin(Stdio::null())
-        .stderr(Stdio::piped());
+    let require_tools =
+        crate::require_tools_from(env::var_os(crate::REQUIRE_TOOLS_VAR).as_deref())?;
+    let mut command = crate::child_command(require_tools, "git", args, repository);
+    command.stdin(Stdio::null()).stderr(Stdio::piped());
     for name in GIT_REDIRECTS {
         command.env_remove(name);
     }
@@ -317,6 +320,7 @@ mod tests {
     use super::*;
     use std::fs;
     use std::path::PathBuf;
+    use std::process::Command;
 
     fn paths(list: &[&str]) -> Vec<String> {
         list.iter().map(|path| (*path).to_owned()).collect()

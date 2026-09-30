@@ -63,11 +63,13 @@ pub const DEFAULT_RULES: &str = "rules/rules.v1.json";
 
 /// The assertion vocabulary, in full.
 ///
-/// PLACEHOLDER — and this one is a decision, not an omission.
-/// **Decisions-log item 97** (which is plan §7 decision 16, taken on the
-/// recommendation on 2026-09-14 — an earlier draft of this comment called it
-/// "recommended, not yet logged", and a review was right that it is logged)
-/// authorises T15 to extend this list **once**, "when `scenario run` meets real
+/// **Ruled: none of item 97's three is taken now** (the register's M-05,
+/// ruled by S1's plan's decision 9, decisions-log item 128). The history,
+/// kept because it is the reason: **decisions-log item 97** (which is plan §7
+/// decision 16, taken on the recommendation on 2026-09-14 — an earlier draft
+/// of this comment called it "recommended, not yet logged", and a review was
+/// right that it is logged) authorises T15 to extend this list **once**,
+/// "when `scenario run` meets real
 /// events", by *at most* `event_count_in_range`, `state_hash_at_tick` and
 /// `terminal_hash`. "At most" is the word that matters: taking none of the
 /// three is inside the decision, and that is what T15 did.
@@ -82,9 +84,9 @@ pub const DEFAULT_RULES: &str = "rules/rules.v1.json";
 /// the vocabulary in `xtask/src/scenario.rs` and `scenarios/README.md`, both
 /// contract paths (AGENTS.md §5), to buy assertions nothing needs.
 ///
-/// **The owner confirms** that taking none is the right reading of item 97's
-/// "by at most", or names which of the three to spend the contract change on.
-/// Until then the three stay reserved and naming one is an error that says so.
+/// The owner confirmed that taking none is the right reading of item 97's "by
+/// at most" (item 128). The three stay reserved, and naming one is an error
+/// that says so; a later stage that needs one spends a format change on it.
 pub const ASSERTIONS: &[&str] = &["event_fired", "hash_chain_equals"];
 
 /// Names held for decisions-log item 97's extension.
@@ -100,11 +102,24 @@ const TOP_LEVEL_KEYS: &[&str] = &[
     "summary",
     "map",
     "rules",
+    "units_per_seat",
+    "round_limit",
     "seats",
     "segments",
     "assertions",
 ];
 const MAP_KEYS: &[&str] = &["seed", "generator"];
+
+/// The longest segment a scenario may play, in game milliseconds: spec §3's
+/// "the world then runs for up to 8 minutes". The format's cap (the register's
+/// X-01, taken with S1-41 in S1's first contract pull request), and
+/// `xtask/src/scenario.rs`'s `MAX_SEGMENT_MS` holds the same number, so the two
+/// readers refuse the same files.
+pub const MAX_SEGMENT_MS: i32 = 480_000;
+
+/// Harness walkers per seat when a scenario names none: none, which is what
+/// every chain committed before the key existed was produced with.
+pub const DEFAULT_UNITS_PER_SEAT: u32 = 0;
 const SEAT_KEYS: &[&str] = &["seat", "kind", "playbook"];
 const SEGMENT_KEYS: &[&str] = &["index", "length_ms", "note"];
 const EVENT_FIRED_KEYS: &[&str] = &["assert", "event", "seat", "by_tick", "note"];
@@ -123,17 +138,17 @@ pub enum SeatKind {
     /// filed is the gateway's fallback — the library's Safe Playbook with
     /// nothing raised — and never a safe playbook the operator made for it.
     ///
-    /// PLACEHOLDER: a `safe` seat filing the gateway's fallback rather than an
-    /// operator-made safe playbook. **Owner**, at **S5**, with the `operator`
-    /// scenario key.
+    /// PLACEHOLDER: a `safe` seat files the gateway's fallback — owner, S5, with
+    /// the `operator` scenario key, rather than an operator-made safe playbook.
     Safe,
     /// It plays the built-in operator: Easy, seated by the runner through
     /// `serve::InProcessSeats` as `gamectl host` seats it, which plans, submits
     /// and says ready in every Lull (T18b; decisions-log item 113 (8)).
     ///
-    /// PLACEHOLDER: a `builtin` seat plays Easy, the one difficulty the
-    /// skeleton ships, and the scenario format has no `operator` key to name
-    /// another; the key waits for a second difficulty. **Owner**, at **S5**.
+    /// PLACEHOLDER: a `builtin` seat plays Easy — owner, S5, with a second
+    /// difficulty. Easy is the one difficulty the skeleton ships, and the
+    /// scenario format has no `operator` key to name another; the key waits
+    /// for one.
     Builtin,
 }
 
@@ -190,6 +205,12 @@ pub struct Scenario {
     pub generator: String,
     /// The rules table, as a path from the repository root.
     pub rules: String,
+    /// Harness walkers each seat fields: the `units_per_seat` key, or
+    /// [`DEFAULT_UNITS_PER_SEAT`].
+    pub units_per_seat: u32,
+    /// The round the match ends on: the `round_limit` key, or the sim's
+    /// `DEFAULT_ROUND_LIMIT`. Never fewer than the segments.
+    pub round_limit: u32,
     /// One to three seats, in seat order.
     pub seats: Vec<Seat>,
     /// One or more segments, in order.
@@ -351,6 +372,7 @@ fn read(root: &Path, source: &str, json: &Json, problems: &mut Problems) -> Opti
     let rules = read_rules(root, json, problems);
     let seats = read_seats(root, json, problems);
     let segments = read_segments(json, problems);
+    let (units_per_seat, round_limit) = read_match_settings(json, segments.len(), problems);
     let assertions = read_assertions(root, json, problems);
 
     Some(Scenario {
@@ -360,6 +382,8 @@ fn read(root: &Path, source: &str, json: &Json, problems: &mut Problems) -> Opti
         seed: seed?,
         generator: generator?,
         rules,
+        units_per_seat,
+        round_limit,
         seats,
         segments,
         assertions,
@@ -546,10 +570,17 @@ fn read_segments(json: &Json, problems: &mut Problems) -> Vec<Segment> {
             ),
         }
         match integer_as::<i32>(segment.get("length_ms")) {
-            Some(Ok(length)) if length > 0 => read.push(Segment {
+            Some(Ok(length)) if length > 0 && length <= MAX_SEGMENT_MS => read.push(Segment {
                 index,
                 length_ms: length,
             }),
+            Some(Ok(length)) if length > MAX_SEGMENT_MS => problems.at(
+                &format!("{base}/length_ms"),
+                format!(
+                    "a segment plays at most {MAX_SEGMENT_MS} game milliseconds, spec §3's eight \
+                     minutes; found {length}"
+                ),
+            ),
             Some(_) => problems.at(
                 &format!("{base}/length_ms"),
                 "a segment length is a positive int32 count of game milliseconds \
@@ -562,6 +593,55 @@ fn read_segments(json: &Json, problems: &mut Problems) -> Vec<Segment> {
         }
     }
     read
+}
+
+/// The two match settings a scenario may name (the register's S1-41, taken in
+/// S1's first contract pull request): `units_per_seat` and `round_limit`, each
+/// optional, and absent what every chain committed before the keys existed
+/// was produced with, so adding them moves no chain.
+fn read_match_settings(json: &Json, segments: usize, problems: &mut Problems) -> (u32, u32) {
+    let units_per_seat = match json.get("units_per_seat") {
+        None => DEFAULT_UNITS_PER_SEAT,
+        Some(value) => {
+            if let Some(Ok(units)) = integer_as::<u32>(Some(value)) {
+                units
+            } else {
+                problems.at(
+                    "/units_per_seat",
+                    "optional, but when present it is the walkers each seat fields: an integer of \
+                     0 or more",
+                );
+                DEFAULT_UNITS_PER_SEAT
+            }
+        }
+    };
+    let default_limit = pharmakos_sim::runner::DEFAULT_ROUND_LIMIT;
+    let round_limit = match json.get("round_limit") {
+        None => default_limit,
+        Some(value) => match integer_as::<u32>(Some(value)) {
+            Some(Ok(limit)) if limit >= 1 => limit,
+            _ => {
+                problems.at(
+                    "/round_limit",
+                    "optional, but when present it is the round the match ends on: an integer of \
+                     1 or more",
+                );
+                default_limit
+            }
+        },
+    };
+    if json.get("round_limit").is_some()
+        && usize::try_from(round_limit).is_ok_and(|limit| limit < segments)
+    {
+        problems.at(
+            "/round_limit",
+            format!(
+                "the match ends on round {round_limit}, and the file plays {segments} segments; a \
+                 scenario plays no round past its limit"
+            ),
+        );
+    }
+    (units_per_seat, round_limit)
 }
 
 fn read_assertions(root: &Path, json: &Json, problems: &mut Problems) -> Vec<Assertion> {
@@ -601,8 +681,8 @@ fn read_assertions(root: &Path, json: &Json, problems: &mut Problems) -> Vec<Ass
                 &format!("{base}/assert"),
                 format!(
                     "`{kind}` is reserved for the vocabulary extension decisions-log item 97 \
-                     authorises (plan §7 decision 16); T15 took none of the three and the owner \
-                     has the question (see crates/gamectl/src/scenario.rs). It is not in {FORMAT}."
+                     authorises (plan §7 decision 16); T15 took none of the three, and the owner \
+                     confirmed none is taken now (decisions-log item 128). It is not in {FORMAT}."
                 ),
             );
             continue;
@@ -839,7 +919,85 @@ fn check_path(
 
 #[cfg(test)]
 mod tests {
-    use super::{ASSERTIONS, RESERVED_ASSERTIONS, parse_seed, ticks_of};
+    use super::{
+        ASSERTIONS, DEFAULT_UNITS_PER_SEAT, Json, MAX_SEGMENT_MS, Problems, RESERVED_ASSERTIONS,
+        parse_seed, read_match_settings, read_segments, ticks_of,
+    };
+
+    fn object(text: &str) -> Json {
+        pharmakos_proto::json::read(text).expect("test JSON")
+    }
+
+    fn pointers(problems: &Problems) -> Vec<&str> {
+        problems
+            .0
+            .iter()
+            .map(|problem| problem.pointer.as_str())
+            .collect()
+    }
+
+    /// The register's S1-41: the two keys are optional, and absent they are
+    /// what every committed chain was produced with.
+    #[test]
+    fn the_match_settings_default_to_what_every_chain_was_produced_with() {
+        let mut problems = Problems(Vec::new());
+        assert_eq!(
+            read_match_settings(&object("{}"), 3, &mut problems),
+            (
+                DEFAULT_UNITS_PER_SEAT,
+                pharmakos_sim::runner::DEFAULT_ROUND_LIMIT
+            )
+        );
+        assert_eq!(DEFAULT_UNITS_PER_SEAT, 0);
+        assert!(problems.0.is_empty());
+
+        let mut problems = Problems(Vec::new());
+        assert_eq!(
+            read_match_settings(
+                &object(r#"{"units_per_seat": 50, "round_limit": 3}"#),
+                3,
+                &mut problems
+            ),
+            (50, 3)
+        );
+        assert!(problems.0.is_empty());
+    }
+
+    #[test]
+    fn a_bad_match_setting_is_refused_with_a_pointer() {
+        for (text, pointer) in [
+            (r#"{"units_per_seat": -1}"#, "/units_per_seat"),
+            (r#"{"units_per_seat": "50"}"#, "/units_per_seat"),
+            (r#"{"round_limit": 0}"#, "/round_limit"),
+            (r#"{"round_limit": 2}"#, "/round_limit"), // below the 3 segments
+        ] {
+            let mut problems = Problems(Vec::new());
+            let _ = read_match_settings(&object(text), 3, &mut problems);
+            assert_eq!(pointers(&problems), vec![pointer], "{text}");
+        }
+    }
+
+    /// The register's X-01: the format caps a segment at spec §3's eight
+    /// minutes, where the runner used to cap only its reservation.
+    #[test]
+    fn a_segment_past_eight_minutes_is_refused_with_a_pointer() {
+        assert_eq!(MAX_SEGMENT_MS, 480_000);
+        let mut problems = Problems(Vec::new());
+        let read = read_segments(
+            &object(r#"{"segments": [{"index": 0, "length_ms": 480000}]}"#),
+            &mut problems,
+        );
+        assert_eq!(read.len(), 1);
+        assert!(problems.0.is_empty());
+
+        let mut problems = Problems(Vec::new());
+        let read = read_segments(
+            &object(r#"{"segments": [{"index": 0, "length_ms": 480001}]}"#),
+            &mut problems,
+        );
+        assert!(read.is_empty());
+        assert_eq!(pointers(&problems), vec!["/segments/0/length_ms"]);
+    }
 
     #[test]
     fn the_seed_is_sixteen_lowercase_hex_digits_and_nothing_else() {

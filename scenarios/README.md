@@ -110,11 +110,13 @@ that asserts something the build cannot do teaches the wrong thing twice over.)
 | `map.seed` | yes | The 64-bit map seed, as `"0x"` + **16 lowercase hex digits**. |
 | `map.generator` | yes | The generator's name, so a scenario written against one generation rule is not silently replayed against another. |
 | `rules` | no | The rules table, repository-relative. Defaults to `rules/rules.v1.json` — see below. |
+| `units_per_seat` | no | Harness walkers each seat fields, an integer of 0 or more. Defaults to **0** — see below. |
+| `round_limit` | no | The round the match ends on, an integer of 1 or more and never fewer than `segments`. Defaults to the sim's `DEFAULT_ROUND_LIMIT` (6, spec §3) — see below. |
 | `seats` | yes | One to three seats (spec §3), `seat` counting from 0 in array order. |
 | `seats[].kind` | yes | `playbook` (seals the named file), `safe` (files the safe playbook), `builtin` (the built-in operator, playing Easy). |
 | `seats[].playbook` | with `playbook` | Repository-relative path, forward slashes, no `..`. |
 | `segments` | yes | One or more, `index` counting from 0. |
-| `segments[].length_ms` | yes | Game milliseconds, a positive `int32` bare integer (item 46). |
+| `segments[].length_ms` | yes | Game milliseconds, a positive bare integer (item 46), at most **480 000** — spec §3's "up to 8 minutes". |
 | `assertions` | yes | At least one, and see the pairing rule below. |
 
 **Unknown keys are rejected, never ignored** — the same rule the verifier's Load
@@ -143,6 +145,30 @@ data that ordinary tuning PRs move during S1 and S2, which is exactly why a
 committed hash chain has to record which values produced it. A tuning PR that
 moves every scenario's chain is doing so legitimately; one that moves them
 without saying so is the failure AGENTS.md §4.8 is about.
+
+### The match settings
+
+Two keys name a match's settings beyond the triple, and both were added in
+S1's first contract pull request (the register's S1-41), additively, under the
+same format string:
+
+* **`units_per_seat`** — the harness walkers each seat fields. Absent, it is
+  0, which is what both producers of a committed chain outside this runner use
+  (`crates/sim/tests/scenario.rs`, `crates/gateway/tests/methods.rs`).
+* **`round_limit`** — the round the match ends on. Absent, it is the sim's
+  default of six (spec §3), a lobby setting rather than a tuning row
+  (decisions-log item 102 (7)). A scenario that plays a match to its end names
+  it, and both readers refuse a limit below the file's segment count, because
+  a scenario plays no round past its limit.
+
+Absent, both are what every chain committed before them was produced with, so
+adding the keys moved no chain; a scenario that names either is a claim about
+that setting as well as about the triple.
+
+**A segment is at most 480 000 ms**, spec §3's "the world then runs for up to
+8 minutes" (the register's X-01). Before the cap, a segment was any positive
+`int32`, and two of `i32::MAX` asked the runner for gigabytes of hash chain
+before the first tick; both readers now refuse such a length with a pointer.
 
 ### The assertion vocabulary
 
@@ -181,8 +207,10 @@ Three names are **reserved** for the one extension **decisions-log item 97**
 real events": `event_count_in_range`, `state_hash_at_tick`, `terminal_hash`.
 Item 97 says *by at most* those three, and T15 — the task that met the real
 events — took **none** of them: `hash_chain_equals` already pins every tick, and
-no committed scenario needs a count range. Using one today is an error
-naming the decision that holds it. The vocabulary is *data inside* the format,
+no committed scenario needs a count range. The owner confirmed that none is
+taken now (the register's M-05; decisions-log item 128, ruling S1's plan's
+decision 9). Using one today is an error naming the decision that holds it.
+The vocabulary is *data inside* the format,
 so adding to it is not a format break; removing one would be.
 
 ### What a chain depends on

@@ -56,6 +56,23 @@
 //! A missing *tool* (buf, cargo-deny, reuse, godot, xvfb-run) is a skip
 //! locally and a failure under `--require-tools`, which CI sets.
 //!
+//! Missing workspace metadata is a failure in every step that reads it,
+//! including the three that used to fall back without it — `golden`'s target
+//! directory, `clippy`'s walled-crate list and its research pass — so no step
+//! lints, compares or skips something other than what the metadata says (S1's
+//! plan, decision 9, ruling the register's S1-05).
+//!
+//! # `PHARMAKOS_REQUIRE_TOOLS`, read one way everywhere
+//!
+//! `1` requires the tools; unset or `0` does not; any other value is an error
+//! naming the variable, never a guess (S1-06). `--require-tools` and
+//! `--no-require-tools` override it, and every child process xtask starts —
+//! each step's, the metadata read, the tool probes, `perf-alarms`',
+//! `ci-scope`'s and `package`'s — is built by [`child_command`], which sets the
+//! variable to `1` or removes it, so the answer reaches a test that needs a tool
+//! too (S1-07). `every_child_goes_through_child_command` pins that over the
+//! source text.
+//!
 //! # Where AGENTS.md section 9 item 8's regenerate-and-compare runs
 //!
 //! Not in the `buf` step, and not twice. The prost tree and its descriptor set
@@ -90,7 +107,20 @@
 //! cargo xtask ci-scope              # CI's docs-only fast path: `full` or `prose`
 //! cargo xtask perf-alarms           # the per-runner perf notices; never fails
 //! cargo xtask package               # the unsigned zip for this platform (T21)
+//! cargo xtask placeholders          # the PLACEHOLDER register; --check fails off-grammar
 //! ```
+//!
+//! # The PLACEHOLDER register
+//!
+//! `cargo xtask placeholders` is not a step either: `ci` and `list` do not
+//! know it. It collects every `PLACEHOLDER` marker in the tracked tree, parses
+//! each against the one-line grammar, `<what> — <who>, <when>` after the
+//! marker's colon ([`placeholders::GRAMMAR`]), prints the register grouped by
+//! when and by who, and lists the markers still to be reworded. With
+//! `--check` it fails while any marker is off the grammar. It becomes a `ci`
+//! step in S1's last `xtask` pull request (`tune`), once the lanes have
+//! reworded their markers (S1's plan, decision 9, ruling the register's
+//! S1-10); see [`placeholders`].
 //!
 //! # The research tests
 //!
@@ -157,6 +187,7 @@
 )]
 
 use std::env;
+use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, ExitStatus, Stdio};
@@ -166,6 +197,7 @@ use std::process::{Command, ExitCode, ExitStatus, Stdio};
 mod annotate;
 mod golden;
 mod package;
+mod placeholders;
 mod png;
 mod scenario;
 mod scope;
@@ -265,8 +297,9 @@ const WALL_ALLOW: &[&str] = &[
 /// it is a contract change and needs owner approval — keep this list,
 /// `clippy.toml`'s header comment and AGENTS.md section 4.9 in step.
 ///
-/// PLACEHOLDER: `pharmakos-client-gdext` and `pharmakos-mesher` exist;
-/// `presentation` and `solve` are named by the spec but not yet created.
+/// PLACEHOLDER: `presentation` and `solve`, named and not created — owner, if either is proposed.
+/// The spec names them; `pharmakos-client-gdext` and `pharmakos-mesher` exist, and a proposal
+/// of either of the other two is an AGENTS.md section 5 change (the register's M-02).
 const WALLED_PACKAGES: &[&str] = &["presentation", "solve", "client-gdext", "mesher"];
 
 /// Crates that may never reach the `research` feature, which gates `fork`.
@@ -346,9 +379,12 @@ const HASH_GOLDEN: &str = "tests/golden/determinism/expected.hashes.txt";
 /// The binary the `determinism` step runs once it exists.
 const DETERMINISM_BIN: &str = "determinism";
 
-/// PLACEHOLDER: 1 200 ticks is one minute at 20 Hz — a smoke run of the sim's
-/// harness segment list. It stays until S1 (owner, at S1): the full-segment
-/// chain T10 asked for is the demo scenario's, `scenarios/skeleton/
+/// PLACEHOLDER: 1 200 ticks, a one-minute smoke run — owner, S1, with the real segment.
+///
+/// 1 200 ticks is one minute at 20 Hz, a smoke run of the sim's harness
+/// segment list, until S1's `tune` lane raises it to a real segment (the
+/// register's S1-26): the full-segment chain T10 asked for is the demo
+/// scenario's, `scenarios/skeleton/
 /// against-easy-three-rounds`, whose three rounds are played and compared on
 /// all three operating systems, so lengthening this run would add leg time and
 /// a `crates/sim` determinism change for no new coverage (decisions-log item
@@ -603,13 +639,14 @@ struct Ctx {
     cargo: String,
     /// `--bless`: rewrite golden files from the fresh outputs.
     bless: bool,
-    /// `--require-tools` (or `PHARMAKOS_REQUIRE_TOOLS` set): fail instead of
+    /// `--require-tools` (or `PHARMAKOS_REQUIRE_TOOLS=1`): fail instead of
     /// skipping when buf, cargo-deny, reuse, godot or xvfb-run is missing
     /// ([`skip_or_fail`]). CI sets the variable for the whole workflow (ci.yml's
     /// top-level `env`) and installs each tool its job needs, so a runner that
-    /// lost a tool goes red rather than quietly green. Every child `run`, `run_in` and `capture`
-    /// start inherits the answer through [`REQUIRE_TOOLS_VAR`]
-    /// ([`child_command`]), so a test that needs a tool fails with it too.
+    /// lost a tool goes red rather than quietly green. Every child xtask starts
+    /// inherits the answer through [`REQUIRE_TOOLS_VAR`] ([`child_command`]), so
+    /// a test that needs a tool fails with it too. The variable is read by
+    /// [`require_tools_from`]: `1` on, unset or `0` off, anything else an error.
     require_tools: bool,
     /// `--locked`: pass `--locked` to cargo. On by default in CI, but only once
     /// a `Cargo.lock` is committed — `--locked` with no lock file is an error,
@@ -633,7 +670,10 @@ fn run_cli(args: &[String]) -> Result<bool, String> {
     let mut client_check = false;
     let mut quick = false;
     let mut fix = false;
-    let mut require_tools = env::var_os(REQUIRE_TOOLS_VAR).is_some();
+    // Read strictly, before any flag: a value other than `1`, `0` or unset is
+    // a mistake in the environment, and a flag that happened to override it
+    // would leave the mistake for the next run to trip over (S1-06).
+    let mut require_tools = require_tools_from(env::var_os(REQUIRE_TOOLS_VAR).as_deref())?;
     // `None` until a flag says otherwise; resolved below, once the root is known.
     let mut locked: Option<bool> = None;
 
@@ -667,6 +707,21 @@ fn run_cli(args: &[String]) -> Result<bool, String> {
             "perf-alarms" => {
                 perf_alarms();
                 return Ok(true);
+            }
+            // Not a step either, until S1's `tune` makes it one: the
+            // PLACEHOLDER register. `--check` is the only flag it reads.
+            "placeholders" => {
+                let check = args.iter().any(|arg| arg == "--check");
+                if let Some(other) = args
+                    .iter()
+                    .find(|arg| *arg != "placeholders" && *arg != "--check")
+                {
+                    return Err(format!(
+                        "`placeholders` takes only `--check`, and was given `{other}`"
+                    ));
+                }
+                let root = workspace_root()?;
+                return placeholders::run(&root, require_tools, check);
             }
             "--quick" => quick = true,
             "--fix" => fix = true,
@@ -714,11 +769,12 @@ fn run_cli(args: &[String]) -> Result<bool, String> {
     let cargo = env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
     let locked =
         locked.unwrap_or_else(|| env::var_os("CI").is_some() && root.join("Cargo.lock").is_file());
-    let workspace = load_workspace(&cargo, &root);
+    let workspace = load_workspace(require_tools, &cargo, &root);
     if let Err(reason) = &workspace {
         println!("note: workspace metadata unavailable ({reason})");
         println!(
-            "note: most steps that need it will fail (decisions-log item 116 (6)(g));              golden falls back to <root>/target, and clippy lints the walled crates              with the full deny set and skips its research pass"
+            "note: every step that reads it fails (decisions-log item 116 (6)(g); S1's plan, \
+             decision 9) — none falls back"
         );
     }
     let ctx = Ctx {
@@ -842,6 +898,9 @@ fn print_help() {
     println!(
         "    cargo xtask package        the unsigned zip for this platform; --bless its manifest"
     );
+    println!(
+        "    cargo xtask placeholders   the PLACEHOLDER register; --check fails off the grammar"
+    );
     println!();
     println!("FLAGS:");
     println!("    --quick            fmt, clippy and tests only — the inner loop");
@@ -849,8 +908,10 @@ fn print_help() {
     println!("    --skip <step>      leave one step out of `ci`");
     println!("    -p, --package <n>  restrict package-scoped steps to these packages");
     println!("    --bless            rewrite golden files from the fresh outputs");
-    println!("    --check            stage-client: also run the headless client check");
+    println!("    --check            stage-client: also run the headless client check;");
+    println!("                       placeholders: fail while a marker is off the grammar");
     println!("    --require-tools    fail instead of skipping when a tool is missing");
+    println!("                       (or PHARMAKOS_REQUIRE_TOOLS=1; 0 or unset is off)");
     println!("    --locked           pass --locked to cargo (automatic when $CI is set)");
     println!();
     println!("STEPS:");
@@ -879,7 +940,7 @@ fn step_fmt(ctx: &Ctx) -> Result<Outcome, String> {
 }
 
 fn step_clippy(ctx: &Ctx) -> Result<Outcome, String> {
-    let walled = walled_packages(ctx);
+    let walled = walled_packages(&ctx.workspace)?;
     let mut notes: Vec<String> = Vec::new();
 
     // Pass 1 — everything outside the wall, with the full deny set.
@@ -939,26 +1000,28 @@ fn step_clippy(ctx: &Ctx) -> Result<Outcome, String> {
 
     // Pass 3 — the research configuration, so `fork` code is linted too. Named
     // explicitly rather than with `--all-features`, which would turn `research`
-    // on everywhere and hide the very ban `research-guard` checks.
-    if let Some(feature) = research_feature_spec(ctx) {
-        let mut research_args: Vec<String> = vec!["clippy".to_owned(), "--workspace".to_owned()];
-        for package in &walled {
-            research_args.push("--exclude".to_owned());
-            research_args.push(package.clone());
-        }
-        research_args.push("--all-targets".to_owned());
-        research_args.push("--features".to_owned());
-        research_args.push(feature.clone());
-        if ctx.locked {
-            research_args.push("--locked".to_owned());
-        }
-        research_args.push("--".to_owned());
-        for flag in DETERMINISM_DENY {
-            research_args.push((*flag).to_owned());
-        }
-        run(ctx, &ctx.cargo, &research_args)?;
-        notes.push(format!("research build clean ({feature})"));
+    // on everywhere and hide the very ban `research-guard` checks. A workspace
+    // with no crate declaring the feature fails here rather than skipping the
+    // pass (S1-05): the stage has `fork`, so a lint run without it is a run
+    // that checked less than it says.
+    let feature = research_feature_spec(&ctx.workspace)?;
+    let mut research_args: Vec<String> = vec!["clippy".to_owned(), "--workspace".to_owned()];
+    for package in &walled {
+        research_args.push("--exclude".to_owned());
+        research_args.push(package.clone());
     }
+    research_args.push("--all-targets".to_owned());
+    research_args.push("--features".to_owned());
+    research_args.push(feature.clone());
+    if ctx.locked {
+        research_args.push("--locked".to_owned());
+    }
+    research_args.push("--".to_owned());
+    for flag in DETERMINISM_DENY {
+        research_args.push((*flag).to_owned());
+    }
+    run(ctx, &ctx.cargo, &research_args)?;
+    notes.push(format!("research build clean ({feature})"));
 
     Ok(Outcome::Done(notes.join("; ")))
 }
@@ -1369,7 +1432,7 @@ fn step_deny(ctx: &Ctx) -> Result<Outcome, String> {
                 .to_owned(),
         );
     }
-    if !cargo_subcommand_available(&ctx.cargo, "deny") {
+    if !cargo_subcommand_available(ctx, "deny") {
         return skip_or_fail(
             ctx,
             "cargo-deny is not installed (`cargo install --locked cargo-deny`)",
@@ -1389,7 +1452,7 @@ fn step_buf(ctx: &Ctx) -> Result<Outcome, String> {
                 .to_owned(),
         );
     };
-    if !tool_available("buf") {
+    if !tool_available(ctx, "buf") {
         return skip_or_fail(
             ctx,
             "buf is not installed (https://buf.build/docs/installation)",
@@ -1445,10 +1508,10 @@ fn step_buf(ctx: &Ctx) -> Result<Outcome, String> {
         ],
     )?;
 
-    // PLACEHOLDER: once v1.1 publishes gp.api.v1, add a second comparison
-    // against the last release tag (`.git#tag=vX.Y.Z`) in WIRE_JSON mode —
-    // the branch comparison catches churn, the tag comparison catches a
-    // released-schema break (AGENTS.md section 9, item 8).
+    // PLACEHOLDER: a second comparison, against the last release tag — owner, v1.1.
+    // Once v1.1 publishes gp.api.v1, `buf breaking` also runs against
+    // `.git#tag=vX.Y.Z` in WIRE_JSON mode: the branch comparison catches churn,
+    // the tag comparison a released-schema break (AGENTS.md section 9, item 8).
     Ok(Outcome::Done(
         "buf lint clean; no breaking changes against main. The regenerate-and-compare half \
          of AGENTS.md section 9 item 8 runs as tests (crates/proto/tests/generated.rs, \
@@ -1487,10 +1550,7 @@ fn step_buf(ctx: &Ctx) -> Result<Outcome, String> {
 /// README.
 fn step_golden(ctx: &Ctx) -> Result<Outcome, String> {
     let golden_root = ctx.root.join("tests").join("golden");
-    let target_dir = match &ctx.workspace {
-        Ok(workspace) => workspace.target_dir.clone(),
-        Err(_) => ctx.root.join("target"),
-    };
+    let target_dir = golden_target_dir(&ctx.workspace)?;
     if !golden_root.is_dir() {
         return Err(
             "tests/golden does not exist, so no golden is compared; the stage's goldens live \
@@ -1649,7 +1709,7 @@ fn step_reuse(ctx: &Ctx) -> Result<Outcome, String> {
                 .to_owned(),
         );
     }
-    if !tool_available("reuse") {
+    if !tool_available(ctx, "reuse") {
         return skip_or_fail(
             ctx,
             "the reuse tool is not installed (`pipx install reuse`)",
@@ -1726,7 +1786,7 @@ fn step_scenario(ctx: &Ctx) -> Result<Outcome, String> {
     };
 
     let probe = cargo_run_args(ctx, &owner, &[SCENARIO_SUBCOMMAND, "--help"]);
-    if !command_succeeds(&ctx.root, &ctx.cargo, &probe) {
+    if !command_succeeds(ctx, &ctx.cargo, &probe) {
         return Err(format!(
             "{checked}; `{SCENARIO_BIN} {SCENARIO_SUBCOMMAND} --help` did not succeed, so the \
              runner is missing or does not build, and none of them was played"
@@ -1807,7 +1867,7 @@ fn step_screenshot(ctx: &Ctx) -> Result<Outcome, String> {
         ));
     }
     let godot = godot_program();
-    if !tool_available(&godot) {
+    if !tool_available(ctx, &godot) {
         return skip_or_fail(
             ctx,
             &format!(
@@ -2009,7 +2069,7 @@ fn step_stage_client(ctx: &Ctx) -> Result<Outcome, String> {
     let (library, staged_bytes) = stage_library(ctx, workspace, &project)?;
 
     let godot = godot_program();
-    if !tool_available(&godot) {
+    if !tool_available(ctx, &godot) {
         return skip_or_fail(
             ctx,
             &format!(
@@ -2266,10 +2326,8 @@ fn cargo_run_args(ctx: &Ctx, package: &str, tail: &[&str]) -> Vec<String> {
 /// Runs a command for its exit status alone, swallowing its output. Used to ask
 /// "does this subcommand exist yet", where a non-zero status is an answer and
 /// not a failure.
-fn command_succeeds(cwd: &Path, program: &str, args: &[String]) -> bool {
-    Command::new(program)
-        .args(args)
-        .current_dir(cwd)
+fn command_succeeds(ctx: &Ctx, program: &str, args: &[String]) -> bool {
+    child_command(ctx.require_tools, program, args, &ctx.root)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
@@ -2324,6 +2382,17 @@ fn perf_alarms() {
         }
     };
     let os = env::consts::OS;
+    // Read as `ci` reads it, and passed on through `child_command` like every
+    // other child's (S1-07). A value the reader refuses is a warning here, not
+    // a failure, because this command never fails; the child then runs as if
+    // the variable were unset.
+    let require_tools = match require_tools_from(env::var_os(REQUIRE_TOOLS_VAR).as_deref()) {
+        Ok(required) => required,
+        Err(error) => {
+            println!("::warning title=perf alarms::{error}; the measurement runs without it");
+            false
+        }
+    };
     // Frozen install in CI, as every other cargo call xtask makes there: a
     // lockfile mismatch is then the usual warning below, and the job stays green.
     let locked: &[&str] = if env::var_os("CI").is_some() {
@@ -2346,7 +2415,7 @@ fn perf_alarms() {
         .map(|arg| (*arg).to_owned())
         .collect();
     println!("   $ {}", render_command(&cargo, &args));
-    let status = Command::new(&cargo).args(&args).current_dir(&root).status();
+    let status = child_command(require_tools, &cargo, &args, &root).status();
     match status {
         Ok(status) if status.success() => {}
         Ok(status) => println!(
@@ -2493,13 +2562,16 @@ impl Workspace {
     }
 }
 
-fn load_workspace(cargo: &str, root: &Path) -> Result<Workspace, String> {
-    let output = Command::new(cargo)
-        .args(["metadata", "--format-version", "1", "--no-deps"])
-        .current_dir(root)
-        .stderr(Stdio::piped())
-        .output()
-        .map_err(|error| format!("failed to run `{cargo} metadata`: {error}"))?;
+fn load_workspace(require_tools: bool, cargo: &str, root: &Path) -> Result<Workspace, String> {
+    let output = child_command(
+        require_tools,
+        cargo,
+        &["metadata", "--format-version", "1", "--no-deps"],
+        root,
+    )
+    .stderr(Stdio::piped())
+    .output()
+    .map_err(|error| format!("failed to run `{cargo} metadata`: {error}"))?;
     if !output.status.success() {
         return Err(format!(
             "`{cargo} metadata` failed: {}",
@@ -2566,19 +2638,53 @@ fn parse_workspace(metadata: &str) -> Result<Workspace, String> {
 }
 
 /// The `--features` argument that turns the research build on — for example
-/// `pharmakos-sim/research` — or `None` while no crate declares the feature.
-fn research_feature_spec(ctx: &Ctx) -> Option<String> {
-    let workspace = ctx.workspace.as_ref().ok()?;
+/// `pharmakos-sim/research`.
+///
+/// A failure, not `None`, when the metadata is missing or no crate declares
+/// the feature: `clippy`'s research pass used to be skipped in silence in both
+/// cases, which was one of the three fall-backs S1-05 names. Pure over the
+/// metadata, so `the_three_fall_backs_fail` breaks it.
+fn research_feature_spec(workspace: &Result<Workspace, String>) -> Result<String, String> {
+    let workspace = workspace
+        .as_ref()
+        .map_err(|reason| format!("no workspace metadata for the research pass: {reason}"))?;
     workspace
         .package_with_feature(SIM_PACKAGES, RESEARCH_FEATURE)
         .map(|name| format!("{name}/{RESEARCH_FEATURE}"))
+        .ok_or_else(|| {
+            format!(
+                "no crate declares a `{RESEARCH_FEATURE}` feature, so clippy's research pass has \
+                 nothing to lint; `pharmakos-sim` defines it, and `fork` lives behind it"
+            )
+        })
 }
 
-fn walled_packages(ctx: &Ctx) -> Vec<String> {
-    match &ctx.workspace {
-        Ok(workspace) => workspace.present(WALLED_PACKAGES),
-        Err(_) => Vec::new(),
-    }
+/// The walled crates in the workspace, for `clippy`'s two passes.
+///
+/// A failure when the metadata is missing. It used to answer an empty list,
+/// under which pass 1 linted the walled crates with the full deny set and pass
+/// 2 did not run — a run that checked something other than the wall (S1-05).
+fn walled_packages(workspace: &Result<Workspace, String>) -> Result<Vec<String>, String> {
+    workspace
+        .as_ref()
+        .map(|workspace| workspace.present(WALLED_PACKAGES))
+        .map_err(|reason| format!("no workspace metadata to find the walled crates: {reason}"))
+}
+
+/// Cargo's target directory, where the producing tests write their fresh
+/// goldens.
+///
+/// A failure when the metadata is missing. It used to fall back to
+/// `<root>/target`, which is the wrong place whenever `CARGO_TARGET_DIR` or a
+/// `build.target-dir` moves it — and then every fresh output would read as
+/// missing, or worse, as a stale one from an earlier run (S1-05).
+fn golden_target_dir(workspace: &Result<Workspace, String>) -> Result<PathBuf, String> {
+    workspace
+        .as_ref()
+        .map(|workspace| workspace.target_dir.clone())
+        .map_err(|reason| {
+            format!("no workspace metadata to find the fresh goldens' target directory: {reason}")
+        })
 }
 
 /// True when a `cargo tree -e features --format {p}|{f}` line shows the
@@ -2892,18 +2998,48 @@ fn run(ctx: &Ctx, program: &str, args: &[String]) -> Result<(), String> {
     run_in(ctx, program, args, &root)
 }
 
-/// The environment variable that asks for the tools: set, it turns a missing
-/// tool from a skip into a failure, in xtask ([`Ctx::require_tools`]) and in the
+/// The environment variable that asks for the tools: `1` turns a missing tool
+/// from a skip into a failure, in xtask ([`Ctx::require_tools`]) and in the
 /// tests that need one (`crates/proto/tests/generated.rs` needs buf and
-/// `protoc-gen-prost`). CI sets it for the whole workflow.
+/// `protoc-gen-prost`). CI sets it for the whole workflow. Read by
+/// [`require_tools_from`].
 const REQUIRE_TOOLS_VAR: &str = "PHARMAKOS_REQUIRE_TOOLS";
 
-/// A child process as xtask starts every step's: `program args` in `cwd`, with
-/// [`REQUIRE_TOOLS_VAR`] set to `1` when the run requires its tools and removed
-/// when it does not. So `--require-tools` alone makes a test that needs a tool
-/// fail on a missing one, and `--no-require-tools` reaches the children too,
-/// even from a shell that exported the variable (decisions-log item 118 (4)).
-fn child_command(require_tools: bool, program: &str, args: &[String], cwd: &Path) -> Command {
+/// What [`REQUIRE_TOOLS_VAR`] asks for: `1` requires the tools, unset or `0`
+/// does not, and anything else — `true`, `yes`, an empty string, a stray
+/// space — is an error that names the variable (S1's plan, decision 9, ruling
+/// the register's S1-06). Before it, the variable was read as set or unset, so
+/// `PHARMAKOS_REQUIRE_TOOLS=0` meant on. `crates/proto/tests/generated.rs`
+/// reads it by the same rule.
+fn require_tools_from(value: Option<&OsStr>) -> Result<bool, String> {
+    match value.map(OsStr::to_str) {
+        None | Some(Some("0")) => Ok(false),
+        Some(Some("1")) => Ok(true),
+        Some(other) => Err(format!(
+            "{REQUIRE_TOOLS_VAR} is `{}`; it is `1` (a missing tool fails), or `0` or unset (a \
+             missing tool skips), and nothing else",
+            other.unwrap_or("<not UTF-8>")
+        )),
+    }
+}
+
+/// A child process as xtask starts every one of its children: `program args`
+/// in `cwd`, with [`REQUIRE_TOOLS_VAR`] set to `1` when the run requires its
+/// tools and removed when it does not. So `--require-tools` alone makes a test
+/// that needs a tool fail on a missing one, and `--no-require-tools` reaches
+/// the children too, even from a shell that exported the variable
+/// (decisions-log item 118 (4)).
+///
+/// The only `Command::new` in xtask outside its tests, since S1-07: the tool
+/// probes, the metadata read, `perf-alarms`, `ci-scope`'s git and `package`'s
+/// children all come through here, and `every_child_goes_through_child_command`
+/// counts the constructions in every module's source.
+pub(crate) fn child_command<S: AsRef<OsStr>>(
+    require_tools: bool,
+    program: &str,
+    args: &[S],
+    cwd: &Path,
+) -> Command {
     let mut command = Command::new(program);
     command.args(args).current_dir(cwd);
     if require_tools {
@@ -3018,32 +3154,38 @@ fn find_in_dirs(program: &str, dirs: &[PathBuf]) -> Option<PathBuf> {
 /// True when the tool answers `--version`. On Windows this finds `tool.exe` but
 /// not a `tool.cmd` shim, which is why CI installs buf as a real binary. A tool
 /// with no `--version` (`xvfb-run`) is found with [`find_on_path`] instead.
-fn tool_available(program: &str) -> bool {
-    Command::new(program)
-        .arg("--version")
+fn tool_available(ctx: &Ctx, program: &str) -> bool {
+    child_command(ctx.require_tools, program, &["--version"], &ctx.root)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
         .is_ok_and(|status| status.success())
 }
 
-fn cargo_subcommand_available(cargo: &str, subcommand: &str) -> bool {
-    Command::new(cargo)
-        .args([subcommand, "--version"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
+fn cargo_subcommand_available(ctx: &Ctx, subcommand: &str) -> bool {
+    child_command(
+        ctx.require_tools,
+        &ctx.cargo,
+        &[subcommand, "--version"],
+        &ctx.root,
+    )
+    .stdout(Stdio::null())
+    .stderr(Stdio::null())
+    .status()
+    .is_ok_and(|status| status.success())
 }
 
 fn git_ref_exists(ctx: &Ctx, reference: &str) -> bool {
-    Command::new("git")
-        .args(["rev-parse", "--verify", "--quiet", reference])
-        .current_dir(&ctx.root)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
+    child_command(
+        ctx.require_tools,
+        "git",
+        &["rev-parse", "--verify", "--quiet", reference],
+        &ctx.root,
+    )
+    .stdout(Stdio::null())
+    .stderr(Stdio::null())
+    .status()
+    .is_ok_and(|status| status.success())
 }
 
 /// The directory holding the buf configuration, if there is one yet.
@@ -3150,7 +3292,6 @@ fn line_at(bytes: &[u8], offset: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ffi::OsStr;
 
     #[test]
     fn reads_names_features_and_bins_from_metadata() {
@@ -3477,6 +3618,203 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
         );
         assert_eq!(required.get_current_dir(), Some(cwd));
         assert_eq!(REQUIRE_TOOLS_VAR, "PHARMAKOS_REQUIRE_TOOLS");
+    }
+
+    /// S1-06, as S1's plan's decision 9 rules it: `1` on, unset or `0` off,
+    /// anything else an error that names the variable. Before it, `0` meant on.
+    #[test]
+    fn require_tools_reads_one_zero_or_unset_and_refuses_anything_else() {
+        assert_eq!(require_tools_from(None), Ok(false));
+        assert_eq!(require_tools_from(Some(OsStr::new("0"))), Ok(false));
+        assert_eq!(require_tools_from(Some(OsStr::new("1"))), Ok(true));
+        for wrong in [
+            "", " 1", "1 ", "true", "yes", "on", "2", "01", "false", "off",
+        ] {
+            let error = require_tools_from(Some(OsStr::new(wrong))).expect_err(wrong);
+            assert!(error.contains(REQUIRE_TOOLS_VAR), "{error}");
+            assert!(error.contains(&format!("`{wrong}`")), "{error}");
+        }
+    }
+
+    /// S1-05, as S1's plan's decision 9 rules it: the three consumers of the
+    /// workspace metadata that used to fall back without it — `golden`'s
+    /// target directory, `clippy`'s walled list and its research pass — fail
+    /// instead, and the research pass fails too when no crate declares the
+    /// feature it lints.
+    #[test]
+    fn the_three_fall_backs_fail() {
+        let missing: Result<Workspace, String> = Err("`cargo metadata` failed".to_owned());
+        let golden = golden_target_dir(&missing).expect_err("golden fails");
+        assert!(golden.contains("`cargo metadata` failed"), "{golden}");
+        let walled = walled_packages(&missing).expect_err("clippy's walled list fails");
+        assert!(walled.contains("`cargo metadata` failed"), "{walled}");
+        let research = research_feature_spec(&missing).expect_err("the research pass fails");
+        assert!(research.contains("`cargo metadata` failed"), "{research}");
+
+        // With metadata, each answers what the metadata says.
+        let present: Result<Workspace, String> = parse_workspace(
+            r#"{"packages":[
+                {"name":"pharmakos-sim","features":{"research":[]},"targets":[]},
+                {"name":"pharmakos-mesher","features":{},"targets":[]}
+            ],"target_directory":"/somewhere/else","workspace_root":"/repo"}"#,
+        );
+        assert_eq!(
+            golden_target_dir(&present),
+            Ok(PathBuf::from("/somewhere/else")),
+            "the target directory is cargo's, never an assumed <root>/target"
+        );
+        assert_eq!(
+            walled_packages(&present),
+            Ok(vec!["pharmakos-mesher".to_owned()])
+        );
+        assert_eq!(
+            research_feature_spec(&present),
+            Ok("pharmakos-sim/research".to_owned())
+        );
+
+        // A workspace whose sim lost the feature: a failure, not a skipped pass.
+        let featureless: Result<Workspace, String> = parse_workspace(
+            r#"{"packages":[{"name":"pharmakos-sim","features":{},"targets":[]}],
+                "workspace_root":"/repo"}"#,
+        );
+        let error = research_feature_spec(&featureless).expect_err("no research feature");
+        assert!(
+            error.contains("no crate declares a `research` feature"),
+            "{error}"
+        );
+    }
+
+    /// S1-07: every child process xtask starts is built by `child_command`,
+    /// so `--require-tools` reaches it. Counted over every module's source
+    /// text outside its tests: `Command::new` appears once, in
+    /// `child_command` itself.
+    #[test]
+    fn every_child_goes_through_child_command() {
+        let sources: &[(&str, &str)] = &[
+            ("main.rs", include_str!("main.rs")),
+            ("annotate.rs", include_str!("annotate.rs")),
+            ("golden.rs", include_str!("golden.rs")),
+            ("package.rs", include_str!("package.rs")),
+            ("placeholders.rs", include_str!("placeholders.rs")),
+            ("png.rs", include_str!("png.rs")),
+            ("scenario.rs", include_str!("scenario.rs")),
+            ("scope.rs", include_str!("scope.rs")),
+            ("zip.rs", include_str!("zip.rs")),
+        ];
+        let needle = ["Command", "::new("].concat();
+        let mut found: Vec<String> = Vec::new();
+        for (name, source) in sources {
+            // Everything from a file's test module on is its tests, which
+            // build fixture repositories with git of their own.
+            let code = source
+                .split("\n#[cfg(test)]\nmod tests")
+                .next()
+                .unwrap_or(source);
+            for (index, line) in code.lines().enumerate() {
+                let trimmed = line.trim_start();
+                if trimmed.starts_with("//") {
+                    continue;
+                }
+                if trimmed.contains(needle.as_str()) {
+                    found.push(format!("{name}:{}", index + 1));
+                }
+            }
+        }
+        assert_eq!(
+            found.len(),
+            1,
+            "a child process is started outside child_command, so --require-tools does not \
+             reach it (S1-07): {found:?}"
+        );
+        assert!(
+            found
+                .first()
+                .is_some_and(|place| place.starts_with("main.rs:")),
+            "{found:?}"
+        );
+        // And every module is in the list above: a new module is a new place
+        // a child could be started from.
+        let declared = include_str!("main.rs")
+            .lines()
+            .filter(|line| line.starts_with("mod ") && line.ends_with(';'))
+            .count();
+        assert_eq!(
+            declared + 1,
+            sources.len(),
+            "a module is missing from the list"
+        );
+    }
+
+    /// S1-01: the toolchain is pinned to one exact version, and the
+    /// `toolchain:` input of every Rust install step in the workflows names
+    /// it. `[workspace.package] rust-version` and `clippy.toml`'s `msrv` agree
+    /// with each other and sit at or below the pin: clippy.toml says why they
+    /// are not raised with it yet.
+    #[test]
+    fn the_toolchain_is_pinned_once_everywhere() {
+        /// `major.minor[.patch]` as numbers, for comparing versions.
+        fn numbers(version: &str) -> Vec<u32> {
+            version
+                .split('.')
+                .map(|part| {
+                    part.parse::<u32>()
+                        .unwrap_or_else(|_| panic!("`{version}` is not a version"))
+                })
+                .collect()
+        }
+        fn quoted_value<'a>(text: &'a str, key: &str) -> &'a str {
+            text.lines()
+                .map(str::trim)
+                .find_map(|line| line.strip_prefix(key))
+                .and_then(|rest| rest.trim_start().strip_prefix('='))
+                .and_then(|rest| rest.trim().split('"').nth(1))
+                .unwrap_or_else(|| panic!("no `{key} = \"...\"` line"))
+        }
+        let channel = quoted_value(include_str!("../../rust-toolchain.toml"), "channel");
+        let parts: Vec<&str> = channel.split('.').collect();
+        assert_eq!(
+            parts.len(),
+            3,
+            "rust-toolchain.toml pins an exact version, never `stable`: `{channel}`"
+        );
+        assert!(
+            parts.iter().all(|part| part.parse::<u32>().is_ok()),
+            "{channel}"
+        );
+        let rust_version = quoted_value(include_str!("../../Cargo.toml"), "rust-version");
+        let msrv = quoted_value(include_str!("../../clippy.toml"), "msrv");
+        assert_eq!(
+            rust_version, msrv,
+            "[workspace.package] rust-version and clippy.toml's msrv are one number"
+        );
+        assert!(
+            numbers(msrv) <= numbers(channel),
+            "the MSRV ({msrv}) is above the pinned toolchain ({channel})"
+        );
+        let pinned = format!("toolchain: {channel}");
+        for (name, workflow) in [
+            ("ci.yml", include_str!("../../.github/workflows/ci.yml")),
+            (
+                "nightly-scenarios.yml",
+                include_str!("../../.github/workflows/nightly-scenarios.yml"),
+            ),
+        ] {
+            let installs = workflow.matches("uses: dtolnay/rust-toolchain@").count();
+            let named = workflow
+                .lines()
+                .filter(|line| line.trim() == pinned)
+                .count();
+            assert!(installs > 0, "{name} installs no toolchain");
+            assert_eq!(
+                named, installs,
+                "every Rust install step in {name} names `{pinned}`"
+            );
+        }
+    }
+
+    #[test]
+    fn placeholders_is_not_a_step() {
+        assert!(STEPS.iter().all(|step| step.name != "placeholders"));
     }
 
     #[test]
