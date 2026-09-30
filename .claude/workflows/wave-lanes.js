@@ -11,9 +11,11 @@
 //
 //   {
 //     wave: 'wave3',                          // label only
-//     plan: 'docs/design/s1-plan.md',         // default shown: the stage's plan, whose section 3
-//                                             // holds one section per task
-//     stage: 'S1',                            // default shown: the stage's name in the prompts
+//     plan: 'docs/design/s1-plan.md',         // the stage's plan, whose section 3 holds one
+//                                             // section per task; pass it (and stage) every
+//                                             // time: a later change of the defaults would
+//                                             // re-run a resumed run's finished agents
+//     stage: 'S1',                            // the stage's name in the prompts
 //     scratch: 'C:/.../scratchpad',           // REQUIRED: where PR bodies and CI logs land
 //     repo: 'C:/Users/PC/pharmakos',          // default shown
 //     worktree_root: 'C:/Users/PC',           // default shown; worktrees are <root>/pharmakos-<id>
@@ -28,13 +30,13 @@
 //                                             // it in backticks ("### `fixs` —"; two tasks may
 //                                             // share one: "### `tgtv` → `proj` —")
 //       branch: 'fix/sim-demo-findings',
-//       owns: 'crates/sim (all of it), tests/golden/pathing, plus Cargo.lock',
-//       items: '124, 126, 127, 128',          // decisions-log §2.7 items to read: the task's
-//                                             // Implements line, plus the plan's own item
+//       owns: 'crates/sim, crates/gateway, ... (the task section's Owns line), plus Cargo.lock',
+//       items: '16, 123, 124, 126, 127, 128', // decisions-log §2.7 items to read: the task's
+//                                             // Implements line, plus item 128 (S1's plan)
 //       bless_determinism: true,              // optional: the plan says this task moves the
 //                                             // determinism chain (its re-bless ledger)
-//       new_crate: 'crates/bench',            // optional: the one new workspace member the
-//                                             // plan's task section adds
+//       new_crate: undefined,                 // optional, S1's p1 only ('crates/bench'): the
+//                                             // one new workspace member its section adds
 //       extras: '...',                        // wave-specific emphasis for the builder (may be '')
 //       lens_a: '...',                        // extra checks for lens A (may be '')
 //       lens_b: '...',                        // extra checks for lens B (may be '')
@@ -75,6 +77,8 @@ for (const l of LANES) {
   for (const k of ['id', 'task', 'branch', 'owns', 'items']) {
     if (!l[k]) throw new Error(`lane ${JSON.stringify(l)} is missing "${k}"`)
   }
+  if ('bless_determinism' in l && typeof l.bless_determinism !== 'boolean') throw new Error(`lane ${l.id}: bless_determinism must be a boolean`)
+  if ('new_crate' in l && l.new_crate !== undefined && typeof l.new_crate !== 'string') throw new Error(`lane ${l.id}: new_crate must be a string`)
 }
 
 const wt = lane => `${WT_ROOT}/pharmakos-${lane.id}`
@@ -97,8 +101,8 @@ ENVIRONMENT (read first)
   Never edit files under ${REPO} itself. The spike code is readable at ${WT_ROOT}/pharmakos-spikes/spikes/ (tag spike-end): a reference, never copied, never edited.
 - Target directory: ${target(lane)} and NO other. The builder warms it; reviewers and the fix pass reuse it (a cold workspace build costs ten minutes and hundreds of lines of context; a warm full suite costs two minutes). A probe crate you write under ${laneScratch(lane, who)} may use ${target(lane)}-probe.
 - Scratch files (scripts, notes, probes) go ONLY under ${laneScratch(lane, who)}/ (create it); the other agents share the parent folders, so never write loose files there. The PR body and CI log paths named below are the exceptions.
-${DOCS_REF ? `- The design docs for this run are ahead of main: the main session's docs PR is still in CI on ${DOCS_REF} (decisions-log item 115). Copy every file it adds or changes under AGENTS.md, CLAUDE.md and docs/design/, keeping its path:
-    git -C ${REPO} fetch -q --prune origin; d=${laneScratch(lane, who)}/docs; mkdir -p $d; for f in $(git -C ${REPO} diff --no-renames --name-only --diff-filter=AM origin/main...${DOCS_REF} -- AGENTS.md CLAUDE.md docs/design); do mkdir -p $d/$(dirname $f) && git -C ${REPO} show ${DOCS_REF}:$f > $d/$f; done; ls -R $d
+${DOCS_REF ? `- The design docs for this run are ahead of main: the main session's docs PR is still in CI on ${DOCS_REF} (decisions-log item 115). Copy every file it adds or changes under AGENTS.md, CLAUDE.md, docs/design/ and docs/placeholders.md, keeping its path:
+    git -C ${REPO} fetch -q --prune origin; d=${laneScratch(lane, who)}/docs; mkdir -p $d; for f in $(git -C ${REPO} diff --no-renames --name-only --diff-filter=AM origin/main...${DOCS_REF} -- AGENTS.md CLAUDE.md docs/design docs/placeholders.md); do mkdir -p $d/$(dirname $f) && git -C ${REPO} show ${DOCS_REF}:$f > $d/$f; done; ls -R $d
   then read each copy in place of your worktree's file at the same path; where they differ, the copy wins. If ${DOCS_REF} no longer exists, the docs PR has merged: read those files from origin/main instead (git -C ${REPO} show origin/main:<path>). Never commit AGENTS.md, CLAUDE.md or anything under docs/; they reach your branch when the main session's merge train rebases it.
 ` : ''}- Other lanes build and run CI on this machine at the same time. Never stop, kill or signal a process you did not start yourself: no taskkill /IM, Stop-Process -Name, pkill or killall by image name. To cancel your own run, stop the process you launched by its PID. In wave 6 run 2 a lane that killed every cargo process probably cut another lane's CI short (decisions-log item 113).
 - CI etiquette: "cargo xtask ci --quick" is the inner loop. Run the FULL suite by writing it to a file and reading only the summary, with the exit code checked separately, because a pipe hides it:
@@ -118,7 +122,7 @@ function brief(lane) {
   return `
 WHAT TO BUILD - task ${lane.task} of ${STAGE} (${WAVE}).
 The brief is the plan itself, not a restatement of it. Read, in this order, before editing:
-1. ${PLAN} section 3, the task section whose "### " heading carries \`${lane.task}\` in backticks, in full: its lines (Builds, Implements, Needs, Acceptance, Contract PR, PLACEHOLDERs, and whatever else it names: Owns, named places, the order it merges in) are the deliverables and the tests, line by line; then that plan's section 2 (what the decisions log settled for the stage) and every section 6/7 decision the task section names, whose answers are in the decisions log. Where the task section and another part of the plan disagree, the task section and the decisions log win; say so in the PR.
+1. ${PLAN} section 3, the task section whose "### " heading carries \`${lane.task}\` in backticks, in full: its lines (Builds, Implements, Needs, Acceptance, Contract PR, PLACEHOLDERs, and whatever else it names: Owns, named places, the order it merges in) are the deliverables and the tests, line by line; then that plan's section 2 (what the decisions log settled for the stage) and every section 6/7 decision the task section names, whose answers are in the decisions log. If the task section and another part of the plan disagree, follow the decisions log and say so in the PR body; never choose between them silently.
 2. docs/design/decisions-log.md section 2.7 items ${lane.items}, and the register rows the task's Implements line names, in docs/placeholders.md; then the last entries of the log (the wave's opening entry and the decisions taken for it). The decisions log outranks the spec, which outranks the co-design doc (docs/design/README.md).
 3. The spec sections the plan section cites, in docs/spec/pharmakos-spec-v0.6.html (search the HTML for the section title).
 4. Every source file of the crate you own, in full, and its tests; the goldens' READMEs under tests/golden; rules/rules.v1.json and proto/gp/v1/rules.proto for the rows you read; the spike modules the plan section names, as references.
@@ -126,7 +130,7 @@ ${lane.extras ? '\nWAVE-SPECIFIC EMPHASIS:\n' + lane.extras + '\n' : ''}
 Then build every deliverable and every acceptance test the plan section names, with the goldens it names, until "cargo xtask ci" is fully green in the worktree (no --skip).
 
 WHEN GREEN - the PR, then stop:
-1. Write the PR body to ${bodyPath(lane)}: first line is the PR title (the conventional-commit subject of the work, ending with "(${lane.task})"), a blank line, then a body that (a) says which crates you touched, (b) names every CONTRACT path touched and what the contract change is, (c) explains every golden that moved and why (for the sim: the first tick the determinism chain diverges at and which rule moved it), (d) lists every PLACEHOLDER you left and who resolves it when, (e) lists anything in AGENTS.md you found wrong or missing (do not edit AGENTS.md), and ends with the line "🤖 Generated with [Claude Code](https://claude.com/claude-code)".
+1. Write the PR body to ${bodyPath(lane)}: first line is the PR title (the conventional-commit subject of the work, ending with "(${lane.task})"), a blank line, then a body that (a) says which crates you touched, (b) names every CONTRACT path touched and what the contract change is, (c) explains every golden that moved and why (for a lane that moves the determinism chain: the first tick it diverges at and which rule moved it), (d) lists every PLACEHOLDER you left and who resolves it when, (e) lists anything in AGENTS.md you found wrong or missing (do not edit AGENTS.md), and ends with the line "🤖 Generated with [Claude Code](https://claude.com/claude-code)".
 2. Push and open the pull request, then stop - never merge, never enable auto-merge:
     cd ${wt(lane)} && git push -u origin ${lane.branch}
     tail -n +3 ${bodyPath(lane)} > ${SCRATCH}/${lane.id}-pr-body.notitle.md
@@ -136,7 +140,7 @@ WHEN GREEN - the PR, then stop:
 }
 
 function lensA(lane) {
-  return `LENS A: determinism, the contract paths and the harness rules. Adversarially check, with a file and line for every claim: every contract path the PR body names is really the whole set the diff touches (git diff main...HEAD --stat, then AGENTS.md section 5's list); every new piece of sim state is in the state hash's declared order, in the snapshot and restored, and in the goldens (a voxel write also marks its chunk); the snapshot stays fixed-width; RNG streams are drawn only where declared and no stream is reused; no float, as-cast, HashMap/HashSet, wall clock or unordered iteration outside the allowances (a walled crate may use floats and clocks; nothing else may); no #[allow] on a determinism lint anywhere in the diff; a research-guarded crate declares no [features] and takes the sim with default-features = false and never names the stepping API; goldens are LF-terminated, land under $CARGO_TARGET_DIR/golden/<area>/ at the committed relative paths, and every golden that moved is explained in the PR body by a behaviour change you can confirm in the code. Try to make the code panic or overflow with an adversarial input and report the input with the panic.${lane.lens_a ? '\nALSO FOR THIS LANE: ' + lane.lens_a : ''}`
+  return `LENS A: determinism, the contract paths and the harness rules. Adversarially check, with a file and line for every claim: every contract path the PR body names is really the whole set the diff touches (git diff main...HEAD --stat, then AGENTS.md section 5's list); every new piece of sim state is in the state hash's declared order, in the snapshot and restored, and in the goldens (a voxel write also marks its chunk); the snapshot stays fixed-width; RNG streams are drawn only where declared and no stream is reused; no float, as-cast, HashMap/HashSet, wall clock or unordered iteration outside the allowances (a walled crate may use floats and clocks; nothing else may); no #[allow] on a determinism lint anywhere in the diff; a research-guarded crate declares no [features] and takes the sim with default-features = false and never names the stepping API; tests/golden/determinism is untouched unless the plan section says this lane moves the determinism chain; goldens are LF-terminated, land under $CARGO_TARGET_DIR/golden/<area>/ at the committed relative paths, and every golden that moved is explained in the PR body by a behaviour change you can confirm in the code. Try to make the code panic or overflow with an adversarial input and report the input with the panic.${lane.lens_a ? '\nALSO FOR THIS LANE: ' + lane.lens_a : ''}`
 }
 
 function lensB(lane) {
