@@ -257,7 +257,7 @@ the producer; a fixture made by the consumer would test nothing but the consumer
 T16 commits a byte-identical copy under `godot/fixtures/`, guarded by a test that
 compares the two.
 
-A diff here means one of five things, and the first is the only cheap one:
+A diff here means one of six things, and the first is the only cheap one:
 
 * **the map generator moved.** `tests/golden/mapgen/` will have moved too, and
   that is where the explanation belongs.
@@ -274,6 +274,12 @@ A diff here means one of five things, and the first is the only cheap one:
   The id is a digest of the match id, the match seed, the chunk count and how
   many times the feed has been attached — deterministic on purpose, which is
   what lets a rendered cursor sit in a golden.
+* **only the `_status` footer's `phase_remaining_ms` moved.** The footer is the
+  opening Lull's, with the whole Lull reported left, so it is the rules table's
+  `match.lull_ms`: a Lull re-tune moves it and nothing a client draws. S1's
+  first contract pull request moved it from 180 000 to 300 000 when it re-ruled
+  the register's D-01 (decisions-log item 127 (2)), and
+  `godot/fixtures/view_keyframe.jsonl` was re-copied with it.
 
 The `.txt` header carries **two** byte figures and they are different numbers:
 `run bytes` is what the encoder produced and what `VIEW_PAGE_BYTES` budgets,
@@ -348,8 +354,11 @@ things moved:
   the edge of the core's sphere and place a Build beacon there (decisions-log
   item 113 (6)).
 
-The `_status` footer is the opening Lull's, with the whole Lull reported left;
-it moving means the footer's shape did.
+The `_status` footer is the opening Lull's, with the whole Lull reported left,
+so its `phase_remaining_ms` is the rules table's `match.lull_ms`: a Lull re-tune
+moves it (S1's first contract pull request moved it from 180 000 to 300 000,
+with the `godot/fixtures/` copy). Any other change in it means the footer's
+shape did.
 
 ### `demo_<playbook>_verify/` and `demo_<playbook>_render/`
 
@@ -392,7 +401,9 @@ What moves a demo case, and what a diff means:
   `instantiate_template`, or the template's own values.
 * **The context moved** (item 109): the golden seed's map, the rules table (its
   `rules_hash` is in every report, so a tuning change moves every `_verify`
-  case), the segment ladder the footer names, or the frozen snapshot's shape. A
+  case, and the footer's `phase_remaining_ms` is `match.lull_ms`, so a Lull
+  re-tune moves every `_verify` and every `_render` case), the segment ladder
+  the footer names, or the frozen snapshot's shape. A
   widened snapshot moves every `report_hash` here with the verifier's own
   goldens, and the pull request re-blesses both and says why.
 * **The verifier or the renderer moved.** A new diagnostic, a changed lint or a

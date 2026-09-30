@@ -3747,7 +3747,10 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
 
     /// S1-01: the toolchain is pinned to one exact version, and the
     /// `toolchain:` input of every Rust install step in the workflows names
-    /// it. `[workspace.package] rust-version` and `clippy.toml`'s `msrv` agree
+    /// it. The two workflows that install Rust, `ci.yml` and
+    /// `nightly-scenarios.yml`, are read by name, and a listing of
+    /// `.github/workflows/` fails the test when any other workflow installs
+    /// Rust, so a new one cannot go unchecked. `[workspace.package] rust-version` and `clippy.toml`'s `msrv` agree
     /// with each other and sit at or below the pin: clippy.toml says why they
     /// are not raised with it yet.
     #[test]
@@ -3810,6 +3813,36 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
                 "every Rust install step in {name} names `{pinned}`"
             );
         }
+        let workflows = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join(".github")
+            .join("workflows");
+        let mut files = Vec::new();
+        walk(&workflows, &mut files).expect(".github/workflows");
+        assert!(
+            files.len() >= 2,
+            "no workflows under {}",
+            workflows.display()
+        );
+        let mut unchecked = Vec::new();
+        for path in files {
+            let name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_default()
+                .to_owned();
+            if name == "ci.yml" || name == "nightly-scenarios.yml" {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap_or_default();
+            if text.contains("dtolnay/rust-toolchain@") {
+                unchecked.push(name);
+            }
+        }
+        assert!(
+            unchecked.is_empty(),
+            "these workflows install Rust and this test does not read them: {unchecked:?}"
+        );
     }
 
     #[test]
