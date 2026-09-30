@@ -144,6 +144,10 @@ fn the_project_pins_the_settings_item_56_rests_on() {
             "MSAA off is why the mesher's T-junctions have never shown",
         ),
         (
+            "run/flush_stdout_on_print=true",
+            "F3 (decisions-log item 126 (3)): a release build otherwise flushes its log only on              an error or a clean exit, so an instance that hangs and is ended by hand leaves              an empty log, as the demo's hung second instance did",
+        ),
+        (
             "common/physics_jitter_fix=0.0",
             "the PROJECT setting, not a line in one scene's _ready. At its 0.5 default it \
              rewrites delta into a quantised estimate — 647 of 1 000 steady G1 frames \
@@ -966,4 +970,169 @@ fn the_smoke_check_drives_the_real_lobby() {
     assert_eq!(ok.len(), 1, "exactly one OK line: {ok:?}");
     let scene = read("scenes/smoke_check.tscn");
     assert!(scene.contains("res://scripts/smoke_check.gd"));
+}
+
+/// The lines of `func name` in `text` that are code, trimmed, with comments and blank lines
+/// dropped.
+fn gd_code<'a>(text: &'a str, name: &str) -> Vec<&'a str> {
+    gd_function(text, name)
+        .into_iter()
+        .skip(1)
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .collect()
+}
+
+/// **The first click lands** (F1, decisions-log item 126 (3); S1's plan, task `fixc`). The
+/// behaviour is checked headless by `watch_check.gd`'s `_first_click_lands` (ci.yml's
+/// `client extension` jobs), which injects one click on Submit, a Fix button and Save with
+/// the rows redrawn under the press, with a map menu open and after a panel scroll; this
+/// pins the source that makes it hold on every leg:
+///
+/// * the rows are rebuilt only when they changed, and a Fix button takes no focus;
+/// * a press on the panel closes the map menus;
+/// * a left-click the map surface takes releases the GUI focus (item 124 (5) (g));
+/// * the lobby's containers, drawn over the editor's layer, never take the mouse;
+/// * the watch check runs the first-click check in round 1's Lull.
+#[test]
+fn the_first_click_on_the_panel_reaches_its_handler() {
+    let rows = read("scripts/rows.gd");
+    let fill = gd_code(&rows, "fill");
+    let unchanged = fill
+        .iter()
+        .position(|line| line.starts_with("if container.has_meta(DRAWN)"))
+        .expect("fill compares the rows with the rows it drew");
+    let rebuilt = fill
+        .iter()
+        .position(|line| line.contains("queue_free()"))
+        .expect("fill still rebuilds rows that changed");
+    assert!(
+        unchanged < rebuilt && fill.get(unchanged + 3).copied() == Some("return"),
+        "rows that did not change keep their controls: {fill:?}"
+    );
+    let row = gd_code(&rows, "_row");
+    assert!(
+        row.contains(&"button.focus_mode = Control.FOCUS_NONE"),
+        "a Fix button takes no keyboard focus: {row:?}"
+    );
+
+    let editor = read("scripts/editor.gd");
+    let input = gd_code(&editor, "_input");
+    assert!(
+        input
+            .iter()
+            .any(|line| line.contains("menu_open() and _panel.get_global_rect().has_point(")),
+        "a press on the panel is looked for while a map menu is open: {input:?}"
+    );
+    assert!(
+        input.last().copied() == Some("close_menu()"),
+        "and closes the menus: {input:?}"
+    );
+    let take = gd_code(&editor, "_take_map_click");
+    assert_eq!(
+        take,
+        [
+            "get_viewport().set_input_as_handled()",
+            "get_viewport().gui_release_focus()"
+        ],
+        "a map click is handled and releases the GUI focus (item 124 (5) (g))"
+    );
+    let unhandled = gd_code(&editor, "_unhandled_input");
+    for handler in ["_on_beacon_clicked(", "_on_ground_clicked("] {
+        let at = unhandled
+            .iter()
+            .position(|line| line.starts_with(handler))
+            .unwrap_or_else(|| panic!("_unhandled_input calls {handler}: {unhandled:?}"));
+        assert_eq!(
+            at.checked_sub(1)
+                .and_then(|before| unhandled.get(before))
+                .copied(),
+            Some("_take_map_click()"),
+            "the map click is taken before {handler}: {unhandled:?}"
+        );
+    }
+    assert!(
+        unhandled
+            .first()
+            .is_some_and(|line| line.contains("not visible")),
+        "a hidden editor takes no map click: {unhandled:?}"
+    );
+
+    let lobby = read("scripts/lobby.gd");
+    for container in ["column", "_chooser", "buttons"] {
+        assert!(
+            lobby.contains(&format!(
+                "	{container}.mouse_filter = Control.MOUSE_FILTER_IGNORE"
+            )),
+            "the lobby's `{container}` is drawn over the editor's panel and must not take its              clicks"
+        );
+    }
+
+    let check = read("scripts/watch_check.gd");
+    let run = gd_code(&check, "_run");
+    let camera = run
+        .iter()
+        .position(|line| line.contains("_camera_keys()"))
+        .expect("the camera check runs");
+    assert!(
+        run.get(camera + 3)
+            .is_some_and(|line| line.contains("await _first_click_lands()")),
+        "the first-click check runs in round 1's Lull, after the camera's: {run:?}"
+    );
+    assert!(
+        check.contains("const CLICKED := [\"fix\", \"save\", \"submit\"]")
+            && check.contains("const CASES := [\"redraw\", \"menu\", \"scroll\"]"),
+        "every button F1 names, in every case"
+    );
+}
+
+/// **Before a match, the chooser alone** (F6, decisions-log item 126 (3)): the watch strip
+/// and the editor's panel are hidden until the host announces a match, and the status line
+/// names the watch speed only in a Push.
+#[test]
+fn the_chooser_hides_the_watch_strip_and_the_editor_until_a_match_starts() {
+    let lobby = read("scripts/lobby.gd");
+    let ready = gd_code(&lobby, "_ready");
+    let setup = ready
+        .iter()
+        .position(|line| *line == "editor.setup(vista)")
+        .expect("the lobby sets the editor up");
+    assert_eq!(
+        ready.get(setup + 1).copied(),
+        Some("editor.visible = false"),
+        "the editor's panel is hidden at once: {ready:?}"
+    );
+    let build = gd_code(&lobby, "_build_ui");
+    let strip = build
+        .iter()
+        .position(|line| *line == "var buttons := HBoxContainer.new()")
+        .expect("the watch strip");
+    assert!(
+        build
+            .iter()
+            .skip(strip)
+            .take(4)
+            .any(|line| *line == "buttons.visible = false"),
+        "the watch strip starts hidden: {build:?}"
+    );
+    let announced = gd_code(&lobby, "_on_announced");
+    for shown in ["_strip.visible = true", "editor.visible = true"] {
+        assert!(
+            announced.contains(&shown),
+            "`{shown}` once the host has announced: {announced:?}"
+        );
+    }
+    let process = gd_code(&lobby, "_process");
+    let speed = process
+        .iter()
+        .position(|line| line.contains("\"lobby_speed\""))
+        .expect("the status line can name the speed");
+    assert_eq!(
+        speed
+            .checked_sub(1)
+            .and_then(|before| process.get(before))
+            .copied(),
+        Some("if String(state.get(\"phase\", \"\")) == \"push\":"),
+        "the speed is named only in a Push: {process:?}"
+    );
 }

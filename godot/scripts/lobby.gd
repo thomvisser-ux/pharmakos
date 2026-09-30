@@ -37,6 +37,15 @@
 # the match ends, the lobby forgets it: an ended match keeps its save and its id stays
 # taken (item 113 (11)), so a finished match's last Push is not replayed from here.
 #
+# BEFORE A MATCH (F6, decisions-log item 126 (3)): the chooser alone. The watch strip (the
+# speed buttons, Skip, Ready, Continue, Follow, Whole map) and the editor's panel are hidden
+# until the host has announced a match, and the status line names the watch speed only in
+# a Push, where speed means something.
+#
+# With `-- --log-input` on the command line, `_input` prints every mouse button the lobby
+# sees, beside the editor's own logging of Submit, Fix and Save (scripts/editor.gd): the
+# owner's way to reproduce F1 by hand (godot/README.md).
+#
 # PLACEHOLDER: `user://`'s remembered match is a per-machine convenience, not state: the
 # save itself is the gateway's, in the private match cache. OWNER, with the save browser,
 # S6. PLACEHOLDER: forgetting an ended match (item 113 (11)), and the New/Resume layout,
@@ -74,6 +83,8 @@ var _resuming := false
 ## The six-field line written to the host, remembered once it announces.
 var _line := ""
 var _chooser: HBoxContainer
+## The watch strip: shown once a match has started.
+var _strip: HBoxContainer
 ## Whether the lobby forgot the match because it ended; the status line then says so.
 var _forgotten := false
 
@@ -88,6 +99,7 @@ func _ready() -> void:
 	link.received.connect(_on_received)
 	link.announced.connect(_on_announced)
 	editor.setup(vista)
+	editor.visible = false
 	_status.text = Strings.text("lobby_choose")
 
 
@@ -148,7 +160,8 @@ func _process(_delta: float) -> void:
 	var timer := String(state.get("timer", ""))
 	if timer != "":
 		parts.append(timer)
-	parts.append(Strings.text("lobby_speed", {"speed": state.get("speed", 1)}))
+	if String(state.get("phase", "")) == "push":
+		parts.append(Strings.text("lobby_speed", {"speed": state.get("speed", 1)}))
 	if state.get("skipping", false):
 		parts.append(Strings.text("lobby_skipping"))
 	if state.get("all_ready", false):
@@ -164,8 +177,15 @@ func _notification(what: int) -> void:
 			link.quit()
 
 
+func _input(event: InputEvent) -> void:
+	if editor.log_input and event is InputEventMouseButton:
+		print("[lobby] _input: button %d %s at %s" % [event.button_index, "down" if event.pressed else "up", event.position])
+
+
 func _on_announced(_match_id: String) -> void:
 	_status.text = Strings.text("lobby_connected")
+	_strip.visible = true
+	editor.visible = true
 	_remember()
 
 
@@ -202,18 +222,27 @@ func _on_received(answer: Dictionary) -> void:
 func _build_ui() -> void:
 	var layer := CanvasLayer.new()
 	add_child(layer)
+	# The lobby's layer is drawn over the editor's, and a container passes the mouse by
+	# default, so a column widened by a long event row would sit over the editor's panel
+	# and take the clicks meant for its buttons (F1). The containers here ignore the mouse;
+	# their buttons still take it.
 	var column := VBoxContainer.new()
 	column.position = Vector2(12, 12)
+	column.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	layer.add_child(column)
 	_status = Label.new()
 	column.add_child(_status)
 	_chooser = HBoxContainer.new()
+	_chooser.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	column.add_child(_chooser)
 	_button(_chooser, Strings.text("lobby_new_match"), new_match)
 	if remembered_line() != "":
 		_button(_chooser, Strings.text("lobby_resume"), resume_match)
 	_button(_chooser, Strings.text("lobby_about"), _show_about)
 	var buttons := HBoxContainer.new()
+	buttons.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	buttons.visible = false
+	_strip = buttons
 	column.add_child(buttons)
 	# The speed set is the pacer's (crates/client-gdext/src/pacer.rs SPEEDS, a PLACEHOLDER);
 	# the lobby only draws a button for each, so the set has one home.

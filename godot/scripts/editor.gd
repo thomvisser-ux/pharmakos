@@ -46,6 +46,24 @@
 #   * draft continuity through `get_draft`: the carried draft is fetched and opened every
 #     Lull (the bridge's editor).
 #
+# THE FIRST CLICK LANDS (F1, decisions-log item 126 (3); S1's plan, task `fixc`). At the
+# demo the first click on Fix or Submit after the panel had changed or scrolled did
+# nothing, and the second worked. Four things keep a click on the panel whole:
+#   * the rows are rebuilt only when they change (scripts/rows.gd, `fill`), so a redraw
+#     that changed nothing never frees the Fix button a press landed on before its release;
+#   * a press on the panel closes the map menus first (`_input`), so an open menu is never
+#     left behind the click that meant to leave it;
+#   * a click the map surface takes releases the GUI focus (`_take_map_click`,
+#     decisions-log item 124 (5) (g)), so no text field keeps the keys after it;
+#   * Submit and Fix say at once that they were taken ("Submitting...", "Fixing..."), from
+#     the bridge's status line, so a click whose answer is still on its way is not taken
+#     for a click that was lost.
+# Every button on the panel takes no keyboard focus. Run the game with `-- --log-input` and
+# the editor prints every press (button_down) and every handled click (pressed) on Submit,
+# Fix and Save, and the lobby every mouse button it sees in `_input`: the logging the owner
+# reproduces F1 by hand with (godot/README.md). `watch_check.gd`'s `_first_click_lands`
+# injects the clicks headless.
+#
 # PLACEHOLDER: the panel's layout, sizes and colours, the menu's wording and the ghost's
 # look are the skeleton's; the real editor's layout is S6's, OWNER (skeleton plan T19).
 #
@@ -86,12 +104,19 @@ const ITEM_NORMAL := 12
 const ITEM_HIGH := 13
 const ITEM_SELECTOR := 20
 const SELECTORS := ["nearest", "weakest", "safest", "most_threatened"]
+## The user argument (after `--`) that turns on the click logging.
+const LOG_INPUT_ARG := "--log-input"
+## The panel buttons whose clicks are counted and, with `--log-input`, logged.
+const COUNTED := ["submit", "fix", "save"]
 
 var bridge: Node = null
 var vista: Node3D = null
 
 ## The file the player opened or last saved, if any.
 var file_path := ""
+## Whether `--log-input` was given: every press and handled click on Submit, Fix and Save
+## is printed, and the lobby prints the mouse buttons it sees.
+var log_input := false
 
 var _changes := -1
 var _panel: PanelContainer
@@ -124,6 +149,11 @@ var _rules_box: VBoxContainer
 var _templates_drawn := ""
 var _wizard_drawn := ""
 var _rules_drawn := ""
+## Per counted button: how many presses (`button_down`) and handled clicks (`pressed`) it
+## has had, for `watch_check.gd`'s `_first_click_lands`.
+var _clicks := {}
+## The panel's own buttons, by their string key.
+var _named := {}
 
 
 ## Builds the panel, the menus and the map's drawing nodes. `vista` is the scene's vista,
@@ -131,6 +161,9 @@ var _rules_drawn := ""
 func setup(the_vista: Node3D) -> void:
 	vista = the_vista
 	bridge = vista.bridge
+	log_input = LOG_INPUT_ARG in OS.get_cmdline_user_args()
+	for name in COUNTED:
+		_clicks[name] = {"down": 0, "pressed": 0}
 	_build_panel()
 	_build_menus()
 	_build_map_nodes()
@@ -204,6 +237,42 @@ func close_menu() -> void:
 	_visit_menu.hide()
 
 
+## Whether a map menu is open.
+func menu_open() -> bool:
+	return _menu.visible or _visit_menu.visible
+
+
+## How many presses and handled clicks each counted panel button has had:
+## `{"submit": {"down": n, "pressed": n}, "fix": ..., "save": ...}`.
+func click_counts() -> Dictionary:
+	return _clicks.duplicate(true)
+
+
+## The panel's Submit or Save button, or the first Fix button drawn (or null), for a check
+## to click.
+func panel_button(name: String) -> Button:
+	if name == "fix":
+		var fixes: Array[Button] = Rows.fix_buttons(_rows)
+		return null if fixes.is_empty() else fixes[0]
+	return _named.get(name)
+
+
+## The panel's rectangle on screen.
+func panel_rect() -> Rect2:
+	return _panel.get_global_rect()
+
+
+## The panel's scroll container, for a check to read how far it scrolled.
+func panel_scroll() -> ScrollContainer:
+	return _panel.get_child(0)
+
+
+## The Save as... dialog, for a check to see that Save with no file opened it, and to close
+## it.
+func save_dialog() -> FileDialog:
+	return _save_dialog
+
+
 ## The wizard's pages as drawn, in order (see scripts/wizard.gd, `page_controls`).
 func wizard_page_controls() -> Array[Control]:
 	return Wizard.page_controls(_wizard_box)
@@ -268,21 +337,38 @@ func _process(_delta: float) -> void:
 		refresh()
 
 
+## A press on the panel closes the map menus before any control takes it, so a menu is
+## never left open behind the click that meant to leave it (F1).
+func _input(event: InputEvent) -> void:
+	if _panel == null or not (event is InputEventMouseButton) or not event.pressed:
+		return
+	if menu_open() and _panel.get_global_rect().has_point(event.position):
+		close_menu()
+
+
 func _unhandled_input(event: InputEvent) -> void:
-	if vista == null or not (event is InputEventMouseButton):
+	if vista == null or not visible or not (event is InputEventMouseButton):
 		return
 	if not event.pressed or event.button_index != MOUSE_BUTTON_LEFT:
 		return
 	var camera: Camera3D = vista.rig.camera
 	var beacon := _beacon_under(camera, event.position)
 	if not beacon.is_empty():
+		_take_map_click()
 		_on_beacon_clicked(beacon, event.alt_pressed, event.position)
-		get_viewport().set_input_as_handled()
 		return
 	var picked: Dictionary = bridge.view_pick(camera.project_ray_origin(event.position), camera.project_ray_normal(event.position))
 	if picked.get("hit", false):
+		_take_map_click()
 		_on_ground_clicked(picked["at"], event.position)
-		get_viewport().set_input_as_handled()
+
+
+## The map surface took a left-click: it is handled here, so the camera rig never sees it,
+## and the GUI focus is released as the rig would release it, so a text field does not keep
+## the keys (decisions-log item 124 (5) (g)).
+func _take_map_click() -> void:
+	get_viewport().set_input_as_handled()
+	get_viewport().gui_release_focus()
 
 
 # --- The map --------------------------------------------------------------------------
@@ -378,7 +464,7 @@ func _draw_state(state: Dictionary) -> void:
 	elif verdict != "none" and verdict != "refused":
 		line += " - " + Strings.text("qualifies_yes" if state.get("qualifies", false) else "qualifies_no")
 	_verdict.text = line
-	Rows.fill(_rows, state.get("rows", []), Callable(self, "fix"), state.get("rows_current", false) and not state.get("busy", false))
+	Rows.fill(_rows, state.get("rows", []), Callable(self, "_on_fix_pressed"), state.get("rows_current", false) and not state.get("busy", false), Callable(self, "_on_fix_down"))
 	_undo_button.disabled = int(state.get("undo_depth", 0)) == 0
 	if state.get("beacon_prose", "") != "":
 		_beacon_label.text = String(state["beacon_prose"])
@@ -549,10 +635,10 @@ func _build_panel() -> void:
 	var buttons := HBoxContainer.new()
 	column.add_child(buttons)
 	_button(buttons, "load", func() -> void: _load_dialog.popup_centered_ratio(0.6))
-	_button(buttons, "save", _save)
+	_count(_button(buttons, "save", _save), "save")
 	_button(buttons, "save_as", func() -> void: _save_dialog.popup_centered_ratio(0.6))
 	_undo_button = _button(buttons, "undo", func() -> void: bridge.editor_undo())
-	_button(buttons, "submit", submit)
+	_count(_button(buttons, "submit", _on_submit_pressed), "submit")
 	_status = _label(column)
 	_verdict = _label(column)
 	_beacon_label = _label(column)
@@ -638,11 +724,48 @@ func _build_map_nodes() -> void:
 	vista.add_child(_ghost)
 
 
+## Save: to the file the player opened or last saved, or, with no file yet, through the
+## Save as... dialog.
 func _save() -> void:
+	_counted("save")
 	if file_path == "":
 		_save_dialog.popup_centered_ratio(0.6)
 	else:
 		save_file(file_path)
+
+
+func _on_submit_pressed() -> void:
+	_counted("submit")
+	submit()
+
+
+func _on_fix_pressed(row: int, which: int) -> void:
+	_counted("fix")
+	fix(row, which)
+
+
+func _on_fix_down(row: int, which: int) -> void:
+	_pressed_down("fix")
+	if log_input:
+		print("[editor] Fix (row %d, fix %d): button_down" % [row, which])
+
+
+## Counts, and with `--log-input` logs, a press on `button`, which the editor knows as `name`.
+func _count(button: Button, name: String) -> void:
+	_named[name] = button
+	button.button_down.connect(func() -> void: _pressed_down(name))
+
+
+func _pressed_down(name: String) -> void:
+	_clicks[name]["down"] += 1
+	if log_input and name != "fix":
+		print("[editor] %s: button_down" % name)
+
+
+func _counted(name: String) -> void:
+	_clicks[name]["pressed"] += 1
+	if log_input:
+		print("[editor] %s: pressed" % name)
 
 
 func _say_local(key: String, args: Dictionary) -> void:

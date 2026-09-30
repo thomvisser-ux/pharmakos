@@ -381,6 +381,11 @@ impl PharmakosBridge {
     /// The one piece of marshalling item 92 names by name. An array of the wrong length
     /// comes back empty and logs why, rather than being padded into something the mesher
     /// would accept.
+    ///
+    /// The refusal is the answer, and the caller reads it from the empty array, so its
+    /// reason is printed as a note rather than as an `ERROR`: the client check's negative
+    /// probe asks for exactly this refusal, and its log line read as an error in a player's
+    /// log, which the game and the checks share (F6, decisions-log item 126 (3)).
     #[func]
     fn transpose_chunk(&mut self, sim_order: PackedByteArray) -> PackedByteArray {
         let mut out = std::mem::take(&mut self.transposed);
@@ -390,7 +395,7 @@ impl PharmakosBridge {
         let bytes = match result {
             Some(Ok(())) => PackedByteArray::from(out.as_slice()),
             Some(Err(error)) => {
-                godot_error!("[pharmakos] transpose_chunk: {error}");
+                godot_print!("[pharmakos] transpose_chunk refused: {error}");
                 PackedByteArray::new()
             }
             None => PackedByteArray::new(),
@@ -424,7 +429,9 @@ impl PharmakosBridge {
     ///
     /// `method` is the gateway's own wire spelling — `"get_status"`, `"verify_plan"`.
     /// Anything the schema rejects comes back as `null` with the reason and its JSON
-    /// Pointer in the log: an unknown field is refused here, never stripped.
+    /// Pointer in the log: an unknown field is refused here, never stripped. The `null` is
+    /// the refusal, so the reason is printed as a note, not an `ERROR`, for the reason
+    /// `transpose_chunk` gives.
     #[func]
     fn decode_result(&mut self, method: GString, result_json: GString) -> Variant {
         let wire = method.to_string();
@@ -435,7 +442,7 @@ impl PharmakosBridge {
         match decoded {
             Some(Ok(value)) => json_to_variant(&value),
             Some(Err(error)) => {
-                godot_error!("[pharmakos] decode_result({wire}): {error}");
+                godot_print!("[pharmakos] decode_result({wire}) refused: {error}");
                 Variant::nil()
             }
             None => Variant::nil(),
