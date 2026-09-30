@@ -19,12 +19,12 @@ members = [
 ]
 
 [workspace.package]
-version = "0.0.0"                # pre-spike; v0.1 is the wk-35.5 gate, v1 the wk-63.5 build
+version = "0.0.0"                # stays 0.0.0 until the wk-35.5 v0.1 gate (item 117 (2)); v1 is wk 63.5
 edition = "2024"
-rust-version = "1.85"            # PLACEHOLDER: raise to whatever rust-toolchain.toml pins
+rust-version = "1.85"            # PLACEHOLDER: the MSRV, below the 1.98.1 pin — owner, S1, see clippy.toml
 license = "GPL-3.0-or-later"     # crates/proto overrides this with MIT OR Apache-2.0
 authors = ["Pharmakos contributors"]
-repository = "https://example.invalid/pharmakos"  # PLACEHOLDER: GitHub org not registered yet
+repository = "https://example.invalid/pharmakos"  # PLACEHOLDER: the address — owner, the v0.1 gate
 publish = false                  # nothing in this workspace goes to crates.io
 
 # Shared dependency versions live here so every crate agrees on one graph, which is part

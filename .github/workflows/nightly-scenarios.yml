@@ -71,6 +71,8 @@ jobs:
 
       - name: Install the Rust toolchain
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable (branch)
+        with:
+          toolchain: 1.98.1
 
       - name: Cache cargo registry and target
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -81,10 +83,10 @@ jobs:
         run: cargo build --release --package pharmakos-gamectl --bin gamectl
 
       - name: Run the scenario over the seed set
-        # PLACEHOLDER: none of the flags below exist. T15 built `gamectl scenario run
-        # <file>` with no options (crates/gamectl/src/cli.rs), and the seed set, the
-        # Balanced operator's selection and the machine-readable result are S2's, when the
-        # nightly scenarios are enabled (owner, at S2; decisions-log item 116 (6)(j)).
+        # PLACEHOLDER: the flags below, which do not exist — owner, S2, when the nightly
+        # scenarios are enabled (decisions-log item 116 (6)(j)). T15 built `gamectl
+        # scenario run <file>` with no options (crates/gamectl/src/cli.rs), and the seed
+        # set, the Balanced operator's selection and the machine-readable result are S2's.
         # What the command must do is settled: take a scenario file (map seed + playbooks +
         # assertions on events and hashes), run it against the Balanced built-in operator
         # over a fixed seed set, and write a machine-readable result.
@@ -105,7 +107,7 @@ jobs:
         run: |
           set -euo pipefail
           result="target/scenario/${{ matrix.scenario }}.json"
-          # PLACEHOLDER: `win_rate_percent` is an integer field on the scenario result.
+          # PLACEHOLDER: `win_rate_percent` as an integer field — owner, S2, with S2-01.
           # Both greps are made non-fatal and `tail` replaces `head`: under `pipefail`
           # a grep that matches nothing exits 1 and would fail this step with no
           # message, and `head` closing the pipe early can SIGPIPE the upstream grep
@@ -158,6 +160,8 @@ jobs:
 
       - name: Install the Rust toolchain
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable (branch)
+        with:
+          toolchain: 1.98.1
 
       - name: Cache cargo registry and target
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
