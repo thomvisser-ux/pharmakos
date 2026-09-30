@@ -26,9 +26,9 @@ version = 1
 
 SPDX-PackageName = "Pharmakos"
 SPDX-PackageSupplier = "Pharmakos contributors"
-# PLACEHOLDER: no public repository URL has been chosen yet. Replace with the
-# canonical clone URL before the first public release; REUSE accepts the string
-# "NOASSERTION" until then.
+# PLACEHOLDER: the public repository URL — owner, the v0.1 gate (decisions-log
+# item 127 (4)). Replace with the canonical clone URL before the first public release;
+# REUSE accepts the string "NOASSERTION" until then.
 SPDX-PackageDownloadLocation = "NOASSERTION"
 
 # --- The game: everything that executes ------------------------------------
@@ -198,6 +198,25 @@ precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 Pharmakos contributors"
 SPDX-License-Identifier = "MIT OR Apache-2.0"
 
+# The three templates' render goldens quote library/: the renderer prints each
+# playbook's `meta` title and summary and its step labels, and for these three cases
+# those strings come from library/'s permissive templates. The answer is the gateway's
+# output, in the game tier like the rest of tests/golden/gateway/, and the quotation is
+# small; T22a judged no override necessary and wrote this block in its pull request for
+# the owner to take or leave (decisions-log item 124 (5) (e)). S1's plan's decision 9
+# takes it (item 128), so each file records both licences it carries: the gateway's GPL
+# and the templates' MIT OR Apache-2.0. Aggregate, so a header a file ever states is
+# combined with this, and AFTER the tests/** block, so it wins.
+[[annotations]]
+path = [
+    "tests/golden/gateway/demo_hold_and_build_render/**",
+    "tests/golden/gateway/demo_expand_and_mine_render/**",
+    "tests/golden/gateway/demo_safe_playbook_render/**",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Pharmakos contributors"
+SPDX-License-Identifier = "GPL-3.0-or-later AND (MIT OR Apache-2.0)"
+
 # --- The rules table -------------------------------------------------------
 # rules/rules.v1.json is the canonical JSON of one gp.v1.RulesTable
 # (decisions-log item 78): the shape is schema and the values are data. It is
@@ -284,14 +303,21 @@ SPDX-License-Identifier = "GPL-3.0-or-later"
 # carries the manifest that covered them. See docs/spikes/README.md rule 3.
 
 # --- Repository metadata ---------------------------------------------------
-# Licence pointers and directory placeholders. Documentation-tier, so the
+# Licence pointers and directory placeholders, documentation-tier, so the
 # manifest itself can be copied into another project without dragging the
-# copyleft along. The per-directory LICENSE files are listed one by one rather
-# than as `*/LICENSE`: assets/LICENSE is also matched by assets/**, and a
-# pointer file that resolved to two different licences at once would be exactly
-# the ambiguity these files exist to remove. tests/LICENSE is the sharpest case:
-# tests/** is the game tier, so without this line the pointer for the GPL
-# directory would itself be GPL. This block is last so each listed pointer
+# copyleft along.
+#
+# This block changes nothing `reuse lint` reports, and says so (the register's
+# S1-08, corrected in S1's first contract pull request): reuse ignores every file
+# named LICENSE*, LICENCE* or COPYING* and every empty file (REUSE Specification
+# 3.3, "excluded files"), and REUSE.toml carries its own header. Deleting the
+# block leaves the lint compliant, which is how this was checked. What the lines
+# still do is state, for a reader and for a tool that does not share reuse's
+# ignore rule, which tier each pointer belongs to: the per-directory LICENSE files
+# are listed one by one rather than as `*/LICENSE`, because assets/LICENSE is also
+# matched by assets/** and tests/LICENSE by the game tier's tests/**, and a
+# pointer that read as two licences at once would be the ambiguity these files
+# exist to remove. The block is last so that, for such a tool, each listed path
 # resolves here.
 [[annotations]]
 path = [

@@ -27,10 +27,12 @@
 # --- Private match cache (spec §15: deterministic replays, saves, drafts, notebooks) ---
 # The cache lives outside the repository, in the per-user data directory
 # (<data dir>/Pharmakos/matches/<match-id>/, pharmakos in lower case on Linux; the
-# platform table is in crates/gateway/src/cache.rs, decisions-log item 98). The patterns
-# below predate that layout and do not match it: a copied Pharmakos/matches/ folder is
-# not ignored, so never copy one into a checkout.
-# These files are per-seat secrets and must never be committed.
+# platform table is in crates/gateway/src/cache.rs, decisions-log item 98). The first
+# pattern matches that layout, so a cache copied into a checkout by mistake is ignored
+# wherever it lands (decisions-log item 124 (5) (i)); the two after it predate the layout
+# and are kept for a tree that still holds one. These files are per-seat secrets and must
+# never be committed.
+**/[Pp]harmakos/matches/
 /match-cache/
 **/match-cache/
 *.replay
