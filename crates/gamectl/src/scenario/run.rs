@@ -39,24 +39,25 @@
 //! second way to play a match; if T16a gives `Surface` accessors for those
 //! three, this file should take them and `.runner()` should join the needles.
 //!
-//! # What is fixed here rather than in the file, and why
+//! # The match settings a file may name
 //!
-//! Two inputs of a match are not in the scenario format, so they are written
-//! down here where a reader can find them:
+//! Two inputs of a match beyond the triple are the scenario's own keys since
+//! S1's first contract pull request (the register's S1-41), each optional:
 //!
-//! * `units_per_seat` is **0**. Both existing producers of a committed chain
-//!   use it (`crates/sim/tests/scenario.rs`, `crates/gateway/tests/methods.rs`),
-//!   and a scenario's hash chain has to be reproducible by them.
-//! * `round_limit` is [`DEFAULT_ROUND_LIMIT`], the spec's default and a lobby
-//!   setting rather than a tuning row (decisions-log item 102 (7)).
+//! * `units_per_seat`, the harness walkers each seat fields, is **0** when the
+//!   file names none. Both existing producers of a committed chain use 0
+//!   (`crates/sim/tests/scenario.rs`, `crates/gateway/tests/methods.rs`), and
+//!   a scenario's hash chain has to be reproducible by them; a scenario that
+//!   wants a seat with a roster names it.
+//! * `round_limit` is the sim's
+//!   [`DEFAULT_ROUND_LIMIT`](pharmakos_sim::runner::DEFAULT_ROUND_LIMIT), the
+//!   spec's default and a lobby setting rather than a tuning row
+//!   (decisions-log item 102 (7)), when the file names none; a scenario that
+//!   plays a match to its end names it, and both readers refuse a limit below
+//!   the file's segment count.
 //!
-//! PLACEHOLDER: both belong in the scenario file the day a scenario wants to
-//! vary them — `units_per_seat` when S1's units arrive and a scenario wants a
-//! seat with a roster, `round_limit` when a scenario plays a match to its end.
-//! Adding a key is additive and is not a format break (`scenarios/README.md`),
-//! but it is still a contract path, so the **owner** decides, at the stage that
-//! first needs it. Today neither is variable and a file that could set them
-//! would be a knob nothing turns.
+//! Absent, both are what every committed chain was produced with, so the keys
+//! moved no chain. `scenarios/README.md` documents them.
 //!
 //! # A `builtin` seat plays Easy (T18b)
 //!
@@ -78,8 +79,8 @@
 //! about the map seed, the playbooks and the rules hash, and moves when
 //! either does (`tests/golden/scenarios/README.md`).
 //!
-//! PLACEHOLDER: a `builtin` seat plays Easy, and the `operator` scenario key
-//! that would name another difficulty waits for one. **Owner**, at **S5**.
+//! PLACEHOLDER: a `builtin` seat plays Easy — owner, S5, with the `operator`
+//! scenario key that would name another difficulty.
 
 use std::fmt::Write as _;
 use std::path::Path;
@@ -93,7 +94,7 @@ use pharmakos_gateway::token::{Subject, Token};
 use pharmakos_proto::json::Json;
 use pharmakos_sim::math::quantity::{Ms, Tick};
 use pharmakos_sim::rules::RulesTable;
-use pharmakos_sim::runner::{DEFAULT_ROUND_LIMIT, MatchSettings};
+use pharmakos_sim::runner::MatchSettings;
 use pharmakos_sim::tables::SeatId;
 use pharmakos_sim::world::WorldConfig;
 
@@ -102,20 +103,17 @@ use crate::host::EasyOperators;
 use crate::scenario::{Assertion, Scenario, SeatKind, ticks_of};
 use crate::strings;
 
-/// No harness walkers. See the module doc.
-const UNITS_PER_SEAT: u32 = 0;
-
 /// The most of the hash chain this runner reserves up front, in bytes.
 ///
 /// Sixteen megabytes is about seven hundred thousand ticks, which is nine and
 /// a half hours of game time — past anything a scenario plays and short of
 /// anything that hurts. It caps the *reservation* only.
 ///
-/// PLACEHOLDER: the real fix is a cap on `length_ms` in the scenario format,
-/// reported with a pointer the way `MAX_SEATS` is. That cap has to hold in
-/// `xtask/src/scenario.rs` as well or the two readers of the format stop
-/// agreeing, and `xtask` is a contract path (AGENTS.md §5). **OWNER**, with the
-/// format's other open question in this task's pull request.
+/// The format caps each segment at eight minutes since S1's first contract
+/// pull request (`crate::scenario::MAX_SEGMENT_MS`, the register's X-01, held
+/// in `xtask/src/scenario.rs` too), so no single length asks for gigabytes
+/// any more; this bound stays for a file that lists many segments, which the
+/// format does not cap.
 const CHAIN_RESERVE_CAP: usize = 16 * 1024 * 1024;
 
 /// The match id every scenario run hosts under.
@@ -390,7 +388,7 @@ fn open(root: &Path, scenario: &Scenario, rules: RulesTable) -> Result<Surface, 
         &WorldConfig {
             match_seed: scenario.seed,
             seats: count,
-            units_per_seat: UNITS_PER_SEAT,
+            units_per_seat: scenario.units_per_seat,
             rules: rules.clone(),
             match_settings: MatchSettings {
                 segment_lengths_ms: scenario
@@ -398,7 +396,7 @@ fn open(root: &Path, scenario: &Scenario, rules: RulesTable) -> Result<Surface, 
                     .iter()
                     .map(|segment| segment.length_ms)
                     .collect(),
-                round_limit: DEFAULT_ROUND_LIMIT,
+                round_limit: scenario.round_limit,
             },
         },
         library,

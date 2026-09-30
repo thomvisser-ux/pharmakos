@@ -70,10 +70,11 @@ pub(crate) const FORMAT: &str = "pharmakos.scenario.v1";
 /// Decisions-log item 97 (skeleton-plan section 7 decision 16, taken
 /// 2026-09-14) authorised one extension "when `scenario run` meets real
 /// events", by *at most* `event_count_in_range`, `state_hash_at_tick` and
-/// `terminal_hash`; T15 took none of the three, and the owner has the question
-/// (`crates/gamectl/src/scenario.rs` says why). The vocabulary is data inside
-/// the format, not the format, so adding to it is not a format break; removing
-/// one would be.
+/// `terminal_hash`; T15 took none of the three, and the owner confirmed that
+/// none is taken now (the register's M-05, ruled by S1's plan's decision 9,
+/// decisions-log item 128; `crates/gamectl/src/scenario.rs` says why). The
+/// vocabulary is data inside the format, not the format, so adding to it is
+/// not a format break; removing one would be.
 pub(crate) const ASSERTIONS: &[&str] = &["event_fired", "hash_chain_equals"];
 
 /// Names held for decisions-log item 97's extension. Naming one today is an
@@ -91,10 +92,25 @@ const TOP_LEVEL_KEYS: &[&str] = &[
     "summary",
     "map",
     "rules",
+    "units_per_seat",
+    "round_limit",
     "seats",
     "segments",
     "assertions",
 ];
+
+/// The longest segment a scenario may play, in game milliseconds: spec
+/// section 3's "the world then runs for up to 8 minutes", the top of the 3 / 5
+/// / 8 ladder.
+///
+/// The cap is the format's rather than the runner's (the register's X-01,
+/// taken with S1-41 in S1's first contract pull request): before it, a segment
+/// was any positive `int32`, so two segments of `i32::MAX` asked the runner
+/// for gigabytes of hash chain before the first tick, and the runner capped
+/// its reservation instead of the file refusing the length with a pointer.
+/// `gamectl`'s reader holds the same number, so the two readers keep refusing
+/// the same files.
+pub(crate) const MAX_SEGMENT_MS: i64 = 480_000;
 
 /// The rules table a scenario runs against when it does not name one.
 ///
@@ -201,7 +217,8 @@ pub(crate) fn validate(root: &Path, path: &Path) -> Result<Scenario, String> {
         check_map(&json, &mut problems);
         rules = check_rules(root, &json, &mut problems);
         seats = check_seats(root, &json, &mut problems);
-        check_segments(&json, &mut problems);
+        let segments = check_segments(&json, &mut problems);
+        check_match_settings(&json, segments, &mut problems);
         assertions = check_assertions(root, &json, &mut problems);
     } else {
         problems.push(Problem::new("", "a scenario file is a JSON object"));
@@ -412,13 +429,14 @@ fn check_seats(root: &Path, json: &Json, problems: &mut Vec<Problem>) -> usize {
     seats.len()
 }
 
-fn check_segments(json: &Json, problems: &mut Vec<Problem>) {
+/// Returns how many segments the file lists, for the round limit's check.
+fn check_segments(json: &Json, problems: &mut Vec<Problem>) -> usize {
     let Some(Json::Array(segments)) = json.get("segments") else {
         problems.push(Problem::new(
             "/segments",
             "required: an array of one or more segments",
         ));
-        return;
+        return 0;
     };
     if segments.is_empty() {
         problems.push(Problem::new(
@@ -447,7 +465,14 @@ fn check_segments(json: &Json, problems: &mut Vec<Problem>) {
         }
 
         match integer(segment.get("length_ms")) {
-            Some(number) if number > 0 && number <= i64::from(i32::MAX) => {}
+            Some(number) if number > 0 && number <= MAX_SEGMENT_MS => {}
+            Some(number) if number > MAX_SEGMENT_MS => problems.push(Problem::new(
+                &format!("{base}/length_ms"),
+                format!(
+                    "a segment plays at most {MAX_SEGMENT_MS} game milliseconds, spec section \
+                     3's eight minutes; found {number}"
+                ),
+            )),
             Some(number) => problems.push(Problem::new(
                 &format!("{base}/length_ms"),
                 format!(
@@ -458,6 +483,45 @@ fn check_segments(json: &Json, problems: &mut Vec<Problem>) {
             None => problems.push(Problem::new(
                 &format!("{base}/length_ms"),
                 "required: the segment's length in game milliseconds, a bare integer",
+            )),
+        }
+    }
+    segments.len()
+}
+
+/// The two match settings a scenario may name (the register's S1-41, taken in
+/// S1's first contract pull request): `units_per_seat`, the harness walkers
+/// each seat fields, and `round_limit`, the round the match ends on. Both are
+/// optional, and absent they are what every committed chain was produced
+/// with — no walkers, and the sim's `DEFAULT_ROUND_LIMIT` — so adding the keys
+/// moves no chain.
+fn check_match_settings(json: &Json, segments: usize, problems: &mut Vec<Problem>) {
+    if let Some(value) = json.get("units_per_seat") {
+        if integer(Some(value)).is_none_or(|number| u32::try_from(number).is_err()) {
+            problems.push(Problem::new(
+                "/units_per_seat",
+                "optional, but when present it is the walkers each seat fields: an integer of 0 \
+                 or more",
+            ));
+        }
+    }
+    if let Some(value) = json.get("round_limit") {
+        match integer(Some(value)) {
+            Some(number) if number >= 1 && u32::try_from(number).is_ok() => {
+                if usize::try_from(number).is_ok_and(|limit| limit < segments) {
+                    problems.push(Problem::new(
+                        "/round_limit",
+                        format!(
+                            "the match ends on round {number}, and the file plays {segments} \
+                             segments; a scenario plays no round past its limit"
+                        ),
+                    ));
+                }
+            }
+            _ => problems.push(Problem::new(
+                "/round_limit",
+                "optional, but when present it is the round the match ends on: an integer of 1 \
+                 or more",
             )),
         }
     }
@@ -494,8 +558,8 @@ fn check_assertions(root: &Path, json: &Json, problems: &mut Vec<Problem>) -> us
                 &format!("{base}/assert"),
                 format!(
                     "`{kind}` is reserved for the vocabulary extension decisions-log item 97 \
-                     authorises (plan §7 decision 16); T15 took none of the three and the owner \
-                     has the question (see crates/gamectl/src/scenario.rs). It is not in {FORMAT}."
+                     authorises (plan §7 decision 16); T15 took none of the three, and the owner \
+                     confirmed none is taken now (decisions-log item 128). It is not in {FORMAT}."
                 ),
             ));
             continue;
@@ -961,6 +1025,71 @@ mod tests {
     }
 
     #[test]
+    fn a_segment_longer_than_the_spec_s_eight_minutes_is_rejected() {
+        let dir = scratch("segment-cap");
+        let path = write(&dir, &GOOD.replace("180000", "480000"));
+        validate(&dir, &path).expect("eight minutes is the cap, and allowed");
+
+        let path = write(&dir, &GOOD.replace("180000", "480001"));
+        let report = validate(&dir, &path).expect_err("rejected");
+        assert!(report.contains("/segments/0/length_ms"), "{report}");
+        assert!(report.contains("at most 480000"), "{report}");
+
+        // What the cap exists for: a length that asked the runner for gigabytes.
+        let path = write(&dir, &GOOD.replace("180000", "2147483647"));
+        let report = validate(&dir, &path).expect_err("rejected");
+        assert!(report.contains("/segments/0/length_ms"), "{report}");
+    }
+
+    /// Inserts top-level keys into [`GOOD`] after its `name`.
+    fn with_keys(keys: &str) -> String {
+        GOOD.replace(
+            "  \"name\": \"smoke\",\n",
+            &format!("  \"name\": \"smoke\",\n{keys}"),
+        )
+    }
+
+    #[test]
+    fn units_per_seat_and_round_limit_are_optional_match_settings() {
+        let dir = scratch("match-settings");
+        let path = write(
+            &dir,
+            &with_keys("  \"units_per_seat\": 0,\n  \"round_limit\": 1,\n"),
+        );
+        validate(&dir, &path).expect("both keys, in range");
+        let path = write(
+            &dir,
+            &with_keys("  \"units_per_seat\": 50,\n  \"round_limit\": 6,\n"),
+        );
+        validate(&dir, &path).expect("walkers and the default round limit");
+
+        for (keys, pointer) in [
+            ("  \"units_per_seat\": -1,\n", "/units_per_seat"),
+            ("  \"units_per_seat\": \"50\",\n", "/units_per_seat"),
+            ("  \"units_per_seat\": 4294967296,\n", "/units_per_seat"),
+            ("  \"round_limit\": 0,\n", "/round_limit"),
+            ("  \"round_limit\": 1.5,\n", "/round_limit"),
+        ] {
+            let path = write(&dir, &with_keys(keys));
+            let report = validate(&dir, &path).expect_err(keys);
+            assert!(report.contains(pointer), "{keys}: {report}");
+        }
+    }
+
+    #[test]
+    fn a_round_limit_below_the_segment_count_is_rejected() {
+        let dir = scratch("round-limit-short");
+        let body = with_keys("  \"round_limit\": 1,\n").replace(
+            "[ { \"index\": 0, \"length_ms\": 180000 } ]",
+            "[ { \"index\": 0, \"length_ms\": 180000 }, { \"index\": 1, \"length_ms\": 300000 } ]",
+        );
+        let path = write(&dir, &body);
+        let report = validate(&dir, &path).expect_err("rejected");
+        assert!(report.contains("/round_limit"), "{report}");
+        assert!(report.contains("plays 2 segments"), "{report}");
+    }
+
+    #[test]
     fn a_scenario_must_assert_on_events_and_on_hashes() {
         let dir = scratch("events-only");
         let body = GOOD.replace(
@@ -980,6 +1109,10 @@ mod tests {
         let report = validate(&dir, &path).expect_err("rejected");
         assert!(report.contains("decisions-log item 97"), "{report}");
         assert!(report.contains("T15 took none"), "{report}");
+        assert!(
+            report.contains("owner confirmed none is taken now"),
+            "the register's M-05, ruled: {report}"
+        );
         assert!(!report.contains("not yet logged"), "{report}");
     }
 
