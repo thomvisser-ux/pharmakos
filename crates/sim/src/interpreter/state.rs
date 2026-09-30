@@ -706,6 +706,14 @@ pub enum StepFailure {
     NoMast,
     /// The commander died while the step was running.
     CommanderDead,
+    /// The treasury cannot cover the order the step would commit (spec
+    /// section 7, "an order the treasury cannot cover fails like any other
+    /// step"). In S1 the deploy is the only step that spends, so this is a
+    /// `place_beacon` whose `structures.beacon.cost_dollars` the seat's `$`
+    /// does not reach when the deploy would start (decision 7 of S1's plan,
+    /// ruled by item 128). Id 11 is `feature_lost`, which the targeting lane
+    /// adds (`targeting.md`'s failure table).
+    Unaffordable,
 }
 
 impl StepFailure {
@@ -714,7 +722,7 @@ impl StepFailure {
     /// `tests/interpreter.rs`'s `every_step_failure_has_a_unique_id` walks it,
     /// which is what makes the ordering claim checked rather than asserted —
     /// the array was out of order when it was only a doc comment.
-    pub const ALL: [StepFailure; 10] = [
+    pub const ALL: [StepFailure; 11] = [
         StepFailure::Timeout,
         StepFailure::NoTarget,
         StepFailure::NoPath,
@@ -725,6 +733,7 @@ impl StepFailure {
         StepFailure::NoMast,
         StepFailure::CommanderDead,
         StepFailure::NotOwn,
+        StepFailure::Unaffordable,
     ];
 
     /// The wire id. Additive only: never reuse, never renumber.
@@ -741,6 +750,7 @@ impl StepFailure {
             StepFailure::NoMast => 8,
             StepFailure::CommanderDead => 9,
             StepFailure::NotOwn => 10,
+            StepFailure::Unaffordable => 12,
         }
     }
 
@@ -758,6 +768,7 @@ impl StepFailure {
             StepFailure::NoBeaconRoom => "no_beacon_room",
             StepFailure::NoMast => "no_mast",
             StepFailure::CommanderDead => "commander_dead",
+            StepFailure::Unaffordable => "unaffordable",
         }
     }
 }
