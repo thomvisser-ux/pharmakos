@@ -143,7 +143,7 @@ Each goes to S1's first contract pull request (AGENTS.md section 5).
 | S1-22 | Whether a priority raise re-applies the brownout order, so a raised dark beacon relights and a lit lower-priority one sheds | `crates/sim/src/programs.rs` `program_for` doc (first of three); copy in `crates/operator/src/safe.rs` module doc | item 113 (4); plan T14b |
 | S1-23 | What "one field" means for the interface's 0.5 s step when a setting is a list | `crates/plan-core/src/interface.rs` `count` | — |
 | S1-24 | `BUILD_HP_PER_SECOND` = 60, proposed as `structures.build_hp_per_second` | `crates/sim/src/economy.rs` `BUILD_HP_PER_SECOND` | item 105 (1) |
-| S1-25 | `MINING_LOAD_VOXELS` = 16, proposed as `economy.mining_load_voxels` | `crates/sim/src/economy.rs` `MINING_LOAD_VOXELS` | — |
+| S1-25 | `MINING_LOAD_VOXELS` = 16, now the row `economy.mining_carry_voxels` (`con1`; the name is item 129 (2)'s) | `crates/sim/src/economy.rs` `MINING_LOAD_VOXELS` | — |
 | S1-26 | The determinism harness: its segment list (20 000 / 15 000 ms), its harness playbook, its 1 200-tick run and its fifty walkers per seat, all deleted when `DETERMINISM_TICKS` is raised to a real segment. Two copies still name T14 | `crates/sim/src/lib.rs` `DETERMINISM_SEGMENT_LENGTHS_MS`, `determinism_playbook`; `xtask/src/main.rs` `DETERMINISM_TICKS`; `crates/sim/tests/determinism.rs` `GOLDEN_TICKS`; `tests/golden/determinism/README.md` "What the committed chain covers (T10)"; `crates/sim/src/world.rs` `fill_unit_table`; stale copies naming T14: `WorldConfig::units_per_seat`, `draw_new_destinations`; unmarked copy: `crates/sim/src/lib.rs` `DETERMINISM_MATCH_SEED` | item 116 (6)(e) |
 | S1-27 | `VENT_PATCH_RADIUS` = 1: a vent is a three-by-three patch | `crates/sim/src/mapgen.rs` `VENT_PATCH_RADIUS` | — |
 | S1-28 | A seam's shape: `SEAM_VOXELS_PER_COLUMN` = 4 and `SEAM_DISC_RADIUS` = 5 | `crates/sim/src/mapgen.rs` `SEAM_VOXELS_PER_COLUMN`, `SEAM_DISC_RADIUS` | — |
@@ -568,9 +568,6 @@ part:
 - `packaging/README.md` "## PLACEHOLDERs": the heading is a grep hit (a reference) and its two
   bullets are unmarked: the repository's public address (G-01) and the export preset's fields (a
   pointer to G-03 and G-04).
-- `godot/scripts/camera_rig.gd` `NEAREST`: the header's grep sees it, and Appendix B counts it among
-  the 23 pointers; it is listed here only because its pointer is split across two lines,
-  "PLACEHOLDER, as" and "above.", so a search for the pointer's whole form misses it (D-21).
 - `xtask/src/scenario.rs` `SEAT_KEYS`: "owner, at S5" with no marker (S5-02).
 - `crates/sim/src/lib.rs` `DETERMINISM_MATCH_SEED`: "owner, at S1" with no marker (S1-26).
 - `godot/scripts/mesher_rules.gd` `RULES_JSON`: the client's inline copy of `match.lull_ms` (D-01).

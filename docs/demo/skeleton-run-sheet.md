@@ -412,7 +412,9 @@ on the status line. Watch round 1 at 1× or 2× so each beat is seen.
 
 37. **The last recap.** Read the `settled` row and press "Continue". The last recap waits for it too.
     - Proof: `crates/sim/tests/runner.rs` `the_round_limit_ends_the_match_when_the_last_recap_closes`
-      (the match ends when the last recap closes, not before); pressing it: by hand only.
+      (the match ends when the last recap closes, not before); pressing it: by hand only. S1's `fixs`
+      decides the round limit at the last round's final tick instead and renamed the test
+      `the_round_limit_is_decided_at_the_last_rounds_final_tick` (item 129).
 
 38. **The match ends on the round limit.**
     - See: "Round 3 - ENDED  speed Nx  The last match has ended, so there is nothing to resume.",
@@ -423,7 +425,8 @@ on the status line. Watch round 1 at 1× or 2× so each beat is seen.
       the same reason no demo reaches the fog's other unlock, an elimination (the T16a notes' two-seat
       match that ends by elimination); `crates/gateway/tests/security.rs`
       `elimination_lifts_fog_without_reissuing_a_token` alone proves it until S2.
-    - Proof: `crates/sim/tests/runner.rs` `the_round_limit_ends_the_match_when_the_last_recap_closes`;
+    - Proof: `crates/sim/tests/runner.rs` `the_round_limit_ends_the_match_when_the_last_recap_closes`
+      (since S1's `fixs`, `the_round_limit_is_decided_at_the_last_rounds_final_tick`);
       `view.rs` `the_full_map_unlock_comes_from_a_server_side_policy_change` and its client half,
       `crates/client-gdext/tests/unlock.rs` of the same name; `godot_project.rs`
       `the_lobby_forgets_an_ended_match_and_shows_a_refusal_as_the_host_wrote_it`. No scenario
