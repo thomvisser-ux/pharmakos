@@ -749,14 +749,20 @@ message GetMapSummaryResponse {
   string match_seed = 4;
 
   // Every vent and seam on the map (the register's S1-48), in feature id
-  // order. The feature table is a pure function of the seed, the rules and
-  // the occupied seats, and the seed is served above, so listing it reveals
-  // nothing new; it is fog-filtered from S3, with the knowledge store
-  // (docs/design/targeting.md, "Surfaces").
+  // order. Each feature's id, kind, grade and anchor are a pure function of
+  // the seed, the rules and the occupied seats. Its `live`, `covered`,
+  // `travel_ms` and `reachable` read the world as it stands (the frozen
+  // snapshot in a Lull or a recap, the live world in a Push), unfogged in S1
+  // as targeting.md's ranking already is, so a seam another seat has mined
+  // out shows here as not live. The list is fog-filtered from S3, with the
+  // knowledge store (docs/design/targeting.md, "Descriptions (S1)" and
+  // "Surfaces").
   repeated MapFeature features = 5;
 
   // PLACEHOLDER: a fog-filtered terrain summary — owner, S3, with the
-  // knowledge store that gives "fog-filtered" its meaning.
+  // knowledge store that gives "fog-filtered" its meaning. The stage is S1's
+  // plan task con2's reading (the plan names S1-48's features and not the
+  // terrain), for the owner to confirm.
   reserved 6 to 15;
 }
 
@@ -820,8 +826,9 @@ message WhatIf {
 // 111, decision C7, a departure from item 105 (2) taken in the open): the
 // seat's OWN economy as the world stands, the frozen snapshot's in a Lull or a
 // recap and the live world's in a Push. They are what the sim already reads
-// out, not a projection. S1's projection, income and what-if answers land in
-// NEW fields and never redefine these four. Another seat's economy is on no
+// out, not a projection. Later answers land in NEW fields and never redefine
+// these four: S1's next BMI and committed spend (fields 5 and 6), and the
+// projection, the projected income and the what-if answers after them. Another seat's economy is on no
 // wire at all (spec section 10: enemy treasury is deliberately absent).
 //
 // Whole $ and whole kW, int32 like gp.v1's Treasury and KwHeadroom predicates,
@@ -854,8 +861,11 @@ message GetEconomyForecastResponse {
   // a dry run and never a model of anybody else (spec section 11).
   int32 committed_dollars = 6;
 
-  // PLACEHOLDER: the projected income, the projection and the what-if answers — owner, S3
-  // (decision 12), with the what-if vocabulary.
+  // PLACEHOLDER: the projected income, the projection and the what-if
+  // answers — owner, S3, with the what-if vocabulary. Decision 12 (item 128)
+  // sends the what-ifs to S3 and fills only the next BMI and the committed
+  // spend in S1; the projection's and the projected income's stage is S1's
+  // plan task con2's reading, for the owner to confirm.
   //
   // This method answers the LIVE world during a Push, although its name says
   // "forecast". Ruled for S1 by the owner (item 128, decision 12, the
