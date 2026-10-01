@@ -492,20 +492,6 @@ impl Posture {
             Posture::Patrol(_) => 3,
         }
     }
-
-    /// The posture a [`Posture::id`] names, as the editor and a feed line
-    /// spell it (`Hold`, `Shadow`, `Patrol`), or `None` for an id this build
-    /// does not define. What a reader of `fallback_engaged` is shown instead
-    /// of the raw code (the demo's F5).
-    #[must_use]
-    pub const fn name_of_id(id: u8) -> Option<&'static str> {
-        match id {
-            1 => Some("Hold"),
-            2 => Some("Shadow"),
-            3 => Some("Patrol"),
-            _ => None,
-        }
-    }
 }
 
 /// A condition tree. Integer comparisons only, over the seat's own knowledge.

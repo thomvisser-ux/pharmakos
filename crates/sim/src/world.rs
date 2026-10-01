@@ -13,16 +13,17 @@
 //! T7 replaced straight-line walking with path following over HPA\*, and T10
 //! put the Lull / Push / recap runner around this loop: [`Phase::Match`] is the
 //! phase that settles a tick's deaths and closes a segment, and the hashed
-//! [`crate::runner::MatchState`] is what it moves. What is still to come:
+//! [`crate::runner::MatchState`] is what it moves. T11 then drove the
+//! commander's destinations from the playbook interpreter, and T14 filled the
+//! economy, the Build mandate, Survey-lite and the programs, and was the first
+//! task to put anything in the voxel phase's edit queue.
 //!
-//! * T11 drives destinations from the playbook interpreter.
-//! * T14 fills the economy, the Build mandate, Survey-lite and the programs,
-//!   and is the first task to put anything in the voxel phase's edit queue.
-//!
-//! Every one of those pull requests **moves the hash chain**, and each one owes
-//! the explanation (AGENTS.md section 4.8, section 10 item 2). The values marked
-//! `PLACEHOLDER (harness)` below are scaffolding those tasks delete, not tuning
-//! values: they are not in the rules table because they are not rules.
+//! Every pull request that changes what a tick does **moves the hash chain**,
+//! and each one owes the explanation (AGENTS.md section 4.8, section 10 item
+//! 2). The values marked `PLACEHOLDER (harness)` below are the determinism
+//! harness's scaffolding, not tuning values: they are not in the rules table
+//! because they are not rules, and they go with S1-26's real determinism
+//! segment (owner, at S1, the `tune` lane).
 //!
 //! # The phase order is fixed
 //!
@@ -1532,12 +1533,14 @@ impl World {
 
     /// How many unit rows a match may ever hold.
     ///
-    /// Derived from the starting count and [`UNIT_TABLE_ROOM`] by one
-    /// expression called from construction and from a restore, for exactly the
-    /// reason [`beacon_limit_of`] is: the ceiling decides what a tick does — it
-    /// is what turns a fabrication order into a held one — so a limit
-    /// recomputed from "however many units there are now" would grow every time
-    /// a match was saved and resumed.
+    /// Derived once, at construction, from the starting count and
+    /// [`UNIT_TABLE_ROOM`], and **kept** by a restore, for exactly the reason
+    /// [`beacon_limit_of`] is: the ceiling decides what a tick does — it is
+    /// what turns a fabrication order into a held one — so a limit recomputed
+    /// from "however many units there are now" would grow every time a match
+    /// was saved and resumed. A restore therefore expects a world built from
+    /// the snapshot's own match configuration, and refuses a snapshot with more
+    /// units than this ceiling ([`crate::snapshot::SnapshotError::OverCeiling`]).
     #[must_use]
     pub const fn unit_limit(&self) -> u32 {
         self.unit_limit
@@ -2722,8 +2725,9 @@ impl World {
     ///
     /// PLACEHOLDER (harness): the destination is drawn from [`Stream::Spawn`] at
     /// `(tick, seat, unit id)`, which is the wandering T2 introduced so that the
-    /// hash chain covers a moving table. T14 deletes it with
-    /// `WorldConfig::units_per_seat`, the walkers it exists to move.
+    /// hash chain covers a moving table. It goes with
+    /// `WorldConfig::units_per_seat`, the walkers it exists to move, and with
+    /// S1-26's real determinism segment (owner, at S1, the `tune` lane).
     ///
     /// **A commander is not drawn for** (T11): where the commander goes is the
     /// playbook's to say, and a seat that has sealed none leaves its commander

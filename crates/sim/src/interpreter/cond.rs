@@ -147,56 +147,12 @@ impl View<'_> {
         (0..count).find(|row| beacons.ids().get(*row).copied() == Some(beacon.raw()))
     }
 
-    /// A beacon's maximum hit points.
-    ///
-    /// The seat's **lowest-id** beacon is its core (spec section 3: a seat's
-    /// first beacon is its core), which is `beacon.core_hp`; every other is a
-    /// placed beacon at `structures.beacon.hp`. The same rule the respawn point
-    /// uses to find a core.
-    pub(crate) fn beacon_max_hp(&self, row: usize) -> i64 {
-        let rules = self.world.rules().message();
-        let seat = self.world.beacons().seats().get(row).copied().unwrap_or(0);
-        let is_core = self.core_row(seat) == Some(row);
-        if is_core {
-            return rules
-                .beacon
-                .as_ref()
-                .map_or(0, |block| i64::from(block.core_hp));
-        }
-        rules
-            .structures
-            .as_ref()
-            .and_then(|block| block.beacon)
-            .map_or(0, |row| i64::from(row.hp))
-    }
-
-    /// The row of a seat's core: its lowest-id beacon.
-    pub(crate) fn core_row(&self, seat: u8) -> Option<usize> {
-        let beacons = self.world.beacons();
-        let count = usize::try_from(beacons.len()).unwrap_or(0);
-        let mut best: Option<(u32, usize)> = None;
-        let mut row: usize = 0;
-        while row < count {
-            if beacons.seats().get(row).copied() == Some(seat) {
-                let id = beacons.ids().get(row).copied().unwrap_or(u32::MAX);
-                if best.is_none_or(|(found, _)| id < found) {
-                    best = Some((id, row));
-                }
-            }
-            row = row.saturating_add(1);
-        }
-        best.map(|(_, row)| row)
-    }
-
-    /// A beacon's hit points as a whole percentage of its maximum.
+    /// A beacon's hit points as a whole percentage of its maximum: the
+    /// selector catalogue's own [`Board::row_hp_pct`], so a condition and a
+    /// selector read one rule for a beacon's maximum (the core is the seat's
+    /// lowest-id beacon).
     pub(crate) fn beacon_hp_pct(&self, row: usize) -> i64 {
-        let hp = self
-            .world
-            .beacons()
-            .hit_points()
-            .get(row)
-            .map_or(0, |hp| i64::from(hp.raw()));
-        percent(hp, self.beacon_max_hp(row))
+        self.row_hp_pct(row)
     }
 
     /// Whether a beacon is alive.
@@ -416,6 +372,8 @@ struct SnapshotBoard<'a> {
     snapshot: &'a Snapshot,
     rules: &'a RulesTable,
     seat: SeatId,
+    /// Where a `nearest` ranks from, when not from the commander.
+    from: Option<[Fx; 3]>,
 }
 
 impl Board for SnapshotBoard<'_> {
@@ -448,8 +406,14 @@ impl Board for SnapshotBoard<'_> {
     }
     /// The seat's commander: its first commander row in unit-id order, the
     /// same rule the world's own index keeps (one per occupied seat, spec
-    /// section 4). `None` when it is dead, as the live view answers.
+    /// section 4). `None` when it is dead, as the live view answers. A caller
+    /// that names the point a later step starts from
+    /// ([`resolve_beacon_in`]'s `from`) is answered with that point instead:
+    /// it is where the commander will stand when that step resolves.
     fn commander_at(&self) -> Option<[Fx; 3]> {
+        if self.from.is_some() {
+            return self.from;
+        }
         let commander = crate::tables::UnitKind::Commander.id();
         let row = self
             .snapshot
@@ -492,18 +456,26 @@ pub(crate) fn resolve_beacon(view: &View<'_>, spec: BeaconSpec) -> Option<Beacon
 /// and the targeting lane's `resolve_refs` reuses it. It reads, it never steps
 /// (AGENTS.md section 3 rule 2): a selector is a ranking over what the
 /// snapshot already holds.
+///
+/// `from` is where a `nearest` selector ranks from. At run time a selector
+/// resolves when its step starts, from wherever the commander stands then,
+/// which for any leg after the first is the end of the leg before it; so a
+/// caller estimating a later leg passes that point, and `None` ranks from
+/// where the snapshot's commander stands, as a route's first step does.
 #[must_use]
 pub fn resolve_beacon_in(
     snapshot: &Snapshot,
     rules: &RulesTable,
     seat: SeatId,
     spec: BeaconSpec,
+    from: Option<[Fx; 3]>,
 ) -> Option<BeaconId> {
     resolve_on(
         &SnapshotBoard {
             snapshot,
             rules,
             seat,
+            from,
         },
         spec,
     )

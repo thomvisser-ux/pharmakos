@@ -502,6 +502,17 @@ pub enum SnapshotError {
         /// How many units the snapshot holds.
         units: u32,
     },
+    /// The snapshot holds more units than the receiving world's unit ceiling
+    /// ([`World::unit_limit`]), which comes from the receiving world's own
+    /// match configuration. The file was saved under another configuration
+    /// (a larger `units_per_seat`, say): restoring it would either overflow
+    /// the table or resume with a ceiling the unbroken run did not have.
+    OverCeiling {
+        /// How many units the snapshot holds.
+        units: u32,
+        /// The receiving world's ceiling.
+        limit: u32,
+    },
     /// A carried chunk digest is not the digest of the chunk the restore
     /// rebuilt. The file describes a store this build does not produce — a
     /// different generator, a different rules table, or edited bytes — and a
@@ -551,6 +562,10 @@ impl core::fmt::Display for SnapshotError {
                 f,
                 "the snapshot's {units} units cannot be indexed by a broadphase grid built from \
                  this world's rules table"
+            ),
+            SnapshotError::OverCeiling { units, limit } => write!(
+                f,
+                "the snapshot holds {units} units and this world's unit ceiling is {limit}:                  it was saved under another match configuration"
             ),
             SnapshotError::ChunkDigest { chunk } => write!(
                 f,
@@ -760,9 +775,18 @@ impl Snapshot {
     ///
     /// The world keeps its rules table, so restoring into a world built under
     /// different rules is caught by the rules hash at the save's own level
-    /// (T17) rather than silently half-applied here. Its derived indexes are
-    /// **resized to the restored tables** before anything is written, because a
-    /// snapshot may hold more units than the receiving world was built for.
+    /// (T17) rather than silently half-applied here.
+    ///
+    /// **The receiving world must be built from the snapshot's own match
+    /// configuration** (its seat count, its `units_per_seat`), as
+    /// `Host::resume` builds it from the config line. The world keeps its
+    /// unit ceiling ([`World::unit_limit`]), which construction derived from
+    /// that configuration's starting count, so a resumed match has exactly the
+    /// room the unbroken run had. A snapshot with more units than that ceiling
+    /// is refused ([`SnapshotError::OverCeiling`]); one with fewer restores,
+    /// and its derived indexes are rebuilt for the restored tables before
+    /// anything is written, but a world built under another configuration
+    /// resumes with that configuration's ceiling, not the saved match's.
     ///
     /// The map is regenerated from [`Snapshot::match_seed`] under the receiving
     /// world's rules and the snapshot's own seat count, and the modified chunks
@@ -772,9 +796,10 @@ impl Snapshot {
     ///
     /// Returns [`SnapshotError::Ragged`] when the columns disagree in length,
     /// [`SnapshotError::Map`] when the map cannot be regenerated, or
-    /// [`SnapshotError::Unindexable`] when the receiving world's rules table
-    /// cannot describe a grid for the restored unit count. Either way the world
-    /// is left exactly as it was.
+    /// [`SnapshotError::OverCeiling`] when the snapshot holds more units than
+    /// the receiving world's unit ceiling, or [`SnapshotError::Unindexable`]
+    /// when the receiving world's rules table cannot describe a grid for its
+    /// ceiling. Either way the world is left exactly as it was.
     #[allow(
         clippy::too_many_lines,
         reason = "one block per table, and every block must run before the first assignment: a restore either applies in full or changes nothing, so the checks cannot be moved behind the writes"
@@ -865,6 +890,12 @@ impl Snapshot {
         let (voxels, chunks) = self.restore_store(world, seat_count)?;
 
         let unit_count = units.len();
+        if unit_count > world.unit_limit() {
+            return Err(SnapshotError::OverCeiling {
+                units: unit_count,
+                limit: world.unit_limit(),
+            });
+        }
         let router = self.restore_router()?;
         let plan = self.restore_plan();
         if !plan.is_consistent(self.seat_id.len()) {

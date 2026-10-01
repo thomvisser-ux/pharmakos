@@ -505,7 +505,7 @@ fn an_unplaced_seat_is_neither_eliminated_nor_counted() {
 }
 
 #[test]
-fn the_round_limit_ends_the_match_when_the_last_recap_closes() {
+fn the_round_limit_is_decided_at_the_last_rounds_final_tick() {
     let mut world = world(2, &[1_000]);
     // One round, so the test plays the whole match.
     assert!(world.match_state().round_limit() >= 1);

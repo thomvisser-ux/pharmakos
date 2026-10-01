@@ -346,12 +346,35 @@ fn a_snapshot_written_by_one_process_continues_the_chain_in_another() {
 }
 
 #[test]
+fn a_snapshot_over_the_receiving_worlds_unit_ceiling_is_refused() {
+    let big = world_of(rules(), 100);
+    let mut small = world_of(rules(), 1);
+    let before = small.state_hash();
+    let units = big.units().len();
+    let limit = small.unit_limit();
+    assert!(units > limit, "the fixture is over the ceiling");
+    assert_eq!(
+        Snapshot::capture(&big).restore_into(&mut small),
+        Err(SnapshotError::OverCeiling { units, limit }),
+        "a file saved under another configuration is refused, and says why"
+    );
+    assert_eq!(
+        small.state_hash(),
+        before,
+        "and the world is left as it was"
+    );
+}
+
+#[test]
 fn a_restore_resizes_the_derived_index_to_the_restored_world() {
-    // `World::restore_tables` replaces the unit table wholesale. The broadphase
-    // is sized for the unit count the *receiving* world was built for, so a
-    // snapshot of a larger world used to restore cleanly, hash correctly, and
-    // then query an empty index for the rest of the match. Restoring 200 units
-    // into a world built for 4 is that case, made small.
+    // `World::restore_tables` replaces the unit table wholesale, so the
+    // broadphase must index the restored units rather than the ones the
+    // receiving world was built with. A snapshot of a larger world used to
+    // restore cleanly, hash correctly, and then query an empty index for the
+    // rest of the match. Restoring 200 units into a world built for 4 is that
+    // case, made small: it is under the receiving world's unit ceiling, so it
+    // restores (a supported resume builds the world from the snapshot's own
+    // configuration; this test exercises only the index).
     let mut big = world_with(rules());
     let mut enc = Enc::with_capacity(64 * 1024);
     for _ in 0..20 {

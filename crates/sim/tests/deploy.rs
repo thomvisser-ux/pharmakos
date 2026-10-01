@@ -25,9 +25,11 @@ use pharmakos_proto::json;
 use pharmakos_sim::events::{Event, EventKind};
 use pharmakos_sim::interpreter::Plan;
 use pharmakos_sim::interpreter::state::StepFailure;
+use pharmakos_sim::math::fixed::Fx;
 use pharmakos_sim::math::quantity::{Hp, Money};
 use pharmakos_sim::runner::{MatchSettings, Runner};
-use pharmakos_sim::tables::{SeatId, StructureKind, UnitKind};
+use pharmakos_sim::seams::MandateKind;
+use pharmakos_sim::tables::{BeaconId, PRIORITY_NORMAL, SeatId, StructureKind, UnitKind};
 use pharmakos_sim::world::{DamageOrder, DamageTarget};
 use pharmakos_sim::{RulesTable, World, WorldConfig};
 
@@ -83,10 +85,17 @@ fn world(segment_ms: i32) -> World {
 }
 
 fn open(segment_ms: i32, treasury: Option<Money>) -> Runner {
+    open_with(segment_ms, |world| {
+        if let Some(amount) = treasury {
+            world.set_treasury(SeatId::new(SEAT), amount);
+        }
+    })
+}
+
+/// [`open`], with the world prepared by `prepare` before the seal.
+fn open_with(segment_ms: i32, prepare: impl FnOnce(&mut World)) -> Runner {
     let mut world = world(segment_ms);
-    if let Some(amount) = treasury {
-        world.set_treasury(SeatId::new(SEAT), amount);
-    }
+    prepare(&mut world);
     let plan = Plan::compile(
         &json::decode(DEPLOY).expect("the playbook is canonical gp.v1 JSON"),
         &rules(),
@@ -150,6 +159,16 @@ fn step(runner: &mut Runner) -> Option<(u32, i64, Vec<Event>)> {
         .saturating_sub(before)
         .saturating_sub(explained(runner.world(), &events));
     Some((report.tick.raw(), unexplained, events))
+}
+
+/// Seat 0's core: its first beacon row.
+fn core_of(world: &World) -> BeaconId {
+    let beacons = world.beacons();
+    (0..beacons.ids().len())
+        .find(|row| beacons.seats().get(*row).copied() == Some(SEAT))
+        .and_then(|row| beacons.ids().get(row).copied())
+        .map(BeaconId::new)
+        .expect("seat 0 has a core")
 }
 
 fn has(events: &[Event], kind: EventKind) -> bool {
@@ -265,6 +284,68 @@ fn an_aborted_deploy_refunds_the_beacon_in_full() {
     assert!(
         row.is_some_and(|state| state.stage == pharmakos_sim::interpreter::VisitState::NotStarted),
         "and the frozen snapshot holds no half-paid deploy"
+    );
+}
+
+#[test]
+fn a_site_made_illegal_before_placement_aborts_and_refunds_the_deploy() {
+    // An illegal site: the deploy's site lies in seat 0's core's sphere and in
+    // no other beacon's of seat 0's, so destroying the core mid-deploy leaves
+    // the site outside every own sphere when the 12 s are up. A second beacon
+    // of seat 0's, thirty voxels past the site, keeps the seat in the match.
+    let site = [
+        Fx::from_voxels(27),
+        Fx::from_voxels(356),
+        Fx::from_voxels(29),
+    ];
+    let far = [Fx::from_voxels(57), site[1], site[2]];
+    let mut core = None;
+    let mut runner = open_with(60_000, |world| {
+        core = Some(core_of(world));
+        world
+            .place_beacon_directly(SeatId::new(SEAT), far, MandateKind::Build, PRIORITY_NORMAL)
+            .expect("the beacon table has room");
+    });
+    let core = core.expect("seat 0 has a core");
+    let cost = runner.world().beacon_cost().raw();
+    let mut moves: Vec<i64> = Vec::new();
+    let mut failures: Vec<i64> = Vec::new();
+    let mut destroyed = false;
+    while let Some((tick, unexplained, events)) = step(&mut runner) {
+        if unexplained != 0 {
+            moves.push(unexplained);
+        }
+        failures.extend(
+            events
+                .iter()
+                .filter(|event| event.kind == EventKind::StepFailed)
+                .map(|event| event.value),
+        );
+        assert!(
+            !has(&events, EventKind::BeaconPlaced),
+            "an illegal site gets no beacon"
+        );
+        if tick == 100 && !destroyed {
+            assert!(runner.world_mut().request_damage(DamageOrder {
+                target: DamageTarget::Beacon(core),
+                amount: Hp::new(1_000_000),
+                by: SeatId::NEUTRAL,
+            }));
+            destroyed = true;
+        }
+        if tick >= 400 {
+            break;
+        }
+    }
+    assert_eq!(
+        failures.first().copied(),
+        Some(i64::from(StepFailure::IllegalSite.id())),
+        "the site was illegal when the deploy came to place its beacon"
+    );
+    assert_eq!(
+        moves,
+        vec![-cost, cost],
+        "charged when the deploy started, refunded in full when it was aborted"
     );
 }
 
