@@ -46,7 +46,14 @@ use std::path::{Path, PathBuf};
 /// `cargo xtask ci`'s `scenario` step walks the tree and sorts; this list is
 /// the same set, and `the_committed_list_is_the_whole_set` checks it has not
 /// fallen behind.
-const SCENARIOS: &[&str] = &[AGAINST_EASY, THREE_ROUNDS, COMPLETING, REFUSING];
+const SCENARIOS: &[&str] = &[
+    AGAINST_EASY,
+    THREE_ROUNDS,
+    COMPLETING,
+    REFUSING,
+    ROUND_LIMIT_AUDIT,
+    UNAFFORDABLE_DEPLOY,
+];
 
 /// The scenario against the built-in operator: seat 1 is `builtin`, played by
 /// Easy, and seat 0 builds a Generator on its vent (T18b; decisions-log item
@@ -63,6 +70,14 @@ const COMPLETING: &str = "scenarios/skeleton/deploy-and-visit.scenario.jsonc";
 
 /// The scenario that pins the interpreter refusing loudly (T11's).
 const REFUSING: &str = "scenarios/skeleton/expand-east-segment.scenario.jsonc";
+
+/// A match played to its round limit, whose winner the final audit names
+/// (S1's `fixs`; register X-08).
+const ROUND_LIMIT_AUDIT: &str = "scenarios/s1/round-limit-audit.scenario.jsonc";
+
+/// A deploy the treasury cannot cover fails its step, and `on_fail` takes it
+/// (S1's `fixs`; register X-12, decision 7).
+const UNAFFORDABLE_DEPLOY: &str = "scenarios/s1/unaffordable-deploy.scenario.jsonc";
 
 /// **The exact set of scenarios allowed to seal through the harness door.**
 ///
@@ -215,17 +230,25 @@ fn the_committed_list_is_the_whole_set() {
     // than by listing the directory. A scenario added without a line here is a
     // scenario this test does not play and whose fresh output the `golden`
     // step therefore cannot find.
-    let dir = root().join("scenarios").join("skeleton");
-    for name in [
-        "against-easy",
-        "against-easy-three-rounds",
-        "deploy-and-visit",
-        "expand-east-segment",
+    for (stage, names) in [
+        (
+            "skeleton",
+            &[
+                "against-easy",
+                "against-easy-three-rounds",
+                "deploy-and-visit",
+                "expand-east-segment",
+            ][..],
+        ),
+        ("s1", &["round-limit-audit", "unaffordable-deploy"][..]),
     ] {
-        assert!(
-            dir.join(format!("{name}{SUFFIX}")).is_file(),
-            "{name} is listed here and is not committed"
-        );
+        let dir = root().join("scenarios").join(stage);
+        for name in names {
+            assert!(
+                dir.join(format!("{name}{SUFFIX}")).is_file(),
+                "{stage}/{name} is listed here and is not committed"
+            );
+        }
     }
     for source in SCENARIOS {
         assert!(
