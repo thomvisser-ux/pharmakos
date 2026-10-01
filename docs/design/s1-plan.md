@@ -183,9 +183,10 @@ then `tune`). At most one `proto/**` PR is open at a time (`con1`, then `con2`, 
 a row retires). Each `→` in section 4.1 is a separate `wave-lanes.js` run, since a run launches all
 its lanes at once. Each task's Implements line is its lane's `items`. Every task over 10 ad carries
 a split seam written before it starts. Each lane rewords the register's stale and "ruled at the
-demo" comments (D-20 to D-27, X-07, X-09 to X-11, items 123 (5) and 124 (5)) in the files it owns. A lane that adds a committed
-scenario also owns its line in `crates/gamectl/tests/scenarios.rs`'s `SCENARIOS`, the scenario
-chains' only producer (item 129).
+demo" comments (D-20 to D-27, X-07, X-09 to X-11, items 123 (5) and 124 (5)) in the files it owns. A lane that adds a
+committed scenario also owns its path constant and its `SCENARIOS` entry in
+`crates/gamectl/tests/scenarios.rs`, the producer the `golden` step reads (item 129); the task
+sections that add one name it in their Owns lines.
 
 ---
 
@@ -300,7 +301,8 @@ chains' only producer (item 129).
     `APPDATA`/`LOCALAPPDATA`; `--rendering-driver opengl3`). If a shared `user://` is the cause, a
     single-instance guard: the second instance says "Pharmakos is already running." and quits;
     `application/run/flush_stdout_on_print` so the next hang leaves a log. If it is not, stop and
-    report (decision 19).
+    report (decision 19). *Item 129 (2) (c): F3 did not reproduce, the flushed log landed, and the
+    guard is deferred until F3 recurs in the next round of testing.*
   - **F6.** The speed label only in a Push (`lobby.gd`); the chooser hides the speed strip and the
     editor panel until a match starts; the smoke check's two `ERROR` lines traced to their source
     and an expected refusal demoted from `godot_error!`. Camera wheel zoom: the owner's, by hand.
@@ -318,7 +320,7 @@ chains' only producer (item 129).
 - **Acceptance:** `watch_check.gd` gains `_first_click_lands`: after a rows redraw, with a map menu
   open and after a panel scroll, one injected click on Submit, Fix and Save reaches its handler
   exactly once; `godot_project.rs` pins the focus release, the hidden chooser controls and the guard
-  text; the PR body records F3's reproduction and cause; the main session's local `cargo xtask
+  text (the guard text waived by item 129 (2) (c)); the PR body records F3's reproduction and cause; the main session's local `cargo xtask
   package` smoke log holds no `ERROR` line (item 124 (5) (c): lanes do not run it).
 - **Contract PR:** no. **PLACEHOLDERs:** none expected. **Agent-days:** 3–4.
 
@@ -347,8 +349,9 @@ chains' only producer (item 129).
 - **Builds:**
   - **Rules rows (additive):** `match.first_lull_ms` = 600 000 and `match.lull_ms` 180 000 → 300 000
     (item 127 (2), D-01); `structures.build_hp_per_second` = 60 (S1-24);
-    `economy.mining_carry_voxels` = 16 (named so by item 129 (2), since the gateway's confinement test
-    refuses `load` in a `gp.*` field) in `Economy`'s reserved 12 (S1-25), which narrows `reserved 12
+    `economy.mining_carry_voxels` = 16 (named so by item 129 (2) (a): the gateway's confinement
+    test refuses `load` in a `gp.*` field) in `Economy`'s reserved 12 (S1-25), which narrows
+    `reserved 12
     to 15` to 13–15 and so trips buf's `RESERVED_MESSAGE_NO_DELETE`: `proto/buf.yaml` gains the
     scoped `ignore_only` for `gp/v1/rules.proto` its own comment prescribes, with the justification,
     and `con2` replaces it with its own. **No spacing row:** the minimum beacon spacing targeting.md
@@ -437,7 +440,7 @@ chains' only producer (item 129).
 
 - **Owns:** `crates/sim` (the determinism harness in `lib.rs` and `tests/allocations.rs` included);
   in `crates/gateway` only what the id change forces (the view, `list_beacons`, events, the save and
-  `match.json` formats, `GATEWAY_VERSION`); `crates/gamectl/tests` that name ids; a named place in
+  `match.json` formats, `GATEWAY_VERSION`); `crates/gamectl/tests` that name ids, and any scenario's `SCENARIOS` entry it adds (item 129); a named place in
   `crates/operator`'s tests that name ids, with `tests/golden/operator`; the re-bless of
   `tests/golden/verifier` and `tests/golden/gateway/*_verify`, with
   `godot/fixtures/rows_report.json` (a named place, re-copied only if the four verifier goldens it
@@ -553,7 +556,10 @@ chains' only producer (item 129).
 
 - **Owns:** a new crate (recommended `crates/bench`, package `pharmakos-bench`, never shipped),
   `Cargo.toml`'s members, `xtask/src/main.rs` (`WALLED_PACKAGES`, `GUARDED_PACKAGES`, `perf_alarms`,
-  and the doc comments of `CLIENT_WALL` and `WALL_GUARDED_PACKAGES`), `clippy.toml`'s header.
+  and the doc comments of `CLIENT_WALL` and `WALL_GUARDED_PACKAGES`), `clippy.toml`'s header;
+  and, carried by item 129, the client check's own user folders in `xtask/src/main.rs` (as
+  `xtask/src/package.rs` already gives the smoke run) and a fresh `golden` output per run, so a
+  warm target cannot compare a stale `actual.*`.
   Nothing in `crates/sim`: the counted half is `tgt`'s hunk. **Branch** `feat/bench-p1`, worktree
   `../pharmakos-p1`, target `D:/build/p1`.
 - **Builds:** section 5's harness per decision 2: QUICK's timing, and the wall-clock cost of a
@@ -600,14 +606,16 @@ chains' only producer (item 129).
 
 ### `mine` — `crates/sim`: finite seams and all four Mine settings (S1-38, item 127 (9))
 
-- **Owns:** `crates/sim` (except `grid`'s named place). **Branch** `feat/sim-mine-settings`,
+- **Owns:** `crates/sim` (except `grid`'s named place), and its scenario's path constant and
+  `SCENARIOS` entry in `crates/gamectl/tests/scenarios.rs` (item 129). **Branch** `feat/sim-mine-settings`,
   worktree `../pharmakos-mine`, target `D:/build/mine`.
 - **Builds:** the interpreter stores `MineSettings` (the empty `Mine(_)` arm); `dig_max_depth`,
   `pillar_spacing`, `seam_choice` and "never digs under structures" per decision 6, replacing
   `dig_stand`'s exposed-rim rule with a pit-safe one; the seam choice held until the seam is spent,
   using `tgt`'s "nearest"; a spent seam reads as spent; the Mine request filed under its own urgency
   band (spec §7's ladder: mine last) instead of `Urgency::Units`; `MINING_LOAD_VOXELS` read from its
-  row; S1-27 to S1-30 per decision 13; each "nearest" estimate the seam choice makes counted on
+  row, `economy.mining_carry_voxels`, with the two comments that still say `mining_load_voxels`
+  (`crates/sim/src/economy.rs`, `crates/sim/tests/economy.rs`) reworded; S1-27 to S1-30 per decision 13; each "nearest" estimate the seam choice makes counted on
   `tgt`'s evaluation-units counter (P1).
 - **Implements:** item 127 (9); register S1-25's reader, S1-27 to S1-30, S1-38; spec §6's Mine row,
   §7's urgency ladder.
@@ -625,8 +633,9 @@ chains' only producer (item 129).
 ### `grid` — named place in `crates/sim`: the four grid rulings
 
 - **Owns:** `crates/sim/src/power.rs`, the grid tests in `crates/sim/tests/economy.rs`, and the
-  `program_for` doc lines in `crates/sim/src/programs.rs`; runs beside `mine` (AGENTS.md §6 named
-  place). **Branch** `feat/sim-grid-rulings`, worktree `../pharmakos-grid`, target `D:/build/grid`.
+  `program_for` doc lines in `crates/sim/src/programs.rs`, and its scenario's path constant and
+  `SCENARIOS` entry in `crates/gamectl/tests/scenarios.rs` (item 129; it merges after `mine` and
+  rebases over that file); runs beside `mine` (AGENTS.md §6 named place). **Branch** `feat/sim-grid-rulings`, worktree `../pharmakos-grid`, target `D:/build/grid`.
 - **Builds:** S1-33 (a shed that relieves nothing is skipped); S1-22 (a priority raise re-applies
   the brownout order: a dark beacon relights at once when shedding lit beacons of lower priority
   covers it, with draw no higher than supply after the swap); S1-35 and S1-36 reworded as ruled;
@@ -764,7 +773,7 @@ agent runs beside `mine`, `tgtw` and `grid`.
 
 | Wave | Days | Slot 1 — sim | Slot 2 — gateway, verifier, operator | Slot 3 — contracts, client, harness | The owner can see |
 |---|---|---|---|---|---|
-| 1 | 0–6.5 | **fixs** (6) | **fixc** (3.5) → **check** (2) | **con1** (3.5) → **con2** (3) | First clicks land; $ 60 charged; one instance; 10:00 in the rules; the first balance report |
+| 1 | 0–6.5 | **fixs** (6) | **fixc** (3.5) → **check** (2) | **con1** (3.5) → **con2** (3) | First clicks land; $ 60 charged; 10:00 in the rules; the first balance report |
 | 2 | 6.5–15.5 | **tgt** (9) | **tgtv** (2.5) → **proj** (5, open until `tgt` merges) | **p1** (4.5) | E0601/W0602 in the editor; the P1 notices |
 | 3 | 15.5–23 | **mine** (5.5) | **tgtw** (3) → **econ** (4.5) | **proj**'s re-bless (0.5, then it merges) → **grid** (2.5, named place, 16–18.5) → **oper** (3.5, from 18.5) | Covering the nearest vent; mining past round 1; a brownout by recycling |
 | 4 | 21–27.5 | **build** (4.5) | — | **ui** (4.5, from 23) | The chip, Alt-click, recap lines, the 10:00 first Lull |
@@ -1086,6 +1095,8 @@ a pressure the game creates until S2's combat.
 **19. F3's fix shape.** *(`fixc`, after reproducing.)* **(Recommended):** a single-instance guard
 (two instances also share `last_match.txt` and the match cache). *Alternative:*
 `use_custom_user_dir` per instance. *Downside:* two lobbies could still resume one match.
+*Amended by item 129 (2) (c):* F3 did not reproduce; the guard waits for F3 to recur in the next
+round of testing, and the item closes if it does not.
 
 ---
 

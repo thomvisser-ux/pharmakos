@@ -107,8 +107,9 @@ With them, smaller:
   and edited.
 - **F6. Minor.** Save with no file does nothing visible (only Save as… works); the Push's speed
   label carries into the Lull, where speed means nothing; the chooser shows the speed buttons and
-  the whole editor panel before any match; the first launch's log holds the client check's (not, as first written, the shipped smoke check's:
-  S1's `fixc` traced them, item 129) two expected `ERROR` lines from its negative probes, which read as errors in a player's log. The
+  the whole editor panel before any match; the first launch's log holds two expected `ERROR` lines from negative probes,
+  the client check's rather than, as first written, the shipped smoke check's (S1's `fixc` traced
+  them; item 129), which read as errors in a player's log. The
   camera's wheel zoom was not verified, because synthetic input barely moved it; the owner checks it
   by hand.
 
