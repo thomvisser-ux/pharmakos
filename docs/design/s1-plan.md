@@ -183,7 +183,9 @@ then `tune`). At most one `proto/**` PR is open at a time (`con1`, then `con2`, 
 a row retires). Each `→` in section 4.1 is a separate `wave-lanes.js` run, since a run launches all
 its lanes at once. Each task's Implements line is its lane's `items`. Every task over 10 ad carries
 a split seam written before it starts. Each lane rewords the register's stale and "ruled at the
-demo" comments (D-20 to D-27, X-07, X-09 to X-11, items 123 (5) and 124 (5)) in the files it owns.
+demo" comments (D-20 to D-27, X-07, X-09 to X-11, items 123 (5) and 124 (5)) in the files it owns. A lane that adds a committed
+scenario also owns its line in `crates/gamectl/tests/scenarios.rs`'s `SCENARIOS`, the scenario
+chains' only producer (item 129).
 
 ---
 
@@ -345,7 +347,8 @@ demo" comments (D-20 to D-27, X-07, X-09 to X-11, items 123 (5) and 124 (5)) in 
 - **Builds:**
   - **Rules rows (additive):** `match.first_lull_ms` = 600 000 and `match.lull_ms` 180 000 → 300 000
     (item 127 (2), D-01); `structures.build_hp_per_second` = 60 (S1-24);
-    `economy.mining_load_voxels` = 16 in `Economy`'s reserved 12 (S1-25), which narrows `reserved 12
+    `economy.mining_carry_voxels` = 16 (named so by item 129 (2), since the gateway's confinement test
+    refuses `load` in a `gp.*` field) in `Economy`'s reserved 12 (S1-25), which narrows `reserved 12
     to 15` to 13–15 and so trips buf's `RESERVED_MESSAGE_NO_DELETE`: `proto/buf.yaml` gains the
     scoped `ignore_only` for `gp/v1/rules.proto` its own comment prescribes, with the justification,
     and `con2` replaces it with its own. **No spacing row:** the minimum beacon spacing targeting.md
@@ -1006,7 +1009,7 @@ X-18 after S4 with M-09; M-05 takes none of item 97's three assertions now; M-03
 *Downside:* S1-05's failures can redden `ci` on a metadata slip.
 
 **10. [play] The new rows' values.** *Gates `con1`.* **(Recommended):** `first_lull_ms` 600 000,
-`lull_ms` 300 000 (ruled by item 127 (2)); `build_hp_per_second` 60 and `mining_load_voxels` 16
+`lull_ms` 300 000 (ruled by item 127 (2)); `build_hp_per_second` 60 and `mining_carry_voxels` 16
 (today's constants); the minimum beacon spacing at "no stacking only" — the same column — which is a
 legality rule in the sim, so S1 adds no spacing row; `revision` 3 → 4. *Downside:* a larger spacing,
 if the owner wants one at the demo, is a new row in a later contract PR and moves every chain again.
