@@ -21,7 +21,9 @@
 //!   Easy's advice fills it for seat 0 (`instantiate_template{suggested}`),
 //!   through `submit_plan` in every Lull, the way a player who takes the
 //!   wizard's suggestion does; seat 1 is Easy. A Lull in which the template
-//!   is refused leaves seat 0 on whatever the gateway files for it;
+//!   is refused -- by `instantiate_template` or by `submit_plan` -- is
+//!   reported as `h&b-refused` and leaves seat 0 on whatever the gateway
+//!   files for it;
 //!
 //! each over **3 rounds** and **6 rounds** of the rules table's own segment
 //! ladder (an empty `segment_lengths_ms`, item 40): 3, 5 and 8 minutes, and
@@ -61,7 +63,12 @@
 //!   `structures.generator.cost_dollars`, read from the rules table.
 //!
 //! Beside them, informational and not a flag: whether a Generator of the
-//! seat's ever stood (`get_view`'s `generator` subtype).
+//! seat's ever stood (`get_view`'s `generator` subtype), and, per match-up,
+//! how many matches were decided before their round limit.
+//!
+//! Not built here: decision 16's column on whether the spec's `expand_east`
+//! reaches its first site within its 120 s timeout (see the PLACEHOLDER at
+//! [`render`]).
 //!
 //! # How to run it
 //!
@@ -76,10 +83,14 @@
 //! and its summary printed. Nothing here reads a clock (AGENTS.md section
 //! 4.5): the wall time is the shell's to measure.
 //!
-//! The one test that is not ignored,
-//! [`one_short_match_reports_through_the_gateway`], plays one short match
-//! through the same reader, so a change to the feed's lines or the view's
-//! entity list fails `cargo xtask ci` rather than the next owner's run.
+//! Three tests are not ignored, so a change to what the gateway answers
+//! fails `cargo xtask ci` rather than the next owner's run:
+//! [`one_short_match_reports_through_the_gateway`] plays one short match
+//! through the same reader (the forecast's fields, the feed's lines, the
+//! view's entity list); [`easy_seals_its_own_playbook_in_round_1`] pins how
+//! the report tells Easy's own seal from its safe one; and
+//! [`the_flags_say_what_item_127_3_asks`] pins the flag rules and the line
+//! parsing on made-up readings.
 #![allow(
     clippy::expect_used,
     clippy::unwrap_used,
@@ -334,6 +345,17 @@ fn number(value: &Json, key: &str) -> i64 {
     }
 }
 
+/// A number the reader cannot do without: a missing or renamed field fails
+/// the run rather than reading as 0, which would quietly corrupt the report
+/// (a treasury of 0 at every reading raises NEVER-AFFORDS-GENERATOR on every
+/// seat).
+fn required(value: &Json, key: &str) -> i64 {
+    match value.get(key) {
+        Some(Json::Number(lexeme)) => lexeme.parse().expect("a whole number"),
+        other => panic!("the reader needs `{key}` as a number, and got {other:?} in {value:?}"),
+    }
+}
+
 fn string<'a>(value: &'a Json, key: &str) -> &'a str {
     match value.get(key) {
         Some(Json::String(text)) => text,
@@ -465,7 +487,7 @@ fn tally_feed(surface: &mut Surface, token: &Token, seat: u8) -> Tally {
                         .entry(string(count, "kind").to_owned())
                         .or_default();
                     *slot = slot
-                        .saturating_add(u32::try_from(number(count, "count")).expect("a count"));
+                        .saturating_add(u32::try_from(required(count, "count")).expect("a count"));
                 }
             }
         }
@@ -604,9 +626,9 @@ fn read_seat(surface: &mut Surface, seat: u8, with_standing: bool) -> (Reading, 
     let tally = tally_feed(surface, &token, seat);
     (
         Reading {
-            treasury: number(&forecast, "treasury_now"),
-            supply_kw: number(&forecast, "supply_kw_now"),
-            draw_kw: number(&forecast, "draw_kw_now"),
+            treasury: required(&forecast, "treasury_now"),
+            supply_kw: required(&forecast, "supply_kw_now"),
+            draw_kw: required(&forecast, "draw_kw_now"),
             beacons,
             structures,
             units,
@@ -695,21 +717,23 @@ struct MatchRun {
 }
 
 /// What the template seat sealed: Hold & Build with Easy's suggestion, with
-/// the template's own stand-ins, or a refusal.
+/// the template's own stand-ins, or a refusal (by `instantiate_template` or
+/// by `submit_plan`), which leaves the seat to whatever the gateway files.
 fn submit_template(surface: &mut Surface) -> String {
     let token = in_process_token(surface, TEMPLATE_SEAT);
-    let made = result(
-        &call(
-            surface,
-            &token,
-            "instantiate_template",
-            object(vec![
-                ("template_id", Json::String(String::from(TEMPLATE_ID))),
-                ("suggested", Json::Bool(true)),
-            ]),
-        ),
-        "instantiate_template{suggested}",
-    );
+    let Some(made) = call(
+        surface,
+        &token,
+        "instantiate_template",
+        object(vec![
+            ("template_id", Json::String(String::from(TEMPLATE_ID))),
+            ("suggested", Json::Bool(true)),
+        ]),
+    )
+    .get("result")
+    .cloned() else {
+        return String::from("h&b-refused");
+    };
     let suggested = array(&made, "parameters")
         .iter()
         .any(|parameter| parameter.get("suggested") == Some(&Json::Bool(true)));
@@ -854,6 +878,15 @@ fn play(seed: u64, matchup: Matchup, rounds: u32, rules: &str, ladder: Vec<i32>)
 // ---------------------------------------------------------------------------
 
 /// Item 127 (3)'s three conditions, for one seat of one match.
+///
+/// PLACEHOLDER: the flags' readings of item 127 (3) -- owner, at S1's demo
+/// with `tune`'s report. No decision fixes them, and each is a guess: a flat
+/// treasury counts as ONLY-GROWS (`<=`); any `beacon_placed` counts as a new
+/// asset for STALLED, so a free stacked beacon hides a stall until X-12's
+/// charge and F4's cure land; and NEVER-AFFORDS-GENERATOR counts round 1's
+/// opening treasury, so it cannot fire while the starting treasury
+/// (`economy.bmi_dollars` x `starting_bmi_multiplier`) is at least the
+/// Generator's price.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 struct Flags {
     /// The treasury never fell between two readings.
@@ -1035,11 +1068,12 @@ fn render_match(out: &mut String, run: &MatchRun, generator_cost: i64) {
 fn render_summary(out: &mut String, runs: &[MatchRun], generator_cost: i64) {
     let _ = writeln!(
         out,
-        "{:<24} {:<14} {:>6} {:>7} {:>6} {:>10} {:>8} {:>17} {:>9} {:>14}",
+        "{:<24} {:<14} {:>6} {:>7} {:>7} {:>6} {:>10} {:>8} {:>17} {:>9} {:>14}",
         "match-up",
         "seat",
         "rounds",
         "matches",
+        "decided",
         "seats",
         "only-grows",
         "stalled",
@@ -1079,11 +1113,12 @@ fn render_summary(out: &mut String, runs: &[MatchRun], generator_cost: i64) {
         let high = ends.iter().max().copied().unwrap_or(0);
         let _ = writeln!(
             out,
-            "{:<24} {:<14} {:>6} {:>7} {:>6} {:>10} {:>8} {:>17} {:>9} {:>14}",
+            "{:<24} {:<14} {:>6} {:>7} {:>7} {:>6} {:>10} {:>8} {:>17} {:>9} {:>14}",
             matchup.name(),
             role,
             rounds,
             group.len(),
+            group.iter().filter(|run| run.played < run.rounds).count(),
             seats.len(),
             count(&|f| f.only_grows),
             count(&|f| f.stalled_from.is_some()),
@@ -1126,6 +1161,13 @@ fn render_summary(out: &mut String, runs: &[MatchRun], generator_cost: i64) {
 }
 
 /// The whole report: a header, the summary, then every match.
+///
+/// PLACEHOLDER: decision 16's column -- whether the spec's `expand_east`
+/// reaches its first site within its 120 s timeout -- is not built here;
+/// `tune` (wave 5), which owns decision 16, adds it, or the owner moves it at
+/// S1's demo. The example is a playbook the verifier refuses
+/// (`expand-east-segment` seals it through the scenario harness's own door),
+/// so this file, which plays only what a seat may submit, cannot seal it.
 fn render(runs: &[MatchRun], generator_cost: i64, rules_hash: &str) -> String {
     let mut out = String::new();
     let _ = writeln!(
@@ -1143,7 +1185,8 @@ fn render(runs: &[MatchRun], generator_cost: i64, rules_hash: &str) -> String {
     let _ = writeln!(
         out,
         "Flags: ONLY-GROWS = the treasury never fell; STALLED = two rounds in a row with no new \
-         asset; NEVER-AFFORDS-GENERATOR = the treasury never reached the Generator's price."
+         asset; NEVER-AFFORDS-GENERATOR = the treasury never reached the Generator's price. \
+         `decided` = matches decided before their round limit (not a flag)."
     );
     out.push('\n');
     render_summary(&mut out, runs, generator_cost);
@@ -1166,9 +1209,9 @@ fn report_path() -> PathBuf {
 // ---------------------------------------------------------------------------
 
 /// The 80 matches. Writes the report and prints its summary; asserts only
-/// what makes the report trustworthy (every match played every round it was
-/// asked for, every reading was answered), never a balance condition -- a
-/// flag is the owner's evidence, not a red test.
+/// what makes the report trustworthy (every match was played, every reading
+/// was answered), never a balance condition -- a flag, or a match decided
+/// before its round limit, is the owner's evidence, not a red test.
 #[test]
 #[ignore = "the headless balance check: 80 matches, minutes in release; run it by name"]
 fn balance_check_writes_its_report() {
@@ -1200,12 +1243,13 @@ fn balance_check_writes_its_report() {
         SEED_COUNT * Matchup::ALL.len() * ROUND_COUNTS.len()
     );
     for run in &runs {
-        assert_eq!(
-            run.played,
-            run.rounds,
-            "{} / seed 0x{:016x} was decided before its round limit",
+        assert!(
+            run.played >= 1 && run.played <= run.rounds,
+            "{} / seed 0x{:016x} played {} of {} rounds",
             run.matchup.name(),
-            run.seed
+            run.seed,
+            run.played,
+            run.rounds
         );
     }
 }
@@ -1219,10 +1263,14 @@ const SMOKE_PUSH_MS: i32 = 30_000;
 /// fails `cargo xtask ci` rather than the owner's next run: Hold & Build vs
 /// Easy at the scenario files' seed, two rounds of 30 s.
 ///
-/// Every seat is read at both Lulls and at the end; the round-1 recap's
-/// settlement reaches the feed and the report; the treasury identity holds
-/// with nothing spent below zero; the template's seat sealed the template
-/// with Easy's suggestion in round 1; and the report renders it.
+/// Every seat is read at both Lulls and at the end; round 1 opens on the
+/// rules' starting treasury and every reading has a draw and a supply, so a
+/// renamed forecast field cannot read as 0 unnoticed; each round's
+/// settlement reaches the feed; no round's derived spend is below zero; the
+/// census sees the seat's commander; the template's seat sealed the template
+/// with Easy's suggestion in round 1; and the report renders it. (On these
+/// 30 s Pushes Easy seals its safe playbook from round 1, so
+/// [`easy_seals_its_own_playbook_in_round_1`] pins the `easy-own` label.)
 #[test]
 fn one_short_match_reports_through_the_gateway() {
     let rules = rules_json();
@@ -1242,10 +1290,28 @@ fn one_short_match_reports_through_the_gateway() {
         "the last recap says the match is over: {}",
         run.recap
     );
-    assert_eq!(run.ticks, 2 * 600, "two Pushes of 30 s at 20 Hz");
+    assert_eq!(
+        run.ticks,
+        Ms::new(SMOKE_PUSH_MS).to_ticks_floor().saturating_mul(2),
+        "two Pushes of 30 s"
+    );
+    let opening = pharmakos_sim::economy::starting_treasury(&table).raw();
     for seat in &run.seats {
         let what = format!("seat {}: {seat:#?}", seat.seat);
         assert_eq!(seat.rounds.len(), 2, "{what}");
+        assert_eq!(
+            seat.rounds.first().map(|round| round.start.treasury),
+            Some(opening),
+            "round 1 opens on the rules' starting treasury: {what}"
+        );
+        assert!(
+            seat.rounds
+                .iter()
+                .map(|round| &round.start)
+                .chain(std::iter::once(&seat.end))
+                .all(|reading| reading.draw_kw > 0 && reading.supply_kw > 0),
+            "every reading has a draw and a supply: {what}"
+        );
         assert!(
             seat.rounds.iter().all(|round| round.tally.settled > 0),
             "{what}"
@@ -1296,6 +1362,29 @@ fn one_short_match_reports_through_the_gateway() {
         );
     }
     eprintln!("{text}");
+}
+
+/// `seal_of` tells Easy's own playbook from its safe one by the seed note
+/// Easy writes into its own playbook's `/meta/note` (`compose::seed_note`).
+/// Easy seals its own playbook in round 1 on the rules' own ladder (item
+/// 113 (7)), so the opening Lull of an Easy vs Easy match pins that wording:
+/// were it to change, every Easy seal would read `easy-safe` unnoticed.
+#[test]
+fn easy_seals_its_own_playbook_in_round_1() {
+    let rules = rules_json();
+    let mut surface = open("easy-own", SCENARIO_SEED, &rules, 1, Vec::new());
+    let mut factory = EasyOperators::new(&rules).expect("the operator reads the rules text");
+    let mut easy = InProcessSeats::open(&mut surface, &seat_ids(), None, &mut factory)
+        .expect("in-process seats");
+    easy.plan(&mut surface);
+    assert!(surface.begin_push().expect("the Push opens"));
+    for seat in seat_ids() {
+        assert_eq!(
+            seal_of(&surface, seat.raw(), 1, None),
+            "easy-own",
+            "seat {seat:?}"
+        );
+    }
 }
 
 /// The flag rules, on made-up readings.
