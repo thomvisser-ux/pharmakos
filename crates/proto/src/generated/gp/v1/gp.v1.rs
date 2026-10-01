@@ -383,7 +383,9 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.MoveStep".into() }fn t
 /// change). The row catalogue is InterfaceRow's oneof below, which is spec
 /// section 5's on-site change list, complete (the register's M-11, enumerated
 /// here as decisions-log item 128's decision 11 asked). Each row's duration is
-/// a rules-table row (gp.v1.RulesTable.InterfaceTimes), never a constant here:
+/// a rules-table row (gp.v1.RulesTable.InterfaceTimes), never a constant here;
+/// the durations below are rules/rules.v1.json's values today, quoted for
+/// the reader, and the table is their source:
 ///
 ///    set_mandate           switch mandate type       switch_mandate_ms, 8 s
 ///    set_mandate_settings  edit mandate settings     edit_settings_base_ms 2 s
@@ -572,8 +574,9 @@ pub struct BuildTarget {
     /// Where it goes. Must lie inside one of your own spheres: inside the
     /// sphere of the beacon whose mandate holds the target.
     ///
-    /// A fixed voxel, or `on` a feature — the one place `on` is legal
-    /// (docs/design/targeting.md, "Sites"). `on` ranks only vents whose `on`
+    /// A fixed voxel, or `on` a feature — the one place `on` is legal as a
+    /// description; RemoveBuildTargetRow.anchor also takes it, as a name
+    /// (`feature_id`) only (docs/design/targeting.md, "Sites"). `on` ranks only vents whose `on`
     /// column lies inside that beacon's sphere (for an initial row, the sphere
     /// of the site `covering` chose), measured from that beacon; a vent is a
     /// candidate only if no live Generator of any seat and no Build target of
@@ -1400,8 +1403,10 @@ pub mod location {
         Safest(super::Safest),
         /// "on a vent": the column a structure stands on, on the feature itself.
         /// Legal only in BuildTarget.anchor (in add_build_target, a Build
-        /// mandate's settings and a place_beacon's `initial`); BuildTarget.anchor
-        /// says how the column is chosen. Anywhere else the verifier refuses it.
+        /// mandate's settings and a place_beacon's `initial`), where
+        /// BuildTarget.anchor says how the column is chosen, and, as a name
+        /// (`feature_id`) only, in RemoveBuildTargetRow.anchor, which removes the
+        /// target standing on that feature. Anywhere else the verifier refuses it.
         ///
         /// Refused in S1 until targeting's behaviour lands: the sim's compile
         /// answers NotAtThisStage and the verifier E0003 (S1's plan, task con2).

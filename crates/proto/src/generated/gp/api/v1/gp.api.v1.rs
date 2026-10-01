@@ -667,10 +667,14 @@ pub struct GetMapSummaryResponse {
     #[prost(string, tag="4")]
     pub match_seed: ::prost::alloc::string::String,
     /// Every vent and seam on the map (the register's S1-48), in feature id
-    /// order. The feature table is a pure function of the seed, the rules and
-    /// the occupied seats, and the seed is served above, so listing it reveals
-    /// nothing new; it is fog-filtered from S3, with the knowledge store
-    /// (docs/design/targeting.md, "Surfaces").
+    /// order. Each feature's id, kind, grade and anchor are a pure function of
+    /// the seed, the rules and the occupied seats. Its `live`, `covered`,
+    /// `travel_ms` and `reachable` read the world as it stands (the frozen
+    /// snapshot in a Lull or a recap, the live world in a Push), unfogged in S1
+    /// as targeting.md's ranking already is, so a seam another seat has mined
+    /// out shows here as not live. The list is fog-filtered from S3, with the
+    /// knowledge store (docs/design/targeting.md, "Descriptions (S1)" and
+    /// "Surfaces").
     #[prost(message, repeated, tag="5")]
     pub features: ::prost::alloc::vec::Vec<MapFeature>,
 }
@@ -778,8 +782,9 @@ fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.WhatIf".into() }fn
 /// 111, decision C7, a departure from item 105 (2) taken in the open): the
 /// seat's OWN economy as the world stands, the frozen snapshot's in a Lull or a
 /// recap and the live world's in a Push. They are what the sim already reads
-/// out, not a projection. S1's projection, income and what-if answers land in
-/// NEW fields and never redefine these four. Another seat's economy is on no
+/// out, not a projection. Later answers land in NEW fields and never redefine
+/// these four: S1's next BMI and committed spend (fields 5 and 6), and the
+/// projection, the projected income and the what-if answers after them. Another seat's economy is on no
 /// wire at all (spec section 10: enemy treasury is deliberately absent).
 ///
 /// Whole $ and whole kW, int32 like gp.v1's Treasury and KwHeadroom predicates,
