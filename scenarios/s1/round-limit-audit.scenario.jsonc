@@ -65,7 +65,7 @@
     { "assert": "event_fired", "event": "settled", "by_tick": 600,
       "note": "Round 1's recap settles on the tick its Push ends." },
     { "assert": "event_fired", "event": "final_audit", "by_tick": 3600,
-      "note": "The final audit's lines, one per seat, at the final tick and not before: seat 0 at $ 896, seat 1 at $ 986." },
+      "note": "The final audit's lines are on the bus by the final tick (seat 0 at $ 896, seat 1 at $ 986). A `by_tick` assertion shows only that; that they come at tick 3600 and not before is pinned by the chain and by crates/sim/tests/audit.rs." },
     { "assert": "event_fired", "event": "match_ended", "by_tick": 3600,
       "note": "The round limit ends the match at its final tick, after the audit; the sim's line names seat 1, which the runner does not record for a match-wide line." },
     { "assert": "hash_chain_equals",
