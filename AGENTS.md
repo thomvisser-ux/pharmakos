@@ -167,11 +167,12 @@ editor UI. Nothing else executes. Directories are under `crates/`; package names
    with it (decisions-log item 113); and the lobby in `godot/scripts/lobby.gd`, which remembers
    the config line once the host announces and forgets it when the rig reports the match ended
    (decisions-log item 114); and, from S1's `fixc` (decisions-log item 129), `editor.gd`'s click
-   counters and `--log-input` logging, `rows.gd`'s rebuild only when the rows or their enabled
-   state change, `lobby.gd`'s speed label shown only in a Push (a branch on the bridge's phase
-   string, for display), and the watch strip and editor hidden until a match is announced; a
-   Fix button kept across a redraw still calls `Editor::fix`, which refuses unless the rows are
-   current and nothing is in flight. The client may compose a JSON Patch from a click; a verdict, a
+   counters, its closing of a map menu on a press on the panel and its focus release on a map
+   click, `--log-input` logging in `editor.gd` and `lobby.gd`, `rows.gd`'s rebuild only when the
+   rows change (otherwise it only sets its Fix buttons' enabled state), `lobby.gd`'s speed label
+   shown only in a Push (a branch on the bridge's phase string, for display), and the watch strip
+   and editor hidden until a match is announced; a Fix button kept across a redraw still calls
+   `Editor::fix`, which refuses unless the rows are current and nothing is in flight. The client may compose a JSON Patch from a click; a verdict, a
    travel time, a legality answer, a Fix and the patched text (`patch_plan`'s answer) still come
    from the gateway. The gateway's JSON-RPC answers are not canonical `gp.api.v1` JSON — they carry
    a `_status` footer and lower-case enum values (decisions-log item 80) — so every client of them,
