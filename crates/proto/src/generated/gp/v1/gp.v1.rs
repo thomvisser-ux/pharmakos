@@ -294,13 +294,26 @@ pub mod step {
         /// Completes within the arrive radius. Fails on no path or timeout.
         #[prost(message, tag="10")]
         Move(super::MoveStep),
-        /// Completes when all rows are committed. Fails if the beacon is
-        /// destroyed, the commander dies, or the commander leaves range. Damage
-        /// does not interrupt.
+        /// Walks to the beacon first (walk-in), then commits the rows. Completes
+        /// when all rows are committed. Fails `no_path` if the commander cannot
+        /// reach the beacon, and fails if the beacon is destroyed, the commander
+        /// dies, or the commander leaves range mid-visit. Damage does not
+        /// interrupt. timeout_ms, when set, bounds the walk up to arrival
+        /// (docs/design/targeting.md, "Companion changes", from S1's targeting
+        /// behaviour).
         #[prost(message, tag="11")]
         Interface(super::InterfaceStep),
-        /// 12 s deploy, then any initial settings at interface rates. Fails if
-        /// placement becomes illegal. Choosing the mandate type is free.
+        /// Walks to the site first (walk-in), then a 12 s deploy, then any
+        /// initial settings at interface rates. Choosing the mandate type is free.
+        /// There is no placement range to be within, because the commander walks
+        /// to the site before it deploys, so `commander.placement_range_voxels` is
+        /// superseded (decisions-log item 127 (12), amending item 11). timeout_ms,
+        /// when set, bounds the walk up to arrival, and a site the commander
+        /// cannot reach fails `no_path`. Fails `illegal_site` if placement becomes
+        /// illegal. A step restarted after its deploy (by a death or the reflex)
+        /// resumes as a visit to the beacon it placed, with the rows it had left,
+        /// and never places a second one (docs/design/targeting.md, "Companion
+        /// changes", from S1's targeting behaviour).
         #[prost(message, tag="12")]
         PlaceBeacon(super::PlaceBeaconStep),
         /// Completes when the condition is true. timeout_ms is required.
@@ -325,6 +338,8 @@ pub struct MoveStep {
     /// stays pinned for that step.
     #[prost(message, optional, tag="1")]
     pub to: ::core::option::Option<Location>,
+    /// Omitted, it reads as DIRECT with an I-level note: one of the four named
+    /// defaults in this file's header (decisions-log item 128, decision 11).
     #[prost(enumeration="move_step::Pace", tag="2")]
     pub pace: i32,
 }
@@ -364,14 +379,38 @@ impl ::prost::Name for MoveStep {
 const NAME: &'static str = "MoveStep";
 const PACKAGE: &'static str = "gp.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.v1.MoveStep".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.MoveStep".into() }}
-/// PLACEHOLDER STUB. The interface row catalogue is the on-site change list in
-/// spec section 5, which carries a duration per row; it is not enumerated
-/// here. Each row is atomic: one change that commits at the end of its own
-/// duration, so a multi-field edit is all-or-nothing. Committed rows stay, and
-/// a resumed visit is a new visit that pays the handshake again.
+/// A visit: the commander walks to a beacon and changes it on site (touch to
+/// change). The row catalogue is InterfaceRow's oneof below, which is spec
+/// section 5's on-site change list, complete (the register's M-11, enumerated
+/// here as decisions-log item 128's decision 11 asked). Each row's duration is
+/// a rules-table row (gp.v1.RulesTable.InterfaceTimes), never a constant here:
+///
+///    set_mandate           switch mandate type       switch_mandate_ms, 8 s
+///    set_mandate_settings  edit mandate settings     edit_settings_base_ms 2 s
+///                                                    + edit_settings_per_field_ms
+///                                                    0.5 s per extra field,
+///                                                    at most edit_settings_max_ms
+///                                                    6 s; each changed element
+///                                                    of a list counts as one
+///                                                    field (decision 15)
+///    set_priority          Quartermaster priority    set_priority_ms, 1.5 s
+///    recycle               recycle the beacon        recycle_ms, 10 s
+///    add_build_target      add a Build target        build_target_ms, 2.5 s
+///    remove_build_target   remove a Build target     build_target_ms, 2.5 s
+///    queue_structure       queue a licensed          queue_structure_ms, 5 s,
+///                          capability structure      plus construction time
+///
+/// The visit handshake (visit_handshake_ms, 1.5 s, once per visit) is charged
+/// by the engine and is not an authored row; a deploy pays no separate
+/// handshake (decision 15). Each row is atomic: one change that commits at the
+/// end of its own duration, so a multi-field edit is all-or-nothing. Committed
+/// rows stay, and a resumed visit is a new visit that pays the handshake
+/// again. A row that names a target reads it when the step starts and never
+/// commits a lost one (docs/design/targeting.md, "Three reading rules").
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct InterfaceStep {
-    /// Which beacon to visit. Fixed id or selector.
+    /// Which beacon to visit. Fixed id or selector. The commander walks to it
+    /// first (walk-in, Step.interface).
     #[prost(message, optional, tag="1")]
     pub beacon: ::core::option::Option<BeaconRef>,
     /// Applied in order. Each commits on its own.
@@ -492,6 +531,12 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.AddBuildTargetRow".int
 /// Removes the Build target anchored here. Named by its anchor rather than by
 /// an index because a playbook is sealed before the round runs, and an index
 /// into a list the mandate may have changed is not a stable reference.
+///
+/// A target that was made through `on` is keyed by the feature it stands on,
+/// not by a voxel: remove it with `{"on":{"feature_id":"vent_120_88"}}`. That
+/// is the only `on` this row accepts — a description (`vent`, `seam`,
+/// `covered`) names no one target to remove — and carry-over replaces such a
+/// target by feature id too (docs/design/targeting.md, "Sites").
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct RemoveBuildTargetRow {
     #[prost(message, optional, tag="1")]
@@ -524,7 +569,18 @@ pub struct BuildTarget {
     /// The skeleton's minimal Build mandate ships one blueprint, the Generator.
     #[prost(string, tag="1")]
     pub blueprint_id: ::prost::alloc::string::String,
-    /// Where it goes. Must lie inside one of your own spheres.
+    /// Where it goes. Must lie inside one of your own spheres: inside the
+    /// sphere of the beacon whose mandate holds the target.
+    ///
+    /// A fixed voxel, or `on` a feature — the one place `on` is legal
+    /// (docs/design/targeting.md, "Sites"). `on` ranks only vents whose `on`
+    /// column lies inside that beacon's sphere (for an initial row, the sphere
+    /// of the site `covering` chose), measured from that beacon; a vent is a
+    /// candidate only if no live Generator of any seat and no Build target of
+    /// this seat stands on its footprint. The `on` column is the anchor column
+    /// if it is free, otherwise the next free footprint column in (y, x) order.
+    /// One structure stands per voxel across seats: a site where any live
+    /// structure already stands is `illegal_site`.
     #[prost(message, optional, tag="2")]
     pub anchor: ::core::option::Option<Location>,
     /// Quarter turns about the vertical axis, 0-3. An integer because the sim is
@@ -560,8 +616,17 @@ const PACKAGE: &'static str = "gp.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.v1.Area".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.Area".into() }}
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PlaceBeaconStep {
-    /// The site must lie inside one of your own spheres and within the
-    /// commander's placement range.
+    /// The site must lie inside one of your own spheres, and not on the column
+    /// of one of your own live beacons (no stacking: `illegal_site`). The
+    /// commander walks there first (walk-in, Step.place_beacon); there is no
+    /// placement range to stand within (decisions-log item 127 (12), amending
+    /// item 11).
+    ///
+    /// A fixed voxel, or `covering` a feature — the one place `covering` is
+    /// legal (docs/design/targeting.md, "Sites"). Under `covering` the sim ranks
+    /// the candidates, takes the first it can cover, and walks a fixed spiral
+    /// around it for the first legal, standable, reachable column whose sphere
+    /// holds the feature's `on` column.
     #[prost(message, optional, tag="1")]
     pub at: ::core::option::Option<Location>,
     /// Author's labels. Selectors may match on them.
@@ -1297,22 +1362,28 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.FallbackPatrol".into()
 // Locations, selectors and references
 // =============================================================================
 
-/// A place, fixed or late-bound. Selectors resolve when the step starts, then
-/// stay pinned for that step (spec section 10, "Late-bound selectors").
+/// A place, fixed or late-bound. A step reads its targets when it starts and
+/// keeps them until it ends (spec section 10, "Late-bound selectors";
+/// docs/design/targeting.md, "Three reading rules").
 ///
-/// The four selector forms — nearest, weakest, safest, most threatened (spec
-/// section 13, "Selectors stay": alt-click turns a fixed target into one of
-/// them) — live on BeaconRef, and a Location reaches them through
-/// beacon_anchor. There is one selector catalogue rather than two: a selector
-/// picks a beacon, and a place derived from a beacon is that beacon's anchor.
-/// `safest` keeps a Location form of its own because the fixed reflex names it
-/// directly and the editor renders it as a place, not as a beacon.
+/// Two kinds of thing can be described, and each has its own picks. A BEACON
+/// is picked by the four selector forms — nearest, weakest, safest, most
+/// threatened (spec section 13, "Selectors stay": alt-click turns a fixed
+/// target into one of them) — which live on BeaconRef, and a Location reaches
+/// them through beacon_anchor: a place derived from a beacon is that beacon's
+/// anchor. A FEATURE (a heat vent or a scrap seam) is picked through
+/// FeatureRef, and a Location reaches it through `on` and `covering`, which are
+/// SITES rather than places: each says where a thing is built relative to the
+/// feature, and each is legal in one field only. The picks are per kind; what
+/// is shared is one rank vocabulary and one resolver, not one message
+/// (targeting.md, "Descriptions (S1)"). `safest` keeps a Location form of its
+/// own because the fixed reflex names it directly and the editor renders it as
+/// a place, not as a beacon.
 ///
-/// Numbers 4-9 are free for a further fixed form; 10-49 stay held for a
-/// non-beacon selector catalogue (an area, a seam, a vent) if S3 needs one.
+/// Numbers 4-9 are free for a further fixed form.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Location {
-    #[prost(oneof="location::Place", tags="1, 2, 3")]
+    #[prost(oneof="location::Place", tags="1, 2, 3, 10, 11")]
     pub place: ::core::option::Option<location::Place>,
 }
 /// Nested message and enum types in `Location`.
@@ -1327,12 +1398,185 @@ pub mod location {
         /// to. Shorthand for beacon_anchor { safest {} }.
         #[prost(message, tag="3")]
         Safest(super::Safest),
+        /// "on a vent": the column a structure stands on, on the feature itself.
+        /// Legal only in BuildTarget.anchor (in add_build_target, a Build
+        /// mandate's settings and a place_beacon's `initial`); BuildTarget.anchor
+        /// says how the column is chosen. Anywhere else the verifier refuses it.
+        ///
+        /// Refused in S1 until targeting's behaviour lands: the sim's compile
+        /// answers NotAtThisStage and the verifier E0003 (S1's plan, task con2).
+        #[prost(message, tag="10")]
+        On(super::FeatureRef),
+        /// "a site covering a vent": where a beacon stands so that its sphere
+        /// holds the feature. Legal only in PlaceBeaconStep.at, which says how the
+        /// site is chosen. Anywhere else the verifier refuses it.
+        ///
+        /// Refused in S1 until targeting's behaviour lands, as `on` is.
+        #[prost(message, tag="11")]
+        Covering(super::FeatureRef),
     }
 }
 impl ::prost::Name for Location {
 const NAME: &'static str = "Location";
 const PACKAGE: &'static str = "gp.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.v1.Location".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.Location".into() }}
+/// A feature — a heat vent or a scrap seam — named or described
+/// (docs/design/targeting.md, "The model" and "Descriptions (S1)").
+///
+/// A NAME is a fixed id. A DESCRIPTION is a pick from a closed catalogue: a
+/// rank and a few flat filters, one level deep, with no variables, no
+/// arithmetic, no offsets and no loops. The sealed file holds the text as the
+/// author wrote it, never what it resolved to, so a carried playbook reads its
+/// descriptions again every round.
+///
+/// Ranking runs in the sim (the tick) and in the gateway (resolve_refs,
+/// estimate_route); the verifier checks vocabulary, placement and filters and
+/// never ranks.
+///
+/// Numbers 5-15 are free for a further arm.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct FeatureRef {
+    #[prost(oneof="feature_ref::Ref", tags="1, 2, 3, 4")]
+    pub r#ref: ::core::option::Option<feature_ref::Ref>,
+}
+/// Nested message and enum types in `FeatureRef`.
+pub mod feature_ref {
+    /// How a pick orders its candidates. One rank vocabulary for every kind.
+    ///
+    /// NEAREST is the least estimated travel from the origin to the feature
+    /// over the terrain the seat knows — the item-61 estimator's integer cost —
+    /// with unreachable candidates skipped and ties to the lowest anchor y, then
+    /// x. The origin is the commander's column when the step starts (under
+    /// `covering`), the target beacon's anchor (under `on`; for an initial row,
+    /// the site `covering` chose), or, for a description a beacon holds, that
+    /// beacon's anchor (targeting.md, "Nearest").
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum Rank {
+        /// A verifier error. An unset rank is never read as NEAREST.
+        Unspecified = 0,
+        Nearest = 1,
+    }
+    impl Rank {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "RANK_UNSPECIFIED",
+                Self::Nearest => "NEAREST",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "RANK_UNSPECIFIED" => Some(Self::Unspecified),
+                "NEAREST" => Some(Self::Nearest),
+                _ => None,
+            }
+        }
+    }
+    /// Which features a pick considers, by the seat's own coverage.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum Coverage {
+        /// Under `covering`, a verifier error. Under `on`, `coverage` must be
+        /// omitted, so this is the only value it may hold there.
+        Unspecified = 0,
+        /// Every feature of the kind.
+        Any = 1,
+        /// Outside every sphere of the seat's own living beacons, awake or
+        /// dormant, since a dormant beacon keeps its sphere. Never reads another
+        /// seat's state.
+        Uncovered = 2,
+    }
+    impl Coverage {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "COVERAGE_UNSPECIFIED",
+                Self::Any => "ANY",
+                Self::Uncovered => "UNCOVERED",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "COVERAGE_UNSPECIFIED" => Some(Self::Unspecified),
+                "ANY" => Some(Self::Any),
+                "UNCOVERED" => Some(Self::Uncovered),
+                _ => None,
+            }
+        }
+    }
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Ref {
+        /// A feature's name: `vent_<x>_<y>` or `seam_<x>_<y>`, from its
+        /// generation anchor column (the patch or disc centre) with no z, because
+        /// craters change z. An id reveals no count and no order. A name that is
+        /// hidden, absent or wrong fails its step `no_target`, exactly as a
+        /// description that matches nothing does, so a guess reveals nothing.
+        #[prost(string, tag="1")]
+        FeatureId(::prost::alloc::string::String),
+        /// "the nearest vent ...".
+        #[prost(message, tag="2")]
+        Vent(super::VentPick),
+        /// "the nearest seam ...".
+        #[prost(message, tag="3")]
+        Seam(super::SeamPick),
+        /// "the feature this beacon was placed to cover". Legal only under `on`,
+        /// in a Build target inside the `initial` of a place_beacon whose `at` is
+        /// a `covering` arm. It binds as a name at deploy.
+        #[prost(message, tag="4")]
+        Covered(super::Covered),
+    }
+}
+impl ::prost::Name for FeatureRef {
+const NAME: &'static str = "FeatureRef";
+const PACKAGE: &'static str = "gp.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.v1.FeatureRef".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.FeatureRef".into() }}
+/// A description of a heat vent. Per kind, so a filter that only means
+/// something for one kind is never a question for the other.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct VentPick {
+    /// Required: an unset rank is a verifier error.
+    #[prost(enumeration="feature_ref::Rank", tag="1")]
+    pub rank: i32,
+    /// Required under `covering`; must be omitted under `on`.
+    #[prost(enumeration="feature_ref::Coverage", tag="2")]
+    pub coverage: i32,
+}
+impl ::prost::Name for VentPick {
+const NAME: &'static str = "VentPick";
+const PACKAGE: &'static str = "gp.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.v1.VentPick".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.VentPick".into() }}
+/// A description of a scrap seam. The same shape as VentPick, kept a separate
+/// message so the two kinds' filters can part later without a format break.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SeamPick {
+    /// Required: an unset rank is a verifier error.
+    #[prost(enumeration="feature_ref::Rank", tag="1")]
+    pub rank: i32,
+    /// Required under `covering`; must be omitted under `on`.
+    #[prost(enumeration="feature_ref::Coverage", tag="2")]
+    pub coverage: i32,
+}
+impl ::prost::Name for SeamPick {
+const NAME: &'static str = "SeamPick";
+const PACKAGE: &'static str = "gp.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.v1.SeamPick".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.SeamPick".into() }}
+/// "the feature this beacon was placed to cover" — FeatureRef.covered.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct Covered {
+}
+impl ::prost::Name for Covered {
+const NAME: &'static str = "Covered";
+const PACKAGE: &'static str = "gp.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.v1.Covered".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.Covered".into() }}
 /// Integer voxel coordinates. Not a position: sim positions are Q16.16 and
 /// squared distances Q32.32, but a playbook names voxels, which are whole
 /// numbers (spec section 15, "Maths").
@@ -1366,9 +1610,19 @@ pub struct BeaconRef {
 pub mod beacon_ref {
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
     pub enum Ref {
-        /// A beacon id from the seat's frozen snapshot. Bindings are per-match: a
-        /// saved playbook is bound to seat, round, beacon ids and voxels, so
-        /// cross-match reuse needs a rebind step (roadmap, v1.1).
+        /// A beacon's name, as the seat's frozen snapshot spells it. `b_NN` is one
+        /// of the seat's own beacons, numbered per seat — a seat's core is always
+        /// `b_00`, so a template can name it anywhere — and resolves only among
+        /// them. `e_NN` is another seat's beacon, a per-viewer handle minted in
+        /// first-sighting order; a seat never sees another seat's `b_NN`. A name
+        /// that is hidden, absent or someone else's fails its step `no_target`,
+        /// one answer for all (docs/design/targeting.md, "Names"; decisions-log
+        /// item 127 (13), from S1's targeting determinism pull request).
+        ///
+        /// Names are bound per match: a saved playbook is bound to seat, round,
+        /// beacon ids and voxels, so cross-match reuse needs a rebind step
+        /// (roadmap, v1.1). A description (a selector below) is read again every
+        /// round instead.
         #[prost(string, tag="1")]
         BeaconId(::prost::alloc::string::String),
         /// Safest first. Own beacons only; the one the fixed 20% reflex walks to.
@@ -1540,11 +1794,13 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.BeaconFilter".into() }
 // Mandate settings
 // =============================================================================
 
-/// PLACEHOLDER STUB, AND NOT THIS FILE'S CONTRACT. The five mandates and their
-/// settings are spec section 6; this message exists only so the envelope and
-/// the worked example type-check. It should move to gp/v1/mandate.proto when
-/// the section 6 contract is written, which is a separate owner-approved
-/// change.
+/// The five mandates and their settings are spec section 6's contract, which
+/// grows with the stages (Defend and Attack at S2, below).
+///
+/// PLACEHOLDER: the move to gp/v1/mandate.proto — owner, the next proto PR
+/// that adds a mandate field (the register's M-14). Not in S1 (decisions-log
+/// item 128, S1's plan's decision 11): the move changes no wire or JSON name,
+/// because the package stays gp.v1, and nothing in S1 needs it.
 ///
 /// Only the fields the spec's expand_east example uses are filled in. The
 /// mandate oneof numbers (10-14) and the five names are safe: they are the
@@ -1622,9 +1878,13 @@ impl ::prost::Name for MandateSettings {
 const NAME: &'static str = "MandateSettings";
 const PACKAGE: &'static str = "gp.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.v1.MandateSettings".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.MandateSettings".into() }}
-/// Spec section 6, the Build row. The skeleton's minimal Build mandate reads
-/// `targets` and nothing else; the remaining fields are defined here because
-/// the section-6 table names them, and they stay inert until S1 fills them in.
+/// Spec section 6, the Build row. What "full Build settings" means in S1 is
+/// the owner's ruling (decisions-log item 128 (3) (d), S1's plan's decision
+/// 5, amending item 33 (a) and spec section 17's S1 row): S1 builds `targets`
+/// in full — order, rotation, `on` and `covered {}` — and `protected_areas`.
+/// `repair_threshold_pct`, `rebuild_destroyed` and `terraform` are stored and
+/// priced in S1 and take effect in S2; terraform's meaning beyond its enum is
+/// still unruled.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BuildSettings {
     /// Build the highest-order affordable target that is unbuilt or damaged.
@@ -1638,7 +1898,9 @@ pub struct BuildSettings {
     /// structure is never rebuilt automatically whatever this says (section 8).
     #[prost(bool, tag="3")]
     pub rebuild_destroyed: bool,
-    /// Whether the mandate may reshape terrain to place a target.
+    /// Whether the mandate may reshape terrain to place a target. Omitted, it
+    /// reads as NONE with an I-level note: one of the four named defaults in
+    /// this file's header (decisions-log item 128, decision 11).
     #[prost(enumeration="build_settings::Terraform", tag="4")]
     pub terraform: i32,
     /// Ground the mandate will not dig, fill or build on.
@@ -1732,45 +1994,55 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.SurveySettings".into()
 /// flee on threat. Never digs under structures." The skeleton fields a mining
 /// drone and ships the "Expand & Mine" template, so this one is filled like
 /// Build and Survey rather than held.
+///
+/// All four settings work in S1 (decisions-log item 127 (9)), with the
+/// meanings the owner ruled (item 128 (3) (e), S1's plan's decision 6), and an
+/// omitted seam_choice or pillar_spacing reads as a named default with an
+/// I-level note (item 128, decision 11; this file's header). That answers the
+/// open question this message used to carry, which the spec's own worked
+/// example raised by leaving two fields out:
+/// {"mine":{"dig_max_depth":4,"flee_on_threat":true}} verifies.
+///
+/// "Never digs under structures" refuses a voxel in or beside the footprint
+/// column of any live structure or beacon, of any seat.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct MineSettings {
-    /// Voxels. Never digs under structures.
+    /// Voxels below the seam's ORIGINAL top surface the mandate may dig; 0 means
+    /// the exposed rim only.
     #[prost(uint32, tag="1")]
     pub dig_max_depth: u32,
+    /// Stored in S1 and does nothing until S2, which brings the threats to flee
+    /// from.
     #[prost(bool, tag="2")]
     pub flee_on_threat: bool,
-    /// Which seam of the ones the mandate can reach.
+    /// Which seam of the ones the mandate can reach. A choice inside the Mine
+    /// program, held until the seam is spent; a Mine beacon may dig a seam other
+    /// than the one it was placed to cover (docs/design/targeting.md, "Three
+    /// reading rules"). Omitted, it reads as NEAREST with an I-level note.
     #[prost(enumeration="mine_settings::SeamChoice", tag="3")]
     pub seam_choice: i32,
-    /// Voxels between the pillars the mandate leaves standing to hold the roof
-    /// up.
+    /// Pillars the mandate leaves standing: a spacing of N leaves every Nth
+    /// column in x and in y undug; 0 means no pillars, which is also what an
+    /// omitted spacing reads as, with an I-level note. A dig pattern, not a
+    /// collapse rule: there is no collapse before S2, so in S1 a non-zero spacing
+    /// only costs yield.
     #[prost(uint32, tag="4")]
     pub pillar_spacing: u32,
 }
 /// Nested message and enum types in `MineSettings`.
 pub mod mine_settings {
-    // PLACEHOLDER — how an OMITTED mine setting reads. Spec section 6 names all
-    // four fields and their values but does not say what a mandate does when
-    // one is left out, and section 10's worked example leaves two of them out:
-    // it writes {"mine":{"dig_max_depth":4,"flee_on_threat":true}}. So this
-    // message cannot take the package's "an unset enum is a verifier error"
-    // rule without making the spec's own example fail to verify, and it cannot
-    // take a default without inventing one. Both readings are the section 6
-    // mandate contract's to choose — the same contract that decides whether
-    // these messages move to gp/v1/mandate.proto — and they are a pair: an
-    // omitted seam_choice and an omitted pillar_spacing get the same treatment
-    // or the row is inconsistent. OWNER decides at S1 (economy), which is when
-    // mining first has numbers to be wrong about; T6 (verifier) implements
-    // whichever it is. Nothing before S1 depends on the answer: the skeleton's
-    // "Expand & Mine" template writes the same two fields the spec's example
-    // does.
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum SeamChoice {
         Unspecified = 0,
+        /// The most remaining yield (ore voxels times richness) among the reachable
+        /// seams in the beacon's sphere, ties by nearest.
         Richest = 1,
+        /// Nearest as targeting defines it: the least estimated travel, ties to
+        /// the lowest anchor y, then x.
         Nearest = 2,
+        /// Reads as NEAREST until S2's threat model, and the verifier warns that
+        /// it does.
         Safest = 3,
     }
     impl SeamChoice {

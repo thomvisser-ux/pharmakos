@@ -37,7 +37,7 @@ host                      serve one match to the game client over this process's
 
 ## The playbook vocabulary (gp.v1)
 
-89 messages. A field's name is the one the canonical form writes, which is
+93 messages. A field's name is the one the canonical form writes, which is
 the .proto spelling and not lowerCamelCase. A reserved number is one held on
 purpose: field numbers are added, never renumbered or reused.
 
@@ -163,6 +163,8 @@ gp.v1.Condition
   reserved 120
   reserved flag_clear, flag_set, grid_island, jammed, link_up, satellite_pass
 
+gp.v1.Covered
+
 gp.v1.Declarative
   route                        1   repeated gp.v1.Step
   handlers                     2   repeated gp.v1.Handler
@@ -185,6 +187,13 @@ gp.v1.FallbackPatrol
 
 gp.v1.FallbackShadow
   beacon                       1   gp.v1.BeaconRef
+
+gp.v1.FeatureRef
+  oneof: ref
+  feature_id                   1   string
+  vent                         2   gp.v1.VentPick
+  seam                         3   gp.v1.SeamPick
+  covered                      4   gp.v1.Covered
 
 gp.v1.Freshness
   kind                         1   gp.v1.Freshness.Kind
@@ -236,7 +245,9 @@ gp.v1.Location
   voxel                        1   gp.v1.Voxel
   beacon_anchor                2   gp.v1.BeaconRef
   safest                       3   gp.v1.Safest
-  reserved 10 to 49
+  on                           10  gp.v1.FeatureRef
+  covering                     11  gp.v1.FeatureRef
+  reserved 12 to 49
 
 gp.v1.Mandate
   oneof: kind
@@ -507,6 +518,11 @@ gp.v1.ScriptOperator
 gp.v1.ScriptProgram
   reserved 1 to 15
 
+gp.v1.SeamPick
+  rank                         1   gp.v1.FeatureRef.Rank
+  coverage                     2   gp.v1.FeatureRef.Coverage
+  reserved 3 to 15
+
 gp.v1.SegmentElapsed
   ms                           1   gp.v1.IntCompare
 
@@ -552,6 +568,11 @@ gp.v1.ThreatAt
 gp.v1.Treasury
   dollars                      1   gp.v1.IntCompare
 
+gp.v1.VentPick
+  rank                         1   gp.v1.FeatureRef.Rank
+  coverage                     2   gp.v1.FeatureRef.Coverage
+  reserved 3 to 15
+
 gp.v1.Voxel
   x                            1   int32
   y                            2   int32
@@ -566,7 +587,7 @@ gp.v1.Weakest
 
 ## The enumerations (gp.v1)
 
-16 of them. JSON spells an enum by value name.
+18 of them. JSON spells an enum by value name.
 
 
 gp.v1.BeaconFilter.MandateKind
@@ -603,6 +624,15 @@ gp.v1.CmdrHpPct.Cmp
   NE                               4
   GE                               5
   GT                               6
+
+gp.v1.FeatureRef.Coverage
+  COVERAGE_UNSPECIFIED             0
+  ANY                              1
+  UNCOVERED                        2
+
+gp.v1.FeatureRef.Rank
+  RANK_UNSPECIFIED                 0
+  NEAREST                          1
 
 gp.v1.Freshness.Kind
   FRESHNESS_UNSPECIFIED            0

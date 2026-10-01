@@ -1183,6 +1183,21 @@
         }
       ]
     },
+    "Coverage": {
+      "type": "string",
+      "description": "`gp.v1.FeatureRef.Coverage`. A playbook on disk carries the value name verbatim.",
+      "enum": [
+        "COVERAGE_UNSPECIFIED",
+        "ANY",
+        "UNCOVERED"
+      ]
+    },
+    "Covered": {
+      "type": "object",
+      "description": "gp.v1.Covered",
+      "additionalProperties": false,
+      "properties": {}
+    },
     "Declarative": {
       "type": "object",
       "description": "gp.v1.Declarative",
@@ -1285,6 +1300,75 @@
           "$ref": "#/$defs/BeaconRef"
         }
       }
+    },
+    "FeatureRef": {
+      "type": "object",
+      "description": "gp.v1.FeatureRef",
+      "additionalProperties": false,
+      "properties": {
+        "feature_id": {
+          "type": "string"
+        },
+        "vent": {
+          "$ref": "#/$defs/VentPick"
+        },
+        "seam": {
+          "$ref": "#/$defs/SeamPick"
+        },
+        "covered": {
+          "$ref": "#/$defs/Covered"
+        }
+      },
+      "allOf": [
+        {
+          "not": {
+            "required": [
+              "feature_id",
+              "vent"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "feature_id",
+              "seam"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "feature_id",
+              "covered"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "vent",
+              "seam"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "vent",
+              "covered"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "seam",
+              "covered"
+            ]
+          }
+        }
+      ]
     },
     "GoCode": {
       "type": "object",
@@ -1613,6 +1697,12 @@
         },
         "safest": {
           "$ref": "#/$defs/Safest"
+        },
+        "on": {
+          "$ref": "#/$defs/FeatureRef"
+        },
+        "covering": {
+          "$ref": "#/$defs/FeatureRef"
         }
       },
       "allOf": [
@@ -1635,8 +1725,64 @@
         {
           "not": {
             "required": [
+              "voxel",
+              "on"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "voxel",
+              "covering"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
               "beacon_anchor",
               "safest"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_anchor",
+              "on"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "beacon_anchor",
+              "covering"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "safest",
+              "on"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "safest",
+              "covering"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "on",
+              "covering"
             ]
           }
         }
@@ -2002,6 +2148,14 @@
         }
       }
     },
+    "Rank": {
+      "type": "string",
+      "description": "`gp.v1.FeatureRef.Rank`. A playbook on disk carries the value name verbatim.",
+      "enum": [
+        "RANK_UNSPECIFIED",
+        "NEAREST"
+      ]
+    },
     "RecycleRow": {
       "type": "object",
       "description": "gp.v1.RecycleRow",
@@ -2077,6 +2231,19 @@
         "NEAREST",
         "SAFEST"
       ]
+    },
+    "SeamPick": {
+      "type": "object",
+      "description": "gp.v1.SeamPick",
+      "additionalProperties": false,
+      "properties": {
+        "rank": {
+          "$ref": "#/$defs/Rank"
+        },
+        "coverage": {
+          "$ref": "#/$defs/Coverage"
+        }
+      }
     },
     "SegmentElapsed": {
       "type": "object",
@@ -2326,6 +2493,19 @@
       "properties": {
         "dollars": {
           "$ref": "#/$defs/IntCompare"
+        }
+      }
+    },
+    "VentPick": {
+      "type": "object",
+      "description": "gp.v1.VentPick",
+      "additionalProperties": false,
+      "properties": {
+        "rank": {
+          "$ref": "#/$defs/Rank"
+        },
+        "coverage": {
+          "$ref": "#/$defs/Coverage"
         }
       }
     },

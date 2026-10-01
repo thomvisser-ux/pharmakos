@@ -36,10 +36,18 @@
 //     readings. No other message in gp.v1 may join this exception without an
 //     owner decision: it is the difference between "unset is a default" and
 //     "unset is an error", and the rest of the schema is the second.
-//     ONE CASE IS OPEN rather than excepted: MineSettings.seam_choice, where
-//     section 10's worked example omits the field, so neither reading can be
-//     asserted here without either failing that example or inventing a
-//     default. The PLACEHOLDER at that message names the owner and the stage.
+//     ONE OTHER EXCEPTION IS RULED, BY NAME, AND IT IS THE OWNER'S: an
+//     omitted SETTING inside a mandate or a step reads as a stated default,
+//     with an I-level note saying so (decisions-log item 128, which rules S1's
+//     plan's decision 11 and the register's S1-39). Four settings, and only
+//     these four: MoveStep.pace reads as DIRECT, MineSettings.seam_choice as
+//     NEAREST, MineSettings.pillar_spacing as 0 (no pillars) and
+//     BuildSettings.terraform as NONE. The reason is the spec's own worked
+//     example, which writes {"mine":{"dig_max_depth":4,"flee_on_threat":true}}
+//     and must verify. Nothing else joins the list: targeting's new
+//     RANK_UNSPECIFIED and COVERAGE_UNSPECIFIED (FeatureRef) stay errors, as
+//     docs/design/targeting.md adopted them. S1's verifier lane implements
+//     the four.
 //   * Every duration is game milliseconds, never ticks. The sim runs at
 //     20 Hz and takes decisions every 250 ms of game time, but no number in a
 //     playbook is expressed in ticks (spec section 10, "Execution").
@@ -293,13 +301,26 @@ message Step {
     // Completes within the arrive radius. Fails on no path or timeout.
     MoveStep move = 10;
 
-    // Completes when all rows are committed. Fails if the beacon is
-    // destroyed, the commander dies, or the commander leaves range. Damage
-    // does not interrupt.
+    // Walks to the beacon first (walk-in), then commits the rows. Completes
+    // when all rows are committed. Fails `no_path` if the commander cannot
+    // reach the beacon, and fails if the beacon is destroyed, the commander
+    // dies, or the commander leaves range mid-visit. Damage does not
+    // interrupt. timeout_ms, when set, bounds the walk up to arrival
+    // (docs/design/targeting.md, "Companion changes", from S1's targeting
+    // behaviour).
     InterfaceStep interface = 11;
 
-    // 12 s deploy, then any initial settings at interface rates. Fails if
-    // placement becomes illegal. Choosing the mandate type is free.
+    // Walks to the site first (walk-in), then a 12 s deploy, then any
+    // initial settings at interface rates. Choosing the mandate type is free.
+    // There is no placement range to be within, because the commander walks
+    // to the site before it deploys, so `commander.placement_range_voxels` is
+    // superseded (decisions-log item 127 (12), amending item 11). timeout_ms,
+    // when set, bounds the walk up to arrival, and a site the commander
+    // cannot reach fails `no_path`. Fails `illegal_site` if placement becomes
+    // illegal. A step restarted after its deploy (by a death or the reflex)
+    // resumes as a visit to the beacon it placed, with the rows it had left,
+    // and never places a second one (docs/design/targeting.md, "Companion
+    // changes", from S1's targeting behaviour).
     PlaceBeaconStep place_beacon = 12;
 
     // Completes when the condition is true. timeout_ms is required.
@@ -333,6 +354,8 @@ message MoveStep {
   // stays pinned for that step.
   Location to = 1;
 
+  // Omitted, it reads as DIRECT with an I-level note: one of the four named
+  // defaults in this file's header (decisions-log item 128, decision 11).
   Pace pace = 2;
 
   enum Pace {
@@ -342,13 +365,37 @@ message MoveStep {
   }
 }
 
-// PLACEHOLDER STUB. The interface row catalogue is the on-site change list in
-// spec section 5, which carries a duration per row; it is not enumerated
-// here. Each row is atomic: one change that commits at the end of its own
-// duration, so a multi-field edit is all-or-nothing. Committed rows stay, and
-// a resumed visit is a new visit that pays the handshake again.
+// A visit: the commander walks to a beacon and changes it on site (touch to
+// change). The row catalogue is InterfaceRow's oneof below, which is spec
+// section 5's on-site change list, complete (the register's M-11, enumerated
+// here as decisions-log item 128's decision 11 asked). Each row's duration is
+// a rules-table row (gp.v1.RulesTable.InterfaceTimes), never a constant here:
+//
+//   set_mandate           switch mandate type       switch_mandate_ms, 8 s
+//   set_mandate_settings  edit mandate settings     edit_settings_base_ms 2 s
+//                                                   + edit_settings_per_field_ms
+//                                                   0.5 s per extra field,
+//                                                   at most edit_settings_max_ms
+//                                                   6 s; each changed element
+//                                                   of a list counts as one
+//                                                   field (decision 15)
+//   set_priority          Quartermaster priority    set_priority_ms, 1.5 s
+//   recycle               recycle the beacon        recycle_ms, 10 s
+//   add_build_target      add a Build target        build_target_ms, 2.5 s
+//   remove_build_target   remove a Build target     build_target_ms, 2.5 s
+//   queue_structure       queue a licensed          queue_structure_ms, 5 s,
+//                         capability structure      plus construction time
+//
+// The visit handshake (visit_handshake_ms, 1.5 s, once per visit) is charged
+// by the engine and is not an authored row; a deploy pays no separate
+// handshake (decision 15). Each row is atomic: one change that commits at the
+// end of its own duration, so a multi-field edit is all-or-nothing. Committed
+// rows stay, and a resumed visit is a new visit that pays the handshake
+// again. A row that names a target reads it when the step starts and never
+// commits a lost one (docs/design/targeting.md, "Three reading rules").
 message InterfaceStep {
-  // Which beacon to visit. Fixed id or selector.
+  // Which beacon to visit. Fixed id or selector. The commander walks to it
+  // first (walk-in, Step.interface).
   BeaconRef beacon = 1;
 
   // Applied in order. Each commits on its own.
@@ -419,6 +466,12 @@ message AddBuildTargetRow {
 // Removes the Build target anchored here. Named by its anchor rather than by
 // an index because a playbook is sealed before the round runs, and an index
 // into a list the mandate may have changed is not a stable reference.
+//
+// A target that was made through `on` is keyed by the feature it stands on,
+// not by a voxel: remove it with `{"on":{"feature_id":"vent_120_88"}}`. That
+// is the only `on` this row accepts — a description (`vent`, `seam`,
+// `covered`) names no one target to remove — and carry-over replaces such a
+// target by feature id too (docs/design/targeting.md, "Sites").
 message RemoveBuildTargetRow {
   Location anchor = 1;
 }
@@ -440,7 +493,18 @@ message BuildTarget {
   // The skeleton's minimal Build mandate ships one blueprint, the Generator.
   string blueprint_id = 1;
 
-  // Where it goes. Must lie inside one of your own spheres.
+  // Where it goes. Must lie inside one of your own spheres: inside the
+  // sphere of the beacon whose mandate holds the target.
+  //
+  // A fixed voxel, or `on` a feature — the one place `on` is legal
+  // (docs/design/targeting.md, "Sites"). `on` ranks only vents whose `on`
+  // column lies inside that beacon's sphere (for an initial row, the sphere
+  // of the site `covering` chose), measured from that beacon; a vent is a
+  // candidate only if no live Generator of any seat and no Build target of
+  // this seat stands on its footprint. The `on` column is the anchor column
+  // if it is free, otherwise the next free footprint column in (y, x) order.
+  // One structure stands per voxel across seats: a site where any live
+  // structure already stands is `illegal_site`.
   Location anchor = 2;
 
   // Quarter turns about the vertical axis, 0-3. An integer because the sim is
@@ -465,8 +529,17 @@ message Area {
 }
 
 message PlaceBeaconStep {
-  // The site must lie inside one of your own spheres and within the
-  // commander's placement range.
+  // The site must lie inside one of your own spheres, and not on the column
+  // of one of your own live beacons (no stacking: `illegal_site`). The
+  // commander walks there first (walk-in, Step.place_beacon); there is no
+  // placement range to stand within (decisions-log item 127 (12), amending
+  // item 11).
+  //
+  // A fixed voxel, or `covering` a feature — the one place `covering` is
+  // legal (docs/design/targeting.md, "Sites"). Under `covering` the sim ranks
+  // the candidates, takes the first it can cover, and walks a fixed spiral
+  // around it for the first legal, standable, reachable column whose sphere
+  // holds the feature's `on` column.
   Location at = 1;
 
   // Author's labels. Selectors may match on them.
@@ -884,19 +957,25 @@ message FallbackPatrol {
 // Locations, selectors and references
 // =============================================================================
 
-// A place, fixed or late-bound. Selectors resolve when the step starts, then
-// stay pinned for that step (spec section 10, "Late-bound selectors").
+// A place, fixed or late-bound. A step reads its targets when it starts and
+// keeps them until it ends (spec section 10, "Late-bound selectors";
+// docs/design/targeting.md, "Three reading rules").
 //
-// The four selector forms — nearest, weakest, safest, most threatened (spec
-// section 13, "Selectors stay": alt-click turns a fixed target into one of
-// them) — live on BeaconRef, and a Location reaches them through
-// beacon_anchor. There is one selector catalogue rather than two: a selector
-// picks a beacon, and a place derived from a beacon is that beacon's anchor.
-// `safest` keeps a Location form of its own because the fixed reflex names it
-// directly and the editor renders it as a place, not as a beacon.
+// Two kinds of thing can be described, and each has its own picks. A BEACON
+// is picked by the four selector forms — nearest, weakest, safest, most
+// threatened (spec section 13, "Selectors stay": alt-click turns a fixed
+// target into one of them) — which live on BeaconRef, and a Location reaches
+// them through beacon_anchor: a place derived from a beacon is that beacon's
+// anchor. A FEATURE (a heat vent or a scrap seam) is picked through
+// FeatureRef, and a Location reaches it through `on` and `covering`, which are
+// SITES rather than places: each says where a thing is built relative to the
+// feature, and each is legal in one field only. The picks are per kind; what
+// is shared is one rank vocabulary and one resolver, not one message
+// (targeting.md, "Descriptions (S1)"). `safest` keeps a Location form of its
+// own because the fixed reflex names it directly and the editor renders it as
+// a place, not as a beacon.
 //
-// Numbers 4-9 are free for a further fixed form; 10-49 stay held for a
-// non-beacon selector catalogue (an area, a seam, a vent) if S3 needs one.
+// Numbers 4-9 are free for a further fixed form.
 message Location {
   oneof place {
     Voxel voxel = 1;
@@ -905,12 +984,132 @@ message Location {
     // "the safest own beacon" — the same target the fixed 20% reflex walks
     // to. Shorthand for beacon_anchor { safest {} }.
     Safest safest = 3;
+
+    // "on a vent": the column a structure stands on, on the feature itself.
+    // Legal only in BuildTarget.anchor (in add_build_target, a Build
+    // mandate's settings and a place_beacon's `initial`); BuildTarget.anchor
+    // says how the column is chosen. Anywhere else the verifier refuses it.
+    //
+    // Refused in S1 until targeting's behaviour lands: the sim's compile
+    // answers NotAtThisStage and the verifier E0003 (S1's plan, task con2).
+    FeatureRef on = 10;
+
+    // "a site covering a vent": where a beacon stands so that its sphere
+    // holds the feature. Legal only in PlaceBeaconStep.at, which says how the
+    // site is chosen. Anywhere else the verifier refuses it.
+    //
+    // Refused in S1 until targeting's behaviour lands, as `on` is.
+    FeatureRef covering = 11;
   }
 
-  // RESERVED — the non-beacon selector range, held so a later form cannot
-  // land on a number a hand-written file already used.
-  reserved 10 to 49;
+  // RESERVED — the rest of the site range. 12 is held for `toward`, a site
+  // for stepping-stone expansion that S1's plan's decision 3 deferred to S3
+  // with the rest of the catalogue (decisions-log item 128 (3) (c)); 13-49
+  // for whatever S3's design pass adds. Held so a later form cannot land on a
+  // number a hand-written file already used.
+  reserved 12 to 49;
 }
+
+// A feature — a heat vent or a scrap seam — named or described
+// (docs/design/targeting.md, "The model" and "Descriptions (S1)").
+//
+// A NAME is a fixed id. A DESCRIPTION is a pick from a closed catalogue: a
+// rank and a few flat filters, one level deep, with no variables, no
+// arithmetic, no offsets and no loops. The sealed file holds the text as the
+// author wrote it, never what it resolved to, so a carried playbook reads its
+// descriptions again every round.
+//
+// Ranking runs in the sim (the tick) and in the gateway (resolve_refs,
+// estimate_route); the verifier checks vocabulary, placement and filters and
+// never ranks.
+//
+// Numbers 5-15 are free for a further arm.
+message FeatureRef {
+  oneof ref {
+    // A feature's name: `vent_<x>_<y>` or `seam_<x>_<y>`, from its
+    // generation anchor column (the patch or disc centre) with no z, because
+    // craters change z. An id reveals no count and no order. A name that is
+    // hidden, absent or wrong fails its step `no_target`, exactly as a
+    // description that matches nothing does, so a guess reveals nothing.
+    string feature_id = 1;
+
+    // "the nearest vent ...".
+    VentPick vent = 2;
+
+    // "the nearest seam ...".
+    SeamPick seam = 3;
+
+    // "the feature this beacon was placed to cover". Legal only under `on`,
+    // in a Build target inside the `initial` of a place_beacon whose `at` is
+    // a `covering` arm. It binds as a name at deploy.
+    Covered covered = 4;
+  }
+
+  // How a pick orders its candidates. One rank vocabulary for every kind.
+  //
+  // NEAREST is the least estimated travel from the origin to the feature
+  // over the terrain the seat knows — the item-61 estimator's integer cost —
+  // with unreachable candidates skipped and ties to the lowest anchor y, then
+  // x. The origin is the commander's column when the step starts (under
+  // `covering`), the target beacon's anchor (under `on`; for an initial row,
+  // the site `covering` chose), or, for a description a beacon holds, that
+  // beacon's anchor (targeting.md, "Nearest").
+  enum Rank {
+    // A verifier error. An unset rank is never read as NEAREST.
+    RANK_UNSPECIFIED = 0;
+    NEAREST = 1;
+
+    // RESERVED — the rest of the catalogue (S3, after a design pass like the
+    // one "nearest" had): RICHEST and a risk-weighted rank.
+    reserved 2 to 9;
+  }
+
+  // Which features a pick considers, by the seat's own coverage.
+  enum Coverage {
+    // Under `covering`, a verifier error. Under `on`, `coverage` must be
+    // omitted, so this is the only value it may hold there.
+    COVERAGE_UNSPECIFIED = 0;
+
+    // Every feature of the kind.
+    ANY = 1;
+
+    // Outside every sphere of the seat's own living beacons, awake or
+    // dormant, since a dormant beacon keeps its sphere. Never reads another
+    // seat's state.
+    UNCOVERED = 2;
+  }
+}
+
+// A description of a heat vent. Per kind, so a filter that only means
+// something for one kind is never a question for the other.
+message VentPick {
+  // Required: an unset rank is a verifier error.
+  FeatureRef.Rank rank = 1;
+
+  // Required under `covering`; must be omitted under `on`.
+  FeatureRef.Coverage coverage = 2;
+
+  // RESERVED — the deferred filters (S3): grade, in_reach and the
+  // enemy-known filters, and a `from` origin override
+  // (docs/design/targeting.md, "Deferred, with their numbers reserved").
+  reserved 3 to 15;
+}
+
+// A description of a scrap seam. The same shape as VentPick, kept a separate
+// message so the two kinds' filters can part later without a format break.
+message SeamPick {
+  // Required: an unset rank is a verifier error.
+  FeatureRef.Rank rank = 1;
+
+  // Required under `covering`; must be omitted under `on`.
+  FeatureRef.Coverage coverage = 2;
+
+  // RESERVED — the deferred filters (S3), as VentPick's.
+  reserved 3 to 15;
+}
+
+// "the feature this beacon was placed to cover" — FeatureRef.covered.
+message Covered {}
 
 // Integer voxel coordinates. Not a position: sim positions are Q16.16 and
 // squared distances Q32.32, but a playbook names voxels, which are whole
@@ -931,9 +1130,19 @@ message Voxel {
 // on_fail decides what happens next — it is never a silent skip.
 message BeaconRef {
   oneof ref {
-    // A beacon id from the seat's frozen snapshot. Bindings are per-match: a
-    // saved playbook is bound to seat, round, beacon ids and voxels, so
-    // cross-match reuse needs a rebind step (roadmap, v1.1).
+    // A beacon's name, as the seat's frozen snapshot spells it. `b_NN` is one
+    // of the seat's own beacons, numbered per seat — a seat's core is always
+    // `b_00`, so a template can name it anywhere — and resolves only among
+    // them. `e_NN` is another seat's beacon, a per-viewer handle minted in
+    // first-sighting order; a seat never sees another seat's `b_NN`. A name
+    // that is hidden, absent or someone else's fails its step `no_target`,
+    // one answer for all (docs/design/targeting.md, "Names"; decisions-log
+    // item 127 (13), from S1's targeting determinism pull request).
+    //
+    // Names are bound per match: a saved playbook is bound to seat, round,
+    // beacon ids and voxels, so cross-match reuse needs a rebind step
+    // (roadmap, v1.1). A description (a selector below) is read again every
+    // round instead.
     string beacon_id = 1;
 
     // Safest first. Own beacons only; the one the fixed 20% reflex walks to.
@@ -1026,11 +1235,13 @@ message BeaconFilter {
 // Mandate settings
 // =============================================================================
 
-// PLACEHOLDER STUB, AND NOT THIS FILE'S CONTRACT. The five mandates and their
-// settings are spec section 6; this message exists only so the envelope and
-// the worked example type-check. It should move to gp/v1/mandate.proto when
-// the section 6 contract is written, which is a separate owner-approved
-// change.
+// The five mandates and their settings are spec section 6's contract, which
+// grows with the stages (Defend and Attack at S2, below).
+//
+// PLACEHOLDER: the move to gp/v1/mandate.proto — owner, the next proto PR
+// that adds a mandate field (the register's M-14). Not in S1 (decisions-log
+// item 128, S1's plan's decision 11): the move changes no wire or JSON name,
+// because the package stays gp.v1, and nothing in S1 needs it.
 //
 // Only the fields the spec's expand_east example uses are filled in. The
 // mandate oneof numbers (10-14) and the five names are safe: they are the
@@ -1074,9 +1285,13 @@ message MandateSettings {
   }
 }
 
-// Spec section 6, the Build row. The skeleton's minimal Build mandate reads
-// `targets` and nothing else; the remaining fields are defined here because
-// the section-6 table names them, and they stay inert until S1 fills them in.
+// Spec section 6, the Build row. What "full Build settings" means in S1 is
+// the owner's ruling (decisions-log item 128 (3) (d), S1's plan's decision
+// 5, amending item 33 (a) and spec section 17's S1 row): S1 builds `targets`
+// in full — order, rotation, `on` and `covered {}` — and `protected_areas`.
+// `repair_threshold_pct`, `rebuild_destroyed` and `terraform` are stored and
+// priced in S1 and take effect in S2; terraform's meaning beyond its enum is
+// still unruled.
 message BuildSettings {
   // Build the highest-order affordable target that is unbuilt or damaged.
   repeated BuildTarget targets = 1;
@@ -1089,15 +1304,18 @@ message BuildSettings {
   // structure is never rebuilt automatically whatever this says (section 8).
   bool rebuild_destroyed = 3;
 
-  // Whether the mandate may reshape terrain to place a target.
+  // Whether the mandate may reshape terrain to place a target. Omitted, it
+  // reads as NONE with an I-level note: one of the four named defaults in
+  // this file's header (decisions-log item 128, decision 11).
   Terraform terraform = 4;
 
   // Ground the mandate will not dig, fill or build on.
   repeated Area protected_areas = 5;
 
   // RESERVED — the repair and reclaim drone fields of section 6's Build row.
-  // Drone fields are the unit-mix half of the mandate and arrive with the
-  // full Build mandate at S1.
+  // Drone fields are the unit-mix half of the mandate, and repair and reclaim
+  // drones are S2's (spec section 17), so both numbers stay held until S2
+  // (decisions-log item 128 (3) (d), S1's plan's decision 5).
   reserved 6, 7;
   reserved "repair_drones", "reclaim_drones";
 
@@ -1151,39 +1369,52 @@ message SurveySettings {
 // flee on threat. Never digs under structures." The skeleton fields a mining
 // drone and ships the "Expand & Mine" template, so this one is filled like
 // Build and Survey rather than held.
+//
+// All four settings work in S1 (decisions-log item 127 (9)), with the
+// meanings the owner ruled (item 128 (3) (e), S1's plan's decision 6), and an
+// omitted seam_choice or pillar_spacing reads as a named default with an
+// I-level note (item 128, decision 11; this file's header). That answers the
+// open question this message used to carry, which the spec's own worked
+// example raised by leaving two fields out:
+// {"mine":{"dig_max_depth":4,"flee_on_threat":true}} verifies.
+//
+// "Never digs under structures" refuses a voxel in or beside the footprint
+// column of any live structure or beacon, of any seat.
 message MineSettings {
-  // Voxels. Never digs under structures.
+  // Voxels below the seam's ORIGINAL top surface the mandate may dig; 0 means
+  // the exposed rim only.
   uint32 dig_max_depth = 1;
 
+  // Stored in S1 and does nothing until S2, which brings the threats to flee
+  // from.
   bool flee_on_threat = 2;
 
-  // Which seam of the ones the mandate can reach.
+  // Which seam of the ones the mandate can reach. A choice inside the Mine
+  // program, held until the seam is spent; a Mine beacon may dig a seam other
+  // than the one it was placed to cover (docs/design/targeting.md, "Three
+  // reading rules"). Omitted, it reads as NEAREST with an I-level note.
   SeamChoice seam_choice = 3;
 
-  // Voxels between the pillars the mandate leaves standing to hold the roof
-  // up.
+  // Pillars the mandate leaves standing: a spacing of N leaves every Nth
+  // column in x and in y undug; 0 means no pillars, which is also what an
+  // omitted spacing reads as, with an I-level note. A dig pattern, not a
+  // collapse rule: there is no collapse before S2, so in S1 a non-zero spacing
+  // only costs yield.
   uint32 pillar_spacing = 4;
-
-  // PLACEHOLDER — how an OMITTED mine setting reads. Spec section 6 names all
-  // four fields and their values but does not say what a mandate does when
-  // one is left out, and section 10's worked example leaves two of them out:
-  // it writes {"mine":{"dig_max_depth":4,"flee_on_threat":true}}. So this
-  // message cannot take the package's "an unset enum is a verifier error"
-  // rule without making the spec's own example fail to verify, and it cannot
-  // take a default without inventing one. Both readings are the section 6
-  // mandate contract's to choose — the same contract that decides whether
-  // these messages move to gp/v1/mandate.proto — and they are a pair: an
-  // omitted seam_choice and an omitted pillar_spacing get the same treatment
-  // or the row is inconsistent. OWNER decides at S1 (economy), which is when
-  // mining first has numbers to be wrong about; T6 (verifier) implements
-  // whichever it is. Nothing before S1 depends on the answer: the skeleton's
-  // "Expand & Mine" template writes the same two fields the spec's example
-  // does.
 
   enum SeamChoice {
     SEAM_CHOICE_UNSPECIFIED = 0;
+
+    // The most remaining yield (ore voxels times richness) among the reachable
+    // seams in the beacon's sphere, ties by nearest.
     RICHEST = 1;
+
+    // Nearest as targeting defines it: the least estimated travel, ties to
+    // the lowest anchor y, then x.
     NEAREST = 2;
+
+    // Reads as NEAREST until S2's threat model, and the verifier warns that
+    // it does.
     SAFEST = 3;
   }
 }

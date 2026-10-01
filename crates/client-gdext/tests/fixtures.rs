@@ -71,6 +71,7 @@ fn generate() -> Vec<(&'static str, &'static str, String)> {
             phase_remaining_ms: 90_000,
             segment_length_ms: 180_000,
             round: 1,
+            untimed: false,
         }),
     };
     let briefing = GetBriefingResponse {
