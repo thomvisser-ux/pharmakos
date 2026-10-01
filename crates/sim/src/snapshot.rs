@@ -565,7 +565,7 @@ impl core::fmt::Display for SnapshotError {
             ),
             SnapshotError::OverCeiling { units, limit } => write!(
                 f,
-                "the snapshot holds {units} units and this world's unit ceiling is {limit}:                  it was saved under another match configuration"
+                "the snapshot holds {units} units and this world's unit ceiling is {limit}: it was saved under another match configuration"
             ),
             SnapshotError::ChunkDigest { chunk } => write!(
                 f,
