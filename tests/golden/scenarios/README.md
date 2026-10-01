@@ -13,9 +13,10 @@ and `library/`). S1's `fixs` lane added the first two of `scenarios/s1/`:
 `round-limit-audit`, six rounds to the round limit whose final tick carries the
 final audit's winner in the match state's winner byte, and
 `unaffordable-deploy`, whose fourth deploy fails with `unaffordable` (failure
-id 12) because the first three spent the treasury; and it moved every chain
-that places a beacon, because a deploy is now charged its `$` when it starts
-(register X-12; `determinism/README.md` says where each first diverged). Every
+id 12) because the first three spent the treasury; and it moved three of the
+skeleton's chains, because a deploy is now charged its `$` when it starts
+(register X-12; the paragraph on S1's `fixs` below says where each first
+diverged). Every
 chain here is also compared across Windows, Linux and macOS by the
 `cross-OS determinism guard` job.
 
@@ -112,6 +113,16 @@ scenarios report. `expand-east-segment`'s event log did not move, and every
 tick `deploy-and-visit` asserts on or quotes (206, 451, 511, 716, 776) is where
 it was. That is the "chain moved but the event log did not" case above, read
 and accepted: the scenarios assert on the route, not on the meter.
+
+**S1's `fixs` moved three chains and left the fourth** (register X-12, spec
+section 7: "`$` leaves the treasury the moment an order commits: deploy
+starts"). A deploy is now charged `structures.beacon.cost_dollars` on the tick
+it starts, and the treasury is hashed seat state, so each chain moved on the
+first tick a deploy started: `against-easy` and `against-easy-three-rounds`
+from tick 206 (Easy's seat 1 starts its Mine deploy), and `deploy-and-visit`
+from tick 211 (seat 0's deploy). `expand-east-segment` and its event log did
+not move: its deploy fails `illegal_site` as it starts, before the charge, so
+nothing is ever paid. The two `scenarios/s1/` chains are new.
 
 `expand-east-segment` carries one more thing worth knowing before its chain is
 read. The playbook it seals **does not qualify against either seat's own frozen

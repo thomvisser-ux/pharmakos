@@ -52,7 +52,7 @@
     { "assert": "event_fired", "event": "step_completed", "seat": 0, "by_tick": 300,
       "note": "The first deploy's step completes at tick 281, once its initial setting has committed." },
     { "assert": "event_fired", "event": "fallback_engaged", "seat": 0, "by_tick": 1000,
-      "note": "The failed step's `on_fail: SKIP` took it: the route went on to the five-second hold, which completed at tick 961, and the route ran out into the fallback on the same tick. A failure `on_fail` did not take would have left no route to finish." },
+      "note": "The route ran out into the fallback by this tick, which shows only that the route ended before the segment did: an `ABORT_ROUTE` would pass this line too, and earlier. That `on_fail: SKIP` took the failure, so that the five-second hold ran and completed at tick 961, is pinned by the chain and by crates/sim/tests/deploy.rs." },
     { "assert": "event_fired", "event": "segment_ended", "by_tick": 1200,
       "note": "The segment ends on the tick, not near it." },
     { "assert": "hash_chain_equals",
