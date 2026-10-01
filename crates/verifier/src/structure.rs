@@ -45,6 +45,7 @@ use crate::limits::{CONDITION_MAX_DEPTH, CONDITION_MAX_NODES, Limits};
 use crate::pointer;
 use crate::report::{Builder, Diag, number, patch_add, patch_replace};
 use crate::size;
+use crate::walk::{self, Visit};
 
 use std::collections::BTreeMap;
 
@@ -130,6 +131,8 @@ pub(crate) fn run(playbook: &Playbook, limits: &Limits, out: &mut Builder) {
             }
         }
     }
+
+    walk::walk(playbook, &mut HeldSites { out });
 }
 
 /// The four blocks every playbook carries (`proto/gp/v1/playbook.proto`:
@@ -336,7 +339,43 @@ fn check_location(place: Option<&Location>, at: &str, what: &str, out: &mut Buil
         Some(location::Place::BeaconAnchor(target)) => {
             check_beacon_ref(target, &pointer::child(at, "beacon_anchor"), out);
         }
-        Some(location::Place::Voxel(_) | location::Place::Safest(_)) => {}
+        // Targeting's two sites name a place too, so there is nothing more to
+        // check here; [`HeldSites`] refuses them wherever they stand, a Build
+        // target's anchor included, which this function is never handed.
+        Some(
+            location::Place::Voxel(_)
+            | location::Place::Safest(_)
+            | location::Place::On(_)
+            | location::Place::Covering(_),
+        ) => {}
+    }
+}
+
+/// Targeting's two sites, `on` and `covering` (docs/design/targeting.md,
+/// "Sites"), refused wherever a playbook writes them.
+///
+/// They are in the schema from S1's targeting proto and have no effect until
+/// its behaviour lands, so each is refused as a held-back word is, with `E0003`
+/// at the arm, rather than checked for where it may stand: the sim refuses the
+/// same file at compile (`PlanError::NotAtThisStage`), and a report that
+/// qualified a file the sim then refused would be a verifier that lies. The
+/// shared walk is what reaches every `Location`, a Build target's anchor
+/// (`on`'s only legal place) included, which [`check_location`]'s callers do
+/// not. S1's targeting verifier lane replaces this with the real rules: which
+/// arm is legal where, the ranks and the coverage filters.
+struct HeldSites<'a> {
+    out: &'a mut Builder,
+}
+
+impl Visit for HeldSites<'_> {
+    fn location(&mut self, at: &str, place: &Location) {
+        let field = match place.place.as_ref() {
+            Some(location::Place::On(_)) => "on",
+            Some(location::Place::Covering(_)) => "covering",
+            _ => return,
+        };
+        self.out
+            .emit(Diag::new("E0003", pointer::child(at, field)).arg("field", field));
     }
 }
 

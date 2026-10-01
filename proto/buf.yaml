@@ -69,20 +69,34 @@ breaking:
   # un-reservation nobody intended never passes unnoticed (decisions-log items
   # 100 (10), 109 and 111).
   ignore_only:
-    # S1's first contract pull request (S1's plan, task con1). One rule, one file.
+    # S1's targeting proto (S1's plan, task con2; targeting.md's contract pull
+    # request 1). One rule, two files, four narrowed ranges, each number taken
+    # by the field it was held for and nothing else. con1's block for
+    # gp/v1/rules.proto is gone: that discharge is on main, both sides of the
+    # comparison now say `reserved 13 to 15`, and keeping the file listed
+    # would let a later un-reservation there pass unseen.
     #
-    # Why it is here. `RulesTable.Economy` held field numbers 12 to 15 so its next
-    # rows keep the one-byte tag range. `economy.mining_carry_voxels` (the
-    # register's S1-25, a row at the sim's own constant) takes 12, so the range
-    # narrows to 13-15; buf sees the old range [12, 15] go away and cannot tell
-    # that the number was discharged for the row it was held for rather than
-    # un-reserved. tests/golden/proto/expected.reserved.txt shows the narrowing
-    # (`RulesTable.Economy` 13-15), which is the reviewable half.
+    # gp/v1/playbook.proto, `Location`: 10 to 49 were held for a non-beacon
+    # selector catalogue ("an area, a seam, a vent"). Targeting's sites take
+    # 10 (`on`) and 11 (`covering`), both `FeatureRef`s (decisions-log item
+    # 127 (12), docs/design/targeting.md "Sites"), and the range narrows to
+    # 12-49, with 12 held for `toward` (S1's plan, decision 3).
     #
-    # Inert once this change is on main: from then on both sides of the
-    # comparison say `reserved 13 to 15`. The next proto pull request (`con2`,
-    # the targeting proto) replaces this block with its own, or deletes it if it
-    # discharges nothing, so a later un-reservation in rules.proto cannot pass
-    # behind it.
+    # gp/api/v1/gateway.proto, three messages whose tails were held for
+    # exactly these fields, each a PLACEHOLDER that named them:
+    #   * `GetRecapResponse`: 2 and 3, the settlement lines and the shortfall
+    #     (the register's X-16); 4-15 stay held.
+    #   * `GetMapSummaryResponse`: 5, the vent and seam list (S1-48); 6-15
+    #     stay held for the terrain summary.
+    #   * `GetEconomyForecastResponse`: 5 and 6, the next BMI and the
+    #     committed spend (S1-46, decision 12); 7-15 stay held for S3's
+    #     projection and what-if answers.
+    #
+    # buf sees each old range go away and cannot tell a discharge from an
+    # un-reservation; tests/golden/proto/expected.reserved.txt shows each
+    # narrowing, which is the reviewable half. Inert once this change is on
+    # main. The next proto pull request replaces this block with its own, or
+    # deletes it if it discharges nothing.
     RESERVED_MESSAGE_NO_DELETE:
-      - gp/v1/rules.proto
+      - gp/v1/playbook.proto
+      - gp/api/v1/gateway.proto

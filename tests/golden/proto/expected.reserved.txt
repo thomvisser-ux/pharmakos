@@ -19,13 +19,13 @@ gp.api.v1.GetBriefingResponse
   numbers: 5-15
 
 gp.api.v1.GetEconomyForecastResponse
-  numbers: 5-15
+  numbers: 7-15
 
 gp.api.v1.GetMapSummaryResponse
-  numbers: 5-15
+  numbers: 6-15
 
 gp.api.v1.GetRecapResponse
-  numbers: 2-15
+  numbers: 4-15
 
 gp.api.v1.ViewChunk
   numbers: 3-15
@@ -54,7 +54,7 @@ gp.v1.DefendSettings
   numbers: 1-15
 
 gp.v1.Location
-  numbers: 10-49
+  numbers: 12-49
 
 gp.v1.MandateSettings
   numbers: 3, 4
@@ -87,6 +87,9 @@ gp.v1.ScriptOperator
 gp.v1.ScriptProgram
   numbers: 1-15
 
+gp.v1.SeamPick
+  numbers: 3-15
+
 gp.v1.Step
   numbers: 16, 17, 18, 19, 20, 21, 22
   names:   branch, capture, clear_flag, logistics, reassign, repeat, set_flag
@@ -98,9 +101,15 @@ gp.v1.SurveySettings
 gp.v1.TemplateParameter
   numbers: 3-15
 
+gp.v1.VentPick
+  numbers: 3-15
+
 gp.api.v1.Method
   numbers: 80, 81, 82, 83
   names:   METHOD_CAST_VOTE, METHOD_CONNECT, METHOD_GET_BALLOT, METHOD_GET_DISPATCHES
+
+gp.v1.FeatureRef.Rank
+  numbers: 2-9
 
 gp.v1.OnDeath.OnRespawn
   numbers: 2-9

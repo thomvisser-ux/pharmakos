@@ -262,7 +262,12 @@ fn walk_location(place: &Location, at: &str, visitor: &mut dyn Visit) {
         Some(location::Place::BeaconAnchor(beacon)) => {
             walk_beacon(beacon, &pointer::child(at, "beacon_anchor"), visitor);
         }
-        Some(location::Place::Safest(_)) | None => {}
+        // Targeting's sites carry no voxel and no beacon to visit; the
+        // structure stage refuses them until S1's targeting verifier lane.
+        Some(
+            location::Place::Safest(_) | location::Place::On(_) | location::Place::Covering(_),
+        )
+        | None => {}
     }
 }
 
