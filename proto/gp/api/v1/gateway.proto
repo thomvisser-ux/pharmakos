@@ -74,6 +74,7 @@ package gp.api.v1;
 
 import "google/protobuf/descriptor.proto";
 import "gp/v1/playbook.proto";
+import "gp/v1/rules.proto";
 
 // =============================================================================
 // Scopes
@@ -239,6 +240,15 @@ enum Method {
   // not one of the caller's own, indistinguishable from an id that does not
   // exist. Phase-gated like every planning method.
   METHOD_GET_DRAFT = 57 [(required_scope) = SCOPE_PLAN];
+
+  // "resolve_refs" — what each feature reference in a playbook reads now,
+  // ranked over the frozen world as the sim ranks at step start
+  // (docs/design/targeting.md, "Surfaces"). The editor's chip and the
+  // advisor ask it, because neither can reach the sim. Internal in S1: it is
+  // on the advisor's allow-list, and v1.1 publishes it. Phase-gated like
+  // every planning method, and it steps nothing (AGENTS.md section 3 rule 2:
+  // ranking is an estimate, not a dry run).
+  METHOD_RESOLVE_REFS = 58 [(required_scope) = SCOPE_PLAN];
 
   // --- Commit --------------------------------------------------------------
 
@@ -473,6 +483,15 @@ message Status {
   // 1-based. The round the match is on.
   uint32 round = 4;
 
+  // True when the current phase has no countdown: the lobby, a recap, an
+  // ended match, or an untimed Lull. `phase_remaining_ms` then reads 0 and
+  // means nothing, and a client must not show it as a timer that ran out,
+  // which is how every client reads a 0 there (decisions-log item 128, S1's
+  // plan's decision 12; the register's S1-11). A field of its own rather than
+  // a sentinel in `phase_remaining_ms`, so that field's reading stays as it
+  // is.
+  bool untimed = 5;
+
   enum Phase {
     PHASE_UNSPECIFIED = 0;
     LOBBY = 1;
@@ -584,9 +603,49 @@ message GetRecapRequest {
 message GetRecapResponse {
   string prose = 1;
 
-  // PLACEHOLDER: the settlement lines of spec section 7 — owner, S1, with
-  // the recap's settlement lines, now that T14's economy produces them.
-  reserved 2 to 15;
+  // The Ledger's settlement for the calling seat at this recap (spec section
+  // 7, "Settlement"; the register's X-16). The seat's OWN, like every number
+  // on this surface: another seat's income is on no wire.
+  Settlement settlement = 2;
+
+  // The grid's shortfall at segment end. Unset when supply covered draw.
+  Shortfall shortfall = 3;
+
+  // RESERVED — the rest of the recap: awards (S4, with the award catalogue)
+  // and highlights (S7, with recordings).
+  reserved 4 to 15;
+}
+
+// One settlement. What the recap's settlement line says: the BMI and its
+// band, and the award fund, which arrives at S4 (S1's plan, section 1.1).
+message Settlement {
+  // The Basic Minimum Income credited at this settlement, after the band's
+  // adjustment, whole $.
+  int32 bmi_dollars = 1;
+
+  // The band: the seat's place on held value among the living seats, 1-based,
+  // the leader first. A separate ranking from Standing.rank, which is on the
+  // full audit score (spec section 3).
+  uint32 band_rank = 2;
+
+  // The band's adjustment to the BMI, whole percent, truncated toward zero:
+  // from the last place's bonus to the leader's malus, linear between, and 0
+  // for a seat alone on the ladder (spec section 7, "BMI scaling").
+  int32 band_percent = 3;
+
+  // The seat's share of the award fund, whole $. Always 0 until S4, which
+  // brings the awards the fund is split by.
+  int32 award_dollars = 4;
+}
+
+// A grid short of power at segment end (spec section 7, the brownout order).
+message Shortfall {
+  // The draw the brownout order shed to bring draw within supply, whole kW.
+  int32 kw = 1;
+
+  // The seat's own beacons that were dark at segment end, as `b_NN`, in
+  // ascending id order.
+  repeated string beacon_ids = 2;
 }
 
 message ListBeaconsRequest {
@@ -689,10 +748,61 @@ message GetMapSummaryResponse {
   // the scenario file a reader will compare it against.
   string match_seed = 4;
 
-  // PLACEHOLDER: a fog-filtered vent, seam and terrain summary — owner, S1,
-  // over T5's generated map, with the economy that gives a vent and a seam
-  // something to report.
-  reserved 5 to 15;
+  // Every vent and seam on the map (the register's S1-48), in feature id
+  // order. Each feature's id, kind, grade and anchor are a pure function of
+  // the seed, the rules and the occupied seats. Its `live`, `covered`,
+  // `travel_ms` and `reachable` read the world as it stands (the frozen
+  // snapshot in a Lull or a recap, the live world in a Push), unfogged in S1
+  // as targeting.md's ranking already is, so a seam another seat has mined
+  // out shows here as not live. The list is fog-filtered from S3, with the
+  // knowledge store (docs/design/targeting.md, "Descriptions (S1)" and
+  // "Surfaces").
+  repeated MapFeature features = 5;
+
+  // PLACEHOLDER: a fog-filtered terrain summary — owner, S3, with the
+  // knowledge store that gives "fog-filtered" its meaning. The stage is S1's
+  // plan task con2's reading (the plan names S1-48's features and not the
+  // terrain), for the owner to confirm.
+  reserved 6 to 15;
+}
+
+// One feature as the seat sees it.
+message MapFeature {
+  // Its name, as a playbook writes it: `vent_<x>_<y>` or `seam_<x>_<y>`.
+  string feature_id = 1;
+
+  Kind kind = 2;
+
+  // Its grade. Lower case on the JSON-RPC wire, as every enum this surface
+  // answers with is (decisions-log item 80): "rich".
+  gp.v1.ByRichness.Richness grade = 3;
+
+  // The generation anchor column, the patch or disc centre. No z: craters
+  // change z, and the name carries none.
+  int32 x = 4;
+  int32 y = 5;
+
+  // False once the feature is lost: no exposed vent material left in a
+  // vent's footprint, no ore left in a seam's.
+  bool live = 6;
+
+  // True when the feature lies inside a sphere of one of the seat's own
+  // living beacons, awake or dormant: the opposite of a pick's UNCOVERED.
+  bool covered = 7;
+
+  // Travel from the commander, game milliseconds, by the estimator "nearest"
+  // ranks with (targeting.md, "Nearest").
+  int32 travel_ms = 8;
+
+  // False when no route reaches the feature; `travel_ms` is then 0 and
+  // means nothing.
+  bool reachable = 9;
+
+  enum Kind {
+    KIND_UNSPECIFIED = 0;
+    VENT = 1;
+    SEAM = 2;
+  }
 }
 
 // `$` and kW, with what-ifs (spec section 12). The arithmetic is the
@@ -716,8 +826,9 @@ message WhatIf {
 // 111, decision C7, a departure from item 105 (2) taken in the open): the
 // seat's OWN economy as the world stands, the frozen snapshot's in a Lull or a
 // recap and the live world's in a Push. They are what the sim already reads
-// out, not a projection. S1's projection, income and what-if answers land in
-// NEW fields and never redefine these four. Another seat's economy is on no
+// out, not a projection. Later answers land in NEW fields and never redefine
+// these four: S1's next BMI and committed spend (fields 5 and 6), and the
+// projection, the projected income and the what-if answers after them. Another seat's economy is on no
 // wire at all (spec section 10: enemy treasury is deliberately absent).
 //
 // Whole $ and whole kW, int32 like gp.v1's Treasury and KwHeadroom predicates,
@@ -740,15 +851,27 @@ message GetEconomyForecastResponse {
   // (decisions-log item 113 (4)).
   int32 headroom_kw_now = 4;
 
-  // PLACEHOLDER: the next BMI and the committed spend — owner, S1, filled
-  // additively with the economy's surfaces; the per-what-if answers are S3's
-  // (decisions-log item 128, S1's plan's decision 12).
+  // The BMI the seat would be credited at the next settlement, at the band
+  // it holds now, whole $ (decisions-log item 128, S1's plan's decision 12;
+  // the register's S1-46).
+  int32 bmi_next_dollars = 5;
+
+  // The `$` the seat's standing orders have committed and not yet paid,
+  // whole $: the Quartermaster's own arithmetic over the seat's orders, never
+  // a dry run and never a model of anybody else (spec section 11).
+  int32 committed_dollars = 6;
+
+  // PLACEHOLDER: the projected income, the projection and the what-if
+  // answers — owner, S3, with the what-if vocabulary. Decision 12 (item 128)
+  // sends the what-ifs to S3 and fills only the next BMI and the committed
+  // spend in S1; the projection's and the projected income's stage is S1's
+  // plan task con2's reading, for the owner to confirm.
   //
   // This method answers the LIVE world during a Push, although its name says
   // "forecast". Ruled for S1 by the owner (item 128, decision 12, the
   // register's S1-12): a seat's own economy is its own knowledge, so the live
   // answer stays.
-  reserved 5 to 15;
+  reserved 7 to 15;
 }
 
 // The travel estimate of item 61, exposed. Abstract search only; it never
@@ -771,7 +894,10 @@ message EstimateRouteResponse {
 }
 
 message Leg {
-  // Where this leg ends.
+  // Where this leg ends. For a `covering` waypoint, the site the beacon
+  // would stand on, as a voxel: Easy asks once per candidate rather than
+  // keeping a second site algorithm of its own (docs/design/targeting.md,
+  // "Surfaces").
   gp.v1.Location to = 1;
 
   // Game milliseconds.
@@ -1090,6 +1216,63 @@ message GetDraftResponse {
 
   // Which round it was saved in, as DraftSummary.round.
   uint32 round = 3;
+}
+
+// What each feature reference in a playbook reads now
+// (docs/design/targeting.md, "Surfaces").
+//
+// Answered over the frozen world, ranked exactly as the sim ranks when a step
+// starts, from where things stand now: under `covering` the origin is the
+// commander's column as the snapshot holds it, so a step that comes after
+// another step moves the commander may read differently when it runs, and the
+// chip says "read when the step starts". The verifier never ranks; this is
+// where a preview of a description comes from.
+message ResolveRefsRequest {
+  // The playbook, JSONC, as verify_plan and render_plan take it.
+  string playbook_jsonc = 1;
+}
+
+message ResolveRefsResponse {
+  // One per FeatureRef in the file (every `on` and every `covering`), in
+  // file order.
+  repeated ResolvedRef refs = 1;
+}
+
+// What one FeatureRef reads now.
+message ResolvedRef {
+  // RFC 6901 JSON Pointer to the FeatureRef in the file:
+  // `/declarative/route/0/place_beacon/at/covering`.
+  string pointer = 1;
+
+  // The feature it reads, `vent_<x>_<y>` or `seam_<x>_<y>`. Empty when it
+  // reads nothing, and `failure` says why.
+  string feature_id = 2;
+
+  // Travel from the origin to that feature, game milliseconds, by the
+  // estimator "nearest" ranks with. 0 when it reads nothing.
+  int32 travel_ms = 3;
+
+  // Every candidate that matched the reference's filters and is reachable,
+  // in rank order: the chip's "now" and "next". The pick is the first
+  // candidate with a legal site, so it need not be the first one listed.
+  repeated FeatureCandidate candidates = 4;
+
+  // How many features matched the filters before reachability was asked:
+  // the recap's "3 matched, none reachable".
+  uint32 matched = 5;
+
+  // Why it reads nothing, as the step failure the sim would answer, spelt as
+  // the segment feed spells it (`no_target`, `illegal_site`). Empty when it
+  // reads a feature.
+  string failure = 6;
+}
+
+// One feature a reference could read, and how far it is.
+message FeatureCandidate {
+  string feature_id = 1;
+
+  // Game milliseconds from the reference's origin.
+  int32 travel_ms = 2;
 }
 
 // What the operator would file on a timeout, so a seat can see the cost of one

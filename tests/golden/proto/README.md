@@ -46,7 +46,13 @@ the result is pinned here (`expected.expand_east.json` and its siblings).
   safe. Dropped is a `WIRE_JSON` break unless it is a held number discharged by
   the row it was held for, as above; S1's first contract pull request
   discharged `RulesTable.Economy`'s 12 for `economy.mining_carry_voxels`, so
-  the range reads 13-15.
+  the range reads 13-15. S1's targeting proto discharged `Location`'s 10 and
+  11 for the sites `on` and `covering` (12-49 stay held, 12 for `toward`),
+  `GetRecapResponse`'s 2 and 3 for the settlement and the shortfall,
+  `GetMapSummaryResponse`'s 5 for the feature list and
+  `GetEconomyForecastResponse`'s 5 and 6 for the next BMI and the committed
+  spend, and added three reservations of its own: `VentPick` and `SeamPick`
+  3-15 (the deferred filters) and `FeatureRef.Rank` 2-9 (the deferred ranks).
 * **`expected.rules.v1.json`**: the rules table's canonical JSON, so a row was
   added or a value re-tuned. The table is hashed into `rules_hash`, so the same
   pull request re-blesses every verifier `report_hash` golden, the gateway's
@@ -55,5 +61,6 @@ the result is pinned here (`expected.expand_east.json` and its siblings).
   row the sim reads moves the hash chains as well.
 * **`expected.method-scopes.txt`**: a gateway method was added or its
   `required_scope` annotation changed, which is a `gp.api.v1` contract change.
+  S1's targeting proto added `resolve_refs`, under `plan`.
 * **`expected.expand_east.json`**: the canonical codec's output for a committed
   playbook, as the section above describes.

@@ -1170,6 +1170,20 @@ fn compile_place(place: Option<&gp::v1::Location>, names: &Names<'_>) -> Result<
             Ok(Place::Beacon(compile_beacon_ref(Some(reference), names)?))
         }
         Some(gp::v1::location::Place::Safest(_)) => Ok(Place::Beacon(BeaconSpec::Safest)),
+        // Targeting's two sites (docs/design/targeting.md, "Sites"): in the
+        // vocabulary from S1's targeting proto, and refused until the
+        // behaviour pull request gives them an effect -- the resolver, the
+        // spiral and the `on` rules. Refused, never read as a voxel or a
+        // beacon (AGENTS.md section 12). `covered {}` is legal only under
+        // `on`, so the `on` refusal covers it.
+        Some(gp::v1::location::Place::On(_)) => Err(PlanError::NotAtThisStage {
+            construct: "site `on`",
+            stage: "targeting's behaviour lands later in S1",
+        }),
+        Some(gp::v1::location::Place::Covering(_)) => Err(PlanError::NotAtThisStage {
+            construct: "site `covering`",
+            stage: "targeting's behaviour lands later in S1",
+        }),
         None => Err(PlanError::MissingBlock("location.place")),
     }
 }

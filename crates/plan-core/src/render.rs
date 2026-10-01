@@ -316,11 +316,18 @@ fn priority(value: i32) -> &'static str {
 // ---------------------------------------------------------------------------
 
 fn location(place: Option<&Location>) -> String {
+    // Targeting's two sites, named plainly and not yet rendered: the verifier
+    // refuses both until S1's targeting verifier lane, which renders what they
+    // describe and moves these two lines into the string table with the rest.
+    const SITE_ON: &str = "a spot on a vent or seam (not in this build yet)";
+    const SITE_COVERING: &str = "a site covering a vent or seam (not in this build yet)";
     match place.and_then(|place| place.place.as_ref()) {
         None => s::PLACE_NOWHERE.to_owned(),
         Some(location::Place::Voxel(at)) => voxel(at),
         Some(location::Place::BeaconAnchor(reference)) => beacon(Some(reference)),
         Some(location::Place::Safest(_)) => s::BEACON_SAFEST.to_owned(),
+        Some(location::Place::On(_)) => SITE_ON.to_owned(),
+        Some(location::Place::Covering(_)) => SITE_COVERING.to_owned(),
     }
 }
 

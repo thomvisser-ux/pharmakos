@@ -257,6 +257,15 @@ pub struct Status {
     /// 1-based. The round the match is on.
     #[prost(uint32, tag="4")]
     pub round: u32,
+    /// True when the current phase has no countdown: the lobby, a recap, an
+    /// ended match, or an untimed Lull. `phase_remaining_ms` then reads 0 and
+    /// means nothing, and a client must not show it as a timer that ran out,
+    /// which is how every client reads a 0 there (decisions-log item 128, S1's
+    /// plan's decision 12; the register's S1-11). A field of its own rather than
+    /// a sentinel in `phase_remaining_ms`, so that field's reading stays as it
+    /// is.
+    #[prost(bool, tag="5")]
+    pub untimed: bool,
 }
 /// Nested message and enum types in `Status`.
 pub mod status {
@@ -476,11 +485,61 @@ fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.GetRecapRequest".i
 pub struct GetRecapResponse {
     #[prost(string, tag="1")]
     pub prose: ::prost::alloc::string::String,
+    /// The Ledger's settlement for the calling seat at this recap (spec section
+    /// 7, "Settlement"; the register's X-16). The seat's OWN, like every number
+    /// on this surface: another seat's income is on no wire.
+    #[prost(message, optional, tag="2")]
+    pub settlement: ::core::option::Option<Settlement>,
+    /// The grid's shortfall at segment end. Unset when supply covered draw.
+    #[prost(message, optional, tag="3")]
+    pub shortfall: ::core::option::Option<Shortfall>,
 }
 impl ::prost::Name for GetRecapResponse {
 const NAME: &'static str = "GetRecapResponse";
 const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.GetRecapResponse".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.GetRecapResponse".into() }}
+/// One settlement. What the recap's settlement line says: the BMI and its
+/// band, and the award fund, which arrives at S4 (S1's plan, section 1.1).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct Settlement {
+    /// The Basic Minimum Income credited at this settlement, after the band's
+    /// adjustment, whole $.
+    #[prost(int32, tag="1")]
+    pub bmi_dollars: i32,
+    /// The band: the seat's place on held value among the living seats, 1-based,
+    /// the leader first. A separate ranking from Standing.rank, which is on the
+    /// full audit score (spec section 3).
+    #[prost(uint32, tag="2")]
+    pub band_rank: u32,
+    /// The band's adjustment to the BMI, whole percent, truncated toward zero:
+    /// from the last place's bonus to the leader's malus, linear between, and 0
+    /// for a seat alone on the ladder (spec section 7, "BMI scaling").
+    #[prost(int32, tag="3")]
+    pub band_percent: i32,
+    /// The seat's share of the award fund, whole $. Always 0 until S4, which
+    /// brings the awards the fund is split by.
+    #[prost(int32, tag="4")]
+    pub award_dollars: i32,
+}
+impl ::prost::Name for Settlement {
+const NAME: &'static str = "Settlement";
+const PACKAGE: &'static str = "gp.api.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.Settlement".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.Settlement".into() }}
+/// A grid short of power at segment end (spec section 7, the brownout order).
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct Shortfall {
+    /// The draw the brownout order shed to bring draw within supply, whole kW.
+    #[prost(int32, tag="1")]
+    pub kw: i32,
+    /// The seat's own beacons that were dark at segment end, as `b_NN`, in
+    /// ascending id order.
+    #[prost(string, repeated, tag="2")]
+    pub beacon_ids: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+}
+impl ::prost::Name for Shortfall {
+const NAME: &'static str = "Shortfall";
+const PACKAGE: &'static str = "gp.api.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.Shortfall".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.Shortfall".into() }}
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ListBeaconsRequest {
     #[prost(message, optional, tag="1")]
@@ -580,7 +639,7 @@ impl ::prost::Name for GetMapSummaryRequest {
 const NAME: &'static str = "GetMapSummaryRequest";
 const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.GetMapSummaryRequest".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.GetMapSummaryRequest".into() }}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetMapSummaryResponse {
     /// Voxels on each axis.
     #[prost(message, optional, tag="1")]
@@ -607,11 +666,93 @@ pub struct GetMapSummaryResponse {
     /// the scenario file a reader will compare it against.
     #[prost(string, tag="4")]
     pub match_seed: ::prost::alloc::string::String,
+    /// Every vent and seam on the map (the register's S1-48), in feature id
+    /// order. Each feature's id, kind, grade and anchor are a pure function of
+    /// the seed, the rules and the occupied seats. Its `live`, `covered`,
+    /// `travel_ms` and `reachable` read the world as it stands (the frozen
+    /// snapshot in a Lull or a recap, the live world in a Push), unfogged in S1
+    /// as targeting.md's ranking already is, so a seam another seat has mined
+    /// out shows here as not live. The list is fog-filtered from S3, with the
+    /// knowledge store (docs/design/targeting.md, "Descriptions (S1)" and
+    /// "Surfaces").
+    #[prost(message, repeated, tag="5")]
+    pub features: ::prost::alloc::vec::Vec<MapFeature>,
 }
 impl ::prost::Name for GetMapSummaryResponse {
 const NAME: &'static str = "GetMapSummaryResponse";
 const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.GetMapSummaryResponse".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.GetMapSummaryResponse".into() }}
+/// One feature as the seat sees it.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct MapFeature {
+    /// Its name, as a playbook writes it: `vent_<x>_<y>` or `seam_<x>_<y>`.
+    #[prost(string, tag="1")]
+    pub feature_id: ::prost::alloc::string::String,
+    #[prost(enumeration="map_feature::Kind", tag="2")]
+    pub kind: i32,
+    /// Its grade. Lower case on the JSON-RPC wire, as every enum this surface
+    /// answers with is (decisions-log item 80): "rich".
+    #[prost(enumeration="super::super::v1::by_richness::Richness", tag="3")]
+    pub grade: i32,
+    /// The generation anchor column, the patch or disc centre. No z: craters
+    /// change z, and the name carries none.
+    #[prost(int32, tag="4")]
+    pub x: i32,
+    #[prost(int32, tag="5")]
+    pub y: i32,
+    /// False once the feature is lost: no exposed vent material left in a
+    /// vent's footprint, no ore left in a seam's.
+    #[prost(bool, tag="6")]
+    pub live: bool,
+    /// True when the feature lies inside a sphere of one of the seat's own
+    /// living beacons, awake or dormant: the opposite of a pick's UNCOVERED.
+    #[prost(bool, tag="7")]
+    pub covered: bool,
+    /// Travel from the commander, game milliseconds, by the estimator "nearest"
+    /// ranks with (targeting.md, "Nearest").
+    #[prost(int32, tag="8")]
+    pub travel_ms: i32,
+    /// False when no route reaches the feature; `travel_ms` is then 0 and
+    /// means nothing.
+    #[prost(bool, tag="9")]
+    pub reachable: bool,
+}
+/// Nested message and enum types in `MapFeature`.
+pub mod map_feature {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum Kind {
+        Unspecified = 0,
+        Vent = 1,
+        Seam = 2,
+    }
+    impl Kind {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "KIND_UNSPECIFIED",
+                Self::Vent => "VENT",
+                Self::Seam => "SEAM",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "KIND_UNSPECIFIED" => Some(Self::Unspecified),
+                "VENT" => Some(Self::Vent),
+                "SEAM" => Some(Self::Seam),
+                _ => None,
+            }
+        }
+    }
+}
+impl ::prost::Name for MapFeature {
+const NAME: &'static str = "MapFeature";
+const PACKAGE: &'static str = "gp.api.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.MapFeature".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.MapFeature".into() }}
 /// `$` and kW, with what-ifs (spec section 12). The arithmetic is the
 /// Quartermaster's projection, which is an ALLOWED estimate: no dry run, no
 /// stepping, no modelling of anybody else (spec section 11).
@@ -641,8 +782,9 @@ fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.WhatIf".into() }fn
 /// 111, decision C7, a departure from item 105 (2) taken in the open): the
 /// seat's OWN economy as the world stands, the frozen snapshot's in a Lull or a
 /// recap and the live world's in a Push. They are what the sim already reads
-/// out, not a projection. S1's projection, income and what-if answers land in
-/// NEW fields and never redefine these four. Another seat's economy is on no
+/// out, not a projection. Later answers land in NEW fields and never redefine
+/// these four: S1's next BMI and committed spend (fields 5 and 6), and the
+/// projection, the projected income and the what-if answers after them. Another seat's economy is on no
 /// wire at all (spec section 10: enemy treasury is deliberately absent).
 ///
 /// Whole $ and whole kW, int32 like gp.v1's Treasury and KwHeadroom predicates,
@@ -666,6 +808,16 @@ pub struct GetEconomyForecastResponse {
     /// (decisions-log item 113 (4)).
     #[prost(int32, tag="4")]
     pub headroom_kw_now: i32,
+    /// The BMI the seat would be credited at the next settlement, at the band
+    /// it holds now, whole $ (decisions-log item 128, S1's plan's decision 12;
+    /// the register's S1-46).
+    #[prost(int32, tag="5")]
+    pub bmi_next_dollars: i32,
+    /// The `$` the seat's standing orders have committed and not yet paid,
+    /// whole $: the Quartermaster's own arithmetic over the seat's orders, never
+    /// a dry run and never a model of anybody else (spec section 11).
+    #[prost(int32, tag="6")]
+    pub committed_dollars: i32,
 }
 impl ::prost::Name for GetEconomyForecastResponse {
 const NAME: &'static str = "GetEconomyForecastResponse";
@@ -702,7 +854,10 @@ const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.EstimateRouteResponse".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.EstimateRouteResponse".into() }}
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Leg {
-    /// Where this leg ends.
+    /// Where this leg ends. For a `covering` waypoint, the site the beacon
+    /// would stand on, as a voxel: Easy asks once per candidate rather than
+    /// keeping a second site algorithm of its own (docs/design/targeting.md,
+    /// "Surfaces").
     #[prost(message, optional, tag="1")]
     pub to: ::core::option::Option<super::super::v1::Location>,
     /// Game milliseconds.
@@ -1207,6 +1362,83 @@ impl ::prost::Name for GetDraftResponse {
 const NAME: &'static str = "GetDraftResponse";
 const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.GetDraftResponse".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.GetDraftResponse".into() }}
+/// What each feature reference in a playbook reads now
+/// (docs/design/targeting.md, "Surfaces").
+///
+/// Answered over the frozen world, ranked exactly as the sim ranks when a step
+/// starts, from where things stand now: under `covering` the origin is the
+/// commander's column as the snapshot holds it, so a step that comes after
+/// another step moves the commander may read differently when it runs, and the
+/// chip says "read when the step starts". The verifier never ranks; this is
+/// where a preview of a description comes from.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ResolveRefsRequest {
+    /// The playbook, JSONC, as verify_plan and render_plan take it.
+    #[prost(string, tag="1")]
+    pub playbook_jsonc: ::prost::alloc::string::String,
+}
+impl ::prost::Name for ResolveRefsRequest {
+const NAME: &'static str = "ResolveRefsRequest";
+const PACKAGE: &'static str = "gp.api.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.ResolveRefsRequest".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.ResolveRefsRequest".into() }}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ResolveRefsResponse {
+    /// One per FeatureRef in the file (every `on` and every `covering`), in
+    /// file order.
+    #[prost(message, repeated, tag="1")]
+    pub refs: ::prost::alloc::vec::Vec<ResolvedRef>,
+}
+impl ::prost::Name for ResolveRefsResponse {
+const NAME: &'static str = "ResolveRefsResponse";
+const PACKAGE: &'static str = "gp.api.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.ResolveRefsResponse".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.ResolveRefsResponse".into() }}
+/// What one FeatureRef reads now.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ResolvedRef {
+    /// RFC 6901 JSON Pointer to the FeatureRef in the file:
+    /// `/declarative/route/0/place_beacon/at/covering`.
+    #[prost(string, tag="1")]
+    pub pointer: ::prost::alloc::string::String,
+    /// The feature it reads, `vent_<x>_<y>` or `seam_<x>_<y>`. Empty when it
+    /// reads nothing, and `failure` says why.
+    #[prost(string, tag="2")]
+    pub feature_id: ::prost::alloc::string::String,
+    /// Travel from the origin to that feature, game milliseconds, by the
+    /// estimator "nearest" ranks with. 0 when it reads nothing.
+    #[prost(int32, tag="3")]
+    pub travel_ms: i32,
+    /// Every candidate that matched the reference's filters and is reachable,
+    /// in rank order: the chip's "now" and "next". The pick is the first
+    /// candidate with a legal site, so it need not be the first one listed.
+    #[prost(message, repeated, tag="4")]
+    pub candidates: ::prost::alloc::vec::Vec<FeatureCandidate>,
+    /// How many features matched the filters before reachability was asked:
+    /// the recap's "3 matched, none reachable".
+    #[prost(uint32, tag="5")]
+    pub matched: u32,
+    /// Why it reads nothing, as the step failure the sim would answer, spelt as
+    /// the segment feed spells it (`no_target`, `illegal_site`). Empty when it
+    /// reads a feature.
+    #[prost(string, tag="6")]
+    pub failure: ::prost::alloc::string::String,
+}
+impl ::prost::Name for ResolvedRef {
+const NAME: &'static str = "ResolvedRef";
+const PACKAGE: &'static str = "gp.api.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.ResolvedRef".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.ResolvedRef".into() }}
+/// One feature a reference could read, and how far it is.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct FeatureCandidate {
+    #[prost(string, tag="1")]
+    pub feature_id: ::prost::alloc::string::String,
+    /// Game milliseconds from the reference's origin.
+    #[prost(int32, tag="2")]
+    pub travel_ms: i32,
+}
+impl ::prost::Name for FeatureCandidate {
+const NAME: &'static str = "FeatureCandidate";
+const PACKAGE: &'static str = "gp.api.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.FeatureCandidate".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.FeatureCandidate".into() }}
 /// What the operator would file on a timeout, so a seat can see the cost of one
 /// (spec section 14). Always qualifies.
 ///
@@ -1838,6 +2070,14 @@ pub enum Method {
     /// not one of the caller's own, indistinguishable from an id that does not
     /// exist. Phase-gated like every planning method.
     GetDraft = 57,
+    /// "resolve_refs" — what each feature reference in a playbook reads now,
+    /// ranked over the frozen world as the sim ranks at step start
+    /// (docs/design/targeting.md, "Surfaces"). The editor's chip and the
+    /// advisor ask it, because neither can reach the sim. Internal in S1: it is
+    /// on the advisor's allow-list, and v1.1 publishes it. Phase-gated like
+    /// every planning method, and it steps nothing (AGENTS.md section 3 rule 2:
+    /// ranking is an estimate, not a dry run).
+    ResolveRefs = 58,
     // --- Commit --------------------------------------------------------------
 
     /// "submit_plan" — always runs FULL. The latest verified submission replaces
@@ -1915,6 +2155,7 @@ impl Method {
             Self::ListDrafts => "METHOD_LIST_DRAFTS",
             Self::GetSafePlan => "METHOD_GET_SAFE_PLAN",
             Self::GetDraft => "METHOD_GET_DRAFT",
+            Self::ResolveRefs => "METHOD_RESOLVE_REFS",
             Self::SubmitPlan => "METHOD_SUBMIT_PLAN",
             Self::SetReady => "METHOD_SET_READY",
             Self::GetSegmentFeed => "METHOD_GET_SEGMENT_FEED",
@@ -1953,6 +2194,7 @@ impl Method {
             "METHOD_LIST_DRAFTS" => Some(Self::ListDrafts),
             "METHOD_GET_SAFE_PLAN" => Some(Self::GetSafePlan),
             "METHOD_GET_DRAFT" => Some(Self::GetDraft),
+            "METHOD_RESOLVE_REFS" => Some(Self::ResolveRefs),
             "METHOD_SUBMIT_PLAN" => Some(Self::SubmitPlan),
             "METHOD_SET_READY" => Some(Self::SetReady),
             "METHOD_GET_SEGMENT_FEED" => Some(Self::GetSegmentFeed),

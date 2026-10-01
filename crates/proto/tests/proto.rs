@@ -15,7 +15,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use pharmakos_proto::descriptor::{Message, ScalarKind, schema};
+use pharmakos_proto::gp::api::v1 as gp_api;
 use pharmakos_proto::gp::api::v1::{Method, Scope};
+use pharmakos_proto::gp::v1 as gp_v1;
 use pharmakos_proto::gp::v1::by_richness::Richness;
 use pharmakos_proto::gp::v1::{ByRichness, Playbook, RulesTable, playbook, rules_table};
 use pharmakos_proto::json::{self, Json};
@@ -1243,4 +1245,315 @@ fn names_token(line: &str, token: &str) -> bool {
         from = end;
     }
     false
+}
+
+// ---------------------------------------------------------------------------
+// S1's targeting proto and the S1 wire (S1's plan, task con2)
+// ---------------------------------------------------------------------------
+
+/// One value of a new message: typed, encoded to canonical text, decoded back,
+/// and canonicalised from a compact hand-written spelling, which must all agree.
+///
+/// `every_message_round_trips_through_canonical_json` already walks every
+/// message generically; this names each new one, in the spelling its comment
+/// documents, so a mapping change that the generic walk would accept (a field
+/// that encodes but under another name) still fails here.
+fn round_trips<M>(message: &M, spelled: &str, keys: &[&str])
+where
+    M: prost::Message + prost::Name + Default + PartialEq + core::fmt::Debug,
+{
+    let text = json::encode(message).unwrap_or_else(|error| panic!("{}: {error}", M::NAME));
+    let back: M = json::decode(&text).unwrap_or_else(|error| panic!("{}: {error}", M::NAME));
+    assert_eq!(&back, message, "{} did not survive canonical JSON", M::NAME);
+    let canonical = json::canonicalise(&M::full_name(), spelled)
+        .unwrap_or_else(|error| panic!("{}: {error}\n{spelled}", M::NAME));
+    assert_eq!(
+        canonical,
+        text,
+        "{}: the documented spelling is not the canonical one",
+        M::NAME
+    );
+    for key in keys {
+        assert!(
+            text.contains(&format!("\"{key}\"")),
+            "{}: `{key}` is not spelt as documented:\n{text}",
+            M::NAME
+        );
+    }
+}
+
+fn vent_pick(coverage: gp_v1::feature_ref::Coverage) -> gp_v1::FeatureRef {
+    gp_v1::FeatureRef {
+        r#ref: Some(gp_v1::feature_ref::Ref::Vent(gp_v1::VentPick {
+            rank: gp_v1::feature_ref::Rank::Nearest.into(),
+            coverage: coverage.into(),
+        })),
+    }
+}
+
+#[test]
+fn targetings_sites_round_trip_in_their_documented_spellings() {
+    use gp_v1::feature_ref::{Coverage, Rank, Ref};
+    use gp_v1::location::Place;
+    use gp_v1::{Covered, FeatureRef, Location, SeamPick};
+
+    // place_beacon { at: { covering: { vent: { rank: NEAREST, coverage: UNCOVERED } } } }
+    round_trips(
+        &Location {
+            place: Some(Place::Covering(vent_pick(Coverage::Uncovered))),
+        },
+        r#"{"covering":{"vent":{"rank":"NEAREST","coverage":"UNCOVERED"}}}"#,
+        &["covering", "vent", "rank", "coverage"],
+    );
+    // A seam, and ANY.
+    round_trips(
+        &Location {
+            place: Some(Place::Covering(FeatureRef {
+                r#ref: Some(Ref::Seam(SeamPick {
+                    rank: Rank::Nearest.into(),
+                    coverage: Coverage::Any.into(),
+                })),
+            })),
+        },
+        r#"{"covering":{"seam":{"rank":"NEAREST","coverage":"ANY"}}}"#,
+        &["covering", "seam"],
+    );
+    // BuildTarget { anchor: { on: { vent: { rank: NEAREST } } } }: `coverage`
+    // is omitted under `on`, and an omitted enum stays omitted.
+    round_trips(
+        &Location {
+            place: Some(Place::On(vent_pick(Coverage::Unspecified))),
+        },
+        r#"{"on":{"vent":{"rank":"NEAREST"}}}"#,
+        &["on", "vent", "rank"],
+    );
+    // A name: what RemoveBuildTargetRow accepts under `on`.
+    round_trips(
+        &Location {
+            place: Some(Place::On(FeatureRef {
+                r#ref: Some(Ref::FeatureId("vent_120_88".to_owned())),
+            })),
+        },
+        r#"{"on":{"feature_id":"vent_120_88"}}"#,
+        &["on", "feature_id"],
+    );
+    // `covered {}` is an empty message in a oneof, so it has presence and must
+    // survive as `{}` rather than vanish as a default.
+    round_trips(
+        &Location {
+            place: Some(Place::On(FeatureRef {
+                r#ref: Some(Ref::Covered(Covered {})),
+            })),
+        },
+        r#"{"on":{"covered":{}}}"#,
+        &["on", "covered"],
+    );
+}
+
+#[test]
+fn targetings_unspecified_values_keep_their_full_prefix() {
+    // playbook.proto's header: zero values are sentinels, and targeting's stay
+    // errors (they are not among decision 11's four named defaults). The bare
+    // spellings a player types are NEAREST, ANY and UNCOVERED.
+    let rank = schema()
+        .enumeration("gp.v1.FeatureRef.Rank")
+        .expect("FeatureRef.Rank is in the schema");
+    let names: Vec<(&str, i32)> = rank
+        .values
+        .iter()
+        .map(|value| (value.name.as_str(), value.number))
+        .collect();
+    assert_eq!(names, [("RANK_UNSPECIFIED", 0), ("NEAREST", 1)]);
+    let coverage = schema()
+        .enumeration("gp.v1.FeatureRef.Coverage")
+        .expect("FeatureRef.Coverage is in the schema");
+    let names: Vec<(&str, i32)> = coverage
+        .values
+        .iter()
+        .map(|value| (value.name.as_str(), value.number))
+        .collect();
+    assert_eq!(
+        names,
+        [("COVERAGE_UNSPECIFIED", 0), ("ANY", 1), ("UNCOVERED", 2)]
+    );
+
+    // And the two sites sit on the numbers targeting.md fixed, with 12 to 49
+    // still held (`toward` is 12, deferred to S3).
+    let location = schema()
+        .message("gp.v1.Location")
+        .expect("Location is in the schema");
+    let numbers: Vec<(&str, i32)> = location
+        .fields
+        .iter()
+        .map(|field| (field.name.as_str(), field.number))
+        .collect();
+    assert_eq!(
+        numbers,
+        [
+            ("voxel", 1),
+            ("beacon_anchor", 2),
+            ("safest", 3),
+            ("on", 10),
+            ("covering", 11)
+        ]
+    );
+    assert_eq!(location.reserved_ranges, [(12, 49)]);
+}
+
+#[test]
+fn the_s1_status_and_resolve_refs_round_trip_in_their_documented_spellings() {
+    use gp_api::{
+        FeatureCandidate, ResolveRefsRequest, ResolveRefsResponse, ResolvedRef, Status, status,
+    };
+
+    // S1-11: a recap has no countdown, and says so in its own field.
+    round_trips(
+        &Status {
+            phase: status::Phase::Recap.into(),
+            phase_remaining_ms: 0,
+            segment_length_ms: 300_000,
+            round: 2,
+            untimed: true,
+        },
+        r#"{"phase":"RECAP","segment_length_ms":300000,"round":2,"untimed":true}"#,
+        &["untimed"],
+    );
+
+    // resolve_refs.
+    round_trips(
+        &ResolveRefsRequest {
+            playbook_jsonc: "{}".to_owned(),
+        },
+        r#"{"playbook_jsonc":"{}"}"#,
+        &["playbook_jsonc"],
+    );
+    round_trips(
+        &ResolveRefsResponse {
+            refs: vec![
+                ResolvedRef {
+                    pointer: "/declarative/route/0/place_beacon/at/covering".to_owned(),
+                    feature_id: "vent_120_88".to_owned(),
+                    travel_ms: 14_000,
+                    candidates: vec![
+                        FeatureCandidate {
+                            feature_id: "vent_120_88".to_owned(),
+                            travel_ms: 14_000,
+                        },
+                        FeatureCandidate {
+                            feature_id: "vent_150_20".to_owned(),
+                            travel_ms: 16_000,
+                        },
+                    ],
+                    matched: 2,
+                    failure: String::new(),
+                },
+                ResolvedRef {
+                    pointer: "/declarative/route/3/place_beacon/at/covering".to_owned(),
+                    feature_id: String::new(),
+                    travel_ms: 0,
+                    candidates: Vec::new(),
+                    matched: 3,
+                    failure: "no_target".to_owned(),
+                },
+            ],
+        },
+        concat!(
+            r#"{"refs":[{"pointer":"/declarative/route/0/place_beacon/at/covering","#,
+            r#""feature_id":"vent_120_88","travel_ms":14000,"candidates":["#,
+            r#"{"feature_id":"vent_120_88","travel_ms":14000},"#,
+            r#"{"feature_id":"vent_150_20","travel_ms":16000}],"matched":2},"#,
+            r#"{"pointer":"/declarative/route/3/place_beacon/at/covering","matched":3,"#,
+            r#""failure":"no_target"}]}"#
+        ),
+        &["refs", "pointer", "candidates", "matched", "failure"],
+    );
+}
+
+#[test]
+fn the_s1_economy_wire_round_trips_in_its_documented_spellings() {
+    use gp_api::map_feature::Kind;
+    use gp_api::{
+        GetEconomyForecastResponse, GetMapSummaryResponse, GetRecapResponse, MapFeature,
+        Settlement, Shortfall,
+    };
+
+    // S1-48: get_map_summary's features.
+    round_trips(
+        &GetMapSummaryResponse {
+            match_seed: "0x00000000ca5caded".to_owned(),
+            features: vec![MapFeature {
+                feature_id: "vent_120_88".to_owned(),
+                kind: Kind::Vent.into(),
+                grade: Richness::Rich.into(),
+                x: 120,
+                y: 88,
+                live: true,
+                covered: false,
+                travel_ms: 14_000,
+                reachable: true,
+            }],
+            ..GetMapSummaryResponse::default()
+        },
+        concat!(
+            r#"{"match_seed":"0x00000000ca5caded","features":[{"feature_id":"vent_120_88","#,
+            r#""kind":"VENT","grade":"RICH","x":120,"y":88,"live":true,"travel_ms":14000,"#,
+            r#""reachable":true}]}"#
+        ),
+        &["features", "grade", "live", "reachable"],
+    );
+
+    // X-16: the recap's settlement and shortfall.
+    round_trips(
+        &GetRecapResponse {
+            prose: "Round 1 settled.".to_owned(),
+            settlement: Some(Settlement {
+                bmi_dollars: 105,
+                band_rank: 2,
+                band_percent: 5,
+                award_dollars: 0,
+            }),
+            shortfall: Some(Shortfall {
+                kw: 6,
+                beacon_ids: vec!["b_03".to_owned()],
+            }),
+        },
+        concat!(
+            r#"{"prose":"Round 1 settled.","settlement":{"bmi_dollars":105,"band_rank":2,"#,
+            r#""band_percent":5},"shortfall":{"kw":6,"beacon_ids":["b_03"]}}"#
+        ),
+        &["settlement", "bmi_dollars", "band_percent", "shortfall"],
+    );
+
+    // S1-46: the forecast's next BMI and committed spend, beside the four
+    // present-state values they never redefine.
+    round_trips(
+        &GetEconomyForecastResponse {
+            treasury_now: 140,
+            supply_kw_now: 30,
+            draw_kw_now: 22,
+            headroom_kw_now: 8,
+            bmi_next_dollars: 95,
+            committed_dollars: 60,
+        },
+        concat!(
+            r#"{"treasury_now":140,"supply_kw_now":30,"draw_kw_now":22,"headroom_kw_now":8,"#,
+            r#""bmi_next_dollars":95,"committed_dollars":60}"#
+        ),
+        &["bmi_next_dollars", "committed_dollars"],
+    );
+}
+
+#[test]
+fn resolve_refs_is_a_planning_method() {
+    // A preview over the frozen world, taken with the playbook it previews:
+    // the `plan` scope verify_plan and render_plan sit under, which an
+    // advisor's token holds and a spectator's does not.
+    assert_eq!(
+        scope::required_scope(Method::ResolveRefs),
+        Some(Scope::Plan)
+    );
+    assert_eq!(
+        scope::wire_name("gp.api.v1.Method", Method::ResolveRefs.as_str_name()),
+        "resolve_refs"
+    );
 }
