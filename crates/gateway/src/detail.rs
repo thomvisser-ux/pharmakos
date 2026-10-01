@@ -42,10 +42,10 @@
 //!    what a budget cuts -- and the client is told exactly where the cut fell,
 //!    because the cursor comes back pointing at the next unread event.
 //!
-//! PLACEHOLDER: the per-method salience order for the T13 method slice
-//! (`get_briefing`, `get_recap`, `list_beacons`, `query_area` and the rest).
-//! OWNER settles it with T13, whose methods are the things being ordered; T9
-//! fixes the two rules above and the parameter's shape.
+//! PLACEHOLDER: the per-method salience order for the read methods
+//! (`get_briefing`, `get_recap`, `list_beacons`, `query_area` and the rest;
+//! register X-02). The owner settles it at hardening, with H-07 and H-08; T9
+//! fixed the two rules above and the parameter's shape.
 
 use crate::error::Error;
 use crate::rpc::Request;

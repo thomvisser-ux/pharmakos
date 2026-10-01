@@ -193,4 +193,25 @@ fn estimate_route_sends_a_nearest_leg_to_the_nearest_beacon() {
         "and `safest` still ranks by condition, which puts the core (full hit points, and \
          the lower id on a tie) first"
     );
+
+    // A `nearest` leg after the first ranks from the waypoint before it, where
+    // the commander will stand when that step resolves, and not from where the
+    // commander stands now. From the core the nearest beacon is the core
+    // itself, though from the commander it is the new beacon.
+    let [cx, cy, cz] = core_at;
+    let answer = call_in_lull(
+        &mut surface,
+        &token,
+        &mut left,
+        "estimate_route",
+        &format!(
+            r#"{{"waypoints": [{{"voxel": {{"x": {cx}, "y": {cy}, "z": {cz}}}}}, {{"beacon_anchor": {{"nearest": {{}}}}}}]}}"#
+        ),
+    );
+    let legs = array_of(&result(&answer, "estimate_route"), "legs");
+    assert_eq!(
+        to(legs.first().expect("a first leg")),
+        core_at,
+        "a later leg's `nearest` ranks from the leg before it, as the run would"
+    );
 }

@@ -387,7 +387,9 @@ fn a_seat_that_was_never_placed_does_not_survive_a_no_survivor_end() {
     let report = runner.step().expect("a Push tick");
     assert!(report.match_ended, "{report:?}");
 
-    let outcome = runner.outcome().expect("every placed seat fell on one tick");
+    let outcome = runner
+        .outcome()
+        .expect("every placed seat fell on one tick");
     assert_eq!(outcome.reason, MatchEndReason::NoSurvivor);
     assert_eq!(
         outcome.winner,

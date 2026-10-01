@@ -480,7 +480,8 @@ impl Surface {
         }
         let mut places: Vec<Voxel> = Vec::with_capacity(waypoints.len());
         for (index, waypoint) in waypoints.iter().enumerate() {
-            places.push(self.place_of(seat, waypoint, index)?);
+            let from = places.last().copied();
+            places.push(self.place_of(seat, waypoint, index, from)?);
         }
 
         let route = pharmakos_plan_core::travel::Route::estimate(&places, self.host()?.routes());
@@ -538,7 +539,19 @@ impl Surface {
     /// with the interpreter's own reason, and one that resolves to nothing is
     /// `NOT_FOUND`, as it would be a step failure at run time. Nothing is
     /// stepped: a selector ranks what the snapshot already holds.
-    fn place_of(&self, seat: SeatId, waypoint: &Json, index: usize) -> Result<Voxel, Error> {
+    ///
+    /// `from` is the waypoint before this one, already resolved: a `nearest`
+    /// leg ranks from there, because at run time the selector resolves when
+    /// its step starts, with the commander at the end of the leg before. The
+    /// first waypoint has none and ranks from where the snapshot's commander
+    /// stands.
+    fn place_of(
+        &self,
+        seat: SeatId,
+        waypoint: &Json,
+        index: usize,
+        from: Option<Voxel>,
+    ) -> Result<Voxel, Error> {
         use pharmakos_sim::interpreter::{BeaconSpec, beacon_spec_of, resolve_beacon_in};
         let at = format!("waypoint {index}");
         if let Some(voxel) = waypoint.get("voxel") {
@@ -562,7 +575,11 @@ impl Surface {
             )));
         };
         let snapshot = host.runner().frozen().snapshot();
-        let Some(beacon) = resolve_beacon_in(snapshot, host.rules(), seat, spec) else {
+        let origin = match from {
+            Some(voxel) => Some(fx_point(voxel, &at)?),
+            None => None,
+        };
+        let Some(beacon) = resolve_beacon_in(snapshot, host.rules(), seat, spec, origin) else {
             return Err(Error::not_found(match spec {
                 BeaconSpec::Id(id) => format!(
                     "{at} names `{}`, which this seat has not",
@@ -730,6 +747,17 @@ fn priority_wire_name(value: u8) -> String {
         "gp.v1.InterfaceRow.QuartermasterPriority",
         named.as_str_name(),
     )
+}
+
+/// A whole voxel as the fixed-point point at its corner, which is the voxel
+/// a selector's ranking floors it back to.
+fn fx_point(voxel: Voxel, at: &str) -> Result<[pharmakos_sim::math::fixed::Fx; 3], Error> {
+    let axis = |value: i32| {
+        i16::try_from(value)
+            .map(pharmakos_sim::math::fixed::Fx::from_voxels)
+            .map_err(|_| Error::invalid(format!("{at}: the waypoint before it is off the map")))
+    };
+    Ok([axis(voxel.x)?, axis(voxel.y)?, axis(voxel.z)?])
 }
 
 /// One `gp.v1.Voxel` out of a request.

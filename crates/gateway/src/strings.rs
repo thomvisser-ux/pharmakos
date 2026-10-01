@@ -145,15 +145,25 @@ pub fn event_text(event: &Event) -> String {
 /// `fallback_engaged`'s line: the posture by name, never its wire code (the
 /// demo's F5).
 fn fallback_engaged(value: i64) -> String {
-    match u8::try_from(value)
-        .ok()
-        .and_then(pharmakos_sim::interpreter::Posture::name_of_id)
-    {
+    match u8::try_from(value).ok().and_then(posture_name) {
         Some(posture) => format!("The route ended and the fallback took over: {posture}."),
         None => format!(
             "The route ended and the fallback took over, in a posture this build does not \
              name (code {value})."
         ),
+    }
+}
+
+/// The posture a `fallback_engaged` value names, as the editor spells it, or
+/// `None` for an id this build does not define. The ids are the sim's
+/// `pharmakos_sim::interpreter::Posture::id`: 1 Hold, 2 Shadow, 3 Patrol. The
+/// words live here, in the gateway's one string table, and not in the sim.
+const fn posture_name(id: u8) -> Option<&'static str> {
+    match id {
+        1 => Some("Hold"),
+        2 => Some("Shadow"),
+        3 => Some("Patrol"),
+        _ => None,
     }
 }
 
