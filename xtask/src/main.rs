@@ -20,8 +20,8 @@
 //! | `profiles`       | overflow checks are on in every profile, release included                     |
 //! | `test`           | `cargo test --workspace` without the `research` feature                       |
 //! | `test-research`  | `cargo test --package pharmakos-sim --features pharmakos-sim/research`        |
-//! | `research-guard` | plan-core / verifier / operator / gateway / gamectl must not reach `research` |
-//! | `wall-guard`     | those crates and `sim` never reach a walled crate; the client never the core  |
+//! | `research-guard` | plan-core / verifier / operator / gateway / gamectl / bench never reach `research` |
+//! | `wall-guard`     | `sim` and the deterministic crates never reach a walled crate; the client never the core |
 //! | `deny`           | `cargo deny check` (licences, advisories, banned crates)                      |
 //! | `buf`            | `buf lint` and `buf breaking --against .git#branch=main`                      |
 //! | `golden`         | `tests/golden/**/expected.*` against the fresh `target/golden/**/actual.*`    |
@@ -86,9 +86,13 @@
 //!
 //! `cargo xtask perf-alarms` is not a step: `ci` and `list` do not know it. It
 //! runs the mesher's p99 alarm exactly as `crates/mesher/tests/perf_alarm.rs`
-//! says (`--release`, `--ignored`, `--nocapture`), which prints its own
-//! `::notice::` lines, and publishes the allocations per tick as a notice
-//! naming the test that asserts it. It has no threshold, compares nothing
+//! says, and P1's wall-clock half from the walled bench,
+//! `crates/bench/tests/perf_alarm.rs` (QUICK's p50 and p99 over the committed
+//! verifier cases and `budget_128`, and ns per size unit per decision tick in
+//! a hosted match at the size budget; S1's plan, task `p1`), each with
+//! `--release`, `--ignored`, `--nocapture` and `--test-threads=1`, and each
+//! printing its own `::notice::` lines; then it publishes the allocations per
+//! tick as a notice naming the test that asserts it. It has no threshold, compares nothing
 //! across operating systems, and never exits non-zero: a failed measurement is
 //! a `::warning::` (skeleton-plan section 7 decision 23, logged as
 //! decisions-log item 116 (6)(b)).
@@ -283,16 +287,21 @@ const WALL_ALLOW: &[&str] = &[
 
 /// Packages behind the wall. Matched with and without the `pharmakos-` prefix.
 ///
-/// Two of the four names are the spec's own wording — "a walled
-/// presentation/solve module" (spec section 15, Maths). The other two are
-/// crates: `client-gdext`, the thin gdext bridge, and `mesher`, the greedy
+/// Two of the five names are the spec's own wording — "a walled
+/// presentation/solve module" (spec section 15, Maths). The other three are
+/// crates: `client-gdext`, the thin gdext bridge; `mesher`, the greedy
 /// mesher, which decisions log section 2.7 item 56 made its own walled crate
 /// rather than a module inside the bridge — it takes integer chunk data in and
 /// produces vertex buffers out, links without gdext so the headless CPU proxy
 /// and the CI geometry check can reuse it, and is depended on by `client-gdext`
-/// alone today; `wall-guard` below enforces the half that matters to
-/// determinism — that no crate in [`WALL_GUARDED_PACKAGES`] ever reaches it.
-/// A crate that is not on this list gets no float allowance. Adding a name
+/// alone today; and `bench`, P1's timing harness (S1's plan, decision 2,
+/// approved by decisions-log item 128 (3) (b)), the walled harness AGENTS.md
+/// section 4.5 sanctions: it drives the verifier and a hosted match from
+/// outside to put a wall-clock figure on them, is never shipped, and reports
+/// through `cargo xtask perf-alarms`. `wall-guard` below enforces the half
+/// that matters to determinism — that no crate in [`WALL_GUARDED_PACKAGES`]
+/// ever reaches a walled crate. A crate that is not on this list gets no float
+/// or clock allowance. Adding a name
 /// widens the float, cast, hash-map and clock allowance for a whole crate, so
 /// it is a contract change and needs owner approval — keep this list,
 /// `clippy.toml`'s header comment and AGENTS.md section 4.9 in step.
@@ -300,27 +309,44 @@ const WALL_ALLOW: &[&str] = &[
 /// PLACEHOLDER: `presentation` and `solve`, named and not created — owner, if either is proposed.
 /// The spec names them; `pharmakos-client-gdext` and `pharmakos-mesher` exist, and a proposal
 /// of either of the other two is an AGENTS.md section 5 change (the register's M-02).
-const WALLED_PACKAGES: &[&str] = &["presentation", "solve", "client-gdext", "mesher"];
+const WALLED_PACKAGES: &[&str] = &["presentation", "solve", "client-gdext", "mesher", "bench"];
 
 /// Crates that may never reach the `research` feature, which gates `fork`.
 ///
 /// `sim` is deliberately absent: it is the crate that *defines* the feature, so
 /// it is the one package for which reaching `research` is correct. Walled
-/// crates are kept away by the separate [`WALL_GUARDED_PACKAGES`] list below,
-/// which does include `sim`. `gamectl` joined at decisions-log item 109: it
-/// takes the sim with default features off, because the gateway's API is
-/// written in the sim's types.
-const GUARDED_PACKAGES: &[&str] = &["plan-core", "verifier", "operator", "gateway", "gamectl"];
+/// crates are kept away from the deterministic ones by the separate
+/// [`WALL_GUARDED_PACKAGES`] list below, which does include `sim`. `gamectl`
+/// joined at decisions-log item 109: it takes the sim with default features
+/// off, because the gateway's API is written in the sim's types. `bench`
+/// joined with S1's `p1` (decision 2, decisions-log item 128 (3) (b)): it is
+/// walled, and it times the verifier and a hosted match, so a `fork` within
+/// its reach would let it time a dry run nobody ships. It is the one walled
+/// crate here, and so the one name on this list that is not also on
+/// [`WALL_GUARDED_PACKAGES`].
+const GUARDED_PACKAGES: &[&str] = &[
+    "plan-core",
+    "verifier",
+    "operator",
+    "gateway",
+    "gamectl",
+    "bench",
+];
 
 /// Crates that may never depend on a walled crate, transitively included.
 ///
-/// [`GUARDED_PACKAGES`] plus `sim`. The guarded crates must not reach the
-/// float, cast, hash-map and clock allowance, and neither must the sim — it is
-/// the crate that owns hashed state, so it is the one the wall exists to
-/// protect (AGENTS.md section 4.9). The two lists are separate rather than one
-/// because `sim` defines the `research` feature and so cannot join the research
-/// guard. Keep this list, AGENTS.md section 4.9 and `clippy.toml`'s header in
-/// step; widening it is a contract change like any other.
+/// The deterministic crates: `sim`, and every crate of [`GUARDED_PACKAGES`]
+/// that is not itself walled — all of them but `bench`, the walled timing
+/// harness, which is on the research guard and behind the wall at once. The
+/// deterministic crates must not reach the float, cast, hash-map and clock
+/// allowance, and neither must the sim — it is the crate that owns hashed
+/// state, so it is the one the wall exists to protect (AGENTS.md section 4.9).
+/// The two lists are separate rather than one because `sim` defines the
+/// `research` feature and so cannot join the research guard, and because a
+/// walled crate guarded from `research` is still a walled crate.
+/// `the_guard_lists_partition_the_crates` pins the relation. Keep this list,
+/// AGENTS.md section 4.9 and `clippy.toml`'s header in step; widening it is a
+/// contract change like any other.
 const WALL_GUARDED_PACKAGES: &[&str] = &[
     "sim",
     "plan-core",
@@ -344,10 +370,14 @@ const WALL_GUARDED_PACKAGES: &[&str] = &[
 /// scoring, whose library depends on `pharmakos-proto` alone and so would pass
 /// every other check if the client reached it; the mesher takes integer chunk data
 /// in and "nothing from the sim". Each entry is a walled crate by name, and a
-/// future walled crate joins by adding its own line. It is deliberately NOT
-/// "no walled crate reaches the sim": that would forbid the walled harness
-/// AGENTS.md section 4.5 sanctions, a walled crate driving the sim from
-/// outside to put a millisecond figure on it. Names are bare, as in
+/// walled crate on the client side of the wall — one that must decide nothing
+/// — joins by adding its own line. Not every walled crate has one: `bench`,
+/// P1's timing harness, exists to reach the sim, the verifier and the gateway,
+/// so a line for it would name nothing it may not reach (S1's plan, section 5
+/// and decision 2). It is deliberately NOT "no walled crate reaches the sim":
+/// that would forbid the walled harness AGENTS.md section 4.5 sanctions, a
+/// walled crate driving the sim from outside to put a millisecond figure on
+/// it, which `bench` is. Names are bare, as in
 /// [`WALLED_PACKAGES`], and matched with and without the `pharmakos-` prefix.
 /// `crates/client-gdext/tests/no_sim.rs` checks the client's line from
 /// `Cargo.lock` as well, and its
@@ -561,12 +591,12 @@ const STEPS: &[Step] = &[
     },
     Step {
         name: "research-guard",
-        about: "plan-core/verifier/operator/gateway/gamectl must not reach `research`",
+        about: "plan-core/verifier/operator/gateway/gamectl/bench must not reach `research`",
         run: step_research_guard,
     },
     Step {
         name: "wall-guard",
-        about: "those crates and sim never reach a walled crate; the client never the core",
+        about: "sim and the deterministic crates never reach a walled crate; the client never the core",
         run: step_wall_guard,
     },
     Step {
@@ -1102,8 +1132,33 @@ fn scan_profiles(text: &str) -> (bool, Vec<String>) {
     (release_checked, offenders)
 }
 
+/// `cargo test --workspace` without `research`, after emptying
+/// `<target>/golden/` on an unscoped run.
+///
+/// The `golden` step compares every committed `expected.*` with the fresh
+/// `actual.*` beside it, and the tests run here write those. A warm target
+/// directory also holds every `actual.*` an earlier run wrote, including one
+/// whose producer has since stopped writing it — a scenario taken off
+/// `crates/gamectl/tests/scenarios.rs`'s list, a case renamed — so without the
+/// emptying the `golden` step could compare a stale output, pass locally and
+/// fail on a clean CI runner (decisions-log item 129 (4), carried by S1's
+/// `p1`). Every `actual.*` the step then reads was therefore written by this
+/// run. A `--package` run empties nothing, because it runs only some of the
+/// producers; it says so instead.
 fn step_test(ctx: &Ctx) -> Result<Outcome, String> {
     let mut args: Vec<String> = vec!["test".to_owned()];
+    let fresh_note = if ctx.packages.is_empty() {
+        let golden = golden_target_dir(&ctx.workspace)?.join("golden");
+        empty_fresh_outputs(&golden)?;
+        format!(
+            "{} emptied first, so every fresh golden output is this run's",
+            golden.display()
+        )
+    } else {
+        "a --package run leaves the golden outputs of the packages it does not test as an \
+         earlier run wrote them"
+            .to_owned()
+    };
     if ctx.packages.is_empty() {
         args.push("--workspace".to_owned());
     } else {
@@ -1116,7 +1171,22 @@ fn step_test(ctx: &Ctx) -> Result<Outcome, String> {
         args.push("--locked".to_owned());
     }
     run(ctx, &ctx.cargo, &args)?;
-    Ok(Outcome::Done("tests pass without `research`".to_owned()))
+    Ok(Outcome::Done(format!(
+        "tests pass without `research`; {fresh_note}"
+    )))
+}
+
+/// Remove `<target>/golden/` and everything under it, if it is there. Its
+/// absence is the state this wants, so a missing folder is not an error.
+fn empty_fresh_outputs(golden: &Path) -> Result<(), String> {
+    match fs::remove_dir_all(golden) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!(
+            "could not empty {} before the tests write fresh golden outputs: {error}",
+            golden.display()
+        )),
+    }
 }
 
 fn step_test_research(ctx: &Ctx) -> Result<Outcome, String> {
@@ -1212,8 +1282,9 @@ fn package_spec_may_name(spec: &str, name: &str) -> bool {
 }
 
 /// `fork` lives behind the `research` feature, and release builds never enable
-/// it. This proves the plan core, verifier, operator and gateway cannot reach
-/// it: once with their default features (the shipped configuration), once with
+/// it. This proves the crates of [`GUARDED_PACKAGES`] — plan-core, the
+/// verifier, the operator, the gateway, `gamectl` and the walled bench —
+/// cannot reach it: once with their default features (the shipped configuration), once with
 /// every feature of their own turned on (so no feature of theirs can forward to
 /// it later). `--all-features` here is a `cargo tree` query, not a build — the
 /// AGENTS.md ban on `--all-features` is about compiling, where it would enable
@@ -1224,8 +1295,8 @@ fn step_research_guard(ctx: &Ctx) -> Result<Outcome, String> {
     let present = workspace.present(GUARDED_PACKAGES);
     if present.is_empty() {
         return Err(
-            "none of plan-core, verifier, operator, gateway, gamectl exist, so there is nothing \
-             to guard; the workspace lost its crates or the metadata is wrong"
+            "none of plan-core, verifier, operator, gateway, gamectl, bench exist, so there is \
+             nothing to guard; the workspace lost its crates or the metadata is wrong"
                 .to_owned(),
         );
     }
@@ -1260,8 +1331,9 @@ fn step_research_guard(ctx: &Ctx) -> Result<Outcome, String> {
                 };
                 let mut report = format!(
                     "`{package}` reaches the `{RESEARCH_FEATURE}` feature {how}.\n      \
-                     The plan core, verifier, operator and gateway may never depend on `fork`: \
-                     \"no dry runs\" is a hard guarantee in shipped builds (spec section 15).\n      \
+                     The crates of GUARDED_PACKAGES may never depend on `fork`: \"no dry \
+                     runs\" is a hard guarantee in shipped builds (spec section 15), and the \
+                     walled bench must not time one.\n      \
                      Offending feature edges:\n"
                 );
                 for line in offenders.iter().take(20) {
@@ -1285,7 +1357,7 @@ fn step_research_guard(ctx: &Ctx) -> Result<Outcome, String> {
 /// 1. Floats, `as` casts and hash maps are legal inside the walled crates, so
 ///    nothing deterministic may depend on them — otherwise the allowance leaks
 ///    into hashed state. "Nothing deterministic" is [`WALL_GUARDED_PACKAGES`]:
-///    the guarded crates and the sim itself.
+///    the research guard's crates less the walled bench, and the sim itself.
 /// 2. The thin client never reaches the core: each walled crate named in
 ///    [`CLIENT_WALL`] never reaches the crates its line forbids (decisions-log
 ///    item 102 (3)).
@@ -2038,6 +2110,11 @@ fn judge_shot(ctx: &Ctx, shot: &Shot, image: Result<png::Image, String>) -> Resu
 ///    classes instantiate as placeholders and the first call on them fails. G1
 ///    lost four runs to this.
 ///
+/// Both Godot runs, the import and the check, use the step's own user folders,
+/// `<target>/client-check/data/`, emptied at the start of every run
+/// ([`client_env`]): never the machine's, whose `user://` is the owner's real
+/// game folder (decisions-log item 129 (4)).
+///
 /// With `--check`, the headless client check runs afterwards and its exit code
 /// is the step's: that is where T12's "assert the caught-panic count is 0"
 /// lives, and where paths A and B are compared inside the engine rather than
@@ -2082,17 +2159,24 @@ fn step_stage_client(ctx: &Ctx) -> Result<Outcome, String> {
         );
     }
 
+    // Godot's user folders for both runs below, emptied first: never the
+    // machine's own (decisions-log item 129 (4)).
+    let data = client_data_dir(&workspace.target_dir);
+    let environment = client_env(&data);
+    reset_client_data(&workspace.target_dir, &data, &environment)?;
+
     // The pre-step every fresh checkout needs; see this function's doc comment.
-    let import_note = import_project(ctx, &godot, &project)?;
+    let import_note = import_project_in(ctx, &godot, &project, &environment)?;
 
     if !ctx.client_check {
         return Ok(Outcome::Done(format!(
-            "{library} staged ({staged_bytes} bytes, carries `{ENTRY_SYMBOL}`); {import_note}; \
-             `--check` also runs the headless client check"
+            "{library} staged ({staged_bytes} bytes, carries `{ENTRY_SYMBOL}`); {import_note}, \
+             with Godot's user folders under {}; `--check` also runs the headless client check",
+            data.display()
         )));
     }
 
-    run(
+    run_with_env(
         ctx,
         &godot,
         &[
@@ -2101,6 +2185,7 @@ fn step_stage_client(ctx: &Ctx) -> Result<Outcome, String> {
             GODOT_PROJECT_DIR.to_owned(),
             CLIENT_CHECK_SCENE.to_owned(),
         ],
+        &environment,
     )
     .map_err(|error| {
         format!(
@@ -2113,8 +2198,102 @@ fn step_stage_client(ctx: &Ctx) -> Result<Outcome, String> {
 
     Ok(Outcome::Done(format!(
         "{library} staged ({staged_bytes} bytes, carries `{ENTRY_SYMBOL}`); {import_note}; the \
-         headless client check passed with no caught panics"
+         headless client check passed with no caught panics, with Godot's user folders under {}",
+        data.display()
     )))
+}
+
+/// The client check's own user folders: `<target>/client-check/data/`.
+fn client_data_dir(target_dir: &Path) -> PathBuf {
+    target_dir.join("client-check").join("data")
+}
+
+/// The environment the client check's Godot runs under: every folder Godot
+/// reads its user folders from — `user://` (the project's log, which Godot
+/// rotates, `last_match.txt`, the checks' own `.jsonc` outputs), its editor
+/// settings and its shader caches — moved under `data`.
+///
+/// Before S1's `p1`, the import and the check ran with the machine's own
+/// folders, so every local `cargo xtask ci` wrote into the owner's real game
+/// folder: in S1's wave 1 a check run rotated away the demo's log there and
+/// left four check outputs beside it (decisions-log item 129 (4)).
+/// `cargo xtask package` already gave its smoke run folders of its own the
+/// same way (`package::smoke_env`, decisions-log item 117 (7)); this is the
+/// same list, by platform.
+fn client_env(data: &Path) -> Vec<(String, String)> {
+    let at = |name: &str| data.join(name).to_string_lossy().into_owned();
+    if cfg!(target_os = "windows") {
+        vec![
+            ("APPDATA".to_owned(), at("appdata")),
+            ("LOCALAPPDATA".to_owned(), at("localappdata")),
+        ]
+    } else {
+        vec![
+            ("HOME".to_owned(), at("home")),
+            ("XDG_CACHE_HOME".to_owned(), at("cache")),
+            ("XDG_CONFIG_HOME".to_owned(), at("config")),
+            ("XDG_DATA_HOME".to_owned(), at("data")),
+        ]
+    }
+}
+
+/// Empty `data` and create each folder of `environment` under it, so every
+/// run starts from nothing and leaves only its own outputs. Refuses a `data`
+/// that is not strictly inside `target_dir`, because it is about to be
+/// deleted.
+fn reset_client_data(
+    target_dir: &Path,
+    data: &Path,
+    environment: &[(String, String)],
+) -> Result<(), String> {
+    if !data.starts_with(target_dir) || data == target_dir {
+        return Err(format!(
+            "the client check's user folders {} are not inside the target directory {}; \
+             refusing to empty them",
+            data.display(),
+            target_dir.display()
+        ));
+    }
+    match fs::remove_dir_all(data) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(format!("emptying {}: {error}", data.display())),
+    }
+    for (_, folder) in environment {
+        fs::create_dir_all(folder).map_err(|error| format!("creating {folder}: {error}"))?;
+    }
+    Ok(())
+}
+
+/// [`run`], with `environment` set for the child on top of what
+/// [`child_command`] sets, and printed in front of the command.
+fn run_with_env(
+    ctx: &Ctx,
+    program: &str,
+    args: &[String],
+    environment: &[(String, String)],
+) -> Result<(), String> {
+    let prefix: Vec<String> = environment
+        .iter()
+        .map(|(key, value)| format!("{key}=\"{value}\" "))
+        .collect();
+    println!("   $ {}{}", prefix.concat(), render_command(program, args));
+    let mut command = child_command(ctx.require_tools, program, args, &ctx.root);
+    for (key, value) in environment {
+        command.env(key, value);
+    }
+    let status = command
+        .status()
+        .map_err(|error| format!("failed to launch `{program}`: {error}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "`{}` failed ({})",
+            render_command(program, args),
+            describe_exit(status)
+        ))
+    }
 }
 
 /// Steps 1 to 3 of [`step_stage_client`]: build the cdylib, check the
@@ -2231,13 +2410,25 @@ fn stage_library(
 /// one that exits cleanly, and the run is only accepted when the file is
 /// present either way. If it is not, the failure is reported with the reason.
 fn import_project(ctx: &Ctx, godot: &str, project: &Path) -> Result<String, String> {
+    import_project_in(ctx, godot, project, &[])
+}
+
+/// [`import_project`], with `environment` set for Godot: `stage-client` passes
+/// its own user folders ([`client_env`]); the screenshot step and the package
+/// pass none.
+fn import_project_in(
+    ctx: &Ctx,
+    godot: &str,
+    project: &Path,
+    environment: &[(String, String)],
+) -> Result<String, String> {
     let import_args: Vec<String> = vec![
         "--headless".to_owned(),
         "--path".to_owned(),
         project.to_string_lossy().replace('\\', "/"),
         "--import".to_owned(),
     ];
-    let first = run(ctx, godot, &import_args);
+    let first = run_with_env(ctx, godot, &import_args, environment);
     let mut note = "project imported".to_owned();
     if let Err(error) = first {
         println!(
@@ -2245,7 +2436,7 @@ fn import_project(ctx: &Ctx, godot: &str, project: &Path) -> Result<String, Stri
              teardown fault with a GDExtension loaded — retrying, and the extension list is \
              checked either way"
         );
-        run(ctx, godot, &import_args)?;
+        run_with_env(ctx, godot, &import_args, environment)?;
         "project imported (the cold import crashed at teardown and the retry exited cleanly)"
             .clone_into(&mut note);
     }
@@ -2348,9 +2539,40 @@ fn skip_or_fail(ctx: &Ctx, message: &str) -> Result<Outcome, String> {
 // The perf alarms (not a step)
 // ---------------------------------------------------------------------------
 
-/// The package and test target of the mesher's p99 alarm.
-const MESHER_PACKAGE: &str = "pharmakos-mesher";
-const MESHER_PERF_TEST: &str = "perf_alarm";
+/// One perf alarm: an `#[ignore]`d test target run with `--release`,
+/// `--ignored` and `--nocapture`, which prints its own `::notice::` lines.
+struct Alarm {
+    /// The package that owns the target.
+    package: &'static str,
+    /// The test target.
+    test: &'static str,
+    /// The annotation title its warning goes under when it cannot measure.
+    title: &'static str,
+}
+
+/// The alarms `cargo xtask perf-alarms` runs, in order, one after the other,
+/// so no two measurements share the machine.
+///
+/// * **mesher p99**: `crates/mesher/tests/perf_alarm.rs`, run exactly as its
+///   header says.
+/// * **P1's wall-clock half** (S1's plan, task `p1`): `crates/bench/tests/
+///   perf_alarm.rs` — QUICK's p50 and p99 over the committed verifier cases
+///   and `budget_128`, and a decision tick's cost in ns per size unit in a
+///   hosted match at the size budget. The bench is walled, which is what lets
+///   it read a clock while driving the verifier and the sim from outside
+///   (AGENTS.md section 4.5).
+const ALARMS: &[Alarm] = &[
+    Alarm {
+        package: "pharmakos-mesher",
+        test: "perf_alarm",
+        title: "mesher p99",
+    },
+    Alarm {
+        package: "pharmakos-bench",
+        test: "perf_alarm",
+        title: "P1 timings",
+    },
+];
 
 /// `cargo xtask perf-alarms`: skeleton-plan section 7 decision 23, logged as
 /// decisions-log item 116 (6)(b). Per runner, never compared, no threshold,
@@ -2359,19 +2581,21 @@ const MESHER_PERF_TEST: &str = "perf_alarm";
 /// so a failed measurement is a `::warning::` and the command still answers
 /// success.
 ///
-/// * **mesher p99**: `crates/mesher/tests/perf_alarm.rs`, run exactly as its
-///   header says (`--release` is not optional; `--ignored`; `--nocapture`, so
-///   its own `::notice::` lines reach the annotations).
+/// * every [`ALARMS`] entry, run as [`alarm_args`] builds it: `--release` is
+///   not optional (a debug figure is a different number, not a slow version of
+///   the real one), `--ignored`, `--nocapture` so the target's own
+///   `::notice::` lines reach the annotations, and `--test-threads=1` so the
+///   tests inside one target never share the machine either;
 /// * **allocations per tick**: a notice naming the test that asserts it. The
 ///   count is zero by construction — `crates/sim/tests/allocations.rs` fails
 ///   otherwise, in every leg's `test` step — so it is published, not
 ///   measured again and never compared.
 ///
-/// The third alarm the plan named, the tick-minus-pathing mean, is not built:
-/// a millisecond figure for the sim comes only from a walled crate driving it
-/// from outside (AGENTS.md section 4.5), none exists, and it moves to S2's
-/// G3′-real gate. The budgets come with S1's P1 and S2's G3′-real gates.
-/// xtask itself reads no clock; the mesher's test does, behind the wall.
+/// The tick-minus-pathing mean the skeleton plan named stays S2's G3′-real:
+/// the bench now drives the sim from outside, as AGENTS.md section 4.5
+/// requires of a millisecond figure for it, but S1 asks it for P1's figures
+/// only, and the budget comes with the gate that sets it. xtask itself reads
+/// no clock; the measuring tests do, behind the wall.
 fn perf_alarms() {
     let cargo = env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
     let root = match workspace_root() {
@@ -2395,41 +2619,49 @@ fn perf_alarms() {
     };
     // Frozen install in CI, as every other cargo call xtask makes there: a
     // lockfile mismatch is then the usual warning below, and the job stays green.
-    let locked: &[&str] = if env::var_os("CI").is_some() {
-        &["--locked"]
-    } else {
-        &[]
-    };
-    let args: Vec<String> = ["test", "--release"]
-        .iter()
-        .chain(locked)
-        .chain(&[
-            "--package",
-            MESHER_PACKAGE,
-            "--test",
-            MESHER_PERF_TEST,
-            "--",
-            "--ignored",
-            "--nocapture",
-        ])
-        .map(|arg| (*arg).to_owned())
-        .collect();
-    println!("   $ {}", render_command(&cargo, &args));
-    let status = child_command(require_tools, &cargo, &args, &root).status();
-    match status {
-        Ok(status) if status.success() => {}
-        Ok(status) => println!(
-            "::warning title=mesher p99::not measured on {os}: `{}` failed ({}); an alarm, not a \
-             gate, so this job stays green",
-            render_command(&cargo, &args),
-            describe_exit(status)
-        ),
-        Err(error) => println!(
-            "::warning title=mesher p99::not measured on {os}: could not launch `{cargo}`: \
-             {error}"
-        ),
+    let locked = env::var_os("CI").is_some();
+    for alarm in ALARMS {
+        let args = alarm_args(alarm, locked);
+        println!("   $ {}", render_command(&cargo, &args));
+        let status = child_command(require_tools, &cargo, &args, &root).status();
+        match status {
+            Ok(status) if status.success() => {}
+            Ok(status) => println!(
+                "::warning title={}::not measured on {os}: `{}` failed ({}); an alarm, not a \
+                 gate, so this job stays green",
+                alarm.title,
+                render_command(&cargo, &args),
+                describe_exit(status)
+            ),
+            Err(error) => println!(
+                "::warning title={}::not measured on {os}: could not launch `{cargo}`: {error}",
+                alarm.title
+            ),
+        }
     }
     println!("{}", allocations_notice(os));
+}
+
+/// The cargo arguments one alarm runs with. Pure, so the flags every alarm
+/// needs are pinned by a unit test.
+fn alarm_args(alarm: &Alarm, locked: bool) -> Vec<String> {
+    let mut args: Vec<String> = vec!["test".to_owned(), "--release".to_owned()];
+    if locked {
+        args.push("--locked".to_owned());
+    }
+    for arg in [
+        "--package",
+        alarm.package,
+        "--test",
+        alarm.test,
+        "--",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1",
+    ] {
+        args.push(arg.to_owned());
+    }
+    args
 }
 
 /// The allocations-per-tick notice, word for word. Pure, so its text is pinned.
@@ -3864,6 +4096,134 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
                 );
             }
         }
+    }
+
+    #[test]
+    fn the_guard_lists_partition_the_crates() {
+        // The wall's deterministic side is the research guard's crates that
+        // are not walled, plus the sim, which defines `research` and so cannot
+        // be on the research guard.
+        let mut expected: Vec<&str> = GUARDED_PACKAGES
+            .iter()
+            .copied()
+            .filter(|name| !WALLED_PACKAGES.contains(name))
+            .chain(SIM_PACKAGES.iter().copied())
+            .collect();
+        expected.sort_unstable();
+        let mut deterministic: Vec<&str> = WALL_GUARDED_PACKAGES.to_vec();
+        deterministic.sort_unstable();
+        assert_eq!(deterministic, expected);
+        // The bench (S1's plan, decision 2): walled, on the research guard, on
+        // the wall's deterministic side never, and with no client line.
+        assert!(WALLED_PACKAGES.contains(&"bench"));
+        assert!(GUARDED_PACKAGES.contains(&"bench"));
+        assert!(!WALL_GUARDED_PACKAGES.contains(&"bench"));
+        assert!(
+            CLIENT_WALL
+                .iter()
+                .all(|(client, forbidden)| { *client != "bench" && !forbidden.contains(&"bench") })
+        );
+    }
+
+    #[test]
+    fn a_deterministic_crate_that_reached_the_bench_is_refused() {
+        let walled: Vec<String> = WALLED_PACKAGES
+            .iter()
+            .map(|name| format!("pharmakos-{name}"))
+            .collect();
+        let clean = "pharmakos-gamectl v0.0.0 (/r)\npharmakos-gateway v0.0.0 (/r)\n";
+        assert_eq!(first_reached("pharmakos-gamectl", clean, &walled), None);
+        let broken = format!("{clean}pharmakos-bench v0.0.0 (/r)\n");
+        assert_eq!(
+            first_reached("pharmakos-gamectl", &broken, &walled),
+            Some("pharmakos-bench")
+        );
+        // The bench reaching the sim, the verifier and the gateway is the point
+        // of it, and no relation of wall-guard's names that.
+        assert!(
+            CLIENT_WALL
+                .iter()
+                .all(|(client, _)| !client.contains("bench"))
+        );
+    }
+
+    #[test]
+    fn every_alarm_runs_in_release_ignored_and_one_test_at_a_time() {
+        let packages: Vec<&str> = ALARMS.iter().map(|alarm| alarm.package).collect();
+        assert_eq!(packages, vec!["pharmakos-mesher", "pharmakos-bench"]);
+        for alarm in ALARMS {
+            for locked in [false, true] {
+                let args = alarm_args(alarm, locked);
+                let (cargo, test) =
+                    args.split_at(args.iter().position(|arg| arg == "--").expect("a `--`"));
+                assert_eq!(cargo.first().map(String::as_str), Some("test"));
+                assert!(cargo.iter().any(|arg| arg == "--release"), "{args:?}");
+                assert_eq!(cargo.iter().any(|arg| arg == "--locked"), locked);
+                assert!(
+                    cargo
+                        .windows(2)
+                        .any(|pair| pair == ["--package", alarm.package])
+                );
+                assert!(cargo.windows(2).any(|pair| pair == ["--test", alarm.test]));
+                assert_eq!(
+                    test,
+                    ["--", "--ignored", "--nocapture", "--test-threads=1"],
+                    "{args:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_client_check_keeps_its_user_folders_under_the_target_directory() {
+        let target = env::temp_dir().join("pharmakos-xtask-client-data");
+        let data = client_data_dir(&target);
+        let environment = client_env(&data);
+        let keys: Vec<&str> = environment.iter().map(|(key, _)| key.as_str()).collect();
+        if cfg!(target_os = "windows") {
+            assert_eq!(keys, ["APPDATA", "LOCALAPPDATA"]);
+        } else {
+            assert_eq!(
+                keys,
+                ["HOME", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME"]
+            );
+        }
+        for (key, value) in &environment {
+            let path = Path::new(value);
+            assert!(path.starts_with(&data) && path != data, "{key}={value}");
+        }
+
+        // A run's leftovers are gone and every folder exists afterwards.
+        let stale = data.join("appdata").join("Godot").join("old.jsonc");
+        fs::create_dir_all(stale.parent().expect("a parent")).expect("temp dir");
+        fs::write(&stale, "{}\n").expect("write");
+        reset_client_data(&target, &data, &environment).expect("reset");
+        assert!(!stale.exists());
+        for (_, folder) in &environment {
+            assert!(Path::new(folder).is_dir(), "{folder}");
+        }
+        // Never a folder outside the target directory, nor the directory itself.
+        let elsewhere = env::temp_dir().join("pharmakos-xtask-not-the-target");
+        assert!(reset_client_data(&target, &elsewhere, &environment).is_err());
+        assert!(reset_client_data(&target, &target, &environment).is_err());
+        fs::remove_dir_all(&target).expect("clean up");
+    }
+
+    #[test]
+    fn emptying_the_fresh_outputs_removes_a_stale_actual() {
+        let golden = env::temp_dir()
+            .join("pharmakos-xtask-fresh-outputs")
+            .join("golden");
+        let stale = golden
+            .join("scenarios")
+            .join("gone")
+            .join("actual.hashes.txt");
+        fs::create_dir_all(stale.parent().expect("a parent")).expect("temp dir");
+        fs::write(&stale, "0\tdeadbeefdeadbeef\n").expect("write");
+        empty_fresh_outputs(&golden).expect("emptied");
+        assert!(!golden.exists());
+        // Already empty is the state it wants, not an error.
+        empty_fresh_outputs(&golden).expect("nothing to empty");
     }
 
     #[test]
