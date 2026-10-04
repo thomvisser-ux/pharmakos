@@ -501,13 +501,14 @@ sections that add one name it in their Owns lines.
   target `D:/build/tgtw`.
 - **Builds:** `resolve_refs` over the frozen world, on `ADVISOR_METHODS`, internal, through the
   snapshot-level resolver `fixs` exports; `estimate_route` accepting `covering` and returning the
-  site (discharges S1-20); `get_map_summary.features` (id, kind, grade, coverage by the seat,
-  travel; S1-48); `verifier_scope` carrying the features (id, kind, grade, live bit) and the
-  commander's position; `core_beacon_of` becomes `b_00` (S1-13); the Lull's "this round: …" message
-  on re-seal and the recap's "why a step found nothing" text; carried by item 130, the stale
-  `reserved 5 to 15` comment in `surface/knowledge.rs` (~313–315) and the dispatch catch-all's "no
-  request/response pair" in `surface.rs`, untrue of `resolve_refs` until this lane serves it.
-  `features` keeps `live` (item 130 (3) (a)).
+  site (discharges S1-20); `get_map_summary.features` (id, kind, grade, live, coverage by the seat,
+  travel, reachable; S1-48; `live` kept by item 130 (3) (a)); `verifier_scope` carrying the features
+  (id, kind, grade, live bit) and the commander's position; `core_beacon_of` becomes `b_00` (S1-13);
+  the Lull's "this round: …" message on re-seal and the recap's "why a step found nothing" text;
+  carried by item 130, the stale `get_map_summary` doc in `surface/knowledge.rs` (~331–336: its
+  `reserved 5 to 15` and its "what *is* fogged … vents, seams") and `surface.rs`'s "Four methods …
+  no request/response pair", in the module doc and at the dispatch catch-all (~68–71, ~2429–2436),
+  untrue of `resolve_refs` until this lane serves it.
 - **Does not:** rank in the verifier; publish anything (v1.1).
 - **Implements:** item 127 (12) (targeting.md's gateway lines); register S1-13, S1-20, S1-48.
 - **Needs:** `tgt` merged. **Acceptance:** `resolve_refs_answers_as_the_sim_would_at_step_start`
@@ -750,7 +751,9 @@ sections that add one name it in their Owns lines.
   real segment and the harness segment list, playbook and fifty walkers deleted; `cargo xtask
   placeholders` made a `ci` step once the lanes have reworded their markers (decision 9); decision
   16's `expand_east` column in `balance.rs`'s `render`, which `check` left as a PLACEHOLDER (item
-  130). The check's seed set and flag readings are the owner's at S1's demo, with this report.
+  130), read from the committed `expand-east-segment` scenario's run, or, if it needs a second
+  harness door, through a named place granted here first. The check's seed set and flag readings are
+  the owner's at S1's demo, with this report.
 - **Implements:** item 127 (3); item 103 (3)'s walk speed; register S1-26 and the economy rows'
   owner PLACEHOLDERs.
 - **Needs:** `build`, `oper` merged; decision 16. **Acceptance:** the check's report attached to the
@@ -1125,9 +1128,11 @@ G3′-real's power budget and table-room totals. **S3:** `toward` (decision 3), 
 filters as `FeatureRef` ranks, `in_reach` and enemy-known filters, fog-based liveness and
 reachability, withholding the seed from seat tokens (item 127 (13)), aligning `BeaconRef.nearest`
 (octile today) with targeting's "nearest" (before the public v0.1), FULL ≤ 50 ms and the size
-budget, the forecast's what-ifs, `decision_tick_ms`, P6's baseline at the playtest (item 126 (2)
-(e)). **S4:** the award fund, blueprints beyond the Generator, `queue_structure`, the symmetric
-generator. **S5:** Easy's stepping stones, Normal and Hard, P2's baseline (item 126 (2) (e)).
+budget, the forecast's what-ifs, its projected income and projection, `get_map_summary`'s terrain
+summary and the fog filter on its feature list (item 130 (3)), `decision_tick_ms`, P6's baseline at
+the playtest (item 126 (2) (e)). **S4:** the award fund, blueprints beyond the Generator,
+`queue_structure`, the symmetric generator. **S5:** Easy's stepping stones, Normal and Hard, P2's
+baseline (item 126 (2) (e)).
 **S6:** the lobby's settings screen and Probation's untimed Lulls (item 127 (10)). **v1.1:**
 publishing `resolve_refs`, `extract_template` and rebind. **Hardening:** H-05's resumed Lull timer;
 U-03, the casual fog policy's missing phase term (no casual match is reachable before S6's settings
