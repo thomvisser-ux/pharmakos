@@ -1231,7 +1231,7 @@ fn one_anchor_is_one_building() {
         .unwrap_or_default();
     let anchor = offset(at, 2);
     assert!(
-        !world.anchor_is_claimed(anchor),
+        !world.anchor_is_claimed(seat, anchor),
         "bare ground is nobody's yet"
     );
     assert!(world.add_target(
@@ -1242,20 +1242,25 @@ fn one_anchor_is_one_building() {
         0
     ));
     assert!(
-        world.anchor_is_claimed(anchor),
+        world.anchor_is_claimed(seat, anchor),
         "a Build target claims the ground it names"
     );
     assert!(
-        !world.anchor_is_claimed(offset(at, 3)),
+        !world.anchor_is_claimed(seat, offset(at, 3)),
         "and only the ground it names"
     );
     let neighbour = world
         .place_beacon_directly(seat, offset(at, 6), MandateKind::Build, PRIORITY_NORMAL)
         .unwrap_or_else(|| panic!("room for a beacon"));
     assert!(
-        world.anchor_is_claimed(anchor),
+        world.anchor_is_claimed(seat, anchor),
         "the claim is the seat's, so another beacon of the same seat sees it \
          too: {neighbour:?}"
+    );
+    assert!(
+        !world.anchor_is_claimed(SeatId::new(1), anchor),
+        "and only the seat's: a queued Build target is a per-seat claim, so \
+         another seat's unbuilt target stays hidden (targeting.md, Sites)"
     );
 }
 

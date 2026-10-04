@@ -11,10 +11,14 @@
 //! # When a selector resolves
 //!
 //! [`resolve_beacon`] is the whole selector catalogue. Every arm of it (the
-//! three ranked selectors **and a fixed `b_NN` id**) answers over the seat's
+//! three ranked selectors **and a fixed `b_NN` name**) answers over the seat's
 //! **living own** beacons and nothing else, because spec section 10's
 //! conditions "read only the seat's knowledge store" and there is no knowledge
-//! store to read another seat's beacon through. A ranked selector ties to the
+//! store to read another seat's beacon through. A `b_NN` is the seat's own
+//! beacon with that per-seat ordinal, and an `e_NN` -- another seat's beacon,
+//! by the gateway's per-viewer handle -- resolves to nothing at all, so a
+//! guess at another seat's beacon fails `no_target` exactly as an absent one
+//! does (`docs/design/targeting.md`, "Failure"). A ranked selector ties to the
 //! lowest beacon id (item 62's convention, and AGENTS.md section 4.6's "ties to
 //! the lowest id"), and resolving to nothing is a step failure rather than a
 //! silent skip.
@@ -150,7 +154,7 @@ impl View<'_> {
     /// A beacon's hit points as a whole percentage of its maximum: the
     /// selector catalogue's own [`Board::row_hp_pct`], so a condition and a
     /// selector read one rule for a beacon's maximum (the core is the seat's
-    /// lowest-id beacon).
+    /// `b_00`).
     pub(crate) fn beacon_hp_pct(&self, row: usize) -> i64 {
         self.row_hp_pct(row)
     }
@@ -204,7 +208,12 @@ fn percent(value: i64, total: i64) -> i64 {
 }
 
 /// Evaluate one condition tree.
+///
+/// Every node evaluated is one of P1's evaluation units (S1's plan, section
+/// 5): counted on the world's unhashed decision counter as it is reached, so a
+/// short-circuited `all` or `any` counts only what it read.
 pub(crate) fn evaluate(view: &View<'_>, condition: &Cond) -> bool {
+    view.world.charge_decision(1);
     match condition {
         Cond::All(items) => items.iter().all(|item| evaluate(view, item)),
         Cond::Any(items) => items.iter().any(|item| evaluate(view, item)),
@@ -266,6 +275,8 @@ pub(crate) trait Board {
     fn row_id(&self, row: usize) -> Option<u32>;
     /// One row's seat.
     fn row_seat(&self, row: usize) -> Option<u8>;
+    /// One row's per-seat ordinal, what its owner's `b_NN` names.
+    fn row_ordinal(&self, row: usize) -> Option<u32>;
     /// One row's writ byte.
     fn row_mandate(&self, row: usize) -> u8;
     /// One row's anchor.
@@ -277,39 +288,31 @@ pub(crate) trait Board {
     /// Where the seat's commander stands, when it has one.
     fn commander_at(&self) -> Option<[Fx; 3]>;
 
+    /// Count `units` of evaluation work: the live world counts a decision's
+    /// selector candidates (P1's counted half); a frozen snapshot, which no
+    /// decision reads, counts nothing.
+    fn charge(&self, units: u32) {
+        let _ = units;
+    }
+
     /// Whether a row's beacon is alive.
     fn row_alive(&self, row: usize) -> bool {
         self.row_hp(row) > 0
     }
 
-    /// The row a beacon id names. Rows are dense and in id order, so the id is
-    /// the row; checked rather than assumed.
-    fn row_of(&self, beacon: BeaconId) -> Option<usize> {
-        let index = usize::try_from(beacon.raw()).ok()?;
-        if self.row_id(index) == Some(beacon.raw()) {
-            return Some(index);
-        }
-        (0..self.beacon_rows()).find(|row| self.row_id(*row) == Some(beacon.raw()))
+    /// The row of `seat`'s beacon with this ordinal, alive or dead.
+    fn row_of_ordinal(&self, seat: SeatId, ordinal: u32) -> Option<usize> {
+        (0..self.beacon_rows()).find(|row| {
+            self.row_seat(*row) == Some(seat.raw()) && self.row_ordinal(*row) == Some(ordinal)
+        })
     }
 
     /// A row's maximum hit points: `beacon.core_hp` for a seat's core, its
-    /// lowest-id beacon (spec section 3), and `structures.beacon.hp` for any
-    /// other.
+    /// `b_00` (spec section 3: the generator places it first), and
+    /// `structures.beacon.hp` for any other.
     fn row_max_hp(&self, row: usize) -> i64 {
-        let seat = self.row_seat(row);
-        let mut core: Option<(u32, usize)> = None;
-        let mut at: usize = 0;
-        while at < self.beacon_rows() {
-            if self.row_seat(at) == seat {
-                let id = self.row_id(at).unwrap_or(u32::MAX);
-                if core.is_none_or(|(found, _)| id < found) {
-                    core = Some((id, at));
-                }
-            }
-            at = at.saturating_add(1);
-        }
         let message = self.rules().message();
-        if core.map(|(_, found)| found) == Some(row) {
+        if self.row_ordinal(row) == Some(0) {
             return message
                 .beacon
                 .as_ref()
@@ -341,6 +344,9 @@ impl Board for View<'_> {
     fn row_seat(&self, row: usize) -> Option<u8> {
         self.world.beacons().seats().get(row).copied()
     }
+    fn row_ordinal(&self, row: usize) -> Option<u32> {
+        self.world.beacons().ordinals().get(row).copied()
+    }
     fn row_mandate(&self, row: usize) -> u8 {
         self.world
             .beacons()
@@ -365,6 +371,9 @@ impl Board for View<'_> {
     fn commander_at(&self) -> Option<[Fx; 3]> {
         View::commander_at(self)
     }
+    fn charge(&self, units: u32) {
+        self.world.charge_decision(units);
+    }
 }
 
 /// One seat's view of a frozen planning snapshot, for a selector.
@@ -388,6 +397,9 @@ impl Board for SnapshotBoard<'_> {
     }
     fn row_seat(&self, row: usize) -> Option<u8> {
         self.snapshot.beacon_seat.get(row).copied()
+    }
+    fn row_ordinal(&self, row: usize) -> Option<u32> {
+        self.snapshot.beacon_ordinal.get(row).copied()
     }
     fn row_mandate(&self, row: usize) -> u8 {
         self.snapshot.beacon_mandate.get(row).copied().unwrap_or(0)
@@ -484,24 +496,21 @@ pub fn resolve_beacon_in(
 /// The selector catalogue, over any [`Board`].
 fn resolve_on<B: Board>(board: &B, spec: BeaconSpec) -> Option<BeaconId> {
     match spec {
-        BeaconSpec::Id(id) => {
-            let row = board.row_of(id)?;
-            // **Own beacons only, fixed ids included.** Spec section 10 says
-            // conditions read only the seat's knowledge store and lists "own
-            // beacon" as the family; the verifier resolves a fixed `beacon_id`
-            // against "a beacon the seat's snapshot holds", so that a saved
-            // playbook carried into another match is told so "rather than
-            // quietly pointed at somebody else's beacon" (`resolve.rs`). A
-            // `b_NN` that names another seat's beacon would otherwise answer
-            // `beacon_hp_pct` and `beacon_powered` from that seat's live state —
-            // a knowledge store nobody built, read through the one selector
-            // that skips ranking.
-            if board.row_seat(row) == Some(board.seat().raw()) && board.row_alive(row) {
-                Some(id)
+        BeaconSpec::Own(ordinal) => {
+            // **Own beacons only, by construction.** A `b_NN` counts the
+            // seat's own beacons (decisions-log item 127 (13)), so it cannot
+            // name another seat's: the row it finds is the seat's, alive or
+            // not, and a dead one resolves to nothing.
+            let row = board.row_of_ordinal(board.seat(), ordinal)?;
+            if board.row_alive(row) {
+                board.row_id(row).map(BeaconId::new)
             } else {
                 None
             }
         }
+        // Another seat's beacon: never a target a seat's own orders resolve
+        // to (see [`BeaconSpec::Foreign`]).
+        BeaconSpec::Foreign(_) => None,
         BeaconSpec::Safest => rank(board, Filter::default(), Rank::Safest),
         BeaconSpec::Weakest(filter) => rank(board, filter, Rank::Weakest),
         BeaconSpec::Nearest(filter) => rank(board, filter, Rank::Nearest),
@@ -532,6 +541,7 @@ fn rank<B: Board>(board: &B, filter: Filter, rank: Rank) -> Option<BeaconId> {
     let mut best: Option<(i64, u32)> = None;
     let mut row: usize = 0;
     while row < count {
+        board.charge(1);
         let id = board.row_id(row).unwrap_or(u32::MAX);
         if board.row_seat(row) != Some(board.seat().raw()) || !board.row_alive(row) {
             row = row.saturating_add(1);

@@ -7,12 +7,12 @@
       {"label": "deploy", "place_beacon": {"at": {"voxel": {"x": 27, "y": 356, "z": 29}}, "tags": ["east"],
         "initial": {"priority": "NORMAL", "mandate": {"roe": "RETURN_FIRE", "mine": {"dig_max_depth": 4, "flee_on_threat": true}}}},
         "timeout_ms": 30000, "on_fail": {"action": "ABORT_ROUTE"}},
-      {"label": "touch_new", "interface": {"beacon": {"beacon_id": "b_03"}, "rows": [
+      {"label": "touch_new", "interface": {"beacon": {"beacon_id": "b_01"}, "rows": [
         {"set_priority": "LOW"}
       ]}, "timeout_ms": 20000, "on_fail": {"action": "SKIP"}}
     ],
     "handlers": []
   },
   "on_death": {"on_respawn": "CONTINUE", "max_deaths_before_fallback": 2},
-  "fallback": {"shadow": {"beacon": {"beacon_id": "b_03"}}}
+  "fallback": {"shadow": {"beacon": {"beacon_id": "b_01"}}}
 }

@@ -256,9 +256,6 @@ fn the_view_uses_the_sims_own_sphere_rule() {
 fn a_fogged_seat_never_receives_an_unseen_entity() {
     let mut surface = hosted(2, SEGMENT_MS, 3);
     let token = seat_token(&mut surface, 0);
-    let (own, _) = core_beacon(&surface, 0);
-    let (other, _) = core_beacon(&surface, 1);
-
     let (page, _) = view(&mut surface, &token, "");
     let ids = entity_ids(&page);
     let owners: Vec<String> = array_of(&page, "entities")
@@ -266,12 +263,11 @@ fn a_fogged_seat_never_receives_an_unseen_entity() {
         .map(|entity| text_of(entity, "owner"))
         .collect();
 
+    // A seat's own core is its `b_00`, and anybody else's beacon would be an
+    // `e_NN` minted for it (decisions-log item 127 (13)).
+    assert!(ids.contains(&String::from("b_00")), "its own core: {ids:?}");
     assert!(
-        ids.contains(&pharmakos_gateway::view::beacon_id(own)),
-        "its own core: {ids:?}"
-    );
-    assert!(
-        !ids.contains(&pharmakos_gateway::view::beacon_id(other)),
+        !ids.iter().any(|id| id.starts_with("e_")),
         "and not the other seat's, which is a map away: {ids:?}"
     );
     assert!(
@@ -1148,4 +1144,90 @@ fn a_viewer_is_a_seat_a_spectator_or_the_lobby() {
     );
     assert_ne!(Viewer::Admin, Viewer::Spectator { nofog: false });
     let _: Option<&Token> = None;
+}
+
+/// Sees every voxel south of a line, and nothing north of it: a stand-in for a
+/// seat whose sight reaches one other seat's core before another's.
+struct SouthOf(i32);
+
+impl Vision for SouthOf {
+    fn sees(&self, _seat: SeatId, at: &Voxel) -> bool {
+        at.y < self.0
+    }
+}
+
+/// The beacon names one `list_beacons` page answers, in its order.
+fn listed<V: Vision>(surface: &mut Surface, token: &Token, vision: &V) -> Vec<String> {
+    let response = surface.call(Some(token), &support::request("list_beacons", "{}"), vision);
+    array_of(&result(&response, "list_beacons"), "beacons")
+        .iter()
+        .map(|row| text_of(row, "beacon_id"))
+        .collect()
+}
+
+/// Decisions-log item 127 (13): a seat names its own beacons `b_NN` per seat
+/// and everybody else's `e_NN`, a handle minted for that viewer the first time
+/// it is shown the beacon -- so the number counts what the viewer already
+/// knows, never another seat's placements, and two viewers number the same
+/// beacon independently (`docs/design/targeting.md`, "Names").
+#[test]
+fn another_seats_beacon_is_e_nn_in_first_sighting_order() {
+    // Fogged, so the vision each call is given decides what is shown.
+    let mut surface = hosted(3, SEGMENT_MS, 3);
+    let zero = seat_token(&mut surface, 0);
+    let one = seat_token(&mut surface, 1);
+    // On the golden seed seat 0's core stands at y = 24, seat 1's at y = 359
+    // and seat 2's at y = 193. Seat 0 is first shown only what lies south of
+    // y = 300: its own core and seat 2's.
+    assert_eq!(
+        listed(&mut surface, &zero, &SouthOf(300)),
+        ["b_00", "e_01"],
+        "seat 2's core is the first other beacon seat 0 is shown"
+    );
+    // Then everything: seat 1's core is minted next, although its row comes
+    // first in the world's table, and the handle seat 0 already holds stands.
+    assert_eq!(
+        listed(&mut surface, &zero, &Everything),
+        ["b_00", "e_01", "e_02"]
+    );
+    let get = |surface: &mut Surface, token: &Token, name: &str| {
+        let response = surface.call(
+            Some(token),
+            &support::request("get_beacon", &format!(r#"{{"beacon_id":"{name}"}}"#)),
+            &Everything,
+        );
+        let summary = result(&response, "get_beacon")
+            .get("summary")
+            .cloned()
+            .expect("a summary");
+        (text_of(&summary, "beacon_id"), text_of(&summary, "owner"))
+    };
+    assert_eq!(get(&mut surface, &zero, "e_01").1, "seat.2");
+    assert_eq!(get(&mut surface, &zero, "e_02").1, "seat.1");
+    assert_eq!(get(&mut surface, &zero, "b_00").1, "seat.0");
+    // A handle never minted for this viewer names nothing, exactly as an
+    // absent beacon does.
+    let response = surface.call(
+        Some(&zero),
+        &support::request("get_beacon", r#"{"beacon_id":"e_03"}"#),
+        &Everything,
+    );
+    assert_eq!(code(&response), "NOT_FOUND");
+    // Seat 1 numbers the world its own way: its first listing mints in table
+    // order, so seat 0's core is its `e_01`, and its own core is its `b_00`.
+    assert_eq!(
+        listed(&mut surface, &one, &Everything),
+        ["b_00", "e_01", "e_02"]
+    );
+    assert_eq!(get(&mut surface, &one, "e_01").1, "seat.0");
+    assert_eq!(get(&mut surface, &one, "b_00").1, "seat.1");
+}
+
+/// Sees everything.
+struct Everything;
+
+impl Vision for Everything {
+    fn sees(&self, _seat: SeatId, _at: &Voxel) -> bool {
+        true
+    }
 }

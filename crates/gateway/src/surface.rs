@@ -2092,12 +2092,16 @@ impl Surface {
         let mut own: Vec<usize> = (0..beacons.ids().len())
             .filter(|index| beacons.seats().get(*index).copied() == Some(seat.raw()))
             .collect();
-        own.sort_by_key(|index| beacons.ids().get(*index).copied().unwrap_or(u32::MAX));
+        // By per-seat ordinal, which is what the seat's `b_NN` names: `b_00`,
+        // its core, first (decisions-log item 127 (13)).
+        own.sort_by_key(|index| beacons.ordinals().get(*index).copied().unwrap_or(u32::MAX));
         let core = crate::surface::knowledge::core_beacon_of(world, seat);
         for index in own {
             let id = beacons.ids().get(index).copied().unwrap_or_default();
             scope.push_beacon(pharmakos_verifier::KnownBeacon {
-                beacon_id: crate::view::beacon_id(pharmakos_sim::tables::BeaconId::new(id)),
+                beacon_id: pharmakos_sim::tables::own_beacon_name(
+                    beacons.ordinals().get(index).copied().unwrap_or(u32::MAX),
+                ),
                 owner: seat,
                 side: pharmakos_verifier::Ownership::Own,
                 mandate: crate::view::mandate_of(crate::view::mandate_from_id(

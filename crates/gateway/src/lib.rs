@@ -155,4 +155,11 @@ pub use token::{Subject, Token, TokenStore};
 ///
 /// Bumped by the task that changes the surface's observable behaviour, not by
 /// every edit.
-pub const GATEWAY_VERSION: u32 = 1;
+///
+/// **2 is S1's targeting** (decisions-log item 127 (13)): a beacon's name on
+/// the wire became per viewer -- a seat's own beacons its per-seat `b_NN`,
+/// anybody else's an `e_NN` minted for that viewer -- where 1 named every
+/// beacon by its row in the world's table. `match.json` carries this number,
+/// so an old private replay says which naming its sealed playbooks were
+/// written in.
+pub const GATEWAY_VERSION: u32 = 2;

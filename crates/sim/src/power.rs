@@ -213,43 +213,31 @@ pub(crate) fn settle(world: &mut World, order: &mut Vec<u32>) {
     }
 }
 
-/// How far apart two surface columns can stand and still be voxels of one heat
-/// vent.
-///
-/// A vent is stamped as a square patch around one column
-/// ([`crate::mapgen::VENT_PATCH_RADIUS`]), so two voxels of one patch differ by
-/// at most its full span on each axis.
-const VENT_PATCH_SPAN: i32 = 2 * crate::mapgen::VENT_PATCH_RADIUS;
-
 /// Whether two standing points are taps on **one** heat vent.
 ///
-/// Same grade and inside one patch's span on both horizontal axes. The grade
-/// is part of the test because two patches of different richness are two
-/// vents however close the generator laid them.
-///
-/// PLACEHOLDER: the span is the honest test only while a vent is the square
-/// patch [`crate::mapgen`] stamps and two patches of the same grade are never
-/// laid within it — which is true of every map the committed table generates,
-/// and is what `STARTING_FEATURE_CLEARANCE` keeps true for contested features.
-/// A vent identity carried on the world (a vent table, hashed) would make it
-/// true by construction and would also let Survey report vents; that is the
-/// map's own work. Owner, at S1, with the vent and seam tuning.
+/// Both stand on vent material, and on footprint columns of the same vent in
+/// the map's feature table ([`crate::features`]): the generator records every
+/// column it stamps a vent into and refuses a map where two features share a
+/// column, so a vent's identity is true by construction rather than inferred
+/// from how far apart two taps stand (register S1-32, discharged by S1's
+/// targeting; `docs/design/targeting.md`, "Names").
 fn one_vent(world: &World, a: [crate::math::fixed::Fx; 3], b: [crate::math::fixed::Fx; 3]) -> bool {
-    let (Some(grade_a), Some(grade_b)) = (vent_under(world, a), vent_under(world, b)) else {
-        return false;
-    };
-    if grade_a != grade_b {
+    if vent_under(world, a).is_none() || vent_under(world, b).is_none() {
         return false;
     }
-    let (Some(ax), Some(ay)) = (a.first(), a.get(1)) else {
-        return false;
-    };
-    let (Some(bx), Some(by)) = (b.first(), b.get(1)) else {
-        return false;
-    };
-    let dx = ax.floor_voxels().saturating_sub(bx.floor_voxels());
-    let dy = ay.floor_voxels().saturating_sub(by.floor_voxels());
-    dx.saturating_abs() <= VENT_PATCH_SPAN && dy.saturating_abs() <= VENT_PATCH_SPAN
+    match (vent_feature_under(world, a), vent_feature_under(world, b)) {
+        (Some(first), Some(second)) => first == second,
+        _ => false,
+    }
+}
+
+/// The vent of the map's feature table whose footprint holds the column a
+/// standing point floors onto, or `None`.
+fn vent_feature_under(world: &World, at: [crate::math::fixed::Fx; 3]) -> Option<usize> {
+    let x = at.first()?.floor_voxels();
+    let y = at.get(1)?.floor_voxels();
+    let index = world.features().at_column(x, y)?;
+    (world.features().get(index)?.kind == crate::features::FeatureKind::Vent).then_some(index)
 }
 
 /// Whether an earlier live Generator of `seat` already taps the vent under
@@ -290,12 +278,15 @@ fn vent_already_tapped(
 /// nothing either, and that is the whole of "one Generator per vent, output
 /// set by the vent's richness, **because the vent's heat is the limit, not the
 /// tap**" (spec section 5). The rule is enforced here, where the heat is
-/// counted, rather than by refusing the second building: a seat is free to
-/// stand two Generators on one vent and free to waste the `$`, and the grid is
-/// not one kilowatt richer for it. The interface row that names a Build target
-/// already refuses an anchor another target has claimed
-/// ([`World::anchor_is_claimed`]), so the sealed-playbook route to stacking
-/// them is shut as well.
+/// counted, rather than only by refusing the second building: a seat that
+/// writes two fixed-voxel targets on two columns of one vent may stand two
+/// Generators there and waste the `$`, and the grid is not one kilowatt richer
+/// for it. Since S1 the other routes are shut where they are written: a Build
+/// target `on` a vent refuses a vent a live Generator of any seat already
+/// stands on (`crate::targeting::on_vent`), the interface row refuses an anchor
+/// another of the seat's targets has claimed ([`World::anchor_is_claimed`]),
+/// and construction is refused where any live structure stands (one structure
+/// per voxel, `docs/design/targeting.md`, "Sites").
 #[must_use]
 pub(crate) fn supply_of(world: &World, seat: SeatId, rules: PowerRules) -> i32 {
     let mut total: i32 = 0;

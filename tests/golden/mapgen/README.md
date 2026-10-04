@@ -37,6 +37,43 @@ LF endings, a trailing newline, no carriage return. The producing test is
 writes `<target>/golden/mapgen/actual.digests.txt`; `cargo xtask ci`'s `golden`
 step compares the pair and `cargo xtask golden --bless` accepts a fresh one.
 
+### `expected.features.txt` — the feature table (S1)
+
+**Added by S1's targeting** (the `tgt` lane; `docs/design/targeting.md`,
+"Names"; decisions-log item 127 (12)), a new golden in this area and so a
+golden-format change. One line per vent and per seam of each seed's three-seat
+map, seeds in the order of `expected.digests.txt`, and within a seed in the
+feature table's own `(anchor y, anchor x)` order — the resolver's tie-break.
+Five TAB-separated fields:
+
+```text
+0x<seed, 16 lowercase hex>  <name>  <grade>  <footprint columns>  <anchor top z>
+```
+
+* **name** — the feature's name as a playbook writes it: `vent_<x>_<y>` or
+  `seam_<x>_<y>`, from the generation anchor column (the patch or disc centre),
+  with no z because craters change z.
+* **grade** — `lean`, `standard` or `rich`.
+* **footprint columns** — how many columns the generator stamped it into: nine
+  for a vent's patch, about forty for a seam's disc.
+* **anchor top z** — the anchor column's top solid voxel when it was stamped,
+  the voxel the feature is made of.
+
+The producing test is `the_per_seed_features_match_their_golden`, which writes
+`<target>/golden/mapgen/actual.features.txt`. The table is a pure function of
+`(seed, rules table, occupied seats)`, regenerated on a restore and never
+hashed per tick, so it moves with the generator and never with play.
+
+**What a diff here means.** A moved **name** is a moved anchor, and a name is
+what a sealed playbook carries: a carried `vent_120_88` that no longer names a
+vent fails its step `no_target`. Expect it only with a generator change, which
+moves `expected.digests.txt` on the same seed; a features diff with the digests
+unchanged means the table's bookkeeping changed (which columns count as a
+feature's footprint), which is the rules a liveness scan and "one feature per
+column" read, and is explained in the pull request that moved it. The
+generator refuses a map whose features share an anchor or a footprint column
+(`MapError::FeatureOverlap`), so a seed that stops generating is that check.
+
 The seed set is eight seeds and **includes `0x00000000ca5caded`**, because the
 committed scenarios name it: `expand-east-segment` and `deploy-and-visit` both
 assert on a match played on that seed, so the seed belongs in the committed

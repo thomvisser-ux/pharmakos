@@ -27,7 +27,7 @@ use std::path::PathBuf;
 
 use pharmakos_sim::encoding::hex;
 use pharmakos_sim::mapgen::{self, GeneratedMap, MapFile, MapReport};
-use pharmakos_sim::tables::{BeaconId, UnitKind};
+use pharmakos_sim::tables::{UnitKind, own_beacon_name};
 use pharmakos_sim::voxels::{Material, Richness, VoxelStore};
 use pharmakos_sim::{MatchSettings, RulesTable, World, WorldConfig};
 
@@ -117,6 +117,7 @@ fn mapgen_is_seed_deterministic() {
         }
         assert_eq!(first.beacons, second.beacons);
         assert_eq!(first.starting_units, second.starting_units);
+        assert_eq!(first.features, second.features);
         assert_eq!(first.report, second.report);
     }
 
@@ -531,22 +532,25 @@ fn the_starting_force_is_the_rules_table_rows() {
 fn a_beacon_names_itself_the_way_a_playbook_does() {
     // The string a playbook's `beacon_id` resolves against. The verifier matches
     // on strings it is handed and the gateway builds that list from this table,
-    // so the spelling is a contract between three crates.
-    assert_eq!(BeaconId::new(0).playbook_id(), "b_00");
-    assert_eq!(BeaconId::new(1).playbook_id(), "b_01");
-    assert_eq!(BeaconId::new(9).playbook_id(), "b_09");
-    assert_eq!(BeaconId::new(42).playbook_id(), "b_42");
+    // so the spelling is a contract between three crates. Since S1 the number
+    // is the beacon's **per-seat ordinal** (decisions-log item 127 (13)).
+    assert_eq!(own_beacon_name(0), "b_00");
+    assert_eq!(own_beacon_name(1), "b_01");
+    assert_eq!(own_beacon_name(9), "b_09");
+    assert_eq!(own_beacon_name(42), "b_42");
     // The padding is a minimum, never a truncation.
-    assert_eq!(BeaconId::new(100).playbook_id(), "b_100");
+    assert_eq!(own_beacon_name(100), "b_100");
 
+    // Every seat's core is its own `b_00`: the generator places it first.
     let map = generate(SEEDS[2]);
     let names: Vec<String> = map
         .beacons
-        .ids()
+        .ordinals()
         .iter()
-        .map(|id| BeaconId::new(*id).playbook_id())
+        .map(|ordinal| own_beacon_name(*ordinal))
         .collect();
-    assert_eq!(names, ["b_00", "b_01", "b_02"]);
+    assert_eq!(names, ["b_00", "b_00", "b_00"]);
+    assert_eq!(map.beacons.seats(), [0, 1, 2]);
 }
 
 #[test]
@@ -846,4 +850,132 @@ fn ore_near(voxels: &VoxelStore, at: [i32; 3], radius: i32) -> u32 {
         dy = dy.saturating_add(1);
     }
     count
+}
+
+/// One `expected.features.txt` line: a feature of one seed's map.
+fn feature_line(seed: u64, feature: &pharmakos_sim::features::Feature) -> String {
+    let grade = match feature.grade {
+        Richness::Lean => "lean",
+        Richness::Standard => "standard",
+        Richness::Rich => "rich",
+    };
+    let top = feature.anchor_column().map_or(-1, |column| column.top);
+    format!(
+        "0x{}\t{}\t{grade}\t{}\t{top}\n",
+        hex(seed),
+        feature.name(),
+        feature.footprint.len()
+    )
+}
+
+#[test]
+fn the_per_seed_features_match_their_golden() {
+    // S1's feature table (`docs/design/targeting.md`, "Names"): every vent and
+    // seam of each seed's three-seat map, by name, in the table's own
+    // `(anchor y, anchor x)` order, with its grade, how many columns its
+    // footprint holds and the z of its anchor column's top. The names are what
+    // a playbook writes, so a moved anchor is a moved name.
+    let mut fresh = String::new();
+    for seed in SEEDS {
+        let map = generate(seed);
+        for feature in map.features.features() {
+            fresh.push_str(&feature_line(seed, feature));
+        }
+    }
+    if let Some(target) = target_dir() {
+        let out = target.join("golden").join("mapgen");
+        std::fs::create_dir_all(&out).expect("creating the golden output directory");
+        std::fs::write(out.join("actual.features.txt"), fresh.as_bytes())
+            .expect("writing actual.features.txt");
+    }
+    let golden_path = repo_root()
+        .join("tests")
+        .join("golden")
+        .join("mapgen")
+        .join("expected.features.txt");
+    let Ok(golden) = std::fs::read_to_string(&golden_path) else {
+        panic!(
+            "no committed golden at {}. `cargo xtask golden --bless` accepts the fresh output.",
+            golden_path.display()
+        );
+    };
+    assert_eq!(
+        golden,
+        fresh,
+        "the feature table moved: {} differs from this run. A moved anchor is a moved name.",
+        golden_path.display()
+    );
+}
+
+#[test]
+fn every_feature_of_every_seed_has_its_own_columns() {
+    // The generator's one-feature-per-column check, held over the committed
+    // seed set: no two features share an anchor or a footprint column, every
+    // zone's vent and seam are in the table, and the table's order is the
+    // resolver's tie-break.
+    for seed in SEEDS {
+        let map = generate(seed);
+        let table = map.features.features();
+        assert_eq!(
+            table.len(),
+            usize::try_from(GOLDEN_SEATS * 2 + 6).expect("a few features"),
+            "seed {}: a vent and a seam per zone and six contested features",
+            hex(seed)
+        );
+        for (index, feature) in table.iter().enumerate() {
+            for other in table.iter().skip(index + 1) {
+                assert_ne!(feature.anchor, other.anchor);
+                assert!(
+                    feature
+                        .footprint
+                        .iter()
+                        .all(|column| !other.covers(column.x, column.y)),
+                    "seed {}: {} and {} overlap",
+                    hex(seed),
+                    feature.name(),
+                    other.name()
+                );
+                assert!(
+                    (feature.anchor[1], feature.anchor[0]) < (other.anchor[1], other.anchor[0])
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn a_duplicate_anchor_or_overlapping_footprints_is_a_map_error() {
+    use pharmakos_sim::features::{Feature, FeatureKind, FeatureTable, FootprintColumn};
+    let column = |x: i32, y: i32| FootprintColumn { x, y, top: 30 };
+    let vent = Feature::new(
+        FeatureKind::Vent,
+        [10, 10],
+        Richness::Lean,
+        vec![column(10, 10), column(11, 10)],
+    );
+    let seam = Feature::new(
+        FeatureKind::Seam,
+        [12, 10],
+        Richness::Rich,
+        vec![column(11, 10), column(12, 10)],
+    );
+    match FeatureTable::new(vec![vent.clone(), seam]) {
+        Err(mapgen::MapError::FeatureOverlap { first, second }) => {
+            assert_eq!(
+                (first.as_str(), second.as_str()),
+                ("vent_10_10", "seam_12_10")
+            );
+        }
+        other => panic!("overlapping footprints are refused, not {other:?}"),
+    }
+    let twin = Feature::new(
+        FeatureKind::Seam,
+        [10, 10],
+        Richness::Rich,
+        vec![column(9, 9)],
+    );
+    assert!(matches!(
+        FeatureTable::new(vec![vent, twin]),
+        Err(mapgen::MapError::FeatureOverlap { .. })
+    ));
 }

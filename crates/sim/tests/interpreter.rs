@@ -882,11 +882,12 @@ fn wall_in_the_commander(world: &mut World) {
 #[test]
 fn a_playbook_reads_only_its_own_seats_beacons() {
     // Spec section 10: "conditions read only the seat's knowledge store", and
-    // its predicate families list *own* beacon. A fixed `b_NN` is the one
-    // selector that skips the ranking, so it is the one that could answer from
-    // another seat's live state — and there is no knowledge store for it to be
-    // answering from. An interface with somebody else's beacon is told apart
-    // from an unresolvable one: `not_own`, because beacon capture is out of v1.
+    // its predicate families list *own* beacon. Since S1 a `b_NN` counts the
+    // seat's own beacons (decisions-log item 127 (13)), so it cannot name
+    // another seat's at all, and an `e_NN` -- another seat's beacon, by the
+    // gateway's per-viewer handle -- resolves to nothing. Both answer
+    // `no_target`, the one answer hidden, absent and someone else's get
+    // (`docs/design/targeting.md`, "Failure"); `not_own` (id 10) is retired.
     let mut playbook = minimal();
     {
         let route = &mut playbook
@@ -894,10 +895,20 @@ fn a_playbook_reads_only_its_own_seats_beacons() {
             .as_mut()
             .expect("the minimal playbook has a body")
             .route;
-        // b_01 is seat 1's core in a three-seat match; the case seat is 0.
+        // Seat 0 has placed nothing, so its `b_01` is absent; `b_01` was seat
+        // 1's core under the pre-S1 global numbering.
+        route.push(interface_step(
+            "absent",
+            beacon_id("b_01"),
+            vec![gp::v1::InterfaceRow {
+                row: Some(gp::v1::interface_row::Row::SetPriority(i32::from(
+                    gp::v1::interface_row::QuartermasterPriority::Low,
+                ))),
+            }],
+        ));
         route.push(interface_step(
             "theirs",
-            beacon_id("b_01"),
+            beacon_id("e_01"),
             vec![gp::v1::InterfaceRow {
                 row: Some(gp::v1::interface_row::Row::SetPriority(i32::from(
                     gp::v1::interface_row::QuartermasterPriority::Low,
@@ -921,9 +932,18 @@ fn a_playbook_reads_only_its_own_seats_beacons() {
         }
         runner.clear_events();
     }
+    let failed = values_of(&body, EventKind::StepFailed);
+    assert_eq!(
+        failed,
+        vec![
+            i64::from(StepFailure::NoTarget.id()),
+            i64::from(StepFailure::NoTarget.id())
+        ],
+        "an absent `b_NN` and another seat's `e_NN` both fail `no_target`:\n{body}"
+    );
     assert!(
-        values_of(&body, EventKind::StepFailed).contains(&i64::from(StepFailure::NotOwn.id())),
-        "interfacing with another seat's beacon fails with `not_own`:\n{body}"
+        !failed.contains(&i64::from(StepFailure::RETIRED_NOT_OWN)),
+        "id 10 is retired:\n{body}"
     );
 }
 

@@ -39,7 +39,6 @@ use std::cell::Cell;
 
 use pharmakos_sim::encoding::Enc;
 use pharmakos_sim::runner::{DEFAULT_ROUND_LIMIT, Runner};
-use pharmakos_sim::tables::SeatId;
 use pharmakos_sim::voxels::VoxelEdit;
 use pharmakos_sim::{MatchSettings, RulesTable, World, WorldConfig};
 
@@ -139,20 +138,19 @@ fn a_tick_allocates_nothing() {
     // Every seat seals the harness playbook, for the same reason: the decision
     // phase returns immediately for a seat that sealed nothing, so without this
     // the whole interpreter — selector resolution, the visit's row clocks, the
-    // reflex, the handler scan — would sit outside the one assertion that a
-    // tick allocates nothing (T11).
-    let plan = pharmakos_sim::Plan::compile(
-        &pharmakos_sim::determinism_playbook(),
-        runner.world().rules(),
-    )
-    .expect("the harness playbook compiles");
-    for seat in 0..pharmakos_sim::DETERMINISM_SEATS {
-        let id = SeatId::new(u8::try_from(seat).expect("the harness runs few seats"));
-        assert!(
-            runner.world_mut().seal_playbook(id, plan.clone()),
-            "seat {seat} seals"
-        );
-    }
+    // reflex, the handler scan, and since S1 the walk in, the deploy's charge
+    // and the `covering` resolver with its "nearest" estimates and its spiral —
+    // would sit outside the one assertion that a tick allocates nothing (T11).
+    // Each seat deploys at its own harness site, which S1's no-stacking rule
+    // moved off the core's column (`pharmakos_sim::determinism_site`).
+    pharmakos_sim::seal_determinism_playbooks(runner.world_mut())
+        .expect("the harness playbook compiles");
+    let sealed = runner.world().interpreter().len();
+    assert_eq!(
+        sealed,
+        usize::try_from(pharmakos_sim::DETERMINISM_SEATS).expect("a few seats"),
+        "every seat seals"
+    );
     assert!(runner.begin_push(), "a match opens in a Lull");
     let mut enc = Enc::with_capacity(64 * 1024);
 

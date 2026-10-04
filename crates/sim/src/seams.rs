@@ -98,6 +98,67 @@ impl WorkCounter {
     }
 }
 
+/// A running count of evaluation units that a **read-only** path can add to:
+/// what a decision's conditions, selectors and "nearest" estimates are
+/// measured in (P1's counted half, S1's plan section 5; decisions-log item
+/// 33 (c)).
+///
+/// The tally behind [`WorkCounter`]'s per-decision figure. It exists because
+/// a condition is evaluated over a `&World`, and counting there needs interior
+/// mutability; it is an atomic, with relaxed ordering, only so that a `World`
+/// holding one stays `Sync`. Nothing reads it from another thread, and every
+/// count is made in the tick's own fixed order.
+///
+/// **It is not state**: never hashed, never saved, and it compares equal to
+/// any other tally, so two worlds that differ only in what was last measured
+/// are the same world. `tests/determinism.rs` keeps it out of the encoding.
+#[derive(Debug, Default)]
+pub struct UnitTally(core::sync::atomic::AtomicU32);
+
+impl UnitTally {
+    /// A tally at zero.
+    #[must_use]
+    pub const fn new() -> UnitTally {
+        UnitTally(core::sync::atomic::AtomicU32::new(0))
+    }
+
+    /// Add `units`, saturating.
+    pub fn add(&self, units: u32) {
+        let now = self.get();
+        self.0.store(
+            now.saturating_add(units),
+            core::sync::atomic::Ordering::Relaxed,
+        );
+    }
+
+    /// What has been counted since the last reset.
+    #[must_use]
+    pub fn get(&self) -> u32 {
+        self.0.load(core::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Start again from zero.
+    pub fn reset(&self) {
+        self.0.store(0, core::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+impl Clone for UnitTally {
+    fn clone(&self) -> UnitTally {
+        UnitTally(core::sync::atomic::AtomicU32::new(self.get()))
+    }
+}
+
+/// Every tally equals every other: a measurement is not state (see
+/// [`UnitTally`]).
+impl PartialEq for UnitTally {
+    fn eq(&self, _other: &UnitTally) -> bool {
+        true
+    }
+}
+
+impl Eq for UnitTally {}
+
 /// The identity of a built-in program.
 ///
 /// `program_id` sits on a beacon's mandate so that the `program {builtin|script}`

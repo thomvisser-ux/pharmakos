@@ -34,10 +34,11 @@
 use crate::events::{Emission, EventKind};
 use crate::interpreter::cond::{self, View, resolve_beacon, within};
 use crate::interpreter::state::{
-    NO_INDEX, NO_TICK, PlanState, StepFailure, VisitState, deadline_of,
+    Binding, NO_INDEX, NO_TICK, PlanState, StepFailure, VisitState, deadline_of,
 };
 use crate::interpreter::{
-    Action, FailAction, Place, Plan, PlanStep, Posture, REFLEX_HP_PERCENT, Resume, Row, ticks_of,
+    Action, Anchor, FailAction, FeatureSpec, Place, Plan, PlanStep, Posture, REFLEX_HP_PERCENT,
+    Removal, Resume, Row, ticks_of,
 };
 use crate::knowledge::{AssetId, Position};
 use crate::math::fixed::Fx;
@@ -114,7 +115,13 @@ pub(crate) fn decide(world: &mut World, seat_index: usize, plan: &Plan, state: &
     // ran out. A rule that fires in the tail runs its body and hands the seat
     // back to the tail afterwards, because every `resume` a body can name
     // leaves a cursor of [`NO_INDEX`] where it is.
+    //
+    // Nor while a placement has a beacon in the ground and rows left to write:
+    // **handlers do not fire during a deploy or a commit**, and a placement
+    // cleared by death or the reflex after its deploy is still that deploy's
+    // commit, resumed (`docs/design/targeting.md`, "Companion changes").
     if state.rule == NO_INDEX
+        && state.restart_beacon == NO_INDEX
         && !matches!(
             state.stage,
             VisitState::Handshake | VisitState::Committing | VisitState::Deploying
@@ -247,6 +254,9 @@ fn try_fire(
             if fires >= rule.max_fires || tick.raw() < ready {
                 continue;
             }
+            // P1's counted half: a handler tried is one evaluation unit, and
+            // its condition's nodes are counted as they are evaluated.
+            seen.world.charge_decision(1);
             if cond::evaluate(&seen, &rule.when) {
                 found = u32::try_from(index).ok();
                 break;
@@ -308,6 +318,10 @@ fn advance_body(
     let outcome = run_step(world, seat, seat_index, state, step, index);
     let body_len = rule.body.len();
     let resume = rule.resume;
+    if outcome != Outcome::Running {
+        // The step has ended, so nothing of it is resumed.
+        state.clear_restart();
+    }
     match outcome {
         Outcome::Running => {}
         Outcome::Complete | Outcome::Skipped => {
@@ -343,6 +357,7 @@ fn end_body(world: &mut World, seat: SeatId, state: &mut PlanState, plan: &Plan,
     let tick = world.tick();
     state.rule = NO_INDEX;
     state.rule_step = 0;
+    state.clear_restart();
     drop_step(world, seat, state);
     let mut ended = false;
     match resume {
@@ -402,6 +417,8 @@ fn advance_route(
             FailAction::JumpForward(target) => Some(target.max(index.saturating_add(1))),
         },
     };
+    // The step has ended, so nothing of it is resumed.
+    state.clear_restart();
     drop_step(world, seat, state);
     match next {
         Some(cursor) if usize::try_from(cursor).unwrap_or(usize::MAX) < plan.route().len() => {
@@ -490,7 +507,24 @@ fn fail(world: &mut World, seat: SeatId, state: &PlanState, failure: StepFailure
     Outcome::Failed(failure)
 }
 
-/// Start a step: resolve and pin its target, set its clocks, report it.
+/// Start a step: resolve and pin its target, read every target its rows write,
+/// set its clocks, report it.
+///
+/// **A step reads all its targets when it starts**, including the ones it
+/// writes into a new beacon's initial settings or an interface row, and keeps
+/// them until it ends (`docs/design/targeting.md`, "Three reading rules", 1):
+/// a `covering` site, and every `on` anchor of its rows, are resolved here and
+/// bound on the state, never read again by a later decision.
+///
+/// **`place_beacon` and `interface` walk to their target first** (targeting.md,
+/// "Companion changes"): a step whose commander is not yet within interface
+/// range starts by walking there, and the step's `timeout_ms` bounds that walk
+/// up to arrival; a target the commander cannot reach fails `no_path`. The
+/// placement range no longer plays a part (amending item 11).
+#[allow(
+    clippy::too_many_lines,
+    reason = "one arm per action, and the placement arm is two halves -- a fresh placement and a resumed one -- that share the walk in; splitting it would hand the state between functions as a parameter list as long as the arm"
+)]
 fn start_step(
     world: &mut World,
     seat: SeatId,
@@ -500,6 +534,11 @@ fn start_step(
     index: u32,
 ) -> Result<(), StepFailure> {
     let tick = world.tick();
+    let resuming =
+        matches!(step.action, Action::PlaceBeacon { .. }) && state.resumes(state.rule, index);
+    if !resuming {
+        state.clear_restart();
+    }
     state.started = tick.raw();
     state.deadline = deadline_of(tick, step.timeout_ms);
     state.stage = VisitState::Running;
@@ -520,55 +559,98 @@ fn start_step(
         Action::Interface { beacon, rows } => {
             let resolved = {
                 let seen = view(world, seat, seat_index, state);
-                match resolve_beacon(&seen, *beacon) {
-                    Some(id) => id,
-                    // *Touch to change* is a rule about your **own** beacons:
-                    // beacon capture is out of v1 (AGENTS.md §11). A fixed
-                    // `b_NN` resolves to nothing when it names somebody else's
-                    // beacon, exactly as it does when it names a dead one, so
-                    // the two are told apart here — a playbook that reaches for
-                    // another seat's beacon gets `not_own` rather than the
-                    // `no_target` an unresolvable selector gets.
-                    None => {
-                        return Err(match_not_own(world, seat, *beacon));
-                    }
-                }
+                // *Touch to change* is a rule about your **own** beacons:
+                // beacon capture is out of v1 (AGENTS.md §11). Since S1 a
+                // `b_NN` counts only the seat's own beacons and an `e_NN`
+                // resolves to nothing, so "someone else's" is `no_target`, the
+                // one answer hidden and absent get too; `not_own` (id 10),
+                // which told a seat whether an unseen enemy beacon was alive,
+                // is retired (`docs/design/targeting.md`, "Failure").
+                resolve_beacon(&seen, *beacon).ok_or(StepFailure::NoTarget)?
             };
             let at = beacon_at(world, resolved).ok_or(StepFailure::NoTarget)?;
             let commander = commander_at(world, seat).ok_or(StepFailure::CommanderDead)?;
-            if !within(commander, at, interface_range(world)) {
-                return Err(StepFailure::OutOfRange);
-            }
+            bind_rows(world, seat, state, rows, at, Some(resolved))?;
             state.pinned = true;
             state.pinned_beacon = resolved.raw();
             state.pinned_at = voxels_of(at);
             state.visit_beacon = resolved.raw();
-            state.stage = VisitState::Handshake;
-            state.visit_due = tick.raw().saturating_add(ticks_of(handshake_ms(world)));
-            visit = Some((resolved, at, rows.len()));
+            if within(commander, at, interface_range(world)) {
+                begin_visit(world, state);
+                visit = Some((resolved, at, rows.len()));
+            } else {
+                walk_in(world, seat, commander, at)?;
+            }
             where_at = Some(at);
         }
-        Action::PlaceBeacon { at, .. } => {
-            let site = pin_place(world, seat, seat_index, state, *at)?;
+        Action::PlaceBeacon { at, rows, .. } => {
             let commander = commander_at(world, seat).ok_or(StepFailure::CommanderDead)?;
-            if !site_is_legal(world, seat, commander, site) {
-                return Err(StepFailure::IllegalSite);
+            if resuming {
+                // **Restart keeps the placed beacon** (targeting.md,
+                // "Companion changes"): the step resumes as a visit to the
+                // beacon it placed, with the rows it had left, and reads
+                // nothing again -- so it never pays for a second beacon.
+                let placed = BeaconId::new(state.restart_beacon);
+                let alive = world_beacon_row(world, placed).is_some_and(|row| {
+                    world
+                        .beacons()
+                        .hit_points()
+                        .get(row)
+                        .is_some_and(|hp| hp.is_alive())
+                });
+                if !alive {
+                    return Err(StepFailure::BeaconGone);
+                }
+                let site = beacon_at(world, placed).ok_or(StepFailure::BeaconGone)?;
+                state.resumed = true;
+                state.pinned = true;
+                state.pinned_beacon = placed.raw();
+                state.pinned_at = voxels_of(site);
+                state.visit_beacon = placed.raw();
+                state.visit_row = state.restart_row;
+                if within(commander, site, interface_range(world)) {
+                    begin_visit(world, state);
+                    let left = rows
+                        .len()
+                        .saturating_sub(usize::try_from(state.restart_row).unwrap_or(0));
+                    visit = Some((placed, site, left));
+                } else {
+                    walk_in(world, seat, commander, site)?;
+                }
+                where_at = Some(site);
+            } else {
+                let site = match at {
+                    Place::Covering(spec) => {
+                        let found = {
+                            let (ground, scratch) = world.ground_and_scratch();
+                            crate::targeting::cover(&ground, scratch, seat, commander, *spec)?
+                        };
+                        let [x, y] = found.site;
+                        let point = world
+                            .ground()
+                            .standing(x, y)
+                            .ok_or(StepFailure::IllegalSite)?;
+                        state.bound_feature = u32::try_from(found.feature).unwrap_or(NO_INDEX);
+                        state.pinned = true;
+                        state.pinned_beacon = NO_INDEX;
+                        state.pinned_at = voxels_of(point);
+                        point
+                    }
+                    Place::Voxel(_) | Place::Beacon(_) => {
+                        pin_place(world, seat, seat_index, state, *at)?
+                    }
+                };
+                if !site_is_legal(world, seat, site) {
+                    return Err(StepFailure::IllegalSite);
+                }
+                bind_rows(world, seat, state, rows, site, None)?;
+                if within(commander, site, interface_range(world)) {
+                    begin_deploy(world, seat, state, site)?;
+                } else {
+                    walk_in(world, seat, commander, site)?;
+                }
+                where_at = Some(site);
             }
-            // Spec section 7: "`$` leaves the treasury the moment an order
-            // commits: deploy starts". Charged last, after every test that can
-            // refuse the step, so a step that fails to start has paid nothing;
-            // and a treasury that cannot cover it fails the step like any other
-            // failure (decision 7 of S1's plan, id 12). From here until the
-            // beacon is in the ground the stage is `Deploying`, and that stage
-            // is the only record of the charge: every way out of it that is not
-            // the placement refunds it in full ([`drop_step`], and
-            // [`abandon_deploys`] at segment end).
-            if !world.charge_deploy(seat) {
-                return Err(StepFailure::Unaffordable);
-            }
-            state.stage = VisitState::Deploying;
-            state.visit_due = tick.raw().saturating_add(ticks_of(deploy_ms(world)));
-            where_at = Some(site);
         }
         Action::WaitUntil(_) | Action::Hold { .. } | Action::Broadcast => {}
     }
@@ -593,6 +675,149 @@ fn start_step(
     Ok(())
 }
 
+/// Read every `on` anchor `rows` write, in order, and bind each on the state
+/// (`docs/design/targeting.md`, "Three reading rules", 1).
+///
+/// `centre` is the sphere the targets are written into -- the beacon a visit
+/// is at, or, for a placement's initial settings, the site -- and `except` is
+/// that beacon, whose own targets do not count against the `on` candidate
+/// rule. `covered {}` names the feature this step's `covering` chose.
+///
+/// The bindings vector was reserved at the seal to the plan's largest step, so
+/// nothing here allocates.
+fn bind_rows(
+    world: &mut World,
+    seat: SeatId,
+    state: &mut PlanState,
+    rows: &[Row],
+    centre: [Fx; 3],
+    except: Option<BeaconId>,
+) -> Result<(), StepFailure> {
+    state.bindings.clear();
+    let covered = (state.bound_feature != NO_INDEX)
+        .then(|| usize::try_from(state.bound_feature).ok())
+        .flatten();
+    for row in rows {
+        let anchors: &[(u8, Anchor)] = match row {
+            Row::AddTarget { anchor, .. } => {
+                if let Anchor::On(spec) = anchor {
+                    let binding = bind_one(world, seat, centre, except, covered, *spec)?;
+                    state.bindings.push(binding);
+                }
+                continue;
+            }
+            Row::Settings { targets, .. } => targets,
+            Row::Mandate { .. }
+            | Row::Priority { .. }
+            | Row::Recycle
+            | Row::RemoveTarget { .. } => {
+                continue;
+            }
+        };
+        for (_, anchor) in anchors {
+            if let Anchor::On(spec) = anchor {
+                let binding = bind_one(world, seat, centre, except, covered, *spec)?;
+                state.bindings.push(binding);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Resolve one `on` anchor ([`crate::targeting::on_vent`]) into a binding.
+fn bind_one(
+    world: &mut World,
+    seat: SeatId,
+    centre: [Fx; 3],
+    except: Option<BeaconId>,
+    covered: Option<usize>,
+    spec: FeatureSpec,
+) -> Result<Binding, StepFailure> {
+    let site = {
+        let (ground, scratch) = world.ground_and_scratch();
+        crate::targeting::on_vent(&ground, scratch, seat, centre, except, covered, spec)?
+    };
+    let [x, y] = site.column;
+    let z = world
+        .surface()
+        .node_of(x, y)
+        .map_or(0, |node| world.surface().standing_z(node));
+    Ok(Binding {
+        feature: u32::try_from(site.feature).unwrap_or(NO_INDEX),
+        at: [x, y, z],
+    })
+}
+
+/// Whether every feature the step in progress bound is still there. A step
+/// checks its bound features at each decision, and a lost one fails it
+/// `feature_lost` (targeting.md, "Three reading rules", 1).
+fn bindings_live(world: &World, state: &PlanState) -> bool {
+    let live = |feature: u32| -> bool {
+        feature == NO_INDEX || world.feature_is_live(usize::try_from(feature).unwrap_or(usize::MAX))
+    };
+    live(state.bound_feature) && state.bindings.iter().all(|binding| live(binding.feature))
+}
+
+/// Begin the visit handshake (spec section 5: 1.5 s, once per visit). The walk
+/// in, if there was one, is over, so the step's timeout no longer runs: it
+/// bounds the walk up to arrival (targeting.md, "Companion changes").
+fn begin_visit(world: &World, state: &mut PlanState) {
+    let tick = world.tick();
+    state.deadline = NO_TICK;
+    state.stage = VisitState::Handshake;
+    state.visit_due = tick.raw().saturating_add(ticks_of(handshake_ms(world)));
+}
+
+/// Begin the deploy at `site`: the site must still be legal, and spec section
+/// 7's "`$` leaves the treasury the moment an order commits: deploy starts"
+/// charges the beacon's cost **here**, after the walk in and never at the
+/// step's start (S1's targeting moved it; X-12's charge is otherwise
+/// unchanged). A treasury that cannot cover it fails the step `unaffordable`
+/// (decision 7 of S1's plan, id 12). From here until the beacon is in the
+/// ground the stage is `Deploying`, and that stage is the only record of the
+/// charge: every way out of it that is not the placement refunds it in full
+/// ([`drop_step`], and [`abandon_deploys`] at segment end).
+fn begin_deploy(
+    world: &mut World,
+    seat: SeatId,
+    state: &mut PlanState,
+    site: [Fx; 3],
+) -> Result<(), StepFailure> {
+    if !site_is_legal(world, seat, site) {
+        return Err(StepFailure::IllegalSite);
+    }
+    if !world.charge_deploy(seat) {
+        return Err(StepFailure::Unaffordable);
+    }
+    let tick = world.tick();
+    state.deadline = NO_TICK;
+    state.stage = VisitState::Deploying;
+    state.visit_due = tick.raw().saturating_add(ticks_of(deploy_ms(world)));
+    Ok(())
+}
+
+/// Walk the commander to `to`, or fail `no_path` at once when no route can
+/// exist: the connectivity oracle's answer, two array reads (item 60), so a
+/// sealed-in commander does not spend its whole timeout learning it.
+fn walk_in(
+    world: &mut World,
+    seat: SeatId,
+    commander: [Fx; 3],
+    to: [Fx; 3],
+) -> Result<(), StepFailure> {
+    let [fx, fy] = crate::targeting::column_of(commander);
+    let [tx, ty] = crate::targeting::column_of(to);
+    let surface = world.surface();
+    let (Some(from), Some(goal)) = (surface.node_of(fx, fy), surface.node_of(tx, ty)) else {
+        return Err(StepFailure::NoPath);
+    };
+    if !world.clusters().connected(surface, from, goal) {
+        return Err(StepFailure::NoPath);
+    }
+    walk_commander(world, seat, to);
+    Ok(())
+}
+
 /// Look at a started step and say whether it is done.
 fn look(
     world: &mut World,
@@ -603,6 +828,9 @@ fn look(
     index: u32,
 ) -> Outcome {
     let tick = world.tick();
+    if !bindings_live(world, state) {
+        return Outcome::Failed(StepFailure::FeatureLost);
+    }
     match &step.action {
         Action::Move { .. } => {
             let Some(at) = commander_at(world, seat) else {
@@ -633,7 +861,12 @@ fn look(
             Outcome::Running
         }
         Action::Broadcast => Outcome::Failed(StepFailure::NoMast),
-        Action::Interface { rows, .. } => run_visit(world, seat, state, rows, index),
+        Action::Interface { rows, .. } => {
+            if state.stage == VisitState::Running {
+                return walk_to_visit(world, seat, state, rows.len());
+            }
+            run_visit(world, seat, state, rows, index)
+        }
         Action::PlaceBeacon {
             mandate,
             rows,
@@ -641,12 +874,88 @@ fn look(
             ..
         } => {
             let _ = tags;
+            if state.resumed {
+                if state.stage == VisitState::Running {
+                    let left = rows
+                        .len()
+                        .saturating_sub(usize::try_from(state.visit_row).unwrap_or(0));
+                    return walk_to_visit(world, seat, state, left);
+                }
+                return run_visit(world, seat, state, rows, index);
+            }
+            if state.stage == VisitState::Running {
+                return walk_to_deploy(world, seat, state);
+            }
             run_deploy(world, seat, state, *mandate, rows, index)
         }
     }
 }
 
+/// One decision of a walk in to a visit: arrived within interface range, the
+/// handshake begins; a beacon gone or a commander sealed in ends the step.
+fn walk_to_visit(world: &mut World, seat: SeatId, state: &mut PlanState, rows: usize) -> Outcome {
+    let tick = world.tick();
+    let beacon = BeaconId::new(state.visit_beacon);
+    let Some(row) = world_beacon_row(world, beacon) else {
+        return Outcome::Failed(StepFailure::BeaconGone);
+    };
+    if !world
+        .beacons()
+        .hit_points()
+        .get(row)
+        .is_some_and(|hp| hp.is_alive())
+    {
+        return Outcome::Failed(StepFailure::BeaconGone);
+    }
+    let Some(commander) = commander_at(world, seat) else {
+        return Outcome::Failed(StepFailure::CommanderDead);
+    };
+    let Some(at) = world.beacons().positions().get(row).copied() else {
+        return Outcome::Failed(StepFailure::BeaconGone);
+    };
+    if within(commander, at, interface_range(world)) {
+        begin_visit(world, state);
+        emit(
+            world,
+            tick,
+            EventKind::VisitStarted,
+            seat,
+            Some(beacon),
+            Some(at),
+            i64::try_from(rows).unwrap_or(i64::MAX),
+        );
+        return Outcome::Running;
+    }
+    if sealed_in(world, seat) {
+        return Outcome::Failed(StepFailure::NoPath);
+    }
+    Outcome::Running
+}
+
+/// One decision of a walk in to a deploy site: arrived within interface range,
+/// the deploy begins (and is charged); a commander sealed in ends the step.
+fn walk_to_deploy(world: &mut World, seat: SeatId, state: &mut PlanState) -> Outcome {
+    let site = point_of(state.pinned_at);
+    let Some(commander) = commander_at(world, seat) else {
+        return Outcome::Failed(StepFailure::CommanderDead);
+    };
+    if within(commander, site, interface_range(world)) {
+        return match begin_deploy(world, seat, state, site) {
+            Ok(()) => Outcome::Running,
+            Err(failure) => Outcome::Failed(failure),
+        };
+    }
+    if sealed_in(world, seat) {
+        return Outcome::Failed(StepFailure::NoPath);
+    }
+    Outcome::Running
+}
+
 /// One decision's worth of a visit: the handshake, then one row at a time.
+///
+/// Also what a **resumed placement** runs: a visit to the beacon it placed,
+/// from the first row it had not committed, which it keeps as its restart
+/// point so a second interruption resumes later still.
 fn run_visit(
     world: &mut World,
     seat: SeatId,
@@ -681,8 +990,8 @@ fn run_visit(
     }
     if state.stage == VisitState::Handshake {
         state.stage = VisitState::Committing;
-        state.visit_row = 0;
-        let Some(first) = rows.first() else {
+        let first_at = usize::try_from(state.visit_row).unwrap_or(usize::MAX);
+        let Some(first) = rows.get(first_at) else {
             emit(
                 world,
                 tick,
@@ -690,7 +999,7 @@ fn run_visit(
                 seat,
                 Some(beacon),
                 Some(at),
-                0,
+                i64::from(state.visit_row),
             );
             complete(world, seat, index);
             return Outcome::Complete;
@@ -714,7 +1023,12 @@ fn run_visit(
         complete(world, seat, index);
         return Outcome::Complete;
     };
-    commit_row(world, row_index, seat, row);
+    let slots = rows
+        .get(..row_at)
+        .map_or(0, crate::interpreter::binding_slots);
+    if let Err(failure) = commit_row(world, row_index, seat, row, &state.bindings, slots) {
+        return Outcome::Failed(failure);
+    }
     emit(
         world,
         tick,
@@ -725,6 +1039,9 @@ fn run_visit(
         i64::from(state.visit_row),
     );
     state.visit_row = state.visit_row.saturating_add(1);
+    if state.resumed {
+        state.restart_row = state.visit_row;
+    }
     let next_at = usize::try_from(state.visit_row).unwrap_or(usize::MAX);
     if let Some(next) = rows.get(next_at) {
         state.visit_due = tick
@@ -762,8 +1079,9 @@ fn run_deploy(
     };
     // "The commander must stay for all of it: death, leaving, or an illegal
     // site aborts the deploy" (spec section 5). Leaving is tested against the
-    // interface range rather than the placement range: the commander stands at
-    // the site, and the placement range is how far the *site* may be from it.
+    // interface range: the commander walked in to the site, and the deploy
+    // requires the interface range (targeting.md: the placement range is
+    // moot).
     //
     // Tested on **every** decision of the step, the initial settings rows
     // included, and not only while the deploy's clock runs: those rows are
@@ -778,7 +1096,7 @@ fn run_deploy(
         return Outcome::Running;
     }
     if state.stage == VisitState::Deploying {
-        if !site_is_legal(world, seat, commander, site) {
+        if !site_is_legal(world, seat, site) {
             return Outcome::Failed(StepFailure::IllegalSite);
         }
         let Some(placed) = world.place_beacon(seat, site, mandate) else {
@@ -786,6 +1104,13 @@ fn run_deploy(
         };
         state.visit_beacon = placed.raw();
         state.pinned_beacon = placed.raw();
+        // The restart point: from here the step has a beacon to resume at,
+        // and a step that death or the reflex clears resumes as a visit to it
+        // rather than paying for another (targeting.md, "Companion changes").
+        state.restart_beacon = placed.raw();
+        state.restart_rule = state.rule;
+        state.restart_at = index;
+        state.restart_row = 0;
         emit(
             world,
             tick,
@@ -828,7 +1153,12 @@ fn run_deploy(
         complete(world, seat, index);
         return Outcome::Complete;
     };
-    commit_row(world, row_index, seat, row);
+    let slots = rows
+        .get(..row_at)
+        .map_or(0, crate::interpreter::binding_slots);
+    if let Err(failure) = commit_row(world, row_index, seat, row, &state.bindings, slots) {
+        return Outcome::Failed(failure);
+    }
     emit(
         world,
         tick,
@@ -839,6 +1169,7 @@ fn run_deploy(
         i64::from(state.visit_row),
     );
     state.visit_row = state.visit_row.saturating_add(1);
+    state.restart_row = state.visit_row;
     let next_at = usize::try_from(state.visit_row).unwrap_or(usize::MAX);
     if let Some(next) = rows.get(next_at) {
         state.visit_due = tick
@@ -868,17 +1199,36 @@ fn run_deploy(
 /// reports its commit and changes nothing — and the `row_committed` event names
 /// the row, so a transcript shows it rather than hiding it.
 ///
+/// **No row ever commits a lost target** (targeting.md, "Three reading
+/// rules", 1): a row writing an `on` anchor whose bound feature is lost fails
+/// the step `feature_lost` instead. `bindings` are the step's, and `slot` is
+/// where this row's first one is.
+///
 /// The one row that does more than write a column is [`Row::Recycle`], which
 /// takes the beacon out of the world; it is applied last of its visit because
 /// the rows after it would have nothing to write to, which
 /// [`run_visit`]'s `BeaconGone` test then catches on the next decision.
-fn commit_row(world: &mut World, row: usize, seat: SeatId, spec: &Row) {
+#[allow(
+    clippy::too_many_lines,
+    reason = "one arm per interface row, each the whole of what that row writes; the settings arm is the longest because a settings edit replaces three lists at once"
+)]
+fn commit_row(
+    world: &mut World,
+    row: usize,
+    seat: SeatId,
+    spec: &Row,
+    bindings: &[Binding],
+    slot: usize,
+) -> Result<(), StepFailure> {
     let beacon = world
         .beacons()
         .ids()
         .get(row)
         .copied()
         .map_or(BeaconId::NONE, BeaconId::new);
+    let live = |world: &World, binding: &Binding| -> bool {
+        world.feature_is_live(usize::try_from(binding.feature).unwrap_or(usize::MAX))
+    };
     match spec {
         Row::Mandate { kind } => world.set_beacon_mandate(row, *kind),
         Row::Priority { priority } => world.set_beacon_priority(row, *priority),
@@ -886,18 +1236,46 @@ fn commit_row(world: &mut World, row: usize, seat: SeatId, spec: &Row) {
             world.recycle_beacon(seat, beacon);
         }
         Row::AddTarget { blueprint, anchor } => {
-            let at = point_of(*anchor);
-            // One anchor, one building: a target on ground another target has
-            // already claimed would be charged for in its own right and would
-            // stand a second structure in the same voxel
+            let (at, bound) = match anchor {
+                Anchor::Voxel(voxel) => (point_of(*voxel), None),
+                Anchor::On(feature) => {
+                    let binding = bindings.get(slot).ok_or(StepFailure::NoTarget)?;
+                    if !live(world, binding) {
+                        return Err(StepFailure::FeatureLost);
+                    }
+                    (
+                        point_of(binding.at),
+                        Some((binding.feature, feature.description_id())),
+                    )
+                }
+            };
+            // One anchor, one building: a target on ground another target of
+            // the seat's has already claimed would be charged for in its own
+            // right and would stand a second structure in the same voxel
             // ([`World::anchor_is_claimed`]).
-            if crate::mandate::inside_sphere(world, beacon, at) && !world.anchor_is_claimed(at) {
-                world.add_target(beacon, TargetKind::Build, *blueprint, at, 0);
+            if crate::mandate::inside_sphere(world, beacon, at)
+                && !world.anchor_is_claimed(seat, at)
+            {
+                match bound {
+                    None => {
+                        world.add_target(beacon, TargetKind::Build, *blueprint, at, 0);
+                    }
+                    Some(bound) => {
+                        world.add_bound_target(beacon, *blueprint, at, bound);
+                    }
+                }
             }
         }
-        Row::RemoveTarget { anchor } => {
-            world.remove_target_at(beacon, point_of(*anchor));
-        }
+        Row::RemoveTarget { anchor } => match anchor {
+            Removal::Voxel(voxel) => {
+                world.remove_target_at(beacon, point_of(*voxel));
+            }
+            Removal::Feature { kind, anchor } => {
+                if let Some(feature) = world.features().index_of(*kind, *anchor) {
+                    world.remove_bound_target(beacon, u32::try_from(feature).unwrap_or(NO_INDEX));
+                }
+            }
+        },
         Row::Settings {
             targets,
             protected,
@@ -912,6 +1290,16 @@ fn commit_row(world: &mut World, row: usize, seat: SeatId, spec: &Row) {
             // alone, which is what "edits settings within the current mandate"
             // means for the fields it is silent about.
             if !targets.is_empty() {
+                // All-or-nothing reaches the bindings too: a list with one lost
+                // target commits none of it.
+                let used = targets.iter().filter(|(_, anchor)| anchor.binds()).count();
+                let end = slot.saturating_add(used);
+                if bindings
+                    .get(slot..end)
+                    .is_none_or(|bound| bound.iter().any(|binding| !live(world, binding)))
+                {
+                    return Err(StepFailure::FeatureLost);
+                }
                 // Replacing is not abandoning: an anchor that survives the
                 // edit keeps the structure it has already been paid for, or
                 // the mandate would buy it a second time
@@ -920,7 +1308,33 @@ fn commit_row(world: &mut World, row: usize, seat: SeatId, spec: &Row) {
                     beacon,
                     targets
                         .iter()
-                        .map(|(blueprint, anchor)| (*blueprint, point_of(*anchor))),
+                        .enumerate()
+                        .map(|(at, (blueprint, anchor))| match anchor {
+                            Anchor::Voxel(voxel) => (
+                                *blueprint,
+                                point_of(*voxel),
+                                crate::targeting::NO_FEATURE,
+                                crate::targeting::DESCRIPTION_VOXEL,
+                            ),
+                            Anchor::On(feature) => {
+                                let before = targets.get(..at).map_or(0, |earlier| {
+                                    earlier.iter().filter(|(_, a)| a.binds()).count()
+                                });
+                                let binding = bindings
+                                    .get(slot.saturating_add(before))
+                                    .copied()
+                                    .unwrap_or(Binding {
+                                        feature: crate::targeting::NO_FEATURE,
+                                        at: [0; 3],
+                                    });
+                                (
+                                    *blueprint,
+                                    point_of(binding.at),
+                                    binding.feature,
+                                    feature.description_id(),
+                                )
+                            }
+                        }),
                 );
             }
             if !protected.is_empty() {
@@ -940,6 +1354,7 @@ fn commit_row(world: &mut World, row: usize, seat: SeatId, spec: &Row) {
             }
         }
     }
+    Ok(())
 }
 
 /// The guaranteed tail (spec section 10): hold, shadow or patrol, for ever.
@@ -996,6 +1411,7 @@ fn enter_fallback(world: &mut World, seat: SeatId, state: &mut PlanState, plan: 
     state.rule = NO_INDEX;
     state.rule_step = 0;
     state.cursor = NO_INDEX;
+    state.clear_restart();
     drop_step(world, seat, state);
     if announce {
         emit(
@@ -1083,15 +1499,20 @@ fn pin_place(
             };
             match resolved {
                 Some(id) => Some(id),
-                None => return Err(match_not_own(world, seat, spec)),
+                None => return Err(StepFailure::NoTarget),
             }
         }
         Place::Voxel(_) => None,
+        // `covering` is a placement's site and is resolved by the placement
+        // itself; the compile refuses it anywhere else.
+        Place::Covering(_) => return Err(StepFailure::NoTarget),
     };
     let at = match (place, beacon) {
         (Place::Voxel(voxel), _) => ground_point(world, voxel),
         (Place::Beacon(_), Some(id)) => beacon_at(world, id).ok_or(StepFailure::NoTarget)?,
-        (Place::Beacon(_), None) => return Err(StepFailure::NoTarget),
+        (Place::Beacon(_) | Place::Covering(_), None) | (Place::Covering(_), Some(_)) => {
+            return Err(StepFailure::NoTarget);
+        }
     };
     state.pinned = true;
     state.pinned_beacon = beacon.map_or(NO_INDEX, BeaconId::raw);
@@ -1113,38 +1534,24 @@ fn resolve_place(
             let seen = view(world, seat, seat_index, state);
             resolve_beacon(&seen, spec).and_then(|id| beacon_at(world, id))
         }
+        // A fallback never covers anything: the compile refuses it there.
+        Place::Covering(_) => None,
     }
 }
 
-/// Whether a site is inside one of the seat's own spheres **and** within the
-/// commander's placement range (spec section 5, Placement; item 11).
-fn site_is_legal(world: &World, seat: SeatId, commander: [Fx; 3], site: [Fx; 3]) -> bool {
-    if !within(commander, site, placement_range(world)) {
-        return false;
-    }
-    let radius = sphere_radius(world);
-    let beacons = world.beacons();
-    let count = usize::try_from(beacons.len()).unwrap_or(0);
-    let mut row: usize = 0;
-    while row < count {
-        let own = beacons.seats().get(row).copied() == Some(seat.raw());
-        let alive = beacons
-            .hit_points()
-            .get(row)
-            .is_some_and(|hp| hp.is_alive());
-        if own
-            && alive
-            && beacons
-                .positions()
-                .get(row)
-                .copied()
-                .is_some_and(|at| within(at, site, radius))
-        {
-            return true;
-        }
-        row = row.saturating_add(1);
-    }
-    false
+/// Whether a site is legal: inside one of the seat's own spheres (spec section
+/// 5, Placement; item 11) and **not on the column of one of the seat's own live
+/// beacons** -- no stacking, a legality rule with no rules-table row
+/// (`docs/design/targeting.md`, "Companion changes"; decision 10 of S1's plan).
+///
+/// There is no placement range any more: `place_beacon` walks to its site
+/// first, so the commander's distance from the site is the walk's business,
+/// and the deploy requires the interface range (targeting.md, amending item
+/// 11; `commander.placement_range_voxels` stays in the schema, superseded).
+fn site_is_legal(world: &World, seat: SeatId, site: [Fx; 3]) -> bool {
+    let ground = world.ground();
+    let [x, y] = crate::targeting::column_of(site);
+    ground.inside_own_sphere(seat, site) && !ground.stacks_on_own(seat, x, y)
 }
 
 /// Send the commander somewhere. The route itself is the router's (T7): this
@@ -1179,31 +1586,6 @@ fn commander_at(world: &World, seat: SeatId) -> Option<[Fx; 3]> {
         return None;
     }
     world.units().positions().get(index).copied()
-}
-
-/// Why a beacon reference that resolved to nothing did so.
-///
-/// `not_own` when the playbook named a live beacon of another seat by its fixed
-/// id, and `no_target` for everything else — a selector that ranked nothing, a
-/// dead beacon, an id no beacon carries.
-fn match_not_own(world: &World, seat: SeatId, spec: crate::interpreter::BeaconSpec) -> StepFailure {
-    let crate::interpreter::BeaconSpec::Id(id) = spec else {
-        return StepFailure::NoTarget;
-    };
-    let Some(row) = world_beacon_row(world, id) else {
-        return StepFailure::NoTarget;
-    };
-    let alive = world
-        .beacons()
-        .hit_points()
-        .get(row)
-        .is_some_and(|hp| hp.is_alive());
-    let own = world.beacons().seats().get(row).copied() == Some(seat.raw());
-    if alive && !own {
-        StepFailure::NotOwn
-    } else {
-        StepFailure::NoTarget
-    }
 }
 
 fn beacon_at(world: &World, beacon: BeaconId) -> Option<[Fx; 3]> {
@@ -1309,10 +1691,6 @@ fn interface_range(world: &World) -> i32 {
     commander_row(world, |block| block.interface_range_voxels)
 }
 
-fn placement_range(world: &World) -> i32 {
-    commander_row(world, |block| block.placement_range_voxels)
-}
-
 fn commander_row(
     world: &World,
     pick: fn(&pharmakos_proto::gp::v1::rules_table::Commander) -> u32,
@@ -1323,17 +1701,6 @@ fn commander_row(
         .commander
         .as_ref()
         .and_then(|block| i32::try_from(pick(block)).ok())
-        .unwrap_or(0)
-}
-
-/// The sphere of authority's radius, in voxels (`beacon.sphere_radius_voxels`).
-fn sphere_radius(world: &World) -> i32 {
-    world
-        .rules()
-        .message()
-        .beacon
-        .as_ref()
-        .and_then(|block| i32::try_from(block.sphere_radius_voxels).ok())
         .unwrap_or(0)
 }
 

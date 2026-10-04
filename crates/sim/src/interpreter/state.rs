@@ -100,8 +100,27 @@ impl VisitState {
     }
 }
 
+/// One target a step read when it started: an `on` anchor's feature and the
+/// column it chose (`docs/design/targeting.md`, "Three reading rules", 1).
+///
+/// Hashed, because the step keeps it until it ends and commits it into a
+/// Build target: a re-read at commit time would be a second reading of the
+/// same description.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Binding {
+    /// The feature's index in the map's feature table.
+    pub feature: u32,
+    /// The `on` column, in whole voxels; `z` is the column's standing height
+    /// when the step started.
+    pub at: [i32; 3],
+}
+
 /// One seat's execution state.
 #[derive(Clone, PartialEq, Eq, Debug)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "each flag is one fixed-width hashed field with its own meaning (pinned, the reflex's two, a resumed placement); folding them into a state machine would change the canonical encoding for no reader's gain"
+)]
 pub struct PlanState {
     /// How many times this seat's commander has died **this match**
     /// (`gp.v1.CmdrDeaths`). The only field that survives a segment.
@@ -158,6 +177,28 @@ pub struct PlanState {
     pub fires: Vec<u32>,
     /// Per handler, the first tick it may fire again (its cooldown).
     pub ready: Vec<u32>,
+    /// The feature a `covering` step chose, or [`NO_INDEX`]: what `covered {}`
+    /// names, and a bound target the step checks at each decision.
+    pub bound_feature: u32,
+    /// Every `on` anchor the step in progress read when it started, in the
+    /// order its rows write them. Reserved at the seal to the plan's
+    /// [`crate::interpreter::Plan::max_bindings`], so binding allocates
+    /// nothing inside a tick.
+    pub bindings: Vec<Binding>,
+    /// Whether the step in progress is a placement **resumed as a visit** to
+    /// the beacon it placed (targeting.md, "Companion changes": restart keeps
+    /// the placed beacon).
+    pub resumed: bool,
+    /// The beacon a placement placed and has not finished writing, or
+    /// [`NO_INDEX`]: what a restart resumes at. Kept when death, the reflex or
+    /// a rule clears the step; dropped when the step ends.
+    pub restart_beacon: u32,
+    /// The rule body that placement belongs to, or [`NO_INDEX`] for the route.
+    pub restart_rule: u32,
+    /// The placement's step index in the route or that body.
+    pub restart_at: u32,
+    /// The first of its initial rows not yet committed.
+    pub restart_row: u32,
 }
 
 /// A seat that has sealed nothing: no route, no rule, no visit, no deadline.
@@ -192,6 +233,13 @@ impl Default for PlanState {
             fallback_leg: 0,
             fires: Vec::new(),
             ready: Vec::new(),
+            bound_feature: NO_INDEX,
+            bindings: Vec::new(),
+            resumed: false,
+            restart_beacon: NO_INDEX,
+            restart_rule: NO_INDEX,
+            restart_at: NO_INDEX,
+            restart_row: 0,
         }
     }
 }
@@ -228,6 +276,13 @@ impl PlanState {
             fallback_leg: 0,
             fires: vec![0; plan.handlers().len()],
             ready: vec![0; plan.handlers().len()],
+            bound_feature: NO_INDEX,
+            bindings: Vec::with_capacity(plan.max_bindings()),
+            resumed: false,
+            restart_beacon: NO_INDEX,
+            restart_rule: NO_INDEX,
+            restart_at: NO_INDEX,
+            restart_row: 0,
         }
     }
 
@@ -252,7 +307,13 @@ impl PlanState {
     /// What the reflex does to a visit, and what a resumed step does to its
     /// pinned selector: *"a resumed visit is a new visit and pays the handshake
     /// again"* (item 24).
-    pub const fn clear_step(&mut self) {
+    ///
+    /// A placement that has already placed its beacon **keeps** its bindings
+    /// and its restart point: it resumes as a visit to that beacon, with the
+    /// rows it had left, and reads nothing again (targeting.md, "Companion
+    /// changes"). [`PlanState::clear_restart`] is what forgets those, when the
+    /// step ends.
+    pub fn clear_step(&mut self) {
         self.stage = VisitState::NotStarted;
         self.started = NO_TICK;
         self.deadline = NO_TICK;
@@ -262,6 +323,29 @@ impl PlanState {
         self.visit_beacon = NO_INDEX;
         self.visit_row = 0;
         self.visit_due = NO_TICK;
+        self.resumed = false;
+        if self.restart_beacon == NO_INDEX {
+            self.bound_feature = NO_INDEX;
+            self.bindings.clear();
+        }
+    }
+
+    /// Forget the step's bindings and its restart point: the step has ended,
+    /// so nothing of it is resumed.
+    pub fn clear_restart(&mut self) {
+        self.restart_beacon = NO_INDEX;
+        self.restart_rule = NO_INDEX;
+        self.restart_at = NO_INDEX;
+        self.restart_row = 0;
+        self.bound_feature = NO_INDEX;
+        self.bindings.clear();
+    }
+
+    /// Whether a placement at step `index` (of rule `rule`, or the route when
+    /// [`NO_INDEX`]) is the one this state's restart point resumes.
+    #[must_use]
+    pub const fn resumes(&self, rule: u32, index: u32) -> bool {
+        self.restart_beacon != NO_INDEX && self.restart_rule == rule && self.restart_at == index
     }
 
     /// Append this seat's block to the canonical encoding.
@@ -292,6 +376,21 @@ impl PlanState {
             enc.u32(*fires);
             enc.u32(self.ready.get(index).copied().unwrap_or(0));
         }
+        // S1's targeting (snapshot version 7): the step's bindings and the
+        // restarted placement's beacon and rows.
+        enc.u32(self.bound_feature);
+        enc.len(u32::try_from(self.bindings.len()).unwrap_or(u32::MAX));
+        for binding in &self.bindings {
+            enc.u32(binding.feature);
+            for axis in binding.at {
+                enc.i32(axis);
+            }
+        }
+        enc.bool(self.resumed);
+        enc.u32(self.restart_beacon);
+        enc.u32(self.restart_rule);
+        enc.u32(self.restart_at);
+        enc.u32(self.restart_row);
     }
 }
 
@@ -450,6 +549,21 @@ impl Interpreter {
                     .ready
                     .push(state.ready.get(index).copied().unwrap_or(0));
             }
+            parts.bound_feature.push(state.bound_feature);
+            parts
+                .binding_count
+                .push(u32::try_from(state.bindings.len()).unwrap_or(u32::MAX));
+            for binding in &state.bindings {
+                parts.binding_feature.push(binding.feature);
+                for axis in binding.at {
+                    parts.binding_at.push(axis);
+                }
+            }
+            parts.resumed.push(u8::from(state.resumed));
+            parts.restart_beacon.push(state.restart_beacon);
+            parts.restart_rule.push(state.restart_rule);
+            parts.restart_at.push(state.restart_at);
+            parts.restart_row.push(state.restart_row);
         }
         parts
     }
@@ -480,6 +594,7 @@ impl Interpreter {
         let mut states: Vec<PlanState> = Vec::with_capacity(seats);
         let mut at: usize = 0;
         let mut rule_at: usize = 0;
+        let mut binding_at: usize = 0;
         while at < seats {
             let Some(stage) = parts.stage.get(at).copied().and_then(VisitState::from_id) else {
                 return false;
@@ -492,6 +607,27 @@ impl Interpreter {
             else {
                 return false;
             };
+            let bound = usize::try_from(parts.binding_count.get(at).copied().unwrap_or(0))
+                .unwrap_or(usize::MAX);
+            let bound_to = binding_at.saturating_add(bound);
+            let Some(features) = parts.binding_feature.get(binding_at..bound_to) else {
+                return false;
+            };
+            let mut bindings: Vec<Binding> = Vec::with_capacity(bound);
+            for (slot, feature) in features.iter().enumerate() {
+                let axis = |k: usize| -> i32 {
+                    binding_at
+                        .saturating_add(slot)
+                        .checked_mul(3)
+                        .and_then(|base| base.checked_add(k))
+                        .and_then(|index| parts.binding_at.get(index).copied())
+                        .unwrap_or(0)
+                };
+                bindings.push(Binding {
+                    feature: *feature,
+                    at: [axis(0), axis(1), axis(2)],
+                });
+            }
             let base = at.saturating_mul(3);
             states.push(PlanState {
                 deaths_match: parts.deaths_match.get(at).copied().unwrap_or(0),
@@ -527,8 +663,16 @@ impl Interpreter {
                 fallback_leg: parts.fallback_leg.get(at).copied().unwrap_or(0),
                 fires: fires.to_vec(),
                 ready: ready.to_vec(),
+                bound_feature: parts.bound_feature.get(at).copied().unwrap_or(NO_INDEX),
+                bindings,
+                resumed: parts.resumed.get(at).copied().unwrap_or(0) != 0,
+                restart_beacon: parts.restart_beacon.get(at).copied().unwrap_or(NO_INDEX),
+                restart_rule: parts.restart_rule.get(at).copied().unwrap_or(NO_INDEX),
+                restart_at: parts.restart_at.get(at).copied().unwrap_or(NO_INDEX),
+                restart_row: parts.restart_row.get(at).copied().unwrap_or(0),
             });
             rule_at = to;
+            binding_at = bound_to;
             at = at.saturating_add(1);
         }
         self.plans.resize(seats, None);
@@ -548,6 +692,11 @@ impl Interpreter {
             };
             state.fires.resize(plan.handlers().len(), 0);
             state.ready.resize(plan.handlers().len(), 0);
+            // The room a step's bindings need, reserved here for the reason
+            // the seal reserves it: binding inside a tick allocates nothing.
+            state
+                .bindings
+                .reserve(plan.max_bindings().saturating_sub(state.bindings.len()));
         }
         self.states = states;
         true
@@ -607,6 +756,24 @@ pub struct PlanParts {
     pub fires: Vec<u32>,
     /// Cooldown ticks, packed in seat order.
     pub ready: Vec<u32>,
+    /// The feature a `covering` step chose, per seat.
+    pub bound_feature: Vec<u32>,
+    /// How many bindings each seat's step in progress holds.
+    pub binding_count: Vec<u32>,
+    /// Each binding's feature, packed in seat order.
+    pub binding_feature: Vec<u32>,
+    /// Each binding's column, three whole voxels per binding, packed.
+    pub binding_at: Vec<i32>,
+    /// Whether the step is a placement resumed as a visit, per seat.
+    pub resumed: Vec<u8>,
+    /// The beacon a restarted placement resumes at, per seat.
+    pub restart_beacon: Vec<u32>,
+    /// The rule body that placement is in, per seat.
+    pub restart_rule: Vec<u32>,
+    /// That placement's step index, per seat.
+    pub restart_at: Vec<u32>,
+    /// The first initial row it had not committed, per seat.
+    pub restart_row: Vec<u32>,
 }
 
 impl PlanParts {
@@ -649,7 +816,21 @@ impl PlanParts {
             || self.last_hp.len() != seats
             || self.fallback_leg.len() != seats
             || self.rule_count.len() != seats
+            || self.bound_feature.len() != seats
+            || self.binding_count.len() != seats
+            || self.resumed.len() != seats
+            || self.restart_beacon.len() != seats
+            || self.restart_rule.len() != seats
+            || self.restart_at.len() != seats
+            || self.restart_row.len() != seats
         {
+            return false;
+        }
+        let mut bound: usize = 0;
+        for count in &self.binding_count {
+            bound = bound.saturating_add(usize::try_from(*count).unwrap_or(usize::MAX));
+        }
+        if bound != self.binding_feature.len() || bound.saturating_mul(3) != self.binding_at.len() {
             return false;
         }
         // Every stage byte must name a stage this build defines, for the reason
@@ -685,18 +866,14 @@ pub enum StepFailure {
     NoTarget,
     /// No route exists to the target — the walker is sealed in (item 60).
     NoPath,
-    /// The commander is not within interface range of the beacon, or left it
-    /// mid-visit (spec section 5).
+    /// The commander left the visit's range mid-visit (spec section 5).
     OutOfRange,
-    /// The beacon is not the seat's own. *Touch to change* is a rule about your
-    /// own beacons: beacon capture is explicitly out of v1 (AGENTS.md §11), so
-    /// an interface with somebody else's beacon fails rather than quietly
-    /// rewriting their writ.
-    NotOwn,
     /// The beacon being interfaced with was destroyed.
     BeaconGone,
-    /// The site is not inside one of the seat's own spheres, or not within the
-    /// commander's placement range.
+    /// The site is not a legal one: not inside one of the seat's own spheres,
+    /// on the column of one of the seat's own live beacons (no stacking), or,
+    /// for a description, no candidate it matched has a legal site
+    /// (`docs/design/targeting.md`, "Failure").
     IllegalSite,
     /// There is no room in the beacon table for another beacon.
     NoBeaconRoom,
@@ -711,9 +888,14 @@ pub enum StepFailure {
     /// step"). In S1 the deploy is the only step that spends, so this is a
     /// `place_beacon` whose `structures.beacon.cost_dollars` the seat's `$`
     /// does not reach when the deploy would start (decision 7 of S1's plan,
-    /// ruled by item 128). Id 11 is `feature_lost`, which the targeting lane
-    /// adds (`targeting.md`'s failure table).
+    /// ruled by item 128).
     Unaffordable,
+    /// A feature the step bound when it started -- a vent or seam it is
+    /// covering or building on -- is **lost**: no exposed vent material, or no
+    /// ore, is left in its footprint (`docs/design/targeting.md`, "Three
+    /// reading rules" and "Failure"). A step checks its bound features at each
+    /// decision, and no row ever commits a lost target.
+    FeatureLost,
 }
 
 impl StepFailure {
@@ -732,11 +914,17 @@ impl StepFailure {
         StepFailure::NoBeaconRoom,
         StepFailure::NoMast,
         StepFailure::CommanderDead,
-        StepFailure::NotOwn,
+        StepFailure::FeatureLost,
         StepFailure::Unaffordable,
     ];
 
-    /// The wire id. Additive only: never reuse, never renumber.
+    /// The id `not_own` carried until S1: **retired, never reused**. It told a
+    /// seat whether an unseen enemy beacon was alive, and `no_target` answers
+    /// instead (`docs/design/targeting.md`, "Failure").
+    pub const RETIRED_NOT_OWN: u8 = 10;
+
+    /// The wire id. Additive only: never reuse, never renumber. Id 10 is
+    /// retired ([`StepFailure::RETIRED_NOT_OWN`]).
     #[must_use]
     pub const fn id(self) -> u8 {
         match self {
@@ -749,7 +937,7 @@ impl StepFailure {
             StepFailure::NoBeaconRoom => 7,
             StepFailure::NoMast => 8,
             StepFailure::CommanderDead => 9,
-            StepFailure::NotOwn => 10,
+            StepFailure::FeatureLost => 11,
             StepFailure::Unaffordable => 12,
         }
     }
@@ -762,12 +950,12 @@ impl StepFailure {
             StepFailure::NoTarget => "no_target",
             StepFailure::NoPath => "no_path",
             StepFailure::OutOfRange => "out_of_range",
-            StepFailure::NotOwn => "not_own",
             StepFailure::BeaconGone => "beacon_gone",
             StepFailure::IllegalSite => "illegal_site",
             StepFailure::NoBeaconRoom => "no_beacon_room",
             StepFailure::NoMast => "no_mast",
             StepFailure::CommanderDead => "commander_dead",
+            StepFailure::FeatureLost => "feature_lost",
             StepFailure::Unaffordable => "unaffordable",
         }
     }

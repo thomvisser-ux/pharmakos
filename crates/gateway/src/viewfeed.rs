@@ -133,6 +133,9 @@ struct ViewerState {
     /// Opaque handles, in the order this viewer first saw each thing.
     units: Vec<(u32, String)>,
     structures: Vec<(u32, String)>,
+    /// The viewer's `e_NN` handles for other seats' beacons, by beacon id,
+    /// in the order it was first shown each one.
+    beacons: Vec<(u32, String)>,
 }
 
 impl ViewerState {
@@ -147,6 +150,7 @@ impl ViewerState {
             },
             units: Vec::new(),
             structures: Vec::new(),
+            beacons: Vec::new(),
         }
     }
 }
@@ -567,6 +571,83 @@ impl ViewFeed {
     /// This viewer's opaque handle for a structure. As [`ViewFeed::unit_handle`].
     pub fn structure_handle(&mut self, viewer: Viewer, id: u32) -> String {
         ViewFeed::handle(&mut self.viewers, viewer, id, true)
+    }
+
+    /// This viewer's name for the beacon at `row` of `world`'s table.
+    ///
+    /// A seat's **own** beacon is its `b_NN`, the beacon's per-seat ordinal,
+    /// so a seat's core is `b_00` (decisions-log item 127 (13)). **Anybody
+    /// else's** is an `e_NN`: a handle minted for this viewer the first time
+    /// it is shown that beacon, counting from `e_01`, exactly as
+    /// [`ViewFeed::unit_handle`] mints a unit's (`docs/design/targeting.md`,
+    /// "Names"). Either way the number counts what this viewer already knows,
+    /// so no name tells a seat how many beacons another has placed. A
+    /// spectator and the lobby own no beacon, so every beacon is an `e_NN` to
+    /// them.
+    ///
+    /// Re-minted on a restore, with the unit and structure handles (the
+    /// module docs): an `e_NN` reaches no hashed state and no verifier
+    /// scope in S1 (S3 gives the knowledge store the sighted enemy beacons,
+    /// register S3-04), and the sim answers one with `no_target`.
+    pub fn beacon_name(
+        &mut self,
+        viewer: Viewer,
+        world: &pharmakos_sim::world::World,
+        row: usize,
+    ) -> String {
+        let beacons = world.beacons();
+        let owner = beacons.seats().get(row).copied();
+        if let Viewer::Seat(seat) = viewer
+            && owner == Some(seat.raw())
+        {
+            return pharmakos_sim::tables::own_beacon_name(
+                beacons.ordinals().get(row).copied().unwrap_or(0),
+            );
+        }
+        let id = beacons.ids().get(row).copied().unwrap_or(u32::MAX);
+        let index = slot_of(&mut self.viewers, viewer);
+        let Some(state) = self.viewers.get_mut(index) else {
+            return String::new();
+        };
+        if let Some((_, name)) = state.beacons.iter().find(|(held, _)| *held == id) {
+            return name.clone();
+        }
+        let number = u32::try_from(state.beacons.len())
+            .unwrap_or(u32::MAX)
+            .saturating_add(1);
+        let name = pharmakos_sim::tables::foreign_beacon_name(number);
+        state.beacons.push((id, name.clone()));
+        name
+    }
+
+    /// The row of `world`'s beacon table a name names **for this viewer**, or
+    /// `None`.
+    ///
+    /// A `b_NN` names the viewer's own beacon with that ordinal, and only a
+    /// seat owns beacons. An `e_NN` names the beacon this viewer was shown
+    /// under that handle, and nothing else: a handle never shown to this
+    /// viewer names nothing, so a guess answers exactly as an absent beacon
+    /// does.
+    #[must_use]
+    pub fn beacon_row(
+        &self,
+        viewer: Viewer,
+        world: &pharmakos_sim::world::World,
+        name: &str,
+    ) -> Option<usize> {
+        let beacons = world.beacons();
+        match pharmakos_sim::tables::parse_beacon_name(name)? {
+            pharmakos_sim::tables::BeaconName::Own(ordinal) => match viewer {
+                Viewer::Seat(seat) => beacons.row_of_ordinal(seat, ordinal),
+                Viewer::Spectator { .. } | Viewer::Admin => None,
+            },
+            pharmakos_sim::tables::BeaconName::Foreign(number) => {
+                let wanted = pharmakos_sim::tables::foreign_beacon_name(number);
+                let state = self.viewers.iter().find(|state| state.viewer == viewer)?;
+                let (id, _) = state.beacons.iter().find(|(_, held)| *held == wanted)?;
+                beacons.ids().iter().position(|held| held == id)
+            }
+        }
     }
 
     fn handle(viewers: &mut Vec<ViewerState>, viewer: Viewer, id: u32, structure: bool) -> String {

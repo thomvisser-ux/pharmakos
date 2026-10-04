@@ -1268,8 +1268,9 @@ fn another_seats_beacon_carries_its_owner_and_nothing_else() {
         );
         let rows = support::array_of(&listed, "beacons");
         assert!(rows.len() >= 2, "both seats' cores: {rows:?}");
-        let (theirs, _) = support::core_beacon(&surface, 1);
-        let theirs = pharmakos_gateway::view::beacon_id(theirs);
+        // Seat 1's core, as seat 0 is shown it: an `e_NN` minted for seat 0
+        // on first sighting, and the first it was shown (item 127 (13)).
+        let theirs = String::from("e_01");
         for row in &rows {
             let keys: Vec<String> = match row {
                 Json::Object(entries) => entries.iter().map(|(key, _)| key.clone()).collect(),
