@@ -124,10 +124,26 @@ from tick 211 (seat 0's deploy). `expand-east-segment` and its event log did
 not move: its deploy fails `illegal_site` as it starts, before the charge, so
 nothing is ever paid. The two `scenarios/s1/` chains are new.
 
+**S1's targeting (`tgt`) moved every chain from its first line (tick 1)**
+(decisions-log item 127 (12) and (13); `docs/design/targeting.md`). The
+canonical encoding gained columns -- each beacon's per-seat ordinal, each Build
+target's bound feature and description, each seat's step bindings and restart
+point -- so every tick's hash moved whatever the match did. What the matches
+*did* moved in two places, both read: `expand-east-segment`'s event log, where
+`b_01` is now each seat's own first placed beacon (per-seat names), which
+neither places, so seat 0's tail fails `no_target` (2) instead of the retired
+`not_own` (10) and seat 1's fails the same way instead of walking to its core
+(tick 2411); and `against-easy-three-rounds`, where seat 0's carried deploy is
+refused in rounds 2 and 3 by no stacking (`illegal_site`, ticks 4056 and 5191)
+instead of placing a second beacon on its round-1 column (the demo's F4).
+Every tick the other scenarios quote is where it was. `cover-nearest-vent` is
+new.
+
 `expand-east-segment` carries one more thing worth knowing before its chain is
 read. The playbook it seals **does not qualify against either seat's own frozen
-snapshot** on this map: `E0401` for `b_01`, which is seat 1's core and is not in
-seat 0's view, and `E0403` for a site two hundred and sixty voxels outside every
+snapshot** on this map: `E0401` for `b_01`, which since S1 names each seat's own
+first placed beacon and neither has one yet, and `E0403` for a site two hundred
+and sixty voxels outside every
 sphere. No client could submit it. `gamectl scenario run` therefore seals it
 through a documented harness door and prints a `note` line saying so on every
 run; `deploy-and-visit` needs no such line. See `crates/gamectl/src/scenario/

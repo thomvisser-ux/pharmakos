@@ -112,6 +112,37 @@ lane made the final audit name a round-limit winner at the match's final tick;
 the 1 200-tick run never reaches the default six rounds, so that does not
 reach this chain.
 
+## What moved it (S1's targeting, `tgt`)
+
+**The encoding gained columns, so the chain diverges at tick 0**, its first
+line (decisions-log item 127 (12) and (13); `docs/design/targeting.md`,
+contract pull requests 2 and 3). Every beacon row now carries its **per-seat
+ordinal** (what a seat's `b_NN` names; a seat's core is `b_00`), every Build
+target its bound feature and description, and every seat's plan state its
+step bindings, its covering feature and a restarted placement's beacon and
+row. Those are AGENTS.md §4.8's "hash everything you add", and the snapshot
+version moved to 7 with them.
+
+The harness itself changed too, in two places, both determinism code:
+
+* **Its deploy moved off the core's column.** S1's no-stacking rule refuses a
+  site on one of the seat's own live beacons, and the old site was the `safest`
+  beacon's own anchor, the core it had just walked to. Each seat now deploys
+  at `pharmakos_sim::determinism_site`, three voxels east of its own core
+  (`DETERMINISM_SITE_OFFSET_VOXELS`), inside the interface range, so the
+  walk-in is nothing and the deploy still lands in the first 20-second segment
+  and in `tests/allocations.rs`'s counted window. The file now varies by seat
+  in that one place.
+* **A `covering` step runs inside the tick.** After the wait, a `place_beacon`
+  covering the nearest uncovered vent resolves its description -- the
+  estimator's "nearest", the covering spiral -- and walks toward the site for
+  its five-second timeout, so the chain covers S1's resolver; it never deploys.
+
+The walk-in, the charge moved to the deploy's start after the walk-in, and the
+per-seat table room (the world total divided by the seat count) are in the run
+as well; at four seats each seat may place 10 beacons and fabricate 75 units,
+which the 1 200-tick run never reaches.
+
 ## What a diff means
 
 **The sim's behaviour changed.** That is all it can mean: the chain is a pure
