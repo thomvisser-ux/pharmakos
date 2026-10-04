@@ -703,7 +703,7 @@ gp.v1.Playbook.Kind
 
 ## Diagnostics
 
-57 codes. A code is language-neutral, append-only and never
+69 codes. A code is language-neutral, append-only and never
 reused; only an ERROR stops a playbook qualifying. `none at the skeleton` names the
 task that owes the emitter, which is honesty about coverage rather than a gap.
 
@@ -868,6 +868,34 @@ E0406  ERROR  references and placement  raised at: semantics
   the area is inside out: min ({minx}, {miny}, {minz}) is not at or below max ({maxx}, {maxy}, {maxz}) on every axis.
   The two corners of this box are the wrong way round, so the box holds nothing.
 
+E0407  ERROR  references and placement  raised at: structure
+  `covering` is legal only in a place_beacon's `at`, which is where a new beacon goes; here it names no site a beacon is placed at.
+  "A site covering a vent" says where a new beacon goes, so it belongs in a place-beacon step and nowhere else.
+
+E0408  ERROR  references and placement  raised at: structure
+  `on` is legal only in a Build target's anchor, and as a `feature_id` in remove_build_target; here there is no structure for it to stand.
+  "On a vent" says where a building goes, so it belongs in a Build target.
+
+E0409  ERROR  references and placement  raised at: structure
+  `covered` is legal only under `on` in a Build target inside the `initial` of a place_beacon whose `at` is `covering`: it means the feature that beacon was placed to cover.
+  "The vent this beacon was placed to cover" only means something for a beacon placed to cover one, in the settings it starts with.
+
+E0410  ERROR  references and placement  raised at: structure
+  remove_build_target names the target it removes by its feature's `feature_id`; a description names no one target to remove.
+  To take a building off the list, name the vent it stands on.
+
+E0411  ERROR  references and placement  raised at: structure
+  `coverage` must be omitted under `on`: the pick ranks the vents inside the target beacon's sphere, and coverage is not one of its filters there.
+  Under "on", leave the coverage out.
+
+E0412  ERROR  references and placement  raised at: resolve
+  `{id}` is not a feature this seat's snapshot holds.
+  The seat does not know a vent or seam by that name.
+
+E0413  ERROR  references and placement  raised at: semantics
+  `on` stands a structure on a heat vent, and {what} names a scrap seam.
+  Buildings stand on vents. A seam is dug, not built on.
+
 E0501  ERROR  settings and recycle  raised at: semantics
   `{field}` is {found}; it must be between 0 and 100.
   A percentage runs from none of it to all of it.
@@ -895,6 +923,10 @@ E0506  ERROR  settings and recycle  raised at: none at the skeleton (S4, with th
 E0507  ERROR  settings and recycle  raised at: none at the skeleton (S4, with licences)
   `{id}` needs a licence this seat does not hold.
   The seat has not earned the right to build this yet.
+
+W0501  WARNING  settings and recycle  raised at: semantics
+  `seam_choice` SAFEST reads as NEAREST until S2's threat model arrives.
+  "Safest" needs threats to weigh, and they come later. Until then this beacon digs the nearest seam.
 
 E0601  ERROR  economy, power and messaging  raised at: none at the skeleton (S1, the estimate stage)
   the playbook adds {found} kW of draw beyond supply; set `allow_dormant_beacons` to accept the shortfall instead.
@@ -928,6 +960,18 @@ W0703  WARNING  schedule, conflicts and staleness  raised at: none at the skelet
   the sighting this rests on is {found} ms old; the reach window is {max} ms.
   What the seat remembers here may be too old to act on.
 
+W0704  WARNING  schedule, conflicts and staleness  raised at: lint
+  {what} matches nothing on the map right now: {why}.
+  Unless the map changes before this step starts, it finds nothing and fails.
+
+W0705  WARNING  schedule, conflicts and staleness  raised at: lint
+  an earlier step places a beacon, so {what} may read differently when this step starts than it does now.
+  A description is read when its step starts, and a beacon placed before then can change what it picks.
+
+W0706  WARNING  schedule, conflicts and staleness  raised at: lint
+  every vent a beacon at this fixed site could cover is already covered: {feature} by your `{beacon}`.
+  A fixed site puts its beacon in the same place every time. A description such as "the nearest vent you do not cover" reads the map again each round.
+
 I0001  INFO  information  raised at: none at the skeleton (T7/S1, the estimate stage)
   the route is about {found} ms of walking.
   Roughly how long the walking takes.
@@ -935,3 +979,7 @@ I0001  INFO  information  raised at: none at the skeleton (T7/S1, the estimate s
 I0002  INFO  information  raised at: none at the skeleton (S3, the lint stage)
   `{selector}` would resolve to `{id}` right now.
   What this selector picks if the round started now.
+
+I0003  INFO  information  raised at: structure
+  `{field}` is omitted and reads as {value}.
+  A setting left out takes its named default.

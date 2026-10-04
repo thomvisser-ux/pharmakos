@@ -405,7 +405,11 @@ What moves a demo case, and what a diff means:
   re-tune moves every `_verify` and every `_render` case), the segment ladder
   the footer names, or the frozen snapshot's shape. A
   widened snapshot moves every `report_hash` here with the verifier's own
-  goldens, and the pull request re-blesses both and says why.
+  goldens, and the pull request re-blesses both and says why. So does a
+  widened seat view (`pharmakos_verifier::Scope`'s encoding): S1's targeting
+  verifier added the map's features and the commander's position to it, which
+  moved every `report_hash` here while the gateway still fills neither, and
+  S1's task `tgtw` moves them again when it does.
 * **The verifier or the renderer moved.** A new diagnostic, a changed lint or a
   changed `verifier_version` moves the `_verify` cases; a template string in
   `render_plan` moves every `_render` case. A report that stops qualifying is

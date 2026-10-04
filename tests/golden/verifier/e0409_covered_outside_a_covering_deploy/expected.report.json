@@ -1,0 +1,19 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0409",
+      "severity": "ERROR",
+      "path": "/declarative/route/0/interface/rows/0/add_build_target/target/anchor/on/covered",
+      "message": "`covered` is legal only under `on` in a Build target inside the `initial` of a place_beacon whose `at` is `covering`: it means the feature that beacon was placed to cover.",
+      "beginner": "\"The vent this beacon was placed to cover\" only means something for a beacon placed to cover one, in the settings it starts with."
+    }
+  ],
+  "report_hash": "eN2ZjqUNZhM=",
+  "rules_hash": "p1QGoPeYo6c=",
+  "plan_fingerprint": "zOxU/YTLg4I=",
+  "verifier_version": "0.1.0-skeleton",
+  "size_units": 2,
+  "size_budget": 128
+}
+

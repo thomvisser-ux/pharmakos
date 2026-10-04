@@ -2,6 +2,20 @@
   "depth": "FULL",
   "diagnostics": [
     {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/0/place_beacon/initial/mandate/build/terraform",
+      "message": "`terraform` is omitted and reads as NONE.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/0/place_beacon/initial/mandate/build/terraform\",\"value\":\"NONE\"}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
       "code": "E0406",
       "severity": "ERROR",
       "path": "/declarative/route/0/place_beacon/initial/mandate/build/protected_areas/0",
@@ -21,7 +35,7 @@
       ]
     }
   ],
-  "report_hash": "PoVqM86S/xk=",
+  "report_hash": "/Sur9FXvsu8=",
   "rules_hash": "p1QGoPeYo6c=",
   "plan_fingerprint": "esngw5AWuiY=",
   "verifier_version": "0.1.0-skeleton",

@@ -42,6 +42,7 @@
 
 use pharmakos_proto::gp::api::v1::diagnostic::Severity;
 use pharmakos_proto::gp::api::v1::verify_plan::Depth;
+use pharmakos_proto::gp::v1::by_richness::Richness;
 use pharmakos_proto::json::{self, Json};
 use pharmakos_sim::knowledge::SeatEconomy;
 use pharmakos_sim::math::random::{Stream, StreamRng};
@@ -49,7 +50,9 @@ use pharmakos_sim::rules::RulesTable;
 use pharmakos_sim::snapshot::{SNAPSHOT_VERSION, Snapshot};
 use pharmakos_sim::tables::SeatId;
 use pharmakos_verifier::catalogue::CATALOGUE;
-use pharmakos_verifier::{Input, KnownBeacon, Ownership, Scope, VERIFIER_VERSION, verify};
+use pharmakos_verifier::{
+    FeatureKind, Input, KnownBeacon, KnownFeature, Ownership, Scope, VERIFIER_VERSION, verify,
+};
 
 use pharmakos_proto::gp::v1::Voxel;
 use pharmakos_proto::gp::v1::beacon_filter::MandateKind;
@@ -209,11 +212,46 @@ impl Shape {
     }
 
     fn location(&mut self) -> Json {
+        // Targeting's two arms (S1), never on a clean run: they are legal in
+        // one slot each, so most places this lands are refusals.
+        if self.damage(4) {
+            return self.feature_site();
+        }
         match self.below(3) {
             0 => Json::Object(vec![("voxel".to_owned(), self.voxel())]),
             1 => Json::Object(vec![("beacon_anchor".to_owned(), self.beacon_ref())]),
             _ => Json::Object(vec![("safest".to_owned(), Json::Object(Vec::new()))]),
         }
+    }
+
+    /// `on` or `covering`, with a name, a pick (sometimes with its rank or
+    /// coverage left out), `covered {}`, or nothing chosen at all.
+    fn feature_site(&mut self) -> Json {
+        let arm = if self.rarely(2) { "on" } else { "covering" };
+        let pick = |rank: bool, coverage: Option<&str>| {
+            let mut fields: Vec<(String, Json)> = Vec::new();
+            if rank {
+                fields.push(("rank".to_owned(), Json::String("NEAREST".to_owned())));
+            }
+            if let Some(filter) = coverage {
+                fields.push(("coverage".to_owned(), Json::String(filter.to_owned())));
+            }
+            Json::Object(fields)
+        };
+        let reference = match self.below(6) {
+            0 => ("feature_id", Json::String("vent_150_25".to_owned())),
+            1 => ("feature_id", Json::String(self.name())),
+            2 => ("vent", pick(true, Some("UNCOVERED"))),
+            3 => ("seam", pick(self.rarely(2), Some("ANY"))),
+            4 => ("vent", pick(true, None)),
+            _ => ("covered", Json::Object(Vec::new())),
+        };
+        let inner = if self.rarely(8) {
+            Json::Object(Vec::new())
+        } else {
+            Json::Object(vec![(reference.0.to_owned(), reference.1)])
+        };
+        Json::Object(vec![(arm.to_owned(), inner)])
     }
 
     fn condition(&mut self, depth: i32) -> Json {
@@ -533,19 +571,29 @@ fn rules() -> RulesTable {
 }
 
 fn scope() -> Scope {
-    Scope::new(SeatId::new(0), SeatEconomy::default()).with_beacon(KnownBeacon {
-        beacon_id: "b_01".to_owned(),
-        owner: SeatId::new(0),
-        side: Ownership::Own,
-        mandate: MandateKind::Build,
-        tags: Vec::new(),
-        at: Voxel {
-            x: 80,
-            y: 11,
-            z: 55,
-        },
-        is_core: true,
-    })
+    Scope::new(SeatId::new(0), SeatEconomy::default())
+        .with_beacon(KnownBeacon {
+            beacon_id: "b_01".to_owned(),
+            owner: SeatId::new(0),
+            side: Ownership::Own,
+            mandate: MandateKind::Build,
+            tags: Vec::new(),
+            at: Voxel {
+                x: 80,
+                y: 11,
+                z: 55,
+            },
+            is_core: true,
+        })
+        .with_feature(KnownFeature {
+            feature_id: "vent_150_25".to_owned(),
+            kind: FeatureKind::Vent,
+            grade: Richness::Standard,
+            x: 150,
+            y: 25,
+            live: true,
+            covered_by: None,
+        })
 }
 
 fn snapshot() -> Vec<u8> {

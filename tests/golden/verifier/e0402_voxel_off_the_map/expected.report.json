@@ -2,6 +2,20 @@
   "depth": "FULL",
   "diagnostics": [
     {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/0/move/pace",
+      "message": "`pace` is omitted and reads as DIRECT.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/0/move/pace\",\"value\":\"DIRECT\"}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
       "code": "E0402",
       "severity": "ERROR",
       "path": "/declarative/route/0/move/to/voxel",
@@ -14,7 +28,7 @@
       ]
     }
   ],
-  "report_hash": "Hni625u4R38=",
+  "report_hash": "ypGGqg6AXcc=",
   "rules_hash": "p1QGoPeYo6c=",
   "plan_fingerprint": "DiFymx5QiqY=",
   "verifier_version": "0.1.0-skeleton",

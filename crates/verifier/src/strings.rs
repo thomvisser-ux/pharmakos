@@ -264,6 +264,49 @@ pub const VERIFIER_STRINGS: &[Text] = &[
                   ({maxx}, {maxy}, {maxz}) on every axis.",
         beginner: "The two corners of this box are the wrong way round, so the box holds nothing.",
     },
+    Text {
+        code: "E0407",
+        message: "`covering` is legal only in a place_beacon's `at`, which is where a new beacon \
+                  goes; here it names no site a beacon is placed at.",
+        beginner: "\"A site covering a vent\" says where a new beacon goes, so it belongs in a \
+                   place-beacon step and nowhere else.",
+    },
+    Text {
+        code: "E0408",
+        message: "`on` is legal only in a Build target's anchor, and as a `feature_id` in \
+                  remove_build_target; here there is no structure for it to stand.",
+        beginner: "\"On a vent\" says where a building goes, so it belongs in a Build target.",
+    },
+    Text {
+        code: "E0409",
+        message: "`covered` is legal only under `on` in a Build target inside the `initial` of a \
+                  place_beacon whose `at` is `covering`: it means the feature that beacon was \
+                  placed to cover.",
+        beginner: "\"The vent this beacon was placed to cover\" only means something for a beacon \
+                   placed to cover one, in the settings it starts with.",
+    },
+    Text {
+        code: "E0410",
+        message: "remove_build_target names the target it removes by its feature's `feature_id`; \
+                  a description names no one target to remove.",
+        beginner: "To take a building off the list, name the vent it stands on.",
+    },
+    Text {
+        code: "E0411",
+        message: "`coverage` must be omitted under `on`: the pick ranks the vents inside the \
+                  target beacon's sphere, and coverage is not one of its filters there.",
+        beginner: "Under \"on\", leave the coverage out.",
+    },
+    Text {
+        code: "E0412",
+        message: "`{id}` is not a feature this seat's snapshot holds.",
+        beginner: "The seat does not know a vent or seam by that name.",
+    },
+    Text {
+        code: "E0413",
+        message: "`on` stands a structure on a heat vent, and {what} names a scrap seam.",
+        beginner: "Buildings stand on vents. A seam is dug, not built on.",
+    },
     // --- E05xx: settings and recycle -----------------------------------------
     Text {
         code: "E0501",
@@ -300,6 +343,12 @@ pub const VERIFIER_STRINGS: &[Text] = &[
         code: "E0507",
         message: "`{id}` needs a licence this seat does not hold.",
         beginner: "The seat has not earned the right to build this yet.",
+    },
+    Text {
+        code: "W0501",
+        message: "`seam_choice` SAFEST reads as NEAREST until S2's threat model arrives.",
+        beginner: "\"Safest\" needs threats to weigh, and they come later. Until then this beacon \
+                   digs the nearest seam.",
     },
     // --- E06xx and W06xx: economy, power and messaging -----------------------
     Text {
@@ -344,6 +393,25 @@ pub const VERIFIER_STRINGS: &[Text] = &[
         message: "the sighting this rests on is {found} ms old; the reach window is {max} ms.",
         beginner: "What the seat remembers here may be too old to act on.",
     },
+    Text {
+        code: "W0704",
+        message: "{what} matches nothing on the map right now: {why}.",
+        beginner: "Unless the map changes before this step starts, it finds nothing and fails.",
+    },
+    Text {
+        code: "W0705",
+        message: "an earlier step places a beacon, so {what} may read differently when this \
+                  step starts than it does now.",
+        beginner: "A description is read when its step starts, and a beacon placed before then \
+                   can change what it picks.",
+    },
+    Text {
+        code: "W0706",
+        message: "every vent a beacon at this fixed site could cover is already covered: {feature} \
+                  by your `{beacon}`.",
+        beginner: "A fixed site puts its beacon in the same place every time. A description such \
+                   as \"the nearest vent you do not cover\" reads the map again each round.",
+    },
     // --- I...: information ---------------------------------------------------
     Text {
         code: "I0001",
@@ -355,7 +423,54 @@ pub const VERIFIER_STRINGS: &[Text] = &[
         message: "`{selector}` would resolve to `{id}` right now.",
         beginner: "What this selector picks if the round started now.",
     },
+    Text {
+        code: "I0003",
+        message: "`{field}` is omitted and reads as {value}.",
+        beginner: "A setting left out takes its named default.",
+    },
 ];
+
+// --- Words the templates' arguments use --------------------------------------
+//
+// A template's `{what}`, `{why}`, `{feature}` and `{value}` are filled at the
+// call site, and the English they are filled with lives here rather than there,
+// so the one table holds every word a player reads.
+
+/// A heat vent's display name, before its anchor: "Heat vent (120, 88)"
+/// (docs/design/targeting.md, "Names").
+pub const VENT_NAME: &str = "Heat vent";
+/// A scrap seam's display name, before its anchor.
+pub const SEAM_NAME: &str = "Scrap seam";
+/// A vent pick with no coverage filter: "the nearest vent".
+pub const PICK_NEAREST_VENT: &str = "the nearest vent";
+/// A seam pick with no coverage filter.
+pub const PICK_NEAREST_SEAM: &str = "the nearest seam";
+/// A vent pick under UNCOVERED.
+pub const PICK_NEAREST_UNCOVERED_VENT: &str = "the nearest vent you do not cover";
+/// A seam pick under UNCOVERED.
+pub const PICK_NEAREST_UNCOVERED_SEAM: &str = "the nearest seam you do not cover";
+/// W0704's reason when no feature of the kind is live.
+pub const WHY_NONE_LIVE: &str = "none of that kind is live";
+/// W0704's reason when every live one lies inside one of the seat's spheres.
+pub const WHY_ALL_COVERED: &str = "every live one is inside one of your spheres";
+/// W0704's reason for a name whose feature is lost.
+pub const WHY_LOST: &str = "it is lost";
+/// E0413's `{what}` for a seam pick.
+pub const SEAM_PICK: &str = "the `seam` pick";
+/// E0413's `{what}` for `covered` under a deploy that covers a seam.
+pub const COVERED_SEAM: &str = "`covered`, whose deploy covers a seam,";
+/// I0003's `{value}` for an omitted `pillar_spacing`.
+pub const NO_PILLARS: &str = "0, no pillars";
+/// W0706's Fix: swap the fixed site for the description it should have been.
+pub const FIX_COVER_NEAREST_VENT: &str = "Cover the nearest vent you do not cover yet";
+/// I0003's Fix: write the named default out.
+pub const FIX_WRITE_DEFAULT: &str = "Write the default out";
+/// E0111's Fix on a pick with no rank.
+pub const FIX_RANK_NEAREST: &str = "Rank it by nearest";
+/// E0111's Fix on a `covering` pick with no coverage filter.
+pub const FIX_COVERAGE_UNCOVERED: &str = "Pick only what you do not cover yet";
+/// E0411's Fix.
+pub const FIX_DROP_COVERAGE: &str = "Leave the coverage out";
 
 /// The row for one code, or `None` if the table does not have it.
 #[must_use]

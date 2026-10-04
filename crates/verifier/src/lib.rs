@@ -17,16 +17,27 @@
 //! | structure | [`structure`] | complete |
 //! | resolve | [`resolve`] | complete |
 //! | semantics | [`semantics`] | complete |
-//! | estimate | [`estimate`] | **present and empty** — T7, T8, S1 |
-//! | lint | [`lint`] | **present and empty** — S2, S3 |
+//! | estimate | [`estimate`] | **present and empty** — S1's `proj` fills it |
+//! | lint | [`lint`] | targeting's three lints (S1); S2 and S3 add the rest |
 //!
-//! FULL's two stages exist and do nothing, deliberately (decisions-log item
-//! 82): `verify_plan{depth}` and `report_hash` ship complete from day one, so
-//! the API shape and the hash contract never change when S1 and S3 fill them,
-//! and `submit_plan` runs FULL exactly as spec section 12 says. Today a FULL
-//! report therefore carries exactly QUICK's diagnostics —
-//! `full_finds_what_quick_finds` asserts it — and the two differ only in the
-//! depth stamped on the report and hashed into it.
+//! FULL's two stages shipped present and empty, deliberately (decisions-log
+//! item 82): `verify_plan{depth}` and `report_hash` were complete from day one,
+//! so the API shape and the hash contract never change as S1 and S3 fill them,
+//! and `submit_plan` runs FULL exactly as spec section 12 says. A FULL report
+//! carries QUICK's diagnostics first, in the same order, and then whatever the
+//! two FULL stages add, which today is targeting's lints and nothing that
+//! refuses — `full_finds_what_quick_finds` asserts it.
+//!
+//! # Targeting (S1)
+//!
+//! From S1 a playbook can name or describe a vent or a seam
+//! (docs/design/targeting.md). The verifier checks which arm stands where,
+//! the picks' ranks and filters, that a name exists and that `on` stands on a
+//! vent, and it lints a description that matches nothing, one an earlier
+//! placement may change, and a fixed site beside a vent the seat already
+//! covers. It **never ranks**: "nearest" is the sim's and the gateway's, and
+//! `tests/confinement.rs`'s `the_verifier_never_ranks` holds this crate to
+//! it.
 //!
 //! # Determinism
 //!
@@ -112,7 +123,7 @@ use pharmakos_sim::snapshot::{Snapshot, SnapshotError};
 
 pub use hash::REPORT_HASH_DOMAIN;
 pub use limits::{CONDITION_MAX_DEPTH, CONDITION_MAX_NODES, Limits, RulesGap};
-pub use scope::{KnownBeacon, Ownership, Scope};
+pub use scope::{FeatureKind, KnownBeacon, KnownFeature, Ownership, Scope};
 pub use size::size_units;
 
 /// This build of the verifier, opaque and hashed.

@@ -3,6 +3,20 @@
   "depth": "FULL",
   "diagnostics": [
     {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/0/move/pace",
+      "message": "`pace` is omitted and reads as DIRECT.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/0/move/pace\",\"value\":\"DIRECT\"}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
       "code": "E0404",
       "severity": "WARNING",
       "path": "/declarative/route/0/move/to/beacon_anchor/nearest/filter",
@@ -20,7 +34,7 @@
       ]
     }
   ],
-  "report_hash": "8q7GrEgI7wY=",
+  "report_hash": "RxqlDKxugsU=",
   "rules_hash": "p1QGoPeYo6c=",
   "plan_fingerprint": "xVJqfV5ZLUk=",
   "verifier_version": "0.1.0-skeleton",

@@ -1,0 +1,26 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0411",
+      "severity": "ERROR",
+      "path": "/declarative/route/0/interface/rows/0/add_build_target/target/anchor/on/vent/coverage",
+      "message": "`coverage` must be omitted under `on`: the pick ranks the vents inside the target beacon's sphere, and coverage is not one of its filters there.",
+      "beginner": "Under \"on\", leave the coverage out.",
+      "suggestions": [
+        {
+          "title": "Leave the coverage out",
+          "json_patch": "[{\"op\":\"remove\",\"path\":\"/declarative/route/0/interface/rows/0/add_build_target/target/anchor/on/vent/coverage\"}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    }
+  ],
+  "report_hash": "o67zOmt498o=",
+  "rules_hash": "p1QGoPeYo6c=",
+  "plan_fingerprint": "eZK07lKze/U=",
+  "verifier_version": "0.1.0-skeleton",
+  "size_units": 2,
+  "size_budget": 128
+}
+

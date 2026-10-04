@@ -1,0 +1,34 @@
+{
+  "qualifies": true,
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "W0706",
+      "severity": "WARNING",
+      "path": "/declarative/route/0/place_beacon/at/voxel",
+      "message": "every vent a beacon at this fixed site could cover is already covered: Heat vent (90, 20) by your `b_01`.",
+      "beginner": "A fixed site puts its beacon in the same place every time. A description such as \"the nearest vent you do not cover\" reads the map again each round.",
+      "suggestions": [
+        {
+          "title": "Cover the nearest vent you do not cover yet",
+          "json_patch": "[{\"op\":\"replace\",\"path\":\"/declarative/route/0/place_beacon/at\",\"value\":{\"covering\":{\"vent\":{\"rank\":\"NEAREST\",\"coverage\":\"UNCOVERED\"}}}}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ],
+      "map_refs": [
+        {
+          "x": 95,
+          "y": 25,
+          "z": 56
+        }
+      ]
+    }
+  ],
+  "report_hash": "tbBADZU6zYQ=",
+  "rules_hash": "p1QGoPeYo6c=",
+  "plan_fingerprint": "BoPiVpsxwuQ=",
+  "verifier_version": "0.1.0-skeleton",
+  "size_units": 1,
+  "size_budget": 128
+}
+

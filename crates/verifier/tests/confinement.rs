@@ -291,3 +291,60 @@ fn every_allow_is_audited_and_carries_a_reason() {
         findings.join("\n")
     );
 }
+
+#[test]
+fn the_verifier_never_ranks() {
+    // docs/design/targeting.md, "Surfaces": "The verifier checks vocabulary,
+    // legality of placement (which arm where), filters and existence, never
+    // rank." "Nearest" is the least estimated travel, and the estimator is the
+    // sim's pathing module, which the gateway lends to `resolve_refs` and
+    // `estimate_route`; a verifier that ranked would need it. So no source
+    // here names the pathfinder at all, and the one place the estimate stage
+    // is named is `lib.rs`'s pipeline. In particular the resolve stage, which
+    // is where a description would be "resolved" if anything here resolved
+    // one, never reaches `estimate` (S1's plan, task `tgtv`).
+    let mut findings: Vec<String> = Vec::new();
+    for path in sources() {
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let is_lib = path.ends_with("lib.rs");
+        let is_resolve = path.ends_with("resolve.rs");
+        for (number, line) in code_lines(&text) {
+            if line.contains("pathing") {
+                findings.push(format!(
+                    "{}:{number}: names the sim's pathfinder\n    {}",
+                    path.display(),
+                    line.trim()
+                ));
+            }
+            if line.contains("estimate::") && !is_lib {
+                findings.push(format!(
+                    "{}:{number}: reaches the estimate stage outside the pipeline\n    {}",
+                    path.display(),
+                    line.trim()
+                ));
+            }
+            if is_resolve && line.contains("estimate") {
+                findings.push(format!(
+                    "{}:{number}: the resolve stage names `estimate`\n    {}",
+                    path.display(),
+                    line.trim()
+                ));
+            }
+        }
+    }
+    assert!(
+        findings.is_empty(),
+        "the verifier checks and never ranks:\n{}",
+        findings.join("\n")
+    );
+    // The scan is looking at the right thing: lib.rs does call the stage.
+    let lib = std::fs::read_to_string(PathBuf::from("src").join("lib.rs")).expect("lib.rs");
+    assert!(
+        code_lines(&lib)
+            .iter()
+            .any(|(_, line)| line.contains("estimate::run")),
+        "lib.rs no longer runs the estimate stage, so this scan proves nothing"
+    );
+}

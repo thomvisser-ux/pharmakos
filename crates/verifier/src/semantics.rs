@@ -15,14 +15,26 @@
 //! they are the whole of why a playbook halts: the route is finite, it only ever
 //! moves down it, and nothing in it can block for ever.
 //!
-//! # Placement, and the one thing this stage cannot know
+//! # Placement, and what this stage cannot know
 //!
-//! A `place_beacon` site "must lie inside one of your own spheres **and** within
-//! the commander's placement range" (`gp.v1.PlaceBeaconStep`). Only the first
-//! half is a fact about the sealed playbook: the second is measured from the
-//! commander to the site *at the moment the step runs*, and the commander walks
-//! there first. So `E0403` checks the sphere and says so, and the placement
-//! range is a run-time failure that `on_fail` answers like any other.
+//! A `place_beacon` site "must lie inside one of your own spheres, and not on
+//! the column of one of your own live beacons" (`gp.v1.PlaceBeaconStep`). The
+//! commander walks there first, and there is no placement range to stand
+//! within any more (walk-in; decisions-log item 127 (12), amending item 11).
+//! The sphere is a fact about the sealed playbook and the seat's view, so
+//! `E0403` checks it; whether the walk arrives, and whether the site is still
+//! legal when it does, are run-time failures that `on_fail` answers like any
+//! other (`no_path`, `illegal_site`).
+//!
+//! # Targeting: what a name or a pick under `on` is
+//!
+//! `on` stands a structure on a heat vent (docs/design/targeting.md, "Sites":
+//! the pick "ranks only vents"), so a seam under it — a seam pick, a seam's
+//! name, or `covered {}` under a deploy that covers a seam — is `E0413`. This
+//! is S1's targeting verifier's reading (task `tgtv`): the page defines `on`
+//! over vents alone, and S1's only blueprint is the Generator.
+//! `seam_choice: SAFEST` reads as NEAREST until S2's threat model and is
+//! `W0501` (decisions-log item 127 (9), S1's plan's decision 6).
 //!
 //! # No dry runs
 //!
@@ -33,19 +45,23 @@
 
 use pharmakos_proto::gp::api::v1::patch_suggestion::Applicability;
 use pharmakos_proto::gp::v1::beacon_filter::{MandateKind, Side};
+use pharmakos_proto::gp::v1::feature_ref;
 use pharmakos_proto::gp::v1::handler::Resume;
+use pharmakos_proto::gp::v1::mine_settings::SeamChoice;
 use pharmakos_proto::gp::v1::on_fail::Action;
 use pharmakos_proto::gp::v1::{
-    Area, BeaconFilter, BuildTarget, InterfaceStep, Location, MandateSettings, Playbook, Step,
-    Voxel, beacon_ref, interface_row, location, mandate_settings,
+    Area, BeaconFilter, BuildTarget, FeatureRef, InterfaceStep, Location, MandateSettings,
+    Playbook, Step, Voxel, beacon_ref, interface_row, location, mandate_settings,
 };
 
 use crate::limits::Limits;
 use crate::pointer;
 use crate::report::{Builder, Diag, number, patch_add, patch_replace};
 use crate::resolve::Symbols;
-use crate::scope::{Ownership, Scope};
-use crate::walk::{self, List, Visit};
+use crate::scope::{FeatureKind, Ownership, Scope};
+use crate::strings;
+use crate::structure::arm_name;
+use crate::walk::{self, List, Slot, Visit};
 
 /// Run the stage.
 pub(crate) fn run(
@@ -226,9 +242,51 @@ impl Visit for Semantics<'_> {
         );
     }
 
+    fn location(&mut self, at: &str, place: &Location, slot: Slot<'_>) {
+        let Some(location::Place::On(feature)) = place.place.as_ref() else {
+            return;
+        };
+        let deploy = match slot {
+            Slot::BuildAnchor { deploy } => deploy,
+            Slot::RemoveAnchor => None,
+            // `E0408` from the structure stage: `on` cannot stand here at all.
+            Slot::PlaceSite | Slot::Elsewhere => return,
+        };
+        let Some(chosen) = feature.r#ref.as_ref() else {
+            return;
+        };
+        let removing = matches!(slot, Slot::RemoveAnchor);
+        let what = match chosen {
+            // A description under remove_build_target is `E0410` already.
+            feature_ref::Ref::Seam(_) if !removing => strings::SEAM_PICK.to_owned(),
+            feature_ref::Ref::FeatureId(id) if self.is_seam(id) => format!("`{id}`"),
+            feature_ref::Ref::Covered(_)
+                if deploy.is_some_and(|cover| self.names_a_seam(cover)) =>
+            {
+                strings::COVERED_SEAM.to_owned()
+            }
+            _ => return,
+        };
+        self.out.emit(
+            Diag::new(
+                "E0413",
+                pointer::child(&pointer::child(at, "on"), arm_name(chosen)),
+            )
+            .arg("what", what),
+        );
+    }
+
     fn mandate(&mut self, at: &str, settings: &MandateSettings) {
         if settings.mandate.is_none() {
             self.out.emit(Diag::new("E0502", at));
+        }
+        if let Some(mandate_settings::Mandate::Mine(mine)) = settings.mandate.as_ref() {
+            if mine.seam_choice() == SeamChoice::Safest {
+                self.out.emit(Diag::new(
+                    "W0501",
+                    pointer::child(&pointer::child(at, "mine"), "seam_choice"),
+                ));
+            }
         }
         self.percent(at, "retreat_hp_pct", settings.retreat_hp_pct);
         if let Some(mandate_settings::Mandate::Build(build)) = settings.mandate.as_ref() {
@@ -331,6 +389,24 @@ impl Semantics<'_> {
                     Applicability::MaybeIncorrect,
                 ),
         );
+    }
+
+    /// Whether the seat's view holds a feature of this name, and it is a seam.
+    /// A name the view does not hold is `E0412`'s, not this stage's.
+    fn is_seam(&self, feature_id: &str) -> bool {
+        self.scope
+            .feature(feature_id)
+            .is_some_and(|known| known.kind == FeatureKind::Seam)
+    }
+
+    /// Whether a `covering` reference names a seam: a seam pick, or the name
+    /// of a seam the view holds.
+    fn names_a_seam(&self, cover: &FeatureRef) -> bool {
+        match cover.r#ref.as_ref() {
+            Some(feature_ref::Ref::Seam(_)) => true,
+            Some(feature_ref::Ref::FeatureId(id)) => self.is_seam(id),
+            _ => false,
+        }
     }
 
     /// Whether a voxel is a place on this map at all.

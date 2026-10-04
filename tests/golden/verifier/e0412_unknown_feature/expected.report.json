@@ -1,0 +1,19 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0412",
+      "severity": "ERROR",
+      "path": "/declarative/route/0/place_beacon/at/covering/feature_id",
+      "message": "`vent_1_1` is not a feature this seat's snapshot holds.",
+      "beginner": "The seat does not know a vent or seam by that name."
+    }
+  ],
+  "report_hash": "sb1qaJRLhKA=",
+  "rules_hash": "p1QGoPeYo6c=",
+  "plan_fingerprint": "JglfCAqn5oI=",
+  "verifier_version": "0.1.0-skeleton",
+  "size_units": 1,
+  "size_budget": 128
+}
+

@@ -1,0 +1,19 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0410",
+      "severity": "ERROR",
+      "path": "/declarative/route/0/interface/rows/0/remove_build_target/anchor/on/vent",
+      "message": "remove_build_target names the target it removes by its feature's `feature_id`; a description names no one target to remove.",
+      "beginner": "To take a building off the list, name the vent it stands on."
+    }
+  ],
+  "report_hash": "oO6gH830eXk=",
+  "rules_hash": "p1QGoPeYo6c=",
+  "plan_fingerprint": "TG3cKIFK+7c=",
+  "verifier_version": "0.1.0-skeleton",
+  "size_units": 1,
+  "size_budget": 128
+}
+

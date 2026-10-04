@@ -20,9 +20,16 @@
 //! vocabulary can actually produce in the QUICK stages**, with the rest entered
 //! as rows that have no emitter yet. So the table is complete and the coverage
 //! is recorded in the same file. FULL's families — `E06xx`, `W06xx`, `W07xx`
-//! and the information codes — are entered and unemitted, consistent with item
+//! and the information codes — were entered unemitted, consistent with item
 //! 82's empty estimate and lint stages, and S1 and S3 fill them in without
-//! renumbering anything.
+//! renumbering anything. S1's targeting verifier (task `tgtv`) is the first to:
+//! the lint stage raises `W0704` to `W0706`, the structure stage `I0003`, and
+//! `E0407` to `E0413` and `W0501` join their families at the end. The estimate
+//! stage is still empty until S1's `proj` task.
+//!
+//! The label an unemitted row prints, `none at the skeleton (…)`, is kept as
+//! it was spelt when the table shipped, because `gamectl docs` quotes it; the
+//! parenthesis is what says who owes the row.
 //!
 //! [`Emitter::NoneYet`] carries the task or stage that fills the row, so
 //! "unemitted" is never a mystery: the catalogue says who owes it.
@@ -77,9 +84,9 @@ pub enum Stage {
     Resolve,
     /// The rules that need meaning: jumps forward, placement, settings.
     Semantics,
-    /// Travel, interface time, `$` and `kW` projection. Empty at the skeleton.
+    /// Travel, interface time, `$` and `kW` projection. Empty until S1's `proj`.
     Estimate,
-    /// Schedule, conflicts and staleness. Empty at the skeleton.
+    /// Schedule, conflicts and staleness: targeting's three lints from S1.
     Lint,
 }
 
@@ -475,6 +482,53 @@ pub const CATALOGUE: &[Entry] = &[
         severity: Severity::Error,
         emitter: Emitter::Stage(Stage::Semantics),
     },
+    // E0407 to E0413: targeting's sites (docs/design/targeting.md, "Sites";
+    // S1's plan, task `tgtv`). Which arm is legal where is a question about
+    // the file alone, so the structure stage asks it; whether a name exists
+    // is a resolve question, and whether the thing named is a vent is a
+    // semantics one, because it reads the seat's view.
+    Entry {
+        code: "E0407",
+        family: Family::ReferencesAndPlacement,
+        severity: Severity::Error,
+        emitter: Emitter::Stage(Stage::Structure),
+    },
+    Entry {
+        code: "E0408",
+        family: Family::ReferencesAndPlacement,
+        severity: Severity::Error,
+        emitter: Emitter::Stage(Stage::Structure),
+    },
+    Entry {
+        code: "E0409",
+        family: Family::ReferencesAndPlacement,
+        severity: Severity::Error,
+        emitter: Emitter::Stage(Stage::Structure),
+    },
+    Entry {
+        code: "E0410",
+        family: Family::ReferencesAndPlacement,
+        severity: Severity::Error,
+        emitter: Emitter::Stage(Stage::Structure),
+    },
+    Entry {
+        code: "E0411",
+        family: Family::ReferencesAndPlacement,
+        severity: Severity::Error,
+        emitter: Emitter::Stage(Stage::Structure),
+    },
+    Entry {
+        code: "E0412",
+        family: Family::ReferencesAndPlacement,
+        severity: Severity::Error,
+        emitter: Emitter::Stage(Stage::Resolve),
+    },
+    Entry {
+        code: "E0413",
+        family: Family::ReferencesAndPlacement,
+        severity: Severity::Error,
+        emitter: Emitter::Stage(Stage::Semantics),
+    },
     // --- E05xx: settings and recycle -----------------------------------------
     Entry {
         code: "E0501",
@@ -517,6 +571,16 @@ pub const CATALOGUE: &[Entry] = &[
         family: Family::SettingsAndRecycle,
         severity: Severity::Error,
         emitter: Emitter::NoneYet("S4, with licences"),
+    },
+    // A warning in the settings family, spelt with the `W` the spec gives a
+    // family's warnings, as `W06xx` beside `E06xx`. Decisions-log item 127 (9)
+    // and S1's plan's decision 6: `seam_choice: SAFEST` reads as NEAREST until
+    // S2's threat model, and the verifier says so.
+    Entry {
+        code: "W0501",
+        family: Family::SettingsAndRecycle,
+        severity: Severity::Warning,
+        emitter: Emitter::Stage(Stage::Semantics),
     },
     // --- E06xx and W06xx: economy, power and messaging -----------------------
     Entry {
@@ -574,6 +638,27 @@ pub const CATALOGUE: &[Entry] = &[
         severity: Severity::Warning,
         emitter: Emitter::NoneYet("S2/S3, with the reach window"),
     },
+    // Targeting's three lints (docs/design/targeting.md, "Surfaces"), the
+    // first codes the lint stage raises. Advice, never a refusal: each is a
+    // warning, and none of them ranks anything.
+    Entry {
+        code: "W0704",
+        family: Family::ScheduleConflictsAndStaleness,
+        severity: Severity::Warning,
+        emitter: Emitter::Stage(Stage::Lint),
+    },
+    Entry {
+        code: "W0705",
+        family: Family::ScheduleConflictsAndStaleness,
+        severity: Severity::Warning,
+        emitter: Emitter::Stage(Stage::Lint),
+    },
+    Entry {
+        code: "W0706",
+        family: Family::ScheduleConflictsAndStaleness,
+        severity: Severity::Warning,
+        emitter: Emitter::Stage(Stage::Lint),
+    },
     // --- I...: information ---------------------------------------------------
     Entry {
         code: "I0001",
@@ -586,6 +671,15 @@ pub const CATALOGUE: &[Entry] = &[
         family: Family::Information,
         severity: Severity::Info,
         emitter: Emitter::NoneYet("S3, the lint stage"),
+    },
+    // S1-39, S1's plan's decision 11 (item 128): an omitted `pace`,
+    // `seam_choice`, `pillar_spacing` or `terraform` reads as its named
+    // default, and the report says so.
+    Entry {
+        code: "I0003",
+        family: Family::Information,
+        severity: Severity::Info,
+        emitter: Emitter::Stage(Stage::Structure),
     },
 ];
 
@@ -631,6 +725,7 @@ pub fn catalogue_json() -> Json {
 mod tests {
     use super::{CATALOGUE, Emitter, Entry, Family, Stage, entry};
     use crate::strings::VERIFIER_STRINGS;
+    use pharmakos_proto::gp::api::v1::diagnostic::Severity;
 
     #[test]
     fn the_two_tables_name_the_same_codes() {
@@ -716,17 +811,27 @@ mod tests {
     }
 
     #[test]
-    fn nothing_the_skeleton_emits_hangs_off_an_empty_full_stage() {
-        // Item 82: estimate and lint are present and empty, so no row may claim
-        // one as its emitter until S1 and S3 fill them.
+    fn nothing_hangs_off_the_empty_estimate_stage_and_every_lint_is_advice() {
+        // Item 82, in its S1 form. The estimate stage is still present and
+        // empty until S1's `proj` task, so no row may claim it; the lint stage
+        // raises targeting's three lints, and a lint is advice, never a
+        // refusal (spec section 11: a playbook qualifies on zero errors), so a
+        // row that names the lint stage is never an ERROR.
         for row in CATALOGUE {
             if let Emitter::Stage(stage) = row.emitter {
                 assert!(
-                    stage.in_quick(),
-                    "{} names {} as its emitter, but that stage is empty at the skeleton",
-                    row.code,
-                    stage.name()
+                    stage != Stage::Estimate,
+                    "{} names the estimate stage as its emitter, but that stage is empty until \
+                     S1's proj task",
+                    row.code
                 );
+                if stage == Stage::Lint {
+                    assert!(
+                        row.severity != Severity::Error,
+                        "{} is an error raised by the lint stage; a lint never refuses a playbook",
+                        row.code
+                    );
+                }
             }
         }
     }
