@@ -44,14 +44,28 @@
 //! It does **not** say how long the commander will take to walk anywhere, when
 //! it will arrive, what the opponent will do, or how long the segment is. The
 //! first is [`crate::travel`]'s, rendered beside the route as a bound the
-//! editor draws; the last is not in the frozen snapshot yet
-//! ([`crate::context::segment_length_ms`]) and is left out rather than guessed.
+//! editor draws. The last *is* in the frozen snapshot, since T10
+//! ([`crate::context::segment_length_ms`]), and the prose still leaves it out:
+//! whether the route fits the coming segment is the verifier's estimate stage's
+//! to say (`W0701` and `I0001`, S1's plan's task `proj`), and a sentence here
+//! about the segment would be a claim beyond the file, the rate card and the
+//! meter, which item 97 rules out.
+//!
+//! # Targeting's descriptions read as what they are
+//!
+//! A `covering` or `on` site (docs/design/targeting.md) is rendered as the text
+//! the author wrote — "a site covering the nearest heat vent you do not cover
+//! yet" — never as what it would resolve to, because the sealed file holds the
+//! text and a carried playbook reads it again every round. A name reads as the
+//! feature it names, "Heat vent (120, 88)", from the name alone. Nothing here
+//! ranks.
 
+use pharmakos_proto::gp::v1::feature_ref::{self, Coverage, Rank};
 use pharmakos_proto::gp::v1::{
-    BeaconFilter, BeaconRef, Condition, Fallback, Handler, InterfaceRow, Location, MandateSettings,
-    OnDeath, Options, Playbook, Step, Voxel, beacon_filter, beacon_ref, cmdr_hp_pct, condition,
-    fallback, handler, int_compare, interface_row, location, mandate_settings, meta, on_death,
-    on_fail, playbook, step,
+    BeaconFilter, BeaconRef, Condition, Fallback, FeatureRef, Handler, InterfaceRow, Location,
+    MandateSettings, OnDeath, Options, Playbook, Step, Voxel, beacon_filter, beacon_ref,
+    cmdr_hp_pct, condition, fallback, handler, int_compare, interface_row, location,
+    mandate_settings, meta, on_death, on_fail, playbook, step,
 };
 use std::fmt::Write as _;
 
@@ -83,11 +97,12 @@ pub fn render_plan(
 
     let mut out = String::new();
     // `context` is the frozen snapshot's half of the rendering. Nothing in the
-    // prose reads it yet, because the one fact the prose would take from it —
-    // the coming segment's length — is not in the snapshot until T10
-    // (`crate::context::segment_length_ms`), and a rendering that guessed it
-    // would be the constant spec section 13 forbids. The argument is here from
-    // the start so that filling it in is a line in this function rather than a
+    // prose reads it yet. The one fact the prose would take from it, the
+    // coming segment's length, has been in the snapshot since T10
+    // (`crate::context::segment_length_ms`); whether the route fits it is the
+    // verifier's estimate stage's to say (S1's `proj`), so the prose does not
+    // state it (the module doc says why). The argument stays so that a fact
+    // the prose does come to read is a line in this function rather than a
     // signature change in every caller.
     let _ = context.segment_ms();
     envelope(playbook, &mut out);
@@ -316,19 +331,62 @@ fn priority(value: i32) -> &'static str {
 // ---------------------------------------------------------------------------
 
 fn location(place: Option<&Location>) -> String {
-    // Targeting's two sites, named plainly and not yet rendered: the verifier
-    // refuses both until S1's targeting verifier lane, which renders what they
-    // describe and moves these two lines into the string table with the rest.
-    const SITE_ON: &str = "a spot on a vent or seam (not in this build yet)";
-    const SITE_COVERING: &str = "a site covering a vent or seam (not in this build yet)";
     match place.and_then(|place| place.place.as_ref()) {
         None => s::PLACE_NOWHERE.to_owned(),
         Some(location::Place::Voxel(at)) => voxel(at),
         Some(location::Place::BeaconAnchor(reference)) => beacon(Some(reference)),
         Some(location::Place::Safest(_)) => s::BEACON_SAFEST.to_owned(),
-        Some(location::Place::On(_)) => SITE_ON.to_owned(),
-        Some(location::Place::Covering(_)) => SITE_COVERING.to_owned(),
+        Some(location::Place::On(feature)) => format!("{} {}", s::SITE_ON, feature_ref(feature)),
+        Some(location::Place::Covering(feature)) => {
+            format!("{} {}", s::SITE_COVERING, feature_ref(feature))
+        }
     }
+}
+
+/// A feature, named or described, as the author wrote it.
+fn feature_ref(feature: &FeatureRef) -> String {
+    match feature.r#ref.as_ref() {
+        None => s::FEATURE_NONE.to_owned(),
+        Some(feature_ref::Ref::FeatureId(id)) => feature_name(id),
+        Some(feature_ref::Ref::Vent(pick)) => {
+            pick_sentence(s::VENT_NOUN, pick.rank(), pick.coverage())
+        }
+        Some(feature_ref::Ref::Seam(pick)) => {
+            pick_sentence(s::SEAM_NOUN, pick.rank(), pick.coverage())
+        }
+        Some(feature_ref::Ref::Covered(_)) => s::FEATURE_COVERED.to_owned(),
+    }
+}
+
+/// `vent_120_88` as "Heat vent (120, 88)" (targeting.md, "Names"). A name that
+/// is not of that shape is quoted as it was written: the verifier says whether
+/// it names anything, and the rendering does not guess.
+fn feature_name(id: &str) -> String {
+    let parse = |prefix: &str| {
+        let rest = id.strip_prefix(prefix)?;
+        let (x, y) = rest.split_once('_')?;
+        Some((x.parse::<i32>().ok()?, y.parse::<i32>().ok()?))
+    };
+    if let Some((x, y)) = parse("vent_") {
+        return format!("{} ({x}, {y})", s::VENT_NAME);
+    }
+    if let Some((x, y)) = parse("seam_") {
+        return format!("{} ({x}, {y})", s::SEAM_NAME);
+    }
+    format!("{} \"{id}\"", s::FEATURE_NOUN)
+}
+
+/// A pick, with the chip's reminder of when and how it reads.
+fn pick_sentence(noun: &str, rank: Rank, coverage: Coverage) -> String {
+    let rank = match rank {
+        Rank::Nearest => s::BEACON_NEAREST,
+        Rank::Unspecified => s::RANK_UNSET,
+    };
+    let filter = match coverage {
+        Coverage::Uncovered => s::NOT_COVERED,
+        Coverage::Any | Coverage::Unspecified => "",
+    };
+    format!("{rank} {noun}{filter} ({})", s::PICK_NOTE)
 }
 
 fn voxel(at: &Voxel) -> String {
@@ -704,6 +762,7 @@ mod tests {
     use super::{Limits, duration, join, render_plan};
     use crate::canonical::canonicalise_text;
     use crate::context::PlanContext;
+    use crate::strings as s;
     use pharmakos_sim::math::quantity::Ms;
     use pharmakos_sim::rules::RulesTable;
     use pharmakos_sim::snapshot::Snapshot;
@@ -810,8 +869,9 @@ mod tests {
     }
 
     /// Item 97: claim nothing a scenario assertion would later have to state
-    /// differently. The snapshot does not carry the coming segment's length,
-    /// so the prose must not mention a segment **at all** — not in any
+    /// differently. The snapshot carries the coming segment's length (T10),
+    /// but whether the route fits it is the verifier's estimate stage's to
+    /// say, so the prose must not mention a segment **at all** — not in any
     /// wording, which is why this looks for the word rather than for one
     /// sentence built from it.
     #[test]
@@ -819,7 +879,84 @@ mod tests {
         let text = prose(MINIMAL).to_lowercase();
         assert!(
             !text.contains("segment"),
-            "the snapshot does not carry the segment length yet:\n{text}"
+            "the prose claims something about the segment:\n{text}"
         );
+    }
+
+    /// Targeting's arms read as the text the author wrote (S1's plan, task
+    /// `tgtv`), with no "not in this build yet" left over from the proto
+    /// pull request that added them, and every phrase from the string table.
+    #[test]
+    fn targetings_sites_read_as_the_text_the_author_wrote() {
+        let cover = concat!(
+            "{\"schema_version\":{\"major\":1},",
+            "\"meta\":{\"title\":\"Cover\",\"author_kind\":\"HUMAN\"},",
+            "\"declarative\":{\"route\":[",
+            "{\"label\":\"cover\",\"place_beacon\":{\"at\":{\"covering\":",
+            "{\"vent\":{\"rank\":\"NEAREST\",\"coverage\":\"UNCOVERED\"}}},",
+            "\"initial\":{\"mandate\":{\"build\":{\"targets\":[{\"blueprint_id\":\"generator\",",
+            "\"anchor\":{\"on\":{\"covered\":{}}},\"order\":1}]}}}}},",
+            "{\"label\":\"tap\",\"interface\":{\"beacon\":{\"beacon_id\":\"b_00\"},\"rows\":[",
+            "{\"add_build_target\":{\"target\":{\"blueprint_id\":\"generator\",",
+            "\"anchor\":{\"on\":{\"vent\":{\"rank\":\"NEAREST\"}}}}}},",
+            "{\"remove_build_target\":{\"anchor\":{\"on\":{\"feature_id\":\"vent_120_88\"}}}}]}},",
+            "{\"label\":\"dig\",\"place_beacon\":{\"at\":{\"covering\":",
+            "{\"feature_id\":\"seam_14_9\"}}}}]},",
+            "\"on_death\":{\"on_respawn\":\"CONTINUE\"},",
+            "\"fallback\":{\"hold\":{\"at\":{\"beacon_anchor\":{\"safest\":{}}}}},",
+            "\"kind\":\"PLAYBOOK\"}"
+        );
+        let text = prose(cover);
+        for (line, phrase) in [
+            (
+                "covering",
+                format!(
+                    "{} {} {}{} ({})",
+                    s::SITE_COVERING,
+                    s::BEACON_NEAREST,
+                    s::VENT_NOUN,
+                    s::NOT_COVERED,
+                    s::PICK_NOTE
+                ),
+            ),
+            (
+                "on",
+                format!(
+                    "{} {} {} ({})",
+                    s::SITE_ON,
+                    s::BEACON_NEAREST,
+                    s::VENT_NOUN,
+                    s::PICK_NOTE
+                ),
+            ),
+            (
+                "a vent's name",
+                format!("{} {} (120, 88)", s::SITE_ON, s::VENT_NAME),
+            ),
+            (
+                "a seam's name",
+                format!("{} {} (14, 9)", s::SITE_COVERING, s::SEAM_NAME),
+            ),
+        ] {
+            assert!(
+                text.contains(&phrase),
+                "{line}: `{phrase}` is not in\n{text}"
+            );
+        }
+        assert!(
+            !text.contains("not in this build"),
+            "the proto lane's placeholder wording survived:\n{text}"
+        );
+        // `covered` sits in the deploy's initial settings, which the prose
+        // names as a mandate without listing (the module doc's narrowing), so
+        // its phrase is checked where it is built.
+        let covered = pharmakos_proto::gp::v1::FeatureRef {
+            r#ref: Some(super::feature_ref::Ref::Covered(
+                pharmakos_proto::gp::v1::Covered {},
+            )),
+        };
+        assert_eq!(super::feature_ref(&covered), s::FEATURE_COVERED);
+        assert_eq!(super::feature_name("vent_1"), "feature \"vent_1\"");
+        assert_eq!(super::feature_name("seam_-3_4"), "Scrap seam (-3, 4)");
     }
 }

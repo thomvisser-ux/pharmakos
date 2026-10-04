@@ -150,6 +150,40 @@ pub const BEACON_NONE: &str = "no beacon the file names";
 /// Reminds the reader when a selector resolves (spec section 13's chip text).
 pub const SELECTOR_NOTE: &str = "resolves when the step starts";
 
+// --- Targeting's sites and features -----------------------------------------
+//
+// docs/design/targeting.md, "Names", "Descriptions (S1)" and "Sites". These
+// replace the two placeholder phrases S1's targeting proto rendered the arms
+// with ("... (not in this build yet)"), which lived at the call site until S1's
+// targeting verifier (task `tgtv`) moved them here.
+
+/// `Location.covering`: "a site covering the nearest heat vent ...".
+pub const SITE_COVERING: &str = "a site covering";
+/// `Location.on`: "a spot on Heat vent (120, 88)".
+pub const SITE_ON: &str = "a spot on";
+/// A vent's display name, before its anchor: "Heat vent (120, 88)".
+pub const VENT_NAME: &str = "Heat vent";
+/// A seam's display name, before its anchor.
+pub const SEAM_NAME: &str = "Scrap seam";
+/// A vent in a pick: "the nearest heat vent".
+pub const VENT_NOUN: &str = "heat vent";
+/// A seam in a pick.
+pub const SEAM_NOUN: &str = "scrap seam";
+/// A `feature_id` that is not `vent_<x>_<y>` or `seam_<x>_<y>`, quoted after.
+pub const FEATURE_NOUN: &str = "feature";
+/// `FeatureRef.covered`.
+pub const FEATURE_COVERED: &str = "the feature this beacon was placed to cover";
+/// A `FeatureRef` with no arm set, which the verifier rejects.
+pub const FEATURE_NONE: &str = "no feature the file names";
+/// A pick whose rank is unset, which the verifier rejects.
+pub const RANK_UNSET: &str = "an unranked";
+/// `FeatureRef.Coverage.UNCOVERED`: outside every sphere of the seat's own
+/// living beacons.
+pub const NOT_COVERED: &str = " you do not cover yet";
+/// Reminds the reader how and when a pick reads (targeting.md's chip:
+/// "nearest by travel ..., read when the step starts").
+pub const PICK_NOTE: &str = "nearest by travel, read when the step starts";
+
 // --- Conditions -------------------------------------------------------------
 
 /// `all`.
