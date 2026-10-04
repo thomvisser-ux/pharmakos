@@ -11,7 +11,8 @@
 //! `fixture_snapshot`) and `tests/golden/verifier/README.md` tabulates. That
 //! fixture lives in an integration test, which no other crate can import, so
 //! [`fixture_scope`] and [`fixture_snapshot`] restate it, and
-//! `tests/fixture.rs` holds the restatement to the committed reports: every
+//! `tests/harness.rs` (`every_case_under_the_bench_fixture_is_its_committed_report`)
+//! holds the restatement to the committed reports: every
 //! case's report under this fixture must equal its `expected.report.json` byte
 //! for byte. A fixture that drifted from the verifier's would time inputs no
 //! golden describes, and that test is what turns the drift red.
