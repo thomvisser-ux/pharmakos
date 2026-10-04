@@ -90,8 +90,8 @@
 //! `crates/bench/tests/perf_alarm.rs` (QUICK's p50 and p99 over the committed
 //! verifier cases and `budget_128`, and ns per size unit per decision tick in
 //! a hosted match at the size budget; S1's plan, task `p1`), each with
-//! `--release`, `--ignored`, `--nocapture` and `--test-threads=1`, and each
-//! printing its own `::notice::` lines; then it publishes the allocations per
+//! `--release`, `--ignored` and `--nocapture`, and each printing its own
+//! `::notice::` lines; then it publishes the allocations per
 //! tick as a notice naming the test that asserts it. It has no threshold, compares nothing
 //! across operating systems, and never exits non-zero: a failed measurement is
 //! a `::warning::` (skeleton-plan section 7 decision 23, logged as
@@ -307,8 +307,9 @@ const WALL_ALLOW: &[&str] = &[
 /// `clippy.toml`'s header comment and AGENTS.md section 4.9 in step.
 ///
 /// PLACEHOLDER: `presentation` and `solve`, named and not created — owner, if either is proposed.
-/// The spec names them; `pharmakos-client-gdext` and `pharmakos-mesher` exist, and a proposal
-/// of either of the other two is an AGENTS.md section 5 change (the register's M-02).
+/// The spec names them; `pharmakos-client-gdext`, `pharmakos-mesher` and `pharmakos-bench` exist,
+/// and a proposal of either of the other two is an AGENTS.md section 5 change (the register's
+/// M-02).
 const WALLED_PACKAGES: &[&str] = &["presentation", "solve", "client-gdext", "mesher", "bench"];
 
 /// Crates that may never reach the `research` feature, which gates `fork`.
@@ -2415,7 +2416,9 @@ fn import_project(ctx: &Ctx, godot: &str, project: &Path) -> Result<String, Stri
 
 /// [`import_project`], with `environment` set for Godot: `stage-client` passes
 /// its own user folders ([`client_env`]); the screenshot step and the package
-/// pass none.
+/// pass none, so their Godot runs still use the machine's own user folders (a
+/// Linux developer's real `user://` for the screenshot step, the package's
+/// import on any host). Item 129 (4) asked this for the client check only.
 fn import_project_in(
     ctx: &Ctx,
     godot: &str,
@@ -2584,8 +2587,11 @@ const ALARMS: &[Alarm] = &[
 /// * every [`ALARMS`] entry, run as [`alarm_args`] builds it: `--release` is
 ///   not optional (a debug figure is a different number, not a slow version of
 ///   the real one), `--ignored`, `--nocapture` so the target's own
-///   `::notice::` lines reach the annotations, and `--test-threads=1` so the
-///   tests inside one target never share the machine either;
+///   `::notice::` lines reach the annotations. No `--test-threads=1`: on one
+///   thread libtest prints `test <name> ... ` before each test runs, so the
+///   test's first `::notice::` would not start its line and GitHub would not
+///   read it. A target whose measurements must not share the machine runs them
+///   in one test, as the bench does;
 /// * **allocations per tick**: a notice naming the test that asserts it. The
 ///   count is zero by construction — `crates/sim/tests/allocations.rs` fails
 ///   otherwise, in every leg's `test` step — so it is published, not
@@ -2657,7 +2663,6 @@ fn alarm_args(alarm: &Alarm, locked: bool) -> Vec<String> {
         "--",
         "--ignored",
         "--nocapture",
-        "--test-threads=1",
     ] {
         args.push(arg.to_owned());
     }
@@ -4148,7 +4153,7 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
     }
 
     #[test]
-    fn every_alarm_runs_in_release_ignored_and_one_test_at_a_time() {
+    fn every_alarm_runs_in_release_ignored_and_on_libtests_own_threads() {
         let packages: Vec<&str> = ALARMS.iter().map(|alarm| alarm.package).collect();
         assert_eq!(packages, vec!["pharmakos-mesher", "pharmakos-bench"]);
         for alarm in ALARMS {
@@ -4165,18 +4170,17 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
                         .any(|pair| pair == ["--package", alarm.package])
                 );
                 assert!(cargo.windows(2).any(|pair| pair == ["--test", alarm.test]));
-                assert_eq!(
-                    test,
-                    ["--", "--ignored", "--nocapture", "--test-threads=1"],
-                    "{args:?}"
-                );
+                assert_eq!(test, ["--", "--ignored", "--nocapture"], "{args:?}");
             }
         }
     }
 
     #[test]
     fn the_client_check_keeps_its_user_folders_under_the_target_directory() {
-        let target = env::temp_dir().join("pharmakos-xtask-client-data");
+        let target = env::temp_dir().join(format!(
+            "pharmakos-xtask-client-data-{}",
+            std::process::id()
+        ));
         let data = client_data_dir(&target);
         let environment = client_env(&data);
         let keys: Vec<&str> = environment.iter().map(|(key, _)| key.as_str()).collect();
@@ -4203,7 +4207,10 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
             assert!(Path::new(folder).is_dir(), "{folder}");
         }
         // Never a folder outside the target directory, nor the directory itself.
-        let elsewhere = env::temp_dir().join("pharmakos-xtask-not-the-target");
+        let elsewhere = env::temp_dir().join(format!(
+            "pharmakos-xtask-not-the-target-{}",
+            std::process::id()
+        ));
         assert!(reset_client_data(&target, &elsewhere, &environment).is_err());
         assert!(reset_client_data(&target, &target, &environment).is_err());
         fs::remove_dir_all(&target).expect("clean up");
@@ -4211,9 +4218,11 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
 
     #[test]
     fn emptying_the_fresh_outputs_removes_a_stale_actual() {
-        let golden = env::temp_dir()
-            .join("pharmakos-xtask-fresh-outputs")
-            .join("golden");
+        let parent = env::temp_dir().join(format!(
+            "pharmakos-xtask-fresh-outputs-{}",
+            std::process::id()
+        ));
+        let golden = parent.join("golden");
         let stale = golden
             .join("scenarios")
             .join("gone")
@@ -4224,6 +4233,7 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
         assert!(!golden.exists());
         // Already empty is the state it wants, not an error.
         empty_fresh_outputs(&golden).expect("nothing to empty");
+        fs::remove_dir_all(&parent).expect("clean up");
     }
 
     #[test]
