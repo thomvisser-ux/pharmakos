@@ -1,0 +1,27 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// S1's targeting (the `tgt` lane; docs/design/targeting.md): one step, carried
+// round after round. "Place a beacon covering the nearest vent you do not yet
+// cover, and build a Generator on the vent it covers." The sealed file holds
+// the description, never what it resolved to, so every round reads it again.
+// See cover-nearest-vent.scenario.jsonc for what is asserted.
+{
+  "schema_version": {"major": 1, "minor": 0},
+  "meta": {"title": "Cover the nearest vent", "author_kind": "HUMAN"},
+  "kind": "PLAYBOOK",
+  "declarative": {
+    "route": [
+      {"label": "cover",
+        "place_beacon": {
+          "at": {"covering": {"vent": {"rank": "NEAREST", "coverage": "UNCOVERED"}}},
+          "initial": {"mandate": {"build": {"targets": [
+            {"blueprint_id": "generator", "anchor": {"on": {"covered": {}}}}
+          ]}}}},
+        "timeout_ms": 120000, "on_fail": {"action": "SKIP"}}
+    ],
+    "handlers": []
+  },
+  "on_death": {"on_respawn": "CONTINUE", "max_deaths_before_fallback": 2},
+  "fallback": {"hold": {"at": {"safest": {}}}}
+}

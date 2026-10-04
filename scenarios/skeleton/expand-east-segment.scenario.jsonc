@@ -28,7 +28,7 @@
 {
   "format": "pharmakos.scenario.v1",
   "name": "expand-east-segment",
-  "summary": "Two seats seal the worked example and it does not get far, loudly. The commander walks east for the whole of its 120 s timeout without arriving; the eastern site is then out of placement range, so the deploy is refused rather than silently skipped; and the tail step, a walk to `b_01`, is seat 1's own core but somebody else's to seat 0 — so seat 1 walks and seat 0 is refused with `not_own` and takes up its fallback. Nothing here places a beacon, fires a handler or commits a row: at these tuning values the spec's own worked playbook cannot complete its first step on this map, which is a tuning finding for the owner (see the pull request), not a defect this scenario hides.",
+  "summary": "Two seats seal the worked example and it does not get far, loudly. The commander walks east for the whole of its 120 s timeout without arriving; the eastern site is outside both seats' spheres, so the deploy is refused with `illegal_site` rather than silently skipped; and the tail step, a walk to `b_01`, names each seat's own first placed beacon (per-seat names since S1's targeting), which neither has placed — so both seats are refused with `no_target` and take up their fallback. Nothing here places a beacon, fires a handler or commits a row: at these tuning values the spec's own worked playbook cannot complete its first step on this map, which is a tuning finding for the owner (see the pull request), not a defect this scenario hides.",
 
   // The same seed the format's worked example names, so the two scenarios are
   // about the same map and a map bug shows up in both.
@@ -43,10 +43,10 @@
   "rules": "rules/rules.v1.json",
 
   "seats": [
-    // Both seats seal the spec's worked example. Its `b_01` is seat 1's core
-    // and its eastern site is in neither seat's sphere, which is the point:
-    // the transcript shows a timeout, a refusal and a tail, none of them
-    // silent.
+    // Both seats seal the spec's worked example. Its `b_01` is each seat's
+    // own first placed beacon, which neither places, and its eastern site is
+    // in neither seat's sphere, which is the point: the transcript shows a
+    // timeout, two refusals and a tail, none of them silent.
     { "seat": 0, "kind": "playbook", "playbook": "examples/playbooks/expand_east.jsonc" },
     { "seat": 1, "kind": "playbook", "playbook": "examples/playbooks/expand_east.jsonc" }
   ],
@@ -66,7 +66,7 @@
     { "assert": "event_fired", "event": "step_failed", "seat": 0, "by_tick": 2410,
       "note": "The first failure by this tick is the move's own 120 s timeout (reason 1), and the deploy's illegal site (reason 6) follows five ticks later. The assertion cannot yet tell them apart — `step_failed` carries the reason in `value` and this format has no value predicate — so it is written as what it is: the segment fails loudly rather than silently, twice, before tick 2410. A value predicate is T15's, with the rest of the assertion vocabulary." },
     { "assert": "event_fired", "event": "fallback_engaged", "seat": 0, "by_tick": 2411,
-      "note": "Seat 0's tail step names `b_01`, which is seat 1's core: an interface or a walk to another seat's beacon is refused with `not_own` (beacon capture is out of v1), so seat 0's route ends and its guaranteed tail takes over. Seat 1 seals the same file and walks, because for seat 1 `b_01` is its own." },
+      "note": "Seat 0's tail step names `b_01`. Since S1's targeting a `b_NN` counts the seat's own beacons (decisions-log item 127 (13)), so `b_01` is seat 0's first placed beacon, and the deploy before it was refused: the walk fails with `no_target` (reason 2), so seat 0's route ends and its guaranteed tail takes over. Seat 1 seals the same file and does the same. Before S1 `b_01` was seat 1's core, seat 0 was refused with the retired `not_own` and seat 1 walked home." },
     { "assert": "event_fired", "event": "segment_ended", "by_tick": 3600,
       "note": "The segment ends on the tick, not near it." },
     { "assert": "hash_chain_equals",
