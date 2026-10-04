@@ -459,7 +459,8 @@ sections that add one name it in their Owns lines.
   feature id, the beacon ordinal, the restarted step's beacon and rows) in the hash, the snapshot
   **and** the goldens; `SNAPSHOT_VERSION`, the save version and `GATEWAY_VERSION` bumped, refusing
   old saves with a clear message; `fixs`'s charge moved to where the deploy starts after the
-  walk-in, never at step start; `con2`'s refusals in `compile_place` replaced by the behaviour.
+  walk-in, never at step start; `con2`'s refusals in `compile_place` replaced by the behaviour, and
+  `PlanError::NotAtThisStage`'s doc table brought in line with what still refuses (item 130).
   **The harness deploy re-sited:** `determinism_playbook` deploys at the `safest` beacon's own
   position, which no stacking makes `illegal_site`, so it moves to a legal site (determinism code)
   and `tests/allocations.rs` still sees the deploy land. **P1's counter:** an unhashed
@@ -503,7 +504,10 @@ sections that add one name it in their Owns lines.
   site (discharges S1-20); `get_map_summary.features` (id, kind, grade, coverage by the seat,
   travel; S1-48); `verifier_scope` carrying the features (id, kind, grade, live bit) and the
   commander's position; `core_beacon_of` becomes `b_00` (S1-13); the Lull's "this round: …" message
-  on re-seal and the recap's "why a step found nothing" text.
+  on re-seal and the recap's "why a step found nothing" text; carried by item 130, the stale
+  `reserved 5 to 15` comment in `surface/knowledge.rs` (~313–315) and the dispatch catch-all's "no
+  request/response pair" in `surface.rs`, untrue of `resolve_refs` until this lane serves it.
+  `features` keeps `live` (item 130 (3) (a)).
 - **Does not:** rank in the verifier; publish anything (v1.1).
 - **Implements:** item 127 (12) (targeting.md's gateway lines); register S1-13, S1-20, S1-48.
 - **Needs:** `tgt` merged. **Acceptance:** `resolve_refs_answers_as_the_sim_would_at_step_start`
@@ -527,8 +531,12 @@ sections that add one name it in their Owns lines.
   `COVERAGE_UNSPECIFIED` as errors; `coverage` under `on` refused; feature `NEAREST` in a condition
   refused; the three lints and their catalogue rows; the warning for `seam_choice: SAFEST` (reads as
   NEAREST until S2), a new catalogue code (item 127 (9), decision 6); `render_plan` for the new
-  arms, replacing `con2`'s refusals; S1-39 per decision 11; item 124 (5) (h). Never ranks. Merges
-  before `tgt`, whose PR re-blesses every `report_hash` golden over the new `Scope` layout. 2–3 ad.
+  arms, replacing `con2`'s refusals; S1-39 per decision 11; item 124 (5) (h). Carried by item 130:
+  the refusal replaced is `con2`'s `HeldSites` visitor in `structure.rs`, not a second one beside
+  it, together with E0003's message and its catalogue row's emitter; `render_plan`'s two `con2`
+  strings move into `strings.rs` with a render test; the S1-39 doc in `structure.rs` (~232–247)
+  re-cited to decision 11. Never ranks. Merges before `tgt`, whose PR re-blesses every
+  `report_hash` golden over the new `Scope` layout. 2–3 ad.
 - **`proj` builds:** the estimate stage (S1-47): the projection arithmetic moved **down** into the
   verifier (plan-core re-exports it), breaking the plan-core → verifier cycle the code map found;
   units and Build targets in the projection with the charged beacon; E0601, W0601, W0602, W0603 and
@@ -664,7 +672,9 @@ sections that add one name it in their Owns lines.
   above `lull_ms` (`surface.rs` ~1003–1006) and the Lull's elapsed time is `lull_ms` less the
   remaining (~1465–1483), so both read round 1's length from `first_lull_ms`. Then `gamectl scenario
   run` and `seat doctor`, which pass each Lull's whole length to `Surface::set_phase_remaining_ms`,
-  pass round 1's as `first_lull_ms`.
+  pass round 1's as `first_lull_ms`. Carried by item 130: the stale `reserved 2 to 15` comment in
+  `surface/knowledge.rs` (~173), and the recap's "Round N ran 0 ticks" for a full round once the
+  match has ended, which `check` found.
 - **Implements:** item 127 (2)'s gateway half; register S1-11, S1-12, S1-46, X-03, X-16.
 - **Needs:** `tgtw` merged; decision 12. **Acceptance:** method and walkthrough goldens; a test that
   the bound admits a 600 000 ms first Lull and refuses 600 001; `scenario run` and `seat doctor`
@@ -738,7 +748,9 @@ sections that add one name it in their Owns lines.
 - **Builds:** runs `check` on the finished rules; proposes each economy row per decision 16 with a
   PLACEHOLDER naming the owner at S1's demo; S1-26 per decision 16: `DETERMINISM_TICKS` raised to a
   real segment and the harness segment list, playbook and fifty walkers deleted; `cargo xtask
-  placeholders` made a `ci` step once the lanes have reworded their markers (decision 9).
+  placeholders` made a `ci` step once the lanes have reworded their markers (decision 9); decision
+  16's `expand_east` column in `balance.rs`'s `render`, which `check` left as a PLACEHOLDER (item
+  130). The check's seed set and flag readings are the owner's at S1's demo, with this report.
 - **Implements:** item 127 (3); item 103 (3)'s walk speed; register S1-26 and the economy rows'
   owner PLACEHOLDERs.
 - **Needs:** `build`, `oper` merged; decision 16. **Acceptance:** the check's report attached to the
@@ -859,8 +871,9 @@ or `tests/golden/package/`, so 12 of the 18 PRs (`fixs`, `fixc`, `con1`, `con2`,
   crate-map row for `pharmakos-bench`, §3 rule 1's "any of the five", §3 rule 2's previews, §3 rule
   4's `rig.rs` keep-alive sum per decision 17, §5's reserved-range discharge, §4.9's walled list,
   its "the research guard's five crates plus the sim" and its `CLIENT_WALL` sentence, §9's
-  local-package sentence per decision 9, §9 item 11's P1) and the rulings, and launch each run
-  through `docs_ref` (item 115 (3)). AGENTS.md is a harness doc no lane edits: the `pharmakos-bench`
+  local-package sentence per decision 9, §9's line on a check run by hand (`#[ignore]`d, never a
+  step, never compared across operating systems; item 130), §9 item 11's P1) and the rulings, and
+  launch each run through `docs_ref` (item 115 (3)). AGENTS.md is a harness doc no lane edits: the `pharmakos-bench`
   sentences are in the docs PR that lands with `p1`, whose PR rewords the matching `xtask` doc
   comments. `rules/README.md` is `con1`'s, not theirs.
 - A lane that changes any of AGENTS.md §9's six shipped paths (`library/`, `rules/`, `packaging/`,

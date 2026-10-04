@@ -174,9 +174,9 @@ Each goes to S1's first contract pull request (AGENTS.md section 5).
 
 | ID | What is guessed | Anchors | Source |
 |---|---|---|---|
-| S1-46 | The forecast's what-if vocabulary and answers, its projected income and projection; `WhatIf` still reserves 1 to 15. The `gateway.proto` copy is stale ("Filled by T13 with T14's economy") | `crates/gateway/src/surface/knowledge.rs` `get_economy_forecast` ("What-ifs"); `gateway.proto` `GetEconomyForecastResponse`; stale copy `gateway.proto` `GetEconomyForecastRequest.WhatIf` | w6 notes A6 |
+| S1-46 | The forecast's what-if vocabulary and answers, its projected income and projection, all S3 (the what-ifs by decision 12, the rest by item 130 (3) (b)); `con2` put the next BMI and the committed spend on the wire for `econ`; `WhatIf` still reserves 1 to 15. | `crates/gateway/src/surface/knowledge.rs` `get_economy_forecast` ("What-ifs"); `gateway.proto` `GetEconomyForecastResponse` and `GetEconomyForecastRequest.WhatIf` | w6 notes A6 |
 | S1-47 | Ordered units and Build targets enter the verifier's projection with the economy and the real Quartermaster, where `E0601`, `W0601` and `W0602` get their emitters | `crates/plan-core/src/projection.rs` module doc | item 82 |
-| S1-48 | `get_map_summary`'s vents, seams and terrain summary, fog-filtered | `gateway.proto` `GetMapSummaryResponse` | — |
+| S1-48 | `get_map_summary`'s vents and seams (`con2`'s `features`, for `tgtw`), unfogged in S1; the terrain summary and the fog filter are S3 (item 130 (3)) | `gateway.proto` `GetMapSummaryResponse` | — |
 
 ### Tuning, delegated
 
