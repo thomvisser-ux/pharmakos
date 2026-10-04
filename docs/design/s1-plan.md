@@ -873,9 +873,9 @@ or `tests/golden/package/`, so 12 of the 18 PRs (`fixs`, `fixc`, `con1`, `con2`,
   its "the research guard's five crates plus the sim" and its `CLIENT_WALL` sentence, §9's
   local-package sentence per decision 9, §9's line on a check run by hand (`#[ignore]`d, never a
   step, never compared across operating systems; item 130), §9 item 11's P1) and the rulings, and
-  launch each run through `docs_ref` (item 115 (3)). AGENTS.md is a harness doc no lane edits: the `pharmakos-bench`
-  sentences are in the docs PR that lands with `p1`, whose PR rewords the matching `xtask` doc
-  comments. `rules/README.md` is `con1`'s, not theirs.
+  launch each run through `docs_ref` (item 115 (3)). AGENTS.md is a harness doc no lane edits: the
+  `pharmakos-bench` sentences are in the docs PR that lands with `p1`, whose PR rewords the
+  matching `xtask` doc comments. `rules/README.md` is `con1`'s, not theirs.
 - A lane that changes any of AGENTS.md §9's six shipped paths (`library/`, `rules/`, `packaging/`,
   `LICENSES/`, `REUSE.toml`, `godot/`) is packaged locally by the main session before its merge
   (decision 9's reading of item 124 (5) (c)): in S1, `con1`, `fixc`, `oper`, `ui` and `tune`, and
