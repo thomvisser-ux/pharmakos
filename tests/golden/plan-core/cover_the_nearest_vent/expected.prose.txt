@@ -1,0 +1,18 @@
+Cover the nearest vent
+Written by hand.
+
+Route
+  1. cover: place a beacon at a site covering the nearest heat vent you do not cover yet (nearest by travel, read when the step starts), on a Build mandate (16.5 s on site).
+  2. tap: interface with beacon "b_01" and add a build target: generator at a spot on the nearest heat vent (nearest by travel, read when the step starts) and remove the build target at a spot on Heat vent (120, 88) (6.5 s on site).
+  3. dig: place a beacon at a site covering Scrap seam (14, 9) (12 s on site).
+
+If the commander dies
+  On respawn, carry on from the step the route was on.
+  After 2 deaths the fallback takes over.
+
+Fallback
+  Hold at the safest own beacon.
+
+Budget
+  5 of 128 size units.
+  35 s standing at a beacon along the route.

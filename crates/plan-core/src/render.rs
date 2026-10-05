@@ -360,12 +360,16 @@ fn feature_ref(feature: &FeatureRef) -> String {
 
 /// `vent_120_88` as "Heat vent (120, 88)" (targeting.md, "Names"). A name that
 /// is not of that shape is quoted as it was written: the verifier says whether
-/// it names anything, and the rendering does not guess.
+/// it names anything, and the rendering does not guess. "That shape" is the
+/// canonical spelling exactly: `vent_+120_088` parses to the same numbers but
+/// is a different name, which the verifier matches by string and refuses, so
+/// it is quoted rather than read as the vent it is not.
 fn feature_name(id: &str) -> String {
     let parse = |prefix: &str| {
         let rest = id.strip_prefix(prefix)?;
         let (x, y) = rest.split_once('_')?;
-        Some((x.parse::<i32>().ok()?, y.parse::<i32>().ok()?))
+        let parsed = (x.parse::<i32>().ok()?, y.parse::<i32>().ok()?);
+        (format!("{prefix}{}_{}", parsed.0, parsed.1) == id).then_some(parsed)
     };
     if let Some((x, y)) = parse("vent_") {
         return format!("{} ({x}, {y})", s::VENT_NAME);
@@ -958,5 +962,10 @@ mod tests {
         assert_eq!(super::feature_ref(&covered), s::FEATURE_COVERED);
         assert_eq!(super::feature_name("vent_1"), "feature \"vent_1\"");
         assert_eq!(super::feature_name("seam_-3_4"), "Scrap seam (-3, 4)");
+        // A name the verifier would refuse, because it is not the canonical
+        // spelling, is quoted rather than read as the vent it is not.
+        for odd in ["vent_+1_2", "vent_01_2", "vent_1_02", "seam_-0_4"] {
+            assert_eq!(super::feature_name(odd), format!("feature \"{odd}\""));
+        }
     }
 }
