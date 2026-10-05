@@ -61,7 +61,7 @@ use crate::resolve::Symbols;
 use crate::scope::{FeatureKind, Ownership, Scope};
 use crate::strings;
 use crate::structure::arm_name;
-use crate::walk::{self, List, Slot, Visit};
+use crate::walk::{self, Carrier, List, Slot, Visit};
 
 /// Run the stage.
 pub(crate) fn run(
@@ -276,7 +276,7 @@ impl Visit for Semantics<'_> {
         );
     }
 
-    fn mandate(&mut self, at: &str, settings: &MandateSettings) {
+    fn mandate(&mut self, at: &str, settings: &MandateSettings, _carrier: Carrier) {
         if settings.mandate.is_none() {
             self.out.emit(Diag::new("E0502", at));
         }

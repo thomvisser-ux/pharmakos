@@ -59,6 +59,22 @@ pub(crate) enum Slot<'a> {
     Elsewhere,
 }
 
+/// What carries a mandate settings block, which decides how an omitted field in
+/// it reads.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Carrier {
+    /// A `place_beacon`'s `initial.mandate`: the beacon starts from nothing, so
+    /// an omitted field takes its default.
+    Initial,
+    /// A `set_mandate` row: the switch clears the beacon's settings, so an
+    /// omitted field takes its default there too.
+    Switch,
+    /// A `set_mandate_settings` row, an edit "within the current mandate"
+    /// (`playbook.proto`): an omitted field is one the row does not write, and
+    /// the sim prices the row by the fields it does write.
+    Edit,
+}
+
 /// The leaves a stage can ask to be shown.
 ///
 /// Every method has a default that does nothing, so a stage writes only what it
@@ -83,8 +99,8 @@ pub(crate) trait Visit {
     fn area(&mut self, _at: &str, _area: &Area) {}
     /// Any condition node, all the way down.
     fn condition(&mut self, _at: &str, _condition: &Condition) {}
-    /// Any mandate settings block.
-    fn mandate(&mut self, _at: &str, _settings: &MandateSettings) {}
+    /// Any mandate settings block, with the row or step that carries it.
+    fn mandate(&mut self, _at: &str, _settings: &MandateSettings, _carrier: Carrier) {}
     /// Any build target.
     fn build_target(&mut self, _at: &str, _target: &BuildTarget) {}
 }
@@ -178,6 +194,7 @@ fn walk_entry(entry: &Step, at: &str, visitor: &mut dyn Visit) {
                     walk_mandate(
                         settings,
                         &pointer::child(&pointer::child(&here, "initial"), "mandate"),
+                        Carrier::Initial,
                         deploy,
                         visitor,
                     );
@@ -220,12 +237,19 @@ fn walk_entry(entry: &Step, at: &str, visitor: &mut dyn Visit) {
 fn walk_row(row: Option<&interface_row::Row>, at: &str, visitor: &mut dyn Visit) {
     match row {
         Some(interface_row::Row::SetMandate(settings)) => {
-            walk_mandate(settings, &pointer::child(at, "set_mandate"), None, visitor);
+            walk_mandate(
+                settings,
+                &pointer::child(at, "set_mandate"),
+                Carrier::Switch,
+                None,
+                visitor,
+            );
         }
         Some(interface_row::Row::SetMandateSettings(settings)) => {
             walk_mandate(
                 settings,
                 &pointer::child(at, "set_mandate_settings"),
+                Carrier::Edit,
                 None,
                 visitor,
             );
@@ -257,10 +281,11 @@ fn walk_row(row: Option<&interface_row::Row>, at: &str, visitor: &mut dyn Visit)
 fn walk_mandate(
     settings: &MandateSettings,
     at: &str,
+    carrier: Carrier,
     deploy: Option<&FeatureRef>,
     visitor: &mut dyn Visit,
 ) {
-    visitor.mandate(at, settings);
+    visitor.mandate(at, settings, carrier);
     match settings.mandate.as_ref() {
         Some(mandate_settings::Mandate::Build(build)) => {
             let here = pointer::child(at, "build");

@@ -72,7 +72,7 @@ use crate::pointer;
 use crate::report::{Builder, Diag, number, patch_add, patch_remove, patch_replace};
 use crate::size;
 use crate::strings;
-use crate::walk::{self, List, Slot, Visit};
+use crate::walk::{self, Carrier, List, Slot, Visit};
 
 use std::collections::BTreeMap;
 
@@ -438,7 +438,15 @@ impl Visit for Sites<'_> {
         }
     }
 
-    fn mandate(&mut self, at: &str, settings: &MandateSettings) {
+    fn mandate(&mut self, at: &str, settings: &MandateSettings, carrier: Carrier) {
+        // A `set_mandate_settings` row edits the current mandate: a field it
+        // leaves out is one it does not write, not one it sets to the default,
+        // and writing the default out would add a field the sim charges for.
+        // So the note, and its Fix, stand only where the beacon's settings
+        // start from nothing.
+        if carrier == Carrier::Edit {
+            return;
+        }
         match settings.mandate.as_ref() {
             Some(mandate_settings::Mandate::Mine(mine)) => {
                 let here = pointer::child(at, "mine");

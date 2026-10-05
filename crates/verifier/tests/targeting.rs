@@ -304,6 +304,39 @@ fn on_stands_only_in_a_build_targets_anchor() {
 }
 
 #[test]
+fn an_edit_row_carries_no_default_note() {
+    // S1-39's defaults (decision 11) are what an omitted field reads as where a
+    // beacon's settings start from nothing. A `set_mandate_settings` row edits
+    // the current mandate instead: a field it leaves out is one it does not
+    // write, and the sim prices the row by the fields it does write, so a
+    // "write the default out" Fix there would lengthen the row and could
+    // overwrite a live setting.
+    let notes = |route: &str| -> Vec<String> {
+        found(&report(route, Depth::Full))
+            .into_iter()
+            .filter(|(code, _)| code == "I0003")
+            .map(|(_, path)| path)
+            .collect()
+    };
+    for row in [
+        r#"{"set_mandate_settings":{"mine":{"dig_max_depth":3}}}"#,
+        r#"{"set_mandate_settings":{"build":{"repair_threshold_pct":50}}}"#,
+    ] {
+        assert_eq!(notes(&visit_core(row)), Vec::<String>::new(), "{row}");
+    }
+    // The same block in a switch, whose settings start from nothing, is noted.
+    assert_eq!(
+        notes(&visit_core(
+            r#"{"set_mandate":{"mine":{"dig_max_depth":3}}}"#
+        )),
+        [
+            "/declarative/route/0/interface/rows/0/set_mandate/mine/seam_choice",
+            "/declarative/route/0/interface/rows/0/set_mandate/mine/pillar_spacing",
+        ]
+    );
+}
+
+#[test]
 fn covered_means_something_only_under_a_covering_deploy() {
     let covered_target = generator_on(r#"{"covered":{}}"#);
     // In a row, there is no deploy for it to mean.
