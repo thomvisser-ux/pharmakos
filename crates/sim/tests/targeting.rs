@@ -26,6 +26,7 @@ use std::path::PathBuf;
 
 use pharmakos_proto::gp;
 use pharmakos_proto::json;
+use pharmakos_sim::encoding::Enc;
 use pharmakos_sim::events::{Event, EventKind};
 use pharmakos_sim::interpreter::state::StepFailure;
 use pharmakos_sim::interpreter::{BeaconSpec, Plan, PlanError, resolve_beacon_in};
@@ -34,7 +35,10 @@ use pharmakos_sim::math::quantity::Hp;
 use pharmakos_sim::runner::{MatchPhase, MatchSettings, Runner};
 use pharmakos_sim::seams::MandateKind;
 use pharmakos_sim::snapshot::Snapshot;
-use pharmakos_sim::tables::{PRIORITY_NORMAL, SeatId, StructureKind, UnitId, own_beacon_name};
+use pharmakos_sim::tables::{
+    BeaconId, PRIORITY_NORMAL, SeatId, StructureKind, TargetKind, UnitId, own_beacon_name,
+};
+use pharmakos_sim::targeting::NO_FEATURE;
 use pharmakos_sim::voxels::{Material, VoxelEdit};
 use pharmakos_sim::world::{DamageOrder, DamageTarget, room_per_seat};
 use pharmakos_sim::{RulesTable, World, WorldConfig};
@@ -146,10 +150,15 @@ fn id(failure: StepFailure) -> i64 {
 
 /// Seat 0's core column on the golden seed, and its standing height.
 fn core_voxel(world: &World) -> [i32; 3] {
+    core_voxel_of(world, SeatId::new(SEAT))
+}
+
+/// `seat`'s core column, and its standing height.
+fn core_voxel_of(world: &World, seat: SeatId) -> [i32; 3] {
     let row = world
         .beacons()
-        .row_of_ordinal(SeatId::new(SEAT), 0)
-        .expect("seat 0's core is its b_00");
+        .row_of_ordinal(seat, 0)
+        .expect("a seat's core is its b_00");
     world
         .beacons()
         .positions()
@@ -157,6 +166,46 @@ fn core_voxel(world: &World) -> [i32; 3] {
         .copied()
         .expect("a position")
         .map(Fx::floor_voxels)
+}
+
+/// The core of `seat`, as a beacon id.
+fn core_of(world: &World, seat: SeatId) -> BeaconId {
+    let row = world
+        .beacons()
+        .row_of_ordinal(seat, 0)
+        .expect("a seat's core is its b_00");
+    BeaconId::new(u32::try_from(row).expect("a few beacons"))
+}
+
+/// The standing voxel `dx` east and `dy` north of `seat`'s core.
+fn beside(world: &World, seat: SeatId, dx: i32, dy: i32) -> [i32; 3] {
+    let core = core_voxel_of(world, seat);
+    let (x, y) = (core[0] + dx, core[1] + dy);
+    [x, y, world.voxels().standing_z(x, y)]
+}
+
+/// Step a Push up to `limit` ticks, keeping every seat's events.
+fn play_all(runner: &mut Runner, limit: u32) -> Vec<Event> {
+    let mut kept: Vec<Event> = Vec::new();
+    let mut ticks: u32 = 0;
+    while ticks < limit && runner.phase() == MatchPhase::Push {
+        if runner.step().is_none() {
+            break;
+        }
+        kept.extend(runner.events().iter().copied());
+        runner.clear_events();
+        ticks += 1;
+    }
+    kept
+}
+
+/// Every `StructureQueued` of `seat`, by where it stands.
+fn queued_by(events: &[Event], seat: SeatId) -> Vec<Option<[Fx; 3]>> {
+    events
+        .iter()
+        .filter(|event| event.kind == EventKind::StructureQueued && event.seat == Some(seat))
+        .map(|event| event.at.map(pharmakos_sim::knowledge::Position::to_array))
+        .collect()
 }
 
 fn point(voxel: [i32; 3]) -> [Fx; 3] {
@@ -391,12 +440,116 @@ fn table_room_is_the_world_total_divided_by_the_seat_count() {
     );
 }
 
+#[test]
+fn a_seats_structure_share_counts_its_ruins() {
+    // The structure share is per seat like the beacon and unit shares, and
+    // counts every row the seat ever built, ruins included: a ruin keeps its
+    // row, so a share that freed itself when a structure fell would let one
+    // seat churn the table full and refuse another seat's build -- the leak
+    // per-seat room closes. At three seats each share is 120 / 3 = 40.
+    assert_eq!(room_per_seat(120, 3), 40);
+    let mut world = world_at(SEED, 3, &[180_000]);
+    let zero = SeatId::new(0);
+    let one = SeatId::new(1);
+    let outpost = world
+        .place_beacon_directly(
+            zero,
+            point(beside(&world, zero, 3, 0)),
+            MandateKind::Build,
+            PRIORITY_NORMAL,
+        )
+        .expect("room");
+    for step in 0..40 {
+        let at = beside(&world, zero, -2 - step, 6);
+        world
+            .raise_structure(zero, outpost, StructureKind::Generator, point(at))
+            .expect("room in the table");
+    }
+    // The outpost falls, and its forty structures become neutral ruins.
+    assert!(world.request_damage(DamageOrder {
+        target: DamageTarget::Beacon(outpost),
+        amount: Hp::new(1_000_000),
+        by: SeatId::NEUTRAL,
+    }));
+    for seat in [zero, one] {
+        let core = core_of(&world, seat);
+        world.set_writ(core, MandateKind::Build);
+        assert!(world.add_target(
+            core,
+            TargetKind::Build,
+            StructureKind::Generator.id(),
+            point(beside(&world, seat, 1, 0)),
+            0
+        ));
+    }
+    let mut runner = Runner::new(world);
+    assert!(runner.begin_push(), "a match opens in a Lull");
+    let events = play_all(&mut runner, 200);
+    assert_eq!(
+        count(&events, EventKind::StructureRuined),
+        40,
+        "the outpost's structures are ruins"
+    );
+    assert!(
+        queued_by(&events, zero).is_empty(),
+        "seat 0's ruins still fill its share"
+    );
+    assert_eq!(
+        queued_by(&events, one).len(),
+        1,
+        "and seat 1's share is untouched"
+    );
+}
+
+#[test]
+fn one_structure_per_voxel_holds_across_seats() {
+    // targeting.md, "Sites": construction is refused where a structure of any
+    // seat stands, so the first seat to build wins and the other's target is
+    // never paid for. The Build mandate skips such a target rather than asking
+    // for it, so the target behind it in the list is still served.
+    let mut world = world_at(SEED, 2, &[180_000]);
+    let zero = SeatId::new(0);
+    let one = SeatId::new(1);
+    let taken = point(beside(&world, one, 1, 0));
+    let free = point(beside(&world, one, 2, 0));
+    world
+        .raise_structure(zero, core_of(&world, zero), StructureKind::Generator, taken)
+        .expect("room");
+    let core = core_of(&world, one);
+    world.set_writ(core, MandateKind::Build);
+    for at in [taken, free] {
+        assert!(world.add_target(
+            core,
+            TargetKind::Build,
+            StructureKind::Generator.id(),
+            at,
+            0
+        ));
+    }
+    let cost = world.structure_cost(StructureKind::Generator).raw();
+    let purse = |world: &World| world.seats().treasuries().get(1).expect("seat 1").raw();
+    let before = purse(&world);
+    let mut runner = Runner::new(world);
+    assert!(runner.begin_push(), "a match opens in a Lull");
+    let events = play_all(&mut runner, 200);
+    assert_eq!(
+        queued_by(&events, one),
+        vec![Some(free)],
+        "seat 1 builds only where nobody stands"
+    );
+    assert_eq!(
+        before - purse(runner.world()),
+        cost,
+        "and pays for that one Generator alone"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // The resolver in a world, and the three reading rules
 // ---------------------------------------------------------------------------
 
 #[test]
-fn a_carried_covering_step_finds_no_vent_after_round_one_on_the_golden_seed() {
+fn a_carried_covering_step_has_no_legal_site_after_round_one_on_the_golden_seed() {
     // targeting.md's finding, played: round 1 covers seat 0's starting vent and
     // builds a Generator on it; in rounds 2 and 3 the same sealed step reads
     // its description again (a carried playbook re-reads its descriptions
@@ -432,6 +585,9 @@ fn a_carried_covering_step_finds_no_vent_after_round_one_on_the_golden_seed() {
     assert!(failures(first).is_empty(), "{:?}", failures(first));
     for later in rounds.iter().skip(1) {
         assert_eq!(count(later, EventKind::BeaconPlaced), 0, "no vent to cover");
+        // `illegal_site`, not `no_target`: the description matches, the sites
+        // do not (targeting.md's failure table; the plan's acceptance line
+        // says `no_target`, and the PR records the disagreement for a ruling).
         assert_eq!(failures(later), vec![id(StepFailure::IllegalSite)]);
     }
 }
@@ -628,6 +784,120 @@ fn a_restarted_step_resumes_at_the_beacon_it_placed() {
     );
 }
 
+/// Capture `world`, restore the bytes into `fresh` (a world built and sealed
+/// as `world` was), and assert the two hash the same now and after one more
+/// tick. Returns the decoded snapshot, for the caller to see what it carried.
+fn assert_round_trips(world: &World, fresh: &World, enc: &mut Enc) -> Snapshot {
+    let bytes = Snapshot::capture(world).to_bytes().expect("encodes");
+    let decoded = Snapshot::from_bytes(&bytes).expect("decodes");
+    let mut restored = fresh.clone();
+    decoded.restore_into(&mut restored).expect("restores");
+    let tick = world.tick().raw();
+    assert_eq!(
+        restored.state_hash(),
+        world.state_hash(),
+        "tick {tick}: the restored world does not hash to the saved one"
+    );
+    let mut continued = world.clone();
+    assert_eq!(
+        restored.step(enc),
+        continued.step(enc),
+        "tick {tick}: the restored world diverges on the next tick"
+    );
+    decoded
+}
+
+/// Whether a tick is worth a round-trip: one where the step or its beacon
+/// changed state. A restore regenerates the map, so a checkpoint every few
+/// ticks would make this the suite's slowest test; these are the ticks where
+/// the new columns change (a step binds, a beacon lands, a row commits a bound
+/// target, the target is paid for, a restart resumes as a visit).
+fn checkpoint(events: &[Event]) -> bool {
+    events.iter().any(|event| {
+        matches!(
+            event.kind,
+            EventKind::StepStarted
+                | EventKind::BeaconPlaced
+                | EventKind::RowCommitted
+                | EventKind::StructureQueued
+                | EventKind::VisitStarted
+        )
+    })
+}
+
+#[test]
+fn a_bound_step_and_a_resumed_visit_round_trip_through_a_snapshot() {
+    // Risk R2's mitigation for S1's new hashed state: the covering step's
+    // bindings, a bound Build target, and a restarted placement resumed as a
+    // visit all survive a save and restore mid-flight, hash-identically, and
+    // the restored world takes the same next tick. The harness playbook has
+    // no `on` anchor, so the determinism suite's round-trip never carries
+    // these columns with values in them; this does.
+    let mut enc = Enc::with_capacity(64 * 1024);
+    let sealed = || {
+        let mut world = world_at(SEED, 2, &[180_000]);
+        assert!(world.seal_playbook(SeatId::new(SEAT), compile(COVER).expect("compiles")));
+        world
+    };
+    let fresh = sealed();
+
+    // Covering, walking, deploying and committing, untouched.
+    let mut runner = open(world_at(SEED, 2, &[180_000]), COVER);
+    let (mut bound, mut target) = (false, false);
+    let events = play(&mut runner, 1_600, |world, events| {
+        if checkpoint(events) {
+            let carried = assert_round_trips(world, &fresh, &mut enc);
+            bound |= !carried.plan_binding_feature.is_empty();
+            target |= carried
+                .target_feature
+                .iter()
+                .any(|feature| *feature != NO_FEATURE);
+        }
+    });
+    assert_eq!(
+        count(&events, EventKind::StepCompleted),
+        1,
+        "the step completes"
+    );
+    assert!(bound, "a checkpoint carried the step's bindings");
+    assert!(target, "a checkpoint carried a bound Build target");
+
+    // The same step, with the commander killed once the beacon lands: the
+    // step restarts and resumes as a visit to the beacon it placed.
+    let mut runner = open(world_at(SEED, 2, &[180_000]), COVER);
+    let commander = runner.world().commander_of(SeatId::new(SEAT));
+    let (mut killed, mut resumed) = (false, false);
+    let events = play(&mut runner, 2_400, |world, events| {
+        // Checkpoints come before the kill is filed: a damage order waits for
+        // the next tick's combat phase as a host input, and a save is taken
+        // at a Lull boundary, where none is pending, so the snapshot does not
+        // carry one.
+        if killed && checkpoint(events) {
+            let carried = assert_round_trips(world, &fresh, &mut enc);
+            resumed |= carried.plan_resumed.iter().any(|flag| *flag != 0);
+        }
+        if !killed
+            && events
+                .iter()
+                .any(|event| event.kind == EventKind::BeaconPlaced)
+        {
+            assert!(world.request_damage(DamageOrder {
+                target: DamageTarget::Unit(UnitId::new(commander.raw())),
+                amount: Hp::new(10_000),
+                by: SeatId::NEUTRAL,
+            }));
+            killed = true;
+        }
+    });
+    assert!(killed, "the deploy landed");
+    assert!(resumed, "a checkpoint carried the resumed visit");
+    assert_eq!(
+        count(&events, EventKind::BeaconPlaced),
+        1,
+        "one beacon, ever"
+    );
+}
+
 #[test]
 fn the_walk_in_times_out_with_no_path() {
     // Walk-in (targeting.md, "Companion changes"): `place_beacon` walks to its
@@ -761,8 +1031,14 @@ fn the_decision_tick_counts_its_evaluation_units() {
     let mut runner = open(world_at(SEED, 2, &[180_000]), COVER);
     let _ = play(&mut runner, 1, |_, _| {});
     let covering = runner.world().decision_work(0).unwrap().spent();
-    assert!(
-        covering > 12,
+    // Pinned exactly on the golden seed, so a change to what the resolver
+    // charges shows here rather than drifting under a lower bound. The count
+    // goes past the plan's four categories (S1's plan, section 5 item 3): it
+    // also charges one unit per feature the ranker scans and one per spiral
+    // column the covering search tries, which the pull request names for
+    // `p1`'s report.
+    assert_eq!(
+        covering, 412,
         "a covering resolution ranks every feature and walks a spiral: {covering}"
     );
 }
