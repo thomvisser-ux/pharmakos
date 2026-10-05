@@ -1,0 +1,39 @@
+# SPDX-FileCopyrightText: 2026 Pharmakos contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[package]
+name = "pharmakos-bench"
+description = "Walled timing harness for P1: QUICK's wall-clock percentiles and a decision tick's cost per size unit. Never shipped."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+# Never published and never in a zip (S1's plan, decision 2; decisions-log item 128 (3) (b)):
+# `cargo xtask package` builds the client library and `gamectl` and nothing else.
+publish = false
+
+# No [features] section on purpose: this crate is in xtask's research guard
+# (`GUARDED_PACKAGES`), so it must never define, forward or enable `research`, and its
+# dependency on the sim reads `default-features = false` (AGENTS.md section 3 rule 1).
+#
+# It is walled (`WALLED_PACKAGES` in xtask/src/main.rs): wall-clock time and the float
+# allowance are legal here and nowhere in the crates it reaches, and `cargo xtask
+# wall-guard` keeps every deterministic crate from depending on it. It takes no
+# `CLIENT_WALL` line, because it exists to reach the sim from outside (AGENTS.md
+# section 4.5's walled harness; S1's plan, section 5).
+
+[dependencies]
+# The verifier's wire types: `Depth`, the report, and the canonical JSON codec.
+pharmakos-proto    = { workspace = true }
+# The rules table, the snapshot, the world's config and the seat's economy, read only.
+pharmakos-sim      = { workspace = true, default-features = false }
+# QUICK itself, timed against the verifier goldens' own fixture.
+pharmakos-verifier = { workspace = true }
+# The hosted match whose decision ticks are timed: `Host` behind a `Surface`, the path
+# every player's playbook takes (AGENTS.md section 3, gamectl's row).
+pharmakos-gateway  = { workspace = true }
+
+[lints]
+workspace = true

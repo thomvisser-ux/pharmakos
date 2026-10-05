@@ -35,24 +35,27 @@
 #   * `cargo xtask wall-guard` then fails the build if sim, plan-core, verifier, operator,
 #     gateway or gamectl depends on a walled crate, transitively included — which is
 #     what keeps the allowance from leaking into hashed state. That list is
-#     `WALL_GUARDED_PACKAGES` in xtask/src/main.rs; it is the research guard's list plus
-#     `sim`, which cannot join the research guard because `sim` is the crate that defines
-#     the `research` feature.
+#     `WALL_GUARDED_PACKAGES` in xtask/src/main.rs; it is the research guard's list less
+#     the walled `bench` (which is on both), plus `sim`, which cannot join the research
+#     guard because `sim` is the crate that defines the `research` feature.
 #
 # The allow-list of walled crates lives in one place, `WALLED_PACKAGES` in
 # xtask/src/main.rs. Today it reads:
 #
-#     presentation, solve, client-gdext, mesher       (with or without the pharmakos- prefix)
+#     presentation, solve, client-gdext, mesher, bench   (with or without the pharmakos- prefix)
 #
 # The first two are the spec's own wording — "a walled presentation/solve module"
-# (spec §15, Maths). The other two are crates that exist: the thin gdext bridge, and the
+# (spec §15, Maths). The other three are crates that exist: the thin gdext bridge; the
 # greedy mesher, which decisions log §2.7 item 56 decided is its own walled crate — integer
 # chunk data in, vertex buffers out, linking without gdext, and depended on by client-gdext
-# alone today. Adding a name to that list widens the float, cast, hash-map and clock
-# allowance for a whole crate, so it is a contract change too.
+# alone today; and the bench, P1's timing harness (S1's plan, decision 2, approved by
+# decisions log §2.7 item 128 (3) (b)) — the walled harness AGENTS.md §4.5 sanctions, which
+# reads the clock while it drives the verifier and a hosted match from outside, is never
+# shipped, and is also on the research guard. Adding a name to that list widens the float,
+# cast, hash-map and clock allowance for a whole crate, so it is a contract change too.
 #
 # PLACEHOLDER: `presentation` and `solve`, named and not created — owner, if either is proposed.
-# `pharmakos-client-gdext` and `pharmakos-mesher` of the four exist (the register's M-02).
+# `pharmakos-client-gdext`, `pharmakos-mesher` and `pharmakos-bench` of the five exist (the register's M-02).
 #
 # Inside a walled crate, keep the float surface at the edge: marshal to and from integer
 # types as early as possible, and never hand a float back to anything the sim hashes.
