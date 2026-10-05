@@ -20,6 +20,16 @@
 //! Sharing the fixture is deliberate. A case's job is to isolate **one
 //! diagnostic**, and a per-case scope would make each report a function of two
 //! things that changed instead of one.
+//!
+//! **The map, for the cases that read it.** From S1 the seat's view can carry
+//! the map's vents and seams and the commander's position (S1's plan, task
+//! `tgtv`). The cases named in [`MAP_CASES`] — the ones that name or describe a
+//! feature, or whose lint reads the map — are checked against [`map_scope`],
+//! which is [`fixture_scope`] with those added and nothing else changed. Every
+//! other case keeps the plain fixture, because `crates/gamectl/src/seat.rs`'s
+//! reference seat is that fixture written a second time, and
+//! `gamectl verify`'s test compares the worked example's `report_hash` with the
+//! golden here.
 
 use std::fmt::Write as _;
 use std::fs;
@@ -30,14 +40,17 @@ use pharmakos_proto::gp::api::v1::diagnostic::Severity;
 use pharmakos_proto::gp::api::v1::verify_plan::Depth;
 use pharmakos_proto::gp::v1::Voxel;
 use pharmakos_proto::gp::v1::beacon_filter::MandateKind;
+use pharmakos_proto::gp::v1::by_richness::Richness;
 use pharmakos_proto::json;
 use pharmakos_sim::knowledge::SeatEconomy;
 use pharmakos_sim::math::quantity::{Kw, Money};
 use pharmakos_sim::rules::RulesTable;
 use pharmakos_sim::snapshot::{SNAPSHOT_VERSION, Snapshot};
 use pharmakos_sim::tables::SeatId;
-use pharmakos_verifier::catalogue::{CATALOGUE, Emitter, catalogue_json};
-use pharmakos_verifier::{Input, KnownBeacon, Ownership, Scope, VERIFIER_VERSION, hash, verify};
+use pharmakos_verifier::catalogue::{CATALOGUE, Emitter, Stage, catalogue_json};
+use pharmakos_verifier::{
+    FeatureKind, Input, KnownBeacon, KnownFeature, Ownership, Scope, VERIFIER_VERSION, hash, verify,
+};
 
 // ---------------------------------------------------------------------------
 // Paths
@@ -223,6 +236,112 @@ fn fixture_scope() -> Scope {
     ))
 }
 
+/// The cases checked against [`map_scope`]: every case that names or describes
+/// a feature, and the one whose lint reads the map around a fixed site.
+const MAP_CASES: &[&str] = &[
+    "cover_the_nearest_vent",
+    "e0111_covering_without_coverage",
+    "e0111_pick_without_a_rank",
+    "e0407_covering_outside_a_place_step",
+    "e0408_on_outside_a_build_target",
+    "e0409_covered_outside_a_covering_deploy",
+    "e0410_removing_by_a_description",
+    "e0411_coverage_under_on",
+    "e0412_unknown_feature",
+    "e0413_a_seam_under_on",
+    "w0704_a_lost_feature",
+    "w0705_an_earlier_step_places_a_beacon",
+    "w0706_a_fixed_site_by_a_covered_vent",
+];
+
+fn feature(
+    id: &str,
+    kind: FeatureKind,
+    grade: Richness,
+    at: (i32, i32),
+    live: bool,
+    covered_by: Option<&str>,
+) -> KnownFeature {
+    KnownFeature {
+        feature_id: id.to_owned(),
+        kind,
+        grade,
+        x: at.0,
+        y: at.1,
+        live,
+        covered_by: covered_by.map(str::to_owned),
+    }
+}
+
+/// [`fixture_scope`] with the map's features and the commander's position:
+///
+/// | Feature | Kind | Live | Covered by |
+/// | --- | --- | --- | --- |
+/// | `seam_104_24` | seam, standard | yes | `b_02` |
+/// | `seam_200_60` | seam, rich | yes | — |
+/// | `vent_150_25` | vent, standard | yes | — |
+/// | `vent_40_40` | vent, lean | **no** (lost) | — |
+/// | `vent_90_20` | vent, lean | yes | `b_01` |
+///
+/// The commander stands at (82, 13, 55), beside the core.
+fn map_scope() -> Scope {
+    fixture_scope()
+        .with_feature(feature(
+            "seam_104_24",
+            FeatureKind::Seam,
+            Richness::Standard,
+            (104, 24),
+            true,
+            Some("b_02"),
+        ))
+        .with_feature(feature(
+            "seam_200_60",
+            FeatureKind::Seam,
+            Richness::Rich,
+            (200, 60),
+            true,
+            None,
+        ))
+        .with_feature(feature(
+            "vent_150_25",
+            FeatureKind::Vent,
+            Richness::Standard,
+            (150, 25),
+            true,
+            None,
+        ))
+        .with_feature(feature(
+            "vent_40_40",
+            FeatureKind::Vent,
+            Richness::Lean,
+            (40, 40),
+            false,
+            None,
+        ))
+        .with_feature(feature(
+            "vent_90_20",
+            FeatureKind::Vent,
+            Richness::Lean,
+            (90, 20),
+            true,
+            Some("b_01"),
+        ))
+        .with_commander(Voxel {
+            x: 82,
+            y: 13,
+            z: 55,
+        })
+}
+
+/// The view a case is checked against.
+fn scope_for(case: &str) -> Scope {
+    if MAP_CASES.contains(&case) {
+        map_scope()
+    } else {
+        fixture_scope()
+    }
+}
+
 fn case_bytes(case: &str) -> Vec<u8> {
     let path = cases_dir().join(format!("{case}.json"));
     fs::read(&path).unwrap_or_else(|error| panic!("reading {}: {error}", path.display()))
@@ -230,7 +349,7 @@ fn case_bytes(case: &str) -> Vec<u8> {
 
 fn report_for(case: &str, depth: Depth) -> VerifyReport {
     let rules = rules();
-    let scope = fixture_scope();
+    let scope = scope_for(case);
     let snapshot = fixture_snapshot();
     let playbook = case_bytes(case);
     let input = Input::new(&playbook, &snapshot, &scope, &rules)
@@ -370,23 +489,69 @@ fn nothing_outside_the_catalogue_is_ever_emitted() {
 
 #[test]
 fn full_finds_what_quick_finds() {
-    // Item 82: FULL's estimate and lint stages are present and empty, so today a
-    // FULL report carries exactly QUICK's diagnostics. When S1 and S3 fill them
-    // this test is the one that says so, and the report goldens move with it.
+    // Item 82, in its S1 form. FULL runs QUICK's four stages first and then
+    // estimate and lint, and appends to the same report, so QUICK's diagnostics
+    // are FULL's first ones, in the same order. What FULL adds comes only from
+    // the two FULL stages: the estimate stage is still empty until S1's `proj`,
+    // and the lint stage raises targeting's three lints, which are advice and
+    // never change whether a playbook qualifies.
+    let mut full_added_something = false;
     for case in cases() {
         let quick = report_for(&case, Depth::Quick);
         let full = report_for(&case, Depth::Full);
-        assert_eq!(
-            quick.diagnostics, full.diagnostics,
-            "{case}: FULL found something QUICK did not, but both of FULL's extra stages are \
-             empty (decisions-log item 82)"
+        assert!(
+            full.diagnostics.starts_with(&quick.diagnostics),
+            "{case}: FULL lost or reordered something QUICK found"
         );
+        for extra in full.diagnostics.iter().skip(quick.diagnostics.len()) {
+            let stage = CATALOGUE
+                .iter()
+                .find(|row| row.code == extra.code)
+                .map(|row| row.emitter);
+            assert!(
+                matches!(stage, Some(Emitter::Stage(Stage::Estimate | Stage::Lint))),
+                "{case}: FULL added `{}`, which no FULL stage raises",
+                extra.code
+            );
+            assert_ne!(
+                extra.severity,
+                i32::from(Severity::Error),
+                "{case}: FULL added an error, `{}`; a lint is advice",
+                extra.code
+            );
+            full_added_something = true;
+        }
         assert_eq!(quick.qualifies, full.qualifies, "{case}");
         assert_ne!(
             quick.report_hash, full.report_hash,
             "{case}: the depth is one of the five hashed inputs, so two depths never share a hash"
         );
     }
+    assert!(
+        full_added_something,
+        "no case shows FULL finding more than QUICK, so the half of this test that checks what \
+         FULL adds has nothing to check"
+    );
+}
+
+#[test]
+fn every_map_case_exists_and_the_map_is_all_it_adds() {
+    let names = cases();
+    for case in MAP_CASES {
+        assert!(
+            names.iter().any(|name| name == case),
+            "{case} is in MAP_CASES and has no case file"
+        );
+    }
+    // The map scope is the fixture plus the map: the beacons and the economy
+    // are the plain fixture's, so a map case and a plain case differ in what
+    // the view adds and in nothing else.
+    let plain = fixture_scope();
+    let map = map_scope();
+    assert_eq!(map.beacons(), plain.beacons());
+    assert_eq!(map.economy(), plain.economy());
+    assert!(plain.features().is_empty() && plain.commander().is_none());
+    assert_eq!(map.features().len(), 5);
 }
 
 #[test]
@@ -594,14 +759,43 @@ fn the_worked_example_qualifies_and_is_six_units() {
     let report = report_for("expand_east", Depth::Full);
     assert!(
         report.qualifies,
-        "spec section 10's own worked example must verify clean; it found {:?}",
+        "spec section 10's own worked example must verify; it found {:?}",
         report
             .diagnostics
             .iter()
             .map(|diagnostic| (diagnostic.code.clone(), diagnostic.message.clone()))
             .collect::<Vec<_>>()
     );
-    assert!(report.diagnostics.is_empty());
+    // S1-39, S1's plan's decision 11: the example omits `pace` on two moves and
+    // `seam_choice` and `pillar_spacing` on its Mine block, each of which reads
+    // as its named default with an I-level note — and nothing more than a note.
+    let notes: Vec<(&str, &str)> = report
+        .diagnostics
+        .iter()
+        .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
+        .collect();
+    assert_eq!(
+        notes,
+        [
+            (
+                "I0003",
+                "/declarative/route/1/place_beacon/initial/mandate/mine/seam_choice"
+            ),
+            (
+                "I0003",
+                "/declarative/route/1/place_beacon/initial/mandate/mine/pillar_spacing"
+            ),
+            ("I0003", "/declarative/route/2/move/pace"),
+            ("I0003", "/declarative/handlers/0/body/0/move/pace"),
+        ]
+    );
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.severity == i32::from(Severity::Info)),
+        "the worked example carries notes and nothing stronger"
+    );
     // Item 94's own worked example: three route steps, one handler, two steps in
     // its body.
     assert_eq!(report.size_units, 6);

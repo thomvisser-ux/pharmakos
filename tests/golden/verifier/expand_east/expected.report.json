@@ -1,7 +1,58 @@
 {
   "qualifies": true,
   "depth": "FULL",
-  "report_hash": "TwltnCNBwK0=",
+  "diagnostics": [
+    {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/1/place_beacon/initial/mandate/mine/seam_choice",
+      "message": "`seam_choice` is omitted and reads as NEAREST.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/1/place_beacon/initial/mandate/mine/seam_choice\",\"value\":\"NEAREST\"}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/1/place_beacon/initial/mandate/mine/pillar_spacing",
+      "message": "`pillar_spacing` is omitted and reads as 0, no pillars.",
+      "beginner": "A setting left out takes its named default."
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/2/move/pace",
+      "message": "`pace` is omitted and reads as DIRECT.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/2/move/pace\",\"value\":\"DIRECT\"}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/handlers/0/body/0/move/pace",
+      "message": "`pace` is omitted and reads as DIRECT.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/handlers/0/body/0/move/pace\",\"value\":\"DIRECT\"}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    }
+  ],
+  "report_hash": "D111/XSuEdE=",
   "rules_hash": "p1QGoPeYo6c=",
   "plan_fingerprint": "tPe4E/SBB60=",
   "verifier_version": "0.1.0-skeleton",

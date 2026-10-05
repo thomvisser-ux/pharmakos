@@ -1,0 +1,26 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0111",
+      "severity": "ERROR",
+      "path": "/declarative/route/0/place_beacon/at/covering/vent/rank",
+      "message": "`rank` is unset; an unset choice is an error, never a default.",
+      "beginner": "One of the choices here has been left blank.",
+      "suggestions": [
+        {
+          "title": "Rank it by nearest",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/0/place_beacon/at/covering/vent/rank\",\"value\":\"NEAREST\"}]",
+          "applicability": "MAYBE_INCORRECT"
+        }
+      ]
+    }
+  ],
+  "report_hash": "c4bbMgg2IYA=",
+  "rules_hash": "p1QGoPeYo6c=",
+  "plan_fingerprint": "S3xqCcdx4OU=",
+  "verifier_version": "0.1.0-skeleton",
+  "size_units": 1,
+  "size_budget": 128
+}
+

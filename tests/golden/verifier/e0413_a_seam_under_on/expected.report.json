@@ -1,0 +1,19 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0413",
+      "severity": "ERROR",
+      "path": "/declarative/route/0/interface/rows/0/add_build_target/target/anchor/on/seam",
+      "message": "`on` stands a structure on a heat vent, and the `seam` pick names a scrap seam.",
+      "beginner": "Buildings stand on vents. A seam is dug, not built on."
+    }
+  ],
+  "report_hash": "whO8h3nzKDA=",
+  "rules_hash": "p1QGoPeYo6c=",
+  "plan_fingerprint": "ogwCs6ocO8U=",
+  "verifier_version": "0.1.0-skeleton",
+  "size_units": 2,
+  "size_budget": 128
+}
+

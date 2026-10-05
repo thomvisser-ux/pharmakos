@@ -46,6 +46,8 @@ Three kinds of golden live here, and they fail for different reasons:
 | `expand_east/` | `expected.prose.txt` | the same file's `render_plan` |
 | `awkward/` | `expected.jsonc` | the same, from `crates/plan-core/tests/cases/awkward.jsonc` |
 | `awkward/` | `expected.canonical.json` | that fixture's canonical JSON, comments stripped |
+| `cover_the_nearest_vent/` | `expected.jsonc` | the same, from `crates/plan-core/tests/cases/cover_the_nearest_vent.jsonc` (S1, task `tgtv`) |
+| `cover_the_nearest_vent/` | `expected.prose.txt` | that fixture's `render_plan` |
 
 `expand_east/` has no `expected.canonical.json` of its own on purpose: its
 canonical JSON is byte-identical to `tests/golden/proto/expected.expand_east.json`,
@@ -63,6 +65,17 @@ proto3 default, which the canonical form drops: that comment is **relocated** to
 the nearest surviving ancestor and reported in `Canonical::relocated`, never
 dropped, and `a_comment_on_a_written_out_default_is_relocated_and_reported`
 pins both halves.
+
+`cover_the_nearest_vent/` is targeting's case (docs/design/targeting.md,
+"Sites"): every new arm of S1's `Location` where an author writes it —
+`covering` with a pick and with a name, `on` with a pick, with `covered {}` and
+with a name — through the round trip, the canonical form and the prose. A prose
+diff here is a change in how a site reads to the player. `covered {}` sits in
+the deploy's initial settings, which the prose names as a mandate without
+listing, so its phrase is pinned by `render.rs`'s own test rather than here.
+Its fixture carries no SPDX header, so neither does the golden, which stays in
+this area's permissive tier as `awkward/expected.canonical.json` does; the
+fixture's own licence comes from `REUSE.toml`'s `crates/**` block.
 
 ## Licensing
 

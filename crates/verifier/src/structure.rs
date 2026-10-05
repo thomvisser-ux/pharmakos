@@ -32,20 +32,47 @@
 //! 10's worked example loads as written — and a negative one is **rejected here,
 //! with a JSON Pointer**, rather than at decode where there would be no pointer
 //! to give. `E0109` is that rejection.
+//!
+//! # Targeting's sites: which arm is legal where
+//!
+//! S1's targeting vocabulary (docs/design/targeting.md, "Sites") adds two
+//! `Location` arms, each a `gp.v1.FeatureRef`, and each is legal in exactly one
+//! place: `covering` in a `place_beacon`'s `at`, and `on` in a Build target's
+//! anchor (plus, as a `feature_id` only, `remove_build_target`'s). `covered {}`
+//! is legal only under `on` in a Build target inside the `initial` of a
+//! `place_beacon` whose `at` is `covering`. Whether an arm may stand where it
+//! stands is a question about the file alone, so it is asked here, by
+//! [`Sites`] over the shared walk, which knows the slot each `Location` is in;
+//! `E0407` to `E0411` are its answers, and an unset rank, an unset choice and,
+//! under `covering`, an unset coverage are `E0111`, like every other unset
+//! choice. Whether a name exists is [`crate::resolve`]'s question and whether
+//! the thing named is a vent is [`crate::semantics`]'s. Nothing here ranks.
+//!
+//! # Omitted settings (S1-39)
+//!
+//! An omitted `MoveStep.pace`, `MineSettings.seam_choice`,
+//! `MineSettings.pillar_spacing` and `BuildSettings.terraform` read as named
+//! defaults, each with an `I0003` note; see [`walk_action`].
 
 use pharmakos_proto::gp::api::v1::patch_suggestion::Applicability;
+use pharmakos_proto::gp::v1::build_settings::Terraform;
+use pharmakos_proto::gp::v1::feature_ref::{self, Coverage, Rank};
 use pharmakos_proto::gp::v1::handler::Resume;
+use pharmakos_proto::gp::v1::mine_settings::SeamChoice;
+use pharmakos_proto::gp::v1::move_step::Pace;
 use pharmakos_proto::gp::v1::on_death::OnRespawn;
 use pharmakos_proto::gp::v1::{
-    BeaconRef, Condition, Handler, IntCompare, Location, Playbook, Step, condition, fallback,
-    int_compare, interface_row, location, step,
+    BeaconRef, Condition, FeatureRef, Handler, IntCompare, Location, MandateSettings, Playbook,
+    Step, condition, fallback, int_compare, interface_row, location, mandate_settings, step,
 };
+use pharmakos_proto::json::Json;
 
 use crate::limits::{CONDITION_MAX_DEPTH, CONDITION_MAX_NODES, Limits};
 use crate::pointer;
-use crate::report::{Builder, Diag, number, patch_add, patch_replace};
+use crate::report::{Builder, Diag, number, patch_add, patch_remove, patch_replace};
 use crate::size;
-use crate::walk::{self, Visit};
+use crate::strings;
+use crate::walk::{self, Carrier, List, Slot, Visit};
 
 use std::collections::BTreeMap;
 
@@ -132,7 +159,7 @@ pub(crate) fn run(playbook: &Playbook, limits: &Limits, out: &mut Builder) {
         }
     }
 
-    walk::walk(playbook, &mut HeldSites { out });
+    walk::walk(playbook, &mut Sites { out });
 }
 
 /// The four blocks every playbook carries (`proto/gp/v1/playbook.proto`:
@@ -229,23 +256,21 @@ fn walk_route_entry(entry: &Step, at: &str, out: &mut Builder) {
     walk_action(kind, at, out);
 }
 
-/// PLACEHOLDER — how an **omitted enum inside the body** reads.
+/// One step's action: present, and naming what it needs.
 ///
-/// `proto/gp/v1/playbook.proto`'s header says an unset enum is a verifier error
-/// and names exactly one exception (`BeaconFilter`) and one open case
-/// (`MineSettings.seam_choice`). Two more fields are in the same position and
-/// cannot take the rule as written, because spec section 10's worked example —
-/// which `examples/playbooks/expand_east.jsonc` copies verbatim and which the
-/// schema is checked against — omits them: `MoveStep.pace` on its third step,
-/// and `MineSettings.pillar_spacing` beside `seam_choice`. Checking them would
-/// make the spec's own example fail to verify; defaulting them would invent a
-/// default the section 6 mandate contract has not chosen.
-///
-/// So this stage checks **neither**, and records why here rather than silently.
-/// **OWNER decides at S1**, with the rest of the section 6 mandate contract and
-/// alongside `MineSettings`'s own PLACEHOLDER, which names the same stage; the
-/// answer is one decision for all three, because an omitted setting reading two
-/// ways in one file is the inconsistency the rule exists to prevent. The
+/// **How an omitted enum or setting inside the body reads (the register's
+/// S1-39), decided.** `proto/gp/v1/playbook.proto`'s header says an unset enum
+/// is a verifier error, and spec section 10's worked example — which
+/// `examples/playbooks/expand_east.jsonc` copies verbatim — omits three
+/// settings the rule would then refuse: `MoveStep.pace` on its third step, and
+/// `MineSettings.seam_choice` and `pillar_spacing`. S1's plan's decision 11,
+/// ruled with the plan by decisions-log item 128, answers all of them at once:
+/// an omitted `pace` reads as DIRECT, `seam_choice` as NEAREST,
+/// `pillar_spacing` as 0 (no pillars) and `BuildSettings.terraform` as NONE,
+/// each with an `I0003` note, so the spec's example verifies and says what it
+/// was read as. They are four invented defaults, named as such in the plan and
+/// the header; targeting's new `*_UNSPECIFIED` values stay errors, as adopted.
+/// [`Sites`] raises the notes over the shared walk, in document order. The
 /// envelope's own tags — `kind` and `author_kind` — are unaffected and are
 /// checked at decode, because item 76 settles them by name.
 fn walk_action(kind: &step::Kind, at: &str, out: &mut Builder) {
@@ -340,7 +365,7 @@ fn check_location(place: Option<&Location>, at: &str, what: &str, out: &mut Buil
             check_beacon_ref(target, &pointer::child(at, "beacon_anchor"), out);
         }
         // Targeting's two sites name a place too, so there is nothing more to
-        // check here; [`HeldSites`] refuses them wherever they stand, a Build
+        // check here: [`Sites`] judges them in the slot they stand in, a Build
         // target's anchor included, which this function is never handed.
         Some(
             location::Place::Voxel(_)
@@ -351,31 +376,189 @@ fn check_location(place: Option<&Location>, at: &str, what: &str, out: &mut Buil
     }
 }
 
-/// Targeting's two sites, `on` and `covering` (docs/design/targeting.md,
-/// "Sites"), refused wherever a playbook writes them.
+/// Targeting's sites, judged where they stand, and the omitted settings'
+/// notes (S1-39): the two checks of this stage that need the shared walk.
 ///
-/// They are in the schema from S1's targeting proto and have no effect until
-/// its behaviour lands, so each is refused as a held-back word is, with `E0003`
-/// at the arm, rather than checked for where it may stand: the sim refuses the
-/// same file at compile (`PlanError::NotAtThisStage`), and a report that
-/// qualified a file the sim then refused would be a verifier that lies. The
-/// shared walk is what reaches every `Location`, a Build target's anchor
-/// (`on`'s only legal place) included, which [`check_location`]'s callers do
-/// not. S1's targeting verifier lane replaces this with the real rules: which
-/// arm is legal where, the ranks and the coverage filters.
-struct HeldSites<'a> {
+/// This replaces the refusal S1's targeting proto shipped (task `con2`), which
+/// emitted `E0003` at either arm wherever it stood until the rules below
+/// landed; `E0003` is decode's again, for the words held back to a later
+/// version, and `on` and `covering` are v1 vocabulary (decisions-log item 130
+/// (4)).
+struct Sites<'a> {
     out: &'a mut Builder,
 }
 
-impl Visit for HeldSites<'_> {
-    fn location(&mut self, at: &str, place: &Location) {
-        let field = match place.place.as_ref() {
-            Some(location::Place::On(_)) => "on",
-            Some(location::Place::Covering(_)) => "covering",
-            _ => return,
+/// Which site arm a `FeatureRef` is under, with what that arm reads.
+#[derive(Clone, Copy)]
+enum Arm<'a> {
+    /// `covering`, in a `place_beacon`'s `at`.
+    Covering,
+    /// `on`, in a Build target's anchor; `deploy` is the enclosing
+    /// `place_beacon`'s `covering`, if the target is in its `initial`.
+    On { deploy: Option<&'a FeatureRef> },
+}
+
+impl Visit for Sites<'_> {
+    fn entry(&mut self, at: &str, entry: &Step, _list: List, _index: usize) {
+        if let Some(step::Kind::Move(walk_to)) = entry.kind.as_ref() {
+            if walk_to.pace() == Pace::Unspecified {
+                self.default_note(&pointer::child(at, "move"), "pace", "DIRECT", true);
+            }
+        }
+    }
+
+    fn location(&mut self, at: &str, place: &Location, slot: Slot<'_>) {
+        match place.place.as_ref() {
+            Some(location::Place::Covering(feature)) => {
+                let here = pointer::child(at, "covering");
+                if matches!(slot, Slot::PlaceSite) {
+                    self.feature(feature, &here, Arm::Covering);
+                } else {
+                    self.out.emit(Diag::new("E0407", here));
+                }
+            }
+            Some(location::Place::On(feature)) => {
+                let here = pointer::child(at, "on");
+                match slot {
+                    Slot::BuildAnchor { deploy } => {
+                        self.feature(feature, &here, Arm::On { deploy });
+                    }
+                    Slot::RemoveAnchor => match feature.r#ref.as_ref() {
+                        None => self.out.emit(Diag::new("E0111", here).arg("field", "ref")),
+                        Some(feature_ref::Ref::FeatureId(_)) => {}
+                        Some(description) => self.out.emit(Diag::new(
+                            "E0410",
+                            pointer::child(&here, arm_name(description)),
+                        )),
+                    },
+                    Slot::PlaceSite | Slot::Elsewhere => self.out.emit(Diag::new("E0408", here)),
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn mandate(&mut self, at: &str, settings: &MandateSettings, carrier: Carrier) {
+        // A `set_mandate_settings` row edits the current mandate: a field it
+        // leaves out is one it does not write, not one it sets to the default,
+        // and writing the default out would add a field the sim charges for.
+        // So the note, and its Fix, stand only where the beacon's settings
+        // start from nothing.
+        if carrier == Carrier::Edit {
+            return;
+        }
+        match settings.mandate.as_ref() {
+            Some(mandate_settings::Mandate::Mine(mine)) => {
+                let here = pointer::child(at, "mine");
+                if mine.seam_choice() == SeamChoice::Unspecified {
+                    self.default_note(&here, "seam_choice", "NEAREST", true);
+                }
+                if mine.pillar_spacing == 0 {
+                    // No Fix: proto3 writes a zero by leaving it out, so there
+                    // is no spelling of "0" for the note to go quiet on.
+                    self.default_note(&here, "pillar_spacing", strings::NO_PILLARS, false);
+                }
+            }
+            Some(mandate_settings::Mandate::Build(build))
+                if build.terraform() == Terraform::Unspecified =>
+            {
+                self.default_note(&pointer::child(at, "build"), "terraform", "NONE", true);
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Sites<'_> {
+    /// One `FeatureRef` under an arm it may stand under.
+    fn feature(&mut self, feature: &FeatureRef, at: &str, arm: Arm<'_>) {
+        let Some(chosen) = feature.r#ref.as_ref() else {
+            self.out.emit(Diag::new("E0111", at).arg("field", "ref"));
+            return;
         };
-        self.out
-            .emit(Diag::new("E0003", pointer::child(at, field)).arg("field", field));
+        let pick = match chosen {
+            // A name is checked for existence by the resolve stage and for its
+            // kind by the semantics stage; its shape here is a string.
+            feature_ref::Ref::FeatureId(_) => return,
+            feature_ref::Ref::Covered(_) => {
+                if !matches!(arm, Arm::On { deploy: Some(_) }) {
+                    self.out
+                        .emit(Diag::new("E0409", pointer::child(at, "covered")));
+                }
+                return;
+            }
+            feature_ref::Ref::Vent(pick) => (pick.rank(), pick.coverage()),
+            feature_ref::Ref::Seam(pick) => (pick.rank(), pick.coverage()),
+        };
+        let here = pointer::child(at, arm_name(chosen));
+        let (rank, coverage) = pick;
+        if rank == Rank::Unspecified {
+            self.out.emit(
+                Diag::new("E0111", pointer::child(&here, "rank"))
+                    .arg("field", "rank")
+                    .fix(
+                        strings::FIX_RANK_NEAREST,
+                        // `add`: an unset enum is written by leaving it out.
+                        patch_add(
+                            &pointer::child(&here, "rank"),
+                            &Json::String("NEAREST".to_owned()),
+                        ),
+                        Applicability::MaybeIncorrect,
+                    ),
+            );
+        }
+        match arm {
+            Arm::Covering if coverage == Coverage::Unspecified => self.out.emit(
+                Diag::new("E0111", pointer::child(&here, "coverage"))
+                    .arg("field", "coverage")
+                    .fix(
+                        strings::FIX_COVERAGE_UNCOVERED,
+                        patch_add(
+                            &pointer::child(&here, "coverage"),
+                            &Json::String("UNCOVERED".to_owned()),
+                        ),
+                        Applicability::MaybeIncorrect,
+                    ),
+            ),
+            Arm::On { .. } if coverage != Coverage::Unspecified => {
+                self.out
+                    .emit(Diag::new("E0411", pointer::child(&here, "coverage")).fix(
+                        strings::FIX_DROP_COVERAGE,
+                        // The member is present by construction (it is not the
+                        // default), and taking it out changes nothing the sim
+                        // reads, which is what makes the fix machine-applicable.
+                        patch_remove(&pointer::child(&here, "coverage")),
+                        Applicability::MachineApplicable,
+                    ));
+            }
+            Arm::Covering | Arm::On { .. } => {}
+        }
+    }
+
+    /// `I0003`: an omitted setting and the named default it reads as.
+    fn default_note(&mut self, at: &str, field: &'static str, value: &str, fixable: bool) {
+        let here = pointer::child(at, field);
+        let mut diag = Diag::new("I0003", here.clone())
+            .arg("field", field)
+            .arg("value", value);
+        if fixable {
+            diag = diag.fix(
+                strings::FIX_WRITE_DEFAULT,
+                patch_add(&here, &Json::String(value.to_owned())),
+                Applicability::MachineApplicable,
+            );
+        }
+        self.out.emit(diag);
+    }
+}
+
+/// The JSON name of a `FeatureRef`'s arm, for a pointer.
+pub(crate) const fn arm_name(chosen: &feature_ref::Ref) -> &'static str {
+    match chosen {
+        feature_ref::Ref::FeatureId(_) => "feature_id",
+        feature_ref::Ref::Vent(_) => "vent",
+        feature_ref::Ref::Seam(_) => "seam",
+        feature_ref::Ref::Covered(_) => "covered",
     }
 }
 

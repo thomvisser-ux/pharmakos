@@ -7,9 +7,23 @@
       "path": "/declarative/route/0/move/to",
       "message": "`to` is required and is missing.",
       "beginner": "A part that every playbook must have is not here."
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/0/move/pace",
+      "message": "`pace` is omitted and reads as DIRECT.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/0/move/pace\",\"value\":\"DIRECT\"}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
     }
   ],
-  "report_hash": "GFyhDTphmVA=",
+  "report_hash": "3bIH0YH6g8w=",
   "rules_hash": "p1QGoPeYo6c=",
   "plan_fingerprint": "htu/hoNWNhQ=",
   "verifier_version": "0.1.0-skeleton",

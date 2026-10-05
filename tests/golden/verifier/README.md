@@ -32,16 +32,47 @@ for every case — one seat, one snapshot, one scope — written out in that fil
 
 Sharing the fixture is deliberate: a case's job is to isolate **one
 diagnostic**, and a per-case scope would make each report a function of two
-things that changed instead of one. A case is named after the code it isolates,
+things that changed instead of one. The one exception is an `I0003` note: from
+S1 (S1-39, the plan's decision 11) an omitted `pace`, `seam_choice`,
+`pillar_spacing` or `terraform` reads as its named default with that note, so a
+case written before S1 that leaves one of them out carries an `I0003` beside the
+code it isolates. The note is information, never changes whether the case
+qualifies, and is not what the case is about.
+
+**The map, for the cases that read it (S1).** From S1's targeting verifier the
+seat's view can carry the map's vents and seams and the commander's position.
+The cases named in `verifier.rs`'s `MAP_CASES` — every case that names or
+describes a feature, and `w0706_a_fixed_site_by_a_covered_vent` — are checked
+against `map_scope`, which is the same fixture with this added and nothing else:
+
+| Feature | Kind | Live | Covered by |
+| --- | --- | --- | --- |
+| `seam_104_24` | seam, standard | yes | `b_02` |
+| `seam_200_60` | seam, rich | yes | — |
+| `vent_150_25` | vent, standard | yes | — |
+| `vent_40_40` | vent, lean | **no** (lost) | — |
+| `vent_90_20` | vent, lean | yes | `b_01` |
+
+and the commander at 82, 13, 55. Every other case keeps the plain fixture,
+because `crates/gamectl/src/seat.rs`'s reference seat is that fixture written
+a second time and `gamectl verify`'s test compares the worked example's
+`report_hash` with the golden here. A case is named after the code it isolates,
 and a code that can be wrong in more than one shape gets more than one case —
 `E0111` has three, because an unset choice on `Fallback.posture`, on
 `Location.place` and on `BeaconRef.ref` are three different things for an author
-to have done. Two cases are meant to pass:
+to have done. Three cases are meant to pass with no error:
 
 * `expand_east` — spec section 10's worked example, canonicalised. It must
-  verify clean and measure **6 size units** (decisions-log item 94's own worked
-  example). If this case ever gains a diagnostic, either the verifier or the
-  spec's example is wrong, and the pull request has to say which.
+  qualify and measure **6 size units** (decisions-log item 94's own worked
+  example). From S1 it carries four `I0003` notes and nothing stronger: it
+  omits `pace` on two moves and `seam_choice` and `pillar_spacing` on its Mine
+  block, and S1's plan's decision 11 (the register's S1-39, ruled by item 128)
+  reads each as a named default with a note. If it ever gains a warning or an
+  error, either the verifier or the spec's example is wrong, and the pull
+  request has to say which.
+* `cover_the_nearest_vent` — targeting's adopted spelling, "place a beacon
+  covering the nearest vent you do not cover, and build a Generator on it",
+  against the map: no diagnostic at all.
 * `budget_128` — a playbook that sits **exactly on** the size budget, for a
   walled bench harness to time later. Wall-clock time is illegal in
   `crates/verifier`, so nothing here times anything: the QUICK and FULL timings
@@ -110,5 +141,14 @@ cargo xtask golden --bless              # accepts them
   in the verifier, not a report change.
 * **FULL's report grew when S1 and S3 fill the estimate and lint stages.**
   Expected, and written down in advance (decisions-log item 82): explain it in
-  that pull request. Until then `full_finds_what_quick_finds` holds, and the two
-  depths differ only in the depth stamped on the report and hashed into it.
+  that pull request. S1's targeting verifier was the first: the lint stage
+  raises `W0704` to `W0706`, so the `w07…` cases' FULL reports carry a warning
+  their QUICK reports do not. `full_finds_what_quick_finds` holds in its S1
+  form: FULL's diagnostics start with QUICK's, and what follows comes only from
+  a FULL stage and is never an error.
+* **Every `report_hash` moved in S1's targeting verifier, the reports whose
+  diagnostics stayed the same included.**
+  The seat's view widened to carry the features and the commander's position
+  (`Scope::encode`), and `REPORT_HASH_DOMAIN` went from `gp.api.v1/report/1` to
+  `/2` with it, so input 2's bytes moved for every case, the cases with no map
+  included (an empty feature list and an absent commander are bytes too).

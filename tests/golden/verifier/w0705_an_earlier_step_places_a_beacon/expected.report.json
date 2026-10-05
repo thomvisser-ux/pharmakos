@@ -1,0 +1,23 @@
+{
+  "qualifies": true,
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "W0705",
+      "severity": "WARNING",
+      "path": "/declarative/route/1/place_beacon/at/covering/vent",
+      "related_paths": [
+        "/declarative/route/0"
+      ],
+      "message": "an earlier step places a beacon, so the nearest vent you do not cover may read differently when this step starts than it does now.",
+      "beginner": "A description is read when its step starts, and a beacon placed before then can change what it picks."
+    }
+  ],
+  "report_hash": "lmY+xXkwiic=",
+  "rules_hash": "p1QGoPeYo6c=",
+  "plan_fingerprint": "QfHubneHKUY=",
+  "verifier_version": "0.1.0-skeleton",
+  "size_units": 2,
+  "size_budget": 128
+}
+

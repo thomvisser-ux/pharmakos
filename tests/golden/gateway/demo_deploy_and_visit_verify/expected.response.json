@@ -5,8 +5,35 @@
     "report": {
       "qualifies": true,
       "depth": "full",
-      "diagnostics": [],
-      "report_hash": "GAFj20l4YBM=",
+      "diagnostics": [
+        {
+          "code": "I0003",
+          "severity": "info",
+          "path": "/declarative/route/1/place_beacon/initial/mandate/mine/seam_choice",
+          "related_paths": [],
+          "message": "`seam_choice` is omitted and reads as NEAREST.",
+          "beginner": "A setting left out takes its named default.",
+          "suggestions": [
+            {
+              "title": "Write the default out",
+              "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/1/place_beacon/initial/mandate/mine/seam_choice\",\"value\":\"NEAREST\"}]",
+              "applicability": "machine_applicable"
+            }
+          ],
+          "map_refs": []
+        },
+        {
+          "code": "I0003",
+          "severity": "info",
+          "path": "/declarative/route/1/place_beacon/initial/mandate/mine/pillar_spacing",
+          "related_paths": [],
+          "message": "`pillar_spacing` is omitted and reads as 0, no pillars.",
+          "beginner": "A setting left out takes its named default.",
+          "suggestions": [],
+          "map_refs": []
+        }
+      ],
+      "report_hash": "8RfssJvop80=",
       "rules_hash": "p1QGoPeYo6c=",
       "plan_fingerprint": "HsSv5nrPa8Y=",
       "verifier_version": "0.1.0-skeleton",

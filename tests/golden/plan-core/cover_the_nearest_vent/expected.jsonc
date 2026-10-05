@@ -1,0 +1,108 @@
+// cover_the_nearest_vent.jsonc - targeting's sites as an author writes them
+// (docs/design/targeting.md, "Sites"): `covering` with a pick and with a name,
+// `on` with a pick, with `covered {}` and with a name, so the round trip and
+// the prose are pinned for every new arm.
+{
+  "schema_version": {
+    "major": 1
+  },
+  "meta": {
+    "title": "Cover the nearest vent",
+    "author_kind": "HUMAN"
+  },
+  "declarative": {
+    "route": [
+      // a description: the sim ranks it when the step starts
+      {
+        "label": "cover",
+        "place_beacon": {
+          "at": {
+            "covering": {
+              "vent": {
+                "rank": "NEAREST",
+                "coverage": "UNCOVERED"
+              }
+            }
+          },
+          "initial": {
+            "mandate": {
+              "build": {
+                "targets": [
+                  {
+                    "blueprint_id": "generator",
+                    "anchor": {
+                      "on": {
+                        "covered": {}
+                      }
+                    },
+                    "order": 1
+                  }
+                ],
+                "terraform": "NONE"
+              }
+            }
+          }
+        }
+      },
+      {
+        "label": "tap",
+        "interface": {
+          "beacon": {
+            "beacon_id": "b_01"
+          },
+          "rows": [
+            {
+              "add_build_target": {
+                "target": {
+                  "blueprint_id": "generator",
+                  "anchor": {
+                    "on": {
+                      "vent": {
+                        "rank": "NEAREST"
+                      }
+                    }
+                  },
+                  "order": 2
+                }
+              }
+            },
+            /* a name is a fixed id */
+            {
+              "remove_build_target": {
+                "anchor": {
+                  "on": {
+                    "feature_id": "vent_120_88"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "label": "dig",
+        "place_beacon": {
+          "at": {
+            "covering": {
+              "feature_id": "seam_14_9"
+            }
+          }
+        }
+      }
+    ]
+  },
+  "on_death": {
+    "on_respawn": "CONTINUE",
+    "max_deaths_before_fallback": 2
+  },
+  "fallback": {
+    "hold": {
+      "at": {
+        "beacon_anchor": {
+          "safest": {}
+        }
+      }
+    }
+  },
+  "kind": "PLAYBOOK"
+}

@@ -18,7 +18,7 @@
 //! in, and therefore part of what `report_hash` covers.
 
 use pharmakos_proto::gp::v1::{
-    Area, BeaconFilter, BeaconRef, BuildTarget, Condition, InterfaceStep, Location,
+    Area, BeaconFilter, BeaconRef, BuildTarget, Condition, FeatureRef, InterfaceStep, Location,
     MandateSettings, Playbook, Step, beacon_ref, broadcast_step, condition, fallback,
     interface_row, location, mandate_settings, step,
 };
@@ -34,6 +34,47 @@ pub(crate) enum List {
     Body(usize),
 }
 
+/// Where a `Location` stands, which is what decides which of targeting's arms
+/// it may hold (docs/design/targeting.md, "Sites").
+///
+/// The walk knows this and a visitor handed only the `Location` would not: a
+/// Build target's anchor and a move's destination are the same message.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) enum Slot<'a> {
+    /// `PlaceBeaconStep.at`, the one place `covering` is legal.
+    PlaceSite,
+    /// `BuildTarget.anchor`, the one place `on` is legal as a description:
+    /// in `add_build_target`, a Build mandate's settings, or a `place_beacon`'s
+    /// `initial`.
+    BuildAnchor {
+        /// The `covering` reference of the `place_beacon` whose `initial`
+        /// holds the target, when there is one: the only context in which
+        /// `covered {}` means anything.
+        deploy: Option<&'a FeatureRef>,
+    },
+    /// `RemoveBuildTargetRow.anchor`, where `on` is legal as a name only.
+    RemoveAnchor,
+    /// Anywhere else: a move's destination, a broadcast's place, the
+    /// fallback's hold or patrol. Neither arm is legal here.
+    Elsewhere,
+}
+
+/// What carries a mandate settings block, which decides how an omitted field in
+/// it reads.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Carrier {
+    /// A `place_beacon`'s `initial.mandate`: the beacon starts from nothing, so
+    /// an omitted field takes its default.
+    Initial,
+    /// A `set_mandate` row: the switch clears the beacon's settings, so an
+    /// omitted field takes its default there too.
+    Switch,
+    /// A `set_mandate_settings` row, an edit "within the current mandate"
+    /// (`playbook.proto`): an omitted field is one the row does not write, and
+    /// the sim prices the row by the fields it does write.
+    Edit,
+}
+
 /// The leaves a stage can ask to be shown.
 ///
 /// Every method has a default that does nothing, so a stage writes only what it
@@ -45,8 +86,9 @@ pub(crate) trait Visit {
     fn interface(&mut self, _at: &str, _interface: &InterfaceStep) {}
     /// One `place_beacon` site, as a location.
     fn place_site(&mut self, _at: &str, _site: &Location) {}
-    /// Any location, `place_beacon`'s site included.
-    fn location(&mut self, _at: &str, _location: &Location) {}
+    /// Any location, `place_beacon`'s site included, with the slot it stands
+    /// in.
+    fn location(&mut self, _at: &str, _location: &Location, _slot: Slot<'_>) {}
     /// Any beacon reference, fixed or late-bound.
     fn beacon(&mut self, _at: &str, _reference: &BeaconRef) {}
     /// Any selector filter.
@@ -57,8 +99,8 @@ pub(crate) trait Visit {
     fn area(&mut self, _at: &str, _area: &Area) {}
     /// Any condition node, all the way down.
     fn condition(&mut self, _at: &str, _condition: &Condition) {}
-    /// Any mandate settings block.
-    fn mandate(&mut self, _at: &str, _settings: &MandateSettings) {}
+    /// Any mandate settings block, with the row or step that carries it.
+    fn mandate(&mut self, _at: &str, _settings: &MandateSettings, _carrier: Carrier) {}
     /// Any build target.
     fn build_target(&mut self, _at: &str, _target: &BuildTarget) {}
 }
@@ -89,7 +131,7 @@ pub(crate) fn walk(playbook: &Playbook, visitor: &mut dyn Visit) {
             Some(fallback::Posture::Hold(hold)) => {
                 let at = pointer::child("/fallback", "hold");
                 if let Some(place) = hold.at.as_ref() {
-                    walk_location(place, &pointer::child(&at, "at"), visitor);
+                    walk_location(place, &pointer::child(&at, "at"), Slot::Elsewhere, visitor);
                 }
             }
             Some(fallback::Posture::Shadow(shadow)) => {
@@ -101,7 +143,7 @@ pub(crate) fn walk(playbook: &Playbook, visitor: &mut dyn Visit) {
             Some(fallback::Posture::Patrol(patrol)) => {
                 let at = pointer::child(&pointer::child("/fallback", "patrol"), "waypoints");
                 for (index, waypoint) in patrol.waypoints.iter().enumerate() {
-                    walk_location(waypoint, &pointer::at(&at, index), visitor);
+                    walk_location(waypoint, &pointer::at(&at, index), Slot::Elsewhere, visitor);
                 }
             }
             None => {}
@@ -117,7 +159,12 @@ fn walk_entry(entry: &Step, at: &str, visitor: &mut dyn Visit) {
         Some(step::Kind::Move(walk_to)) => {
             let here = pointer::child(at, "move");
             if let Some(place) = walk_to.to.as_ref() {
-                walk_location(place, &pointer::child(&here, "to"), visitor);
+                walk_location(
+                    place,
+                    &pointer::child(&here, "to"),
+                    Slot::Elsewhere,
+                    visitor,
+                );
             }
         }
         Some(step::Kind::Interface(interface)) => {
@@ -136,13 +183,19 @@ fn walk_entry(entry: &Step, at: &str, visitor: &mut dyn Visit) {
             if let Some(site) = place.at.as_ref() {
                 let site_at = pointer::child(&here, "at");
                 visitor.place_site(&site_at, site);
-                walk_location(site, &site_at, visitor);
+                walk_location(site, &site_at, Slot::PlaceSite, visitor);
             }
+            let deploy = match place.at.as_ref().and_then(|site| site.place.as_ref()) {
+                Some(location::Place::Covering(feature)) => Some(feature),
+                _ => None,
+            };
             if let Some(initial) = place.initial.as_ref() {
                 if let Some(settings) = initial.mandate.as_ref() {
                     walk_mandate(
                         settings,
                         &pointer::child(&pointer::child(&here, "initial"), "mandate"),
+                        Carrier::Initial,
+                        deploy,
                         visitor,
                     );
                 }
@@ -172,6 +225,7 @@ fn walk_entry(entry: &Step, at: &str, visitor: &mut dyn Visit) {
                 walk_location(
                     location,
                     &pointer::child(&pointer::child(&here, name), "at"),
+                    Slot::Elsewhere,
                     visitor,
                 );
             }
@@ -183,12 +237,20 @@ fn walk_entry(entry: &Step, at: &str, visitor: &mut dyn Visit) {
 fn walk_row(row: Option<&interface_row::Row>, at: &str, visitor: &mut dyn Visit) {
     match row {
         Some(interface_row::Row::SetMandate(settings)) => {
-            walk_mandate(settings, &pointer::child(at, "set_mandate"), visitor);
+            walk_mandate(
+                settings,
+                &pointer::child(at, "set_mandate"),
+                Carrier::Switch,
+                None,
+                visitor,
+            );
         }
         Some(interface_row::Row::SetMandateSettings(settings)) => {
             walk_mandate(
                 settings,
                 &pointer::child(at, "set_mandate_settings"),
+                Carrier::Edit,
+                None,
                 visitor,
             );
         }
@@ -197,6 +259,7 @@ fn walk_row(row: Option<&interface_row::Row>, at: &str, visitor: &mut dyn Visit)
                 walk_build_target(
                     target,
                     &pointer::child(&pointer::child(at, "add_build_target"), "target"),
+                    None,
                     visitor,
                 );
             }
@@ -206,6 +269,7 @@ fn walk_row(row: Option<&interface_row::Row>, at: &str, visitor: &mut dyn Visit)
                 walk_location(
                     anchor,
                     &pointer::child(&pointer::child(at, "remove_build_target"), "anchor"),
+                    Slot::RemoveAnchor,
                     visitor,
                 );
             }
@@ -214,14 +278,20 @@ fn walk_row(row: Option<&interface_row::Row>, at: &str, visitor: &mut dyn Visit)
     }
 }
 
-fn walk_mandate(settings: &MandateSettings, at: &str, visitor: &mut dyn Visit) {
-    visitor.mandate(at, settings);
+fn walk_mandate(
+    settings: &MandateSettings,
+    at: &str,
+    carrier: Carrier,
+    deploy: Option<&FeatureRef>,
+    visitor: &mut dyn Visit,
+) {
+    visitor.mandate(at, settings, carrier);
     match settings.mandate.as_ref() {
         Some(mandate_settings::Mandate::Build(build)) => {
             let here = pointer::child(at, "build");
             let targets_at = pointer::child(&here, "targets");
             for (index, target) in build.targets.iter().enumerate() {
-                walk_build_target(target, &pointer::at(&targets_at, index), visitor);
+                walk_build_target(target, &pointer::at(&targets_at, index), deploy, visitor);
             }
             let areas_at = pointer::child(&here, "protected_areas");
             for (index, area) in build.protected_areas.iter().enumerate() {
@@ -238,10 +308,20 @@ fn walk_mandate(settings: &MandateSettings, at: &str, visitor: &mut dyn Visit) {
     }
 }
 
-fn walk_build_target(target: &BuildTarget, at: &str, visitor: &mut dyn Visit) {
+fn walk_build_target(
+    target: &BuildTarget,
+    at: &str,
+    deploy: Option<&FeatureRef>,
+    visitor: &mut dyn Visit,
+) {
     visitor.build_target(at, target);
     if let Some(anchor) = target.anchor.as_ref() {
-        walk_location(anchor, &pointer::child(at, "anchor"), visitor);
+        walk_location(
+            anchor,
+            &pointer::child(at, "anchor"),
+            Slot::BuildAnchor { deploy },
+            visitor,
+        );
     }
 }
 
@@ -255,15 +335,16 @@ fn walk_area(area: &Area, at: &str, visitor: &mut dyn Visit) {
     }
 }
 
-fn walk_location(place: &Location, at: &str, visitor: &mut dyn Visit) {
-    visitor.location(at, place);
+fn walk_location(place: &Location, at: &str, slot: Slot<'_>, visitor: &mut dyn Visit) {
+    visitor.location(at, place, slot);
     match place.place.as_ref() {
         Some(location::Place::Voxel(voxel)) => visitor.voxel(&pointer::child(at, "voxel"), voxel),
         Some(location::Place::BeaconAnchor(beacon)) => {
             walk_beacon(beacon, &pointer::child(at, "beacon_anchor"), visitor);
         }
-        // Targeting's sites carry no voxel and no beacon to visit; the
-        // structure stage refuses them until S1's targeting verifier lane.
+        // Targeting's sites carry no voxel and no beacon to visit: a stage
+        // that checks them reads the `FeatureRef` from `location`, with the
+        // slot that decides whether the arm may stand there.
         Some(
             location::Place::Safest(_) | location::Place::On(_) | location::Place::Covering(_),
         )

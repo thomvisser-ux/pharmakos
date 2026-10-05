@@ -1,0 +1,26 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0111",
+      "severity": "ERROR",
+      "path": "/declarative/route/0/place_beacon/at/covering/seam/coverage",
+      "message": "`coverage` is unset; an unset choice is an error, never a default.",
+      "beginner": "One of the choices here has been left blank.",
+      "suggestions": [
+        {
+          "title": "Pick only what you do not cover yet",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/0/place_beacon/at/covering/seam/coverage\",\"value\":\"UNCOVERED\"}]",
+          "applicability": "MAYBE_INCORRECT"
+        }
+      ]
+    }
+  ],
+  "report_hash": "msgaKEtgQ7I=",
+  "rules_hash": "p1QGoPeYo6c=",
+  "plan_fingerprint": "ev0nbgF2aO0=",
+  "verifier_version": "0.1.0-skeleton",
+  "size_units": 1,
+  "size_budget": 128
+}
+

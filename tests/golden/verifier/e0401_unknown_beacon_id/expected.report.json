@@ -2,6 +2,20 @@
   "depth": "FULL",
   "diagnostics": [
     {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/0/move/pace",
+      "message": "`pace` is omitted and reads as DIRECT.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/0/move/pace\",\"value\":\"DIRECT\"}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
       "code": "E0401",
       "severity": "ERROR",
       "path": "/declarative/route/0/move/to/beacon_anchor/beacon_id",
@@ -9,7 +23,7 @@
       "beginner": "The seat does not know a beacon by that name."
     }
   ],
-  "report_hash": "tPA5yEAWfNg=",
+  "report_hash": "FqcrLnC9wls=",
   "rules_hash": "p1QGoPeYo6c=",
   "plan_fingerprint": "uzFJWnIzy6s=",
   "verifier_version": "0.1.0-skeleton",

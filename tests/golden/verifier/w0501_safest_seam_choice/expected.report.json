@@ -1,0 +1,20 @@
+{
+  "qualifies": true,
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "W0501",
+      "severity": "WARNING",
+      "path": "/declarative/route/0/interface/rows/0/set_mandate_settings/mine/seam_choice",
+      "message": "`seam_choice` SAFEST reads as NEAREST until S2's threat model arrives.",
+      "beginner": "\"Safest\" needs threats to weigh, and they come later. Until then this beacon digs the nearest seam."
+    }
+  ],
+  "report_hash": "h4MZa/Z2XfQ=",
+  "rules_hash": "p1QGoPeYo6c=",
+  "plan_fingerprint": "owHqs5gTA0M=",
+  "verifier_version": "0.1.0-skeleton",
+  "size_units": 1,
+  "size_budget": 128
+}
+

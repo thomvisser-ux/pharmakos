@@ -29,9 +29,31 @@
 //! gateway's edge where the view is built. The economy comes straight across as
 //! [`SeatEconomy`], which is already the seat's own view of its own money and
 //! power.
+//!
+//! # Features and the commander (S1's targeting)
+//!
+//! From S1 the view also carries the map's vents and seams as the seat sees
+//! them, and the commander's position (docs/design/targeting.md, "Surfaces":
+//! "`Scope` gains the features (id, kind, grade, a live bit) and the
+//! commander's position"). The verifier **checks** against them — that a name
+//! exists, that a description has something to match, that a fixed site is not
+//! beside a vent the seat already covers — and **never ranks** them: "nearest"
+//! is the sim's and the gateway's, where the pathing graph is. A
+//! [`KnownFeature`] therefore carries no travel and no cost. It does carry two
+//! things beyond targeting.md's list, both of them facts the gateway already
+//! computes for `get_map_summary.features` with the sim's own rules rather than
+//! anything the verifier works out for itself: the anchor column (the name's
+//! `<x>_<y>`, held as numbers so nothing here parses a name for geometry) and
+//! which of the seat's own beacons covers it, which two of the three lints read
+//! (S1's plan, task `tgtv`; the gateway fills both in task `tgtw`).
+//!
+//! A view with no features is legal and is what every gateway builds until
+//! `tgtw`: it encodes as an empty list, a named feature then resolves to
+//! nothing (`E0412`), and the lints that read the map have nothing to say.
 
 use pharmakos_proto::gp::v1::Voxel;
 use pharmakos_proto::gp::v1::beacon_filter::MandateKind;
+use pharmakos_proto::gp::v1::by_richness::Richness;
 use pharmakos_sim::encoding::Enc;
 use pharmakos_sim::knowledge::SeatEconomy;
 use pharmakos_sim::tables::SeatId;
@@ -99,22 +121,75 @@ pub struct KnownBeacon {
     pub is_core: bool,
 }
 
+/// Which kind of map feature a [`KnownFeature`] is.
+///
+/// The numbers are `gp.api.v1.MapFeature.Kind`'s for the same two words, so
+/// the gateway's view and its `get_map_summary` answer spell one fact one way.
+/// There is no unspecified value: a feature is always one or the other.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub enum FeatureKind {
+    /// A heat vent: what a Generator stands on.
+    Vent = 1,
+    /// A scrap seam: what a Mine beacon digs.
+    Seam = 2,
+}
+
+impl FeatureKind {
+    /// The number [`Scope::encode`] writes, `gp.api.v1.MapFeature.Kind`'s.
+    #[must_use]
+    pub const fn as_i32(self) -> i32 {
+        match self {
+            FeatureKind::Vent => 1,
+            FeatureKind::Seam => 2,
+        }
+    }
+}
+
+/// One vent or seam, as the seat's view holds it (docs/design/targeting.md,
+/// "Names" and "Surfaces").
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct KnownFeature {
+    /// Its name, as a playbook writes it: `vent_<x>_<y>` or `seam_<x>_<y>`. A
+    /// playbook's `feature_id` is matched against this **exactly**.
+    pub feature_id: String,
+    /// Vent or seam.
+    pub kind: FeatureKind,
+    /// Its grade, the map generator's richness.
+    pub grade: Richness,
+    /// The generation anchor column's x, the name's `<x>`.
+    pub x: i32,
+    /// The generation anchor column's y, the name's `<y>`.
+    pub y: i32,
+    /// False once it is lost: no exposed vent material left in a vent's
+    /// footprint, no ore left in a seam's.
+    pub live: bool,
+    /// The seat's own living beacon whose sphere covers it, the lowest id when
+    /// several do, as the sim decides coverage; `None` when it is UNCOVERED.
+    /// Own beacons only: another seat's coverage is never in a seat's view.
+    pub covered_by: Option<String>,
+}
+
 /// What one seat can see of its own frozen snapshot, for one verification.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Scope {
     seat: SeatId,
     economy: SeatEconomy,
     beacons: Vec<KnownBeacon>,
+    features: Vec<KnownFeature>,
+    commander: Option<Voxel>,
 }
 
 impl Scope {
-    /// An empty view for `seat`.
+    /// An empty view for `seat`: no beacons, no features, and no commander
+    /// position.
     #[must_use]
     pub const fn new(seat: SeatId, economy: SeatEconomy) -> Scope {
         Scope {
             seat,
             economy,
             beacons: Vec::new(),
+            features: Vec::new(),
+            commander: None,
         }
     }
 
@@ -180,11 +255,80 @@ impl Scope {
             .filter(|beacon| beacon.side == Ownership::Own)
     }
 
+    /// Add a feature, keeping the list in ascending `feature_id` order.
+    ///
+    /// A feature already in the list is **replaced**, for the reason
+    /// [`Scope::push_beacon`] gives: the id stays unique, so the order is
+    /// total and the encoding does not depend on the order the gateway added
+    /// them in.
+    pub fn push_feature(&mut self, feature: KnownFeature) {
+        match self
+            .features
+            .binary_search_by(|existing| existing.feature_id.cmp(&feature.feature_id))
+        {
+            Ok(index) => {
+                if let Some(slot) = self.features.get_mut(index) {
+                    *slot = feature;
+                }
+            }
+            Err(index) => self.features.insert(index, feature),
+        }
+    }
+
+    /// The same, as a builder.
+    #[must_use]
+    pub fn with_feature(mut self, feature: KnownFeature) -> Scope {
+        self.push_feature(feature);
+        self
+    }
+
+    /// Every feature the seat knows, in ascending `feature_id` order.
+    #[must_use]
+    pub fn features(&self) -> &[KnownFeature] {
+        &self.features
+    }
+
+    /// The feature with exactly this id, if the seat knows one.
+    #[must_use]
+    pub fn feature(&self, feature_id: &str) -> Option<&KnownFeature> {
+        self.features
+            .binary_search_by(|existing| existing.feature_id.as_str().cmp(feature_id))
+            .ok()
+            .and_then(|index| self.features.get(index))
+    }
+
+    /// Set where the commander stands in the frozen snapshot, as a voxel.
+    pub fn set_commander(&mut self, at: Option<Voxel>) {
+        self.commander = at;
+    }
+
+    /// The same, as a builder.
+    #[must_use]
+    pub fn with_commander(mut self, at: Voxel) -> Scope {
+        self.commander = Some(at);
+        self
+    }
+
+    /// Where the commander stands, if the view carries it. `covering`'s
+    /// "nearest" measures from here at step start; the verifier carries it so
+    /// that the hash covers it and never ranks from it.
+    #[must_use]
+    pub const fn commander(&self) -> Option<Voxel> {
+        self.commander
+    }
+
     /// Append the view to the canonical encoding.
     ///
     /// Fixed stride and length prefixes throughout, exactly as
     /// [`Enc`](pharmakos_sim::encoding::Enc) asks: nothing here can be confused
     /// with its neighbour, and no `usize` reaches the bytes.
+    ///
+    /// The beacons, then the features, then the commander. An absent
+    /// `covered_by` or commander is a `false` presence byte; a present one is
+    /// `true` followed by the value, so "none" and "the empty string" or "the
+    /// origin" never share bytes. The features and the commander widened this
+    /// encoding in S1 (`REPORT_HASH_DOMAIN` moved with it), so every
+    /// `report_hash` moved once, the view's content unchanged.
     pub(crate) fn encode(&self, enc: &mut Enc) {
         enc.u8(self.seat.raw());
         enc.i64(self.economy.treasury.raw());
@@ -204,6 +348,31 @@ impl Scope {
             enc.i32(beacon.at.y);
             enc.i32(beacon.at.z);
             enc.bool(beacon.is_core);
+        }
+        enc.len(count(self.features.len()));
+        for feature in &self.features {
+            encode_str(enc, &feature.feature_id);
+            enc.i32(feature.kind.as_i32());
+            enc.i32(i32::from(feature.grade));
+            enc.i32(feature.x);
+            enc.i32(feature.y);
+            enc.bool(feature.live);
+            match feature.covered_by.as_deref() {
+                None => enc.bool(false),
+                Some(beacon_id) => {
+                    enc.bool(true);
+                    encode_str(enc, beacon_id);
+                }
+            }
+        }
+        match self.commander {
+            None => enc.bool(false),
+            Some(at) => {
+                enc.bool(true);
+                enc.i32(at.x);
+                enc.i32(at.y);
+                enc.i32(at.z);
+            }
         }
     }
 }
@@ -227,9 +396,10 @@ fn encode_str(enc: &mut Enc, text: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::{KnownBeacon, Ownership, Scope};
+    use super::{FeatureKind, KnownBeacon, KnownFeature, Ownership, Scope};
     use pharmakos_proto::gp::v1::Voxel;
     use pharmakos_proto::gp::v1::beacon_filter::{MandateKind, Side};
+    use pharmakos_proto::gp::v1::by_richness::Richness;
     use pharmakos_sim::encoding::Enc;
     use pharmakos_sim::knowledge::SeatEconomy;
     use pharmakos_sim::tables::SeatId;
@@ -296,6 +466,77 @@ mod tests {
             .map(|found| found.beacon_id.as_str())
             .collect();
         assert_eq!(own, ["b_01"]);
+    }
+
+    fn feature(id: &str, covered_by: Option<&str>) -> KnownFeature {
+        KnownFeature {
+            feature_id: id.to_owned(),
+            kind: FeatureKind::Vent,
+            grade: Richness::Standard,
+            x: 10,
+            y: 20,
+            live: true,
+            covered_by: covered_by.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn the_feature_order_does_not_reach_the_bytes() {
+        let economy = SeatEconomy::default();
+        let one = Scope::new(SeatId::new(0), economy)
+            .with_feature(feature("vent_10_20", None))
+            .with_feature(feature("seam_30_40", None));
+        let other = Scope::new(SeatId::new(0), economy)
+            .with_feature(feature("seam_30_40", None))
+            .with_feature(feature("vent_10_20", None));
+        assert_eq!(digest(&one), digest(&other));
+        assert_eq!(
+            one.features()
+                .iter()
+                .map(|found| found.feature_id.as_str())
+                .collect::<Vec<_>>(),
+            ["seam_30_40", "vent_10_20"]
+        );
+    }
+
+    #[test]
+    fn every_part_of_the_s1_view_moves_the_bytes() {
+        let economy = SeatEconomy::default();
+        let base = Scope::new(SeatId::new(0), economy);
+        let with_feature = base.clone().with_feature(feature("vent_10_20", None));
+        let covered = base
+            .clone()
+            .with_feature(feature("vent_10_20", Some("b_01")));
+        let at_origin = base.clone().with_commander(Voxel { x: 0, y: 0, z: 0 });
+        let elsewhere = base.clone().with_commander(Voxel { x: 0, y: 0, z: 1 });
+        let all = [
+            digest(&base),
+            digest(&with_feature),
+            digest(&covered),
+            digest(&at_origin),
+            digest(&elsewhere),
+        ];
+        for (index, one) in all.iter().enumerate() {
+            for other in all.iter().skip(index.saturating_add(1)) {
+                assert_ne!(one, other, "two different views share bytes");
+            }
+        }
+    }
+
+    #[test]
+    fn a_feature_id_is_matched_exactly() {
+        let scope = Scope::new(SeatId::new(0), SeatEconomy::default())
+            .with_feature(feature("vent_10_20", None));
+        assert!(scope.feature("vent_10_20").is_some());
+        assert!(scope.feature("vent_10_2").is_none());
+        assert!(scope.feature("VENT_10_20").is_none());
+    }
+
+    #[test]
+    fn the_kind_writes_the_map_summary_s_own_numbers() {
+        use pharmakos_proto::gp::api::v1::map_feature::Kind;
+        assert_eq!(FeatureKind::Vent.as_i32(), i32::from(Kind::Vent));
+        assert_eq!(FeatureKind::Seam.as_i32(), i32::from(Kind::Seam));
     }
 
     #[test]

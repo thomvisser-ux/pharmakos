@@ -2,6 +2,27 @@
   "depth": "FULL",
   "diagnostics": [
     {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/0/place_beacon/initial/mandate/mine/seam_choice",
+      "message": "`seam_choice` is omitted and reads as NEAREST.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/0/place_beacon/initial/mandate/mine/seam_choice\",\"value\":\"NEAREST\"}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/0/place_beacon/initial/mandate/mine/pillar_spacing",
+      "message": "`pillar_spacing` is omitted and reads as 0, no pillars.",
+      "beginner": "A setting left out takes its named default."
+    },
+    {
       "code": "E0501",
       "severity": "ERROR",
       "path": "/declarative/route/0/place_beacon/initial/mandate/retreat_hp_pct",
@@ -16,7 +37,7 @@
       ]
     }
   ],
-  "report_hash": "c+ZN7sOJhjA=",
+  "report_hash": "gftGAnNvBN4=",
   "rules_hash": "p1QGoPeYo6c=",
   "plan_fingerprint": "yLd+P9kns1s=",
   "verifier_version": "0.1.0-skeleton",

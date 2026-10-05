@@ -320,6 +320,62 @@
     "beginner": "The two corners of this box are the wrong way round, so the box holds nothing."
   },
   {
+    "code": "E0407",
+    "family": "references and placement",
+    "severity": "ERROR",
+    "emitter": "structure",
+    "message": "`covering` is legal only in a place_beacon's `at`, which is where a new beacon goes; here it names no site a beacon is placed at.",
+    "beginner": "\"A site covering a vent\" says where a new beacon goes, so it belongs in a place-beacon step and nowhere else."
+  },
+  {
+    "code": "E0408",
+    "family": "references and placement",
+    "severity": "ERROR",
+    "emitter": "structure",
+    "message": "`on` is legal only in a Build target's anchor, and as a `feature_id` in remove_build_target; here there is no structure for it to stand.",
+    "beginner": "\"On a vent\" says where a building goes, so it belongs in a Build target."
+  },
+  {
+    "code": "E0409",
+    "family": "references and placement",
+    "severity": "ERROR",
+    "emitter": "structure",
+    "message": "`covered` is legal only under `on` in a Build target inside the `initial` of a place_beacon whose `at` is `covering`: it means the feature that beacon was placed to cover.",
+    "beginner": "\"The vent this beacon was placed to cover\" only means something for a beacon placed to cover one, in the settings it starts with."
+  },
+  {
+    "code": "E0410",
+    "family": "references and placement",
+    "severity": "ERROR",
+    "emitter": "structure",
+    "message": "remove_build_target names the target it removes by its feature's `feature_id`; a description names no one target to remove.",
+    "beginner": "To take a building off the list, name the vent it stands on."
+  },
+  {
+    "code": "E0411",
+    "family": "references and placement",
+    "severity": "ERROR",
+    "emitter": "structure",
+    "message": "`coverage` must be omitted under `on`: the pick ranks the vents inside the target beacon's sphere, and coverage is not one of its filters there.",
+    "beginner": "Under \"on\", leave the coverage out."
+  },
+  {
+    "code": "E0412",
+    "family": "references and placement",
+    "severity": "ERROR",
+    "emitter": "resolve",
+    "message": "`{id}` is not a feature this seat's snapshot holds.",
+    "beginner": "The seat does not know a vent or seam by that name."
+  },
+  {
+    "code": "E0413",
+    "family": "references and placement",
+    "severity": "ERROR",
+    "emitter": "semantics",
+    "message": "`on` stands a structure on a heat vent, and {what} names a scrap seam.",
+    "beginner": "Buildings stand on vents. A seam is dug, not built on."
+  },
+  {
     "code": "E0501",
     "family": "settings and recycle",
     "severity": "ERROR",
@@ -374,6 +430,14 @@
     "emitter": "none at the skeleton (S4, with licences)",
     "message": "`{id}` needs a licence this seat does not hold.",
     "beginner": "The seat has not earned the right to build this yet."
+  },
+  {
+    "code": "W0501",
+    "family": "settings and recycle",
+    "severity": "WARNING",
+    "emitter": "semantics",
+    "message": "`seam_choice` SAFEST reads as NEAREST until S2's threat model arrives.",
+    "beginner": "\"Safest\" needs threats to weigh, and they come later. Until then this beacon digs the nearest seam."
   },
   {
     "code": "E0601",
@@ -440,6 +504,30 @@
     "beginner": "What the seat remembers here may be too old to act on."
   },
   {
+    "code": "W0704",
+    "family": "schedule, conflicts and staleness",
+    "severity": "WARNING",
+    "emitter": "lint",
+    "message": "{what} matches nothing on the map right now: {why}.",
+    "beginner": "Unless the map changes before this step starts, it finds nothing and fails."
+  },
+  {
+    "code": "W0705",
+    "family": "schedule, conflicts and staleness",
+    "severity": "WARNING",
+    "emitter": "lint",
+    "message": "an earlier step places a beacon, so {what} may read differently when this step starts than it does now.",
+    "beginner": "A description is read when its step starts, and a beacon placed before then can change what it picks."
+  },
+  {
+    "code": "W0706",
+    "family": "schedule, conflicts and staleness",
+    "severity": "WARNING",
+    "emitter": "lint",
+    "message": "every vent a beacon at this fixed site could cover is already covered: {feature} by your `{beacon}`.",
+    "beginner": "A fixed site puts its beacon in the same place every time. A description such as \"the nearest vent you do not cover\" reads the map again each round."
+  },
+  {
     "code": "I0001",
     "family": "information",
     "severity": "INFO",
@@ -454,6 +542,14 @@
     "emitter": "none at the skeleton (S3, the lint stage)",
     "message": "`{selector}` would resolve to `{id}` right now.",
     "beginner": "What this selector picks if the round started now."
+  },
+  {
+    "code": "I0003",
+    "family": "information",
+    "severity": "INFO",
+    "emitter": "structure",
+    "message": "`{field}` is omitted and reads as {value}.",
+    "beginner": "A setting left out takes its named default."
   }
 ]
 

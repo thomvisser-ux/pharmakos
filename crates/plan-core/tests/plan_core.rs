@@ -77,6 +77,15 @@ fn awkward() -> String {
     )
 }
 
+fn cover_the_nearest_vent() -> String {
+    read(
+        &Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("cases")
+            .join("cover_the_nearest_vent.jsonc"),
+    )
+}
+
 fn read(path: &Path) -> String {
     fs::read_to_string(path).unwrap_or_else(|error| panic!("reading {}: {error}", path.display()))
 }
@@ -266,6 +275,34 @@ fn the_example_renders_to_its_prose_golden() {
     let prose = render_plan(&canonical.playbook, &context(), &rules())
         .expect("the committed rules table is complete");
     assert_golden("expand_east", "prose.txt", &prose);
+}
+
+// ---------------------------------------------------------------------------
+// Targeting's sites (S1, task `tgtv`)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn targetings_sites_round_trip_canonicalise_and_render_to_their_goldens() {
+    // Every new arm in the places an author writes it: `covering` with a pick
+    // and with a name, `on` with a pick, with `covered {}` and with a name.
+    let text = cover_the_nearest_vent();
+    let document = Document::parse(&text).expect("the targeting fixture parses");
+    assert_eq!(document.to_text(), text, "load-and-save lost a byte");
+    let canonical = canonicalise_text(&text).expect("the targeting fixture canonicalises");
+    assert!(
+        canonical.relocated.is_empty(),
+        "nothing in the fixture is written at a default: {:?}",
+        canonical.relocated
+    );
+    assert_golden("cover_the_nearest_vent", "jsonc", &canonical.text);
+    let again = canonicalise_text(&canonical.text).expect("the canonical text canonicalises");
+    assert_eq!(
+        again.text, canonical.text,
+        "the canonical form is a fixed point"
+    );
+    let prose = render_plan(&canonical.playbook, &context(), &rules())
+        .expect("the committed rules table is complete");
+    assert_golden("cover_the_nearest_vent", "prose.txt", &prose);
 }
 
 #[test]

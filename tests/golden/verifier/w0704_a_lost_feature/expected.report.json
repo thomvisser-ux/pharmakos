@@ -1,0 +1,20 @@
+{
+  "qualifies": true,
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "W0704",
+      "severity": "WARNING",
+      "path": "/declarative/route/0/place_beacon/at/covering/feature_id",
+      "message": "`vent_40_40` matches nothing on the map right now: it is lost.",
+      "beginner": "Unless the map changes before this step starts, it finds nothing and fails."
+    }
+  ],
+  "report_hash": "rxS0z9gQKeY=",
+  "rules_hash": "p1QGoPeYo6c=",
+  "plan_fingerprint": "q0gWYzv5jLg=",
+  "verifier_version": "0.1.0-skeleton",
+  "size_units": 1,
+  "size_budget": 128
+}
+

@@ -35,7 +35,11 @@
 //! and hands over as a [`Scope`]. Input 2 is therefore the pair — the bytes and
 //! the view of them — because hashing the bytes alone would give two different
 //! reports, built from two different views of one snapshot, the same hash. The
-//! scope is the seat's view of that snapshot and is hashed as part of it.
+//! scope is the seat's view of that snapshot and is hashed as part of it. From
+//! S1 that view carries the map's vents and seams and the commander's position
+//! as well as the beacons and the economy (docs/design/targeting.md,
+//! "Surfaces": "`report_hash` stays a pure function of `Scope`"), so whatever
+//! the checks read of the map is inside the hash too.
 //!
 //! **The domain separator.** The bytes start with `REPORT_HASH_DOMAIN`, which is
 //! a tag rather than a sixth input. It is there for the reason
@@ -65,7 +69,13 @@ use crate::scope::Scope;
 ///
 /// Changing it moves every `report_hash` in the project, so it is a determinism
 /// change and is reviewed as one (AGENTS.md section 5).
-pub const REPORT_HASH_DOMAIN: &[u8] = b"gp.api.v1/report/1";
+///
+/// `/2` from S1's targeting verifier (S1's plan, task `tgtv`): the [`Scope`]'s
+/// encoding widened to carry the map's features and the commander's position,
+/// so input 2's bytes are laid out differently from `/1`'s, and the version
+/// says so in one place rather than leaving a reader to infer it from a moved
+/// golden.
+pub const REPORT_HASH_DOMAIN: &[u8] = b"gp.api.v1/report/2";
 
 /// The report hash over the five inputs.
 ///

@@ -1,0 +1,19 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0408",
+      "severity": "ERROR",
+      "path": "/declarative/route/0/place_beacon/at/on",
+      "message": "`on` is legal only in a Build target's anchor, and as a `feature_id` in remove_build_target; here there is no structure for it to stand.",
+      "beginner": "\"On a vent\" says where a building goes, so it belongs in a Build target."
+    }
+  ],
+  "report_hash": "9hBvYHfv22w=",
+  "rules_hash": "p1QGoPeYo6c=",
+  "plan_fingerprint": "b0sp8BeRSfA=",
+  "verifier_version": "0.1.0-skeleton",
+  "size_units": 1,
+  "size_budget": 128
+}
+

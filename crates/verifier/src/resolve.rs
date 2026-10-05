@@ -16,6 +16,14 @@
 //!   a near miss is a diagnostic rather than a guess, and a saved playbook
 //!   carried into another match is told so rather than quietly pointed at
 //!   somebody else's beacon.
+//! * **Feature ids** — a `feature_id` under `on` or `covering` must be a vent or
+//!   seam the seat's view holds, matched exactly, or it is `E0412`
+//!   (docs/design/targeting.md, "Surfaces": the verifier checks existence).
+//!   A *description* resolves nothing here, for the reason a selector does not:
+//!   it is read when its step starts, by the sim, and **the verifier never
+//!   ranks**. Nothing in this module reaches the estimate stage or the
+//!   pathfinder, and `tests/confinement.rs`'s `the_verifier_never_ranks` holds
+//!   it to that.
 //!
 //! A **late-bound selector** resolves nothing here and is not meant to: it
 //! resolves when the step starts and stays pinned for that step (spec section
@@ -26,12 +34,15 @@
 //! The stage also builds the [`Symbols`] table, because the forwardness of a
 //! jump is a question about *positions* and belongs to [`crate::semantics`].
 
-use pharmakos_proto::gp::v1::{BeaconRef, Condition, Playbook, Step, beacon_ref, condition};
+use pharmakos_proto::gp::v1::feature_ref;
+use pharmakos_proto::gp::v1::{
+    BeaconRef, Condition, Location, Playbook, Step, beacon_ref, condition, location,
+};
 
 use crate::pointer;
 use crate::report::{Builder, Diag};
 use crate::scope::Scope;
-use crate::walk::{self, List, Visit};
+use crate::walk::{self, List, Slot, Visit};
 
 /// Every name a playbook declares, in the order it declares them.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
@@ -191,6 +202,29 @@ impl Visit for Resolver<'_> {
         if self.scope.beacon(id).is_none() {
             self.out
                 .emit(Diag::new("E0401", pointer::child(at, "beacon_id")).arg("id", id));
+        }
+    }
+
+    fn location(&mut self, at: &str, place: &Location, _slot: Slot<'_>) {
+        // Every slot, legal or not, as `E0401` is raised for a beacon id
+        // wherever it stands: whether the arm may stand there is the structure
+        // stage's question, and whether the name names anything is this one's.
+        let (arm, feature) = match place.place.as_ref() {
+            Some(location::Place::On(feature)) => ("on", feature),
+            Some(location::Place::Covering(feature)) => ("covering", feature),
+            _ => return,
+        };
+        let Some(feature_ref::Ref::FeatureId(id)) = feature.r#ref.as_ref() else {
+            return;
+        };
+        if self.scope.feature(id).is_none() {
+            self.out.emit(
+                Diag::new(
+                    "E0412",
+                    pointer::child(&pointer::child(at, arm), "feature_id"),
+                )
+                .arg("id", id),
+            );
         }
     }
 

@@ -7,9 +7,23 @@
       "path": "/declarative/route/0/move/to",
       "message": "`place` is unset; an unset choice is an error, never a default.",
       "beginner": "One of the choices here has been left blank."
+    },
+    {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/0/move/pace",
+      "message": "`pace` is omitted and reads as DIRECT.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/0/move/pace\",\"value\":\"DIRECT\"}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
     }
   ],
-  "report_hash": "nvCytYrLXaQ=",
+  "report_hash": "zOz6hbeb0DA=",
   "rules_hash": "p1QGoPeYo6c=",
   "plan_fingerprint": "S8aNfwnG0nE=",
   "verifier_version": "0.1.0-skeleton",
