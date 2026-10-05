@@ -40,6 +40,7 @@
 //! held-back word, a value of the wrong type. That is the population a hand
 //! editor actually produces.
 
+use pharmakos_proto::gp::api::v1::VerifyReport;
 use pharmakos_proto::gp::api::v1::diagnostic::Severity;
 use pharmakos_proto::gp::api::v1::verify_plan::Depth;
 use pharmakos_proto::gp::v1::by_richness::Richness;
@@ -224,6 +225,32 @@ impl Shape {
         }
     }
 
+    /// A `place_beacon` site that covers a feature: a legal one on a clean run
+    /// (an UNCOVERED vent pick, or a name the scope holds, lost or live),
+    /// anything [`Shape::feature_site`] makes otherwise.
+    fn covering_site(&mut self) -> Json {
+        if !self.clean {
+            return self.feature_site();
+        }
+        let reference = if self.rarely(2) {
+            (
+                "vent",
+                Json::Object(vec![
+                    ("rank".to_owned(), Json::String("NEAREST".to_owned())),
+                    ("coverage".to_owned(), Json::String("UNCOVERED".to_owned())),
+                ]),
+            )
+        } else {
+            let index = usize::try_from(self.below(4)).unwrap_or(0);
+            let id = FEATURE_IDS.get(index).copied().unwrap_or("vent_150_25");
+            ("feature_id", Json::String(id.to_owned()))
+        };
+        Json::Object(vec![(
+            "covering".to_owned(),
+            Json::Object(vec![(reference.0.to_owned(), reference.1)]),
+        )])
+    }
+
     /// `on` or `covering`, with a name, a pick (sometimes with its rank or
     /// coverage left out), `covered {}`, or nothing chosen at all.
     fn feature_site(&mut self) -> Json {
@@ -239,7 +266,11 @@ impl Shape {
             Json::Object(fields)
         };
         let reference = match self.below(6) {
-            0 => ("feature_id", Json::String("vent_150_25".to_owned())),
+            0 => {
+                let index = usize::try_from(self.below(4)).unwrap_or(0);
+                let id = FEATURE_IDS.get(index).copied().unwrap_or("vent_150_25");
+                ("feature_id", Json::String(id.to_owned()))
+            }
             1 => ("feature_id", Json::String(self.name())),
             2 => ("vent", pick(true, Some("UNCOVERED"))),
             3 => ("seam", pick(self.rarely(2), Some("ANY"))),
@@ -393,7 +424,14 @@ impl Shape {
                 ));
             }
             1 => {
-                let site = Json::Object(vec![("voxel".to_owned(), self.voxel())]);
+                // One site in three describes a feature instead, so the lint
+                // stage's targeting checks see sites they have something to
+                // say about.
+                let site = if self.below(3) == 0 {
+                    self.covering_site()
+                } else {
+                    Json::Object(vec![("voxel".to_owned(), self.voxel())])
+                };
                 let retreat = if self.clean {
                     self.number(0, 100)
                 } else {
@@ -570,6 +608,30 @@ fn rules() -> RulesTable {
         .unwrap_or_else(|error| panic!("reading the rules table: {error}"))
 }
 
+/// The names the scope's features carry, for a `feature_id` that names one.
+const FEATURE_IDS: [&str; 4] = ["vent_150_25", "vent_84_12", "vent_300_300", "seam_200_60"];
+
+fn feature(
+    id: &str,
+    kind: FeatureKind,
+    at: (i32, i32),
+    live: bool,
+    by: Option<&str>,
+) -> KnownFeature {
+    KnownFeature {
+        feature_id: id.to_owned(),
+        kind,
+        grade: Richness::Standard,
+        x: at.0,
+        y: at.1,
+        live,
+        covered_by: by.map(str::to_owned),
+    }
+}
+
+/// Seat 0's core, and one feature of each state the lints read: a live vent
+/// nobody covers, a live vent the core covers (inside the core's sphere, where
+/// a clean run's voxels sit, so W0706 fires), a lost vent and a seam.
 fn scope() -> Scope {
     Scope::new(SeatId::new(0), SeatEconomy::default())
         .with_beacon(KnownBeacon {
@@ -585,15 +647,34 @@ fn scope() -> Scope {
             },
             is_core: true,
         })
-        .with_feature(KnownFeature {
-            feature_id: "vent_150_25".to_owned(),
-            kind: FeatureKind::Vent,
-            grade: Richness::Standard,
-            x: 150,
-            y: 25,
-            live: true,
-            covered_by: None,
-        })
+        .with_feature(feature(
+            "vent_150_25",
+            FeatureKind::Vent,
+            (150, 25),
+            true,
+            None,
+        ))
+        .with_feature(feature(
+            "vent_84_12",
+            FeatureKind::Vent,
+            (84, 12),
+            true,
+            Some("b_01"),
+        ))
+        .with_feature(feature(
+            "vent_300_300",
+            FeatureKind::Vent,
+            (300, 300),
+            false,
+            None,
+        ))
+        .with_feature(feature(
+            "seam_200_60",
+            FeatureKind::Seam,
+            (200, 60),
+            true,
+            None,
+        ))
 }
 
 fn snapshot() -> Vec<u8> {
@@ -606,7 +687,7 @@ fn snapshot() -> Vec<u8> {
 }
 
 /// Verify one generated playbook and assert every invariant a report has.
-fn check(index: u32, rules: &RulesTable, scope: &Scope, snapshot: &[u8]) {
+fn check(index: u32, rules: &RulesTable, scope: &Scope, snapshot: &[u8]) -> VerifyReport {
     let text = json::write(&Shape::new(index).playbook());
     let input = Input::new(text.as_bytes(), snapshot, scope, rules)
         .unwrap_or_else(|error| panic!("assembling the input: {error}"));
@@ -657,6 +738,7 @@ fn check(index: u32, rules: &RulesTable, scope: &Scope, snapshot: &[u8]) {
     // The report is a message the gateway hands back unchanged, so it has to be
     // writable as canonical JSON whatever went into it.
     json::encode(&report).unwrap_or_else(|error| panic!("run {index}: {error}"));
+    report
 }
 
 #[test]
@@ -666,7 +748,7 @@ fn the_generator_still_produces_shapes_the_verifier_reads() {
     let snapshot = snapshot();
     let mut qualified = 0_u32;
     for index in 0..SMOKE_RUNS {
-        check(index, &rules, &scope, &snapshot);
+        let _ = check(index, &rules, &scope, &snapshot);
         let text = json::write(&Shape::new(index).playbook());
         let input =
             Input::new(text.as_bytes(), &snapshot, &scope, &rules).expect("the input assembles");
@@ -690,7 +772,21 @@ fn ten_thousand_playbooks_come_back_as_reports() {
     let rules = rules();
     let scope = scope();
     let snapshot = snapshot();
+    let mut lints: Vec<String> = Vec::new();
     for index in 0..RUNS {
-        check(index, &rules, &scope, &snapshot);
+        let report = check(index, &rules, &scope, &snapshot);
+        for diagnostic in report.diagnostics {
+            if diagnostic.code.starts_with("W07") && !lints.contains(&diagnostic.code) {
+                lints.push(diagnostic.code);
+            }
+        }
     }
+    // Every emitting branch of targeting's three lints is reached, so a green
+    // run says something about each of them.
+    lints.sort();
+    assert_eq!(
+        lints,
+        ["W0704", "W0705", "W0706"],
+        "the lints the run reached"
+    );
 }

@@ -302,7 +302,11 @@ fn the_verifier_never_ranks() {
     // here names the pathfinder at all, and the one place the estimate stage
     // is named is `lib.rs`'s pipeline. In particular the resolve stage, which
     // is where a description would be "resolved" if anything here resolved
-    // one, never reaches `estimate` (S1's plan, task `tgtv`).
+    // one, never reaches `estimate` (S1's plan, task `tgtv`). This is a
+    // tripwire over the text, not a proof: it catches the spellings that name
+    // the pathfinder or the stage — a call, an alias, a braced import, a path
+    // through `super`, a glob of the sim — and a determined rename could still
+    // slip past it, which is what review is for.
     let mut findings: Vec<String> = Vec::new();
     for path in sources() {
         let Ok(text) = std::fs::read_to_string(&path) else {
@@ -318,9 +322,31 @@ fn the_verifier_never_ranks() {
                     line.trim()
                 ));
             }
-            if line.contains("estimate::") && !is_lib {
+            // An alias (`use crate::estimate as e;`), a braced import
+            // (`use crate::{estimate, ..}`, on one line or one item per line)
+            // and a path through `super` all name the module without the
+            // `estimate::` a call through it carries.
+            let trimmed = line.trim();
+            let imports_it = (trimmed.starts_with("use ") || trimmed.starts_with("pub use "))
+                && trimmed.contains("estimate")
+                || trimmed.contains("crate::estimate")
+                || trimmed.contains("super::estimate")
+                || trimmed == "estimate,"
+                || trimmed == "estimate"
+                || trimmed.starts_with("estimate as ");
+            if (line.contains("estimate::") || imports_it) && !is_lib {
                 findings.push(format!(
                     "{}:{number}: reaches the estimate stage outside the pipeline\n    {}",
+                    path.display(),
+                    line.trim()
+                ));
+            }
+            // A glob import of the sim, or of any of its modules, could bring
+            // the pathfinder in without naming it.
+            if line.contains("pharmakos_sim::") && line.contains('*') {
+                findings.push(format!(
+                    "{}:{number}: a glob import of the sim can reach the pathfinder unnamed
+    {}",
                     path.display(),
                     line.trim()
                 ));

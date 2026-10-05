@@ -659,7 +659,13 @@ fn no_condition_can_name_a_feature_in_s1() {
         seen.len() > 5,
         "the walk reached only {seen:?}; it is not following the condition's fields"
     );
-    for forbidden in ["gp.v1.FeatureRef", "gp.v1.Location", "gp.v1.VentPick"] {
+    for forbidden in [
+        "gp.v1.FeatureRef",
+        "gp.v1.Location",
+        "gp.v1.VentPick",
+        "gp.v1.SeamPick",
+        "gp.v1.Covered",
+    ] {
         assert!(
             !seen.iter().any(|name| name == forbidden),
             "{forbidden} is reachable from gp.v1.Condition: a condition can now name a place \

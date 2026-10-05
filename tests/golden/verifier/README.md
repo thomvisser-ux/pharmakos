@@ -32,7 +32,12 @@ for every case — one seat, one snapshot, one scope — written out in that fil
 
 Sharing the fixture is deliberate: a case's job is to isolate **one
 diagnostic**, and a per-case scope would make each report a function of two
-things that changed instead of one.
+things that changed instead of one. The one exception is an `I0003` note: from
+S1 (S1-39, the plan's decision 11) an omitted `pace`, `seam_choice`,
+`pillar_spacing` or `terraform` reads as its named default with that note, so a
+case written before S1 that leaves one of them out carries an `I0003` beside the
+code it isolates. The note is information, never changes whether the case
+qualifies, and is not what the case is about.
 
 **The map, for the cases that read it (S1).** From S1's targeting verifier the
 seat's view can carry the map's vents and seams and the commander's position.
