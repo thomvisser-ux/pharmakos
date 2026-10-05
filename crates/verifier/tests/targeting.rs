@@ -33,6 +33,7 @@ use std::path::{Path, PathBuf};
 
 use pharmakos_proto::gp::api::v1::VerifyReport;
 use pharmakos_proto::gp::api::v1::diagnostic::Severity;
+use pharmakos_proto::gp::api::v1::patch_suggestion::Applicability;
 use pharmakos_proto::gp::api::v1::verify_plan::Depth;
 use pharmakos_proto::gp::v1::Voxel;
 use pharmakos_proto::gp::v1::beacon_filter::MandateKind;
@@ -606,8 +607,10 @@ fn a_fixed_site_is_flagged_only_when_every_vent_in_reach_is_covered() {
         "{}",
         diagnostic.message
     );
-    // Its Fix swaps in the description, at the site.
+    // Its Fix swaps in the description, at the site, for the author to look at
+    // rather than as a one-click button: it changes where the beacon goes.
     let fix = diagnostic.suggestions.first().expect("a Fix");
+    assert_eq!(fix.applicability(), Applicability::MaybeIncorrect);
     assert_eq!(
         fix.json_patch,
         r#"[{"op":"replace","path":"/declarative/route/0/place_beacon/at","value":{"covering":{"vent":{"rank":"NEAREST","coverage":"UNCOVERED"}}}}]"#

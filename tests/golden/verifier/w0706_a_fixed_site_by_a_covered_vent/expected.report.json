@@ -12,7 +12,7 @@
         {
           "title": "Cover the nearest vent you do not cover yet",
           "json_patch": "[{\"op\":\"replace\",\"path\":\"/declarative/route/0/place_beacon/at\",\"value\":{\"covering\":{\"vent\":{\"rank\":\"NEAREST\",\"coverage\":\"UNCOVERED\"}}}}]",
-          "applicability": "MACHINE_APPLICABLE"
+          "applicability": "MAYBE_INCORRECT"
         }
       ],
       "map_refs": [

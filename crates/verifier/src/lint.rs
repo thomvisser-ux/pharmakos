@@ -291,9 +291,13 @@ impl Lints<'_> {
                 .fix(
                     strings::FIX_COVER_NEAREST_VENT,
                     // `replace`: the site is there by construction, since this
-                    // lint fired on it.
+                    // lint fired on it. MAYBE_INCORRECT, not a one-click Fix
+                    // button: the swap moves where the beacon goes (the sim
+                    // resolves the description at step start), and the lint's
+                    // premise is the column test above, which can count a vent
+                    // that lies outside the sphere. The author looks first.
                     patch_replace(at, &cover_nearest_uncovered_vent()),
-                    Applicability::MachineApplicable,
+                    Applicability::MaybeIncorrect,
                 ),
         );
     }
