@@ -110,9 +110,10 @@ editor UI. Nothing else executes. Directories are under `crates/`; package names
    builds both configurations. `plan-core`, `verifier`, `operator`, `gateway`, `gamectl` and the
    walled `bench` must never reach it — not in `[dependencies]`, not in `[dev-dependencies]`, not
    through a default feature, not transitively. They declare no `[features]` section of their own,
-   and any dependency they take on the sim reads `pharmakos-sim = { workspace = true,
-   default-features = false }`. `cargo xtask ci` walks `cargo tree -e features` and fails the build
-   if the feature reaches any of the six (`GUARDED_PACKAGES` in `xtask/src/main.rs`).
+   and any dependency they take on the sim reads
+   `pharmakos-sim = { workspace = true, default-features = false }`. `cargo xtask ci` walks
+   `cargo tree -e features` and fails the build if the feature reaches any of the six
+   (`GUARDED_PACKAGES` in `xtask/src/main.rs`).
 2. **No dry runs.** `plan-core` and `verifier` may estimate — pathfinder travel over known terrain,
    interface-time arithmetic, `$`/`kW` projection, placement legality, selector previews, mast
    coverage. They may never step or fork the sim, run mandates, programs, combat or construction,
@@ -469,7 +470,11 @@ a red test go green without explaining the behaviour change that moved them.
 
 Proto rules that hold regardless: Protobuf is the single source of truth; fields are added, never
 renumbered or reused; reserved field numbers stay reserved; `buf breaking` runs in CI in
-`WIRE_JSON` mode; submitted playbooks with unknown fields are rejected.
+`WIRE_JSON` mode; submitted playbooks with unknown fields are rejected. A change that discharges a
+held field number, filling a reserved range with the field it was held for, adds an `ignore_only`
+block to `proto/buf.yaml` scoped to the files it discharges in, with each discharge written out,
+and the next proto change that discharges nothing deletes it, so an un-reservation nobody intended
+never passes unseen (decisions-log items 100 (10), 109, 111, 129 and 130).
 
 ## 6. Parallel agents
 
@@ -679,10 +684,17 @@ extract that zip on a runner with no checkout and no toolchain, and run `gamectl
 inside it and the smoke check from the parent folder. The four have been required checks since T21
 merged (items 119 (1) and 121), and they take the fast path: the package jobs decide as the
 building jobs do, and each clean-launch job reads its package job's answer. A lane that changes
-`library/`, `rules/`, `packaging/`, `LICENSES/`, `REUSE.toml` or `godot/` changes what ships, so it
-runs `cargo xtask package` locally. The command keeps the smoke run's user folders under
+`library/`, `rules/`, `packaging/`, `LICENSES/`, `REUSE.toml` or `godot/` changes what ships, so the
+main session runs `cargo xtask package` on it locally before it merges (S1's plan, decision 9,
+ruled by decisions-log item 128). The command keeps the smoke run's user folders under
 `<target>/package/data/` itself, and reads the export templates from Godot's own folder, where they
 must be installed.
+
+**The PLACEHOLDER register.** `cargo xtask placeholders` is not a step either: it collects every
+`PLACEHOLDER` marker in the tracked tree, parses each against the one-line grammar
+`<what> — <who>, <when>`, prints the register grouped by when and by who, and with `--check` fails
+while any marker is off the grammar. It becomes a `ci` step in S1's last `xtask` pull request
+(`tune`), once the lanes have reworded their markers (decisions-log items 128 and 129).
 
 Nightly, additionally: the three adversarial scenarios (§10) on a fixed seed set, and the fuzzer
 (10 000 generated playbooks, no panic). Both are jobs in `.github/workflows/nightly-scenarios.yml`
