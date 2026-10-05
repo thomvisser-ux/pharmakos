@@ -476,15 +476,16 @@ sections that add one name it in their Owns lines.
   which this PR's re-bless then covers); decisions 3 and 4.
 - **Acceptance:** `the_nearest_vent_is_the_least_travel_not_the_least_distance` (a vent across a
   ravine loses); `ties_go_to_anchor_y_then_x`; `a_held_target_fails_only_when_lost`;
-  `a_carried_covering_step_finds_no_vent_after_round_one_on_the_golden_seed`;
+  `a_carried_covering_step_has_no_legal_site_after_round_one_on_the_golden_seed`;
   `a_second_generator_on_a_covered_vent_is_illegal_site`; `stacking_on_an_own_beacon_is_illegal`;
   `a_restarted_step_resumes_at_the_beacon_it_placed`; `the_walk_in_times_out_with_no_path`;
   `a_seats_core_is_b_00_and_ids_are_per_seat`;
   `another_seats_beacon_is_e_nn_in_first_sighting_order`; `a_pre_s1_save_is_refused`;
   `the_feature_table_is_regenerated_identically_on_restore`; a new
   `tests/golden/mapgen/expected.features.txt` (a format change); the new scenario
-  `scenarios/s1/cover-nearest-vent` asserting `beacon_placed`, round 2's `step_failed` `no_target`
-  and hashes; `the_decision_tick_counts_its_evaluation_units` (counted work, asserted, unhashed);
+  `scenarios/s1/cover-nearest-vent` asserting `beacon_placed`, round 2's `step_failed`
+  `illegal_site` (item 131 (4) (a): the vents match but have no legal site, which targeting.md's
+  failure table answers with `illegal_site`) and hashes; `the_decision_tick_counts_its_evaluation_units` (counted work, asserted, unhashed);
   `allocations.rs` green over the re-sited deploy; **every chain** (the determinism chain included)
   re-blessed once, the first diverging tick named per chain; every `report_hash` golden re-blessed
   (the snapshot version and the ids); every gateway, operator, interpreter and economy golden that
@@ -508,7 +509,10 @@ sections that add one name it in their Owns lines.
   carried by item 130, the stale `get_map_summary` doc in `surface/knowledge.rs` (~331–336: its
   `reserved 5 to 15` and its "what *is* fogged … vents, seams") and `surface.rs`'s "Four methods …
   no request/response pair", in the module doc and at the dispatch catch-all (~68–71, ~2429–2436),
-  untrue of `resolve_refs` until this lane serves it.
+  untrue of `resolve_refs` until this lane serves it. Carried by item 131: `verifier_scope` fills
+  each feature's anchor column (`x`, `y`) and `covered_by` (the seat's own covering beacon, lowest
+  id) as well as targeting.md's four, because two of `tgtv`'s three lints read them (item 131 (4)
+  (d)).
 - **Does not:** rank in the verifier; publish anything (v1.1).
 - **Implements:** item 127 (12) (targeting.md's gateway lines); register S1-13, S1-20, S1-48.
 - **Needs:** `tgt` merged. **Acceptance:** `resolve_refs_answers_as_the_sim_would_at_step_start`
@@ -523,7 +527,10 @@ sections that add one name it in their Owns lines.
 
 - **Owns:** `crates/verifier`, `crates/plan-core`, and a named place in
   `godot/fixtures/rows_report.json`, which `crates/client-gdext/tests/editor_fixtures.rs` (~170–194)
-  holds equal to four verifier goldens' `diagnostics`, re-copied when they move. **Branches**
+  holds equal to four verifier goldens' `diagnostics`, re-copied when they move; for `proj`, a
+  named place in `crates/bench/src/quick.rs` (`fixture_scope`, `map_scope`, `MAP_CASES`,
+  `fixture_snapshot`), restated in the same PR if it changes the verifier goldens' fixture, which
+  `crates/bench/tests/harness.rs` holds equal (item 131 (5)). **Branches**
   `feat/verifier-targeting` then `feat/verifier-estimate`, worktrees `../pharmakos-tgtv`,
   `../pharmakos-proj`, targets `D:/build/tgtv`, `D:/build/proj`.
 - **`tgtv` builds:** `Scope`'s features and the commander's position; which arm is legal where
@@ -542,7 +549,10 @@ sections that add one name it in their Owns lines.
   verifier (plan-core re-exports it), breaking the plan-core → verifier cycle the code map found;
   units and Build targets in the projection with the charged beacon; E0601, W0601, W0602, W0603 and
   the route-fits-the-segment codes W0701 and I0001 emitted; W0603's embedded spaces fixed; S1-23,
-  X-05 and U-04 per decision 15; M-10 (`Options` stays `allow_dormant_beacons` alone). No stepping,
+  X-05 and U-04 per decision 15; M-10 (`Options` stays `allow_dormant_beacons` alone). Carried by
+  item 131: the two other strings with embedded spaces in `crates/verifier/tests/verifier.rs`, and
+  `tests/golden/verifier/README.md`'s "No producer exists" on `budget_128` (`crates/bench` is it).
+  No stepping,
   no future evaluated: `$`/`kW` projection is Quartermaster arithmetic (AGENTS.md §3 rule 2). 5–6
   ad.
 - **Implements:** `tgtv`: item 127 (9), (12); register S1-39; item 124 (5) (h). `proj`: register
@@ -625,7 +635,9 @@ sections that add one name it in their Owns lines.
   band (spec §7's ladder: mine last) instead of `Urgency::Units`; `MINING_LOAD_VOXELS` read from its
   row, `economy.mining_carry_voxels`, with the two comments that still say `mining_load_voxels`
   (`crates/sim/src/economy.rs`, `crates/sim/tests/economy.rs`) reworded; S1-27 to S1-30 per decision 13; each "nearest" estimate the seam choice makes counted on
-  `tgt`'s evaluation-units counter (P1).
+  `tgt`'s evaluation-units counter (P1). Carried by item 131: why the sim's `set_mandate` row
+  keeps the kind alone (`Row::Mandate { kind }`) and drops the settings it carries, which the
+  verifier's I0003 reads as starting from the defaults; fixed here, or put to the owner.
 - **Implements:** item 127 (9); register S1-25's reader, S1-27 to S1-30, S1-38; spec §6's Mine row,
   §7's urgency ladder.
 - **Needs:** `tgt` merged; decisions 6 and 13. **Acceptance:** `fixs`'s F2 test un-ignored and

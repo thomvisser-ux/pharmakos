@@ -84,6 +84,7 @@ editor UI. Nothing else executes. Directories are under `crates/`; package names
 | `crates/gamectl` — `pharmakos-gamectl` (bin `gamectl`) | CLI: `verify`, `schema`, `docs`, `scenario run`, `seat doctor`, `host`. No `connect` in v1. `scenario run` hosts a headless match and `host` serves one to the Godot client over its own stdio pipe (the config line in on stdin, the announce line with the port and the tokens out on stdout, exit when stdin ends), which is why the gateway is on the list. From T18, `host` links the built-in operator and adapts its client to the gateway's in-process seats (decisions-log item 111); from T18b, `scenario run` seats a `builtin` seat with Easy through `serve::InProcessSeats` (decisions-log item 113). | `pharmakos-proto`, `pharmakos-plan-core`, `pharmakos-verifier`, `pharmakos-gateway`, `pharmakos-operator`, and `pharmakos-sim` *only* as `default-features = false`, because the gateway's API is written in the sim's types. `gamectl` drives a match only through the gateway's `Host` and `Surface`, never through the sim's `Runner` (decisions-log item 109) |
 | `crates/mesher` — `pharmakos-mesher` | The **walled** greedy mesher: integer chunk data and `.vox` models in, vertex and index buffers out, under the per-frame upload budget the client applies. Links without gdext, so the headless CPU proxy and the CI geometry check reuse it. | `dot_vox` later; nothing from the sim. Never depended on by `sim`, `plan-core`, `verifier`, `operator`, `gateway` or `gamectl` — `cargo xtask wall-guard` fails the build over it (`WALL_GUARDED_PACKAGES`, §4.9) |
 | `crates/client-gdext` — `pharmakos-client-gdext` | **Thin** gdext bridge (`cdylib` + `rlib`): marshals gateway calls and mesh buffers between Godot 4.7 and Rust. It marshals; it does not decide, and rule 4 names the pieces that schedule or draw without deciding. | `godot` (gdext), `pharmakos-proto`, `pharmakos-mesher` |
+| `crates/bench` — `pharmakos-bench` | The **walled** timing harness for P1 (decisions-log item 131): QUICK's p50 and p99 over the committed verifier cases and `budget_128`, and the wall-clock cost of a decision tick per size unit from a hosted match whose playbooks sit at the size budget, published by `cargo xtask perf-alarms`. Never shipped. It restates the verifier goldens' fixture, and `tests/harness.rs` holds the restatement to the committed reports. | `pharmakos-proto`, `pharmakos-verifier`, `pharmakos-gateway`, and `pharmakos-sim` *only* as `default-features = false`. It takes no `CLIENT_WALL` line, because it exists to drive the sim from outside; no deterministic crate may depend on it (`WALL_GUARDED_PACKAGES`, §4.9) |
 | `xtask` | `cargo xtask ci` and friends. Dev-only, never shipped, std-only, no dependencies. | nothing |
 
 > **Internal boundaries — decided (decisions-log items 56 and 70).** There is **no `math` crate**:
@@ -104,20 +105,23 @@ editor UI. Nothing else executes. Directories are under `crates/`; package names
 
 ### Dependency rules that CI enforces
 
-1. **The research-feature ban.** `fork` exists only behind `pharmakos-sim`'s compile-time
-   `research` feature, which is defined in that crate and in no other. Release builds never enable
-   it; CI builds both configurations. `plan-core`, `verifier`, `operator`, `gateway` and `gamectl` must
-   never reach it — not in `[dependencies]`, not in `[dev-dependencies]`, not through a default feature,
-   not transitively. They declare no `[features]` section of their own, and any dependency they take
-   on the sim reads `pharmakos-sim = { workspace = true, default-features = false }`.
-   `cargo xtask ci` walks `cargo tree -e features` and fails the build if the feature reaches any of
-   the five.
+1. **The research-feature ban.** `fork` exists only behind `pharmakos-sim`'s compile-time `research`
+   feature, which is defined in that crate and in no other. Release builds never enable it; CI
+   builds both configurations. `plan-core`, `verifier`, `operator`, `gateway`, `gamectl` and the
+   walled `bench` must never reach it — not in `[dependencies]`, not in `[dev-dependencies]`, not
+   through a default feature, not transitively. They declare no `[features]` section of their own,
+   and any dependency they take on the sim reads `pharmakos-sim = { workspace = true,
+   default-features = false }`. `cargo xtask ci` walks `cargo tree -e features` and fails the build
+   if the feature reaches any of the six (`GUARDED_PACKAGES` in `xtask/src/main.rs`).
 2. **No dry runs.** `plan-core` and `verifier` may estimate — pathfinder travel over known terrain,
    interface-time arithmetic, `$`/`kW` projection, placement legality, selector previews, mast
    coverage. They may never step or fork the sim, run mandates, programs, combat or construction,
-   model enemy behaviour, or evaluate rule conditions over a projected future. Prefer depending on
-   the sim's snapshot and knowledge types only; if you find yourself wanting its stepping API, the
-   design is wrong — stop and ask. The gateway, which hosts the match, is held to the same rule:
+   model enemy behaviour, or evaluate rule conditions over a projected future. The verifier checks
+   targeting's names and descriptions and **never ranks** them: "nearest" is the sim's and the
+   gateway's, and `crates/verifier/tests/confinement.rs`'s `the_verifier_never_ranks` is the
+   tripwire (decisions-log item 131). Prefer depending on the sim's snapshot and knowledge types
+   only; if you find yourself wanting its stepping API, the design is wrong — stop and ask. The
+   gateway, which hosts the match, is held to the same rule:
    its planning methods (`verify_plan`, `render_plan`, `patch_plan`, `instantiate_template`)
    answer from the frozen snapshot and the rules table, its knowledge and view reads read the
    frozen snapshot or the live world through the fog filter, and none of them steps anything;
@@ -364,6 +368,14 @@ not — the hash is stale rather than missing, no golden moves, and nothing goes
 disagrees. Only `set` and `crater` may reach a chunk after generation, and both mark; a new write
 path joins that pair and never bypasses it.
 
+A table **derived** from the match's inputs is the exception that proves the rule: the feature table
+(vents and seams) is a pure function of the seed, the rules and the occupied seats, so it is not
+hashed per tick and not carried in the snapshot. It is generated with the map, regenerated by
+`Snapshot::restore_into`, and pinned by its own golden
+(`tests/golden/mapgen/expected.features.txt`). What it derives from the world, a feature's liveness,
+is read from voxels the chunk digests already hash. A derived table that starts to hold anything a
+tick writes is state, and goes into the three places above (decisions-log item 131).
+
 ### 4.9 The wall is a crate boundary
 
 Floats and wall-clock time are permitted only in the walled presentation/solve layer — rendering,
@@ -374,7 +386,7 @@ integers before it is used.
 per-path allow-list, so the mechanism is this and nothing else:
 
 - The walled crates are named in one place: `WALLED_PACKAGES` in `xtask/src/main.rs` (today:
-  `presentation`, `solve`, `client-gdext`, `mesher`; only the last two exist). `clippy.toml`'s
+  `presentation`, `solve`, `client-gdext`, `mesher`, `bench`; the last three exist). `clippy.toml`'s
   header repeats the list for readers.
 - `cargo xtask clippy` pass 1 lints the whole workspace *minus* those crates with the full deny set;
   pass 2 lints those crates with `-D warnings` plus the float, cast, hash-map and clock allowances,
@@ -384,20 +396,22 @@ per-path allow-list, so the mechanism is this and nothing else:
   walled crate too, so a walled crate still reads slices through `get` and divides through
   `checked_div`.
 - `cargo xtask wall-guard` then fails the build if `sim`, `plan-core`, `verifier`, `operator`,
-  `gateway` or `gamectl` depends on a walled crate, transitively included. That list is `WALL_GUARDED_PACKAGES`
-  in `xtask/src/main.rs` — the research guard's five crates plus the sim, which cannot join the
-  research guard because the sim is the crate that *defines* the `research` feature. The sim is on
-  the wall's list because it is the crate that owns hashed state, so it is the one the wall exists
-  to protect. That dependency edge is what makes the allowance safe, and it is only visible to CI
-  because the wall is a crate.
-- `wall-guard`'s second relation keeps the client side of the wall away from the core:
-  `CLIENT_WALL` in `xtask/src/main.rs` pairs a walled crate, line by line, with what it may never
-  reach, transitively included (`client-gdext`: the sim, the verifier, plan-core, the gateway and
-  the operator, the crate of gameplay decisions, on the owner's decision of decisions-log item
-  118 (5); `mesher`: the sim), and fails too when a crate a line names has left the workspace.
-  `crates/client-gdext/tests/no_sim.rs` checks the client's line from `Cargo.lock` as well. A
-  future walled crate joins by adding its own line; the rule is not "no walled crate reaches the sim", which would forbid the walled
-  harness §4.5 sanctions (decisions-log items 102 (3) and 116 (6)(d)).
+  `gateway` or `gamectl` depends on a walled crate, transitively included. That list is
+  `WALL_GUARDED_PACKAGES` in `xtask/src/main.rs` — the research guard's crates less the walled
+  `bench`, plus the sim, which cannot join the research guard because the sim is the crate that
+  *defines* the `research` feature. The sim is on the wall's list because it is the crate that owns
+  hashed state, so it is the one the wall exists to protect. That dependency edge is what makes the
+  allowance safe, and it is only visible to CI because the wall is a crate.
+- `wall-guard`'s second relation keeps the client side of the wall away from the core: `CLIENT_WALL`
+  in `xtask/src/main.rs` pairs a walled crate, line by line, with what it may never reach,
+  transitively included (`client-gdext`: the sim, the verifier, plan-core, the gateway and the
+  operator, the crate of gameplay decisions, on the owner's decision of decisions-log item 118 (5);
+  `mesher`: the sim), and fails too when a crate a line names has left the workspace.
+  `crates/client-gdext/tests/no_sim.rs` checks the client's line from `Cargo.lock` as well. A walled
+  crate on the client side of the wall joins by adding its own line; `bench` has none, because it is
+  the walled harness §4.5 sanctions and exists to drive the sim from outside. The rule is not "no
+  walled crate reaches the sim", which would forbid that harness (decisions-log items 102 (3), 116
+  (6)(d) and 131).
 - Adding a crate to `WALLED_PACKAGES` widens the allowance for that whole crate, so it is a contract
   change (§5) and needs owner approval.
 
@@ -594,7 +608,11 @@ cargo xtask ci --fix      # rustfmt and the machine-applicable clippy fixes
 5. **Tests** — `cargo test --workspace` without `research`, and `pharmakos-sim`'s own tests with it
    (`cargo test --package pharmakos-sim --features pharmakos-sim/research`): the sim is the one crate
    whose code the feature changes, and clippy's research pass (item 2) still compiles every
-   non-walled crate against a research sim (decisions-log items 113 (9) and 115 (5)).
+   non-walled crate against a research sim (decisions-log items 113 (9) and 115 (5)). An unscoped
+   run first empties `<target>/golden/`, so every `actual.*` the `golden` step reads was written by
+   this run; a `--package` run empties nothing (decisions-log item 131). A check run by hand, such
+   as `crates/gamectl/tests/balance.rs`'s 80-match balance report, is an `#[ignore]`d test: never a
+   step, and never compared across operating systems (decisions-log item 130).
 6. **Determinism** — replay a fixed set of seeded matches headless and compare the full per-tick
    xxh3 hash chain against golden files; save/restore round-trips hash-identically; in the research
    build, fork equivalence. The CI matrix runs Windows, Linux and macOS and compares the chains
@@ -624,14 +642,16 @@ cargo xtask ci --fix      # rustfmt and the machine-applicable clippy fixes
     (h)); `--headless` selects Godot's dummy renderer, which cannot take a screenshot, so the step uses
     it only for the import. The adversarial scenarios are nightly (below) and gated off until S2.
 11. **Perf budgets** *(added per gate, not in `cargo xtask ci` today)* — the G3′ CI budget check
-    (tick p99 within budget) lands with S2's exit measurement, and the verifier's QUICK ≤5 ms p99 and
-    FULL ≤50 ms p99 at the playbook size budget (P1) land with the verifier's gate. Until then,
-    `cargo xtask perf-alarms`, which is not a step, publishes the mesher p99 and the allocations per
-    tick (the count `crates/sim/tests/allocations.rs` asserts) as `::notice::` annotations per
-    runner, with no threshold and never compared across operating systems, in the `perf alarms (…)`
-    jobs, which are not required and turn a failed measurement into a `::warning::` rather than a
-    red check (decisions-log item 116 (6)(b)). The tick-minus-pathing mean has no legal producer
-    until a walled harness drives the sim from outside (§4.5); it moves to S2's G3′-real gate.
+    (tick p99 within budget) lands with S2's exit measurement, and the verifier's QUICK ≤5 ms p99
+    and FULL ≤50 ms p99 at the playbook size budget (P1) land with the verifier's gate. Until then,
+    `cargo xtask perf-alarms`, which is not a step, publishes the mesher p99, the allocations per
+    tick (the count `crates/sim/tests/allocations.rs` asserts) and P1's figures from
+    `pharmakos-bench` (QUICK's p50 and p99 over the committed cases and at `budget_128`, and ns per
+    size unit per decision tick) as `::notice::` annotations per runner, with no threshold and never
+    compared across operating systems, in the `perf alarms (…)` jobs, which are not required and
+    turn a failed measurement into a `::warning::` rather than a red check (decisions-log items 116
+    (6)(b) and 131). `pharmakos-bench` is the walled harness that drives the sim from outside
+    (§4.5); the tick-minus-pathing mean it could now produce stays S2's G3′-real gate's.
 
 **The docs-only fast path.** A pull request whose merge commit changes only `docs/**`, `AGENTS.md`,
 `CLAUDE.md`, `.claude/**` and top-level `*.md` runs the DCO walk and the `reuse` step in place of the
