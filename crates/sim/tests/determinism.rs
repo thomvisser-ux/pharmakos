@@ -107,7 +107,9 @@ fn world_of(rules: RulesTable, units_per_seat: u32) -> World {
         match_settings: harness_settings(),
     })
     .expect("the rules table describes a map and a broadphase grid");
-    pharmakos_sim::seal_determinism_playbooks(&mut world).expect("the harness playbook compiles");
+    let sealed = pharmakos_sim::seal_determinism_playbooks(&mut world)
+        .expect("the harness playbook compiles");
+    assert_eq!(sealed, pharmakos_sim::DETERMINISM_SEATS, "every seat seals");
     world
 }
 

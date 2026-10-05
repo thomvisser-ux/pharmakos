@@ -2466,27 +2466,18 @@ impl BeaconTable {
         }
         // The ordinals are a function of the seat column, so a file whose two
         // columns disagree describes no table this sim builds: refused rather
-        // than restored into names that resolve to the wrong beacon.
-        for (row, ordinal) in columns.ordinal.iter().enumerate() {
-            let Some(seat) = columns.seat.get(row) else {
+        // than restored into names that resolve to the wrong beacon. One pass,
+        // with a running count per seat, so a large column read from a file
+        // costs its length and no more.
+        let mut placed = [0_u32; 256];
+        for (seat, ordinal) in columns.seat.iter().zip(columns.ordinal.iter()) {
+            let Some(count) = placed.get_mut(usize::from(*seat)) else {
                 return false;
             };
-            let earlier =
-                columns
-                    .seat
-                    .get(..row)
-                    .unwrap_or_default()
-                    .iter()
-                    .fold(0_u32, |sum, held| {
-                        if held == seat {
-                            sum.saturating_add(1)
-                        } else {
-                            sum
-                        }
-                    });
-            if earlier != *ordinal {
+            if *count != *ordinal {
                 return false;
             }
+            *count = count.saturating_add(1);
         }
         let Ok(count) = u32::try_from(n) else {
             return false;

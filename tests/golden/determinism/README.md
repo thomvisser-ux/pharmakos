@@ -131,12 +131,19 @@ The harness itself changed too, in two places, both determinism code:
   at `pharmakos_sim::determinism_site`, three voxels east of its own core
   (`DETERMINISM_SITE_OFFSET_VOXELS`), inside the interface range, so the
   walk-in is nothing and the deploy still lands in the first 20-second segment
-  and in `tests/allocations.rs`'s counted window. The file now varies by seat
-  in that one place.
+  (tick 271 for seats 0-2) and in `tests/allocations.rs`'s counted window. The
+  file now varies by seat in that one place. **Every later round re-deploys at
+  the same site, and no stacking refuses it**: the site is now the column of
+  the seat's own round-1 beacon, so the deploy step fails `illegal_site` for
+  seats 0-2 at ticks 431, 736 and 1036 (rounds 2, 3 and 4) and the route moves
+  on, where before S1 the site was the core and stacking was allowed.
 * **A `covering` step runs inside the tick.** After the wait, a `place_beacon`
   covering the nearest uncovered vent resolves its description -- the
-  estimator's "nearest", the covering spiral -- and walks toward the site for
-  its five-second timeout, so the chain covers S1's resolver; it never deploys.
+  estimator's "nearest", the covering spiral -- and walks toward the site it
+  chose, so the chain covers S1's resolver. In this 1 200-tick run it starts at
+  ticks 646 and 946 for seats 0-2, and the segment ends (700, 1 000) before its
+  five-second timeout is spent: it neither deploys nor times out, and its
+  fallback is never reached.
 
 The walk-in, the charge moved to the deploy's start after the walk-in, and the
 per-seat table room (the world total divided by the seat count) are in the run

@@ -143,14 +143,9 @@ fn a_tick_allocates_nothing() {
     // would sit outside the one assertion that a tick allocates nothing (T11).
     // Each seat deploys at its own harness site, which S1's no-stacking rule
     // moved off the core's column (`pharmakos_sim::determinism_site`).
-    pharmakos_sim::seal_determinism_playbooks(runner.world_mut())
+    let sealed = pharmakos_sim::seal_determinism_playbooks(runner.world_mut())
         .expect("the harness playbook compiles");
-    let sealed = runner.world().interpreter().len();
-    assert_eq!(
-        sealed,
-        usize::try_from(pharmakos_sim::DETERMINISM_SEATS).expect("a few seats"),
-        "every seat seals"
-    );
+    assert_eq!(sealed, pharmakos_sim::DETERMINISM_SEATS, "every seat seals");
     assert!(runner.begin_push(), "a match opens in a Lull");
     let mut enc = Enc::with_capacity(64 * 1024);
 

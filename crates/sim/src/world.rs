@@ -150,7 +150,7 @@ const HARNESS_DAMAGE_QUEUE: usize = 256;
 /// PLACEHOLDER: the world total of beacons a match may place on top of the
 /// cores the generator pre-places, shared equally per seat -- owner, at S1's
 /// demo with the balance check's report; the totals are revisited at S2's
-/// G3'-real measurement.
+/// G3'-real measurement (register S1-37).
 ///
 /// Forty is item 63's world total. Since S1 the room is **per seat**: each
 /// seat may place [`room_per_seat`] of the total, the total divided by the
@@ -170,7 +170,7 @@ const BEACON_TABLE_ROOM: u32 = 40;
 /// PLACEHOLDER: the world total of units a match may fabricate on top of the
 /// starting force, shared equally per seat -- owner, at S1's demo with the
 /// balance check's report; the totals are revisited at S2's G3'-real
-/// measurement.
+/// measurement (register S1-37).
 ///
 /// Item 63 fixes the world total at **300 units**; since S1 each seat may
 /// fabricate [`room_per_seat`] of it on top of its own starting force (100 a
@@ -183,12 +183,19 @@ const UNIT_TABLE_ROOM: u32 = 300;
 
 /// PLACEHOLDER: the world total of structures a match may build, shared
 /// equally per seat since S1 ("Build targets and structures follow",
-/// `docs/design/targeting.md`) -- owner, at S2 with the capability catalogue.
+/// `docs/design/targeting.md`) -- the per-seat split is the owner's at S1's
+/// demo with the balance check's report, like the two rooms above (register
+/// S1-37); the total is the owner's at S2 with the capability catalogue.
 ///
 /// Three a beacon at [`BEACON_TABLE_ROOM`], which covers a Generator on every
 /// vent a map carries plus the Survey posts and turrets S2 adds. A seat's
-/// share is [`room_per_seat`] of it; the table itself is never larger than the
-/// total, because a ruin keeps its row and owns nothing.
+/// share is [`room_per_seat`] of it, counted over **every row the seat ever
+/// built**, ruins included ([`World::structures_built_by`]): a ruin keeps its
+/// row, so a share that freed itself when a structure fell would let one seat
+/// churn the whole table full and refuse another seat's build for a reason
+/// that seat cannot see -- the leak per-seat room exists to close. Counted
+/// that way, the shares add up to at most the total, and the table cannot fill
+/// before a share does.
 const STRUCTURE_TABLE_ROOM: u32 = 120;
 
 /// One seat's share of a world total: the total divided by the seat count,
@@ -254,7 +261,7 @@ const SIGHTINGS_PER_SEAT: u32 = 64;
 /// whether it looks like an allocation size). The generator pre-places one core
 /// per seat, so this is the old expression's value on a fresh world and a
 /// reproducible one on a resumed one.
-const fn beacon_limit_of(seats: u32) -> u32 {
+pub(crate) const fn beacon_limit_of(seats: u32) -> u32 {
     seats.saturating_add(room_per_seat(BEACON_TABLE_ROOM, seats).saturating_mul(seats))
 }
 
@@ -1661,16 +1668,20 @@ impl World {
             })
     }
 
-    /// How many structure rows `seat` owns now. A ruin owns nothing, so it
-    /// counts against no seat's share, while the table's own total still
-    /// bounds it ([`STRUCTURE_TABLE_ROOM`]).
-    fn structures_of(&self, seat: SeatId) -> u32 {
-        self.structures.seats().iter().fold(0_u32, |sum, held| {
-            if *held == seat.raw() {
-                sum.saturating_add(1)
-            } else {
-                sum
-            }
+    /// How many structure rows `seat` has built this match, standing or
+    /// ruined: the rows homed to one of its beacons. A row is never freed and
+    /// a structure's home never changes, and neither does a beacon's seat, so
+    /// the count only grows, as [`World::fabricated_by`]'s does; that is what
+    /// keeps one seat's churn out of another seat's share
+    /// ([`STRUCTURE_TABLE_ROOM`]). The owner column cannot answer it, because
+    /// a ruin's owner is no seat.
+    fn structures_built_by(&self, seat: SeatId) -> u32 {
+        self.structures.homes().iter().fold(0_u32, |sum, home| {
+            let built = usize::try_from(*home)
+                .ok()
+                .and_then(|row| self.beacons.seats().get(row))
+                .is_some_and(|held| *held == seat.raw());
+            if built { sum.saturating_add(1) } else { sum }
         })
     }
 
@@ -1754,7 +1765,8 @@ impl World {
             return false;
         }
         if self.structures.len() >= STRUCTURE_TABLE_ROOM
-            || self.structures_of(seat) >= room_per_seat(STRUCTURE_TABLE_ROOM, self.seats.len())
+            || self.structures_built_by(seat)
+                >= room_per_seat(STRUCTURE_TABLE_ROOM, self.seats.len())
         {
             return false;
         }

@@ -219,9 +219,10 @@ impl Ground<'_> {
         })
     }
 
-    /// **One structure per voxel**: whether a live structure of any seat --
-    /// or a ruin, which owns nothing and still stands -- occupies the column
-    /// `(x, y)`.
+    /// **One structure per voxel**: whether a structure with hit points left
+    /// occupies the column `(x, y)`, whoever owns it -- a ruin included, since
+    /// a ruin keeps its hit points in S1. The owner column is not read; a
+    /// structure at zero hit points frees its column.
     #[must_use]
     pub fn structure_on(&self, x: i32, y: i32) -> bool {
         let count = usize::try_from(self.structures.len()).unwrap_or(0);
@@ -900,6 +901,16 @@ mod tests {
 
     /// The first feature "nearest" ranks from `origin`, by name.
     fn nearest(map: &mut Map, origin: [i32; 2]) -> String {
+        ranked(map, origin, 1)
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| panic!("a reachable vent"))
+            .0
+    }
+
+    /// The first `count` features "nearest" ranks from `origin`, in order,
+    /// by name and with their travel cost.
+    fn ranked(map: &mut Map, origin: [i32; 2], count: usize) -> Vec<(String, i64)> {
         let rules = rules();
         let beacons = BeaconTable::with_capacity(0);
         let structures = StructureTable::with_capacity(0);
@@ -919,13 +930,19 @@ mod tests {
             work: &work,
         };
         let mut ranker = Ranker::new(&ground, origin, |_| true);
-        let (feature, _) = ranker
-            .next(&ground, &mut map.scratch)
-            .unwrap_or_else(|| panic!("a reachable vent"));
-        map.features
-            .get(feature)
-            .unwrap_or_else(|| panic!("in the table"))
-            .name()
+        let mut out: Vec<(String, i64)> = Vec::new();
+        while out.len() < count {
+            let Some((feature, cost)) = ranker.next(&ground, &mut map.scratch) else {
+                break;
+            };
+            let name = map
+                .features
+                .get(feature)
+                .unwrap_or_else(|| panic!("in the table"))
+                .name();
+            out.push((name, cost));
+        }
+        out
     }
 
     #[test]
@@ -942,7 +959,14 @@ mod tests {
             |x, y| (28..=30).contains(&x) && y < 50,
             &[[40, 10], [10, 45]],
         );
-        assert_eq!(nearest(&mut map, [10, 10]), "vent_10_45");
+        let order = ranked(&mut map, [10, 10], 2);
+        let names: Vec<&str> = order.iter().map(|(name, _)| name.as_str()).collect();
+        // Both are reachable -- A by the way round past the ravine's end -- so
+        // A is ranked second, at a higher travel cost, rather than skipped: the
+        // test separates "least travel" from "reachable at all".
+        assert_eq!(names, ["vent_10_45", "vent_40_10"]);
+        let costs: Vec<i64> = order.iter().map(|(_, cost)| *cost).collect();
+        assert!(costs.first() < costs.get(1), "{costs:?}");
     }
 
     #[test]
@@ -971,5 +995,129 @@ mod tests {
             &[[22, 22], [50, 50]],
         );
         assert_eq!(nearest(&mut map, [5, 5]), "vent_50_50");
+    }
+
+    /// Reading rule 2 in a world (`docs/design/targeting.md`, "Three reading
+    /// rules"): an unbuilt Build target bound to a vent that is lost reads its
+    /// description again when it was written as "the nearest vent", and idles
+    /// in place when it was written as a name.
+    fn reread_after_loss(desc: u8) -> Reread {
+        use crate::math::quantity::Money;
+        use crate::runner::{MatchSettings, Runner};
+        use crate::seams::MandateKind;
+        use crate::tables::{PRIORITY_NORMAL, SeatId, StructureKind};
+        use crate::voxels::VoxelEdit;
+        use crate::world::{World, WorldConfig};
+
+        // The golden seed carries two vents 24 voxels apart, `vent_103_111`
+        // and `vent_98_135`; a beacon between them holds both in its
+        // 24-voxel sphere, and no third vent is in it.
+        let mut world = World::new(&WorldConfig {
+            match_seed: 0x0000_0000_ca5c_aded,
+            seats: 2,
+            units_per_seat: 0,
+            rules: rules(),
+            match_settings: MatchSettings {
+                segment_lengths_ms: vec![180_000],
+                round_limit: 1,
+            },
+        })
+        .unwrap_or_else(|error| panic!("the golden seed generates: {error}"));
+        let lost = world
+            .features()
+            .index_of_name("vent_103_111")
+            .unwrap_or_else(|| panic!("the golden seed carries vent_103_111"));
+        let kept = world
+            .features()
+            .index_of_name("vent_98_135")
+            .unwrap_or_else(|| panic!("the golden seed carries vent_98_135"));
+        let stand = |world: &World, index: usize| {
+            let feature = world
+                .features()
+                .get(index)
+                .unwrap_or_else(|| panic!("in the table"));
+            let [x, y] = feature.anchor;
+            world
+                .ground()
+                .standing(x, y)
+                .unwrap_or_else(|| panic!("the anchor stands"))
+        };
+        let lost_at = stand(&world, lost);
+        let kept_at = stand(&world, kept);
+        let seat = SeatId::new(0);
+        let centre = world
+            .ground()
+            .standing(100, 123)
+            .unwrap_or_else(|| panic!("the midpoint stands"));
+        let beacon = world
+            .place_beacon_directly(seat, centre, MandateKind::Build, PRIORITY_NORMAL)
+            .unwrap_or_else(|| panic!("room for a beacon"));
+        // No money, so the Quartermaster never pays for the target and it
+        // stays unbuilt, which is what rule 2 reads.
+        world.set_treasury(seat, Money::new(0));
+        let lost_id = u32::try_from(lost).unwrap_or_else(|error| panic!("{error}"));
+        let kept_id = u32::try_from(kept).unwrap_or_else(|error| panic!("{error}"));
+        assert!(world.add_bound_target(
+            beacon,
+            StructureKind::Generator.id(),
+            lost_at,
+            (lost_id, desc)
+        ));
+        let footprint = world
+            .features()
+            .get(lost)
+            .unwrap_or_else(|| panic!("in the table"))
+            .footprint
+            .clone();
+        for column in &footprint {
+            assert!(world.request_voxel_edit(VoxelEdit::Set {
+                at: [column.x, column.y, column.top],
+                material: Material::STONE,
+            }));
+        }
+        let mut runner = Runner::new(world);
+        assert!(runner.begin_push(), "a match opens in a Lull");
+        for _ in 0..20 {
+            assert!(runner.step().is_some(), "the Push runs");
+        }
+        let world = runner.world();
+        assert!(!world.feature_is_live(lost), "the vent is lost");
+        let targets = world.targets();
+        assert_eq!(targets.len(), 1, "one target, never a second");
+        let feature = targets.features().first().copied().unwrap_or(u32::MAX);
+        let anchor = targets
+            .anchors()
+            .first()
+            .copied()
+            .unwrap_or_else(|| panic!("an anchor"));
+        Reread {
+            feature,
+            anchor,
+            lost: (lost_id, lost_at),
+            kept: (kept_id, kept_at),
+        }
+    }
+
+    /// What [`reread_after_loss`] found: the target's bound feature and
+    /// anchor after the loss, and each vent's index and standing anchor.
+    struct Reread {
+        feature: u32,
+        anchor: [crate::math::fixed::Fx; 3],
+        lost: (u32, [crate::math::fixed::Fx; 3]),
+        kept: (u32, [crate::math::fixed::Fx; 3]),
+    }
+
+    #[test]
+    fn a_lost_description_reads_again_and_a_lost_name_idles() {
+        let described = reread_after_loss(super::DESCRIPTION_NEAREST_VENT);
+        assert_eq!(
+            described.feature, described.kept.0,
+            "the description moved to the other vent"
+        );
+        assert_eq!(described.anchor, described.kept.1, "and so did its anchor");
+
+        let named = reread_after_loss(super::DESCRIPTION_NAME);
+        assert_eq!(named.feature, named.lost.0, "a name is not read again");
+        assert_eq!(named.anchor, named.lost.1, "it idles where it was");
     }
 }

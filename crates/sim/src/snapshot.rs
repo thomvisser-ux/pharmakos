@@ -570,6 +570,15 @@ pub enum SnapshotError {
         /// The receiving world's ceiling.
         limit: u32,
     },
+    /// The snapshot holds more beacon rows than a match of its own seat count
+    /// can ever place (the cores plus every seat's share of the beacon room).
+    /// The file describes no match this sim plays.
+    OverBeaconCeiling {
+        /// How many beacons the snapshot holds.
+        beacons: u32,
+        /// The ceiling for the snapshot's seat count.
+        limit: u32,
+    },
     /// A carried chunk digest is not the digest of the chunk the restore
     /// rebuilt. The file describes a store this build does not produce — a
     /// different generator, a different rules table, or edited bytes — and a
@@ -623,6 +632,10 @@ impl core::fmt::Display for SnapshotError {
             SnapshotError::OverCeiling { units, limit } => write!(
                 f,
                 "the snapshot holds {units} units and this world's unit ceiling is {limit}: it was saved under another match configuration"
+            ),
+            SnapshotError::OverBeaconCeiling { beacons, limit } => write!(
+                f,
+                "the snapshot holds {beacons} beacons and a match of its seat count places at most {limit}"
             ),
             SnapshotError::ChunkDigest { chunk } => write!(
                 f,
@@ -866,7 +879,9 @@ impl Snapshot {
     /// Returns [`SnapshotError::Ragged`] when the columns disagree in length,
     /// [`SnapshotError::Map`] when the map cannot be regenerated, or
     /// [`SnapshotError::OverCeiling`] when the snapshot holds more units than
-    /// the receiving world's unit ceiling, or [`SnapshotError::Unindexable`]
+    /// the receiving world's unit ceiling, [`SnapshotError::OverBeaconCeiling`]
+    /// when it holds more beacons than a match of its seat count can place,
+    /// or [`SnapshotError::Unindexable`]
     /// when the receiving world's rules table cannot describe a grid for its
     /// ceiling. Either way the world is left exactly as it was.
     #[allow(
@@ -912,8 +927,19 @@ impl Snapshot {
             return Err(SnapshotError::Ragged("unit"));
         }
 
-        let mut beacons =
-            BeaconTable::with_capacity(u32::try_from(self.beacon_id.len()).unwrap_or(0));
+        // The beacon ceiling is a function of the seat count alone
+        // (`beacon_limit_of`), so a file holding more rows describes no match
+        // this sim plays; refused before the table is built or checked, so a
+        // crafted column costs nothing to turn away.
+        let beacon_limit = crate::world::beacon_limit_of(seat_count);
+        let beacon_count = u32::try_from(self.beacon_id.len()).unwrap_or(u32::MAX);
+        if beacon_count > beacon_limit {
+            return Err(SnapshotError::OverBeaconCeiling {
+                beacons: beacon_count,
+                limit: beacon_limit,
+            });
+        }
+        let mut beacons = BeaconTable::with_capacity(beacon_count);
         if !beacons.restore(BeaconColumns {
             id: self.beacon_id.clone(),
             seat: self.beacon_seat.clone(),

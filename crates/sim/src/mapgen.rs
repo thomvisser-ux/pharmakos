@@ -130,7 +130,11 @@ const VENT_PATCH_RADIUS: i32 = 1;
 /// PLACEHOLDER: how many voxels of ore a seam column carries before the seam
 /// moves to the next column. Four, so a 150-voxel seam is about 38 columns and
 /// fits inside the disc below. Owner, at S1 with the mining rules.
-const SEAM_VOXELS_PER_COLUMN: i32 = 4;
+///
+/// The feature table's liveness scan reads exactly this depth
+/// ([`crate::features::SEAM_DEPTH_VOXELS`] is defined as this constant), so a
+/// change here moves both together.
+pub(crate) const SEAM_VOXELS_PER_COLUMN: i32 = 4;
 
 /// PLACEHOLDER: the radius of the disc a seam is laid into, in voxels. Five,
 /// so `economy.seam_voxels` at [`SEAM_VOXELS_PER_COLUMN`] a column fits with

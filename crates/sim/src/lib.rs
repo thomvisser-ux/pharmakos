@@ -264,7 +264,9 @@ pub fn determinism_world(rules_path: &std::path::Path) -> Result<World, WorldErr
             round_limit: DEFAULT_ROUND_LIMIT,
         },
     })?;
-    seal_determinism_playbooks(&mut world)?;
+    // How many seats sealed is the tests' to assert (`tests/determinism.rs`,
+    // `tests/allocations.rs`); the loop seals exactly the world's own seats.
+    let _sealed = seal_determinism_playbooks(&mut world)?;
     Ok(world)
 }
 
@@ -274,22 +276,30 @@ pub fn determinism_world(rules_path: &std::path::Path) -> Result<World, WorldErr
 /// The one sealing path the determinism binary, `tests/determinism.rs` and
 /// `tests/allocations.rs` all share, so the chain they produce is one run.
 ///
+/// Answers how many seats took their seal ([`World::seal_playbook`] refuses a
+/// seat the world does not have), so a caller asserts that every seat sealed
+/// rather than inferring it from the interpreter's length, which counts seats
+/// whether or not anything was sealed for them.
+///
 /// # Errors
 ///
 /// Returns [`PlanError`] when this build cannot compile the harness playbook.
-pub fn seal_determinism_playbooks(world: &mut World) -> Result<(), PlanError> {
+pub fn seal_determinism_playbooks(world: &mut World) -> Result<u32, PlanError> {
     let seats = world.seats().len();
     let mut seat: u32 = 0;
+    let mut sealed: u32 = 0;
     while seat < seats {
         let id = tables::SeatId::new(u8::try_from(seat).unwrap_or(u8::MAX));
         let plan = interpreter::Plan::compile(
             &determinism_playbook(determinism_site(world, id)),
             world.rules(),
         )?;
-        world.seal_playbook(id, plan);
+        if world.seal_playbook(id, plan) {
+            sealed = sealed.saturating_add(1);
+        }
         seat = seat.saturating_add(1);
     }
-    Ok(())
+    Ok(sealed)
 }
 
 /// Where `seat`'s harness deploy stands: [`DETERMINISM_SITE_OFFSET_VOXELS`]
@@ -400,7 +410,7 @@ fn skip_on_fail() -> gp::v1::OnFail {
 
 /// The harness playbook's route: a walk to a selector, a deploy at `site`, a
 /// visit with a committed row, a hold, a wait on a clock predicate and a
-/// `covering` placement that outlasts its timeout.
+/// `covering` placement that resolves and walks until the segment ends.
 #[allow(
     clippy::too_many_lines,
     reason = "one block per route step of the harness playbook, each a proto literal; splitting it would scatter one route across six functions"
@@ -496,10 +506,12 @@ fn harness_route(site: [i32; 3]) -> Vec<gp::v1::Step> {
         },
         // S1's targeting inside the tick: the resolver ranks the uncovered
         // vents by the estimator's travel and walks the `covering` spiral, and
-        // the commander walks toward the site it chose. Five seconds is far
-        // short of the walk, so the step times out and the route ends in its
-        // fallback -- what the chain needs is the resolution and the walk,
-        // not another beacon.
+        // the commander walks toward the site it chose. In the committed
+        // 1 200-tick chain the step starts at ticks 646 and 946 and the
+        // segment ends (700, 1 000) before its five seconds are spent, so it
+        // neither deploys nor times out -- what the chain needs is the
+        // resolution and the walk, not another beacon. The timeout bounds
+        // a longer run.
         Step {
             label: "reach".to_owned(),
             timeout_ms: 5_000,

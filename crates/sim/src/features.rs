@@ -65,8 +65,9 @@ pub const MAX_FEATURES: usize = 32;
 /// The generator lays a seam from a column's top solid voxel downwards
 /// (`crate::mapgen`'s `stamp_seam`), at most this many voxels a column; nothing
 /// ever adds ore, so a liveness scan of these voxels finds every ore voxel the
-/// seam still has.
-pub const SEAM_DEPTH_VOXELS: i32 = 4;
+/// seam still has. Defined as the generator's own depth, which is a tuning
+/// PLACEHOLDER, so the two cannot part: a deeper seam is scanned deeper.
+pub const SEAM_DEPTH_VOXELS: i32 = crate::mapgen::SEAM_VOXELS_PER_COLUMN;
 
 /// What a feature is.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
