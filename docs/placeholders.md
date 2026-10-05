@@ -44,6 +44,8 @@ From 588 lines to 256 rows, one step at a time:
 | Carry-forwards that carry no marker: item 123 (4) 8 (S1-03 to S1-10), item 123 (5) 2 (S1-44, S1-45) | +10 | 249 |
 | Unmarked guesses added by hand (the "Unmarked" section) | +7 | **256** |
 
+S1-49 and S1-50 were added by item 131, after this count.
+
 Appendix B lists every line of the 38, 16 and 23 above, and every line of the 10 and 5, by file and
 symbol, so each step can be reproduced. The 61 merged copies are the extra anchors in the rows.
 
@@ -150,16 +152,18 @@ Each goes to S1's first contract pull request (AGENTS.md section 5).
 | S1-29 | `STARTING_FEATURE_CLEARANCE` = 1 | `crates/sim/src/mapgen.rs` `STARTING_FEATURE_CLEARANCE` | — |
 | S1-30 | The starting force's two-voxel spacing, its footprint | `crates/sim/src/mapgen.rs` `RING` | — |
 | S1-31 | The key-core is netted out of draw rather than shown as an output in supply | `crates/sim/src/power.rs` module doc, and by pointer `draw_of` | item 113 (5); plan T14b |
-| S1-32 | Two vents are one when their patches share a span; a vent table would make it true by construction | `crates/sim/src/power.rs` `one_vent` | — |
+| S1-32 | Two vents are one when their patches share a span; a vent table would make it true by construction. **Discharged by `tgt` #81 (item 131): `one_vent` reads the feature table.** | `crates/sim/src/power.rs` `one_vent` | — |
 | S1-33 | The brownout order sheds a beacon whose shed relieves nothing, ahead of the core | `crates/sim/src/power.rs` `brown_out`, and by pointer `crates/sim/tests/economy.rs` `a_beacon_whose_shed_relieves_nothing_is_still_shed_ahead_of_the_core` | item 113 (5); plan T14b |
 | S1-34 | A unit's sight radius, `UNIT_VISION_RADIUS_VOXELS` = 8, and the view's "recompute everything on a change" key. The copies disagree on the stage: `programs.rs` says S2, `watch.rs` and `host.rs` "S1 at the latest", `viewfeed.rs` "S1/S3" | `crates/sim/src/programs.rs` `UNIT_VISION_RADIUS_VOXELS`; `crates/gateway/src/surface/watch.rs` `sight_key`; `crates/gateway/src/viewfeed.rs` `Sight`; `crates/gateway/src/host.rs` `SphereVision` (its second clause) | item 105 (1); T16a notes, section D |
 | S1-35 | The commander walks through a brownout, drawing nothing while its home is dark ("argued, not decided") | `crates/sim/src/programs.rs` `program_for` doc (second) | item 10 |
 | S1-36 | A unit's program is chosen by its kind, never by its home beacon's writ | `crates/sim/src/programs.rs` `program_for` doc (third) | item 90 |
-| S1-37 | The fielding limits: `BEACON_TABLE_ROOM` = 40 and `UNIT_TABLE_ROOM` = 300, per match | `crates/sim/src/world.rs` `BEACON_TABLE_ROOM`, `UNIT_TABLE_ROOM` | item 63 |
+| S1-37 | The fielding limits: `BEACON_TABLE_ROOM` = 40 and `UNIT_TABLE_ROOM` = 300, per match, shared per seat since `tgt` (the total ÷ the seat count, rounded down, item 127 (12)), as is `STRUCTURE_TABLE_ROOM` (S2-08's total); the per-seat numbers are the owner's at S1's demo with the balance check's report (item 131), and the totals are revisited at S2's G3′-real measurement | `crates/sim/src/world.rs` `BEACON_TABLE_ROOM`, `UNIT_TABLE_ROOM`, `STRUCTURE_TABLE_ROOM`, `room_per_seat` | item 63 |
 | S1-38 | `MineSettings`' `dig_max_depth`, `pillar_spacing`, `seam_choice` and "never digs under structures" are not applied; the skeleton digs the nearest ore and one safe layer | `crates/sim/src/world.rs` `ore_in_sphere`, `dig_stand` (two comments) | — |
-| S1-39 | How an omitted enum or setting inside the body reads (`MoveStep.pace`, `MineSettings.pillar_spacing` and `seam_choice`): one decision for all three | `crates/verifier/src/structure.rs` `walk_action` doc; `proto/gp/v1/playbook.proto` `MineSettings` | — |
+| S1-39 | How an omitted enum or setting inside the body reads (`MoveStep.pace`, `MineSettings.pillar_spacing` and `seam_choice`): one decision for all three. **Discharged by `tgtv` #80 per decision 11 (item 131): each, and `BuildSettings.terraform`, reads as a named default with an I0003 note where a beacon's settings start from nothing (a `place_beacon`'s `initial`, a `set_mandate` switch), never on a `set_mandate_settings` edit.** | `crates/verifier/src/structure.rs` `walk_action` doc; `proto/gp/v1/playbook.proto` `MineSettings` | — |
 | S1-40 | The lobby's match: the golden seed, two seats with the human at seat 0 and Easy at seat 1, the rules' segment ladder, and the round limit; the settings screen and the Probation preset. **With T22a:** `ROUND_LIMIT` becomes 3 and the comment records item 123 (2) 3, the settings screen and the Probation preset staying the owner's at S1. Cross-referenced from D-20 | `godot/scripts/host_link.gd` `MATCH_SEED` and the constants after it | item 123 (2) 3 |
 | S1-41 | Values the scenario format cannot set: `units_per_seat` when S1's units arrive, `round_limit` when a scenario plays a match to its end. **Nearest section:** the entry says "the stage that first needs it" | `crates/gamectl/src/scenario/run.rs` module doc | item 102 (7) |
+| S1-49 | `BENCH_SEED`, the map P1's per-unit figure is certified on (today the committed scenarios' seed); owner, at S1's demo P1 run | `crates/bench/src/decision.rs` `BENCH_SEED` | item 131 |
+| S1-50 | `DETERMINISM_SITE_OFFSET_VOXELS` = 3, how far east of its core the harness deploy stands since no stacking; owner, at S1, the `tune` lane, with S1-26's real determinism segment | `crates/sim/src/lib.rs` `DETERMINISM_SITE_OFFSET_VOXELS` | item 131 |
 
 ### A named lane
 
@@ -202,7 +206,7 @@ Each goes to S1's first contract pull request (AGENTS.md section 5).
 | S2-05 | `HEADROOM_VOXELS` = 2 has no rules row | `crates/sim/src/pathing.rs` `HEADROOM_VOXELS` | — |
 | S2-06 | `MAX_ROUTE_NODES` = 1024, sized against the 384-voxel map | `crates/sim/src/pathing.rs` `MAX_ROUTE_NODES` | — |
 | S2-07 | The tick's queues: `HARNESS_EDIT_QUEUE` = 64 and `HARNESS_DAMAGE_QUEUE` = 256 | `crates/sim/src/world.rs` `HARNESS_EDIT_QUEUE`, `HARNESS_DAMAGE_QUEUE` | item 65 |
-| S2-08 | `STRUCTURE_TABLE_ROOM` = 120 and `WRECK_TABLE_ROOM` = 120 | `crates/sim/src/world.rs` `STRUCTURE_TABLE_ROOM`, `WRECK_TABLE_ROOM` | — |
+| S2-08 | `STRUCTURE_TABLE_ROOM` = 120 and `WRECK_TABLE_ROOM` = 120 (the totals; `STRUCTURE_TABLE_ROOM`'s per-seat split is S1-37) | `crates/sim/src/world.rs` `STRUCTURE_TABLE_ROOM`, `WRECK_TABLE_ROOM` | — |
 | S2-09 | `BROADPHASE_QUERY_RADIUS_VOXELS` = 16, until a weapon's range replaces it | `crates/sim/src/world.rs` `BROADPHASE_QUERY_RADIUS_VOXELS` | item 67 |
 | S2-10 | A Build target dropped from the list strands what was already paid for there | `crates/sim/src/world.rs` `replace_build_targets` doc | item 23 |
 | S2-11 | What a seat may see of an enemy beacon or asset beyond where it is (HP, power state, heading, build progress, mandate) | `gateway.proto` `ViewEntity` (numbers 6 to 15); `gateway.proto` `BeaconSummary` (numbers 7 to 15) | T16a notes, section D |

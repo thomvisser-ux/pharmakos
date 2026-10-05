@@ -102,8 +102,9 @@ If `cargo xtask ci` is green locally and a `cargo xtask ci` leg is red in CI, th
 `xtask` bug worth fixing, not a reason to run a different command. It is complete for harness parts
 1 and 2 (`xtask/src/main.rs`, fifteen steps, covering AGENTS.md §9 items 1–10) and green; a failure
 in it is a bug to fix rather than a reason to reach for another command. `cargo xtask ci-scope`,
-`cargo xtask perf-alarms` and `cargo xtask package` sit outside the step table; `perf-alarms` never
-fails, and `package` runs alone (AGENTS.md §9).
+`cargo xtask perf-alarms`, `cargo xtask placeholders` and `cargo xtask package` sit outside the step
+table; `perf-alarms` never fails, `placeholders` becomes a step with `tune`, and `package` runs
+alone (AGENTS.md §9).
 
 ## When you finish
 

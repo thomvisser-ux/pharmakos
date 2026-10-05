@@ -476,19 +476,20 @@ sections that add one name it in their Owns lines.
   which this PR's re-bless then covers); decisions 3 and 4.
 - **Acceptance:** `the_nearest_vent_is_the_least_travel_not_the_least_distance` (a vent across a
   ravine loses); `ties_go_to_anchor_y_then_x`; `a_held_target_fails_only_when_lost`;
-  `a_carried_covering_step_finds_no_vent_after_round_one_on_the_golden_seed`;
+  `a_carried_covering_step_has_no_legal_site_after_round_one_on_the_golden_seed`;
   `a_second_generator_on_a_covered_vent_is_illegal_site`; `stacking_on_an_own_beacon_is_illegal`;
   `a_restarted_step_resumes_at_the_beacon_it_placed`; `the_walk_in_times_out_with_no_path`;
   `a_seats_core_is_b_00_and_ids_are_per_seat`;
   `another_seats_beacon_is_e_nn_in_first_sighting_order`; `a_pre_s1_save_is_refused`;
   `the_feature_table_is_regenerated_identically_on_restore`; a new
   `tests/golden/mapgen/expected.features.txt` (a format change); the new scenario
-  `scenarios/s1/cover-nearest-vent` asserting `beacon_placed`, round 2's `step_failed` `no_target`
-  and hashes; `the_decision_tick_counts_its_evaluation_units` (counted work, asserted, unhashed);
-  `allocations.rs` green over the re-sited deploy; **every chain** (the determinism chain included)
-  re-blessed once, the first diverging tick named per chain; every `report_hash` golden re-blessed
-  (the snapshot version and the ids); every gateway, operator, interpreter and economy golden that
-  names an id explained.
+  `scenarios/s1/cover-nearest-vent` asserting `beacon_placed`, round 2's `step_failed` (its
+  `illegal_site`, by item 131 (4) (a), pinned by the chain and by the sim test above, since
+  `event_fired` has no value predicate) and hashes; `the_decision_tick_counts_its_evaluation_units`
+  (counted work, asserted, unhashed); `allocations.rs` green over the re-sited deploy; **every
+  chain** (the determinism chain included) re-blessed once, the first diverging tick named per
+  chain; every `report_hash` golden re-blessed (the snapshot version and the ids); every gateway,
+  operator, interpreter and economy golden that names an id explained.
 - **Contract PR:** yes (determinism code, the snapshot and save formats, a golden format).
 - **PLACEHOLDERs:** the per-seat numbers (owner, S1's demo, with the check's report; the totals
   revisited at S2's G3′-real). **Agent-days:** 8.5–9.5. **Split seam:** ids, room and the save bump
@@ -508,7 +509,10 @@ sections that add one name it in their Owns lines.
   carried by item 130, the stale `get_map_summary` doc in `surface/knowledge.rs` (~331–336: its
   `reserved 5 to 15` and its "what *is* fogged … vents, seams") and `surface.rs`'s "Four methods …
   no request/response pair", in the module doc and at the dispatch catch-all (~68–71, ~2429–2436),
-  untrue of `resolve_refs` until this lane serves it.
+  untrue of `resolve_refs` until this lane serves it. Carried by item 131: `verifier_scope` fills
+  each feature's anchor column (`x`, `y`) and `covered_by` (the seat's own covering beacon, lowest
+  id) as well as targeting.md's four, because two of `tgtv`'s three lints read them (item 131 (4)
+  (d)).
 - **Does not:** rank in the verifier; publish anything (v1.1).
 - **Implements:** item 127 (12) (targeting.md's gateway lines); register S1-13, S1-20, S1-48.
 - **Needs:** `tgt` merged. **Acceptance:** `resolve_refs_answers_as_the_sim_would_at_step_start`
@@ -523,7 +527,10 @@ sections that add one name it in their Owns lines.
 
 - **Owns:** `crates/verifier`, `crates/plan-core`, and a named place in
   `godot/fixtures/rows_report.json`, which `crates/client-gdext/tests/editor_fixtures.rs` (~170–194)
-  holds equal to four verifier goldens' `diagnostics`, re-copied when they move. **Branches**
+  holds equal to four verifier goldens' `diagnostics`, re-copied when they move; for `proj`, a
+  named place in `crates/bench/src/quick.rs` (`fixture_scope`, `map_scope`, `MAP_CASES`,
+  `fixture_snapshot`), restated in the same PR if it changes the verifier goldens' fixture, which
+  `crates/bench/tests/harness.rs` holds equal (item 131 (5)). **Branches**
   `feat/verifier-targeting` then `feat/verifier-estimate`, worktrees `../pharmakos-tgtv`,
   `../pharmakos-proj`, targets `D:/build/tgtv`, `D:/build/proj`.
 - **`tgtv` builds:** `Scope`'s features and the commander's position; which arm is legal where
@@ -542,9 +549,11 @@ sections that add one name it in their Owns lines.
   verifier (plan-core re-exports it), breaking the plan-core → verifier cycle the code map found;
   units and Build targets in the projection with the charged beacon; E0601, W0601, W0602, W0603 and
   the route-fits-the-segment codes W0701 and I0001 emitted; W0603's embedded spaces fixed; S1-23,
-  X-05 and U-04 per decision 15; M-10 (`Options` stays `allow_dormant_beacons` alone). No stepping,
-  no future evaluated: `$`/`kW` projection is Quartermaster arithmetic (AGENTS.md §3 rule 2). 5–6
-  ad.
+  X-05 and U-04 per decision 15; M-10 (`Options` stays `allow_dormant_beacons` alone). Carried by
+  item 131: the two other strings with embedded spaces in `crates/verifier/tests/verifier.rs`, and
+  `tests/golden/verifier/README.md`'s "No producer exists" on `budget_128` (`crates/bench` is it),
+  with its fixture table's `b_01` "the seat's pre-placed core". No stepping, no future evaluated:
+  `$`/`kW` projection is Quartermaster arithmetic (AGENTS.md §3 rule 2). 5–6 ad.
 - **Implements:** `tgtv`: item 127 (9), (12); register S1-39; item 124 (5) (h). `proj`: register
   S1-23, S1-47, X-05, U-04, M-10; P1's QUICK path (item 33 (c)).
 - **Needs:** `tgtv`: `con2` merged; decisions 6 and 11. `proj`: `tgtv` and `fixs` merged (the
@@ -625,7 +634,9 @@ sections that add one name it in their Owns lines.
   band (spec §7's ladder: mine last) instead of `Urgency::Units`; `MINING_LOAD_VOXELS` read from its
   row, `economy.mining_carry_voxels`, with the two comments that still say `mining_load_voxels`
   (`crates/sim/src/economy.rs`, `crates/sim/tests/economy.rs`) reworded; S1-27 to S1-30 per decision 13; each "nearest" estimate the seam choice makes counted on
-  `tgt`'s evaluation-units counter (P1).
+  `tgt`'s evaluation-units counter (P1). Carried by item 131: why the sim's `set_mandate` row
+  keeps the kind alone (`Row::Mandate { kind }`) and drops the settings it carries, which the
+  verifier's I0003 reads as starting from the defaults; fixed here, or put to the owner.
 - **Implements:** item 127 (9); register S1-25's reader, S1-27 to S1-30, S1-38; spec §6's Mine row,
   §7's urgency ladder.
 - **Needs:** `tgt` merged; decisions 6 and 13. **Acceptance:** `fixs`'s F2 test un-ignored and
@@ -794,6 +805,11 @@ agent runs beside `mine`, `tgtw` and `grid`.
 | 4 | 21–27.5 | **build** (4.5) | — | **ui** (4.5, from 23) | The chip, Alt-click, recap lines, the 10:00 first Lull |
 | 5 | 25.5–30.5 | **tune** (3) → **demo** (2, from 28.5) | — | — | The S1 demo of §1.1 |
 
+**As run (item 131 (6)).** `proj` did not run as wave 2's second run in slot 2: it builds in full
+in wave 3's slot 3, beside `mine` and `tgtw`, and with `tgt` merged it needs no separate re-bless
+pass. `grid` follows it in slot 3, as its named place if `mine` is still open and otherwise after
+`mine` merges, then `oper`; `econ` follows `tgtw` in slot 2.
+
 **Totals.** 18 tasks in 17 lanes (`tgtv` and `proj` are one lane in two PRs), **about 71.5 ad**
 (63.5–79.5), against the code map's 62–74; this plan adds X-08's audit, the restore bug, the
 selector bug, S1-26 and S1-42 to it, and the reviews added `con1`'s and `con2`'s named places and
@@ -875,7 +891,8 @@ or `tests/golden/package/`, so 12 of the 18 PRs (`fixs`, `fixc`, `con1`, `con2`,
   4's `rig.rs` keep-alive sum per decision 17, §5's reserved-range discharge, §4.9's walled list,
   its "the research guard's five crates plus the sim" and its `CLIENT_WALL` sentence, §9's
   local-package sentence per decision 9, §9's line on a check run by hand (`#[ignore]`d, never a
-  step, never compared across operating systems; item 130), §9 item 11's P1) and the rulings, and
+  step, never compared across operating systems; item 130), §9 item 11's P1, and, from item 131,
+  §3 rule 2's "never ranks" and §4.8's derived feature table) and the rulings, and
   launch each run through `docs_ref` (item 115 (3)). AGENTS.md is a harness doc no lane edits: the
   `pharmakos-bench` sentences are in the docs PR that lands with `p1`, whose PR rewords the
   matching `xtask` doc comments. `rules/README.md` is `con1`'s, not theirs.
