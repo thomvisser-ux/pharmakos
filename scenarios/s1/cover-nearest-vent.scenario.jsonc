@@ -21,11 +21,10 @@
 //
 // `event_fired` has no value predicate (register M-05), so the failure's id is
 // pinned by the chain and by crates/sim/tests/targeting.rs's
-// `a_carried_covering_step_finds_no_vent_after_round_one_on_the_golden_seed`,
-// which reads it. Until the verifier's targeting lane (`tgtv`) lands, the
-// verifier refuses `covering` and `on` with E0003, so this file seals through
-// the harness door and the run prints a note naming it
-// (crates/gamectl/tests/scenarios.rs, HARNESS_DOOR).
+// `a_carried_covering_step_has_no_legal_site_after_round_one_on_the_golden_seed`,
+// which reads it. The verifier accepts `covering` and `on` since its
+// targeting lane (`tgtv`), so this file seals through `submit_plan` like any
+// client's.
 {
   "format": "pharmakos.scenario.v1",
   "name": "cover-nearest-vent",

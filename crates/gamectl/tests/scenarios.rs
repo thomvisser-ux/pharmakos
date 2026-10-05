@@ -100,11 +100,10 @@ const COVER_NEAREST_VENT: &str = "scenarios/s1/cover-nearest-vent.scenario.jsonc
 /// A scenario that starts using it, or one that stops, turns `cargo test` red
 /// with the reason in the message.
 ///
-/// `cover-nearest-vent` is on it **until the verifier's targeting lane
-/// (`tgtv`) lands**: until then the verifier refuses `covering` and `on` with
-/// E0003, so its seat seals through the harness door. Once `tgtv` accepts the
-/// vocabulary, `submit_plan` takes the file and this entry comes off.
-const HARNESS_DOOR: &[&str] = &[REFUSING, COVER_NEAREST_VENT];
+/// `cover-nearest-vent` was on it until the verifier's targeting lane (`tgtv`)
+/// landed and accepted `covering` and `on`; `submit_plan` now takes the file,
+/// so its entry came off.
+const HARNESS_DOOR: &[&str] = &[REFUSING];
 
 /// What a doctored copy is named.
 ///
