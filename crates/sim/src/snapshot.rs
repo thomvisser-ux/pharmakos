@@ -116,7 +116,19 @@ use serde::{Deserialize, Serialize};
 /// combat lands at S2, for the same reason they are in the hash: a field that
 /// affects behaviour and is not carried is a restore that silently forgets it
 /// (AGENTS.md section 4.8).
-pub const SNAPSHOT_VERSION: u32 = 6;
+///
+/// **Version 7 is S1's targeting** (decisions-log item 127 (12) and (13);
+/// `docs/design/targeting.md`, contract pull requests 2 and 3). Beacon names
+/// became **per seat**, so it adds each beacon's per-seat ordinal, what a
+/// seat's `b_NN` names; and it adds the state the targeting design binds: per
+/// Build target, the description it was written with and the feature it is
+/// bound to; and per seat, the feature the step in progress is covering, the
+/// binding each of its rows read when it started, and the beacon a restarted
+/// placement resumes at with the row it had reached. A version-6 file is
+/// refused rather than read: its `b_NN` numbers counted every seat's beacons,
+/// and read as per-seat names they would point a seat's orders at other
+/// beacons.
+pub const SNAPSHOT_VERSION: u32 = 7;
 
 /// A flat, fixed-width projection of the world.
 ///
@@ -194,6 +206,9 @@ pub struct Snapshot {
     pub beacon_priority: Vec<u8>,
     /// The Survey mandate's scout count, per beacon.
     pub beacon_scouts: Vec<u8>,
+    /// Each beacon's per-seat ordinal, what a seat's `b_NN` names
+    /// ([`crate::tables::BeaconTable::ordinals`]).
+    pub beacon_ordinal: Vec<u32>,
 
     /// Structure ids.
     pub structure_id: Vec<u32>,
@@ -229,6 +244,12 @@ pub struct Snapshot {
     pub target_radius: Vec<i32>,
     /// The structure realising each Build target.
     pub target_built: Vec<u32>,
+    /// The feature each Build target is bound to, or
+    /// [`crate::targeting::NO_FEATURE`].
+    pub target_feature: Vec<u32>,
+    /// How each Build target was written ([`crate::targeting::DESCRIPTION_VOXEL`]
+    /// and its two siblings).
+    pub target_desc: Vec<u8>,
 
     /// Whose memory each sighting is.
     pub sighting_seat: Vec<u8>,
@@ -357,6 +378,26 @@ pub struct Snapshot {
     pub plan_fires: Vec<u32>,
     /// Per-handler cooldown ticks, packed the same way.
     pub plan_ready: Vec<u32>,
+    /// The feature a `covering` step chose, per seat.
+    pub plan_bound_feature: Vec<u32>,
+    /// How many bindings each seat's step in progress holds.
+    pub plan_binding_count: Vec<u32>,
+    /// Each binding's feature, packed in seat order behind
+    /// [`Snapshot::plan_binding_count`].
+    pub plan_binding_feature: Vec<u32>,
+    /// Each binding's column, three whole voxels per binding, packed the same
+    /// way.
+    pub plan_binding_at: Vec<i32>,
+    /// Whether each seat's step is a placement resumed as a visit, `0` or `1`.
+    pub plan_resumed: Vec<u8>,
+    /// The beacon a restarted placement resumes at, per seat.
+    pub plan_restart_beacon: Vec<u32>,
+    /// The rule body that placement is in, per seat.
+    pub plan_restart_rule: Vec<u32>,
+    /// That placement's step index, per seat.
+    pub plan_restart_at: Vec<u32>,
+    /// The first initial row it had not committed, per seat.
+    pub plan_restart_row: Vec<u32>,
 }
 
 /// An empty snapshot in an **opening Lull**, not an empty one in no phase at
@@ -371,6 +412,10 @@ pub struct Snapshot {
 ///
 /// [`Enc`]: crate::encoding::Enc
 impl Default for Snapshot {
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one line per column of a flat projection, for the reason `capture` gives"
+    )]
     fn default() -> Snapshot {
         Snapshot {
             version: SNAPSHOT_VERSION,
@@ -403,6 +448,7 @@ impl Default for Snapshot {
             beacon_dormant: Vec::new(),
             beacon_priority: Vec::new(),
             beacon_scouts: Vec::new(),
+            beacon_ordinal: Vec::new(),
             structure_id: Vec::new(),
             structure_seat: Vec::new(),
             structure_kind: Vec::new(),
@@ -419,6 +465,8 @@ impl Default for Snapshot {
             target_at: Vec::new(),
             target_radius: Vec::new(),
             target_built: Vec::new(),
+            target_feature: Vec::new(),
+            target_desc: Vec::new(),
             sighting_seat: Vec::new(),
             sighting_asset: Vec::new(),
             sighting_owner: Vec::new(),
@@ -471,6 +519,15 @@ impl Default for Snapshot {
             plan_rule_count: Vec::new(),
             plan_fires: Vec::new(),
             plan_ready: Vec::new(),
+            plan_bound_feature: Vec::new(),
+            plan_binding_count: Vec::new(),
+            plan_binding_feature: Vec::new(),
+            plan_binding_at: Vec::new(),
+            plan_resumed: Vec::new(),
+            plan_restart_beacon: Vec::new(),
+            plan_restart_rule: Vec::new(),
+            plan_restart_at: Vec::new(),
+            plan_restart_row: Vec::new(),
         }
     }
 }
@@ -511,6 +568,15 @@ pub enum SnapshotError {
         /// How many units the snapshot holds.
         units: u32,
         /// The receiving world's ceiling.
+        limit: u32,
+    },
+    /// The snapshot holds more beacon rows than a match of its own seat count
+    /// can ever place (the cores plus every seat's share of the beacon room).
+    /// The file describes no match this sim plays.
+    OverBeaconCeiling {
+        /// How many beacons the snapshot holds.
+        beacons: u32,
+        /// The ceiling for the snapshot's seat count.
         limit: u32,
     },
     /// A carried chunk digest is not the digest of the chunk the restore
@@ -566,6 +632,10 @@ impl core::fmt::Display for SnapshotError {
             SnapshotError::OverCeiling { units, limit } => write!(
                 f,
                 "the snapshot holds {units} units and this world's unit ceiling is {limit}: it was saved under another match configuration"
+            ),
+            SnapshotError::OverBeaconCeiling { beacons, limit } => write!(
+                f,
+                "the snapshot holds {beacons} beacons and a match of its seat count places at most {limit}"
             ),
             SnapshotError::ChunkDigest { chunk } => write!(
                 f,
@@ -658,6 +728,7 @@ impl Snapshot {
             beacon_dormant: beacons.dormant().iter().map(|d| u8::from(*d)).collect(),
             beacon_priority: beacons.priorities().to_vec(),
             beacon_scouts: beacons.scout_counts().to_vec(),
+            beacon_ordinal: beacons.ordinals().to_vec(),
 
             structure_id: structures.ids().to_vec(),
             structure_seat: structures.seats().to_vec(),
@@ -677,6 +748,8 @@ impl Snapshot {
             target_at: axes_from_points(targets.anchors()),
             target_radius: targets.radii().to_vec(),
             target_built: targets.built().to_vec(),
+            target_feature: targets.features().to_vec(),
+            target_desc: targets.descriptions().to_vec(),
 
             sighting_seat: sightings.seats().to_vec(),
             sighting_asset: sightings.assets().to_vec(),
@@ -740,6 +813,15 @@ impl Snapshot {
             plan_rule_count: plan.rule_count,
             plan_fires: plan.fires,
             plan_ready: plan.ready,
+            plan_bound_feature: plan.bound_feature,
+            plan_binding_count: plan.binding_count,
+            plan_binding_feature: plan.binding_feature,
+            plan_binding_at: plan.binding_at,
+            plan_resumed: plan.resumed,
+            plan_restart_beacon: plan.restart_beacon,
+            plan_restart_rule: plan.restart_rule,
+            plan_restart_at: plan.restart_at,
+            plan_restart_row: plan.restart_row,
         }
     }
 
@@ -797,7 +879,9 @@ impl Snapshot {
     /// Returns [`SnapshotError::Ragged`] when the columns disagree in length,
     /// [`SnapshotError::Map`] when the map cannot be regenerated, or
     /// [`SnapshotError::OverCeiling`] when the snapshot holds more units than
-    /// the receiving world's unit ceiling, or [`SnapshotError::Unindexable`]
+    /// the receiving world's unit ceiling, [`SnapshotError::OverBeaconCeiling`]
+    /// when it holds more beacons than a match of its seat count can place,
+    /// or [`SnapshotError::Unindexable`]
     /// when the receiving world's rules table cannot describe a grid for its
     /// ceiling. Either way the world is left exactly as it was.
     #[allow(
@@ -843,8 +927,19 @@ impl Snapshot {
             return Err(SnapshotError::Ragged("unit"));
         }
 
-        let mut beacons =
-            BeaconTable::with_capacity(u32::try_from(self.beacon_id.len()).unwrap_or(0));
+        // The beacon ceiling is a function of the seat count alone
+        // (`beacon_limit_of`), so a file holding more rows describes no match
+        // this sim plays; refused before the table is built or checked, so a
+        // crafted column costs nothing to turn away.
+        let beacon_limit = crate::world::beacon_limit_of(seat_count);
+        let beacon_count = u32::try_from(self.beacon_id.len()).unwrap_or(u32::MAX);
+        if beacon_count > beacon_limit {
+            return Err(SnapshotError::OverBeaconCeiling {
+                beacons: beacon_count,
+                limit: beacon_limit,
+            });
+        }
+        let mut beacons = BeaconTable::with_capacity(beacon_count);
         if !beacons.restore(BeaconColumns {
             id: self.beacon_id.clone(),
             seat: self.beacon_seat.clone(),
@@ -855,6 +950,7 @@ impl Snapshot {
             dormant: self.beacon_dormant.iter().map(|d| *d != 0).collect(),
             priority: self.beacon_priority.clone(),
             scouts: self.beacon_scouts.clone(),
+            ordinal: self.beacon_ordinal.clone(),
         }) {
             return Err(SnapshotError::Ragged("beacon"));
         }
@@ -887,7 +983,7 @@ impl Snapshot {
         let sightings = self.restore_sightings(world)?;
         let credit = self.restore_credit(world)?;
 
-        let (voxels, chunks) = self.restore_store(world, seat_count)?;
+        let (voxels, chunks, features) = self.restore_store(world, seat_count)?;
 
         let unit_count = units.len();
         if unit_count > world.unit_limit() {
@@ -914,6 +1010,7 @@ impl Snapshot {
             credit,
             voxels,
             chunks,
+            features,
             router,
             match_state,
             plan,
@@ -944,6 +1041,8 @@ impl Snapshot {
                 at: points_from_axes(&self.target_at).ok_or(SnapshotError::Ragged("target_at"))?,
                 radius: self.target_radius.clone(),
                 built: self.target_built.clone(),
+                feature: self.target_feature.clone(),
+                desc: self.target_desc.clone(),
             },
         ) {
             return Err(SnapshotError::Ragged("target"));
@@ -1082,6 +1181,15 @@ impl Snapshot {
             rule_count: self.plan_rule_count.clone(),
             fires: self.plan_fires.clone(),
             ready: self.plan_ready.clone(),
+            bound_feature: self.plan_bound_feature.clone(),
+            binding_count: self.plan_binding_count.clone(),
+            binding_feature: self.plan_binding_feature.clone(),
+            binding_at: self.plan_binding_at.clone(),
+            resumed: self.plan_resumed.clone(),
+            restart_beacon: self.plan_restart_beacon.clone(),
+            restart_rule: self.plan_restart_rule.clone(),
+            restart_at: self.plan_restart_at.clone(),
+            restart_row: self.plan_restart_row.clone(),
         }
     }
 
@@ -1145,6 +1253,9 @@ impl Snapshot {
 
     /// Rebuild the chunk store: the pristine layer from the seed, then the
     /// chunks an edit changed, then the digest column checked against both.
+    /// The map's **feature table** comes back with the pristine layer: it is a
+    /// pure function of the same three inputs and is regenerated, never
+    /// carried (`crate::features`).
     ///
     /// Separate from [`Snapshot::restore_into`] because it is the half of a
     /// restore that is about the *map* rather than about the tables, and
@@ -1154,13 +1265,14 @@ impl Snapshot {
         &self,
         world: &World,
         seat_count: u32,
-    ) -> Result<(VoxelStore, ChunkDigests), SnapshotError> {
+    ) -> Result<(VoxelStore, ChunkDigests, crate::features::FeatureTable), SnapshotError> {
         if self.modified_chunk.len().saturating_mul(CHUNK_VOXELS) != self.modified_chunk_bytes.len()
         {
             return Err(SnapshotError::Ragged("modified_chunk"));
         }
         let generated = mapgen::generate(self.match_seed, world.rules(), seat_count)
             .map_err(SnapshotError::Map)?;
+        let features = generated.features;
         let mut voxels = generated.voxels;
         for (slot, chunk) in self.modified_chunk.iter().enumerate() {
             let from = slot.saturating_mul(CHUNK_VOXELS);
@@ -1193,7 +1305,7 @@ impl Snapshot {
             }
             chunk = chunk.saturating_add(1);
         }
-        Ok((voxels, chunks))
+        Ok((voxels, chunks, features))
     }
 }
 

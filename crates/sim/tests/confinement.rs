@@ -60,6 +60,11 @@ const ALLOWED_LINTS: &[&str] = &[
     // expression: a `Snapshot` cannot be built in halves and a restore's checks
     // cannot move behind its writes.
     "clippy::too_many_lines",
+    // A hashed state struct whose flags are each one fixed-width field with
+    // its own meaning (`PlanState`: pinned, the reflex's two, a resumed
+    // placement); folding them into a state machine would change the
+    // canonical encoding for no reader's gain (S1's targeting).
+    "clippy::struct_excessive_bools",
 ];
 
 /// Lints that may be allowed only under this path prefix.

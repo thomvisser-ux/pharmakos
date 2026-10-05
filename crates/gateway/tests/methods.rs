@@ -203,11 +203,16 @@ fn own_beacon(surface: &Surface) -> (String, i32, i32, i32) {
         .iter()
         .position(|seat| *seat == 0)
         .expect("seat 0 has a core beacon");
-    let id = pharmakos_sim::tables::BeaconId::new(beacons.ids().get(row).copied().expect("an id"));
+    let ordinal = beacons.ordinals().get(row).copied().expect("an ordinal");
     let at = pharmakos_gateway::view::voxel_of(
         beacons.positions().get(row).copied().expect("a position"),
     );
-    (pharmakos_gateway::view::beacon_id(id), at.x, at.y, at.z)
+    (
+        pharmakos_sim::tables::own_beacon_name(ordinal),
+        at.x,
+        at.y,
+        at.z,
+    )
 }
 
 /// Where seat 0's commander stands.
@@ -1171,19 +1176,11 @@ fn a_fogged_seat_is_told_a_beacon_it_cannot_see_is_not_there() {
     );
     let _ = result(&mine, "the seat's own beacon");
 
-    let others: Vec<String> = {
-        let host = surface.host().expect("a hosted match");
-        let beacons = host.world().beacons();
-        beacons
-            .seats()
-            .iter()
-            .enumerate()
-            .filter(|(_, seat)| **seat != 0)
-            .filter_map(|(row, _)| beacons.ids().get(row).copied())
-            .map(|id| pharmakos_gateway::view::beacon_id(pharmakos_sim::tables::BeaconId::new(id)))
-            .collect()
-    };
-    let enemy = others.first().expect("seat 1 has a core beacon");
+    // Another seat's beacon has no `b_NN` this seat can write (a `b_NN`
+    // counts the caller's own, decisions-log item 127 (13)), and an `e_NN`
+    // names only a beacon this caller was shown under it: seat 1's core is
+    // a map away and was never shown, so its first handle names nothing.
+    let enemy = "e_01";
     let refused = surface.call(
         Some(&token),
         &request("get_beacon", &format!(r#"{{"beacon_id":"{enemy}"}}"#)),

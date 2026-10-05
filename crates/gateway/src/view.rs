@@ -5,11 +5,16 @@
 //!
 //! Every method of the slice answers with `gp.api.v1` shapes over `gp.v1`
 //! values, and every one of those conversions is a decision: a fixed-point
-//! position becomes a whole voxel by *flooring*, a [`BeaconId`] becomes the
-//! `b_04` the spec's worked example types, a [`MandateKind`] of the sim becomes
-//! the one the verifier's [`KnownBeacon`] carries. Written once here rather
-//! than four times in four handlers, because two handlers that round a
+//! position becomes a whole voxel by *flooring*, a [`MandateKind`] of the sim
+//! becomes the one the verifier's [`KnownBeacon`] carries. Written once here
+//! rather than four times in four handlers, because two handlers that round a
 //! position differently would show a player a beacon in two places.
+//!
+//! A beacon's **name** is not here: since S1 it depends on who is asking -- a
+//! seat's own beacons are its per-seat `b_NN`, anybody else's an `e_NN` minted
+//! per viewer -- so it is [`crate::viewfeed::ViewFeed::beacon_name`]'s, and
+//! the spelling is the sim's ([`pharmakos_sim::tables::own_beacon_name`]),
+//! the one place the gateway, the verifier and the interpreter agree on it.
 //!
 //! Nothing here reads a rules row, steps anything or decides who may see what.
 //! Fog is [`crate::fog`]'s and the tick is [`crate::time`]'s.
@@ -19,18 +24,7 @@ use pharmakos_proto::gp::v1::beacon_filter::MandateKind as WireMandate;
 use pharmakos_sim::knowledge::Position;
 use pharmakos_sim::math::fixed::Fx;
 use pharmakos_sim::seams::MandateKind;
-use pharmakos_sim::tables::{BeaconId, SeatId, StructureKind, UnitKind};
-
-/// How many digits a rendered beacon id pads to.
-///
-/// Two, so the spec's own `get_beacon{b_04}` is what this gateway hands out
-/// for beacon 4. A match with a hundred beacons writes three digits and reads
-/// back correctly either way -- [`beacon_id_from`] parses the number, not the
-/// padding, so `b_4` and `b_04` are the same beacon and `b_004` is too.
-pub const BEACON_ID_DIGITS: usize = 2;
-
-/// The prefix every beacon id carries.
-pub const BEACON_ID_PREFIX: &str = "b_";
+use pharmakos_sim::tables::{SeatId, StructureKind, UnitKind};
 
 /// A fixed-point position as the whole voxel it stands in.
 ///
@@ -53,31 +47,6 @@ pub fn voxel_of(at: [Fx; 3]) -> Voxel {
 #[must_use]
 pub fn voxel_of_position(at: Position) -> Voxel {
     voxel_of(at.to_array())
-}
-
-/// A beacon's id on the wire: `b_04`.
-#[must_use]
-pub fn beacon_id(beacon: BeaconId) -> String {
-    format!(
-        "{BEACON_ID_PREFIX}{:0width$}",
-        beacon.raw(),
-        width = BEACON_ID_DIGITS
-    )
-}
-
-/// The beacon a wire id names, or `None` when the text is not one.
-///
-/// Decided on **characters**, never on a parse that would also take `b_+4`,
-/// `b_ 4` or `b_4\n`: the digits must be ASCII digits and nothing else, which
-/// is the same rule `plan-core`'s template ids are decided by and for the same
-/// cross-platform reason (decisions-log item 100's closing note).
-#[must_use]
-pub fn beacon_id_from(text: &str) -> Option<BeaconId> {
-    let digits = text.strip_prefix(BEACON_ID_PREFIX)?;
-    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
-        return None;
-    }
-    digits.parse::<u32>().ok().map(BeaconId::new)
 }
 
 /// The sim's mandate as the one `gp.v1.BeaconFilter` spells.
@@ -186,14 +155,15 @@ pub fn seed_text(seed: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        beacon_id, beacon_id_from, mandate_from_id, mandate_name, mandate_of, seed_text, voxel_of,
-        voxel_of_position,
+        mandate_from_id, mandate_name, mandate_of, seed_text, voxel_of, voxel_of_position,
     };
     use pharmakos_proto::gp::v1::beacon_filter::MandateKind as WireMandate;
     use pharmakos_sim::knowledge::Position;
     use pharmakos_sim::math::fixed::Fx;
     use pharmakos_sim::seams::MandateKind;
-    use pharmakos_sim::tables::BeaconId;
+    use pharmakos_sim::tables::{
+        BeaconName, foreign_beacon_name, own_beacon_name, parse_beacon_name,
+    };
 
     #[test]
     fn a_position_floors_onto_its_voxel_on_every_axis() {
@@ -211,13 +181,21 @@ mod tests {
     }
 
     #[test]
-    fn a_beacon_id_is_the_specs_own_spelling_and_round_trips() {
-        assert_eq!(beacon_id(BeaconId::new(4)), "b_04");
-        assert_eq!(beacon_id(BeaconId::new(123)), "b_123");
-        assert_eq!(beacon_id_from("b_04"), Some(BeaconId::new(4)));
-        assert_eq!(beacon_id_from("b_4"), Some(BeaconId::new(4)));
-        for hostile in ["", "b_", "04", "b_+4", "b_ 4", "b_4x", "B_04", "b_-1"] {
-            assert_eq!(beacon_id_from(hostile), None, "`{hostile}` is not an id");
+    fn a_beacon_name_is_the_specs_own_spelling_and_round_trips() {
+        assert_eq!(own_beacon_name(4), "b_04");
+        assert_eq!(own_beacon_name(123), "b_123");
+        assert_eq!(foreign_beacon_name(1), "e_01");
+        assert_eq!(parse_beacon_name("b_04"), Some(BeaconName::Own(4)));
+        assert_eq!(parse_beacon_name("b_4"), Some(BeaconName::Own(4)));
+        assert_eq!(parse_beacon_name("e_07"), Some(BeaconName::Foreign(7)));
+        for hostile in [
+            "", "b_", "e_", "04", "b_+4", "b_ 4", "b_4x", "B_04", "b_-1", "E_01", "x_01",
+        ] {
+            assert_eq!(
+                parse_beacon_name(hostile),
+                None,
+                "`{hostile}` is not a name"
+            );
         }
     }
 

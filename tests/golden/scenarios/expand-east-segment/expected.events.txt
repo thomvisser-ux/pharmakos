@@ -15,9 +15,11 @@
 2406	2	step_started	1	-	1
 2406	3	step_failed	1	-	6
 2411	0	step_started	0	-	2
-2411	1	step_failed	0	-	10
+2411	1	step_failed	0	-	2
 2411	2	fallback_engaged	0	-	1
 2411	3	step_started	1	-	2
+2411	4	step_failed	1	-	2
+2411	5	fallback_engaged	1	-	1
 3226	0	ore_delivered	0	3	32
 3453	0	ore_delivered	1	7	32
 3600	0	segment_ended	-	-	3600

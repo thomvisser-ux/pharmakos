@@ -20,9 +20,14 @@
 // them can be asserted by event: `event_fired` checks the FIRST time an event
 // fires (crates/gamectl/src/scenario/run.rs, the `.min()` over matching
 // ticks), and on this map every event either seat reports first fires in
-// round 1. So each beat is asserted at its first occurrence, and **Easy's
-// later rounds are pinned by the chain alone**: a probe of every event kind
-// for both seats found none whose first occurrence falls in round 2 or 3. A
+// round 1 but one. So each beat is asserted at its first occurrence, and
+// **Easy's later rounds are pinned by the chain alone**: a probe of every event
+// kind for both seats found one first occurrence outside round 1 -- seat 0's
+// first `step_failed`, at tick 4056 in round 2, asserted below. Since S1's
+// targeting the sealed file's fixed site is the column its own round-1 beacon
+// stands on, and no stacking refuses it (`illegal_site`): the demo's F4, a
+// carried positional playbook placing a beacon on the same voxel every round,
+// now fails loudly instead (docs/design/targeting.md). A
 // `plan_sealed` for seat 1 in rounds 2 and 3 is not asserted either: round
 // 1's seal meets any later deadline, and the gateway's fallback emits the same
 // line (as against-easy.scenario.jsonc says).
@@ -81,6 +86,8 @@
       "note": "The Generator on the lean vent, completed at tick 1276 by the drone the new beacon fabricated: seat 0's first completed structure." },
     { "assert": "event_fired", "event": "ore_delivered", "seat": 1, "by_tick": 2200,
       "note": "Seat 1 is the first seat to deliver ore in this run, at tick 1823 (seat 0's first delivery is at tick 2157). The player's own ore is on T22's run sheet." },
+    { "assert": "event_fired", "event": "step_failed", "seat": 0, "by_tick": 4100,
+      "note": "Round 2: seat 0's carried deploy names the column its round-1 beacon stands on, and no stacking refuses it as the step starts, at tick 4056, with `illegal_site` (id 6) -- seat 0's first failure of the match. Before S1 it stacked a second beacon there (the demo's F4). The id is pinned by the chain." },
     { "assert": "event_fired", "event": "settled", "by_tick": 3600,
       "note": "Round 1's recap settles on the tick its Push ends, the first settlement of the match." },
     { "assert": "hash_chain_equals",

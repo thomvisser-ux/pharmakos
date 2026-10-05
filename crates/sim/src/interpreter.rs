@@ -90,14 +90,16 @@ pub(crate) mod cond;
 pub(crate) mod exec;
 pub mod state;
 
+use crate::features::FeatureKind;
 use crate::math::quantity::Ms;
 use crate::rules::RulesTable;
 use crate::seams::MandateKind;
-use crate::tables::BeaconId;
 use pharmakos_proto::gp;
 
+pub use crate::targeting::FeatureSpec;
+
 pub use cond::resolve_beacon_in;
-pub use state::{Interpreter, PlanParts, PlanState, StepFailure, VisitState};
+pub use state::{Binding, Interpreter, PlanParts, PlanState, StepFailure, VisitState};
 
 /// The self-preservation reflex's threshold, in whole percent of the
 /// commander's maximum hit points.
@@ -223,8 +225,21 @@ pub struct Filter {
 /// silent skip.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum BeaconSpec {
-    /// A beacon named by its `b_NN` id in the frozen snapshot.
-    Id(BeaconId),
+    /// A seat's own beacon named by its `b_NN`: the number is the beacon's
+    /// per-seat ordinal ([`crate::tables::BeaconTable::ordinals`]), so `b_00`
+    /// is always the seat's core (decisions-log item 127 (13)). It resolves
+    /// only among the seat's own beacons.
+    Own(u32),
+    /// Another seat's beacon named by an `e_NN`, the per-viewer handle the
+    /// gateway mints on first sighting (`docs/design/targeting.md`, "Names").
+    ///
+    /// **It resolves to nothing in the sim**, and the step fails `no_target`:
+    /// a seat changes only its own beacons (touch to change, AGENTS.md
+    /// section 1), the minting is the gateway's and per viewer, and the
+    /// failure table answers "someone else's" with the same `no_target` as
+    /// hidden and absent, so a guess reveals nothing. Item 13's Attack target
+    /// is S2's.
+    Foreign(u32),
     /// "the safest own beacon" — the target the fixed reflex walks to.
     Safest,
     /// Least travel from the commander first.
@@ -240,6 +255,44 @@ pub enum Place {
     Voxel([i32; 3]),
     /// The anchor of whichever beacon the selector picks.
     Beacon(BeaconSpec),
+    /// `covering`: a site whose sphere holds a feature, found by
+    /// [`crate::targeting::cover`]. Legal only in `place_beacon.at`
+    /// (`docs/design/targeting.md`, "Sites").
+    Covering(FeatureSpec),
+}
+
+/// Where a Build target goes: a fixed voxel, or `on` a vent
+/// (`docs/design/targeting.md`, "Sites").
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Anchor {
+    /// Whole voxel coordinates, as a playbook writes them.
+    Voxel([i32; 3]),
+    /// `on` a feature: its `on` column, chosen when the step starts
+    /// ([`crate::targeting::on_vent`]).
+    On(FeatureSpec),
+}
+
+impl Anchor {
+    /// Whether the anchor binds a feature when its step starts.
+    #[must_use]
+    pub const fn binds(&self) -> bool {
+        matches!(self, Anchor::On(_))
+    }
+}
+
+/// What a `remove_build_target` names: a fixed anchor, or -- for a target made
+/// through `on`, which is keyed by its feature -- the feature, by name.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Removal {
+    /// The target anchored at this voxel.
+    Voxel([i32; 3]),
+    /// The target bound to this feature (`on {feature_id}`).
+    Feature {
+        /// The kind the name spells.
+        kind: FeatureKind,
+        /// The anchor column the name spells.
+        anchor: [i32; 2],
+    },
 }
 
 /// One on-site change (spec section 5's change list).
@@ -277,7 +330,7 @@ pub enum Row {
         /// time and each further one the per-field time, capped at the maximum.
         fields: u32,
         /// The Build mandate's target list: blueprint and anchor.
-        targets: Vec<(u8, [i32; 3])>,
+        targets: Vec<(u8, Anchor)>,
         /// The Build mandate's protected areas, as centre and radius in whole
         /// voxels.
         protected: Vec<([i32; 3], i32)>,
@@ -304,17 +357,18 @@ pub enum Row {
         blueprint: u8,
         /// Where it goes. Must lie inside one of your own spheres, which the
         /// interpreter tests when the row commits.
-        anchor: [i32; 3],
+        anchor: Anchor,
     },
     /// Remove the Build target anchored at this place —
     /// `interface_times.build_target_ms`.
     ///
     /// Named by its anchor rather than by an index because a playbook is sealed
     /// before the round runs, and an index into a list the mandate may have
-    /// changed is not a stable reference (`playbook.proto`'s own words).
+    /// changed is not a stable reference (`playbook.proto`'s own words). A
+    /// target made through `on` is keyed by its feature, and named by it.
     RemoveTarget {
         /// The anchor naming the target.
-        anchor: [i32; 3],
+        anchor: Removal,
     },
 }
 
@@ -346,6 +400,28 @@ impl Row {
             }
         }
     }
+
+    /// How many `on` anchors the row writes: the bindings its step reads when
+    /// it starts (`docs/design/targeting.md`, "Three reading rules", 1).
+    #[must_use]
+    pub fn binding_slots(&self) -> usize {
+        match self {
+            Row::AddTarget { anchor, .. } => usize::from(anchor.binds()),
+            Row::Settings { targets, .. } => {
+                targets.iter().filter(|(_, anchor)| anchor.binds()).count()
+            }
+            Row::Mandate { .. }
+            | Row::Priority { .. }
+            | Row::Recycle
+            | Row::RemoveTarget { .. } => 0,
+        }
+    }
+}
+
+/// How many bindings a list of rows reads.
+#[must_use]
+pub fn binding_slots(rows: &[Row]) -> usize {
+    rows.iter().map(Row::binding_slots).sum()
 }
 
 /// What a step does. Exactly one per step, and required.
@@ -534,6 +610,7 @@ pub struct Plan {
     handlers: Vec<Rule>,
     fallback: Posture,
     max_deaths_before_fallback: u32,
+    max_bindings: usize,
 }
 
 impl Plan {
@@ -560,6 +637,14 @@ impl Plan {
     #[must_use]
     pub const fn max_deaths_before_fallback(&self) -> u32 {
         self.max_deaths_before_fallback
+    }
+
+    /// The most bindings any one step of the plan reads: what a seat's state
+    /// reserves at the seal, so that binding a step's targets allocates
+    /// nothing inside a tick.
+    #[must_use]
+    pub const fn max_bindings(&self) -> usize {
+        self.max_bindings
     }
 
     /// Compile a decoded playbook, or say exactly what is wrong with it.
@@ -651,11 +736,27 @@ impl Plan {
 
         let fallback = compile_fallback(fallback_block, &names)?;
 
+        let max_bindings = route
+            .iter()
+            .chain(handlers.iter().flat_map(|rule| rule.body.iter()))
+            .map(|step| match &step.action {
+                Action::Interface { rows, .. } | Action::PlaceBeacon { rows, .. } => {
+                    binding_slots(rows)
+                }
+                Action::Move { .. }
+                | Action::WaitUntil(_)
+                | Action::Hold { .. }
+                | Action::Broadcast => 0,
+            })
+            .max()
+            .unwrap_or(0);
+
         Ok(Plan {
             route,
             handlers,
             fallback,
             max_deaths_before_fallback: on_death.max_deaths_before_fallback,
+            max_bindings,
         })
     }
 }
@@ -823,7 +924,7 @@ fn compile_action(step: &gp::v1::Step, names: &Names<'_>) -> Result<Action, Plan
     let kind = step.kind.as_ref().ok_or(PlanError::StepWithoutAction)?;
     match kind {
         gp::v1::step::Kind::Move(move_step) => {
-            let to = compile_place(move_step.to.as_ref(), names)?;
+            let to = compile_route_place(move_step.to.as_ref(), names)?;
             let pace = gp::v1::move_step::Pace::try_from(move_step.pace).map_err(|_| {
                 PlanError::UnknownEnum {
                     field: "move.pace",
@@ -839,17 +940,21 @@ fn compile_action(step: &gp::v1::Step, names: &Names<'_>) -> Result<Action, Plan
             let beacon = compile_beacon_ref(interface.beacon.as_ref(), names)?;
             let mut rows: Vec<Row> = Vec::with_capacity(interface.rows.len());
             for row in &interface.rows {
-                rows.push(compile_row(row, names)?);
+                rows.push(compile_row(row, names, false)?);
             }
             Ok(Action::Interface { beacon, rows })
         }
         gp::v1::step::Kind::PlaceBeacon(place) => {
-            let at = compile_place(place.at.as_ref(), names)?;
+            let at = compile_place(place.at.as_ref(), names, true)?;
+            // `covered {}` names the feature a `covering` site was chosen for,
+            // so it is legal only in the initial settings of a `place_beacon`
+            // whose `at` is a `covering` arm (targeting.md, "Sites").
+            let covering = matches!(at, Place::Covering(_));
             let mut rows: Vec<Row> = Vec::new();
             let mut mandate = MandateKind::None;
             if let Some(initial) = place.initial.as_ref() {
                 if let Some(settings) = initial.mandate.as_ref() {
-                    let row = compile_settings_row(settings, names)?;
+                    let row = compile_settings_row(settings, names, covering)?;
                     if let Row::Settings { kind, fields, .. } = &row {
                         mandate = kind.unwrap_or(MandateKind::None);
                         // Choosing the mandate type is free at place_beacon
@@ -892,7 +997,11 @@ fn compile_action(step: &gp::v1::Step, names: &Names<'_>) -> Result<Action, Plan
     }
 }
 
-fn compile_row(row: &gp::v1::InterfaceRow, names: &Names<'_>) -> Result<Row, PlanError> {
+fn compile_row(
+    row: &gp::v1::InterfaceRow,
+    names: &Names<'_>,
+    covering: bool,
+) -> Result<Row, PlanError> {
     let inner = row.row.as_ref().ok_or(PlanError::MissingBlock("row"))?;
     match inner {
         gp::v1::interface_row::Row::SetMandate(settings) => {
@@ -900,7 +1009,7 @@ fn compile_row(row: &gp::v1::InterfaceRow, names: &Names<'_>) -> Result<Row, Pla
             Ok(Row::Mandate { kind })
         }
         gp::v1::interface_row::Row::SetMandateSettings(settings) => {
-            compile_settings_row(settings, names)
+            compile_settings_row(settings, names, covering)
         }
         gp::v1::interface_row::Row::SetPriority(priority) => Ok(Row::Priority {
             priority: compile_priority(*priority)?,
@@ -911,11 +1020,11 @@ fn compile_row(row: &gp::v1::InterfaceRow, names: &Names<'_>) -> Result<Row, Pla
                 .target
                 .as_ref()
                 .ok_or(PlanError::MissingBlock("add_build_target.target"))?;
-            let (blueprint, anchor) = compile_build_target(target, names)?;
+            let (blueprint, anchor) = compile_build_target(target, names, covering)?;
             Ok(Row::AddTarget { blueprint, anchor })
         }
         gp::v1::interface_row::Row::RemoveBuildTarget(remove) => Ok(Row::RemoveTarget {
-            anchor: compile_voxel_place(remove.anchor.as_ref(), names)?,
+            anchor: compile_removal(remove.anchor.as_ref(), names)?,
         }),
         gp::v1::interface_row::Row::QueueStructure(_) => Err(PlanError::NotAtThisStage {
             construct: "interface row `queue_structure`",
@@ -950,6 +1059,7 @@ fn compile_priority(priority: i32) -> Result<u8, PlanError> {
 fn compile_settings_row(
     settings: &gp::v1::MandateSettings,
     names: &Names<'_>,
+    covering: bool,
 ) -> Result<Row, PlanError> {
     let mut fields: u32 = 0;
     if settings.roe != 0 {
@@ -958,7 +1068,7 @@ fn compile_settings_row(
     if settings.retreat_hp_pct != 0 {
         fields = fields.saturating_add(1);
     }
-    let mut targets: Vec<(u8, [i32; 3])> = Vec::new();
+    let mut targets: Vec<(u8, Anchor)> = Vec::new();
     let mut protected: Vec<([i32; 3], i32)> = Vec::new();
     let mut probes: Vec<([i32; 3], i32)> = Vec::new();
     let mut scouts: u32 = 0;
@@ -967,7 +1077,7 @@ fn compile_settings_row(
         match mandate {
             gp::v1::mandate_settings::Mandate::Build(build) => {
                 for target in &build.targets {
-                    targets.push(compile_build_target(target, names)?);
+                    targets.push(compile_build_target(target, names, covering)?);
                 }
                 for area in &build.protected_areas {
                     protected.push(compile_area(area, names)?);
@@ -1006,7 +1116,8 @@ fn compile_settings_row(
 fn compile_build_target(
     target: &gp::v1::BuildTarget,
     names: &Names<'_>,
-) -> Result<(u8, [i32; 3]), PlanError> {
+    covering: bool,
+) -> Result<(u8, Anchor), PlanError> {
     let blueprint = match target.blueprint_id.as_str() {
         "generator" => crate::tables::StructureKind::Generator.id(),
         _ => {
@@ -1018,7 +1129,7 @@ fn compile_build_target(
     };
     Ok((
         blueprint,
-        compile_voxel_place(target.anchor.as_ref(), names)?,
+        compile_anchor(target.anchor.as_ref(), names, covering)?,
     ))
 }
 
@@ -1062,25 +1173,176 @@ fn compile_area(area: &gp::v1::Area, names: &Names<'_>) -> Result<([i32; 3], i32
     Ok((centre, half_x.max(half_y)))
 }
 
-/// A `Location` that has to be a fixed voxel.
+/// A Build target's anchor: a fixed voxel, or `on` a vent.
 ///
-/// A Build target's anchor and a removal's anchor are both written into a
-/// beacon's settings and compared against later, so a late-bound selector would
-/// have to resolve at commit time and then be compared against a selector that
-/// resolved somewhere else. Refused rather than resolved: `playbook.proto` says
-/// a removal names its anchor "rather than by an index because a playbook is
-/// sealed before the round runs", and the same argument bars a target whose
-/// place is not fixed either.
-fn compile_voxel_place(
+/// A late-bound **beacon** selector stays refused: a Build target is written
+/// into a beacon's settings and compared against later, so a selector would
+/// have to resolve at commit time and then be compared against one that
+/// resolved somewhere else. `on` is the anchor S1's targeting gives a meaning
+/// to: it binds when its step starts and is keyed by the feature it names
+/// (`docs/design/targeting.md`, "Sites").
+fn compile_anchor(
     place: Option<&gp::v1::Location>,
     names: &Names<'_>,
-) -> Result<[i32; 3], PlanError> {
-    match compile_place(place, names)? {
-        Place::Voxel(at) => Ok(at),
-        Place::Beacon(_) => Err(PlanError::NotAtThisStage {
-            construct: "a Build target anchored on a selector rather than on a voxel",
-            stage: "S3 (the full selector work, where a pinned anchor gets a meaning)",
-        }),
+    covering: bool,
+) -> Result<Anchor, PlanError> {
+    let location = place.ok_or(PlanError::MissingBlock("location"))?;
+    match location.place.as_ref() {
+        Some(gp::v1::location::Place::Voxel(voxel)) => {
+            names.voxel(voxel)?;
+            Ok(Anchor::Voxel([voxel.x, voxel.y, voxel.z]))
+        }
+        Some(gp::v1::location::Place::On(reference)) => Ok(Anchor::On(compile_feature_ref(
+            reference,
+            FeatureSite::On { covering },
+        )?)),
+        Some(gp::v1::location::Place::BeaconAnchor(_) | gp::v1::location::Place::Safest(_)) => {
+            Err(PlanError::NotAtThisStage {
+                construct: "a Build target anchored on a beacon selector rather than on a voxel or `on` a vent",
+                stage: "S3 (the full selector work, where a pinned anchor gets a meaning)",
+            })
+        }
+        Some(gp::v1::location::Place::Covering(_)) => Err(PlanError::MisplacedTarget(
+            "`covering` is legal only in a `place_beacon`'s `at`; a Build target stands `on` a vent",
+        )),
+        None => Err(PlanError::MissingBlock("location.place")),
+    }
+}
+
+/// What a `remove_build_target` names: a fixed voxel, or `on {feature_id}`
+/// for a target keyed by its feature. A description there is refused: a
+/// removal names a target, and only a name is stable across a Lull
+/// (targeting.md, "Sites").
+fn compile_removal(
+    place: Option<&gp::v1::Location>,
+    names: &Names<'_>,
+) -> Result<Removal, PlanError> {
+    let location = place.ok_or(PlanError::MissingBlock("location"))?;
+    match location.place.as_ref() {
+        Some(gp::v1::location::Place::Voxel(voxel)) => {
+            names.voxel(voxel)?;
+            Ok(Removal::Voxel([voxel.x, voxel.y, voxel.z]))
+        }
+        Some(gp::v1::location::Place::On(reference)) => match reference.r#ref.as_ref() {
+            Some(gp::v1::feature_ref::Ref::FeatureId(id)) => {
+                let (kind, anchor) = crate::features::parse_feature_name(id)
+                    .ok_or_else(|| PlanError::UnknownFeature(id.clone()))?;
+                Ok(Removal::Feature { kind, anchor })
+            }
+            Some(_) => Err(PlanError::MisplacedTarget(
+                "a `remove_build_target` names its target `on {feature_id}`, never by a description",
+            )),
+            None => Err(PlanError::MissingBlock("on.ref")),
+        },
+        Some(gp::v1::location::Place::BeaconAnchor(_) | gp::v1::location::Place::Safest(_)) => {
+            Err(PlanError::NotAtThisStage {
+                construct: "a Build target anchored on a beacon selector rather than on a voxel or `on` a vent",
+                stage: "S3 (the full selector work, where a pinned anchor gets a meaning)",
+            })
+        }
+        Some(gp::v1::location::Place::Covering(_)) => Err(PlanError::MisplacedTarget(
+            "`covering` is legal only in a `place_beacon`'s `at`",
+        )),
+        None => Err(PlanError::MissingBlock("location.place")),
+    }
+}
+
+/// Where a `FeatureRef` is written, which decides what it may say.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum FeatureSite {
+    /// `place_beacon.at`'s `covering`.
+    Covering,
+    /// A Build target's `on`; `covering` says whether it is in the initial
+    /// settings of a `place_beacon` whose `at` is a `covering` arm, the one
+    /// place `covered {}` is legal.
+    On {
+        /// Inside a `covering` placement's initial settings.
+        covering: bool,
+    },
+}
+
+/// One `gp.v1.FeatureRef`, compiled for the site it is written at
+/// (`docs/design/targeting.md`, "Descriptions" and "Sites").
+///
+/// The rank must be `NEAREST`, the one rank S1 has; an unset one is an error,
+/// never read as `NEAREST`. Under `covering` a coverage filter is required
+/// (`ANY` or `UNCOVERED`); under `on` it must be omitted, `on` ranks only
+/// vents, and `covered {}` is legal only in a `covering` placement's initial
+/// settings.
+fn compile_feature_ref(
+    reference: &gp::v1::FeatureRef,
+    site: FeatureSite,
+) -> Result<FeatureSpec, PlanError> {
+    let pick = |kind: FeatureKind, rank: i32, coverage: i32| -> Result<FeatureSpec, PlanError> {
+        match gp::v1::feature_ref::Rank::try_from(rank) {
+            Ok(gp::v1::feature_ref::Rank::Nearest) => {}
+            Ok(gp::v1::feature_ref::Rank::Unspecified) => {
+                return Err(PlanError::UnsetEnum("feature_ref.rank"));
+            }
+            Err(_) => {
+                return Err(PlanError::UnknownEnum {
+                    field: "feature_ref.rank",
+                    value: rank,
+                });
+            }
+        }
+        let coverage = gp::v1::feature_ref::Coverage::try_from(coverage).map_err(|_| {
+            PlanError::UnknownEnum {
+                field: "feature_ref.coverage",
+                value: coverage,
+            }
+        })?;
+        match site {
+            FeatureSite::Covering => {
+                let uncovered = match coverage {
+                    gp::v1::feature_ref::Coverage::Unspecified => {
+                        return Err(PlanError::UnsetEnum("covering.coverage"));
+                    }
+                    gp::v1::feature_ref::Coverage::Any => false,
+                    gp::v1::feature_ref::Coverage::Uncovered => true,
+                };
+                Ok(FeatureSpec::Nearest { kind, uncovered })
+            }
+            FeatureSite::On { .. } => {
+                if coverage != gp::v1::feature_ref::Coverage::Unspecified {
+                    return Err(PlanError::MisplacedTarget(
+                        "`on` takes no `coverage`: it ranks the free vents inside the beacon's sphere",
+                    ));
+                }
+                if kind != FeatureKind::Vent {
+                    return Err(PlanError::MisplacedTarget(
+                        "`on` ranks only vents: a Generator stands on a vent",
+                    ));
+                }
+                Ok(FeatureSpec::Nearest {
+                    kind,
+                    uncovered: false,
+                })
+            }
+        }
+    };
+    match reference.r#ref.as_ref() {
+        Some(gp::v1::feature_ref::Ref::FeatureId(id)) => {
+            let (kind, anchor) = crate::features::parse_feature_name(id)
+                .ok_or_else(|| PlanError::UnknownFeature(id.clone()))?;
+            Ok(FeatureSpec::Name { kind, anchor })
+        }
+        Some(gp::v1::feature_ref::Ref::Vent(vent)) => {
+            pick(FeatureKind::Vent, vent.rank, vent.coverage)
+        }
+        Some(gp::v1::feature_ref::Ref::Seam(seam)) => {
+            pick(FeatureKind::Seam, seam.rank, seam.coverage)
+        }
+        Some(gp::v1::feature_ref::Ref::Covered(_)) => match site {
+            FeatureSite::On { covering: true } => Ok(FeatureSpec::Covered),
+            FeatureSite::On { covering: false } | FeatureSite::Covering => {
+                Err(PlanError::MisplacedTarget(
+                    "`covered {}` is legal only under `on`, in the initial settings of a \
+                     `place_beacon` whose `at` is a `covering` arm",
+                ))
+            }
+        },
+        None => Err(PlanError::MissingBlock("feature_ref.ref")),
     }
 }
 
@@ -1159,7 +1421,24 @@ fn mandate_of(settings: &gp::v1::MandateSettings) -> Option<MandateKind> {
     }
 }
 
-fn compile_place(place: Option<&gp::v1::Location>, names: &Names<'_>) -> Result<Place, PlanError> {
+/// A place a walk or a fallback names: a voxel or a beacon. Targeting's sites
+/// are refused here, each pointing at the one place it is legal.
+fn compile_route_place(
+    place: Option<&gp::v1::Location>,
+    names: &Names<'_>,
+) -> Result<Place, PlanError> {
+    compile_place(place, names, false)
+}
+
+/// A place: a voxel, a beacon, or -- where `covering` is legal, a
+/// `place_beacon`'s `at` -- a site covering a feature
+/// (`docs/design/targeting.md`, "Sites"). `on` is never a place: it is a Build
+/// target's anchor ([`compile_anchor`]).
+fn compile_place(
+    place: Option<&gp::v1::Location>,
+    names: &Names<'_>,
+    placing: bool,
+) -> Result<Place, PlanError> {
     let location = place.ok_or(PlanError::MissingBlock("location"))?;
     match location.place.as_ref() {
         Some(gp::v1::location::Place::Voxel(voxel)) => {
@@ -1170,20 +1449,21 @@ fn compile_place(place: Option<&gp::v1::Location>, names: &Names<'_>) -> Result<
             Ok(Place::Beacon(compile_beacon_ref(Some(reference), names)?))
         }
         Some(gp::v1::location::Place::Safest(_)) => Ok(Place::Beacon(BeaconSpec::Safest)),
-        // Targeting's two sites (docs/design/targeting.md, "Sites"): in the
-        // vocabulary from S1's targeting proto, and refused until the
-        // behaviour pull request gives them an effect -- the resolver, the
-        // spiral and the `on` rules. Refused, never read as a voxel or a
-        // beacon (AGENTS.md section 12). `covered {}` is legal only under
-        // `on`, so the `on` refusal covers it.
-        Some(gp::v1::location::Place::On(_)) => Err(PlanError::NotAtThisStage {
-            construct: "site `on`",
-            stage: "targeting's behaviour lands later in S1",
-        }),
-        Some(gp::v1::location::Place::Covering(_)) => Err(PlanError::NotAtThisStage {
-            construct: "site `covering`",
-            stage: "targeting's behaviour lands later in S1",
-        }),
+        Some(gp::v1::location::Place::Covering(reference)) => {
+            if placing {
+                Ok(Place::Covering(compile_feature_ref(
+                    reference,
+                    FeatureSite::Covering,
+                )?))
+            } else {
+                Err(PlanError::MisplacedTarget(
+                    "`covering` is legal only in a `place_beacon`'s `at`",
+                ))
+            }
+        }
+        Some(gp::v1::location::Place::On(_)) => Err(PlanError::MisplacedTarget(
+            "`on` is legal only as a Build target's anchor (and, by name, a removal's)",
+        )),
         None => Err(PlanError::MissingBlock("location.place")),
     }
 }
@@ -1194,9 +1474,11 @@ fn compile_beacon_ref(
 ) -> Result<BeaconSpec, PlanError> {
     let beacon = reference.ok_or(PlanError::MissingBlock("beacon"))?;
     match beacon.r#ref.as_ref() {
-        Some(gp::v1::beacon_ref::Ref::BeaconId(id)) => Ok(BeaconSpec::Id(
-            parse_beacon_id(id).ok_or_else(|| PlanError::UnknownBeacon(id.clone()))?,
-        )),
+        Some(gp::v1::beacon_ref::Ref::BeaconId(id)) => match crate::tables::parse_beacon_name(id) {
+            Some(crate::tables::BeaconName::Own(ordinal)) => Ok(BeaconSpec::Own(ordinal)),
+            Some(crate::tables::BeaconName::Foreign(handle)) => Ok(BeaconSpec::Foreign(handle)),
+            None => Err(PlanError::UnknownBeacon(id.clone())),
+        },
         Some(gp::v1::beacon_ref::Ref::Safest(_)) => Ok(BeaconSpec::Safest),
         Some(gp::v1::beacon_ref::Ref::Nearest(nearest)) => Ok(BeaconSpec::Nearest(compile_filter(
             nearest.filter.as_ref(),
@@ -1222,9 +1504,9 @@ fn compile_beacon_ref(
 ///
 /// # Errors
 ///
-/// As [`Plan::compile`] refuses the same reference: an unknown `b_NN`
-/// spelling, a construct that is not at this stage (`most_threatened`, an
-/// enemy or tag filter), or an unset one.
+/// As [`Plan::compile`] refuses the same reference: a `beacon_id` that is
+/// neither a `b_NN` nor an `e_NN`, a construct that is not at this stage
+/// (`most_threatened`, an enemy or tag filter), or an unset one.
 pub fn beacon_spec_of(
     reference: &gp::v1::BeaconRef,
     rules: &RulesTable,
@@ -1235,19 +1517,6 @@ pub fn beacon_spec_of(
         extent: rules.map_size_voxels(),
     };
     compile_beacon_ref(Some(reference), &names)
-}
-
-/// `b_NN` to a beacon id.
-///
-/// The spelling is [`BeaconId::playbook_id`]'s, and it is a contract between
-/// three crates: the gateway builds the list, the verifier resolves against it,
-/// and this parses it back.
-fn parse_beacon_id(text: &str) -> Option<BeaconId> {
-    let digits = text.strip_prefix("b_")?;
-    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
-        return None;
-    }
-    digits.parse::<u32>().ok().map(BeaconId::new)
 }
 
 fn compile_filter(filter: Option<&gp::v1::BeaconFilter>) -> Result<Filter, PlanError> {
@@ -1359,7 +1628,7 @@ fn compile_handler(
 fn compile_fallback(fallback: &gp::v1::Fallback, names: &Names<'_>) -> Result<Posture, PlanError> {
     match fallback.posture.as_ref() {
         Some(gp::v1::fallback::Posture::Hold(hold)) => {
-            Ok(Posture::Hold(compile_place(hold.at.as_ref(), names)?))
+            Ok(Posture::Hold(compile_route_place(hold.at.as_ref(), names)?))
         }
         Some(gp::v1::fallback::Posture::Shadow(shadow)) => Ok(Posture::Shadow(compile_beacon_ref(
             shadow.beacon.as_ref(),
@@ -1371,7 +1640,7 @@ fn compile_fallback(fallback: &gp::v1::Fallback, names: &Names<'_>) -> Result<Po
             }
             let mut waypoints: Vec<Place> = Vec::with_capacity(patrol.waypoints.len());
             for waypoint in &patrol.waypoints {
-                waypoints.push(compile_place(Some(waypoint), names)?);
+                waypoints.push(compile_route_place(Some(waypoint), names)?);
             }
             Ok(Posture::Patrol(waypoints))
         }
@@ -1542,8 +1811,19 @@ pub enum PlanError {
     UnknownLabel(String),
     /// A handler id names no handler in this playbook.
     UnknownHandler(String),
-    /// A `beacon_id` is not of the `b_NN` form the three crates agree on.
+    /// A `beacon_id` is neither a `b_NN` nor an `e_NN`, the two forms the
+    /// three crates agree on ([`crate::tables::parse_beacon_name`]).
     UnknownBeacon(String),
+    /// A `feature_id` is not a `vent_<x>_<y>` or a `seam_<x>_<y>`
+    /// ([`crate::features::parse_feature_name`]).
+    UnknownFeature(String),
+    /// A targeting construct written where it is not legal: `covering`
+    /// outside a `place_beacon`'s `at`, `on` outside a Build target's anchor,
+    /// a coverage filter or a seam under `on`, `covered {}` outside a
+    /// `covering` placement's initial settings, or a description in a removal
+    /// (`docs/design/targeting.md`, "Sites"). The verifier says the same with a
+    /// code and a JSON Pointer; this is the sim's own door.
+    MisplacedTarget(&'static str),
     /// A handler's cooldown is below `verifier.handler_cooldown_min_ms`.
     CooldownTooShort {
         /// What the playbook said.
@@ -1593,12 +1873,18 @@ pub enum PlanError {
     /// |---|---|
     /// | `queue_structure` | S4 (capability licences) |
     /// | a Build target naming a blueprint other than `generator` | S4 |
-    /// | a Build target anchored on a selector rather than on a voxel | S3 |
+    /// | a Build target (or a removal) anchored on a beacon selector rather than on a voxel or `on` a vent | S3 |
     /// | Defend and Attack mandate settings | S2 |
     /// | selector `most_threatened` | S2 |
     /// | selector filter `side: ENEMY_KNOWN` | S3 |
     /// | selector filter `tags` | S3 |
     /// | predicate `beacon_under_attack` | S2 |
+    ///
+    /// Targeting's `on` and `covering`, refused here until S1's targeting
+    /// behaviour landed (S1's plan, task `con2`), now have their effect and
+    /// are no longer on the list (task `tgt`; decisions-log item 130 (4)). A
+    /// targeting construct written where it is not legal is a
+    /// [`PlanError::MisplacedTarget`], not a stage.
     NotAtThisStage {
         /// What was written.
         construct: &'static str,
@@ -1645,8 +1931,16 @@ impl core::fmt::Display for PlanError {
                 write!(f, "`{label}` names no step in this playbook's route")
             }
             PlanError::UnknownHandler(id) => write!(f, "`{id}` names no handler in this playbook"),
+            PlanError::UnknownFeature(id) => write!(
+                f,
+                "`{id}` is not a feature name of the `vent_<x>_<y>` or `seam_<x>_<y>` form"
+            ),
+            PlanError::MisplacedTarget(why) => write!(f, "{why}"),
             PlanError::UnknownBeacon(id) => {
-                write!(f, "`{id}` is not a beacon reference of the `b_NN` form")
+                write!(
+                    f,
+                    "`{id}` is not a beacon reference of the `b_NN` or `e_NN` form"
+                )
             }
             PlanError::CooldownTooShort { found, least } => write!(
                 f,

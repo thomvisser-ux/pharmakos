@@ -34,7 +34,7 @@
 use pharmakos_proto::gp::v1::Voxel;
 use pharmakos_proto::json::{Json, base64};
 use pharmakos_sim::math::quantity::Hp;
-use pharmakos_sim::tables::{BeaconId, SeatId, StructureKind, UnitKind};
+use pharmakos_sim::tables::{SeatId, StructureKind, UnitKind};
 use pharmakos_sim::world::World;
 
 use crate::error::Error;
@@ -235,14 +235,10 @@ fn visible_entities<V: Vision>(
         if !filter.visible(viewer, &world_at(owner, at)) {
             continue;
         }
-        let id = beacons.ids().get(row).copied().unwrap_or_default();
-        out.push(entity(
-            &view::beacon_id(BeaconId::new(id)),
-            "BEACON",
-            "",
-            owner,
-            at,
-        ));
+        // The viewer's own name for it: a seat's own `b_NN`, anybody else's
+        // `e_NN` (decisions-log item 127 (13)).
+        let name = views.beacon_name(viewer, world, row);
+        out.push(entity(&name, "BEACON", "", owner, at));
     }
 
     let units = world.units();

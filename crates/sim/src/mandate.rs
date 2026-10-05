@@ -243,7 +243,17 @@ fn drones_homed(world: &World, beacon: BeaconId, kind: UnitKind) -> u32 {
     total
 }
 
-/// The first Build target of `beacon` nothing has been paid for yet.
+/// The first Build target of `beacon` nothing has been paid for yet and that
+/// can still be built.
+///
+/// Two kinds of unpaid target are passed over (`docs/design/targeting.md`):
+///
+/// * one whose column a live structure of **any** seat already stands on --
+///   one structure per voxel, so the first seat to build wins and the other's
+///   target fails, which here means it is never paid for;
+/// * one bound to a feature that is **lost** -- a name idles when its target
+///   is lost, and a held description that found nothing to read again idles
+///   with it ([`World`]'s re-read runs first, on the same tick).
 #[must_use]
 pub(crate) fn next_unpaid_target(world: &World, beacon: BeaconId) -> Option<usize> {
     let targets = world.targets();
@@ -253,12 +263,33 @@ pub(crate) fn next_unpaid_target(world: &World, beacon: BeaconId) -> Option<usiz
         if targets.beacons().get(row).copied() == Some(beacon.raw())
             && targets.kinds().get(row).copied() == Some(TargetKind::Build.id())
             && targets.built().get(row).copied() == Some(BeaconId::NONE.raw())
+            && buildable(world, row)
         {
             return Some(row);
         }
         row = row.saturating_add(1);
     }
     None
+}
+
+/// Whether the Build target at `row` can still be built: nothing stands on its
+/// column, and the feature it is bound to, if any, is not lost.
+fn buildable(world: &World, row: usize) -> bool {
+    let targets = world.targets();
+    let Some(anchor) = targets.anchors().get(row).copied() else {
+        return false;
+    };
+    let [x, y] = crate::targeting::column_of(anchor);
+    if world.ground().structure_on(x, y) {
+        return false;
+    }
+    let feature = targets
+        .features()
+        .get(row)
+        .copied()
+        .unwrap_or(crate::targeting::NO_FEATURE);
+    feature == crate::targeting::NO_FEATURE
+        || world.feature_is_live(usize::try_from(feature).unwrap_or(usize::MAX))
 }
 
 /// The first Build target of `beacon` that has a structure and is not finished.
@@ -316,7 +347,9 @@ fn building_work(world: &World, beacon: BeaconId) -> u32 {
                 .copied()
                 .unwrap_or(BeaconId::NONE.raw());
             if built == BeaconId::NONE.raw() {
-                work = work.saturating_add(1);
+                if buildable(world, row) {
+                    work = work.saturating_add(1);
+                }
             } else {
                 let at = usize::try_from(built).unwrap_or(usize::MAX);
                 if world.structures().building().get(at).copied() == Some(true) {

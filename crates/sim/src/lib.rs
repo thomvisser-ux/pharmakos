@@ -78,6 +78,7 @@ pub mod credit;
 pub mod economy;
 pub mod encoding;
 pub mod events;
+pub mod features;
 pub mod interpreter;
 pub mod knowledge;
 pub mod mandate;
@@ -93,6 +94,7 @@ pub mod sight;
 pub mod snapshot;
 pub mod survey;
 pub mod tables;
+pub mod targeting;
 pub mod voxels;
 pub mod world;
 
@@ -164,6 +166,21 @@ pub const DETERMINISM_UNITS_PER_SEAT: u32 = 50;
 /// 180 s first round compared across the three operating systems) as that
 /// full-segment chain, so the raise is not what T10's line waits on.
 pub const DETERMINISM_SEGMENT_LENGTHS_MS: [i32; 2] = [20_000, 15_000];
+
+/// PLACEHOLDER (harness): how far east of its core, in whole voxels, each
+/// seat's harness deploy stands.
+///
+/// S1's no-stacking rule makes the harness's old site -- the `safest` beacon's
+/// own anchor, the core it had just walked to -- `illegal_site`
+/// (`docs/design/targeting.md`, "Companion changes"), so the deploy moved to a
+/// legal site: three voxels east of the seat's core, inside the core's sphere,
+/// within the interface range of the core itself so the walk in is nothing,
+/// and never on the core's column. Short enough that the deploy still lands
+/// inside the harness's 20-second first segment and inside
+/// `tests/allocations.rs`'s counted window. It goes with S1-26's real
+/// determinism segment (owner, at S1, the `tune` lane), when the harness
+/// playbook is replaced by a committed template's instantiation.
+pub const DETERMINISM_SITE_OFFSET_VOXELS: i32 = 3;
 
 /// Find `rules/rules.v1.json` from wherever the caller happens to stand.
 ///
@@ -237,7 +254,6 @@ impl From<PlanError> for WorldError {
 /// cannot describe a map, or cannot compile [`determinism_playbook`].
 pub fn determinism_world(rules_path: &std::path::Path) -> Result<World, WorldError> {
     let rules = RulesTable::load(rules_path)?;
-    let plan = interpreter::Plan::compile(&determinism_playbook(), &rules)?;
     let mut world = World::new(&WorldConfig {
         match_seed: DETERMINISM_MATCH_SEED,
         seats: DETERMINISM_SEATS,
@@ -248,26 +264,84 @@ pub fn determinism_world(rules_path: &std::path::Path) -> Result<World, WorldErr
             round_limit: DEFAULT_ROUND_LIMIT,
         },
     })?;
-    let mut seat: u32 = 0;
-    while seat < DETERMINISM_SEATS {
-        let id = tables::SeatId::new(u8::try_from(seat).unwrap_or(u8::MAX));
-        world.seal_playbook(id, plan.clone());
-        seat = seat.saturating_add(1);
-    }
+    // How many seats sealed is the tests' to assert (`tests/determinism.rs`,
+    // `tests/allocations.rs`); the loop seals exactly the world's own seats.
+    let _sealed = seal_determinism_playbooks(&mut world)?;
     Ok(world)
 }
 
-/// PLACEHOLDER (harness): the playbook every seat seals in the determinism run.
+/// Seal every seat's harness playbook ([`determinism_playbook`]) into `world`,
+/// each deploying at its own seat's harness site ([`determinism_site`]).
+///
+/// The one sealing path the determinism binary, `tests/determinism.rs` and
+/// `tests/allocations.rs` all share, so the chain they produce is one run.
+///
+/// Answers how many seats took their seal ([`World::seal_playbook`] refuses a
+/// seat the world does not have), so a caller asserts that every seat sealed
+/// rather than inferring it from the interpreter's length, which counts seats
+/// whether or not anything was sealed for them.
+///
+/// # Errors
+///
+/// Returns [`PlanError`] when this build cannot compile the harness playbook.
+pub fn seal_determinism_playbooks(world: &mut World) -> Result<u32, PlanError> {
+    let seats = world.seats().len();
+    let mut seat: u32 = 0;
+    let mut sealed: u32 = 0;
+    while seat < seats {
+        let id = tables::SeatId::new(u8::try_from(seat).unwrap_or(u8::MAX));
+        let plan = interpreter::Plan::compile(
+            &determinism_playbook(determinism_site(world, id)),
+            world.rules(),
+        )?;
+        if world.seal_playbook(id, plan) {
+            sealed = sealed.saturating_add(1);
+        }
+        seat = seat.saturating_add(1);
+    }
+    Ok(sealed)
+}
+
+/// Where `seat`'s harness deploy stands: [`DETERMINISM_SITE_OFFSET_VOXELS`]
+/// east of its core, at the core's height (the interpreter stands a voxel site
+/// on the ground under it). A seat with no core -- the harness's fourth seat,
+/// seated but unplaced on a three-zone map -- gets the map's origin, which it
+/// never walks to because it has no commander.
+#[must_use]
+pub fn determinism_site(world: &World, seat: tables::SeatId) -> [i32; 3] {
+    let beacons = world.beacons();
+    let Some(core) = beacons.row_of_ordinal(seat, 0) else {
+        return [0, 0, 0];
+    };
+    let at = beacons
+        .positions()
+        .get(core)
+        .copied()
+        .unwrap_or([math::fixed::Fx::ZERO; 3]);
+    let axis = |index: usize| at.get(index).map_or(0, |value| value.floor_voxels());
+    [
+        axis(0).saturating_add(DETERMINISM_SITE_OFFSET_VOXELS),
+        axis(1),
+        axis(2),
+    ]
+}
+
+/// PLACEHOLDER (harness): the playbook every seat seals in the determinism run,
+/// deploying at `site`.
 ///
 /// It is a *harness* playbook, not a game one, and it is written in code rather
 /// than read from a file for the reason the harness's seeds are constants: the
 /// determinism binary must produce its chain from nothing but the rules table.
 /// What it is for is coverage — the chain has to run the interpreter's state
 /// through its shapes, so the harness plays a route that uses a **late-bound
-/// selector**, a **visit with a committed row**, a **hold**, a **wait on a
-/// clock predicate** and a **handler with a cooldown and a fire limit**, and
-/// then falls through to its guaranteed tail. Every place is a selector rather
-/// than a voxel, so the same file is legal for every seat on every spawn.
+/// selector**, a **deploy**, a **visit with a committed row**, a **hold**, a
+/// **wait on a clock predicate**, a **`covering` site** (S1's resolver, its
+/// "nearest" estimates and its spiral, inside the tick) and a **handler with a
+/// cooldown and a fire limit**, and then falls through to its guaranteed
+/// tail. Every place but the deploy's is a selector or a description; the
+/// deploy's is the seat's own [`determinism_site`], because S1's no-stacking
+/// rule refuses the selector it used to name (`safest`, a beacon's own
+/// column), and that is the one thing the file now varies by seat.
 ///
 /// It is deliberately *not* `examples/playbooks/expand_east.jsonc`: that file
 /// names voxels in one seat's corner of one map, and the harness runs four
@@ -278,7 +352,7 @@ pub fn determinism_world(rules_path: &std::path::Path) -> Result<World, WorldErr
 /// covers a real playbook (owner, at S1, with `DETERMINISM_SEGMENT_LENGTHS_MS`;
 /// decisions-log item 116 (6)(e)).
 #[must_use]
-pub fn determinism_playbook() -> gp::v1::Playbook {
+pub fn determinism_playbook(site: [i32; 3]) -> gp::v1::Playbook {
     use gp::v1::{
         Declarative, Fallback, FallbackHold, Meta, OnDeath, Playbook, SchemaVersion, meta,
         on_death, playbook,
@@ -293,7 +367,7 @@ pub fn determinism_playbook() -> gp::v1::Playbook {
         }),
         kind: i32::from(playbook::Kind::Playbook),
         declarative: Some(Declarative {
-            route: harness_route(),
+            route: harness_route(site),
             handlers: harness_handlers(),
             options: None,
         }),
@@ -334,12 +408,18 @@ fn skip_on_fail() -> gp::v1::OnFail {
     }
 }
 
-/// The harness playbook's route: a walk to a selector, a visit with a committed
-/// row, a hold and a wait on a clock predicate.
-fn harness_route() -> Vec<gp::v1::Step> {
+/// The harness playbook's route: a walk to a selector, a deploy at `site`, a
+/// visit with a committed row, a hold, a wait on a clock predicate and a
+/// `covering` placement that resolves and walks until the segment ends.
+#[allow(
+    clippy::too_many_lines,
+    reason = "one block per route step of the harness playbook, each a proto literal; splitting it would scatter one route across six functions"
+)]
+fn harness_route(site: [i32; 3]) -> Vec<gp::v1::Step> {
     use gp::v1::{
-        Condition, HoldStep, IntCompare, InterfaceRow, InterfaceStep, MoveStep, SegmentElapsed,
-        Step, WaitUntilStep, condition, int_compare, interface_row, move_step, step,
+        Condition, FeatureRef, HoldStep, IntCompare, InterfaceRow, InterfaceStep, MoveStep,
+        SegmentElapsed, Step, VentPick, WaitUntilStep, condition, feature_ref, int_compare,
+        interface_row, location, move_step, step,
     };
     vec![
         Step {
@@ -356,16 +436,22 @@ fn harness_route() -> Vec<gp::v1::Step> {
         // why it is in the harness playbook: `BeaconTable::reserve` is what
         // keeps that row from being an allocation (G3′ §9.17), and
         // `tests/allocations.rs` can only assert it over a deploy it actually
-        // performs. The site is the `safest` selector, like every other place
-        // here, so the same file is legal for every seat on every spawn — the
-        // commander has just walked to that beacon, so the site is inside its
-        // own sphere and within placement range.
+        // performs. The site is the seat's own harness site, three voxels
+        // from the core the commander has just walked to: inside its sphere,
+        // within interface range, and -- since S1's no-stacking rule -- not
+        // on the core's own column, which the `safest` selector named before.
         Step {
             label: "deploy".to_owned(),
             timeout_ms: 30_000,
             on_fail: Some(skip_on_fail()),
             kind: Some(step::Kind::PlaceBeacon(gp::v1::PlaceBeaconStep {
-                at: Some(safest_place()),
+                at: Some(gp::v1::Location {
+                    place: Some(location::Place::Voxel(gp::v1::Voxel {
+                        x: site.first().copied().unwrap_or(0),
+                        y: site.get(1).copied().unwrap_or(0),
+                        z: site.get(2).copied().unwrap_or(0),
+                    })),
+                }),
                 tags: Vec::new(),
                 // A writ and no settings: choosing the mandate type is free at
                 // deploy time (spec section 5), so this costs the deploy and
@@ -415,6 +501,32 @@ fn harness_route() -> Vec<gp::v1::Step> {
                         }),
                     })),
                 }),
+            })),
+            ..Step::default()
+        },
+        // S1's targeting inside the tick: the resolver ranks the uncovered
+        // vents by the estimator's travel and walks the `covering` spiral, and
+        // the commander walks toward the site it chose. In the committed
+        // 1 200-tick chain the step starts at ticks 646 and 946 and the
+        // segment ends (700, 1 000) before its five seconds are spent, so it
+        // neither deploys nor times out -- what the chain needs is the
+        // resolution and the walk, not another beacon. The timeout bounds
+        // a longer run.
+        Step {
+            label: "reach".to_owned(),
+            timeout_ms: 5_000,
+            on_fail: Some(skip_on_fail()),
+            kind: Some(step::Kind::PlaceBeacon(gp::v1::PlaceBeaconStep {
+                at: Some(gp::v1::Location {
+                    place: Some(location::Place::Covering(FeatureRef {
+                        r#ref: Some(feature_ref::Ref::Vent(VentPick {
+                            rank: i32::from(feature_ref::Rank::Nearest),
+                            coverage: i32::from(feature_ref::Coverage::Uncovered),
+                        })),
+                    })),
+                }),
+                tags: Vec::new(),
+                initial: None,
             })),
             ..Step::default()
         },

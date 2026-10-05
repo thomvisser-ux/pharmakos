@@ -1,0 +1,64 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// S1's targeting (the `tgt` lane; docs/design/targeting.md, "What the map means
+// for it"): a carried "cover the nearest vent" on the golden seed.
+//
+//   seat 0  seals scenarios/s1/cover-nearest-vent.playbook.jsonc, one step: a
+//           `place_beacon` covering the nearest vent it does not yet cover,
+//           with a Generator `on` the vent it covered. In round 1 the resolver
+//           ranks the uncovered vents by the estimator's travel from the
+//           commander's column, takes `vent_324_16`, and walks the covering
+//           spiral to the first legal, reachable column whose sphere holds the
+//           vent; the commander walks there, deploys (the beacon lands at tick
+//           721) and the Generator is paid for at tick 766. Rounds 2 and 3 read
+//           the same description again: the vents seat 0 does not cover are
+//           contested ones about 80 voxels out, beyond one beacon's reach, so
+//           the description matches and no candidate has a legal site -- the
+//           step fails as it starts, with `illegal_site` (failure id 6), and the
+//           fallback holds;
+//   seat 1  seals nothing, so the gateway files the safe playbook for it.
+//
+// `event_fired` has no value predicate (register M-05), so the failure's id is
+// pinned by the chain and by crates/sim/tests/targeting.rs's
+// `a_carried_covering_step_has_no_legal_site_after_round_one_on_the_golden_seed`,
+// which reads it. The verifier accepts `covering` and `on` since its
+// targeting lane (`tgtv`), so this file seals through `submit_plan` like any
+// client's.
+{
+  "format": "pharmakos.scenario.v1",
+  "name": "cover-nearest-vent",
+  "summary": "Seat 0 carries one step, a beacon covering the nearest vent it does not cover with a Generator on it: round 1 covers its starting vent and builds on it, and rounds 2 and 3 find no vent within reach and fail the step as it starts. Seat 1 holds on its safe playbook.",
+
+  "map": {
+    "seed": "0x00000000ca5caded",
+    "generator": "skeleton"
+  },
+
+  "rules": "rules/rules.v1.json",
+
+  "seats": [
+    { "seat": 0, "kind": "playbook", "playbook": "scenarios/s1/cover-nearest-vent.playbook.jsonc" },
+    { "seat": 1, "kind": "safe" }
+  ],
+
+  "segments": [
+    { "index": 0, "length_ms": 180000, "note": "Round 1: the walk to the covering site, the twelve-second deploy, the Generator." },
+    { "index": 1, "length_ms": 180000, "note": "Round 2: the carried description, read again, finds no vent within reach." },
+    { "index": 2, "length_ms": 180000, "note": "Round 3: the same." }
+  ],
+
+  "assertions": [
+    { "assert": "event_fired", "event": "beacon_placed", "seat": 0, "by_tick": 800,
+      "note": "The covering beacon lands at tick 721, after a walk of about 24 voxels and the twelve-second deploy." },
+    { "assert": "event_fired", "event": "structure_queued", "seat": 0, "by_tick": 800,
+      "note": "The Generator `on` the covered vent is paid for at tick 766, at the vent's anchor column." },
+    { "assert": "event_fired", "event": "step_failed", "seat": 0, "by_tick": 3601,
+      "note": "Seat 0's first failure is round 2's, at its first tick: the carried step finds no vent it can cover and fails `illegal_site` (id 6), the failure table's answer when candidates match and none has a legal site. Round 1 fails nothing." },
+    { "assert": "event_fired", "event": "segment_ended", "by_tick": 10800,
+      "note": "Three rounds of 3 600 ticks." },
+    { "assert": "hash_chain_equals",
+      "golden": "tests/golden/scenarios/cover-nearest-vent/expected.hashes.txt",
+      "note": "Byte-identical on Windows, Linux and macOS. Re-blessed with `cargo xtask golden --bless`, and never to turn a red build green." }
+  ]
+}

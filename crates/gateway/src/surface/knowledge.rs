@@ -41,7 +41,7 @@ use pharmakos_proto::gp::v1::Voxel;
 use pharmakos_proto::json::Json;
 use pharmakos_sim::math::quantity::Ms;
 use pharmakos_sim::runner::MatchEndReason;
-use pharmakos_sim::tables::{BeaconId, SeatId};
+use pharmakos_sim::tables::SeatId;
 
 use crate::detail::{self, Detail};
 use crate::error::Error;
@@ -209,8 +209,12 @@ impl Surface {
     }
 
     /// `list_beacons`: the beacons this seat may see, its own first.
+    ///
+    /// `&mut self` because naming another seat's beacon mints this viewer's
+    /// `e_NN` for it the first time it is shown
+    /// ([`crate::viewfeed::ViewFeed::beacon_name`]); nothing else is written.
     pub(super) fn list_beacons<V: Vision>(
-        &self,
+        &mut self,
         subject: crate::token::Subject,
         held: crate::scopes::ScopeSet,
         request: &Request,
@@ -244,7 +248,7 @@ impl Surface {
             .iter()
             .skip(from)
             .take(limit)
-            .map(|(id, at)| self.beacon_summary(viewer, *id, *at))
+            .map(|(name, row, at)| self.beacon_summary(viewer, name, *row, *at))
             .collect();
         let index = from.min(visible.len()).saturating_add(page.len());
         let next = if index >= visible.len() {
@@ -264,8 +268,13 @@ impl Surface {
     }
 
     /// `get_beacon`: one beacon, if this seat may see it.
+    ///
+    /// A `b_NN` names one of the caller's own beacons by its per-seat
+    /// ordinal, and an `e_NN` the beacon this caller was shown under that
+    /// handle (decisions-log item 127 (13); `docs/design/targeting.md`,
+    /// "Names"). `&mut self` for the reason `list_beacons` is.
     pub(super) fn get_beacon<V: Vision>(
-        &self,
+        &mut self,
         subject: crate::token::Subject,
         held: crate::scopes::ScopeSet,
         request: &Request,
@@ -275,16 +284,20 @@ impl Surface {
         let wanted = request
             .string_param("beacon_id")?
             .ok_or_else(|| Error::invalid("`beacon_id` names a beacon, as in `b_04`"))?;
-        let id = view::beacon_id_from(wanted)
-            .ok_or_else(|| Error::not_found(format!("`{wanted}` is not a beacon id")))?;
+        if pharmakos_sim::tables::parse_beacon_name(wanted).is_none() {
+            return Err(Error::not_found(format!("`{wanted}` is not a beacon id")));
+        }
         let viewer = self.viewer_of(subject, held);
 
-        let host = self.host()?;
-        let beacons = host.world().beacons();
-        let row = beacons
-            .ids()
-            .iter()
-            .position(|held| *held == id.raw())
+        let host = self
+            .host
+            .as_ref()
+            .ok_or_else(|| Error::internal("this gateway is not hosting a match"))?;
+        let world = host.world();
+        let beacons = world.beacons();
+        let row = self
+            .views
+            .beacon_row(viewer, world, wanted)
             // NOT_FOUND, deliberately, and the same refusal a beacon the seat
             // may not see gets below: "a named beacon does not exist, or is not
             // yours" is one answer in the closed set, and two answers would let
@@ -297,7 +310,7 @@ impl Surface {
             .copied()
             .map(view::voxel_of)
             .unwrap_or_default();
-        let filter = FogFilter::new(self.fog_policy(), vision);
+        let filter = FogFilter::new(&self.fog, vision);
         let audience = Audience::World {
             owner: Some(SeatId::new(owner)),
             at,
@@ -305,6 +318,7 @@ impl Surface {
         if !filter.visible(viewer, &audience) {
             return Err(Error::not_found(format!("no beacon `{wanted}` here")));
         }
+        let name = self.views.beacon_name(viewer, world, row);
 
         let hit_points = beacons
             .hit_points()
@@ -315,11 +329,14 @@ impl Surface {
         let mandate = view::mandate_from_id(beacons.mandates().get(row).copied().unwrap_or(0));
         let own = viewer == Viewer::Seat(SeatId::new(owner));
         Ok(Json::Object(vec![
-            (String::from("summary"), self.beacon_summary(viewer, id, at)),
+            (
+                String::from("summary"),
+                self.beacon_summary(viewer, &name, row, at),
+            ),
             (
                 String::from("prose"),
                 Json::String(strings::beacon(
-                    &view::beacon_id(id),
+                    &name,
                     view::mandate_name(mandate),
                     hit_points,
                     own,
@@ -581,9 +598,13 @@ impl Surface {
         };
         let Some(beacon) = resolve_beacon_in(snapshot, host.rules(), seat, spec, origin) else {
             return Err(Error::not_found(match spec {
-                BeaconSpec::Id(id) => format!(
+                BeaconSpec::Own(ordinal) => format!(
                     "{at} names `{}`, which this seat has not",
-                    view::beacon_id(id)
+                    pharmakos_sim::tables::own_beacon_name(ordinal)
+                ),
+                BeaconSpec::Foreign(handle) => format!(
+                    "{at} names `{}`, which is not this seat's to walk to by name",
+                    pharmakos_sim::tables::foreign_beacon_name(handle)
                 ),
                 _ => format!("{at} is a beacon of this seat's, and none answers its selector"),
             }));
@@ -620,9 +641,9 @@ impl Surface {
     /// unset is left out rather than written as a zero a reader would take for
     /// an answer. The rest of spec section 12's beacon detail — mandate, HP,
     /// units by role, tags, a sighting's age — stays `reserved 7 to 15`.
-    fn beacon_summary(&self, viewer: Viewer, id: BeaconId, at: Voxel) -> Json {
+    fn beacon_summary(&self, viewer: Viewer, name: &str, row: usize, at: Voxel) -> Json {
         let mut entries = vec![
-            (String::from("beacon_id"), Json::String(view::beacon_id(id))),
+            (String::from("beacon_id"), Json::String(name.to_owned())),
             (
                 String::from("at"),
                 Json::Object(vec![
@@ -636,9 +657,10 @@ impl Surface {
             return Json::Object(entries);
         };
         let beacons = host.world().beacons();
-        let Some(row) = beacons.ids().iter().position(|held| *held == id.raw()) else {
+        if row >= beacons.ids().len() {
             return Json::Object(entries);
-        };
+        }
+        let id = beacons.ids().get(row).copied().unwrap_or(u32::MAX);
         let owner = beacons.seats().get(row).copied().unwrap_or_default();
         entries.push((
             String::from("owner"),
@@ -647,7 +669,7 @@ impl Surface {
         if viewer != Viewer::Seat(SeatId::new(owner)) {
             return Json::Object(entries);
         }
-        let core = core_beacon_of(host.world(), SeatId::new(owner)) == Some(id.raw());
+        let core = core_beacon_of(host.world(), SeatId::new(owner)) == Some(id);
         let priority = beacons.priorities().get(row).copied().unwrap_or_default();
         let powered = !beacons.dormant().get(row).copied().unwrap_or(false);
         entries.push((String::from("core"), Json::Bool(core)));
@@ -659,14 +681,26 @@ impl Surface {
         Json::Object(entries)
     }
 
-    /// The beacons a viewer may see, own first, then by id.
-    fn visible_beacons<V: Vision>(&self, viewer: Viewer, vision: &V) -> Vec<(BeaconId, Voxel)> {
-        let Ok(host) = self.host() else {
+    /// The beacons a viewer may see, with this viewer's name for each, own
+    /// first by ordinal (`b_00` first), then everybody else's by this viewer's
+    /// handle (`e_01` first).
+    ///
+    /// Another seat's beacons are named in table order the first time they
+    /// are shown together, so the handles a listing mints count up in the
+    /// order a seat's own listing reads; a beacon seen later takes the next
+    /// handle and sorts last, which keeps an earlier page's cursor honest.
+    fn visible_beacons<V: Vision>(
+        &mut self,
+        viewer: Viewer,
+        vision: &V,
+    ) -> Vec<(String, usize, Voxel)> {
+        let Some(host) = self.host.as_ref() else {
             return Vec::new();
         };
-        let beacons = host.world().beacons();
-        let filter = FogFilter::new(self.fog_policy(), vision);
-        let mut found: Vec<(bool, u32, Voxel)> = Vec::new();
+        let world = host.world();
+        let beacons = world.beacons();
+        let filter = FogFilter::new(&self.fog, vision);
+        let mut found: Vec<(bool, usize, Voxel)> = Vec::new();
         for row in 0..beacons.ids().len() {
             let owner = beacons.seats().get(row).copied().unwrap_or_default();
             let at = beacons
@@ -683,19 +717,33 @@ impl Surface {
                 continue;
             }
             let own = viewer == Viewer::Seat(SeatId::new(owner));
-            found.push((
-                !own,
-                beacons.ids().get(row).copied().unwrap_or(u32::MAX),
-                at,
-            ));
+            found.push((!own, row, at));
         }
-        // Own beacons first, then by id: every sort key ends in a unique id
-        // (item 62's convention, which this crate keeps because its outputs are
-        // byte-compared across three operating systems).
-        found.sort_unstable_by_key(|(foreign, id, _)| (*foreign, *id));
-        found
+        // Named in table order, which is the order a first listing mints the
+        // `e_NN` handles in.
+        found.sort_unstable_by_key(|(foreign, row, _)| (*foreign, *row));
+        let mut named: Vec<(bool, u32, String, usize, Voxel)> = found
             .into_iter()
-            .map(|(_, id, at)| (BeaconId::new(id), at))
+            .map(|(foreign, row, at)| {
+                let name = self.views.beacon_name(viewer, world, row);
+                let number = match pharmakos_sim::tables::parse_beacon_name(&name) {
+                    Some(
+                        pharmakos_sim::tables::BeaconName::Own(number)
+                        | pharmakos_sim::tables::BeaconName::Foreign(number),
+                    ) => number,
+                    None => u32::MAX,
+                };
+                (foreign, number, name, row, at)
+            })
+            .collect();
+        // Own beacons first, then by the number in the name: every sort key
+        // ends in a unique value (item 62's convention, which this crate keeps
+        // because its outputs are byte-compared across three operating
+        // systems), and within a side a name's number is unique.
+        named.sort_unstable_by_key(|(foreign, number, _, row, _)| (*foreign, *number, *row));
+        named
+            .into_iter()
+            .map(|(_, _, name, row, at)| (name, row, at))
             .collect()
     }
 }

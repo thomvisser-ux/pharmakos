@@ -53,6 +53,7 @@ const SCENARIOS: &[&str] = &[
     REFUSING,
     ROUND_LIMIT_AUDIT,
     UNAFFORDABLE_DEPLOY,
+    COVER_NEAREST_VENT,
 ];
 
 /// The scenario against the built-in operator: seat 1 is `builtin`, played by
@@ -79,6 +80,11 @@ const ROUND_LIMIT_AUDIT: &str = "scenarios/s1/round-limit-audit.scenario.jsonc";
 /// (S1's `fixs`; register X-12, decision 7).
 const UNAFFORDABLE_DEPLOY: &str = "scenarios/s1/unaffordable-deploy.scenario.jsonc";
 
+/// A carried "cover the nearest vent" on the golden seed: round 1 covers the
+/// starting vent and builds on it, rounds 2 and 3 find no vent within reach
+/// (S1's `tgt`; `docs/design/targeting.md`, "What the map means for it").
+const COVER_NEAREST_VENT: &str = "scenarios/s1/cover-nearest-vent.scenario.jsonc";
+
 /// **The exact set of scenarios allowed to seal through the harness door.**
 ///
 /// The door is unscoped in the runner — anything `submit_plan` explicitly
@@ -93,6 +99,10 @@ const UNAFFORDABLE_DEPLOY: &str = "scenarios/s1/unaffordable-deploy.scenario.jso
 /// file that needs it, in a test that already plays every committed scenario.
 /// A scenario that starts using it, or one that stops, turns `cargo test` red
 /// with the reason in the message.
+///
+/// `cover-nearest-vent` was on it until the verifier's targeting lane (`tgtv`)
+/// landed and accepted `covering` and `on`; `submit_plan` now takes the file,
+/// so its entry came off.
 const HARNESS_DOOR: &[&str] = &[REFUSING];
 
 /// What a doctored copy is named.

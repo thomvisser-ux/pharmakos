@@ -773,6 +773,8 @@ pub struct TargetTable {
     at: Vec<[Fx; 3]>,
     radius: Vec<i32>,
     built: Vec<u32>,
+    feature: Vec<u32>,
+    desc: Vec<u8>,
     capacity: u32,
 }
 
@@ -789,6 +791,8 @@ impl TargetTable {
             at: Vec::with_capacity(n),
             radius: Vec::with_capacity(n),
             built: Vec::with_capacity(n),
+            feature: Vec::with_capacity(n),
+            desc: Vec::with_capacity(n),
             capacity,
         }
     }
@@ -855,6 +859,42 @@ impl TargetTable {
         &mut self.built
     }
 
+    /// The anchor column, to write into: the one writer is a held
+    /// description's re-read, which moves an unbuilt target onto the vent it
+    /// now names (`docs/design/targeting.md`, "Three reading rules", 2).
+    pub fn anchors_mut(&mut self) -> &mut [[Fx; 3]] {
+        &mut self.at
+    }
+
+    /// The feature each Build target is bound to, as an index into the map's
+    /// feature table ([`crate::features::FeatureTable`]), or
+    /// [`crate::targeting::NO_FEATURE`] for a target written as a fixed voxel
+    /// and for every non-Build row.
+    ///
+    /// Hashed: a bound target idles or reads again when its feature is lost,
+    /// and **Build targets made through `on` are keyed by it** -- a removal
+    /// names the feature, and a settings edit carries a target over by it
+    /// (targeting.md, "Sites").
+    #[must_use]
+    pub fn features(&self) -> &[u32] {
+        &self.feature
+    }
+
+    /// The bound-feature column, to write into. A held description's re-read
+    /// is the one writer.
+    pub fn features_mut(&mut self) -> &mut [u32] {
+        &mut self.feature
+    }
+
+    /// How each Build target was written: [`crate::targeting::DESCRIPTION_VOXEL`],
+    /// [`crate::targeting::DESCRIPTION_NAME`] or
+    /// [`crate::targeting::DESCRIPTION_NEAREST_VENT`]. Hashed, because it
+    /// decides whether a lost target idles or reads again.
+    #[must_use]
+    pub fn descriptions(&self) -> &[u8] {
+        &self.desc
+    }
+
     /// Append one row, keeping the table in `(beacon, kind)` order.
     ///
     /// `false` when the table is full, which the caller reports as a step
@@ -866,6 +906,27 @@ impl TargetTable {
         blueprint: u8,
         at: [Fx; 3],
         radius: i32,
+    ) -> bool {
+        self.add_bound(
+            beacon,
+            kind,
+            blueprint,
+            at,
+            radius,
+            (u32::MAX, crate::targeting::DESCRIPTION_VOXEL),
+        )
+    }
+
+    /// [`TargetTable::add`], for a Build target written through `on`: `bound`
+    /// is the feature it is bound to and how it was written.
+    pub fn add_bound(
+        &mut self,
+        beacon: BeaconId,
+        kind: TargetKind,
+        blueprint: u8,
+        at: [Fx; 3],
+        radius: i32,
+        bound: (u32, u8),
     ) -> bool {
         if self.count >= self.capacity {
             return false;
@@ -888,6 +949,8 @@ impl TargetTable {
         self.at.insert(slot, at);
         self.radius.insert(slot, radius);
         self.built.insert(slot, BeaconId::NONE.raw());
+        self.feature.insert(slot, bound.0);
+        self.desc.insert(slot, bound.1);
         self.count = self.count.saturating_add(1);
         true
     }
@@ -903,6 +966,8 @@ impl TargetTable {
         self.at.remove(slot);
         self.radius.remove(slot);
         self.built.remove(slot);
+        self.feature.remove(slot);
+        self.desc.remove(slot);
         self.count = self.count.saturating_sub(1);
     }
 
@@ -932,6 +997,8 @@ impl TargetTable {
             || columns.at.len() != n
             || columns.radius.len() != n
             || columns.built.len() != n
+            || columns.feature.len() != n
+            || columns.desc.len() != n
         {
             return false;
         }
@@ -939,6 +1006,13 @@ impl TargetTable {
             .kind
             .iter()
             .all(|id| TargetKind::from_id(*id).is_some())
+        {
+            return false;
+        }
+        if !columns
+            .desc
+            .iter()
+            .all(|id| *id <= crate::targeting::DESCRIPTION_NEAREST_VENT)
         {
             return false;
         }
@@ -956,6 +1030,8 @@ impl TargetTable {
         self.at = columns.at;
         self.radius = columns.radius;
         self.built = columns.built;
+        self.feature = columns.feature;
+        self.desc = columns.desc;
         true
     }
 }
@@ -976,6 +1052,10 @@ pub struct TargetColumns {
     pub radius: Vec<i32>,
     /// The structure realising each Build target.
     pub built: Vec<u32>,
+    /// The feature each Build target is bound to.
+    pub feature: Vec<u32>,
+    /// How each Build target was written.
+    pub desc: Vec<u8>,
 }
 
 /// What one seat remembers seeing, with the tick it was seen at (spec section
@@ -1958,21 +2038,80 @@ impl BeaconId {
     pub const fn is_some(self) -> bool {
         self.0 != BeaconId::NONE.0
     }
+}
 
-    /// The string a playbook's `beacon_id` names this beacon by: `b_` followed
-    /// by the id in decimal, zero-padded to two digits — `b_00`, `b_01`,
-    /// `b_42`, and `b_100` once a match ever holds more than a hundred beacons.
-    ///
-    /// The verifier resolves a playbook's beacon references against a list of
-    /// these strings, and the gateway builds that list from this table, so the
-    /// spelling is a contract between three crates and belongs next to the id
-    /// rather than inside any one of them. Two digits because the world total
-    /// is 40 beacons (item 63) and a fixed width sorts and reads well; the
-    /// padding is a minimum, never a truncation.
-    #[must_use]
-    pub fn playbook_id(self) -> String {
-        format!("b_{:02}", self.0)
+/// The prefix of a seat's name for one of its **own** beacons: `b_NN`.
+pub const OWN_BEACON_PREFIX: &str = "b_";
+
+/// The prefix of a viewer's name for **another seat's** beacon: `e_NN`.
+pub const FOREIGN_BEACON_PREFIX: &str = "e_";
+
+/// How many digits a beacon name pads its number to.
+///
+/// Two, so a seat's core is `b_00` and the spec's own `get_beacon{b_04}` reads
+/// as written. The padding is a minimum, never a truncation: a number past 99
+/// writes three digits, and [`parse_beacon_name`] reads the number rather than
+/// the padding, so `b_4`, `b_04` and `b_004` are one name.
+pub const BEACON_NAME_DIGITS: usize = 2;
+
+/// The name a seat calls one of its **own** beacons by: `b_` and the beacon's
+/// per-seat ordinal ([`BeaconTable::ordinals`]).
+///
+/// Per seat since S1 (decisions-log item 127 (13); `docs/design/targeting.md`,
+/// "Names"): a seat's core is always `b_00`, its first placed beacon `b_01`,
+/// and the number counts the seat's own beacons and nothing else, so a new
+/// beacon's name tells a seat nothing about how many the others placed. Before
+/// S1 the number was the beacon's row in the world's table, a count of every
+/// seat's beacons. The verifier resolves a playbook's references against a
+/// list of these names, the gateway builds that list, and the interpreter
+/// parses them back, so the spelling lives here, beside the table, rather than
+/// inside any one of the three.
+#[must_use]
+pub fn own_beacon_name(ordinal: u32) -> String {
+    format!("{OWN_BEACON_PREFIX}{ordinal:0BEACON_NAME_DIGITS$}")
+}
+
+/// The name a viewer calls **another seat's** beacon by: `e_` and the number
+/// that viewer minted for it on first sighting, from one
+/// (`docs/design/targeting.md`, "Names"). The minting is the gateway's, per
+/// viewer; the spelling is here so the two halves of a name agree.
+#[must_use]
+pub fn foreign_beacon_name(handle: u32) -> String {
+    format!("{FOREIGN_BEACON_PREFIX}{handle:0BEACON_NAME_DIGITS$}")
+}
+
+/// What a beacon name names: one of the reader's own beacons, by its per-seat
+/// ordinal, or another seat's, by the reader's own handle for it.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub enum BeaconName {
+    /// `b_NN`: the reader's own beacon with this ordinal.
+    Own(u32),
+    /// `e_NN`: another seat's beacon, by the reader's handle for it.
+    Foreign(u32),
+}
+
+/// The name `text` spells, or `None` when it is not a beacon name.
+///
+/// Decided on **characters**, never on a parse that would also take `b_+4`,
+/// `b_ 4` or `b_4\n`: the digits must be ASCII digits and nothing else, the
+/// same rule `plan-core`'s template ids are decided by, for the same
+/// cross-platform reason (decisions-log item 100's closing note).
+#[must_use]
+pub fn parse_beacon_name(text: &str) -> Option<BeaconName> {
+    let (digits, own) = if let Some(rest) = text.strip_prefix(OWN_BEACON_PREFIX) {
+        (rest, true)
+    } else {
+        (text.strip_prefix(FOREIGN_BEACON_PREFIX)?, false)
+    };
+    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
     }
+    let number = digits.parse::<u32>().ok()?;
+    Some(if own {
+        BeaconName::Own(number)
+    } else {
+        BeaconName::Foreign(number)
+    })
 }
 
 /// A structure's identity.
@@ -2033,6 +2172,8 @@ pub struct BeaconColumns {
     pub priority: Vec<u8>,
     /// The Survey mandate's scout count.
     pub scouts: Vec<u8>,
+    /// Each beacon's per-seat ordinal ([`BeaconTable::ordinals`]).
+    pub ordinal: Vec<u32>,
 }
 
 /// Every column of a restored [`StructureTable`]. Same reasoning as
@@ -2075,6 +2216,7 @@ pub struct BeaconTable {
     dormant: Vec<bool>,
     priority: Vec<u8>,
     scouts: Vec<u8>,
+    ordinal: Vec<u32>,
 }
 
 impl BeaconTable {
@@ -2093,10 +2235,18 @@ impl BeaconTable {
             dormant: Vec::with_capacity(n),
             priority: Vec::with_capacity(n),
             scouts: Vec::with_capacity(n),
+            ordinal: Vec::with_capacity(n),
         }
     }
 
-    /// Append one beacon. Construction only — never called inside a tick.
+    /// Append one beacon. Never grows a column inside a tick: the room a Push
+    /// deploys into is reserved first ([`BeaconTable::reserve`]).
+    ///
+    /// Its ordinal is **derived here** rather than handed in: the number of
+    /// rows `seat` already holds, so a seat's first beacon -- its core, which
+    /// the generator places before anything else -- is ordinal 0 and every
+    /// later one counts up from there. Rows are never removed (a dead beacon
+    /// keeps its row), so an ordinal is never reused.
     pub fn push(
         &mut self,
         id: BeaconId,
@@ -2106,6 +2256,7 @@ impl BeaconTable {
         hp: Hp,
         dormant: bool,
     ) {
+        let ordinal = self.count_of(seat);
         self.id.push(id.raw());
         self.seat.push(seat.raw());
         self.pos.push(pos);
@@ -2115,7 +2266,35 @@ impl BeaconTable {
         self.dormant.push(dormant);
         self.priority.push(PRIORITY_NORMAL);
         self.scouts.push(0);
+        self.ordinal.push(ordinal);
         self.count = self.count.saturating_add(1);
+    }
+
+    /// How many beacon rows `seat` holds, alive or dead.
+    ///
+    /// Also the ordinal its next beacon will take.
+    #[must_use]
+    pub fn count_of(&self, seat: SeatId) -> u32 {
+        self.seat.iter().fold(0_u32, |sum, held| {
+            if *held == seat.raw() {
+                sum.saturating_add(1)
+            } else {
+                sum
+            }
+        })
+    }
+
+    /// The row of `seat`'s beacon with this ordinal, alive or dead, or `None`
+    /// when the seat has no such beacon.
+    ///
+    /// What a `b_NN` resolves through: a name counts the reader's own beacons
+    /// and nothing else (`docs/design/targeting.md`, "Names").
+    #[must_use]
+    pub fn row_of_ordinal(&self, seat: SeatId, ordinal: u32) -> Option<usize> {
+        self.seat
+            .iter()
+            .zip(&self.ordinal)
+            .position(|(held, number)| *held == seat.raw() && *number == ordinal)
     }
 
     /// Make room for `extra` more beacons without growing later.
@@ -2136,6 +2315,7 @@ impl BeaconTable {
         self.dormant.reserve(n);
         self.priority.reserve(n);
         self.scouts.reserve(n);
+        self.ordinal.reserve(n);
     }
 
     /// How many beacons the table holds.
@@ -2244,6 +2424,21 @@ impl BeaconTable {
         &mut self.scouts
     }
 
+    /// Each beacon's **per-seat ordinal**: its place among its own seat's
+    /// beacons, counting from 0, in the order they were placed. A seat's core
+    /// is 0.
+    ///
+    /// What a seat's `b_NN` names ([`own_beacon_name`]). Hashed and
+    /// snapshotted although it is a function of the seat column, because it
+    /// is what a playbook's name resolves through, and a value that decides
+    /// what a tick does is in the hash in its own right (AGENTS.md section
+    /// 4.8). [`BeaconTable::restore`] refuses a column that disagrees with the
+    /// seat column it travels beside.
+    #[must_use]
+    pub fn ordinals(&self) -> &[u32] {
+        &self.ordinal
+    }
+
     /// The hit-point column, to write into.
     ///
     /// The combat phase's damage drain is the only caller. A beacon at zero
@@ -2265,8 +2460,24 @@ impl BeaconTable {
             || columns.dormant.len() != n
             || columns.priority.len() != n
             || columns.scouts.len() != n
+            || columns.ordinal.len() != n
         {
             return false;
+        }
+        // The ordinals are a function of the seat column, so a file whose two
+        // columns disagree describes no table this sim builds: refused rather
+        // than restored into names that resolve to the wrong beacon. One pass,
+        // with a running count per seat, so a large column read from a file
+        // costs its length and no more.
+        let mut placed = [0_u32; 256];
+        for (seat, ordinal) in columns.seat.iter().zip(columns.ordinal.iter()) {
+            let Some(count) = placed.get_mut(usize::from(*seat)) else {
+                return false;
+            };
+            if *count != *ordinal {
+                return false;
+            }
+            *count = count.saturating_add(1);
         }
         let Ok(count) = u32::try_from(n) else {
             return false;
@@ -2281,6 +2492,7 @@ impl BeaconTable {
         self.dormant = columns.dormant;
         self.priority = columns.priority;
         self.scouts = columns.scouts;
+        self.ordinal = columns.ordinal;
         true
     }
 }

@@ -44,6 +44,7 @@ use crate::chunks::ChunkDigests;
 use crate::economy::{Purchase, Quartermaster, SingleTreasury, SpendRequest};
 use crate::encoding::Enc;
 use crate::events::{EVENT_BUS_CAPACITY, Emission, Event, EventBus, EventKind};
+use crate::features::FeatureTable;
 use crate::interpreter::state::PlanParts;
 use crate::interpreter::{Interpreter, Plan};
 use crate::knowledge::{AssetId, Position};
@@ -64,6 +65,7 @@ use crate::tables::{
     PRIORITY_NORMAL, SeatId, SeatTable, SightingTable, StructureId, StructureKind, StructureTable,
     TargetKind, TargetTable, UnitId, UnitKind, UnitTable, WreckTable,
 };
+use crate::targeting::{Ground, NO_FEATURE};
 use crate::voxels::{CHUNK_EDGE, Material, VoxelEdit, VoxelStore};
 use pharmakos_proto::gp;
 
@@ -145,41 +147,67 @@ const HARNESS_EDIT_QUEUE: usize = 64;
 /// thing filling it (owner, at S2).
 const HARNESS_DAMAGE_QUEUE: usize = 256;
 
-/// PLACEHOLDER (harness): how many beacons a match may place on top of the
-/// cores the generator pre-places.
+/// PLACEHOLDER: the world total of beacons a match may place on top of the
+/// cores the generator pre-places, shared equally per seat -- owner, at S1's
+/// demo with the balance check's report; the totals are revisited at S2's
+/// G3'-real measurement (register S1-37).
 ///
-/// The beacon table fixes its count at construction like every other table, so
-/// room for the beacons a Push deploys has to be reserved there — a `push` that
-/// grew the columns would be an allocation inside a tick (G3′ §9.17), and
-/// `tests/allocations.rs` fails on one. Forty is item 63's world total of 40
-/// beacons, taken as the room *per match* rather than per seat, and a deploy
-/// that finds no room fails the step with `no_beacon_room` rather than growing.
-/// The owner settles the real ceiling with the economy that pays for them.
-/// T14 built that economy and did **not** settle it: the ceiling is a property
-/// of the world rather than a rule (spec section 7, "Unit ceiling"), so it
-/// belongs beside [`UNIT_TABLE_ROOM`] with the rest of the fielding limits
-/// (owner, at S1).
+/// Forty is item 63's world total. Since S1 the room is **per seat**: each
+/// seat may place [`room_per_seat`] of the total, the total divided by the
+/// seat count and rounded down (13 a seat at three seats, 20 at two), so a full
+/// table no longer tells a seat how many beacons the others placed
+/// (decisions-log item 127 (12) and (13), amending item 63;
+/// `docs/design/targeting.md`, "Names"). The table still fixes its count at
+/// construction like every other table -- a `push` that grew the columns
+/// would be an allocation inside a tick (G3' section 9.17) -- and a deploy
+/// that finds no room in its own seat's share fails the step with
+/// `no_beacon_room` rather than growing. The ceiling is a property of the
+/// world rather than a rule (spec section 7, "Unit ceiling"), so it lives
+/// beside [`UNIT_TABLE_ROOM`] with the rest of the fielding limits and not in
+/// the rules table.
 const BEACON_TABLE_ROOM: u32 = 40;
 
-/// PLACEHOLDER (harness): how many units a match may fabricate on top of the
-/// starting force.
+/// PLACEHOLDER: the world total of units a match may fabricate on top of the
+/// starting force, shared equally per seat -- owner, at S1's demo with the
+/// balance check's report; the totals are revisited at S2's G3'-real
+/// measurement (register S1-37).
 ///
-/// Item 63 fixes the world total at **300 units**, so that is the room, taken
-/// per match rather than per seat exactly as [`BEACON_TABLE_ROOM`] is. A
-/// fabrication order that finds no room is held rather than filled, which is
-/// what stops the unit table growing inside a tick. The owner settles the real
-/// ceiling with the economy that pays for it — it is a property of the world
-/// rather than a rule (spec section 7, "Unit ceiling": a seat can field only
-/// what its core surplus and vent Generators can power) — so the row is S1's,
-/// not a number anybody should tune here (owner, at S1).
+/// Item 63 fixes the world total at **300 units**; since S1 each seat may
+/// fabricate [`room_per_seat`] of it on top of its own starting force (100 a
+/// seat at three seats), for the reason [`BEACON_TABLE_ROOM`] is per seat. A
+/// fabrication order that finds no room in its seat's share is held rather
+/// than filled, which is what stops the unit table growing inside a tick. The
+/// real ceiling is spec section 7's "a seat can field only what its core
+/// surplus and vent Generators can power", which this only bounds.
 const UNIT_TABLE_ROOM: u32 = 300;
 
-/// PLACEHOLDER (harness): how many structures a match may build.
+/// PLACEHOLDER: the world total of structures a match may build, shared
+/// equally per seat since S1 ("Build targets and structures follow",
+/// `docs/design/targeting.md`) -- the per-seat split is the owner's at S1's
+/// demo with the balance check's report, like the two rooms above (register
+/// S1-37); the total is the owner's at S2 with the capability catalogue.
 ///
 /// Three a beacon at [`BEACON_TABLE_ROOM`], which covers a Generator on every
-/// vent a map carries plus the Survey posts and turrets S2 adds. The owner
-/// settles it with the capability catalogue (owner, at S2).
+/// vent a map carries plus the Survey posts and turrets S2 adds. A seat's
+/// share is [`room_per_seat`] of it, counted over **every row the seat ever
+/// built**, ruins included ([`World::structures_built_by`]): a ruin keeps its
+/// row, so a share that freed itself when a structure fell would let one seat
+/// churn the whole table full and refuse another seat's build for a reason
+/// that seat cannot see -- the leak per-seat room exists to close. Counted
+/// that way, the shares add up to at most the total, and the table cannot fill
+/// before a share does.
 const STRUCTURE_TABLE_ROOM: u32 = 120;
+
+/// One seat's share of a world total: the total divided by the seat count,
+/// **rounded down** (decisions-log item 127 (12)). A match of no seats has no
+/// shares.
+#[must_use]
+pub const fn room_per_seat(total: u32, seats: u32) -> u32 {
+    match total.checked_div(seats) {
+        Some(share) => share,
+        None => 0,
+    }
+}
 
 /// PLACEHOLDER (harness): how many wrecks a match may hold at once.
 ///
@@ -233,8 +261,8 @@ const SIGHTINGS_PER_SEAT: u32 = 64;
 /// whether it looks like an allocation size). The generator pre-places one core
 /// per seat, so this is the old expression's value on a fresh world and a
 /// reproducible one on a resumed one.
-const fn beacon_limit_of(seats: u32) -> u32 {
-    seats.saturating_add(BEACON_TABLE_ROOM)
+pub(crate) const fn beacon_limit_of(seats: u32) -> u32 {
+    seats.saturating_add(room_per_seat(BEACON_TABLE_ROOM, seats).saturating_mul(seats))
 }
 
 /// PLACEHOLDER (harness): the largest radius a broadphase query asks for, in
@@ -338,6 +366,27 @@ pub struct World {
 
     // --- inputs and derived state: never encoded, never hashed ---
     rules: RulesTable,
+    /// Every vent and seam on the map, by name ([`crate::features`]). A pure
+    /// function of the seed, the rules and the occupied seats, generated with
+    /// the map and **regenerated on restore**, never carried or hashed: what
+    /// changes about a feature -- whether it is still there -- is derived from
+    /// the voxels, which the chunk digests already hash.
+    features: FeatureTable,
+    /// The `covering` spiral's offsets, every `[dx, dy]` within a sphere's
+    /// radius in search order ([`crate::targeting::spiral_offsets`]). Derived
+    /// from the rules table once, so a decision allocates nothing.
+    spiral: Vec<[i32; 2]>,
+    /// The evaluation units the decision in progress has spent: handlers
+    /// tried, condition nodes, selector candidates and "nearest" estimates.
+    /// P1's counted half (S1's plan, section 5; decisions-log item 33 (c)).
+    /// **Never hashed**: a [`crate::seams::UnitTally`], so the read-only half
+    /// of a decision can count, and reset at every seat's decision.
+    decision_units: crate::seams::UnitTally,
+    /// Per seat, what its last decision tick's decision spent, as a
+    /// [`WorkCounter`] (the per-tick counter's own type, reused). Not hashed,
+    /// and `tests/determinism.rs` keeps it out of the state encoding as it
+    /// keeps the tick's counter out.
+    decision_work: Vec<WorkCounter>,
     broadphase: Csr,
     /// The HPA\* surface graph. Derived from the chunk store and the cost rows,
     /// rebuilt on a restore rather than carried in a snapshot.
@@ -399,6 +448,11 @@ pub struct World {
     /// How many unit rows the table may ever hold. Derived and not hashed, and
     /// not merely an allocation size — see [`World::unit_limit`].
     unit_limit: u32,
+    /// How many unit rows the world was built with: the starting force and
+    /// the harness walkers. Every row past it was fabricated during a Push,
+    /// which is what a seat's share of [`UNIT_TABLE_ROOM`] counts. Derived
+    /// from the match configuration and kept by a restore, as `unit_limit` is.
+    unit_start: u32,
     /// How many beacon rows the table may ever hold: [`beacon_limit_of`] of the
     /// seat count.
     ///
@@ -457,6 +511,9 @@ pub(crate) struct RestoredTables {
     pub(crate) credit: CreditTable,
     pub(crate) voxels: VoxelStore,
     pub(crate) chunks: ChunkDigests,
+    /// The map's feature table, regenerated with the pristine map rather than
+    /// carried in the file.
+    pub(crate) features: FeatureTable,
     pub(crate) router: crate::pathing::router::RestoredRouter,
     pub(crate) match_state: MatchState,
     pub(crate) plan: PlanParts,
@@ -495,7 +552,9 @@ impl World {
         // broadphase and the scratch buffers can be built once at the ceiling,
         // and only the router and the unit table itself gain a row per unit
         // (see `UNIT_TABLE_ROOM` and `Router::reserve`).
-        let unit_ceiling = unit_count.saturating_add(UNIT_TABLE_ROOM);
+        let unit_ceiling = unit_count.saturating_add(
+            room_per_seat(UNIT_TABLE_ROOM, config.seats).saturating_mul(config.seats),
+        );
 
         let mut seats = SeatTable::with_capacity(config.seats);
         let mut seat_index: u32 = 0;
@@ -517,6 +576,7 @@ impl World {
         let units = fill_unit_table(config, &generated, unit_count, [max_x, max_y]);
 
         let mut voxels = generated.voxels;
+        let features = generated.features;
         let chunk_total = voxels.chunk_count();
         let mut chunks = ChunkDigests::new(chunk_total);
         voxels.settle_all(&mut chunks);
@@ -543,7 +603,7 @@ impl World {
             return Err(MapError::Unclusterable { cluster_voxels });
         };
         let mut router = Router::new(unit_count, &config.rules);
-        router.reserve(UNIT_TABLE_ROOM);
+        router.reserve(unit_ceiling.saturating_sub(unit_count));
         let mut unit = 0;
         while unit < unit_count {
             // Every unit starts by asking for a route: the harness's walkers
@@ -591,6 +651,21 @@ impl World {
             interpreter: Interpreter::with_seats(config.seats),
             voxels,
             rules: config.rules.clone(),
+            features,
+            spiral: crate::targeting::spiral_offsets(
+                config
+                    .rules
+                    .message()
+                    .beacon
+                    .as_ref()
+                    .and_then(|block| i32::try_from(block.sphere_radius_voxels).ok())
+                    .unwrap_or(0),
+            ),
+            decision_units: crate::seams::UnitTally::new(),
+            decision_work: vec![
+                WorkCounter::with_budget(u32::MAX);
+                usize::try_from(config.seats).unwrap_or(0)
+            ],
             broadphase,
             repairer: Repairer::new(clusters.cluster_count()),
             surface,
@@ -617,6 +692,7 @@ impl World {
             commanders,
             beacon_alive,
             unit_limit: unit_ceiling,
+            unit_start: unit_count,
             beacon_limit,
         })
     }
@@ -691,6 +767,76 @@ impl World {
     #[must_use]
     pub const fn rules(&self) -> &RulesTable {
         &self.rules
+    }
+
+    /// Every vent and seam on the map ([`crate::features`]). Derived, never
+    /// hashed.
+    #[must_use]
+    pub const fn features(&self) -> &FeatureTable {
+        &self.features
+    }
+
+    /// Everything the resolver reads, borrowed read-only
+    /// ([`crate::targeting::Ground`]). A caller outside the tick -- a gateway
+    /// preview -- brings its own [`Scratch`] for the estimator.
+    #[must_use]
+    pub fn ground(&self) -> Ground<'_> {
+        Ground {
+            surface: &self.surface,
+            clusters: &self.clusters,
+            voxels: &self.voxels,
+            features: &self.features,
+            beacons: &self.beacons,
+            structures: &self.structures,
+            targets: &self.targets,
+            rules: &self.rules,
+            spiral: &self.spiral,
+            work: &self.decision_units,
+        }
+    }
+
+    /// The resolver's view and the world's own search scratch, borrowed
+    /// together: what the decision phase resolves a description with.
+    pub(crate) fn ground_and_scratch(&mut self) -> (Ground<'_>, &mut Scratch) {
+        (
+            Ground {
+                surface: &self.surface,
+                clusters: &self.clusters,
+                voxels: &self.voxels,
+                features: &self.features,
+                beacons: &self.beacons,
+                structures: &self.structures,
+                targets: &self.targets,
+                rules: &self.rules,
+                spiral: &self.spiral,
+                work: &self.decision_units,
+            },
+            &mut self.scratch,
+        )
+    }
+
+    /// Whether the feature at `index` is still there
+    /// ([`FeatureTable::is_live`]).
+    #[must_use]
+    pub fn feature_is_live(&self, index: usize) -> bool {
+        self.features.is_live(index, &self.surface, &self.voxels)
+    }
+
+    /// Count `units` of evaluation work against the decision in progress.
+    /// Crate-internal: the interpreter's read-only half counts through this.
+    pub(crate) fn charge_decision(&self, units: u32) {
+        self.decision_units.add(units);
+    }
+
+    /// What `seat_index`'s last decision spent, in evaluation units: handlers
+    /// tried, condition nodes evaluated, selector candidates ranked and
+    /// "nearest" estimates run (P1's counted half, S1's plan section 5).
+    ///
+    /// **Not hashed**: a measurement of the decision, not an input to the
+    /// next one. `None` for a seat the world does not have.
+    #[must_use]
+    pub fn decision_work(&self, seat_index: usize) -> Option<WorkCounter> {
+        self.decision_work.get(seat_index).copied()
     }
 
     /// The broadphase index. Derived, never hashed.
@@ -824,7 +970,7 @@ impl World {
 
     /// Deploy a beacon for `seat` at `at`, carrying `mandate`.
     ///
-    /// `None` when the table has no room left ([`BEACON_TABLE_ROOM`]), which
+    /// `None` when the seat has used its share of [`BEACON_TABLE_ROOM`], which
     /// the caller reports as a step failure rather than growing a column inside
     /// a tick.
     ///
@@ -842,6 +988,12 @@ impl World {
         mandate: MandateKind,
     ) -> Option<BeaconId> {
         if self.beacons.len() >= self.beacon_limit {
+            return None;
+        }
+        // The seat's own share of the world total (item 127 (12)): its rows
+        // less its core, which the generator placed and no deploy paid for.
+        let placed = self.beacons.count_of(seat).saturating_sub(1);
+        if placed >= room_per_seat(BEACON_TABLE_ROOM, self.seats.len()) {
             return None;
         }
         let id = BeaconId::new(self.beacons.len());
@@ -1498,11 +1650,46 @@ impl World {
         }
     }
 
+    /// How many units `seat` has fabricated this match: its rows past the ones
+    /// the world was built with, dead or alive (a row is never freed).
+    fn fabricated_by(&self, seat: SeatId) -> u32 {
+        let start = usize::try_from(self.unit_start).unwrap_or(usize::MAX);
+        self.units
+            .seats()
+            .get(start..)
+            .unwrap_or_default()
+            .iter()
+            .fold(0_u32, |sum, held| {
+                if *held == seat.raw() {
+                    sum.saturating_add(1)
+                } else {
+                    sum
+                }
+            })
+    }
+
+    /// How many structure rows `seat` has built this match, standing or
+    /// ruined: the rows homed to one of its beacons. A row is never freed and
+    /// a structure's home never changes, and neither does a beacon's seat, so
+    /// the count only grows, as [`World::fabricated_by`]'s does; that is what
+    /// keeps one seat's churn out of another seat's share
+    /// ([`STRUCTURE_TABLE_ROOM`]). The owner column cannot answer it, because
+    /// a ruin's owner is no seat.
+    fn structures_built_by(&self, seat: SeatId) -> u32 {
+        self.structures.homes().iter().fold(0_u32, |sum, home| {
+            let built = usize::try_from(*home)
+                .ok()
+                .and_then(|row| self.beacons.seats().get(row))
+                .is_some_and(|held| *held == seat.raw());
+            if built { sum.saturating_add(1) } else { sum }
+        })
+    }
+
     /// Produce one unit at `beacon`, homed to it.
     ///
-    /// `None` when the unit table has no room left
-    /// ([`UNIT_TABLE_ROOM`]), which the Quartermaster reports by charging
-    /// nothing rather than growing a column inside a tick.
+    /// `None` when the seat has used its share of [`UNIT_TABLE_ROOM`], which
+    /// the Quartermaster reports by charging nothing rather than growing a
+    /// column inside a tick.
     pub(crate) fn fabricate(
         &mut self,
         seat: SeatId,
@@ -1512,6 +1699,9 @@ impl World {
         let row = usize::try_from(beacon.raw()).ok()?;
         let at = self.beacons.positions().get(row).copied()?;
         if self.units.len() >= self.unit_limit() {
+            return None;
+        }
+        if self.fabricated_by(seat) >= room_per_seat(UNIT_TABLE_ROOM, self.seats.len()) {
             return None;
         }
         let id = UnitId::new(self.units.len());
@@ -1565,7 +1755,19 @@ impl World {
         let Some(anchor) = self.targets.anchors().get(row).copied() else {
             return false;
         };
-        if self.structures.len() >= STRUCTURE_TABLE_ROOM {
+        // **One structure per voxel, across seats** (targeting.md, "Sites"):
+        // construction is refused where any live structure already stands, so
+        // the first seat to build wins and the other's target is never paid
+        // for. The Build mandate skips such a target rather than asking for it
+        // ([`crate::mandate::next_unpaid_target`]); this is the backstop.
+        let [x, y] = crate::targeting::column_of(anchor);
+        if self.ground().structure_on(x, y) {
+            return false;
+        }
+        if self.structures.len() >= STRUCTURE_TABLE_ROOM
+            || self.structures_built_by(seat)
+                >= room_per_seat(STRUCTURE_TABLE_ROOM, self.seats.len())
+        {
             return false;
         }
         let id = StructureId::new(self.structures.len());
@@ -1736,21 +1938,34 @@ impl World {
         self.targets.add(beacon, kind, blueprint, at, radius)
     }
 
-    /// Whether some Build target already claims the anchor `at`.
+    /// Whether some Build target of `seat`'s already claims the anchor `at`.
     ///
     /// One anchor, one building. A second Build target on a claimed anchor
     /// would be paid for in its own right — "paid means yours" charges at
     /// commit (item 23) — and would put a second structure row in the same
     /// voxel, so a playbook naming one anchor twice, or two beacons naming the
     /// same one, would buy the same building twice over. Every target of every
-    /// beacon counts, because the treasury and the ground are the seat's and
-    /// not the beacon's.
+    /// one of the seat's beacons counts, because the treasury and the ground
+    /// are the seat's and not the beacon's.
+    ///
+    /// **Per seat since S1**: a queued Build target is a per-seat claim, so
+    /// another seat's unbuilt target stays hidden, and the first seat to
+    /// *build* wins the voxel ([`World::queue_target`]'s one-structure rule;
+    /// `docs/design/targeting.md`, "Sites").
     #[must_use]
-    pub fn anchor_is_claimed(&self, at: [Fx; 3]) -> bool {
+    pub fn anchor_is_claimed(&self, seat: SeatId, at: [Fx; 3]) -> bool {
         let count = usize::try_from(self.targets.len()).unwrap_or(0);
         let mut row: usize = 0;
         while row < count {
-            if self.targets.kinds().get(row).copied() == Some(TargetKind::Build.id())
+            let owned = self
+                .targets
+                .beacons()
+                .get(row)
+                .and_then(|beacon| usize::try_from(*beacon).ok())
+                .and_then(|beacon| self.beacons.seats().get(beacon).copied())
+                == Some(seat.raw());
+            if owned
+                && self.targets.kinds().get(row).copied() == Some(TargetKind::Build.id())
                 && self.targets.anchors().get(row).copied() == Some(at)
             {
                 return true;
@@ -1758,6 +1973,118 @@ impl World {
             row = row.saturating_add(1);
         }
         false
+    }
+
+    /// Add a Build target written through `on`, bound to `feature` and
+    /// written as `desc` ([`crate::targeting::DESCRIPTION_NAME`] or
+    /// [`crate::targeting::DESCRIPTION_NEAREST_VENT`]). `false` when the table
+    /// has no room.
+    pub(crate) fn add_bound_target(
+        &mut self,
+        beacon: BeaconId,
+        blueprint: u8,
+        at: [Fx; 3],
+        bound: (u32, u8),
+    ) -> bool {
+        self.targets
+            .add_bound(beacon, TargetKind::Build, blueprint, at, 0, bound)
+    }
+
+    /// Remove the Build target of `beacon` bound to `feature`: a target made
+    /// through `on` is keyed by its feature (targeting.md, "Sites"). `false`
+    /// when none is.
+    pub(crate) fn remove_bound_target(&mut self, beacon: BeaconId, feature: u32) -> bool {
+        let count = usize::try_from(self.targets.len()).unwrap_or(0);
+        let mut row: usize = 0;
+        while row < count {
+            if self.targets.beacons().get(row).copied() == Some(beacon.raw())
+                && self.targets.kinds().get(row).copied() == Some(TargetKind::Build.id())
+                && self.targets.features().get(row).copied() == Some(feature)
+            {
+                self.targets.remove(row);
+                return true;
+            }
+            row = row.saturating_add(1);
+        }
+        false
+    }
+
+    /// Read again every **held description** whose feature is lost
+    /// (`docs/design/targeting.md`, "Three reading rules", 2): an unbuilt
+    /// Build target written as "the nearest vent" whose vent is gone is moved
+    /// onto the nearest free vent in its beacon's sphere, measured from that
+    /// beacon, or left idle when there is none. A **name** idles when its
+    /// feature is lost and is not read again, and a target already paid for
+    /// keeps its structure.
+    ///
+    /// Walked in table order, which is ascending beacon id: S2's claim table
+    /// will bind re-reads in exactly that order, and in S1 nothing can lose a
+    /// vent but a crater, so this is the order the rule will need rather than
+    /// one it needs yet. Run on decision ticks only, before the
+    /// Quartermaster gathers, so a re-read target is the one it pays for.
+    fn reread_lost_targets(&mut self) {
+        let count = usize::try_from(self.targets.len()).unwrap_or(0);
+        let mut row: usize = 0;
+        while row < count {
+            let held = self.targets.descriptions().get(row).copied()
+                == Some(crate::targeting::DESCRIPTION_NEAREST_VENT)
+                && self.targets.built().get(row).copied() == Some(BeaconId::NONE.raw());
+            let feature = self
+                .targets
+                .features()
+                .get(row)
+                .copied()
+                .unwrap_or(NO_FEATURE);
+            let lost = feature != NO_FEATURE
+                && !self.feature_is_live(usize::try_from(feature).unwrap_or(usize::MAX));
+            if held && lost {
+                let beacon = self
+                    .targets
+                    .beacons()
+                    .get(row)
+                    .copied()
+                    .map_or(BeaconId::NONE, BeaconId::new);
+                let beacon_row = usize::try_from(beacon.raw()).unwrap_or(usize::MAX);
+                let centre = self.beacons.positions().get(beacon_row).copied();
+                let seat = self
+                    .beacons
+                    .seats()
+                    .get(beacon_row)
+                    .copied()
+                    .map(SeatId::new);
+                if let (Some(centre), Some(seat)) = (centre, seat) {
+                    let found = {
+                        let (ground, scratch) = self.ground_and_scratch();
+                        crate::targeting::on_vent(
+                            &ground,
+                            scratch,
+                            seat,
+                            centre,
+                            Some(beacon),
+                            None,
+                            crate::targeting::FeatureSpec::Nearest {
+                                kind: crate::features::FeatureKind::Vent,
+                                uncovered: false,
+                            },
+                        )
+                        .ok()
+                    };
+                    if let Some(site) = found {
+                        let [x, y] = site.column;
+                        let at = self.ground().standing(x, y);
+                        if let (Some(at), Some(slot)) =
+                            (at, self.targets.anchors_mut().get_mut(row))
+                        {
+                            *slot = at;
+                        }
+                        if let Some(slot) = self.targets.features_mut().get_mut(row) {
+                            *slot = u32::try_from(site.feature).unwrap_or(NO_FEATURE);
+                        }
+                    }
+                }
+            }
+            row = row.saturating_add(1);
+        }
     }
 
     /// Replace `beacon`'s Build target list, carrying the structure each kept
@@ -1784,32 +2111,46 @@ impl World {
     /// the caller's anchors are whole voxels and this walks them twice: a
     /// `collect` into a `Vec` here would be an allocation inside a tick, which
     /// `tests/allocations.rs` fails on.
+    ///
+    /// Each entry is `(blueprint, anchor, feature, desc)`: a target written
+    /// through `on` carries the feature it is bound to and is **carried over by
+    /// feature id** rather than by anchor (`docs/design/targeting.md`,
+    /// "Sites"), so a re-written `on` target whose column moved keeps the
+    /// structure it already paid for.
     pub(crate) fn replace_build_targets<I>(&mut self, beacon: BeaconId, list: I)
     where
-        I: Iterator<Item = (u8, [Fx; 3])> + Clone,
+        I: Iterator<Item = (u8, [Fx; 3], u32, u8)> + Clone,
     {
+        let seat = usize::try_from(beacon.raw())
+            .ok()
+            .and_then(|row| self.beacons.seats().get(row).copied())
+            .map_or(SeatId::NEUTRAL, SeatId::new);
         // The carry-over has to be read before the list is cleared, and the
         // read has nowhere to go but a fixed array. `TARGETS_PER_BEACON_SLOTS` is
         // the table's own ceiling, so an entry past it could not have been
         // added anyway.
         let mut carried = [BeaconId::NONE.raw(); TARGETS_PER_BEACON_SLOTS];
-        for (slot, (_, anchor)) in list.clone().enumerate() {
+        for (slot, (_, anchor, feature, _)) in list.clone().enumerate() {
             let Some(cell) = carried.get_mut(slot) else {
                 break;
             };
-            *cell = self.built_at(beacon, anchor);
+            *cell = self.built_at(beacon, anchor, feature);
         }
         self.clear_targets(beacon, TargetKind::Build);
-        for (slot, (blueprint, anchor)) in list.enumerate() {
+        for (slot, (blueprint, anchor, feature, desc)) in list.enumerate() {
             if !crate::mandate::inside_sphere(self, beacon, anchor)
-                || self.anchor_is_claimed(anchor)
+                || self.anchor_is_claimed(seat, anchor)
             {
                 continue;
             }
-            if !self
-                .targets
-                .add(beacon, TargetKind::Build, blueprint, anchor, 0)
-            {
+            if !self.targets.add_bound(
+                beacon,
+                TargetKind::Build,
+                blueprint,
+                anchor,
+                0,
+                (feature, desc),
+            ) {
                 continue;
             }
             let built = carried.get(slot).copied().unwrap_or(BeaconId::NONE.raw());
@@ -1819,15 +2160,21 @@ impl World {
         }
     }
 
-    /// The structure `beacon`'s Build target at `at` has already been paid
-    /// for, or [`BeaconId::NONE`]'s raw value when there is no such target.
-    fn built_at(&self, beacon: BeaconId, at: [Fx; 3]) -> u32 {
+    /// The structure `beacon`'s Build target at `at` -- or, for one bound to a
+    /// feature, its target bound to `feature` -- has already been paid for, or
+    /// [`BeaconId::NONE`]'s raw value when there is no such target.
+    fn built_at(&self, beacon: BeaconId, at: [Fx; 3], feature: u32) -> u32 {
         let count = usize::try_from(self.targets.len()).unwrap_or(0);
         let mut row: usize = 0;
         while row < count {
+            let same = if feature == NO_FEATURE {
+                self.targets.anchors().get(row).copied() == Some(at)
+            } else {
+                self.targets.features().get(row).copied() == Some(feature)
+            };
             if self.targets.beacons().get(row).copied() == Some(beacon.raw())
                 && self.targets.kinds().get(row).copied() == Some(TargetKind::Build.id())
-                && self.targets.anchors().get(row).copied() == Some(at)
+                && same
             {
                 return self
                     .targets
@@ -2497,6 +2844,7 @@ impl World {
         if !self.is_decision_tick() {
             return;
         }
+        self.reread_lost_targets();
         let mut requests = core::mem::take(&mut self.requests);
         requests.clear();
         self.gather_requests(&mut requests);
@@ -2641,11 +2989,20 @@ impl World {
         let seats = interpreter.len();
         let mut seat: usize = 0;
         while seat < seats {
+            // P1's counted half: what this seat's decision spends, measured
+            // from zero every decision and kept beside the world, unhashed.
+            self.decision_units.reset();
             if let Some((plan, state)) = interpreter.parts_mut(seat) {
                 crate::interpreter::exec::decide(self, seat, plan, state);
             }
+            let mut spent = WorkCounter::with_budget(u32::MAX);
+            let _ = spent.charge(self.decision_units.get());
+            if let Some(slot) = self.decision_work.get_mut(seat) {
+                *slot = spent;
+            }
             seat = seat.saturating_add(1);
         }
+        self.decision_units.reset();
         self.interpreter = interpreter;
     }
 
@@ -3654,6 +4011,7 @@ impl World {
         let dormant = self.beacons.dormant();
         let priorities = self.beacons.priorities();
         let scouts = self.beacons.scout_counts();
+        let ordinals = self.beacons.ordinals();
         for (index, id) in self.beacons.ids().iter().enumerate() {
             enc.u32(*id);
             enc.u8(self.beacons.seats().get(index).copied().unwrap_or(0));
@@ -3664,6 +4022,7 @@ impl World {
             enc.bool(dormant.get(index).copied().unwrap_or(false));
             enc.u8(priorities.get(index).copied().unwrap_or(PRIORITY_NORMAL));
             enc.u8(scouts.get(index).copied().unwrap_or(0));
+            enc.u32(ordinals.get(index).copied().unwrap_or(0));
         }
 
         enc.len(self.structures.len());
@@ -3710,6 +4069,8 @@ impl World {
         let anchors = self.targets.anchors();
         let radii = self.targets.radii();
         let built = self.targets.built();
+        let features = self.targets.features();
+        let descriptions = self.targets.descriptions();
         for (index, beacon) in self.targets.beacons().iter().enumerate() {
             enc.u32(*beacon);
             enc.u8(kinds.get(index).copied().unwrap_or(0));
@@ -3717,6 +4078,8 @@ impl World {
             encode_point(enc, anchors.get(index));
             enc.i32(radii.get(index).copied().unwrap_or(0));
             enc.u32(built.get(index).copied().unwrap_or(BeaconId::NONE.raw()));
+            enc.u32(features.get(index).copied().unwrap_or(NO_FEATURE));
+            enc.u8(descriptions.get(index).copied().unwrap_or(0));
         }
     }
 
@@ -3955,6 +4318,7 @@ impl World {
         self.credit = restored.credit;
         self.voxels = restored.voxels;
         self.chunks = restored.chunks;
+        self.features = restored.features;
         self.broadphase = broadphase;
         // The pathing graph is derived, so it is rebuilt from the restored
         // store rather than carried in the file — and `tests/pathing.rs`'s

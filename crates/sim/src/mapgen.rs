@@ -77,6 +77,7 @@
 //! one moves every seed at once and is a determinism change (AGENTS.md
 //! section 4.7).
 
+use crate::features::{Feature as MapFeature, FeatureKind, FeatureTable, FootprintColumn};
 use crate::math::fixed::{Angle, Fx, cos, sin};
 use crate::math::quantity::{Hp, Kw, Money};
 use crate::math::random::{Stream, StreamRng};
@@ -116,18 +117,24 @@ const TERRAIN_SKIN_VOXELS: i32 = 3;
 const ZONE_JITTER_VOXELS: i32 = 4;
 
 /// PLACEHOLDER: a heat vent is a three-by-three patch of surface voxels. The
-/// patch's shape is tuning and nothing reads it yet — T14's Generator sits on
-/// the vent, it does not mine it. Owner, at S1.
+/// patch's shape is tuning — T14's Generator sits on the vent, it does not
+/// mine it — and S1 kept it, re-owned to S4's map re-derivation with the other
+/// mapgen constants (decision 13 of S1's plan). Owner, at S4.
 ///
-/// Read outside this module by [`crate::power`], which needs the patch's span
-/// to tell two taps on one vent from taps on two vents ("one Generator per
-/// vent", spec section 5).
-pub(crate) const VENT_PATCH_RADIUS: i32 = 1;
+/// Since S1 nothing outside this module reads the span: the columns a vent is
+/// stamped into are its footprint in the map's feature table
+/// ([`crate::features`]), which is how [`crate::power`] tells two taps on one
+/// vent from taps on two (register S1-32).
+const VENT_PATCH_RADIUS: i32 = 1;
 
 /// PLACEHOLDER: how many voxels of ore a seam column carries before the seam
 /// moves to the next column. Four, so a 150-voxel seam is about 38 columns and
 /// fits inside the disc below. Owner, at S1 with the mining rules.
-const SEAM_VOXELS_PER_COLUMN: i32 = 4;
+///
+/// The feature table's liveness scan reads exactly this depth
+/// ([`crate::features::SEAM_DEPTH_VOXELS`] is defined as this constant), so a
+/// change here moves both together.
+pub(crate) const SEAM_VOXELS_PER_COLUMN: i32 = 4;
 
 /// PLACEHOLDER: the radius of the disc a seam is laid into, in voxels. Five,
 /// so `economy.seam_voxels` at [`SEAM_VOXELS_PER_COLUMN`] a column fits with
@@ -261,6 +268,15 @@ pub enum MapError {
         /// What this build writes.
         expected: u32,
     },
+    /// Two features share an anchor column or a footprint column
+    /// ([`crate::features::FeatureTable::new`]): one feature per column, by
+    /// construction (`docs/design/targeting.md`, "Names").
+    FeatureOverlap {
+        /// The first feature's name.
+        first: String,
+        /// The second feature's name.
+        second: String,
+    },
 }
 
 impl fmt::Display for MapError {
@@ -305,6 +321,11 @@ impl fmt::Display for MapError {
             MapError::FileVersion { found, expected } => write!(
                 f,
                 "map file version {found} cannot be read by a build that writes version {expected}"
+            ),
+            MapError::FeatureOverlap { first, second } => write!(
+                f,
+                "`{first}` and `{second}` share an anchor or a footprint column; a map carries \
+                 one feature per column"
             ),
         }
     }
@@ -427,6 +448,8 @@ pub struct GeneratedMap {
     pub seat_supply: Vec<Kw>,
     /// Per-seat starting draw, indexed by seat.
     pub seat_draw: Vec<Kw>,
+    /// Every vent and seam on the map, by name ([`crate::features`]).
+    pub features: FeatureTable,
     /// What the map turned out to be.
     pub report: MapReport,
 }
@@ -617,6 +640,7 @@ pub fn generate(seed: u64, rules: &RulesTable, seats: u32) -> Result<GeneratedMa
 
     // 7. The contested features.
     let mut supply_kw = placed.supply_kw;
+    let mut footprints = placed.footprints;
     let contested = place_contested(
         &mut voxels,
         seed,
@@ -625,9 +649,15 @@ pub fn generate(seed: u64, rules: &RulesTable, seats: u32) -> Result<GeneratedMa
         radius,
         [width, depth],
         &mut supply_kw,
+        &mut footprints,
     )?;
 
-    // 8. The power ceiling.
+    // 8. The feature table, and its one-feature-per-column check (S1,
+    // `docs/design/targeting.md`, "Names"). Bookkeeping only: nothing here
+    // writes a voxel, so no digest moves for it.
+    let features = FeatureTable::new(footprints)?;
+
+    // 9. The power ceiling.
     let ceiling = i32::try_from(numbers.power.map_ceiling_kw).unwrap_or(i32::MAX);
     if supply_kw > ceiling {
         return Err(MapError::PowerCeiling {
@@ -671,6 +701,7 @@ pub fn generate(seed: u64, rules: &RulesTable, seats: u32) -> Result<GeneratedMa
         seat_treasury,
         seat_supply,
         seat_draw,
+        features,
         report,
     })
 }
@@ -685,6 +716,8 @@ struct PlacedZones {
     seat_draw: Vec<Kw>,
     zones: Vec<ZoneReport>,
     supply_kw: i32,
+    /// Every starting vent and seam, as the feature table records it.
+    footprints: Vec<MapFeature>,
 }
 
 /// Realise every zone: a core beacon, a starting force, a heat vent and a scrap
@@ -727,6 +760,7 @@ fn realise_zones(
         seat_draw: Vec::new(),
         zones: Vec::with_capacity(centres.len()),
         supply_kw: 0,
+        footprints: Vec::new(),
     };
 
     for (index, centre) in centres.iter().enumerate() {
@@ -764,7 +798,7 @@ fn realise_zones(
         out.seat_draw.push(numbers.starting_draw());
         out.supply_kw = out.supply_kw.saturating_add(core_surplus);
 
-        let vent = place_vent(voxels, seed, zone, core, vent_band)?;
+        let vent = place_vent(voxels, seed, zone, core, vent_band, &mut out.footprints)?;
         let scrap = place_seam(
             voxels,
             seed,
@@ -772,6 +806,7 @@ fn realise_zones(
             core,
             seam_band,
             numbers.economy.seam_voxels,
+            &mut out.footprints,
         )?;
         out.supply_kw = out
             .supply_kw
@@ -1446,12 +1481,14 @@ fn columns_apart_squared(a: [i32; 3], b: [i32; 3]) -> i64 {
     dx.saturating_mul(dx).saturating_add(dy.saturating_mul(dy))
 }
 
-/// Replace the surface voxel of every column in a small patch with `material`.
+/// Replace the surface voxel of every column in a small patch with `material`,
+/// recording each column it wrote in `footprint`.
 fn stamp_surface_patch(
     voxels: &mut VoxelStore,
     at: [i32; 2],
     radius: i32,
     material: Material,
+    footprint: &mut Vec<FootprintColumn>,
 ) -> u32 {
     let mut placed: u32 = 0;
     let mut dy = -radius;
@@ -1463,6 +1500,7 @@ fn stamp_surface_patch(
             if let Some(z) = voxels.top_solid_z(x, y) {
                 if voxels.set_pristine([x, y, z], material) {
                     placed = placed.saturating_add(1);
+                    footprint.push(FootprintColumn { x, y, top: z });
                 }
             }
             dx = dx.saturating_add(1);
@@ -1472,13 +1510,15 @@ fn stamp_surface_patch(
     placed
 }
 
-/// Place one heat vent in the band `min ..= max` voxels from `core`.
+/// Place one heat vent in the band `min ..= max` voxels from `core`, and
+/// record it in `features`.
 fn place_vent(
     voxels: &mut VoxelStore,
     seed: u64,
     index: u32,
     core: [i32; 3],
     band: Band,
+    features: &mut Vec<MapFeature>,
 ) -> Result<Feature, MapError> {
     let spot = band_point(
         voxels,
@@ -1490,15 +1530,24 @@ fn place_vent(
         "a heat vent",
     )?;
     let apart2 = columns_apart_squared(spot, core);
+    let anchor = [
+        spot.first().copied().unwrap_or(0),
+        spot.get(1).copied().unwrap_or(0),
+    ];
+    let mut footprint: Vec<FootprintColumn> = Vec::new();
     let placed = stamp_surface_patch(
         voxels,
-        [
-            spot.first().copied().unwrap_or(0),
-            spot.get(1).copied().unwrap_or(0),
-        ],
+        anchor,
         VENT_PATCH_RADIUS,
         band.richness.vent(),
+        &mut footprint,
     );
+    features.push(MapFeature::new(
+        FeatureKind::Vent,
+        anchor,
+        band.richness,
+        footprint,
+    ));
     Ok(Feature {
         richness: band.richness,
         at: spot,
@@ -1610,8 +1659,14 @@ fn disc_offsets(radius: i32) -> Vec<[i32; 2]> {
 /// Lay `wanted` voxels of ore around `at`, **from the surface down**: the first
 /// voxel written in a column is the column's own top solid voxel, so a seam is
 /// visible from above, and the next [`SEAM_VOXELS_PER_COLUMN`] - 1 are the
-/// voxels beneath it.
-fn stamp_seam(voxels: &mut VoxelStore, at: [i32; 2], richness: Richness, wanted: u32) -> u32 {
+/// voxels beneath it. Every column that took ore is recorded in `footprint`.
+fn stamp_seam(
+    voxels: &mut VoxelStore,
+    at: [i32; 2],
+    richness: Richness,
+    wanted: u32,
+    footprint: &mut Vec<FootprintColumn>,
+) -> u32 {
     let ore = richness.ore();
     let mut placed: u32 = 0;
     for offset in disc_offsets(SEAM_DISC_RADIUS) {
@@ -1631,6 +1686,7 @@ fn stamp_seam(voxels: &mut VoxelStore, at: [i32; 2], richness: Richness, wanted:
         let Some(top) = voxels.top_solid_z(x, y) else {
             continue;
         };
+        let before = placed;
         let mut k: i32 = 0;
         while k < SEAM_VOXELS_PER_COLUMN && placed < wanted {
             let z = top.saturating_sub(k);
@@ -1642,11 +1698,15 @@ fn stamp_seam(voxels: &mut VoxelStore, at: [i32; 2], richness: Richness, wanted:
             }
             k = k.saturating_add(1);
         }
+        if placed > before {
+            footprint.push(FootprintColumn { x, y, top });
+        }
     }
     placed
 }
 
-/// Place one scrap seam in the band `min ..= max` voxels from `core`.
+/// Place one scrap seam in the band `min ..= max` voxels from `core`, and
+/// record it in `features`.
 fn place_seam(
     voxels: &mut VoxelStore,
     seed: u64,
@@ -1654,6 +1714,7 @@ fn place_seam(
     core: [i32; 3],
     band: Band,
     wanted: u32,
+    features: &mut Vec<MapFeature>,
 ) -> Result<Feature, MapError> {
     let spot = band_point(
         voxels,
@@ -1665,18 +1726,21 @@ fn place_seam(
         "a scrap seam",
     )?;
     let apart2 = columns_apart_squared(spot, core);
-    let placed = stamp_seam(
-        voxels,
-        [
-            spot.first().copied().unwrap_or(0),
-            spot.get(1).copied().unwrap_or(0),
-        ],
-        band.richness,
-        wanted,
-    );
+    let anchor = [
+        spot.first().copied().unwrap_or(0),
+        spot.get(1).copied().unwrap_or(0),
+    ];
+    let mut footprint: Vec<FootprintColumn> = Vec::new();
+    let placed = stamp_seam(voxels, anchor, band.richness, wanted, &mut footprint);
     if placed != wanted {
         return Err(MapError::Unplaceable("a scrap seam of the full size"));
     }
+    features.push(MapFeature::new(
+        FeatureKind::Seam,
+        anchor,
+        band.richness,
+        footprint,
+    ));
     Ok(Feature {
         richness: band.richness,
         at: spot,
@@ -1690,6 +1754,7 @@ fn place_seam(
 /// Each is drawn inside the central half of the map and must clear every spawn
 /// zone by one beacon sphere, every earlier contested feature by twice the seam
 /// disc, and **every starting vent and seam by the two features' own radii**.
+/// Each one placed is recorded in `features`.
 /// A placement that cannot be found in [`CONTESTED_ATTEMPTS`] tries is a rules
 /// table this generator cannot satisfy, reported rather than looped over
 /// forever.
@@ -1700,6 +1765,11 @@ fn place_seam(
 /// contested seam's disc could overwrite a vent whose 20 kW had already been
 /// added to the map's supply total — a power ceiling checked against a vent
 /// that is no longer on the map.
+#[allow(
+    clippy::too_many_arguments,
+    clippy::too_many_lines,
+    reason = "the feature table's record is the eighth argument: the placement loop is unchanged, and the record is written where the feature is"
+)]
 fn place_contested(
     voxels: &mut VoxelStore,
     seed: u64,
@@ -1708,6 +1778,7 @@ fn place_contested(
     zone_radius: i32,
     extent: [i32; 2],
     supply_kw: &mut i32,
+    features: &mut Vec<MapFeature>,
 ) -> Result<Vec<Feature>, MapError> {
     let width = extent.first().copied().unwrap_or(0);
     let depth = extent.get(1).copied().unwrap_or(0);
@@ -1803,16 +1874,39 @@ fn place_contested(
             spot.first().copied().unwrap_or(0),
             spot.get(1).copied().unwrap_or(0),
         ];
+        let mut footprint: Vec<FootprintColumn> = Vec::new();
         let voxels_placed = if *is_vent {
             *supply_kw = supply_kw.saturating_add(numbers.generator_output(*richness));
-            stamp_surface_patch(voxels, at, VENT_PATCH_RADIUS, richness.vent())
+            stamp_surface_patch(
+                voxels,
+                at,
+                VENT_PATCH_RADIUS,
+                richness.vent(),
+                &mut footprint,
+            )
         } else {
-            let n = stamp_seam(voxels, at, *richness, numbers.economy.seam_voxels);
+            let n = stamp_seam(
+                voxels,
+                at,
+                *richness,
+                numbers.economy.seam_voxels,
+                &mut footprint,
+            );
             if n != numbers.economy.seam_voxels {
                 return Err(MapError::Unplaceable("a contested seam of the full size"));
             }
             n
         };
+        features.push(MapFeature::new(
+            if *is_vent {
+                FeatureKind::Vent
+            } else {
+                FeatureKind::Seam
+            },
+            at,
+            *richness,
+            footprint,
+        ));
         placed.push(Feature {
             richness: *richness,
             at: spot,

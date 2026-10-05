@@ -99,8 +99,6 @@ fn harness_settings() -> MatchSettings {
 /// `the_binary_reproduces_the_library_in_a_fresh_process` would be comparing
 /// nothing (T11).
 fn world_of(rules: RulesTable, units_per_seat: u32) -> World {
-    let plan = pharmakos_sim::Plan::compile(&pharmakos_sim::determinism_playbook(), &rules)
-        .expect("the harness playbook compiles");
     let mut world = World::new(&WorldConfig {
         match_seed: pharmakos_sim::DETERMINISM_MATCH_SEED,
         seats: pharmakos_sim::DETERMINISM_SEATS,
@@ -109,10 +107,9 @@ fn world_of(rules: RulesTable, units_per_seat: u32) -> World {
         match_settings: harness_settings(),
     })
     .expect("the rules table describes a map and a broadphase grid");
-    for seat in 0..pharmakos_sim::DETERMINISM_SEATS {
-        let id = SeatId::new(u8::try_from(seat).expect("the harness runs few seats"));
-        assert!(world.seal_playbook(id, plan.clone()), "seat {seat} seals");
-    }
+    let sealed = pharmakos_sim::seal_determinism_playbooks(&mut world)
+        .expect("the harness playbook compiles");
+    assert_eq!(sealed, pharmakos_sim::DETERMINISM_SEATS, "every seat seals");
     world
 }
 

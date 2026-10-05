@@ -92,7 +92,17 @@ use crate::surface::Draft;
 pub const SAVE_FORMAT: &str = "pharmakos.save";
 
 /// The format's version, in the stamp. A save of another version is refused.
-pub const SAVE_FORMAT_VERSION: u32 = 1;
+///
+/// **2 is S1's targeting** (decisions-log item 127 (13);
+/// `docs/design/targeting.md`, contract pull request 2): beacon names became
+/// per seat, so a version-1 save's sealed playbooks, drafts and snapshot name
+/// beacons by numbers that counted every seat's, and resumed under per-seat
+/// names they would point a seat's orders at other beacons. Such a save is
+/// refused by its version, with [`PRE_S1_SAVE`] saying why.
+pub const SAVE_FORMAT_VERSION: u32 = 2;
+
+/// The last format version written before S1's per-seat beacon names.
+pub const PRE_S1_SAVE: u32 = 1;
 
 /// Which Lull boundary a save was made at.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -356,6 +366,15 @@ impl Save {
         }
         let stamp_json = member(&root, "stamp")?;
         let format_version = u32_at(stamp_json, "format_version")?;
+        if format_version <= PRE_S1_SAVE {
+            return Err(Error::invalid(format!(
+                "this save is format version {format_version}, written before S1 made beacon \
+                 names per seat: its playbooks and its snapshot name beacons by numbers that \
+                 counted every seat's, so this build (format version {SAVE_FORMAT_VERSION}) \
+                 refuses it rather than resume orders that would reach other beacons; start a \
+                 new match"
+            )));
+        }
         if format_version != SAVE_FORMAT_VERSION {
             return Err(Error::invalid(format!(
                 "this save is format version {format_version} and this build reads version \
@@ -733,11 +752,27 @@ mod tests {
     fn a_save_from_another_format_version_is_refused_by_its_version() {
         let text = save()
             .render()
-            .replace("\"format_version\": 1", "\"format_version\": 2");
+            .replace("\"format_version\": 2", "\"format_version\": 3");
         let error = Save::parse(&text).expect_err("another version");
         assert_eq!(error.code, Code::InvalidArgument);
         assert!(
-            error.message.contains("format version 2"),
+            error.message.contains("format version 3"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn a_pre_s1_save_is_refused() {
+        let text = save()
+            .render()
+            .replace("\"format_version\": 2", "\"format_version\": 1");
+        let error = Save::parse(&text).expect_err("a pre-S1 save");
+        assert_eq!(error.code, Code::InvalidArgument);
+        assert!(
+            error.message.contains("format version 1")
+                && error.message.contains("per seat")
+                && error.message.contains("start a new match"),
             "{}",
             error.message
         );

@@ -665,9 +665,9 @@ fn own_beacon(surface: &Surface) -> String {
         .iter()
         .position(|seat| *seat == 0)
         .expect("seat 0 has a core beacon");
-    pharmakos_gateway::view::beacon_id(pharmakos_sim::tables::BeaconId::new(
-        beacons.ids().get(row).copied().expect("an id"),
-    ))
+    pharmakos_sim::tables::own_beacon_name(
+        beacons.ordinals().get(row).copied().expect("an ordinal"),
+    )
 }
 
 /// `estimate_route`'s parameters: from the commander to its own core beacon.
