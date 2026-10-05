@@ -8,9 +8,10 @@
 //! the inputs here are exactly the verifier goldens' inputs -- every playbook
 //! under `crates/verifier/tests/cases/`, each against the **one** fixture
 //! `crates/verifier/tests/verifier.rs` writes out (`fixture_scope`,
-//! `fixture_snapshot`) and `tests/golden/verifier/README.md` tabulates. That
-//! fixture lives in an integration test, which no other crate can import, so
-//! [`fixture_scope`] and [`fixture_snapshot`] restate it, and
+//! `fixture_snapshot`, and for the cases its `MAP_CASES` names, `map_scope`)
+//! and `tests/golden/verifier/README.md` tabulates. That fixture lives in an
+//! integration test, which no other crate can import, so [`fixture_scope`],
+//! [`map_scope`], [`MAP_CASES`] and [`fixture_snapshot`] restate it, and
 //! `tests/harness.rs` (`every_case_under_the_bench_fixture_is_its_committed_report`)
 //! holds the restatement to the committed reports: every
 //! case's report under this fixture must equal its `expected.report.json` byte
@@ -38,12 +39,13 @@ use pharmakos_proto::gp::api::v1::VerifyReport;
 use pharmakos_proto::gp::api::v1::verify_plan::Depth;
 use pharmakos_proto::gp::v1::Voxel;
 use pharmakos_proto::gp::v1::beacon_filter::MandateKind;
+use pharmakos_proto::gp::v1::by_richness::Richness;
 use pharmakos_sim::knowledge::SeatEconomy;
 use pharmakos_sim::math::quantity::{Kw, Money};
 use pharmakos_sim::rules::RulesTable;
 use pharmakos_sim::snapshot::{SNAPSHOT_VERSION, Snapshot};
 use pharmakos_sim::tables::SeatId;
-use pharmakos_verifier::{Input, KnownBeacon, Ownership, Scope, verify};
+use pharmakos_verifier::{FeatureKind, Input, KnownBeacon, KnownFeature, Ownership, Scope, verify};
 
 use crate::stats::{Summary, micros};
 
@@ -199,16 +201,109 @@ pub fn fixture_scope() -> Scope {
     ))
 }
 
+/// The cases checked against [`map_scope`], as
+/// `crates/verifier/tests/verifier.rs` lists them in `MAP_CASES`: every case
+/// that names or describes a feature, and the one whose lint reads the map
+/// around a fixed site.
+pub const MAP_CASES: &[&str] = &[
+    "cover_the_nearest_vent",
+    "e0111_covering_without_coverage",
+    "e0111_pick_without_a_rank",
+    "e0407_covering_outside_a_place_step",
+    "e0408_on_outside_a_build_target",
+    "e0409_covered_outside_a_covering_deploy",
+    "e0410_removing_by_a_description",
+    "e0411_coverage_under_on",
+    "e0412_unknown_feature",
+    "e0413_a_seam_under_on",
+    "w0704_a_lost_feature",
+    "w0705_an_earlier_step_places_a_beacon",
+    "w0706_a_fixed_site_by_a_covered_vent",
+];
+
+fn feature(
+    id: &str,
+    kind: FeatureKind,
+    grade: Richness,
+    at: (i32, i32),
+    live: bool,
+    covered_by: Option<&str>,
+) -> KnownFeature {
+    KnownFeature {
+        feature_id: id.to_owned(),
+        kind,
+        grade,
+        x: at.0,
+        y: at.1,
+        live,
+        covered_by: covered_by.map(str::to_owned),
+    }
+}
+
+/// [`fixture_scope`] with the map's features and the commander's position, as
+/// `crates/verifier/tests/verifier.rs` writes it in `map_scope`.
+#[must_use]
+pub fn map_scope() -> Scope {
+    fixture_scope()
+        .with_feature(feature(
+            "seam_104_24",
+            FeatureKind::Seam,
+            Richness::Standard,
+            (104, 24),
+            true,
+            Some("b_02"),
+        ))
+        .with_feature(feature(
+            "seam_200_60",
+            FeatureKind::Seam,
+            Richness::Rich,
+            (200, 60),
+            true,
+            None,
+        ))
+        .with_feature(feature(
+            "vent_150_25",
+            FeatureKind::Vent,
+            Richness::Standard,
+            (150, 25),
+            true,
+            None,
+        ))
+        .with_feature(feature(
+            "vent_40_40",
+            FeatureKind::Vent,
+            Richness::Lean,
+            (40, 40),
+            false,
+            None,
+        ))
+        .with_feature(feature(
+            "vent_90_20",
+            FeatureKind::Vent,
+            Richness::Lean,
+            (90, 20),
+            true,
+            Some("b_01"),
+        ))
+        .with_commander(Voxel {
+            x: 82,
+            y: 13,
+            z: 55,
+        })
+}
+
 /// Everything one QUICK call is a function of, apart from the playbook.
 #[derive(Debug)]
 pub struct Fixture {
     rules: RulesTable,
     scope: Scope,
+    map_scope: Scope,
     snapshot: Vec<u8>,
 }
 
 impl Fixture {
-    /// The committed rules table, [`fixture_scope`] and [`fixture_snapshot`].
+    /// The committed rules table, [`fixture_scope`], [`map_scope`] and
+    /// [`fixture_snapshot`].
     ///
     /// # Errors
     ///
@@ -217,18 +312,31 @@ impl Fixture {
         Ok(Fixture {
             rules: committed_rules(root)?,
             scope: fixture_scope(),
+            map_scope: map_scope(),
             snapshot: fixture_snapshot()?,
         })
     }
 
+    /// The view a case is checked against: [`map_scope`] for the cases
+    /// [`MAP_CASES`] names, [`fixture_scope`] for every other.
+    #[must_use]
+    pub fn scope_for(&self, case: &Case) -> &Scope {
+        if MAP_CASES.contains(&case.name.as_str()) {
+            &self.map_scope
+        } else {
+            &self.scope
+        }
+    }
+
     /// One report, as the verifier goldens are made: `Input::new` then
-    /// `verify` at `depth`.
+    /// `verify` at `depth`, against the case's view.
     ///
     /// # Errors
     ///
     /// When the rules table lacks a block the checks read.
-    pub fn report(&self, playbook: &[u8], depth: Depth) -> Result<VerifyReport, String> {
-        let input = Input::new(playbook, &self.snapshot, &self.scope, &self.rules)
+    pub fn report(&self, case: &Case, depth: Depth) -> Result<VerifyReport, String> {
+        let scope = self.scope_for(case);
+        let input = Input::new(&case.bytes, &self.snapshot, scope, &self.rules)
             .map_err(|gap| format!("assembling the verifier's input: {gap}"))?;
         Ok(verify(&input, depth))
     }
@@ -238,9 +346,9 @@ impl Fixture {
     /// # Errors
     ///
     /// As [`Fixture::report`]; the error is checked after the clock stops.
-    pub fn time_quick(&self, playbook: &[u8]) -> Result<u128, String> {
+    pub fn time_quick(&self, case: &Case) -> Result<u128, String> {
         let started = Instant::now();
-        let report = self.report(playbook, Depth::Quick);
+        let report = self.report(case, Depth::Quick);
         let elapsed = started.elapsed().as_nanos();
         let report = report?;
         // Read after the clock stops, so the optimiser cannot drop the call.
@@ -290,11 +398,11 @@ pub fn measure(fixture: &Fixture, cases: &[Case], plan: QuickPlan) -> Result<Qui
     let mut slowest: (String, u128) = (String::new(), 0);
     for case in cases {
         for _ in 0..plan.warmup {
-            fixture.time_quick(&case.bytes)?;
+            fixture.time_quick(case)?;
         }
         let mut own: Vec<u128> = Vec::with_capacity(plan.calls);
         for _ in 0..plan.calls {
-            own.push(fixture.time_quick(&case.bytes)?);
+            own.push(fixture.time_quick(case)?);
         }
         pooled.extend_from_slice(&own);
         let summary = Summary::of(own);

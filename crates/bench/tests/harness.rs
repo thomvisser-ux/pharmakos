@@ -19,9 +19,9 @@ use pharmakos_proto::json;
 /// The bench's restatement of the verifier goldens' fixture is that fixture:
 /// every committed case, verified FULL under it, is its committed report byte
 /// for byte. When this goes red after a change to
-/// `crates/verifier/tests/verifier.rs`'s `fixture_scope` or
-/// `fixture_snapshot`, restate the change in `quick::fixture_scope` and
-/// `quick::fixture_snapshot`; the QUICK figure is only P1's if it is taken on
+/// `crates/verifier/tests/verifier.rs`'s `fixture_scope`, `map_scope`,
+/// `MAP_CASES` or `fixture_snapshot`, restate the change in `quick`'s
+/// namesakes; the QUICK figure is only P1's if it is taken on
 /// the goldens' inputs.
 #[test]
 fn every_case_under_the_bench_fixture_is_its_committed_report() {
@@ -32,7 +32,7 @@ fn every_case_under_the_bench_fixture_is_its_committed_report() {
     let mut drifted: Vec<String> = Vec::new();
     for case in &cases {
         let report = fixture
-            .report(&case.bytes, Depth::Full)
+            .report(case, Depth::Full)
             .expect("the rules table is complete");
         let mut text = json::encode(&report).expect("the report encodes");
         text.push('\n');
@@ -60,7 +60,7 @@ fn the_budget_case_sits_exactly_on_the_budget() {
         .find(|case| case.name == BUDGET_CASE)
         .expect("budget_128 is committed");
     let report = fixture
-        .report(&budget.bytes, Depth::Quick)
+        .report(budget, Depth::Quick)
         .expect("the rules table is complete");
     assert!(report.qualifies, "{:?}", report.diagnostics);
     assert_eq!(report.size_units, report.size_budget);
