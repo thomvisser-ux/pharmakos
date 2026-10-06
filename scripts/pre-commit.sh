@@ -8,21 +8,19 @@
 # that; the hook exists so the obvious two failures — unformatted code and a clippy warning
 # — never reach a pull request. It takes seconds, not minutes.
 #
-# INSTALL (from the repository root):
-#
-#     ln -s ../../scripts/pre-commit.sh .git/hooks/pre-commit    # macOS, Linux, Git Bash
-#     cp scripts/pre-commit.sh .git/hooks/pre-commit             # Windows without symlinks
-#     chmod +x .git/hooks/pre-commit
+# INSTALL: `git config core.hooksPath scripts/githooks` from the repository root, once per
+# clone (README, "Setting up a clone"). scripts/githooks/pre-commit is the two-line wrapper
+# that runs this file, and scripts/githooks/pre-push runs `cargo xtask fmt clippy`. Hooks
+# kept in the tree are reviewed like any other file; xtask's
+# `the_clone_runs_the_versioned_hooks` fails a clone that is not wired, except under CI.
 #
 # It is a shell script and Git for Windows ships the shell that runs it, so one file works
 # on all three operating systems.
 #
 # WHY NOT .cargo-husky: cargo-husky installs hooks as a side effect of `cargo test`, which
 # means a dev-dependency, a surprise write into .git/hooks, and nothing at all until the
-# first test run. xtask is deliberately dependency-free and the install is one line, so the
-# explicit script wins. If hook management ever needs to be automatic, add
-# `scripts/githooks/pre-commit` (a two-line wrapper around this file) and point
-# `git config core.hooksPath scripts/githooks` at it — that keeps the hooks in review.
+# first test run. xtask is deliberately dependency-free and the setup is one line, so the
+# explicit configuration wins.
 #
 # ESCAPE HATCH: `PHARMAKOS_SKIP_HOOKS=1 git commit ...`, or `git commit --no-verify`. Both
 # are for genuine emergencies; CI will still have its say.

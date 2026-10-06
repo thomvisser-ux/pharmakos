@@ -105,6 +105,7 @@
 //! cargo xtask ci --fix              # rustfmt and the machine-applicable clippy fixes
 //! cargo xtask ci --skip buf         # everything except one step
 //! cargo xtask clippy -p pharmakos-sim   # one step, scoped (what the pre-commit hook runs)
+//! cargo xtask fmt clippy            # two steps, whole workspace (what the pre-push hook runs)
 //! cargo xtask golden --bless        # accept the fresh outputs as the new goldens
 //! cargo xtask stage-client --check  # build the cdylib, stage, import, run the client check
 //! cargo xtask list                  # list the steps
@@ -4406,6 +4407,63 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
     #[test]
     fn ci_scope_is_not_a_step() {
         assert!(STEPS.iter().all(|step| step.name != "ci-scope"));
+    }
+
+    /// The machine-wide pre-push gate (decisions-log item 132): a clone runs
+    /// the hooks kept in `scripts/githooks` (README, "Setting up a clone"), so
+    /// an unwired clone fails here rather than pushing unchecked. A CI runner's
+    /// checkout carries no hooks, so the test answers for a developer's clone
+    /// only: it is skipped when `CI` or `GITHUB_ACTIONS` holds a value other
+    /// than empty, `0` or `false` (`claude.yml` runs `--quick` with a scrubbed
+    /// environment, which `GITHUB_ACTIONS` covers if `CI` is scrubbed).
+    #[test]
+    fn the_clone_runs_the_versioned_hooks() {
+        let set = |name: &str| {
+            env::var(name).is_ok_and(|value| !matches!(value.trim(), "" | "0" | "false"))
+        };
+        if set("CI") || set("GITHUB_ACTIONS") {
+            return;
+        }
+        let root = workspace_root().expect("the workspace root is found");
+        let git = |args: &[&str]| {
+            let mut command = Command::new("git");
+            command.args(args).current_dir(&root).stdin(Stdio::null());
+            // The clone's own config, never a redirected one (as `scope.rs` does).
+            for name in ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_CONFIG"] {
+                command.env_remove(name);
+            }
+            command.output().expect("git runs")
+        };
+        let output = git(&["config", "--get", "core.hooksPath"]);
+        // `git config --get` exits 1 when the key is unset; anything else is
+        // not a clone this test can judge (an exported tree, a broken repo).
+        match output.status.code() {
+            Some(0 | 1) => {}
+            other => panic!(
+                "`git config --get core.hooksPath` failed ({other:?}): {}",
+                String::from_utf8_lossy(&output.stderr)
+            ),
+        }
+        let hooks_path = String::from_utf8_lossy(&output.stdout);
+        assert_eq!(
+            hooks_path.trim(),
+            "scripts/githooks",
+            "this clone does not run the versioned hooks; wire it once with `git config core.hooksPath scripts/githooks`"
+        );
+        // Git runs a hook only if it is executable, and on Linux and macOS a
+        // hook that lost its mode is skipped with a hint, so the index must
+        // hold both at 100755.
+        let staged = git(&["ls-files", "-s", "scripts/githooks"]);
+        let staged = String::from_utf8_lossy(&staged.stdout);
+        for hook in ["pre-commit", "pre-push"] {
+            let path = format!("scripts/githooks/{hook}");
+            assert!(
+                staged
+                    .lines()
+                    .any(|line| line.starts_with("100755 ") && line.ends_with(&path)),
+                "{path} is not tracked as executable (100755): {staged}"
+            );
+        }
     }
 
     #[test]

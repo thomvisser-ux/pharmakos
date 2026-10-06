@@ -127,7 +127,9 @@ rebase_lane() {
     git -C "$wt" rebase --abort || true
     fail "rebase of $lane onto main conflicts; resolve it by hand, push, and restart the train from $lane"
   fi
-  git -C "$wt" push --force-with-lease
+  # The push runs the pre-push hook (`cargo xtask fmt clippy`, decisions-log item 132) in the
+  # lane's warm target, as the local verify below does, never a cold <worktree>/target.
+  CARGO_TARGET_DIR="$build_root/$lane" git -C "$wt" push --force-with-lease
 }
 
 # The paths two commits differ by, one per line: NUL-separated from git so no name is

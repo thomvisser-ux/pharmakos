@@ -1,0 +1,59 @@
+#!/bin/sh
+# SPDX-FileCopyrightText: 2026 Pharmakos contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# The versioned pre-push hook: `cargo xtask fmt clippy`, the suite's formatting and lint
+# steps over the whole workspace, before anything leaves the box. Wired by `git config
+# core.hooksPath scripts/githooks` (README, "Setting up a clone"); xtask's
+# `the_clone_runs_the_versioned_hooks` fails a clone that is not wired, except under CI.
+#
+# Not the tests (decisions-log item 132): on a warm target `cargo xtask ci --quick` took
+# 1900 s with three lanes building beside it, nearly all of it in `test`, while this ran in
+# 22 s. CI runs the whole suite on all three operating systems on every pull request and
+# on main's push, and main is protected.
+#
+# The check runs on the working tree, so a push of anything but HEAD's commit is refused:
+# check the ref out and push from there. Uncommitted changes are checked with the tree,
+# and the hook says so.
+#
+# ESCAPE HATCH: `PHARMAKOS_SKIP_HOOKS=1 git push ...`, or `git push --no-verify`, as for
+# scripts/pre-commit.sh. CI still has its say.
+
+set -eu
+
+if [ "${PHARMAKOS_SKIP_HOOKS:-0}" = "1" ]; then
+    echo "pre-push: skipped (PHARMAKOS_SKIP_HOOKS=1)"
+    exit 0
+fi
+
+root=$(git rev-parse --show-toplevel)
+cd "$root"
+head=$(git rev-parse HEAD)
+
+# git feeds one line per ref: <local ref> <local sha> <remote ref> <remote sha>.
+# A deletion's local sha is all zeros and pushes no code, so it needs no check. A tag is
+# peeled to its commit, so pushing a tag on HEAD is pushing HEAD.
+pushes_code=0
+while read -r local_ref local_sha _remote_ref _remote_sha; do
+    case "$local_sha" in *[!0]*) ;; *) continue ;; esac
+    pushes_code=1
+    commit=$(git rev-parse --verify --quiet "$local_sha^{commit}" || true)
+    if [ "$commit" != "$head" ]; then
+        echo "pre-push: refused: $local_ref is not HEAD, and the check runs on HEAD's working tree;" >&2
+        echo "          check it out and push from there (PHARMAKOS_SKIP_HOOKS=1 overrides)" >&2
+        exit 1
+    fi
+done
+
+if [ "$pushes_code" = "0" ]; then
+    exit 0
+fi
+if [ -n "$(git status --porcelain)" ]; then
+    echo "pre-push: note: the working tree has uncommitted or untracked files; the check includes them"
+fi
+
+echo "pre-push: cargo xtask fmt clippy"
+if ! cargo xtask fmt clippy; then
+    echo "pre-push: blocked: cargo xtask fmt clippy failed (PHARMAKOS_SKIP_HOOKS=1 to override)" >&2
+    exit 1
+fi

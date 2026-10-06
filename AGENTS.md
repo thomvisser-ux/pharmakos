@@ -577,6 +577,12 @@ of that premise.
 
   Third-party assets keep their own SPDX line and their entry in the credits screen (CC-BY
   attribution is a shipping requirement, not a nicety). Audio comes from CC0/CC-BY sources only.
+- **The versioned hooks.** `scripts/githooks/` holds them, wired once per clone with
+  `git config core.hooksPath scripts/githooks` (README, "Setting up a clone"): `pre-commit` runs
+  rustfmt and clippy on the crates a commit touches, and `pre-push` runs `cargo xtask fmt clippy`
+  over the workspace and refuses a push of anything but HEAD's commit. `PHARMAKOS_SKIP_HOOKS=1` and
+  `--no-verify` are for genuine emergencies, never a way past a failing check (decisions-log item
+  132).
 - An agent-written commit may add a `Co-Authored-By:` trailer above the sign-off. The sign-off
   itself must be a real identity that can make the DCO's assertion.
 
@@ -617,7 +623,9 @@ cargo xtask ci --fix      # rustfmt and the machine-applicable clippy fixes
    run first empties `<target>/golden/`, so every `actual.*` the `golden` step reads was written by
    this run; a `--package` run empties nothing (decisions-log item 131). A check run by hand, such
    as `crates/gamectl/tests/balance.rs`'s 80-match balance report, is an `#[ignore]`d test: never a
-   step, and never compared across operating systems (decisions-log item 130).
+   step, and never compared across operating systems (decisions-log item 130). The tests include
+   xtask's `the_clone_runs_the_versioned_hooks`, which fails a clone whose `core.hooksPath` is not
+   `scripts/githooks`, except where `CI` or `GITHUB_ACTIONS` is set (decisions-log item 132).
 6. **Determinism** — replay a fixed set of seeded matches headless and compare the full per-tick
    xxh3 hash chain against golden files; save/restore round-trips hash-identically; in the research
    build, fork equivalence. The CI matrix runs Windows, Linux and macOS and compares the chains
