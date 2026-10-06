@@ -698,6 +698,14 @@ fn bind_rows(
         .then(|| usize::try_from(state.bound_feature).ok())
         .flatten();
     for row in rows {
+        // A switch binds what the settings it carries bind.
+        let row = match row {
+            Row::Mandate {
+                settings: Some(settings),
+                ..
+            } => settings.as_ref(),
+            other => other,
+        };
         let anchors: &[(u8, Anchor)] = match row {
             Row::AddTarget { anchor, .. } => {
                 if let Anchor::On(spec) = anchor {
@@ -1230,7 +1238,23 @@ fn commit_row(
         world.feature_is_live(usize::try_from(binding.feature).unwrap_or(usize::MAX))
     };
     match spec {
-        Row::Mandate { kind } => world.set_beacon_mandate(row, *kind),
+        Row::Mandate { kind, settings } => {
+            // The switch first, which clears the old mandate's settings, then
+            // the settings the row carries over the defaults it left: one row,
+            // committing at the end of its own duration, all or nothing. The
+            // one way the settings can fail -- a lost `on` target -- is tested
+            // before the switch writes anything, so a failed row leaves the
+            // old writ, its settings and its held seam exactly as they were.
+            if let Some(settings) = settings {
+                if !targets_live(world, settings, bindings, slot) {
+                    return Err(StepFailure::FeatureLost);
+                }
+            }
+            world.set_beacon_mandate(row, *kind);
+            if let Some(settings) = settings {
+                commit_row(world, row, seat, settings, bindings, slot)?;
+            }
+        }
         Row::Priority { priority } => world.set_beacon_priority(row, *priority),
         Row::Recycle => {
             world.recycle_beacon(seat, beacon);
@@ -1281,6 +1305,7 @@ fn commit_row(
             protected,
             probes,
             scouts,
+            mine,
             ..
         } => {
             // A settings edit **replaces** the lists it names, because spec
@@ -1292,12 +1317,7 @@ fn commit_row(
             if !targets.is_empty() {
                 // All-or-nothing reaches the bindings too: a list with one lost
                 // target commits none of it.
-                let used = targets.iter().filter(|(_, anchor)| anchor.binds()).count();
-                let end = slot.saturating_add(used);
-                if bindings
-                    .get(slot..end)
-                    .is_none_or(|bound| bound.iter().any(|binding| !live(world, binding)))
-                {
+                if !targets_live(world, spec, bindings, slot) {
                     return Err(StepFailure::FeatureLost);
                 }
                 // Replacing is not abandoning: an anchor that survives the
@@ -1352,9 +1372,34 @@ fn commit_row(
             if *scouts > 0 {
                 world.set_beacon_scouts(row, u8::try_from(*scouts).unwrap_or(u8::MAX));
             }
+            // The Mine settings the row names, and nothing it is silent about
+            // (`crate::mining::MineEdit`).
+            if let Some(edit) = mine {
+                world.set_beacon_mine(row, *edit);
+            }
         }
     }
     Ok(())
+}
+
+/// Whether every `on` target a [`Row::Settings`] row writes is still bound to
+/// a live feature: the one test a settings edit can fail at commit time, kept
+/// in one place so the switch that carries the edit can ask it before it
+/// writes anything. Any other row has no targets and answers `true`.
+fn targets_live(world: &World, spec: &Row, bindings: &[Binding], slot: usize) -> bool {
+    let Row::Settings { targets, .. } = spec else {
+        return true;
+    };
+    if targets.is_empty() {
+        return true;
+    }
+    let used = targets.iter().filter(|(_, anchor)| anchor.binds()).count();
+    let end = slot.saturating_add(used);
+    bindings.get(slot..end).is_some_and(|bound| {
+        bound.iter().all(|binding| {
+            world.feature_is_live(usize::try_from(binding.feature).unwrap_or(usize::MAX))
+        })
+    })
 }
 
 /// The guaranteed tail (spec section 10): hold, shadow or patrol, for ever.

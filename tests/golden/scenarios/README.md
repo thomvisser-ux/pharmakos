@@ -89,7 +89,8 @@ is not this task's to add (one scenario file per lane).
 
 What it *does* cover from T14 onward is the **economy running underneath a
 playbook that is going nowhere**: each seat's starting mining drone finds ore in
-its core's sphere and delivers it twice over the segment, and the Ledger settles
+its core's sphere and delivers it (twice for seat 0 and once for seat 1 since
+S1's `mine`, below), and the Ledger settles
 at the recap. Those `ore_delivered` and `settled` lines come from the mandate
 layer rather than from the playbook, which is the point — a seat that seals
 nothing still earns and is still paid.
@@ -138,6 +139,25 @@ refused in rounds 2 and 3 by no stacking (`illegal_site`, ticks 4056 and 5191)
 instead of placing a second beacon on its round-1 column (the demo's F4).
 Every tick the other scenarios quote is where it was. `cover-nearest-vent` is
 new.
+
+**S1's Mine mandate (`mine`) moved every chain from its first line (tick 1)**
+(register S1-38; decisions-log items 127 (9) and 128 (3) (e)). The encoding
+gained five beacon columns -- the four Mine settings and the seam a beacon
+holds -- and, measured with them left out, every chain's behaviour also first
+diverges at tick 1, because every seat mines: its starting drone now works the
+seam its core holds, chosen on the decision tick after tick 1's programs
+phase, so it stands for that one tick, and from then on it digs from pit-safe
+stands and takes its seam's whole top layer rather than only the rim (the
+demo's F2). Every `event_fired` assertion of the committed scenarios still
+holds by its deadline, and the interpreter's transcripts (`interpreter/`) did
+not move. `expand-east-segment`'s event log moved in its `ore_delivered` lines
+alone: each seat's first load lands earlier (ticks 1430 and 1915, where they
+were 2157 and 2036), because a drone now reaches the stands inside its seam's
+top layer, and seat 0's second load is a full `$` 64 at 3023 where both seats'
+second loads were the rim's last `$` 32. `mine-to-depth` is new: seat 0 switches its core to Mine
+with `dig_max_depth` 3 every round, a `set_mandate` row whose settings the sim
+now writes (item 131 (5)), and works its starting seam below the rim in all
+three rounds.
 
 `expand-east-segment` carries one more thing worth knowing before its chain is
 read. The playbook it seals **does not qualify against either seat's own frozen

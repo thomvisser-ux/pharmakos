@@ -1,0 +1,26 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// S1's Mine mandate (the `mine` lane; spec section 6's Mine row; decisions-log
+// items 127 (9) and 128 (3) (e)): one visit, carried round after round. "Walk
+// to the core and switch it to Mine, digging the nearest seam to its floor."
+// The switch carries its settings, which the sim writes over the defaults the
+// switch leaves (item 131 (5)), and the core holds its starting seam until it
+// is spent. See mine-to-depth.scenario.jsonc for what is asserted.
+{
+  "schema_version": {"major": 1, "minor": 0},
+  "meta": {"title": "Mine the starting seam to depth", "author_kind": "HUMAN"},
+  "kind": "PLAYBOOK",
+  "declarative": {
+    "route": [
+      {"label": "dig_deep",
+        "interface": {"beacon": {"beacon_id": "b_00"}, "rows": [
+          {"set_mandate": {"mine": {"dig_max_depth": 3, "seam_choice": "NEAREST"}}}
+        ]},
+        "timeout_ms": 60000, "on_fail": {"action": "SKIP"}}
+    ],
+    "handlers": []
+  },
+  "on_death": {"on_respawn": "CONTINUE", "max_deaths_before_fallback": 2},
+  "fallback": {"hold": {"at": {"safest": {}}}}
+}

@@ -1036,9 +1036,80 @@ fn the_decision_tick_counts_its_evaluation_units() {
     // goes past the plan's four categories (S1's plan, section 5 item 3): it
     // also charges one unit per feature the ranker scans and one per spiral
     // column the covering search tries, which the pull request names for
-    // `p1`'s report.
+    // `p1`'s report. Since S1's `mine` lane the first decision also makes the
+    // core's seam choice (its starting mining drone gives it one,
+    // `pharmakos_sim::mining`): one unit per feature ranked (ten on this map)
+    // and one estimate for the one seam with work in reach, so 412 + 11. The
+    // narrow and wide counts above are read at the sixth tick, by when the
+    // seam is held and keeping it costs nothing.
     assert_eq!(
-        covering, 412,
+        covering, 423,
         "a covering resolution ranks every feature and walks a spiral: {covering}"
     );
+}
+
+#[test]
+fn a_set_mandate_whose_target_is_lost_writes_nothing() {
+    // A `set_mandate` row switches the writ and writes the settings it
+    // carries, as one row, all or nothing: a Build switch whose `on` target is
+    // lost while the commander interfaces fails `feature_lost` and leaves the
+    // beacon's old writ and its Mine settings exactly as they were.
+    let mut world = world_at(SEED, 2, &[180_000]);
+    let site = [335, 18, world.voxels().standing_z(335, 18)];
+    let beacon = world
+        .place_beacon_directly(
+            SeatId::new(SEAT),
+            point(site),
+            MandateKind::Survey,
+            PRIORITY_NORMAL,
+        )
+        .expect("room");
+    world.set_mine_settings(
+        beacon,
+        pharmakos_sim::mining::MineSettings {
+            dig_max_depth: 3,
+            pillar_spacing: 0,
+            seam_choice: pharmakos_sim::mining::SeamChoice::Richest,
+            flee_on_threat: false,
+        },
+    );
+    let row = usize::try_from(beacon.raw()).unwrap();
+    let settings_before = world.beacons().mine_settings(row);
+    let writ_before = world.beacons().mandates().get(row).copied();
+    let vent = world
+        .features()
+        .index_of_name(START_VENT)
+        .expect("seat 0's starting vent");
+    let footprint = world.features().get(vent).unwrap().footprint.clone();
+    let route = format!(
+        concat!(
+            r#"{{"label":"sw","interface":{{"beacon":{{"beacon_id":"b_01"}},"rows":[{{"set_mandate":"#,
+            r#"{{"build":{{"targets":[{{"blueprint_id":"generator","anchor":{{"on":{{"feature_id":"{v}"}}}}}}]}}}}}}]}},"#,
+            r#""timeout_ms":120000,"on_fail":{{"action":"SKIP"}}}}"#
+        ),
+        v = START_VENT
+    );
+    let mut runner = open(world, &route);
+    let mut started = false;
+    let mut destroyed = false;
+    let events = play(&mut runner, 2_400, |world, events| {
+        if events.iter().any(|e| e.kind == EventKind::VisitStarted) {
+            started = true;
+        }
+        if started && !destroyed {
+            for column in &footprint {
+                assert!(world.request_voxel_edit(VoxelEdit::Set {
+                    at: [column.x, column.y, column.top],
+                    material: Material::STONE,
+                }));
+            }
+            destroyed = true;
+        }
+    });
+    assert!(destroyed, "the visit started");
+    assert_eq!(failures(&events), vec![id(StepFailure::FeatureLost)]);
+    assert_eq!(count(&events, EventKind::RowCommitted), 0);
+    let world = runner.world();
+    assert_eq!(world.beacons().mandates().get(row).copied(), writ_before);
+    assert_eq!(world.beacons().mine_settings(row), settings_before);
 }

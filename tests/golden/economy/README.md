@@ -31,6 +31,14 @@ living seats.
   (5)), so the `draw` column went from 6 to 4 on every row (the core's 2 kW base
   left it; the starting force's 4 kW did not) and nothing else in the file
   moved.
+* **A mining rule changed, and no table value did.** S1's `mine` lane is the
+  one on record (register S1-38): a drone digs the seam its home beacon holds
+  from pit-safe stands rather than only the seam's exposed rim, so each core's
+  starting drone, at the default `dig_max_depth` of 0, works its starting
+  seam's whole top layer -- 38 voxels, `$` 152 at standard grade -- and the
+  ledger delivers in rounds 2 and 3 where it had stopped after round 2 (the
+  demo's F2). Every `ore_delivered` line, every closing column after it and
+  the settlement ranks moved with it; `rules_hash` did not.
 * **The brownout order changed.** Lowest priority, then furthest from the core,
   core last, autocannon never shed. A different shedding order is a gameplay
   rule change and needs to be stated as one.

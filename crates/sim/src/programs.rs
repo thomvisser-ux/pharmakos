@@ -25,11 +25,10 @@
 //! Timed work — a mining drone's `economy.mining_ms_per_voxel`, a reclaim
 //! drone's lift — is a **tick** written into
 //! [`crate::tables::UnitTable::busy_until`], which is hashed state. The ore
-//! search walks the home beacon's sphere over the chunk store and keeps
-//! nothing; the one place it could have allocated, the candidate list, does not
-//! exist because the search keeps a single best voxel by a total key.
+//! search reads the footprint of the seam the home beacon holds and sorts its
+//! candidates in a fixed array ([`crate::mining`]), so nothing allocates.
 
-use crate::economy::{BUILD_HP_PER_SECOND, MINING_LOAD_VOXELS};
+use crate::economy::BUILD_HP_PER_SECOND;
 use crate::events::{Emission, EventKind};
 use crate::knowledge::{AssetId, Position};
 use crate::math::fixed::{Fx, Sq};
@@ -84,7 +83,7 @@ pub struct MoveProgram;
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct BuildProgram;
 
-/// Dig the seam in the beacon's sphere and carry the ore home.
+/// Dig the seam the beacon holds and carry the ore home ([`crate::mining`]).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct MineProgram;
 
@@ -355,12 +354,14 @@ impl Program for MineProgram {
         {
             return;
         }
-        // 3. The next voxel of the seam — which is also what decides whether
-        //    the hands are full, because the load is a number of **voxels**
-        //    and a voxel's worth depends on the seam's grade.
-        let Some(ore) = world.ore_in_sphere(home) else {
-            // No ore left in the sphere: take home whatever is in hand rather
-            // than standing over it.
+        // 3. The next voxel of the seam the home beacon holds, and the stand
+        //    to dig it from (`crate::mining`: the four Mine settings and the
+        //    pit-safe stand) -- which is also what decides whether the hands
+        //    are full, because the load is a number of **voxels** and a
+        //    voxel's worth depends on the seam's grade.
+        let Some(dig) = world.next_dig(home) else {
+            // No work left in the seam, or no seam held: take home whatever is
+            // in hand rather than standing over it.
             if carried.raw() > 0 {
                 deliver(world, unit, EventKind::OreDelivered);
             } else {
@@ -371,19 +372,11 @@ impl Program for MineProgram {
         // 4. A full load goes home. "Delivered ore is credited to the seat
         //    treasury immediately" (spec section 6), so the credit lands on
         //    arrival and not at the seam.
-        if carried.raw() >= full_load(world, ore) {
+        if carried.raw() >= full_load(world, dig.ore) {
             deliver(world, unit, EventKind::OreDelivered);
             return;
         }
-        let Some(stand) = world.dig_stand(ore) else {
-            // Ore, but none a drone can stand beside.
-            if carried.raw() > 0 {
-                deliver(world, unit, EventKind::OreDelivered);
-            } else {
-                idle_at_home(world, unit);
-            }
-            return;
-        };
+        let stand = dig.stand;
         let here = world
             .units()
             .positions()
@@ -514,8 +507,10 @@ fn hp_per_tick() -> i32 {
 /// What a full load of ore is worth, in `$`, for a drone working the seam that
 /// `ore` belongs to.
 ///
-/// [`MINING_LOAD_VOXELS`] voxels **at that seam's own yield**, so the load is a
-/// number of voxels rather than a number of `$`: a rich seam fills the drone's
+/// `economy.mining_carry_voxels` voxels **at that seam's own yield** (the row
+/// S1's first contract pull request added for the skeleton's
+/// `MINING_LOAD_VOXELS`, register S1-25, and S1's `mine` lane reads), so the
+/// load is a number of voxels rather than a number of `$`: a rich seam fills the drone's
 /// hands in the same number of digs as a lean one and is worth four times as
 /// much when it gets home. That is what "richness sets the total yield" means
 /// (item 22) — the richness is in what a voxel is worth, not in how much a
@@ -540,7 +535,8 @@ fn full_load(world: &World, ore: [i32; 3]) -> i64 {
         },
         Money::raw,
     );
-    per_voxel.saturating_mul(i64::from(MINING_LOAD_VOXELS))
+    let carry = world.rules().mining_carry_voxels().get();
+    per_voxel.saturating_mul(i64::from(carry))
 }
 
 /// Where the drone is already walking to, when that place is still a legal
@@ -626,10 +622,18 @@ fn finish_dig(world: &mut World, unit: u32) {
         *slot = NO_WORK;
     }
     let home = home_of(world, row);
-    let Some(ore) = world.ore_in_sphere(home) else {
+    // Another dig in the same seam's box landed in the queue first this tick:
+    // judge this one next tick, against the world with that one taken out, so
+    // two digs are never pit-safe only one at a time and never take one voxel
+    // twice (`crate::mining::dig_waits`).
+    if crate::mining::dig_waits(world, home) {
+        let next = world.tick().raw().saturating_add(1);
+        if let Some(slot) = world.units_mut().busy_until_mut().get_mut(row) {
+            *slot = next;
+        }
         return;
-    };
-    let Some(stand) = world.dig_stand(ore) else {
+    }
+    let Some(crate::mining::Dig { ore, stand }) = world.next_dig(home) else {
         return;
     };
     let here = world

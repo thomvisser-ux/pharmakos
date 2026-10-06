@@ -72,6 +72,7 @@
 //! | [`fog_cost_numerator`](RulesTable::fog_cost_numerator), [`fog_cost_denominator`](RulesTable::fog_cost_denominator) | `locomotion.fog_cost_numerator` / `_denominator` |
 //! | [`unit_hp`](RulesTable::unit_hp), [`unit_draw_kw`](RulesTable::unit_draw_kw) | `units.<kind>.hp` / `.draw_kw` |
 //! | [`cost_per_second`](RulesTable::cost_per_second) | `commander.cost_per_second`, `units.<kind>.cost_per_second` |
+//! | [`mining_carry_voxels`](RulesTable::mining_carry_voxels) | `economy.mining_carry_voxels` |
 //!
 //! The map generator ([`crate::mapgen`]) reads a dozen more rows — the whole of
 //! `map`, `beacon`, `power`, `economy` and `units` — and reads them from
@@ -91,6 +92,7 @@ use crate::math::quantity::{Hp, Kw};
 use crate::tables::UnitKind;
 use pharmakos_proto::gp;
 use std::fmt;
+use std::num::NonZeroU32;
 
 /// The disk location of the canonical rules table, relative to the repository
 /// root.
@@ -193,6 +195,10 @@ pub struct RulesTable {
     /// The fog multiplier's denominator. `2` (item 61). From
     /// `locomotion.fog_cost_denominator`.
     fog_cost_denominator: i32,
+    /// The voxels a mining drone digs before it carries its load home. `16`
+    /// (register S1-25). From `economy.mining_carry_voxels`. Refused at zero,
+    /// which would send every drone home with empty hands on every pass.
+    mining_carry_voxels: NonZeroU32,
 }
 
 impl RulesTable {
@@ -284,6 +290,13 @@ impl RulesTable {
     #[must_use]
     pub const fn csr_cell_size_voxels(&self) -> i32 {
         self.csr_cell_size_voxels
+    }
+
+    /// The voxels a mining drone digs before it carries its load home
+    /// (`economy.mining_carry_voxels`), never zero.
+    #[must_use]
+    pub const fn mining_carry_voxels(&self) -> NonZeroU32 {
+        self.mining_carry_voxels
     }
 
     /// The per-round segment ladder (`match.segment_lengths_ms`).
@@ -437,6 +450,15 @@ impl RulesTable {
             .commander
             .as_ref()
             .ok_or(RulesError::MissingBlock("commander"))?;
+        let economy = message
+            .economy
+            .as_ref()
+            .ok_or(RulesError::MissingBlock("economy"))?;
+        let mining_carry_voxels =
+            NonZeroU32::new(economy.mining_carry_voxels).ok_or_else(|| RulesError::OutOfRange {
+                field: "economy.mining_carry_voxels".to_owned(),
+                value: "0; a drone that carries nothing never delivers".to_owned(),
+            })?;
 
         if matched.segment_lengths_ms.is_empty() {
             return Err(RulesError::OutOfRange {
@@ -501,6 +523,7 @@ impl RulesTable {
                 "locomotion.fog_cost_denominator",
                 locomotion.fog_cost_denominator,
             )?,
+            mining_carry_voxels,
         })
     }
 

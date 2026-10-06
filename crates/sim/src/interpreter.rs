@@ -312,9 +312,25 @@ pub enum Row {
     /// Switch mandate type — `interface_times.switch_mandate_ms`. Clears the
     /// old mandate's settings and targets; the beacon's Quartermaster priority
     /// survives (item 20).
+    ///
+    /// A `set_mandate` row carries a whole `MandateSettings`, the writ **and**
+    /// its settings, and since S1's `mine` lane the settings it carries are
+    /// written too, starting from the defaults the switch leaves (decisions-log
+    /// item 131 (5): the skeleton kept the kind alone and dropped them, while
+    /// the verifier's I0003 already read such a row as starting from the
+    /// defaults). They are priced as the edit they are, on top of the switch,
+    /// which is how `plan-core` prices the row too -- except for Build targets:
+    /// this crate counts a non-empty target list as one settings field, where
+    /// `plan-core` charges `build_target_ms` per target and counts no field for
+    /// the list. That divergence predates the row (it is
+    /// `set_mandate_settings`'s too) and is the owner's reading to settle;
+    /// `plan-core`'s `count` carries the PLACEHOLDER.
     Mandate {
         /// The writ the beacon takes.
         kind: MandateKind,
+        /// The settings the row writes after the switch: a [`Row::Settings`]
+        /// with at least one field, or `None` when it writes none.
+        settings: Option<Box<Row>>,
     },
     /// Edit mandate settings — base plus per extra field, capped.
     ///
@@ -338,6 +354,10 @@ pub enum Row {
         probes: Vec<([i32; 3], i32)>,
         /// The Survey mandate's scout count.
         scouts: u32,
+        /// The Mine mandate's settings the row writes, each only when the row
+        /// names it ([`crate::mining::MineEdit`]); `None` when the row carries
+        /// no Mine arm.
+        mine: Option<crate::mining::MineEdit>,
     },
     /// Set the Quartermaster priority — `interface_times.set_priority_ms`.
     Priority {
@@ -385,8 +405,13 @@ impl Row {
         let get = |pick: fn(&gp::v1::rules_table::InterfaceTimes) -> i32| -> i32 {
             times.map_or(0, pick)
         };
-        match *self {
-            Row::Mandate { .. } => get(|t| t.switch_mandate_ms),
+        match self {
+            Row::Mandate { settings, .. } => {
+                let switch = get(|t| t.switch_mandate_ms);
+                settings.as_ref().map_or(switch, |edit| {
+                    switch.saturating_add(edit.duration_ms(rules))
+                })
+            }
             Row::Priority { .. } => get(|t| t.set_priority_ms),
             Row::Recycle => get(|t| t.recycle_ms),
             Row::AddTarget { .. } | Row::RemoveTarget { .. } => get(|t| t.build_target_ms),
@@ -410,10 +435,10 @@ impl Row {
             Row::Settings { targets, .. } => {
                 targets.iter().filter(|(_, anchor)| anchor.binds()).count()
             }
-            Row::Mandate { .. }
-            | Row::Priority { .. }
-            | Row::Recycle
-            | Row::RemoveTarget { .. } => 0,
+            Row::Mandate { settings, .. } => {
+                settings.as_ref().map_or(0, |edit| edit.binding_slots())
+            }
+            Row::Priority { .. } | Row::Recycle | Row::RemoveTarget { .. } => 0,
         }
     }
 }
@@ -1006,7 +1031,10 @@ fn compile_row(
     match inner {
         gp::v1::interface_row::Row::SetMandate(settings) => {
             let kind = mandate_of(settings).ok_or(PlanError::UnsetEnum("set_mandate.mandate"))?;
-            Ok(Row::Mandate { kind })
+            Ok(Row::Mandate {
+                kind,
+                settings: compile_switch_settings(settings, names, covering)?,
+            })
         }
         gp::v1::interface_row::Row::SetMandateSettings(settings) => {
             compile_settings_row(settings, names, covering)
@@ -1031,6 +1059,52 @@ fn compile_row(
             stage: "S4 (the capability catalogue and its licences)",
         }),
     }
+}
+
+/// The settings a `set_mandate` row writes after its switch, compiled as the
+/// settings edit they are; `None` when the row writes no settings field.
+///
+/// An empty Defend or Attack arm writes nothing of its own: S2's settings are
+/// refused wherever they are written ([`mandate_fields`]), but a switch to an
+/// S2 writ with nothing in it writes nothing to refuse. The two top-level
+/// fields beside the arm, `roe` and `retreat_hp_pct`, are still fields of the
+/// edit and are priced as they are for any other arm (and as `plan-core`
+/// prices them), so they are counted here rather than dropped with the arm.
+fn compile_switch_settings(
+    settings: &gp::v1::MandateSettings,
+    names: &Names<'_>,
+    covering: bool,
+) -> Result<Option<Box<Row>>, PlanError> {
+    let empty_s2_arm = match settings.mandate.as_ref() {
+        Some(gp::v1::mandate_settings::Mandate::Defend(defend)) => {
+            *defend == gp::v1::DefendSettings::default()
+        }
+        Some(gp::v1::mandate_settings::Mandate::Attack(attack)) => {
+            *attack == gp::v1::AttackSettings::default()
+        }
+        _ => false,
+    };
+    if empty_s2_arm {
+        let fields =
+            u32::from(settings.roe != 0).saturating_add(u32::from(settings.retreat_hp_pct != 0));
+        return Ok((fields > 0).then(|| {
+            Box::new(Row::Settings {
+                kind: mandate_of(settings),
+                fields,
+                targets: Vec::new(),
+                protected: Vec::new(),
+                probes: Vec::new(),
+                scouts: 0,
+                mine: None,
+            })
+        }));
+    }
+    let row = compile_settings_row(settings, names, covering)?;
+    let fields = match &row {
+        Row::Settings { fields, .. } => *fields,
+        _ => 0,
+    };
+    Ok((fields > 0).then(|| Box::new(row)))
 }
 
 /// A Quartermaster priority's wire value, refused when it is one this build
@@ -1072,6 +1146,7 @@ fn compile_settings_row(
     let mut protected: Vec<([i32; 3], i32)> = Vec::new();
     let mut probes: Vec<([i32; 3], i32)> = Vec::new();
     let mut scouts: u32 = 0;
+    let mut mine: Option<crate::mining::MineEdit> = None;
     if let Some(mandate) = settings.mandate.as_ref() {
         fields = fields.saturating_add(mandate_fields(mandate)?);
         match mandate {
@@ -1089,8 +1164,15 @@ fn compile_settings_row(
                 }
                 scouts = survey.scout_count;
             }
-            gp::v1::mandate_settings::Mandate::Mine(_)
-            | gp::v1::mandate_settings::Mandate::Defend(_)
+            gp::v1::mandate_settings::Mandate::Mine(settings) => {
+                mine = Some(crate::mining::MineEdit::of(settings).map_err(|value| {
+                    PlanError::UnknownEnum {
+                        field: "mine.seam_choice",
+                        value,
+                    }
+                })?);
+            }
+            gp::v1::mandate_settings::Mandate::Defend(_)
             | gp::v1::mandate_settings::Mandate::Attack(_) => {}
         }
     }
@@ -1101,6 +1183,7 @@ fn compile_settings_row(
         protected,
         probes,
         scouts,
+        mine,
     })
 }
 

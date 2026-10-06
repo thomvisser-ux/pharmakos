@@ -1035,8 +1035,36 @@ impl World {
         if let Some(slot) = self.beacons.scout_counts_mut().get_mut(row) {
             *slot = 0;
         }
+        // The Mine settings are the old mandate's settings too, and the seam
+        // the beacon held was chosen under them: both go (`crate::mining`).
+        self.beacons
+            .set_mine_settings(row, crate::mining::MineSettings::default());
+        if let Some(slot) = self.beacons.seams_mut().get_mut(row) {
+            *slot = NO_FEATURE;
+        }
         if let Some(id) = id {
             self.targets.clear_beacon(BeaconId::new(id));
+        }
+    }
+
+    /// Write what a committed settings row says about a beacon's Mine
+    /// settings: the settings it names, and nothing it is silent about.
+    ///
+    /// A written `seam_choice` is a change made on site to the target the
+    /// beacon holds, so the held seam is released and the next decision tick
+    /// chooses again under the new choice (`docs/design/targeting.md`, "Three
+    /// reading rules", 2: a beacon keeps its target "until you change it on
+    /// site").
+    pub(crate) fn set_beacon_mine(&mut self, row: usize, edit: crate::mining::MineEdit) {
+        let Some(settings) = self.beacons.mine_settings(row) else {
+            return;
+        };
+        self.beacons
+            .set_mine_settings(row, edit.applied_to(settings));
+        if edit.seam_choice.is_some()
+            && let Some(slot) = self.beacons.seams_mut().get_mut(row)
+        {
+            *slot = NO_FEATURE;
         }
     }
 
@@ -1249,9 +1277,10 @@ impl World {
     pub fn standing_point(&self, at: [i32; 3]) -> [Fx; 3] {
         let x = at.first().copied().unwrap_or(0);
         let y = at.get(1).copied().unwrap_or(0);
-        // From the pathing surface, for the reason `ore_in_sphere` reads it
-        // there: it is one array read rather than a walk down the column, and
-        // it is the same number, refreshed in the same phase as the bytes.
+        // From the pathing surface, for the reason the dig search reads it
+        // there (`crate::mining`): it is one array read rather than a walk
+        // down the column, and it is the same number, refreshed in the same
+        // phase as the bytes.
         let z = self.surface.node_of(x, y).map_or_else(
             || self.voxels.standing_z(x, y),
             |node| self.surface.standing_z(node),
@@ -1263,205 +1292,28 @@ impl World {
         ]
     }
 
-    /// The nearest **workable** ore voxel inside `beacon`'s sphere, or `None`.
+    /// The ore voxel a drone homed to `beacon` digs next, or `None`.
     ///
-    /// Workable means a drone can stand beside it ([`World::dig_stand`]). Ore
-    /// at the bottom of a pit the seam's own digging left behind is still ore
-    /// and is not work: a search that returned it would send a drone to a place
-    /// it cannot reach and leave it there for the rest of the segment, which is
-    /// the failure this filter exists to prevent. A seam is therefore mined
-    /// from its edges inwards, which is also what it looks like.
+    /// The nearest **workable** ore voxel of the seam the beacon holds
+    /// ([`crate::mining`]): exposed, inside the beacon's sphere, within its
+    /// `dig_max_depth`, off its pillars, clear of every structure and beacon,
+    /// with a pit-safe stand beside it. `None` when the beacon holds no seam
+    /// or its seam is spent for it.
     ///
-    /// Walked column by column over the sphere's footprint and top-down within
-    /// a column, keeping one best by `(distance², x, y, z)` — a total order, so
-    /// two machines dig the same voxel (item 62). Nothing is collected, so
-    /// nothing allocates.
-    ///
-    /// PLACEHOLDER: `MineSettings`' `dig_max_depth`, `pillar_spacing`,
-    /// `seam_choice` and "never digs under structures" are **not** applied. The
-    /// skeleton's Mine mandate digs the nearest ore in the sphere and stops
-    /// there; the four settings are spec section 6's Mine row in full and they
-    /// arrive with **S1**'s finite-seam work, which is also the stage
-    /// `playbook.proto`'s own PLACEHOLDER on an omitted mine setting names
-    /// (owner, at S1).
+    /// S1 replaced the skeleton's search, which swept the whole sphere for the
+    /// nearest *exposed rim* voxel and dug a seam's top layer from its edges
+    /// only (the demo's F2; register S1-38): the four Mine settings and the
+    /// pit-safe stand are [`crate::mining`]'s, and so is the order.
     #[must_use]
     pub fn ore_in_sphere(&self, beacon: BeaconId) -> Option<[i32; 3]> {
-        let row = usize::try_from(beacon.raw()).ok()?;
-        let centre = self.beacons.positions().get(row).copied()?;
-        let radius = self.sphere_radius();
-        let reach = radius.floor_voxels().max(0);
-        let cx = centre.first()?.floor_voxels();
-        let cy = centre.get(1)?.floor_voxels();
-        let limit = Sq::of_radius(radius);
-        let mut best: Option<(Sq, i32, i32, i32)> = None;
-        let mut dy = -reach;
-        while dy <= reach {
-            let y = cy.saturating_add(dy);
-            let mut dx = -reach;
-            while dx <= reach {
-                // The 2-D test first, and before a single voxel is read: a
-                // circle is 79 % of the square that bounds it, and the corners
-                // are the columns furthest from the beacon and so the ones the
-                // exact test would throw away anyway.
-                if dx.saturating_mul(dx).saturating_add(dy.saturating_mul(dy))
-                    > reach.saturating_mul(reach)
-                {
-                    dx = dx.saturating_add(1);
-                    continue;
-                }
-                let x = cx.saturating_add(dx);
-                // **The exposed voxel, and only that one.** A drone digs what
-                // it can reach: the top solid voxel of a column. A column whose
-                // top voxel is stone has no ore a drone can get at, even if
-                // there is ore under the stone — and when the drone takes the
-                // exposed ore voxel, the one beneath it becomes the top solid
-                // voxel and is exposed in its turn, which is how a seam is dug
-                // out from the top down.
-                //
-                // That is also what makes this search one lookup a column
-                // rather than a sweep of the whole 64-voxel column, which is
-                // the difference between a search a mandate can run on every
-                // decision tick and one it cannot. `crate::mapgen`'s
-                // `stamp_seam` lays a seam from the top solid voxel downwards,
-                // so nothing it places is missed.
-                // The column's top is read from the **pathing surface**, not by
-                // walking the column: the surface keeps one `top` per column,
-                // derived from the chunk store and refreshed in the same phase
-                // that changes the bytes ([`World::phase_voxels`]). Walking the
-                // column instead would be thirty-odd voxel reads per column and
-                // sixty thousand per search, which is the difference between a
-                // search a mandate can run and one it cannot.
-                let z = self
-                    .surface
-                    .node_of(x, y)
-                    .map_or(-1, |node| self.surface.top(node));
-                if z >= 0
-                    && self
-                        .voxels
-                        .get([x, y, z])
-                        .and_then(Material::ore_richness)
-                        .is_some()
-                {
-                    let at = [
-                        Fx::from_voxels(i16::try_from(x).unwrap_or(0)),
-                        Fx::from_voxels(i16::try_from(y).unwrap_or(0)),
-                        Fx::from_voxels(i16::try_from(z).unwrap_or(0)),
-                    ];
-                    let distance = Sq::between(at, centre);
-                    if distance <= limit
-                        && best
-                            .is_none_or(|(bd, bx, by, bz)| (distance, x, y, z) < (bd, bx, by, bz))
-                        && self.dig_stand([x, y, z]).is_some()
-                    {
-                        best = Some((distance, x, y, z));
-                    }
-                }
-                dx = dx.saturating_add(1);
-            }
-            dy = dy.saturating_add(1);
-        }
-        best.map(|(_, x, y, z)| [x, y, z])
+        crate::mining::next_dig(self, beacon).map(|dig| dig.ore)
     }
 
-    /// Where a drone stands to dig the ore voxel at `at`.
-    ///
-    /// **Never the ore's own column.** A drone that stood on the voxel it was
-    /// digging would drop its own floor: the column's top solid voxel becomes
-    /// the one beneath, the standing point falls with it, and after a few
-    /// voxels the drone is at the bottom of a hole it cannot climb out of,
-    /// because a walker climbs one voxel at a time
-    /// (`locomotion.climb_surcharge`, item 59). It is the mining equivalent of
-    /// item 60's "sealed in", and unlike that one it is entirely
-    /// self-inflicted, so the fix is not to let it happen.
-    ///
-    /// So the drone stands on a **neighbouring** column: the eight around the
-    /// ore, walked in a fixed order — east, north, west, south, then the four
-    /// diagonals — and the first whose top solid voxel is not itself ore and
-    /// sits within one voxel of the ore's own top. The fixed order is what
-    /// makes the choice a total one; the one-voxel test is what keeps the
-    /// drone's own footing legal ground rather than a ledge it walked off.
-    ///
-    /// `None` when the ore is walled in on all eight sides, which a drone
-    /// answers by delivering what it is carrying and idling rather than by
-    /// walking into the ground.
+    /// The next dig of a drone homed to `beacon`: the ore voxel of
+    /// [`World::ore_in_sphere`] and the stand a drone digs it from, or `None`.
     #[must_use]
-    pub fn dig_stand(&self, at: [i32; 3]) -> Option<[Fx; 3]> {
-        const AROUND: [[i32; 2]; 8] = [
-            [1, 0],
-            [0, 1],
-            [-1, 0],
-            [0, -1],
-            [1, 1],
-            [-1, 1],
-            [-1, -1],
-            [1, -1],
-        ];
-        let x = at.first().copied().unwrap_or(0);
-        let y = at.get(1).copied().unwrap_or(0);
-        let z = at.get(2).copied().unwrap_or(0);
-        for step in AROUND {
-            let nx = x.saturating_add(step.first().copied().unwrap_or(0));
-            let ny = y.saturating_add(step.get(1).copied().unwrap_or(0));
-            let Some(node) = self.surface.node_of(nx, ny) else {
-                continue;
-            };
-            if !self.surface.walkable(node) {
-                continue;
-            }
-            // **Level with the seam face, or one above it — never below.**
-            // `top == z` puts the drone one voxel above the ore; `top == z + 1`
-            // puts it level with the ground the ore is set into. A lower stand
-            // would be inside the pit the seam's own digging leaves, and a
-            // drone that stepped down into one would then be digging the rim
-            // out from under itself: after a few voxels it is at the bottom of
-            // a hole it cannot climb, parked as sealed in (item 60) by its own
-            // work. The rule keeps a drone on the rim, so a seam is mined from
-            // its edges inwards.
-            // **Exactly level with the top of the ore.** The drone stands one
-            // voxel above the ore it is taking, so the hole it leaves is one
-            // voxel deep — and a one-voxel step is always walkable
-            // (`locomotion.climb_surcharge`, item 59). That is the whole
-            // safeguard: a seam worked this way can never open a pit, so a
-            // drone can never seal itself in (item 60) with its own digging,
-            // which is what a looser rule was measured doing.
-            //
-            // The price, said out loud: only the **exposed layer** of a seam is
-            // mined. `crate::mapgen`'s `stamp_seam` lays several voxels down
-            // each column, and once the top one is gone the next sits a voxel
-            // below every neighbour, so no stand is level with it any more.
-            //
-            // PLACEHOLDER: going deeper is `MineSettings.dig_max_depth` and
-            // `pillar_spacing` — spec section 6's Mine row, which also says
-            // "never digs under structures" — and those arrive with **S1**'s
-            // finite-seam work. The skeleton takes the layer it can take
-            // safely; S1 replaces this rule rather than building on it (owner,
-            // at S1).
-            let top = self.surface.top(node);
-            if top != z {
-                continue;
-            }
-            // **Undisturbed surface skin only.** The generator lays a skin of
-            // `Material::DIRT` over the terrain's stone, so a column whose top
-            // voxel is dirt is one nothing has dug; a dug column exposes the
-            // stone under the skin, and an ore column's top is ore. Standing
-            // only on dirt is what keeps a drone *out* of its own excavation:
-            // without it the drone steps down into the pit it has opened,
-            // keeps digging from inside, and ends the segment parked as sealed
-            // in (item 60) on a pillar of its own making — which is what this
-            // rule was written after watching it do.
-            //
-            // PLACEHOLDER: this is the skeleton's stand-in for
-            // `MineSettings.pillar_spacing` and "never digs under structures",
-            // which are the real rules for the shape of a worked seam and
-            // arrive with **S1**'s finite-seam work. The property it buys is
-            // the one that matters now — a drone cannot strand itself — and S1
-            // replaces it rather than building on it (owner, at S1).
-            if self.voxels.get([nx, ny, top]) != Some(Material::DIRT) {
-                continue;
-            }
-            return Some(self.standing_point([nx, ny, top]));
-        }
-        None
+    pub fn next_dig(&self, beacon: BeaconId) -> Option<crate::mining::Dig> {
+        crate::mining::next_dig(self, beacon)
     }
 
     /// What one ore voxel is worth, by the grade of the seam it came out of.
@@ -1871,6 +1723,33 @@ impl World {
     pub fn set_writ(&mut self, beacon: BeaconId, mandate: MandateKind) {
         if let Ok(row) = usize::try_from(beacon.raw()) {
             self.set_beacon_mandate(row, mandate);
+        }
+    }
+
+    /// Write a beacon's Mine settings directly, releasing the seam it holds.
+    ///
+    /// Fixture API. The settings normally arrive as a committed settings row;
+    /// [`World::set_writ`] puts them back to the defaults, exactly as a
+    /// mandate switch does, so a fixture sets the writ first and the settings
+    /// second.
+    pub fn set_mine_settings(&mut self, beacon: BeaconId, settings: crate::mining::MineSettings) {
+        if let Ok(row) = usize::try_from(beacon.raw()) {
+            self.beacons.set_mine_settings(row, settings);
+            if let Some(slot) = self.beacons.seams_mut().get_mut(row) {
+                *slot = NO_FEATURE;
+            }
+        }
+    }
+
+    /// Apply a settings row's Mine edit to a beacon directly: what a committed
+    /// settings row naming the Mine arm writes, without the visit.
+    ///
+    /// Fixture API. Unlike [`World::set_mine_settings`] it writes only what
+    /// the edit names, and releases the held seam only when the edit writes a
+    /// `seam_choice`, exactly as the row does.
+    pub fn edit_mine_settings(&mut self, beacon: BeaconId, edit: crate::mining::MineEdit) {
+        if let Ok(row) = usize::try_from(beacon.raw()) {
+            self.set_beacon_mine(row, edit);
         }
     }
 
@@ -2490,6 +2369,36 @@ impl World {
         self.edits.len()
     }
 
+    /// Whether an edit already queued this tick reaches a column of the box
+    /// `[min_x, min_y, max_x, max_y]` (inclusive): a `Set` whose column lies in
+    /// it, or a `Crater` whose ball's footprint overlaps it.
+    ///
+    /// A dig is chosen against the world as the last voxel phase left it, so
+    /// a second dig in the same box on the same tick would be judged without
+    /// the first; [`crate::mining::dig_waits`] asks this and defers.
+    #[must_use]
+    pub fn edit_queued_within(&self, bounds: [i32; 4]) -> bool {
+        let [min_x, min_y, max_x, max_y] = bounds;
+        self.edits.iter().any(|edit| {
+            let (x, y, reach) = match edit {
+                VoxelEdit::Set { at, .. } => (
+                    at.first().copied().unwrap_or(0),
+                    at.get(1).copied().unwrap_or(0),
+                    0,
+                ),
+                VoxelEdit::Crater { centre, radius } => (
+                    centre.first().copied().unwrap_or(0),
+                    centre.get(1).copied().unwrap_or(0),
+                    (*radius).max(0),
+                ),
+            };
+            x.saturating_add(reach) >= min_x
+                && x.saturating_sub(reach) <= max_x
+                && y.saturating_add(reach) >= min_y
+                && y.saturating_sub(reach) <= max_y
+        })
+    }
+
     /// File a damage order for this tick's combat phase. `false` when the
     /// queue is full.
     ///
@@ -2995,6 +2904,12 @@ impl World {
             if let Some((plan, state)) = interpreter.parts_mut(seat) {
                 crate::interpreter::exec::decide(self, seat, plan, state);
             }
+            // The seat's Mine beacons keep a seam with work left, chosen
+            // inside the seat's own decision so its "nearest" estimates are
+            // counted with the rest of the decision (`crate::mining`).
+            if let Ok(id) = u8::try_from(seat) {
+                crate::mining::refresh_seams(self, SeatId::new(id));
+            }
             let mut spent = WorkCounter::with_budget(u32::MAX);
             let _ = spent.charge(self.decision_units.get());
             if let Some(slot) = self.decision_work.get_mut(seat) {
@@ -3307,6 +3222,11 @@ impl World {
         }
         if let Some(slot) = self.beacons.scout_counts_mut().get_mut(row) {
             *slot = 0;
+        }
+        self.beacons
+            .set_mine_settings(row, crate::mining::MineSettings::default());
+        if let Some(slot) = self.beacons.seams_mut().get_mut(row) {
+            *slot = NO_FEATURE;
         }
         self.targets.clear_beacon(beacon);
     }
@@ -4012,6 +3932,11 @@ impl World {
         let priorities = self.beacons.priorities();
         let scouts = self.beacons.scout_counts();
         let ordinals = self.beacons.ordinals();
+        let dig_depths = self.beacons.dig_depths();
+        let pillars = self.beacons.pillar_spacings();
+        let seam_choices = self.beacons.seam_choices();
+        let flees = self.beacons.flees();
+        let seams = self.beacons.seams();
         for (index, id) in self.beacons.ids().iter().enumerate() {
             enc.u32(*id);
             enc.u8(self.beacons.seats().get(index).copied().unwrap_or(0));
@@ -4023,6 +3948,12 @@ impl World {
             enc.u8(priorities.get(index).copied().unwrap_or(PRIORITY_NORMAL));
             enc.u8(scouts.get(index).copied().unwrap_or(0));
             enc.u32(ordinals.get(index).copied().unwrap_or(0));
+            // S1's Mine settings and the held seam (`crate::mining`).
+            enc.u32(dig_depths.get(index).copied().unwrap_or(0));
+            enc.u32(pillars.get(index).copied().unwrap_or(0));
+            enc.u8(seam_choices.get(index).copied().unwrap_or(0));
+            enc.bool(flees.get(index).copied().unwrap_or(false));
+            enc.u32(seams.get(index).copied().unwrap_or(NO_FEATURE));
         }
 
         enc.len(self.structures.len());

@@ -1,0 +1,62 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// S1's Mine mandate (the `mine` lane; register S1-38; spec section 6's Mine
+// row): the demo's F2 cured on the golden seed. At the demo a seat mining its
+// starting seam earned in round 1 and nothing after, because the skeleton dug
+// only the seam's exposed rim. Here the seam is worked below the rim, from
+// pit-safe stands, in every round.
+//
+//   seat 0  seals scenarios/s1/mine-to-depth.playbook.jsonc every round: it
+//           walks to its core and switches it to Mine with `dig_max_depth` 3
+//           (the whole seam) and `seam_choice` NEAREST. The switch commits
+//           after the handshake, the 8 s switch and the 2.5 s edit it carries
+//           (round 1's at tick 241); the core holds `seam_348_31`, its
+//           starting seam, and its starting mining drone works it below the
+//           rim and delivers in each of the three rounds. One drone keeps up
+//           with one seam (item 22's backlog threshold), so the Mine mandate
+//           buys none;
+//   seat 1  seals nothing, so the gateway files the safe playbook for it, and
+//           its starting drone digs its own starting seam's top layer under
+//           its Build core's default settings (depth 0), spends it in round 2
+//           and earns nothing in round 3.
+//
+// `event_fired` has no value predicate and no "after" (register M-05), so the
+// rounds-2-and-3 deliveries are pinned by the chain, and by
+// crates/sim/tests/economy.rs's `a_starting_seam_yields_more_than_its_exposed_rim`,
+// which asserts a delivery in every round on another seed.
+{
+  "format": "pharmakos.scenario.v1",
+  "name": "mine-to-depth",
+  "summary": "Seat 0 switches its core to Mine with dig_max_depth 3 every round, so its starting seam is worked below the rim and it earns in every round; seat 1 holds on its safe playbook, digs its own seam's top layer at the default depth and runs out in round 2.",
+
+  "map": {
+    "seed": "0x00000000ca5caded",
+    "generator": "skeleton"
+  },
+
+  "rules": "rules/rules.v1.json",
+
+  "seats": [
+    { "seat": 0, "kind": "playbook", "playbook": "scenarios/s1/mine-to-depth.playbook.jsonc" },
+    { "seat": 1, "kind": "safe" }
+  ],
+
+  "segments": [
+    { "index": 0, "length_ms": 180000, "note": "Round 1: the walk to the core, the switch, the first loads." },
+    { "index": 1, "length_ms": 180000, "note": "Round 2: the carried switch again; the seam is worked below its rim." },
+    { "index": 2, "length_ms": 180000, "note": "Round 3: the same, further down." }
+  ],
+
+  "assertions": [
+    { "assert": "event_fired", "event": "row_committed", "seat": 0, "by_tick": 600,
+      "note": "The switch to Mine, with its settings, commits on the core at tick 241." },
+    { "assert": "event_fired", "event": "ore_delivered", "seat": 0, "by_tick": 3600,
+      "note": "Round 1's first load." },
+    { "assert": "event_fired", "event": "segment_ended", "by_tick": 10800,
+      "note": "Three rounds of 3 600 ticks." },
+    { "assert": "hash_chain_equals",
+      "golden": "tests/golden/scenarios/mine-to-depth/expected.hashes.txt",
+      "note": "Byte-identical on Windows, Linux and macOS. Re-blessed with `cargo xtask golden --bless`, and never to turn a red build green." }
+  ]
+}
