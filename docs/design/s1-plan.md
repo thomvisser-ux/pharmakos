@@ -686,7 +686,19 @@ sections that add one name it in their Owns lines.
   run` and `seat doctor`, which pass each Lull's whole length to `Surface::set_phase_remaining_ms`,
   pass round 1's as `first_lull_ms`. Carried by item 130: the stale `reserved 2 to 15` comment in
   `surface/knowledge.rs` (~173), and the recap's "Round N ran 0 ticks" for a full round once the
-  match has ended, which `check` found.
+  match has ended, which `check` found. Carried by item 133: `resolve_refs` answers `PHASE_CLOSED`
+  in a Push, as `estimate_route`'s `covering` does, with the test
+  `resolve_refs_in_a_push_is_phase_closed` (item 133 (3) (f); the sim's fog follow-up does not cure
+  the live read); `single` in `src/targeting.rs` gets the sphere test the sim's fix adds, with a test
+  of a named vent outside the sphere (item 133 (3) (g)); the recap's "3 matched, none reachable"
+  line once the fog follow-up puts the count on `step_failed` (item 133 (3) (h)), unless `ui` takes
+  it; `tgtw`'s review B nits in `tests/targeting.rs` (the row-order
+  test compares no picks with the sim's, the vent test the feature and not the column);
+  `surface/planning.rs`'s module doc, which still calls FULL's estimate and lint stages "present
+  and empty", and `tests/confinement.rs`'s message placing the one `Plan::compile` call in
+  `compile_playbook` (it is `compile_decoded` now); and, once the fog follow-up makes
+  `matches_pick`, `on_candidate` and `generator_on` public, `src/targeting.rs` drops its restated
+  copies (item 133 (3) (j)).
 - **Implements:** item 127 (2)'s gateway half; register S1-11, S1-12, S1-46, X-03, X-16.
 - **Needs:** `tgtw` merged; decision 12. **Acceptance:** method and walkthrough goldens; a test that
   the bound admits a 600 000 ms first Lull and refuses 600 001; `scenario run` and `seat doctor`
@@ -701,7 +713,10 @@ sections that add one name it in their Owns lines.
   Easy emits names and calls `estimate_route` with `covering`; `site_for`, `mine_site`'s heuristics
   and `SPHERE_MARGIN_VOXELS` deleted; `safe.rs`'s raise under S1-22's new meaning; S1-14 to S1-21
   per decision 14; the wizard's live `instantiate_template{suggested: true}` answer, hosted from
-  `crates/gamectl/tests/wizard.rs`, gets its report and prose golden. The main session runs `cargo
+  `crates/gamectl/tests/wizard.rs`, gets its report and prose golden. Carried by item 133 (3)
+  (a): Easy's and the safe playbook's Mine blocks write a `dig_max_depth`, so a seat nobody edits
+  keeps earning past round 2 (F2's cure is the mechanism; the economy golden's seats 0 and 1 stop
+  after round 2 at the default depth 0). The main session runs `cargo
   xtask package` locally before merging (`library/` ships).
 - **Implements:** item 124 (5) (l), item 127 (7), (12) (Easy's names and the templates); register
   S1-14 to S1-21.
@@ -719,6 +734,10 @@ sections that add one name it in their Owns lines.
   `bridge.rs`); the recap's settlement, shortfall and "found nothing" lines; the Lull's "this
   round:" line; the chip; a click on a vent offering "Place beacon covering this vent" and Alt-click
   turning it into the description; E0601's `allow_dormant_beacons` checkbox; S1-44 per decision 17.
+  Carried by item 133: the "this round" sentence has no field; it rides `get_briefing`'s prose in a
+  Lull, for a seat's own token only, and this lane shows it from there; it gets a field when v1.1
+  publishes the method (item 133 (3) (i)). The recap's "3 matched, none reachable" line is this
+  lane's or `econ`'s once the fog follow-up puts the count on `step_failed` (item 133 (3) (h)).
 - **Does not:** decide, time or validate anything (AGENTS.md §3 rule 4): every answer is the
   gateway's.
 - **Implements:** item 127 (2)'s client half, (12) (the chip, the click and Alt-click); register
@@ -738,6 +757,19 @@ sections that add one name it in their Owns lines.
   switched). No new spending failure: the Build mandate builds "the highest-order affordable target"
   (spec §6, `mandate.rs`) and a Build row "is not a spend" (`exec.rs`), so only the deploy fails a
   step for want of `$` in S1 (decision 7); `queue_structure` is S4's.
+  Carried by item 133: the sim's interface pricing brought to decision 15 (register S1-51; item
+  133 (3) (b)): a Build target its own 2.5 s row rather than one settings field for the list, and
+  each element of `protected_areas` or `probe_areas` one field (`mandate_fields`), re-blessing the
+  chains it moves; when the sim stops counting a target list as a field, a `set_mandate` whose
+  Build arm holds only targets must still compile to carried settings, or the gateway's
+  `resolve_playbook` count guard refuses those playbooks (`INTERNAL`); and the silent fallbacks of
+  the skeleton's idiom, each a typed or checked conversion or a destructured anchor:
+  `set_beacon_scouts`' `u8::try_from(..).unwrap_or(u8::MAX)` in `interpreter/exec.rs` (a typed
+  refusal, or a verifier error), the same file's `point_of` and anchor reads (~1700–1721) and its
+  `usize` row-index conversions (`restart_row`, `visit_row`, `fallback_leg`, ~615, ~889, ~1420);
+  `interpreter.rs`'s `Row::duration_ms` (`extra`'s `unwrap_or(0)`, and a missing `interface_times`
+  block read as 0); and in `mining.rs` `point()`'s `i16::try_from(..).unwrap_or(0)`, `pillar()`'s
+  anchor read and the file's other `unwrap_or(0)` reads.
 - **Implements:** item 33 (a)'s Build settings as decision 5 reads them; register S1-24's reader,
   S1-42; spec §6's Build row.
 - **Needs:** `mine` merged; decision 5. **Acceptance:** `targets_build_in_their_order`;
@@ -765,6 +797,11 @@ sections that add one name it in their Owns lines.
   130), read from the committed `expand-east-segment` scenario's run, or, if it needs a second
   harness door, through a named place granted here first. The check's seed set and flag readings are
   the owner's at S1's demo, with this report.
+  Carried by item 133: the depth `oper` gives Easy and the safe playbook is tuned with the numbers
+  (item 133 (3) (a)); and `rules/README.md`, which ships, is reworded here, the next lane to touch
+  `rules/` (packaged locally by decision 9): `economy.mining_carry_voxels`' row still describes
+  the sim's deleted `MINING_LOAD_VOXELS`, and `interface_times.*`' Settled? cell becomes
+  "ratified, decision 15" (U-04).
 - **Implements:** item 127 (3); item 103 (3)'s walk speed; register S1-26 and the economy rows'
   owner PLACEHOLDERs.
 - **Needs:** `build`, `oper` merged; decision 16. **Acceptance:** the check's report attached to the
@@ -776,7 +813,10 @@ sections that add one name it in their Owns lines.
 - **Owns:** `docs/demo/s1-run-sheet.md` (the main session's docs PR), the register's S1 section.
   **Builds:** the P1 certifying run on the owner's machine; the 10k fuzz run through
   `nightly-scenarios.yml`'s manual `force` input, recorded (section 5); the run sheet; the
-  register's S1 rows closed or moved with their owners. **Implements:** AGENTS.md §10 items 6 and 8;
+  register's S1 rows closed or moved with their owners. Carried by item 133: the P1 run measures
+  FULL against a late-match snapshot, since FULL decodes the whole snapshot on every call for
+  `coming_segment_ms`; moving the length into `Scope` is a `report_hash` contract change and a
+  gateway change, the owner's with P1's FULL budget. **Implements:** AGENTS.md §10 items 6 and 8;
   item 33 (c). **Needs:** `tune` and `ui` merged. **Agent-days:** 1.5–2.
 
 ---
@@ -810,6 +850,19 @@ in wave 3's slot 3, beside `mine` and `tgtw`, and with `tgt` merged it needs no 
 pass. `grid` follows it in slot 3, as its named place if `mine` is still open and otherwise after
 `mine` merges, then `oper`; `econ` follows `tgtw` in slot 2.
 
+**As run (item 133).** Wave 3's run built `proj`, `mine` and `tgtw` at once; they merged in that
+order on 2026-10-06 (#85, #86, #84), `mine` re-blessing `report_hash` over `proj`, and `tgtw` over
+both, where the commander's voxel in `Scope` let `proj`'s estimate count each route's first leg, so
+two `demo_*_verify` goldens moved in their I0001 as well as their hash (section 4.2's `tgtw` row
+said the gateway's hashes only). One lane joins the schedule: the sim's fog follow-up of item 133
+(3) (c), a small `crates/sim` lane in slot 1 ahead of `build` (a named or `covered {}` `on` whose
+`on` column lies outside the target sphere answers `no_target` before the structure test), with
+`grid` beside it as its named place in slot 3, then `oper`; `econ` runs in slot 2. The follow-up
+also puts the candidate count on `step_failed` and makes `matches_pick`, `on_candidate` and
+`generator_on` public (item 133 (3) (h), (j)). Each launches on the owner's word. The table above is
+superseded where the as-run notes differ: it is the plan as adopted, and these notes are the
+schedule.
+
 **Totals.** 18 tasks in 17 lanes (`tgtv` and `proj` are one lane in two PRs), **about 71.5 ad**
 (63.5–79.5), against the code map's 62–74; this plan adds X-08's audit, the restore bug, the
 selector bug, S1-26 and S1-42 to it, and the reviews added `con1`'s and `con2`'s named places and
@@ -836,6 +889,7 @@ Two splits already shorten it: targeting's preview surfaces (`tgtw`) leave the s
 | `grid` | none committed | — | — |
 | `build` | those with a Build | — (the harness writes no Build target) | all, if it adds hashed state |
 | `oper` (Easy's sealed files) | `against-easy*` | — | the operator's and the `demo_*_verify` goldens |
+| fog follow-up (item 133 (3) (c), (h)) | none expected; any that moves is named in its PR | — | — |
 | `tune` (values; S1-26) | all | **moved** | all |
 
 **Over the stage the scenario chains move six times** (`fixs`, `tgt`, `mine`, `build`, `oper`,
@@ -892,7 +946,9 @@ or `tests/golden/package/`, so 12 of the 18 PRs (`fixs`, `fixc`, `con1`, `con2`,
   its "the research guard's five crates plus the sim" and its `CLIENT_WALL` sentence, §9's
   local-package sentence per decision 9, §9's line on a check run by hand (`#[ignore]`d, never a
   step, never compared across operating systems; item 130), §9 item 11's P1, and, from item 131,
-  §3 rule 2's "never ranks" and §4.8's derived feature table) and the rulings, and
+  §3 rule 2's "never ranks" and §4.8's derived feature table, and from item 133 §3 rule 2's
+  `resolve_refs` preview, `compile_decoded` and the verifier's lower-bound travel, the crate map's
+  plan-core and verifier rows, and §9's bless note) and the rulings, and
   launch each run through `docs_ref` (item 115 (3)). AGENTS.md is a harness doc no lane edits: the
   `pharmakos-bench` sentences are in the docs PR that lands with `p1`, whose PR rewords the
   matching `xtask` doc comments. `rules/README.md` is `con1`'s, not theirs.

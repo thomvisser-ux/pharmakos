@@ -44,7 +44,7 @@ From 588 lines to 256 rows, one step at a time:
 | Carry-forwards that carry no marker: item 123 (4) 8 (S1-03 to S1-10), item 123 (5) 2 (S1-44, S1-45) | +10 | 249 |
 | Unmarked guesses added by hand (the "Unmarked" section) | +7 | **256** |
 
-S1-49 and S1-50 were added by item 131, after this count.
+S1-49 and S1-50 were added by item 131, after this count; item 133 added S1-51 and S3-19 and moved S1-27 to S1-30 to S4.
 
 Appendix B lists every line of the 38, 16 and 23 above, and every line of the 10 and 5, by file and
 symbol, so each step can be reproduced. The 61 merged copies are the extra anchors in the rows.
@@ -133,24 +133,20 @@ Each goes to S1's first contract pull request (AGENTS.md section 5).
 |---|---|---|---|
 | S1-11 | What `_status.phase_remaining_ms` shows outside a Push: an untimed Lull and a recap both read 0, like a Lull whose timer ran out; whether they become a distinguishable "no countdown", with the recap screen | `crates/gateway/src/surface.rs` `sync_time` | T16a notes, section D |
 | S1-12 | `get_economy_forecast` answers the live world during a Push although its name says "forecast"; spec section 3 allows a seat its own score live and does not name `$` or kW | `crates/gateway/src/surface/knowledge.rs` `get_economy_forecast`; `proto/gp/api/v1/gateway.proto` `GetEconomyForecastResponse` | w6 notes D |
-| S1-13 | A seat's core is its lowest-numbered beacon; a column the day a beacon carries a kind | `crates/gateway/src/surface/knowledge.rs` `core_beacon_of`; `gateway.proto` `BeaconSummary.core`; stale copy in `crates/gateway/src/surface.rs` `verifier_scope` doc, which says "owner, at T14" | — |
+| S1-13 | A seat's core is its lowest-numbered beacon; a column the day a beacon carries a kind. **Discharged in the gateway by `tgtw` #84 (item 133): `core_beacon_of` is the seat's `b_00` (per-seat ordinal 0); the `verifier_scope` doc's stale copy is gone, the doc now S3-04's alone. `gateway.proto`'s `BeaconSummary.core` marker still says "lowest-numbered"; the row closes when the next `proto/**` pull request rewords it.** | `crates/gateway/src/surface/knowledge.rs` `core_beacon_of`; `gateway.proto` `BeaconSummary.core` | — |
 | S1-14 | A placed beacon's added draw is read as zero in every goal that places one | `crates/operator/src/candidates.rs` `PLACED_BEACON_ADDED_DRAW_KW` | items 90, 113 (5) |
 | S1-15 | A Generator goal always places a new Build beacon rather than adding to an existing beacon's Build list | `crates/operator/src/candidates.rs` `enumerate` | item 113 (6) |
 | S1-16 | "Inside one of the seat's own non-core spheres" read as "mined already" | `crates/operator/src/candidates.rs` `mine_site` | — |
 | S1-17 | `SAFE_REACH_MS` = 60 000: spec section 14's "within 60 s travel", with "at risk" undefined there | `crates/operator/src/easy.rs` `SAFE_REACH_MS` | — |
 | S1-18 | `SAFE_MAX_RAISED` = 2: spec section 14's "up to 2" | `crates/operator/src/easy.rs` `SAFE_MAX_RAISED` | — |
 | S1-19 | `SAFE_ESTIMATES` = 4, a bound the spec does not state | `crates/operator/src/easy.rs` `SAFE_ESTIMATES` | — |
-| S1-20 | `SPHERE_MARGIN_VOXELS` = 2, until placement legality is on the wire as an estimate | `crates/operator/src/easy.rs` `SPHERE_MARGIN_VOXELS` | — |
+| S1-20 | `SPHERE_MARGIN_VOXELS` = 2, until placement legality is on the wire as an estimate. **Its need is discharged by `tgtw` #84 (item 133): `estimate_route` accepts `covering` and returns the site the sim's `cover` chooses. Deleting `SPHERE_MARGIN_VOXELS` is `oper`'s.** | `crates/operator/src/easy.rs` `SPHERE_MARGIN_VOXELS` | — |
 | S1-21 | The safe playbook's reading of "power is short" and "at risk" (spec section 14 defines neither) | `crates/operator/src/safe.rs` module doc, and by pointer `power_short` and `at_risk` | item 113 (4); w6 notes D |
 | S1-22 | Whether a priority raise re-applies the brownout order, so a raised dark beacon relights and a lit lower-priority one sheds | `crates/sim/src/programs.rs` `program_for` doc (first of three); copy in `crates/operator/src/safe.rs` module doc | item 113 (4); plan T14b |
-| S1-23 | What "one field" means for the interface's 0.5 s step when a setting is a list | `crates/plan-core/src/interface.rs` `count` | — |
+| S1-23 | What "one field" means for the interface's 0.5 s step when a setting is a list. **Discharged by `proj` #85 per decision 15 (item 133): each element of a list is one field of the edit, still capped at 6 s; the function is now `crates/verifier/src/interface.rs` `count`, re-exported by plan-core, whose open half is S1-51.** | `crates/verifier/src/interface.rs` `count` (moved from plan-core by `proj` #85) | — |
 | S1-24 | `BUILD_HP_PER_SECOND` = 60, proposed as `structures.build_hp_per_second` | `crates/sim/src/economy.rs` `BUILD_HP_PER_SECOND` | item 105 (1) |
-| S1-25 | `MINING_LOAD_VOXELS` = 16, now the row `economy.mining_carry_voxels` (`con1`; the name is item 129 (2) (a)'s) | `crates/sim/src/economy.rs` `MINING_LOAD_VOXELS` (its doc still says `mining_load_voxels`; `mine` rewords it) | — |
+| S1-25 | `MINING_LOAD_VOXELS` = 16, now the row `economy.mining_carry_voxels` (`con1`; the name is item 129 (2) (a)'s). **`mine` #86 (item 133) reads the row through `RulesTable::mining_carry_voxels` and deletes `MINING_LOAD_VOXELS` and its marker; the row's own tuning PLACEHOLDER in `rules.proto` (owner, at S1's demo) stands, and `rules/README.md`'s line for it is reworded by the next lane that touches `rules/`.** | `proto/gp/v1/rules.proto` `mining_carry_voxels` marker ("tuning — owner, at S1's demo"); `crates/sim/src/economy.rs` `MINING_LOAD_VOXELS` deleted by `mine` #86 | — |
 | S1-26 | The determinism harness: its segment list (20 000 / 15 000 ms), its harness playbook, its 1 200-tick run and its fifty walkers per seat, all deleted when `DETERMINISM_TICKS` is raised to a real segment. Two copies still name T14 | `crates/sim/src/lib.rs` `DETERMINISM_SEGMENT_LENGTHS_MS`, `determinism_playbook`; `xtask/src/main.rs` `DETERMINISM_TICKS`; `crates/sim/tests/determinism.rs` `GOLDEN_TICKS`; `tests/golden/determinism/README.md` "What the committed chain covers (T10)"; `crates/sim/src/world.rs` `fill_unit_table`; stale copies naming T14: `WorldConfig::units_per_seat`, `draw_new_destinations`; unmarked copy: `crates/sim/src/lib.rs` `DETERMINISM_MATCH_SEED` | item 116 (6)(e) |
-| S1-27 | `VENT_PATCH_RADIUS` = 1: a vent is a three-by-three patch | `crates/sim/src/mapgen.rs` `VENT_PATCH_RADIUS` | — |
-| S1-28 | A seam's shape: `SEAM_VOXELS_PER_COLUMN` = 4 and `SEAM_DISC_RADIUS` = 5 | `crates/sim/src/mapgen.rs` `SEAM_VOXELS_PER_COLUMN`, `SEAM_DISC_RADIUS` | — |
-| S1-29 | `STARTING_FEATURE_CLEARANCE` = 1 | `crates/sim/src/mapgen.rs` `STARTING_FEATURE_CLEARANCE` | — |
-| S1-30 | The starting force's two-voxel spacing, its footprint | `crates/sim/src/mapgen.rs` `RING` | — |
 | S1-31 | The key-core is netted out of draw rather than shown as an output in supply | `crates/sim/src/power.rs` module doc, and by pointer `draw_of` | item 113 (5); plan T14b |
 | S1-32 | Two vents are one when their patches share a span; a vent table would make it true by construction. **Discharged by `tgt` #81 (item 131): `one_vent` reads the feature table.** | `crates/sim/src/power.rs` `one_vent` | — |
 | S1-33 | The brownout order sheds a beacon whose shed relieves nothing, ahead of the core | `crates/sim/src/power.rs` `brown_out`, and by pointer `crates/sim/tests/economy.rs` `a_beacon_whose_shed_relieves_nothing_is_still_shed_ahead_of_the_core` | item 113 (5); plan T14b |
@@ -158,7 +154,7 @@ Each goes to S1's first contract pull request (AGENTS.md section 5).
 | S1-35 | The commander walks through a brownout, drawing nothing while its home is dark ("argued, not decided") | `crates/sim/src/programs.rs` `program_for` doc (second) | item 10 |
 | S1-36 | A unit's program is chosen by its kind, never by its home beacon's writ | `crates/sim/src/programs.rs` `program_for` doc (third) | item 90 |
 | S1-37 | The fielding limits: `BEACON_TABLE_ROOM` = 40 and `UNIT_TABLE_ROOM` = 300, per match, shared per seat since `tgt` (the total ÷ the seat count, rounded down, item 127 (12)), as is `STRUCTURE_TABLE_ROOM` (S2-08's total); the per-seat numbers are the owner's at S1's demo with the balance check's report (item 131), and the totals are revisited at S2's G3′-real measurement | `crates/sim/src/world.rs` `BEACON_TABLE_ROOM`, `UNIT_TABLE_ROOM`, `STRUCTURE_TABLE_ROOM`, `room_per_seat` | item 63 |
-| S1-38 | `MineSettings`' `dig_max_depth`, `pillar_spacing`, `seam_choice` and "never digs under structures" are not applied; the skeleton digs the nearest ore and one safe layer | `crates/sim/src/world.rs` `ore_in_sphere`, `dig_stand` (two comments) | — |
+| S1-38 | `MineSettings`' `dig_max_depth`, `pillar_spacing`, `seam_choice` and "never digs under structures" are not applied; the skeleton digs the nearest ore and one safe layer. **Discharged by `mine` #86 (item 133): `crates/sim/src/mining.rs` applies all four settings and the held seam; the two markers went with `dig_stand`.** | `crates/sim/src/world.rs` `ore_in_sphere` (its marker gone); `dig_stand` deleted by `mine` #86 | — |
 | S1-39 | How an omitted enum or setting inside the body reads (`MoveStep.pace`, `MineSettings.pillar_spacing` and `seam_choice`): one decision for all three. **Discharged by `tgtv` #80 per decision 11 (item 131): each, and `BuildSettings.terraform`, reads as a named default with an I0003 note where a beacon's settings start from nothing (a `place_beacon`'s `initial`, a `set_mandate` switch), never on a `set_mandate_settings` edit.** | `crates/verifier/src/structure.rs` `walk_action` doc; `proto/gp/v1/playbook.proto` `MineSettings` | — |
 | S1-40 | The lobby's match: the golden seed, two seats with the human at seat 0 and Easy at seat 1, the rules' segment ladder, and the round limit; the settings screen and the Probation preset. **With T22a:** `ROUND_LIMIT` becomes 3 and the comment records item 123 (2) 3, the settings screen and the Probation preset staying the owner's at S1. Cross-referenced from D-20 | `godot/scripts/host_link.gd` `MATCH_SEED` and the constants after it | item 123 (2) 3 |
 | S1-41 | Values the scenario format cannot set: `units_per_seat` when S1's units arrive, `round_limit` when a scenario plays a match to its end. **Nearest section:** the entry says "the stage that first needs it" | `crates/gamectl/src/scenario/run.rs` module doc | item 102 (7) |
@@ -173,14 +169,15 @@ Each goes to S1's first contract pull request (AGENTS.md section 5).
 | S1-43 | The still-commented `[workspace.dependencies]` versions, checked against the registry by the lane that uncomments each. **Nearest section:** no stage is named | `Cargo.toml` `[workspace.dependencies]` header comment | — |
 | S1-44 | `no_arithmetic.rs`'s scanner matches operators only, so arithmetic methods pass it; widening it flags `rig.rs`'s keep-alive sum and needs AGENTS.md rule 4's wording on the keyframe back-off (an owner decision). The next `client-gdext` lane. **Nearest section:** no stage is named | `crates/client-gdext/tests/no_arithmetic.rs`; `crates/client-gdext/src/rig.rs` keep-alive | item 123 (5) |
 | S1-45 | `tests/rate_budget.rs` and `tests/phase_budget.rs` each carry their own stand-in gateway; one could serve both. The next lane that touches either. **Nearest section:** no stage is named | `crates/client-gdext/tests/rate_budget.rs`, `phase_budget.rs` | item 123 (5) |
+| S1-51 | The sim's interface pricing brought to decision 15: the sim's `mandate_fields` still counts a list, and a Build target list, as one field of the edit, so the Push charges a multi-element list or targets less than the editor quotes and W0701 can fire on a route the Push fits. The owner of `crates/sim` in S1's wave 4, `build`, which moves those scenarios' chains | `crates/verifier/src/interface.rs` `count` doc | item 133 |
 
 ### No one named
 
 | ID | What is guessed | Anchors | Source |
 |---|---|---|---|
 | S1-46 | The forecast's what-if vocabulary and answers, its projected income and projection, all S3 (the what-ifs by decision 12, the rest by item 130 (3) (b)); `con2` put the next BMI and the committed spend on the wire for `econ`; `WhatIf` still reserves 1 to 15 | `crates/gateway/src/surface/knowledge.rs` `get_economy_forecast` ("What-ifs"); `gateway.proto` `GetEconomyForecastResponse` and `WhatIf` | w6 notes A6 |
-| S1-47 | Ordered units and Build targets enter the verifier's projection with the economy and the real Quartermaster, where `E0601`, `W0601` and `W0602` get their emitters | `crates/plan-core/src/projection.rs` module doc | item 82 |
-| S1-48 | `get_map_summary`'s vents and seams (`con2`'s `features`, for `tgtw`), unfogged in S1; the fog filter (item 130 (3) (a)) and the terrain summary (item 130 (3) (b)) are S3 | `gateway.proto` `GetMapSummaryResponse` | — |
+| S1-47 | Ordered units and Build targets enter the verifier's projection with the economy and the real Quartermaster, where `E0601`, `W0601` and `W0602` get their emitters. **Discharged by `proj` #85 (item 133): the estimate stage emits them over `crates/verifier/src/projection.rs`, which plan-core re-exports.** | `crates/plan-core/src/projection.rs` module doc | item 82 |
+| S1-48 | `get_map_summary`'s vents and seams (`con2`'s `features`, for `tgtw`), unfogged in S1; the fog filter (item 130 (3) (a)) and the terrain summary (item 130 (3) (b)) are S3. **Done by `tgtw` #84 (item 133): `get_map_summary.features`, unfogged in S1; the fog filter stays S3's.** | `gateway.proto` `GetMapSummaryResponse` | — |
 
 ### Tuning, delegated
 
@@ -239,7 +236,7 @@ Each goes to S1's first contract pull request (AGENTS.md section 5).
 | S3-01 | The map menu's Visit & change offers the priority row only; mandate and Build-target rows come with the pickers | `crates/client-gdext/src/editor.rs` `Action::Visit` | — |
 | S3-02 | The placement ghost is per click, not live on hover. **Names S3/S6** | `crates/client-gdext/src/editor.rs` `GhostState`, and by pointer `preview_place`; `godot/scripts/editor.gd` header | w6 notes A4, A6 |
 | S3-03 | `gamectl verify` keeps its reference view, so a beacon outside its spheres gets E0403 although the game accepts it; revisited with Save/Load | `crates/gamectl/src/seat.rs` module doc | item 117 (1) |
-| S3-04 | A seat's sighted enemy beacons join the verifier's scope with the knowledge store | `crates/gateway/src/surface.rs` `verifier_scope` doc (its `is_core` clause is S1-13) | — |
+| S3-04 | A seat's sighted enemy beacons join the verifier's scope with the knowledge store | `crates/gateway/src/surface.rs` `verifier_scope` doc (reworded to this row alone by `tgtw` #84; its old `is_core` clause was S1-13) | — |
 | S3-05 | Real terrain fog (never seen, last known, the ×1.5 bound) as one mask feeding the view and the route estimator, which is when legs are dashed | `crates/gateway/src/viewfeed.rs` module doc | item 107 (1); T16a notes, section D |
 | S3-06 | The interpreter's own ceilings: `MAX_ROUTE_STEPS` = 256 and `MAX_HANDLERS` = 64 | `crates/sim/src/interpreter.rs` `MAX_ROUTE_STEPS`, `MAX_HANDLERS` | item 94 |
 | S3-07 | A step's tags are counted, not stored; a selector's tag filter is refused | `crates/sim/src/interpreter.rs` field `tags` | — |
@@ -254,6 +251,7 @@ Each goes to S1's first contract pull request (AGENTS.md section 5).
 | S3-16 | The segment clock and the "fits" pill are not built. **Names S3/S6** | `godot/scripts/editor.gd` header | plan T19 |
 | S3-17 | Chip editing and drag reordering in the rule list | `godot/scripts/rule_list.gd` header | item 111, decision C3 |
 | S3-18 | Travel times are shown as raw game milliseconds until the gateway answers a rendered figure (items 57 and 61) | `godot/scripts/strings.gd` `leg`; `godot/scripts/editor.gd` header | items 57, 61 |
+| S3-19 | The verifier's travel is a lower bound (`walking.rs`), so W0701 warns only on a route that cannot fit (apart from S1-51's pricing gap until `build`); pathfinder-quality legs per known leg, priced by the gateway and handed in with `Scope`, come with the segment clock and the fits pill (S3-16) | `crates/verifier/src/walking.rs` module doc | item 133 |
 
 ### Tuning, delegated
 
@@ -274,13 +272,17 @@ Each goes to S1's first contract pull request (AGENTS.md section 5).
 |---|---|---|---|
 | S4-01 | Whether the outside of the map lights its interior, the first time a map is open at its rim | `crates/mesher/src/bake.rs` `LightField::light_at` | — |
 | S4-02 | `MAP_COLUMNS_MAX` = 1024 × 1024, with the map sizes | `crates/operator/src/easy.rs` `MAP_COLUMNS_MAX` | — |
-| S4-03 | The blueprint catalogue: `blueprint_id` is a string, and only the Generator compiles | `crates/plan-core/src/projection.rs` `structure_row`; `crates/sim/src/interpreter.rs` `compile_build_target`; `playbook.proto` `QueueStructureRow.blueprint_id`, `BuildTarget.blueprint_id` | plan T1 |
+| S4-03 | The blueprint catalogue: `blueprint_id` is a string, and only the Generator compiles | `crates/verifier/src/projection.rs` `BLUEPRINTS` (moved from plan-core's `structure_row` by `proj` #85, item 133); `crates/sim/src/interpreter.rs` `compile_build_target`; `playbook.proto` `QueueStructureRow.blueprint_id`, `BuildTarget.blueprint_id` | plan T1 |
 | S4-04 | The award catalogue: the award fund is computed and paid to nobody; the kill-credit per-seat totals become hashed state when awards read them | `crates/sim/src/economy.rs` `award_fund`; `crates/sim/src/credit.rs` module doc | — |
 | S4-05 | The terrain's own shape: two noise octaves' lattice edges and amplitudes, the skin depth, the floor and the headroom | `crates/sim/src/mapgen.rs` `TERRAIN_COARSE_SHIFT`, and by pointer `TERRAIN_COARSE_AMPLITUDE`, `TERRAIN_FINE_SHIFT`, `TERRAIN_FINE_AMPLITUDE`, `TERRAIN_SKIN_VOXELS`; `terrain` (the floor) | plan decision 14 |
 | S4-06 | `ZONE_JITTER_VOXELS` = 4 | `crates/sim/src/mapgen.rs` `ZONE_JITTER_VOXELS` | — |
 | S4-07 | `CONTESTED_ATTEMPTS` = 64 | `crates/sim/src/mapgen.rs` `CONTESTED_ATTEMPTS` | — |
 | S4-08 | `SECTOR_HALF_WIDTH`, a sixth of a turn | `crates/sim/src/mapgen.rs` `SECTOR_HALF_WIDTH` | — |
 | S4-09 | A free zone placement with a separation search, and the spec's three-way symmetry | `crates/sim/src/mapgen.rs` `zone_centres` | — |
+| S1-27 | `VENT_PATCH_RADIUS` = 1: a vent is a three-by-three patch. **Re-owned by `mine` #86 to S4's map re-derivation per decision 13 (item 133); moved here from S1 with its ID.** | `crates/sim/src/mapgen.rs` `VENT_PATCH_RADIUS` | — |
+| S1-28 | A seam's shape: `SEAM_VOXELS_PER_COLUMN` = 4 and `SEAM_DISC_RADIUS` = 5. **Re-owned by `mine` #86 to S4's map re-derivation per decision 13 (item 133); moved here from S1 with its ID.** | `crates/sim/src/mapgen.rs` `SEAM_VOXELS_PER_COLUMN`, `SEAM_DISC_RADIUS` | — |
+| S1-29 | `STARTING_FEATURE_CLEARANCE` = 1. **Re-owned by `mine` #86 to S4's map re-derivation per decision 13 (item 133); moved here from S1 with its ID.** | `crates/sim/src/mapgen.rs` `STARTING_FEATURE_CLEARANCE` | — |
+| S1-30 | The starting force's two-voxel spacing, its footprint. **Re-owned by `mine` #86 to S4's map re-derivation per decision 13 (item 133); moved here from S1 with its ID.** | `crates/sim/src/mapgen.rs` `RING` | — |
 
 ### No one named
 
@@ -480,7 +482,7 @@ S1-42).
 | X-01 | The real fix for `CHAIN_RESERVE_CAP`: a `length_ms` cap in the scenario format, "in this task's pull request" (T15) | `crates/gamectl/src/scenario/run.rs` `CHAIN_RESERVE_CAP` | owner, S1, with S1-41 (both touch the format, an `xtask` contract path) | plan T15 |
 | X-03 | The standing sentence, "OWNER/T14 fills the sentence in with the economy" | `crates/gateway/src/strings.rs` `standing` | owner, S1, with the recap's settlement lines | plan T14 |
 | X-04 | Whether `normals` are uploaded at all, "T12's decision … owner signs it off then" | `crates/mesher/src/lib.rs` `MeshBuffers` | owner, S6's art pass, with S6-05 | plan T12 |
-| X-05 | Whether a deploy pays the visit handshake, "the owner settles it at T14" | `crates/plan-core/src/interface.rs` `place_beacon_ms` | owner, S1, with the full mandate contract (S1-23) | plan T14 |
+| X-05 | Whether a deploy pays the visit handshake, "the owner settles it at T14". **Discharged by `proj` #85 per decision 15 (item 133): a deploy pays no handshake.** | `crates/verifier/src/interface.rs` `place_beacon_ms` (moved from plan-core by `proj` #85) | owner, S1, with the full mandate contract (S1-23) | plan T14 |
 | X-08 | The winner of a round-limit or no-survivor end is decided by the final audit, "(owner, at T14)"; both carry `winner: None` | `crates/sim/src/runner.rs` `MatchOutcome` | owner, S1, with the audit | plan T14 |
 | X-09 | The recap's settlement is not done in `end_recap`, "(owner, at T14)" | `crates/sim/src/runner.rs` `end_recap` | owner, S1, with the recap's settlement lines (w6 notes A6) | plan T14 |
 | X-12 | The `$` a placed beacon costs is not charged in `place_beacon`, "(owner, at T14)". Nothing else charges it either: `World::beacon_cost` is read only for a recycle's refund, held value and kill credit, and the interpreter's deploy (`crates/sim/src/interpreter/exec.rs`) calls `place_beacon` and pays nothing, so a placed beacon is free at the skeleton | `crates/sim/src/world.rs` `place_beacon` | owner, S1, with the Quartermaster | plan T14 |
@@ -522,7 +524,7 @@ S1-42).
 | M-07 | Marker easing: `EASE_RATE` = 6 and `TURN_AFTER` = 0.05 ("Tuning", no who in the constants, no when) | `godot/scripts/vista.gd` `EASE_RATE`, `TURN_AFTER` | owner, S6, with S6-30 | T16a notes, B6 |
 | M-08 | No BSR module is named (no who, no when) | `proto/buf.yaml` comment above `lint:` | owner, v1.1, if the schemas are ever pushed to a registry | — |
 | M-09 | `Event.kind` is a string until the catalogue stops moving (no who, no when) | `gateway.proto` `Event.kind` | owner, after S4, the last stage the entry names as adding kinds | — |
-| M-10 | `Options` is a stub; the one option the spec pins is "allow dormant beacons" (no who, no when) | `playbook.proto` `Options` | owner, S1, with the grid (spec section 7) | plan T1 |
+| M-10 | `Options` is a stub; the one option the spec pins is "allow dormant beacons" (no who, no when). **Discharged by `proj` #85 (item 133): `Options` stays `allow_dormant_beacons` alone, held by an exhaustive-pattern test in `crates/verifier/src/estimate.rs`.** | `playbook.proto` `Options` | owner, S1, with the grid (spec section 7) | plan T1 |
 | M-11 | The interface row catalogue is not enumerated (no who, no when) | `playbook.proto` `InterfaceStep` | owner, S1, with the section 6 mandate contract | plan T1 |
 | M-12 | An area is an axis-aligned box (a polygon or a sphere would be an owner decision; no when) | `playbook.proto` `Area` | owner, S3, with the pickers | — |
 | M-13 | A patrol route is a list of locations (no who, no when) | `playbook.proto` `FallbackPatrol` | owner, S3, with the rest of the vocabulary | — |
@@ -546,7 +548,7 @@ Seven rows, each added by hand because no line says PLACEHOLDER:
 
 | ID | What | Anchors | Proposed | Source |
 |---|---|---|---|---|
-| U-04 | `interface_times.*` are spec section 5's values, and "all of section 5 is marked Tuning", with no who or when | `rules/README.md` Settled? row `interface_times.*` | owner, S1, with the full mandate contract | plan T11 |
+| U-04 | `interface_times.*` are spec section 5's values, and "all of section 5 is marked Tuning", with no who or when. **Discharged by `proj` #85 per decision 15 (item 133): the times are ratified as section 5's; the Settled? cell is reworded to "ratified, decision 15" by the next lane that touches `rules/`.** | `rules/README.md` Settled? row `interface_times.*` | owner, S1, with the full mandate contract | plan T11 |
 | U-05 | No pause button, and whether a minimised window keeps pacing (a stalled client is a pause) | none in the code; the T16a notes, section D | owner; no stage proposed | T16a notes, section D |
 | U-06 | Entity ids are opaque per-viewer handles; revisited if v1.1 agents or S7's recordings need two seats to agree | none in the code; the T16a notes, section D | owner, v1.1 | T16a notes, section D |
 | U-07 | The full predicate catalogue is S3's, and the plan asked `playbook.proto` to say so in a stub; no stub names it | `proto/gp/v1/playbook.proto` (no entry) | owner, S3 | plan T1 |

@@ -77,8 +77,8 @@ editor UI. Nothing else executes. Directories are under `crates/`; package names
 |---|---|---|
 | `crates/proto` — `pharmakos-proto` | Generated prost types for `gp.v1` (playbooks, templates) and `gp.api.v1` (gateway), the canonical JSON mapping, and the voxel run-length codec (`chunk_rle`) the gateway's view feed encodes with and the client decodes with. The single schema source. Licensed `MIT OR Apache-2.0`, unlike the rest. | `prost` |
 | `crates/sim` — `pharmakos-sim` | The deterministic sim: 20 Hz fixed tick, integer maths, SoA tables, 32³ copy-on-write chunks, runner (Lull/Push/recap), playbook interpreter, mandates, programs, Quartermaster, power grid, combat, kill-credit counters, pathing/ETA, map generation, snapshot/restore, replay, per-tick xxh3 state hash. `fork` lives **here and nowhere else**, behind `feature = "research"`. | `pharmakos-proto`, and the determinism crates (`xxh3`, `imbl`, `postcard`/`rkyv`, pathfinding primitives) |
-| `crates/plan-core` — `pharmakos-plan-core` | Playbook core: canonical form, JSONC round-trip (comments survive), JSON Patch, `render_plan` prose, interface-time and `$`/`kW` arithmetic, travel estimates. In process with the gateway. | `pharmakos-proto`, `pharmakos-verifier`, `pharmakos-sim` *only* as `default-features = false` |
-| `crates/verifier` — `pharmakos-verifier` | Seal inspection: decode → structure → resolve → semantics (QUICK) → estimate → lint (FULL). Diagnostic catalogue, `report_hash`. | `pharmakos-proto`, `pharmakos-sim` *only* as `default-features = false` |
+| `crates/plan-core` — `pharmakos-plan-core` | Playbook core: canonical form, JSONC round-trip (comments survive), JSON Patch, `render_plan` prose, the interface-time and `$`/`kW` arithmetic re-exported from the verifier, travel estimates through the `TravelEstimator` seam its caller binds. In process with the gateway. | `pharmakos-proto`, `pharmakos-verifier`, `pharmakos-sim` *only* as `default-features = false` |
+| `crates/verifier` — `pharmakos-verifier` | Seal inspection: decode → structure → resolve → semantics (QUICK) → estimate → lint (FULL). Diagnostic catalogue, `report_hash`. Spec §5's interface-time arithmetic (`interface.rs`) and the `$`/`kW` projection (`projection.rs`), moved down from plan-core in S1 and re-exported by it, and the walking lower bound (`walking.rs`), new in S1 (decisions-log item 133). | `pharmakos-proto`, `pharmakos-sim` *only* as `default-features = false` |
 | `crates/operator` — `pharmakos-operator` | The built-in operator: templates + utility scoring, the safe playbook, the wizard's suggestions, Easy/Normal/Hard. An ordinary gateway client with no privileged reads: from T18 it reaches the match only through a call closure over `gp.api.v1` JSON-RPC, which the gateway binds to that seat's own in-process token (`serve::InProcessSeats`) and `gamectl host` adapts to `serve::Operators` — a `BuiltInSeat` plays a seat; an `Advisor` returns a human seat's safe playbook and suggestions, which the host files — and it reads the public rules text for its tuning rows (decisions-log item 111). Filing on a miss is the gateway's (`begin_push`) and executing a sealed playbook is the sim's. | The library: `pharmakos-proto` only. Its tests may add `pharmakos-gateway` as a dev-dependency (T18 needed none); an operator test that hosts a match lives in `crates/gamectl/tests` |
 | `crates/gateway` — `pharmakos-gateway` | Seat Gateway: JSON-RPC over a localhost WebSocket, tokens, scopes, fog filter, rate limits, event bus, snapshots, private match cache, saves and resume, and the private replay's inputs. Hosts the match. | `pharmakos-proto`, `pharmakos-plan-core`, `pharmakos-verifier`, `pharmakos-sim` *only* as `default-features = false` |
 | `crates/gamectl` — `pharmakos-gamectl` (bin `gamectl`) | CLI: `verify`, `schema`, `docs`, `scenario run`, `seat doctor`, `host`. No `connect` in v1. `scenario run` hosts a headless match and `host` serves one to the Godot client over its own stdio pipe (the config line in on stdin, the announce line with the port and the tokens out on stdout, exit when stdin ends), which is why the gateway is on the list. From T18, `host` links the built-in operator and adapts its client to the gateway's in-process seats (decisions-log item 111); from T18b, `scenario run` seats a `builtin` seat with Easy through `serve::InProcessSeats` (decisions-log item 113). | `pharmakos-proto`, `pharmakos-plan-core`, `pharmakos-verifier`, `pharmakos-gateway`, `pharmakos-operator`, and `pharmakos-sim` *only* as `default-features = false`, because the gateway's API is written in the sim's types. `gamectl` drives a match only through the gateway's `Host` and `Surface`, never through the sim's `Runner` (decisions-log item 109) |
@@ -114,22 +114,31 @@ editor UI. Nothing else executes. Directories are under `crates/`; package names
    `pharmakos-sim = { workspace = true, default-features = false }`. `cargo xtask ci` walks
    `cargo tree -e features` and fails the build if the feature reaches any of the six
    (`GUARDED_PACKAGES` in `xtask/src/main.rs`).
-2. **No dry runs.** `plan-core` and `verifier` may estimate — pathfinder travel over known terrain,
+2. **No dry runs.** `plan-core` and `verifier` may estimate — travel over known terrain,
    interface-time arithmetic, `$`/`kW` projection, placement legality, selector previews, mast
-   coverage. They may never step or fork the sim, run mandates, programs, combat or construction,
-   model enemy behaviour, or evaluate rule conditions over a projected future. The verifier checks
-   targeting's names and descriptions and **never ranks** them: "nearest" is the sim's and the
-   gateway's, and `crates/verifier/tests/confinement.rs`'s `the_verifier_never_ranks` is the
-   tripwire (decisions-log item 131). Prefer depending on the sim's snapshot and knowledge types
-   only; if you find yourself wanting its stepping API, the design is wrong — stop and ask. The
-   gateway, which hosts the match, is held to the same rule:
-   its planning methods (`verify_plan`, `render_plan`, `patch_plan`, `instantiate_template`)
-   answer from the frozen snapshot and the rules table, its knowledge and view reads read the
-   frozen snapshot or the live world through the fog filter, and none of them steps anything;
-   `submit_plan` *compiles* the playbook (the sim's `Plan::compile`, called once, from
-   `compile_playbook` in `surface/planning.rs`), a pure function of the playbook and the rules
-   table that steps nothing — compiling a playbook is not driving a match (decisions-log items
-   103 (9) and 104 (6)). The match itself is stepped and sealed in one module,
+   coverage. The verifier's travel is `walking.rs`'s lower bound (the admissible octile bound at the
+   rules table's step costs, between places the view names); the pathfinder stays in the sim and the
+   gateway, and plan-core reaches it only through the `TravelEstimator` seam its caller binds
+   (decisions-log item 133). They may never step or fork the sim, run mandates, programs, combat or
+   construction, model enemy behaviour, or evaluate rule conditions over a projected future. The
+   verifier checks targeting's names and descriptions and **never ranks** them: "nearest" is the
+   sim's and the gateway's, and `crates/verifier/tests/confinement.rs`'s `the_verifier_never_ranks`
+   is the tripwire (decisions-log item 131). Prefer depending on the sim's snapshot and knowledge
+   types only; if you find yourself wanting its stepping API, the design is wrong — stop and ask.
+   The gateway, which hosts the match, is held to the same rule: its planning methods
+   (`verify_plan`, `render_plan`, `patch_plan`, `instantiate_template`, `resolve_refs`) answer from
+   the frozen snapshot and the rules table — `resolve_refs` ranks "nearest" through the sim's own
+   resolver (`targeting::cover`, `targeting::on_vent`, the `Ranker`) with a tally and scratch of its
+   own, over the hosted world (the frozen world in a Lull; it has no phase gate yet — `econ` adds
+   it, decisions-log item 133), a preview of what a step will bind and not a dry run, and
+   `get_map_summary`'s features (unfogged in S1, decisions-log item 130 (3) (a)) and
+   `estimate_route`'s `covering` legs read the hosted world through the same resolver, a `covering`
+   waypoint answering `PHASE_CLOSED` in a Push — its knowledge and view reads read the frozen
+   snapshot or the live world through the fog filter, and none of them steps anything; `submit_plan`
+   *compiles* the playbook (the sim's `Plan::compile`, called once, from `compile_decoded` in
+   `surface/planning.rs`, which `compile_playbook` and `resolve_refs` share), a pure function of the
+   playbook and the rules table that steps nothing — compiling a playbook is not driving a match
+   (decisions-log items 103 (9) and 104 (6)). The match itself is stepped and sealed in one module,
    the gateway's `host.rs`. No handler steps or seals, *except* the admin-scoped control handlers in
    `crates/gateway/src/surface/control.rs`, which drive only the live match through `Surface`'s
    driving methods and may name none of `Runner`, `Host`, `World`, `host_mut`, `seal_plans`,
@@ -635,7 +644,13 @@ cargo xtask ci --fix      # rustfmt and the machine-applicable clippy fixes
    legs, and compares no perf figure (decisions-log item 116 (6)(n)).
 7. **Goldens** — JSONC playbooks round-trip byte-for-byte through `plan-core`'s canonical form
    with comments intact; verifier `report_hash` goldens; the diagnostic catalogue; `render_plan`
-   prose. Golden diffs must be human-readable.
+   prose. Golden diffs must be human-readable. `cargo xtask golden --bless` rewrites the
+   `expected.*` files that exist and creates none: a new case's golden is its fresh `actual.*`
+   copied into place (a new scenario's, `gamectl scenario run`'s `actual.hashes.txt`). A producer
+   that stops at its first mismatch (`crates/gamectl/tests/scenarios.rs`, and
+   `crates/gateway/tests/demo_playbooks.rs`, which writes its render output after its verify
+   comparison) leaves later outputs unwritten, so after a bless it is re-run and blessed again until
+   the `golden` step reports nothing missing (decisions-log item 133).
 8. **Schema** — `buf lint`, and `buf breaking` against `main` in `WIRE_JSON` mode (both run from the
    workspace root with `proto` as the input, because buf resolves a `.git#…` reference relative to
    the invocation directory); a second comparison against the last release tag is added when v1.1
