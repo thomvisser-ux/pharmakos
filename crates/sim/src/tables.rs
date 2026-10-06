@@ -2174,6 +2174,16 @@ pub struct BeaconColumns {
     pub scouts: Vec<u8>,
     /// Each beacon's per-seat ordinal ([`BeaconTable::ordinals`]).
     pub ordinal: Vec<u32>,
+    /// The Mine mandate's `dig_max_depth`, per beacon.
+    pub dig_depth: Vec<u32>,
+    /// The Mine mandate's `pillar_spacing`, per beacon.
+    pub pillars: Vec<u32>,
+    /// The Mine mandate's `seam_choice`, as [`crate::mining::SeamChoice::id`].
+    pub seam_choice: Vec<u8>,
+    /// The Mine mandate's `flee_on_threat`, per beacon.
+    pub flee: Vec<bool>,
+    /// The seam each beacon holds ([`BeaconTable::seams`]).
+    pub seam: Vec<u32>,
 }
 
 /// Every column of a restored [`StructureTable`]. Same reasoning as
@@ -2217,6 +2227,11 @@ pub struct BeaconTable {
     priority: Vec<u8>,
     scouts: Vec<u8>,
     ordinal: Vec<u32>,
+    dig_depth: Vec<u32>,
+    pillars: Vec<u32>,
+    seam_choice: Vec<u8>,
+    flee: Vec<bool>,
+    seam: Vec<u32>,
 }
 
 impl BeaconTable {
@@ -2236,6 +2251,11 @@ impl BeaconTable {
             priority: Vec::with_capacity(n),
             scouts: Vec::with_capacity(n),
             ordinal: Vec::with_capacity(n),
+            dig_depth: Vec::with_capacity(n),
+            pillars: Vec::with_capacity(n),
+            seam_choice: Vec::with_capacity(n),
+            flee: Vec::with_capacity(n),
+            seam: Vec::with_capacity(n),
         }
     }
 
@@ -2267,6 +2287,12 @@ impl BeaconTable {
         self.priority.push(PRIORITY_NORMAL);
         self.scouts.push(0);
         self.ordinal.push(ordinal);
+        let mine = crate::mining::MineSettings::default();
+        self.dig_depth.push(mine.dig_max_depth);
+        self.pillars.push(mine.pillar_spacing);
+        self.seam_choice.push(mine.seam_choice.id());
+        self.flee.push(mine.flee_on_threat);
+        self.seam.push(crate::targeting::NO_FEATURE);
         self.count = self.count.saturating_add(1);
     }
 
@@ -2316,6 +2342,11 @@ impl BeaconTable {
         self.priority.reserve(n);
         self.scouts.reserve(n);
         self.ordinal.reserve(n);
+        self.dig_depth.reserve(n);
+        self.pillars.reserve(n);
+        self.seam_choice.reserve(n);
+        self.flee.reserve(n);
+        self.seam.reserve(n);
     }
 
     /// How many beacons the table holds.
@@ -2439,6 +2470,88 @@ impl BeaconTable {
         &self.ordinal
     }
 
+    /// The Mine mandate's settings of the beacon at `row`, or `None` when
+    /// there is no such row.
+    ///
+    /// Four plain columns beside the writ, for the reason the scout count is
+    /// one: settings that are numbers rather than lists. Every beacon carries
+    /// them whatever its writ, at [`crate::mining::MineSettings::default`]
+    /// until a settings row writes them, because a mining drone works under
+    /// its home beacon's settings whatever that beacon's writ (item 127 (6):
+    /// a unit's kind is its job). A mandate switch puts them back to the
+    /// defaults (item 20). Hashed and snapshotted like every order.
+    #[must_use]
+    pub fn mine_settings(&self, row: usize) -> Option<crate::mining::MineSettings> {
+        Some(crate::mining::MineSettings {
+            dig_max_depth: self.dig_depth.get(row).copied()?,
+            pillar_spacing: self.pillars.get(row).copied()?,
+            seam_choice: crate::mining::SeamChoice::from_id(self.seam_choice.get(row).copied()?)?,
+            flee_on_threat: self.flee.get(row).copied()?,
+        })
+    }
+
+    /// Write the Mine mandate's settings of the beacon at `row`. A committed
+    /// settings row, a mandate switch's reset, or a fixture.
+    pub fn set_mine_settings(&mut self, row: usize, settings: crate::mining::MineSettings) {
+        if let Some(slot) = self.dig_depth.get_mut(row) {
+            *slot = settings.dig_max_depth;
+        }
+        if let Some(slot) = self.pillars.get_mut(row) {
+            *slot = settings.pillar_spacing;
+        }
+        if let Some(slot) = self.seam_choice.get_mut(row) {
+            *slot = settings.seam_choice.id();
+        }
+        if let Some(slot) = self.flee.get_mut(row) {
+            *slot = settings.flee_on_threat;
+        }
+    }
+
+    /// The `dig_max_depth` column.
+    #[must_use]
+    pub fn dig_depths(&self) -> &[u32] {
+        &self.dig_depth
+    }
+
+    /// The `pillar_spacing` column.
+    #[must_use]
+    pub fn pillar_spacings(&self) -> &[u32] {
+        &self.pillars
+    }
+
+    /// The `seam_choice` column, as [`crate::mining::SeamChoice::id`] values.
+    #[must_use]
+    pub fn seam_choices(&self) -> &[u8] {
+        &self.seam_choice
+    }
+
+    /// The `flee_on_threat` column.
+    #[must_use]
+    pub fn flees(&self) -> &[bool] {
+        &self.flee
+    }
+
+    /// The seam each beacon **holds**: its index in the map's feature table,
+    /// or [`crate::targeting::NO_FEATURE`] for none.
+    ///
+    /// The Mine program's `seam_choice`, held until the seam is spent
+    /// (`docs/design/targeting.md`, "Three reading rules": the named exception
+    /// for a mandate's own `seam_choice`). It decides where every drone homed
+    /// to the beacon digs, so it is hashed, snapshotted and in the goldens
+    /// (AGENTS.md section 4.8). Chosen on the decision tick
+    /// ([`crate::mining`]); released by a mandate switch and by a written
+    /// `seam_choice`.
+    #[must_use]
+    pub fn seams(&self) -> &[u32] {
+        &self.seam
+    }
+
+    /// The held-seam column, to write into. Crate-internal: the seam choice
+    /// and the rows that release it are its only writers.
+    pub(crate) fn seams_mut(&mut self) -> &mut [u32] {
+        &mut self.seam
+    }
+
     /// The hit-point column, to write into.
     ///
     /// The combat phase's damage drain is the only caller. A beacon at zero
@@ -2461,6 +2574,20 @@ impl BeaconTable {
             || columns.priority.len() != n
             || columns.scouts.len() != n
             || columns.ordinal.len() != n
+            || columns.dig_depth.len() != n
+            || columns.pillars.len() != n
+            || columns.seam_choice.len() != n
+            || columns.flee.len() != n
+            || columns.seam.len() != n
+        {
+            return false;
+        }
+        // A seam choice is one of the three the schema names: an unset or
+        // unknown byte describes no beacon this sim builds.
+        if columns
+            .seam_choice
+            .iter()
+            .any(|id| crate::mining::SeamChoice::from_id(*id).is_none())
         {
             return false;
         }
@@ -2493,6 +2620,11 @@ impl BeaconTable {
         self.priority = columns.priority;
         self.scouts = columns.scouts;
         self.ordinal = columns.ordinal;
+        self.dig_depth = columns.dig_depth;
+        self.pillars = columns.pillars;
+        self.seam_choice = columns.seam_choice;
+        self.flee = columns.flee;
+        self.seam = columns.seam;
         true
     }
 }

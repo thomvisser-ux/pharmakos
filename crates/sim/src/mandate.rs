@@ -65,7 +65,8 @@ pub trait Mandate {
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct Build;
 
-/// The built-in Mine mandate: a mining drone while there is reachable ore.
+/// The built-in Mine mandate: a mining drone while the seam it holds has work
+/// left ([`crate::mining`]).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct Mine;
 
@@ -123,7 +124,7 @@ impl Mandate for Build {
         let work = building_work(world, beacon);
         let drones = drones_homed(world, beacon, UnitKind::BuildDrone);
         backlogged(world, work, drones)
-            .then(|| unit_request(world, seat, beacon, UnitKind::BuildDrone))
+            .then(|| unit_request(world, seat, beacon, UnitKind::BuildDrone, Urgency::Units))
     }
 }
 
@@ -134,14 +135,20 @@ impl Mandate for Mine {
 
     fn request(&self, world: &World, beacon: BeaconId) -> Option<SpendRequest> {
         let seat = seat_of(world, beacon)?;
-        // "Reachable ore" is the work in hand (item 22). One item rather than a
-        // voxel count, because a seam is a single job: the drone that has it
-        // keeps it until it is spent, and counting the voxels would ask the
-        // fabricator to field a drone per two voxels of scrap.
-        let work = u32::from(world.ore_in_sphere(beacon).is_some());
+        // "Reachable ore" is the work in hand (item 22): the seam the beacon
+        // holds, while it has a voxel left that the beacon's settings allow
+        // and a drone can safely take (`crate::mining`). One item rather than
+        // a voxel count, because a seam is a single job: the beacon holds it
+        // until it is spent, and counting the voxels would ask the fabricator
+        // to field a drone per two voxels of scrap. A spent seam is no work,
+        // so the fabricator stops.
+        let work = u32::from(world.next_dig(beacon).is_some());
         let drones = drones_homed(world, beacon, UnitKind::MiningDrone);
+        // Filed in the Mine band, last on spec section 7's ladder ("defend
+        // under attack, then repair, units, build, mine"): the drone is what
+        // this mandate spends on, so it is the mandate's own spend.
         backlogged(world, work, drones)
-            .then(|| unit_request(world, seat, beacon, UnitKind::MiningDrone))
+            .then(|| unit_request(world, seat, beacon, UnitKind::MiningDrone, Urgency::Mine))
     }
 }
 
@@ -165,7 +172,7 @@ impl Mandate for Survey {
         // A count rather than a backlog: spec section 6's Survey row names
         // "scout count" as a setting, so this is the one mandate the player
         // gives a number to and the fabricator fills it exactly.
-        (have < wanted).then(|| unit_request(world, seat, beacon, UnitKind::Scout))
+        (have < wanted).then(|| unit_request(world, seat, beacon, UnitKind::Scout, Urgency::Units))
     }
 }
 
@@ -185,8 +192,15 @@ fn structure_price(world: &World, kind: StructureKind) -> (Money, Kw) {
     (cost, Kw::new(rules.structure_draw(kind)))
 }
 
-/// A fabrication request for one unit kind.
-fn unit_request(world: &World, seat: SeatId, beacon: BeaconId, kind: UnitKind) -> SpendRequest {
+/// A fabrication request for one unit kind, in the urgency band it is filed
+/// under.
+fn unit_request(
+    world: &World,
+    seat: SeatId,
+    beacon: BeaconId,
+    kind: UnitKind,
+    urgency: Urgency,
+) -> SpendRequest {
     let draw = world
         .rules()
         .message()
@@ -196,7 +210,7 @@ fn unit_request(world: &World, seat: SeatId, beacon: BeaconId, kind: UnitKind) -
     SpendRequest {
         seat,
         beacon,
-        urgency: Urgency::Units,
+        urgency,
         cost: world.unit_cost(kind),
         draw: Kw::new(draw),
         buys: Purchase::Unit(kind),

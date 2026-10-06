@@ -213,25 +213,37 @@ fn play_segment(runner: &mut Runner, feed: &mut Vec<Event>) {
 // `$`: value, the refund, and "paid means yours"
 // ---------------------------------------------------------------------------
 
-/// The demo's F2, reproduced (item 126 (3); S1's plan, the `fixs` lane): a
-/// seat mining its starting seam delivers ore in round 1 and nothing after,
-/// with the same carried playbook. The cause is the skeleton's dig rule: a
-/// drone digs only the **exposed** ore voxel of a column, standing level with
-/// it on undisturbed dirt (`World::dig_stand`), so once a seam's top layer is
-/// gone no stand is level with the next and `World::ore_in_sphere` answers
-/// nothing while ore is still in the ground. At the demo that was 24 voxels,
+/// The demo's F2, reproduced (item 126 (3); S1's plan, the `fixs` lane) and
+/// cured (the `mine` lane): a seat mining its starting seam delivered ore in
+/// round 1 and nothing after, with the same carried playbook. The cause was
+/// the skeleton's dig rule: a drone dug only the **exposed** ore voxel of a
+/// column, standing level with it on undisturbed dirt, so once a seam's top
+/// layer was gone no stand was level with the next and the search answered
+/// nothing while ore was still in the ground. At the demo that was 24 voxels,
 /// the $ 64 and $ 32 of round 1.
 ///
-/// The cure is the Mine rule — `dig_max_depth`, `pillar_spacing` and "never
-/// under structures" (S1-38, item 127 (9), decision 6) — which is the `mine`
-/// lane's in wave 3, so this test is committed red and ignored until then.
+/// The cure is the Mine rule (S1-38, item 127 (9), decision 6): a beacon whose
+/// `dig_max_depth` reaches the seam's floor works it below the rim, from
+/// pit-safe stands (`pharmakos_sim::mining`). Committed red and ignored by
+/// `fixs`; un-ignored here. Its last assertion changed with the cure, and says
+/// so: the pit-safe rule leaves the ramps a pit needs in the ground, so "every
+/// ore voxel left can still be dug" is no longer the claim. The claim is the
+/// demo's: the seat keeps earning after round 1, from below the rim, and no
+/// drone strands itself doing it.
 #[test]
-#[ignore = "red until the mine lane (S1-38)"]
 fn a_starting_seam_yields_more_than_its_exposed_rim() {
     let mut fixture = world(&[180_000]);
     let seat = SeatId::new(0);
     let core = core_of(&fixture, seat);
     fixture.set_writ(core, MandateKind::Mine);
+    fixture.set_mine_settings(
+        core,
+        pharmakos_sim::mining::MineSettings {
+            dig_max_depth: 3,
+            ..pharmakos_sim::mining::MineSettings::default()
+        },
+    );
+    let pristine = world(&[180_000]);
     let mut runner = Runner::new(fixture);
     let mut delivered: Vec<usize> = Vec::new();
     for _ in 0..3 {
@@ -244,40 +256,67 @@ fn a_starting_seam_yields_more_than_its_exposed_rim() {
         );
         assert!(runner.end_recap(), "the recap closes into the next Lull");
     }
+    assert!(
+        delivered.iter().all(|count| *count > 0),
+        "the seat earns from its starting seam in every round: {delivered:?}"
+    );
+
+    // Dug below the rim: some ore voxel under a footprint column's original
+    // top is gone, which the skeleton's rule could never reach.
     let world = runner.world();
     let row = usize::try_from(core.raw()).unwrap_or(usize::MAX);
-    let centre = world
+    let held = world
         .beacons()
-        .positions()
+        .seams()
         .get(row)
         .copied()
-        .unwrap_or_else(|| panic!("the core has a place"));
-    let radius = world.sphere_radius();
-    let reach = radius.floor_voxels();
-    let limit = pharmakos_sim::math::fixed::Sq::of_radius(radius);
-    let [cx, cy, _] = centre.map(Fx::floor_voxels);
-    let mut left: u32 = 0;
-    for y in cy.saturating_sub(reach)..=cy.saturating_add(reach) {
-        for x in cx.saturating_sub(reach)..=cx.saturating_add(reach) {
-            for z in 0..64 {
-                let at = [x, y, z].map(|axis| Fx::from_voxels(i16::try_from(axis).unwrap_or(0)));
-                if pharmakos_sim::math::fixed::Sq::between(at, centre) <= limit
-                    && world
-                        .voxels()
-                        .get([x, y, z])
-                        .and_then(Material::ore_richness)
-                        .is_some()
-                {
-                    left = left.saturating_add(1);
-                }
+        .unwrap_or(u32::MAX);
+    let starting = pristine
+        .features()
+        .features()
+        .iter()
+        .filter(|feature| feature.kind == pharmakos_sim::features::FeatureKind::Seam)
+        .min_by_key(|feature| {
+            let [x, y] = feature.anchor;
+            let at = pristine
+                .beacons()
+                .positions()
+                .get(row)
+                .copied()
+                .unwrap_or([Fx::ZERO; 3]);
+            let [ax, ay, _] = at.map(Fx::floor_voxels);
+            let dx = i64::from(x.saturating_sub(ax));
+            let dy = i64::from(y.saturating_sub(ay));
+            dx * dx + dy * dy
+        })
+        .unwrap_or_else(|| panic!("the map has a seam"));
+    let mut below_rim: u32 = 0;
+    for column in &starting.footprint {
+        for depth in 1..4 {
+            let at = [column.x, column.y, column.top - depth];
+            let was = pristine.voxels().get(at).and_then(Material::ore_richness);
+            let now = world.voxels().get(at).and_then(Material::ore_richness);
+            if was.is_some() && now.is_none() {
+                below_rim += 1;
             }
         }
     }
     assert!(
-        left == 0 || world.ore_in_sphere(core).is_some(),
-        "{left} ore voxels are still in the core's sphere and none of them can be dug; ore \
-         deliveries per round: {delivered:?}"
+        below_rim > 0,
+        "the core works its starting seam below the rim (held seam {held}); ore deliveries per          round: {delivered:?}"
     );
+
+    // Pit-safe: no unit of the seat ends the match parked as sealed in.
+    let states = world.router().states();
+    for (unit, owner) in world.units().seats().iter().enumerate() {
+        if *owner == seat.raw() {
+            assert_ne!(
+                states.get(unit).copied(),
+                Some(pharmakos_sim::WalkState::Sealed.id()),
+                "unit {unit} stranded itself; ore deliveries per round: {delivered:?}"
+            );
+        }
+    }
 }
 
 /// The latent restore bug the S1 plan names (`fixs`): `World::unit_limit` is
@@ -2113,7 +2152,7 @@ fn the_settlement_ledger_matches_its_golden() {
 #[test]
 fn the_tick_bench_reports_counted_work() {
     // The settlement golden's own segment length, deliberately: a mining
-    // drone's round trip is `economy.mining_load_voxels` digs at
+    // drone's round trip is `economy.mining_carry_voxels` digs at
     // `economy.mining_ms_per_voxel` plus the walk, which is most of two
     // thousand ticks, so a shorter segment would report a spend count of zero
     // and tell S1 nothing about the work a tick actually does.

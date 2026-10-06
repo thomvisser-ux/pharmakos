@@ -116,10 +116,11 @@ const TERRAIN_SKIN_VOXELS: i32 = 3;
 /// S4.
 const ZONE_JITTER_VOXELS: i32 = 4;
 
-/// PLACEHOLDER: a heat vent is a three-by-three patch of surface voxels. The
-/// patch's shape is tuning — T14's Generator sits on the vent, it does not
-/// mine it — and S1 kept it, re-owned to S4's map re-derivation with the other
-/// mapgen constants (decision 13 of S1's plan). Owner, at S4.
+/// PLACEHOLDER: a vent is a three-by-three patch of surface voxels (S1-27) — owner, S4's map re-derivation
+///
+/// The patch's shape is tuning -- T14's Generator sits on the vent, it does
+/// not mine it -- and S1 kept it, re-owned to S4's map re-derivation with the
+/// other mapgen constants (decision 13 of S1's plan, ruled by item 128).
 ///
 /// Since S1 nothing outside this module reads the span: the columns a vent is
 /// stamped into are its footprint in the map's feature table
@@ -127,20 +128,28 @@ const ZONE_JITTER_VOXELS: i32 = 4;
 /// vent from taps on two (register S1-32).
 const VENT_PATCH_RADIUS: i32 = 1;
 
-/// PLACEHOLDER: how many voxels of ore a seam column carries before the seam
-/// moves to the next column. Four, so a 150-voxel seam is about 38 columns and
-/// fits inside the disc below. Owner, at S1 with the mining rules.
+/// PLACEHOLDER: a seam column carries four voxels of ore (S1-28) — owner, S4's map re-derivation
+///
+/// How many voxels of ore a seam column carries before the seam moves to the
+/// next column. Four, so a 150-voxel seam is about 38 columns and fits inside
+/// the disc below. S1 kept it, re-owned to S4's map re-derivation (decision 13
+/// of S1's plan); S1's Mine settings read the depth it lays rather than this
+/// number (`crate::mining`).
 ///
 /// The feature table's liveness scan reads exactly this depth
 /// ([`crate::features::SEAM_DEPTH_VOXELS`] is defined as this constant), so a
 /// change here moves both together.
 pub(crate) const SEAM_VOXELS_PER_COLUMN: i32 = 4;
 
-/// PLACEHOLDER: the radius of the disc a seam is laid into, in voxels. Five,
-/// so `economy.seam_voxels` at [`SEAM_VOXELS_PER_COLUMN`] a column fits with
-/// room to spare. It decides the same seam's shape that
-/// [`SEAM_VOXELS_PER_COLUMN`] does, so it is the owner's at S1 with the mining
-/// rules, and it moves every committed seed when it moves.
+/// PLACEHOLDER: a seam is laid into a disc of radius five (S1-28) — owner, S4's map re-derivation
+///
+/// Five, so `economy.seam_voxels` at [`SEAM_VOXELS_PER_COLUMN`] a column fits
+/// with room to spare. It decides the same seam's shape that
+/// [`SEAM_VOXELS_PER_COLUMN`] does, so it moved with it to S4 (decision 13 of
+/// S1's plan), and it moves every committed seed when it moves. The Mine
+/// program's fixed arrays are sized for it
+/// ([`crate::features::MAX_FOOTPRINT_COLUMNS`], [`crate::mining::BOX_CELLS`]),
+/// and the feature table refuses a seam that outgrows them.
 const SEAM_DISC_RADIUS: i32 = 5;
 
 /// PLACEHOLDER: how many placements a contested feature may try before the
@@ -155,11 +164,13 @@ const CONTESTED_ATTEMPTS: u32 = 64;
 /// moves. Owner, at S4's symmetric map.
 const SECTOR_HALF_WIDTH: u16 = 10_922;
 
-/// PLACEHOLDER: how far a contested feature must clear a *starting* vent or
-/// seam, over and above the two features' own radii, in voxels. One, which is
-/// the least that keeps the two discs disjoint so a contested seam can never
-/// overwrite a vent whose power has already been counted. Owner, at S1, with
-/// the mining rules that decide what a seam is worth.
+/// PLACEHOLDER: a contested feature clears a starting one by one voxel (S1-29) — owner, S4's map re-derivation
+///
+/// How far a contested feature must clear a *starting* vent or seam, over and
+/// above the two features' own radii, in voxels. One, which is the least that
+/// keeps the two discs disjoint so a contested seam can never overwrite a vent
+/// whose power has already been counted. Re-owned to S4's map re-derivation
+/// by decision 13 of S1's plan.
 const STARTING_FEATURE_CLEARANCE: i32 = 1;
 
 /// Which draw of the generator a random number belongs to.
@@ -1040,9 +1051,12 @@ impl<'a> Numbers<'a> {
 /// The eight compass offsets a starting unit is placed on, in order, widening
 /// by two voxels every eight units.
 ///
-/// PLACEHOLDER: the two-voxel spacing baked into the offsets below is the
-/// starting force's footprint, and nothing reads a unit's footprint yet.
-/// Owner, at S1, with the first rules-table row that gives a unit a size.
+/// PLACEHOLDER: the starting force stands two voxels apart (S1-30) — owner, S4's map re-derivation
+///
+/// The two-voxel spacing baked into the offsets below is the starting force's
+/// footprint, and nothing reads a unit's footprint yet. Re-owned to S4's map
+/// re-derivation by decision 13 of S1's plan, or to the first rules-table row
+/// that gives a unit a size if one comes sooner.
 const RING: [[i32; 2]; 8] = [
     [0, -2],
     [2, 0],

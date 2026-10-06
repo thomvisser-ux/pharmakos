@@ -785,7 +785,10 @@ fn the_rules_hash_is_pinned_to_the_committed_table() {
     // b31d8d0789eb207c with revision 4 (S1's first contract pull request):
     // `match.lull_ms` 300 000 and the new `match.first_lull_ms`,
     // `structures.build_hp_per_second` and `economy.mining_carry_voxels`
-    // rows, none of which the tick reads, so the chain did not move with it.
+    // rows, none of which the tick read, so the chain did not move with it.
+    // S1's `mine` lane made the tick read `economy.mining_carry_voxels` in
+    // place of the constant it was proposed from, at the same value, so that
+    // reading moved nothing either; the table and this hash are unchanged.
     assert_eq!(
         hex(rules().rules_hash()),
         "a75406a0f798a3a7",

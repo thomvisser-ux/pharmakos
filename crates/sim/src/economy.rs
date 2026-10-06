@@ -69,21 +69,6 @@ use crate::tables::{BeaconId, SeatId};
 /// plan's §1.1 demo goes up in ten seconds on one drone and five on two.
 pub const BUILD_HP_PER_SECOND: i32 = 60;
 
-/// PLACEHOLDER: ore voxels a mining drone carries before it walks its load
-/// home.
-///
-/// A named constant for the reason [`BUILD_HP_PER_SECOND`] is one: spec
-/// section 6's Mine row says "drones carry ore to their home beacon" and
-/// section 7 says delivered ore is credited immediately, but no row says how
-/// much a drone carries, and `economy.seam_voxels` and `mining_ms_per_voxel`
-/// are the only two numbers the seam has. Nothing in T14's acceptance asserts
-/// its value. Proposed as `economy.mining_load_voxels` by **S1**, with the
-/// finite-seam work that gives a load a meaning (owner, at S1).
-///
-/// Sixteen, so that a `economy.seam_voxels` = 150 seam is about nine round
-/// trips rather than one or a hundred and fifty.
-pub const MINING_LOAD_VOXELS: i32 = 16;
-
 /// The five urgency bands the Quartermaster fills in order (spec section 7).
 ///
 /// The ids are written out and additive only, for the reason every other wire
@@ -103,7 +88,11 @@ pub enum Urgency {
     Units,
     /// A Build mandate paying for an unbuilt target.
     Build,
-    /// A Mine mandate's spend.
+    /// A Mine mandate's spend: the mining drone it fabricates while the seam
+    /// it holds has work left. Last on the ladder (spec section 7), and
+    /// filed here rather than under [`Urgency::Units`] since S1's `mine`
+    /// lane, so a Build mandate's drones and targets are paid for before a
+    /// Mine mandate's drone.
     Mine,
 }
 

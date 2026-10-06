@@ -59,6 +59,17 @@ use crate::voxels::{Material, Richness, VoxelStore};
 /// than ranked short.
 pub const MAX_FEATURES: usize = 32;
 
+/// The most footprint columns one feature may carry.
+///
+/// A ceiling rather than a tuning value, for the reason [`MAX_FEATURES`] is
+/// one: the Mine program sorts a seam's candidate voxels in a fixed-size array
+/// so that a dig search allocates nothing ([`crate::mining`]), and this is
+/// that array's length. S1's seam is a disc of radius five, at most 81
+/// columns; [`FeatureTable::new`] refuses a feature with more, and one whose
+/// box with its ring would not fit the pit-safe flood's grid
+/// ([`crate::mining::BOX_CELLS`]), rather than mining it short.
+pub const MAX_FOOTPRINT_COLUMNS: usize = 128;
+
 /// How many voxels deep, from the top of the column the generator found, a
 /// seam's ore can lie.
 ///
@@ -237,6 +248,29 @@ impl FeatureTable {
                     features.len()
                 ),
             });
+        }
+        for feature in &features {
+            let [min_x, min_y, max_x, max_y] = feature.bounds;
+            let side = |low: i32, high: i32| {
+                i64::from(high)
+                    .saturating_sub(i64::from(low))
+                    .saturating_add(3)
+            };
+            let cells = side(min_x, max_x).saturating_mul(side(min_y, max_y));
+            let fits = usize::try_from(cells).is_ok_and(|cells| cells <= crate::mining::BOX_CELLS);
+            if feature.footprint.len() > MAX_FOOTPRINT_COLUMNS
+                || (!feature.footprint.is_empty() && !fits)
+            {
+                return Err(MapError::OutOfRange {
+                    field: "mapgen seam shape",
+                    why: format!(
+                        "{} spans {} columns; the Mine program works at most {MAX_FOOTPRINT_COLUMNS}                          columns in a box of at most {} cells",
+                        feature.name(),
+                        feature.footprint.len(),
+                        crate::mining::BOX_CELLS
+                    ),
+                });
+            }
         }
         // item 62: anchors are unique once the check below passes, and the
         // kind ends the key so even a refused duplicate sorts the same way.

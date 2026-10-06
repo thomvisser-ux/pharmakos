@@ -1036,9 +1036,14 @@ fn the_decision_tick_counts_its_evaluation_units() {
     // goes past the plan's four categories (S1's plan, section 5 item 3): it
     // also charges one unit per feature the ranker scans and one per spiral
     // column the covering search tries, which the pull request names for
-    // `p1`'s report.
+    // `p1`'s report. Since S1's `mine` lane the first decision also makes the
+    // core's seam choice (its starting mining drone gives it one,
+    // `pharmakos_sim::mining`): one unit per feature ranked (ten on this map)
+    // and one estimate for the one seam with work in reach, so 412 + 11. The
+    // narrow and wide counts above are read at the sixth tick, by when the
+    // seam is held and keeping it costs nothing.
     assert_eq!(
-        covering, 412,
+        covering, 423,
         "a covering resolution ranks every feature and walks a spiral: {covering}"
     );
 }

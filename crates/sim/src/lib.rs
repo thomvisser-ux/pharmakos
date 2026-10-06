@@ -84,6 +84,7 @@ pub mod knowledge;
 pub mod mandate;
 pub mod mapgen;
 pub mod math;
+pub mod mining;
 pub mod pathing;
 pub mod power;
 pub mod programs;

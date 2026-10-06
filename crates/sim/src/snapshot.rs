@@ -128,7 +128,18 @@ use serde::{Deserialize, Serialize};
 /// refused rather than read: its `b_NN` numbers counted every seat's beacons,
 /// and read as per-seat names they would point a seat's orders at other
 /// beacons.
-pub const SNAPSHOT_VERSION: u32 = 7;
+///
+/// **Version 8 is S1's Mine mandate** (decisions-log items 127 (9) and 128 (3)
+/// (e); S1's plan, task `mine`). It adds five per-beacon columns: the Mine
+/// settings `dig_max_depth`, `pillar_spacing`, `seam_choice` and
+/// `flee_on_threat`, which every beacon carries at their defaults until a
+/// settings row writes them, and **the seam the beacon holds**, the Mine
+/// program's choice kept until the seam is spent ([`crate::mining`]). A
+/// version-7 file is refused rather than read: it carries no held seam, and a
+/// world restored from it would choose afresh where the unbroken run kept its
+/// choice -- a desync with nothing red in front of it. The gateway's save
+/// refuses a version-7 snapshot by its stamp before it reaches this check.
+pub const SNAPSHOT_VERSION: u32 = 8;
 
 /// A flat, fixed-width projection of the world.
 ///
@@ -209,6 +220,18 @@ pub struct Snapshot {
     /// Each beacon's per-seat ordinal, what a seat's `b_NN` names
     /// ([`crate::tables::BeaconTable::ordinals`]).
     pub beacon_ordinal: Vec<u32>,
+    /// The Mine mandate's `dig_max_depth`, per beacon.
+    pub beacon_dig_depth: Vec<u32>,
+    /// The Mine mandate's `pillar_spacing`, per beacon.
+    pub beacon_pillars: Vec<u32>,
+    /// The Mine mandate's `seam_choice`, per beacon, as
+    /// [`crate::mining::SeamChoice::id`].
+    pub beacon_seam_choice: Vec<u8>,
+    /// The Mine mandate's `flee_on_threat`, per beacon, `0` or `1`.
+    pub beacon_flee: Vec<u8>,
+    /// The seam each beacon holds, as an index into the map's feature table,
+    /// or [`crate::targeting::NO_FEATURE`].
+    pub beacon_seam: Vec<u32>,
 
     /// Structure ids.
     pub structure_id: Vec<u32>,
@@ -449,6 +472,11 @@ impl Default for Snapshot {
             beacon_priority: Vec::new(),
             beacon_scouts: Vec::new(),
             beacon_ordinal: Vec::new(),
+            beacon_dig_depth: Vec::new(),
+            beacon_pillars: Vec::new(),
+            beacon_seam_choice: Vec::new(),
+            beacon_flee: Vec::new(),
+            beacon_seam: Vec::new(),
             structure_id: Vec::new(),
             structure_seat: Vec::new(),
             structure_kind: Vec::new(),
@@ -729,6 +757,11 @@ impl Snapshot {
             beacon_priority: beacons.priorities().to_vec(),
             beacon_scouts: beacons.scout_counts().to_vec(),
             beacon_ordinal: beacons.ordinals().to_vec(),
+            beacon_dig_depth: beacons.dig_depths().to_vec(),
+            beacon_pillars: beacons.pillar_spacings().to_vec(),
+            beacon_seam_choice: beacons.seam_choices().to_vec(),
+            beacon_flee: beacons.flees().iter().map(|f| u8::from(*f)).collect(),
+            beacon_seam: beacons.seams().to_vec(),
 
             structure_id: structures.ids().to_vec(),
             structure_seat: structures.seats().to_vec(),
@@ -951,6 +984,11 @@ impl Snapshot {
             priority: self.beacon_priority.clone(),
             scouts: self.beacon_scouts.clone(),
             ordinal: self.beacon_ordinal.clone(),
+            dig_depth: self.beacon_dig_depth.clone(),
+            pillars: self.beacon_pillars.clone(),
+            seam_choice: self.beacon_seam_choice.clone(),
+            flee: self.beacon_flee.iter().map(|f| *f != 0).collect(),
+            seam: self.beacon_seam.clone(),
         }) {
             return Err(SnapshotError::Ragged("beacon"));
         }
@@ -984,6 +1022,19 @@ impl Snapshot {
         let credit = self.restore_credit(world)?;
 
         let (voxels, chunks, features) = self.restore_store(world, seat_count)?;
+        // A held seam names a seam of the regenerated map, or none: an index
+        // past the table, or one naming a vent, describes no beacon this sim
+        // builds.
+        let held_ok = beacons.seams().iter().all(|seam| {
+            *seam == crate::targeting::NO_FEATURE
+                || usize::try_from(*seam)
+                    .ok()
+                    .and_then(|index| features.get(index))
+                    .is_some_and(|feature| feature.kind == crate::features::FeatureKind::Seam)
+        });
+        if !held_ok {
+            return Err(SnapshotError::Ragged("beacon_seam"));
+        }
 
         let unit_count = units.len();
         if unit_count > world.unit_limit() {

@@ -698,6 +698,14 @@ fn bind_rows(
         .then(|| usize::try_from(state.bound_feature).ok())
         .flatten();
     for row in rows {
+        // A switch binds what the settings it carries bind.
+        let row = match row {
+            Row::Mandate {
+                settings: Some(settings),
+                ..
+            } => settings.as_ref(),
+            other => other,
+        };
         let anchors: &[(u8, Anchor)] = match row {
             Row::AddTarget { anchor, .. } => {
                 if let Anchor::On(spec) = anchor {
@@ -1230,7 +1238,15 @@ fn commit_row(
         world.feature_is_live(usize::try_from(binding.feature).unwrap_or(usize::MAX))
     };
     match spec {
-        Row::Mandate { kind } => world.set_beacon_mandate(row, *kind),
+        Row::Mandate { kind, settings } => {
+            // The switch first, which clears the old mandate's settings, then
+            // the settings the row carries over the defaults it left: one row,
+            // committing at the end of its own duration, all or nothing.
+            world.set_beacon_mandate(row, *kind);
+            if let Some(settings) = settings {
+                commit_row(world, row, seat, settings, bindings, slot)?;
+            }
+        }
         Row::Priority { priority } => world.set_beacon_priority(row, *priority),
         Row::Recycle => {
             world.recycle_beacon(seat, beacon);
@@ -1281,6 +1297,7 @@ fn commit_row(
             protected,
             probes,
             scouts,
+            mine,
             ..
         } => {
             // A settings edit **replaces** the lists it names, because spec
@@ -1351,6 +1368,11 @@ fn commit_row(
             }
             if *scouts > 0 {
                 world.set_beacon_scouts(row, u8::try_from(*scouts).unwrap_or(u8::MAX));
+            }
+            // The Mine settings the row names, and nothing it is silent about
+            // (`crate::mining::MineEdit`).
+            if let Some(edit) = mine {
+                world.set_beacon_mine(row, *edit);
             }
         }
     }
