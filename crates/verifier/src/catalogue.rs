@@ -24,8 +24,9 @@
 //! 82's empty estimate and lint stages, and S1 and S3 fill them in without
 //! renumbering anything. S1's targeting verifier (task `tgtv`) is the first to:
 //! the lint stage raises `W0704` to `W0706`, the structure stage `I0003`, and
-//! `E0407` to `E0413` and `W0501` join their families at the end. The estimate
-//! stage is still empty until S1's `proj` task.
+//! `E0407` to `E0413` and `W0501` join their families at the end. S1's `proj`
+//! task fills the estimate stage: `E0601`, `W0601` to `W0603`, `W0701` and
+//! `I0001`, each a number the table already held.
 //!
 //! The label an unemitted row prints, `none at the skeleton (…)`, is kept as
 //! it was spelt when the table shipped, because `gamectl docs` quotes it; the
@@ -84,7 +85,7 @@ pub enum Stage {
     Resolve,
     /// The rules that need meaning: jumps forward, placement, settings.
     Semantics,
-    /// Travel, interface time, `$` and `kW` projection. Empty until S1's `proj`.
+    /// Travel, interface time, `$` and `kW` projection (S1's `proj`).
     Estimate,
     /// Schedule, conflicts and staleness: targeting's three lints from S1.
     Lint,
@@ -587,7 +588,7 @@ pub const CATALOGUE: &[Entry] = &[
         code: "E0601",
         family: Family::EconomyPowerAndMessaging,
         severity: Severity::Error,
-        emitter: Emitter::NoneYet("S1, the estimate stage"),
+        emitter: Emitter::Stage(Stage::Estimate),
     },
     Entry {
         code: "E0602",
@@ -599,13 +600,13 @@ pub const CATALOGUE: &[Entry] = &[
         code: "W0601",
         family: Family::EconomyPowerAndMessaging,
         severity: Severity::Warning,
-        emitter: Emitter::NoneYet("S1, the estimate stage"),
+        emitter: Emitter::Stage(Stage::Estimate),
     },
     Entry {
         code: "W0602",
         family: Family::EconomyPowerAndMessaging,
         severity: Severity::Warning,
-        emitter: Emitter::NoneYet("S1, the estimate stage"),
+        emitter: Emitter::Stage(Stage::Estimate),
     },
     // `proto/gp/v1/playbook.proto` names this warning by hand and leaves it
     // unnumbered: "When false, a playbook that adds draw beyond supply is an
@@ -617,14 +618,14 @@ pub const CATALOGUE: &[Entry] = &[
         code: "W0603",
         family: Family::EconomyPowerAndMessaging,
         severity: Severity::Warning,
-        emitter: Emitter::NoneYet("S1, the estimate stage"),
+        emitter: Emitter::Stage(Stage::Estimate),
     },
     // --- W07xx: schedule, conflicts and staleness ----------------------------
     Entry {
         code: "W0701",
         family: Family::ScheduleConflictsAndStaleness,
         severity: Severity::Warning,
-        emitter: Emitter::NoneYet("S1, the estimate stage"),
+        emitter: Emitter::Stage(Stage::Estimate),
     },
     Entry {
         code: "W0702",
@@ -664,7 +665,7 @@ pub const CATALOGUE: &[Entry] = &[
         code: "I0001",
         family: Family::Information,
         severity: Severity::Info,
-        emitter: Emitter::NoneYet("T7/S1, the estimate stage"),
+        emitter: Emitter::Stage(Stage::Estimate),
     },
     Entry {
         code: "I0002",
@@ -811,20 +812,25 @@ mod tests {
     }
 
     #[test]
-    fn nothing_hangs_off_the_empty_estimate_stage_and_every_lint_is_advice() {
-        // Item 82, in its S1 form. The estimate stage is still present and
-        // empty until S1's `proj` task, so no row may claim it; the lint stage
-        // raises targeting's three lints, and a lint is advice, never a
-        // refusal (spec section 11: a playbook qualifies on zero errors), so a
-        // row that names the lint stage is never an ERROR.
+    fn the_full_stages_refuse_only_what_the_spec_refuses() {
+        // Item 82, in its S1 form; it replaces the skeleton's
+        // `nothing_the_skeleton_emits_hangs_off_an_empty_full_stage`. The
+        // estimate stage is filled (S1's `proj`), and of everything FULL can
+        // add, exactly one code refuses a playbook: `E0601`, spec section 11's
+        // "adding draw beyond supply is an error unless 'allow dormant
+        // beacons' is set". An existing shortfall is "only a warning", a route
+        // that does not fit is advice, and a lint is advice (spec section 11:
+        // a playbook qualifies on zero errors).
+        let mut estimate_errors: Vec<&str> = Vec::new();
+        let mut estimated: Vec<&str> = Vec::new();
         for row in CATALOGUE {
             if let Emitter::Stage(stage) = row.emitter {
-                assert!(
-                    stage != Stage::Estimate,
-                    "{} names the estimate stage as its emitter, but that stage is empty until \
-                     S1's proj task",
-                    row.code
-                );
+                if stage == Stage::Estimate {
+                    estimated.push(row.code);
+                    if row.severity == Severity::Error {
+                        estimate_errors.push(row.code);
+                    }
+                }
                 if stage == Stage::Lint {
                     assert!(
                         row.severity != Severity::Error,
@@ -834,6 +840,17 @@ mod tests {
                 }
             }
         }
+        assert_eq!(
+            estimate_errors,
+            ["E0601"],
+            "the estimate stage refuses only added draw beyond supply"
+        );
+        assert_eq!(
+            estimated,
+            ["E0601", "W0601", "W0602", "W0603", "W0701", "I0001"],
+            "the estimate stage raises the economy family and the schedule's two codes, and \
+             E0602 waits for radio (S4)"
+        );
     }
 
     #[test]

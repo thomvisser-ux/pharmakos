@@ -56,6 +56,22 @@ pub enum RulesGap {
         /// What the table said.
         value: u32,
     },
+    /// A value that is a duration or a price, and so can never be below
+    /// zero, is.
+    Negative {
+        /// The field's path in `gp.v1.RulesTable`.
+        field: &'static str,
+        /// What the table said.
+        value: i64,
+    },
+    /// A value that must be above zero is not: a walking speed of zero would
+    /// make every leg endless.
+    NotPositive {
+        /// The field's path in `gp.v1.RulesTable`.
+        field: &'static str,
+        /// What the table said.
+        value: i64,
+    },
 }
 
 impl fmt::Display for RulesGap {
@@ -70,6 +86,16 @@ impl fmt::Display for RulesGap {
                 formatter,
                 "the rules table's `{field}` is {value}, which the verifier's signed comparison \
                  cannot hold"
+            ),
+            RulesGap::Negative { field, value } => write!(
+                formatter,
+                "the rules table's `{field}` is {value}, and nothing the verifier prices can cost \
+                 less than nothing"
+            ),
+            RulesGap::NotPositive { field, value } => write!(
+                formatter,
+                "the rules table's `{field}` is {value}; the verifier divides by it and needs it \
+                 above zero"
             ),
         }
     }

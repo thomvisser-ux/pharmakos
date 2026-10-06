@@ -30,6 +30,16 @@
 //! reference seat is that fixture written a second time, and
 //! `gamectl verify`'s test compares the worked example's `report_hash` with the
 //! golden here.
+//!
+//! **Two more, for the estimate stage.** From S1's `proj` the estimate stage
+//! reads the seat's economy and the coming segment's length, and two of its
+//! codes need a fixture the plain one is not: `W0601` a grid that is already
+//! short, and `W0701` a snapshot that carries a coming segment. The cases in
+//! [`SHORT_CASES`] are checked against [`short_scope`], which is
+//! [`fixture_scope`] with its draw above its supply and nothing else changed,
+//! and the cases in [`SEGMENT_CASES`] against [`segment_snapshot`], which is
+//! [`fixture_snapshot`] with a first round's three minutes coming. Every other
+//! case keeps the plain fixture, for the reason above.
 
 use std::fmt::Write as _;
 use std::fs;
@@ -236,6 +246,45 @@ fn fixture_scope() -> Scope {
     ))
 }
 
+/// The seat's frozen snapshot with a coming segment in it: the first round's
+/// three minutes (`match.segment_lengths_ms`' first entry), for the cases
+/// [`SEGMENT_CASES`] names.
+fn segment_snapshot() -> Vec<u8> {
+    Snapshot {
+        version: SNAPSHOT_VERSION,
+        match_seed: 0x0102_0304_0506_0708,
+        tick: 3_600,
+        coming_segment_ms: 180_000,
+        ..Snapshot::default()
+    }
+    .to_bytes()
+    .unwrap_or_else(|error| panic!("encoding the segment snapshot: {error}"))
+}
+
+/// The cases checked against [`segment_snapshot`]: the schedule check's.
+const SEGMENT_CASES: &[&str] = &["w0701_a_route_longer_than_the_segment"];
+
+/// [`fixture_scope`] with a grid that is already short: supply 4 `kW` under a
+/// draw of 10, the same beacons, and nothing else changed.
+fn short_scope() -> Scope {
+    let plain = fixture_scope();
+    let mut short = Scope::new(
+        plain.seat(),
+        SeatEconomy {
+            treasury: plain.economy().treasury,
+            supply: Kw::new(4),
+            draw: Kw::new(10),
+        },
+    );
+    for known in plain.beacons() {
+        short.push_beacon(known.clone());
+    }
+    short
+}
+
+/// The cases checked against [`short_scope`]: the existing shortfall's.
+const SHORT_CASES: &[&str] = &["w0601_an_existing_shortfall"];
+
 /// The cases checked against [`map_scope`]: every case that names or describes
 /// a feature, and the one whose lint reads the map around a fixed site.
 const MAP_CASES: &[&str] = &[
@@ -337,8 +386,19 @@ fn map_scope() -> Scope {
 fn scope_for(case: &str) -> Scope {
     if MAP_CASES.contains(&case) {
         map_scope()
+    } else if SHORT_CASES.contains(&case) {
+        short_scope()
     } else {
         fixture_scope()
+    }
+}
+
+/// The snapshot a case is checked against.
+fn snapshot_for(case: &str) -> Vec<u8> {
+    if SEGMENT_CASES.contains(&case) {
+        segment_snapshot()
+    } else {
+        fixture_snapshot()
     }
 }
 
@@ -350,7 +410,7 @@ fn case_bytes(case: &str) -> Vec<u8> {
 fn report_for(case: &str, depth: Depth) -> VerifyReport {
     let rules = rules();
     let scope = scope_for(case);
-    let snapshot = fixture_snapshot();
+    let snapshot = snapshot_for(case);
     let playbook = case_bytes(case);
     let input = Input::new(&playbook, &snapshot, &scope, &rules)
         .unwrap_or_else(|error| panic!("assembling the input: {error}"));
@@ -492,10 +552,12 @@ fn full_finds_what_quick_finds() {
     // Item 82, in its S1 form. FULL runs QUICK's four stages first and then
     // estimate and lint, and appends to the same report, so QUICK's diagnostics
     // are FULL's first ones, in the same order. What FULL adds comes only from
-    // the two FULL stages: the estimate stage is still empty until S1's `proj`,
-    // and the lint stage raises targeting's three lints, which are advice and
-    // never change whether a playbook qualifies.
+    // the two FULL stages, and of it exactly one code refuses a playbook:
+    // `E0601`, added draw beyond supply without `allow_dormant_beacons` (spec
+    // section 11). So FULL qualifies a playbook exactly when QUICK does and
+    // the estimate stage added no `E0601`.
     let mut full_added_something = false;
+    let mut full_refused_something = false;
     for case in cases() {
         let quick = report_for(&case, Depth::Quick);
         let full = report_for(&case, Depth::Full);
@@ -503,6 +565,7 @@ fn full_finds_what_quick_finds() {
             full.diagnostics.starts_with(&quick.diagnostics),
             "{case}: FULL lost or reordered something QUICK found"
         );
+        let mut refused = false;
         for extra in full.diagnostics.iter().skip(quick.diagnostics.len()) {
             let stage = CATALOGUE
                 .iter()
@@ -513,15 +576,17 @@ fn full_finds_what_quick_finds() {
                 "{case}: FULL added `{}`, which no FULL stage raises",
                 extra.code
             );
-            assert_ne!(
-                extra.severity,
-                i32::from(Severity::Error),
-                "{case}: FULL added an error, `{}`; a lint is advice",
-                extra.code
-            );
+            if extra.severity == i32::from(Severity::Error) {
+                assert_eq!(
+                    extra.code, "E0601",
+                    "{case}: FULL added an error other than added draw beyond supply"
+                );
+                refused = true;
+            }
             full_added_something = true;
         }
-        assert_eq!(quick.qualifies, full.qualifies, "{case}");
+        full_refused_something |= refused;
+        assert_eq!(quick.qualifies && !refused, full.qualifies, "{case}");
         assert_ne!(
             quick.report_hash, full.report_hash,
             "{case}: the depth is one of the five hashed inputs, so two depths never share a hash"
@@ -531,6 +596,11 @@ fn full_finds_what_quick_finds() {
         full_added_something,
         "no case shows FULL finding more than QUICK, so the half of this test that checks what \
          FULL adds has nothing to check"
+    );
+    assert!(
+        full_refused_something,
+        "no case shows FULL refusing what QUICK let through, so the half of this test that checks \
+         E0601 has nothing to check"
     );
 }
 
@@ -552,6 +622,34 @@ fn every_map_case_exists_and_the_map_is_all_it_adds() {
     assert_eq!(map.economy(), plain.economy());
     assert!(plain.features().is_empty() && plain.commander().is_none());
     assert_eq!(map.features().len(), 5);
+}
+
+#[test]
+fn every_estimate_case_exists_and_its_fixture_changes_one_thing() {
+    let names = cases();
+    for case in SHORT_CASES.iter().chain(SEGMENT_CASES) {
+        assert!(
+            names.iter().any(|name| name == case),
+            "{case} is in a fixture list and has no case file"
+        );
+    }
+    // The short scope is the plain fixture with supply and draw changed: the
+    // seat, the treasury and the beacons are the plain fixture's.
+    let plain = fixture_scope();
+    let short = short_scope();
+    assert_eq!(short.seat(), plain.seat());
+    assert_eq!(short.beacons(), plain.beacons());
+    assert_eq!(short.economy().treasury, plain.economy().treasury);
+    assert!(short.economy().supply < short.economy().draw);
+    assert!(plain.economy().supply >= plain.economy().draw);
+    // The segment snapshot is the plain one with a coming segment: the bytes
+    // differ, and nothing else the decoded snapshot says does.
+    let mut segment = Snapshot::from_bytes(&segment_snapshot()).expect("a snapshot");
+    let bare = Snapshot::from_bytes(&fixture_snapshot()).expect("a snapshot");
+    assert_eq!(segment.coming_segment_ms, 180_000);
+    assert_eq!(bare.coming_segment_ms, 0);
+    segment.coming_segment_ms = 0;
+    assert_eq!(segment, bare);
 }
 
 #[test]
@@ -787,6 +885,12 @@ fn the_worked_example_qualifies_and_is_six_units() {
             ),
             ("I0003", "/declarative/route/2/move/pace"),
             ("I0003", "/declarative/handlers/0/body/0/move/pace"),
+            // The estimate stage: the one leg whose two ends the view names,
+            // from the deploy at (96, 11) to the core `b_01` at (80, 11),
+            // sixteen voxels less the four of interface range the deploy
+            // stopped within and the two of arrive radius the move stops
+            // within: ten seconds at a voxel a second.
+            ("I0001", "/declarative/route"),
         ]
     );
     assert!(
@@ -941,7 +1045,8 @@ fn author_text_cannot_talk_the_decoder_into_the_wrong_code() {
     // *is* the unknown-field marker must still come back as `E0001` — anything
     // else names `author_kind`, a real and declared field, as unknown, and
     // offers a patch that deletes it.
-    let text = "{\"schema_version\":{\"major\":1},\"kind\":\"PLAYBOOK\",                \"meta\":{\"title\":\"case\",\"author_kind\":\"is not a field\"}}";
+    let text = "{\"schema_version\":{\"major\":1},\"kind\":\"PLAYBOOK\",\
+                \"meta\":{\"title\":\"case\",\"author_kind\":\"is not a field\"}}";
     let rules = rules();
     let scope = fixture_scope();
     let snapshot = fixture_snapshot();
@@ -983,7 +1088,9 @@ fn the_worked_example_case_is_the_canonical_bytes_crates_proto_pins() {
     .expect("crates/proto's canonical golden");
     assert!(
         ours == theirs,
-        "crates/verifier/tests/cases/expand_east.json has drifted from          tests/golden/proto/expected.expand_east.json; the verifier's clean case must be exactly          the canonical form the proto lane pins"
+        "crates/verifier/tests/cases/expand_east.json has drifted from \
+         tests/golden/proto/expected.expand_east.json; the verifier's clean case must be exactly \
+         the canonical form the proto lane pins"
     );
 }
 

@@ -30,9 +30,11 @@
 //! numbers are fixed width, so the encoding is unambiguous: no concatenation of
 //! one input can be mistaken for a different concatenation of another.
 //!
-//! **Why the scope rides with the snapshot.** The verifier never reads the
-//! snapshot bytes; it reads the seat's *view* of them, which the gateway builds
-//! and hands over as a [`Scope`]. Input 2 is therefore the pair — the bytes and
+//! **Why the scope rides with the snapshot.** The verifier reads the seat's
+//! *view* of the snapshot, which the gateway builds and hands over as a
+//! [`Scope`]; of the bytes themselves it reads one number, the coming
+//! segment's length, in FULL's estimate stage (spec section 3 puts it in the
+//! snapshot). Input 2 is therefore the pair — the bytes and
 //! the view of them — because hashing the bytes alone would give two different
 //! reports, built from two different views of one snapshot, the same hash. The
 //! scope is the seat's view of that snapshot and is hashed as part of it. From

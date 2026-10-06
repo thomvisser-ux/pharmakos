@@ -17,7 +17,7 @@
 //! | structure | [`structure`] | complete |
 //! | resolve | [`resolve`] | complete |
 //! | semantics | [`semantics`] | complete |
-//! | estimate | [`estimate`] | **present and empty** — S1's `proj` fills it |
+//! | estimate | [`estimate`] | the `$` and `kW` projection and the schedule (S1); mast coverage is S4's |
 //! | lint | [`lint`] | targeting's three lints (S1); S2 and S3 add the rest |
 //!
 //! FULL's two stages shipped present and empty, deliberately (decisions-log
@@ -25,8 +25,18 @@
 //! so the API shape and the hash contract never change as S1 and S3 fill them,
 //! and `submit_plan` runs FULL exactly as spec section 12 says. A FULL report
 //! carries QUICK's diagnostics first, in the same order, and then whatever the
-//! two FULL stages add, which today is targeting's lints and nothing that
-//! refuses — `full_finds_what_quick_finds` asserts it.
+//! two FULL stages add. Of that, exactly one code refuses: `E0601`, spec
+//! section 11's "adding draw beyond supply is an error unless 'allow dormant
+//! beacons' is set" — `full_finds_what_quick_finds` asserts it.
+//!
+//! # The arithmetic the estimate stage shares
+//!
+//! [`interface`] (spec section 5's rates) and [`projection`] (the `$` and `kW`
+//! the route orders) moved here from `plan-core`, which re-exports both, so the
+//! estimate stage could use them without a dependency cycle and the prose, the
+//! editor and the verifier price one playbook one way (S1's plan, task
+//! `proj`). [`walking`] is the commander's walking as a lower bound, which is
+//! all the verifier can say without the pathfinder it never names.
 //!
 //! # Targeting (S1)
 //!
@@ -101,9 +111,12 @@
 
 pub mod catalogue;
 pub mod hash;
+pub mod interface;
 pub mod limits;
+pub mod projection;
 pub mod scope;
 pub mod strings;
+pub mod walking;
 
 mod decode;
 mod estimate;
@@ -122,9 +135,12 @@ use pharmakos_sim::rules::RulesTable;
 use pharmakos_sim::snapshot::{Snapshot, SnapshotError};
 
 pub use hash::REPORT_HASH_DOMAIN;
+pub use interface::Rates;
 pub use limits::{CONDITION_MAX_DEPTH, CONDITION_MAX_NODES, Limits, RulesGap};
+pub use projection::{Prices, Projection, ProjectionError};
 pub use scope::{FeatureKind, KnownBeacon, KnownFeature, Ownership, Scope};
 pub use size::size_units;
+pub use walking::Walk;
 
 /// This build of the verifier, opaque and hashed.
 ///
@@ -136,8 +152,11 @@ pub use size::size_units;
 /// PLACEHOLDER: how this string is derived once there are releases — a version,
 /// a build identity, or both — is the **owner's** call at the wk-35.5 v0.1 gate,
 /// with the rest of the versioning. Until then it names the stage that produced
-/// it, and the report goldens move when it moves.
-pub const VERIFIER_VERSION: &str = "0.1.0-skeleton";
+/// it, and the report goldens move when it moves. `0.1.0-s1` from S1's
+/// estimate stage (task `proj`): a FULL report from this build finds what the
+/// skeleton's empty stage could not, so it is not comparable with one from
+/// before, and the version says so.
+pub const VERIFIER_VERSION: &str = "0.1.0-s1";
 
 /// Everything one verification is a function of, apart from the depth.
 ///
@@ -152,6 +171,9 @@ pub struct Input<'a> {
     rules: &'a RulesTable,
     rules_hash: u64,
     limits: Limits,
+    rates: Rates,
+    prices: Prices,
+    walk: Walk,
 }
 
 impl<'a> Input<'a> {
@@ -171,7 +193,8 @@ impl<'a> Input<'a> {
     /// # Errors
     ///
     /// Returns [`RulesGap`] when the rules table does not carry a block the
-    /// checks read.
+    /// checks read — the verifier's limits, the interface rates, the prices
+    /// and the commander's walking rows — or carries one out of range.
     pub fn new(
         playbook: &'a [u8],
         snapshot: &'a [u8],
@@ -185,6 +208,9 @@ impl<'a> Input<'a> {
             rules,
             rules_hash: rules.rules_hash(),
             limits: Limits::from_rules(rules)?,
+            rates: Rates::from_rules(rules)?,
+            prices: Prices::from_rules(rules)?,
+            walk: Walk::from_rules(rules)?,
         })
     }
 
@@ -218,6 +244,27 @@ impl<'a> Input<'a> {
         &self.limits
     }
 
+    /// Spec section 5's interface rates, which the estimate stage prices a
+    /// visit and a deploy at.
+    #[must_use]
+    pub const fn rates(&self) -> &Rates {
+        &self.rates
+    }
+
+    /// The rules table's prices, which the estimate stage projects `$` and
+    /// `kW` with.
+    #[must_use]
+    pub const fn prices(&self) -> &Prices {
+        &self.prices
+    }
+
+    /// The commander's walking rows, which the estimate stage bounds a leg
+    /// with.
+    #[must_use]
+    pub const fn walk(&self) -> &Walk {
+        &self.walk
+    }
+
     /// `rules_hash`, computed once when the input was assembled.
     #[must_use]
     pub const fn rules_hash(&self) -> u64 {
@@ -226,12 +273,11 @@ impl<'a> Input<'a> {
 
     /// The snapshot, decoded.
     ///
-    /// The QUICK stages read the [`Scope`] rather than the snapshot, so nothing
-    /// in this crate calls this today. It is here because the snapshot is a
-    /// named input rather than an opaque blob, and because the estimate stage
-    /// will want the map out of it — the fact that the bytes are a snapshot
-    /// should be checkable by the caller, and by a test, without this crate
-    /// guessing.
+    /// The QUICK stages read the [`Scope`] rather than the snapshot and never
+    /// call this. The estimate stage does, for the one fact the snapshot
+    /// carries and the view does not: the coming segment's length (spec
+    /// section 3). The fact that the bytes are a snapshot is checkable by the
+    /// caller, and by a test, without this crate guessing.
     ///
     /// # Errors
     ///
@@ -277,7 +323,7 @@ pub fn verify(input: &Input<'_>, depth: Depth) -> VerifyReport {
         let symbols = resolve::run(&playbook, input.scope, &mut out);
         semantics::run(&playbook, input.scope, limits, &symbols, &mut out);
         if depth == Depth::Full {
-            estimate::run(&playbook, input.scope, limits, &mut out);
+            estimate::run(&playbook, input, &mut out);
             lint::run(&playbook, input.scope, limits, &symbols, &mut out);
         }
     }

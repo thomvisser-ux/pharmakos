@@ -374,14 +374,16 @@ pub const VERIFIER_STRINGS: &[Text] = &[
     },
     Text {
         code: "W0603",
-        message: "the playbook adds {found} kW of draw beyond supply; `allow_dormant_beacons`                   accepts it, and the beacons past the supply stay dormant.",
+        message: "the playbook adds {found} kW of draw beyond supply; `allow_dormant_beacons` \
+                  accepts it, and the beacons past the supply stay dormant.",
         beginner: "Some of what this playbook switches on will have no power and will sit idle.",
     },
     // --- W07xx: schedule, conflicts and staleness ----------------------------
     Text {
         code: "W0701",
-        message: "the route needs about {found} ms and the coming segment is {segment} ms.",
-        beginner: "There may not be time to walk this whole route this round.",
+        message: "the route needs at least {found} ms if every step runs, and the coming segment \
+                  is {segment} ms.",
+        beginner: "There is not time for this whole route this round.",
     },
     Text {
         code: "W0702",
@@ -415,8 +417,9 @@ pub const VERIFIER_STRINGS: &[Text] = &[
     // --- I...: information ---------------------------------------------------
     Text {
         code: "I0001",
-        message: "the route is about {found} ms of walking.",
-        beginner: "Roughly how long the walking takes.",
+        message: "the route is at least {found} ms of walking, between the places it names.",
+        beginner: "The least time the walking can take; going round anything in the way takes \
+                   longer.",
     },
     Text {
         code: "I0002",
@@ -471,6 +474,9 @@ pub const FIX_RANK_NEAREST: &str = "Rank it by nearest";
 pub const FIX_COVERAGE_UNCOVERED: &str = "Pick only what you do not cover yet";
 /// E0411's Fix.
 pub const FIX_DROP_COVERAGE: &str = "Leave the coverage out";
+/// E0601's Fix: accept the shortfall, so the beacons past the supply stay
+/// dormant.
+pub const FIX_ALLOW_DORMANT: &str = "Allow dormant beacons";
 
 /// The row for one code, or `None` if the table does not have it.
 #[must_use]
