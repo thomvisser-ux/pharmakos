@@ -150,6 +150,35 @@ per-seat table room (the world total divided by the seat count) are in the run
 as well; at four seats each seat may place 10 beacons and fabricate 75 units,
 which the 1 200-tick run never reaches.
 
+## What moved it (S1's Mine mandate, `mine`)
+
+**The encoding gained columns again, so the chain diverges at tick 0**
+(decisions-log items 127 (9) and 128 (3) (e); register S1-38). Every beacon
+row now carries the Mine mandate's four settings -- `dig_max_depth`,
+`pillar_spacing`, `seam_choice`, `flee_on_threat` -- and **the seam it
+holds**, the Mine program's choice kept until the seam is spent
+(`crates/sim/src/mining.rs`); the snapshot version moved to 8 with them.
+
+Measured with those five columns left out of the encoding, **the behaviour
+first diverges at tick 1**, and the rules that moved it are these:
+
+* **A drone digs the seam its home beacon holds, and the choice is made on the
+  decision tick.** Tick 1's programs phase runs before its decision phase, so
+  each seat's starting mining drone, whose core holds no seam yet, stands for
+  one tick where the skeleton's sphere search sent it walking at once; from
+  tick 2 it works the seam its core chose.
+* **The dig rule is pit-safe, not rim-only.** A drone stands level with the ore
+  or one below it, on any column connected to its home, and a dig is refused
+  only if it would strand a column of the seam's box; so each core works its
+  starting seam's whole top layer (its default `dig_max_depth` is 0), where the
+  skeleton took only the rim columns that had undisturbed dirt beside them.
+  **The harness's Mine beacon now digs past the rim** in the same way.
+* **A Mine mandate's drone is filed in the Mine band**, last on spec section
+  7's ladder, where the skeleton filed it with the units.
+
+`economy.mining_carry_voxels` replaced the constant it was proposed from at the
+same value, which moved nothing.
+
 ## What a diff means
 
 **The sim's behaviour changed.** That is all it can mean: the chain is a pure
