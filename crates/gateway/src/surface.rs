@@ -50,7 +50,7 @@
 //! |---|---|
 //! | here | `get_status`, `wait_for`, `save_notes`, `set_ready`, `get_segment_feed` |
 //! | [`knowledge`] | `get_briefing`, `get_recap`, `list_beacons`, `get_beacon`, `get_map_summary`, `get_economy_forecast`, `estimate_route` |
-//! | [`planning`] | `get_schema`, `list_templates`, `instantiate_template`, `verify_plan`, `render_plan`, `patch_plan`, `save_draft`, `list_drafts`, `get_draft`, `get_safe_plan`, `submit_plan` |
+//! | [`planning`] | `get_schema`, `list_templates`, `instantiate_template`, `verify_plan`, `render_plan`, `patch_plan`, `save_draft`, `list_drafts`, `get_draft`, `get_safe_plan`, `resolve_refs`, `submit_plan` |
 //! | [`watch`] | `get_view` |
 //! | [`control`] | `end_lull`, `advance_push`, `end_recap`, `report_host_clock` |
 //!
@@ -65,12 +65,14 @@
 //! parameter, its three rungs, its wire spelling and the two salience rules are
 //! T9's; the per-method order is each method's own and is stated at the method.
 //!
-//! Four methods of the schema still answer [`crate::error::Code::Internal`] --
-//! `query_area`, `list_known_enemies`, `get_reports` and `get_capabilities` --
-//! and that is not an omission: `gateway.proto` says they have no
-//! request/response pair at all, because no skeleton client calls them and the
-//! stage that introduces what each reports on (S3's knowledge store, S4's
-//! licences) is the stage that will know what the request takes. The reading of
+//! Every method `gateway.proto` gives a request/response pair is served, S1's
+//! `resolve_refs` included. Four methods of the schema still answer
+//! [`crate::error::Code::Internal`] -- `query_area`, `list_known_enemies`,
+//! `get_reports` and `get_capabilities` -- and that is not an omission: they
+//! are exactly the four `gateway.proto` gives no request/response pair at all,
+//! because no client calls them yet and the stage that introduces what each
+//! reports on (S3's knowledge store, S4's licences) is the stage that will
+//! know what the request takes. The reading of
 //! the closed error set is T9's and is unchanged: the set has no
 //! `NOT_IMPLEMENTED`, `INVALID_ARGUMENT` would tell a client to fix a request
 //! that is perfectly well formed, and `INTERNAL` is the one code whose
@@ -2063,12 +2065,30 @@ impl Surface {
     /// reference one it cannot know about -- the same fog leak
     /// [`crate::fog`] exists to prevent, arriving through the back door.
     ///
-    /// PLACEHOLDER: a seat's **sighted** enemy beacons join this scope with the
-    /// knowledge store at **S3**; `is_core` is decided here by "the seat's
-    /// lowest-numbered beacon", which is true of every map the generator makes
-    /// because it pre-places the core first, and becomes a column the day a
-    /// beacon has a kind (owner, at S1, with the grid, as
-    /// `crate::surface::knowledge::core_beacon_of` says).
+    /// PLACEHOLDER: a seat's sighted enemy beacons join this scope — owner, S3
+    /// with the knowledge store (the register's S3-04).
+    ///
+    /// `is_core` marks the seat's `b_00`, by the rule
+    /// `crate::surface::knowledge::core_beacon_of` states and the wire's
+    /// `BeaconSummary.core` reads (the register's S1-13).
+    ///
+    /// # The map's features and the commander (S1's targeting)
+    ///
+    /// Every vent and seam on the map, as [`crate::targeting::feature_reads`]
+    /// reads it for this seat: the four facts targeting.md's "Surfaces" names
+    /// (id, kind, grade, a live bit), the anchor column the name spells, and
+    /// `covered_by`, the seat's own living beacon whose sphere holds the
+    /// feature, the lowest when several do, as `b_NN` (decisions-log item
+    /// 131 (4) (d): two of the verifier's three targeting lints read the last
+    /// two). The feature list is unfogged in S1, as targeting's ranking and
+    /// `get_map_summary.features` are (item 130 (3) (a)); `covered_by` names
+    /// only the seat's own beacons, so another seat's coverage is in nobody's
+    /// view. Then where the seat's commander stands, as a voxel, or nothing
+    /// when it is not standing anywhere. The verifier **checks** against all
+    /// of it and never ranks (AGENTS.md section 3 rule 2): no travel, cost or
+    /// order reaches the scope. Every field is a `report_hash` input
+    /// ([`pharmakos_verifier::Scope`]'s encoding), which is why the view is
+    /// built from the frozen world and nothing else.
     ///
     /// # Errors
     ///
@@ -2119,6 +2139,28 @@ impl Surface {
                 is_core: core == Some(id),
             });
         }
+
+        for read in crate::targeting::feature_reads(world, Some(seat)) {
+            scope.push_feature(pharmakos_verifier::KnownFeature {
+                feature_id: read.name,
+                kind: match read.kind {
+                    pharmakos_sim::features::FeatureKind::Vent => {
+                        pharmakos_verifier::FeatureKind::Vent
+                    }
+                    pharmakos_sim::features::FeatureKind::Seam => {
+                        pharmakos_verifier::FeatureKind::Seam
+                    }
+                },
+                grade: crate::surface::knowledge::grade_proto(read.grade),
+                x: read.x,
+                y: read.y,
+                live: read.live,
+                covered_by: read.covered_by.map(pharmakos_sim::tables::own_beacon_name),
+            });
+        }
+        scope.set_commander(
+            crate::targeting::commander_point(world, seat).map(crate::view::voxel_of),
+        );
         Ok(scope)
     }
 
@@ -2402,7 +2444,7 @@ impl Surface {
             Method::GetRecap => self.get_recap(request),
             Method::ListBeacons => self.list_beacons(subject, held, request, vision),
             Method::GetBeacon => self.get_beacon(subject, held, request, vision),
-            Method::GetMapSummary => self.get_map_summary(request),
+            Method::GetMapSummary => self.get_map_summary(subject, request),
             Method::GetEconomyForecast => self.get_economy_forecast(subject, request),
             Method::EstimateRoute => self.estimate_route(subject, request),
 
@@ -2417,6 +2459,7 @@ impl Surface {
             Method::ListDrafts => self.list_drafts(subject),
             Method::GetDraft => self.get_draft(subject, request),
             Method::GetSafePlan => self.get_safe_plan(subject),
+            Method::ResolveRefs => self.resolve_refs(subject, request),
             Method::SubmitPlan => self.submit_plan(subject, request),
 
             // The view.
@@ -2430,9 +2473,11 @@ impl Surface {
             Method::EndRecap => self.serve_end_recap(),
             Method::ReportHostClock => self.serve_report_host_clock(request),
 
-            // The four `gateway.proto` gives no request/response pair at all,
-            // plus `METHOD_UNSPECIFIED`, which `method_from_wire` already
-            // refuses before a handler is reached.
+            // The four `gateway.proto` gives no request/response pair at all
+            // (`query_area`, `list_known_enemies`, `get_reports`,
+            // `get_capabilities`), plus `METHOD_UNSPECIFIED`, which
+            // `method_from_wire` already refuses before a handler is reached.
+            // Every method with a pair has an arm above.
             other => Err(Error::internal(format!(
                 "`{}` is in the schema and this build does not serve it: `gateway.proto` gives it \
                  no request/response pair, because no skeleton client calls it and the stage that \

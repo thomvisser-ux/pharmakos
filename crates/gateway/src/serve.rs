@@ -291,7 +291,7 @@ impl Operators for NoOperators {
 /// the gateway, so an advisor reading it (the recap's events, say) leaves the
 /// human's feed as it found it. Anything off it is answered `FORBIDDEN_SCOPE`
 /// and audited (`an_advisor_is_refused_every_method_off_its_allow_list`).
-pub const ADVISOR_METHODS: [Method; 18] = [
+pub const ADVISOR_METHODS: [Method; 19] = [
     Method::GetStatus,
     Method::WaitFor,
     Method::GetBriefing,
@@ -308,6 +308,7 @@ pub const ADVISOR_METHODS: [Method; 18] = [
     Method::RenderPlan,
     Method::PatchPlan,
     Method::GetSafePlan,
+    Method::ResolveRefs,
     Method::GetView,
     Method::GetSegmentFeed,
 ];
