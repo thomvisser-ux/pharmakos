@@ -54,6 +54,7 @@ const SCENARIOS: &[&str] = &[
     ROUND_LIMIT_AUDIT,
     UNAFFORDABLE_DEPLOY,
     COVER_NEAREST_VENT,
+    MINE_TO_DEPTH,
 ];
 
 /// The scenario against the built-in operator: seat 1 is `builtin`, played by
@@ -84,6 +85,11 @@ const UNAFFORDABLE_DEPLOY: &str = "scenarios/s1/unaffordable-deploy.scenario.jso
 /// starting vent and builds on it, rounds 2 and 3 find no vent within reach
 /// (S1's `tgt`; `docs/design/targeting.md`, "What the map means for it").
 const COVER_NEAREST_VENT: &str = "scenarios/s1/cover-nearest-vent.scenario.jsonc";
+
+/// The demo's F2 cured: seat 0 switches its core to Mine with `dig_max_depth`
+/// 3 every round and works its starting seam below the rim, earning in every
+/// round (S1's `mine`; register S1-38).
+const MINE_TO_DEPTH: &str = "scenarios/s1/mine-to-depth.scenario.jsonc";
 
 /// **The exact set of scenarios allowed to seal through the harness door.**
 ///
