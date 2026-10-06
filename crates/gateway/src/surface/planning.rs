@@ -589,16 +589,33 @@ impl Surface {
     /// The Lull's "this round" sentence for `seat`: what the playbook it will
     /// play this round does wherever its route reads the map
     /// (`docs/design/targeting.md`, "Surfaces": "On re-seal the Lull says what
-    /// this round will do"). `get_briefing` carries it in its prose.
+    /// this round will do"). `get_briefing` carries it in its prose, to a
+    /// caller that holds `plan.submit` only.
     ///
-    /// The playbook is the seat's seal when it sealed this round -- so a
-    /// re-seal changes the sentence at once -- and otherwise last round's
-    /// playbook, carried as this Lull's draft (spec section 13, "Draft
-    /// continuity"): the demo's round 2 reads "no vent you can cover" off a
-    /// carried "cover the nearest vent" before anybody has touched it. Read
-    /// exactly as `resolve_refs` reads it, over the frozen world. `None`
-    /// outside a Lull, when the seat has neither, and when its route reads
-    /// the map nowhere.
+    /// **It reads the seat's seal and nothing else** -- gateway-owned state a
+    /// caller cannot write except by sealing. The playbook is the seal when
+    /// the seat sealed this round, so a re-seal changes the sentence at once;
+    /// otherwise it is last round's seal, if the seat sealed it itself, which
+    /// is byte for byte the playbook this Lull carried as its draft (spec
+    /// section 13, "Draft continuity"; `Surface::carry_draft_forward` copies
+    /// it from there): the demo's round 2 reads "no vent you can cover" off a
+    /// carried "cover the nearest vent" before anybody has touched it. The
+    /// draft list itself is never read: a seat may save anything under the
+    /// carried draft's id, and the advisor, which reads briefings, never reads
+    /// a seat's drafts (decisions-log item 111). A playbook the gateway filed
+    /// is not the seat's and is not carried, so it says nothing.
+    ///
+    /// Read exactly as `resolve_refs` reads it, over the frozen world, with
+    /// the plan the seal compiled to. `None` outside a Lull, when there is no
+    /// such seal, and when its route reads the map nowhere.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::Internal`] when a sealed playbook has no
+    /// canonical form, when the rules table prices no beacon, or when a
+    /// `covering` read answers neither a site nor a failure: each is the
+    /// gateway contradicting itself, since a seal was verified and compiled
+    /// once already.
     pub(super) fn this_round(
         &self,
         seat: pharmakos_sim::tables::SeatId,
@@ -612,34 +629,25 @@ impl Surface {
         }
         let round = host.runner().round();
         let state = self.seat_state(crate::token::Subject::Seat(seat), seat)?;
-        let sealed = state.sealed.as_ref().filter(|sealed| sealed.round == round);
-        let carried = state
-            .draft(crate::surface::CARRIED_DRAFT_ID)
-            .filter(|draft| draft.round == round);
-        let text = match (sealed, carried) {
-            (Some(sealed), _) => sealed.playbook_jsonc.as_str(),
-            (None, Some(draft)) => draft.playbook_jsonc.as_str(),
-            (None, None) => return Ok(None),
+        let Some(sealed) = state.sealed.as_ref().filter(|sealed| {
+            sealed.round == round
+                || (sealed.round.checked_add(1) == Some(round) && !sealed.filed_by_the_gateway)
+        }) else {
+            return Ok(None);
         };
-        // Both were sealed once, so both have a canonical form and compile: a
-        // refusal here is the gateway's own inconsistency.
-        let canonical = pharmakos_plan_core::canonicalise_text(text).map_err(|error| {
-            Error::internal(format!(
-                "a playbook this seat sealed has no canonical form: {}",
-                error.message
-            ))
-        })?;
-        let plan = compile_decoded(&canonical.playbook, host.rules()).map_err(|error| {
-            Error::internal(format!(
-                "a playbook this seat sealed no longer compiles: {error}"
-            ))
-        })?;
+        let canonical =
+            pharmakos_plan_core::canonicalise_text(&sealed.playbook_jsonc).map_err(|error| {
+                Error::internal(format!(
+                    "a playbook this seat sealed has no canonical form: {}",
+                    error.message
+                ))
+            })?;
         let reads = crate::targeting::resolve_playbook(
             host.world(),
             host.runner().frozen().snapshot(),
             seat,
             &canonical.playbook,
-            &plan,
+            &sealed.plan,
         )?;
         let dollars = host
             .rules()
@@ -649,40 +657,41 @@ impl Surface {
             .and_then(|block| block.beacon)
             .map(|beacon| beacon.cost_dollars)
             .ok_or_else(|| Error::internal("the rules table prices no beacon"))?;
-        let lines: Vec<RoundRead<'_>> = reads
-            .iter()
-            .filter(|read| read.site == Site::Covering)
-            .filter_map(|read| {
-                let kind = read
-                    .kind
-                    .map_or("feature", pharmakos_sim::features::FeatureKind::name);
-                let step = read.route_step?;
-                Some(match (read.failure, read.site_voxel) {
-                    (None, Some(site)) => RoundRead::Places {
-                        step,
-                        x: site.x,
-                        y: site.y,
-                        dollars,
-                    },
-                    (Some(StepFailure::NoTarget), _) if read.matched == 0 => {
-                        RoundRead::NothingMatches { step, kind }
-                    }
-                    (Some(StepFailure::NoTarget), _) => RoundRead::NoneReachable {
-                        step,
-                        matched: read.matched,
-                    },
-                    (Some(StepFailure::IllegalSite), _) => RoundRead::NoneCoverable { step, kind },
-                    (Some(failure), _) => RoundRead::Fails {
-                        step,
-                        failure: failure.name(),
-                    },
-                    (None, None) => RoundRead::Fails {
-                        step,
-                        failure: StepFailure::NoTarget.name(),
-                    },
-                })
-            })
-            .collect();
+        let mut lines: Vec<RoundRead<'_>> = Vec::new();
+        for read in reads.iter().filter(|read| read.site == Site::Covering) {
+            // A handler body may never run, so only the route speaks.
+            let Some(step) = read.route_step else {
+                continue;
+            };
+            let kind = read
+                .kind
+                .map_or("feature", pharmakos_sim::features::FeatureKind::name);
+            lines.push(match (read.failure, read.site_voxel) {
+                (None, Some(site)) => RoundRead::Places {
+                    step,
+                    x: site.x,
+                    y: site.y,
+                    dollars,
+                },
+                (Some(StepFailure::NoTarget), _) if read.matched == 0 => {
+                    RoundRead::NothingMatches { step, kind }
+                }
+                (Some(StepFailure::NoTarget), _) => RoundRead::NoneReachable {
+                    step,
+                    matched: read.matched,
+                },
+                (Some(StepFailure::IllegalSite), _) => RoundRead::NoneCoverable { step, kind },
+                (Some(failure), _) => RoundRead::Fails {
+                    step,
+                    failure: failure.name(),
+                },
+                (None, None) => {
+                    return Err(Error::internal(
+                        "a `covering` read answered neither a site nor a failure",
+                    ));
+                }
+            });
+        }
         Ok(crate::strings::this_round(&lines))
     }
 
@@ -896,7 +905,8 @@ fn is_draft_id(text: &str) -> bool {
 /// One `gp.api.v1.ResolvedRef` as JSON: every field, the defaults included,
 /// as `estimate_route`'s legs are written. `failure` is the step failure's
 /// name as the segment feed spells it, and empty when the reference reads a
-/// feature.
+/// feature. `travel_ms` is 0 when there is no travel to write, as
+/// [`crate::targeting::Resolved::travel_ms`] says.
 fn resolved_json(resolved: &crate::targeting::Resolved) -> Json {
     let candidates: Vec<Json> = resolved
         .candidates
@@ -925,7 +935,12 @@ fn resolved_json(resolved: &crate::targeting::Resolved) -> Json {
         ),
         (
             String::from("travel_ms"),
-            Json::Number(resolved.travel_ms.raw().to_string()),
+            Json::Number(
+                resolved
+                    .travel_ms
+                    .map_or(0, pharmakos_sim::math::quantity::Ms::raw)
+                    .to_string(),
+            ),
         ),
         (String::from("candidates"), Json::Array(candidates)),
         (

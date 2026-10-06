@@ -16,8 +16,13 @@
 //! * `estimate_route_returns_the_covering_site` -- a `covering` waypoint's leg
 //!   ends on the column the sim then walks to and deploys on;
 //! * `a_hidden_or_foreign_name_answers_no_target` -- an absent feature name, a
-//!   `b_NN` the seat does not have, another seat's `e_NN` and one it was never
-//!   shown all answer the same `no_target`, so a guess reveals nothing.
+//!   `b_NN` the seat does not have, another seat's `e_NN` it has been shown
+//!   and one nobody minted all answer the same `no_target`, so a guess
+//!   reveals nothing.
+//!
+//! And `an_on_nearest_reads_the_vent_the_sim_binds` holds the gateway's
+//! restated `on` filter to the sim's `on {vent: NEAREST}` binding, as the
+//! first acceptance line holds its `covering` filter.
 //!
 //! Beside them, two goldens in `tests/golden/gateway/`: seat 0's whole
 //! `get_map_summary` answer in the opening Lull (`map_summary`) and its whole
@@ -32,8 +37,9 @@ mod support;
 
 use pharmakos_gateway::fog::FogPolicy;
 use pharmakos_gateway::rpc;
+use pharmakos_gateway::scopes::{Scope, ScopeSet};
 use pharmakos_gateway::surface::Surface;
-use pharmakos_gateway::token::Token;
+use pharmakos_gateway::token::{Subject, Token};
 use pharmakos_proto::json::Json;
 use pharmakos_sim::events::EventKind;
 use pharmakos_sim::math::quantity::Ms;
@@ -233,6 +239,19 @@ fn estimate_route_returns_the_covering_site() {
         "the step's site is the leg's end"
     );
 
+    // In a Push the hosted world has moved on from the frozen one the
+    // route's other legs read, so a `covering` waypoint is a planning
+    // question asked in the wrong phase.
+    let in_push = support::call(
+        &mut surface,
+        &token,
+        "estimate_route",
+        &format!(
+            r#"{{"waypoints":[{{"voxel":{{"x":{x},"y":{y},"z":{z}}}}},{{"covering":{{"vent":{{"rank":"NEAREST","coverage":"UNCOVERED"}}}}}}]}}"#
+        ),
+    );
+    assert_eq!(support::code(&in_push), "PHASE_CLOSED", "{in_push:?}");
+
     // A covering that covers nothing is NOT_FOUND, naming the step failure.
     let mut fresh = opening();
     let mut left = LULL_MS;
@@ -296,19 +315,87 @@ fn a_hidden_or_foreign_name_answers_no_target() {
         )]
     );
 
-    // A beacon the seat does not have, another seat's it was never shown, and
-    // a handle nobody minted: one answer, the same as the absent feature's.
+    // A beacon the seat does not have and a handle nobody minted: one answer,
+    // the same as the absent feature's.
     let mine_absent = learned(&refs(&mut surface, &token, &mut left, &visit("b_07")));
-    let foreign = learned(&refs(&mut surface, &token, &mut left, &visit("e_01")));
     let never = learned(&refs(&mut surface, &token, &mut left, &visit("e_99")));
     assert_eq!(mine_absent, learned(&absent));
-    assert_eq!(foreign, mine_absent);
     assert_eq!(never, mine_absent);
+
+    // Another seat's beacon the seat **has** been shown: in an unfogged match
+    // `list_beacons` names seat 1's core `e_01` to seat 0, and that real name
+    // still answers exactly what an absent one does.
+    let mut casual = support::hosted_casual(2, SEGMENT_MS, 3);
+    let seen = support::seat_token(&mut casual, 0);
+    let mut casual_left = LULL_MS;
+    let listed = result(
+        &call_in_lull(&mut casual, &seen, &mut casual_left, "list_beacons", "{}"),
+        "list_beacons",
+    );
+    let names: Vec<String> = array_of(&listed, "beacons")
+        .iter()
+        .map(|beacon| text_of(beacon, "beacon_id"))
+        .collect();
+    assert!(
+        names.iter().any(|name| name == "e_01"),
+        "seat 1's core is shown to seat 0 as `e_01`: {names:?}"
+    );
+    let foreign = learned(&refs(&mut casual, &seen, &mut casual_left, &visit("e_01")));
+    assert_eq!(foreign, mine_absent);
 
     // The seat's own core, by contrast, reads a vent inside its sphere or says
     // why not -- and either way through the sim's own `on` resolver.
     let own = refs(&mut surface, &token, &mut left, &visit("b_00"));
     assert_eq!(own.len(), 1);
+}
+
+#[test]
+fn an_on_nearest_reads_the_vent_the_sim_binds() {
+    let (mut surface, token) = opening();
+    let mut left = LULL_MS;
+    // The scenario's playbook with its `on` ranked rather than named: the
+    // nearest free vent inside the new beacon's sphere, which on the golden
+    // seed is the vent the covering bound.
+    let playbook = cover_and_build().replace(
+        r#""on": {"covered": {}}"#,
+        r#""on": {"vent": {"rank": "NEAREST"}}"#,
+    );
+    assert_ne!(playbook, cover_and_build(), "the `on` was rewritten");
+    let answered = refs(&mut surface, &token, &mut left, &playbook);
+    let on = answered.get(1).expect("the on");
+    assert_eq!(text_of(on, "failure"), "", "it reads a vent: {on:?}");
+    let picked = text_of(on, "feature_id");
+    let candidates = array_of(on, "candidates");
+    assert_eq!(
+        candidates.first().map(|first| text_of(first, "feature_id")),
+        Some(picked.clone()),
+        "a ranked pick is the first listed candidate"
+    );
+    assert_eq!(
+        number(on, "matched"),
+        i64::try_from(candidates.len()).expect("fits"),
+        "every free vent inside the sphere is reachable from its centre here"
+    );
+
+    let sealed = call_in_lull(
+        &mut surface,
+        &token,
+        &mut left,
+        "submit_plan",
+        &format!(r#"{{"playbook_jsonc":{}}}"#, support::quote(&playbook)),
+    );
+    assert_eq!(
+        result(&sealed, "submit_plan").get("accepted"),
+        Some(&Json::Bool(true)),
+        "{sealed:?}"
+    );
+    let state = first_step_state(&mut surface);
+    let binding = state.bindings.first().expect("the step bound its `on`");
+    assert_eq!(
+        feature_name(&surface, binding.feature),
+        picked,
+        "the sim's `on {{vent: NEAREST}}` bound the vent the gateway named"
+    );
 }
 
 #[test]
@@ -442,6 +529,44 @@ fn the_lull_says_what_this_round_will_do_and_round_two_finds_no_vent() {
     );
     assert!(round_one.ends_with(", $ 60."), "{round_one}");
 
+    // A re-seal changes the sentence at once: covering the nearest seam,
+    // which the core already covers, places the beacon somewhere else (and
+    // builds nothing, since a Generator never stands on a seam).
+    let seam = r#"{"schema_version":{"major":1},"meta":{"title":"t","author_kind":"HUMAN"},"kind":"PLAYBOOK",
+        "declarative":{"route":[{"label":"p","place_beacon":{"at":{"covering":{"seam":{"rank":"NEAREST","coverage":"ANY"}}}},"on_fail":{"action":"SKIP"}}]},
+        "on_death":{"on_respawn":"CONTINUE"},"fallback":{"hold":{"at":{"safest":{}}}}}"#;
+    let resealed = call_in_lull(
+        &mut surface,
+        &token,
+        &mut left,
+        "submit_plan",
+        &format!(r#"{{"playbook_jsonc":{}}}"#, support::quote(seam)),
+    );
+    assert_eq!(
+        result(&resealed, "submit_plan").get("accepted"),
+        Some(&Json::Bool(true)),
+        "{resealed:?}"
+    );
+    let resealed_says = briefing(&mut surface, &mut left);
+    assert!(
+        resealed_says.contains("This round: step 1"),
+        "{resealed_says}"
+    );
+    assert_ne!(
+        resealed_says, round_one,
+        "the re-seal is what the Lull reads"
+    );
+
+    // Back to the vent playbook, which round 2 then carries.
+    let _ = call_in_lull(
+        &mut surface,
+        &token,
+        &mut left,
+        "submit_plan",
+        &format!(r#"{{"playbook_jsonc":{}}}"#, support::quote(&playbook)),
+    );
+    assert_eq!(briefing(&mut surface, &mut left), round_one);
+
     // Round 1 covers the starting vent; round 2's carried copy finds none it
     // can cover (targeting.md, "What the map means for it"; item 131 (4) (a)).
     surface.begin_push().expect("the Push begins");
@@ -455,6 +580,47 @@ fn the_lull_says_what_this_round_will_do_and_round_two_finds_no_vent() {
         round_two.ends_with("This round: step 1 finds no vent you can cover."),
         "{round_two}"
     );
+
+    // The advisor reads this briefing with a seat token that never holds
+    // `plan.submit` (decisions-log item 111): it is told the briefing without
+    // the sentence, which comes from the seat's own playbook.
+    let advisor = advisor_token(&mut surface, 0);
+    let advised = text_of(
+        &result(
+            &call_in_lull(&mut surface, &advisor, &mut left, "get_briefing", "{}"),
+            "get_briefing",
+        ),
+        "prose",
+    );
+    assert!(!advised.contains("This round:"), "{advised}");
+    assert!(round_two.starts_with(&advised), "{advised} / {round_two}");
+
+    // The carried draft's id is the seat's to overwrite, with anything at
+    // all; the sentence reads the seal, never the draft list, so it neither
+    // moves nor breaks.
+    let saved = call_in_lull(
+        &mut surface,
+        &token,
+        &mut left,
+        "save_draft",
+        r#"{"draft_id":"carried","playbook_jsonc":"{ not json"}"#,
+    );
+    let _ = result(&saved, "save_draft");
+    assert_eq!(briefing(&mut surface, &mut left), round_two);
+}
+
+/// A token shaped as the built-in advisor's for `seat`: the seat's subject,
+/// with `observe`, `plan` and `docs` and never `plan.submit`
+/// (`pharmakos_gateway::serve`'s advisor scopes).
+fn advisor_token(surface: &mut Surface, seat: u8) -> Token {
+    let scopes = ScopeSet::of(&[Scope::Observe, Scope::Plan, Scope::Docs]);
+    let tick = surface.time().tick;
+    let held = surface.match_id().to_owned();
+    let (token, _) = surface
+        .tokens()
+        .mint(Subject::Seat(SeatId::new(seat)), &held, scopes, tick)
+        .expect("minted");
+    token
 }
 
 #[test]

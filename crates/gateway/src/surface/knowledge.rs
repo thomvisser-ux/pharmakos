@@ -6,10 +6,14 @@
 //!
 //! Spec section 12's Knowledge group, minus the four methods `gateway.proto`
 //! gives no request/response pair. Every one of them reads the **frozen
-//! planning snapshot or the live world through the fog filter**, and not one of
-//! them steps anything: `estimate_route` estimates its legs through
+//! planning snapshot or the live world through the fog filter** -- with one
+//! exception the design takes on purpose: `get_map_summary`'s features are
+//! unfogged in S1, as targeting's ranking is (decisions-log item 130 (3) (a)),
+//! and each seat-relative field in them is the asking seat's own -- and not
+//! one of them steps anything: `estimate_route` estimates its legs through
 //! [`crate::routes::RouteAdapter`], which owns its own search graph and has no
-//! `World` in its hand at all; a `covering` waypoint and `get_map_summary`'s
+//! `World` in its hand at all; a `covering` waypoint (answered only while the
+//! hosted world is the frozen one, outside a Push) and `get_map_summary`'s
 //! features read the hosted world through the sim's own resolver, borrowed
 //! read-only ([`crate::targeting`]), and rank by estimate rather than by
 //! running anything; and `get_economy_forecast` reads the calling seat's own
@@ -109,10 +113,17 @@ impl Surface {
     /// In a Lull the prose ends with the "this round" sentence
     /// ([`Surface::this_round`]): what the seat's sealed or carried playbook
     /// does this round wherever its route reads the map, read off the frozen
-    /// world as the sim will read it. Like the notebook, it is the seat's own.
+    /// world as the sim will read it. Like the notebook, it is the seat's own,
+    /// and it goes only to a caller that holds `plan.submit` -- the seat's own
+    /// client. The built-in advisor reads a human seat's briefing with a token
+    /// that never holds that scope (`crate::serve`'s advisor scopes), and a
+    /// sentence about the seat's playbook is exactly what decisions-log item
+    /// 111 keeps from it: what it advises must not depend on what the seat
+    /// wrote.
     pub(super) fn get_briefing(
         &self,
         subject: crate::token::Subject,
+        held: crate::scopes::ScopeSet,
         request: &Request,
     ) -> Result<Json, Error> {
         let seat = Surface::seat_of(subject, "a briefing")?;
@@ -144,8 +155,13 @@ impl Surface {
         );
         let standing = strings::standing(living);
         // The Lull's "this round" sentence, after the standing: what this
-        // round's playbook does wherever its route reads the map.
-        let this_round = self.this_round(seat)?;
+        // round's playbook does wherever its route reads the map. Never to an
+        // advisor, which holds no `plan.submit`.
+        let this_round = if held.holds(crate::scopes::Scope::PlanSubmit) {
+            self.this_round(seat)?
+        } else {
+            None
+        };
 
         Ok(Json::Object(vec![
             (String::from("notes"), Json::String(notes)),
@@ -418,7 +434,7 @@ impl Surface {
     fn map_features(&self, seat: Option<SeatId>) -> Result<Vec<Json>, Error> {
         let host = self.host()?;
         let world = host.world();
-        let reads = crate::targeting::feature_reads(world, seat);
+        let reads = crate::targeting::feature_reads(world, seat)?;
         let commander = seat.and_then(|seat| crate::targeting::commander_point(world, seat));
         let travel: Vec<(usize, i64)> = match commander {
             Some(commander) => {
@@ -593,9 +609,12 @@ impl Surface {
             )));
         }
         let mut places: Vec<Voxel> = Vec::with_capacity(waypoints.len());
+        // One search scratch for every `covering` waypoint of the route, made
+        // the first time one needs it.
+        let mut scratch: Option<pharmakos_sim::pathing::Scratch> = None;
         for (index, waypoint) in waypoints.iter().enumerate() {
             let from = places.last().copied();
-            places.push(self.place_of(seat, waypoint, index, from)?);
+            places.push(self.place_of(seat, waypoint, index, from, &mut scratch)?);
         }
 
         let route = pharmakos_plan_core::travel::Route::estimate(&places, self.host()?.routes());
@@ -672,13 +691,15 @@ impl Surface {
     /// nothing is `NOT_FOUND` naming the step failure it would be
     /// (`no_target`, `illegal_site`): hidden, absent and someone else's are
     /// one answer. `on` is a Build target's anchor and never a place to walk
-    /// to, so it is refused as any other non-place is.
+    /// to, so it is refused as any other non-place is. `scratch` is the
+    /// route's one search scratch for its `covering` waypoints.
     fn place_of(
         &self,
         seat: SeatId,
         waypoint: &Json,
         index: usize,
         from: Option<Voxel>,
+        scratch: &mut Option<pharmakos_sim::pathing::Scratch>,
     ) -> Result<Voxel, Error> {
         use pharmakos_sim::interpreter::{BeaconSpec, beacon_spec_of, resolve_beacon_in};
         let at = format!("waypoint {index}");
@@ -686,7 +707,7 @@ impl Surface {
             return read_voxel(voxel, &at);
         }
         if let Some(reference) = waypoint.get("covering") {
-            return self.covering_site(seat, reference, &at, from);
+            return self.covering_site(seat, reference, &at, from, scratch);
         }
         let host = self.host()?;
         let spec = if let Some(reference) = waypoint.get("beacon_anchor") {
@@ -745,14 +766,29 @@ impl Surface {
 
     /// A `covering` waypoint's site: where the beacon would stand, as the sim
     /// chooses it ([`Surface::place_of`] says why this is here).
+    ///
+    /// **Outside a Push only.** The site is read off the hosted world, the
+    /// beacons' spheres and the commander included, and the route's beacon
+    /// and `safest` legs are read off the frozen snapshot; the two are the
+    /// same world in a Lull, a recap and an ended match, and not in a Push,
+    /// where one answer would mix two worlds. So a `covering` waypoint in a
+    /// Push is `PHASE_CLOSED`, as a planning method is -- it is a planning
+    /// question, asked in the phase that plans.
     fn covering_site(
         &self,
         seat: SeatId,
         reference: &Json,
         at: &str,
         from: Option<Voxel>,
+        scratch: &mut Option<pharmakos_sim::pathing::Scratch>,
     ) -> Result<Voxel, Error> {
         use crate::targeting::Site;
+        if self.host()?.runner().phase() == pharmakos_sim::runner::MatchPhase::Push {
+            return Err(Error::phase_closed(format!(
+                "{at} is a `covering`, which is read off the frozen world, and in a Push the \
+                 world has moved on from it: ask outside a Push"
+            )));
+        }
         let reference: pharmakos_proto::gp::v1::FeatureRef =
             pharmakos_proto::json::decode_json(reference).map_err(|error| {
                 Error::invalid(format!("{at}: `covering` is a `gp.v1.FeatureRef`: {error}"))
@@ -770,14 +806,18 @@ impl Surface {
         };
         let tally = pharmakos_sim::seams::UnitTally::new();
         let ground = crate::targeting::lend(world, &tally);
-        let mut scratch = crate::targeting::scratch_for(world)?;
-        let found = pharmakos_sim::targeting::cover(&ground, &mut scratch, seat, origin, spec)
-            .map_err(|failure| {
+        let scratch = match scratch {
+            Some(held) => held,
+            None => scratch.insert(crate::targeting::scratch_for(world)?),
+        };
+        let found = pharmakos_sim::targeting::cover(&ground, scratch, seat, origin, spec).map_err(
+            |failure| {
                 Error::not_found(format!(
                     "{at} covers nothing: its step would fail `{}`",
                     failure.name()
                 ))
-            })?;
+            },
+        )?;
         let [x, y] = found.site;
         let point = ground
             .standing(x, y)
