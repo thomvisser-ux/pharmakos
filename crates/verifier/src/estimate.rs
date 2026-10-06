@@ -17,6 +17,8 @@
 //! | `W0603` | warning | The same, with `allow_dormant_beacons` set: the shortfall is accepted |
 //! | `W0602` | warning | The route's committed spending outruns the treasury |
 //! | `W0701` | warning | The route cannot fit the coming segment, if every step runs |
+//! | `W0604` | warning | Only the upper bound adds draw beyond supply: an edit of a beacon that may already field what it orders |
+//! | `W0707` | warning | The snapshot does not decode, so the schedule was not checked |
 //! | `I0001` | information | How much walking the route's known legs are, at least |
 //!
 //! `E0601` is the one error FULL can add, and it is spec section 11's own
@@ -43,12 +45,20 @@
 //! of the frozen snapshot, so the editor's clock, the fits pill and
 //! `render_plan` all read the same number rather than a constant"), and the
 //! snapshot bytes are already one of `report_hash`'s five inputs. A snapshot
-//! that carries no positive length — one taken before a match opened, or bytes
-//! that are not a snapshot this build reads — gives no segment, and the
-//! schedule check then says nothing rather than guessing one: `W0701` is
-//! about the segment the snapshot says is coming, and there is none to compare
-//! with. Decoding the snapshot is FULL's cost alone; QUICK never pays it, which
-//! keeps P1's QUICK path where it was (decisions-log item 33 (c)).
+//! that carries no positive length (one taken before a match opened) gives no
+//! segment, and the schedule check then says nothing rather than guessing one:
+//! `W0701` is about the segment the snapshot says is coming, and there is none
+//! to compare with. Bytes that do not decode as a snapshot this build reads
+//! are a different case, a fault in whatever assembled the [`Input`] rather
+//! than in the playbook, and the check says so with `W0707` rather than going
+//! quiet.
+//!
+//! Decoding the snapshot is FULL's cost alone; QUICK never pays it (decisions-
+//! log item 33 (c)). It decodes the whole snapshot, every modified chunk
+//! included, to read one number; the cheaper road is the gateway handing the
+//! length in with the seat's view, which is a change to `report_hash`'s scope
+//! encoding and so a contract change, and is left to the owner with FULL's
+//! budget (P1).
 //!
 //! # What may never happen here
 //!
@@ -79,12 +89,12 @@ use pharmakos_proto::gp::v1::{
     BeaconRef, Declarative, Location, Playbook, Voxel, beacon_ref, location, step,
 };
 use pharmakos_proto::json::Json;
-use pharmakos_sim::math::quantity::{Money, Ms};
+use pharmakos_sim::math::quantity::Ms;
 
 use crate::Input;
 use crate::interface;
 use crate::pointer;
-use crate::projection::{self, Cost};
+use crate::projection::{self, Tally};
 use crate::report::{Builder, Diag, patch_add};
 use crate::scope::Scope;
 use crate::strings;
@@ -109,16 +119,23 @@ pub(crate) fn run(playbook: &Playbook, input: &Input<'_>, out: &mut Builder) {
 // `$` and `kW`
 // ---------------------------------------------------------------------------
 
-/// `W0601`, then `E0601` or `W0603`, then `W0602`.
+/// `W0601`, then `E0601` or `W0603` (or `W0604`), then `W0602`.
 ///
-/// A route that orders a blueprint the rules table does not price, or whose
-/// sums leave their types, is not projected at all: there is no honest figure
-/// to compare. The first is a playbook the sim refuses at the seal's compile
-/// (only the Generator is buildable before S4, and `E0506` names the rest when
-/// the capability catalogue exists); the second is past any playbook inside
-/// the size budget.
+/// The route is summed in [`Tally`], which holds any playbook's orders
+/// exactly, so no count is large enough to silence the check: an order past
+/// the sim's own `$` and `kW` types is past every supply, and is reported as
+/// what it is (`ProjectionError::Overflow` cannot arise here).
+///
+/// **A step that orders a blueprint the rules table does not price ends the
+/// projection there.** There is no honest figure for that step or any after
+/// it, but everything found before it stands and is reported: draw and spend
+/// only grow along a route, so a line crossed before the unpriced step stays
+/// crossed. Such a playbook is refused by the sim at the seal's compile (only
+/// the Generator is buildable before S4), and `E0506` names it once the
+/// capability catalogue exists (S4).
 fn economy(body: &Declarative, input: &Input<'_>, out: &mut Builder) {
-    let economy = input.scope().economy();
+    let scope = input.scope();
+    let economy = scope.economy();
     let supply = i64::from(economy.supply.raw());
     let draw = i64::from(economy.draw.raw());
     let headroom = supply.saturating_sub(draw);
@@ -127,31 +144,37 @@ fn economy(body: &Declarative, input: &Input<'_>, out: &mut Builder) {
     }
 
     let prices = input.prices();
-    let mut total = Cost::ZERO;
+    // What the route certainly adds, and the upper bound with what it may add
+    // (`projection`'s module doc, "How sure it is").
+    let mut adds = Tally::ZERO;
+    let mut upper = Tally::ZERO;
     let mut first_short: Option<String> = None;
+    let mut first_maybe_short: Option<String> = None;
     let mut first_over: Option<String> = None;
     // The draw the grid can still take before it is short. An existing
     // shortfall leaves none: every `kW` the route adds is beyond supply.
-    let room = headroom.max(0);
+    let room = i128::from(headroom.max(0));
+    let treasury = i128::from(economy.treasury.raw());
     for (index, entry) in body.route.iter().enumerate() {
-        let Ok(cost) = projection::step_cost(entry, prices) else {
-            return;
+        let Ok(orders) = projection::step_orders(entry, prices, scope) else {
+            break;
         };
-        let Ok(sum) = total.plus(cost) else {
-            return;
-        };
-        total = sum;
+        adds = adds.plus(orders.adds);
+        upper = upper.plus(orders.upper());
         let at = pointer::at(ROUTE, index);
-        if first_short.is_none() && i64::from(total.draw.raw()) > room {
+        if first_short.is_none() && adds.draw > room {
             first_short = Some(at.clone());
         }
-        if first_over.is_none() && total.spend.raw() > economy.treasury.raw() {
+        if first_maybe_short.is_none() && upper.draw > room {
+            first_maybe_short = Some(at.clone());
+        }
+        if first_over.is_none() && upper.spend > treasury {
             first_over = Some(at);
         }
     }
 
     if let Some(at) = first_short {
-        let beyond = i64::from(total.draw.raw()).saturating_sub(room);
+        let beyond = adds.draw.saturating_sub(room);
         let allowed = body
             .options
             .as_ref()
@@ -165,12 +188,17 @@ fn economy(body: &Declarative, input: &Input<'_>, out: &mut Builder) {
                 Applicability::MaybeIncorrect,
             ));
         }
+    } else if let Some(at) = first_maybe_short {
+        // Only the upper bound crosses the line: the route may add the draw,
+        // and the view cannot say whether it does, so this is a warning and
+        // never spec section 11's error.
+        out.emit(Diag::new("W0604", at).arg("found", upper.draw.saturating_sub(room)));
     }
     if let Some(at) = first_over {
         out.emit(
             Diag::new("W0602", at)
-                .arg("found", dollars(total.spend))
-                .arg("available", dollars(economy.treasury)),
+                .arg("found", dollars(upper.spend))
+                .arg("available", dollars(treasury)),
         );
     }
 }
@@ -196,8 +224,8 @@ fn allow_dormant(body: &Declarative) -> String {
 
 /// A `$` figure as a player reads it: `$ 60`, the spelling the gateway's own
 /// feed lines use.
-fn dollars(money: Money) -> String {
-    format!("$ {}", money.raw())
+fn dollars(money: i128) -> String {
+    format!("$ {money}")
 }
 
 // ---------------------------------------------------------------------------
@@ -217,7 +245,14 @@ fn schedule(body: &Declarative, input: &Input<'_>, out: &mut Builder) {
     let mut walking = Ms::ZERO;
     let mut elapsed = Ms::ZERO;
     let mut first_late: Option<String> = None;
-    let segment = segment(input);
+    let segment = match segment(input) {
+        Segment::Coming(length) => Some(length),
+        Segment::NoneYet => None,
+        Segment::Unreadable => {
+            out.emit(Diag::new("W0707", pointer::ROOT));
+            None
+        }
+    };
 
     for (index, entry) in body.route.iter().enumerate() {
         // A leg to walk first, as the place the view names (or `None` when it
@@ -274,11 +309,26 @@ fn schedule(body: &Declarative, input: &Input<'_>, out: &mut Builder) {
     }
 }
 
-/// The coming segment's length, from the snapshot, when it carries a positive
-/// one (see the module doc).
-fn segment(input: &Input<'_>) -> Option<Ms> {
-    let snapshot = input.decode_snapshot().ok()?;
-    (snapshot.coming_segment_ms > 0).then(|| Ms::new(snapshot.coming_segment_ms))
+/// What the snapshot says about the coming segment (see the module doc).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Segment {
+    /// A segment of this length is coming.
+    Coming(Ms),
+    /// The snapshot carries no positive length: no match has opened a segment
+    /// yet.
+    NoneYet,
+    /// The bytes are not a snapshot this build reads.
+    Unreadable,
+}
+
+fn segment(input: &Input<'_>) -> Segment {
+    match input.decode_snapshot() {
+        Ok(snapshot) if snapshot.coming_segment_ms > 0 => {
+            Segment::Coming(Ms::new(snapshot.coming_segment_ms))
+        }
+        Ok(_) => Segment::NoneYet,
+        Err(_) => Segment::Unreadable,
+    }
 }
 
 /// Where a location is, when the view names it: a voxel, or a beacon by its
@@ -311,7 +361,6 @@ fn plus(left: Ms, right: Ms) -> Ms {
 #[cfg(test)]
 mod tests {
     use super::dollars;
-    use pharmakos_sim::math::quantity::Money;
 
     /// M-10, ruled by S1's plan (task `proj`): `Options` stays
     /// `allow_dormant_beacons` alone, the one option spec section 7 names.
@@ -327,7 +376,7 @@ mod tests {
 
     #[test]
     fn a_dollar_figure_reads_as_the_feed_spells_it() {
-        assert_eq!(dollars(Money::new(220)), "$ 220");
-        assert_eq!(dollars(Money::new(-5)), "$ -5");
+        assert_eq!(dollars(220), "$ 220");
+        assert_eq!(dollars(-5), "$ -5");
     }
 }

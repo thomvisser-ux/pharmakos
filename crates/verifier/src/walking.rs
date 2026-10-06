@@ -13,24 +13,35 @@
 //!
 //! What it can do without the graph is arithmetic that **no path can beat**:
 //! the octile distance over the leg's horizontal delta, at the rules table's
-//! step costs, divided by the commander's speed and rounded up to the tick the
-//! way the sim's walker arrives. Every real step costs at least its base rate
-//! (a climb only adds a non-negative surcharge), so the walk the sim takes is
-//! never shorter than this figure. It is the same admissible heuristic the
-//! sim's own search is guided by, and it reads no terrain, so it knows nothing
-//! the snapshot would have to be stepped to learn.
+//! step costs, divided by the commander's speed and rounded **down** to the
+//! tick. Every real step costs at least its base rate (a climb only adds a
+//! non-negative surcharge), so the walk the sim takes is never shorter than
+//! this figure. It is the same admissible heuristic the sim's own search is
+//! guided by, and it reads no terrain, so it knows nothing the snapshot would
+//! have to be stepped to learn.
 //!
-//! A lower bound is the honest number for the two codes that use it: `W0701`
-//! says a route **cannot** fit the coming segment, which a lower bound proves
-//! and an estimate would only suggest, and `I0001` says how much walking the
-//! route is at least. Neither claims an arrival time.
+//! **Why down.** The sim's walker adds its speed to an accumulator every tick
+//! and spends it a step at a time, and it keeps what is left over from one leg
+//! into the next. The leftover is less than one tick's speed, so a leg can end
+//! one tick before `ceil(cost x TICK_HZ / speed)`, but never before
+//! `floor(cost x TICK_HZ / speed)`. At the committed rows (step costs 10 and
+//! 14, the commander's 10 a second) every step's price is a whole number of
+//! ticks, nothing is ever left over, and the two roundings agree.
 //!
-//! PLACEHOLDER: pathfinder-quality travel for the schedule check — the gateway
-//! pricing each known leg with the sim's estimator and handing the figures in
-//! with the seat's view, so `W0701` can warn on a route that probably does not
-//! fit rather than only on one that cannot. That needs a `Scope` field the
-//! gateway fills, which is the same shape as the segment clock and the
-//! "fits" pill (the register's S3-16); owner, at S3, with the segment clock.
+//! A lower bound is the honest number for the two codes that use it: `I0001`
+//! says how much walking the route is at least, and `W0701` adds the walking
+//! to the interface time to say the route does not fit. Neither claims an
+//! arrival time. `W0701` proves the route cannot fit at the ruled interface
+//! rates; until the sim charges those rates the Push may charge a visit less
+//! (`crate::interface`, "Until the sim prices a visit the same way").
+//!
+//! The gateway pricing each known leg with the sim's estimator and handing the
+//! figures in with the seat's view would let `W0701` warn on a route that
+//! probably does not fit rather than only on one that cannot. That needs a
+//! `Scope` field the gateway fills, which is the same shape as the segment
+//! clock and the "fits" pill (the register's S3-16).
+//!
+//! PLACEHOLDER: pathfinder-quality travel per known leg for W0701 — owner, S3, with the segment clock.
 //!
 //! # The radius at each end
 //!
@@ -145,12 +156,12 @@ impl Walk {
         let cost = per_diagonal
             .saturating_mul(low)
             .saturating_add(per_straight.saturating_mul(high.saturating_sub(low)));
-        // The sim's walker adds its speed to an accumulator each tick and
-        // arrives on tick `ceil(cost * TICK_HZ / speed)`, so the bound rounds
-        // the same way.
+        // The sim's walker adds its speed to an accumulator each tick and may
+        // carry less than one tick's speed in from the leg before, so it
+        // arrives no sooner than tick `floor(cost * TICK_HZ / speed)` (the
+        // module doc, "Why down").
         let ticks = cost
             .saturating_mul(i64::from(TICK_HZ))
-            .saturating_add(self.cost_per_second.saturating_sub(1))
             .checked_div(self.cost_per_second)
             .unwrap_or(i64::MAX);
         Ms::from_ticks(u32::try_from(ticks).unwrap_or(u32::MAX))
@@ -215,6 +226,21 @@ mod tests {
         let low = Voxel { x: 0, y: 0, z: 0 };
         let high = Voxel { x: 8, y: 0, z: 60 };
         assert_eq!(walk().leg(low, 0, high, 0), Ms::new(8_000));
+    }
+
+    /// A speed that does not divide a step's price rounds down: the sim's
+    /// walker may carry part of a tick in from the leg before, so the bound
+    /// must not round up past it.
+    #[test]
+    fn a_leg_rounds_down_when_the_speed_does_not_divide_it() {
+        let mut message = rules().message().clone();
+        if let Some(commander) = message.commander.as_mut() {
+            commander.cost_per_second = 3;
+        }
+        let table = RulesTable::from_message(&message).expect("the sim's view builds");
+        let walk = Walk::from_rules(&table).expect("a positive speed walks");
+        // One cardinal voxel: 10 x 20 / 3 = 66.7 ticks, so 66 ticks, 3.3 s.
+        assert_eq!(walk.leg(voxel(0, 0), 0, voxel(1, 0), 0), Ms::new(3_300));
     }
 
     #[test]

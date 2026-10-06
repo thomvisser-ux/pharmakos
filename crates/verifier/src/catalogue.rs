@@ -620,6 +620,17 @@ pub const CATALOGUE: &[Entry] = &[
         severity: Severity::Warning,
         emitter: Emitter::Stage(Stage::Estimate),
     },
+    // The upper bound's warning (S1's `proj`, its review): an edit of a beacon
+    // that may already field what it orders (a `set_mandate_settings` row, or
+    // a `set_mandate` the view cannot show is a switch) is counted in full,
+    // and when only that bound crosses the line the shortfall is possible,
+    // not certain, so it is never `E0601`.
+    Entry {
+        code: "W0604",
+        family: Family::EconomyPowerAndMessaging,
+        severity: Severity::Warning,
+        emitter: Emitter::Stage(Stage::Estimate),
+    },
     // --- W07xx: schedule, conflicts and staleness ----------------------------
     Entry {
         code: "W0701",
@@ -659,6 +670,15 @@ pub const CATALOGUE: &[Entry] = &[
         family: Family::ScheduleConflictsAndStaleness,
         severity: Severity::Warning,
         emitter: Emitter::Stage(Stage::Lint),
+    },
+    // The schedule check could not read the snapshot it is about: a fault in
+    // whatever assembled the input rather than in the playbook, said out loud
+    // rather than left as a silent skip (S1's `proj`, its review).
+    Entry {
+        code: "W0707",
+        family: Family::ScheduleConflictsAndStaleness,
+        severity: Severity::Warning,
+        emitter: Emitter::Stage(Stage::Estimate),
     },
     // --- I...: information ---------------------------------------------------
     Entry {
@@ -814,7 +834,7 @@ mod tests {
     #[test]
     fn the_full_stages_refuse_only_what_the_spec_refuses() {
         // Item 82, in its S1 form; it replaces the skeleton's
-        // `nothing_the_skeleton_emits_hangs_off_an_empty_full_stage`. The
+        // `nothing_hangs_off_the_empty_estimate_stage_and_every_lint_is_advice`. The
         // estimate stage is filled (S1's `proj`), and of everything FULL can
         // add, exactly one code refuses a playbook: `E0601`, spec section 11's
         // "adding draw beyond supply is an error unless 'allow dormant
@@ -847,8 +867,10 @@ mod tests {
         );
         assert_eq!(
             estimated,
-            ["E0601", "W0601", "W0602", "W0603", "W0701", "I0001"],
-            "the estimate stage raises the economy family and the schedule's two codes, and \
+            [
+                "E0601", "W0601", "W0602", "W0603", "W0604", "W0701", "W0707", "I0001"
+            ],
+            "the estimate stage raises the economy family and the schedule's three codes, and \
              E0602 waits for radio (S4)"
         );
     }

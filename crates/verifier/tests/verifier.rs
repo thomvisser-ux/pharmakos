@@ -480,9 +480,20 @@ fn the_catalogue_is_the_committed_one() {
 // Coverage
 // ---------------------------------------------------------------------------
 
+/// Codes no playbook can produce against a well-formed input: they report a
+/// fault in whatever assembled the [`Input`], so no case under the shared
+/// fixture reaches them, and each has its own test instead.
+///
+/// `W0707`, the snapshot that does not decode:
+/// `an_unreadable_snapshot_is_reported_and_not_swallowed`.
+const HOST_FAULT_CODES: &[&str] = &["W0707"];
+
 #[test]
 fn every_emitted_code_has_a_case() {
-    let mut seen: Vec<String> = Vec::new();
+    let mut seen: Vec<String> = HOST_FAULT_CODES
+        .iter()
+        .map(|code| (*code).to_owned())
+        .collect();
     for case in cases() {
         for diagnostic in report_for(&case, Depth::Full).diagnostics {
             if !seen.contains(&diagnostic.code) {
@@ -544,7 +555,7 @@ fn nothing_outside_the_catalogue_is_ever_emitted() {
 }
 
 // ---------------------------------------------------------------------------
-// Depth, and the two empty FULL stages
+// Depth, and the two FULL stages
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -1092,6 +1103,96 @@ fn the_worked_example_case_is_the_canonical_bytes_crates_proto_pins() {
          tests/golden/proto/expected.expand_east.json; the verifier's clean case must be exactly \
          the canonical form the proto lane pins"
     );
+}
+
+// ---------------------------------------------------------------------------
+// The estimate stage's edges
+// ---------------------------------------------------------------------------
+
+/// A one-step route that visits `beacon` with one interface row.
+fn one_visit(beacon: &str, row: &str) -> String {
+    format!(
+        "{{\"schema_version\":{{\"major\":1}},\"meta\":{{\"title\":\"case\",\
+         \"author_kind\":\"HUMAN\"}},\"kind\":\"PLAYBOOK\",\"declarative\":{{\"route\":[\
+         {{\"label\":\"s1\",\"interface\":{{\"beacon\":{{\"beacon_id\":\"{beacon}\"}},\
+         \"rows\":[{row}]}}}}]}}}}"
+    )
+}
+
+/// The plain fixture's beacons, a Survey beacon `b_03` beside them, and one
+/// `kW` of headroom.
+fn survey_scope() -> Scope {
+    let plain = fixture_scope();
+    let mut scope = Scope::new(
+        plain.seat(),
+        SeatEconomy {
+            treasury: plain.economy().treasury,
+            supply: Kw::new(10),
+            draw: Kw::new(9),
+        },
+    );
+    for known in plain.beacons() {
+        scope.push_beacon(known.clone());
+    }
+    scope.with_beacon(beacon(
+        "b_03",
+        Ownership::Own,
+        MandateKind::Survey,
+        (90, 11, 55),
+        false,
+        &[],
+    ))
+}
+
+fn codes_of(text: &str, scope: &Scope, snapshot: &[u8]) -> Vec<String> {
+    let rules = rules();
+    let input = Input::new(text.as_bytes(), snapshot, scope, &rules)
+        .unwrap_or_else(|error| panic!("assembling the input: {error}"));
+    verify(&input, Depth::Full)
+        .diagnostics
+        .into_iter()
+        .map(|found| found.code)
+        .collect()
+}
+
+/// An edit that re-sends a Survey beacon's count, or lowers it, adds no draw
+/// the view can prove: the sim fills the count rather than adding to it. The
+/// upper bound still warns (`W0604`), and the seal is never refused (`E0601`).
+#[test]
+fn a_settings_edit_on_a_beacon_that_may_already_field_it_is_never_an_error() {
+    let scope = survey_scope();
+    let snapshot = fixture_snapshot();
+    for count in [5, 3] {
+        let row =
+            format!("{{\"set_mandate_settings\":{{\"survey\":{{\"scout_count\":{count}}}}}}}");
+        let codes = codes_of(&one_visit("b_03", &row), &scope, &snapshot);
+        assert!(
+            !codes.iter().any(|code| code == "E0601"),
+            "a count of {count} on a Survey beacon: {codes:?}"
+        );
+        assert!(codes.iter().any(|code| code == "W0604"), "{codes:?}");
+    }
+    // The same order as a switch of a beacon the view says is on another writ
+    // is new draw, and is the error.
+    let row = "{\"set_mandate\":{\"survey\":{\"scout_count\":5}}}";
+    let codes = codes_of(&one_visit("b_02", row), &scope, &snapshot);
+    assert!(codes.iter().any(|code| code == "E0601"), "{codes:?}");
+    // A `set_mandate` to the writ the beacon is already on is not a switch.
+    let codes = codes_of(&one_visit("b_03", row), &scope, &snapshot);
+    assert!(!codes.iter().any(|code| code == "E0601"), "{codes:?}");
+    assert!(codes.iter().any(|code| code == "W0604"), "{codes:?}");
+}
+
+/// Bytes that are not a snapshot are said out loud (`W0707`), not skipped in
+/// silence; a snapshot with no segment yet says nothing.
+#[test]
+fn an_unreadable_snapshot_is_reported_and_not_swallowed() {
+    let scope = fixture_scope();
+    let text = String::from_utf8(case_bytes("expand_east")).expect("UTF-8");
+    let codes = codes_of(&text, &scope, b"not a snapshot");
+    assert!(codes.iter().any(|code| code == "W0707"), "{codes:?}");
+    let codes = codes_of(&text, &scope, &fixture_snapshot());
+    assert!(!codes.iter().any(|code| code == "W0707"), "{codes:?}");
 }
 
 // ---------------------------------------------------------------------------

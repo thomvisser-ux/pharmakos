@@ -6,10 +6,20 @@
 //! This is one of the four things spec section 11 lists as an **allowed
 //! estimate**, and the only one of the four that is exact rather than
 //! estimated: an interface row's duration is a number in the rules table, and
-//! the sum of a visit's rows is what the commander will actually stand there
-//! for. The editor's segment clock draws it as a bar with a tick at each
-//! commit point, `render_plan` says it in words, and the estimate stage adds it
-//! to the route's walking to say whether the route fits the coming segment.
+//! the sum of a visit's rows, at the rates the owner ruled (decision 15, below),
+//! is what the commander stands there for. The editor's segment clock draws it
+//! as a bar with a tick at each commit point, `render_plan` says it in words,
+//! and the estimate stage adds it to the route's walking to say whether the
+//! route fits the coming segment.
+//!
+//! **Until the sim prices a visit the same way, the Push can charge less.**
+//! The sim this crate ships beside still counts a list setting as one field
+//! and a Build target list as one field of the edit, and charges a
+//! `set_mandate` row the switch alone (see [`count`]'s PLACEHOLDER). So a visit
+//! that writes a list of two or more, Build targets, or a `set_mandate` with
+//! settings, stands in the Push for less time than quoted here, and `W0701`
+//! can say a route does not fit when the Push would fit it. The figure is right
+//! for the ruling; the sim catches up in its own lane.
 //!
 //! # Why it lives in the verifier
 //!
@@ -340,15 +350,20 @@ fn each<T>(list: &[T]) -> u32 {
 /// somebody decides what it costs — a new field can never silently cost
 /// nothing.
 ///
-/// PLACEHOLDER: the sim's own pricing does not count this way yet —
+/// The sim's own pricing does not count this way yet:
 /// `crates/sim/src/interpreter.rs`'s `mandate_fields` still counts a list as
 /// one field whatever its length and a Build target list as one field of the
-/// edit, so a playbook with a two-element list, or with targets, stands at a
-/// beacon for a different time in the Push from the one quoted here. The
-/// owner's ruling is this function's; bringing the sim to it moves the chains
-/// of every scenario whose playbook writes such a list, so it is a `crates/sim`
-/// lane's (the `build` task, S1's Build settings, which owns that file next) —
-/// owner of `crates/sim`, S1 wave 4.
+/// edit, and its `set_mandate` row charges the switch and drops the settings
+/// (decisions-log item 131 (5) asks `mine` why). So a playbook with a
+/// two-element list, with targets, or with a `set_mandate` that carries
+/// settings, stands at a beacon for less time in the Push than the one quoted
+/// here, and the estimate stage's `W0701` can fire on a route the Push fits.
+/// The owner's ruling is this function's; bringing the sim to it moves the
+/// chains of every scenario whose playbook writes such a list, so it is a
+/// `crates/sim` lane's (the `build` task, S1's Build settings, which owns that
+/// file next).
+///
+/// PLACEHOLDER: the sim's interface pricing brought to decision 15, so W0701 bounds the Push — owner of crates/sim, S1 wave 4.
 #[must_use]
 pub fn count(settings: &MandateSettings) -> Counted {
     let MandateSettings {

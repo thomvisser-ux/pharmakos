@@ -123,7 +123,8 @@ pub fn report_hash(
 /// the fingerprint checkable, because recomputing over the file as it stands
 /// would hash the old fingerprint into the new one.
 ///
-/// **PLACEHOLDER — `pharmakos_sim::hash::plan_fingerprint`.**
+/// PLACEHOLDER: this rule folded into the sim as `hash::plan_fingerprint` — owner of crates/sim, S1.
+///
 /// `crates/proto/src/fingerprint.rs` records that T2 would add a function of
 /// exactly this shape to the sim so the arithmetic has one home. T2 shipped
 /// without it, and this crate is the first caller, so the rule is applied here

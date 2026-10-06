@@ -11,7 +11,9 @@
 //! the code. `tests/golden/verifier/expected.catalogue.json` pins the join, so
 //! a code cannot lose its words and a set of words cannot lose its code.
 //!
-//! **PLACEHOLDER — the one project-wide string table.** Spec section 11 says
+//! PLACEHOLDER: the one project-wide string table — owner, S6, with the editor.
+//!
+//! Spec section 11 says
 //! every user-facing string in v1 is English and lives in *one* table: the user
 //! interface, this catalogue, and `render_plan`'s plain-language rendering.
 //! This module is that table's verifier section and nothing more. Who assembles
@@ -378,6 +380,14 @@ pub const VERIFIER_STRINGS: &[Text] = &[
                   accepts it, and the beacons past the supply stay dormant.",
         beginner: "Some of what this playbook switches on will have no power and will sit idle.",
     },
+    Text {
+        code: "W0604",
+        message: "the playbook may add up to {found} kW of draw beyond supply: an edit of a beacon \
+                  that may already field what it orders is counted in full, because the view \
+                  cannot see what the beacon fields.",
+        beginner: "This playbook might switch on more than the seat's power can carry; it depends \
+                   on what the beacons it edits already have.",
+    },
     // --- W07xx: schedule, conflicts and staleness ----------------------------
     Text {
         code: "W0701",
@@ -413,6 +423,13 @@ pub const VERIFIER_STRINGS: &[Text] = &[
                   by your `{beacon}`.",
         beginner: "A fixed site puts its beacon in the same place every time. A description such \
                    as \"the nearest vent you do not cover\" reads the map again each round.",
+    },
+    Text {
+        code: "W0707",
+        message: "the snapshot this report is about does not decode, so whether the route fits \
+                  the coming segment was not checked.",
+        beginner: "The game could not check this route's timing. That is a fault in the game, not \
+                   in the playbook.",
     },
     // --- I...: information ---------------------------------------------------
     Text {

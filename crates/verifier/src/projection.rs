@@ -28,10 +28,37 @@
 //! | A Survey mandate's `scout_count` | that many `units.scout.cost_dollars` | that many `power.kw_per_unit` |
 //!
 //! Scouts are the one unit a playbook **orders**: spec section 6's Survey row
-//! makes the count a setting, and the sim's Survey mandate fills it exactly.
-//! The view carries no unit roster, so a count written to a Survey beacon that
-//! already fields scouts is counted in full: an upper bound on the spend and
-//! the draw, which errs towards a warning, never towards silence.
+//! makes the count a setting, and the sim's Survey mandate fields scouts until
+//! the beacon has that many. The sim stores the count in a `u8` and clamps a
+//! larger one to 255 when the row commits (`set_beacon_scouts`); the projection
+//! counts the number the author wrote, in full, because that is what the
+//! playbook orders, and a count past the sim's column is past every supply the
+//! rules table can give a seat anyway.
+//!
+//! # How sure it is: what an order adds, and what it may add
+//!
+//! The view carries no unit roster and no beacon's settings, so the projection
+//! cannot always tell how much of an order is **new**. It sorts every order
+//! into one of two piles ([`Orders`]):
+//!
+//! * **Adds**: draw and spend the route certainly orders. A deploy and
+//!   everything in its `initial` (the beacon is new, so nothing fields yet); an
+//!   `add_build_target` and a `queue_structure` row; and a `set_mandate` row
+//!   that switches a beacon the view names by id to a writ the view says it is
+//!   not on.
+//! * **May add, at most**: an edit of a beacon that may already field what it
+//!   orders. A `set_mandate_settings` row, which edits within the current writ
+//!   (the sim fills a Survey count rather than adding to it, and keeps a Build
+//!   target's structure when an edit re-lists its anchor), and a `set_mandate`
+//!   row on a beacon the view does not name, or names on the same writ. These
+//!   are counted in full, as an upper bound.
+//!
+//! The estimate stage tests the first pile alone against `E0601`, spec section
+//! 11's one FULL error, so the error is never raised on draw the route may not
+//! add; and the two piles together against the warnings (`W0604` for power,
+//! `W0602` for money), so an upper bound errs towards a warning and never
+//! towards silence. [`project`] and [`step_cost`], which `plan-core` re-exports,
+//! sum both piles: they are the upper bound.
 //!
 //! A Build target is not money that leaves at the seal — the mandate builds
 //! "the highest-order affordable target" over the segment, and an unaffordable
@@ -57,8 +84,10 @@
 //!
 //! Every price is a row in `gp.v1.RulesTable`, never a constant.
 
+use pharmakos_proto::gp::v1::beacon_filter::MandateKind;
 use pharmakos_proto::gp::v1::{
-    BuildTarget, MandateSettings, Playbook, Step, interface_row, mandate_settings, step,
+    BuildTarget, InterfaceStep, MandateSettings, Playbook, Step, beacon_ref, interface_row,
+    mandate_settings, step,
 };
 use pharmakos_sim::knowledge::SeatEconomy;
 use pharmakos_sim::math::quantity::{Kw, Money};
@@ -67,16 +96,18 @@ use pharmakos_sim::rules::RulesTable;
 use pharmakos_sim::tables::StructureKind;
 
 use crate::limits::RulesGap;
+use crate::scope::Scope;
 
 /// The blueprints the rules table prices, by the id a playbook writes.
 ///
-/// **PLACEHOLDER — the blueprint catalogue.** `QueueStructureRow.blueprint_id`
-/// and `BuildTarget.blueprint_id` are strings until spec section 8's
-/// capability contract is written, and `proto/gp/v1/playbook.proto` says so at
-/// both fields. The ids are the `gp.v1.RulesTable.Structures` field names,
-/// which is the one spelling the project already uses. The owner fixes the
-/// catalogue at S4, with licences; when it becomes an enum this table becomes
+/// `QueueStructureRow.blueprint_id` and `BuildTarget.blueprint_id` are strings
+/// until spec section 8's capability contract is written, and
+/// `proto/gp/v1/playbook.proto` says so at both fields. The ids are the
+/// `gp.v1.RulesTable.Structures` field names, which is the one spelling the
+/// project already uses. When the catalogue becomes an enum this table becomes
 /// a match on it and the strings go away.
+///
+/// PLACEHOLDER: the blueprint catalogue as a typed list rather than strings — owner, S4, with licences.
 const BLUEPRINTS: [(&str, StructureKind); 5] = [
     ("generator", StructureKind::Generator),
     ("autocannon", StructureKind::Autocannon),
@@ -118,26 +149,97 @@ impl Cost {
                 .ok_or(ProjectionError::Overflow)?,
         })
     }
+}
 
-    /// This cost `count` times.
+/// A `$` and `kW` total over a route, wide enough that no playbook can leave
+/// it.
+///
+/// Every term is a price the rules table holds as an unsigned 32-bit row,
+/// widened, times a count a playbook holds as an unsigned 32-bit field: below
+/// 2^64 apiece. An `i128` sum of such terms cannot leave its type before the
+/// route has 2^63 of them, which no playbook the decoder accepts comes near, so
+/// a figure here is the exact sum of what the playbook wrote, whatever it
+/// wrote. That is the difference from [`Cost`], whose `i64` and `i32` a single
+/// hostile `scout_count` can leave, and why the estimate stage tests the route
+/// in this type: an order too large for [`Cost`] is past every supply, and has
+/// to say so rather than fall silent.
+///
+/// The additions saturate, which by the argument above never happens; were it
+/// to, every term is non-negative, so a saturated figure would still exceed
+/// every room and treasury it is compared with, and the comparison would still
+/// come out the way the exact sum would.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct Tally {
+    /// `$`.
+    pub spend: i128,
+    /// `kW`.
+    pub draw: i128,
+}
+
+impl Tally {
+    /// Nothing.
+    pub const ZERO: Tally = Tally { spend: 0, draw: 0 };
+
+    /// One order at `price`.
+    #[must_use]
+    pub fn of(price: Cost) -> Tally {
+        Tally {
+            spend: i128::from(price.spend.raw()),
+            draw: i128::from(price.draw.raw()),
+        }
+    }
+
+    /// `count` orders at `price`, exactly.
+    #[must_use]
+    pub fn times(price: Cost, count: u32) -> Tally {
+        let count = i128::from(count);
+        Tally {
+            // |i64| x u32 and |i32| x u32 are both below 2^96: the products
+            // are exact in `i128`, and saturation (see the type's doc) is
+            // never reached.
+            spend: i128::from(price.spend.raw()).saturating_mul(count),
+            draw: i128::from(price.draw.raw()).saturating_mul(count),
+        }
+    }
+
+    /// Two tallies added (see the type's doc for why this saturates).
+    #[must_use]
+    pub fn plus(self, other: Tally) -> Tally {
+        Tally {
+            spend: self.spend.saturating_add(other.spend),
+            draw: self.draw.saturating_add(other.draw),
+        }
+    }
+
+    /// The tally as a [`Cost`].
     ///
     /// # Errors
     ///
-    /// [`ProjectionError::Overflow`] when either product leaves its type.
-    pub fn times(self, count: u32) -> Result<Cost, ProjectionError> {
-        let spend = self
-            .spend
-            .raw()
-            .checked_mul(i64::from(count))
-            .ok_or(ProjectionError::Overflow)?;
-        let draw = i64::from(self.draw.raw())
-            .checked_mul(i64::from(count))
-            .and_then(|draw| i32::try_from(draw).ok())
-            .ok_or(ProjectionError::Overflow)?;
+    /// [`ProjectionError::Overflow`] when either figure leaves the sim's `$`
+    /// or `kW` type.
+    pub fn narrow(self) -> Result<Cost, ProjectionError> {
         Ok(Cost {
-            spend: Money::new(spend),
-            draw: Kw::new(draw),
+            spend: Money::new(i64::try_from(self.spend).map_err(|_| ProjectionError::Overflow)?),
+            draw: Kw::new(i32::try_from(self.draw).map_err(|_| ProjectionError::Overflow)?),
         })
+    }
+}
+
+/// What one route step orders, sorted by how sure the projection is that the
+/// order is new (see the module doc, "How sure it is").
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct Orders {
+    /// What the step certainly adds.
+    pub adds: Tally,
+    /// What the step may add, counted in full: an upper bound.
+    pub at_most: Tally,
+}
+
+impl Orders {
+    /// Both piles, as one upper bound.
+    #[must_use]
+    pub fn upper(self) -> Tally {
+        self.adds.plus(self.at_most)
     }
 }
 
@@ -149,9 +251,11 @@ pub enum ProjectionError {
     /// Generator is buildable before S4), and `E0506` is the verifier code
     /// that will name it once the capability catalogue exists (S4).
     UnknownBlueprint(String),
-    /// A sum left its type. No rules table and no playbook inside the size
-    /// budget can reach it; a hostile one can, and is refused rather than
-    /// wrapped.
+    /// A figure left the sim's `$` or `kW` type. One `scout_count` near the
+    /// top of its `u32` is enough, and costs one size unit, so a playbook
+    /// inside the size budget can reach it: [`project`] and [`step_cost`]
+    /// refuse it rather than wrap. The estimate stage never meets it, because
+    /// it sums in [`Tally`].
     Overflow,
 }
 
@@ -192,8 +296,6 @@ impl Prices {
     /// [`RulesGap::MissingBlock`] when the table carries no `structures`,
     /// `units` or `power` block, or no row for the beacon, the scout or a
     /// blueprint: a price the table does not carry is never zero.
-    /// [`RulesGap::OutOfRange`] when a draw does not fit the sim's signed
-    /// `kW`.
     pub fn from_rules(rules: &RulesTable) -> Result<Prices, RulesGap> {
         let message = rules.message();
         let structures = message
@@ -204,21 +306,18 @@ impl Prices {
             .units
             .as_ref()
             .ok_or(RulesGap::MissingBlock("units"))?;
-        let power = message
+        // The block must be there (a draw the table does not carry is never
+        // zero), but every `kW` row in it is read through the sim.
+        message
             .power
             .as_ref()
             .ok_or(RulesGap::MissingBlock("power"))?;
         // The sim's own reading of every `kW` row, so "what draws" has one
         // home: a Generator and an autocannon draw nothing, whatever their
-        // rows would say.
+        // rows would say, and a row past the sim's signed `kW` reads as the sim
+        // reads it.
         let draws = PowerRules::of(rules);
-        let per_unit =
-            Kw::new(
-                i32::try_from(power.kw_per_unit).map_err(|_| RulesGap::OutOfRange {
-                    field: "power.kw_per_unit",
-                    value: power.kw_per_unit,
-                })?,
-            );
+        let per_unit = Kw::new(draws.per_unit);
         let beacon = structures
             .beacon
             .as_ref()
@@ -298,49 +397,90 @@ impl Prices {
     }
 }
 
-/// What one route step orders.
+/// What one route step orders, as one upper bound in the sim's types.
 ///
 /// # Errors
 ///
-/// As [`Prices::blueprint`] and [`Cost::plus`].
+/// As [`Prices::blueprint`], and [`ProjectionError::Overflow`] when the step's
+/// orders leave the sim's `$` or `kW` type.
 pub fn step_cost(entry: &Step, prices: &Prices) -> Result<Cost, ProjectionError> {
+    orders(entry, prices, None)?.upper().narrow()
+}
+
+/// What one route step orders, sorted into what it adds and what it may add
+/// (the module doc, "How sure it is"), exactly.
+///
+/// `scope` is the seat's view, which says which writ a beacon named by id is
+/// on, so a `set_mandate` row can be told apart from a switch.
+///
+/// # Errors
+///
+/// As [`Prices::blueprint`]: a blueprint the rules table does not price. Never
+/// [`ProjectionError::Overflow`], because a [`Tally`] holds any playbook's
+/// orders.
+pub fn step_orders(
+    entry: &Step,
+    prices: &Prices,
+    scope: &Scope,
+) -> Result<Orders, ProjectionError> {
+    orders(entry, prices, Some(scope))
+}
+
+/// [`step_orders`], with or without a view. Without one, no `set_mandate` row
+/// can be shown to be a switch, so it is counted in the upper pile; the sum of
+/// the two piles is the same either way.
+fn orders(entry: &Step, prices: &Prices, scope: Option<&Scope>) -> Result<Orders, ProjectionError> {
     match entry.kind.as_ref() {
         Some(step::Kind::PlaceBeacon(place)) => {
-            let settings = place
+            // A new beacon fields nothing yet, so everything its initial
+            // settings order is new.
+            let initial = match place
                 .initial
                 .as_ref()
-                .and_then(|initial| initial.mandate.as_ref());
-            let initial = match settings {
-                Some(settings) => settings_cost(settings, prices)?,
-                None => Cost::ZERO,
+                .and_then(|initial| initial.mandate.as_ref())
+            {
+                Some(settings) => settings_tally(settings, prices)?,
+                None => Tally::ZERO,
             };
-            prices.beacon().plus(initial)
+            Ok(Orders {
+                adds: Tally::of(prices.beacon()).plus(initial),
+                at_most: Tally::ZERO,
+            })
         }
         Some(step::Kind::Interface(visit)) => {
-            let mut total = Cost::ZERO;
+            let mut found = Orders::default();
             for row in &visit.rows {
-                let cost = match row.row.as_ref() {
-                    Some(
-                        interface_row::Row::SetMandate(settings)
-                        | interface_row::Row::SetMandateSettings(settings),
-                    ) => settings_cost(settings, prices)?,
-                    Some(interface_row::Row::AddBuildTarget(add)) => match add.target.as_ref() {
-                        Some(target) => target_cost(target, prices)?,
-                        None => Cost::ZERO,
-                    },
+                match row.row.as_ref() {
+                    Some(interface_row::Row::SetMandate(settings)) => {
+                        let ordered = settings_tally(settings, prices)?;
+                        if is_a_switch(visit, settings, scope) {
+                            found.adds = found.adds.plus(ordered);
+                        } else {
+                            found.at_most = found.at_most.plus(ordered);
+                        }
+                    }
+                    Some(interface_row::Row::SetMandateSettings(settings)) => {
+                        found.at_most = found.at_most.plus(settings_tally(settings, prices)?);
+                    }
+                    Some(interface_row::Row::AddBuildTarget(add)) => {
+                        if let Some(target) = add.target.as_ref() {
+                            found.adds = found.adds.plus(target_tally(target, prices)?);
+                        }
+                    }
                     Some(interface_row::Row::QueueStructure(queue)) => {
-                        prices.blueprint(&queue.blueprint_id)?
+                        found.adds = found
+                            .adds
+                            .plus(Tally::of(prices.blueprint(&queue.blueprint_id)?));
                     }
                     Some(
                         interface_row::Row::SetPriority(_)
                         | interface_row::Row::Recycle(_)
                         | interface_row::Row::RemoveBuildTarget(_),
                     )
-                    | None => Cost::ZERO,
-                };
-                total = total.plus(cost)?;
+                    | None => {}
+                }
             }
-            Ok(total)
+            Ok(found)
         }
         Some(
             step::Kind::Move(_)
@@ -348,33 +488,62 @@ pub fn step_cost(entry: &Step, prices: &Prices) -> Result<Cost, ProjectionError>
             | step::Kind::Hold(_)
             | step::Kind::Broadcast(_),
         )
-        | None => Ok(Cost::ZERO),
+        | None => Ok(Orders::default()),
     }
 }
 
+/// True when a `set_mandate` row certainly switches its beacon's writ: the
+/// beacon is named by an id the view knows, and the view says it is on a
+/// different writ. A beacon named by a description, or one already on the
+/// writ the row names, may already field what the row orders.
+fn is_a_switch(visit: &InterfaceStep, settings: &MandateSettings, scope: Option<&Scope>) -> bool {
+    let Some(scope) = scope else {
+        return false;
+    };
+    let Some(beacon_ref::Ref::BeaconId(id)) =
+        visit.beacon.as_ref().and_then(|at| at.r#ref.as_ref())
+    else {
+        return false;
+    };
+    let Some(known) = scope.beacon(id) else {
+        return false;
+    };
+    let writ = match settings.mandate.as_ref() {
+        Some(mandate_settings::Mandate::Build(_)) => MandateKind::Build,
+        Some(mandate_settings::Mandate::Survey(_)) => MandateKind::Survey,
+        Some(mandate_settings::Mandate::Mine(_)) => MandateKind::Mine,
+        Some(mandate_settings::Mandate::Defend(_)) => MandateKind::Defend,
+        Some(mandate_settings::Mandate::Attack(_)) => MandateKind::Attack,
+        None => return false,
+    };
+    known.mandate != writ
+}
+
 /// What a settings block orders: its Build targets, or its scouts.
-fn settings_cost(settings: &MandateSettings, prices: &Prices) -> Result<Cost, ProjectionError> {
+fn settings_tally(settings: &MandateSettings, prices: &Prices) -> Result<Tally, ProjectionError> {
     match settings.mandate.as_ref() {
         Some(mandate_settings::Mandate::Build(build)) => {
-            let mut total = Cost::ZERO;
+            let mut total = Tally::ZERO;
             for target in &build.targets {
-                total = total.plus(target_cost(target, prices)?)?;
+                total = total.plus(target_tally(target, prices)?);
             }
             Ok(total)
         }
-        Some(mandate_settings::Mandate::Survey(survey)) => prices.scout().times(survey.scout_count),
+        Some(mandate_settings::Mandate::Survey(survey)) => {
+            Ok(Tally::times(prices.scout(), survey.scout_count))
+        }
         Some(
             mandate_settings::Mandate::Mine(_)
             | mandate_settings::Mandate::Defend(_)
             | mandate_settings::Mandate::Attack(_),
         )
-        | None => Ok(Cost::ZERO),
+        | None => Ok(Tally::ZERO),
     }
 }
 
 /// One Build target: one structure of its blueprint.
-fn target_cost(target: &BuildTarget, prices: &Prices) -> Result<Cost, ProjectionError> {
-    prices.blueprint(&target.blueprint_id)
+fn target_tally(target: &BuildTarget, prices: &Prices) -> Result<Tally, ProjectionError> {
+    prices.blueprint(&target.blueprint_id).map(Tally::of)
 }
 
 /// What the playbook orders, and what the seat is left with.
@@ -420,12 +589,13 @@ pub fn project(
     economy: SeatEconomy,
     prices: &Prices,
 ) -> Result<Projection, ProjectionError> {
-    let mut total = Cost::ZERO;
+    let mut wide = Tally::ZERO;
     if let Some(body) = playbook.declarative.as_ref() {
         for entry in &body.route {
-            total = total.plus(step_cost(entry, prices)?)?;
+            wide = wide.plus(orders(entry, prices, None)?.upper());
         }
     }
+    let total = wide.narrow()?;
     let treasury_after = economy
         .treasury
         .checked_sub(total.spend)
@@ -445,7 +615,7 @@ pub fn project(
 
 #[cfg(test)]
 mod tests {
-    use super::{Cost, Prices, ProjectionError, project};
+    use super::{Cost, Prices, ProjectionError, Tally, project};
     use crate::limits::RulesGap;
     use pharmakos_proto::gp::v1::{
         BuildSettings, BuildTarget, Declarative, InitialSettings, InterfaceRow, InterfaceStep,
@@ -631,14 +801,20 @@ mod tests {
             }),
             Err(ProjectionError::Overflow)
         );
+        // One hostile count is past the sim's types, and the upper bound
+        // refuses it; the tally the estimate stage reads holds it exactly.
+        let survey = mandate_settings::Mandate::Survey(SurveySettings {
+            probe_areas: Vec::new(),
+            scout_count: u32::MAX,
+        });
+        let playbook = playbook(vec![place(Some(survey))]);
         assert_eq!(
-            Cost {
-                spend: Money::new(1),
-                draw: Kw::new(1)
-            }
-            .times(u32::MAX),
+            project(&playbook, economy(), &prices()),
             Err(ProjectionError::Overflow)
         );
+        let tally = Tally::times(prices().scout(), u32::MAX);
+        assert_eq!(tally.draw, i128::from(u32::MAX));
+        assert_eq!(tally.spend, 10 * i128::from(u32::MAX));
     }
 
     #[test]

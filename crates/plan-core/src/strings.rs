@@ -4,7 +4,9 @@
 //! The string table's `plan-core` section: every English word `render_plan`
 //! can put in front of a player, in one place.
 //!
-//! **PLACEHOLDER — the one project-wide string table.** Spec section 11 says
+//! PLACEHOLDER: the one project-wide string table — owner, S6, with the editor.
+//!
+//! Spec section 11 says
 //! every user-facing string in v1 is English and lives in *one* table: the
 //! user interface, the diagnostic catalogue, and "the plain-language playbook
 //! rendering", which is this crate's. `pharmakos-verifier`'s `strings` module

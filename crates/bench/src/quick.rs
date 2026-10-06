@@ -25,7 +25,7 @@
 //! [`Input::new`] then [`verify`] at [`Depth::Quick`], which is what every
 //! QUICK call in the gateway runs (`plan-core`'s `verify_jsonc` builds a fresh
 //! `Input` each time, and `Input::new` computes `rules_hash` and reads the
-//! limits). `plan-core`'s canonicalisation in front of it and the JSON-RPC
+//! limits, the interface rates, the prices and the walking rows). `plan-core`'s canonicalisation in front of it and the JSON-RPC
 //! framing around it are not timed: the figure is the verifier's.
 //!
 //! Each call is timed **once**, never best-of-N: P1's bar is a p99 over calls,

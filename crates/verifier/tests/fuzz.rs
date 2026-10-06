@@ -39,6 +39,18 @@
 //! them: a missing block, a negative duration, a label that names nothing, a
 //! held-back word, a value of the wrong type. That is the population a hand
 //! editor actually produces.
+//!
+//! # The estimate stage's arithmetic (S1's `proj`)
+//!
+//! The estimate stage sums counts the author controls, so the generator writes
+//! the orders it prices — Survey scout counts over the whole `u32` field, Build
+//! targets, `set_mandate`, `set_mandate_settings`, `add_build_target` and
+//! `queue_structure` rows, an unpriced blueprint on a damaged run, and the
+//! `allow_dormant_beacons` option — against a seat with 8 `kW` of headroom and
+//! a snapshot with a segment coming. Beyond "a report comes back", one property
+//! is checked on every run: a route whose deploys order more draw than the
+//! headroom carries `E0601` or `W0603`, however large the count, against a
+//! reference sum written apart from the verifier's.
 
 use pharmakos_proto::gp::api::v1::VerifyReport;
 use pharmakos_proto::gp::api::v1::diagnostic::Severity;
@@ -55,8 +67,29 @@ use pharmakos_verifier::{
     FeatureKind, Input, KnownBeacon, KnownFeature, Ownership, Scope, VERIFIER_VERSION, verify,
 };
 
-use pharmakos_proto::gp::v1::Voxel;
 use pharmakos_proto::gp::v1::beacon_filter::MandateKind;
+use pharmakos_proto::gp::v1::{
+    BuildTarget, MandateSettings, Playbook, Voxel, interface_row, mandate_settings, step,
+};
+use pharmakos_sim::math::quantity::{Kw, Money};
+
+/// The blueprint id a damaged run orders that the rules table does not price.
+const UNPRICED: &str = "death_ray";
+
+/// The blueprints the rules table prices (`projection::BLUEPRINTS`), restated
+/// for the property's reference sum.
+const PRICED: [&str; 5] = [
+    "generator",
+    "autocannon",
+    "mortar",
+    "survey_post",
+    "resonance_spire",
+];
+
+/// The fixture seat's economy: `$` 500, and 8 `kW` of headroom.
+const TREASURY: i64 = 500;
+const SUPPLY: i32 = 10;
+const DRAW: i32 = 2;
 
 /// How many playbooks the nightly run generates.
 const RUNS: u32 = 10_000;
@@ -447,7 +480,7 @@ impl Shape {
                                 "mandate".to_owned(),
                                 Json::Object(vec![
                                     ("retreat_hp_pct".to_owned(), retreat),
-                                    ("mine".to_owned(), Json::Object(Vec::new())),
+                                    self.mandate(),
                                 ]),
                             )]),
                         ),
@@ -470,16 +503,7 @@ impl Shape {
             }
             4 => {
                 let beacon = self.beacon_ref();
-                // Recycling is what a damaged run reaches for; the core cannot
-                // be recycled, so a clean run sets a priority instead.
-                let row = if self.clean {
-                    Json::Object(vec![(
-                        "set_priority".to_owned(),
-                        Json::String("NORMAL".to_owned()),
-                    )])
-                } else {
-                    Json::Object(vec![("recycle".to_owned(), Json::Object(Vec::new()))])
-                };
+                let row = self.row();
                 fields.push((
                     "interface".to_owned(),
                     Json::Object(vec![
@@ -490,6 +514,116 @@ impl Shape {
             }
             _ => {}
         }
+    }
+
+    /// One interface row. Recycling is what a damaged run reaches for; the
+    /// core cannot be recycled, so a clean run sets a priority instead. The
+    /// other four are the rows the estimate stage prices (S1's `proj`): a
+    /// settings edit and a switch, each with a mandate's settings, a Build
+    /// target and a queued structure.
+    fn row(&mut self) -> Json {
+        match self.below(5) {
+            0 if self.clean => Json::Object(vec![(
+                "set_priority".to_owned(),
+                Json::String("NORMAL".to_owned()),
+            )]),
+            0 => Json::Object(vec![("recycle".to_owned(), Json::Object(Vec::new()))]),
+            1 => {
+                let (key, value) = self.mandate();
+                Json::Object(vec![(
+                    "set_mandate_settings".to_owned(),
+                    Json::Object(vec![(key, value)]),
+                )])
+            }
+            2 => {
+                let (key, value) = self.mandate();
+                Json::Object(vec![(
+                    "set_mandate".to_owned(),
+                    Json::Object(vec![(key, value)]),
+                )])
+            }
+            3 => {
+                let target = self.build_target();
+                Json::Object(vec![(
+                    "add_build_target".to_owned(),
+                    Json::Object(vec![("target".to_owned(), target)]),
+                )])
+            }
+            _ => {
+                let blueprint = self.blueprint();
+                Json::Object(vec![(
+                    "queue_structure".to_owned(),
+                    Json::Object(vec![("blueprint_id".to_owned(), blueprint)]),
+                )])
+            }
+        }
+    }
+
+    /// A mandate's settings, as the `(arm, block)` pair a settings message
+    /// holds: Mine with nothing set, Survey with a scout count, or Build with
+    /// one to three targets.
+    fn mandate(&mut self) -> (String, Json) {
+        match self.below(3) {
+            0 => ("mine".to_owned(), Json::Object(Vec::new())),
+            1 => {
+                let count = self.scout_count();
+                (
+                    "survey".to_owned(),
+                    Json::Object(vec![("scout_count".to_owned(), count)]),
+                )
+            }
+            _ => {
+                let mut targets = Vec::new();
+                for _ in 0..=self.below(3) {
+                    targets.push(self.build_target());
+                }
+                (
+                    "build".to_owned(),
+                    Json::Object(vec![("targets".to_owned(), Json::Array(targets))]),
+                )
+            }
+        }
+    }
+
+    /// A scout count over the whole `u32` field: a small one, the very top,
+    /// or anywhere between, so the projection meets the counts no `i32` holds.
+    fn scout_count(&mut self) -> Json {
+        let anywhere = u32::try_from(self.rng.range_i32(0, i32::MAX)).unwrap_or(0);
+        let count = match self.below(4) {
+            0 => u32::try_from(self.below(12)).unwrap_or(0),
+            1 => u32::MAX,
+            2 => anywhere.saturating_mul(2).saturating_add(1),
+            _ => anywhere,
+        };
+        Json::Number(count.to_string())
+    }
+
+    /// A blueprint id: one the rules table prices, or on a damaged run one it
+    /// does not, which ends the projection at its step.
+    fn blueprint(&mut self) -> Json {
+        if self.damage(4) {
+            return Json::String(UNPRICED.to_owned());
+        }
+        let index = usize::try_from(self.below(3)).unwrap_or(0);
+        Json::String(
+            ["generator", "mortar", "survey_post"]
+                .get(index)
+                .copied()
+                .unwrap_or("generator")
+                .to_owned(),
+        )
+    }
+
+    fn build_target(&mut self) -> Json {
+        let blueprint = self.blueprint();
+        let anchor = self.voxel();
+        Json::Object(vec![
+            ("blueprint_id".to_owned(), blueprint),
+            (
+                "anchor".to_owned(),
+                Json::Object(vec![("voxel".to_owned(), anchor)]),
+            ),
+        ])
     }
 
     fn handler(&mut self) -> Json {
@@ -560,13 +694,19 @@ impl Shape {
         for _ in 0..handler_count {
             handlers.push(self.handler());
         }
-        fields.push((
-            "declarative".to_owned(),
-            Json::Object(vec![
-                ("route".to_owned(), Json::Array(route)),
-                ("handlers".to_owned(), Json::Array(handlers)),
-            ]),
-        ));
+        let mut body = vec![
+            ("route".to_owned(), Json::Array(route)),
+            ("handlers".to_owned(), Json::Array(handlers)),
+        ];
+        // The one option (spec section 7), so `W0603` is reached as well as
+        // `E0601`.
+        if self.rarely(4) {
+            body.push((
+                "options".to_owned(),
+                Json::Object(vec![("allow_dormant_beacons".to_owned(), Json::Bool(true))]),
+            ));
+        }
+        fields.push(("declarative".to_owned(), Json::Object(body)));
         if !self.damage(10) {
             fields.push((
                 "on_death".to_owned(),
@@ -633,53 +773,68 @@ fn feature(
 /// nobody covers, a live vent the core covers (inside the core's sphere, where
 /// a clean run's voxels sit, so W0706 fires), a lost vent and a seam.
 fn scope() -> Scope {
-    Scope::new(SeatId::new(0), SeatEconomy::default())
-        .with_beacon(KnownBeacon {
-            beacon_id: "b_01".to_owned(),
-            owner: SeatId::new(0),
-            side: Ownership::Own,
-            mandate: MandateKind::Build,
-            tags: Vec::new(),
-            at: Voxel {
-                x: 80,
-                y: 11,
-                z: 55,
-            },
-            is_core: true,
-        })
-        .with_feature(feature(
-            "vent_150_25",
-            FeatureKind::Vent,
-            (150, 25),
-            true,
-            None,
-        ))
-        .with_feature(feature(
-            "vent_84_12",
-            FeatureKind::Vent,
-            (84, 12),
-            true,
-            Some("b_01"),
-        ))
-        .with_feature(feature(
-            "vent_300_300",
-            FeatureKind::Vent,
-            (300, 300),
-            false,
-            None,
-        ))
-        .with_feature(feature(
-            "seam_200_60",
-            FeatureKind::Seam,
-            (200, 60),
-            true,
-            None,
-        ))
+    Scope::new(
+        SeatId::new(0),
+        SeatEconomy {
+            treasury: Money::new(TREASURY),
+            supply: Kw::new(SUPPLY),
+            draw: Kw::new(DRAW),
+        },
+    )
+    .with_commander(Voxel {
+        x: 82,
+        y: 13,
+        z: 55,
+    })
+    .with_beacon(KnownBeacon {
+        beacon_id: "b_01".to_owned(),
+        owner: SeatId::new(0),
+        side: Ownership::Own,
+        mandate: MandateKind::Build,
+        tags: Vec::new(),
+        at: Voxel {
+            x: 80,
+            y: 11,
+            z: 55,
+        },
+        is_core: true,
+    })
+    .with_feature(feature(
+        "vent_150_25",
+        FeatureKind::Vent,
+        (150, 25),
+        true,
+        None,
+    ))
+    .with_feature(feature(
+        "vent_84_12",
+        FeatureKind::Vent,
+        (84, 12),
+        true,
+        Some("b_01"),
+    ))
+    .with_feature(feature(
+        "vent_300_300",
+        FeatureKind::Vent,
+        (300, 300),
+        false,
+        None,
+    ))
+    .with_feature(feature(
+        "seam_200_60",
+        FeatureKind::Seam,
+        (200, 60),
+        true,
+        None,
+    ))
 }
 
+/// A snapshot with a first round's three minutes coming, so the schedule
+/// check (`W0701`) runs on every generated route.
 fn snapshot() -> Vec<u8> {
     Snapshot {
         version: SNAPSHOT_VERSION,
+        coming_segment_ms: 180_000,
         ..Snapshot::default()
     }
     .to_bytes()
@@ -687,7 +842,10 @@ fn snapshot() -> Vec<u8> {
 }
 
 /// Verify one generated playbook and assert every invariant a report has.
-fn check(index: u32, rules: &RulesTable, scope: &Scope, snapshot: &[u8]) -> VerifyReport {
+///
+/// The flag says whether the draw property below applied, so a run can show
+/// that it was not vacuous.
+fn check(index: u32, rules: &RulesTable, scope: &Scope, snapshot: &[u8]) -> (VerifyReport, bool) {
     let text = json::write(&Shape::new(index).playbook());
     let input = Input::new(text.as_bytes(), snapshot, scope, rules)
         .unwrap_or_else(|error| panic!("assembling the input: {error}"));
@@ -738,7 +896,103 @@ fn check(index: u32, rules: &RulesTable, scope: &Scope, snapshot: &[u8]) -> Veri
     // The report is a message the gateway hands back unchanged, so it has to be
     // writable as canonical JSON whatever went into it.
     json::encode(&report).unwrap_or_else(|error| panic!("run {index}: {error}"));
-    report
+
+    // The estimate stage's one refusal can never be silenced: a route whose
+    // deploys certainly order more draw than the grid has room for carries
+    // `E0601`, or `W0603` where the playbook accepts the shortfall, however
+    // large the count.
+    let mut applied = false;
+    let decoded = !report
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code.starts_with("E000"));
+    if decoded {
+        if let Ok(playbook) = json::decode::<Playbook>(&text) {
+            let per_unit = i128::from(
+                rules
+                    .message()
+                    .power
+                    .as_ref()
+                    .map_or(0, |power| power.kw_per_unit),
+            );
+            let room = i128::from(SUPPLY.saturating_sub(DRAW));
+            if certain_scout_draw(&playbook, per_unit) > room {
+                applied = true;
+                assert!(
+                    report
+                        .diagnostics
+                        .iter()
+                        .any(|diagnostic| diagnostic.code == "E0601" || diagnostic.code == "W0603"),
+                    "run {index}: the route's deploys order draw beyond supply and nothing says so"
+                );
+            }
+        }
+    }
+    (report, applied)
+}
+
+/// A reference figure for the property above, written apart from the
+/// verifier's: the draw of the scouts the route's deploys order, up to the
+/// first step that names a blueprint the rules table does not price, where the
+/// projection stops. It counts less than the verifier does (no switch, no
+/// structure), so it is a lower bound of what the verifier must see.
+fn certain_scout_draw(playbook: &Playbook, per_unit: i128) -> i128 {
+    let unpriced = |targets: &[BuildTarget]| {
+        targets
+            .iter()
+            .any(|target| !PRICED.contains(&target.blueprint_id.as_str()))
+    };
+    let settings_unpriced = |settings: Option<&MandateSettings>| {
+        matches!(
+            settings.and_then(|settings| settings.mandate.as_ref()),
+            Some(mandate_settings::Mandate::Build(build)) if unpriced(&build.targets)
+        )
+    };
+    let mut draw: i128 = 0;
+    for entry in playbook
+        .declarative
+        .as_ref()
+        .map_or(&[][..], |body| body.route.as_slice())
+    {
+        match entry.kind.as_ref() {
+            Some(step::Kind::PlaceBeacon(place)) => {
+                let settings = place
+                    .initial
+                    .as_ref()
+                    .and_then(|initial| initial.mandate.as_ref());
+                if settings_unpriced(settings) {
+                    break;
+                }
+                if let Some(mandate_settings::Mandate::Survey(survey)) =
+                    settings.and_then(|settings| settings.mandate.as_ref())
+                {
+                    draw = draw
+                        .saturating_add(per_unit.saturating_mul(i128::from(survey.scout_count)));
+                }
+            }
+            Some(step::Kind::Interface(visit)) => {
+                let stops = visit.rows.iter().any(|row| match row.row.as_ref() {
+                    Some(
+                        interface_row::Row::SetMandate(settings)
+                        | interface_row::Row::SetMandateSettings(settings),
+                    ) => settings_unpriced(Some(settings)),
+                    Some(interface_row::Row::AddBuildTarget(add)) => add
+                        .target
+                        .as_ref()
+                        .is_some_and(|target| !PRICED.contains(&target.blueprint_id.as_str())),
+                    Some(interface_row::Row::QueueStructure(queue)) => {
+                        !PRICED.contains(&queue.blueprint_id.as_str())
+                    }
+                    _ => false,
+                });
+                if stops {
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    draw
 }
 
 #[test]
@@ -773,14 +1027,40 @@ fn ten_thousand_playbooks_come_back_as_reports() {
     let scope = scope();
     let snapshot = snapshot();
     let mut lints: Vec<String> = Vec::new();
+    let mut estimates: Vec<String> = Vec::new();
+    let mut applied: u32 = 0;
     for index in 0..RUNS {
-        let report = check(index, &rules, &scope, &snapshot);
+        let (report, held) = check(index, &rules, &scope, &snapshot);
+        applied = applied.saturating_add(u32::from(held));
         for diagnostic in report.diagnostics {
-            if diagnostic.code.starts_with("W07") && !lints.contains(&diagnostic.code) {
-                lints.push(diagnostic.code);
+            let code = diagnostic.code;
+            let list = if ["W0704", "W0705", "W0706"].contains(&code.as_str()) {
+                &mut lints
+            } else if ["E0601", "W0602", "W0603", "W0604", "W0701", "I0001"]
+                .contains(&code.as_str())
+            {
+                &mut estimates
+            } else {
+                continue;
+            };
+            if !list.contains(&code) {
+                list.push(code);
             }
         }
     }
+    // Every code the estimate stage can raise against this fixture is
+    // reached: `W0601` needs a grid already short, and `W0707` bytes that are
+    // not a snapshot, and both have tests of their own.
+    assert!(
+        applied > 0,
+        "no generated route ordered draw beyond supply; the property was never tested"
+    );
+    estimates.sort();
+    assert_eq!(
+        estimates,
+        ["E0601", "I0001", "W0602", "W0603", "W0604", "W0701"],
+        "the estimate codes the run reached"
+    );
     // Every emitting branch of targeting's three lints is reached, so a green
     // run says something about each of them.
     lints.sort();

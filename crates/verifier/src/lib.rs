@@ -149,9 +149,10 @@ pub use walking::Walk;
 /// another report from the same verifier. It is a string rather than a number so
 /// that a build can say what it is rather than only that it differs.
 ///
-/// PLACEHOLDER: how this string is derived once there are releases — a version,
-/// a build identity, or both — is the **owner's** call at the wk-35.5 v0.1 gate,
-/// with the rest of the versioning. Until then it names the stage that produced
+/// PLACEHOLDER: how this string is derived once there are releases — owner, the wk-35.5 v0.1 gate.
+///
+/// A version, a build identity, or both, decided with the rest of the
+/// versioning. Until then it names the stage that produced
 /// it, and the report goldens move when it moves. `0.1.0-s1` from S1's
 /// estimate stage (task `proj`): a FULL report from this build finds what the
 /// skeleton's empty stage could not, so it is not comparable with one from
