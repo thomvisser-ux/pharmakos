@@ -686,17 +686,19 @@ sections that add one name it in their Owns lines.
   run` and `seat doctor`, which pass each Lull's whole length to `Surface::set_phase_remaining_ms`,
   pass round 1's as `first_lull_ms`. Carried by item 130: the stale `reserved 2 to 15` comment in
   `surface/knowledge.rs` (~173), and the recap's "Round N ran 0 ticks" for a full round once the
-  match has ended, which `check` found. Carried by item 133: `step_failed` carries no candidate
-  count, so "3 matched, none reachable" is said only in the Lull: the recap's lines may say it if a
-  sim lane puts the count on the event; `tgtw`'s review B nits in `tests/targeting.rs` (the row-order
+  match has ended, which `check` found. Carried by item 133: `resolve_refs` answers `PHASE_CLOSED`
+  in a Push, as `estimate_route`'s `covering` does, with the test
+  `resolve_refs_in_a_push_is_phase_closed` (item 133 (3) (f); the sim's fog follow-up does not cure
+  the live read); `single` in `src/targeting.rs` gets the sphere test the sim's fix adds, with a test
+  of a named vent outside the sphere (item 133 (3) (g)); the recap's "3 matched, none reachable"
+  line once the fog follow-up puts the count on `step_failed` (item 133 (3) (h)), unless `ui` takes
+  it; `tgtw`'s review B nits in `tests/targeting.rs` (the row-order
   test compares no picks with the sim's, the vent test the feature and not the column);
   `surface/planning.rs`'s module doc, which still calls FULL's estimate and lint stages "present
   and empty", and `tests/confinement.rs`'s message placing the one `Plan::compile` call in
-  `compile_playbook` (it is `compile_decoded` now); once a sim lane makes `matches_pick`,
-  `on_candidate` and `generator_on` public, `src/targeting.rs` drops its restated copies; and, for
-  the main session to rule with item 133 (3) (c)'s follow-up, `resolve_refs` has no phase gate, so
-  in a Push it ranks over the live world where `estimate_route`'s `covering` answers
-  `PHASE_CLOSED`.
+  `compile_playbook` (it is `compile_decoded` now); and, once the fog follow-up makes
+  `matches_pick`, `on_candidate` and `generator_on` public, `src/targeting.rs` drops its restated
+  copies (item 133 (3) (j)).
 - **Implements:** item 127 (2)'s gateway half; register S1-11, S1-12, S1-46, X-03, X-16.
 - **Needs:** `tgtw` merged; decision 12. **Acceptance:** method and walkthrough goldens; a test that
   the bound admits a 600 000 ms first Lull and refuses 600 001; `scenario run` and `seat doctor`
@@ -733,7 +735,9 @@ sections that add one name it in their Owns lines.
   round:" line; the chip; a click on a vent offering "Place beacon covering this vent" and Alt-click
   turning it into the description; E0601's `allow_dormant_beacons` checkbox; S1-44 per decision 17.
   Carried by item 133: the "this round" sentence has no field; it rides `get_briefing`'s prose in a
-  Lull, for a seat's own token only, and this lane shows it from there.
+  Lull, for a seat's own token only, and this lane shows it from there; it gets a field when v1.1
+  publishes the method (item 133 (3) (i)). The recap's "3 matched, none reachable" line is this
+  lane's or `econ`'s once the fog follow-up puts the count on `step_failed` (item 133 (3) (h)).
 - **Does not:** decide, time or validate anything (AGENTS.md §3 rule 4): every answer is the
   gateway's.
 - **Implements:** item 127 (2)'s client half, (12) (the chip, the click and Alt-click); register
@@ -758,11 +762,14 @@ sections that add one name it in their Owns lines.
   each element of `protected_areas` or `probe_areas` one field (`mandate_fields`), re-blessing the
   chains it moves; when the sim stops counting a target list as a field, a `set_mandate` whose
   Build arm holds only targets must still compile to carried settings, or the gateway's
-  `resolve_playbook` count guard refuses those playbooks (`INTERNAL`); and three silent fallbacks:
+  `resolve_playbook` count guard refuses those playbooks (`INTERNAL`); and the silent fallbacks of
+  the skeleton's idiom, each a typed or checked conversion or a destructured anchor:
   `set_beacon_scouts`' `u8::try_from(..).unwrap_or(u8::MAX)` in `interpreter/exec.rs` (a typed
-  refusal, or a verifier error), and in `mining.rs` `point()`'s `i16::try_from(..).unwrap_or(0)`
-  and `pillar()`'s anchor read with `unwrap_or(0)` (destructure the `[i32; 2]` anchor; a typed or
-  checked conversion), with the file's other `unwrap_or(0)` reads.
+  refusal, or a verifier error), the same file's `point_of` and anchor reads (~1700–1721) and its
+  `usize` row-index conversions (`restart_row`, `visit_row`, `fallback_leg`, ~615, ~889, ~1420);
+  `interpreter.rs`'s `Row::duration_ms` (`extra`'s `unwrap_or(0)`, and a missing `interface_times`
+  block read as 0); and in `mining.rs` `point()`'s `i16::try_from(..).unwrap_or(0)`, `pillar()`'s
+  anchor read and the file's other `unwrap_or(0)` reads.
 - **Implements:** item 33 (a)'s Build settings as decision 5 reads them; register S1-24's reader,
   S1-42; spec §6's Build row.
 - **Needs:** `mine` merged; decision 5. **Acceptance:** `targets_build_in_their_order`;
@@ -850,8 +857,11 @@ two `demo_*_verify` goldens moved in their I0001 as well as their hash (section 
 said the gateway's hashes only). One lane joins the schedule: the sim's fog follow-up of item 133
 (3) (c), a small `crates/sim` lane in slot 1 ahead of `build` (a named or `covered {}` `on` whose
 `on` column lies outside the target sphere answers `no_target` before the structure test), with
-`grid` beside it as its named place in slot 3, then `oper`; `econ` runs in slot 2. Each launches on
-the owner's word.
+`grid` beside it as its named place in slot 3, then `oper`; `econ` runs in slot 2. The follow-up
+also puts the candidate count on `step_failed` and makes `matches_pick`, `on_candidate` and
+`generator_on` public (item 133 (3) (h), (j)). Each launches on the owner's word. The table above is
+superseded where the as-run notes differ: it is the plan as adopted, and these notes are the
+schedule.
 
 **Totals.** 18 tasks in 17 lanes (`tgtv` and `proj` are one lane in two PRs), **about 71.5 ad**
 (63.5–79.5), against the code map's 62–74; this plan adds X-08's audit, the restore bug, the
@@ -879,6 +889,7 @@ Two splits already shorten it: targeting's preview surfaces (`tgtw`) leave the s
 | `grid` | none committed | — | — |
 | `build` | those with a Build | — (the harness writes no Build target) | all, if it adds hashed state |
 | `oper` (Easy's sealed files) | `against-easy*` | — | the operator's and the `demo_*_verify` goldens |
+| fog follow-up (item 133 (3) (c), (h)) | none expected; any that moves is named in its PR | — | — |
 | `tune` (values; S1-26) | all | **moved** | all |
 
 **Over the stage the scenario chains move six times** (`fixs`, `tgt`, `mine`, `build`, `oper`,
@@ -935,7 +946,9 @@ or `tests/golden/package/`, so 12 of the 18 PRs (`fixs`, `fixc`, `con1`, `con2`,
   its "the research guard's five crates plus the sim" and its `CLIENT_WALL` sentence, §9's
   local-package sentence per decision 9, §9's line on a check run by hand (`#[ignore]`d, never a
   step, never compared across operating systems; item 130), §9 item 11's P1, and, from item 131,
-  §3 rule 2's "never ranks" and §4.8's derived feature table) and the rulings, and
+  §3 rule 2's "never ranks" and §4.8's derived feature table, and from item 133 §3 rule 2's
+  `resolve_refs` preview, `compile_decoded` and the verifier's lower-bound travel, the crate map's
+  plan-core and verifier rows, and §9's bless note) and the rulings, and
   launch each run through `docs_ref` (item 115 (3)). AGENTS.md is a harness doc no lane edits: the
   `pharmakos-bench` sentences are in the docs PR that lands with `p1`, whose PR rewords the
   matching `xtask` doc comments. `rules/README.md` is `con1`'s, not theirs.
