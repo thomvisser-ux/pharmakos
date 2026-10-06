@@ -75,3 +75,4 @@ if ($failures.Count) {
   exit 1
 }
 Write-Host 'Done. Open a NEW shell, then verify:  rustc -V; cargo -V; protoc --version; buf --version; godot --version' -ForegroundColor Green
+Write-Host 'In each clone, once:  git config core.hooksPath scripts/githooks   (README, "Setting up a clone")' -ForegroundColor Green

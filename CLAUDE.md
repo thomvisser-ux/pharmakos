@@ -15,15 +15,16 @@ Read that file before your first edit. What follows is only the Claude Code-spec
 
 1. **The toolchain is installed and `cargo xtask ci` is green.** rustc 1.98.1 (MSVC host), `protoc`
    36, `buf` 1.73, `cargo-deny`, `reuse` and Godot 4.7.2 with its export templates are all present,
-   so compile your work and run `cargo xtask ci --quick` as the inner loop and the full
-   `cargo xtask ci` before you open a PR. Every step is required: a step whose input is missing
-   fails with the reason, and only the
-   platform skips (`screenshot` off Linux, `stage-client` on macOS) and `test-research`'s
-   `--package` filter remain (decisions-log item 116 (6)(g)); a missing tool (buf, cargo-deny,
-   reuse, godot, xvfb-run, and inside the `test` step buf and `protoc-gen-prost`) skips locally and
-   fails under `PHARMAKOS_REQUIRE_TOOLS=1`, which CI and the merge train's local check set; the
-   `--require-tools` flag covers the steps' own tools only. The `PLACEHOLDER` rule is unchanged: mark every guessed value
-   `// PLACEHOLDER: <what, who decides, when>` and list it in your PR.
+   so compile your work and run `cargo xtask ci --quick` as the inner loop and the full `cargo xtask
+   ci` before you open a PR. Every step is required: a step whose input is missing fails with the
+   reason, and only the platform skips (`screenshot` off Linux, `stage-client` on macOS) and
+   `test-research`'s `--package` filter remain (decisions-log item 116 (6)(g)); a missing tool (buf,
+   cargo-deny, reuse, godot, xvfb-run, and inside the `test` step buf and `protoc-gen-prost`) skips
+   locally and fails under `PHARMAKOS_REQUIRE_TOOLS=1`, which CI and the merge train's local check
+   set; the `--require-tools` flag covers the steps' own tools only. Wire the versioned hooks first
+   (`git config core.hooksPath scripts/githooks`): an unwired clone fails the `test` step. The
+   `PLACEHOLDER` rule is unchanged: mark every guessed value `// PLACEHOLDER: <what, who decides,
+   when>` and list it in your PR.
 2. **Check the design precedence before implementing a rule**: `docs/design/decisions-log.md` §2.7 >
    the spec (`docs/spec/pharmakos-spec-v0.6.html`) > `docs/design/co-design-gameplan-api.md`. See
    `docs/design/README.md`. The co-design doc predates the v1 simplification and still describes
@@ -88,6 +89,7 @@ cargo xtask ci            # the whole check suite — what CI's legs run, and it
 cargo xtask ci --quick    # fmt, clippy, unit tests — the inner loop
 cargo xtask ci --fix      # rustfmt plus machine-applicable clippy fixes
 cargo xtask package       # the unsigned zip for this platform (T21); --bless its manifest
+git config core.hooksPath scripts/githooks   # once per clone: the versioned hooks (item 132)
 git commit -s             # DCO sign-off is mandatory on every commit
 git worktree add ../pharmakos-<task> -b feat/<crate>-<task>
 ```

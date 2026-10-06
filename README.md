@@ -35,6 +35,21 @@ specification, the design record, the harness (`AGENTS.md` / `CLAUDE.md`, `cargo
 conventions) and the workspace below, in which every crate has code: the walking skeleton, closed at
 the owner's review of its stage demo on 2026-09-29.
 
+## Setting up a clone
+
+1. Wire the versioned git hooks, once per clone (every worktree of the clone shares the setting,
+   and a worktree of a commit older than the hooks runs none until it is rebased):
+
+   ```sh
+   git config core.hooksPath scripts/githooks
+   ```
+
+   `pre-commit` runs rustfmt and clippy on the crates you touched (`scripts/pre-commit.sh`), and
+   `pre-push` runs `cargo xtask fmt clippy` over the whole workspace. `PHARMAKOS_SKIP_HOOKS=1` skips
+   both. An unwired clone fails `cargo xtask ci`'s tests (`the_clone_runs_the_versioned_hooks`),
+   except under CI (decisions-log item 132).
+2. On Windows, `scripts/setup-windows.ps1` installs the toolchain; then `cargo xtask ci`.
+
 ## Repository layout
 
 ```

@@ -27,6 +27,7 @@ tests/golden/** -text
 # Git Bash and the CI runners execute them directly.
 *.sh text eol=lf
 scripts/* text eol=lf
+scripts/githooks/* text eol=lf
 
 # Windows-only files keep CRLF.
 *.ps1 text eol=crlf

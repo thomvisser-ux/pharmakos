@@ -1,0 +1,7 @@
+#!/bin/sh
+# SPDX-FileCopyrightText: 2026 Pharmakos contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# The versioned pre-commit hook: scripts/pre-commit.sh, reached through
+# `git config core.hooksPath scripts/githooks` (README, "Setting up a clone").
+exec sh "$(git rev-parse --show-toplevel)/scripts/pre-commit.sh" "$@"
