@@ -848,7 +848,11 @@ fn unread(
 ///   the sim's snapshot-level resolver -- and the site must be legal before
 ///   its initial settings' `on` anchors are read, each from that site;
 /// * an `interface` resolves its beacon first, and reads each row's `on`
-///   anchors from that beacon, in row order;
+///   anchors from that beacon, in row order -- a `set_mandate` row's Build
+///   targets among them, read like any other row's: the sim's `bind_rows`
+///   reads a switch's carried settings at step start, from the same beacon
+///   and with the same `except`, before any row commits, so the switch
+///   clearing the old targets when it commits does not change the reading;
 /// * a step stops reading at its first failure: a reference after it is never
 ///   read, and answers the failure its step would end on. A removal's name is
 ///   read when its row commits, so it never ends the step.
@@ -861,12 +865,14 @@ fn unread(
 /// it: the `covering` sites and the `on` anchors listed here are exactly the
 /// ones the compiled plan binds when its steps start
 /// ([`pharmakos_sim::interpreter::Row::binding_slots`]), counted, or the
-/// answer is refused. That is why a `set_mandate` row's targets are not
-/// listed: the sim compiles that row as the writ alone and binds nothing in it
-/// (decisions-log item 131 (5) leaves the why to the `mine` lane), and a
-/// preview that read what the run never reads would be a promise the run does
-/// not keep. When the sim starts binding them, the count moves and this
-/// refuses until the walk below follows.
+/// answer is refused: a preview that read what the run never reads, or missed
+/// what it does, would be a promise the run does not keep. A `set_mandate`
+/// row is the case in point: the skeleton's sim compiled it as the writ alone
+/// and bound nothing in it, and since S1's `mine` lane it carries the settings
+/// it writes after the switch and binds their `on` anchors (decisions-log
+/// item 131 (5)), so this walk lists them -- except where the sim compiles no
+/// settings at all (an empty Defend or Attack arm), which has no Build target
+/// to list either.
 ///
 /// # Errors
 ///
@@ -989,6 +995,17 @@ fn row_anchors<'a>(row: &'a InterfaceRow, at: &str) -> Vec<(String, &'a FeatureR
                 .map(|(pointer, reference)| (pointer, reference, on))
                 .collect()
         }
+        // A switch binds what the settings it carries bind (the sim's
+        // `bind_rows`): its Build targets' `on` anchors, in list order, read
+        // from the visited beacon like any other row's. Only a Build arm
+        // carries targets, so an empty Defend or Attack arm, which the sim
+        // compiles to no settings, lists nothing here either.
+        Some(Row::SetMandate(settings)) => {
+            build_anchors(Some(settings), &format!("{at}/set_mandate"))
+                .into_iter()
+                .map(|(pointer, reference)| (pointer, reference, on))
+                .collect()
+        }
         Some(Row::AddBuildTarget(add)) => anchor_on(
             add.target
                 .as_ref()
@@ -1011,12 +1028,7 @@ fn row_anchors<'a>(row: &'a InterfaceRow, at: &str) -> Vec<(String, &'a FeatureR
                 )]
             })
             .unwrap_or_default(),
-        // The sim compiles a `set_mandate` row as the writ alone and binds
-        // nothing in it ([`resolve_playbook`] says why that is not listed).
-        Some(
-            Row::SetMandate(_) | Row::SetPriority(_) | Row::Recycle(_) | Row::QueueStructure(_),
-        )
-        | None => Vec::new(),
+        Some(Row::SetPriority(_) | Row::Recycle(_) | Row::QueueStructure(_)) | None => Vec::new(),
     }
 }
 

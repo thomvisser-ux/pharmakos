@@ -22,7 +22,10 @@
 //!
 //! And `an_on_nearest_reads_the_vent_the_sim_binds` holds the gateway's
 //! restated `on` filter to the sim's `on {vent: NEAREST}` binding, as the
-//! first acceptance line holds its `covering` filter.
+//! first acceptance line holds its `covering` filter;
+//! `a_set_mandate_rows_on_reads_the_vent_the_sim_binds` holds a switch's
+//! carried Build targets to the same, since the `mine` lane made the sim bind
+//! them.
 //!
 //! Beside them, two goldens in `tests/golden/gateway/`: seat 0's whole
 //! `get_map_summary` answer in the opening Lull (`map_summary`) and its whole
@@ -395,6 +398,140 @@ fn an_on_nearest_reads_the_vent_the_sim_binds() {
         feature_name(&surface, binding.feature),
         picked,
         "the sim's `on {{vent: NEAREST}}` bound the vent the gateway named"
+    );
+}
+
+/// A one-step playbook visiting the seat's beacon `beacon` with `rows`.
+fn visit(beacon: &str, rows: &str) -> String {
+    format!(
+        r#"{{"schema_version":{{"major":1}},"meta":{{"title":"t","author_kind":"HUMAN"}},"kind":"PLAYBOOK",
+        "declarative":{{"route":[{{"label":"v","interface":{{"beacon":{{"beacon_id":"{beacon}"}},"rows":[{rows}]}},"on_fail":{{"action":"SKIP"}}}}]}},
+        "on_death":{{"on_respawn":"CONTINUE"}},"fallback":{{"hold":{{"at":{{"safest":{{}}}}}}}}}}"#
+    )
+}
+
+/// A `set_mandate` row switching to Build with one Generator `on` the
+/// nearest vent.
+const SWITCH_TO_BUILD_ON_NEAREST: &str = r#"{"set_mandate":{"build":{"targets":[
+    {"blueprint_id":"generator","anchor":{"on":{"vent":{"rank":"NEAREST"}}}}]}}}"#;
+
+#[test]
+fn a_set_mandate_rows_on_reads_the_vent_the_sim_binds() {
+    let (mut surface, token) = opening();
+    let mut left = LULL_MS;
+    // Round 1 places `b_01` covering the nearest vent and builds nothing on
+    // it, so round 2 has a beacon whose sphere holds a free vent (the core's
+    // holds none on the golden seed: its starting vent lies outside it).
+    let cover_only = r#"{"schema_version":{"major":1},"meta":{"title":"t","author_kind":"HUMAN"},"kind":"PLAYBOOK",
+        "declarative":{"route":[{"label":"p","place_beacon":{"at":{"covering":{"vent":{"rank":"NEAREST","coverage":"UNCOVERED"}}}},"on_fail":{"action":"SKIP"}}]},
+        "on_death":{"on_respawn":"CONTINUE"},"fallback":{"hold":{"at":{"safest":{}}}}}"#;
+    let sealed = call_in_lull(
+        &mut surface,
+        &token,
+        &mut left,
+        "submit_plan",
+        &format!(r#"{{"playbook_jsonc":{}}}"#, support::quote(cover_only)),
+    );
+    assert_eq!(
+        result(&sealed, "submit_plan").get("accepted"),
+        Some(&Json::Bool(true)),
+        "{sealed:?}"
+    );
+    surface.begin_push().expect("the Push begins");
+    let _ = support::step(&mut surface, 10_000);
+    surface.end_recap().expect("the recap ends");
+    surface.set_phase_remaining_ms(Ms::new(LULL_MS));
+    surface.open_lull().expect("round 2's Lull");
+    let mut left = LULL_MS;
+
+    // Since the `mine` lane a switch carries the settings it writes, and the
+    // sim binds their `on` anchors when the step starts: the walk lists them,
+    // where it used to list nothing and the count guard then refused.
+    let playbook = visit("b_01", SWITCH_TO_BUILD_ON_NEAREST);
+    let answered = refs(&mut surface, &token, &mut left, &playbook);
+    assert_eq!(answered.len(), 1, "the switch's one `on`: {answered:?}");
+    let on = answered.first().expect("the on");
+    assert_eq!(
+        text_of(on, "pointer"),
+        "/declarative/route/0/interface/rows/0/set_mandate/build/targets/0/anchor/on"
+    );
+    assert_eq!(text_of(on, "failure"), "", "it reads a vent: {on:?}");
+    let picked = text_of(on, "feature_id");
+    assert_eq!(
+        array_of(on, "candidates")
+            .first()
+            .map(|first| text_of(first, "feature_id")),
+        Some(picked.clone()),
+        "a ranked pick is the first listed candidate"
+    );
+
+    let sealed = call_in_lull(
+        &mut surface,
+        &token,
+        &mut left,
+        "submit_plan",
+        &format!(r#"{{"playbook_jsonc":{}}}"#, support::quote(&playbook)),
+    );
+    assert_eq!(
+        result(&sealed, "submit_plan").get("accepted"),
+        Some(&Json::Bool(true)),
+        "{sealed:?}"
+    );
+    // The Lull's "this round" sentence reads the seal through the same walk,
+    // so the briefing must still answer over a sealed switch with an `on`
+    // (before the walk followed the switch, the count guard refused it and
+    // took the whole briefing down). The route reads no `covering`, so there
+    // is no sentence to say.
+    let briefing = call_in_lull(&mut surface, &token, &mut left, "get_briefing", "{}");
+    assert!(
+        !text_of(&result(&briefing, "get_briefing"), "prose").contains("This round:"),
+        "an interface step reads no `covering`: {briefing:?}"
+    );
+    // The feed is the segment's, so round 1's events are gone by now.
+    let state = first_step_state(&mut surface);
+    assert_eq!(state.bindings.len(), 1, "the step bound the switch's `on`");
+    let binding = state.bindings.first().expect("the binding");
+    assert_eq!(
+        feature_name(&surface, binding.feature),
+        picked,
+        "the sim bound the vent the gateway named for the switch's target"
+    );
+}
+
+#[test]
+fn set_mandate_rows_are_counted_with_the_rows_beside_them() {
+    let (mut surface, token) = opening();
+    let mut left = LULL_MS;
+    // A switch between two other rows that bind, and an empty Defend arm the
+    // sim compiles to no settings: three `on` anchors, in row order, and the
+    // count guard (which refuses a drift as INTERNAL) answers.
+    let rows = format!(
+        r#"{{"add_build_target":{{"target":{{"blueprint_id":"generator","anchor":{{"on":{{"vent":{{"rank":"NEAREST"}}}}}}}}}}}},
+        {SWITCH_TO_BUILD_ON_NEAREST},
+        {{"set_mandate":{{"defend":{{}}}}}},
+        {{"set_mandate_settings":{{"build":{{"targets":[
+          {{"blueprint_id":"generator","anchor":{{"on":{{"vent":{{"rank":"NEAREST"}}}}}}}}]}}}}}}"#
+    );
+    let answer = call_in_lull(
+        &mut surface,
+        &token,
+        &mut left,
+        "resolve_refs",
+        &format!(
+            r#"{{"playbook_jsonc":{}}}"#,
+            support::quote(&visit("b_00", &rows))
+        ),
+    );
+    let answered = array_of(&result(&answer, "resolve_refs"), "refs");
+    let pointers: Vec<String> = answered.iter().map(|one| text_of(one, "pointer")).collect();
+    let at = "/declarative/route/0/interface/rows";
+    assert_eq!(
+        pointers,
+        vec![
+            format!("{at}/0/add_build_target/target/anchor/on"),
+            format!("{at}/1/set_mandate/build/targets/0/anchor/on"),
+            format!("{at}/3/set_mandate_settings/build/targets/0/anchor/on"),
+        ]
     );
 }
 
