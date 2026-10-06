@@ -1,0 +1,23 @@
+{
+  "qualifies": true,
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "W0603",
+      "severity": "WARNING",
+      "path": "/declarative/route/0",
+      "related_paths": [
+        "/declarative/options/allow_dormant_beacons"
+      ],
+      "message": "the playbook adds 1 kW of draw beyond supply; `allow_dormant_beacons` accepts it, and the beacons past the supply stay dormant.",
+      "beginner": "Some of what this playbook switches on will have no power and will sit idle."
+    }
+  ],
+  "report_hash": "sFpGEIw8CMU=",
+  "rules_hash": "p1QGoPeYo6c=",
+  "plan_fingerprint": "5sI0LmZ+rOA=",
+  "verifier_version": "0.1.0-s1",
+  "size_units": 1,
+  "size_budget": 128
+}
+

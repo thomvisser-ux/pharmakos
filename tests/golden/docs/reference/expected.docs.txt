@@ -928,7 +928,7 @@ W0501  WARNING  settings and recycle  raised at: semantics
   `seam_choice` SAFEST reads as NEAREST until S2's threat model arrives.
   "Safest" needs threats to weigh, and they come later. Until then this beacon digs the nearest seam.
 
-E0601  ERROR  economy, power and messaging  raised at: none at the skeleton (S1, the estimate stage)
+E0601  ERROR  economy, power and messaging  raised at: estimate
   the playbook adds {found} kW of draw beyond supply; set `allow_dormant_beacons` to accept the shortfall instead.
   There is not enough power for everything this playbook switches on.
 
@@ -936,21 +936,21 @@ E0602  ERROR  economy, power and messaging  raised at: none at the skeleton (S4,
   a broadcast needs a Radio Mast, and coverage at the place it is sent from.
   Nothing can be sent without a mast.
 
-W0601  WARNING  economy, power and messaging  raised at: none at the skeleton (S1, the estimate stage)
+W0601  WARNING  economy, power and messaging  raised at: estimate
   the grid is already {found} kW short.
   The power the seat has is already less than the power it is using.
 
-W0602  WARNING  economy, power and messaging  raised at: none at the skeleton (S1, the estimate stage)
+W0602  WARNING  economy, power and messaging  raised at: estimate
   committed spending of {found} outruns the projected treasury of {available}.
   This playbook spends more than the seat is likely to have.
 
-W0603  WARNING  economy, power and messaging  raised at: none at the skeleton (S1, the estimate stage)
-  the playbook adds {found} kW of draw beyond supply; `allow_dormant_beacons`                   accepts it, and the beacons past the supply stay dormant.
+W0603  WARNING  economy, power and messaging  raised at: estimate
+  the playbook adds {found} kW of draw beyond supply; `allow_dormant_beacons` accepts it, and the beacons past the supply stay dormant.
   Some of what this playbook switches on will have no power and will sit idle.
 
-W0701  WARNING  schedule, conflicts and staleness  raised at: none at the skeleton (S1, the estimate stage)
-  the route needs about {found} ms and the coming segment is {segment} ms.
-  There may not be time to walk this whole route this round.
+W0701  WARNING  schedule, conflicts and staleness  raised at: estimate
+  the route needs at least {found} ms if every step runs, and the coming segment is {segment} ms.
+  There is not time for this whole route this round.
 
 W0702  WARNING  schedule, conflicts and staleness  raised at: none at the skeleton (S3, the lint stage)
   `{id}` can never fire: `{winner}` is earlier and its condition is true first.
@@ -972,9 +972,9 @@ W0706  WARNING  schedule, conflicts and staleness  raised at: lint
   every vent a beacon at this fixed site could cover is already covered: {feature} by your `{beacon}`.
   A fixed site puts its beacon in the same place every time. A description such as "the nearest vent you do not cover" reads the map again each round.
 
-I0001  INFO  information  raised at: none at the skeleton (T7/S1, the estimate stage)
-  the route is about {found} ms of walking.
-  Roughly how long the walking takes.
+I0001  INFO  information  raised at: estimate
+  the route is at least {found} ms of walking, between the places it names.
+  The least time the walking can take; going round anything in the way takes longer.
 
 I0002  INFO  information  raised at: none at the skeleton (S3, the lint stage)
   `{selector}` would resolve to `{id}` right now.

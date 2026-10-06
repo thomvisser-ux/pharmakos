@@ -1,0 +1,27 @@
+{
+  "qualifies": true,
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "W0701",
+      "severity": "WARNING",
+      "path": "/declarative/route/1",
+      "message": "the route needs at least 498400 ms if every step runs, and the coming segment is 180000 ms.",
+      "beginner": "There is not time for this whole route this round."
+    },
+    {
+      "code": "I0001",
+      "severity": "INFO",
+      "path": "/declarative/route",
+      "message": "the route is at least 498400 ms of walking, between the places it names.",
+      "beginner": "The least time the walking can take; going round anything in the way takes longer."
+    }
+  ],
+  "report_hash": "DLZyHpZvRsE=",
+  "rules_hash": "p1QGoPeYo6c=",
+  "plan_fingerprint": "XDxgLw2ztrc=",
+  "verifier_version": "0.1.0-s1",
+  "size_units": 2,
+  "size_budget": 128
+}
+

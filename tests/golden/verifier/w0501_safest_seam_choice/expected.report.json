@@ -10,10 +10,10 @@
       "beginner": "\"Safest\" needs threats to weigh, and they come later. Until then this beacon digs the nearest seam."
     }
   ],
-  "report_hash": "y0pYoJhMEAU=",
+  "report_hash": "cuAKXwIIqlE=",
   "rules_hash": "p1QGoPeYo6c=",
   "plan_fingerprint": "owHqs5gTA0M=",
-  "verifier_version": "0.1.0-skeleton",
+  "verifier_version": "0.1.0-s1",
   "size_units": 1,
   "size_budget": 128
 }

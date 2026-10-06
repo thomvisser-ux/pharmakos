@@ -9,10 +9,10 @@
       "beginner": "A playbook needs at least one step for the commander to walk."
     }
   ],
-  "report_hash": "LVtXggz/o5Q=",
+  "report_hash": "6VYa5qtaUPg=",
   "rules_hash": "p1QGoPeYo6c=",
   "plan_fingerprint": "zuF4kT6SYHs=",
-  "verifier_version": "0.1.0-skeleton",
+  "verifier_version": "0.1.0-s1",
   "size_budget": 128
 }
 

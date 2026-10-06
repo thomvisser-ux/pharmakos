@@ -9,10 +9,10 @@
       "beginner": "Say how to compare: at most, equal to, more than, and so on."
     }
   ],
-  "report_hash": "zwbwniEBqBY=",
+  "report_hash": "sZhIgOLoH4k=",
   "rules_hash": "p1QGoPeYo6c=",
   "plan_fingerprint": "8zJrwyB1K5k=",
-  "verifier_version": "0.1.0-skeleton",
+  "verifier_version": "0.1.0-s1",
   "size_units": 3,
   "size_budget": 128
 }

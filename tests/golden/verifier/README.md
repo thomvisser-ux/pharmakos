@@ -26,9 +26,15 @@ for every case — one seat, one snapshot, one scope — written out in that fil
 
 | Beacon | Side | Writ | At | Notes |
 | --- | --- | --- | --- | --- |
-| `b_01` | own | BUILD | 80, 11, 55 | the seat's pre-placed core |
+| `b_01` | own | BUILD | 80, 11, 55 | marked as the seat's core (`is_core`) |
 | `b_02` | own | MINE | 100, 20, 58 | tagged `east` |
 | `e_01` | enemy, known | — | 300, 300, 40 | seen, not readable |
+
+The core's name is the skeleton's. Since S1's targeting determinism (`tgt`) a
+live seat's core is `b_00` and its beacons are numbered per seat; the fixture
+keeps `b_01` marked as the core because the verifier reads `is_core`, never the
+number, and because `crates/gamectl/src/seat.rs` writes this fixture a second
+time for `gamectl verify`'s test, so renaming it here alone would split the two.
 
 Sharing the fixture is deliberate: a case's job is to isolate **one
 diagnostic**, and a per-case scope would make each report a function of two
@@ -53,10 +59,29 @@ against `map_scope`, which is the same fixture with this added and nothing else:
 | `vent_40_40` | vent, lean | **no** (lost) | — |
 | `vent_90_20` | vent, lean | yes | `b_01` |
 
-and the commander at 82, 13, 55. Every other case keeps the plain fixture,
-because `crates/gamectl/src/seat.rs`'s reference seat is that fixture written
-a second time and `gamectl verify`'s test compares the worked example's
-`report_hash` with the golden here. A case is named after the code it isolates,
+and the commander at 82, 13, 55.
+
+**The economy and the segment, for the estimate stage's cases (S1).** From
+S1's `proj` the estimate stage reads the seat's treasury, supply and draw and
+the coming segment's length, which spec section 3 puts in the frozen snapshot.
+Two of its codes need a fixture the plain one is not, and each gets one change
+and nothing else:
+
+| List in `verifier.rs` | Fixture | The one change |
+| --- | --- | --- |
+| `SHORT_CASES` (`w0601_an_existing_shortfall`) | `short_scope` | supply 4 `kW` under a draw of 10, so the grid is already short |
+| `SEGMENT_CASES` (`w0701_a_route_longer_than_the_segment`) | `segment_snapshot` | `coming_segment_ms` 180 000, a first round's three minutes |
+
+The plain fixture's economy is a treasury of `$` 200, a supply of 10 `kW` and a
+draw of 4, and its snapshot carries no coming segment, so no other case can
+raise `W0601` or `W0701`.
+
+Every other case keeps the plain fixture, because
+`crates/gamectl/src/seat.rs`'s reference seat is that fixture written a second
+time and `gamectl verify`'s test compares the worked example's `report_hash`
+with the golden here. `crates/bench/src/quick.rs` restates all five fixtures
+and their lists, and `crates/bench/tests/harness.rs` holds the restatement to
+the reports here. A case is named after the code it isolates,
 and a code that can be wrong in more than one shape gets more than one case —
 `E0111` has three, because an unset choice on `Fallback.posture`, on
 `Location.place` and on `BeaconRef.ref` are three different things for an author
@@ -67,18 +92,21 @@ to have done. Three cases are meant to pass with no error:
   example). From S1 it carries four `I0003` notes and nothing stronger: it
   omits `pace` on two moves and `seam_choice` and `pillar_spacing` on its Mine
   block, and S1's plan's decision 11 (the register's S1-39, ruled by item 128)
-  reads each as a named default with a note. If it ever gains a warning or an
-  error, either the verifier or the spec's example is wrong, and the pull
-  request has to say which.
+  reads each as a named default with a note. From S1's estimate stage it also
+  carries an `I0001`: ten seconds of walking at least, on the one leg whose two
+  ends the view names (from the deploy at 96, 11 back to `b_01`). If it ever
+  gains a warning or an error, either the verifier or the spec's example is
+  wrong, and the pull request has to say which.
 * `cover_the_nearest_vent` — targeting's adopted spelling, "place a beacon
   covering the nearest vent you do not cover, and build a Generator on it",
   against the map: no diagnostic at all.
-* `budget_128` — a playbook that sits **exactly on** the size budget, for a
-  walled bench harness to time later. Wall-clock time is illegal in
-  `crates/verifier`, so nothing here times anything: the QUICK and FULL timings
-  against this fixture are **S1's P1 gate's**, which builds the walled harness
-  that measures them and sets their budgets (decisions-log item 116 (6)(b);
-  AGENTS.md section 9 item 11). No producer exists in the walking skeleton.
+* `budget_128` — a playbook that sits **exactly on** the size budget, for the
+  walled bench harness to time. Wall-clock time is illegal in
+  `crates/verifier`, so nothing here times anything: `crates/bench`
+  (`pharmakos-bench`, S1's `p1`, decisions-log item 131) is the producer, and
+  `cargo xtask perf-alarms` publishes QUICK's p50 and p99 over every case here
+  and over this one alone, as notices with no threshold until P1's gate sets
+  one (AGENTS.md section 9 item 11).
 
 ## One `path` that is not a node pointer
 
@@ -143,12 +171,22 @@ cargo xtask golden --bless              # accepts them
   Expected, and written down in advance (decisions-log item 82): explain it in
   that pull request. S1's targeting verifier was the first: the lint stage
   raises `W0704` to `W0706`, so the `w07…` cases' FULL reports carry a warning
-  their QUICK reports do not. `full_finds_what_quick_finds` holds in its S1
-  form: FULL's diagnostics start with QUICK's, and what follows comes only from
-  a FULL stage and is never an error.
+  their QUICK reports do not. S1's `proj` filled the estimate stage, so FULL
+  reports gained `E0601`, `W0601` to `W0603`, `W0701` and `I0001` where their
+  cases call for them: an `I0001` on every case whose route has a leg between
+  two places the view names, and the rest only on their own cases.
+  `full_finds_what_quick_finds` holds in its S1 form: FULL's diagnostics start
+  with QUICK's, what follows comes only from a FULL stage, and the one error it
+  may add is `E0601` (spec section 11: "adding draw beyond supply is an error
+  unless 'allow dormant beacons' is set").
 * **Every `report_hash` moved in S1's targeting verifier, the reports whose
   diagnostics stayed the same included.**
   The seat's view widened to carry the features and the commander's position
   (`Scope::encode`), and `REPORT_HASH_DOMAIN` went from `gp.api.v1/report/1` to
   `/2` with it, so input 2's bytes moved for every case, the cases with no map
   included (an empty feature list and an absent commander are bytes too).
+* **Every `report_hash` moved in S1's estimate stage (`proj`), the QUICK-only
+  ones and the reports whose diagnostics stayed the same included.**
+  `VERIFIER_VERSION` went from `0.1.0-skeleton` to `0.1.0-s1`, input 4 of the
+  five: a FULL report from this build finds what the skeleton's empty stage
+  could not, so it is not comparable with one from before.

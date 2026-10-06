@@ -1,0 +1,26 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0601",
+      "severity": "ERROR",
+      "path": "/declarative/route/0",
+      "message": "the playbook adds 1 kW of draw beyond supply; set `allow_dormant_beacons` to accept the shortfall instead.",
+      "beginner": "There is not enough power for everything this playbook switches on.",
+      "suggestions": [
+        {
+          "title": "Allow dormant beacons",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/options\",\"value\":{\"allow_dormant_beacons\":true}}]",
+          "applicability": "MAYBE_INCORRECT"
+        }
+      ]
+    }
+  ],
+  "report_hash": "8NGrj1cvl5s=",
+  "rules_hash": "p1QGoPeYo6c=",
+  "plan_fingerprint": "OMyX+iax6no=",
+  "verifier_version": "0.1.0-s1",
+  "size_units": 1,
+  "size_budget": 128
+}
+

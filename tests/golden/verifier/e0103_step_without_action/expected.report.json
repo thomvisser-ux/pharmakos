@@ -9,10 +9,10 @@
       "beginner": "This step does not say what to do."
     }
   ],
-  "report_hash": "kV0qjP03JAg=",
+  "report_hash": "P89f48KGO1Q=",
   "rules_hash": "p1QGoPeYo6c=",
   "plan_fingerprint": "jR5OFr9Vm7M=",
-  "verifier_version": "0.1.0-skeleton",
+  "verifier_version": "0.1.0-s1",
   "size_units": 1,
   "size_budget": 128
 }

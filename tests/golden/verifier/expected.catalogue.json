@@ -443,7 +443,7 @@
     "code": "E0601",
     "family": "economy, power and messaging",
     "severity": "ERROR",
-    "emitter": "none at the skeleton (S1, the estimate stage)",
+    "emitter": "estimate",
     "message": "the playbook adds {found} kW of draw beyond supply; set `allow_dormant_beacons` to accept the shortfall instead.",
     "beginner": "There is not enough power for everything this playbook switches on."
   },
@@ -459,7 +459,7 @@
     "code": "W0601",
     "family": "economy, power and messaging",
     "severity": "WARNING",
-    "emitter": "none at the skeleton (S1, the estimate stage)",
+    "emitter": "estimate",
     "message": "the grid is already {found} kW short.",
     "beginner": "The power the seat has is already less than the power it is using."
   },
@@ -467,7 +467,7 @@
     "code": "W0602",
     "family": "economy, power and messaging",
     "severity": "WARNING",
-    "emitter": "none at the skeleton (S1, the estimate stage)",
+    "emitter": "estimate",
     "message": "committed spending of {found} outruns the projected treasury of {available}.",
     "beginner": "This playbook spends more than the seat is likely to have."
   },
@@ -475,17 +475,17 @@
     "code": "W0603",
     "family": "economy, power and messaging",
     "severity": "WARNING",
-    "emitter": "none at the skeleton (S1, the estimate stage)",
-    "message": "the playbook adds {found} kW of draw beyond supply; `allow_dormant_beacons`                   accepts it, and the beacons past the supply stay dormant.",
+    "emitter": "estimate",
+    "message": "the playbook adds {found} kW of draw beyond supply; `allow_dormant_beacons` accepts it, and the beacons past the supply stay dormant.",
     "beginner": "Some of what this playbook switches on will have no power and will sit idle."
   },
   {
     "code": "W0701",
     "family": "schedule, conflicts and staleness",
     "severity": "WARNING",
-    "emitter": "none at the skeleton (S1, the estimate stage)",
-    "message": "the route needs about {found} ms and the coming segment is {segment} ms.",
-    "beginner": "There may not be time to walk this whole route this round."
+    "emitter": "estimate",
+    "message": "the route needs at least {found} ms if every step runs, and the coming segment is {segment} ms.",
+    "beginner": "There is not time for this whole route this round."
   },
   {
     "code": "W0702",
@@ -531,9 +531,9 @@
     "code": "I0001",
     "family": "information",
     "severity": "INFO",
-    "emitter": "none at the skeleton (T7/S1, the estimate stage)",
-    "message": "the route is about {found} ms of walking.",
-    "beginner": "Roughly how long the walking takes."
+    "emitter": "estimate",
+    "message": "the route is at least {found} ms of walking, between the places it names.",
+    "beginner": "The least time the walking can take; going round anything in the way takes longer."
   },
   {
     "code": "I0002",

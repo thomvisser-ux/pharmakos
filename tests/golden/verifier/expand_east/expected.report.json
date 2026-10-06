@@ -50,12 +50,19 @@
           "applicability": "MACHINE_APPLICABLE"
         }
       ]
+    },
+    {
+      "code": "I0001",
+      "severity": "INFO",
+      "path": "/declarative/route",
+      "message": "the route is at least 10000 ms of walking, between the places it names.",
+      "beginner": "The least time the walking can take; going round anything in the way takes longer."
     }
   ],
-  "report_hash": "S9u7YaVc4bE=",
+  "report_hash": "8dYB5vu1KIc=",
   "rules_hash": "p1QGoPeYo6c=",
   "plan_fingerprint": "tPe4E/SBB60=",
-  "verifier_version": "0.1.0-skeleton",
+  "verifier_version": "0.1.0-s1",
   "size_units": 6,
   "size_budget": 128
 }

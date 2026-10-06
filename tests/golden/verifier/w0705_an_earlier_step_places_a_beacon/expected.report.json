@@ -3,6 +3,13 @@
   "depth": "FULL",
   "diagnostics": [
     {
+      "code": "I0001",
+      "severity": "INFO",
+      "path": "/declarative/route",
+      "message": "the route is at least 9600 ms of walking, between the places it names.",
+      "beginner": "The least time the walking can take; going round anything in the way takes longer."
+    },
+    {
       "code": "W0705",
       "severity": "WARNING",
       "path": "/declarative/route/1/place_beacon/at/covering/vent",
@@ -13,10 +20,10 @@
       "beginner": "A description is read when its step starts, and a beacon placed before then can change what it picks."
     }
   ],
-  "report_hash": "ZHV4sOjrxTk=",
+  "report_hash": "aLAaSPCN5XU=",
   "rules_hash": "p1QGoPeYo6c=",
   "plan_fingerprint": "QfHubneHKUY=",
-  "verifier_version": "0.1.0-skeleton",
+  "verifier_version": "0.1.0-s1",
   "size_units": 2,
   "size_budget": 128
 }
