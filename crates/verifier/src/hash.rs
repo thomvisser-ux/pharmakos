@@ -30,9 +30,11 @@
 //! numbers are fixed width, so the encoding is unambiguous: no concatenation of
 //! one input can be mistaken for a different concatenation of another.
 //!
-//! **Why the scope rides with the snapshot.** The verifier never reads the
-//! snapshot bytes; it reads the seat's *view* of them, which the gateway builds
-//! and hands over as a [`Scope`]. Input 2 is therefore the pair — the bytes and
+//! **Why the scope rides with the snapshot.** The verifier reads the seat's
+//! *view* of the snapshot, which the gateway builds and hands over as a
+//! [`Scope`]; of the bytes themselves it reads one number, the coming
+//! segment's length, in FULL's estimate stage (spec section 3 puts it in the
+//! snapshot). Input 2 is therefore the pair — the bytes and
 //! the view of them — because hashing the bytes alone would give two different
 //! reports, built from two different views of one snapshot, the same hash. The
 //! scope is the seat's view of that snapshot and is hashed as part of it. From
@@ -121,7 +123,8 @@ pub fn report_hash(
 /// the fingerprint checkable, because recomputing over the file as it stands
 /// would hash the old fingerprint into the new one.
 ///
-/// **PLACEHOLDER — `pharmakos_sim::hash::plan_fingerprint`.**
+/// PLACEHOLDER: this rule folded into the sim as `hash::plan_fingerprint` — owner of crates/sim, S1.
+///
 /// `crates/proto/src/fingerprint.rs` records that T2 would add a function of
 /// exactly this shape to the sim so the arithmetic has one home. T2 shipped
 /// without it, and this crate is the first caller, so the rule is applied here

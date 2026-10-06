@@ -8,10 +8,12 @@
 //! the inputs here are exactly the verifier goldens' inputs -- every playbook
 //! under `crates/verifier/tests/cases/`, each against the **one** fixture
 //! `crates/verifier/tests/verifier.rs` writes out (`fixture_scope`,
-//! `fixture_snapshot`, and for the cases its `MAP_CASES` names, `map_scope`)
+//! `fixture_snapshot`, and for the cases its `MAP_CASES`, `SHORT_CASES` and
+//! `SEGMENT_CASES` name, `map_scope`, `short_scope` and `segment_snapshot`)
 //! and `tests/golden/verifier/README.md` tabulates. That fixture lives in an
 //! integration test, which no other crate can import, so [`fixture_scope`],
-//! [`map_scope`], [`MAP_CASES`] and [`fixture_snapshot`] restate it, and
+//! [`map_scope`], [`MAP_CASES`], [`fixture_snapshot`], [`short_scope`],
+//! [`SHORT_CASES`], [`segment_snapshot`] and [`SEGMENT_CASES`] restate it, and
 //! `tests/harness.rs` (`every_case_under_the_bench_fixture_is_its_committed_report`)
 //! holds the restatement to the committed reports: every
 //! case's report under this fixture must equal its `expected.report.json` byte
@@ -23,7 +25,7 @@
 //! [`Input::new`] then [`verify`] at [`Depth::Quick`], which is what every
 //! QUICK call in the gateway runs (`plan-core`'s `verify_jsonc` builds a fresh
 //! `Input` each time, and `Input::new` computes `rules_hash` and reads the
-//! limits). `plan-core`'s canonicalisation in front of it and the JSON-RPC
+//! limits, the interface rates, the prices and the walking rows). `plan-core`'s canonicalisation in front of it and the JSON-RPC
 //! framing around it are not timed: the figure is the verifier's.
 //!
 //! Each call is timed **once**, never best-of-N: P1's bar is a p99 over calls,
@@ -136,6 +138,28 @@ pub fn fixture_snapshot() -> Result<Vec<u8>, String> {
     .map_err(|error| format!("encoding the fixture snapshot: {error}"))
 }
 
+/// The seat's frozen snapshot with a coming segment in it, as
+/// `crates/verifier/tests/verifier.rs` writes it in `segment_snapshot`.
+///
+/// # Errors
+///
+/// When the snapshot will not encode.
+pub fn segment_snapshot() -> Result<Vec<u8>, String> {
+    Snapshot {
+        version: SNAPSHOT_VERSION,
+        match_seed: 0x0102_0304_0506_0708,
+        tick: 3_600,
+        coming_segment_ms: 180_000,
+        ..Snapshot::default()
+    }
+    .to_bytes()
+    .map_err(|error| format!("encoding the segment snapshot: {error}"))
+}
+
+/// The cases checked against [`segment_snapshot`], as
+/// `crates/verifier/tests/verifier.rs` lists them in `SEGMENT_CASES`.
+pub const SEGMENT_CASES: &[&str] = &["w0701_a_route_longer_than_the_segment"];
+
 fn beacon(
     id: &str,
     side: Ownership,
@@ -200,6 +224,29 @@ pub fn fixture_scope() -> Scope {
         &[],
     ))
 }
+
+/// [`fixture_scope`] with a grid that is already short, as
+/// `crates/verifier/tests/verifier.rs` writes it in `short_scope`.
+#[must_use]
+pub fn short_scope() -> Scope {
+    let plain = fixture_scope();
+    let mut short = Scope::new(
+        plain.seat(),
+        SeatEconomy {
+            treasury: plain.economy().treasury,
+            supply: Kw::new(4),
+            draw: Kw::new(10),
+        },
+    );
+    for known in plain.beacons() {
+        short.push_beacon(known.clone());
+    }
+    short
+}
+
+/// The cases checked against [`short_scope`], as
+/// `crates/verifier/tests/verifier.rs` lists them in `SHORT_CASES`.
+pub const SHORT_CASES: &[&str] = &["w0601_an_existing_shortfall"];
 
 /// The cases checked against [`map_scope`], as
 /// `crates/verifier/tests/verifier.rs` lists them in `MAP_CASES`: every case
@@ -298,33 +345,51 @@ pub struct Fixture {
     rules: RulesTable,
     scope: Scope,
     map_scope: Scope,
+    short_scope: Scope,
     snapshot: Vec<u8>,
+    segment_snapshot: Vec<u8>,
 }
 
 impl Fixture {
-    /// The committed rules table, [`fixture_scope`], [`map_scope`] and
-    /// [`fixture_snapshot`].
+    /// The committed rules table, [`fixture_scope`], [`map_scope`],
+    /// [`short_scope`], [`fixture_snapshot`] and [`segment_snapshot`].
     ///
     /// # Errors
     ///
-    /// As [`committed_rules`] and [`fixture_snapshot`].
+    /// As [`committed_rules`], [`fixture_snapshot`] and [`segment_snapshot`].
     pub fn committed(root: &Path) -> Result<Fixture, String> {
         Ok(Fixture {
             rules: committed_rules(root)?,
             scope: fixture_scope(),
             map_scope: map_scope(),
+            short_scope: short_scope(),
             snapshot: fixture_snapshot()?,
+            segment_snapshot: segment_snapshot()?,
         })
     }
 
     /// The view a case is checked against: [`map_scope`] for the cases
-    /// [`MAP_CASES`] names, [`fixture_scope`] for every other.
+    /// [`MAP_CASES`] names, [`short_scope`] for the cases [`SHORT_CASES`]
+    /// names, [`fixture_scope`] for every other.
     #[must_use]
     pub fn scope_for(&self, case: &Case) -> &Scope {
         if MAP_CASES.contains(&case.name.as_str()) {
             &self.map_scope
+        } else if SHORT_CASES.contains(&case.name.as_str()) {
+            &self.short_scope
         } else {
             &self.scope
+        }
+    }
+
+    /// The snapshot a case is checked against: [`segment_snapshot`] for the
+    /// cases [`SEGMENT_CASES`] names, [`fixture_snapshot`] for every other.
+    #[must_use]
+    pub fn snapshot_for(&self, case: &Case) -> &[u8] {
+        if SEGMENT_CASES.contains(&case.name.as_str()) {
+            &self.segment_snapshot
+        } else {
+            &self.snapshot
         }
     }
 
@@ -336,7 +401,7 @@ impl Fixture {
     /// When the rules table lacks a block the checks read.
     pub fn report(&self, case: &Case, depth: Depth) -> Result<VerifyReport, String> {
         let scope = self.scope_for(case);
-        let input = Input::new(&case.bytes, &self.snapshot, scope, &self.rules)
+        let input = Input::new(&case.bytes, self.snapshot_for(case), scope, &self.rules)
             .map_err(|gap| format!("assembling the verifier's input: {gap}"))?;
         Ok(verify(&input, depth))
     }

@@ -9,10 +9,10 @@
       "beginner": "This says to jump, but not where to."
     }
   ],
-  "report_hash": "oGM8JLG1f4Y=",
+  "report_hash": "HObdieAJlwU=",
   "rules_hash": "p1QGoPeYo6c=",
   "plan_fingerprint": "DVffR4YAaUk=",
-  "verifier_version": "0.1.0-skeleton",
+  "verifier_version": "0.1.0-s1",
   "size_units": 1,
   "size_budget": 128
 }

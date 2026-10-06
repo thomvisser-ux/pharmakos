@@ -1,0 +1,19 @@
+{
+  "qualifies": true,
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "W0601",
+      "severity": "WARNING",
+      "message": "the grid is already 6 kW short.",
+      "beginner": "The power the seat has is already less than the power it is using."
+    }
+  ],
+  "report_hash": "5yEdGOuICw4=",
+  "rules_hash": "p1QGoPeYo6c=",
+  "plan_fingerprint": "9Y5p5OPom34=",
+  "verifier_version": "0.1.0-s1",
+  "size_units": 1,
+  "size_budget": 128
+}
+

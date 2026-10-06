@@ -268,7 +268,8 @@ fn the_only_allow_in_src_is_the_sanctioned_read_dir() {
     assert_eq!(
         found.len(),
         1,
-        "exactly one `#[allow]` under `src/`, in library.rs, for the read_dir clippy.toml          sanctions: {found:?}"
+        "exactly one `#[allow]` under `src/`, in library.rs, for the read_dir clippy.toml \
+         sanctions: {found:?}"
     );
     assert!(
         found.first().is_some_and(|at| at.contains("library.rs")),

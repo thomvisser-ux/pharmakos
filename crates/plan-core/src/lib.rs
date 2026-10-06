@@ -13,8 +13,8 @@
 //! | [`canonical`] | The canonical form, **authoritative for the file format** |
 //! | [`patch`] | RFC 6902 JSON Patch with inverse-patch undo |
 //! | [`render`] | `render_plan`'s deterministic English prose |
-//! | [`interface`] | Interface-time arithmetic at spec section 5's rates |
-//! | [`projection`] | The `$` and `kW` projection the Quartermaster's rules imply |
+//! | [`interface`] | Interface-time arithmetic at spec section 5's rates, re-exported from the verifier |
+//! | [`projection`] | The `$` and `kW` projection the Quartermaster's rules imply, the verifier's arithmetic against this crate's [`PlanContext`] |
 //! | [`travel`] | The pass-through to the sim's estimator, and the two rendering rules |
 //! | [`library`] | The local template folder the gateway reads and stores nothing from |
 //! | [`context`] | What the seat's frozen snapshot says |
@@ -78,7 +78,6 @@
 pub mod canonical;
 pub mod context;
 pub mod error;
-pub mod interface;
 pub mod jsonc;
 pub mod library;
 pub mod patch;
@@ -94,6 +93,11 @@ pub use error::Error;
 pub use jsonc::Document;
 pub use library::{instantiate, instantiate_template};
 pub use patch::{Patch, patch_text};
+/// Spec section 5's interface arithmetic, which moved down into the verifier
+/// so its estimate stage could price a visit (S1's plan, task `proj`) and is
+/// re-exported here unchanged: one rate card for the prose, the editor and the
+/// verifier.
+pub use pharmakos_verifier::interface;
 pub use projection::{Projection, project};
 pub use render::render_plan;
 pub use travel::{Estimate, TravelEstimator};

@@ -63,6 +63,18 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
+impl From<pharmakos_verifier::RulesGap> for Error {
+    fn from(gap: pharmakos_verifier::RulesGap) -> Self {
+        Self::at("", format!("the rules table is incomplete: {gap}"))
+    }
+}
+
+impl From<pharmakos_verifier::ProjectionError> for Error {
+    fn from(error: pharmakos_verifier::ProjectionError) -> Self {
+        Self::at("", error.to_string())
+    }
+}
+
 impl From<pharmakos_proto::json::Error> for Error {
     fn from(error: pharmakos_proto::json::Error) -> Self {
         Self {

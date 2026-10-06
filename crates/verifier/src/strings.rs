@@ -11,7 +11,9 @@
 //! the code. `tests/golden/verifier/expected.catalogue.json` pins the join, so
 //! a code cannot lose its words and a set of words cannot lose its code.
 //!
-//! **PLACEHOLDER — the one project-wide string table.** Spec section 11 says
+//! PLACEHOLDER: the one project-wide string table — owner, S6, with the editor.
+//!
+//! Spec section 11 says
 //! every user-facing string in v1 is English and lives in *one* table: the user
 //! interface, this catalogue, and `render_plan`'s plain-language rendering.
 //! This module is that table's verifier section and nothing more. Who assembles
@@ -374,14 +376,24 @@ pub const VERIFIER_STRINGS: &[Text] = &[
     },
     Text {
         code: "W0603",
-        message: "the playbook adds {found} kW of draw beyond supply; `allow_dormant_beacons`                   accepts it, and the beacons past the supply stay dormant.",
+        message: "the playbook adds {found} kW of draw beyond supply; `allow_dormant_beacons` \
+                  accepts it, and the beacons past the supply stay dormant.",
         beginner: "Some of what this playbook switches on will have no power and will sit idle.",
+    },
+    Text {
+        code: "W0604",
+        message: "the playbook may add up to {found} kW of draw beyond supply: an edit of a beacon \
+                  that may already field what it orders is counted in full, because the view \
+                  cannot see what the beacon fields.",
+        beginner: "This playbook might switch on more than the seat's power can carry; it depends \
+                   on what the beacons it edits already have.",
     },
     // --- W07xx: schedule, conflicts and staleness ----------------------------
     Text {
         code: "W0701",
-        message: "the route needs about {found} ms and the coming segment is {segment} ms.",
-        beginner: "There may not be time to walk this whole route this round.",
+        message: "the route needs at least {found} ms if every step runs, and the coming segment \
+                  is {segment} ms.",
+        beginner: "There is not time for this whole route this round.",
     },
     Text {
         code: "W0702",
@@ -412,11 +424,19 @@ pub const VERIFIER_STRINGS: &[Text] = &[
         beginner: "A fixed site puts its beacon in the same place every time. A description such \
                    as \"the nearest vent you do not cover\" reads the map again each round.",
     },
+    Text {
+        code: "W0707",
+        message: "the snapshot this report is about does not decode, so whether the route fits \
+                  the coming segment was not checked.",
+        beginner: "The game could not check this route's timing. That is a fault in the game, not \
+                   in the playbook.",
+    },
     // --- I...: information ---------------------------------------------------
     Text {
         code: "I0001",
-        message: "the route is about {found} ms of walking.",
-        beginner: "Roughly how long the walking takes.",
+        message: "the route is at least {found} ms of walking, between the places it names.",
+        beginner: "The least time the walking can take; going round anything in the way takes \
+                   longer.",
     },
     Text {
         code: "I0002",
@@ -471,6 +491,9 @@ pub const FIX_RANK_NEAREST: &str = "Rank it by nearest";
 pub const FIX_COVERAGE_UNCOVERED: &str = "Pick only what you do not cover yet";
 /// E0411's Fix.
 pub const FIX_DROP_COVERAGE: &str = "Leave the coverage out";
+/// E0601's Fix: accept the shortfall, so the beacons past the supply stay
+/// dormant.
+pub const FIX_ALLOW_DORMANT: &str = "Allow dormant beacons";
 
 /// The row for one code, or `None` if the table does not have it.
 #[must_use]

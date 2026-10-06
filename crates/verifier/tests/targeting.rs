@@ -601,7 +601,13 @@ fn a_fixed_site_is_flagged_only_when_every_vent_in_reach_is_covered() {
             "/declarative/route/0/place_beacon/at/voxel".to_owned()
         )]
     );
-    let diagnostic = flagged.diagnostics.first().expect("the lint");
+    // The estimate stage runs before the lint stage, so the lint is found by
+    // its code rather than by its place in the report.
+    let diagnostic = flagged
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "W0706")
+        .expect("the lint");
     assert!(
         diagnostic.message.contains("Heat vent (90, 20)") && diagnostic.message.contains("b_01"),
         "{}",

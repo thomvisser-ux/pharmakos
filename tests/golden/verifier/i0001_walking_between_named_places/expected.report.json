@@ -1,0 +1,20 @@
+{
+  "qualifies": true,
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "I0001",
+      "severity": "INFO",
+      "path": "/declarative/route",
+      "message": "the route is at least 14000 ms of walking, between the places it names.",
+      "beginner": "The least time the walking can take; going round anything in the way takes longer."
+    }
+  ],
+  "report_hash": "HV4np+50Mp4=",
+  "rules_hash": "p1QGoPeYo6c=",
+  "plan_fingerprint": "gtDggFmq7KI=",
+  "verifier_version": "0.1.0-s1",
+  "size_units": 2,
+  "size_budget": 128
+}
+

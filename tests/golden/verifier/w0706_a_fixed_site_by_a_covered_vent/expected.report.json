@@ -3,6 +3,13 @@
   "depth": "FULL",
   "diagnostics": [
     {
+      "code": "I0001",
+      "severity": "INFO",
+      "path": "/declarative/route",
+      "message": "the route is at least 12200 ms of walking, between the places it names.",
+      "beginner": "The least time the walking can take; going round anything in the way takes longer."
+    },
+    {
       "code": "W0706",
       "severity": "WARNING",
       "path": "/declarative/route/0/place_beacon/at/voxel",
@@ -24,10 +31,10 @@
       ]
     }
   ],
-  "report_hash": "6hoUPK2S/z4=",
+  "report_hash": "aYdclqRC5aA=",
   "rules_hash": "p1QGoPeYo6c=",
   "plan_fingerprint": "BoPiVpsxwuQ=",
-  "verifier_version": "0.1.0-skeleton",
+  "verifier_version": "0.1.0-s1",
   "size_units": 1,
   "size_budget": 128
 }

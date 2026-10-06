@@ -1,0 +1,33 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0601",
+      "severity": "ERROR",
+      "path": "/declarative/route/0",
+      "message": "the playbook adds 4294967289 kW of draw beyond supply; set `allow_dormant_beacons` to accept the shortfall instead.",
+      "beginner": "There is not enough power for everything this playbook switches on.",
+      "suggestions": [
+        {
+          "title": "Allow dormant beacons",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/options\",\"value\":{\"allow_dormant_beacons\":true}}]",
+          "applicability": "MAYBE_INCORRECT"
+        }
+      ]
+    },
+    {
+      "code": "W0602",
+      "severity": "WARNING",
+      "path": "/declarative/route/0",
+      "message": "committed spending of $ 42949673010 outruns the projected treasury of $ 200.",
+      "beginner": "This playbook spends more than the seat is likely to have."
+    }
+  ],
+  "report_hash": "2E9ebEo2B4Q=",
+  "rules_hash": "p1QGoPeYo6c=",
+  "plan_fingerprint": "Owy0Ppy4shs=",
+  "verifier_version": "0.1.0-s1",
+  "size_units": 1,
+  "size_budget": 128
+}
+

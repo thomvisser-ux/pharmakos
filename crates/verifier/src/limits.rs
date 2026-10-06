@@ -18,9 +18,9 @@
 //! breath as "integer comparisons only". They are [`CONDITION_MAX_DEPTH`] and
 //! [`CONDITION_MAX_NODES`] here.
 //!
-//! **PLACEHOLDER — if either becomes a tuning number it needs a rules-table row
-//! of its own, like every other tuning value (owner, S3, with the rule list at
-//! full depth).** They are written here rather than in `rules/rules.v1.json`
+//! PLACEHOLDER: a rules-table row for either, if it becomes a tuning number — owner, S3, with the rule list at full depth.
+//!
+//! They are written here rather than in `rules/rules.v1.json`
 //! because inventing a row the owner has not decided on would be the larger
 //! mistake, and because `rules.proto` is a contract file this task does not
 //! touch.
@@ -56,6 +56,22 @@ pub enum RulesGap {
         /// What the table said.
         value: u32,
     },
+    /// A value that can never be below zero is: a duration, a price, a
+    /// walking step's cost or a climb's surcharge.
+    Negative {
+        /// The field's path in `gp.v1.RulesTable`.
+        field: &'static str,
+        /// What the table said.
+        value: i64,
+    },
+    /// A value that must be above zero is not: a walking speed of zero would
+    /// make every leg endless.
+    NotPositive {
+        /// The field's path in `gp.v1.RulesTable`.
+        field: &'static str,
+        /// What the table said.
+        value: i64,
+    },
 }
 
 impl fmt::Display for RulesGap {
@@ -70,6 +86,16 @@ impl fmt::Display for RulesGap {
                 formatter,
                 "the rules table's `{field}` is {value}, which the verifier's signed comparison \
                  cannot hold"
+            ),
+            RulesGap::Negative { field, value } => write!(
+                formatter,
+                "the rules table's `{field}` is {value}, and nothing the verifier prices can cost \
+                 less than nothing"
+            ),
+            RulesGap::NotPositive { field, value } => write!(
+                formatter,
+                "the rules table's `{field}` is {value}; the verifier divides by it and needs it \
+                 above zero"
             ),
         }
     }
@@ -134,8 +160,10 @@ impl Limits {
 
     /// The playbook size budget, in size units (`verifier.size_budget_units`).
     ///
-    /// PLACEHOLDER: tuning, **owner**, at **S3's exit** — P1 sets the real
-    /// number from the measured per-rule cost per decision tick (item 94). The
+    /// PLACEHOLDER: the size budget's tuning — owner, S3's exit.
+    ///
+    /// P1 sets the real number from the measured per-rule cost per decision
+    /// tick (item 94). The
     /// row carries the same note; nothing here may hard-code a number beside it.
     #[must_use]
     pub const fn size_budget_units(&self) -> u32 {
@@ -172,7 +200,7 @@ impl Limits {
     /// their freshness from it rather than declaring their own. Read but not yet
     /// compared against — `W0703` waits for the sightings that would be stale.
     ///
-    /// PLACEHOLDER: tuning, **owner**, at **S2/S3** (item 90).
+    /// PLACEHOLDER: the reach window's tuning — owner, S2/S3 (item 90).
     #[must_use]
     pub const fn reach_memory_ms(&self) -> i32 {
         self.reach_memory_ms
