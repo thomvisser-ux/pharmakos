@@ -9,10 +9,12 @@ What the Seat Gateway does, written down: who sees which event, what a
 60-second digest says, what the audit log records, which opening handshakes the
 gateway accepts, what the spec's own worked session answers call by call, and —
 since T16a — what a **camera** is shown, since T18a what the editor's
-**wizard** is handed, and since T22a what the stage demo's own playbooks verify
-and render to. Produced by `crates/gateway/tests/goldens.rs`,
+**wizard** is handed, since T22a what the stage demo's own playbooks verify
+and render to, and since S1's `tgtw` what a seat is told about the map's vents
+and seams. Produced by `crates/gateway/tests/goldens.rs`,
 `crates/gateway/tests/methods.rs`, `crates/gateway/tests/view.rs`,
-`crates/gateway/tests/advice.rs` and `crates/gateway/tests/demo_playbooks.rs`;
+`crates/gateway/tests/advice.rs`, `crates/gateway/tests/demo_playbooks.rs` and
+`crates/gateway/tests/targeting.rs`;
 compared by `cargo xtask ci`'s `golden` step;
 re-blessed with `cargo xtask golden --bless`, which a pull request then has to
 explain (AGENTS.md §5).
@@ -22,9 +24,10 @@ The first four exist because the surface is the thing the whole roadmap inherits
 the rule *does*, in a table a reviewer can read without running anything — and
 it is the shape of that table, not any one line of it, that v1.1 publishes. The
 fifth is T13's, and is the method slice answering the session spec §12 prints.
-The next three are T16a's, the ninth is T18a's, and the last ten are T22a's.
+The next three are T16a's, the ninth is T18a's, the next ten are T22a's, and
+the last two are S1's targeting surfaces (task `tgtw`).
 
-## The nineteen cases
+## The twenty-one cases
 
 | Case | File | What it pins |
 | --- | --- | --- |
@@ -47,6 +50,8 @@ The next three are T16a's, the ninth is T18a's, and the last ten are T22a's.
 | `demo_against_easy_render/` | `expected.response.json` | As above, for `scenarios/skeleton/against-easy.playbook.jsonc` as committed |
 | `demo_deploy_and_visit_verify/` | `expected.response.json` | As above, for `scenarios/skeleton/deploy-and-visit.playbook.jsonc` as committed |
 | `demo_deploy_and_visit_render/` | `expected.response.json` | As above, for `scenarios/skeleton/deploy-and-visit.playbook.jsonc` as committed |
+| `map_summary/` | `expected.response.json` | Seat 0's `get_map_summary` in the opening Lull on the golden seed: every vent and seam, its grade, liveness, coverage by seat 0 and travel from its commander |
+| `resolve_refs/` | `expected.response.json` | Seat 0's `resolve_refs` in the same Lull for `scenarios/s1/cover-nearest-vent.playbook.jsonc`: what its `covering` and its `on {covered {}}` read, with every candidate in rank order |
 
 ## What a diff means, case by case
 
@@ -408,8 +413,12 @@ What moves a demo case, and what a diff means:
   goldens, and the pull request re-blesses both and says why. So does a
   widened seat view (`pharmakos_verifier::Scope`'s encoding): S1's targeting
   verifier added the map's features and the commander's position to it, which
-  moved every `report_hash` here while the gateway still fills neither, and
-  S1's task `tgtw` moves them again when it does.
+  moved every `report_hash` here while the gateway still filled neither, and
+  S1's task `tgtw` moved them again when it filled them (decisions-log item
+  131 (4) (d): each feature's id, kind, grade, anchor, live bit and the seat's
+  own covering beacon, and the commander's voxel). That second move changed
+  the view's content and not its encoding, and no diagnostic moved with it:
+  only the `report_hash` line of each `_verify` case.
 * **The verifier or the renderer moved.** A new diagnostic, a changed lint or a
   changed `verifier_version` moves the `_verify` cases; a template string in
   `render_plan` moves every `_render` case. A report that stops qualifying is
@@ -424,6 +433,45 @@ them. The `_verify` cases and the two scenario cases take this area's
 permissive titles, summaries and labels, so `REUSE.toml` records them as
 `GPL-3.0-or-later AND (MIT OR Apache-2.0)` (decisions-log item 124 (5) (e),
 taken by S1's plan's decision 9).
+
+### `map_summary/` and `resolve_refs/`
+
+S1's targeting surfaces (`docs/design/targeting.md`, "Surfaces"; S1's plan, task
+`tgtw`), each one whole JSON-RPC answer, produced by
+`crates/gateway/tests/targeting.rs` on the golden seed in the opening Lull of a
+two-seat match with a 60-second segment. Every number in them is the sim's: the
+features are the map generator's table, a feature's liveness is the sim's
+footprint scan, its coverage is the seat's own living beacons' spheres, and every
+travel time is the item-61 estimator's cost from the commander's column, ranked
+by the sim's own `Ranker` and turned into game milliseconds the way
+`estimate_route`'s legs are. The pick in `resolve_refs` is the sim's own
+`cover` and `on_vent`, and `targeting.rs`'s
+`resolve_refs_answers_as_the_sim_would_at_step_start` holds it to what the sim
+then binds when the step starts.
+
+What a diff means:
+
+* **The map moved** (`tests/golden/mapgen/` moves with it): features appear,
+  disappear or change grade, anchors move, and every travel figure with them.
+* **The estimator or the step costs moved** (`tests/golden/pathing/`, or a
+  rules row in `locomotion.*`): the `travel_ms` figures move, and when they
+  reorder, so do the candidates and possibly the pick. A pick that changes is a
+  change in which vent a carried "cover the nearest vent" covers, and the
+  `cover-nearest-vent` scenario's chain moves with it.
+* **The resolver moved** (`crates/sim/src/targeting.rs`): the pick, the
+  `on` column it implies or `matched` move with nothing else. That is
+  determinism code, and its pull request explains it.
+* **The answer's shape moved**: a field added or renamed in `MapFeature` or
+  `ResolvedRef` is a `gateway.proto` change (AGENTS.md §5).
+* **What a non-seat is told** is not in these files (it is asserted in
+  `targeting.rs`): `admin` and a spectator are told each feature's id, kind,
+  grade, anchor and liveness, and none of `covered`, `travel_ms` and
+  `reachable`, which are a seat's own.
+
+The `_status` footer is the opening Lull's after the client frames the test
+reported before the call (`map_summary`'s is its second call, 299 900 of
+300 000 ms left; `resolve_refs`' its first, 299 950), with the test's
+60-second segment; a Lull re-tune moves it.
 
 ## Conventions
 

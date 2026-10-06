@@ -1,0 +1,56 @@
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "refs": [
+      {
+        "pointer": "/declarative/route/0/place_beacon/at/covering",
+        "feature_id": "vent_324_16",
+        "travel_ms": 45800,
+        "candidates": [
+          {
+            "feature_id": "vent_324_16",
+            "travel_ms": 45800
+          },
+          {
+            "feature_id": "vent_148_117",
+            "travel_ms": 270400
+          },
+          {
+            "feature_id": "vent_103_111",
+            "travel_ms": 313400
+          },
+          {
+            "feature_id": "vent_98_135",
+            "travel_ms": 324200
+          },
+          {
+            "feature_id": "vent_314_356",
+            "travel_ms": 371400
+          }
+        ],
+        "matched": 5,
+        "failure": ""
+      },
+      {
+        "pointer": "/declarative/route/0/place_beacon/initial/mandate/build/targets/0/anchor/on",
+        "feature_id": "vent_324_16",
+        "travel_ms": 13000,
+        "candidates": [
+          {
+            "feature_id": "vent_324_16",
+            "travel_ms": 13000
+          }
+        ],
+        "matched": 1,
+        "failure": ""
+      }
+    ],
+    "_status": {
+      "phase": "lull",
+      "phase_remaining_ms": 299950,
+      "segment_length_ms": 60000,
+      "round": 1
+    }
+  }
+}

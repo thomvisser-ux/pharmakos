@@ -37,13 +37,13 @@
           "severity": "info",
           "path": "/declarative/route",
           "related_paths": [],
-          "message": "the route is at least 2000 ms of walking, between the places it names.",
+          "message": "the route is at least 8000 ms of walking, between the places it names.",
           "beginner": "The least time the walking can take; going round anything in the way takes longer.",
           "suggestions": [],
           "map_refs": []
         }
       ],
-      "report_hash": "JJL8gUuNco0=",
+      "report_hash": "j0cOHkE/6o4=",
       "rules_hash": "p1QGoPeYo6c=",
       "plan_fingerprint": "HsSv5nrPa8Y=",
       "verifier_version": "0.1.0-s1",

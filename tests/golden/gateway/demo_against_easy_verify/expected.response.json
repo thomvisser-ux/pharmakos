@@ -37,9 +37,19 @@
             }
           ],
           "map_refs": []
+        },
+        {
+          "code": "I0001",
+          "severity": "info",
+          "path": "/declarative/route",
+          "related_paths": [],
+          "message": "the route is at least 19000 ms of walking, between the places it names.",
+          "beginner": "The least time the walking can take; going round anything in the way takes longer.",
+          "suggestions": [],
+          "map_refs": []
         }
       ],
-      "report_hash": "vclqZSxORso=",
+      "report_hash": "ezUqV4ElcZ8=",
       "rules_hash": "p1QGoPeYo6c=",
       "plan_fingerprint": "kxoRA9KJ2LQ=",
       "verifier_version": "0.1.0-s1",
