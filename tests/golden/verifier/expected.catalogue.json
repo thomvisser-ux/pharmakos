@@ -480,6 +480,14 @@
     "beginner": "Some of what this playbook switches on will have no power and will sit idle."
   },
   {
+    "code": "W0604",
+    "family": "economy, power and messaging",
+    "severity": "WARNING",
+    "emitter": "estimate",
+    "message": "the playbook may add up to {found} kW of draw beyond supply: an edit of a beacon that may already field what it orders is counted in full, because the view cannot see what the beacon fields.",
+    "beginner": "This playbook might switch on more than the seat's power can carry; it depends on what the beacons it edits already have."
+  },
+  {
     "code": "W0701",
     "family": "schedule, conflicts and staleness",
     "severity": "WARNING",
@@ -526,6 +534,14 @@
     "emitter": "lint",
     "message": "every vent a beacon at this fixed site could cover is already covered: {feature} by your `{beacon}`.",
     "beginner": "A fixed site puts its beacon in the same place every time. A description such as \"the nearest vent you do not cover\" reads the map again each round."
+  },
+  {
+    "code": "W0707",
+    "family": "schedule, conflicts and staleness",
+    "severity": "WARNING",
+    "emitter": "estimate",
+    "message": "the snapshot this report is about does not decode, so whether the route fits the coming segment was not checked.",
+    "beginner": "The game could not check this route's timing. That is a fault in the game, not in the playbook."
   },
   {
     "code": "I0001",

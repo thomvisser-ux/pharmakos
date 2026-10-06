@@ -703,7 +703,7 @@ gp.v1.Playbook.Kind
 
 ## Diagnostics
 
-69 codes. A code is language-neutral, append-only and never
+71 codes. A code is language-neutral, append-only and never
 reused; only an ERROR stops a playbook qualifying. `none at the skeleton` names the
 task that owes the emitter, which is honesty about coverage rather than a gap.
 
@@ -948,6 +948,10 @@ W0603  WARNING  economy, power and messaging  raised at: estimate
   the playbook adds {found} kW of draw beyond supply; `allow_dormant_beacons` accepts it, and the beacons past the supply stay dormant.
   Some of what this playbook switches on will have no power and will sit idle.
 
+W0604  WARNING  economy, power and messaging  raised at: estimate
+  the playbook may add up to {found} kW of draw beyond supply: an edit of a beacon that may already field what it orders is counted in full, because the view cannot see what the beacon fields.
+  This playbook might switch on more than the seat's power can carry; it depends on what the beacons it edits already have.
+
 W0701  WARNING  schedule, conflicts and staleness  raised at: estimate
   the route needs at least {found} ms if every step runs, and the coming segment is {segment} ms.
   There is not time for this whole route this round.
@@ -971,6 +975,10 @@ W0705  WARNING  schedule, conflicts and staleness  raised at: lint
 W0706  WARNING  schedule, conflicts and staleness  raised at: lint
   every vent a beacon at this fixed site could cover is already covered: {feature} by your `{beacon}`.
   A fixed site puts its beacon in the same place every time. A description such as "the nearest vent you do not cover" reads the map again each round.
+
+W0707  WARNING  schedule, conflicts and staleness  raised at: estimate
+  the snapshot this report is about does not decode, so whether the route fits the coming segment was not checked.
+  The game could not check this route's timing. That is a fault in the game, not in the playbook.
 
 I0001  INFO  information  raised at: estimate
   the route is at least {found} ms of walking, between the places it names.

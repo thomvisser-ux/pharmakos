@@ -20,9 +20,13 @@ hash, verifier version, depth. Any of the five moving moves the hash.
 ## Where the inputs live
 
 The playbook for `<case>` is `crates/verifier/tests/cases/<case>.json`, and the
-producing test is `crates/verifier/tests/verifier.rs`. There is **one fixture**
-for every case — one seat, one snapshot, one scope — written out in that file's
-`fixture_scope` and `fixture_snapshot`:
+producing test is `crates/verifier/tests/verifier.rs`. There is **one plain
+fixture** — one seat, one snapshot, one scope — written out in that file's
+`fixture_scope` and `fixture_snapshot`, and three variants of it, each changing
+one thing for the cases that need it: `map_scope` (the map and the commander),
+`short_scope` (a grid already short) and `segment_snapshot` (a coming segment),
+described below. Every case not named for a variant is checked against the
+plain fixture:
 
 | Beacon | Side | Writ | At | Notes |
 | --- | --- | --- | --- | --- |
