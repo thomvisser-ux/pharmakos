@@ -50,7 +50,7 @@
 //! |---|---|
 //! | here | `get_status`, `wait_for`, `save_notes`, `set_ready`, `get_segment_feed` |
 //! | [`knowledge`] | `get_briefing`, `get_recap`, `list_beacons`, `get_beacon`, `get_map_summary`, `get_economy_forecast`, `estimate_route` |
-//! | [`planning`] | `get_schema`, `list_templates`, `instantiate_template`, `verify_plan`, `render_plan`, `patch_plan`, `save_draft`, `list_drafts`, `get_draft`, `get_safe_plan`, `submit_plan` |
+//! | [`planning`] | `get_schema`, `list_templates`, `instantiate_template`, `verify_plan`, `render_plan`, `patch_plan`, `save_draft`, `list_drafts`, `get_draft`, `get_safe_plan`, `resolve_refs`, `submit_plan` |
 //! | [`watch`] | `get_view` |
 //! | [`control`] | `end_lull`, `advance_push`, `end_recap`, `report_host_clock` |
 //!
@@ -65,12 +65,14 @@
 //! parameter, its three rungs, its wire spelling and the two salience rules are
 //! T9's; the per-method order is each method's own and is stated at the method.
 //!
-//! Four methods of the schema still answer [`crate::error::Code::Internal`] --
-//! `query_area`, `list_known_enemies`, `get_reports` and `get_capabilities` --
-//! and that is not an omission: `gateway.proto` says they have no
-//! request/response pair at all, because no skeleton client calls them and the
-//! stage that introduces what each reports on (S3's knowledge store, S4's
-//! licences) is the stage that will know what the request takes. The reading of
+//! Every method `gateway.proto` gives a request/response pair is served, S1's
+//! `resolve_refs` included. Four methods of the schema still answer
+//! [`crate::error::Code::Internal`] -- `query_area`, `list_known_enemies`,
+//! `get_reports` and `get_capabilities` -- and that is not an omission: they
+//! are exactly the four `gateway.proto` gives no request/response pair at all,
+//! because no client calls them yet and the stage that introduces what each
+//! reports on (S3's knowledge store, S4's licences) is the stage that will
+//! know what the request takes. The reading of
 //! the closed error set is T9's and is unchanged: the set has no
 //! `NOT_IMPLEMENTED`, `INVALID_ARGUMENT` would tell a client to fix a request
 //! that is perfectly well formed, and `INTERNAL` is the one code whose
@@ -2063,16 +2065,34 @@ impl Surface {
     /// reference one it cannot know about -- the same fog leak
     /// [`crate::fog`] exists to prevent, arriving through the back door.
     ///
-    /// PLACEHOLDER: a seat's **sighted** enemy beacons join this scope with the
-    /// knowledge store at **S3**; `is_core` is decided here by "the seat's
-    /// lowest-numbered beacon", which is true of every map the generator makes
-    /// because it pre-places the core first, and becomes a column the day a
-    /// beacon has a kind (owner, at S1, with the grid, as
-    /// `crate::surface::knowledge::core_beacon_of` says).
+    /// PLACEHOLDER: a seat's sighted enemy beacons join this scope — owner, S3
+    /// with the knowledge store (the register's S3-04).
+    ///
+    /// `is_core` marks the seat's `b_00`, by the rule
+    /// `crate::surface::knowledge::core_beacon_of` states and the wire's
+    /// `BeaconSummary.core` reads (the register's S1-13).
+    ///
+    /// # The map's features and the commander (S1's targeting)
+    ///
+    /// Every vent and seam on the map, as [`crate::targeting::feature_reads`]
+    /// reads it for this seat: the four facts targeting.md's "Surfaces" names
+    /// (id, kind, grade, a live bit), the anchor column the name spells, and
+    /// `covered_by`, the seat's own living beacon whose sphere holds the
+    /// feature, the lowest when several do, as `b_NN` (decisions-log item
+    /// 131 (4) (d): two of the verifier's three targeting lints read the last
+    /// two). The feature list is unfogged in S1, as targeting's ranking and
+    /// `get_map_summary.features` are (item 130 (3) (a)); `covered_by` names
+    /// only the seat's own beacons, so another seat's coverage is in nobody's
+    /// view. Then where the seat's commander stands, as a voxel, or nothing
+    /// when it is not standing anywhere. The verifier **checks** against all
+    /// of it and never ranks (AGENTS.md section 3 rule 2): no travel, cost or
+    /// order reaches the scope. Every field is a `report_hash` input
+    /// ([`pharmakos_verifier::Scope`]'s encoding), which is why the view is
+    /// built from the frozen world and nothing else.
     ///
     /// # Errors
     ///
-    /// As [`Surface::host`].
+    /// As [`Surface::host`] and [`crate::targeting::feature_reads`].
     pub(crate) fn verifier_scope(&self, seat: SeatId) -> Result<VerifierScope, Error> {
         let world = self.host()?.world();
         let seats = world.seats();
@@ -2119,6 +2139,28 @@ impl Surface {
                 is_core: core == Some(id),
             });
         }
+
+        for read in crate::targeting::feature_reads(world, Some(seat))? {
+            scope.push_feature(pharmakos_verifier::KnownFeature {
+                feature_id: read.name,
+                kind: match read.kind {
+                    pharmakos_sim::features::FeatureKind::Vent => {
+                        pharmakos_verifier::FeatureKind::Vent
+                    }
+                    pharmakos_sim::features::FeatureKind::Seam => {
+                        pharmakos_verifier::FeatureKind::Seam
+                    }
+                },
+                grade: crate::surface::knowledge::grade_proto(read.grade),
+                x: read.x,
+                y: read.y,
+                live: read.live,
+                covered_by: read.covered_by.map(pharmakos_sim::tables::own_beacon_name),
+            });
+        }
+        scope.set_commander(
+            crate::targeting::commander_point(world, seat).map(crate::view::voxel_of),
+        );
         Ok(scope)
     }
 
@@ -2398,11 +2440,11 @@ impl Surface {
             Method::SetReady => self.set_ready(subject, request),
 
             // Knowledge.
-            Method::GetBriefing => self.get_briefing(subject, request),
+            Method::GetBriefing => self.get_briefing(subject, held, request),
             Method::GetRecap => self.get_recap(request),
             Method::ListBeacons => self.list_beacons(subject, held, request, vision),
             Method::GetBeacon => self.get_beacon(subject, held, request, vision),
-            Method::GetMapSummary => self.get_map_summary(request),
+            Method::GetMapSummary => self.get_map_summary(subject, request),
             Method::GetEconomyForecast => self.get_economy_forecast(subject, request),
             Method::EstimateRoute => self.estimate_route(subject, request),
 
@@ -2417,6 +2459,7 @@ impl Surface {
             Method::ListDrafts => self.list_drafts(subject),
             Method::GetDraft => self.get_draft(subject, request),
             Method::GetSafePlan => self.get_safe_plan(subject),
+            Method::ResolveRefs => self.resolve_refs(subject, request),
             Method::SubmitPlan => self.submit_plan(subject, request),
 
             // The view.
@@ -2430,12 +2473,14 @@ impl Surface {
             Method::EndRecap => self.serve_end_recap(),
             Method::ReportHostClock => self.serve_report_host_clock(request),
 
-            // The four `gateway.proto` gives no request/response pair at all,
-            // plus `METHOD_UNSPECIFIED`, which `method_from_wire` already
-            // refuses before a handler is reached.
+            // The four `gateway.proto` gives no request/response pair at all
+            // (`query_area`, `list_known_enemies`, `get_reports`,
+            // `get_capabilities`), plus `METHOD_UNSPECIFIED`, which
+            // `method_from_wire` already refuses before a handler is reached.
+            // Every method with a pair has an arm above.
             other => Err(Error::internal(format!(
                 "`{}` is in the schema and this build does not serve it: `gateway.proto` gives it \
-                 no request/response pair, because no skeleton client calls it and the stage that \
+                 no request/response pair, because no client calls it yet and the stage that \
                  introduces what it reports on is the stage that will know what it takes",
                 scopes::method_wire_name(other)
             ))),
@@ -3209,5 +3254,111 @@ mod tests {
         let error = Surface::audience_of(&sim_event(EventKind::StepStarted, None))
             .expect_err("nobody to show it to");
         assert_eq!(error.code, Code::Internal);
+    }
+
+    /// A two-seat match on the golden seed, hosted and in its opening Lull.
+    fn hosted() -> Surface {
+        use pharmakos_sim::runner::MatchSettings;
+        use pharmakos_sim::world::WorldConfig;
+        let seed = 0x0000_0000_ca5c_aded;
+        let mut surface = Surface::new(
+            "m-0001",
+            seed,
+            rules(),
+            FogPolicy::fogged(),
+            &[SeatId::new(0), SeatId::new(1)],
+        )
+        .expect("a match id");
+        let host = crate::host::Host::open(
+            &WorldConfig {
+                match_seed: seed,
+                seats: 2,
+                units_per_seat: 0,
+                rules: rules(),
+                match_settings: MatchSettings {
+                    segment_lengths_ms: vec![60_000],
+                    round_limit: 3,
+                },
+            },
+            None,
+        )
+        .expect("a match");
+        surface.attach(host).expect("attached");
+        surface.set_phase_remaining_ms(Ms::new(300_000));
+        surface.open_lull().expect("the opening Lull");
+        surface
+    }
+
+    /// The verifier's view carries every field of each feature that
+    /// `get_map_summary` tells the same seat, and the commander's voxel
+    /// (decisions-log item 131 (4) (d): W0704 and W0706 read `covered_by` and
+    /// the anchor), not only the ids E0412 checks.
+    #[test]
+    fn the_verifier_scope_carries_what_the_map_summary_tells_the_seat() {
+        let mut surface = hosted();
+        let token = seat_token(&mut surface, 0);
+        let vision = surface
+            .host()
+            .map(|host| crate::host::SphereVision::of(host.world()))
+            .expect("hosted");
+        let summary =
+            result(&surface.call(Some(&token), &request("get_map_summary", "{}"), &vision));
+        let Some(Json::Array(told)) = summary.get("features") else {
+            panic!("features: {summary:?}");
+        };
+        let scope = surface.verifier_scope(SeatId::new(0)).expect("a scope");
+        assert_eq!(scope.features().len(), told.len());
+        assert!(!told.is_empty(), "the golden seed lays vents and seams");
+        let number = |value: &Json, key: &str| -> i32 {
+            match value.get(key) {
+                Some(Json::Number(lexeme)) => lexeme.parse().expect("an integer"),
+                other => panic!("`{key}`: {other:?}"),
+            }
+        };
+        let mut covered = 0_usize;
+        for (known, feature) in scope.features().iter().zip(told) {
+            assert_eq!(
+                Some(&Json::String(known.feature_id.clone())),
+                feature.get("feature_id")
+            );
+            assert_eq!(known.x, number(feature, "x"));
+            assert_eq!(known.y, number(feature, "y"));
+            assert_eq!(
+                known.feature_id,
+                format!(
+                    "{}_{}_{}",
+                    known.feature_id.split('_').next().unwrap_or(""),
+                    known.x,
+                    known.y
+                ),
+                "the anchor the name spells"
+            );
+            assert_eq!(Some(&Json::Bool(known.live)), feature.get("live"));
+            assert_eq!(
+                Some(&Json::Bool(known.covered_by.is_some())),
+                feature.get("covered"),
+                "{}",
+                known.feature_id
+            );
+            if let Some(beacon) = &known.covered_by {
+                // Round 1: the seat's only beacon is its core.
+                assert_eq!(beacon, "b_00");
+                covered = covered.saturating_add(1);
+            }
+        }
+        assert!(
+            covered > 0,
+            "the starting seam lies inside the core's sphere"
+        );
+        let commander = surface
+            .host()
+            .ok()
+            .and_then(|host| crate::targeting::commander_point(host.world(), SeatId::new(0)))
+            .map(crate::view::voxel_of);
+        assert!(
+            commander.is_some(),
+            "the commander stands in the opening Lull"
+        );
+        assert_eq!(scope.commander(), commander);
     }
 }

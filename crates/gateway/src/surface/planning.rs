@@ -19,6 +19,14 @@
 //! snapshot's bytes and the rules table, and that is all
 //! (AGENTS.md section 3 rule 2; `tests/confinement.rs`).
 //!
+//! `resolve_refs`, S1's fifth, is the one that ranks: "nearest" is ranked where
+//! the pathing graph is, and for a preview that is here. It reads the frozen
+//! world through the sim's own resolver, borrowed read-only
+//! ([`crate::targeting`]), and estimates travel over terrain the snapshot
+//! already holds -- the estimate `estimate_route` answers with -- so it is a
+//! preview and not a dry run: nothing moves, no mandate or program runs, and no
+//! enemy is modelled.
+//!
 //! # `submit_plan` always runs FULL, and an invalid playbook is not an error
 //!
 //! Spec section 12 and decisions-log item 82: `verify_plan{depth}` and
@@ -524,6 +532,169 @@ impl Surface {
         )]))
     }
 
+    /// `resolve_refs`: what each feature reference in a playbook reads now
+    /// (`docs/design/targeting.md`, "Surfaces"; the register's S1-48 lists it
+    /// beside `get_map_summary.features`).
+    ///
+    /// One `ResolvedRef` per `covering` and per `on`, in file order, each read
+    /// over the frozen world exactly as the sim reads it when its step starts
+    /// ([`crate::targeting::resolve_playbook`] says how, site by site), with
+    /// the pick taken from the sim's own resolver. **Nothing is stepped**:
+    /// "nearest" is an estimate over terrain the snapshot already holds, the
+    /// same estimate `estimate_route` answers with, and ranking it is a preview
+    /// rather than a dry run (AGENTS.md section 3 rule 2; `gateway.proto`'s
+    /// own comment on the method).
+    ///
+    /// The playbook goes through the sim's door first, as a submission does
+    /// ([`compile_decoded`]): a file this build cannot execute reads nothing,
+    /// and is refused with the door's own reason rather than half-answered. A
+    /// file with no canonical form names nothing yet, and is refused too:
+    /// `verify_plan` is where its diagnostics are.
+    ///
+    /// Internal in S1 -- it is on the advisor's allow-list
+    /// ([`crate::serve::ADVISOR_METHODS`]) because the operator, like the
+    /// editor, cannot reach the sim -- and published with v1.1.
+    pub(super) fn resolve_refs(
+        &self,
+        subject: crate::token::Subject,
+        request: &Request,
+    ) -> Result<Json, Error> {
+        let seat = Surface::seat_of(subject, "a playbook to resolve")?;
+        let playbook = playbook_param(request)?;
+        let host = self.host()?;
+        let canonical = pharmakos_plan_core::canonicalise_text(playbook).map_err(|error| {
+            Error::invalid(format!(
+                "this file has no canonical form yet, so it names nothing to resolve: {}",
+                error.message
+            ))
+        })?;
+        let plan = compile_decoded(&canonical.playbook, host.rules()).map_err(|error| {
+            Error::invalid(format!(
+                "this build cannot execute this playbook, so none of it reads anything: {error}"
+            ))
+        })?;
+        let resolved = crate::targeting::resolve_playbook(
+            host.world(),
+            host.runner().frozen().snapshot(),
+            seat,
+            &canonical.playbook,
+            &plan,
+        )?;
+        Ok(Json::Object(vec![(
+            String::from("refs"),
+            Json::Array(resolved.iter().map(resolved_json).collect()),
+        )]))
+    }
+
+    /// The Lull's "this round" sentence for `seat`: what the playbook it will
+    /// play this round does wherever its route reads the map
+    /// (`docs/design/targeting.md`, "Surfaces": "On re-seal the Lull says what
+    /// this round will do"). `get_briefing` carries it in its prose, to a
+    /// caller that holds `plan.submit` only.
+    ///
+    /// **It reads the seat's seal and nothing else** -- gateway-owned state a
+    /// caller cannot write except by sealing. The playbook is the seal when
+    /// the seat sealed this round, so a re-seal changes the sentence at once;
+    /// otherwise it is last round's seal, if the seat sealed it itself, which
+    /// is byte for byte the playbook this Lull carried as its draft (spec
+    /// section 13, "Draft continuity"; `Surface::carry_draft_forward` copies
+    /// it from there): the demo's round 2 reads "no vent you can cover" off a
+    /// carried "cover the nearest vent" before anybody has touched it. The
+    /// draft list itself is never read: a seat may save anything under the
+    /// carried draft's id, and the advisor, which reads briefings, never reads
+    /// a seat's drafts (decisions-log item 111). A playbook the gateway filed
+    /// is not the seat's and is not carried, so it says nothing.
+    ///
+    /// Read exactly as `resolve_refs` reads it, over the frozen world, with
+    /// the plan the seal compiled to. `None` outside a Lull, when there is no
+    /// such seal, and when its route reads the map nowhere.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::Internal`] when a sealed playbook has no
+    /// canonical form, when the rules table prices no beacon, or when a
+    /// `covering` read answers neither a site nor a failure: each is the
+    /// gateway contradicting itself, since a seal was verified and compiled
+    /// once already.
+    pub(super) fn this_round(
+        &self,
+        seat: pharmakos_sim::tables::SeatId,
+    ) -> Result<Option<String>, Error> {
+        use crate::strings::RoundRead;
+        use crate::targeting::Site;
+        use pharmakos_sim::interpreter::StepFailure;
+        let host = self.host()?;
+        if host.runner().phase() != pharmakos_sim::runner::MatchPhase::Lull {
+            return Ok(None);
+        }
+        let round = host.runner().round();
+        let state = self.seat_state(crate::token::Subject::Seat(seat), seat)?;
+        let Some(sealed) = state.sealed.as_ref().filter(|sealed| {
+            sealed.round == round
+                || (sealed.round.checked_add(1) == Some(round) && !sealed.filed_by_the_gateway)
+        }) else {
+            return Ok(None);
+        };
+        let canonical =
+            pharmakos_plan_core::canonicalise_text(&sealed.playbook_jsonc).map_err(|error| {
+                Error::internal(format!(
+                    "a playbook this seat sealed has no canonical form: {}",
+                    error.message
+                ))
+            })?;
+        let reads = crate::targeting::resolve_playbook(
+            host.world(),
+            host.runner().frozen().snapshot(),
+            seat,
+            &canonical.playbook,
+            &sealed.plan,
+        )?;
+        let dollars = host
+            .rules()
+            .message()
+            .structures
+            .as_ref()
+            .and_then(|block| block.beacon)
+            .map(|beacon| beacon.cost_dollars)
+            .ok_or_else(|| Error::internal("the rules table prices no beacon"))?;
+        let mut lines: Vec<RoundRead<'_>> = Vec::new();
+        for read in reads.iter().filter(|read| read.site == Site::Covering) {
+            // A handler body may never run, so only the route speaks.
+            let Some(step) = read.route_step else {
+                continue;
+            };
+            let kind = read
+                .kind
+                .map_or("feature", pharmakos_sim::features::FeatureKind::name);
+            lines.push(match (read.failure, read.site_voxel) {
+                (None, Some(site)) => RoundRead::Places {
+                    step,
+                    x: site.x,
+                    y: site.y,
+                    dollars,
+                },
+                (Some(StepFailure::NoTarget), _) if read.matched == 0 => {
+                    RoundRead::NothingMatches { step, kind }
+                }
+                (Some(StepFailure::NoTarget), _) => RoundRead::NoneReachable {
+                    step,
+                    matched: read.matched,
+                },
+                (Some(StepFailure::IllegalSite), _) => RoundRead::NoneCoverable { step, kind },
+                (Some(failure), _) => RoundRead::Fails {
+                    step,
+                    failure: failure.name(),
+                },
+                (None, None) => {
+                    return Err(Error::internal(
+                        "a `covering` read answered neither a site nor a failure",
+                    ));
+                }
+            });
+        }
+        Ok(crate::strings::this_round(&lines))
+    }
+
     /// `submit_plan`: seal it.
     ///
     /// Always FULL. A report with `qualifies: false` comes back with
@@ -637,11 +808,22 @@ pub(crate) fn compile_playbook(playbook_jsonc: &str, rules: &RulesTable) -> Resu
             error.message
         ))
     })?;
-    Plan::compile(&canonical.playbook, rules).map_err(|error| {
+    compile_decoded(&canonical.playbook, rules).map_err(|error| {
         Error::invalid(format!(
             "this playbook qualifies and this build cannot execute it: {error}"
         ))
     })
+}
+
+/// The sim's own door, over a playbook already decoded: the **one** call of
+/// `Plan::compile` in the handler modules (`tests/confinement.rs`), which
+/// [`compile_playbook`] and `resolve_refs` both go through, so the playbook
+/// `resolve_refs` reads is the one a submission would seal.
+fn compile_decoded(
+    playbook: &pharmakos_proto::gp::v1::Playbook,
+    rules: &RulesTable,
+) -> Result<Plan, pharmakos_sim::interpreter::PlanError> {
+    Plan::compile(playbook, rules)
 }
 
 /// The `playbook_jsonc` parameter, bounded.
@@ -718,6 +900,62 @@ fn is_draft_id(text: &str) -> bool {
                 || character == '-'
                 || character == '_'
         })
+}
+
+/// One `gp.api.v1.ResolvedRef` as JSON: every field, the defaults included,
+/// as `estimate_route`'s legs are written. `failure` is the step failure's
+/// name as the segment feed spells it, and empty when the reference reads a
+/// feature. `travel_ms` is 0 when there is no travel to write, as
+/// [`crate::targeting::Resolved::travel_ms`] says.
+fn resolved_json(resolved: &crate::targeting::Resolved) -> Json {
+    let candidates: Vec<Json> = resolved
+        .candidates
+        .iter()
+        .map(|candidate| {
+            Json::Object(vec![
+                (
+                    String::from("feature_id"),
+                    Json::String(candidate.feature_id.clone()),
+                ),
+                (
+                    String::from("travel_ms"),
+                    Json::Number(candidate.travel_ms.raw().to_string()),
+                ),
+            ])
+        })
+        .collect();
+    Json::Object(vec![
+        (
+            String::from("pointer"),
+            Json::String(resolved.pointer.clone()),
+        ),
+        (
+            String::from("feature_id"),
+            Json::String(resolved.feature_id.clone()),
+        ),
+        (
+            String::from("travel_ms"),
+            Json::Number(
+                resolved
+                    .travel_ms
+                    .map_or(0, pharmakos_sim::math::quantity::Ms::raw)
+                    .to_string(),
+            ),
+        ),
+        (String::from("candidates"), Json::Array(candidates)),
+        (
+            String::from("matched"),
+            Json::Number(resolved.matched.to_string()),
+        ),
+        (
+            String::from("failure"),
+            Json::String(
+                resolved
+                    .failure
+                    .map_or_else(String::new, |failure| failure.name().to_owned()),
+            ),
+        ),
+    ])
 }
 
 /// One `gp.api.v1.VerifyReport` as JSON.

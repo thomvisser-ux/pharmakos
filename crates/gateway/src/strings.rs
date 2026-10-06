@@ -87,10 +87,7 @@ pub fn event_text(event: &Event) -> String {
             "Step {} was skipped: its skip_if guard was true.",
             event.value
         ),
-        EventKind::StepFailed => format!(
-            "A step failed with failure code {}, and its on_fail decided what came next.",
-            event.value
-        ),
+        EventKind::StepFailed => step_failed(event.value),
         EventKind::RuleFired => format!("Rule {} fired.", event.value),
         EventKind::RuleEnded => format!("A rule's body ended with resume code {}.", event.value),
         EventKind::ReflexFired => format!(
@@ -140,6 +137,154 @@ pub fn event_text(event: &Event) -> String {
         EventKind::FallbackEngaged => fallback_engaged(event.value),
         EventKind::FinalAudit => format!("The final audit scored {seat} at $ {}.", event.value),
     }
+}
+
+/// `step_failed`'s line: **why** the step stopped, in words, with the failure's
+/// name as the feed and a scenario file spell it.
+///
+/// Targeting's "the recap names why a step found nothing"
+/// (`docs/design/targeting.md`, "Surfaces"; S1's plan, task `tgtw`): a
+/// `no_target` and an `illegal_site` used to read as "failure code 2" and
+/// "failure code 6". The step's index is not on the event (its `value` is the
+/// failure), so the line names the reason and not the step; how many
+/// candidates a description matched is not on it either, so the counted
+/// sentence ("3 matched, none reachable") is the Lull's, where
+/// `resolve_refs` has the count ([`this_round`]). A failure id this build does
+/// not define is said as its code rather than guessed at.
+fn step_failed(value: i64) -> String {
+    use pharmakos_sim::interpreter::StepFailure;
+    let failure = u8::try_from(value)
+        .ok()
+        .and_then(|id| StepFailure::ALL.into_iter().find(|known| known.id() == id));
+    match failure {
+        Some(failure) => format!(
+            "A step failed ({}): {}. Its on_fail decided what came next.",
+            failure.name(),
+            failure_reason(failure)
+        ),
+        None => format!(
+            "A step failed with a failure this build does not name (code {value}). Its \
+             on_fail decided what came next."
+        ),
+    }
+}
+
+/// A step failure, in words.
+const fn failure_reason(failure: pharmakos_sim::interpreter::StepFailure) -> &'static str {
+    use pharmakos_sim::interpreter::StepFailure;
+    match failure {
+        StepFailure::Timeout => "it ran past its timeout",
+        StepFailure::NoTarget => {
+            "it found nothing: nothing matched what it named, or nothing it matched could be \
+             reached"
+        }
+        StepFailure::NoPath => "the commander could not reach its target",
+        StepFailure::OutOfRange => "the commander left the beacon's range mid-visit",
+        StepFailure::BeaconGone => "the beacon it was visiting is gone",
+        StepFailure::IllegalSite => {
+            "it found no legal site: what it matched had no site the seat may place on within \
+             reach"
+        }
+        StepFailure::NoBeaconRoom => "the seat has no room for another beacon",
+        StepFailure::NoMast => "a broadcast needs a Radio Mast",
+        StepFailure::CommanderDead => "the commander died",
+        StepFailure::FeatureLost => "the vent or seam it was bound to is gone",
+        StepFailure::Unaffordable => "the treasury could not cover it",
+    }
+}
+
+/// What one route step's `covering` reads this round, for [`this_round`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum RoundRead<'a> {
+    /// It places a new beacon on the column `(x, y)`, for `$ dollars`.
+    Places {
+        /// The route step, from 0.
+        step: usize,
+        /// The site's column.
+        x: i32,
+        /// The site's column.
+        y: i32,
+        /// The beacon's deploy cost, whole `$`.
+        dollars: u32,
+    },
+    /// Nothing of `kind` matches its description, or its name names nothing.
+    NothingMatches {
+        /// The route step, from 0.
+        step: usize,
+        /// `vent` or `seam`.
+        kind: &'a str,
+    },
+    /// `matched` features matched and none of them can be reached.
+    NoneReachable {
+        /// The route step, from 0.
+        step: usize,
+        /// How many matched.
+        matched: u32,
+    },
+    /// Features of `kind` matched and none has a legal site within reach.
+    NoneCoverable {
+        /// The route step, from 0.
+        step: usize,
+        /// `vent` or `seam`.
+        kind: &'a str,
+    },
+    /// It fails for another reason, named as the feed names it.
+    Fails {
+        /// The route step, from 0.
+        step: usize,
+        /// The step failure's name.
+        failure: &'a str,
+    },
+}
+
+/// The Lull's "this round" sentence: what the seat's playbook will do this
+/// round wherever it reads the map (`docs/design/targeting.md`, "Surfaces":
+/// "On re-seal the Lull says what this round will do"). `None` when the
+/// playbook reads the map nowhere on its route, which is nothing to say.
+///
+/// Steps are numbered from 1, as `render_plan` numbers them. Every number is
+/// the caller's and every word is here: "This round: step 2 places a new
+/// beacon near (150, 20), $ 60." or "This round: step 2 finds no vent you can
+/// cover."
+#[must_use]
+pub fn this_round(reads: &[RoundRead<'_>]) -> Option<String> {
+    let parts: Vec<String> = reads
+        .iter()
+        .map(|read| match *read {
+            RoundRead::Places {
+                step,
+                x,
+                y,
+                dollars,
+            } => format!(
+                "step {} places a new beacon near ({x}, {y}), $ {dollars}",
+                step.saturating_add(1)
+            ),
+            RoundRead::NothingMatches { step, kind } => {
+                format!("step {} finds no {kind} to cover", step.saturating_add(1))
+            }
+            RoundRead::NoneReachable { step, matched } => format!(
+                "step {} finds nothing to cover: {matched} matched, none reachable",
+                step.saturating_add(1)
+            ),
+            RoundRead::NoneCoverable { step, kind } => {
+                format!(
+                    "step {} finds no {kind} you can cover",
+                    step.saturating_add(1)
+                )
+            }
+            RoundRead::Fails { step, failure } => {
+                format!(
+                    "step {} fails `{failure}` before it reads the map",
+                    step.saturating_add(1)
+                )
+            }
+        })
+        .collect();
+    if parts.is_empty() {
+        return None;
+    }
+    Some(format!("This round: {}.", parts.join("; ")))
 }
 
 /// `fallback_engaged`'s line: the posture by name, never its wire code (the
@@ -450,5 +595,67 @@ mod tests {
     fn capitalise_is_ascii_and_survives_an_empty_string() {
         assert_eq!(capitalise("seat 1"), "Seat 1");
         assert_eq!(capitalise(""), "");
+    }
+
+    #[test]
+    fn every_step_failure_is_named_and_said_in_words() {
+        use pharmakos_sim::interpreter::StepFailure;
+        for failure in StepFailure::ALL {
+            let line = event_text(&event(
+                EventKind::StepFailed,
+                Some(0),
+                i64::from(failure.id()),
+            ));
+            assert!(line.contains(&format!("({})", failure.name())), "{line}");
+            assert!(!line.contains("code"), "named, not numbered: {line}");
+        }
+        let unknown = event_text(&event(
+            EventKind::StepFailed,
+            Some(0),
+            i64::from(StepFailure::RETIRED_NOT_OWN),
+        ));
+        assert!(unknown.contains("code 10"), "{unknown}");
+    }
+
+    #[test]
+    fn this_round_says_each_covering_step_or_nothing() {
+        use super::{RoundRead, this_round};
+        assert_eq!(this_round(&[]), None);
+        assert_eq!(
+            this_round(&[RoundRead::Places {
+                step: 0,
+                x: 150,
+                y: 20,
+                dollars: 60
+            }]),
+            Some(String::from(
+                "This round: step 1 places a new beacon near (150, 20), $ 60."
+            ))
+        );
+        assert_eq!(
+            this_round(&[
+                RoundRead::NoneCoverable {
+                    step: 1,
+                    kind: "vent"
+                },
+                RoundRead::NoneReachable {
+                    step: 2,
+                    matched: 3
+                },
+                RoundRead::NothingMatches {
+                    step: 3,
+                    kind: "seam"
+                },
+                RoundRead::Fails {
+                    step: 4,
+                    failure: "commander_dead"
+                },
+            ]),
+            Some(String::from(
+                "This round: step 2 finds no vent you can cover; step 3 finds nothing to cover: \
+                 3 matched, none reachable; step 4 finds no seam to cover; step 5 fails \
+                 `commander_dead` before it reads the map."
+            ))
+        );
     }
 }

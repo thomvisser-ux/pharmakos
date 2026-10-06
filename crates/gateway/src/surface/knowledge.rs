@@ -6,13 +6,20 @@
 //!
 //! Spec section 12's Knowledge group, minus the four methods `gateway.proto`
 //! gives no request/response pair. Every one of them reads the **frozen
-//! planning snapshot or the live world through the fog filter**, and not one of
-//! them steps anything: `estimate_route` goes through
+//! planning snapshot or the live world through the fog filter** -- with one
+//! exception the design takes on purpose: `get_map_summary`'s features are
+//! unfogged in S1, as targeting's ranking is (decisions-log item 130 (3) (a)),
+//! and each seat-relative field in them is the asking seat's own -- and not
+//! one of them steps anything: `estimate_route` estimates its legs through
 //! [`crate::routes::RouteAdapter`], which owns its own search graph and has no
-//! `World` in its hand at all, and `get_economy_forecast` reads the calling
-//! seat's own row of the hosted world -- the frozen planning world in a Lull
-//! or a recap, the live one in a Push -- and projects nothing (AGENTS.md
-//! section 3 rule 2).
+//! `World` in its hand at all; a `covering` waypoint (answered only while the
+//! hosted world is the frozen one, outside a Push) and `get_map_summary`'s
+//! features read the hosted world through the sim's own resolver, borrowed
+//! read-only ([`crate::targeting`]), and rank by estimate rather than by
+//! running anything; and `get_economy_forecast` reads the calling seat's own
+//! row of the hosted world -- the frozen planning world in a Lull or a recap,
+//! the live one in a Push -- and projects nothing (AGENTS.md section 3
+//! rule 2).
 //!
 //! # Salience, per method
 //!
@@ -27,7 +34,7 @@
 //! | `get_recap` | nothing | the prose |
 //! | `list_beacons` | beacons past the budget, **own beacons last** | the cursor that says where the cut fell |
 //! | `get_beacon` | nothing: one beacon is one beacon | the summary and the prose |
-//! | `get_map_summary` | nothing | the extent, the seed, the prose |
+//! | `get_map_summary` | nothing | the extent, the seed, the prose, every feature |
 //! | `get_economy_forecast` | what-if answers past the budget | the treasury and the power figures |
 //! | `estimate_route` | nothing: a route with legs missing is a wrong number | every leg |
 //!
@@ -102,9 +109,21 @@ impl Surface {
     /// The notebook is at the **top**, as spec section 12 asks, and it is the
     /// seat's own: [`Surface::seat_state`] is the only path to it and it takes
     /// the subject asking, so `admin` and another seat both get nothing.
+    ///
+    /// In a Lull the prose ends with the "this round" sentence
+    /// ([`Surface::this_round`]): what the seat's sealed or carried playbook
+    /// does this round wherever its route reads the map, read off the frozen
+    /// world as the sim will read it. Like the notebook, it is the seat's own,
+    /// and it goes only to a caller that holds `plan.submit` -- the seat's own
+    /// client. The built-in advisor reads a human seat's briefing with a token
+    /// that never holds that scope (`crate::serve`'s advisor scopes), and a
+    /// sentence about the seat's playbook is exactly what decisions-log item
+    /// 111 keeps from it: what it advises must not depend on what the seat
+    /// wrote.
     pub(super) fn get_briefing(
         &self,
         subject: crate::token::Subject,
+        held: crate::scopes::ScopeSet,
         request: &Request,
     ) -> Result<Json, Error> {
         let seat = Surface::seat_of(subject, "a briefing")?;
@@ -126,6 +145,23 @@ impl Surface {
         )
         .unwrap_or(0);
         let segment_ms = host.runner().frozen().coming_segment_ms();
+        let briefing = strings::briefing(
+            host.runner().phase(),
+            host.runner().round(),
+            world.match_state().round_limit(),
+            segment_ms,
+            beacons,
+            units,
+        );
+        let standing = strings::standing(living);
+        // The Lull's "this round" sentence, after the standing: what this
+        // round's playbook does wherever its route reads the map. Never to an
+        // advisor, which holds no `plan.submit`.
+        let this_round = if held.holds(crate::scopes::Scope::PlanSubmit) {
+            self.this_round(seat)?
+        } else {
+            None
+        };
 
         Ok(Json::Object(vec![
             (String::from("notes"), Json::String(notes)),
@@ -151,18 +187,10 @@ impl Surface {
             ),
             (
                 String::from("prose"),
-                Json::String(format!(
-                    "{} {}",
-                    strings::briefing(
-                        host.runner().phase(),
-                        host.runner().round(),
-                        world.match_state().round_limit(),
-                        segment_ms,
-                        beacons,
-                        units,
-                    ),
-                    strings::standing(living),
-                )),
+                Json::String(match this_round {
+                    Some(this_round) => format!("{briefing} {standing} {this_round}"),
+                    None => format!("{briefing} {standing}"),
+                }),
             ),
         ]))
     }
@@ -345,13 +373,27 @@ impl Surface {
         ]))
     }
 
-    /// `get_map_summary`: the extent and the seed.
+    /// `get_map_summary`: the extent, the seed, and every vent and seam.
     ///
-    /// Neither is a secret -- "part of the match, not a secret"
-    /// (`gateway.proto`) -- so this one is not fog-filtered. What *is* fogged
-    /// about a map is its vents, seams and terrain, and those are the
-    /// `reserved 5 to 15` the message holds for S1.
-    pub(super) fn get_map_summary(&self, request: &Request) -> Result<Json, Error> {
+    /// The extent and the seed are "part of the match, not a secret"
+    /// (`gateway.proto`), so neither is fog-filtered. Neither is the feature
+    /// list in S1: decisions-log item 130 (3) (a) kept `live` on it and read
+    /// `live`, `covered`, `travel_ms` and `reachable` off the world as it
+    /// stands, unfogged, as targeting's own ranking is in S1, and the list is
+    /// fog-filtered from S3 with the knowledge store (the register's S1-48).
+    /// The terrain summary stays `reserved` until then (item 130 (3) (b)).
+    ///
+    /// Each feature's id, kind, grade and anchor are a pure function of the
+    /// match's inputs; `covered`, `travel_ms` and `reachable` are the asking
+    /// **seat's** own (its own spheres, its own commander), so a caller that
+    /// is no seat -- `admin`, a spectator -- is told the first six fields and
+    /// none of the three, which would be about nobody
+    /// ([`Surface::map_features`]).
+    pub(super) fn get_map_summary(
+        &self,
+        subject: crate::token::Subject,
+        request: &Request,
+    ) -> Result<Json, Error> {
         let _ = detail::of(request)?;
         let host = self.host()?;
         let size = host.world().voxels().size();
@@ -360,6 +402,7 @@ impl Surface {
         let axis = |index: usize| {
             Json::Number(i64::from(size.get(index).copied().unwrap_or(0)).to_string())
         };
+        let features = self.map_features(subject.seat())?;
         Ok(Json::Object(vec![
             (
                 String::from("size"),
@@ -374,7 +417,77 @@ impl Surface {
                 Json::String(strings::map_summary(size, &seed, seats)),
             ),
             (String::from("match_seed"), Json::String(seed)),
+            (String::from("features"), Json::Array(features)),
         ]))
+    }
+
+    /// `get_map_summary.features`: every vent and seam, in feature id order,
+    /// each a `gp.api.v1.MapFeature`.
+    ///
+    /// For a seat, `covered` is whether one of its own living beacons' spheres
+    /// holds the feature (the opposite of a pick's `UNCOVERED`), and
+    /// `travel_ms` and `reachable` are the estimate "nearest" ranks with, from
+    /// where its commander stands, ranked by the sim's own
+    /// [`pharmakos_sim::targeting::Ranker`] ([`crate::targeting`]). A commander
+    /// that is not standing anywhere (dead, mid-Push) reaches nothing, and the
+    /// answer says so. Nothing is stepped.
+    fn map_features(&self, seat: Option<SeatId>) -> Result<Vec<Json>, Error> {
+        let host = self.host()?;
+        let world = host.world();
+        let reads = crate::targeting::feature_reads(world, seat)?;
+        let commander = seat.and_then(|seat| crate::targeting::commander_point(world, seat));
+        let travel: Vec<(usize, i64)> = match commander {
+            Some(commander) => {
+                let tally = pharmakos_sim::seams::UnitTally::new();
+                let ground = crate::targeting::lend(world, &tally);
+                let mut scratch = crate::targeting::scratch_for(world)?;
+                crate::targeting::ranked(
+                    &ground,
+                    &mut scratch,
+                    pharmakos_sim::targeting::column_of(commander),
+                    |_| true,
+                )
+            }
+            None => Vec::new(),
+        };
+        reads
+            .iter()
+            .map(|read| {
+                let mut entries = vec![
+                    (String::from("feature_id"), Json::String(read.name.clone())),
+                    (
+                        String::from("kind"),
+                        Json::String(feature_kind_wire(read.kind)),
+                    ),
+                    (String::from("grade"), Json::String(grade_wire(read.grade))),
+                    (String::from("x"), Json::Number(read.x.to_string())),
+                    (String::from("y"), Json::Number(read.y.to_string())),
+                    (String::from("live"), Json::Bool(read.live)),
+                ];
+                if seat.is_some() {
+                    let reached = match travel.iter().find(|(index, _)| *index == read.index) {
+                        Some((_, cost)) => {
+                            Some(crate::targeting::travel_ms(world, *cost).ok_or_else(|| {
+                                Error::internal(
+                                    "an estimate's cost does not convert to game milliseconds",
+                                )
+                            })?)
+                        }
+                        None => None,
+                    };
+                    entries.push((
+                        String::from("covered"),
+                        Json::Bool(read.covered_by.is_some()),
+                    ));
+                    entries.push((
+                        String::from("travel_ms"),
+                        Json::Number(reached.map_or(0, Ms::raw).to_string()),
+                    ));
+                    entries.push((String::from("reachable"), Json::Bool(reached.is_some())));
+                }
+                Ok(Json::Object(entries))
+            })
+            .collect()
     }
 
     /// `get_economy_forecast`: the seat's own `$` and kW as they stand, with
@@ -496,9 +609,12 @@ impl Surface {
             )));
         }
         let mut places: Vec<Voxel> = Vec::with_capacity(waypoints.len());
+        // One search scratch for every `covering` waypoint of the route, made
+        // the first time one needs it.
+        let mut scratch: Option<pharmakos_sim::pathing::Scratch> = None;
         for (index, waypoint) in waypoints.iter().enumerate() {
             let from = places.last().copied();
-            places.push(self.place_of(seat, waypoint, index, from)?);
+            places.push(self.place_of(seat, waypoint, index, from, &mut scratch)?);
         }
 
         let route = pharmakos_plan_core::travel::Route::estimate(&places, self.host()?.routes());
@@ -562,17 +678,36 @@ impl Surface {
     /// its step starts, with the commander at the end of the leg before. The
     /// first waypoint has none and ranks from where the snapshot's commander
     /// stands.
+    ///
+    /// A fourth arm since S1's targeting: **`covering`**, which a
+    /// `place_beacon` writes in its `at` (`docs/design/targeting.md`,
+    /// "Surfaces": "`estimate_route` accepts `covering` and returns the
+    /// site"). It answers the **site** the beacon would stand on -- the
+    /// column the sim's own [`pharmakos_sim::targeting::cover`] chooses,
+    /// ranked from `from` (or from the commander, for the first waypoint) as
+    /// the step would rank from the commander when it starts -- standing on
+    /// the ground, so the leg's `to` is that site and Easy keeps no second
+    /// site algorithm (the register's S1-20). A reference that covers
+    /// nothing is `NOT_FOUND` naming the step failure it would be
+    /// (`no_target`, `illegal_site`): hidden, absent and someone else's are
+    /// one answer. `on` is a Build target's anchor and never a place to walk
+    /// to, so it is refused as any other non-place is. `scratch` is the
+    /// route's one search scratch for its `covering` waypoints.
     fn place_of(
         &self,
         seat: SeatId,
         waypoint: &Json,
         index: usize,
         from: Option<Voxel>,
+        scratch: &mut Option<pharmakos_sim::pathing::Scratch>,
     ) -> Result<Voxel, Error> {
         use pharmakos_sim::interpreter::{BeaconSpec, beacon_spec_of, resolve_beacon_in};
         let at = format!("waypoint {index}");
         if let Some(voxel) = waypoint.get("voxel") {
             return read_voxel(voxel, &at);
+        }
+        if let Some(reference) = waypoint.get("covering") {
+            return self.covering_site(seat, reference, &at, from, scratch);
         }
         let host = self.host()?;
         let spec = if let Some(reference) = waypoint.get("beacon_anchor") {
@@ -588,7 +723,8 @@ impl Surface {
             BeaconSpec::Safest
         } else {
             return Err(Error::invalid(format!(
-                "{at} names no place: a waypoint is a `voxel`, a `beacon_anchor` or `safest`"
+                "{at} names no place: a waypoint is a `voxel`, a `beacon_anchor`, `safest` or \
+                 `covering`"
             )));
         };
         let snapshot = host.runner().frozen().snapshot();
@@ -626,6 +762,67 @@ impl Surface {
                 "{at}: the resolved beacon has no anchor"
             ))),
         }
+    }
+
+    /// A `covering` waypoint's site: where the beacon would stand, as the sim
+    /// chooses it ([`Surface::place_of`] says why this is here).
+    ///
+    /// **Outside a Push only.** The site is read off the hosted world, the
+    /// beacons' spheres and the commander included, and the route's beacon
+    /// and `safest` legs are read off the frozen snapshot; the two are the
+    /// same world in a Lull, a recap and an ended match, and not in a Push,
+    /// where one answer would mix two worlds. So a `covering` waypoint in a
+    /// Push is `PHASE_CLOSED`, as a planning method is -- it is a planning
+    /// question, asked in the phase that plans.
+    fn covering_site(
+        &self,
+        seat: SeatId,
+        reference: &Json,
+        at: &str,
+        from: Option<Voxel>,
+        scratch: &mut Option<pharmakos_sim::pathing::Scratch>,
+    ) -> Result<Voxel, Error> {
+        use crate::targeting::Site;
+        if self.host()?.runner().phase() == pharmakos_sim::runner::MatchPhase::Push {
+            return Err(Error::phase_closed(format!(
+                "{at} is a `covering`, which is read off the frozen world, and in a Push the \
+                 world has moved on from it: ask outside a Push"
+            )));
+        }
+        let reference: pharmakos_proto::gp::v1::FeatureRef =
+            pharmakos_proto::json::decode_json(reference).map_err(|error| {
+                Error::invalid(format!("{at}: `covering` is a `gp.v1.FeatureRef`: {error}"))
+            })?;
+        let spec = crate::targeting::spec_of(&reference, Site::Covering)
+            .map_err(|why| Error::invalid(format!("{at}: {why}")))?;
+        let world = self.host()?.world();
+        let origin = match from {
+            Some(voxel) => fx_point(voxel, at)?,
+            None => crate::targeting::commander_point(world, seat).ok_or_else(|| {
+                Error::not_found(format!(
+                    "{at} covers from where the commander stands, and it is standing nowhere"
+                ))
+            })?,
+        };
+        let tally = pharmakos_sim::seams::UnitTally::new();
+        let ground = crate::targeting::lend(world, &tally);
+        let scratch = match scratch {
+            Some(held) => held,
+            None => scratch.insert(crate::targeting::scratch_for(world)?),
+        };
+        let found = pharmakos_sim::targeting::cover(&ground, scratch, seat, origin, spec).map_err(
+            |failure| {
+                Error::not_found(format!(
+                    "{at} covers nothing: its step would fail `{}`",
+                    failure.name()
+                ))
+            },
+        )?;
+        let [x, y] = found.site;
+        let point = ground
+            .standing(x, y)
+            .ok_or_else(|| Error::internal(format!("{at}: the sim chose a site off the map")))?;
+        Ok(view::voxel_of(point))
     }
 
     /// One `gp.api.v1.BeaconSummary`, as `viewer` may be told it.
@@ -765,19 +962,59 @@ fn rows_of(column: &[u8], seat: SeatId) -> u32 {
     })
 }
 
-/// A seat's core: **its lowest-numbered beacon**.
+/// A seat's core: **its `b_00`**, the beacon the map generator pre-places
+/// for it.
 ///
-/// PLACEHOLDER: true of every map the generator makes, because it pre-places
-/// the core first, and the same rule [`Surface::verifier_scope`] marks
-/// `is_core` by, so the wire and the verifier cannot disagree about which
-/// beacon is the core. It becomes a column the day a beacon carries a kind:
-/// **OWNER**, at **S1**, with the grid.
+/// Since S1's targeting a beacon's name is its per-seat ordinal, minted in the
+/// order the seat's beacons appear, and the generator places the core before
+/// any seat can place anything, so the core is ordinal 0 on every map and a
+/// template can name it as `b_00` anywhere (decisions-log item 127 (13);
+/// `docs/design/targeting.md`, "Names"). The register's S1-13 asked for that
+/// rule, or a column, the day a beacon could be told apart from the core; the
+/// per-seat ordinal is the rule. [`Surface::verifier_scope`] marks `is_core`
+/// by this same function, so the wire and the verifier cannot disagree about
+/// which beacon is the core. A core that has fallen keeps its ordinal and
+/// stays the core: nothing renumbers a seat's beacons.
 pub(crate) fn core_beacon_of(world: &pharmakos_sim::world::World, seat: SeatId) -> Option<u32> {
     let beacons = world.beacons();
     (0..beacons.ids().len())
-        .filter(|row| beacons.seats().get(*row).copied() == Some(seat.raw()))
-        .filter_map(|row| beacons.ids().get(row).copied())
-        .min()
+        .find(|row| {
+            beacons.seats().get(*row).copied() == Some(seat.raw())
+                && beacons.ordinals().get(*row).copied() == Some(0)
+        })
+        .and_then(|row| beacons.ids().get(row).copied())
+}
+
+/// A feature kind as the JSON-RPC wire spells `gp.api.v1.MapFeature.Kind`:
+/// the value name, lower case (decisions-log item 80).
+fn feature_kind_wire(kind: pharmakos_sim::features::FeatureKind) -> String {
+    use pharmakos_proto::gp::api::v1::map_feature::Kind;
+    let named = match kind {
+        pharmakos_sim::features::FeatureKind::Vent => Kind::Vent,
+        pharmakos_sim::features::FeatureKind::Seam => Kind::Seam,
+    };
+    pharmakos_proto::scope::wire_name("gp.api.v1.MapFeature.Kind", named.as_str_name())
+}
+
+/// A grade as the JSON-RPC wire spells `gp.v1.ByRichness.Richness`: `"rich"`.
+fn grade_wire(grade: pharmakos_sim::voxels::Richness) -> String {
+    pharmakos_proto::scope::wire_name(
+        "gp.v1.ByRichness.Richness",
+        grade_proto(grade).as_str_name(),
+    )
+}
+
+/// The sim's grade as the schema's enum, which the wire and the verifier's
+/// scope both carry.
+pub(crate) const fn grade_proto(
+    grade: pharmakos_sim::voxels::Richness,
+) -> pharmakos_proto::gp::v1::by_richness::Richness {
+    use pharmakos_proto::gp::v1::by_richness::Richness;
+    match grade {
+        pharmakos_sim::voxels::Richness::Lean => Richness::Lean,
+        pharmakos_sim::voxels::Richness::Standard => Richness::Standard,
+        pharmakos_sim::voxels::Richness::Rich => Richness::Rich,
+    }
 }
 
 /// A Quartermaster priority column value as the JSON-RPC wire spells it:

@@ -1,0 +1,131 @@
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "size": {
+      "x": 384,
+      "y": 384,
+      "z": 64
+    },
+    "prose": "The map is 384 by 384 by 64 voxels, generated from seed 0x00000000ca5caded for 2 seats.",
+    "match_seed": "0x00000000ca5caded",
+    "features": [
+      {
+        "feature_id": "seam_142_212",
+        "kind": "seam",
+        "grade": "rich",
+        "x": 142,
+        "y": 212,
+        "live": true,
+        "covered": false,
+        "travel_ms": 309000,
+        "reachable": true
+      },
+      {
+        "feature_id": "seam_241_131",
+        "kind": "seam",
+        "grade": "rich",
+        "x": 241,
+        "y": 131,
+        "live": true,
+        "covered": false,
+        "travel_ms": 173800,
+        "reachable": true
+      },
+      {
+        "feature_id": "seam_266_272",
+        "kind": "seam",
+        "grade": "rich",
+        "x": 266,
+        "y": 272,
+        "live": true,
+        "covered": false,
+        "travel_ms": 305400,
+        "reachable": true
+      },
+      {
+        "feature_id": "seam_347_346",
+        "kind": "seam",
+        "grade": "standard",
+        "x": 347,
+        "y": 346,
+        "live": true,
+        "covered": false,
+        "travel_ms": 346200,
+        "reachable": true
+      },
+      {
+        "feature_id": "seam_348_31",
+        "kind": "seam",
+        "grade": "standard",
+        "x": 348,
+        "y": 31,
+        "live": true,
+        "covered": true,
+        "travel_ms": 15400,
+        "reachable": true
+      },
+      {
+        "feature_id": "vent_103_111",
+        "kind": "vent",
+        "grade": "standard",
+        "x": 103,
+        "y": 111,
+        "live": true,
+        "covered": false,
+        "travel_ms": 313400,
+        "reachable": true
+      },
+      {
+        "feature_id": "vent_148_117",
+        "kind": "vent",
+        "grade": "standard",
+        "x": 148,
+        "y": 117,
+        "live": true,
+        "covered": false,
+        "travel_ms": 270400,
+        "reachable": true
+      },
+      {
+        "feature_id": "vent_314_356",
+        "kind": "vent",
+        "grade": "lean",
+        "x": 314,
+        "y": 356,
+        "live": true,
+        "covered": false,
+        "travel_ms": 371400,
+        "reachable": true
+      },
+      {
+        "feature_id": "vent_324_16",
+        "kind": "vent",
+        "grade": "lean",
+        "x": 324,
+        "y": 16,
+        "live": true,
+        "covered": false,
+        "travel_ms": 45800,
+        "reachable": true
+      },
+      {
+        "feature_id": "vent_98_135",
+        "kind": "vent",
+        "grade": "rich",
+        "x": 98,
+        "y": 135,
+        "live": true,
+        "covered": false,
+        "travel_ms": 324200,
+        "reachable": true
+      }
+    ],
+    "_status": {
+      "phase": "lull",
+      "phase_remaining_ms": 299900,
+      "segment_length_ms": 60000,
+      "round": 1
+    }
+  }
+}

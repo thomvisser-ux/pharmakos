@@ -42,6 +42,7 @@
 //! | [`sha1`] | SHA-1, for `Sec-WebSocket-Accept` and nothing else |
 //! | [`host`] | The match host: the one place this crate seals into or steps a `Runner` |
 //! | [`routes`] | plan-core's `TravelEstimator`, over the sim's estimator (item 100 (1)) |
+//! | [`targeting`] | The map's vents and seams as the planning surfaces read them, through the sim's own resolver |
 //! | [`schema`] | `get_schema`, generated from the checked-in descriptor set |
 //! | [`strings`] | This crate's section of the one English string table |
 //! | [`view`] | The world's types as the wire's: voxels, beacon ids, mandates |
@@ -140,6 +141,7 @@ pub mod session;
 pub mod sha1;
 pub mod strings;
 pub mod surface;
+pub mod targeting;
 pub mod time;
 pub mod token;
 pub mod view;
