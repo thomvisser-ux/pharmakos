@@ -980,14 +980,14 @@ impl Snapshot {
             mandate: self.beacon_mandate.clone(),
             program: self.beacon_program.clone(),
             hp: self.beacon_hp.iter().copied().map(Hp::new).collect(),
-            dormant: self.beacon_dormant.iter().map(|d| *d != 0).collect(),
+            dormant: flags(&self.beacon_dormant, "beacon_dormant")?,
             priority: self.beacon_priority.clone(),
             scouts: self.beacon_scouts.clone(),
             ordinal: self.beacon_ordinal.clone(),
             dig_depth: self.beacon_dig_depth.clone(),
             pillars: self.beacon_pillars.clone(),
             seam_choice: self.beacon_seam_choice.clone(),
-            flee: self.beacon_flee.iter().map(|f| *f != 0).collect(),
+            flee: flags(&self.beacon_flee, "beacon_flee")?,
             seam: self.beacon_seam.clone(),
         }) {
             return Err(SnapshotError::Ragged("beacon"));
@@ -1003,7 +1003,7 @@ impl Snapshot {
                 .ok_or(SnapshotError::Ragged("structure_pos"))?,
             hp: self.structure_hp.iter().copied().map(Hp::new).collect(),
             home: self.structure_home.clone(),
-            building: self.structure_building.iter().map(|b| *b != 0).collect(),
+            building: flags(&self.structure_building, "structure_building")?,
         }) {
             return Err(SnapshotError::Ragged("structure"));
         }
@@ -1292,11 +1292,7 @@ impl Snapshot {
             route_len: self.unit_route_len.clone(),
             route_cursor: self.unit_route_cursor.clone(),
             route_hash: self.unit_route_hash.clone(),
-            route_partial: self
-                .unit_route_partial
-                .iter()
-                .map(|partial| *partial != 0)
-                .collect(),
+            route_partial: flags(&self.unit_route_partial, "unit_route_partial")?,
             nodes: self.route_nodes.clone(),
             cursor: self.repath_cursor,
         })
@@ -1369,6 +1365,21 @@ fn axes_from_points(points: &[[Fx; 3]]) -> Vec<i32> {
         }
     }
     out
+}
+
+/// A column of flags, one byte each: `0` is false and `1` is true, and any
+/// other byte is refused as `Ragged(name)`. The capture writes nothing else,
+/// so a byte that is neither describes no world this sim saved, and reading
+/// it as `true` would re-save a different file from the one restored.
+fn flags(column: &[u8], name: &'static str) -> Result<Vec<bool>, SnapshotError> {
+    column
+        .iter()
+        .map(|byte| match byte {
+            0 => Ok(false),
+            1 => Ok(true),
+            _ => Err(SnapshotError::Ragged(name)),
+        })
+        .collect()
 }
 
 /// Three raw axes per point, in encoder order.

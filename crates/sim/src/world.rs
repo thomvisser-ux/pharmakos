@@ -2369,6 +2369,36 @@ impl World {
         self.edits.len()
     }
 
+    /// Whether an edit already queued this tick reaches a column of the box
+    /// `[min_x, min_y, max_x, max_y]` (inclusive): a `Set` whose column lies in
+    /// it, or a `Crater` whose ball's footprint overlaps it.
+    ///
+    /// A dig is chosen against the world as the last voxel phase left it, so
+    /// a second dig in the same box on the same tick would be judged without
+    /// the first; [`crate::mining::dig_waits`] asks this and defers.
+    #[must_use]
+    pub fn edit_queued_within(&self, bounds: [i32; 4]) -> bool {
+        let [min_x, min_y, max_x, max_y] = bounds;
+        self.edits.iter().any(|edit| {
+            let (x, y, reach) = match edit {
+                VoxelEdit::Set { at, .. } => (
+                    at.first().copied().unwrap_or(0),
+                    at.get(1).copied().unwrap_or(0),
+                    0,
+                ),
+                VoxelEdit::Crater { centre, radius } => (
+                    centre.first().copied().unwrap_or(0),
+                    centre.get(1).copied().unwrap_or(0),
+                    (*radius).max(0),
+                ),
+            };
+            x.saturating_add(reach) >= min_x
+                && x.saturating_sub(reach) <= max_x
+                && y.saturating_add(reach) >= min_y
+                && y.saturating_sub(reach) <= max_y
+        })
+    }
+
     /// File a damage order for this tick's combat phase. `false` when the
     /// queue is full.
     ///

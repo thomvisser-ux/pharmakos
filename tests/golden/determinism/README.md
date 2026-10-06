@@ -179,6 +179,15 @@ first diverges at tick 1**, and the rules that moved it are these:
 `economy.mining_carry_voxels` replaced the constant it was proposed from at the
 same value, which moved nothing.
 
+The lane's review moved it once more, **at tick 804, rejoining at tick 848**:
+**a dig waits one tick when another dig has already queued an edit in the same
+seam's box that tick** (`mining::dig_waits`), because a dig is judged pit-safe
+against the world the last voxel phase left and the queue lands after every
+program has run. At tick 804 seat 0's core's drone (unit 3) took
+`[21, 344, 28]` and a drone homed to beacon 3 (unit 212), whose box overlaps
+it, was finishing `[26, 343, 28]` on the same tick; it now takes it at tick 805
+instead, and the two runs agree again from tick 848.
+
 ## What a diff means
 
 **The sim's behaviour changed.** That is all it can mean: the chain is a pure

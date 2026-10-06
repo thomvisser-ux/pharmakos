@@ -319,7 +319,12 @@ pub enum Row {
     /// item 131 (5): the skeleton kept the kind alone and dropped them, while
     /// the verifier's I0003 already read such a row as starting from the
     /// defaults). They are priced as the edit they are, on top of the switch,
-    /// which is how `plan-core` has always priced the row.
+    /// which is how `plan-core` prices the row too -- except for Build targets:
+    /// this crate counts a non-empty target list as one settings field, where
+    /// `plan-core` charges `build_target_ms` per target and counts no field for
+    /// the list. That divergence predates the row (it is
+    /// `set_mandate_settings`'s too) and is the owner's reading to settle;
+    /// `plan-core`'s `count` carries the PLACEHOLDER.
     Mandate {
         /// The writ the beacon takes.
         kind: MandateKind,
@@ -1059,9 +1064,12 @@ fn compile_row(
 /// The settings a `set_mandate` row writes after its switch, compiled as the
 /// settings edit they are; `None` when the row writes no settings field.
 ///
-/// An empty Defend or Attack arm is the switch alone, as it always was: S2's
-/// settings are refused wherever they are written ([`mandate_fields`]), but a
-/// switch to an S2 writ with nothing in it writes nothing to refuse.
+/// An empty Defend or Attack arm writes nothing of its own: S2's settings are
+/// refused wherever they are written ([`mandate_fields`]), but a switch to an
+/// S2 writ with nothing in it writes nothing to refuse. The two top-level
+/// fields beside the arm, `roe` and `retreat_hp_pct`, are still fields of the
+/// edit and are priced as they are for any other arm (and as `plan-core`
+/// prices them), so they are counted here rather than dropped with the arm.
 fn compile_switch_settings(
     settings: &gp::v1::MandateSettings,
     names: &Names<'_>,
@@ -1077,7 +1085,19 @@ fn compile_switch_settings(
         _ => false,
     };
     if empty_s2_arm {
-        return Ok(None);
+        let fields =
+            u32::from(settings.roe != 0).saturating_add(u32::from(settings.retreat_hp_pct != 0));
+        return Ok((fields > 0).then(|| {
+            Box::new(Row::Settings {
+                kind: mandate_of(settings),
+                fields,
+                targets: Vec::new(),
+                protected: Vec::new(),
+                probes: Vec::new(),
+                scouts: 0,
+                mine: None,
+            })
+        }));
     }
     let row = compile_settings_row(settings, names, covering)?;
     let fields = match &row {

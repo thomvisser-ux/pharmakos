@@ -840,6 +840,16 @@ fn the_rules_reader_rejects_what_it_should() {
         RulesTable::from_canonical_json(&too_wide),
         Err(RulesError::OutOfRange { .. })
     ));
+
+    // A drone that carries nothing would deliver an empty load on every pass:
+    // the tick reads `economy.mining_carry_voxels`, so the reader refuses a
+    // zero there with a typed error instead of letting the tick fall back.
+    let empty_hands = good.replace("\"mining_carry_voxels\": 16", "\"mining_carry_voxels\": 0");
+    assert_ne!(empty_hands, good, "the committed table names the row");
+    assert!(matches!(
+        RulesTable::from_canonical_json(&empty_hands),
+        Err(RulesError::OutOfRange { field, .. }) if field == "economy.mining_carry_voxels"
+    ));
 }
 
 #[test]
@@ -858,7 +868,12 @@ fn the_sim_reads_the_rows_the_schema_puts_them_in() {
     let broadphase = message.broadphase.expect("the broadphase block");
     let mesher = message.mesher.expect("the mesher block");
     let matched = message.r#match.expect("the match block");
+    let economy = message.economy.expect("the economy block");
 
+    assert_eq!(
+        view.mining_carry_voxels().get(),
+        economy.mining_carry_voxels
+    );
     assert_eq!(view.mesher_drain_surfaces(), mesher.surfaces_per_frame);
     assert_eq!(view.mesher_drain_bytes(), mesher.bytes_per_frame);
     assert_eq!(

@@ -284,6 +284,37 @@ pub fn next_dig(world: &World, beacon: BeaconId) -> Option<Dig> {
     )
 }
 
+/// Whether a drone homed to `beacon` must wait a tick before it takes its
+/// dig: an edit queued earlier this tick already reaches the box the pit-safe
+/// flood runs over (the held seam's footprint box and its ring).
+///
+/// [`next_dig`] judges a dig against the world as the last voxel phase left
+/// it, and the queue is applied after every program has run, so two digs in
+/// one box on one tick would each be judged safe alone -- and between them
+/// could cut the last ramp out of the pit, or take the same voxel twice. The
+/// later one, in unit-id order, waits for the earlier to land.
+#[must_use]
+pub fn dig_waits(world: &World, beacon: BeaconId) -> bool {
+    let Some(seam) = usize::try_from(beacon.raw())
+        .ok()
+        .and_then(|row| world.beacons().seams().get(row).copied())
+        .filter(|seam| *seam != NO_FEATURE)
+        .and_then(|seam| usize::try_from(seam).ok())
+    else {
+        return false;
+    };
+    let Some(feature) = world.features().get(seam) else {
+        return false;
+    };
+    let [min_x, min_y, max_x, max_y] = feature.bounds;
+    world.edit_queued_within([
+        min_x.saturating_sub(1),
+        min_y.saturating_sub(1),
+        max_x.saturating_add(1),
+        max_y.saturating_add(1),
+    ])
+}
+
 /// How much ore the seam at `seam` still holds for the beacon at `row`, in
 /// `$`: every ore voxel its settings allow it to take -- inside its sphere,
 /// within its depth, off its pillars and clear of structures -- at the
@@ -774,6 +805,12 @@ fn choose_seam(world: &mut World, row: usize, settings: MineSettings) -> u32 {
             }
         }
         index = index.saturating_add(1);
+    }
+    // No seam has work left for the beacon: nothing to rank, so nothing is
+    // charged. A spent beacon asks again every decision, and charging a
+    // ranking with no candidates would inflate the counted work for nothing.
+    if !work.iter().any(|has| *has) {
+        return NO_FEATURE;
     }
     let Some(origin) = world
         .beacons()

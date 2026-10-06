@@ -573,6 +573,135 @@ fn a_seam_choice_counts_its_estimates_and_a_held_seam_costs_none() {
 }
 
 #[test]
+fn a_spent_beacon_charges_no_ranking() {
+    // Once its seam is spent and no other has work for it, a beacon asks again
+    // on every decision and finds nothing: with no candidate there is nothing
+    // to rank, so nothing is charged.
+    let fixture = world(&[180_000]);
+    let core = core(&fixture);
+    let seam = starting_seam(&fixture, core);
+    let mut runner = Runner::new(fixture);
+    assert!(runner.begin_push());
+    play(&mut runner, 1);
+    carve(&mut runner, seam, None);
+    play(&mut runner, 5);
+    assert_eq!(held(runner.world(), core), None, "the seam is spent");
+    assert_eq!(
+        runner.world().decision_work(0).expect("seat 0").spent(),
+        0,
+        "a choice with no candidate charges nothing"
+    );
+}
+
+fn busy_of(world: &World, unit: usize) -> u32 {
+    world
+        .units()
+        .busy_until()
+        .get(unit)
+        .copied()
+        .expect("a unit")
+}
+
+fn carrying_of(world: &World, unit: usize) -> Money {
+    world.units().carrying().get(unit).copied().expect("a unit")
+}
+
+/// Seat 0's starting mining drone, homed to its core.
+fn drone_of(world: &World, core: BeaconId) -> usize {
+    let units = world.units();
+    units
+        .homes()
+        .iter()
+        .zip(units.kinds())
+        .position(|(home, kind)| *home == core.raw() && *kind == UnitKind::MiningDrone.id())
+        .expect("the core has a mining drone")
+}
+
+#[test]
+fn a_second_dig_in_one_seam_box_waits_for_the_first_to_land() {
+    // Each dig is judged pit-safe against the world the last voxel phase left,
+    // and the queue lands after every program has run, so a dig finishing on a
+    // tick another has already queued an edit in the same box waits one tick
+    // and is judged with that edit taken out.
+    let (fixture, core) = mining_core(&[180_000], MineSettings::default());
+    let mut runner = Runner::new(fixture);
+    assert!(runner.begin_push());
+    let drone = drone_of(runner.world(), core);
+    // Play until the drone is one tick from finishing a dig.
+    let mut guard = 0;
+    loop {
+        let world = runner.world();
+        let busy = busy_of(world, drone);
+        if busy != pharmakos_sim::tables::NO_WORK && busy == world.tick().raw() + 1 {
+            break;
+        }
+        play(&mut runner, 1);
+        guard += 1;
+        assert!(guard < 4_000, "the drone starts a dig");
+    }
+    let target = runner
+        .world()
+        .next_dig(core)
+        .expect("the dig it is finishing")
+        .ore;
+    let feature = {
+        let held = runner
+            .world()
+            .beacons()
+            .seams()
+            .get(row_of(core))
+            .copied()
+            .expect("a row");
+        let index = usize::try_from(held).expect("a held seam");
+        runner
+            .world()
+            .features()
+            .get(index)
+            .expect("a seam")
+            .clone()
+    };
+    // Another dig, already queued this tick, in a different column of the box.
+    let other = feature
+        .footprint
+        .iter()
+        .find(|column| [column.x, column.y, target[2]] != target)
+        .expect("a second column");
+    let world = runner.world();
+    let other_top = world.voxels().top_solid_z(other.x, other.y).expect("solid");
+    let elsewhere = [other.x, other.y, other_top];
+    assert!(!pharmakos_sim::mining::dig_waits(world, core));
+    let carrying = carrying_of(world, drone);
+    assert!(runner.world_mut().request_voxel_edit(VoxelEdit::Set {
+        at: elsewhere,
+        material: Material::AIR,
+    }));
+    assert!(pharmakos_sim::mining::dig_waits(runner.world(), core));
+    let before = runner.world().clone();
+    play(&mut runner, 1);
+    assert!(
+        !dug(&before, runner.world(), target),
+        "the second dig did not land on the tick the first was queued"
+    );
+    assert_eq!(
+        carrying_of(runner.world(), drone),
+        carrying,
+        "and nothing was credited for it"
+    );
+    assert_eq!(
+        busy_of(runner.world(), drone),
+        runner.world().tick().raw() + 1,
+        "it is judged again next tick"
+    );
+    assert!(!pharmakos_sim::mining::dig_waits(runner.world(), core));
+    play(&mut runner, 1);
+    assert!(
+        carrying_of(runner.world(), drone) > carrying
+            || busy_of(runner.world(), drone) == pharmakos_sim::tables::NO_WORK,
+        "the next tick it digs, or finds its stand gone and walks"
+    );
+}
+
+#[test]
 fn the_mine_mandate_files_its_drone_in_the_mine_band() {
     // A Mine beacon with work and no drone asks for one (item 22), in the
     // Mine band: last on spec section 7's ladder, never in the Units band.
@@ -708,6 +837,35 @@ fn a_set_mandate_row_writes_the_settings_it_carries() {
 }
 
 #[test]
+fn a_switch_to_an_empty_s2_writ_prices_the_fields_beside_it() {
+    // An empty Defend arm writes nothing of its own, but `retreat_hp_pct`
+    // beside it is a field of the edit, priced as it is beside any other arm
+    // and as `plan-core` prices it: the switch plus one field.
+    let route = concat!(
+        r#"{"label":"switch","interface":{"beacon":{"beacon_id":"b_00"},"rows":["#,
+        r#"{"set_mandate":{"defend":{},"retreat_hp_pct":50}},"#,
+        r#"{"set_mandate":{"defend":{}}}"#,
+        r#"]},"timeout_ms":120000}"#
+    );
+    let compiled = Plan::compile(&playbook(route), &rules()).expect("compiles");
+    let rows = match compiled.route().first().map(|step| &step.action) {
+        Some(pharmakos_sim::interpreter::Action::Interface { rows, .. }) => rows,
+        other => panic!("an interface step: {other:?}"),
+    };
+    let times = rules().message().interface_times.expect("interface times");
+    assert_eq!(
+        rows.first().expect("a row").duration_ms(&rules()),
+        times.switch_mandate_ms + times.edit_settings_base_ms,
+        "the switch and one field"
+    );
+    assert_eq!(
+        rows.get(1).expect("a row").duration_ms(&rules()),
+        times.switch_mandate_ms,
+        "an empty arm alone is the switch alone"
+    );
+}
+
+#[test]
 fn a_held_seam_survives_save_and_restore_and_a_vent_is_refused() {
     let (fixture, _) = mining_core(
         &[180_000],
@@ -746,12 +904,22 @@ fn a_held_seam_survives_save_and_restore_and_a_vent_is_refused() {
         doctored.restore_into(&mut world(&[180_000])),
         Err(SnapshotError::Ragged("beacon_seam"))
     );
-    let mut doctored = saved;
+    let mut doctored = saved.clone();
     if let Some(slot) = doctored.beacon_seam_choice.first_mut() {
         *slot = 0;
     }
     assert_eq!(
         doctored.restore_into(&mut world(&[180_000])),
         Err(SnapshotError::Ragged("beacon"))
+    );
+    // A flag is a 0 or a 1: any other byte would restore as `true` and re-save
+    // as 1, a different file from the one restored, so it is refused.
+    let mut doctored = saved;
+    if let Some(slot) = doctored.beacon_flee.first_mut() {
+        *slot = 2;
+    }
+    assert_eq!(
+        doctored.restore_into(&mut world(&[180_000])),
+        Err(SnapshotError::Ragged("beacon_flee"))
     );
 }

@@ -535,12 +535,7 @@ fn full_load(world: &World, ore: [i32; 3]) -> i64 {
         },
         Money::raw,
     );
-    let carry = world
-        .rules()
-        .message()
-        .economy
-        .as_ref()
-        .map_or(0, |economy| economy.mining_carry_voxels);
+    let carry = world.rules().mining_carry_voxels().get();
     per_voxel.saturating_mul(i64::from(carry))
 }
 
@@ -627,6 +622,17 @@ fn finish_dig(world: &mut World, unit: u32) {
         *slot = NO_WORK;
     }
     let home = home_of(world, row);
+    // Another dig in the same seam's box landed in the queue first this tick:
+    // judge this one next tick, against the world with that one taken out, so
+    // two digs are never pit-safe only one at a time and never take one voxel
+    // twice (`crate::mining::dig_waits`).
+    if crate::mining::dig_waits(world, home) {
+        let next = world.tick().raw().saturating_add(1);
+        if let Some(slot) = world.units_mut().busy_until_mut().get_mut(row) {
+            *slot = next;
+        }
+        return;
+    }
     let Some(crate::mining::Dig { ore, stand }) = world.next_dig(home) else {
         return;
     };

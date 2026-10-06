@@ -264,7 +264,7 @@ impl FeatureTable {
                 return Err(MapError::OutOfRange {
                     field: "mapgen seam shape",
                     why: format!(
-                        "{} spans {} columns; the Mine program works at most {MAX_FOOTPRINT_COLUMNS}                          columns in a box of at most {} cells",
+                        "{} spans {} columns; the Mine program works at most {MAX_FOOTPRINT_COLUMNS} columns in a box of at most {} cells",
                         feature.name(),
                         feature.footprint.len(),
                         crate::mining::BOX_CELLS

@@ -303,7 +303,7 @@ fn a_starting_seam_yields_more_than_its_exposed_rim() {
     }
     assert!(
         below_rim > 0,
-        "the core works its starting seam below the rim (held seam {held}); ore deliveries per          round: {delivered:?}"
+        "the core works its starting seam below the rim (held seam {held}); ore deliveries per round: {delivered:?}"
     );
 
     // Pit-safe: no unit of the seat ends the match parked as sealed in.
