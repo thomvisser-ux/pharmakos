@@ -46,7 +46,6 @@ use pharmakos_gateway::rpc;
 use pharmakos_gateway::surface::Surface;
 use pharmakos_plan_core::Document;
 use pharmakos_proto::json::Json;
-use pharmakos_sim::math::quantity::Ms;
 use pharmakos_sim::tables::SeatId;
 
 use support::{MATCH, SEED, result, text_of};
@@ -85,14 +84,11 @@ fn lobby_match() -> Surface {
         .expect("a match id");
     surface.attach(host).expect("attached");
     surface.open_lull().expect("the opening Lull");
-    // The client's first clock report: the whole Lull left, as the footer of
-    // `instantiate_suggested` shows it. The length is the rules table's.
-    let lull = support::rules()
-        .message()
-        .r#match
-        .as_ref()
-        .map_or(0, |settings| settings.lull_ms);
-    surface.set_phase_remaining_ms(Ms::new(lull));
+    // The client's first clock report: the whole first Lull left, as the
+    // footer of `instantiate_suggested` shows it. The length is the rules
+    // table's `match.first_lull_ms`, read through the gateway's typed read.
+    let lull = surface.lull_length(1);
+    surface.set_phase_remaining_ms(lull);
     surface
 }
 

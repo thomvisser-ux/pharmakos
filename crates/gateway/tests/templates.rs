@@ -55,7 +55,7 @@ fn each_template_instantiates_and_qualifies_for_both_seats_of_the_golden_seed() 
     // A client reporting its own timer as it goes, as the editor does: a
     // Lull's tick moves only on the client's word, and a socket's rate is per
     // tick.
-    let mut left = support::LULL_MS;
+    let mut left = support::FIRST_LULL_MS;
     for seat in [0_u8, 1] {
         let token = support::seat_token(&mut surface, seat);
         let listed = result(

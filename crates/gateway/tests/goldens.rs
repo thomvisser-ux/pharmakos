@@ -8,10 +8,10 @@
 //! compares it with `tests/golden/gateway/<case>/expected.<ext>`;
 //! `cargo xtask ci`'s `golden` step compares the same pair, and
 //! `cargo xtask golden --bless` accepts a move. `tests/golden/gateway/README.md`
-//! says what a diff in each of the area's nineteen cases means. This file
+//! says what a diff in each of the area's twenty-four cases means. This file
 //! writes four of them (the fog filter, the digest, the audit log and the
-//! handshake); `methods.rs`, `view.rs`, `demo_playbooks.rs` and `advice.rs`
-//! write the other fifteen (item 124 (5) (k)).
+//! handshake); `methods.rs`, `view.rs`, `advice.rs`, `demo_playbooks.rs`,
+//! `targeting.rs` and `economy.rs` write the other twenty (item 124 (5) (k)).
 //!
 //! Every file here is text, one record per line, LF endings, with a trailing
 //! newline -- `tests/golden/README.md` rule 3, enforced by the `golden` step
@@ -319,6 +319,7 @@ fn the_audit_log_golden() {
         phase_remaining_ms: Ms::new(174_000),
         segment_length_ms: Ms::new(180_000),
         round: 1,
+        untimed: false,
     });
 
     let full = ScopeSet::of(&[Scope::Observe, Scope::Plan, Scope::PlanSubmit, Scope::Docs]);

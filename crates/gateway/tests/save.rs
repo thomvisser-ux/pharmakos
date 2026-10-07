@@ -33,7 +33,7 @@ use pharmakos_sim::tables::SeatId;
 use pharmakos_sim::world::WorldConfig;
 
 use support::{
-    LULL_MS, SEED, admin_token, call, call_in_lull, code, hosted_with, quote, result, rules,
+    FIRST_LULL_MS, SEED, admin_token, call, call_in_lull, code, hosted_with, quote, result, rules,
     rules_json, seat_token, text_of, walk_east,
 };
 
@@ -136,7 +136,7 @@ fn orders(surface: &Surface, round: u32) -> Vec<(u8, String)> {
 /// Submit this round's orders through `submit_plan`, like a client.
 fn plan_round(surface: &mut Surface) {
     let round = surface.time().round;
-    let mut left = LULL_MS;
+    let mut left = FIRST_LULL_MS;
     for (seat, playbook) in orders(surface, round) {
         let token = seat_token(surface, seat);
         let answer = result(
@@ -351,7 +351,7 @@ fn a_resumed_lull_has_the_seats_notebooks_drafts_and_seals() {
 
     // Over the wire, with a token the new process minted.
     let token = seat_token(&mut resumed, 0);
-    let mut left = LULL_MS;
+    let mut left = FIRST_LULL_MS;
     let carried = result(
         &call_in_lull(
             &mut resumed,
@@ -397,7 +397,7 @@ fn a_resumed_lull_has_the_seats_notebooks_drafts_and_seals() {
 fn fill_the_stores(surface: &mut Surface) {
     let zero = seat_token(surface, 0);
     let one = seat_token(surface, 1);
-    let mut left = LULL_MS;
+    let mut left = FIRST_LULL_MS;
     let _ = result(
         &call_in_lull(
             surface,
@@ -597,7 +597,7 @@ fn a_cursor_from_the_dead_process_is_stale_on_the_resumed_surface() {
     const MATCH_ID: &str = "m-t17-stale";
     let mut surface = new_match(MATCH_ID);
     let token = seat_token(&mut surface, 0);
-    let mut left = LULL_MS;
+    let mut left = FIRST_LULL_MS;
     let page = result(
         &call_in_lull(
             &mut surface,
@@ -613,7 +613,7 @@ fn a_cursor_from_the_dead_process_is_stale_on_the_resumed_surface() {
 
     let mut resumed = resume(MATCH_ID, &saved).expect("resumed");
     let token = seat_token(&mut resumed, 0);
-    let mut left = LULL_MS;
+    let mut left = FIRST_LULL_MS;
     let response = call_in_lull(
         &mut resumed,
         &token,
@@ -757,7 +757,7 @@ fn a_resumed_match_keeps_its_tick_monotonic() {
     const MATCH_ID: &str = "m-t17-tick";
     let mut surface = new_match(MATCH_ID);
     let token = seat_token(&mut surface, 0);
-    let mut left = LULL_MS;
+    let mut left = FIRST_LULL_MS;
     for _ in 0..20 {
         let _ = call_in_lull(&mut surface, &token, &mut left, "get_status", "{}");
     }

@@ -122,6 +122,7 @@ fn surface() -> Surface {
         phase_remaining_ms: Ms::new(174_000),
         segment_length_ms: Ms::new(180_000),
         round: 1,
+        untimed: false,
     });
     surface
 }
@@ -147,7 +148,9 @@ fn hosted() -> Surface {
     )
     .expect("a match");
     surface.attach(host).expect("attached");
-    surface.set_phase_remaining_ms(Ms::new(180_000));
+    // The whole first Lull left, as the rules table declares it.
+    let first_lull = surface.lull_length(1);
+    surface.set_phase_remaining_ms(first_lull);
     surface.open_lull().expect("the opening Lull");
     surface
 }
@@ -813,7 +816,9 @@ fn a_playbook_submitted_over_the_transport_is_executed() {
     )
     .expect("a match");
     surface.attach(host).expect("attached");
-    surface.set_phase_remaining_ms(Ms::new(180_000));
+    // The whole first Lull left, as the rules table declares it.
+    let first_lull = surface.lull_length(1);
+    surface.set_phase_remaining_ms(first_lull);
     surface.open_lull().expect("the opening Lull");
     let token = seat_token(&mut surface);
     surface.set_limits(Limits {

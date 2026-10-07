@@ -67,6 +67,7 @@ fn surface() -> Surface {
         phase_remaining_ms: Ms::new(174_000),
         segment_length_ms: Ms::new(180_000),
         round: 1,
+        untimed: false,
     });
     surface
 }

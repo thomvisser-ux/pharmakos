@@ -814,9 +814,10 @@ fn a_handler_may_compile_a_playbook_and_may_never_seal_or_step_one() {
     );
     assert_eq!(
         compiles, 1,
-        "`Plan::compile` is called once, in `surface/planning.rs`'s `compile_playbook`, which is \
-         the one door a submitted playbook goes through into the sim. If this is 0 the ban above \
-         is guarding an empty room; if it is more than 1 there are two doors and they can drift"
+        "`Plan::compile` is called once, in `surface/planning.rs`'s `compile_decoded`, which \
+         `compile_playbook` and `resolve_refs` share: the one door a playbook goes through into \
+         the sim. If this is 0 the ban above is guarding an empty room; if it is more than 1 \
+         there are two doors and they can drift"
     );
 }
 

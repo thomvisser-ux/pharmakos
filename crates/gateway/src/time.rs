@@ -50,6 +50,13 @@ pub struct MatchTime {
     pub segment_length_ms: Ms,
     /// 1-based. The round the match is on.
     pub round: u32,
+    /// True when the current phase has no countdown, so `phase_remaining_ms`
+    /// means nothing and a client must not show it as a timer that ran out
+    /// (`gp.api.v1.Status.untimed`; S1's plan, decision 12, the register's
+    /// S1-11). [`crate::surface::Surface`] decides it in one place: the lobby,
+    /// a recap and an ended match are untimed, a Push never is, and a Lull is
+    /// untimed until the host reports a countdown for it.
+    pub untimed: bool,
 }
 
 impl MatchTime {
@@ -63,6 +70,7 @@ impl MatchTime {
             phase_remaining_ms: Ms::ZERO,
             segment_length_ms: Ms::ZERO,
             round: 0,
+            untimed: true,
         }
     }
 
@@ -81,9 +89,17 @@ impl MatchTime {
     /// Written under the key `_status`, which is not a legal Protobuf identifier
     /// -- `gp.api.v1.Status` is the footer's *shape* and never a field of a
     /// response message, and `gateway.proto` says so in its transport note.
+    ///
+    /// `untimed` is written only when it is true, as proto3's JSON mapping
+    /// leaves a `bool` at its default out: a client decoding the footer as a
+    /// `gp.api.v1.Status` reads an absent `untimed` as false, which is a timer.
+    /// So a timed footer -- every Lull with a countdown, every Push -- keeps
+    /// the four fields it had before S1 byte for byte, and the client
+    /// fixtures copied from the gateway's goldens with it (S1's plan, task
+    /// `econ`).
     #[must_use]
     pub fn footer(self) -> Json {
-        Json::Object(vec![
+        let mut entries = vec![
             (
                 String::from("phase"),
                 Json::String(phase_wire_name(self.phase)),
@@ -97,7 +113,110 @@ impl MatchTime {
                 Json::Number(self.segment_length_ms.raw().to_string()),
             ),
             (String::from("round"), Json::Number(self.round.to_string())),
-        ])
+        ];
+        if self.untimed {
+            entries.push((String::from("untimed"), Json::Bool(true)));
+        }
+        Json::Object(entries)
+    }
+}
+
+/// How long each Lull is declared to be: `rules.match.first_lull_ms` for round
+/// 1's and `rules.match.lull_ms` for every later one (spec section 3's ten and
+/// five minutes; decisions-log item 127 (2), S1's plan, decision 10).
+///
+/// Read once, from the rules table the surface is built with, and **typed**:
+/// a table with no `match` block or a Lull that is not a positive number of
+/// game milliseconds is refused with a [`LullRowError`] rather than read as a
+/// zero-length Lull. A Lull's length is what bounds the countdown a host may
+/// report ([`crate::surface::Surface::set_host_clock`]) and what the Lull's
+/// elapsed time is derived from when a host reports only the countdown, so a
+/// zero read in its place would refuse every report or move the gateway's
+/// clock by nothing. Both are tuning values, data and not constants of this
+/// crate's (AGENTS.md section 12).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct LullLengths {
+    first: Ms,
+    later: Ms,
+}
+
+/// Why a rules table declares no usable Lull length.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum LullRowError {
+    /// The table carries no `match` block at all.
+    NoMatchBlock,
+    /// A Lull row is zero or negative.
+    NotPositive {
+        /// The row, as the rules table spells it.
+        row: &'static str,
+        /// What it holds.
+        value: i32,
+    },
+}
+
+impl core::fmt::Display for LullRowError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            LullRowError::NoMatchBlock => formatter.write_str(
+                "the rules table carries no `match` block, so nothing says how long a Lull is",
+            ),
+            LullRowError::NotPositive { row, value } => write!(
+                formatter,
+                "the rules table's `match.{row}` is {value} ms, and a Lull lasts a positive \
+                 number of game milliseconds"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for LullRowError {}
+
+impl LullLengths {
+    /// The two Lull rows of `rules`.
+    ///
+    /// # Errors
+    ///
+    /// [`LullRowError::NoMatchBlock`] for a table with no `match` block, and
+    /// [`LullRowError::NotPositive`] for a row that is not a positive length.
+    pub fn from_rules(
+        rules: &pharmakos_sim::rules::RulesTable,
+    ) -> Result<LullLengths, LullRowError> {
+        let block = rules
+            .message()
+            .r#match
+            .as_ref()
+            .ok_or(LullRowError::NoMatchBlock)?;
+        let positive = |row: &'static str, value: i32| {
+            if value > 0 {
+                Ok(Ms::new(value))
+            } else {
+                Err(LullRowError::NotPositive { row, value })
+            }
+        };
+        Ok(LullLengths {
+            first: positive("first_lull_ms", block.first_lull_ms)?,
+            later: positive("lull_ms", block.lull_ms)?,
+        })
+    }
+
+    /// The Lull that opens round `round`: the first Lull's length for round 1,
+    /// and the later Lulls' for every round after it. Round 0 is the lobby's,
+    /// before any Lull, and reads as the first, which is the next to open.
+    #[must_use]
+    pub const fn for_round(self, round: u32) -> Ms {
+        if round <= 1 { self.first } else { self.later }
+    }
+
+    /// `rules.match.first_lull_ms`.
+    #[must_use]
+    pub const fn first(self) -> Ms {
+        self.first
+    }
+
+    /// `rules.match.lull_ms`.
+    #[must_use]
+    pub const fn later(self) -> Ms {
+        self.later
     }
 }
 
@@ -212,11 +331,12 @@ mod tests {
             phase_remaining_ms: Ms::new(174_000),
             segment_length_ms: Ms::new(180_000),
             round: 1,
+            untimed: false,
         }
     }
 
     #[test]
-    fn the_footer_is_the_four_fields_of_the_schema_in_order() {
+    fn the_footer_is_the_fields_of_the_schema_in_order() {
         let footer = lull().footer();
         let Json::Object(entries) = &footer else {
             panic!("the footer is an object");
@@ -224,7 +344,17 @@ mod tests {
         let keys: Vec<&str> = entries.iter().map(|(key, _)| key.as_str()).collect();
         assert_eq!(
             keys,
-            vec!["phase", "phase_remaining_ms", "segment_length_ms", "round"]
+            vec!["phase", "phase_remaining_ms", "segment_length_ms", "round"],
+            "a timed footer leaves `untimed` out, at proto3's default"
+        );
+        let lobby = MatchTime::lobby().footer();
+        let Json::Object(entries) = &lobby else {
+            panic!("the footer is an object");
+        };
+        assert_eq!(
+            entries.last(),
+            Some(&(String::from("untimed"), Json::Bool(true))),
+            "the lobby has no countdown, and says so last, in the schema's order"
         );
         assert_eq!(
             footer.get("phase"),
@@ -233,6 +363,35 @@ mod tests {
         assert_eq!(
             footer.get("segment_length_ms"),
             Some(&Json::Number(String::from("180000")))
+        );
+    }
+
+    #[test]
+    fn the_first_lull_is_round_ones_and_every_later_lull_is_the_other_row() {
+        use super::{LullLengths, LullRowError};
+        let rules = pharmakos_sim::rules::RulesTable::load(std::path::Path::new(
+            "../../rules/rules.v1.json",
+        ))
+        .expect("the committed rules table");
+        let lulls = LullLengths::from_rules(&rules).expect("the shipped table has both rows");
+        assert_eq!(lulls.first(), Ms::new(600_000));
+        assert_eq!(lulls.later(), Ms::new(300_000));
+        assert_eq!(lulls.for_round(0), lulls.first(), "the lobby's next Lull");
+        assert_eq!(lulls.for_round(1), lulls.first());
+        assert_eq!(lulls.for_round(2), lulls.later());
+        assert_eq!(lulls.for_round(6), lulls.later());
+
+        let mut json = std::fs::read_to_string("../../rules/rules.v1.json").expect("the table");
+        json = json.replace("\"first_lull_ms\": 600000", "\"first_lull_ms\": 0");
+        let zeroed = pharmakos_sim::rules::RulesTable::from_canonical_json(&json)
+            .expect("a table with a zero first Lull still loads");
+        assert_eq!(
+            LullLengths::from_rules(&zeroed),
+            Err(LullRowError::NotPositive {
+                row: "first_lull_ms",
+                value: 0
+            }),
+            "a zero is refused, never read as a Lull of no length"
         );
     }
 

@@ -344,7 +344,8 @@ pub fn briefing(
     )
 }
 
-/// `get_recap`'s prose.
+/// `get_recap`'s prose, once a segment has ended: the round, how many ticks
+/// its segment ran, and how the match stands.
 ///
 /// `outcome` is the reason and **every** winner, in seat order: the last seat
 /// standing, the final audit's single winner, or the seats a shared win ties
@@ -352,11 +353,29 @@ pub fn briefing(
 /// win"). The recap names each of them.
 #[must_use]
 pub fn recap(round: u32, ticks: u32, outcome: Option<(MatchEndReason, &[u8])>) -> String {
-    let segment = format!("Round {round} ran {ticks} ticks.");
-    let Some((reason, winners)) = outcome else {
-        return format!("{segment} The match continues.");
+    format!("Round {round} ran {ticks} ticks. {}", ending(outcome))
+}
+
+/// `get_recap`'s prose when there is no segment end to read: before the first
+/// one (`first_round`), or in a match resumed since its last one, whose recap
+/// figures a resume does not carry (the surface module's PLACEHOLDER, owner
+/// at S7).
+#[must_use]
+pub fn no_recap(first_round: bool, outcome: Option<(MatchEndReason, &[u8])>) -> String {
+    let lead = if first_round {
+        "No round has ended yet."
+    } else {
+        "This match was resumed, and its last recap is not kept across a resume."
     };
-    let ended = format!("{segment} The match ended: {}.", reason.name());
+    format!("{lead} {}", ending(outcome))
+}
+
+/// How the match stands, for the recap.
+fn ending(outcome: Option<(MatchEndReason, &[u8])>) -> String {
+    let Some((reason, winners)) = outcome else {
+        return String::from("The match continues.");
+    };
+    let ended = format!("The match ended: {}.", reason.name());
     match (reason, winners) {
         (MatchEndReason::LastSeatStanding, [seat, ..]) => format!("{ended} Seat {seat} stands."),
         (_, []) => format!("{ended} The final audit names no winner."),
@@ -366,6 +385,30 @@ pub fn recap(round: u32, ticks: u32, outcome: Option<(MatchEndReason, &[u8])>) -
             seats_prose(several)
         ),
     }
+}
+
+/// The recap's settlement line, the seat's own (spec section 7,
+/// "Settlement"): what the Ledger credited it, and the award fund, which
+/// pays nobody until S4 brings the awards it is split by.
+#[must_use]
+pub fn settlement(bmi_dollars: i32) -> String {
+    format!(
+        "The Ledger settled and credited you $ {bmi_dollars}, your Basic Minimum Income at your \
+         band. The award fund pays out from S4, when there are awards to split it by."
+    )
+}
+
+/// The recap's shortfall line, the seat's own: which of its beacons were
+/// dark when the segment ended, by name (spec section 7, "flagged in plain
+/// language in the recap").
+#[must_use]
+pub fn shortfall(beacon_ids: &[String]) -> String {
+    let (verb, names) = match beacon_ids.split_last() {
+        None => ("was", String::from("none of your beacons")),
+        Some((last, [])) => ("was", last.clone()),
+        Some((last, rest)) => ("were", format!("{} and {last}", rest.join(", "))),
+    };
+    format!("When the segment ended, {names} {verb} dark: draw outran supply.")
 }
 
 /// `seats 0 and 1`, `seats 0, 1 and 2`.
@@ -405,23 +448,25 @@ pub fn beacon(id: &str, mandate: &str, hit_points: i32, own: bool) -> String {
 pub const UNRENDERABLE: &str = "This file has no canonical form yet, so there is nothing to read back. Verify it: the \
      diagnostics say where it stops being a playbook.";
 
-/// The seat's own displayed standing, when the audit that settles it has not
-/// been built.
-///
-/// PLACEHOLDER: the score and the rank are the full audit score of spec
-/// section 3. The audit now exists (`pharmakos_sim::audit`, which names a
-/// round-limit winner), but a seat's own live score and rank on the briefing
-/// are the economy's surfaces, S1's `econ` lane's (owner, at S1). Until then
-/// the standing carries the one number this surface shows -- how many seats
-/// are still standing -- and says so rather than showing a zero a player would
-/// read as a rank.
+/// `get_briefing`'s standing sentence: how many seats still stand, and the
+/// seat's own place on the displayed standing (spec section 3: "live
+/// standings show a seat its own score and displayed rank only", on the full
+/// audit score). `place` is the seat's rank and how many seats the standing
+/// ranks, or `None` for a seat out of the match, which holds no place; the
+/// score is its own either way (the register's X-03).
 #[must_use]
-pub fn standing(living: u32) -> String {
-    format!(
-        "{} still standing. Your score and rank are settled by the final audit, which the \
-         economy has not been built to run yet.",
-        count(living, "seat", "seats"),
-    )
+pub fn standing(living: u32, place: Option<(u32, u32)>, score: i32) -> String {
+    let standing = count(living, "seat", "seats");
+    match place {
+        Some((rank, of)) => format!(
+            "{standing} still standing. Your score is $ {score}, which ranks you {rank} of {of} on \
+             the final audit's terms."
+        ),
+        None => format!(
+            "{standing} still standing. You are out of the match, so you hold no place on the \
+             standing; your score is $ {score}."
+        ),
+    }
 }
 
 /// A phase, as a sentence says it.
@@ -474,7 +519,10 @@ fn capitalise(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{briefing, capitalise, clock, count, event_text, map_summary, recap, standing};
+    use super::{
+        briefing, capitalise, clock, count, event_text, map_summary, no_recap, recap, settlement,
+        shortfall, standing,
+    };
     use pharmakos_sim::events::{Event, EventKind};
     use pharmakos_sim::math::quantity::{Ms, Tick};
     use pharmakos_sim::runner::{MatchEndReason, MatchPhase};
@@ -562,11 +610,51 @@ mod tests {
     }
 
     #[test]
+    fn the_recap_reads_a_segment_end_or_says_there_is_none() {
+        assert_eq!(
+            recap(2, 6_000, None),
+            "Round 2 ran 6000 ticks. The match continues."
+        );
+        assert_eq!(
+            no_recap(true, None),
+            "No round has ended yet. The match continues."
+        );
+        assert!(no_recap(false, None).starts_with("This match was resumed"));
+    }
+
+    #[test]
+    fn the_settlement_and_shortfall_lines_name_the_seats_own_figures() {
+        let line = settlement(113);
+        assert!(line.contains("credited you $ 113"), "{line}");
+        assert!(
+            line.contains("S4"),
+            "the award fund is named as S4's: {line}"
+        );
+        assert_eq!(
+            shortfall(&[String::from("b_02")]),
+            "When the segment ended, b_02 was dark: draw outran supply."
+        );
+        assert_eq!(
+            shortfall(&[
+                String::from("b_01"),
+                String::from("b_02"),
+                String::from("b_04")
+            ]),
+            "When the segment ended, b_01, b_02 and b_04 were dark: draw outran supply."
+        );
+    }
+
+    #[test]
     fn the_map_prose_and_the_standing_prose_say_what_they_know() {
         let prose = map_summary([384, 384, 64], "0x00000000ca5caded", 2);
         assert!(prose.contains("384 by 384 by 64"), "{prose}");
         assert!(prose.contains("0x00000000ca5caded"), "{prose}");
-        assert!(standing(2).starts_with("2 seats still standing."));
+        assert_eq!(
+            standing(2, Some((1, 2)), 412),
+            "2 seats still standing. Your score is $ 412, which ranks you 1 of 2 on the final \
+             audit's terms."
+        );
+        assert!(standing(1, None, 0).contains("You are out of the match"));
     }
 
     #[test]

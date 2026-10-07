@@ -403,16 +403,6 @@ fn surface_for(
     table: &pharmakos_sim::rules::RulesTable,
     host: pharmakos_gateway::host::Host,
 ) -> Result<pharmakos_gateway::surface::Surface, String> {
-    let lull = table
-        .message()
-        .r#match
-        .as_ref()
-        .map(|block| block.lull_ms)
-        .ok_or_else(|| {
-            String::from(
-                "the rules table carries no `match` block, so nothing says how long a Lull is",
-            )
-        })?;
     let seats = [
         pharmakos_sim::tables::SeatId::new(0),
         pharmakos_sim::tables::SeatId::new(1),
@@ -426,7 +416,17 @@ fn surface_for(
     )
     .map_err(|error| error.message)?;
     surface.attach(host).map_err(|error| error.message)?;
-    surface.set_phase_remaining_ms(pharmakos_sim::math::quantity::Ms::new(lull));
+    // The opening Lull's whole length, which the check spends no host time
+    // in (AGENTS.md section 4.5): round 1's `rules.match.first_lull_ms`,
+    // through the gateway's own typed read, which refused a table with no
+    // usable Lull row when the surface was made (S1's plan, task `econ`).
+    let round = surface
+        .host()
+        .map_err(|error| error.message.clone())?
+        .runner()
+        .round();
+    let lull = surface.lull_length(round);
+    surface.set_phase_remaining_ms(lull);
     surface.open_lull().map_err(|error| error.message)?;
     Ok(surface)
 }
@@ -436,4 +436,45 @@ fn surface_for(
 #[must_use]
 pub fn reference_view() -> Vec<String> {
     seat::described()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::surface_for;
+
+    #[test]
+    fn the_match_check_opens_round_one_with_the_first_lulls_whole_length() {
+        let root = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
+        let json =
+            std::fs::read_to_string(root.join("rules/rules.v1.json")).expect("the rules table");
+        let table = pharmakos_sim::rules::RulesTable::from_canonical_json(&json)
+            .expect("the committed rules table");
+        let first = table
+            .message()
+            .r#match
+            .as_ref()
+            .map(|block| block.first_lull_ms)
+            .expect("a match block");
+        let host = pharmakos_gateway::host::Host::open(
+            &pharmakos_sim::world::WorldConfig {
+                match_seed: super::CHECK_SEED,
+                seats: 2,
+                units_per_seat: 0,
+                rules: table.clone(),
+                match_settings: pharmakos_sim::runner::MatchSettings {
+                    segment_lengths_ms: vec![super::CHECK_SEGMENT_MS],
+                    round_limit: pharmakos_sim::runner::DEFAULT_ROUND_LIMIT,
+                },
+            },
+            None,
+        )
+        .expect("a match");
+        let surface = surface_for(&table, host).expect("the check's surface");
+        assert_eq!(surface.time().round, 1);
+        assert_eq!(
+            surface.time().phase_remaining_ms.raw(),
+            first,
+            "round 1's Lull is handed over as `first_lull_ms`"
+        );
+    }
 }

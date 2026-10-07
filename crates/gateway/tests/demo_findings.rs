@@ -28,7 +28,8 @@ use pharmakos_gateway::token::Token;
 use pharmakos_proto::gp::api::v1::status::Phase;
 use pharmakos_proto::json::Json;
 use support::{
-    LULL_MS, array_of, call_in_lull, core_beacon, hosted, quote, result, seat_token, step, text_of,
+    FIRST_LULL_MS, LULL_MS, array_of, call_in_lull, core_beacon, hosted, quote, result, seat_token,
+    step, text_of,
 };
 
 /// Every `(kind, text)` on one viewer's page of the current segment's feed.
@@ -49,7 +50,7 @@ fn feed(surface: &mut Surface, token: &Token, left: &mut i32) -> Vec<(String, St
 #[test]
 fn a_timeout_filing_is_named_in_the_seats_own_feed() {
     let mut surface = hosted(2, 1_000, 3);
-    let mut left = LULL_MS;
+    let mut left = FIRST_LULL_MS;
     let seat0 = seat_token(&mut surface, 0);
     let seat1 = seat_token(&mut surface, 1);
     // Seat 1 seals its own playbook; seat 0 seals nothing, so the Lull runs
@@ -116,7 +117,7 @@ const DEPLOY_WEST: &str = r#"{"schema_version": {"major": 1},
 #[test]
 fn estimate_route_sends_a_nearest_leg_to_the_nearest_beacon() {
     let mut surface = hosted(2, 40_000, 3);
-    let mut left = LULL_MS;
+    let mut left = FIRST_LULL_MS;
     let token = seat_token(&mut surface, 0);
     let submitted = call_in_lull(
         &mut surface,

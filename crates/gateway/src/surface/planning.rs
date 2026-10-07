@@ -30,8 +30,10 @@
 //! # `submit_plan` always runs FULL, and an invalid playbook is not an error
 //!
 //! Spec section 12 and decisions-log item 82: `verify_plan{depth}` and
-//! `report_hash` ship complete, FULL's estimate and lint stages are present and
-//! empty, and submit runs FULL. So a FULL pre-check and the check at submit
+//! `report_hash` ship complete, and submit runs FULL -- since S1 a FULL that
+//! runs its estimate stage (`E0601`, the `W06xx` and `W07xx` warnings and
+//! `I0001`, the `proj` lane's) and its lint stage (targeting's lints, the
+//! `tgtv` lane's) as well as QUICK's. So a FULL pre-check and the check at submit
 //! produce the **same `report_hash`** -- which is what the walkthrough asserts
 //! and what makes the seal inspectable rather than a second opinion.
 //!
@@ -49,7 +51,9 @@
 //! vocabulary whose effect waits for a later stage, an enum value newer than
 //! this build, a voxel the verifier's resolve stage does not yet bound.
 //!
-//! [`compile_playbook`] is where the second door is, and it is **at submit**
+//! [`compile_playbook`] is where the second door is (its one `Plan::compile`
+//! call is [`compile_decoded`], which `resolve_refs` shares, so a preview and
+//! a seal go through the same door), and it is **at submit**
 //! rather than at `begin_push` (decisions-log item 103 (1)): a refusal
 //! discovered when the Lull ends is a refusal nobody is listening for, and the
 //! seat would find out by watching a commander stand still. So the compile
@@ -551,6 +555,10 @@ impl Surface {
     /// file with no canonical form names nothing yet, and is refused too:
     /// `verify_plan` is where its diagnostics are.
     ///
+    /// **Outside a Push only**, as `estimate_route`'s `covering` is: in a Push
+    /// the hosted world is the live one, so a preview there would rank over
+    /// the live map and is `PHASE_CLOSED` (decisions-log item 133 (3) (f)).
+    ///
     /// Internal in S1 -- it is on the advisor's allow-list
     /// ([`crate::serve::ADVISOR_METHODS`]) because the operator, like the
     /// editor, cannot reach the sim -- and published with v1.1.
@@ -562,6 +570,19 @@ impl Surface {
         let seat = Surface::seat_of(subject, "a playbook to resolve")?;
         let playbook = playbook_param(request)?;
         let host = self.host()?;
+        // Its own gate, beside the door's: a preview reads the hosted world,
+        // which is the frozen planning world only outside a Push. In a Push
+        // the world has moved on, and a ranking over it would answer about
+        // the live map -- which `estimate_route`'s `covering` already refuses
+        // the same way (decisions-log item 133 (3) (f)). The door closes every
+        // `plan`-scoped method in a Push and a recap; this holds the rule
+        // where the read is, should the method's scope ever change.
+        if host.runner().phase() == pharmakos_sim::runner::MatchPhase::Push {
+            return Err(Error::phase_closed(
+                "`resolve_refs` reads the frozen world, and in a Push the world has moved on \
+                 from it: ask outside a Push",
+            ));
+        }
         let canonical = pharmakos_plan_core::canonicalise_text(playbook).map_err(|error| {
             Error::invalid(format!(
                 "this file has no canonical form yet, so it names nothing to resolve: {}",

@@ -149,7 +149,7 @@ use crate::save::{
     Boundary, Continuation, Persistence, SavedMatch, SavedSeal, SavedSeat, SealedFile, SegmentChain,
 };
 use crate::scopes::{self, Scope};
-use crate::time::MatchTime;
+use crate::time::{LullLengths, MatchTime};
 use crate::token::{Grant, Handle, Subject, Token, TokenStore};
 use crate::viewfeed::ViewFeed;
 use pharmakos_proto::gp::api::v1::status::Phase;
@@ -364,6 +364,10 @@ pub struct Surface {
     match_id: String,
     match_seed: u64,
     rules: RulesTable,
+    /// The Lulls' declared lengths, read from `rules` once and typed
+    /// ([`LullLengths`]): round 1's is `match.first_lull_ms`, every later
+    /// one's `match.lull_ms`.
+    lulls: LullLengths,
     time: MatchTime,
     tokens: TokenStore,
     fog: FogPolicy,
@@ -419,6 +423,36 @@ pub struct Surface {
     /// The current segment's per-tick chain, as it is played: the private
     /// replay's third input, written at the segment's end.
     chain: Vec<(Tick, u64)>,
+    /// What the last segment's end left for its recap, read off the sim's own
+    /// events as they arrive ([`Surface::absorb_events`]). `None` until a
+    /// segment has ended in this process: a resume does not carry it, as it
+    /// does not carry the recap's events (the module doc's PLACEHOLDER).
+    recap: Option<RecapFacts>,
+}
+
+/// What one segment's end told the recap, as the sim reported it: the round,
+/// how many ticks the segment ran (`segment_ended`'s value), what the Ledger
+/// credited each seat (`settled`'s value), and which of each seat's beacons
+/// were dark when it ended.
+///
+/// Derived, unhashed gateway state, like the feed it is read beside. Kept
+/// because a recap reads the segment that has **closed**, and once it has
+/// closed the match state no longer says how long it ran: the sim moves the
+/// segment's start to the closing tick, so a count taken from it reads 0
+/// ticks for a round that ran in full (the recap's "Round N ran 0 ticks",
+/// found by the `check` lane; decisions-log item 130 (4)).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(crate) struct RecapFacts {
+    /// The round whose segment ended, from 1.
+    pub(crate) round: u32,
+    /// How many ticks it ran.
+    pub(crate) ticks: u32,
+    /// What the Ledger credited each seat at this settlement, whole `$`, in
+    /// the order the sim settled them (ascending seat).
+    pub(crate) settled: Vec<(SeatId, i64)>,
+    /// Each seat's own living beacons that were dark when the segment ended,
+    /// by per-seat ordinal, ascending; a seat with none dark is absent.
+    pub(crate) dark: Vec<(SeatId, Vec<u32>)>,
 }
 
 impl Surface {
@@ -429,7 +463,8 @@ impl Surface {
     /// [`crate::error::Code::InvalidArgument`] for a match id
     /// [`crate::cache::MatchCache::valid_match_id`] refuses -- the same gate the
     /// filesystem uses, applied here so a match whose id could not be written
-    /// down never starts.
+    /// down never starts -- and for a rules table whose Lull rows are missing
+    /// or not positive ([`LullLengths::from_rules`]).
     pub fn new(
         match_id: &str,
         match_seed: u64,
@@ -442,6 +477,8 @@ impl Surface {
                 "`{match_id}` is not a match id this gateway will host"
             )));
         }
+        let lulls =
+            LullLengths::from_rules(&rules).map_err(|why| Error::invalid(why.to_string()))?;
         let mut slots: Vec<SeatState> = seats.iter().copied().map(SeatState::new).collect();
         slots.sort_by_key(|slot| slot.seat.raw());
         slots.dedup_by_key(|slot| slot.seat.raw());
@@ -449,6 +486,7 @@ impl Surface {
             match_id: match_id.to_owned(),
             match_seed,
             rules,
+            lulls,
             time: MatchTime::lobby(),
             tokens: TokenStore::new(),
             fog,
@@ -467,6 +505,7 @@ impl Surface {
             views: ViewFeed::new(),
             pending: Persistence::default(),
             chain: Vec::new(),
+            recap: None,
         })
     }
 
@@ -975,10 +1014,13 @@ impl Surface {
     /// not a budget the limiter spends, but it **is** what every seat reads
     /// off the `_status` footer as the time it has left to plan, so an
     /// unbounded one would let the lobby tell a seat its Lull lasts a day.
-    /// The bound is the Lull's own declared length, `rules.match.lull_ms` --
-    /// a tuning value read from the rules table and not a constant of this
-    /// crate's (AGENTS.md section 12) -- and it is refused rather than
-    /// clamped like the other three.
+    /// The bound is the Lull's own declared length for the round the match is
+    /// on ([`Surface::lull_length`]): `rules.match.first_lull_ms` for round
+    /// 1's Lull and `rules.match.lull_ms` for every later one -- tuning values
+    /// read from the rules table and not constants of this crate's (AGENTS.md
+    /// section 12) -- and it is refused rather than clamped like the other
+    /// three. A countdown reported in the lobby, or in a phase that is not a
+    /// Lull, is bounded by the Lull that opens next.
     ///
     /// # Errors
     ///
@@ -1008,11 +1050,12 @@ impl Surface {
                 crate::surface::control::MAX_CLOCK_STEP_MS
             )));
         }
-        let lull_ms = self.lull_ms();
-        if remaining.raw() > lull_ms {
+        let lull = self.lull_length(self.time.round);
+        if remaining > lull {
             return Err(Error::invalid(format!(
-                "`remaining_ms` is what is left of a Lull and a Lull is {lull_ms} ms long; this \
-                 reports {} ms left, which is refused rather than clamped",
+                "`remaining_ms` is what is left of a Lull and this round's Lull is {} ms long; \
+                 this reports {} ms left, which is refused rather than clamped",
+                lull.raw(),
                 remaining.raw()
             )));
         }
@@ -1022,6 +1065,19 @@ impl Surface {
         }
         self.sync_time();
         Ok(())
+    }
+
+    /// How long the Lull that opens round `round` is declared to be:
+    /// `rules.match.first_lull_ms` for round 1 and `rules.match.lull_ms` for
+    /// every round after it ([`LullLengths::for_round`]).
+    ///
+    /// The host reads it to tell the gateway a Lull's whole length when it
+    /// spends no host time in one (`gamectl scenario run`, `gamectl seat
+    /// doctor`; AGENTS.md section 4.5), so a host and the gateway can never
+    /// disagree about which row a round's Lull is.
+    #[must_use]
+    pub const fn lull_length(&self, round: u32) -> Ms {
+        self.lulls.for_round(round)
     }
 
     /// True when every seat of the match has said it is ready.
@@ -1433,8 +1489,10 @@ impl Surface {
     ///
     /// So the tick here is the runner's **plus every tick of host time no sim
     /// tick covered**, derived from two numbers the gateway is given rather
-    /// than from a clock it read: `rules.match.lull_ms`, which is the Lull's
-    /// length, and the client's own answer to how much of it is left
+    /// than from a clock it read: the Lull's declared length
+    /// ([`Surface::lull_length`]: round 1's `rules.match.first_lull_ms`, every
+    /// later round's `rules.match.lull_ms`), and the client's own answer to how
+    /// much of it is left
     /// ([`Surface::set_phase_remaining_ms`]). That is decisions-log item 99's
     /// arrangement exactly -- "the Lull's timer stays on the client side of the
     /// wall" and what reaches the gateway is the host's answer, in ticks of
@@ -1457,23 +1515,22 @@ impl Surface {
     /// sim's tick, so anything that has to be in sim-tick space reads
     /// `host.runner().tick()` instead -- [`Surface::begin_segment`] is the one
     /// place that does. And the derivation applies to the **Lull** and to no
-    /// other phase: `rules.match.lull_ms` is a Lull's length and means nothing
-    /// measured against a recap, which has no declared length at all and simply
-    /// holds the tick still for as long as it lasts.
-    /// `rules.match.lull_ms`: how long a Lull is declared to be.
+    /// other phase: a Lull's length means nothing measured against a recap,
+    /// which has no declared length at all and simply holds the tick still for
+    /// as long as it lasts.
     ///
-    /// A tuning value, read from the rules table the surface was built with
-    /// rather than written into this crate as a constant (AGENTS.md section
-    /// 12). Zero when the table has no match settings, which is a table no
-    /// shipped match runs on.
-    fn lull_ms(&self) -> i32 {
-        self.rules
-            .message()
-            .r#match
-            .as_ref()
-            .map_or(0, |settings| settings.lull_ms)
-    }
-
+    /// # No countdown is told apart from one that ran out
+    ///
+    /// `untimed` is the footer's answer to "is `phase_remaining_ms` a timer at
+    /// all" (`gp.api.v1.Status.untimed`; S1's plan, decision 12, the register's
+    /// S1-11). The lobby, a recap and an ended match have no declared length
+    /// and are untimed; a Push is game time and never is; and a Lull is timed
+    /// once its host has reported a countdown for it, which is the only
+    /// evidence the gateway has of one, because the Lull's timer is the
+    /// client's (decisions-log item 99). A Lull no host has put a countdown on
+    /// -- before the first report, or one run with no timer at all, as S6's
+    /// untimed Probation Lulls will be -- reads `untimed` rather than a 0 a
+    /// client would show as a timer that ran out.
     fn sync_time(&mut self) {
         let Some(host) = self.host.as_ref() else {
             return;
@@ -1489,27 +1546,21 @@ impl Surface {
         let in_push = runner.phase() == MatchPhase::Push;
         let in_lull = runner.phase() == MatchPhase::Lull;
         let reported = self.lull_remaining_ms;
-        // PLACEHOLDER: what `_status.phase_remaining_ms` shows outside a Push
-        // is the client's own report, and zero when there is none -- which
-        // makes an UNTIMED Lull and a RECAP read identically to a Lull whose
-        // timer has just run out. A recap has no declared length at all, and
-        // `serve_report_host_clock` now refuses a countdown outside a Lull,
-        // so the recap's figure is fixed at zero by this lane rather than
-        // decided. Whether a recap and an untimed Lull should instead be a
-        // distinguishable "no countdown" is **OWNER**, at **S1**, with the
-        // recap screen.
+        // Outside a Push the figure is the client's own report, and 0 when
+        // there is none; `untimed` is what says that 0 is no countdown rather
+        // than one that ran out (S1-11, ruled by decision 12).
+        let untimed = match runner.phase() {
+            MatchPhase::Push => false,
+            MatchPhase::Lull => reported.is_none(),
+            MatchPhase::Recap | MatchPhase::Ended => true,
+        };
         let remaining = if in_push {
             let elapsed = runner.tick().since(state.segment_started());
             Ms::from_ticks(state.segment_ticks().saturating_sub(elapsed))
         } else {
             reported.unwrap_or(Ms::ZERO)
         };
-        let lull_ms = host
-            .rules()
-            .message()
-            .r#match
-            .as_ref()
-            .map_or(0, |settings| settings.lull_ms);
+        let lull_ms = self.lulls.for_round(runner.round()).raw();
         // In a Push the sim's own tick is the clock. Outside one, the host's
         // own report is taken first -- it is phase-neutral and is what a recap
         // and an ended match have -- and the Lull's countdown is the older
@@ -1543,6 +1594,7 @@ impl Surface {
             phase_remaining_ms: remaining,
             segment_length_ms: runner.frozen().coming_segment_ms(),
             round: runner.round(),
+            untimed,
         };
     }
 
@@ -1580,6 +1632,7 @@ impl Surface {
         let drained = host.drain_events();
         let anchor = self.feed_anchor;
         for event in drained {
+            self.note_for_the_recap(&event)?;
             let kind = Kind::new(event.kind.name()).map_err(|error| {
                 Error::internal(format!(
                     "the sim emitted `{}`, which this feed will not carry: {}",
@@ -1597,6 +1650,59 @@ impl Surface {
             })?;
         }
         Ok(())
+    }
+
+    /// Keep what a segment's end tells the recap ([`RecapFacts`]).
+    ///
+    /// `segment_ended` opens a new record, with the ticks the segment ran and
+    /// every seat's dark beacons read off the world as it stands, which is the
+    /// world at that segment end: the host drains the bus right after the tick
+    /// that closed the segment ([`Surface::step`]). Each `settled` that
+    /// follows it in the same tick adds what the Ledger credited one seat.
+    /// Every other kind is the feed's alone.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::Internal`] when a `segment_ended` carries a tick
+    /// count that is not one, or a `settled` arrives naming no seat or with
+    /// no segment end before it: each is the sim and this crate disagreeing
+    /// about the event's shape.
+    fn note_for_the_recap(&mut self, event: &pharmakos_sim::events::Event) -> Result<(), Error> {
+        use pharmakos_sim::events::EventKind;
+        match event.kind {
+            EventKind::SegmentEnded => {
+                let ticks = u32::try_from(event.value).map_err(|_| {
+                    Error::internal(format!(
+                        "the sim ended a segment after {} ticks, which is not a tick count",
+                        event.value
+                    ))
+                })?;
+                let host = self.host()?;
+                self.recap = Some(RecapFacts {
+                    round: host.runner().round(),
+                    ticks,
+                    settled: Vec::new(),
+                    dark: dark_beacons(host.world()),
+                });
+            }
+            EventKind::Settled => {
+                let seat = event.seat.ok_or_else(|| {
+                    Error::internal("the Ledger settled a credit and named no seat for it")
+                })?;
+                let facts = self.recap.as_mut().ok_or_else(|| {
+                    Error::internal("the Ledger settled before any segment had ended")
+                })?;
+                facts.settled.push((seat, event.value));
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// What the last segment's end told the recap, when a segment has ended
+    /// in this process.
+    pub(crate) const fn recap_facts(&self) -> Option<&RecapFacts> {
+        self.recap.as_ref()
     }
 
     /// Who one sim event is for.
@@ -2441,7 +2547,7 @@ impl Surface {
 
             // Knowledge.
             Method::GetBriefing => self.get_briefing(subject, held, request),
-            Method::GetRecap => self.get_recap(request),
+            Method::GetRecap => self.get_recap(subject, request),
             Method::ListBeacons => self.list_beacons(subject, held, request, vision),
             Method::GetBeacon => self.get_beacon(subject, held, request, vision),
             Method::GetMapSummary => self.get_map_summary(subject, request),
@@ -2725,6 +2831,38 @@ impl Surface {
 
 /// The plan fingerprint of a playbook's canonical form (decisions-log item
 /// 77): what a save carries beside each seal, and what a resume recomputes.
+/// Every seat's own living beacons that are dark as the world stands, by
+/// per-seat ordinal: the seats in ascending id and each seat's ordinals
+/// ascending, which is `gp.api.v1.Shortfall.beacon_ids`' order. A seat with
+/// no dark beacon is left out. A beacon that has died is not dark: it is
+/// gone, and the recap's shortfall line is about the grid.
+fn dark_beacons(world: &pharmakos_sim::world::World) -> Vec<(SeatId, Vec<u32>)> {
+    let beacons = world.beacons();
+    let mut found: Vec<(u8, u32)> = (0..beacons.ids().len())
+        .filter(|row| beacons.dormant().get(*row).copied() == Some(true))
+        .filter(|row| {
+            beacons
+                .hit_points()
+                .get(*row)
+                .is_some_and(|hp| hp.is_alive())
+        })
+        .filter_map(|row| {
+            let seat = beacons.seats().get(row).copied()?;
+            let ordinal = beacons.ordinals().get(row).copied()?;
+            Some((seat, ordinal))
+        })
+        .collect();
+    found.sort_unstable();
+    let mut grouped: Vec<(SeatId, Vec<u32>)> = Vec::new();
+    for (seat, ordinal) in found {
+        match grouped.last_mut() {
+            Some((held, ordinals)) if held.raw() == seat => ordinals.push(ordinal),
+            _ => grouped.push((SeatId::new(seat), vec![ordinal])),
+        }
+    }
+    grouped
+}
+
 fn plan_fingerprint(playbook_jsonc: &str) -> Result<u64, Error> {
     let canonical = pharmakos_plan_core::canonicalise_text(playbook_jsonc).map_err(|error| {
         Error::internal(format!(
@@ -2843,6 +2981,7 @@ mod tests {
             phase_remaining_ms: Ms::new(174_000),
             segment_length_ms: Ms::new(180_000),
             round: 1,
+            untimed: false,
         });
         surface
     }

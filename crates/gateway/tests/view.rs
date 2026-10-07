@@ -34,8 +34,8 @@ use std::collections::BTreeSet;
 use std::fs;
 
 use support::{
-    LULL_MS, MATCH, SEED, SEGMENT_MS, admin_token, array_of, call, call_in_lull, chunks_of, code,
-    core_beacon, erase, fell, hosted, hosted_as, hosted_casual, result, seat_token,
+    FIRST_LULL_MS, MATCH, SEED, SEGMENT_MS, admin_token, array_of, call, call_in_lull, chunks_of,
+    code, core_beacon, erase, fell, hosted, hosted_as, hosted_casual, result, seat_token,
     seen_and_unseen_in_one_chunk, spectator_token, sphere_radius, step, target_dir, text_of, view,
     view_pages, workspace_root,
 };
@@ -358,6 +358,7 @@ fn no_view_ever_carries_a_destination_a_step_a_mandate_or_a_hit_point() {
         "phase_remaining_ms",
         "segment_length_ms",
         "round",
+        "untimed",
     ];
 
     // All three policies a match can be under, and they are three: the
@@ -514,7 +515,7 @@ fn a_cursor_taken_in_a_lull_still_delivers_what_the_push_reveals() {
     let token = seat_token(&mut surface, 0);
     let (seen, _) = seen_and_unseen_in_one_chunk(&surface, 0);
 
-    let mut remaining = LULL_MS;
+    let mut remaining = FIRST_LULL_MS;
     let response = call_in_lull(
         &mut surface,
         &token,
@@ -878,6 +879,14 @@ fn the_view_one_tick_golden() {
 #[test]
 fn the_view_keyframe_golden() {
     let mut surface = hosted(2, SEGMENT_MS, 3);
+    // The footer this fixture carries reports 300 000 ms left, as it has since
+    // S1's first contract pull request: `godot/fixtures/view_keyframe.jsonl`
+    // is a byte-for-byte copy of it (`crates/client-gdext/tests/
+    // vista_fixture.rs`), and neither copy is the `econ` lane's to move. A
+    // countdown under the first Lull's 600 000 ms is one the gateway takes;
+    // re-copying the fixture at the whole first Lull is the next `godot/`
+    // lane's.
+    surface.set_phase_remaining_ms(pharmakos_sim::math::quantity::Ms::new(support::LULL_MS));
     let token = seat_token(&mut surface, 0);
     let pages = view_pages(&mut surface, &token, "");
 
