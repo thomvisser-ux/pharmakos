@@ -650,6 +650,34 @@ sections that add one name it in their Owns lines.
 - **PLACEHOLDERs:** seam shape and clearance constants (owner, S4's map re-derivation) if decision
   13 leaves them. **Agent-days:** 5–6.
 
+### `fog` — `crates/sim`: targeting's fog follow-up (item 133 (3) (c), (h), (j))
+
+- **Owns:** `crates/sim` (except `grid`'s named place), and a named place in
+  `crates/gateway/src/strings.rs`: `step_failed`'s line and its tests there, which read the
+  event's value (item 134 (2)); every golden its change moves. **Branch** `fix/sim-targeting-fog`,
+  worktree `../pharmakos-fog`, target `D:/build/fog`.
+- **Builds:** in `targeting.rs`'s `on_vent`, a named or `covered {}` `on` whose `on` column lies
+  outside the target sphere answers `no_target` **before** the structure test, so no answer
+  depends on a structure outside the seat's sphere (item 133 (3) (c): `no_target`, so a name reads
+  as a description does; item 131 (4)'s `illegal_site` reading narrows to vents inside the
+  sphere); `step_failed` carries the step's candidate count beside its reason, so the recap can
+  say "3 matched, none reachable" (item 133 (3) (h)), the value slot's layout written once in a
+  public sim type with a typed decode that the gateway's `step_failed` line uses, its words
+  unchanged in this PR (rendering the count is `econ`'s or `ui`'s); `matches_pick`,
+  `on_candidate` and `generator_on` made public, with docs, for the gateway to call (item 133 (3)
+  (j)); `targeting.rs`'s `usize::try_from(..).unwrap_or(0)` table-length reads replaced by a
+  checked or typed read (the global no-silent-fallback rule; `build` sweeps the rest of the sim).
+- **Implements:** item 133 (3) (c), (h), (j); targeting.md's "Sites" and "Surfaces".
+- **Needs:** `tgtw` merged (it has). **Acceptance:**
+  `a_named_vent_outside_the_sphere_is_no_target_whatever_stands_on_it` (a live Generator of
+  another seat on it, and none: both `no_target`); the same for `covered {}`;
+  `a_named_vent_inside_the_sphere_with_a_generator_is_still_illegal_site`; a `step_failed` whose
+  value decodes to its reason and its count, and a gateway test that the line's words are
+  unchanged; `cover-nearest-vent`'s round 2 still fails `no_target`; **no chain moves** (events
+  are derived output, never hashed: `world.rs`), and an event-log golden that moves (a
+  `step_failed` value now carries a count) is re-blessed with the line named. **Contract PR:** no.
+  **PLACEHOLDERs:** none expected. **Agent-days:** 1–1.5.
+
 ### `grid` — named place in `crates/sim`: the four grid rulings
 
 - **Owns:** `crates/sim/src/power.rs`, the grid tests in `crates/sim/tests/economy.rs`, and the
@@ -698,7 +726,9 @@ sections that add one name it in their Owns lines.
   and empty", and `tests/confinement.rs`'s message placing the one `Plan::compile` call in
   `compile_playbook` (it is `compile_decoded` now); and, once the fog follow-up makes
   `matches_pick`, `on_candidate` and `generator_on` public, `src/targeting.rs` drops its restated
-  copies (item 133 (3) (j)).
+  copies (item 133 (3) (j)): if `fog` has merged when `econ`'s fix pass runs, that pass rebases and
+  drops them; otherwise the main session adds the commit at the merge (item 134 (2)). `econ` leaves
+  `strings.rs`'s `step_failed` line and its tests to `fog`'s named place.
 - **Implements:** item 127 (2)'s gateway half; register S1-11, S1-12, S1-46, X-03, X-16.
 - **Needs:** `tgtw` merged; decision 12. **Acceptance:** method and walkthrough goldens; a test that
   the bound admits a 600 000 ms first Lull and refuses 600 001; `scenario run` and `seat doctor`
@@ -862,6 +892,13 @@ also puts the candidate count on `step_failed` and makes `matches_pick`, `on_can
 `generator_on` public (item 133 (3) (h), (j)). Each launches on the owner's word. The table above is
 superseded where the as-run notes differ: it is the plan as adopted, and these notes are the
 schedule.
+
+**As run (item 134).** On the owner's word ("resume", 2026-10-06) wave 4's first run launched three
+lanes at once on `main` at `46ad80c`: `fog` (section 3, slot 1), `econ` (slot 2) and `grid` (slot 3,
+its named place beside `fog`). Merge order `fog` → `econ`, with `grid` independent of both: `fog`
+holds a named place in `econ`'s `crates/gateway/src/strings.rs` (`step_failed`'s line), and `econ`
+drops its restated predicates only once `fog` has made them public. `oper` follows `grid`; `build`
+follows `fog` and `econ`.
 
 **Totals.** 18 tasks in 17 lanes (`tgtv` and `proj` are one lane in two PRs), **about 71.5 ad**
 (63.5–79.5), against the code map's 62–74; this plan adds X-08's audit, the restore bug, the
