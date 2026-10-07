@@ -687,7 +687,9 @@ sections that add one name it in their Owns lines.
     living)` and the ladder-rank function `settle_ledger` computes inline (`world.rs` ~3670–3738,
     beside `economy.rs`'s `bmi_for` ~290), so the recap's `Settlement.band_rank` and
     `band_percent` come from the sim's rule rather than a restatement. Pure: no state change, and no
-    chain moves.
+    chain moves; added beside `settle_ledger`, which is tick-path determinism code and stays as it
+    is, with a test that each read agrees with what `settle_ledger` computes (`settle_ledger`'s rank
+    counts from 0 and `band_rank` from 1, which `econ` converts, checked).
   - **Every silent fallback in `targeting.rs`**, each a typed or checked read (the global
     no-silent-fallback rule): `sphere_radius()`'s `unwrap_or(0)` (~157); the
     `usize::try_from(..).unwrap_or(0)` table-length reads (~184–268); `Ranker::new`'s origin and
@@ -731,7 +733,8 @@ sections that add one name it in their Owns lines.
   (net zero holds by construction, decision 12), and no column changes (retiring it in favour of
   `structures.beacon.draw_kw`, if wanted, goes to `tune` as a contract row: a `rules.proto` change);
   and a `pub` read of a seat's dark load and shed kW in `power.rs`, pure, for `econ`'s shortfall
-  line (`Shortfall.kw`; item 134 (2) (c)).
+  line (`Shortfall.kw`; item 134 (2) (c)); `PowerRules::of`'s `map_or(0, ..)` row reads become
+  typed reads that refuse a missing row (the global no-silent-fallback rule).
 - **Implements:** item 127 (5) to (8); register S1-22, S1-31, S1-33, S1-35, S1-36.
 - **Acceptance:** `a_beacon_whose_shed_relieves_nothing_is_still_shed_ahead_of_the_core` inverted to
   `…_is_skipped_and_stays_lit`; the raise test at `tests/economy.rs` (~481) flipped to
@@ -854,7 +857,9 @@ sections that add one name it in their Owns lines.
   anchor read and the file's other `unwrap_or(0)` reads. Carried by item 134: the scenario notes
   that say a failure's id "is pinned by the chain" are untrue, because events are never hashed
   (`cover-nearest-vent`'s header, `against-easy-three-rounds`' round-2 note (~90) and
-  `unaffordable-deploy`'s header); `build` rewords them when it next touches the scenarios.
+  `unaffordable-deploy`'s header); `build` rewords them when it next touches the scenarios. Carried by item 134 too: `economy.rs`'s
+  `bmi_for` (~290) reads its rows with `unwrap_or(0)` and falls back to `Money::ZERO` when the
+  economy block is missing; `build` makes each a typed read, in the same sweep.
 - **Implements:** item 33 (a)'s Build settings as decision 5 reads them; register S1-24's reader,
   S1-42; spec §6's Build row.
 - **Needs:** `mine` and `fog` merged (one author of `crates/sim`); its fingerprint-caller commit
