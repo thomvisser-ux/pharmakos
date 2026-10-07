@@ -654,28 +654,60 @@ sections that add one name it in their Owns lines.
 
 - **Owns:** `crates/sim` (except `grid`'s named place), and a named place in
   `crates/gateway/src/strings.rs`: `step_failed`'s line and its tests there, which read the
-  event's value (item 134 (2)); every golden its change moves. **Branch** `fix/sim-targeting-fog`,
-  worktree `../pharmakos-fog`, target `D:/build/fog`.
-- **Builds:** in `targeting.rs`'s `on_vent`, a named or `covered {}` `on` whose `on` column lies
-  outside the target sphere answers `no_target` **before** the structure test, so no answer
-  depends on a structure outside the seat's sphere (item 133 (3) (c): `no_target`, so a name reads
-  as a description does; item 131 (4)'s `illegal_site` reading narrows to vents inside the
-  sphere); `step_failed` carries the step's candidate count beside its reason, so the recap can
-  say "3 matched, none reachable" (item 133 (3) (h)), the value slot's layout written once in a
-  public sim type with a typed decode that the gateway's `step_failed` line uses, its words
-  unchanged in this PR (rendering the count is `econ`'s or `ui`'s); `matches_pick`,
-  `on_candidate` and `generator_on` made public, with docs, for the gateway to call (item 133 (3)
-  (j)); `targeting.rs`'s `usize::try_from(..).unwrap_or(0)` table-length reads replaced by a
-  checked or typed read (the global no-silent-fallback rule; `build` sweeps the rest of the sim).
-- **Implements:** item 133 (3) (c), (h), (j); targeting.md's "Sites" and "Surfaces".
+  event's value (item 134 (2) (a)); every golden its change moves. **Branch**
+  `fix/sim-targeting-fog`, worktree `../pharmakos-fog`, target `D:/build/fog`.
+- **Builds:**
+  - **The sphere test first** (item 133 (3) (c)). In `targeting.rs`'s `on_vent`, a named or
+    `covered {}` `on` first tests the vent's anchor point, its anchor column's standing point
+    (`anchor_point`), against the target sphere (within `sphere_radius()` of the centre). No
+    structure can move that point; `Ground::on_column` cannot be the test, because it picks a free
+    column by reading structures. Outside the sphere the answer is `no_target`, whatever stands on
+    the vent, so no answer depends on a structure the seat cannot see (`no_target`, so a name reads
+    as a description does). Inside, the existing tests follow: a `taken` footprint or no free
+    column is `illegal_site`, and so is a free `on` column that lies outside the sphere. Item 131
+    (4)'s `illegal_site` reading narrows to vents inside the sphere. `Nearest` and `on_candidate`
+    are unchanged, and so is `cover`: `fog` changes only `on` picks, so `cover-nearest-vent`'s round
+    2 still fails `illegal_site`. The sphere test is published as a `pub fn` beside the three
+    predicates below, for `econ`'s `single` (item 134 (2) (b)).
+  - **The count on `step_failed`** (item 133 (3) (h)), so the recap can say "3 matched, none
+    reachable". The count is the candidates `matches_pick` or `on_candidate` admitted before
+    reachability was asked, the same meaning as `resolve_refs`'s `matched`: 1 or 0 for a name or
+    `covered {}`, and 0 for one outside the sphere. An absent count is distinct from 0 (no magic
+    value). The value slot's layout is written once in a public sim type with a typed decode, and
+    a bare reason id decodes as the reason with no count, so the gateway's feed test
+    (`crates/gateway/tests/targeting.rs` ~762–776), `strings.rs`'s `RETIRED_NOT_OWN` test and the
+    event-log goldens pass unchanged. `cover`, `on_vent`, `Ranker::new` and the `StepFailure`
+    variants stay source-compatible, because the gateway calls them (`surface/knowledge.rs` ~813,
+    `src/targeting.rs` ~66, and `surface/planning.rs` ~676–683, which matches unit variants): the
+    count travels through a new counted form or accessor. The gateway's `step_failed` line uses the
+    typed decode, its words unchanged in this PR (rendering the count is `econ`'s or `ui`'s).
+  - **The predicates made public** (item 133 (3) (j)): `matches_pick`, `on_candidate`,
+    `generator_on` and the sphere test, each a documented `pub fn`, for the gateway to call.
+  - **Two pure economy reads for `econ`** (item 134 (2) (c)): `economy::band_percent(rules, rank,
+    living)` and the ladder-rank function `settle_ledger` computes inline (`world.rs` ~3670–3738,
+    beside `economy.rs`'s `bmi_for` ~290), so the recap's `Settlement.band_rank` and
+    `band_percent` come from the sim's rule rather than a restatement. Pure: no state change, and no
+    chain moves.
+  - **Every silent fallback in `targeting.rs`**, each a typed or checked read (the global
+    no-silent-fallback rule): `sphere_radius()`'s `unwrap_or(0)` (~157); the
+    `usize::try_from(..).unwrap_or(0)` table-length reads (~184–268); `Ranker::new`'s origin and
+    anchor reads (~427–428, ~444–445); and the same idiom in `spiral_offsets`, `covering_site` and
+    `ring_key` (~531–532, ~561–583, ~622–623). `build` sweeps the sites item 133 (5) names.
+- **Implements:** item 133 (3) (c), (h), (j); item 134 (2); targeting.md's "Sites" and "Surfaces".
 - **Needs:** `tgtw` merged (it has). **Acceptance:**
   `a_named_vent_outside_the_sphere_is_no_target_whatever_stands_on_it` (a live Generator of
   another seat on it, and none: both `no_target`); the same for `covered {}`;
-  `a_named_vent_inside_the_sphere_with_a_generator_is_still_illegal_site`; a `step_failed` whose
-  value decodes to its reason and its count, and a gateway test that the line's words are
-  unchanged; `cover-nearest-vent`'s round 2 still fails `no_target`; **no chain moves** (events
-  are derived output, never hashed: `world.rs`), and an event-log golden that moves (a
-  `step_failed` value now carries a count) is re-blessed with the line named. **Contract PR:** no.
+  `a_named_vent_inside_the_sphere_with_a_generator_is_still_illegal_site`; a named vent whose
+  anchor point is inside the sphere and whose free `on` column is outside it is `illegal_site`; a
+  `step_failed` value that decodes to its reason and its count, a bare reason id that decodes to
+  the reason with no count, a value that does not decode refused with a typed error, and a gateway
+  test that the line's words are unchanged; the economy reads agree with `settle_ledger`'s credit
+  on the settlement golden; `cover-nearest-vent`'s round 2 still fails `illegal_site` (id 6). **No
+  chain moves:** events are derived output, never hashed (`world.rs`; `crates/sim/tests/runner.rs`'s
+  `the_event_bus_is_not_in_the_state_encoding`), and no committed run binds a named or `covered {}`
+  `on` outside the sphere. The event-log goldens (`expand-east-segment`'s `expected.events.txt`, the
+  `interpreter/guards` transcript) should not move, since bare ids decode as themselves; any that
+  moves (a count landing in a value) is re-blessed with the line named. **Contract PR:** no.
   **PLACEHOLDERs:** none expected. **Agent-days:** 1–1.5.
 
 ### `grid` — named place in `crates/sim`: the four grid rulings
@@ -683,12 +715,23 @@ sections that add one name it in their Owns lines.
 - **Owns:** `crates/sim/src/power.rs`, the grid tests in `crates/sim/tests/economy.rs`, and the
   `program_for` doc lines in `crates/sim/src/programs.rs`, and its scenario's path constant and
   `SCENARIOS` entry in `crates/gamectl/tests/scenarios.rs` (item 129; it merges after `mine` and
-  rebases over that file); runs beside `mine` (AGENTS.md §6 named place). **Branch** `feat/sim-grid-rulings`, worktree `../pharmakos-grid`, target `D:/build/grid`.
+  rebases over that file); runs beside `fog` (AGENTS.md §6 named place), merging independently of
+  `fog` and `econ` (item 134 (1); it was planned beside `mine`, which has merged). **Branch**
+  `feat/sim-grid-rulings`, worktree `../pharmakos-grid`, target `D:/build/grid`.
 - **Builds:** S1-33 (a shed that relieves nothing is skipped); S1-22 (a priority raise re-applies
   the brownout order: a dark beacon relights at once when shedding lit beacons of lower priority
-  covers it, with draw no higher than supply after the swap); S1-35 and S1-36 reworded as ruled;
-  S1-31 per decision 12; `power.beacon_base_draw_kw` read (retiring it in favour of
-  `structures.beacon.draw_kw`, if wanted, goes to `tune` as a contract row: a `rules.proto` change).
+  covers it, with draw no higher than supply after the swap), a check inside `settle` (`power.rs`
+  ~190): a dark beacon whose load fits once lit lower-priority beacons are shed swaps with them, no
+  new state, ties to the lowest seat and then the lowest beacon id (S1-22's copy in
+  `crates/operator/src/safe.rs` is `oper`'s); S1-35 reworded in the `program_for` doc lines only
+  (the behaviour exists, `programs.rs` ~131–146, and the new test pins it; the rules-text sentence
+  of item 127 (5) rides with `tune`'s rules PR, because `rules/rules.v1.json` moves `rules_hash` and
+  ships); S1-36 reworded as ruled; S1-31 per decision 12; `power.beacon_base_draw_kw` read:
+  `PowerRules::of` reads it and a test asserts that a beacon's key-core supplies exactly that base
+  (net zero holds by construction, decision 12), and no column changes (retiring it in favour of
+  `structures.beacon.draw_kw`, if wanted, goes to `tune` as a contract row: a `rules.proto` change);
+  and a `pub` read of a seat's dark load and shed kW in `power.rs`, pure, for `econ`'s shortfall
+  line (`Shortfall.kw`; item 134 (2) (c)).
 - **Implements:** item 127 (5) to (8); register S1-22, S1-31, S1-33, S1-35, S1-36.
 - **Acceptance:** `a_beacon_whose_shed_relieves_nothing_is_still_shed_ahead_of_the_core` inverted to
   `…_is_skipped_and_stays_lit`; the raise test at `tests/economy.rs` (~481) flipped to
@@ -701,34 +744,43 @@ sections that add one name it in their Owns lines.
 
 ### `econ` — `crates/gateway`: the economy's surfaces
 
-- **Owns:** `crates/gateway`, and named places in `crates/gamectl/src/scenario/run.rs` and
-  `crates/gamectl/src/doctor.rs` (their Lull passing). **Branch** `feat/gateway-economy`, worktree
-  `../pharmakos-econ`, target `D:/build/econ`.
+- **Owns:** `crates/gateway` (except `fog`'s named place in `strings.rs`), and named places in
+  `crates/gamectl/src/scenario/run.rs` and `crates/gamectl/src/doctor.rs` (their Lull passing).
+  **Branch** `feat/gateway-economy`, worktree `../pharmakos-econ`, target `D:/build/econ`.
 - **Builds:** `get_recap`'s settlement lines (BMI, band, the award fund named as S4's) and the
-  shortfall line (X-16); the standing sentence and the briefing's rank and score from `fixs`'s audit
-  (X-03, over the existing `Standing` fields); the forecast per decision 12 (S1-12, S1-46); S1-11's
-  "no countdown", filling `con2`'s `Status` field; the gateway's per-round Lull bound from
-  `first_lull_ms` (before the client learns it): today `report_host_clock` refuses a remaining time
-  above `lull_ms` (`surface.rs` ~1003–1006) and the Lull's elapsed time is `lull_ms` less the
-  remaining (~1465–1483), so both read round 1's length from `first_lull_ms`. Then `gamectl scenario
-  run` and `seat doctor`, which pass each Lull's whole length to `Surface::set_phase_remaining_ms`,
-  pass round 1's as `first_lull_ms`. Carried by item 130: the stale `reserved 2 to 15` comment in
+  shortfall line (X-16): `Settlement.band_rank`, `band_percent` and `Shortfall.kw` (`gateway.proto`
+  ~619–645) have no sim read on `main`, so they are filled from `fog`'s pure economy reads and
+  `grid`'s shed read once `fog` and `grid` merge (the main session merges both first and `econ`'s
+  fix pass rebases; if they have not merged by then, the main session adds that commit at the
+  merge), and `econ` never restates a sim rule; the BMI line, from the `settled` event's value,
+  ships regardless (item 134 (2) (c)); the standing sentence and the briefing's rank and score from
+  `fixs`'s audit (X-03, over the existing `Standing` fields); the forecast per decision 12 (S1-12,
+  S1-46); S1-11's "no countdown", filling `con2`'s `Status` field; the gateway's per-round Lull
+  bound from `first_lull_ms` (before the client learns it): today `report_host_clock` refuses a
+  remaining time above `lull_ms` (`surface.rs` ~1011–1012) and the Lull's elapsed time is `lull_ms`
+  less the remaining (~1469–1525), so both read round 1's length from `first_lull_ms`, each a typed
+  read rather than today's `map_or(0, ..)`. Then `gamectl scenario run` and `seat doctor`, which
+  pass each Lull's whole length to `Surface::set_phase_remaining_ms`, pass round 1's as
+  `first_lull_ms`. Carried by item 130: the stale `reserved 2 to 15` comment in
   `surface/knowledge.rs` (~173), and the recap's "Round N ran 0 ticks" for a full round once the
   match has ended, which `check` found. Carried by item 133: `resolve_refs` answers `PHASE_CLOSED`
   in a Push, as `estimate_route`'s `covering` does, with the test
   `resolve_refs_in_a_push_is_phase_closed` (item 133 (3) (f); the sim's fog follow-up does not cure
-  the live read); `single` in `src/targeting.rs` gets the sphere test the sim's fix adds, with a test
-  of a named vent outside the sphere (item 133 (3) (g)); the recap's "3 matched, none reachable"
-  line once the fog follow-up puts the count on `step_failed` (item 133 (3) (h)), unless `ui` takes
-  it; `tgtw`'s review B nits in `tests/targeting.rs` (the row-order
-  test compares no picks with the sim's, the vent test the feature and not the column);
-  `surface/planning.rs`'s module doc, which still calls FULL's estimate and lint stages "present
-  and empty", and `tests/confinement.rs`'s message placing the one `Plan::compile` call in
+  the live read); `single` in `src/targeting.rs` gets the sphere test the sim's fix adds, with a
+  test of a named vent outside the sphere (item 133 (3) (g)): the vent's anchor column's standing
+  point within the sphere radius of the centre, through `fog`'s public sphere predicate once `econ`
+  has rebased onto `fog`; if `fog` has not merged when `econ`'s fix pass runs, the main session adds
+  that commit at the merge, as it does the predicate copies (item 134 (2) (b)); the recap's "3
+  matched, none reachable" line once the fog follow-up puts the count on `step_failed` (item 133 (3)
+  (h)), unless `ui` takes it; `tgtw`'s review B nits in `tests/targeting.rs` (the row-order test
+  compares no picks with the sim's, the vent test the feature and not the column);
+  `surface/planning.rs`'s module doc, which still calls FULL's estimate and lint stages "present and
+  empty", and `tests/confinement.rs`'s message placing the one `Plan::compile` call in
   `compile_playbook` (it is `compile_decoded` now); and, once the fog follow-up makes
   `matches_pick`, `on_candidate` and `generator_on` public, `src/targeting.rs` drops its restated
   copies (item 133 (3) (j)): if `fog` has merged when `econ`'s fix pass runs, that pass rebases and
-  drops them; otherwise the main session adds the commit at the merge (item 134 (2)). `econ` leaves
-  `strings.rs`'s `step_failed` line and its tests to `fog`'s named place.
+  drops them; otherwise the main session adds the commit at the merge (item 134 (2) (b)). `econ`
+  leaves `strings.rs`'s `step_failed` line and its tests to `fog`'s named place.
 - **Implements:** item 127 (2)'s gateway half; register S1-11, S1-12, S1-46, X-03, X-16.
 - **Needs:** `tgtw` merged; decision 12. **Acceptance:** method and walkthrough goldens; a test that
   the bound admits a 600 000 ms first Lull and refuses 600 001; `scenario run` and `seat doctor`
@@ -799,10 +851,14 @@ sections that add one name it in their Owns lines.
   `usize` row-index conversions (`restart_row`, `visit_row`, `fallback_leg`, ~615, ~889, ~1420);
   `interpreter.rs`'s `Row::duration_ms` (`extra`'s `unwrap_or(0)`, and a missing `interface_times`
   block read as 0); and in `mining.rs` `point()`'s `i16::try_from(..).unwrap_or(0)`, `pillar()`'s
-  anchor read and the file's other `unwrap_or(0)` reads.
+  anchor read and the file's other `unwrap_or(0)` reads. Carried by item 134: the scenario notes
+  that say a failure's id "is pinned by the chain" are untrue, because events are never hashed
+  (`cover-nearest-vent`'s header, `against-easy-three-rounds`' round-2 note (~90) and
+  `unaffordable-deploy`'s header); `build` rewords them when it next touches the scenarios.
 - **Implements:** item 33 (a)'s Build settings as decision 5 reads them; register S1-24's reader,
   S1-42; spec §6's Build row.
-- **Needs:** `mine` merged; decision 5. **Acceptance:** `targets_build_in_their_order`;
+- **Needs:** `mine` and `fog` merged (one author of `crates/sim`); its fingerprint-caller commit
+  after `econ` merges (section 4.1); decision 5. **Acceptance:** `targets_build_in_their_order`;
   `nothing_is_built_inside_a_protected_area`;
   `unaffordable_targets_wait_for_the_highest_order_affordable_one` (T14 did not pin it);
   `the_plan_fingerprint_is_unmoved`; chains with a Build re-blessed with reasons; every
@@ -831,7 +887,10 @@ sections that add one name it in their Owns lines.
   (item 133 (3) (a)); and `rules/README.md`, which ships, is reworded here, the next lane to touch
   `rules/` (packaged locally by decision 9): `economy.mining_carry_voxels`' row still describes
   the sim's deleted `MINING_LOAD_VOXELS`, and `interface_times.*`' Settled? cell becomes
-  "ratified, decision 15" (U-04).
+  "ratified, decision 15" (U-04). Carried by item 134: S1-35's rules-text sentence (item 127 (5),
+  the commander walking through a blackout drawing nothing) rides with this lane's rules PR, since
+  `rules/rules.v1.json` moves `rules_hash` and ships; `grid` rewords only the `program_for` doc
+  lines.
 - **Implements:** item 127 (3); item 103 (3)'s walk speed; register S1-26 and the economy rows'
   owner PLACEHOLDERs.
 - **Needs:** `build`, `oper` merged; decision 16. **Acceptance:** the check's report attached to the
@@ -857,15 +916,15 @@ sections that add one name it in their Owns lines.
 
 Three slots, never more. `crates/sim` has one author at a time; beside it run only named places:
 `con2`'s `compile_place` and its new `tests/targeting_refused.rs` during `fixs`, and `grid` during
-`mine`. `tgt` carries P1's evaluation-units counter and `mine` its seam estimates, so `p1` has no
-place in the sim. `build`'s named place in the gateway's fingerprint caller overlaps `econ`'s
-ownership of `crates/gateway` (days 18.5–23): `build` edits that caller only after `econ` merges, as
-its last commit. Days are working days in plan units, five to a week; a task starts the day its
-inputs merge. A lane opens its PR when it is green (`wave-lanes.js` holds none back), so the order
-inside a wave is a **merge** order: `fixs` and `fixc` merge after `con1`, the merge train rebasing
-them (both are `MATRIX_ONLY`, so they re-run the matrix), and `con2` after `fixc`. `proj`'s rebase
-and re-bless over `tgt` is a separate half-day pass, placed in wave 3's third slot so that no fourth
-agent runs beside `mine`, `tgtw` and `grid`.
+`mine`, then beside `fog` (item 134). `tgt` carries P1's evaluation-units counter and `mine` its
+seam estimates, so `p1` has no place in the sim. `build`'s named place in the gateway's fingerprint
+caller overlaps `econ`'s ownership of `crates/gateway` (days 18.5–23): `build` edits that caller
+only after `econ` merges, as its last commit. Days are working days in plan units, five to a week; a
+task starts the day its inputs merge. A lane opens its PR when it is green (`wave-lanes.js` holds
+none back), so the order inside a wave is a **merge** order: `fixs` and `fixc` merge after `con1`,
+the merge train rebasing them (both are `MATRIX_ONLY`, so they re-run the matrix), and `con2` after
+`fixc`. `proj`'s rebase and re-bless over `tgt` is a separate half-day pass, placed in wave 3's
+third slot so that no fourth agent runs beside `mine`, `tgtw` and `grid`.
 
 | Wave | Days | Slot 1 — sim | Slot 2 — gateway, verifier, operator | Slot 3 — contracts, client, harness | The owner can see |
 |---|---|---|---|---|---|
@@ -898,7 +957,7 @@ lanes at once on `main` at `46ad80c`: `fog` (section 3, slot 1), `econ` (slot 2)
 its named place beside `fog`). Merge order `fog` → `econ`, with `grid` independent of both: `fog`
 holds a named place in `econ`'s `crates/gateway/src/strings.rs` (`step_failed`'s line), and `econ`
 drops its restated predicates only once `fog` has made them public. `oper` follows `grid`; `build`
-follows `fog` and `econ`.
+runs after `fog` (one author of `crates/sim`), its gateway commit after `econ`.
 
 **Totals.** 18 tasks in 17 lanes (`tgtv` and `proj` are one lane in two PRs), **about 71.5 ad**
 (63.5–79.5), against the code map's 62–74; this plan adds X-08's audit, the restore bug, the
@@ -926,7 +985,7 @@ Two splits already shorten it: targeting's preview surfaces (`tgtw`) leave the s
 | `grid` | none committed | — | — |
 | `build` | those with a Build | — (the harness writes no Build target) | all, if it adds hashed state |
 | `oper` (Easy's sealed files) | `against-easy*` | — | the operator's and the `demo_*_verify` goldens |
-| fog follow-up (item 133 (3) (c), (h)) | none expected; any that moves is named in its PR | — | — |
+| `fog` | none; event logs only if a count lands in a value (`expand-east-segment`'s, the guards transcript), and with bare ids decoding as themselves none is expected | — | — |
 | `tune` (values; S1-26) | all | **moved** | all |
 
 **Over the stage the scenario chains move six times** (`fixs`, `tgt`, `mine`, `build`, `oper`,

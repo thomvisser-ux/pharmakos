@@ -190,6 +190,9 @@ range narrows to 12–49.
     buying a second Generator on a vent, whose second tap supplies 0 kW (`power.rs` `supply_of`).
   - The `on` column is the anchor column if it is free, otherwise the next free footprint column in
     (y, x) order.
+  - A named or `covered {}` vent whose anchor column's standing point lies outside the target
+    beacon's sphere is `no_target`, tested before any structure, so no answer depends on a structure
+    the seat cannot see (decisions-log item 133 (3) (c), item 134).
 - **One structure per voxel, across seats.** A queued Build target is a per-seat claim, so another
   seat's unbuilt target stays hidden. Construction is refused where any live structure already
   stands, which is `illegal_site`. The first seat to build wins, the other's target fails, and the
