@@ -199,6 +199,12 @@ pub struct RulesTable {
     /// (register S1-25). From `economy.mining_carry_voxels`. Refused at zero,
     /// which would send every drone home with empty hands on every pass.
     mining_carry_voxels: NonZeroU32,
+    /// A beacon's sphere of authority in whole voxels, `24` in the committed
+    /// table. From `beacon.sphere_radius_voxels`. Refused at load when the
+    /// `beacon` block is missing or the radius does not fit a voxel
+    /// coordinate, so the resolver's sphere test reads it as it is and never
+    /// substitutes a radius (decisions-log item 134, `fog`).
+    sphere_radius_voxels: i16,
 }
 
 impl RulesTable {
@@ -297,6 +303,14 @@ impl RulesTable {
     #[must_use]
     pub const fn mining_carry_voxels(&self) -> NonZeroU32 {
         self.mining_carry_voxels
+    }
+
+    /// A beacon's sphere of authority in whole voxels
+    /// (`beacon.sphere_radius_voxels`): never negative, and always a voxel
+    /// coordinate, because a table whose radius is neither does not load.
+    #[must_use]
+    pub const fn sphere_radius_voxels(&self) -> i16 {
+        self.sphere_radius_voxels
     }
 
     /// The per-round segment ladder (`match.segment_lengths_ms`).
@@ -460,6 +474,8 @@ impl RulesTable {
                 value: "0; a drone that carries nothing never delivers".to_owned(),
             })?;
 
+        let sphere_radius_voxels = sphere_radius_of(message)?;
+
         if matched.segment_lengths_ms.is_empty() {
             return Err(RulesError::OutOfRange {
                 field: "match.segment_lengths_ms".to_owned(),
@@ -524,6 +540,7 @@ impl RulesTable {
                 locomotion.fog_cost_denominator,
             )?,
             mining_carry_voxels,
+            sphere_radius_voxels,
         })
     }
 
@@ -540,6 +557,23 @@ impl RulesTable {
         })?;
         RulesTable::from_canonical_json(&text)
     }
+}
+
+/// `beacon.sphere_radius_voxels` as the resolver reads it: present, and a
+/// voxel length.
+fn sphere_radius_of(message: &gp::v1::RulesTable) -> Result<i16, RulesError> {
+    let beacon = message
+        .beacon
+        .as_ref()
+        .ok_or(RulesError::MissingBlock("beacon"))?;
+    i16::try_from(beacon.sphere_radius_voxels).map_err(|_| RulesError::OutOfRange {
+        field: "beacon.sphere_radius_voxels".to_owned(),
+        value: format!(
+            "{}; a sphere's radius is a voxel length, at most {}",
+            beacon.sphere_radius_voxels,
+            i16::MAX
+        ),
+    })
 }
 
 /// The schema spells the move costs `uint32`; the sim's path arithmetic is
