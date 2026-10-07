@@ -315,6 +315,156 @@ pub fn bmi_for(rules: &RulesTable, rank: u32, living: u32) -> Money {
     Money::new(base.saturating_add(adjustment))
 }
 
+/// A seat's place on the settlement's ladder ([`ladder_place`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct LadderPlace {
+    /// How many living seats are placed ahead of it: 0 for the leader. The
+    /// wire's `Settlement.band_rank` counts from 1, so it is this plus one.
+    pub rank: u32,
+    /// How many seats are on the ladder: the living ones.
+    pub living: u32,
+}
+
+/// Why a settlement read refused ([`ladder_place`], [`band_percent`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SettlementReadError {
+    /// The rules table carries no `economy` block, so there is no band to
+    /// read. A table loaded through [`RulesTable::from_message`] always has
+    /// one (it refuses a table without), so this answers a hand-built message
+    /// only.
+    MissingEconomy,
+    /// The seat at this index is not on the ladder: past its end, or
+    /// eliminated.
+    SeatOffLadder {
+        /// The seat's index on the ladder.
+        index: usize,
+    },
+    /// `rank` is no place on a ladder of `living` seats: `living` is zero, or
+    /// `rank` is not below it.
+    RankOffLadder {
+        /// The place asked about.
+        rank: u32,
+        /// The seats on the ladder.
+        living: u32,
+    },
+    /// The ladder holds more seats than a `u32` counts.
+    LadderTooLong,
+    /// The band's arithmetic overflowed, or its percent does not fit the
+    /// wire's whole-percent field: a rules table no settlement could pay by.
+    PercentOutOfRange,
+}
+
+impl core::fmt::Display for SettlementReadError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            SettlementReadError::MissingEconomy => {
+                write!(f, "the rules table has no `economy` block")
+            }
+            SettlementReadError::SeatOffLadder { index } => {
+                write!(f, "seat index {index} is not on the settlement's ladder")
+            }
+            SettlementReadError::RankOffLadder { rank, living } => {
+                write!(f, "rank {rank} is no place on a ladder of {living} seats")
+            }
+            SettlementReadError::LadderTooLong => {
+                write!(f, "the ladder holds more seats than a rank counts")
+            }
+            SettlementReadError::PercentOutOfRange => {
+                write!(f, "the band's percent does not fit a whole percent")
+            }
+        }
+    }
+}
+
+impl std::error::Error for SettlementReadError {}
+
+/// Where the seat at `index` stands on the settlement's ladder: the rank the
+/// Ledger's settlement computes inline (`World::settle_ledger`), as a pure
+/// read.
+///
+/// `ladder` holds each seat's **held value** as the Ledger read it, before
+/// anybody was paid, by seat index, and `None` for a seat that has left the
+/// ladder (eliminated). A seat is placed ahead of another when it holds
+/// strictly more, or the same with the **lower** seat index (spec section 7,
+/// "tie-break the lower seat index"). A reader after the settlement recovers
+/// the ladder as each living seat's held value less the `settled` credit it
+/// was paid, since a recap consumes no tick and nothing else moves a treasury
+/// at that tick's end.
+///
+/// # Errors
+///
+/// [`SettlementReadError::SeatOffLadder`] when `index` is past the ladder or
+/// names a seat that left it; [`SettlementReadError::LadderTooLong`] when the
+/// ladder counts past a `u32`.
+pub fn ladder_place(
+    ladder: &[Option<Money>],
+    index: usize,
+) -> Result<LadderPlace, SettlementReadError> {
+    let mine = ladder
+        .get(index)
+        .copied()
+        .flatten()
+        .ok_or(SettlementReadError::SeatOffLadder { index })?;
+    let ahead = ladder
+        .iter()
+        .enumerate()
+        .filter(|(other, theirs)| {
+            *other != index
+                && theirs.is_some_and(|held| held > mine || (held == mine && *other < index))
+        })
+        .count();
+    let living = ladder.iter().filter(|held| held.is_some()).count();
+    Ok(LadderPlace {
+        rank: u32::try_from(ahead).map_err(|_| SettlementReadError::LadderTooLong)?,
+        living: u32::try_from(living).map_err(|_| SettlementReadError::LadderTooLong)?,
+    })
+}
+
+/// The band's adjustment to the BMI in whole percent, truncated toward zero,
+/// for the seat at `rank` (from 0, the leader) on a ladder of `living` seats:
+/// the percent [`bmi_for`] scales `economy.bmi_dollars` by, as a pure read
+/// (spec section 7, "BMI scaling"). Linear from the leader's malus (negative)
+/// to the last place's bonus, and 0 for a seat alone on the ladder.
+///
+/// Unlike [`bmi_for`], which the tick calls and which clamps a rank past the
+/// ladder's end, this read refuses one.
+///
+/// # Errors
+///
+/// [`SettlementReadError::MissingEconomy`] when the table has no `economy`
+/// block; [`SettlementReadError::RankOffLadder`] when `rank` is not below
+/// `living`; [`SettlementReadError::PercentOutOfRange`] when the arithmetic
+/// overflows or the percent does not fit an `i32`.
+pub fn band_percent(
+    rules: &RulesTable,
+    rank: u32,
+    living: u32,
+) -> Result<i32, SettlementReadError> {
+    let economy = rules
+        .message()
+        .economy
+        .as_ref()
+        .ok_or(SettlementReadError::MissingEconomy)?;
+    if rank >= living {
+        return Err(SettlementReadError::RankOffLadder { rank, living });
+    }
+    let last = i64::from(living) - 1;
+    if last == 0 {
+        return Ok(0);
+    }
+    let rank = i64::from(rank);
+    let bonus = i64::from(economy.scaling_last_place_bonus_percent);
+    let malus = i64::from(economy.scaling_leader_malus_percent);
+    let up = bonus.checked_mul(rank);
+    let down = malus.checked_mul(last - rank);
+    let percent = up
+        .zip(down)
+        .and_then(|(up, down)| up.checked_sub(down))
+        .and_then(|numerator| numerator.checked_div(last))
+        .ok_or(SettlementReadError::PercentOutOfRange)?;
+    i32::try_from(percent).map_err(|_| SettlementReadError::PercentOutOfRange)
+}
+
 /// The award fund one settlement releases, in `$`
 /// (`economy.award_fund_percent_of_bmi` of one unadjusted BMI).
 ///
@@ -373,6 +523,88 @@ mod tests {
         let remaining = value_of(Money::new(60), 400, 800);
         assert_eq!(remaining, Money::new(30));
         assert_eq!(percent_of(remaining, 50), Money::new(15));
+    }
+
+    fn rules() -> crate::rules::RulesTable {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join(crate::rules::RULES_PATH);
+        crate::rules::RulesTable::load(&path)
+            .unwrap_or_else(|error| panic!("the committed rules table loads: {error}"))
+    }
+
+    #[test]
+    fn the_band_percent_is_the_percent_bmi_for_pays_by() {
+        use super::{band_percent, bmi_for};
+        let rules = rules();
+        let base = i64::from(rules.message().economy.as_ref().map_or_else(
+            || panic!("the committed table has an economy block"),
+            |economy| economy.bmi_dollars,
+        ));
+        for living in 1..=3_u32 {
+            for rank in 0..living {
+                let percent = band_percent(&rules, rank, living)
+                    .unwrap_or_else(|error| panic!("rank {rank} of {living}: {error}"));
+                let adjustment = (base * i64::from(percent))
+                    .checked_div(100)
+                    .unwrap_or_else(|| panic!("a hundred divides"));
+                assert_eq!(
+                    Money::new(base + adjustment),
+                    bmi_for(&rules, rank, living),
+                    "rank {rank} of {living} at {percent} %"
+                );
+            }
+        }
+        assert_eq!(band_percent(&rules, 0, 1), Ok(0), "alone on the ladder");
+        let leader = band_percent(&rules, 0, 3).unwrap_or_else(|error| panic!("{error}"));
+        let last = band_percent(&rules, 2, 3).unwrap_or_else(|error| panic!("{error}"));
+        assert!(leader < 0 && last > 0, "malus {leader}, bonus {last}");
+    }
+
+    #[test]
+    fn a_band_off_the_ladder_is_refused_rather_than_clamped() {
+        use super::{SettlementReadError, band_percent};
+        let rules = rules();
+        assert_eq!(
+            band_percent(&rules, 3, 3),
+            Err(SettlementReadError::RankOffLadder { rank: 3, living: 3 })
+        );
+        assert_eq!(
+            band_percent(&rules, 0, 0),
+            Err(SettlementReadError::RankOffLadder { rank: 0, living: 0 })
+        );
+        // A bonus no whole percent holds is refused rather than wrapped.
+        let mut message = rules.message().clone();
+        if let Some(economy) = message.economy.as_mut() {
+            economy.scaling_last_place_bonus_percent = u32::MAX;
+        }
+        let wild = crate::rules::RulesTable::from_message(&message)
+            .unwrap_or_else(|error| panic!("the sim's view still builds: {error}"));
+        assert_eq!(
+            band_percent(&wild, 2, 3),
+            Err(SettlementReadError::PercentOutOfRange)
+        );
+    }
+
+    #[test]
+    fn the_ladder_places_a_tie_by_the_lower_seat_index_and_skips_the_eliminated() {
+        use super::{LadderPlace, SettlementReadError, ladder_place};
+        let held = |value: i64| Some(Money::new(value));
+        // Seats 0 and 2 tie; seat 1 has left the ladder; seat 3 leads.
+        let ladder = [held(50), None, held(50), held(80)];
+        let place = |index: usize| ladder_place(&ladder, index);
+        assert_eq!(place(3), Ok(LadderPlace { rank: 0, living: 3 }));
+        assert_eq!(place(0), Ok(LadderPlace { rank: 1, living: 3 }));
+        assert_eq!(place(2), Ok(LadderPlace { rank: 2, living: 3 }));
+        assert_eq!(
+            place(1),
+            Err(SettlementReadError::SeatOffLadder { index: 1 })
+        );
+        assert_eq!(
+            place(4),
+            Err(SettlementReadError::SeatOffLadder { index: 4 })
+        );
     }
 
     #[test]
