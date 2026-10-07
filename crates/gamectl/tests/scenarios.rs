@@ -55,6 +55,7 @@ const SCENARIOS: &[&str] = &[
     UNAFFORDABLE_DEPLOY,
     COVER_NEAREST_VENT,
     MINE_TO_DEPTH,
+    BROWNOUT_BY_RECYCLE,
 ];
 
 /// The scenario against the built-in operator: seat 1 is `builtin`, played by
@@ -90,6 +91,12 @@ const COVER_NEAREST_VENT: &str = "scenarios/s1/cover-nearest-vent.scenario.jsonc
 /// 3 every round and works its starting seam below the rim, earning in every
 /// round (S1's `mine`; register S1-38).
 const MINE_TO_DEPTH: &str = "scenarios/s1/mine-to-depth.scenario.jsonc";
+
+/// The demo's deficit, made on purpose: seat 0 loads its grid past the core's
+/// surplus inside a Generator's headroom, then recycles the Generator's beacon
+/// on site, and the brownout order sheds the low-priority load (S1's `grid`;
+/// S1's plan, decision 18).
+const BROWNOUT_BY_RECYCLE: &str = "scenarios/s1/brownout-by-recycle.scenario.jsonc";
 
 /// **The exact set of scenarios allowed to seal through the harness door.**
 ///
