@@ -97,66 +97,46 @@ pub struct SalvageProgram;
 
 /// The built-in program a unit kind runs.
 ///
-/// The commander has **none**, and that has a second consequence worth saying
-/// out loud: because no program drives it, **a brownout never parks the
-/// commander**. It is homed to its seat's core and draws `power.kw_per_unit`
-/// like any other unit, but dormancy cannot stop it walking.
+/// **A unit's kind is its job** (decisions log item 127 (6), the register's
+/// S1-36): the program is chosen from the kind alone and never from the home
+/// beacon's writ, and the mandate layer governs spending, not behaviour. So
+/// the starting mining drone, which the spec's starting force (item 90) homes
+/// to a core on **Build**, keeps mining and earning; spec section 6's Common
+/// row ("a unit the mandate has no job for ... idles at its beacon") is
+/// reworded to match (item 127 (6)).
 ///
-/// That is deliberate and it is the spec's own logic. A dormant beacon keeps
-/// "the seal, the sphere, interfacing and recycling" lit off the key-core (item
-/// 10) precisely so that a brownout is a setback rather than a lockout — and
-/// the only way a seat acts on a shortfall is to walk the commander to a beacon
-/// and interface on site: raise its Quartermaster priority, which is what spec
-/// section 14's safe playbook does, or change its mandate, or recycle it. A
-/// commander that parked when the lights went out could file none of that, and
-/// a brownout would be a lockout by design.
+/// The commander has **none**, and that has a consequence worth saying out
+/// loud: because no program drives it, **a brownout never parks the
+/// commander** (item 127 (5), the register's S1-35). It is the one exception to
+/// dormancy parking a beacon's units: it walks through a blackout and **draws
+/// nothing while its home is dark**, because draw follows the home beacon and
+/// not the unit's motion ([`crate::power`] counts a unit only while its home is
+/// lit), and while its home is lit it draws `power.kw_per_unit` like any other
+/// unit. A total blackout's headroom is 0 kW for exactly that reason.
 ///
-/// What a raise does on the grid as built is narrower than "fixing" anything:
-/// it moves the beacon later in the brownout order and earlier in the revival
-/// order, and nothing else. It does not relight a dark beacon and it sheds no
-/// lit one in its place, because the power phase sheds only while draw outruns
-/// supply and a revival waits for `power.revive_margin_kw` whatever the
-/// priority (see [`crate::power`]).
+/// That is the spec's own logic. A dormant beacon keeps "the seal, the sphere,
+/// interfacing and recycling" lit off the key-core (item 10) precisely so that
+/// a brownout is a setback rather than a lockout, and the only way a seat acts
+/// on a shortfall is to walk the commander to a beacon and interface on site:
+/// raise its Quartermaster priority, which is what spec section 14's safe
+/// playbook does, or change its mandate, or recycle it. A commander that
+/// parked when the lights went out could file none of that, and a blackout
+/// would be a lockout the seat could not walk out of until the settlement paid
+/// it.
 ///
-/// PLACEHOLDER: whether a priority raise re-applies the brownout order, so that
-/// a raised dark beacon relights and a lit lower-priority one sheds in its
-/// place. The spec is silent; decisions log item 113 (4) logged it. Owner, at
-/// S1, with the grid.
+/// **A raise pays off at once** (item 127 (7), the register's S1-22): raising
+/// a dark beacon's priority re-applies the brownout order, so the beacon
+/// relights at the next settle when shedding lit beacons of lower priority
+/// covers its load, with draw no higher than supply after the swap, and those
+/// beacons go dark in its place (see [`crate::power`], "A priority raise
+/// re-applies the order"). When no such shed covers it, the raise moves the
+/// beacon later in the brownout order and earlier in the revival order, and
+/// the beacon waits for the revival margin.
 ///
 /// Where the commander goes is the playbook's to say and nothing else's
 /// (AGENTS.md §11: "no manual control" cuts the other way too — no program may
 /// steer it either). A raider runs the move program until S2 gives it a
 /// target.
-///
-/// PLACEHOLDER: the exception above is **argued, not decided**. Item 10 says a
-/// dormant beacon parks "its bound units ... at 0 kW" without excepting the
-/// commander, and the asymmetry this build ships is the part to put in front
-/// of the owner: the one unit dormancy cannot stop is also the one the grid
-/// still counts as powered down. Draw follows the home beacon, not the unit's
-/// motion ([`crate::power`] counts a unit only while its home is lit), so while
-/// the core is dark the commander walks and draws nothing, like everything
-/// else homed there; while the core is lit it draws `power.kw_per_unit` like
-/// any other unit. The two options are (a) as built — the commander walks
-/// through a brownout, drawing nothing while its home is dark, so a seat can
-/// always walk to a beacon and interface on site, whatever that then changes
-/// (a total blackout's headroom is 0 kW only because the commander drops out
-/// of the draw with the rest); and (b) the commander parks like every other
-/// unit, which reads the rule literally and makes a total blackout a lockout
-/// the seat cannot walk out of until the settlement pays it. Owner, at S1,
-/// with the rest of the grid's tuning.
-///
-/// PLACEHOLDER: a unit's program is chosen from its **kind** alone and never
-/// from its home beacon's writ, so the mandate layer governs spending and not
-/// behaviour. Spec section 6's Common row — "a unit the mandate has no job for
-/// keeps the common settings and idles at its beacon" — reads as though the
-/// writ should gate the program, and under that reading the starting mining
-/// drone would idle, because the spec's own starting force (item 90) homes it
-/// to a core on **Build**. That is the tension, and it is why this build does
-/// not guess: gating on the writ would leave the skeleton with no income at
-/// all, and the starting force is the spec's, not this task's. Owner, at S1,
-/// with the mandate's settings: either the writ gates the program (and the
-/// starting core's writ or its drone changes), or a unit's kind is its job and
-/// the mandate only decides what is bought.
 #[must_use]
 pub fn program_for(kind: UnitKind) -> Option<&'static dyn Program> {
     match kind {
