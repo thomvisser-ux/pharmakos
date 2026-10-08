@@ -129,8 +129,10 @@ editor UI. Nothing else executes. Directories are under `crates/`; package names
    (`verify_plan`, `render_plan`, `patch_plan`, `instantiate_template`, `resolve_refs`) answer from
    the frozen snapshot and the rules table — `resolve_refs` ranks "nearest" through the sim's own
    resolver (`targeting::cover`, `targeting::on_vent`, the `Ranker`) with a tally and scratch of its
-   own, over the hosted world (the frozen world in a Lull; it has no phase gate yet — `econ` adds
-   it, decisions-log item 133), a preview of what a step will bind and not a dry run, and
+   own, over the hosted world (the frozen world in a Lull; in a Push and a recap the dispatcher's
+   planning door answers `PHASE_CLOSED`, as for every `plan`-scoped method, and the handler holds
+   its own gate in a Push as well, before it parses anything, decisions-log items 133 and 135), a
+   preview of what a step will bind and not a dry run, and
    `get_map_summary`'s features (unfogged in S1, decisions-log item 130 (3) (a)) and
    `estimate_route`'s `covering` legs read the hosted world through the same resolver, a `covering`
    waypoint answering `PHASE_CLOSED` in a Push — its knowledge and view reads read the frozen
