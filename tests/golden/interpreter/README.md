@@ -31,7 +31,11 @@ A transcript is one **event** per line, and nothing else:
 
 `kind` is the assertable name a scenario file uses (decisions-log item 97),
 `subject` is a raw `AssetId` (or `-`), and `value` is the kind's own number —
-a step index, a row index, a failure reason, a resume. **Positions are
+a step index, a row index, a failure reason, a resume. A `step_failed` line's
+`value` is laid out as `pharmakos_sim::interpreter::StepFailed`: the reason id
+in bits 0–7 and, when the step read a feature, a flag in bit 8 and how many
+candidates matched in bits 16–47; a bare reason id is that reason with no
+count. **Positions are
 deliberately absent**: a transcript is about what the interpreter decided, and
 the world's own movement is pinned by `determinism/`.
 

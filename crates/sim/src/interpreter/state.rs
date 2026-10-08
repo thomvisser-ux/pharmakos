@@ -853,7 +853,8 @@ impl PlanParts {
     }
 }
 
-/// Why a step failed. The value the `step_failed` event carries.
+/// Why a step failed: bits 0-7 of the value the `step_failed` event carries,
+/// whose whole layout is [`StepFailed`]'s.
 ///
 /// The ids are written out and additive only, for the reason every other wire
 /// id in this crate is: a scenario file and a transcript golden both read them.

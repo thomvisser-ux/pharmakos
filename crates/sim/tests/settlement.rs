@@ -4,10 +4,11 @@
 //! The settlement's two pure reads agree with the Ledger (decisions-log item
 //! 134 (2) (c); S1's plan, task `fog`).
 //!
-//! `economy::ladder_place` and `economy::band_percent` restate nothing: they
-//! are the rank `World::settle_ledger` computes inline and the percent
-//! `economy::bmi_for` pays by, published so the gateway's recap fills
-//! `Settlement.band_rank` and `band_percent` from the sim's rule. The tick
+//! `economy::ladder_place` restates the rank `World::settle_ledger` computes
+//! inline, and `economy::band_percent` the percent `economy::bmi_for` pays
+//! by; this file holds the two to the same credits. They are published so the
+//! gateway's recap fills `Settlement.band_rank` and `band_percent` from the
+//! sim's rule. The tick
 //! still calls its own code (determinism code, AGENTS.md section 5); this
 //! file plays the settlement golden's own match -- the fixture of
 //! `tests/economy.rs`'s `the_settlement_ledger_matches_its_golden` -- and
