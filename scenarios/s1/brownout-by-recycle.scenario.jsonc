@@ -54,9 +54,9 @@
   "assertions": [
     { "assert": "event_fired", "event": "beacon_placed", "seat": 0, "by_tick": 800,
       "note": "The covering beacon lands at tick 721." },
-    { "assert": "event_fired", "event": "beacon_recycled", "seat": 0, "by_tick": 5000,
+    { "assert": "event_fired", "event": "beacon_recycled", "seat": 0, "by_tick": 4911,
       "note": "Round 2: the Generator's beacon is recycled on site at tick 4911." },
-    { "assert": "event_fired", "event": "beacon_browned_out", "seat": 0, "by_tick": 5000,
+    { "assert": "event_fired", "event": "beacon_browned_out", "seat": 0, "by_tick": 4912,
       "note": "The next settle, tick 4912, sheds the low-priority Survey beacon. Seat 0 sheds nothing before the recycle." },
     { "assert": "event_fired", "event": "segment_ended", "by_tick": 7200,
       "note": "Two rounds of 3 600 ticks." },
