@@ -516,11 +516,13 @@ verifier's:
   a Lull only.
 * **`bmi_next_dollars`** is the sim's `economy::bmi_for` at the sim's
   `economy::ladder_place` over the living seats' held values as the world
-  stands: the BMI the next settlement pays at the band the seat holds now.
-  Seat 0 leads the opening tie, so it is the leader's BMI, and it equals the
-  recap's `bmi_dollars` below (`economy.rs`'s
-  `the_band_and_the_next_bmi_are_the_sims_reads_and_the_next_bmi_is_what_is_settled`).
-  It moves with `economy.bmi_dollars` or the scaling rows.
+  stands: the BMI at the band the seat holds now, a prediction and not a
+  promise, because spending in the Push can move the ladder before the Ledger
+  reads it (`economy.rs`'s
+  `the_next_bmi_is_the_band_held_now_and_spending_in_the_push_can_move_it`).
+  Seat 0 leads the opening tie, so it is the leader's BMI; this recap's
+  `bmi_dollars` below happens to match it, because the twenty ticks spend
+  nothing. It moves with `economy.bmi_dollars` or the scaling rows.
 * **`settlement.bmi_dollars`** is the `settled` event's own value: the BMI
   after the band's adjustment. Seat 0 leads a tie on held value (the lower
   seat index wins a tie), so it draws the leader's malus. `award_dollars` is 0

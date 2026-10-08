@@ -553,13 +553,18 @@ fn ladder_at_settlement(surface: &Surface, credits: &[(u8, i64)]) -> Vec<Option<
 }
 
 #[test]
-fn the_band_and_the_next_bmi_are_the_sims_reads_and_the_next_bmi_is_what_is_settled() {
+fn the_band_and_the_next_bmi_are_the_sims_reads_and_a_push_that_spends_nothing_settles_the_forecast()
+ {
     let mut surface = short_of_power(3);
     let tokens = [seat_token(&mut surface, 0), seat_token(&mut surface, 1)];
     let rules = surface.host().expect("hosted").world().rules().clone();
+    let mut seat_zero_bands: Vec<i64> = Vec::new();
     for round in 1..=2_u32 {
-        // In the Lull: what each seat's forecast says the next settlement pays,
-        // and its treasury before it.
+        // In the Lull: the BMI each seat's forecast says at the band it holds
+        // now, and its treasury before it. Nobody seals anything, so nothing
+        // moves the ladder before the Ledger reads it, and the prediction is
+        // what is settled (`the_next_bmi_is_the_band_held_now_and_spending_
+        // in_the_push_can_move_it` is the case where it is not).
         let mut promised: Vec<(i64, i64)> = Vec::new();
         for token in &tokens {
             let forecast = result(
@@ -584,12 +589,11 @@ fn the_band_and_the_next_bmi_are_the_sims_reads_and_the_next_bmi_is_what_is_sett
         let mut ranks: Vec<i64> = Vec::new();
         for (index, ((raw, credited), settlement)) in credits.iter().zip(&settlements).enumerate() {
             let (next, before) = promised.get(index).copied().expect("a forecast");
-            // The forecast's next BMI is what the Ledger then credited, and
-            // the treasury moved by exactly that in a Push that ordered
-            // nothing.
+            // With nothing spent, the band held in the Lull is the band
+            // settled, and the treasury moved by exactly the credit.
             assert_eq!(
                 next, *credited,
-                "round {round}, seat {raw}: the next BMI is the next `settled` value"
+                "round {round}, seat {raw}: a Push that spends nothing settles at the band held"
             );
             let after = treasury(&mut surface, tokens.get(index).expect("a token"));
             assert_eq!(after - before, *credited, "round {round}, seat {raw}");
@@ -611,6 +615,9 @@ fn the_band_and_the_next_bmi_are_the_sims_reads_and_the_next_bmi_is_what_is_sett
                 "round {round}, seat {raw}: the band read places it where the Ledger paid it"
             );
             ranks.push(number(settlement, "band_rank"));
+            if *raw == 0 {
+                seat_zero_bands.push(number(settlement, "band_rank"));
+            }
         }
         ranks.sort_unstable();
         assert_eq!(
@@ -627,6 +634,13 @@ fn the_band_and_the_next_bmi_are_the_sims_reads_and_the_next_bmi_is_what_is_sett
         surface.set_phase_remaining_ms(surface.lull_length(round + 1));
         surface.open_lull().expect("the next Lull");
     }
+    // Round 1's leader drew the malus and round 2's ladder put it last: the
+    // band moved, so a value copied across rounds would fail here.
+    assert_eq!(
+        seat_zero_bands,
+        vec![1, 2],
+        "seat 0's band in rounds 1 and 2"
+    );
 }
 
 #[test]
@@ -647,5 +661,72 @@ fn the_shortfalls_kw_is_the_grids_shed_read_at_segment_end() {
     assert!(
         text_of(&recap, "prose").contains(&format!("the brownout shed {} kW.", shed.raw())),
         "{recap:?}"
+    );
+}
+
+#[test]
+fn the_next_bmi_is_the_band_held_now_and_spending_in_the_push_can_move_it() {
+    // A prediction, not a promise (gateway.proto: "at the band it holds
+    // now"): held value counts a structure still going up at what it is worth
+    // so far, so a seat that spends in the Push can drop down the ladder
+    // before the Ledger reads it. On the golden seed the cover-and-build
+    // playbook's Generator is queued and paid for at tick 766, and is still
+    // going up when a 40-second segment ends at tick 800 (at 60 seconds the
+    // spender leads again).
+    let mut surface = support::hosted(2, 40_000, 3);
+    let spender = seat_token(&mut surface, 0);
+    let idle = seat_token(&mut surface, 1);
+    let mut left = FIRST_LULL_MS;
+    let playbook = std::fs::read_to_string(
+        support::workspace_root()
+            .join("scenarios")
+            .join("s1")
+            .join("cover-nearest-vent.playbook.jsonc"),
+    )
+    .expect("the committed scenario playbook");
+    let sealed = call_in_lull(
+        &mut surface,
+        &spender,
+        &mut left,
+        "submit_plan",
+        &format!(r#"{{"playbook_jsonc":{}}}"#, quote(&playbook)),
+    );
+    assert_eq!(
+        result(&sealed, "submit_plan").get("accepted"),
+        Some(&Json::Bool(true))
+    );
+    // Seat 0 leads the opening tie, so the forecast says the leader's BMI.
+    let promised = number(
+        &result(
+            &call_in_lull(
+                &mut surface,
+                &spender,
+                &mut left,
+                "get_economy_forecast",
+                "{}",
+            ),
+            "get_economy_forecast",
+        ),
+        "bmi_next_dollars",
+    );
+    run_the_push(&mut surface);
+    let recap = |surface: &mut Surface, token: &Token| {
+        result(&call(surface, token, "get_recap", "{}"), "get_recap")
+            .get("settlement")
+            .expect("a settlement")
+            .clone()
+    };
+    let spent = recap(&mut surface, &spender);
+    let other = recap(&mut surface, &idle);
+    assert_eq!(
+        number(&spent, "band_rank"),
+        2,
+        "the spender held less than the idle seat when the Ledger read the ladder"
+    );
+    assert_eq!(number(&other, "band_rank"), 1);
+    assert_ne!(
+        promised,
+        number(&spent, "bmi_dollars"),
+        "the forecast said the band held in the Lull, and the Push moved it"
     );
 }

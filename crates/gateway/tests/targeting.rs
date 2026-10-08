@@ -1164,7 +1164,8 @@ fn a_named_vent_outside_the_sphere_matches_nothing_as_the_sim_reports() {
         &support::call(&mut surface, &token, "get_recap", "{}"),
         "get_recap",
     );
-    let said = pharmakos_gateway::strings::recap_step_failed(missed.value(), 1);
+    let said =
+        pharmakos_gateway::strings::recap_step_failed(missed.value(), core::num::NonZeroUsize::MIN);
     assert!(
         text_of(&recap, "prose").contains(&said),
         "the recap says `{said}`: {recap:?}"

@@ -434,6 +434,17 @@ pub struct Surface {
     /// `(seat, value)` in the order the sim emitted them: moved into the
     /// recap's record when the segment ends ([`Surface::note_for_the_recap`]).
     segment_failures: Vec<(SeatId, i64)>,
+    /// How many events the sim's bus had dropped, ever, when the host loop
+    /// last drained it (`EventBus::dropped`): the mark the next drain's loss
+    /// is counted from.
+    bus_dropped: u64,
+    /// How many events the bus has dropped during the segment now being
+    /// played, before its end: moved into the recap's record when it ends.
+    segment_dropped: u64,
+    /// The events the bus dropped at a segment end whose own `segment_ended`
+    /// was among them, so no record of it was opened: `get_recap` refuses
+    /// rather than tell the segment before it ([`RecapLoss`]).
+    recap_lost: Option<u64>,
 }
 
 /// What one segment's end told the recap, as the sim reported it: the round,
@@ -468,6 +479,38 @@ pub(crate) struct RecapFacts {
     /// The segment's `step_failed` events, `(seat, value)`, in the order the
     /// sim emitted them.
     pub(crate) failures: Vec<(SeatId, i64)>,
+    /// How many events the sim's bus dropped for want of room during the
+    /// segment and at its end (`EventBus::dropped`, a per-tick cap): when it
+    /// is not 0, `failures` may be short and a `settled` may be missing.
+    pub(crate) dropped: u64,
+}
+
+/// Why [`RecapFacts::band`] tells no band.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(crate) enum BandError {
+    /// The sim's event bus dropped events at this segment, a `settled` among
+    /// them, so the ladder the Ledger read cannot be rebuilt: the band is not
+    /// told, and the rest of the recap still is.
+    FeedLost {
+        /// How many events the bus dropped during the segment and at its end.
+        dropped: u64,
+    },
+    /// The sim and this crate disagreeing about the settlement: `INTERNAL`.
+    Gateway(Error),
+}
+
+impl From<Error> for BandError {
+    fn from(error: Error) -> BandError {
+        BandError::Gateway(error)
+    }
+}
+
+/// A segment end whose record was lost with the events the bus dropped
+/// ([`Surface::recap_loss`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct RecapLoss {
+    /// How many events the bus dropped at that segment end.
+    pub(crate) dropped: u64,
 }
 
 /// One seat's dark beacons at a segment's end ([`RecapFacts::dark`]).
@@ -509,7 +552,7 @@ impl RecapFacts {
     /// is missing from the ladder, a subtraction overflows, or the sim's read
     /// refuses: each is the sim and this crate disagreeing about the
     /// settlement it just reported.
-    pub(crate) fn band(&self, rules: &RulesTable, seat: SeatId) -> Result<Option<Band>, Error> {
+    pub(crate) fn band(&self, rules: &RulesTable, seat: SeatId) -> Result<Option<Band>, BandError> {
         if !self.settled.iter().any(|(held, _)| *held == seat) {
             return Ok(None);
         }
@@ -524,25 +567,26 @@ impl RecapFacts {
                             .iter()
                             .find(|(settled, _)| settled == held)
                             .map(|(_, credit)| *credit)
-                            .ok_or_else(|| {
-                                Error::internal(format!(
+                            .ok_or_else(|| match self.dropped {
+                                0 => BandError::Gateway(Error::internal(format!(
                                     "seat {} is in the match and the Ledger credited it nothing",
                                     held.raw()
-                                ))
+                                ))),
+                                dropped => BandError::FeedLost { dropped },
                             })?;
                         value
                             .raw()
                             .checked_sub(paid)
                             .map(Money::new)
                             .ok_or_else(|| {
-                                Error::internal(
+                                BandError::Gateway(Error::internal(
                                     "a seat's held value less its credit does not fit $",
-                                )
+                                ))
                             })
                     })
                     .transpose()
             })
-            .collect::<Result<Vec<Option<Money>>, Error>>()?;
+            .collect::<Result<Vec<Option<Money>>, BandError>>()?;
         let index = self
             .held
             .iter()
@@ -638,6 +682,9 @@ impl Surface {
             chain: Vec::new(),
             recap: None,
             segment_failures: Vec::new(),
+            bus_dropped: 0,
+            segment_dropped: 0,
+            recap_lost: None,
         })
     }
 
@@ -1059,6 +1106,7 @@ impl Surface {
             )));
         }
         let round = host.runner().round();
+        self.bus_dropped = host.world().event_bus().dropped();
         self.host = Some(host);
         self.sync_time();
         self.begin_segment(round, 0);
@@ -1811,6 +1859,10 @@ impl Surface {
         };
         let drained = host.drain_events();
         let anchor = self.feed_anchor;
+        let ended = drained
+            .iter()
+            .any(|event| event.kind == pharmakos_sim::events::EventKind::SegmentEnded);
+        self.count_drops(ended)?;
         for event in drained {
             self.note_for_the_recap(&event)?;
             let kind = Kind::new(event.kind.name()).map_err(|error| {
@@ -1869,8 +1921,10 @@ impl Surface {
                     dark: dark_beacons(world)?,
                     held: held_values(world),
                     failures: std::mem::take(&mut self.segment_failures),
+                    dropped: core::mem::take(&mut self.segment_dropped),
                 };
                 self.recap = Some(facts);
+                self.recap_lost = None;
             }
             EventKind::StepFailed => {
                 let seat = event.seat.ok_or_else(|| {
@@ -1890,6 +1944,55 @@ impl Surface {
             _ => {}
         }
         Ok(())
+    }
+
+    /// Count what the sim's bus dropped since the last drain
+    /// (`EventBus::dropped`, which counts every drop the bus ever made) and
+    /// put it where the recap will read it: on the segment now being played,
+    /// which its record takes when it ends, or -- when this drain carries a
+    /// `segment_ended` -- on that segment, since the drops of its closing tick
+    /// are its own. A segment end that left no `segment_ended` because the
+    /// bus dropped it is a lost record ([`RecapLoss`]): the recap refuses
+    /// rather than tell the segment before it. Called before the drain's
+    /// events are read, so the record this drain opens starts with the count.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::Internal`] when the bus's count goes down or a
+    /// sum overflows, which a bus that only ever counts up cannot do.
+    fn count_drops(&mut self, ended: bool) -> Result<(), Error> {
+        let host = self.host()?;
+        let now = host.world().event_bus().dropped();
+        let phase = host.runner().phase();
+        let round = host.runner().round();
+        let lost = now.checked_sub(self.bus_dropped).ok_or_else(|| {
+            Error::internal("the sim's event bus counted fewer drops than before")
+        })?;
+        self.bus_dropped = now;
+        if lost == 0 {
+            return Ok(());
+        }
+        self.segment_dropped = self
+            .segment_dropped
+            .checked_add(lost)
+            .ok_or_else(|| Error::internal("a segment dropped more events than a count holds"))?;
+        let unrecorded = self.recap.as_ref().is_none_or(|facts| facts.round != round);
+        if !ended && matches!(phase, MatchPhase::Recap | MatchPhase::Ended) && unrecorded {
+            // The segment closed in this drain and its `segment_ended` was
+            // dropped with the rest: no record of this round's end opens.
+            self.recap = None;
+            self.recap_lost = Some(core::mem::take(&mut self.segment_dropped));
+        }
+        Ok(())
+    }
+
+    /// A segment end whose record the bus's drops lost, when the last one
+    /// was ([`Surface::count_drops`]).
+    pub(crate) const fn recap_loss(&self) -> Option<RecapLoss> {
+        match self.recap_lost {
+            Some(dropped) => Some(RecapLoss { dropped }),
+            None => None,
+        }
     }
 
     /// What the last segment's end told the recap, when a segment has ended
@@ -2439,7 +2542,7 @@ impl Surface {
             });
         }
 
-        for read in crate::targeting::feature_reads(world, Some(seat))? {
+        for read in crate::targeting::feature_reads(world, Some(seat)) {
             scope.push_feature(pharmakos_verifier::KnownFeature {
                 feature_id: read.name,
                 kind: match read.kind {
@@ -3086,6 +3189,17 @@ fn dark_beacons(world: &pharmakos_sim::world::World) -> Result<Vec<DarkAtEnd>, E
                         seat.raw()
                     ))
                 })?;
+            // The brownout order sheds a beacon only when that relieves the
+            // grid, so a seat with a dark beacon has shed something: a shed
+            // of nothing or less is the sim and this crate disagreeing about
+            // the grid, and is never told as a shortfall.
+            if shed.raw() <= 0 {
+                return Err(Error::internal(format!(
+                    "seat {} has a dark beacon and the grid's read says its brownout shed {} kW",
+                    seat.raw(),
+                    shed.raw()
+                )));
+            }
             Ok(DarkAtEnd {
                 seat,
                 ordinals,
@@ -3215,6 +3329,61 @@ mod tests {
             .join("rules")
             .join("rules.v1.json");
         RulesTable::load(&path).expect("the shipped rules table")
+    }
+
+    /// A two-seat settlement record: both seats in the match, held at
+    /// `held` after the Ledger paid `settled`, with `dropped` events lost.
+    fn settlement(settled: &[(u8, i64)], dropped: u64) -> super::RecapFacts {
+        use pharmakos_sim::math::quantity::Money;
+        super::RecapFacts {
+            round: 1,
+            ticks: 20,
+            settled: settled
+                .iter()
+                .map(|(seat, credit)| (SeatId::new(*seat), *credit))
+                .collect(),
+            dark: Vec::new(),
+            held: vec![
+                (SeatId::new(0), Some(Money::new(400))),
+                (SeatId::new(1), Some(Money::new(410))),
+            ],
+            failures: Vec::new(),
+            dropped,
+        }
+    }
+
+    #[test]
+    fn a_band_reads_the_ladder_the_ledger_read_from_1() {
+        let facts = settlement(&[(0, 95), (1, 110)], 0);
+        // Held before payment: seat 0 at 305 leads seat 1 at 300.
+        let band = facts
+            .band(&rules(), SeatId::new(0))
+            .expect("a band")
+            .expect("seat 0 was settled");
+        assert_eq!(band.rank, 1);
+        let other = facts
+            .band(&rules(), SeatId::new(1))
+            .expect("a band")
+            .expect("seat 1 was settled");
+        assert_eq!(other.rank, 2);
+    }
+
+    #[test]
+    fn a_settled_lost_with_the_feed_refuses_only_the_band_and_names_the_loss() {
+        // Seat 1's `settled` was dropped: with a counted loss the band says
+        // so; with none it is the sim and the gateway disagreeing.
+        let lost = settlement(&[(0, 95)], 3);
+        assert_eq!(
+            lost.band(&rules(), SeatId::new(0)),
+            Err(super::BandError::FeedLost { dropped: 3 })
+        );
+        let unexplained = settlement(&[(0, 95)], 0);
+        match unexplained.band(&rules(), SeatId::new(0)) {
+            Err(super::BandError::Gateway(error)) => assert_eq!(error.code, Code::Internal),
+            other => panic!("a missing credit with no loss is INTERNAL, and it was {other:?}"),
+        }
+        // A seat whose own credit is missing was not settled: no band.
+        assert_eq!(lost.band(&rules(), SeatId::new(1)), Ok(None));
     }
 
     fn surface() -> Surface {

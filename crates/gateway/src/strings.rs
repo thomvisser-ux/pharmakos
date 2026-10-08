@@ -152,9 +152,9 @@ pub fn event_text(event: &Event) -> String {
 /// `fog` also carries how many candidates a description matched; this line
 /// does not say the count (decisions-log item 133 (3) (h)): the recap's
 /// [`recap_step_failed`] does, and the Lull's counted sentence
-/// ([`this_round`]) says it before the Push. A value that does not decode -- a failure id this build does
-/// not define, or bits its layout keeps zero -- is said as its code rather
-/// than guessed at.
+/// ([`this_round`]) says it before the Push. A value that does not decode --
+/// a failure id this build does not define, or bits its layout keeps zero --
+/// is said as its code rather than guessed at.
 fn step_failed(value: i64) -> String {
     use pharmakos_sim::interpreter::StepFailed;
     match StepFailed::decode(value) {
@@ -185,10 +185,10 @@ fn step_failed(value: i64) -> String {
 /// words ([`step_failed`], whose sentence this does not change). A value that
 /// does not decode is said as its code, as the feed says it.
 #[must_use]
-pub fn recap_step_failed(value: i64, times: usize) -> String {
+pub fn recap_step_failed(value: i64, times: core::num::NonZeroUsize) -> String {
     use pharmakos_sim::interpreter::{StepFailed, StepFailure};
-    let lead = match times {
-        0 | 1 => String::from("A step"),
+    let lead = match times.get() {
+        1 => String::from("A step"),
         2 => String::from("Twice, a step"),
         many => format!("{many} times, a step"),
     };
@@ -441,6 +441,28 @@ pub fn settlement(bmi_dollars: i32, band_rank: u32, band_percent: i32) -> String
     )
 }
 
+/// The recap's settlement line when its band cannot be told: the sim's event
+/// bus dropped a `settled` at this segment end, so the ladder the Ledger read
+/// cannot be rebuilt ([`feed_lost`] says how much was dropped).
+#[must_use]
+pub fn settlement_unbanded(bmi_dollars: i32) -> String {
+    format!(
+        "The Ledger settled and credited you $ {bmi_dollars}, your Basic Minimum Income at your \
+         band, which this recap cannot tell because the event feed lost part of the \
+         settlement. The award fund pays out from S4, when there are awards to split it by."
+    )
+}
+
+/// The recap's line when the sim's event bus dropped events in the segment
+/// for want of room (its per-tick cap): what follows may be short.
+#[must_use]
+pub fn feed_lost(dropped: u64) -> String {
+    format!(
+        "The event feed dropped {dropped} events this segment, so this recap may be missing \
+         some of what happened."
+    )
+}
+
 /// The recap's shortfall line, the seat's own: which of its beacons were
 /// dark when the segment ended, by name, and the kW their going dark shed
 /// (spec section 7, "flagged in plain language in the recap").
@@ -566,8 +588,9 @@ fn capitalise(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        briefing, capitalise, clock, count, event_text, failure_reason, map_summary, no_recap,
-        recap, recap_step_failed, settlement, shortfall, standing, step_failed,
+        briefing, capitalise, clock, count, event_text, failure_reason, feed_lost, map_summary,
+        no_recap, recap, recap_step_failed, settlement, settlement_unbanded, shortfall, standing,
+        step_failed,
     };
     use pharmakos_sim::events::{Event, EventKind};
     use pharmakos_sim::math::quantity::{Ms, Tick};
@@ -698,35 +721,57 @@ mod tests {
     }
 
     #[test]
+    fn a_feed_loss_is_said_and_the_unbanded_settlement_says_why() {
+        assert_eq!(
+            feed_lost(7),
+            "The event feed dropped 7 events this segment, so this recap may be missing some of \
+             what happened."
+        );
+        let line = settlement_unbanded(95);
+        assert!(line.contains("credited you $ 95"), "{line}");
+        assert!(
+            line.contains("event feed lost part of the settlement"),
+            "{line}"
+        );
+    }
+
+    #[test]
     fn the_recaps_step_failure_says_how_much_matched_and_keeps_the_feeds_words_otherwise() {
         use pharmakos_sim::interpreter::{StepFailed, StepFailure};
+        let times = |count: usize| core::num::NonZeroUsize::new(count).expect("a count");
         let none_reachable = StepFailed::counted(StepFailure::NoTarget, 3).value();
         assert_eq!(
-            recap_step_failed(none_reachable, 1),
+            recap_step_failed(none_reachable, times(1)),
             "A step found nothing: 3 matched, none reachable."
         );
         assert_eq!(
-            recap_step_failed(none_reachable, 2),
+            recap_step_failed(none_reachable, times(2)),
             "Twice, a step found nothing: 3 matched, none reachable."
         );
         assert_eq!(
-            recap_step_failed(none_reachable, 4),
+            recap_step_failed(none_reachable, times(4)),
             "4 times, a step found nothing: 3 matched, none reachable."
         );
         // Nothing matched, or the step read no feature: the feed's words.
         let words = "A step failed (no_target): it found nothing: nothing matched what it named, \
                      or nothing it matched could be reached.";
         assert_eq!(
-            recap_step_failed(StepFailed::counted(StepFailure::NoTarget, 0).value(), 1),
+            recap_step_failed(
+                StepFailed::counted(StepFailure::NoTarget, 0).value(),
+                times(1)
+            ),
             words
         );
         assert_eq!(
-            recap_step_failed(StepFailed::bare(StepFailure::NoTarget).value(), 1),
+            recap_step_failed(StepFailed::bare(StepFailure::NoTarget).value(), times(1)),
             words
         );
         // Another failure keeps its words, counted or not.
         assert_eq!(
-            recap_step_failed(StepFailed::counted(StepFailure::IllegalSite, 1).value(), 1),
+            recap_step_failed(
+                StepFailed::counted(StepFailure::IllegalSite, 1).value(),
+                times(1)
+            ),
             format!(
                 "A step failed (illegal_site): {}.",
                 failure_reason(StepFailure::IllegalSite)
@@ -736,7 +781,7 @@ mod tests {
         assert!(!step_failed(none_reachable).contains("none reachable"));
         // A value that does not decode is said as its code.
         assert_eq!(
-            recap_step_failed(10, 1),
+            recap_step_failed(10, times(1)),
             "A step failed with a failure this build does not name (code 10)."
         );
     }
