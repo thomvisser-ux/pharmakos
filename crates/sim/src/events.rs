@@ -137,7 +137,10 @@ pub enum EventKind {
     /// skipped. `value` carries its index.
     StepSkipped,
     /// A step failed and `on_fail` decided what happened next. `value` carries
-    /// [`crate::interpreter::state::StepFailure::id`] — never a silent skip.
+    /// [`crate::interpreter::state::StepFailed`]: the reason's
+    /// [`crate::interpreter::state::StepFailure::id`], and for a step that
+    /// read a feature how many candidates matched, in the layout that type
+    /// writes and decodes — never a silent skip.
     StepFailed,
     /// A handler's body started. `value` carries the handler's index.
     RuleFired,

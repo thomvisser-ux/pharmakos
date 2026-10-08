@@ -8,11 +8,15 @@
 //! column and a held description's re-read are all answered from a [`Ground`]
 //! -- the world's tables, its voxels, its pathing graph and its feature table,
 //! borrowed read-only -- plus a search [`Scratch`] for the estimator. The sim
-//! asks it from the decision phase; the gateway can ask the same functions over
-//! its hosted world with its own scratch (`resolve_refs`, a later lane), which
-//! is what makes "the gateway's pick equals the sim's" true by construction
-//! rather than by agreement. Nothing here steps, forks or runs a mandate
-//! (AGENTS.md section 3 rule 2).
+//! asks it from the decision phase; the gateway asks the same functions over
+//! its hosted world with its own scratch (`resolve_refs`), which is what makes
+//! "the gateway's pick equals the sim's" true by construction rather than by
+//! agreement. The predicates a pick filters by -- [`matches_pick`],
+//! [`on_candidate`], [`generator_on`] and the sphere test [`anchor_in_sphere`]
+//! -- are public for the same reason, so a preview counts candidates with the
+//! sim's own rule rather than a restatement of it (decisions-log items 133 (3)
+//! (j) and 134 (2) (b)). Nothing here steps, forks or runs a mandate (AGENTS.md
+//! section 3 rule 2).
 //!
 //! # Nearest
 //!
@@ -35,17 +39,42 @@
 //! adopted design accepts for this stage (targeting.md, "Descriptions";
 //! decisions-log item 108 (1)); S3 bases both on the seat's terrain knowledge.
 //!
+//! # The sphere first
+//!
+//! A named or `covered {}` `on` first tests the vent's **anchor point** (its
+//! anchor column's standing point, [`Ground::anchor_point`]) against the
+//! target sphere, and answers `no_target` outside it whatever stands on the
+//! vent: no structure can move that point, so no structure outside the
+//! target sphere decides a named vent (decisions-log item 133 (3) (c); item
+//! 134). That is the claim, and no more: the target sphere is the one the
+//! target is written into, which for a beacon not yet placed (`place_beacon`)
+//! is centred at its site and may reach past every sphere the seat holds,
+//! and the structure tests inside it read the whole footprint, whose columns
+//! may lie just outside it. S1 is unfogged (item 108 (1)); S3's fog work
+//! bases these reads on the seat's knowledge.
+//! [`Ground::on_column`] cannot be that first test, because it picks a free
+//! column by reading structures. Inside the sphere the structure tests follow
+//! and answer `illegal_site`.
+//!
+//! # The count
+//!
+//! The counted forms [`cover_counted`] and [`on_vent_counted`] answer a miss
+//! as a [`StepFailed`]: the reason, and how many candidates matched before
+//! reachability was asked (the meaning of `resolve_refs`'s `matched`), which
+//! the `step_failed` event carries so a recap can say "3 matched, none
+//! reachable" (item 133 (3) (h)). [`cover`] and [`on_vent`] are the same
+//! reads with the reason alone.
+//!
 //! # Allocation
 //!
 //! None: the ranker is a fixed array of [`MAX_FEATURES`] entries, the spiral's
-//! offsets are computed once at construction ([`spiral_offsets`]) and its
-//! per-ring candidates go through a fixed buffer, and the estimator's buffers
-//! are the scratch's (`tests/allocations.rs`).
+//! offsets are computed once at construction ([`spiral_offsets`]) and each
+//! ring is searched in place, and the estimator's buffers are the scratch's
+//! (`tests/allocations.rs`).
 
-use crate::features::{FeatureKind, FeatureTable, MAX_FEATURES};
-use crate::interpreter::cond::within;
-use crate::interpreter::state::StepFailure;
-use crate::math::fixed::Fx;
+use crate::features::{Feature, FeatureKind, FeatureTable, MAX_FEATURES};
+use crate::interpreter::state::{StepFailed, StepFailure};
+use crate::math::fixed::{Fx, Sq};
 use crate::pathing::clusters::Clusters;
 use crate::pathing::estimate::{Fog, Speed, estimate};
 use crate::pathing::search::Scratch;
@@ -146,15 +175,19 @@ impl Ground<'_> {
         self.work.add(units);
     }
 
-    /// `beacon.sphere_radius_voxels`.
+    /// `beacon.sphere_radius_voxels`, which the rules table refuses at load
+    /// unless it is a voxel length ([`RulesTable::sphere_radius_voxels`]).
     #[must_use]
     pub fn sphere_radius(&self) -> i32 {
-        self.rules
-            .message()
-            .beacon
-            .as_ref()
-            .and_then(|block| i32::try_from(block.sphere_radius_voxels).ok())
-            .unwrap_or(0)
+        i32::from(self.rules.sphere_radius_voxels())
+    }
+
+    /// Whether `point` lies within the beacon sphere's radius of `centre`:
+    /// squared distances in Q32.32, no square root (AGENTS.md section 4.2).
+    #[must_use]
+    pub fn in_sphere(&self, centre: [Fx; 3], point: [Fx; 3]) -> bool {
+        let radius = Fx::from_voxels(self.rules.sphere_radius_voxels());
+        Sq::between(centre, point) <= Sq::of_radius(radius)
     }
 
     /// The point a unit or a structure stands at on the column `(x, y)`: one
@@ -180,43 +213,26 @@ impl Ground<'_> {
     /// beacons, **awake or dormant**: a dormant beacon keeps its sphere.
     #[must_use]
     pub fn inside_own_sphere(&self, seat: SeatId, point: [Fx; 3]) -> bool {
-        let radius = self.sphere_radius();
-        let count = usize::try_from(self.beacons.len()).unwrap_or(0);
-        (0..count).any(|row| {
-            self.beacons.seats().get(row).copied() == Some(seat.raw())
-                && self
-                    .beacons
-                    .hit_points()
-                    .get(row)
-                    .is_some_and(|hp| hp.is_alive())
-                && self
-                    .beacons
-                    .positions()
-                    .get(row)
-                    .copied()
-                    .is_some_and(|centre| within(centre, point, radius))
-        })
+        self.own_live_beacons(seat)
+            .any(|centre| self.in_sphere(centre, point))
     }
 
     /// **No stacking**: whether one of `seat`'s own live beacons stands on the
     /// column `(x, y)` (`docs/design/targeting.md`, "Companion changes").
     #[must_use]
     pub fn stacks_on_own(&self, seat: SeatId, x: i32, y: i32) -> bool {
-        let count = usize::try_from(self.beacons.len()).unwrap_or(0);
-        (0..count).any(|row| {
-            self.beacons.seats().get(row).copied() == Some(seat.raw())
-                && self
-                    .beacons
-                    .hit_points()
-                    .get(row)
-                    .is_some_and(|hp| hp.is_alive())
-                && self
-                    .beacons
-                    .positions()
-                    .get(row)
-                    .copied()
-                    .is_some_and(|at| same_column(at, x, y))
-        })
+        self.own_live_beacons(seat).any(|at| same_column(at, x, y))
+    }
+
+    /// Where each of `seat`'s own living beacons stands, in row order.
+    fn own_live_beacons(&self, seat: SeatId) -> impl Iterator<Item = [Fx; 3]> + '_ {
+        self.beacons
+            .seats()
+            .iter()
+            .zip(self.beacons.hit_points())
+            .zip(self.beacons.positions())
+            .filter(move |((owner, hp), _)| **owner == seat.raw() && hp.is_alive())
+            .map(|(_, at)| *at)
     }
 
     /// **One structure per voxel**: whether a structure with hit points left
@@ -225,39 +241,11 @@ impl Ground<'_> {
     /// structure at zero hit points frees its column.
     #[must_use]
     pub fn structure_on(&self, x: i32, y: i32) -> bool {
-        let count = usize::try_from(self.structures.len()).unwrap_or(0);
-        (0..count).any(|row| {
-            self.structures
-                .hit_points()
-                .get(row)
-                .is_some_and(|hp| hp.is_alive())
-                && self
-                    .structures
-                    .positions()
-                    .get(row)
-                    .copied()
-                    .is_some_and(|at| same_column(at, x, y))
-        })
-    }
-
-    /// Whether a **Generator** of any seat stands, alive, on the column.
-    fn generator_on(&self, x: i32, y: i32) -> bool {
-        let count = usize::try_from(self.structures.len()).unwrap_or(0);
-        let generator = crate::tables::StructureKind::Generator.id();
-        (0..count).any(|row| {
-            self.structures.kinds().get(row).copied() == Some(generator)
-                && self
-                    .structures
-                    .hit_points()
-                    .get(row)
-                    .is_some_and(|hp| hp.is_alive())
-                && self
-                    .structures
-                    .positions()
-                    .get(row)
-                    .copied()
-                    .is_some_and(|at| same_column(at, x, y))
-        })
+        self.structures
+            .hit_points()
+            .iter()
+            .zip(self.structures.positions())
+            .any(|(hp, at)| hp.is_alive() && same_column(*at, x, y))
     }
 
     /// Whether a Build target of one of `seat`'s own beacons -- `except`
@@ -265,27 +253,24 @@ impl Ground<'_> {
     /// per-seat claim, so another seat's stays hidden.
     #[must_use]
     pub fn own_target_on(&self, seat: SeatId, except: Option<BeaconId>, x: i32, y: i32) -> bool {
-        let count = usize::try_from(self.targets.len()).unwrap_or(0);
-        (0..count).any(|row| {
-            let Some(beacon) = self.targets.beacons().get(row).copied() else {
-                return false;
-            };
-            if except.is_some_and(|skip| skip.raw() == beacon) {
-                return false;
-            }
-            let owned = usize::try_from(beacon)
-                .ok()
-                .and_then(|at| self.beacons.seats().get(at).copied())
-                == Some(seat.raw());
-            owned
-                && self.targets.kinds().get(row).copied() == Some(TargetKind::Build.id())
-                && self
-                    .targets
-                    .anchors()
-                    .get(row)
-                    .copied()
-                    .is_some_and(|at| same_column(at, x, y))
-        })
+        let build = TargetKind::Build.id();
+        self.targets
+            .beacons()
+            .iter()
+            .zip(self.targets.kinds())
+            .zip(self.targets.anchors())
+            .any(|((beacon, kind), at)| {
+                if except.is_some_and(|skip| skip.raw() == *beacon) || *kind != build {
+                    return false;
+                }
+                // A beacon's id is its row (rows are never removed); an id
+                // that names no row is no beacon of this seat's.
+                let owned = usize::try_from(*beacon)
+                    .ok()
+                    .and_then(|row| self.beacons.seats().get(row).copied())
+                    == Some(seat.raw());
+                owned && same_column(*at, x, y)
+            })
     }
 
     /// The feature's **`on` column**: its anchor column if it is free,
@@ -317,8 +302,10 @@ impl Ground<'_> {
 
     /// The point a feature is measured and covered at: its anchor column's
     /// standing point (or its first footprint column's, should the anchor
-    /// column be missing).
-    fn anchor_point(&self, index: usize) -> Option<[Fx; 3]> {
+    /// column be missing). No structure moves it. `None` when the feature is
+    /// not in the table or the column is off the map.
+    #[must_use]
+    pub fn anchor_point(&self, index: usize) -> Option<[Fx; 3]> {
         let feature = self.features.get(index)?;
         let column = feature
             .anchor_column()
@@ -367,17 +354,15 @@ impl Ground<'_> {
 
 /// Whether a point floors onto the column `(x, y)`.
 fn same_column(at: [Fx; 3], x: i32, y: i32) -> bool {
-    at.first().map(|value| value.floor_voxels()) == Some(x)
-        && at.get(1).map(|value| value.floor_voxels()) == Some(y)
+    let [ax, ay, _] = at;
+    ax.floor_voxels() == x && ay.floor_voxels() == y
 }
 
 /// The column a point floors onto.
 #[must_use]
 pub fn column_of(at: [Fx; 3]) -> [i32; 2] {
-    [
-        at.first().map_or(0, |value| value.floor_voxels()),
-        at.get(1).map_or(0, |value| value.floor_voxels()),
-    ]
+    let [x, y, _] = at;
+    [x.floor_voxels(), y.floor_voxels()]
 }
 
 /// One candidate of a [`Ranker`].
@@ -406,58 +391,71 @@ struct Entry {
 pub struct Ranker {
     entries: [Entry; MAX_FEATURES],
     len: usize,
-    origin: Node,
+    /// The origin's node; `None` when the origin column is off the map, which
+    /// reaches nothing.
+    origin: Option<Node>,
+    /// How many features `keep` admitted, before reachability was asked.
+    matched: u32,
 }
 
 impl Ranker {
     /// The candidates `keep` admits, ranked from the column `origin`.
     ///
     /// A candidate with no reachable footprint column is dropped here: an
-    /// unreachable feature is not a candidate (targeting.md, "Nearest").
+    /// unreachable feature is not a candidate (targeting.md, "Nearest"). It
+    /// still counts in [`Ranker::matched`], which is asked before
+    /// reachability. The feature table holds at most [`MAX_FEATURES`] rows
+    /// (`FeatureTable::new` refuses more), so every admitted, reachable
+    /// feature has an entry.
     pub fn new<F>(ground: &Ground<'_>, origin: [i32; 2], mut keep: F) -> Ranker
     where
         F: FnMut(usize) -> bool,
     {
+        let [ox, oy] = origin;
+        let start = ground.surface.node_of(ox, oy);
         let mut ranker = Ranker {
             entries: [Entry::default(); MAX_FEATURES],
             len: 0,
-            origin: 0,
+            origin: start,
+            matched: 0,
         };
-        let Some(start) = ground.surface.node_of(
-            origin.first().copied().unwrap_or(0),
-            origin.get(1).copied().unwrap_or(0),
-        ) else {
-            return ranker;
-        };
-        ranker.origin = start;
-        let count = ground.features.len().min(MAX_FEATURES);
-        let mut index: usize = 0;
-        while index < count {
+        for (index, feature) in ground.features.features().iter().enumerate() {
             ground.charge(1);
-            if keep(index)
+            if !keep(index) {
+                continue;
+            }
+            ranker.matched += 1;
+            if let Some(start) = start
                 && let Some(goal) = ground.measure_to(index, start)
-                && let Some(feature) = ground.features.get(index)
                 && let Some(slot) = ranker.entries.get_mut(ranker.len)
             {
+                let [x, y] = feature.anchor;
                 *slot = Entry {
                     feature: index,
-                    y: feature.anchor.get(1).copied().unwrap_or(0),
-                    x: feature.anchor.first().copied().unwrap_or(0),
+                    y,
+                    x,
                     goal,
                     bound: i64::from(ground.surface.heuristic(start, goal)),
                     cost: 0,
                     state: 0,
                 };
-                ranker.len = ranker.len.saturating_add(1);
+                ranker.len += 1;
             }
-            index = index.saturating_add(1);
         }
         ranker
+    }
+
+    /// How many features `keep` admitted, reachable or not: the count a
+    /// `step_failed` carries and `resolve_refs` calls `matched`.
+    #[must_use]
+    pub const fn matched(&self) -> u32 {
+        self.matched
     }
 
     /// The next candidate, nearest first, with its estimated cost; `None` when
     /// every candidate has been emitted or found unreachable.
     pub fn next(&mut self, ground: &Ground<'_>, scratch: &mut Scratch) -> Option<(usize, i64)> {
+        let origin = self.origin?;
         loop {
             let live = self.entries.get(..self.len)?;
             // item 62: anchors are unique per feature, so both keys below end
@@ -485,7 +483,6 @@ impl Ranker {
                     return Some((entry.feature, entry.cost));
                 }
                 (_, Some((at, _))) => {
-                    let origin = self.origin;
                     let entry = self.entries.get_mut(at)?;
                     match ground.travel(scratch, origin, entry.goal) {
                         Some(cost) => {
@@ -506,42 +503,27 @@ impl Ranker {
 
 /// Every `[dx, dy]` within `radius`, in `(dx² + dy², dy, dx)` order: the
 /// spiral a `covering` site is searched along, computed once at
-/// construction so a decision allocates nothing.
+/// construction so a decision allocates nothing. A negative radius has no
+/// offsets.
 #[must_use]
 pub fn spiral_offsets(radius: i32) -> Vec<[i32; 2]> {
-    let reach = radius.max(0);
-    let limit = i64::from(reach).saturating_mul(i64::from(reach));
+    // Before `-radius`, which `i32::MIN` would overflow.
+    if radius < 0 {
+        return Vec::new();
+    }
+    let limit = i64::from(radius) * i64::from(radius);
     let mut out: Vec<[i32; 2]> = Vec::new();
-    let mut dy = -reach;
-    while dy <= reach {
-        let mut dx = -reach;
-        while dx <= reach {
-            let d2 = i64::from(dx)
-                .saturating_mul(i64::from(dx))
-                .saturating_add(i64::from(dy).saturating_mul(i64::from(dy)));
-            if d2 <= limit {
+    for dy in -radius..=radius {
+        for dx in -radius..=radius {
+            if ring_key([dx, dy]) <= limit {
                 out.push([dx, dy]);
             }
-            dx = dx.saturating_add(1);
         }
-        dy = dy.saturating_add(1);
     }
     // item 62: the key ends in `dx`, unique within a `dy` row, so it is total.
-    out.sort_unstable_by_key(|offset| {
-        let dx = i64::from(offset.first().copied().unwrap_or(0));
-        let dy = i64::from(offset.get(1).copied().unwrap_or(0));
-        (dx * dx + dy * dy, dy, dx)
-    });
+    out.sort_unstable_by_key(|&[dx, dy]| (ring_key([dx, dy]), dy, dx));
     out
 }
-
-/// The most columns one ring of the spiral can hold.
-///
-/// A ring is the offsets at one squared distance, and no integer is a sum of
-/// two squares in more than a few dozen ways at a sphere's radius; a ring
-/// past this is truncated rather than allocated for, which no committed
-/// radius reaches.
-const RING_ROOM: usize = 64;
 
 /// The `covering` site for `feature`: the spiral's first column, in order of
 /// squared distance from the feature's anchor, then squared distance from the
@@ -549,7 +531,19 @@ const RING_ROOM: usize = 64;
 /// `seat`'s own spheres, not on the column of one of its own live beacons),
 /// standable, outside every feature's footprint, **reachable** by the
 /// commander, and whose sphere holds the feature's `on` column
-/// (`docs/design/targeting.md`, "Sites"). `None` when no such column exists.
+/// (`docs/design/targeting.md`, "Sites") **and** its anchor point
+/// ([`anchor_in_sphere`]). `None` when no such column exists.
+///
+/// The anchor point is the sphere test a `covered {}` `on` asks first, so a
+/// site whose sphere held the `on` column alone (a structure on the anchor
+/// column moves the `on` column off it) would bind a `covering` its own
+/// `covered {}` then answers `no_target`, and leave the vent reading as
+/// `UNCOVERED` after the beacon lands. Where the anchor column is free the
+/// two points are one and the test adds nothing.
+///
+/// Each ring of the spiral (the offsets at one squared distance) is searched
+/// in place for its least `(distance from the commander, y, x)` among the
+/// columns that pass, so no ring is ever truncated to fit a buffer.
 #[must_use]
 pub fn covering_site(
     ground: &Ground<'_>,
@@ -557,30 +551,24 @@ pub fn covering_site(
     commander: [Fx; 3],
     feature: usize,
 ) -> Option<[i32; 2]> {
-    let radius = ground.sphere_radius();
-    let anchor = ground.features.get(feature)?.anchor;
-    let ax = anchor.first().copied().unwrap_or(0);
-    let ay = anchor.get(1).copied().unwrap_or(0);
-    let on = ground.on_column(feature, seat, None)?;
-    let on_point = ground.standing(
-        on.first().copied().unwrap_or(0),
-        on.get(1).copied().unwrap_or(0),
-    )?;
+    let [ax, ay] = ground.features.get(feature)?.anchor;
+    let [ox, oy] = ground.on_column(feature, seat, None)?;
+    let on_point = ground.standing(ox, oy)?;
+    let anchor_point = ground.anchor_point(feature)?;
     let [cx, cy] = column_of(commander);
     let start = ground.surface.node_of(cx, cy)?;
 
-    let mut ring: [(i64, i32, i32); RING_ROOM] = [(0, 0, 0); RING_ROOM];
-    let mut at: usize = 0;
-    while at < ground.spiral.len() {
-        // One ring: every offset at this squared distance.
-        let d2 = ring_key(ground.spiral.get(at));
-        let mut filled: usize = 0;
-        while at < ground.spiral.len() && ring_key(ground.spiral.get(at)) == d2 {
-            let offset = ground.spiral.get(at).copied().unwrap_or([0, 0]);
-            at = at.saturating_add(1);
+    for ring in ground
+        .spiral
+        .chunk_by(|left, right| ring_key(*left) == ring_key(*right))
+    {
+        let mut best: Option<(i64, i32, i32)> = None;
+        for &[dx, dy] in ring {
             ground.charge(1);
-            let x = ax.saturating_add(offset.first().copied().unwrap_or(0));
-            let y = ay.saturating_add(offset.get(1).copied().unwrap_or(0));
+            // An offset that overflows a coordinate names no column.
+            let (Some(x), Some(y)) = (ax.checked_add(dx), ay.checked_add(dy)) else {
+                continue;
+            };
             let Some(node) = ground.surface.node_of(x, y) else {
                 continue;
             };
@@ -589,38 +577,33 @@ pub fn covering_site(
             };
             if !ground.surface.walkable(node)
                 || ground.features.at_column(x, y).is_some()
-                || !within(site, on_point, radius)
+                || !ground.in_sphere(site, on_point)
+                || !ground.in_sphere(site, anchor_point)
                 || !ground.inside_own_sphere(seat, site)
                 || ground.stacks_on_own(seat, x, y)
+                || !ground.clusters.connected(ground.surface, start, node)
             {
                 continue;
             }
-            let dxc = i64::from(x.saturating_sub(cx));
-            let dyc = i64::from(y.saturating_sub(cy));
-            if let Some(slot) = ring.get_mut(filled) {
-                *slot = (dxc * dxc + dyc * dyc, y, x);
-                filled = filled.saturating_add(1);
+            let dxc = i64::from(x) - i64::from(cx);
+            let dyc = i64::from(y) - i64::from(cy);
+            // item 62: the key ends in `(y, x)`, unique per column, so it is
+            // total.
+            let key = (dxc * dxc + dyc * dyc, y, x);
+            if best.is_none_or(|held| key < held) {
+                best = Some(key);
             }
         }
-        let candidates = ring.get_mut(..filled).unwrap_or_default();
-        // item 62: the key ends in `x`, unique within a ring row, so it is
-        // total.
-        candidates.sort_unstable();
-        for (_, y, x) in candidates.iter() {
-            if let Some(node) = ground.surface.node_of(*x, *y)
-                && ground.clusters.connected(ground.surface, start, node)
-            {
-                return Some([*x, *y]);
-            }
+        if let Some((_, y, x)) = best {
+            return Some([x, y]);
         }
     }
     None
 }
 
 /// An offset's squared distance, the key the spiral's rings share.
-fn ring_key(offset: Option<&[i32; 2]>) -> i64 {
-    let dx = i64::from(offset.and_then(|o| o.first()).copied().unwrap_or(0));
-    let dy = i64::from(offset.and_then(|o| o.get(1)).copied().unwrap_or(0));
+fn ring_key(offset: [i32; 2]) -> i64 {
+    let [dx, dy] = offset.map(i64::from);
     dx * dx + dy * dy
 }
 
@@ -636,6 +619,8 @@ pub struct Cover {
 /// Resolve a `covering` site for `seat`, ranked from the commander's column
 /// when the step starts.
 ///
+/// [`cover_counted`] with the reason alone.
+///
 /// # Errors
 ///
 /// `no_target` when a name is absent or lost, or a description matches
@@ -648,43 +633,63 @@ pub fn cover(
     commander: [Fx; 3],
     spec: FeatureSpec,
 ) -> Result<Cover, StepFailure> {
+    cover_counted(ground, scratch, seat, commander, spec).map_err(|failed| failed.reason)
+}
+
+/// [`cover`], with how many candidates matched on a miss.
+///
+/// # Errors
+///
+/// As [`cover`], counted ([`StepFailed::counted`]): a name or `covered {}`
+/// counts 1 when it names a live feature of its kind and 0 otherwise, and a
+/// description counts what [`matches_pick`] admitted, reachable or not.
+pub fn cover_counted(
+    ground: &Ground<'_>,
+    scratch: &mut Scratch,
+    seat: SeatId,
+    commander: [Fx; 3],
+    spec: FeatureSpec,
+) -> Result<Cover, StepFailed> {
     match spec {
         FeatureSpec::Name { kind, anchor } => {
             let feature = ground
                 .features
                 .index_of(kind, anchor)
                 .filter(|index| ground.is_live(*index))
-                .ok_or(StepFailure::NoTarget)?;
-            let site =
-                covering_site(ground, seat, commander, feature).ok_or(StepFailure::IllegalSite)?;
+                .ok_or(StepFailed::counted(StepFailure::NoTarget, 0))?;
+            let site = covering_site(ground, seat, commander, feature)
+                .ok_or(StepFailed::counted(StepFailure::IllegalSite, 1))?;
             Ok(Cover { feature, site })
         }
         FeatureSpec::Nearest { kind, uncovered } => {
             let mut ranker = Ranker::new(ground, column_of(commander), |index| {
                 matches_pick(ground, seat, index, kind, uncovered)
             });
-            let mut matched = false;
+            let mut reached = false;
             while let Some((feature, _)) = ranker.next(ground, scratch) {
-                matched = true;
+                reached = true;
                 if let Some(site) = covering_site(ground, seat, commander, feature) {
                     return Ok(Cover { feature, site });
                 }
             }
-            Err(if matched {
+            let reason = if reached {
                 StepFailure::IllegalSite
             } else {
                 StepFailure::NoTarget
-            })
+            };
+            Err(StepFailed::counted(reason, ranker.matched()))
         }
         // `covered {}` is legal only under `on` (the compile refuses it here).
-        FeatureSpec::Covered => Err(StepFailure::NoTarget),
+        FeatureSpec::Covered => Err(StepFailed::counted(StepFailure::NoTarget, 0)),
     }
 }
 
-/// Whether the feature at `index` passes a pick's filters: its kind, alive,
-/// and -- for `UNCOVERED` -- outside every sphere of `seat`'s own living
-/// beacons, awake or dormant. Never reads another seat's state.
-fn matches_pick(
+/// Whether the feature at `index` passes a `covering` pick's filters: its
+/// kind, alive, and -- for `UNCOVERED` -- its anchor point outside every
+/// sphere of `seat`'s own living beacons, awake or dormant. Never reads
+/// another seat's state. `false` for an index the table does not hold.
+#[must_use]
+pub fn matches_pick(
     ground: &Ground<'_>,
     seat: SeatId,
     index: usize,
@@ -705,6 +710,45 @@ fn matches_pick(
         .is_some_and(|point| !ground.inside_own_sphere(seat, point))
 }
 
+/// Whether a **Generator** of any seat stands, alive, on the column `(x, y)`:
+/// one Generator per vent, since a second tap supplies 0 kW (`power.rs`'s
+/// `supply_of`).
+#[must_use]
+pub fn generator_on(ground: &Ground<'_>, x: i32, y: i32) -> bool {
+    let generator = crate::tables::StructureKind::Generator.id();
+    ground
+        .structures
+        .kinds()
+        .iter()
+        .zip(ground.structures.hit_points())
+        .zip(ground.structures.positions())
+        .any(|((kind, hp), at)| *kind == generator && hp.is_alive() && same_column(*at, x, y))
+}
+
+/// **The sphere test** a named or `covered {}` `on` asks first: whether the
+/// feature at `index` has its anchor point ([`Ground::anchor_point`]) within
+/// the beacon sphere's radius of `centre`, the sphere the target is written
+/// into. No structure moves that point, so no structure outside that sphere
+/// decides the answer (decisions-log item 133 (3) (c)); the module docs say
+/// what the claim does not cover. [`covering_site`] asks it of every site, so
+/// a `covering` never picks a site its own `covered {}` fails. `false` for
+/// an index the table does not hold.
+#[must_use]
+pub fn anchor_in_sphere(ground: &Ground<'_>, centre: [Fx; 3], index: usize) -> bool {
+    ground
+        .anchor_point(index)
+        .is_some_and(|point| ground.in_sphere(centre, point))
+}
+
+/// Whether a live Generator of any seat, or a Build target of `seat`'s (but
+/// `except`'s), stands on any column of the feature's footprint.
+fn vent_taken(ground: &Ground<'_>, seat: SeatId, except: Option<BeaconId>, vent: &Feature) -> bool {
+    vent.footprint.iter().any(|column| {
+        generator_on(ground, column.x, column.y)
+            || ground.own_target_on(seat, except, column.x, column.y)
+    })
+}
+
 /// What an `on` resolved to: the feature and the column the structure stands
 /// on.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -720,15 +764,11 @@ pub struct OnSite {
 /// `None` for one not yet placed), ranked from that centre's column.
 /// `covered` is the feature a `covering` step bound, which `covered {}` names.
 ///
-/// `on` ranks **only vents** whose `on` column lies inside that sphere, and a
-/// vent is a candidate only if no live Generator of any seat and no Build
-/// target of this seat (but `except`'s) stands on its footprint
-/// (targeting.md, "Sites").
+/// [`on_vent_counted`] with the reason alone.
 ///
 /// # Errors
 ///
-/// `no_target` when a name is absent, lost or not a vent, or nothing matches;
-/// `illegal_site` when a named vent has no free column.
+/// As [`on_vent_counted`].
 pub fn on_vent(
     ground: &Ground<'_>,
     scratch: &mut Scratch,
@@ -738,61 +778,95 @@ pub fn on_vent(
     covered: Option<usize>,
     spec: FeatureSpec,
 ) -> Result<OnSite, StepFailure> {
-    // A name is not ranked, but the vent it names must still be a legal `on`
-    // site: one structure per voxel and one Generator per vent, so a vent a
-    // live Generator of any seat -- or another of this seat's Build targets --
-    // already stands on is `illegal_site` rather than a second tap that would
-    // supply nothing (`power.rs`'s `supply_of`).
-    let named = |feature: usize| -> Result<OnSite, StepFailure> {
-        let Some(found) = ground.features.get(feature) else {
-            return Err(StepFailure::NoTarget);
-        };
-        if found.kind != FeatureKind::Vent || !ground.is_live(feature) {
-            return Err(StepFailure::NoTarget);
+    on_vent_counted(ground, scratch, seat, centre, except, covered, spec)
+        .map_err(|failed| failed.reason)
+}
+
+/// [`on_vent`], with how many candidates matched on a miss.
+///
+/// `on` ranks **only vents** whose `on` column lies inside the sphere, and a
+/// vent is a candidate only if no live Generator of any seat and no Build
+/// target of this seat (but `except`'s) stands on its footprint
+/// ([`on_candidate`]; targeting.md, "Sites").
+///
+/// A name, or `covered {}`, is not ranked, and is read **sphere first**: a
+/// vent whose anchor point lies outside the sphere ([`anchor_in_sphere`]) is
+/// `no_target` whatever stands on it, as a description would find it no
+/// candidate. Inside the sphere it must still be a legal `on` site -- one
+/// structure per voxel and one Generator per vent -- so a vent a live
+/// Generator of any seat or another of this seat's Build targets already
+/// stands on, a vent with no free column, and a vent whose free `on` column
+/// lies outside the sphere are each `illegal_site`.
+///
+/// # Errors
+///
+/// Counted ([`StepFailed::counted`]): `no_target` with 0 when a name is
+/// absent, lost, not a vent, or outside the sphere; `illegal_site` with 1 when
+/// a named vent inside the sphere has no legal `on` column; `no_target` with
+/// what [`on_candidate`] admitted when a description reaches nothing.
+pub fn on_vent_counted(
+    ground: &Ground<'_>,
+    scratch: &mut Scratch,
+    seat: SeatId,
+    centre: [Fx; 3],
+    except: Option<BeaconId>,
+    covered: Option<usize>,
+    spec: FeatureSpec,
+) -> Result<OnSite, StepFailed> {
+    let named = |feature: Option<usize>| -> Result<OnSite, StepFailed> {
+        let missed = StepFailed::counted(StepFailure::NoTarget, 0);
+        let feature = feature.ok_or(missed)?;
+        let found = ground.features.get(feature).ok_or(missed)?;
+        if found.kind != FeatureKind::Vent
+            || !ground.is_live(feature)
+            || !anchor_in_sphere(ground, centre, feature)
+        {
+            return Err(missed);
         }
-        let taken = found.footprint.iter().any(|column| {
-            ground.generator_on(column.x, column.y)
-                || ground.own_target_on(seat, except, column.x, column.y)
-        });
-        if taken {
-            return Err(StepFailure::IllegalSite);
+        let illegal = StepFailed::counted(StepFailure::IllegalSite, 1);
+        if vent_taken(ground, seat, except, found) {
+            return Err(illegal);
         }
-        let column = ground
-            .on_column(feature, seat, except)
-            .ok_or(StepFailure::IllegalSite)?;
-        Ok(OnSite { feature, column })
+        let [x, y] = ground.on_column(feature, seat, except).ok_or(illegal)?;
+        let inside = ground
+            .standing(x, y)
+            .is_some_and(|point| ground.in_sphere(centre, point));
+        if !inside {
+            return Err(illegal);
+        }
+        Ok(OnSite {
+            feature,
+            column: [x, y],
+        })
     };
     match spec {
-        FeatureSpec::Name { kind, anchor } => {
-            let feature = ground
-                .features
-                .index_of(kind, anchor)
-                .ok_or(StepFailure::NoTarget)?;
-            named(feature)
-        }
-        FeatureSpec::Covered => named(covered.ok_or(StepFailure::NoTarget)?),
+        FeatureSpec::Name { kind, anchor } => named(ground.features.index_of(kind, anchor)),
+        FeatureSpec::Covered => named(covered),
         FeatureSpec::Nearest { .. } => {
-            let radius = ground.sphere_radius();
             let mut ranker = Ranker::new(ground, column_of(centre), |index| {
-                on_candidate(ground, seat, except, centre, radius, index)
+                on_candidate(ground, seat, except, centre, index)
             });
-            let (feature, _) = ranker.next(ground, scratch).ok_or(StepFailure::NoTarget)?;
-            let column = ground
-                .on_column(feature, seat, except)
-                .ok_or(StepFailure::NoTarget)?;
+            let missed = StepFailed::counted(StepFailure::NoTarget, ranker.matched());
+            let (feature, _) = ranker.next(ground, scratch).ok_or(missed)?;
+            // The candidate rule read this column, so a ranked vent has one.
+            let column = ground.on_column(feature, seat, except).ok_or(missed)?;
             Ok(OnSite { feature, column })
         }
     }
 }
 
 /// Whether the vent at `index` is an `on` candidate for a beacon of `seat`
-/// centred at `centre`.
-fn on_candidate(
+/// centred at `centre` (`except` is that beacon, or `None` for one not yet
+/// placed): a live vent no live Generator of any seat and no Build target of
+/// this seat (but `except`'s) stands on, whose `on` column
+/// ([`Ground::on_column`]) lies inside the sphere. `false` for an index the
+/// table does not hold.
+#[must_use]
+pub fn on_candidate(
     ground: &Ground<'_>,
     seat: SeatId,
     except: Option<BeaconId>,
     centre: [Fx; 3],
-    radius: i32,
     index: usize,
 ) -> bool {
     let Some(feature) = ground.features.get(index) else {
@@ -801,17 +875,13 @@ fn on_candidate(
     if feature.kind != FeatureKind::Vent || !ground.is_live(index) {
         return false;
     }
-    let taken = feature.footprint.iter().any(|column| {
-        ground.generator_on(column.x, column.y)
-            || ground.own_target_on(seat, except, column.x, column.y)
-    });
-    if taken {
+    if vent_taken(ground, seat, except, feature) {
         return false;
     }
     ground
         .on_column(index, seat, except)
         .and_then(|[x, y]| ground.standing(x, y))
-        .is_some_and(|point| within(centre, point, radius))
+        .is_some_and(|point| ground.in_sphere(centre, point))
 }
 
 #[cfg(test)]
@@ -911,6 +981,15 @@ mod tests {
     /// The first `count` features "nearest" ranks from `origin`, in order,
     /// by name and with their travel cost.
     fn ranked(map: &mut Map, origin: [i32; 2], count: usize) -> Vec<(String, i64)> {
+        let (mut out, _) = ranked_all(map, origin);
+        out.truncate(count);
+        out
+    }
+
+    /// Every feature "nearest" ranks from `origin`, in order, by name and
+    /// with its travel cost, and how many the filter matched before
+    /// reachability ([`Ranker::matched`]).
+    fn ranked_all(map: &mut Map, origin: [i32; 2]) -> (Vec<(String, i64)>, u32) {
         let rules = rules();
         let beacons = BeaconTable::with_capacity(0);
         let structures = StructureTable::with_capacity(0);
@@ -931,10 +1010,7 @@ mod tests {
         };
         let mut ranker = Ranker::new(&ground, origin, |_| true);
         let mut out: Vec<(String, i64)> = Vec::new();
-        while out.len() < count {
-            let Some((feature, cost)) = ranker.next(&ground, &mut map.scratch) else {
-                break;
-            };
+        while let Some((feature, cost)) = ranker.next(&ground, &mut map.scratch) {
             let name = map
                 .features
                 .get(feature)
@@ -942,7 +1018,7 @@ mod tests {
                 .name();
             out.push((name, cost));
         }
-        out
+        (out, ranker.matched())
     }
 
     #[test]
@@ -986,15 +1062,38 @@ mod tests {
         // A vent walled in by the ravine on every side is not a candidate:
         // "nearest" skips what the commander cannot reach rather than
         // answering with it.
-        let mut map = synthetic(
-            |x, y| {
-                (18..=26).contains(&x)
-                    && (18..=26).contains(&y)
-                    && !((21..=23).contains(&x) && (21..=23).contains(&y))
-            },
-            &[[22, 22], [50, 50]],
-        );
+        let mut map = synthetic(walled_in, &[[22, 22], [50, 50]]);
         assert_eq!(nearest(&mut map, [5, 5]), "vent_50_50");
+    }
+
+    /// A vent walled in by the ravine, at (22, 22).
+    fn walled_in(x: i32, y: i32) -> bool {
+        (18..=26).contains(&x)
+            && (18..=26).contains(&y)
+            && !((21..=23).contains(&x) && (21..=23).contains(&y))
+    }
+
+    #[test]
+    fn an_unreachable_vent_still_counts_as_matched() {
+        // The count is asked before reachability, from an origin on the map:
+        // both vents match, and only the reachable one is ranked...
+        let mut map = synthetic(walled_in, &[[22, 22], [50, 50]]);
+        let (order, matched) = ranked_all(&mut map, [5, 5]);
+        let names: Vec<&str> = order.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(names, ["vent_50_50"]);
+        assert_eq!(matched, 2);
+        // ...and a walled-in vent alone ranks nothing yet counts 1: the
+        // "1 matched, none reachable" a `no_target` carries.
+        let mut map = synthetic(walled_in, &[[22, 22]]);
+        assert_eq!(ranked_all(&mut map, [5, 5]), (Vec::new(), 1));
+    }
+
+    #[test]
+    fn a_negative_radius_has_no_offsets() {
+        // `i32::MIN` included, whose negation would overflow.
+        assert_eq!(spiral_offsets(-5), Vec::<[i32; 2]>::new());
+        assert_eq!(spiral_offsets(i32::MIN), Vec::<[i32; 2]>::new());
+        assert_eq!(spiral_offsets(0), vec![[0, 0]]);
     }
 
     /// Reading rule 2 in a world (`docs/design/targeting.md`, "Three reading

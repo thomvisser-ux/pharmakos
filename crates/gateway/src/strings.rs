@@ -146,25 +146,27 @@ pub fn event_text(event: &Event) -> String {
 /// (`docs/design/targeting.md`, "Surfaces"; S1's plan, task `tgtw`): a
 /// `no_target` and an `illegal_site` used to read as "failure code 2" and
 /// "failure code 6". The step's index is not on the event (its `value` is the
-/// failure), so the line names the reason and not the step; how many
-/// candidates a description matched is not on it either, so the counted
-/// sentence ("3 matched, none reachable") is the Lull's, where
-/// `resolve_refs` has the count ([`this_round`]). A failure id this build does
-/// not define is said as its code rather than guessed at.
+/// failure), so the line names the reason and not the step. The value is read
+/// through the sim's one decode of its layout
+/// ([`pharmakos_sim::interpreter::StepFailed::decode`]), which since S1's
+/// `fog` also carries how many candidates a description matched; this line
+/// does not say the count yet (rendering it is `econ`'s or `ui`'s, decisions-log
+/// item 133 (3) (h)), so the Lull's counted sentence ([`this_round`]) is still
+/// the only one. A value that does not decode -- a failure id this build does
+/// not define, or bits its layout keeps zero -- is said as its code rather
+/// than guessed at.
 fn step_failed(value: i64) -> String {
-    use pharmakos_sim::interpreter::StepFailure;
-    let failure = u8::try_from(value)
-        .ok()
-        .and_then(|id| StepFailure::ALL.into_iter().find(|known| known.id() == id));
-    match failure {
-        Some(failure) => format!(
+    use pharmakos_sim::interpreter::StepFailed;
+    match StepFailed::decode(value) {
+        Ok(failed) => format!(
             "A step failed ({}): {}. Its on_fail decided what came next.",
-            failure.name(),
-            failure_reason(failure)
+            failed.reason.name(),
+            failure_reason(failed.reason)
         ),
-        None => format!(
-            "A step failed with a failure this build does not name (code {value}). Its \
-             on_fail decided what came next."
+        Err(refused) => format!(
+            "A step failed with a failure this build does not name (code {}). Its \
+             on_fail decided what came next.",
+            refused.value()
         ),
     }
 }
@@ -615,6 +617,58 @@ mod tests {
             i64::from(StepFailure::RETIRED_NOT_OWN),
         ));
         assert!(unknown.contains("code 10"), "{unknown}");
+    }
+
+    #[test]
+    fn a_counted_step_failure_reads_as_its_bare_reason() {
+        // S1's `fog` put the candidate count on the event's value; the line's
+        // words are unchanged by it (decisions-log item 134 (2) (a)).
+        use pharmakos_sim::interpreter::{StepFailed, StepFailure};
+        for failure in StepFailure::ALL {
+            let bare = event_text(&event(
+                EventKind::StepFailed,
+                Some(0),
+                StepFailed::bare(failure).value(),
+            ));
+            for matched in [0, 3, u32::MAX] {
+                let counted = event_text(&event(
+                    EventKind::StepFailed,
+                    Some(0),
+                    StepFailed::counted(failure, matched).value(),
+                ));
+                assert_eq!(counted, bare, "{failure:?} with {matched} matched");
+            }
+        }
+        let bare = event_text(&event(
+            EventKind::StepFailed,
+            Some(0),
+            i64::from(StepFailure::NoTarget.id()),
+        ));
+        assert_eq!(
+            bare,
+            "A step failed (no_target): it found nothing: nothing matched what it named, or \
+             nothing it matched could be reached. Its on_fail decided what came next.",
+            "the words are the line's before the count"
+        );
+    }
+
+    #[test]
+    fn a_step_failed_value_that_does_not_decode_is_said_as_its_code() {
+        use pharmakos_sim::interpreter::{StepFailed, StepFailure};
+        let counted = StepFailed::counted(StepFailure::NoTarget, 3).value();
+        for value in [-1, 1 << 9, 1 << 48, (3 << 16) | 2, counted | (1 << 12)] {
+            let line = event_text(&event(EventKind::StepFailed, Some(0), value));
+            assert!(
+                line.contains(&format!("(code {value})")),
+                "{value:#x}: {line}"
+            );
+        }
+        assert_eq!(
+            event_text(&event(EventKind::StepFailed, Some(0), 10)),
+            "A step failed with a failure this build does not name (code 10). Its on_fail \
+             decided what came next.",
+            "the words are the line's before the count"
+        );
     }
 
     #[test]

@@ -34,7 +34,7 @@
 use crate::events::{Emission, EventKind};
 use crate::interpreter::cond::{self, View, resolve_beacon, within};
 use crate::interpreter::state::{
-    Binding, NO_INDEX, NO_TICK, PlanState, StepFailure, VisitState, deadline_of,
+    Binding, NO_INDEX, NO_TICK, PlanState, StepFailed, StepFailure, VisitState, deadline_of,
 };
 use crate::interpreter::{
     Action, Anchor, FailAction, FeatureSpec, Place, Plan, PlanStep, Posture, REFLEX_HP_PERCENT,
@@ -91,7 +91,7 @@ pub(crate) fn decide(world: &mut World, seat_index: usize, plan: &Plan, state: &
                 seat,
                 subject,
                 None,
-                i64::from(StepFailure::CommanderDead.id()),
+                StepFailed::bare(StepFailure::CommanderDead).value(),
             );
             drop_step(world, seat, state);
         }
@@ -480,10 +480,10 @@ fn run_step(
         }
     }
     if state.deadline != NO_TICK && tick.raw() >= state.deadline {
-        return fail(world, seat, state, StepFailure::Timeout);
+        return fail(world, seat, state, StepFailure::Timeout.into());
     }
     match look(world, seat, seat_index, state, step, index) {
-        Outcome::Failed(failure) => fail(world, seat, state, failure),
+        Outcome::Failed(failure) => fail(world, seat, state, failure.into()),
         other => other,
     }
 }
@@ -492,8 +492,9 @@ fn run_step(
 ///
 /// The step's own index is not on the event: a `step_failed` follows the
 /// `step_started` that named it, and the value slot carries the reason, which
-/// is the thing a transcript and a scenario assertion want.
-fn fail(world: &mut World, seat: SeatId, state: &PlanState, failure: StepFailure) -> Outcome {
+/// is the thing a transcript and a scenario assertion want, and for a step that
+/// read a feature how many candidates matched ([`StepFailed`]'s layout).
+fn fail(world: &mut World, seat: SeatId, state: &PlanState, failure: StepFailed) -> Outcome {
     let tick = world.tick();
     emit(
         world,
@@ -502,9 +503,9 @@ fn fail(world: &mut World, seat: SeatId, state: &PlanState, failure: StepFailure
         seat,
         state.pinned_beacon(),
         None,
-        i64::from(failure.id()),
+        failure.value(),
     );
-    Outcome::Failed(failure)
+    Outcome::Failed(failure.reason)
 }
 
 /// Start a step: resolve and pin its target, read every target its rows write,
@@ -532,7 +533,7 @@ fn start_step(
     state: &mut PlanState,
     step: &PlanStep,
     index: u32,
-) -> Result<(), StepFailure> {
+) -> Result<(), StepFailed> {
     let tick = world.tick();
     let resuming =
         matches!(step.action, Action::PlaceBeacon { .. }) && state.resumes(state.rule, index);
@@ -599,7 +600,7 @@ fn start_step(
                         .is_some_and(|hp| hp.is_alive())
                 });
                 if !alive {
-                    return Err(StepFailure::BeaconGone);
+                    return Err(StepFailure::BeaconGone.into());
                 }
                 let site = beacon_at(world, placed).ok_or(StepFailure::BeaconGone)?;
                 state.resumed = true;
@@ -623,7 +624,9 @@ fn start_step(
                     Place::Covering(spec) => {
                         let found = {
                             let (ground, scratch) = world.ground_and_scratch();
-                            crate::targeting::cover(&ground, scratch, seat, commander, *spec)?
+                            crate::targeting::cover_counted(
+                                &ground, scratch, seat, commander, *spec,
+                            )?
                         };
                         let [x, y] = found.site;
                         let point = world
@@ -641,7 +644,7 @@ fn start_step(
                     }
                 };
                 if !site_is_legal(world, seat, site) {
-                    return Err(StepFailure::IllegalSite);
+                    return Err(StepFailure::IllegalSite.into());
                 }
                 bind_rows(world, seat, state, rows, site, None)?;
                 if within(commander, site, interface_range(world)) {
@@ -692,7 +695,7 @@ fn bind_rows(
     rows: &[Row],
     centre: [Fx; 3],
     except: Option<BeaconId>,
-) -> Result<(), StepFailure> {
+) -> Result<(), StepFailed> {
     state.bindings.clear();
     let covered = (state.bound_feature != NO_INDEX)
         .then(|| usize::try_from(state.bound_feature).ok())
@@ -740,10 +743,10 @@ fn bind_one(
     except: Option<BeaconId>,
     covered: Option<usize>,
     spec: FeatureSpec,
-) -> Result<Binding, StepFailure> {
+) -> Result<Binding, StepFailed> {
     let site = {
         let (ground, scratch) = world.ground_and_scratch();
-        crate::targeting::on_vent(&ground, scratch, seat, centre, except, covered, spec)?
+        crate::targeting::on_vent_counted(&ground, scratch, seat, centre, except, covered, spec)?
     };
     let [x, y] = site.column;
     let z = world

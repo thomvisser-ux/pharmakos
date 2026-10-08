@@ -99,7 +99,10 @@ use pharmakos_proto::gp;
 pub use crate::targeting::FeatureSpec;
 
 pub use cond::resolve_beacon_in;
-pub use state::{Binding, Interpreter, PlanParts, PlanState, StepFailure, VisitState};
+pub use state::{
+    Binding, Interpreter, PlanParts, PlanState, StepFailed, StepFailedError, StepFailure,
+    VisitState,
+};
 
 /// The self-preservation reflex's threshold, in whole percent of the
 /// commander's maximum hit points.

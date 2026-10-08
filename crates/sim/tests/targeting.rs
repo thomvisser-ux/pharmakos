@@ -28,17 +28,21 @@ use pharmakos_proto::gp;
 use pharmakos_proto::json;
 use pharmakos_sim::encoding::Enc;
 use pharmakos_sim::events::{Event, EventKind};
-use pharmakos_sim::interpreter::state::StepFailure;
+use pharmakos_sim::features::FeatureKind;
+use pharmakos_sim::interpreter::state::{StepFailed, StepFailedError, StepFailure};
 use pharmakos_sim::interpreter::{BeaconSpec, Plan, PlanError, resolve_beacon_in};
 use pharmakos_sim::math::fixed::Fx;
 use pharmakos_sim::math::quantity::Hp;
+use pharmakos_sim::pathing::search::Scratch;
 use pharmakos_sim::runner::{MatchPhase, MatchSettings, Runner};
 use pharmakos_sim::seams::MandateKind;
 use pharmakos_sim::snapshot::Snapshot;
 use pharmakos_sim::tables::{
     BeaconId, PRIORITY_NORMAL, SeatId, StructureKind, TargetKind, UnitId, own_beacon_name,
 };
-use pharmakos_sim::targeting::NO_FEATURE;
+use pharmakos_sim::targeting::{
+    FeatureSpec, NO_FEATURE, Ranker, anchor_in_sphere, covering_site, on_vent_counted,
+};
 use pharmakos_sim::voxels::{Material, VoxelEdit};
 use pharmakos_sim::world::{DamageOrder, DamageTarget, room_per_seat};
 use pharmakos_sim::{RulesTable, World, WorldConfig};
@@ -588,7 +592,17 @@ fn a_carried_covering_step_has_no_legal_site_after_round_one_on_the_golden_seed(
         // `illegal_site`, not `no_target`: the description matches, the sites
         // do not (targeting.md's failure table; the plan's acceptance line
         // says `no_target`, and the PR records the disagreement for a ruling).
-        assert_eq!(failures(later), vec![id(StepFailure::IllegalSite)]);
+        // The count is what the description matched (S1's `fog`): every
+        // vent seat 0 does not cover, so at least one.
+        let failed = failed(later);
+        assert_eq!(
+            failed.iter().map(|one| one.reason).collect::<Vec<_>>(),
+            vec![StepFailure::IllegalSite]
+        );
+        assert!(
+            failed.iter().all(|one| one.matched.is_some_and(|n| n >= 1)),
+            "{failed:?}"
+        );
     }
 }
 
@@ -671,9 +685,14 @@ fn a_second_generator_on_a_covered_vent_is_illegal_site() {
     let route = format!("{named},{described}");
     let mut runner = open(world, &route);
     let events = play(&mut runner, 200, |_, _| {});
+    // Counted (S1's `fog`): the name matched its one vent, inside the
+    // sphere; the description matched none.
     assert_eq!(
-        failures(&events),
-        vec![id(StepFailure::IllegalSite), id(StepFailure::NoTarget)]
+        failed(&events),
+        vec![
+            StepFailed::counted(StepFailure::IllegalSite, 1),
+            StepFailed::counted(StepFailure::NoTarget, 0)
+        ]
     );
 }
 
@@ -1112,4 +1131,379 @@ fn a_set_mandate_whose_target_is_lost_writes_nothing() {
     let world = runner.world();
     assert_eq!(world.beacons().mandates().get(row).copied(), writ_before);
     assert_eq!(world.beacons().mine_settings(row), settings_before);
+}
+
+// ---------------------------------------------------------------------------
+// The fog follow-up: the sphere first, and the count on `step_failed`
+// (S1's plan, task `fog`; decisions-log items 133 (3) (c), (h) and 134)
+// ---------------------------------------------------------------------------
+
+/// Every `step_failed` among `events`, decoded through the sim's one layout.
+fn failed(events: &[Event]) -> Vec<StepFailed> {
+    failures(events)
+        .into_iter()
+        .map(|value| StepFailed::decode(value).expect("the sim writes values that decode"))
+        .collect()
+}
+
+/// An `on` read over `world`, as the decision phase reads it, with a scratch
+/// of the caller's (the gateway's way of asking).
+fn on_read(
+    world: &World,
+    centre: [Fx; 3],
+    covered: Option<usize>,
+    spec: FeatureSpec,
+) -> Result<pharmakos_sim::targeting::OnSite, StepFailed> {
+    let mut scratch = Scratch::for_map(world.surface(), world.rules().hpa_cluster_voxels())
+        .expect("a scratch for the map");
+    on_vent_counted(
+        &world.ground(),
+        &mut scratch,
+        SeatId::new(SEAT),
+        centre,
+        None,
+        covered,
+        spec,
+    )
+}
+
+/// The standing point of seat 0's core: 35 voxels from `vent_324_16`, so the
+/// vent's anchor point is outside the core's 24-voxel sphere.
+fn core_point(world: &World) -> [Fx; 3] {
+    point(core_voxel(world))
+}
+
+/// The starting vent's index, and its name as a spec.
+fn start_vent(world: &World) -> (usize, FeatureSpec) {
+    let vent = world
+        .features()
+        .index_of_name(START_VENT)
+        .expect("seat 0's starting vent");
+    let anchor = world.features().get(vent).unwrap().anchor;
+    (
+        vent,
+        FeatureSpec::Name {
+            kind: FeatureKind::Vent,
+            anchor,
+        },
+    )
+}
+
+/// A live Generator of seat 1's on the vent's anchor column.
+fn generator_on_vent(world: &mut World, vent: usize) {
+    let [x, y] = world.features().get(vent).unwrap().anchor;
+    let one = SeatId::new(1);
+    let home = core_of(world, one);
+    world
+        .raise_structure(
+            one,
+            home,
+            StructureKind::Generator,
+            point([x, y, world.voxels().standing_z(x, y)]),
+        )
+        .expect("room");
+}
+
+/// A route that interfaces seat 0's core and adds a Generator target `on`
+/// the starting vent by name.
+fn named_on_core() -> String {
+    format!(
+        concat!(
+            r#"{{"label":"named","interface":{{"beacon":{{"beacon_id":"b_00"}},"rows":[{{"add_build_target":"#,
+            r#"{{"target":{{"blueprint_id":"generator","anchor":{{"on":{{"feature_id":"{v}"}}}}}}}}}}]}},"#,
+            r#""timeout_ms":60000,"on_fail":{{"action":"SKIP"}}}}"#
+        ),
+        v = START_VENT
+    )
+}
+
+#[test]
+fn a_named_vent_outside_the_sphere_is_no_target_whatever_stands_on_it() {
+    // Seat 0's core sphere does not hold `vent_324_16`'s anchor point. With
+    // nothing on the vent and with another seat's live Generator on it, the
+    // answer is the same `no_target`, counted 0, so the step reveals nothing
+    // about a structure the seat cannot see (item 133 (3) (c)). Before the
+    // sphere test came first the second read `illegal_site` and the first
+    // bound a vent outside the sphere.
+    for occupied in [false, true] {
+        let mut world = world_at(SEED, 2, &[180_000]);
+        let (vent, spec) = start_vent(&world);
+        if occupied {
+            generator_on_vent(&mut world, vent);
+        }
+        let centre = core_point(&world);
+        assert!(
+            !anchor_in_sphere(&world.ground(), centre, vent),
+            "the fixture's vent lies outside the core's sphere"
+        );
+        assert_eq!(
+            on_read(&world, centre, None, spec),
+            Err(StepFailed::counted(StepFailure::NoTarget, 0)),
+            "occupied: {occupied}"
+        );
+        let mut runner = open(world, &named_on_core());
+        let events = play(&mut runner, 200, |_, _| {});
+        assert_eq!(
+            failed(&events),
+            vec![StepFailed::counted(StepFailure::NoTarget, 0)],
+            "occupied: {occupied}"
+        );
+        assert_eq!(count(&events, EventKind::RowCommitted), 0);
+    }
+}
+
+#[test]
+fn a_covered_vent_outside_the_sphere_is_no_target_whatever_stands_on_it() {
+    // `covered {}` binds as a name, so it reads sphere first too: the vent a
+    // `covering` bound, read from a sphere that does not hold its anchor
+    // point, is `no_target` with or without a Generator on it.
+    for occupied in [false, true] {
+        let mut world = world_at(SEED, 2, &[180_000]);
+        let (vent, _) = start_vent(&world);
+        if occupied {
+            generator_on_vent(&mut world, vent);
+        }
+        let centre = core_point(&world);
+        assert_eq!(
+            on_read(&world, centre, Some(vent), FeatureSpec::Covered),
+            Err(StepFailed::counted(StepFailure::NoTarget, 0)),
+            "occupied: {occupied}"
+        );
+    }
+}
+
+#[test]
+fn a_named_vent_inside_the_sphere_with_a_generator_is_still_illegal_site() {
+    // Inside the sphere the structure tests follow the sphere test: a vent
+    // another seat's live Generator stands on is `illegal_site`, counted 1 (a
+    // name matched one vent), while the same vent with nothing on it binds.
+    let mut world = world_at(SEED, 2, &[180_000]);
+    let (vent, spec) = start_vent(&world);
+    let centre = point([335, 18, world.voxels().standing_z(335, 18)]);
+    assert!(anchor_in_sphere(&world.ground(), centre, vent));
+    let free = on_read(&world, centre, None, spec).expect("a free vent inside binds");
+    assert_eq!(free.feature, vent);
+    generator_on_vent(&mut world, vent);
+    assert_eq!(
+        on_read(&world, centre, None, spec),
+        Err(StepFailed::counted(StepFailure::IllegalSite, 1))
+    );
+}
+
+#[test]
+fn a_named_vent_whose_free_on_column_is_outside_the_sphere_is_illegal_site() {
+    // A structure that is not a Generator on the vent's anchor column moves
+    // its `on` column to the next free footprint column. A sphere that holds
+    // the anchor point and not that column passes the sphere test and fails
+    // the site: `illegal_site`, counted 1.
+    let mut world = world_at(SEED, 2, &[180_000]);
+    let (vent, spec) = start_vent(&world);
+    let [x, y] = world.features().get(vent).unwrap().anchor;
+    let zero = SeatId::new(SEAT);
+    let home = core_of(&world, zero);
+    world
+        .raise_structure(
+            zero,
+            home,
+            StructureKind::SurveyPost,
+            point([x, y, world.voxels().standing_z(x, y)]),
+        )
+        .expect("room");
+    let ground = world.ground();
+    let anchor = ground.anchor_point(vent).expect("the anchor stands");
+    let [ox, oy] = ground
+        .on_column(vent, zero, None)
+        .expect("a free footprint column");
+    assert_ne!([ox, oy], [x, y], "the anchor column is taken");
+    let on = ground.standing(ox, oy).expect("the on column stands");
+    let [ax, ay, az] = anchor;
+    let reach = ground.sphere_radius() + 1;
+    let centre = (-reach..=reach)
+        .flat_map(|dy| (-reach..=reach).map(move |dx| (dx, dy)))
+        .map(|(dx, dy)| {
+            [
+                Fx::from_voxels(i16::try_from(ax.floor_voxels() + dx).expect("on the map")),
+                Fx::from_voxels(i16::try_from(ay.floor_voxels() + dy).expect("on the map")),
+                az,
+            ]
+        })
+        .find(|centre| ground.in_sphere(*centre, anchor) && !ground.in_sphere(*centre, on))
+        .expect("a sphere's edge between the anchor point and the on column");
+    assert!(anchor_in_sphere(&ground, centre, vent));
+    assert_eq!(
+        on_read(&world, centre, None, spec),
+        Err(StepFailed::counted(StepFailure::IllegalSite, 1))
+    );
+}
+
+#[test]
+fn a_covering_site_holds_the_anchor_point_its_covered_on_tests_first() {
+    // A structure that is not a Generator on a vent's anchor column moves its
+    // `on` column off the anchor point. A `covering` whose site's sphere held
+    // the `on` column alone would bind a site from which its own `covered {}`
+    // answers `no_target` (the sphere test reads the anchor point first), and
+    // the vent would still read as `UNCOVERED` once the beacon landed. The
+    // fixture is the second review's of PR #90: `vent_103_111` with a
+    // SurveyPost of seat 0's on its anchor column, and a beacon of seat 0's
+    // due north of it, its sphere reaching the vent's edge.
+    let zero = SeatId::new(SEAT);
+    let mut base = world_at(SEED, 2, &[180_000]);
+    let vent = base
+        .features()
+        .index_of_name("vent_103_111")
+        .expect("the golden seed carries the vent");
+    let [ax, ay] = base.features().get(vent).unwrap().anchor;
+    let home = core_of(&base, zero);
+    base.raise_structure(
+        zero,
+        home,
+        StructureKind::SurveyPost,
+        point([ax, ay, base.voxels().standing_z(ax, ay)]),
+    )
+    .expect("room");
+    let mut sited: Vec<i32> = Vec::new();
+    for by in [64, 65] {
+        let mut world = base.clone();
+        let centre = point([ax, by, world.voxels().standing_z(ax, by)]);
+        world
+            .place_beacon_directly(zero, centre, MandateKind::Build, PRIORITY_NORMAL)
+            .expect("room for a beacon");
+        let ground = world.ground();
+        let on = ground.on_column(vent, zero, None).expect("a free column");
+        assert_ne!(on, [ax, ay], "the anchor column is taken");
+        let Some([sx, sy]) = covering_site(&ground, zero, centre, vent) else {
+            continue;
+        };
+        let site = ground.standing(sx, sy).expect("a site stands");
+        assert!(
+            anchor_in_sphere(&ground, site, vent),
+            "beacon at y {by}: the site [{sx}, {sy}] holds the anchor point"
+        );
+        let bound =
+            on_read(&world, site, Some(vent), FeatureSpec::Covered).unwrap_or_else(|failed| {
+                panic!("beacon at y {by}: covered {{}} binds, not {failed:?}")
+            });
+        assert_eq!(
+            (bound.feature, bound.column),
+            (vent, on),
+            "beacon at y {by}"
+        );
+        sited.push(by);
+    }
+    // At the review's own beacon (y 64) the site it found, [103, 87], held the
+    // `on` column and not the anchor point; no site holds both now, so the
+    // `covering` fails `illegal_site` rather than its `covered {}`. One voxel
+    // closer, a site holds both and the `covered {}` binds.
+    assert_eq!(sited, [65]);
+}
+
+#[test]
+fn a_description_counts_what_it_matched_before_reachability() {
+    // "3 matched, none reachable": the count is what the filter admitted,
+    // asked before reachability. From an origin off the map nothing is
+    // reachable, so every live vent is matched and none is ranked.
+    let world = world_at(SEED, 2, &[180_000]);
+    let ground = world.ground();
+    let seat = SeatId::new(SEAT);
+    let pick = |index: usize| {
+        pharmakos_sim::targeting::matches_pick(&ground, seat, index, FeatureKind::Vent, false)
+    };
+    let vents = (0..world.features().len())
+        .filter(|index| pick(*index))
+        .count();
+    assert!(vents > 1, "the golden seed carries several live vents");
+    let mut ranker = Ranker::new(&ground, [-1_000, -1_000], pick);
+    assert_eq!(
+        usize::try_from(ranker.matched()).expect("a few"),
+        vents,
+        "matched before reachability"
+    );
+    let mut scratch = Scratch::for_map(world.surface(), world.rules().hpa_cluster_voxels())
+        .expect("a scratch for the map");
+    assert_eq!(ranker.next(&ground, &mut scratch), None, "none reachable");
+}
+
+#[test]
+fn a_step_failed_value_decodes_to_its_reason_and_its_count() {
+    for reason in StepFailure::ALL {
+        for matched in [0, 1, 3, u32::MAX] {
+            let failed = StepFailed::counted(reason, matched);
+            assert_eq!(StepFailed::decode(failed.value()), Ok(failed));
+        }
+    }
+    assert_eq!(
+        StepFailed::decode(StepFailed::counted(StepFailure::NoTarget, 3).value()),
+        Ok(StepFailed {
+            reason: StepFailure::NoTarget,
+            matched: Some(3),
+        })
+    );
+}
+
+#[test]
+fn a_bare_reason_id_decodes_as_the_reason_with_no_count() {
+    // Every value a `step_failed` carried before the count existed reads as
+    // it always did: a scenario's or a transcript's bare id.
+    for reason in StepFailure::ALL {
+        let value = i64::from(reason.id());
+        assert_eq!(StepFailed::decode(value), Ok(StepFailed::bare(reason)));
+        assert_eq!(StepFailed::bare(reason).value(), value);
+        assert_eq!(StepFailed::from(reason), StepFailed::bare(reason));
+    }
+    assert_ne!(
+        StepFailed::counted(StepFailure::NoTarget, 0).value(),
+        StepFailed::bare(StepFailure::NoTarget).value(),
+        "an absent count is not a count of 0"
+    );
+}
+
+#[test]
+fn a_value_that_does_not_decode_is_refused_with_a_typed_error() {
+    let retired = i64::from(StepFailure::RETIRED_NOT_OWN);
+    assert_eq!(
+        StepFailed::decode(retired),
+        Err(StepFailedError::UnknownReason { value: retired })
+    );
+    assert_eq!(
+        StepFailed::decode(0),
+        Err(StepFailedError::UnknownReason { value: 0 })
+    );
+    assert_eq!(
+        StepFailed::decode(-1),
+        Err(StepFailedError::ReservedBits { value: -1 })
+    );
+    for value in [1 << 9, (1 << 15) | 2, (1 << 48) | 2] {
+        assert_eq!(
+            StepFailed::decode(value),
+            Err(StepFailedError::ReservedBits { value })
+        );
+    }
+    let stray = (3 << 16) | 2;
+    assert_eq!(
+        StepFailed::decode(stray),
+        Err(StepFailedError::StrayCount { value: stray })
+    );
+    assert_eq!(StepFailedError::StrayCount { value: stray }.value(), stray);
+}
+
+#[test]
+fn a_rules_table_without_a_voxel_length_sphere_does_not_load() {
+    // The resolver reads `beacon.sphere_radius_voxels` as it is, so the table
+    // refuses one it could not read: a missing block, or a radius past a
+    // voxel coordinate (no clamp and no zero in its place).
+    let mut message = rules().message().clone();
+    message.beacon = None;
+    assert_eq!(
+        RulesTable::from_message(&message),
+        Err(pharmakos_sim::RulesError::MissingBlock("beacon"))
+    );
+    let mut message = rules().message().clone();
+    if let Some(beacon) = message.beacon.as_mut() {
+        beacon.sphere_radius_voxels = 40_000;
+    }
+    assert!(matches!(
+        RulesTable::from_message(&message),
+        Err(pharmakos_sim::RulesError::OutOfRange { field, .. })
+            if field == "beacon.sphere_radius_voxels"
+    ));
 }

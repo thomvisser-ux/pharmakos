@@ -853,7 +853,8 @@ impl PlanParts {
     }
 }
 
-/// Why a step failed. The value the `step_failed` event carries.
+/// Why a step failed: bits 0-7 of the value the `step_failed` event carries,
+/// whose whole layout is [`StepFailed`]'s.
 ///
 /// The ids are written out and additive only, for the reason every other wire
 /// id in this crate is: a scenario file and a transcript golden both read them.
@@ -958,6 +959,198 @@ impl StepFailure {
             StepFailure::FeatureLost => "feature_lost",
             StepFailure::Unaffordable => "unaffordable",
         }
+    }
+
+    /// The reason a wire id names, or `None` for an id this build does not
+    /// define -- the retired [`StepFailure::RETIRED_NOT_OWN`] among them.
+    #[must_use]
+    pub fn from_id(id: u8) -> Option<StepFailure> {
+        StepFailure::ALL.into_iter().find(|known| known.id() == id)
+    }
+}
+
+/// What a `step_failed` event's value slot holds: **why** the step failed,
+/// and, for a step that read a feature, **how many candidates matched** before
+/// reachability was asked (decisions-log item 133 (3) (h)).
+///
+/// The count has the meaning the gateway's `resolve_refs` gives `matched`:
+/// the candidates `matches_pick` or `on_candidate` admitted for a
+/// description ([`crate::targeting::matches_pick`],
+/// [`crate::targeting::on_candidate`]), and 1 or 0 for a name or
+/// `covered {}`, 0 for one outside the target sphere. So "3 matched, none
+/// reachable" is a `no_target` with a count of 3. A failure that read no
+/// feature -- a timeout, a beacon name, an illegal voxel site -- carries
+/// **no** count, which is not a count of 0.
+///
+/// # The value's layout
+///
+/// Written here and nowhere else: a caller encodes with
+/// [`StepFailed::value`] and decodes with [`StepFailed::decode`], and never
+/// shifts or masks the number itself.
+///
+/// | bits | holds |
+/// |---|---|
+/// | 0 to 7 | the reason's [`StepFailure::id`] |
+/// | 8 | 1 when a count is present |
+/// | 9 to 15 | zero |
+/// | 16 to 47 | the count, when bit 8 is set; zero otherwise |
+/// | 48 to 63 | zero |
+///
+/// So a bare reason id -- every value a `step_failed` carried before the
+/// count existed -- decodes as that reason with no count, and a value from an
+/// older transcript or scenario reads as it always did.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct StepFailed {
+    /// Why the step failed.
+    pub reason: StepFailure,
+    /// How many candidates matched before reachability was asked, for a step
+    /// that read a feature; `None` for one that read none.
+    pub matched: Option<u32>,
+}
+
+/// Why a `step_failed` value did not decode ([`StepFailed::decode`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum StepFailedError {
+    /// The reason byte names no reason this build defines: an id from a later
+    /// build, or the retired [`StepFailure::RETIRED_NOT_OWN`].
+    UnknownReason {
+        /// The whole value.
+        value: i64,
+    },
+    /// A bit the layout keeps zero is set: the sign, bits 9 to 15, or bits 48
+    /// and up.
+    ReservedBits {
+        /// The whole value.
+        value: i64,
+    },
+    /// Count bits are set while the presence bit is clear.
+    StrayCount {
+        /// The whole value.
+        value: i64,
+    },
+}
+
+impl StepFailedError {
+    /// The value that did not decode.
+    #[must_use]
+    pub const fn value(self) -> i64 {
+        match self {
+            StepFailedError::UnknownReason { value }
+            | StepFailedError::ReservedBits { value }
+            | StepFailedError::StrayCount { value } => value,
+        }
+    }
+}
+
+impl core::fmt::Display for StepFailedError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            StepFailedError::UnknownReason { value } => {
+                write!(
+                    f,
+                    "step_failed value {value} names no reason this build defines"
+                )
+            }
+            StepFailedError::ReservedBits { value } => {
+                write!(
+                    f,
+                    "step_failed value {value} sets a bit its layout keeps zero"
+                )
+            }
+            StepFailedError::StrayCount { value } => {
+                write!(
+                    f,
+                    "step_failed value {value} carries a count without its presence bit"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for StepFailedError {}
+
+impl StepFailed {
+    /// Bits 0 to 7: the reason id.
+    const REASON_MASK: u64 = 0xFF;
+    /// Bit 8: a count is present.
+    const COUNTED: u64 = 1 << 8;
+    /// Bit 8, as the event's value type.
+    const COUNTED_BIT: i64 = 1 << 8;
+    /// Where the count starts.
+    const COUNT_SHIFT: u32 = 16;
+    /// Bits 16 to 47: the count.
+    const COUNT_MASK: u64 = 0xFFFF_FFFF << StepFailed::COUNT_SHIFT;
+
+    /// A failure that read no feature: the reason alone.
+    #[must_use]
+    pub const fn bare(reason: StepFailure) -> StepFailed {
+        StepFailed {
+            reason,
+            matched: None,
+        }
+    }
+
+    /// A failure of a step that read a feature, with how many candidates
+    /// matched before reachability was asked.
+    #[must_use]
+    pub const fn counted(reason: StepFailure, matched: u32) -> StepFailed {
+        StepFailed {
+            reason,
+            matched: Some(matched),
+        }
+    }
+
+    /// The event's value: the layout above, which a bare failure writes as
+    /// its reason id alone.
+    #[must_use]
+    pub fn value(self) -> i64 {
+        // A u32 shifted by 16 reaches bit 47 at most, so the value is a
+        // non-negative i64 and no bit 48 or above is ever set.
+        let reason = i64::from(self.reason.id());
+        match self.matched {
+            None => reason,
+            Some(count) => {
+                reason | StepFailed::COUNTED_BIT | (i64::from(count) << StepFailed::COUNT_SHIFT)
+            }
+        }
+    }
+
+    /// Read a `step_failed` event's value.
+    ///
+    /// # Errors
+    ///
+    /// [`StepFailedError::ReservedBits`] when a bit the layout keeps zero is
+    /// set (a negative value among them), [`StepFailedError::StrayCount`]
+    /// when count bits are set without the presence bit, and
+    /// [`StepFailedError::UnknownReason`] when the reason byte names no reason
+    /// this build defines.
+    pub fn decode(value: i64) -> Result<StepFailed, StepFailedError> {
+        let bits = u64::try_from(value).map_err(|_| StepFailedError::ReservedBits { value })?;
+        let known = StepFailed::REASON_MASK | StepFailed::COUNTED | StepFailed::COUNT_MASK;
+        if bits & !known != 0 {
+            return Err(StepFailedError::ReservedBits { value });
+        }
+        let counted = bits & StepFailed::COUNTED != 0;
+        let count_bits = (bits & StepFailed::COUNT_MASK) >> StepFailed::COUNT_SHIFT;
+        if !counted && count_bits != 0 {
+            return Err(StepFailedError::StrayCount { value });
+        }
+        let reason = u8::try_from(bits & StepFailed::REASON_MASK)
+            .ok()
+            .and_then(StepFailure::from_id)
+            .ok_or(StepFailedError::UnknownReason { value })?;
+        let matched = if counted {
+            Some(u32::try_from(count_bits).map_err(|_| StepFailedError::ReservedBits { value })?)
+        } else {
+            None
+        };
+        Ok(StepFailed { reason, matched })
+    }
+}
+
+impl From<StepFailure> for StepFailed {
+    fn from(reason: StepFailure) -> StepFailed {
+        StepFailed::bare(reason)
     }
 }
 
