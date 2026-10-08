@@ -182,24 +182,28 @@ impl Surface {
         let elapsed = request.integer_param("elapsed_ms")?.ok_or_else(|| {
             Error::invalid("`elapsed_ms` is host time spent in this phase, in milliseconds")
         })?;
-        let remaining = request.integer_param("remaining_ms")?.unwrap_or(0);
         let elapsed = i32::try_from(elapsed).map_err(|_| {
             Error::invalid(format!(
                 "`elapsed_ms` is game milliseconds and this is {elapsed}"
             ))
         })?;
-        let remaining = i32::try_from(remaining).map_err(|_| {
-            Error::invalid(format!(
-                "`remaining_ms` is game milliseconds and this is {remaining}"
-            ))
-        })?;
-        if remaining != 0 && phase != Phase::Lull {
+        // An absent countdown is no countdown, not a countdown at 0: a Lull a
+        // host reports only its elapsed time for stays untimed (S1-11).
+        let remaining = match request.integer_param("remaining_ms")? {
+            None => None,
+            Some(remaining) => Some(i32::try_from(remaining).map_err(|_| {
+                Error::invalid(format!(
+                    "`remaining_ms` is game milliseconds and this is {remaining}"
+                ))
+            })?),
+        };
+        if remaining.is_some_and(|remaining| remaining != 0) && phase != Phase::Lull {
             return Err(Error::invalid(
                 "`remaining_ms` is what the status footer shows as left in a Lull, and no other \
                  phase has a declared length to count down",
             ));
         }
-        self.set_host_clock(Ms::new(elapsed), Ms::new(remaining))?;
+        self.report_clock(Ms::new(elapsed), remaining.map(Ms::new))?;
         Ok(Json::Object(vec![(
             String::from("all_ready"),
             Json::Bool(self.all_ready()),

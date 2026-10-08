@@ -1035,7 +1035,12 @@ fn the_verifier_scope_carries_the_maps_features() {
 fn resolve_refs_in_a_push_is_phase_closed() {
     // Decisions-log item 133 (3) (f): in a Push the hosted world is the live
     // one, and a preview over it would rank over the live map, which
-    // `estimate_route`'s `covering` already refuses.
+    // `estimate_route`'s `covering` already refuses. What a client is told,
+    // through the wire: here the dispatcher's planning door answers first
+    // (`resolve_refs` is `plan`-scoped, and that door closed every planning
+    // method in a Push before `econ`), so this case holds the answer and not
+    // the handler's own gate, which `surface::tests::
+    // resolve_refs_closes_its_own_door_in_a_push` reaches directly.
     let mut surface = support::hosted(2, SEGMENT_MS, 3);
     let token = support::seat_token(&mut surface, 0);
     let playbook = cover_and_build();

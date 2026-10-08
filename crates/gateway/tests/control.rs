@@ -487,6 +487,72 @@ fn the_first_lulls_countdown_is_bounded_by_first_lull_ms_and_a_later_one_by_lull
     );
 }
 
+/// A host that reports only the time it spends -- no `remaining_ms` -- puts
+/// no countdown on a Lull, so the Lull stays untimed rather than reading as a
+/// timer at 0 that ran out (S1-11; review A of `econ`). A countdown once
+/// reported stays until the next report that carries one.
+#[test]
+fn an_elapsed_only_report_leaves_an_untimed_lull_untimed() {
+    let mut surface = hosted(2, SEGMENT_MS, 2);
+    let admin = admin_token(&mut surface);
+    let _ = result(&call(&mut surface, &admin, "end_lull", "{}"), "end_lull");
+    let _ = result(
+        &call(&mut surface, &admin, "advance_push", r#"{"ms":60000}"#),
+        "advance_push",
+    );
+    let _ = result(&call(&mut surface, &admin, "end_recap", "{}"), "end_recap");
+    assert_eq!(phase_name(&surface), "lull");
+    assert!(
+        surface.time().untimed,
+        "round 2's Lull has no countdown yet"
+    );
+    let before = surface.time().tick;
+
+    let _ = result(
+        &call(
+            &mut surface,
+            &admin,
+            "report_host_clock",
+            r#"{"elapsed_ms":1000}"#,
+        ),
+        "an elapsed-only report",
+    );
+    assert!(
+        surface.time().untimed,
+        "a report with no countdown is no countdown, not one at 0"
+    );
+    assert!(
+        surface.time().tick > before,
+        "the elapsed time still moves the clock"
+    );
+
+    let _ = result(
+        &call(
+            &mut surface,
+            &admin,
+            "report_host_clock",
+            r#"{"elapsed_ms":2000,"remaining_ms":120000}"#,
+        ),
+        "a report with a countdown",
+    );
+    assert!(!surface.time().untimed);
+    assert_eq!(surface.time().phase_remaining_ms, Ms::new(120_000));
+    let _ = result(
+        &call(
+            &mut surface,
+            &admin,
+            "report_host_clock",
+            r#"{"elapsed_ms":3000}"#,
+        ),
+        "a later elapsed-only report",
+    );
+    assert!(
+        !surface.time().untimed,
+        "the countdown already reported stays"
+    );
+    assert_eq!(surface.time().phase_remaining_ms, Ms::new(120_000));
+}
+
 /// The rate budget keeps moving in a recap and after match end, because the
 /// host's clock does.
 #[test]

@@ -109,7 +109,7 @@
 //!
 //! * **saved** -- every seat's notebook, drafts and seal, and `lull_offset`;
 //! * **derived** -- `time` (round and phase from the restored runner),
-//!   `host`, `feed_anchor`, the fog policy's eliminations (from the restored
+//!   `host`, `lulls` (the Lulls' lengths, from the rules table), `feed_anchor`, the fog policy's eliminations (from the restored
 //!   seat table), `views` (the generated map re-encoded from the pristine
 //!   world, every chunk an edit touched re-marked, the stamp restarting, and
 //!   the view's id minted with the resume's generation folded in, so every
@@ -119,9 +119,11 @@
 //!   3's "seat tokens are reissued"), `limits` and `limiters`,
 //!   `lull_remaining_ms`, `reported_elapsed_ms` and `phase_elapsed` (the
 //!   client re-reports its clock), every ready flag, the operator's advice
-//!   (the advisor re-runs at a resumed Lull), and `feed`: a replayed Push
-//!   regenerates it, and a resumed Lull's is empty. PLACEHOLDER: the last
-//!   recap's events do not survive a resume -- **OWNER**, at **S7**.
+//!   (the advisor re-runs at a resumed Lull), `feed`: a replayed Push
+//!   regenerates it, and a resumed Lull's is empty, and `recap`, the last
+//!   segment's facts, which a segment that ends in this process sets again.
+//!   PLACEHOLDER: the last recap's events do not survive a resume -- **OWNER**,
+//!   at **S7**.
 //!
 //! # Secrecy
 //!
@@ -662,6 +664,26 @@ impl Surface {
                 None => None,
                 Some(seal) => Some(restore_seal(held, seal, &rules)?),
             };
+            // A seal of the round the save resumes into prices, as the door
+            // that sealed it required (`Surface::seal_commitment`), so the
+            // forecast's `committed_dollars` answers after a resume as before
+            // it. A save holding one that does not was never written by a
+            // build with that door.
+            if let Some(seal) = sealed.as_ref()
+                && seal.round == self.host()?.runner().round()
+            {
+                self.seal_commitment(SeatId::new(held.seat), &seal.playbook_jsonc)
+                    .map_err(|unpriced| match unpriced {
+                        crate::surface::knowledge::Unpriced::Gateway(error) => error,
+                        crate::surface::knowledge::Unpriced::Playbook(why) => {
+                            Error::invalid(format!(
+                                "seat {}'s sealed playbook in this save does not price: {why}: \
+                                 the file is damaged",
+                                held.seat
+                            ))
+                        }
+                    })?;
+            }
             if let Some(slot) = self
                 .seats
                 .iter_mut()
@@ -1019,15 +1041,37 @@ impl Surface {
     /// 1's Lull and `rules.match.lull_ms` for every later one -- tuning values
     /// read from the rules table and not constants of this crate's (AGENTS.md
     /// section 12) -- and it is refused rather than clamped like the other
-    /// three. A countdown reported in the lobby, or in a phase that is not a
-    /// Lull, is bounded by the Lull that opens next.
+    /// three. The bound is always the **current** round's Lull: in a Push or
+    /// a recap the round has not moved on yet, so it is that round's Lull, not
+    /// the next one's. `report_host_clock` refuses a non-zero countdown
+    /// outside a Lull before it gets here (`serve_report_host_clock`), and a
+    /// countdown reported outside a Lull is not kept.
+    ///
+    /// This is the report **with** a countdown: a Lull it reaches is timed
+    /// from then on, even at 0. A report of the elapsed time alone goes
+    /// through `Surface::report_clock` with no countdown, and leaves a Lull
+    /// untimed (S1-11).
     ///
     /// # Errors
     ///
     /// [`crate::error::Code::InvalidArgument`] for a negative, backwards or
     /// jumping clock, and for a countdown longer than the Lull itself.
     pub fn set_host_clock(&mut self, elapsed: Ms, remaining: Ms) -> Result<(), Error> {
-        if elapsed.raw() < 0 || remaining.raw() < 0 {
+        self.report_clock(elapsed, Some(remaining))
+    }
+
+    /// [`Surface::set_host_clock`], with the countdown optional: `None` is a
+    /// host that reported only the time it has spent in the phase, which
+    /// says nothing about a countdown, so the countdown stays as it was last
+    /// reported -- and a Lull no host has put a countdown on stays untimed,
+    /// rather than reading as a timer at 0 that ran out (S1's plan, decision
+    /// 12; the register's S1-11).
+    ///
+    /// # Errors
+    ///
+    /// As [`Surface::set_host_clock`].
+    pub(crate) fn report_clock(&mut self, elapsed: Ms, remaining: Option<Ms>) -> Result<(), Error> {
+        if elapsed.raw() < 0 || remaining.is_some_and(|remaining| remaining.raw() < 0) {
             return Err(Error::invalid(
                 "a clock is reported in game milliseconds and neither figure is ever negative",
             ));
@@ -1051,7 +1095,9 @@ impl Surface {
             )));
         }
         let lull = self.lull_length(self.time.round);
-        if remaining > lull {
+        if let Some(remaining) = remaining
+            && remaining > lull
+        {
             return Err(Error::invalid(format!(
                 "`remaining_ms` is what is left of a Lull and this round's Lull is {} ms long; \
                  this reports {} ms left, which is refused rather than clamped",
@@ -1060,7 +1106,9 @@ impl Surface {
             )));
         }
         self.reported_elapsed_ms = Some(elapsed);
-        if self.time.phase == Phase::Lull {
+        if self.time.phase == Phase::Lull
+            && let Some(remaining) = remaining
+        {
             self.lull_remaining_ms = Some(remaining);
         }
         self.sync_time();
@@ -1528,9 +1576,11 @@ impl Surface {
     /// once its host has reported a countdown for it, which is the only
     /// evidence the gateway has of one, because the Lull's timer is the
     /// client's (decisions-log item 99). A Lull no host has put a countdown on
-    /// -- before the first report, or one run with no timer at all, as S6's
-    /// untimed Probation Lulls will be -- reads `untimed` rather than a 0 a
-    /// client would show as a timer that ran out.
+    /// -- before the first report that carries one, or one run with no timer
+    /// at all, as S6's untimed Probation Lulls will be, whose host reports
+    /// only the time it spends (`report_host_clock` with no `remaining_ms`)
+    /// -- reads `untimed` rather than a 0 a client would show as a timer that
+    /// ran out.
     fn sync_time(&mut self) {
         let Some(host) = self.host.as_ref() else {
             return;
@@ -1682,7 +1732,7 @@ impl Surface {
                     round: host.runner().round(),
                     ticks,
                     settled: Vec::new(),
-                    dark: dark_beacons(host.world()),
+                    dark: dark_beacons(host.world())?,
                 });
             }
             EventKind::Settled => {
@@ -2834,22 +2884,43 @@ impl Surface {
 /// ascending, which is `gp.api.v1.Shortfall.beacon_ids`' order. A seat with
 /// no dark beacon is left out. A beacon that has died is not dark: it is
 /// gone, and the recap's shortfall line is about the grid.
-fn dark_beacons(world: &pharmakos_sim::world::World) -> Vec<(SeatId, Vec<u32>)> {
+///
+/// # Errors
+///
+/// [`crate::error::Code::Internal`] when a beacon row has no dormancy, hit
+/// points, seat or ordinal: the beacon table's columns are one length by
+/// construction, so a short column is the sim and this crate disagreeing,
+/// and a beacon dropped from the recap over it would be a shortfall told
+/// short.
+fn dark_beacons(world: &pharmakos_sim::world::World) -> Result<Vec<(SeatId, Vec<u32>)>, Error> {
     let beacons = world.beacons();
-    let mut found: Vec<(u8, u32)> = (0..beacons.ids().len())
-        .filter(|row| beacons.dormant().get(*row).copied() == Some(true))
-        .filter(|row| {
-            beacons
-                .hit_points()
-                .get(*row)
-                .is_some_and(|hp| hp.is_alive())
-        })
-        .filter_map(|row| {
-            let seat = beacons.seats().get(row).copied()?;
-            let ordinal = beacons.ordinals().get(row).copied()?;
-            Some((seat, ordinal))
-        })
-        .collect();
+    let column = |name: &str, row: usize| {
+        Error::internal(format!("the beacon table has no {name} for row {row}"))
+    };
+    let mut found: Vec<(u8, u32)> = Vec::new();
+    for row in 0..beacons.ids().len() {
+        let dormant = *beacons
+            .dormant()
+            .get(row)
+            .ok_or_else(|| column("dormancy", row))?;
+        let alive = beacons
+            .hit_points()
+            .get(row)
+            .ok_or_else(|| column("hit points", row))?
+            .is_alive();
+        if !(dormant && alive) {
+            continue;
+        }
+        let seat = *beacons
+            .seats()
+            .get(row)
+            .ok_or_else(|| column("seat", row))?;
+        let ordinal = *beacons
+            .ordinals()
+            .get(row)
+            .ok_or_else(|| column("ordinal", row))?;
+        found.push((seat, ordinal));
+    }
     found.sort_unstable();
     let mut grouped: Vec<(SeatId, Vec<u32>)> = Vec::new();
     for (seat, ordinal) in found {
@@ -2858,7 +2929,7 @@ fn dark_beacons(world: &pharmakos_sim::world::World) -> Vec<(SeatId, Vec<u32>)> 
             _ => grouped.push((SeatId::new(seat), vec![ordinal])),
         }
     }
-    grouped
+    Ok(grouped)
 }
 
 /// The plan fingerprint of a playbook's canonical form (decisions-log item
@@ -3499,5 +3570,28 @@ mod tests {
             "the commander stands in the opening Lull"
         );
         assert_eq!(scope.commander(), commander);
+    }
+
+    /// `resolve_refs`' own phase gate, reached without the dispatcher: the
+    /// planning door in [`Surface::call`] closes every `plan`-scoped method in
+    /// a Push before any handler runs, so a test through `call` would pass
+    /// with this gate deleted (review A and B of `econ`). The request is not
+    /// even a playbook: the gate answers before anything is parsed.
+    #[test]
+    fn resolve_refs_closes_its_own_door_in_a_push() {
+        let mut surface = hosted();
+        assert!(surface.begin_push().expect("the Push begins"));
+        let error = surface
+            .resolve_refs(
+                Subject::Seat(SeatId::new(0)),
+                &request("resolve_refs", "{}"),
+            )
+            .expect_err("a preview of the frozen world in a Push");
+        assert_eq!(error.code, Code::PhaseClosed);
+        assert!(
+            error.message.contains("reads the frozen world"),
+            "the handler's own refusal: {}",
+            error.message
+        );
     }
 }

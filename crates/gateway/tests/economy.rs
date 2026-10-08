@@ -335,6 +335,99 @@ fn the_forecast_commits_what_this_rounds_seal_orders_in_the_lull_only() {
     );
 }
 
+/// One `place_beacon` whose Survey mandate fields `scouts` scouts, with
+/// dormant beacons allowed: legal, one size unit, and it qualifies FULL with
+/// warnings only (`W0602`, `W0603`), because the verifier's estimate sums
+/// wide. Review A of `econ` found 3 000 000 000 of them made the seat's own
+/// forecast answer INTERNAL for the rest of the Lull.
+fn many_scouts(scouts: u64) -> String {
+    format!(
+        r#"{{
+  "schema_version": {{"major": 1, "minor": 0}},
+  "meta": {{"title": "Many scouts", "author_kind": "HUMAN"}},
+  "kind": "PLAYBOOK",
+  "declarative": {{
+    "route": [
+      {{"label": "first", "place_beacon": {{"at": {{"covering": {{"vent": {{"rank": "NEAREST", "coverage": "UNCOVERED"}}}}}},
+        "initial": {{"mandate": {{"roe": "RETURN_FIRE", "survey": {{"scout_count": {scouts}}}}}}}}},
+        "timeout_ms": 30000, "on_fail": {{"action": "SKIP"}}}}
+    ],
+    "handlers": [],
+    "options": {{"allow_dormant_beacons": true}}
+  }},
+  "on_death": {{"on_respawn": "CONTINUE"}},
+  "fallback": {{"hold": {{"at": {{"safest": {{}}}}}}}}
+}}
+"#
+    )
+}
+
+#[test]
+fn a_seal_that_does_not_price_is_refused_at_the_door_and_the_forecast_still_answers() {
+    let mut surface = support::hosted(2, SEGMENT_MS, 3);
+    let token = seat_token(&mut surface, 0);
+    let mut left = FIRST_LULL_MS;
+    // 3e9 scouts: the draw leaves the sim's kW type. 3e8: the spend fits `$`
+    // and is past the forecast's int32.
+    for scouts in [3_000_000_000_u64, 300_000_000] {
+        let playbook = many_scouts(scouts);
+        let verified = result(
+            &call_in_lull(
+                &mut surface,
+                &token,
+                &mut left,
+                "verify_plan",
+                &format!(r#"{{"playbook_jsonc":{}}}"#, quote(&playbook)),
+            ),
+            "verify_plan",
+        );
+        assert_eq!(
+            verified
+                .get("report")
+                .and_then(|report| report.get("qualifies")),
+            Some(&Json::Bool(true)),
+            "{scouts} scouts qualify FULL: {verified:?}"
+        );
+        let refused = call_in_lull(
+            &mut surface,
+            &token,
+            &mut left,
+            "submit_plan",
+            &format!(r#"{{"playbook_jsonc":{}}}"#, quote(&playbook)),
+        );
+        assert_eq!(
+            support::code(&refused),
+            "INVALID_ARGUMENT",
+            "{scouts} scouts: {refused:?}"
+        );
+        let message = refused
+            .get("error")
+            .and_then(|error| error.get("message"))
+            .map(|message| format!("{message:?}"))
+            .unwrap_or_default();
+        assert!(
+            message.contains("cannot price its seal"),
+            "the price door refused it, not the compile: {message}"
+        );
+        let forecast = result(
+            &call_in_lull(
+                &mut surface,
+                &token,
+                &mut left,
+                "get_economy_forecast",
+                "{}",
+            ),
+            "get_economy_forecast",
+        );
+        assert_eq!(
+            number(&forecast, "committed_dollars"),
+            0,
+            "nothing was sealed, so nothing is committed"
+        );
+        assert!(forecast.get("treasury_now").is_some());
+    }
+}
+
 /// Write the fresh answer and compare it with the committed golden, as
 /// `tests/targeting.rs` does for its own cases.
 fn write_golden(case: &str, rendered: &str) {

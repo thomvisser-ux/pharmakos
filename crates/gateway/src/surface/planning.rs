@@ -568,21 +568,26 @@ impl Surface {
         request: &Request,
     ) -> Result<Json, Error> {
         let seat = Surface::seat_of(subject, "a playbook to resolve")?;
-        let playbook = playbook_param(request)?;
         let host = self.host()?;
-        // Its own gate, beside the door's: a preview reads the hosted world,
-        // which is the frozen planning world only outside a Push. In a Push
-        // the world has moved on, and a ranking over it would answer about
-        // the live map -- which `estimate_route`'s `covering` already refuses
-        // the same way (decisions-log item 133 (3) (f)). The door closes every
-        // `plan`-scoped method in a Push and a recap; this holds the rule
-        // where the read is, should the method's scope ever change.
+        // Its own gate, beside the door's, and before anything is parsed, so
+        // a Push answers PHASE_CLOSED whatever the request carries: a preview
+        // reads the hosted world, which is the frozen planning world only
+        // outside a Push. In a Push the world has moved on, and a ranking over
+        // it would answer about the live map -- which `estimate_route`'s
+        // `covering` already refuses the same way (decisions-log item 133 (3)
+        // (f)). The dispatcher's planning door already closes every
+        // `plan`-scoped method in a Push and a recap, so through `call` this
+        // gate is defence in depth: it holds the rule where the read is,
+        // should the method's scope ever change, and
+        // `surface::tests::resolve_refs_closes_its_own_door_in_a_push`
+        // reaches it without the dispatcher.
         if host.runner().phase() == pharmakos_sim::runner::MatchPhase::Push {
             return Err(Error::phase_closed(
                 "`resolve_refs` reads the frozen world, and in a Push the world has moved on \
                  from it: ask outside a Push",
             ));
         }
+        let playbook = playbook_param(request)?;
         let canonical = pharmakos_plan_core::canonicalise_text(playbook).map_err(|error| {
             Error::invalid(format!(
                 "this file has no canonical form yet, so it names nothing to resolve: {}",
@@ -723,6 +728,14 @@ impl Surface {
     /// submission must not unseal what was already sealed. A report that
     /// qualifies **replaces** the previous seal, any number of times until the
     /// timer ends (decisions-log item 5).
+    ///
+    /// Two doors stand after the verifier, and a refusal at either is a method
+    /// error, `INVALID_ARGUMENT`, with the previous seal untouched: the sim's
+    /// compile ([`compile_playbook`]), and the price of the seal
+    /// (`Surface::seal_commitment`) -- a playbook whose spend or draw does
+    /// not fit the sim's `$` and kW types, or whose spend is past the
+    /// forecast's `int32`, is refused rather than sealed into a forecast that
+    /// could not answer.
     pub(super) fn submit_plan(
         &mut self,
         subject: crate::token::Subject,
@@ -741,6 +754,18 @@ impl Surface {
             // `qualifies: false` on the same breath would be the gateway
             // contradicting a hash it has just handed out.
             let plan = compile_playbook(&playbook, self.host()?.rules())?;
+            // The third: a seal always prices, so the seat's own forecast can
+            // always answer its `committed_dollars` (review A of `econ`). The
+            // verifier's estimate sums wide and never overflows, so a FULL
+            // report that qualifies does not promise it.
+            self.seal_commitment(seat, &playbook)
+                .map_err(|unpriced| match unpriced {
+                    super::knowledge::Unpriced::Gateway(error) => error,
+                    super::knowledge::Unpriced::Playbook(why) => Error::invalid(format!(
+                        "this playbook qualifies and the Ledger cannot price its seal: {why}. \
+                         Order less in one step"
+                    )),
+                })?;
             let sealed = Sealed {
                 playbook_jsonc: playbook,
                 report_hash: report.report_hash.clone(),
