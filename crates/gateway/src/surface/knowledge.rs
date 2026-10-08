@@ -1168,7 +1168,7 @@ pub(crate) struct Place {
 /// the final audit calls a shared win. The order is read off the
 /// [`pharmakos_sim::audit::AuditLine`]'s public terms because the sim keeps
 /// its comparison key private; `the_displayed_rank_agrees_with_the_final_audit`
-/// (`tests/methods.rs`) holds the two together, the seats this ranks first
+/// (`tests/economy.rs`) holds the two together, the seats this ranks first
 /// being exactly the audit's winners.
 ///
 /// # Errors

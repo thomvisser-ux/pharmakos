@@ -2829,8 +2829,6 @@ impl Surface {
     }
 }
 
-/// The plan fingerprint of a playbook's canonical form (decisions-log item
-/// 77): what a save carries beside each seal, and what a resume recomputes.
 /// Every seat's own living beacons that are dark as the world stands, by
 /// per-seat ordinal: the seats in ascending id and each seat's ordinals
 /// ascending, which is `gp.api.v1.Shortfall.beacon_ids`' order. A seat with
@@ -2863,6 +2861,8 @@ fn dark_beacons(world: &pharmakos_sim::world::World) -> Vec<(SeatId, Vec<u32>)> 
     grouped
 }
 
+/// The plan fingerprint of a playbook's canonical form (decisions-log item
+/// 77): what a save carries beside each seal, and what a resume recomputes.
 fn plan_fingerprint(playbook_jsonc: &str) -> Result<u64, Error> {
     let canonical = pharmakos_plan_core::canonicalise_text(playbook_jsonc).map_err(|error| {
         Error::internal(format!(
