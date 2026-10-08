@@ -13,6 +13,13 @@
 //! while the headroom cannot run it, then filling it once a Generator brings
 //! the supply back (decisions-log item 123 (2) 7).
 //!
+//! The grid's S1 rulings joined them with S1's `grid` lane: the brownout skips
+//! a beacon whose shed relieves nothing, a priority raise relights a dark
+//! beacon when a lower shed covers it, the commander walks through a blackout
+//! drawing nothing (decisions-log item 127 (5) to (8)), a beacon's key-core
+//! supplies exactly its base (S1's plan, decision 12), and the dark-load read
+//! the gateway's shortfall line takes (item 134 (2) (c)).
+//!
 //! The one golden here, `tests/golden/economy/expected.settlement.txt`, is the
 //! exception and is meant to be: it is a fixed three-round match read line by
 //! line, so a tuning change *does* move it, and `tests/golden/economy/README.md`
@@ -22,6 +29,7 @@ use pharmakos_sim::economy::{Urgency, percent_of, value_of};
 use pharmakos_sim::events::{Event, EventKind};
 use pharmakos_sim::math::fixed::Fx;
 use pharmakos_sim::math::quantity::{Hp, Kw, Money};
+use pharmakos_sim::power::{DarkLoad, PowerError, PowerRules, dark_load};
 use pharmakos_sim::runner::Runner;
 use pharmakos_sim::seams::MandateKind;
 use pharmakos_sim::tables::{
@@ -634,14 +642,13 @@ fn a_dormant_beacon_powers_down_everything_homed_to_it() {
     );
 
     // Its bound units parked where they stood, rather than finishing the leg —
-    // **except the commander**, which a brownout never parks. See
-    // `programs::program_for`: the only way a seat acts on a shortfall is to
-    // walk the commander to a beacon and interface on site, so a commander
-    // that went dark with the grid would make a brownout a lockout. (What a
-    // priority raise then does is narrower than fixing it: the beacon sheds
-    // later and revives sooner, and the raise itself relights nothing;
-    // whether a raise should re-apply the brownout order is a PLACEHOLDER
-    // there, owner at S1.)
+    // **except the commander**, which a brownout never parks (item 127 (5);
+    // `programs::program_for`, and
+    // `the_commander_walks_through_a_blackout_drawing_nothing` below): the
+    // only way a seat acts on a shortfall is to walk the commander to a beacon
+    // and interface on site, so a commander that went dark with the grid
+    // would make a brownout a lockout. What a priority raise then does is
+    // item 127 (7)'s: `a_raise_relights_a_dark_beacon_when_a_lower_shed_covers_it`.
     let commander = world.commander_of(seat);
     let mut parked = 0;
     for unit in 0..world.units().len() {
@@ -961,20 +968,21 @@ fn a_shed_core_revives_once_its_load_leaves_the_margin_spare() {
 }
 
 #[test]
-fn a_beacon_whose_shed_relieves_nothing_is_still_shed_ahead_of_the_core() {
-    // Item 113 (5), behaviour kept and pinned. A beacon is net zero through
-    // its key-core, so shedding one with nothing homed to it relieves 0 kW;
-    // the brownout order is walked without asking what a shed relieves (spec
-    // section 5's order states no exception), so it is shed anyway, ahead of
-    // the core. PLACEHOLDER at `power::brown_out`: whether the order should
-    // skip it (owner, at S1, with the grid). If S1 decides it should, this is
-    // the test that changes.
+fn a_beacon_whose_shed_relieves_nothing_is_skipped_and_stays_lit() {
+    // Item 127 (8), the register's S1-33, amending spec section 5's Dormant
+    // row: the brownout order skips a beacon whose shed relieves nothing, so
+    // idle expansions stay lit in a deficit. A beacon is net zero through its
+    // key-core, so shedding one with nothing homed to it relieves 0 kW; and
+    // shedding one whose Generator out-supplies its load makes the deficit
+    // worse, which relieves nothing either (the next test). Before S1 both
+    // were shed, ahead of the core (item 113 (5)); this test is that one
+    // inverted.
     let grid = Grid::of(&rules());
     let seat = SeatId::new(0);
 
     // (a) The deficit is the core's own: its homed load outruns its surplus.
-    // The idle beacon is shed first, relieving nothing, then the core; neither
-    // can revive, the idle one because a blackout has no margin to give.
+    // The idle beacon is skipped and stays lit; the core is shed, and is the
+    // only beacon shed.
     let mut runner = Runner::new(world(&[20_000]));
     let core = core_of(runner.world(), seat);
     let at = runner
@@ -998,9 +1006,13 @@ fn a_beacon_whose_shed_relieves_nothing_is_still_shed_ahead_of_the_core() {
         load = load.saturating_add(grid.post);
         voxels = voxels.saturating_add(1);
     }
+    let mut feed: Vec<Event> = Vec::new();
     assert!(runner.begin_push(), "the Push begins");
-    runner.step();
-    let feed: Vec<Event> = runner.events().to_vec();
+    for _ in 0..20 {
+        runner.step();
+        feed.extend_from_slice(runner.events());
+        runner.clear_events();
+    }
     let order: Vec<u32> = feed
         .iter()
         .filter(|event| event.kind == EventKind::BeaconBrownedOut && event.seat == Some(seat))
@@ -1008,16 +1020,19 @@ fn a_beacon_whose_shed_relieves_nothing_is_still_shed_ahead_of_the_core() {
         .collect();
     assert_eq!(
         order,
-        [idle.raw(), core.raw()],
-        "the idle beacon is shed first although its shed relieves nothing"
+        [core.raw()],
+        "the core is shed, once, and the idle beacon, whose shed relieves nothing, is not"
     );
-    assert!(dormant(runner.world(), idle) && dormant(runner.world(), core));
+    assert!(
+        !dormant(runner.world(), idle),
+        "the idle beacon stays lit through the deficit"
+    );
+    assert!(dormant(runner.world(), core), "and the core is dark");
 
     // (b) The deficit is a loaded expansion's: the idle beacon, on low
-    // priority, is shed first and relieves nothing; the loaded one is shed
-    // next and settles the deficit. The margin that shed leaves then revives
-    // the idle beacon **on the same tick** — its revival costs nothing — so
-    // it emits a shed and a revival together and ends the tick lit.
+    // priority, comes first in the order and is skipped; the loaded one is
+    // shed and settles the deficit. The idle beacon never goes dark, not even
+    // for the tick a revival would have taken.
     let mut runner = Runner::new(world(&[20_000]));
     let idle = runner
         .world_mut()
@@ -1037,30 +1052,730 @@ fn a_beacon_whose_shed_relieves_nothing_is_still_shed_ahead_of_the_core() {
         load = load.saturating_add(grid.post);
         voxels = voxels.saturating_add(1);
     }
-    assert!(
-        grid.surplus.saturating_sub(grid.starting_load()) >= grid.margin,
-        "the committed table leaves the starting force the margin: {grid:?}"
-    );
+    let mut feed: Vec<Event> = Vec::new();
     assert!(runner.begin_push(), "the Push begins");
-    runner.step();
-    let feed: Vec<Event> = runner.events().to_vec();
-    let shed = ticks_of(&feed, EventKind::BeaconBrownedOut, idle);
-    assert_eq!(shed.len(), 1, "the idle beacon was shed: {feed:?}");
-    assert_eq!(
-        ticks_of(&feed, EventKind::BeaconBrownedOut, loaded),
-        shed,
-        "and the loaded one after it, on the same settle"
+    for _ in 0..20 {
+        runner.step();
+        feed.extend_from_slice(runner.events());
+        runner.clear_events();
+    }
+    assert!(
+        ticks_of(&feed, EventKind::BeaconBrownedOut, idle).is_empty(),
+        "the idle beacon is skipped: {feed:?}"
+    );
+    assert!(
+        ticks_of(&feed, EventKind::BeaconRevived, idle).is_empty(),
+        "so it has nothing to revive from"
     );
     assert_eq!(
-        ticks_of(&feed, EventKind::BeaconRevived, idle),
-        shed,
-        "and revived on the same tick, once the loaded beacon's shed left the margin"
+        ticks_of(&feed, EventKind::BeaconBrownedOut, loaded).len(),
+        1,
+        "the loaded beacon is shed, once"
     );
-    assert!(!dormant(runner.world(), idle), "so it ends the tick lit");
+    assert!(!dormant(runner.world(), idle), "the idle beacon ends lit");
     assert!(dormant(runner.world(), loaded), "the loaded one stays dark");
     assert!(
         !dormant(runner.world(), core),
         "and the core never went dark"
+    );
+}
+
+#[test]
+fn a_beacon_whose_shed_would_deepen_the_deficit_is_skipped() {
+    // Item 127 (8)'s other half: a shed that makes the deficit worse relieves
+    // nothing either, so it is skipped like an idle beacon's.
+    let grid = Grid::of(&rules());
+    let seat = SeatId::new(0);
+    let mut runner = Runner::new(world(&[20_000]));
+    let core = core_of(runner.world(), seat);
+    let at = runner
+        .world()
+        .beacons()
+        .positions()
+        .get(usize::try_from(core.raw()).unwrap_or(0))
+        .copied()
+        .unwrap_or_default();
+
+    // A low-priority expansion whose only homed asset is a Generator on the
+    // zone's vent. It is first in the order, and shedding it would take its Generator's
+    // output off the grid and relieve nothing; it is skipped, and the loaded
+    // beacon after it is shed instead.
+    let rules = rules();
+    let (first, second) = vent_stands(runner.world(), at);
+    let output = vent_output(runner.world(), &rules, first, second);
+    let tapper = runner
+        .world_mut()
+        .place_beacon_directly(seat, offset(at, 10), MandateKind::None, PRIORITY_LOW)
+        .unwrap_or_else(|| panic!("room for a beacon"));
+    runner
+        .world_mut()
+        .raise_structure(seat, tapper, StructureKind::Generator, first)
+        .unwrap_or_else(|| panic!("room for the Generator"));
+    let loaded = runner
+        .world_mut()
+        .place_beacon_directly(seat, offset(at, 4), MandateKind::None, PRIORITY_NORMAL)
+        .unwrap_or_else(|| panic!("room for a beacon"));
+    let mut load = grid.starting_load();
+    let mut voxels: i16 = -2;
+    while load <= grid.surplus.saturating_add(output) {
+        runner
+            .world_mut()
+            .raise_structure(seat, loaded, StructureKind::Mortar, offset(at, voxels))
+            .unwrap_or_else(|| panic!("room for a structure"));
+        load = load.saturating_add(grid.mortar);
+        voxels = voxels.saturating_sub(1);
+    }
+    let mut feed: Vec<Event> = Vec::new();
+    assert!(runner.begin_push(), "the Push begins");
+    for tick in 0..20 {
+        runner.step();
+        feed.extend_from_slice(runner.events());
+        runner.clear_events();
+        let (supply, draw) = supply_and_draw(runner.world(), seat);
+        assert!(
+            supply.raw() >= draw.raw(),
+            "tick {tick}: the settle ends with no deficit: {supply:?} < {draw:?}"
+        );
+    }
+    assert!(
+        ticks_of(&feed, EventKind::BeaconBrownedOut, tapper).is_empty(),
+        "the Generator's beacon is skipped, since its shed would deepen the deficit"
+    );
+    assert!(!dormant(runner.world(), tapper), "and it stays lit");
+    assert!(dormant(runner.world(), loaded), "the loaded beacon is shed");
+    assert!(!dormant(runner.world(), core), "and the core stays lit");
+}
+
+/// A raise's fixture: seat 0's core, a beacon `raised` on low priority with
+/// `raised_posts` Survey Posts homed to it, and a beacon `other` on normal
+/// priority with `other_posts`, the two loads together outrunning the core's
+/// spare surplus so the first settle sheds `raised` (low priority sheds
+/// first). Seat 0 seals one step: walk to `raised` and set its priority to
+/// HIGH, on site.
+struct Raise {
+    runner: Runner,
+    raised: BeaconId,
+    other: BeaconId,
+    feed: Vec<Event>,
+    /// The tick the `set_priority` row committed.
+    committed: u32,
+}
+
+fn raise_fixture(raised_posts: i32, other_posts: i32) -> Raise {
+    let rules = rules();
+    let seat = SeatId::new(0);
+    let mut world = world(&[30_000]);
+    let core = core_of(&world, seat);
+    let at = world
+        .beacons()
+        .positions()
+        .get(usize::try_from(core.raw()).unwrap_or(0))
+        .copied()
+        .unwrap_or_default();
+    let raised = world
+        .place_beacon_directly(seat, offset(at, 4), MandateKind::None, PRIORITY_LOW)
+        .unwrap_or_else(|| panic!("room for a beacon"));
+    let other = world
+        .place_beacon_directly(seat, offset(at, 8), MandateKind::None, PRIORITY_NORMAL)
+        .unwrap_or_else(|| panic!("room for a beacon"));
+    let mut voxels: i16 = -2;
+    for (beacon, posts) in [(raised, raised_posts), (other, other_posts)] {
+        for _ in 0..posts {
+            world
+                .raise_structure(seat, beacon, StructureKind::SurveyPost, offset(at, voxels))
+                .unwrap_or_else(|| panic!("room for a structure"));
+            voxels = voxels.saturating_sub(1);
+        }
+    }
+    let ordinal = world
+        .beacons()
+        .ordinals()
+        .get(usize::try_from(raised.raw()).unwrap_or(usize::MAX))
+        .copied()
+        .unwrap_or_else(|| panic!("the raised beacon has an ordinal"));
+    let name = pharmakos_sim::tables::own_beacon_name(ordinal);
+    let text = format!(
+        r#"{{
+  "schema_version": {{"major": 1, "minor": 0}},
+  "meta": {{"title": "Raise a dark beacon", "author_kind": "HUMAN"}},
+  "kind": "PLAYBOOK",
+  "declarative": {{
+    "route": [
+      {{"label": "raise", "interface": {{"beacon": {{"beacon_id": "{name}"}},
+        "rows": [{{"set_priority": "HIGH"}}]}},
+        "timeout_ms": 20000, "on_fail": {{"action": "SKIP"}}}}
+    ],
+    "handlers": []
+  }},
+  "on_death": {{"on_respawn": "CONTINUE", "max_deaths_before_fallback": 2}},
+  "fallback": {{"hold": {{"at": {{"safest": {{}}}}}}}}
+}}"#
+    );
+    let playbook = pharmakos_proto::json::decode(&text)
+        .unwrap_or_else(|error| panic!("the raise is canonical gp.v1 JSON: {error:?}"));
+    let plan = pharmakos_sim::interpreter::Plan::compile(&playbook, &rules)
+        .unwrap_or_else(|error| panic!("the raise compiles: {error:?}"));
+    let mut runner = Runner::new(world);
+    runner
+        .seal_playbook(seat, plan)
+        .unwrap_or_else(|error| panic!("a Lull takes a seal: {error:?}"));
+    assert!(runner.begin_push(), "the Push begins");
+    let mut feed: Vec<Event> = Vec::new();
+    feed.extend_from_slice(runner.events());
+    runner.clear_events();
+    let mut committed: Option<u32> = None;
+    for _ in 0..600 {
+        runner.step();
+        let events = runner.events().to_vec();
+        runner.clear_events();
+        if committed.is_none() {
+            committed = events
+                .iter()
+                .find(|event| event.kind == EventKind::RowCommitted && event.seat == Some(seat))
+                .map(|event| event.tick.raw());
+            if committed.is_none() {
+                assert!(
+                    dormant(runner.world(), raised) && !dormant(runner.world(), other),
+                    "before the raise the low-priority beacon is the dark one: {events:?}"
+                );
+            }
+        }
+        feed.extend(events);
+        if committed.is_some_and(|tick| runner.world().tick().raw() > tick.saturating_add(40)) {
+            break;
+        }
+    }
+    let committed = committed.unwrap_or_else(|| panic!("the raise committed: {feed:?}"));
+    let priority = runner
+        .world()
+        .beacons()
+        .priorities()
+        .get(usize::try_from(raised.raw()).unwrap_or(usize::MAX))
+        .copied();
+    assert_eq!(priority, Some(PRIORITY_HIGH), "the row raised the beacon");
+    Raise {
+        runner,
+        raised,
+        other,
+        feed,
+        committed,
+    }
+}
+
+/// The most Survey Posts whose draw fits the core's spare surplus (the surplus
+/// less the starting force's load), and at least one.
+fn posts_within_spare() -> i32 {
+    let grid = Grid::of(&rules());
+    let spare = grid.surplus.saturating_sub(grid.starting_load());
+    assert!(
+        grid.post > 0 && spare >= grid.post,
+        "the spare surplus holds a post: {grid:?}"
+    );
+    let mut posts: i32 = 0;
+    while posts.saturating_add(1).saturating_mul(grid.post) <= spare {
+        posts = posts.saturating_add(1);
+    }
+    posts
+}
+
+#[test]
+fn a_raise_relights_a_dark_beacon_when_a_lower_shed_covers_it() {
+    // Item 127 (7), the register's S1-22: raising a dark beacon's priority
+    // re-applies the brownout order, relighting it **at once** when shedding
+    // lit beacons of lower priority covers its load, with draw no higher than
+    // supply after the swap, so the commander's walk there pays off. Before
+    // S1 a raise moved the beacon later in the brownout order and earlier in
+    // the revival order and relit nothing.
+    //
+    // The spare surplus is the core's surplus less the starting force's load.
+    // `raised` carries as many posts as fit it, so it fits once `other` is
+    // shed; `other` carries one post, so the two together do not fit.
+    let raised_posts = posts_within_spare();
+    let fixture = raise_fixture(raised_posts, 1);
+    let world = fixture.runner.world();
+    let seat = SeatId::new(0);
+
+    let relit = ticks_of(&fixture.feed, EventKind::BeaconRevived, fixture.raised);
+    assert_eq!(
+        relit.len(),
+        1,
+        "the raised beacon relights once: {:?}",
+        fixture.feed
+    );
+    let at = relit.first().copied().unwrap_or(0);
+    assert!(
+        at >= fixture.committed && at <= fixture.committed.saturating_add(1),
+        "at once: at the settle that follows the commit ({at} against {})",
+        fixture.committed
+    );
+    assert_eq!(
+        ticks_of(&fixture.feed, EventKind::BeaconBrownedOut, fixture.other),
+        [at],
+        "and the lower-priority beacon is shed in its place, on the same settle"
+    );
+    assert!(
+        !dormant(world, fixture.raised),
+        "the raised beacon stays lit"
+    );
+    assert!(dormant(world, fixture.other), "and the other stays dark");
+    let (supply, draw) = supply_and_draw(world, seat);
+    assert!(
+        draw.raw() <= supply.raw(),
+        "draw is no higher than supply after the swap: {supply:?} {draw:?}"
+    );
+    assert_eq!(
+        ticks_of(&fixture.feed, EventKind::BeaconBrownedOut, fixture.raised).len(),
+        1,
+        "and nothing flickers: the raised beacon was shed once, before the raise"
+    );
+}
+
+#[test]
+fn a_raise_relights_nothing_when_no_lower_shed_covers_it() {
+    // The twin: `raised` carries one post more than the spare surplus, so
+    // even with every lower-priority beacon shed its load does not fit. The
+    // raise commits, the priority is HIGH, and the grid is left exactly as it
+    // was: no swap is half-made, and no event reports one.
+    let raised_posts = posts_within_spare().saturating_add(1);
+    let fixture = raise_fixture(raised_posts, 1);
+    let world = fixture.runner.world();
+    assert!(
+        dormant(world, fixture.raised),
+        "the raised beacon stays dark"
+    );
+    assert!(!dormant(world, fixture.other), "and the other stays lit");
+    assert!(
+        ticks_of(&fixture.feed, EventKind::BeaconRevived, fixture.raised).is_empty(),
+        "no revival is reported: {:?}",
+        fixture.feed
+    );
+    assert!(
+        ticks_of(&fixture.feed, EventKind::BeaconBrownedOut, fixture.other).is_empty(),
+        "and no shed"
+    );
+}
+
+/// Seat 0's core and where it stands.
+fn core_and_site(world: &World) -> (BeaconId, [Fx; 3]) {
+    let core = core_of(world, SeatId::new(0));
+    let at = world
+        .beacons()
+        .positions()
+        .get(usize::try_from(core.raw()).unwrap_or(usize::MAX))
+        .copied()
+        .unwrap_or_else(|| panic!("the core has a position"));
+    (core, at)
+}
+
+/// Home `posts` Survey Posts to `beacon`, west of `at` from `*voxels` down.
+fn raise_posts(world: &mut World, beacon: BeaconId, at: [Fx; 3], posts: i32, voxels: &mut i16) {
+    for _ in 0..posts {
+        world
+            .raise_structure(
+                SeatId::new(0),
+                beacon,
+                StructureKind::SurveyPost,
+                offset(at, *voxels),
+            )
+            .unwrap_or_else(|| panic!("room for a structure"));
+        *voxels = voxels.saturating_sub(1);
+    }
+}
+
+/// Step once after the Push begins with `dark` set dormant, and return the
+/// runner and that settle's events.
+fn settle_once_with_dark(world: World, dark: &[BeaconId]) -> (Runner, Vec<Event>) {
+    let mut runner = Runner::new(world);
+    assert!(runner.begin_push(), "the Push begins");
+    for beacon in dark {
+        runner.world_mut().set_dormant(*beacon, true);
+    }
+    runner.clear_events();
+    runner.step();
+    let feed = runner.events().to_vec();
+    runner.clear_events();
+    (runner, feed)
+}
+
+#[test]
+fn a_revival_the_swap_undoes_in_one_settle_reports_nothing() {
+    // The review of the `grid` lane: the revival runs before the swap in one
+    // settle, so a low beacon revived on the margin can be shed at once for a
+    // normal one the margin held dark. The end state is the brownout order's,
+    // and the feed reports each seat's net change once per settle: the normal
+    // beacon's revival, and nothing at all for the low one, which was dark
+    // before the settle and is dark after it.
+    let grid = Grid::of(&rules());
+    let spare = grid.surplus.saturating_sub(grid.starting_load());
+    let posts = posts_within_spare();
+    let load = grid.post.saturating_mul(posts);
+    assert!(
+        spare.saturating_sub(load) < grid.margin && spare.saturating_sub(grid.post) >= grid.margin,
+        "the margin holds the normal beacon dark and lets the low one's post revive: {grid:?}"
+    );
+    let mut world = world(&[20_000]);
+    let (_, at) = core_and_site(&world);
+    let seat = SeatId::new(0);
+    let normal = world
+        .place_beacon_directly(seat, offset(at, 8), MandateKind::None, PRIORITY_NORMAL)
+        .unwrap_or_else(|| panic!("room for a beacon"));
+    let low = world
+        .place_beacon_directly(seat, offset(at, 12), MandateKind::None, PRIORITY_LOW)
+        .unwrap_or_else(|| panic!("room for a beacon"));
+    let mut voxels: i16 = -2;
+    raise_posts(&mut world, normal, at, posts, &mut voxels);
+    raise_posts(&mut world, low, at, 1, &mut voxels);
+
+    let (mut runner, feed) = settle_once_with_dark(world, &[normal, low]);
+    assert!(!dormant(runner.world(), normal), "the normal beacon is lit");
+    assert!(dormant(runner.world(), low), "and the low one is dark");
+    assert_eq!(
+        ticks_of(&feed, EventKind::BeaconRevived, normal).len(),
+        1,
+        "the normal beacon's revival is reported: {feed:?}"
+    );
+    assert!(
+        ticks_of(&feed, EventKind::BeaconRevived, low).is_empty()
+            && ticks_of(&feed, EventKind::BeaconBrownedOut, low).is_empty(),
+        "and the low beacon, lit and shed in one settle, reports nothing: {feed:?}"
+    );
+    let (supply, draw) = supply_and_draw(runner.world(), seat);
+    assert!(draw.raw() <= supply.raw(), "{supply:?} {draw:?}");
+    for _ in 0..20 {
+        runner.step();
+        assert!(
+            !runner.events().iter().any(|event| matches!(
+                event.kind,
+                EventKind::BeaconRevived | EventKind::BeaconBrownedOut
+            )),
+            "and the grid holds: {:?}",
+            runner.events()
+        );
+        runner.clear_events();
+    }
+}
+
+#[test]
+fn of_two_equal_dark_beacons_the_lower_id_swaps_first() {
+    // S1's plan, `grid`: the swap's ties go to the lowest seat and then the
+    // lowest beacon id. Two dark HIGH beacons, each of whose loads fits only
+    // once one shared LOW beacon is shed, and not both: the lower id relights,
+    // although the other stands nearer the core (the revival order would have
+    // picked the nearer one).
+    let grid = Grid::of(&rules());
+    let spare = grid.surplus.saturating_sub(grid.starting_load());
+    let posts = posts_within_spare();
+    let load = grid.post.saturating_mul(posts);
+    assert!(
+        load <= spare && spare.saturating_sub(grid.post) < load && spare < load.saturating_mul(2),
+        "each fits alone once the LOW beacon is shed, and the two never fit together: {grid:?}"
+    );
+    let mut world = world(&[20_000]);
+    let (_, at) = core_and_site(&world);
+    let seat = SeatId::new(0);
+    let far = world
+        .place_beacon_directly(seat, offset(at, 20), MandateKind::None, PRIORITY_HIGH)
+        .unwrap_or_else(|| panic!("room for a beacon"));
+    let near = world
+        .place_beacon_directly(seat, offset(at, 4), MandateKind::None, PRIORITY_HIGH)
+        .unwrap_or_else(|| panic!("room for a beacon"));
+    let shared = world
+        .place_beacon_directly(seat, offset(at, 8), MandateKind::None, PRIORITY_LOW)
+        .unwrap_or_else(|| panic!("room for a beacon"));
+    assert!(far.raw() < near.raw(), "the far beacon has the lower id");
+    let mut voxels: i16 = -2;
+    raise_posts(&mut world, far, at, posts, &mut voxels);
+    raise_posts(&mut world, near, at, posts, &mut voxels);
+    raise_posts(&mut world, shared, at, 1, &mut voxels);
+
+    let (runner, feed) = settle_once_with_dark(world, &[far, near]);
+    let world = runner.world();
+    assert!(!dormant(world, far), "the lower id relights: {feed:?}");
+    assert!(dormant(world, near), "the nearer, higher id stays dark");
+    assert!(dormant(world, shared), "and the LOW beacon is shed for it");
+    assert_eq!(ticks_of(&feed, EventKind::BeaconRevived, far).len(), 1);
+    assert_eq!(
+        ticks_of(&feed, EventKind::BeaconBrownedOut, shared).len(),
+        1
+    );
+    assert!(ticks_of(&feed, EventKind::BeaconRevived, near).is_empty());
+}
+
+#[test]
+fn a_dark_core_outranks_every_lit_expansion_in_the_swap() {
+    // The swap's rank is the brownout order's first two terms, so a dark core
+    // outranks a lit HIGH expansion, whatever the core's own knob says (the
+    // core is shed last). This is the `grid` lane's reading of item 127 (7),
+    // recorded in its pull request as a rule call open to the owner.
+    //
+    // The core carries posts that, with its surplus and a NORMAL expansion's
+    // Generator, fit only once the HIGH expansion's single post is shed. The
+    // Generator's beacon is ahead of the HIGH one in the brownout order and is
+    // skipped, because shedding it relieves nothing.
+    let rules = rules();
+    let grid = Grid::of(&rules);
+    let mut world = world(&[20_000]);
+    let (core, at) = core_and_site(&world);
+    let seat = SeatId::new(0);
+    let knob = world
+        .beacons()
+        .priorities()
+        .get(usize::try_from(core.raw()).unwrap_or(usize::MAX))
+        .copied();
+    assert!(
+        knob.is_some_and(|knob| knob < PRIORITY_HIGH),
+        "the core's own knob ranks below HIGH, so only its core term can win: {knob:?}"
+    );
+    let (first, second) = vent_stands(&world, at);
+    let output = vent_output(&world, &rules, first, second);
+    assert!(
+        output >= grid.post,
+        "the Generator carries the HIGH beacon's post"
+    );
+    let tapper = world
+        .place_beacon_directly(seat, offset(at, 10), MandateKind::None, PRIORITY_NORMAL)
+        .unwrap_or_else(|| panic!("room for a beacon"));
+    world
+        .raise_structure(seat, tapper, StructureKind::Generator, first)
+        .unwrap_or_else(|| panic!("room for the Generator"));
+    let high = world
+        .place_beacon_directly(seat, offset(at, 14), MandateKind::None, PRIORITY_HIGH)
+        .unwrap_or_else(|| panic!("room for a beacon"));
+    let mut voxels: i16 = -2;
+    raise_posts(&mut world, high, at, 1, &mut voxels);
+    let room = grid.surplus.saturating_add(output);
+    let mut load = grid.starting_load();
+    let mut posts: i32 = 0;
+    while load.saturating_add(grid.post) <= room {
+        load = load.saturating_add(grid.post);
+        posts = posts.saturating_add(1);
+    }
+    raise_posts(&mut world, core, at, posts, &mut voxels);
+
+    let (runner, feed) = settle_once_with_dark(world, &[core]);
+    let world = runner.world();
+    assert!(!dormant(world, core), "the core relights: {feed:?}");
+    assert!(dormant(world, high), "the HIGH expansion is shed for it");
+    assert!(
+        !dormant(world, tapper),
+        "the Generator's beacon, whose shed relieves nothing, stays lit"
+    );
+    assert_eq!(ticks_of(&feed, EventKind::BeaconRevived, core).len(), 1);
+    assert_eq!(ticks_of(&feed, EventKind::BeaconBrownedOut, high).len(), 1);
+    let (supply, draw) = supply_and_draw(world, seat);
+    assert!(draw.raw() <= supply.raw(), "{supply:?} {draw:?}");
+}
+
+#[test]
+fn the_commander_walks_through_a_blackout_drawing_nothing() {
+    // Item 127 (5), the register's S1-35: the commander is the one unit a
+    // blackout does not park, so a seat can always walk to a beacon and change
+    // something on site; and it draws nothing while its home is dark, like
+    // everything else homed there. While its home is lit it draws
+    // `power.kw_per_unit` like any other unit.
+    //
+    // The surplus is cut to one kilowatt short of the margin over the starting
+    // force's load, so a core set dormant stays dark (the fixture of
+    // `a_dormant_beacon_powers_down_everything_homed_to_it`).
+    let grid = Grid::of(&rules());
+    let surplus = grid
+        .starting_load()
+        .saturating_add(grid.margin)
+        .saturating_sub(1);
+    let varied = || rules_with_core_surplus(u32::try_from(surplus).unwrap_or(0));
+    let seat = SeatId::new(0);
+
+    // Lit: the commander is in the draw.
+    let mut lit = Runner::new(world_with(varied(), &[20_000]));
+    assert!(lit.begin_push(), "the Push begins");
+    lit.step();
+    let (_, draw) = supply_and_draw(lit.world(), seat);
+    assert_eq!(
+        draw.raw(),
+        grid.starting_load(),
+        "while its home is lit the commander draws like the rest of the \
+         starting force, which counts it"
+    );
+
+    // Dark: the core is dormant, and the commander walks on, drawing nothing.
+    let mut runner = Runner::new(world_with(varied(), &[20_000]));
+    let core = core_of(runner.world(), seat);
+    let at = runner
+        .world()
+        .beacons()
+        .positions()
+        .get(usize::try_from(core.raw()).unwrap_or(0))
+        .copied()
+        .unwrap_or_default();
+    let commander = runner.world().commander_of(seat);
+    assert!(runner.begin_push(), "the Push begins");
+    runner
+        .world_mut()
+        .send_unit_directly(commander.raw(), offset(at, 12));
+    runner.world_mut().set_dormant(core, true);
+    let row = usize::try_from(commander.raw()).unwrap_or(usize::MAX);
+    let start = runner.world().units().positions().get(row).copied();
+    for tick in 0..40 {
+        runner.step();
+        let world = runner.world();
+        assert!(dormant(world, core), "tick {tick}: the core stays dark");
+        assert_eq!(
+            supply_and_draw(world, seat),
+            (Kw::ZERO, Kw::ZERO),
+            "tick {tick}: a total blackout, with the commander out of the draw"
+        );
+        assert_ne!(
+            world.units().positions().get(row),
+            world.units().destinations().get(row),
+            "tick {tick}: the commander is not parked where it stands"
+        );
+    }
+    assert_ne!(
+        runner.world().units().positions().get(row).copied(),
+        start,
+        "and it walked"
+    );
+}
+
+#[test]
+fn a_beacons_key_core_supplies_exactly_its_base() {
+    // S1's plan, decision 12 (item 128), the register's S1-31: the key-core is
+    // netted out of draw. The power phase reads `power.beacon_base_draw_kw`,
+    // and a beacon's key-core supplies exactly that row, so a live beacon is
+    // net zero by construction and neither column carries either figure.
+    let rules = rules();
+    let row = rules.message().power.as_ref().map_or_else(
+        || panic!("a power block"),
+        |block| block.beacon_base_draw_kw,
+    );
+    let power = PowerRules::read(&rules).unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(
+        u32::try_from(power.beacon_base_draw).ok(),
+        Some(row),
+        "the phase reads the row"
+    );
+    assert!(power.beacon_base_draw > 0, "a beacon has a base to net out");
+    assert_eq!(
+        power.key_core_output(),
+        power.beacon_base_draw,
+        "and its key-core supplies exactly that base"
+    );
+
+    // The three asserts above are the construction the plan's acceptance line
+    // names; what follows is the behaviour. The core's own base is in neither
+    // column: at the first settle the draw is the starting force's and the
+    // supply the deep bore's surplus. A placed expansion is net zero too,
+    // tick by tick: `a_placed_beacon_adds_no_draw`.
+    let grid = Grid::of(&rules);
+    let mut runner = Runner::new(world(&[20_000]));
+    assert!(runner.begin_push(), "the Push begins");
+    runner.step();
+    assert_eq!(
+        supply_and_draw(runner.world(), SeatId::new(0)),
+        (Kw::new(grid.surplus), Kw::new(grid.starting_load())),
+        "net figures: no base in the draw and no key-core in the supply"
+    );
+}
+
+#[test]
+fn the_dark_load_is_what_the_brownout_took_off_the_grid() {
+    // Item 134 (2) (c): econ's shortfall line reads a seat's dark load from
+    // the sim, never a restated brownout rule. Two Mortar-loaded expansions
+    // shed by a deficit: the dark load is their two Mortars, no supply went
+    // dark with them, and the shed kW is the same two Mortars.
+    let grid = Grid::of(&rules());
+    let mut runner = Runner::new(world(&[20_000]));
+    let seat = SeatId::new(0);
+    let core = core_of(runner.world(), seat);
+    let at = runner
+        .world()
+        .beacons()
+        .positions()
+        .get(usize::try_from(core.raw()).unwrap_or(0))
+        .copied()
+        .unwrap_or_default();
+    let mut voxels: i16 = -2;
+    let mut placed: Vec<BeaconId> = Vec::new();
+    for (step, priority) in [
+        (4_i16, PRIORITY_NORMAL),
+        (20, PRIORITY_NORMAL),
+        (6, PRIORITY_LOW),
+        (22, PRIORITY_HIGH),
+    ] {
+        let beacon = runner
+            .world_mut()
+            .place_beacon_directly(seat, offset(at, step), MandateKind::None, priority)
+            .unwrap_or_else(|| panic!("room for a beacon"));
+        runner
+            .world_mut()
+            .raise_structure(seat, beacon, StructureKind::Mortar, offset(at, voxels))
+            .unwrap_or_else(|| panic!("room for a structure"));
+        voxels = voxels.saturating_sub(1);
+        placed.push(beacon);
+    }
+    assert!(runner.begin_push(), "the Push begins");
+    runner.step();
+    let world = runner.world();
+    let dark = placed
+        .iter()
+        .filter(|beacon| dormant(world, **beacon))
+        .count();
+    let dark = i32::try_from(dark).unwrap_or(i32::MAX);
+    assert!(dark > 0, "the fixture sheds something");
+    let load = dark_load(world, seat).unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(
+        load,
+        DarkLoad {
+            draw: Kw::new(grid.mortar.saturating_mul(dark)),
+            supply: Kw::ZERO,
+        },
+        "the dark load is the shed beacons' Mortars"
+    );
+    assert_eq!(
+        load.shed(),
+        Ok(Kw::new(grid.mortar.saturating_mul(dark))),
+        "and the shed kW is the same, with no supply gone dark"
+    );
+    assert_eq!(
+        dark_load(world, SeatId::new(1)),
+        Ok(DarkLoad::default()),
+        "a seat with nothing dark holds nothing off its grid"
+    );
+    assert_eq!(
+        dark_load(world, SeatId::new(7)),
+        Err(PowerError::NoSuchSeat(SeatId::new(7))),
+        "and a seat that is not seated is a typed refusal, not a zero"
+    );
+
+    // A dark core takes its surplus off the grid with it: the supply half.
+    let mut runner = Runner::new(world_with(
+        rules_with_core_surplus(
+            u32::try_from(
+                grid.starting_load()
+                    .saturating_add(grid.margin)
+                    .saturating_sub(1),
+            )
+            .unwrap_or(0),
+        ),
+        &[20_000],
+    ));
+    let core = core_of(runner.world(), seat);
+    assert!(runner.begin_push(), "the Push begins");
+    runner.world_mut().set_dormant(core, true);
+    runner.step();
+    let world = runner.world();
+    assert!(dormant(world, core), "the fixture held");
+    let surplus = grid
+        .starting_load()
+        .saturating_add(grid.margin)
+        .saturating_sub(1);
+    assert_eq!(
+        dark_load(world, seat),
+        Ok(DarkLoad {
+            draw: Kw::new(grid.starting_load()),
+            supply: Kw::new(surplus),
+        }),
+        "a dark core holds its homed load and its surplus off the grid"
     );
 }
 

@@ -159,6 +159,17 @@ with `dig_max_depth` 3 every round, a `set_mandate` row whose settings the sim
 now writes (item 131 (5)), and works its starting seam below the rim in all
 three rounds.
 
+**S1's grid (`grid`) moved no chain** (decisions-log item 127 (5) to (8)). Its
+rulings change what the power phase does only while a seat's draw outruns its
+supply or a beacon is dark, and no committed scenario before it ever had a
+deficit: the Quartermaster holds fabrication at headroom and a placed beacon is
+net zero (item 113 (5)). `brownout-by-recycle` is new, and it is the deficit
+made on purpose (S1's plan, decision 18): seat 0 covers its vent with a
+Generator in round 1, loads its grid past the core's surplus with a
+low-priority Survey beacon's seven scouts in round 2, then recycles the
+Generator's beacon at tick 4911, and the next settle (4912) sheds the Survey
+beacon, which stays dark for the rest of the round.
+
 `expand-east-segment` carries one more thing worth knowing before its chain is
 read. The playbook it seals **does not qualify against either seat's own frozen
 snapshot** on this map: `E0401` for `b_01`, which since S1 names each seat's own

@@ -1,0 +1,59 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// S1's grid (the `grid` lane; S1's plan, decision 18, ruled by decisions-log
+// item 128): the demo's deficit, made on purpose. "Cover the nearest vent and
+// build a Generator on it; then load the grid past the core's surplus with a
+// low-priority Survey beacon; then walk to the Generator's beacon and recycle
+// it." The Generator's supply counts only while it is homed to a lit beacon,
+// so the recycle takes its output off the grid and the brownout order sheds
+// the load. See brownout-by-recycle.scenario.jsonc for what is asserted.
+//
+// The route is carried every round and each step reads its targets again:
+// `cover` places only while an uncovered vent is in reach (round 1); `load`
+// deploys only once the treasury covers it (round 2); `loaded` waits for the
+// seven scouts, read off the grid's headroom (supply 10 + 20 kW, draw the
+// starting four, the Generator's build drone and seven scouts: 18 kW at the
+// committed table), and aborts the route when they never come, so no round
+// recycles a Generator it has not yet loaded past the surplus; `approach`
+// walks the commander beside the covering beacon, so that `recycle`'s
+// "nearest Build beacon" is that one rather than the core (the Survey beacon
+// is on another writ). The route names no beacon by `b_NN`: the covering
+// beacon does not exist when round 1 is verified, so a name would refuse the
+// file, and selectors that read tags are S3's. `allow_dormant_beacons` is set
+// because the load is past the core's supply on purpose (spec section 7: the
+// shortfall is then a warning, not an error).
+{
+  "schema_version": {"major": 1, "minor": 0},
+  "meta": {"title": "Brownout by recycle", "author_kind": "HUMAN"},
+  "kind": "PLAYBOOK",
+  "declarative": {
+    "route": [
+      {"label": "cover",
+        "place_beacon": {
+          "at": {"covering": {"vent": {"rank": "NEAREST", "coverage": "UNCOVERED"}}},
+          "initial": {"mandate": {"build": {"targets": [
+            {"blueprint_id": "generator", "anchor": {"on": {"covered": {}}}}
+          ]}}}},
+        "timeout_ms": 120000, "on_fail": {"action": "SKIP"}},
+      {"label": "load",
+        "place_beacon": {
+          "at": {"voxel": {"x": 364, "y": 30, "z": 36}},
+          "initial": {"priority": "LOW", "mandate": {"survey": {"scout_count": 7}}}},
+        "timeout_ms": 60000, "on_fail": {"action": "SKIP"}},
+      {"label": "loaded",
+        "wait_until": {"condition": {"kw_headroom": {"kw": {"op": "LE", "value": 18}}}},
+        "timeout_ms": 60000, "on_fail": {"action": "ABORT_ROUTE"}},
+      {"label": "approach",
+        "move": {"to": {"voxel": {"x": 338, "y": 20, "z": 36}}},
+        "timeout_ms": 60000, "on_fail": {"action": "SKIP"}},
+      {"label": "recycle",
+        "interface": {"beacon": {"nearest": {"filter": {"mandate": "BUILD"}}}, "rows": [{"recycle": {}}]},
+        "timeout_ms": 90000, "on_fail": {"action": "SKIP"}}
+    ],
+    "handlers": [],
+    "options": {"allow_dormant_beacons": true}
+  },
+  "on_death": {"on_respawn": "CONTINUE", "max_deaths_before_fallback": 2},
+  "fallback": {"hold": {"at": {"safest": {}}}}
+}

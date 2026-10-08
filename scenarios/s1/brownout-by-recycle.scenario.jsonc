@@ -1,0 +1,67 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// S1's grid (the `grid` lane; S1's plan, decision 18, ruled by decisions-log
+// item 128): how the demo shows a deficit. The Quartermaster holds
+// fabrication at headroom and a placed beacon is net zero, so S1 has no
+// deficit by itself (item 113 (5)); a seat makes one by recycling, on site,
+// the beacon a Generator is homed to, whose supply counts only while that
+// beacon is lit.
+//
+//   seat 0  seals scenarios/s1/brownout-by-recycle.playbook.jsonc every round.
+//           Round 1: the covering beacon lands at tick 721 and its Generator
+//           is paid for at tick 766 (supply 10 -> 30 kW once it stands); the
+//           Survey beacon cannot be paid for yet (`unaffordable`, failure id
+//           12), the wait for its scouts times out and aborts the route, and
+//           nothing is recycled. Round 2: the Survey beacon lands on low
+//           priority and fields its seven scouts inside the Generator's
+//           headroom (draw 12 kW against the core's 10), the wait passes, and
+//           the commander walks beside the covering beacon and recycles it,
+//           the nearest Build beacon, at tick 4911. The
+//           Generator is ruined with it, its build drone re-homes to the
+//           core, and at the next settle (tick 4912) the brownout order sheds
+//           the Survey beacon, lowest priority, which relieves its seven
+//           scouts' 7 kW. The core stays lit, and the Survey beacon stays dark
+//           for the rest of the round: reviving it would cost more than the
+//           revive margin leaves;
+//   seat 1  seals nothing, so the gateway files the safe playbook for it.
+//
+// `event_fired` has no value predicate and no "after" (register M-05), so the
+// order of the recycle and the shed is pinned by the chain, and the rule by
+// crates/sim/tests/economy.rs's brownout tests.
+{
+  "format": "pharmakos.scenario.v1",
+  "name": "brownout-by-recycle",
+  "summary": "Seat 0 covers its vent with a Generator in round 1, loads its grid past the core's surplus with a low-priority Survey beacon in round 2, then recycles the Generator's beacon on site, and the brownout order sheds the Survey beacon. Seat 1 holds on its safe playbook.",
+
+  "map": {
+    "seed": "0x00000000ca5caded",
+    "generator": "skeleton"
+  },
+
+  "rules": "rules/rules.v1.json",
+
+  "seats": [
+    { "seat": 0, "kind": "playbook", "playbook": "scenarios/s1/brownout-by-recycle.playbook.jsonc" },
+    { "seat": 1, "kind": "safe" }
+  ],
+
+  "segments": [
+    { "index": 0, "length_ms": 180000, "note": "Round 1: the covering beacon and its Generator; the load cannot be paid for yet." },
+    { "index": 1, "length_ms": 180000, "note": "Round 2: the load, the recycle, the brownout." }
+  ],
+
+  "assertions": [
+    { "assert": "event_fired", "event": "beacon_placed", "seat": 0, "by_tick": 800,
+      "note": "The covering beacon lands at tick 721." },
+    { "assert": "event_fired", "event": "beacon_recycled", "seat": 0, "by_tick": 4911,
+      "note": "Round 2: the Generator's beacon is recycled on site at tick 4911." },
+    { "assert": "event_fired", "event": "beacon_browned_out", "seat": 0, "by_tick": 4912,
+      "note": "The next settle, tick 4912, sheds the low-priority Survey beacon. Seat 0 sheds nothing before the recycle." },
+    { "assert": "event_fired", "event": "segment_ended", "by_tick": 7200,
+      "note": "Two rounds of 3 600 ticks." },
+    { "assert": "hash_chain_equals",
+      "golden": "tests/golden/scenarios/brownout-by-recycle/expected.hashes.txt",
+      "note": "Byte-identical on Windows, Linux and macOS. Re-blessed with `cargo xtask golden --bless`, and never to turn a red build green." }
+  ]
+}
