@@ -26,26 +26,23 @@
 //! world is the simpler thing to state, so the gateway counts into its own
 //! ([`lend`]).
 //!
-//! # Two filters, restated
+//! # The sim's filters, called
 //!
-//! The sim's "which features does this pick consider" predicates for a
-//! `covering` pick and for an `on` pick are private to its module
-//! (`matches_pick` and `on_candidate` in `crates/sim/src/targeting.rs`). The
-//! **pick** never needs them here -- it is the sim's own `cover` or `on_vent`
-//! -- but `gp.api.v1.ResolvedRef` also lists every candidate in rank order
-//! (the chip's "now" and "next") and counts how many matched before
-//! reachability was asked (the recap's "3 matched, none reachable"), and both
-//! of those need the filter. So the two predicates are restated below, from
-//! the sim's public reads only, and the ranking they feed is still the sim's
-//! [`Ranker`]. `tests/targeting.rs` holds the restatement to the sim's pick,
-//! for a `covering` and for an `on {vent: NEAREST}` alike: the first listed
-//! candidate is the feature the sim binds when the step starts. And the
-//! module checks itself as it answers: a "nearest" pick the restated filter
-//! did not list is refused as [`crate::error::Code::Internal`] rather than
-//! answered, so a drift between the copy and the sim surfaces as an error and
-//! never as a wrong chip. A sim change that makes the two predicates public
-//! lets this module drop its copies; the pull request that brought this
-//! module says so.
+//! The **pick** is the sim's own `cover` or `on_vent`, but
+//! `gp.api.v1.ResolvedRef` also lists every candidate in rank order (the
+//! chip's "now" and "next") and counts how many matched before reachability
+//! was asked (the recap's "3 matched, none reachable"), and both of those need
+//! the pick's filter. The filters are the sim's public predicates --
+//! [`pharmakos_sim::targeting::matches_pick`] for a `covering`,
+//! [`pharmakos_sim::targeting::on_candidate`] for an `on {vent: NEAREST}`, and
+//! [`pharmakos_sim::targeting::anchor_in_sphere`] for the sphere test a named
+//! or `covered {}` `on` asks first -- and the ranking they feed is the sim's
+//! [`Ranker`]. Since S1's `fog` made them public, nothing here restates them
+//! (the `tgtw` lane's copies are gone). The module still checks itself as it
+//! answers: a "nearest" pick the listing lacks is refused as
+//! [`crate::error::Code::Internal`] rather than answered with a made-up
+//! travel, so a drift between the sim's pick and its own filter surfaces as an
+//! error and never as a wrong chip.
 
 use pharmakos_proto::gp::v1::location::Place;
 use pharmakos_proto::gp::v1::{
@@ -62,8 +59,11 @@ use pharmakos_sim::math::quantity::Ms;
 use pharmakos_sim::pathing::{Scratch, Speed, ticks_for_cost};
 use pharmakos_sim::seams::UnitTally;
 use pharmakos_sim::snapshot::Snapshot;
-use pharmakos_sim::tables::{BeaconId, SeatId, StructureKind};
-use pharmakos_sim::targeting::{FeatureSpec, Ground, Ranker, column_of, cover, on_vent};
+use pharmakos_sim::tables::{BeaconId, SeatId};
+use pharmakos_sim::targeting::{
+    FeatureSpec, Ground, Ranker, anchor_in_sphere, column_of, cover, matches_pick, on_candidate,
+    on_vent,
+};
 use pharmakos_sim::voxels::Richness;
 use pharmakos_sim::world::World;
 
@@ -168,17 +168,6 @@ pub fn sphere_radius(ground: &Ground<'_>) -> Result<Fx, Error> {
         .map_err(|_| Error::internal("the rules table's sphere radius is not a voxel length"))
 }
 
-/// The point a feature is measured and covered at: its anchor column's
-/// standing point, or its first footprint column's should the generator have
-/// stamped no anchor column (the sim's `anchor_point`).
-#[must_use]
-pub fn anchor_point(ground: &Ground<'_>, feature: &Feature) -> Option<[Fx; 3]> {
-    let column = feature
-        .anchor_column()
-        .or_else(|| feature.footprint.first().copied())?;
-    ground.standing(column.x, column.y)
-}
-
 /// The per-seat ordinal of `seat`'s own **living** beacon -- awake or
 /// dormant, since a dormant beacon keeps its sphere -- whose sphere holds
 /// `point`, the lowest when several do. Never reads another seat's beacons.
@@ -237,7 +226,8 @@ pub fn feature_reads(world: &World, seat: Option<SeatId>) -> Result<Vec<FeatureR
                 y,
                 live: ground.is_live(index),
                 covered_by: seat.and_then(|seat| {
-                    anchor_point(&ground, feature)
+                    ground
+                        .anchor_point(index)
                         .and_then(|at| covering_beacon(&ground, seat, at, radius))
                 }),
             }
@@ -247,80 +237,6 @@ pub fn feature_reads(world: &World, seat: Option<SeatId>) -> Result<Vec<FeatureR
     // duplicate anchor), so the key is total.
     reads.sort_unstable_by(|left, right| left.name.cmp(&right.name));
     Ok(reads)
-}
-
-/// **The sim's `matches_pick`, restated** (see the module docs): whether the
-/// feature at `index` passes a `covering` pick's filters -- its kind, alive,
-/// and for `UNCOVERED` outside every sphere of `seat`'s own living beacons.
-#[must_use]
-pub fn matches_pick(
-    ground: &Ground<'_>,
-    seat: SeatId,
-    index: usize,
-    kind: FeatureKind,
-    uncovered: bool,
-) -> bool {
-    let Some(feature) = ground.features.get(index) else {
-        return false;
-    };
-    if feature.kind != kind || !ground.is_live(index) {
-        return false;
-    }
-    if !uncovered {
-        return true;
-    }
-    anchor_point(ground, feature).is_some_and(|point| !ground.inside_own_sphere(seat, point))
-}
-
-/// **The sim's `on_candidate`, restated** (see the module docs): whether the
-/// vent at `index` is an `on` candidate for a beacon of `seat` centred at
-/// `centre` -- a live vent no live Generator of any seat and no Build target
-/// of this seat (but `except`'s) stands on, whose `on` column lies inside the
-/// sphere of `radius` ([`sphere_radius`]).
-#[must_use]
-pub fn on_candidate(
-    ground: &Ground<'_>,
-    seat: SeatId,
-    except: Option<BeaconId>,
-    centre: [Fx; 3],
-    radius: Fx,
-    index: usize,
-) -> bool {
-    let Some(feature) = ground.features.get(index) else {
-        return false;
-    };
-    if feature.kind != FeatureKind::Vent || !ground.is_live(index) {
-        return false;
-    }
-    let taken = feature.footprint.iter().any(|column| {
-        generator_on(ground, column.x, column.y)
-            || ground.own_target_on(seat, except, column.x, column.y)
-    });
-    if taken {
-        return false;
-    }
-    ground
-        .on_column(index, seat, except)
-        .and_then(|[x, y]| ground.standing(x, y))
-        .is_some_and(|point| within(centre, point, radius))
-}
-
-/// Whether a live Generator of any seat stands on the column (the sim's
-/// `generator_on`, restated for [`on_candidate`]).
-fn generator_on(ground: &Ground<'_>, x: i32, y: i32) -> bool {
-    let structures = ground.structures;
-    let generator = StructureKind::Generator.id();
-    (0..structures.ids().len()).any(|row| {
-        structures.kinds().get(row).copied() == Some(generator)
-            && structures
-                .hit_points()
-                .get(row)
-                .is_some_and(|hp| hp.is_alive())
-            && structures.positions().get(row).copied().is_some_and(|at| {
-                at.first().map(|value| value.floor_voxels()) == Some(x)
-                    && at.get(1).map(|value| value.floor_voxels()) == Some(y)
-            })
-    })
 }
 
 /// Every candidate `keep` admits, nearest first by the sim's [`Ranker`], with
@@ -528,7 +444,6 @@ struct Reader<'a> {
     scratch: Scratch,
     seat: SeatId,
     commander: Option<[Fx; 3]>,
-    radius: Fx,
 }
 
 impl Reader<'_> {
@@ -583,7 +498,7 @@ impl Reader<'_> {
     ///
     /// A **ranked** pick (`spec` is "nearest") is always listed: the sim
     /// ranked it with the same [`Ranker`] over the same filter, so a pick the
-    /// listing lacks means the restated filter has drifted from the sim's, and
+    /// listing lacks means the sim's filter and its pick have drifted apart, and
     /// that is refused rather than answered with a made-up travel. A **named**
     /// pick is listed only when the origin reaches it, and `None` says it
     /// does not ([`Resolved::travel_ms`]).
@@ -602,7 +517,7 @@ impl Reader<'_> {
             .map(|(_, candidate)| candidate.travel_ms);
         match (spec, found) {
             (FeatureSpec::Nearest { .. }, None) => Err(Error::internal(
-                "the sim ranked a feature the gateway's restated filter did not list: the two \
+                "the sim ranked a feature its own filter did not list: the pick and the filter \
                  have drifted apart",
             )),
             (_, found) => Ok(found),
@@ -691,9 +606,12 @@ impl Reader<'_> {
         let mut resolved = empty(pointer, route_step, Site::On { covering }, kind_of(spec));
         let seat = self.seat;
         let ground = self.ground;
-        let radius = self.radius;
         // A named vent, or the one `covered {}` names: a candidate when it is
-        // a live vent at all, which is what "matched" counts for a name.
+        // a live vent whose anchor point lies inside the sphere the target is
+        // written into, which is what "matched" counts for a name. The sphere
+        // test is the sim's own ([`anchor_in_sphere`]): `on_vent` reads a
+        // name sphere first, and a vent outside the sphere is `no_target`
+        // with 0 matched whatever stands on it.
         let single = |index: Option<usize>| -> Option<usize> {
             index.filter(|held| {
                 ground.is_live(*held)
@@ -701,6 +619,7 @@ impl Reader<'_> {
                         .features
                         .get(*held)
                         .is_some_and(|feature| feature.kind == FeatureKind::Vent)
+                    && anchor_in_sphere(&ground, centre, *held)
             })
         };
         let named = match spec {
@@ -711,9 +630,9 @@ impl Reader<'_> {
         let (listed, matched) = match (spec, named) {
             (FeatureSpec::Nearest { .. }, _) => (
                 self.candidates(centre, |index| {
-                    on_candidate(&ground, seat, except, centre, radius, index)
+                    on_candidate(&ground, seat, except, centre, index)
                 })?,
-                self.matched(|index| on_candidate(&ground, seat, except, centre, radius, *index))?,
+                self.matched(|index| on_candidate(&ground, seat, except, centre, *index))?,
             ),
             (_, Some(named)) => (self.candidates(centre, |index| index == named)?, 1),
             (_, None) => (Vec::new(), 0),
@@ -896,7 +815,6 @@ pub fn resolve_playbook(
         scratch: scratch_for(world)?,
         seat,
         commander: commander_point(world, seat),
-        radius: sphere_radius(&ground)?,
     };
     let mut out: Vec<Resolved> = Vec::new();
     let Some(declarative) = playbook.declarative.as_ref() else {

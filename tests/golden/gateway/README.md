@@ -513,14 +513,22 @@ verifier's:
   (`pharmakos_verifier::projection::project`): the beacon and the Generator in
   its initial settings, at the rules table's prices. It moves with a price row,
   with the projection's rules, or with the scenario playbook. It is written in
-  a Lull only; `bmi_next_dollars` is not written until the sim publishes the
-  band a seat holds (decisions-log item 134 (2) (c)).
+  a Lull only.
+* **`bmi_next_dollars`** is the sim's `economy::bmi_for` at the sim's
+  `economy::ladder_place` over the living seats' held values as the world
+  stands: the BMI the next settlement pays at the band the seat holds now.
+  Seat 0 leads the opening tie, so it is the leader's BMI, and it equals the
+  recap's `bmi_dollars` below (`economy.rs`'s
+  `the_band_and_the_next_bmi_are_the_sims_reads_and_the_next_bmi_is_what_is_settled`).
+  It moves with `economy.bmi_dollars` or the scaling rows.
 * **`settlement.bmi_dollars`** is the `settled` event's own value: the BMI
   after the band's adjustment. Seat 0 leads a tie on held value (the lower
   seat index wins a tie), so it draws the leader's malus. `award_dollars` is 0
-  until S4. `band_rank` and `band_percent` are not written until the sim
-  publishes its band reads (the same item); when they arrive, this file moves
-  with them, and that is the pull request that says so.
+  until S4. `band_rank` (from 1, the leader first) and `band_percent` are the
+  sim's `economy::ladder_place` and `economy::band_percent` over the ladder as
+  the Ledger read it (decisions-log item 134 (2) (c)): band 1 at the leader's
+  malus. They move with the scaling rows or with the ladder's tie-break.
+  There is no `shortfall` here: the shipped grid carries the starting force.
 * **The prose** is `crates/gateway/src/strings.rs`'s; a wording change moves it
   and nothing else.
 

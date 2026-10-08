@@ -21,8 +21,11 @@
 //!   reveals nothing.
 //!
 //! And `an_on_nearest_reads_the_vent_the_sim_binds` holds the gateway's
-//! restated `on` filter to the sim's `on {vent: NEAREST}` binding, as the
-//! first acceptance line holds its `covering` filter;
+//! `on` listing (the sim's own filter since `fog`) to the sim's
+//! `on {vent: NEAREST}` binding, as the first acceptance line holds its
+//! `covering` listing;
+//! `a_named_vent_outside_the_sphere_matches_nothing_as_the_sim_reports` holds
+//! a named `on` to the sim's sphere-first reading (0 matched, `no_target`);
 //! `a_set_mandate_rows_on_reads_the_vent_the_sim_binds` holds a switch's
 //! carried Build targets to the same, since the `mine` lane made the sim bind
 //! them -- the `on` column as well as the vent -- and
@@ -1053,4 +1056,117 @@ fn resolve_refs_in_a_push_is_phase_closed() {
     let _ = support::step(&mut surface, 5);
     let in_push = support::call(&mut surface, &token, "resolve_refs", &params);
     assert_eq!(support::code(&in_push), "PHASE_CLOSED", "{in_push:?}");
+}
+
+#[test]
+fn a_named_vent_outside_the_sphere_matches_nothing_as_the_sim_reports() {
+    use pharmakos_gateway::targeting::{Site, commander_point, lend, scratch_for, spec_of};
+    use pharmakos_sim::features::FeatureKind;
+    use pharmakos_sim::interpreter::StepFailure;
+    use pharmakos_sim::targeting::{anchor_in_sphere, cover, on_vent_counted};
+
+    let (mut surface, token) = opening();
+    let mut left = FIRST_LULL_MS;
+    // Where the covering lands, by the sim's own resolver, and a live vent
+    // whose anchor point lies outside the sphere centred there.
+    let (centre, far, far_index) = {
+        let world = surface.host().expect("hosted").world();
+        let tally = pharmakos_sim::seams::UnitTally::new();
+        let ground = lend(world, &tally);
+        let mut scratch = scratch_for(world).expect("a search scratch");
+        let reference: pharmakos_proto::gp::v1::FeatureRef = pharmakos_proto::json::decode_json(
+            &pharmakos_proto::json::read(
+                r#"{"vent": {"rank": "NEAREST", "coverage": "UNCOVERED"}}"#,
+            )
+            .expect("JSON"),
+        )
+        .expect("a FeatureRef");
+        let spec = spec_of(&reference, Site::Covering).expect("a legal `covering`");
+        let commander = commander_point(world, SeatId::new(0)).expect("a living commander");
+        let found = cover(&ground, &mut scratch, SeatId::new(0), commander, spec)
+            .expect("the sim covers a vent");
+        let [x, y] = found.site;
+        let centre = ground.standing(x, y).expect("a site on the map");
+        let far_index = (0..ground.features.len())
+            .find(|index| {
+                ground
+                    .features
+                    .get(*index)
+                    .is_some_and(|feature| feature.kind == FeatureKind::Vent)
+                    && ground.is_live(*index)
+                    && !anchor_in_sphere(&ground, centre, *index)
+            })
+            .expect("the golden seed has a live vent outside the new beacon's sphere");
+        let far = ground.features.get(far_index).expect("a feature").name();
+        (centre, far, far_index)
+    };
+
+    // The scenario's playbook with its `on` naming that vent.
+    let playbook = cover_and_build().replace(
+        r#""on": {"covered": {}}"#,
+        &format!(r#""on": {{"feature_id": "{far}"}}"#),
+    );
+    assert_ne!(playbook, cover_and_build(), "the `on` was rewritten");
+    let answered = refs(&mut surface, &token, &mut left, &playbook);
+    let on = answered.get(1).expect("the on");
+    assert_eq!(text_of(on, "failure"), "no_target", "{on:?}");
+    assert_eq!(
+        number(on, "matched"),
+        0,
+        "a named vent outside the sphere is no candidate: {on:?}"
+    );
+    assert!(array_of(on, "candidates").is_empty(), "{on:?}");
+
+    // The sim's own reading of the same name, from the same centre.
+    let world = surface.host().expect("hosted").world();
+    let tally = pharmakos_sim::seams::UnitTally::new();
+    let ground = lend(world, &tally);
+    let mut scratch = scratch_for(world).expect("a search scratch");
+    let reference: pharmakos_proto::gp::v1::FeatureRef = pharmakos_proto::json::decode_json(
+        &pharmakos_proto::json::read(&format!(r#"{{"feature_id": "{far}"}}"#)).expect("JSON"),
+    )
+    .expect("a FeatureRef");
+    let spec = spec_of(&reference, Site::On { covering: true }).expect("a legal `on`");
+    let missed = on_vent_counted(
+        &ground,
+        &mut scratch,
+        SeatId::new(0),
+        centre,
+        None,
+        None,
+        spec,
+    )
+    .expect_err("the sim reads no vent outside the sphere");
+    assert_eq!(missed.reason, StepFailure::NoTarget);
+    assert_eq!(
+        missed.matched,
+        Some(0),
+        "the sim counts the name outside the sphere as matching nothing (feature {far_index})"
+    );
+
+    // Sealed and played, the step fails as both read it, and the recap names
+    // why in the seat's own words: matched nothing, so the feed's words.
+    let sealed = call_in_lull(
+        &mut surface,
+        &token,
+        &mut left,
+        "submit_plan",
+        &format!(r#"{{"playbook_jsonc":{}}}"#, support::quote(&playbook)),
+    );
+    assert_eq!(
+        result(&sealed, "submit_plan").get("accepted"),
+        Some(&Json::Bool(true)),
+        "{sealed:?}"
+    );
+    surface.begin_push().expect("the Push begins");
+    let _ = support::step(&mut surface, 10_000);
+    let recap = result(
+        &support::call(&mut surface, &token, "get_recap", "{}"),
+        "get_recap",
+    );
+    let said = pharmakos_gateway::strings::recap_step_failed(missed.value(), 1);
+    assert!(
+        text_of(&recap, "prose").contains(&said),
+        "the recap says `{said}`: {recap:?}"
+    );
 }

@@ -6,6 +6,7 @@
     "supply_kw_now": 10,
     "draw_kw_now": 4,
     "headroom_kw_now": 6,
+    "bmi_next_dollars": 95,
     "committed_dollars": 140,
     "_status": {
       "phase": "lull",

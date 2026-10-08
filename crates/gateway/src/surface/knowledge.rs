@@ -51,7 +51,7 @@ use core::num::NonZeroU32;
 
 use pharmakos_proto::gp::v1::Voxel;
 use pharmakos_proto::json::Json;
-use pharmakos_sim::math::quantity::Ms;
+use pharmakos_sim::math::quantity::{Money, Ms};
 use pharmakos_sim::runner::MatchEndReason;
 use pharmakos_sim::tables::SeatId;
 
@@ -218,14 +218,20 @@ impl Surface {
     /// * **The settlement**: `bmi_dollars` is what the Ledger credited the
     ///   seat, the `settled` event's own value (the BMI after its band's
     ///   adjustment), and `award_dollars` is 0, as `gateway.proto` says it is
-    ///   until S4 brings the awards the fund is split by. `band_rank` and
-    ///   `band_percent` are left out until the sim publishes the band it
-    ///   settled at as a read of its own (decisions-log item 134 (2) (c)):
-    ///   restating the ladder here would be a second copy of a sim rule.
+    ///   until S4 brings the awards the fund is split by. `band_rank` (from 1,
+    ///   the leader first) and `band_percent` are the sim's own reads,
+    ///   `economy::ladder_place` and `economy::band_percent`, over the ladder
+    ///   as the Ledger read it ([`crate::surface::RecapFacts::band`];
+    ///   decisions-log item 134 (2) (c)).
     /// * **The shortfall**, only when one of the seat's own beacons was dark
-    ///   as the segment ended: `beacon_ids` names them, `b_NN`, ascending.
-    ///   `kw`, the draw the brownout order shed, is left out until the sim
-    ///   publishes that read (the same item; the grid's).
+    ///   as the segment ended: `beacon_ids` names them, `b_NN`, ascending, and
+    ///   `kw` is the grid's own shed read at that segment end
+    ///   (`power::dark_load`'s `shed`; the same item).
+    /// * **Why a step found nothing**: one sentence per distinct `step_failed`
+    ///   the seat's playbook met in the segment, with how often, in the order
+    ///   each first happened ([`strings::recap_step_failed`]): "3 matched,
+    ///   none reachable" for a description that matched and reached nothing
+    ///   (`docs/design/targeting.md`, "Surfaces").
     pub(super) fn get_recap(
         &self,
         subject: crate::token::Subject,
@@ -268,16 +274,26 @@ impl Surface {
         };
         let mut entries = vec![];
         if let (Some(seat), Some(facts)) = (subject.seat(), facts) {
-            if let Some((_, credited)) = facts.settled.iter().find(|(held, _)| *held == seat) {
+            let credited = facts.settled.iter().find(|(held, _)| *held == seat);
+            let band = facts.band(host.world().rules(), seat)?;
+            if let (Some((_, credited)), Some(band)) = (credited, band) {
                 let bmi = i32::try_from(*credited).map_err(|_| {
                     Error::internal("the Ledger credited more than the wire's int32 carries")
                 })?;
                 prose.push(' ');
-                prose.push_str(&strings::settlement(bmi));
+                prose.push_str(&strings::settlement(bmi, band.rank, band.percent));
                 entries.push((
                     String::from("settlement"),
                     Json::Object(vec![
                         (String::from("bmi_dollars"), Json::Number(bmi.to_string())),
+                        (
+                            String::from("band_rank"),
+                            Json::Number(band.rank.to_string()),
+                        ),
+                        (
+                            String::from("band_percent"),
+                            Json::Number(band.percent.to_string()),
+                        ),
                         (
                             String::from("award_dollars"),
                             Json::Number(String::from("0")),
@@ -285,21 +301,39 @@ impl Surface {
                     ]),
                 ));
             }
-            if let Some((_, dark)) = facts.dark.iter().find(|(held, _)| *held == seat) {
+            if let Some(dark) = facts.dark.iter().find(|dark| dark.seat == seat) {
                 let names: Vec<String> = dark
+                    .ordinals
                     .iter()
                     .copied()
                     .map(pharmakos_sim::tables::own_beacon_name)
                     .collect();
+                let kw = dark.shed.raw();
                 prose.push(' ');
-                prose.push_str(&strings::shortfall(&names));
+                prose.push_str(&strings::shortfall(&names, kw));
                 entries.push((
                     String::from("shortfall"),
-                    Json::Object(vec![(
-                        String::from("beacon_ids"),
-                        Json::Array(names.into_iter().map(Json::String).collect()),
-                    )]),
+                    Json::Object(vec![
+                        (String::from("kw"), Json::Number(kw.to_string())),
+                        (
+                            String::from("beacon_ids"),
+                            Json::Array(names.into_iter().map(Json::String).collect()),
+                        ),
+                    ]),
                 ));
+            }
+            // Why the seat's steps found nothing, each distinct failure once
+            // with how often it happened, in the order it first happened.
+            let mut failures: Vec<(i64, usize)> = Vec::new();
+            for (_, value) in facts.failures.iter().filter(|(held, _)| *held == seat) {
+                match failures.iter_mut().find(|(seen, _)| seen == value) {
+                    Some((_, times)) => *times = times.saturating_add(1),
+                    None => failures.push((*value, 1)),
+                }
+            }
+            for (value, times) in failures {
+                prose.push(' ');
+                prose.push_str(&strings::recap_step_failed(value, times));
             }
         }
         entries.insert(0, (String::from("prose"), Json::String(prose)));
@@ -604,11 +638,13 @@ impl Surface {
     ///   is left out:** a Push pays its seal as it goes, and how much of it is
     ///   still unpaid is the interpreter's to know, which this method does not
     ///   read.
-    /// * **`bmi_next_dollars`** is left out until the sim publishes the band a
-    ///   seat holds as a read of its own (decisions-log item 134 (2) (c), the
-    ///   `fog` lane's economy reads): the BMI at a band is the sim's
-    ///   `economy::bmi_for`, and the band is the sim's ladder, which this crate
-    ///   does not restate.
+    /// * **`bmi_next_dollars`**, in every phase: the BMI the seat would be
+    ///   credited at the next settlement at the band it holds now -- the sim's
+    ///   `economy::bmi_for` at the sim's `economy::ladder_place` over every
+    ///   living seat's held value as the world stands ([`bmi_next`]). Left
+    ///   out for a seat that is out of the match, which is off the ladder and
+    ///   is paid no BMI, and once the match has ended, when no settlement is
+    ///   next.
     ///
     /// # What-ifs
     ///
@@ -677,6 +713,18 @@ impl Surface {
                 wire_number(headroom, "headroom")?,
             ),
         ];
+        let next = if host.runner().outcome().is_some() {
+            // An ended match settles nothing more.
+            None
+        } else {
+            bmi_next(host.world(), seat)?
+        };
+        if let Some(bmi_next) = next {
+            entries.push((
+                String::from("bmi_next_dollars"),
+                wire_number(bmi_next.raw(), "next BMI")?,
+            ));
+        }
         if host.runner().phase() == pharmakos_sim::runner::MatchPhase::Lull {
             let committed = self.committed_dollars(subject, seat)?;
             entries.push((
@@ -1197,6 +1245,35 @@ pub(super) enum Unpriced {
 ///
 /// [`crate::error::Code::Internal`] for a figure past `int32`, which no match
 /// reaches: refused rather than saturated ([`Surface::get_economy_forecast`]).
+/// The BMI `seat` would be credited at the next settlement, at the band it
+/// holds now: the sim's [`pharmakos_sim::economy::bmi_for`] at the sim's
+/// [`pharmakos_sim::economy::ladder_place`] over each living seat's held value
+/// as the world stands ([`crate::surface::held_values`]), the ladder the Ledger
+/// reads when it settles. `None` for a seat out of the match, which is off the
+/// ladder and is paid nothing.
+///
+/// # Errors
+///
+/// [`crate::error::Code::Internal`] when the seat table does not hold the
+/// seat, or the sim's ladder read refuses a seat in the match.
+fn bmi_next(world: &pharmakos_sim::world::World, seat: SeatId) -> Result<Option<Money>, Error> {
+    let held = crate::surface::held_values(world);
+    let index = held
+        .iter()
+        .position(|(held, _)| *held == seat)
+        .ok_or_else(|| Error::internal(format!("the seat table has no seat {}", seat.raw())))?;
+    if held.get(index).is_none_or(|(_, value)| value.is_none()) {
+        return Ok(None);
+    }
+    let ladder: Vec<Option<Money>> = held.into_iter().map(|(_, value)| value).collect();
+    let place = crate::surface::ladder_place(&ladder, index)?;
+    Ok(Some(pharmakos_sim::economy::bmi_for(
+        world.rules(),
+        place.rank,
+        place.living,
+    )))
+}
+
 fn wire_number(value: i64, what: &str) -> Result<Json, Error> {
     i32::try_from(value)
         .map(|value| Json::Number(value.to_string()))

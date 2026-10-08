@@ -159,7 +159,7 @@ use pharmakos_proto::gp::api::v1::verify_plan::Depth;
 use pharmakos_proto::gp::api::v1::{Method, VerifyReport};
 use pharmakos_proto::json::Json;
 use pharmakos_sim::interpreter::Plan;
-use pharmakos_sim::math::quantity::{Ms, Tick};
+use pharmakos_sim::math::quantity::{Kw, Money, Ms, Tick};
 use pharmakos_sim::rules::RulesTable;
 use pharmakos_sim::runner::{MatchPhase, TickReport};
 use pharmakos_sim::tables::SeatId;
@@ -430,12 +430,17 @@ pub struct Surface {
     /// segment has ended in this process: a resume does not carry it, as it
     /// does not carry the recap's events (the module doc's PLACEHOLDER).
     recap: Option<RecapFacts>,
+    /// The `step_failed` events of the segment now being played, as
+    /// `(seat, value)` in the order the sim emitted them: moved into the
+    /// recap's record when the segment ends ([`Surface::note_for_the_recap`]).
+    segment_failures: Vec<(SeatId, i64)>,
 }
 
 /// What one segment's end told the recap, as the sim reported it: the round,
 /// how many ticks the segment ran (`segment_ended`'s value), what the Ledger
-/// credited each seat (`settled`'s value), and which of each seat's beacons
-/// were dark when it ended.
+/// credited each seat (`settled`'s value), each seat's held value, which of
+/// each seat's beacons were dark when it ended and what their going dark
+/// shed, and which of each seat's steps failed during it.
 ///
 /// Derived, unhashed gateway state, like the feed it is read beside. Kept
 /// because a recap reads the segment that has **closed**, and once it has
@@ -452,9 +457,133 @@ pub(crate) struct RecapFacts {
     /// What the Ledger credited each seat at this settlement, whole `$`, in
     /// the order the sim settled them (ascending seat).
     pub(crate) settled: Vec<(SeatId, i64)>,
-    /// Each seat's own living beacons that were dark when the segment ended,
-    /// by per-seat ordinal, ascending; a seat with none dark is absent.
-    pub(crate) dark: Vec<(SeatId, Vec<u32>)>,
+    /// Each seat's own living beacons that were dark when the segment ended;
+    /// a seat with none dark is absent.
+    pub(crate) dark: Vec<DarkAtEnd>,
+    /// Each seat's held value as the world stood once the segment had ended,
+    /// the Ledger's credit included, by seat index: `None` for a seat that
+    /// is out of the match, which is off the settlement's ladder
+    /// ([`RecapFacts::band`]).
+    pub(crate) held: Vec<(SeatId, Option<Money>)>,
+    /// The segment's `step_failed` events, `(seat, value)`, in the order the
+    /// sim emitted them.
+    pub(crate) failures: Vec<(SeatId, i64)>,
+}
+
+/// One seat's dark beacons at a segment's end ([`RecapFacts::dark`]).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(crate) struct DarkAtEnd {
+    /// The seat.
+    pub(crate) seat: SeatId,
+    /// Its living dark beacons, by per-seat ordinal, ascending.
+    pub(crate) ordinals: Vec<u32>,
+    /// The **shed kW**: the draw the brownout order took off the seat's grid
+    /// net of the supply that went dark with it, the sim's own read
+    /// ([`pharmakos_sim::power::dark_load`], [`pharmakos_sim::power::DarkLoad::shed`]).
+    pub(crate) shed: Kw,
+}
+
+/// A seat's band at a settlement: its place on the ladder, from 1 for the
+/// leader (`gp.api.v1.Settlement.band_rank`), and the band's adjustment to
+/// the BMI in whole percent (`band_percent`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct Band {
+    /// From 1, the leader first.
+    pub(crate) rank: u32,
+    /// Whole percent, truncated toward zero.
+    pub(crate) percent: i32,
+}
+
+impl RecapFacts {
+    /// The band `seat` was settled at, read through the sim's own
+    /// [`pharmakos_sim::economy::ladder_place`] and
+    /// [`pharmakos_sim::economy::band_percent`] over the ladder as the Ledger
+    /// read it: each living seat's held value less the credit it was then
+    /// paid, as `crates/sim/tests/settlement.rs` recovers it (a recap
+    /// consumes no tick, and nothing else moves a treasury at that tick's
+    /// end). `None` for a seat that was not settled.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::Internal`] when a living seat has no credit or
+    /// is missing from the ladder, a subtraction overflows, or the sim's read
+    /// refuses: each is the sim and this crate disagreeing about the
+    /// settlement it just reported.
+    pub(crate) fn band(&self, rules: &RulesTable, seat: SeatId) -> Result<Option<Band>, Error> {
+        if !self.settled.iter().any(|(held, _)| *held == seat) {
+            return Ok(None);
+        }
+        let ladder = self
+            .held
+            .iter()
+            .map(|(held, value)| {
+                value
+                    .map(|value| {
+                        let paid = self
+                            .settled
+                            .iter()
+                            .find(|(settled, _)| settled == held)
+                            .map(|(_, credit)| *credit)
+                            .ok_or_else(|| {
+                                Error::internal(format!(
+                                    "seat {} is in the match and the Ledger credited it nothing",
+                                    held.raw()
+                                ))
+                            })?;
+                        value
+                            .raw()
+                            .checked_sub(paid)
+                            .map(Money::new)
+                            .ok_or_else(|| {
+                                Error::internal(
+                                    "a seat's held value less its credit does not fit $",
+                                )
+                            })
+                    })
+                    .transpose()
+            })
+            .collect::<Result<Vec<Option<Money>>, Error>>()?;
+        let index = self
+            .held
+            .iter()
+            .position(|(held, _)| *held == seat)
+            .ok_or_else(|| {
+                Error::internal(format!(
+                    "the Ledger settled seat {}, which the seat table does not hold",
+                    seat.raw()
+                ))
+            })?;
+        let place = ladder_place(&ladder, index)?;
+        let rank = place
+            .rank
+            .checked_add(1)
+            .ok_or_else(|| Error::internal("a ladder place does not count from 1"))?;
+        let percent = pharmakos_sim::economy::band_percent(rules, place.rank, place.living)
+            .map_err(|refused| {
+                Error::internal(format!(
+                    "the sim's band read refused a settlement: {refused}"
+                ))
+            })?;
+        Ok(Some(Band { rank, percent }))
+    }
+}
+
+/// The sim's [`pharmakos_sim::economy::ladder_place`] for the seat at `index`
+/// on `ladder`.
+///
+/// # Errors
+///
+/// [`crate::error::Code::Internal`] when the sim's read refuses: the caller
+/// built the ladder from the seats in the match and asked of one of them.
+pub(crate) fn ladder_place(
+    ladder: &[Option<Money>],
+    index: usize,
+) -> Result<pharmakos_sim::economy::LadderPlace, Error> {
+    pharmakos_sim::economy::ladder_place(ladder, index).map_err(|refused| {
+        Error::internal(format!(
+            "the sim's ladder read refused a seat in the match: {refused}"
+        ))
+    })
 }
 
 impl Surface {
@@ -508,6 +637,7 @@ impl Surface {
             pending: Persistence::default(),
             chain: Vec::new(),
             recap: None,
+            segment_failures: Vec::new(),
         })
     }
 
@@ -1704,18 +1834,21 @@ impl Surface {
 
     /// Keep what a segment's end tells the recap ([`RecapFacts`]).
     ///
-    /// `segment_ended` opens a new record, with the ticks the segment ran and
-    /// every seat's dark beacons read off the world as it stands, which is the
-    /// world at that segment end: the host drains the bus right after the tick
-    /// that closed the segment ([`Surface::step`]). Each `settled` that
-    /// follows it in the same tick adds what the Ledger credited one seat.
-    /// Every other kind is the feed's alone.
+    /// `segment_ended` opens a new record, with the ticks the segment ran,
+    /// every seat's dark beacons and what they shed, and every seat's held
+    /// value, read off the world as it stands, which is the world at that
+    /// segment end: the host drains the bus right after the tick that closed
+    /// the segment ([`Surface::step`]). It takes the segment's `step_failed`
+    /// events with it, which arrive before it (the sim closes a segment at its
+    /// tick's end). Each `settled` that follows it in the same tick adds what
+    /// the Ledger credited one seat. Every other kind is the feed's alone.
     ///
     /// # Errors
     ///
     /// [`crate::error::Code::Internal`] when a `segment_ended` carries a tick
-    /// count that is not one, or a `settled` arrives naming no seat or with
-    /// no segment end before it: each is the sim and this crate disagreeing
+    /// count that is not one, a `settled` arrives naming no seat or with no
+    /// segment end before it, a `step_failed` names no seat, or the grid's
+    /// shed read refuses: each is the sim and this crate disagreeing
     /// about the event's shape.
     fn note_for_the_recap(&mut self, event: &pharmakos_sim::events::Event) -> Result<(), Error> {
         use pharmakos_sim::events::EventKind;
@@ -1728,12 +1861,22 @@ impl Surface {
                     ))
                 })?;
                 let host = self.host()?;
-                self.recap = Some(RecapFacts {
+                let world = host.world();
+                let facts = RecapFacts {
                     round: host.runner().round(),
                     ticks,
                     settled: Vec::new(),
-                    dark: dark_beacons(host.world())?,
-                });
+                    dark: dark_beacons(world)?,
+                    held: held_values(world),
+                    failures: std::mem::take(&mut self.segment_failures),
+                };
+                self.recap = Some(facts);
+            }
+            EventKind::StepFailed => {
+                let seat = event.seat.ok_or_else(|| {
+                    Error::internal("a step failed and the sim named no seat for it")
+                })?;
+                self.segment_failures.push((seat, event.value));
             }
             EventKind::Settled => {
                 let seat = event.seat.ok_or_else(|| {
@@ -2880,19 +3023,22 @@ impl Surface {
 }
 
 /// Every seat's own living beacons that are dark as the world stands, by
-/// per-seat ordinal: the seats in ascending id and each seat's ordinals
-/// ascending, which is `gp.api.v1.Shortfall.beacon_ids`' order. A seat with
-/// no dark beacon is left out. A beacon that has died is not dark: it is
-/// gone, and the recap's shortfall line is about the grid.
+/// per-seat ordinal, with the kW their going dark shed: the seats in
+/// ascending id and each seat's ordinals ascending, which is
+/// `gp.api.v1.Shortfall.beacon_ids`' order. A seat with no dark beacon is
+/// left out. A beacon that has died is not dark: it is gone, and the recap's
+/// shortfall line is about the grid.
 ///
 /// # Errors
 ///
-/// [`crate::error::Code::Internal`] when a beacon row has no dormancy, hit
-/// points, seat or ordinal: the beacon table's columns are one length by
+/// [`crate::error::Code::Internal`] when the grid's shed read refuses a seat
+/// ([`pharmakos_sim::power::PowerError`]: its rules, its seat, or an
+/// overflow), which is never told as a 0, and when a beacon row has no
+/// dormancy, hit points, seat or ordinal: the beacon table's columns are one length by
 /// construction, so a short column is the sim and this crate disagreeing,
 /// and a beacon dropped from the recap over it would be a shortfall told
 /// short.
-fn dark_beacons(world: &pharmakos_sim::world::World) -> Result<Vec<(SeatId, Vec<u32>)>, Error> {
+fn dark_beacons(world: &pharmakos_sim::world::World) -> Result<Vec<DarkAtEnd>, Error> {
     let beacons = world.beacons();
     let column = |name: &str, row: usize| {
         Error::internal(format!("the beacon table has no {name} for row {row}"))
@@ -2929,7 +3075,41 @@ fn dark_beacons(world: &pharmakos_sim::world::World) -> Result<Vec<(SeatId, Vec<
             _ => grouped.push((SeatId::new(seat), vec![ordinal])),
         }
     }
-    Ok(grouped)
+    grouped
+        .into_iter()
+        .map(|(seat, ordinals)| {
+            let shed = pharmakos_sim::power::dark_load(world, seat)
+                .and_then(pharmakos_sim::power::DarkLoad::shed)
+                .map_err(|refused| {
+                    Error::internal(format!(
+                        "the grid's shed read refused seat {}: {refused}",
+                        seat.raw()
+                    ))
+                })?;
+            Ok(DarkAtEnd {
+                seat,
+                ordinals,
+                shed,
+            })
+        })
+        .collect()
+}
+
+/// Every seat's held value as the world stands, by seat index, `None` for a
+/// seat out of the match ([`RecapFacts::held`]): the sim's own
+/// [`pharmakos_sim::world::World::held_value`], over the seats its seat table
+/// counts alive, as `crates/sim/tests/settlement.rs` builds the ladder.
+pub(crate) fn held_values(world: &pharmakos_sim::world::World) -> Vec<(SeatId, Option<Money>)> {
+    let seats = world.seats();
+    seats
+        .seats()
+        .iter()
+        .enumerate()
+        .map(|(index, raw)| {
+            let seat = SeatId::new(*raw);
+            (seat, seats.is_alive(index).then(|| world.held_value(seat)))
+        })
+        .collect()
 }
 
 /// The plan fingerprint of a playbook's canonical form (decisions-log item

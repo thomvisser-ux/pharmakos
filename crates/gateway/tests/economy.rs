@@ -5,7 +5,9 @@
 //! and shortfall lines and its round count (the register's X-16;
 //! decisions-log item 130 (4)), the briefing's standing (X-03), the
 //! forecast's committed spend (S1-46) and `resolve_refs`' phase gate
-//! (decisions-log item 133 (3) (f)).
+//! (decisions-log item 133 (3) (f)); and, at the `fog` / `grid` merge, the
+//! settlement's band, the shortfall's shed kW and the forecast's next BMI,
+//! each the sim's own read (decisions-log item 134 (2) (c)).
 //!
 //! Every figure is read back against the sim's own answer for the same
 //! world -- the audit line, the treasury the Ledger credited, the dormant
@@ -23,7 +25,8 @@ use pharmakos_gateway::host::Host;
 use pharmakos_gateway::surface::Surface;
 use pharmakos_gateway::token::Token;
 use pharmakos_proto::json::Json;
-use pharmakos_sim::math::quantity::Ms;
+use pharmakos_sim::economy::{band_percent, bmi_for, ladder_place};
+use pharmakos_sim::math::quantity::{Money, Ms};
 use pharmakos_sim::rules::RulesTable;
 use pharmakos_sim::runner::MatchSettings;
 use pharmakos_sim::tables::SeatId;
@@ -139,9 +142,10 @@ fn the_recap_names_the_seats_own_settlement_and_shortfall_and_nobody_elses() {
         0,
         "the award fund pays nobody until S4"
     );
-    assert!(
-        settlement.get("band_rank").is_none() && settlement.get("band_percent").is_none(),
-        "the band waits for the sim's own read (decisions-log item 134 (2) (c))"
+    assert_eq!(
+        number(settlement, "band_rank"),
+        1,
+        "two seats tied on held value: the lower seat index leads, and the first band reads 1"
     );
     assert!(
         prose.contains(&format!("credited you $ {credited}")),
@@ -172,7 +176,11 @@ fn the_recap_names_the_seats_own_settlement_and_shortfall_and_nobody_elses() {
         "the world has seat 0's core dark at segment end"
     );
     assert!(
-        prose.ends_with("When the segment ended, b_00 was dark: draw outran supply."),
+        prose.ends_with(&format!(
+            "When the segment ended, b_00 was dark: draw outran supply, and the brownout shed {} \
+             kW.",
+            number(shortfall, "kw")
+        )),
         "{prose}"
     );
 
@@ -216,6 +224,14 @@ fn a_recap_after_the_match_ended_counts_the_ticks_its_last_round_ran() {
         "{in_recap}"
     );
     surface.end_recap().expect("the last recap ends");
+    let forecast = result(
+        &call(&mut surface, &seat, "get_economy_forecast", "{}"),
+        "get_economy_forecast",
+    );
+    assert!(
+        forecast.get("bmi_next_dollars").is_none(),
+        "an ended match settles nothing more: {forecast:?}"
+    );
     let ended = text_of(
         &result(&call(&mut surface, &seat, "get_recap", "{}"), "get_recap"),
         "prose",
@@ -318,8 +334,8 @@ fn the_forecast_commits_what_this_rounds_seal_orders_in_the_lull_only() {
         i64::from(beacon).saturating_add(i64::from(generator))
     );
     assert!(
-        answered.get("bmi_next_dollars").is_none(),
-        "the next BMI waits for the sim's band read (decisions-log item 134 (2) (c))"
+        answered.get("bmi_next_dollars").is_some(),
+        "the next BMI is answered in a Lull: {answered:?}"
     );
 
     // In a Push the seal is being paid as it goes: the field is left out.
@@ -510,5 +526,126 @@ fn the_economy_surfaces_are_goldened_on_the_golden_seed() {
     write_golden(
         "recap",
         &pharmakos_gateway::rpc::render(&call(&mut surface, &token, "get_recap", "{}")),
+    );
+}
+
+/// The ladder as the Ledger read it at the segment end just played, by seat
+/// index: each living seat's held value less the credit it was paid, as
+/// `crates/sim/tests/settlement.rs` recovers it.
+fn ladder_at_settlement(surface: &Surface, credits: &[(u8, i64)]) -> Vec<Option<Money>> {
+    let world = surface.host().expect("hosted").world();
+    let seats = world.seats();
+    seats
+        .seats()
+        .iter()
+        .enumerate()
+        .map(|(index, raw)| {
+            seats.is_alive(index).then(|| {
+                let paid = credits
+                    .iter()
+                    .find(|(seat, _)| seat == raw)
+                    .map(|(_, credit)| *credit)
+                    .expect("a living seat was settled");
+                Money::new(world.held_value(SeatId::new(*raw)).raw() - paid)
+            })
+        })
+        .collect()
+}
+
+#[test]
+fn the_band_and_the_next_bmi_are_the_sims_reads_and_the_next_bmi_is_what_is_settled() {
+    let mut surface = short_of_power(3);
+    let tokens = [seat_token(&mut surface, 0), seat_token(&mut surface, 1)];
+    let rules = surface.host().expect("hosted").world().rules().clone();
+    for round in 1..=2_u32 {
+        // In the Lull: what each seat's forecast says the next settlement pays,
+        // and its treasury before it.
+        let mut promised: Vec<(i64, i64)> = Vec::new();
+        for token in &tokens {
+            let forecast = result(
+                &call(&mut surface, token, "get_economy_forecast", "{}"),
+                "get_economy_forecast",
+            );
+            promised.push((
+                number(&forecast, "bmi_next_dollars"),
+                number(&forecast, "treasury_now"),
+            ));
+        }
+        run_the_push(&mut surface);
+        let mut credits: Vec<(u8, i64)> = Vec::new();
+        let mut settlements: Vec<Json> = Vec::new();
+        for (raw, token) in [0_u8, 1].into_iter().zip(&tokens) {
+            let recap = result(&call(&mut surface, token, "get_recap", "{}"), "get_recap");
+            let settlement = recap.get("settlement").expect("a settlement").clone();
+            credits.push((raw, number(&settlement, "bmi_dollars")));
+            settlements.push(settlement);
+        }
+        let ladder = ladder_at_settlement(&surface, &credits);
+        let mut ranks: Vec<i64> = Vec::new();
+        for (index, ((raw, credited), settlement)) in credits.iter().zip(&settlements).enumerate() {
+            let (next, before) = promised.get(index).copied().expect("a forecast");
+            // The forecast's next BMI is what the Ledger then credited, and
+            // the treasury moved by exactly that in a Push that ordered
+            // nothing.
+            assert_eq!(
+                next, *credited,
+                "round {round}, seat {raw}: the next BMI is the next `settled` value"
+            );
+            let after = treasury(&mut surface, tokens.get(index).expect("a token"));
+            assert_eq!(after - before, *credited, "round {round}, seat {raw}");
+            // The band is the sim's own read of the ladder the Ledger read.
+            let place = ladder_place(&ladder, index).expect("a settled seat is on the ladder");
+            assert_eq!(
+                number(settlement, "band_rank"),
+                i64::from(place.rank) + 1,
+                "round {round}, seat {raw}: band_rank counts from 1"
+            );
+            assert_eq!(
+                number(settlement, "band_percent"),
+                i64::from(band_percent(&rules, place.rank, place.living).expect("a band")),
+                "round {round}, seat {raw}"
+            );
+            assert_eq!(
+                bmi_for(&rules, place.rank, place.living).raw(),
+                *credited,
+                "round {round}, seat {raw}: the band read places it where the Ledger paid it"
+            );
+            ranks.push(number(settlement, "band_rank"));
+        }
+        ranks.sort_unstable();
+        assert_eq!(
+            ranks,
+            vec![1, 2],
+            "round {round}: one leader, one last place"
+        );
+        assert_ne!(
+            credits.first().map(|(_, credit)| credit),
+            credits.get(1).map(|(_, credit)| credit),
+            "round {round}: the band moves the BMI, so the reads are under test"
+        );
+        surface.end_recap().expect("the recap ends");
+        surface.set_phase_remaining_ms(surface.lull_length(round + 1));
+        surface.open_lull().expect("the next Lull");
+    }
+}
+
+#[test]
+fn the_shortfalls_kw_is_the_grids_shed_read_at_segment_end() {
+    let mut surface = short_of_power(3);
+    let seat = seat_token(&mut surface, 0);
+    run_the_push(&mut surface);
+    let recap = result(&call(&mut surface, &seat, "get_recap", "{}"), "get_recap");
+    let shortfall = recap.get("shortfall").expect("the core went dark");
+    // The recap phase consumes no tick, so the world is the segment end's.
+    let shed =
+        pharmakos_sim::power::dark_load(surface.host().expect("hosted").world(), SeatId::new(0))
+            .expect("the grid's read")
+            .shed()
+            .expect("a shed that fits");
+    assert!(shed.raw() > 0, "the dark core relieved the grid: {shed:?}");
+    assert_eq!(number(shortfall, "kw"), i64::from(shed.raw()));
+    assert!(
+        text_of(&recap, "prose").contains(&format!("the brownout shed {} kW.", shed.raw())),
+        "{recap:?}"
     );
 }
