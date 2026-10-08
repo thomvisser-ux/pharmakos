@@ -102,8 +102,8 @@ pub struct SalvageProgram;
 /// beacon's writ, and the mandate layer governs spending, not behaviour. So
 /// the starting mining drone, which the spec's starting force (item 90) homes
 /// to a core on **Build**, keeps mining and earning; spec section 6's Common
-/// row ("a unit the mandate has no job for ... idles at its beacon") is
-/// reworded to match (item 127 (6)).
+/// row ("a unit the mandate has no job for ... idles at its beacon") is to
+/// be reworded to match (item 127 (6)); the spec still carries the old line.
 ///
 /// The commander has **none**, and that has a consequence worth saying out
 /// loud: because no program drives it, **a brownout never parks the

@@ -35,8 +35,9 @@
 //! use (`mapgen`'s `starting_draw`), so a seat's meter does not step at the
 //! first settle, and placing a beacon costs the grid nothing: a beacon with
 //! nothing homed to it is never shed by its own draw (decisions log item 113
-//! (5)). The meter shows the net figures and says so beside itself (S1's plan,
-//! decision 12, ruled by item 128: the register's S1-31).
+//! (5)). The meter is to show the net figures and say so beside itself (S1's
+//! plan, decision 12, ruled by item 128: the register's S1-31; the client's
+//! words are `ui`'s, and no client text says so yet).
 //!
 //! # The order is fixed, and it is not the `$` order
 //!
@@ -80,10 +81,20 @@
 //! lit beacons that rank below it in the brownout order's first two terms (the
 //! core above every other beacon, then the knob), shedding them in the
 //! brownout order, skipping any whose shed relieves nothing, until its load
-//! fits. Dark beacons are tried in the revival order, so of two seats the
-//! lower is settled first and of two equal beacons the lower id swaps first.
-//! A beacon whose load fits without shedding anything is held by the revival
-//! margin alone, which the swap does not override.
+//! fits. Dark beacons are tried highest rank first and, within a rank, lowest
+//! id first, so of two seats the lower is settled first and of two equal
+//! beacons the lower id swaps first, wherever they stand (S1's plan, `grid`:
+//! "ties to the lowest seat and then the lowest beacon id").
+//!
+//! The swap asks for draw no higher than supply, **not** for the revival
+//! margin: a beacon whose load fits only once a lower beacon is shed relights
+//! at a headroom below the margin, down to 0 kW, because the ruling's bar is
+//! "draw no higher than supply after the swap". A beacon whose load fits
+//! without shedding anything is held by the revival margin alone, which the
+//! swap does not override. So a revival earlier in the same settle can be
+//! undone by the swap (a lower beacon revived on the margin, then shed for a
+//! higher one); the feed reports each seat's **net** change once per settle,
+//! so a beacon lit and shed in one settle reports nothing ([`settle`]).
 //!
 //! Nothing in this module reads a clock and nothing in it divides: every figure
 //! is a sum of integer `kW` rows.
@@ -225,7 +236,7 @@ impl From<PowerRulesError> for PowerError {
 /// A flat copy rather than a borrow of the rules table, because the phase
 /// writes the tables the same table is reached through, and because reading
 /// ten rows once a tick is cheaper than reading them once a beacon.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct PowerRules {
     /// `power.core_surplus_kw`.
     pub core_surplus: i32,
@@ -303,15 +314,50 @@ impl PowerRules {
     /// This is [`PowerRules::read`] for the callers that cannot yet carry its
     /// error: the power phase itself, the Quartermaster's headroom
     /// (`crate::world`), the Build mandate's price (`crate::mandate`) and the
-    /// verifier's projection. A table [`PowerRules::read`] refuses reads as
-    /// every row zero here, which is the default this read exists to retire:
-    /// the refusal belongs where the table is loaded, once, so that no world
-    /// can hold a table the phase refuses (raised in the `grid` lane's pull
-    /// request; those callers are outside its named place). The committed
-    /// table passes [`PowerRules::read`], and a test says so.
+    /// verifier's projection. On a table [`PowerRules::read`] accepts, which
+    /// the committed table is (a test says so), the two are equal.
+    ///
+    /// **On a table it refuses this read still falls back, silently**, and
+    /// that is the one fallback left in the module: each row is read as the
+    /// phase read it before the typed read existed, row by row, an absent row
+    /// as 0 and a row above `i32::MAX` as `i32::MAX`, so a refused row moves
+    /// only itself and a bad table settles no differently than it did before
+    /// S1. The fix is not here: the refusal belongs where the table is loaded,
+    /// once (`RulesTable::from_message` calling [`PowerRules::read`]), so that
+    /// no world can hold a table the phase refuses and this read becomes
+    /// infallible. That edit is outside the `grid` lane's named place, so its
+    /// pull request raises it for the main session to sequence.
     #[must_use]
     pub fn of(rules: &RulesTable) -> PowerRules {
-        PowerRules::read(rules).unwrap_or_default()
+        match PowerRules::read(rules) {
+            Ok(read) => read,
+            Err(_) => PowerRules::row_by_row(rules),
+        }
+    }
+
+    /// The pre-S1 read, row by row: an absent row is 0, an oversized one
+    /// `i32::MAX`. Reached only from [`PowerRules::of`] on a refused table.
+    fn row_by_row(rules: &RulesTable) -> PowerRules {
+        let message = rules.message();
+        let power = message.power.as_ref();
+        let by_richness = power.and_then(|block| block.generator_output_kw);
+        let structures = message.structures.as_ref();
+        let row =
+            |value: Option<u32>| value.map_or(0, |value| i32::try_from(value).unwrap_or(i32::MAX));
+        let draw = |kind: Option<&gp::v1::rules_table::StructureKind>| row(kind.map(|k| k.draw_kw));
+        PowerRules {
+            core_surplus: row(power.map(|block| block.core_surplus_kw)),
+            generator_lean: row(by_richness.map(|by| by.lean)),
+            generator_standard: row(by_richness.map(|by| by.standard)),
+            generator_rich: row(by_richness.map(|by| by.rich)),
+            per_unit: row(power.map(|block| block.kw_per_unit)),
+            revive_margin: row(power.map(|block| block.revive_margin_kw)),
+            beacon_base_draw: row(power.map(|block| block.beacon_base_draw_kw)),
+            autocannon_draw: draw(structures.and_then(|block| block.autocannon.as_ref())),
+            mortar_draw: draw(structures.and_then(|block| block.mortar.as_ref())),
+            survey_post_draw: draw(structures.and_then(|block| block.survey_post.as_ref())),
+            spire_draw: draw(structures.and_then(|block| block.resonance_spire.as_ref())),
+        }
     }
 
     /// What a live beacon's own key-core supplies: exactly that beacon's base
@@ -409,16 +455,19 @@ impl DarkLoad {
 ///
 /// [`PowerError::Rules`] when the world's rules table is refused by
 /// [`PowerRules::read`], [`PowerError::NoSuchSeat`] for a seat that is not
-/// seated, and [`PowerError::Overflow`] when a difference does not fit.
+/// seated, and [`PowerError::Overflow`] when a sum or a difference does not
+/// fit a signed 32-bit `kW`: every sum here is checked, where the columns'
+/// [`supply_of`] and [`draw_of`] saturate.
 pub fn dark_load(world: &World, seat: SeatId) -> Result<DarkLoad, PowerError> {
     let rules = PowerRules::read(world.rules())?;
     if world.seat_row(seat).is_none() {
         return Err(PowerError::NoSuchSeat(seat));
     }
-    let draw_lit = draw_under(world, seat, rules, Lighting::AllLit);
-    let draw_now = draw_under(world, seat, rules, Lighting::AsIs);
-    let supply_lit = supply_under(world, seat, rules, Lighting::AllLit);
-    let supply_now = supply_under(world, seat, rules, Lighting::AsIs);
+    let sum = |total: Option<i32>| total.ok_or(PowerError::Overflow);
+    let draw_lit = sum(draw_under(world, seat, rules, Lighting::AllLit))?;
+    let draw_now = sum(draw_under(world, seat, rules, Lighting::AsIs))?;
+    let supply_lit = sum(supply_under(world, seat, rules, Lighting::AllLit))?;
+    let supply_now = sum(supply_under(world, seat, rules, Lighting::AsIs))?;
     Ok(DarkLoad {
         draw: Kw::new(draw_lit.checked_sub(draw_now).ok_or(PowerError::Overflow)?),
         supply: Kw::new(
@@ -432,10 +481,21 @@ pub fn dark_load(world: &World, seat: SeatId) -> Result<DarkLoad, PowerError> {
 /// Settle every seat's grid for this tick.
 ///
 /// `order` is the caller's scratch buffer, so the phase allocates nothing
-/// (G3′ §9.17): it holds the brownout order of one seat's beacons at a time,
-/// and for the swap ([`swap_in`]) one seat's dark beacons followed by the lit
-/// ones below one of them, which together are never more than the seat's
-/// beacons.
+/// (G3′ §9.17). For one seat at a time it holds, from index 0, the seat's
+/// dark beacons as the settle found them (`base` of them, by ascending id),
+/// and after them the working list of whichever step runs: the brownout
+/// order, the revival order, or for the swap ([`swap_in`]) the dark beacons
+/// followed by the lit ones below one of them. Together those are never more
+/// than twice the seat's beacons, so the buffer stops growing after the first
+/// settles.
+///
+/// **The feed reports each seat's net change, once per settle**
+/// ([`report_changes`]): the three steps flip dormancy flags without reporting,
+/// and the beacons whose flag differs from the one the settle found are
+/// reported at the end. A beacon revived on the margin and then shed by the
+/// swap in the same settle was dark before and is dark after, so it reports
+/// nothing; the feed never carries a revival and a shed of one beacon on one
+/// tick.
 pub(crate) fn settle(world: &mut World, order: &mut Vec<u32>) {
     let rules = PowerRules::of(world.rules());
     let seats = usize::try_from(world.seats().len()).unwrap_or(0);
@@ -444,9 +504,14 @@ pub(crate) fn settle(world: &mut World, order: &mut Vec<u32>) {
         let raw = world.seats().seats().get(index).copied().unwrap_or(0);
         let seat = SeatId::new(raw);
         if world.seats().is_alive(index) {
-            brown_out(world, seat, rules, order);
-            revive(world, seat, rules, order);
-            swap_in(world, seat, rules, order);
+            order.clear();
+            found_dark(world, seat, order);
+            let base = order.len();
+            brown_out(world, seat, rules, order, base);
+            revive(world, seat, rules, order, base);
+            swap_in(world, seat, rules, order, base);
+            report_changes(world, seat, order, base);
+            order.clear();
         }
         let supply = supply_of(world, seat, rules);
         let draw = draw_of(world, seat, rules);
@@ -541,19 +606,25 @@ fn vent_already_tapped(
 ///
 /// No key-core output is in it: a key-core supplies exactly its own beacon's
 /// base, which [`draw_of`] leaves out for the same reason.
+///
+/// It saturates at `i32::MAX` on a sum that does not fit, as it did before
+/// [`dark_load`]'s checked sums: its callers (the phase, the Quartermaster's
+/// headroom in `crate::world`) have no error to return yet, and a sum that
+/// large needs a row the load-time refusal [`PowerRules::of`] names would
+/// bound. [`dark_load`] reports the same overflow as a typed error.
 #[must_use]
 pub(crate) fn supply_of(world: &World, seat: SeatId, rules: PowerRules) -> i32 {
-    supply_under(world, seat, rules, Lighting::AsIs)
+    supply_under(world, seat, rules, Lighting::AsIs).unwrap_or(i32::MAX)
 }
 
-/// [`supply_of`] under a [`Lighting`].
-fn supply_under(world: &World, seat: SeatId, rules: PowerRules, lighting: Lighting) -> i32 {
+/// [`supply_of`] under a [`Lighting`], `None` when the sum does not fit.
+fn supply_under(world: &World, seat: SeatId, rules: PowerRules, lighting: Lighting) -> Option<i32> {
     let mut total: i32 = 0;
     let core = core_of(world, seat);
     if let Some(core) = core
         && beacon_counts(world, core, lighting)
     {
-        total = total.saturating_add(rules.core_surplus);
+        total = total.checked_add(rules.core_surplus)?;
     }
     let structures = world.structures();
     let count = usize::try_from(structures.len()).unwrap_or(0);
@@ -567,12 +638,12 @@ fn supply_under(world: &World, seat: SeatId, rules: PowerRules, lighting: Lighti
             if let (Some(grade), Some(point)) = (richness, at)
                 && !vent_already_tapped(world, seat, row, point, lighting)
             {
-                total = total.saturating_add(rules.generator_output(grade));
+                total = total.checked_add(rules.generator_output(grade))?;
             }
         }
         row = row.saturating_add(1);
     }
-    total
+    Some(total)
 }
 
 /// The seat's draw: every unit and every capability structure homed to a live
@@ -582,14 +653,16 @@ fn supply_under(world: &World, seat: SeatId, rules: PowerRules, lighting: Lighti
 /// key-core supplies exactly its base ([`PowerRules::key_core_output`]), so the
 /// beacon is net zero and the column shows the net (see the module docs). A
 /// beacon with nothing homed to it adds nothing here.
+///
+/// It saturates at `i32::MAX` for the reason [`supply_of`] gives.
 #[must_use]
 pub(crate) fn draw_of(world: &World, seat: SeatId, rules: PowerRules) -> i32 {
-    draw_under(world, seat, rules, Lighting::AsIs)
+    draw_under(world, seat, rules, Lighting::AsIs).unwrap_or(i32::MAX)
 }
 
 /// [`draw_of`] under a [`Lighting`].
-fn draw_under(world: &World, seat: SeatId, rules: PowerRules, lighting: Lighting) -> i32 {
-    let mut total: i32 = unit_draw_of(world, seat, rules, lighting);
+fn draw_under(world: &World, seat: SeatId, rules: PowerRules, lighting: Lighting) -> Option<i32> {
+    let mut total: i32 = unit_draw_of(world, seat, rules, lighting)?;
     let structures = world.structures();
     let count = usize::try_from(structures.len()).unwrap_or(0);
     let mut row: usize = 0;
@@ -601,12 +674,12 @@ fn draw_under(world: &World, seat: SeatId, rules: PowerRules, lighting: Lighting
                 .copied()
                 .and_then(StructureKind::from_id);
             if let Some(kind) = kind {
-                total = total.saturating_add(rules.structure_draw(kind));
+                total = total.checked_add(rules.structure_draw(kind))?;
             }
         }
         row = row.saturating_add(1);
     }
-    total
+    Some(total)
 }
 
 /// What the seat's units draw.
@@ -614,7 +687,7 @@ fn draw_under(world: &World, seat: SeatId, rules: PowerRules, lighting: Lighting
 /// A unit draws while its home counts as lit, and only then, whatever it is
 /// doing: so the commander, which a blackout never parks, draws nothing while
 /// its home is dark and walks on (item 127 (5)).
-fn unit_draw_of(world: &World, seat: SeatId, rules: PowerRules, lighting: Lighting) -> i32 {
+fn unit_draw_of(world: &World, seat: SeatId, rules: PowerRules, lighting: Lighting) -> Option<i32> {
     let mut total: i32 = 0;
     let units = world.units();
     let count = usize::try_from(units.len()).unwrap_or(0);
@@ -628,11 +701,11 @@ fn unit_draw_of(world: &World, seat: SeatId, rules: PowerRules, lighting: Lighti
             .copied()
             .unwrap_or(BeaconId::NONE.raw());
         if mine && alive && beacon_counts(world, BeaconId::new(home), lighting) {
-            total = total.saturating_add(rules.per_unit);
+            total = total.checked_add(rules.per_unit)?;
         }
         row = row.saturating_add(1);
     }
-    total
+    Some(total)
 }
 
 /// The seat's core: its lowest-id beacon row, alive or not.
@@ -808,6 +881,94 @@ fn report(world: &mut World, seat: SeatId, beacon: u32, kind: EventKind) {
     world.emit(tick, emission);
 }
 
+/// Append the seat's living dark beacons, as the settle finds them, to
+/// `order`, by ascending id: the "before" [`report_changes`] compares with.
+fn found_dark(world: &World, seat: SeatId, order: &mut Vec<u32>) {
+    let start = order.len();
+    let beacons = world.beacons();
+    for (row, owner) in beacons.seats().iter().enumerate() {
+        if *owner == seat.raw()
+            && beacon_row_is_dark(world, row)
+            && let Some(id) = beacons.ids().get(row).copied()
+        {
+            order.push(id);
+        }
+    }
+    if let Some(found) = order.get_mut(start..) {
+        // item 62: the key is the unique beacon id itself.
+        found.sort_unstable();
+    }
+}
+
+/// Whether the beacon at `row` is alive and dormant.
+fn beacon_row_is_dark(world: &World, row: usize) -> bool {
+    let beacons = world.beacons();
+    beacons
+        .hit_points()
+        .get(row)
+        .is_some_and(|hp| hp.is_alive())
+        && beacons.dormant().get(row).copied() == Some(true)
+}
+
+/// Write into `order[base..]` the seat's living beacons whose dormancy now
+/// differs from what the settle found (`order[..base]`, ascending), keeping
+/// only those now dark when `now_dark` is set and only those now lit when it
+/// is not.
+fn changed(world: &World, seat: SeatId, order: &mut Vec<u32>, base: usize, now_dark: bool) {
+    order.truncate(base);
+    let beacons = world.beacons();
+    for (row, owner) in beacons.seats().iter().enumerate() {
+        let alive = beacons
+            .hit_points()
+            .get(row)
+            .is_some_and(|hp| hp.is_alive());
+        if *owner != seat.raw() || !alive {
+            continue;
+        }
+        let Some(id) = beacons.ids().get(row).copied() else {
+            continue;
+        };
+        let dark = beacons.dormant().get(row).copied() == Some(true);
+        let was = order
+            .get(..base)
+            .is_some_and(|found| found.binary_search(&id).is_ok());
+        if dark == now_dark && dark != was {
+            order.push(id);
+        }
+    }
+}
+
+/// Report the seat's net change for this settle on the bus: every beacon now
+/// dark that the settle found lit, in the brownout order, and then every
+/// beacon now lit that it found dark, in the revival order. A beacon whose
+/// flag ends where it started reports nothing (see [`settle`]).
+fn report_changes(world: &mut World, seat: SeatId, order: &mut Vec<u32>, base: usize) {
+    let core = core_of(world, seat);
+    let core_at = core_site(world, core);
+    for (now_dark, kind) in [
+        (true, EventKind::BeaconBrownedOut),
+        (false, EventKind::BeaconRevived),
+    ] {
+        changed(world, seat, order, base, now_dark);
+        if let Some(list) = order.get_mut(base..) {
+            // item 62: both keys end in the unique beacon id, so either order
+            // is total.
+            if now_dark {
+                list.sort_unstable_by_key(|id| shed_key(world, core, core_at, *id));
+            } else {
+                // item 62: `revive_key` ends in the unique beacon id.
+                list.sort_unstable_by_key(|id| revive_key(world, core, core_at, *id));
+            }
+        }
+        let mut at = base;
+        while let Some(beacon) = order.get(at).copied() {
+            report(world, seat, beacon, kind);
+            at = at.saturating_add(1);
+        }
+    }
+    order.truncate(base);
+}
+
 /// Shed beacons, in the fixed order, until draw no longer outruns supply.
 ///
 /// **A beacon whose shed relieves nothing is skipped** and stays lit (item 127
@@ -820,26 +981,28 @@ fn report(world: &mut World, seat: SeatId, beacon: u32, kind: EventKind) {
 ///
 /// The candidate list is built **once** and walked in order rather than
 /// re-picked after every shed, which is what bounds the loop, and the order a
-/// reader sees is the order the spec writes down.
-fn brown_out(world: &mut World, seat: SeatId, rules: PowerRules, order: &mut Vec<u32>) {
+/// reader sees is the order the spec writes down. It works in `order[base..]`
+/// and leaves `order[..base]` as it found it (see [`settle`]).
+fn brown_out(
+    world: &mut World,
+    seat: SeatId,
+    rules: PowerRules,
+    order: &mut Vec<u32>,
+    base: usize,
+) {
     if headroom(world, seat, rules) >= 0 {
         return;
     }
-    shed_order(world, seat, order);
-    let mut at: usize = 0;
-    while at < order.len() {
+    shed_order(world, seat, order, base);
+    let mut at = base;
+    while let Some(beacon) = order.get(at).copied() {
         if headroom(world, seat, rules) >= 0 {
             break;
         }
-        let Some(beacon) = order.get(at).copied() else {
-            break;
-        };
         at = at.saturating_add(1);
-        if shed_if_it_relieves(world, seat, rules, beacon) {
-            report(world, seat, beacon, EventKind::BeaconBrownedOut);
-        }
+        shed_if_it_relieves(world, seat, rules, beacon);
     }
-    order.clear();
+    order.truncate(base);
 }
 
 /// The brownout order's key for one beacon: the core last, then lowest
@@ -878,8 +1041,8 @@ fn core_site(world: &World, core: Option<BeaconId>) -> Option<[Fx; 3]> {
 /// Written into `order` as beacon ids. Only this seat's living, awake beacons
 /// are candidates: a dead one is already off the grid and a dormant one is
 /// already shed.
-fn shed_order(world: &World, seat: SeatId, order: &mut Vec<u32>) {
-    order.clear();
+fn shed_order(world: &World, seat: SeatId, order: &mut Vec<u32>, base: usize) {
+    order.truncate(base);
     let core = core_of(world, seat);
     let core_at = core_site(world, core);
     let beacons = world.beacons();
@@ -892,7 +1055,9 @@ fn shed_order(world: &World, seat: SeatId, order: &mut Vec<u32>) {
         row = row.saturating_add(1);
     }
     // item 62: `shed_key` ends in the unique beacon id, so the order is total.
-    order.sort_unstable_by_key(|id| shed_key(world, core, core_at, *id));
+    if let Some(list) = order.get_mut(base..) {
+        list.sort_unstable_by_key(|id| shed_key(world, core, core_at, *id));
+    }
 }
 
 /// Bring dormant beacons back, best first, while the margin allows it.
@@ -903,14 +1068,14 @@ fn shed_order(world: &World, seat: SeatId, order: &mut Vec<u32>) {
 /// and then be shed again next tick. That is the whole anti-flicker rule, and
 /// it holds only because [`revive_cost`] measures that load with the same
 /// [`supply_of`] and [`draw_of`] the next settle sheds by.
-fn revive(world: &mut World, seat: SeatId, rules: PowerRules, order: &mut Vec<u32>) {
+fn revive(world: &mut World, seat: SeatId, rules: PowerRules, order: &mut Vec<u32>, base: usize) {
     let mut guard: u32 = 0;
     let limit = world.beacons().len();
     while guard <= limit {
         guard = guard.saturating_add(1);
-        revive_order(world, seat, order);
+        revive_order(world, seat, order, base);
         let mut woke = false;
-        let mut at: usize = 0;
+        let mut at = base;
         while at < order.len() {
             let Some(beacon) = order.get(at).copied() else {
                 break;
@@ -921,7 +1086,6 @@ fn revive(world: &mut World, seat: SeatId, rules: PowerRules, order: &mut Vec<u3
                 continue;
             }
             set_dark(world, beacon, false);
-            report(world, seat, beacon, EventKind::BeaconRevived);
             woke = true;
             break;
         }
@@ -929,7 +1093,7 @@ fn revive(world: &mut World, seat: SeatId, rules: PowerRules, order: &mut Vec<u3
             break;
         }
     }
-    order.clear();
+    order.truncate(base);
 }
 
 /// The revival order's key for one beacon: every term of the shed key,
@@ -948,8 +1112,8 @@ fn revive_key(
 }
 
 /// The order beacons come back in: the brownout order, backwards.
-fn revive_order(world: &World, seat: SeatId, order: &mut Vec<u32>) {
-    order.clear();
+fn revive_order(world: &World, seat: SeatId, order: &mut Vec<u32>, base: usize) {
+    order.truncate(base);
     let core = core_of(world, seat);
     let core_at = core_site(world, core);
     let beacons = world.beacons();
@@ -968,7 +1132,9 @@ fn revive_order(world: &World, seat: SeatId, order: &mut Vec<u32>) {
         row = row.saturating_add(1);
     }
     // item 62: `revive_key` ends in the unique beacon id, so the order is total.
-    order.sort_unstable_by_key(|id| revive_key(world, core, core_at, *id));
+    if let Some(list) = order.get_mut(base..) {
+        list.sort_unstable_by_key(|id| revive_key(world, core, core_at, *id));
+    }
 }
 
 /// What reviving `beacon` would add to the seat's net draw, **measured rather
@@ -1015,33 +1181,55 @@ fn revive_cost(world: &mut World, seat: SeatId, rules: PowerRules, beacon: Beaco
 /// core above every other beacon and then the priority knob. A dark beacon
 /// swaps only with lit beacons of a strictly lower rank, so two beacons of one
 /// priority never swap on distance or id.
-fn swap_rank(world: &World, core: Option<BeaconId>, id: u32) -> (bool, u8) {
-    let row = usize::try_from(id).unwrap_or(usize::MAX);
-    let priority = world.beacons().priorities().get(row).copied().unwrap_or(0);
-    (core.is_some_and(|core| core.raw() == id), priority)
+///
+/// The core's term is the brownout order's own (the core is shed last,
+/// whatever its knob), so a dark core outranks every lit expansion. `None`
+/// for an id with no priority row: such a beacon takes no part in a swap,
+/// rather than being read as the lowest priority.
+fn swap_rank(world: &World, core: Option<BeaconId>, id: u32) -> Option<(bool, u8)> {
+    let row = usize::try_from(id).ok()?;
+    let priority = world.beacons().priorities().get(row).copied()?;
+    Some((core.is_some_and(|core| core.raw() == id), priority))
 }
 
 /// Re-apply the brownout order after a priority change (item 127 (7), the
 /// register's S1-22): relight a dark beacon at once when shedding lit beacons
 /// of a lower rank covers its load.
 ///
-/// Dark beacons are tried in the revival order (the core first, then the
-/// highest priority, the nearest, the lowest id), so the seat walk in
-/// [`settle`] and that order settle every tie: the lowest seat, then the
-/// lowest beacon id. For each, the lit beacons of a strictly lower
-/// [`swap_rank`] are appended after the dark list in `order`, sorted in the
-/// brownout order, and [`relight`] tries the swap.
+/// The seat's dark beacons are tried highest [`swap_rank`] first and, within
+/// a rank, **lowest id first**, so the seat walk in [`settle`] and this order
+/// settle every tie as S1's plan words it: the lowest seat, then the lowest
+/// beacon id, wherever the two stand. For each, the lit beacons of a strictly
+/// lower rank are appended after the dark list in `order`, sorted in the
+/// brownout order, and [`relight`] tries the swap. It works in
+/// `order[base..]` and leaves `order[..base]` as it found it.
 ///
 /// No state is kept: the check reads the priorities and dormancy the tables
 /// already hold, every settle, so a raise committed on site is seen at the next
 /// settle and nothing else is.
-fn swap_in(world: &mut World, seat: SeatId, rules: PowerRules, order: &mut Vec<u32>) {
-    revive_order(world, seat, order);
-    let dark = order.len();
+fn swap_in(world: &mut World, seat: SeatId, rules: PowerRules, order: &mut Vec<u32>, base: usize) {
     let core = core_of(world, seat);
     let core_at = core_site(world, core);
-    let mut at: usize = 0;
-    while at < dark {
+    order.truncate(base);
+    {
+        let beacons = world.beacons();
+        for (row, owner) in beacons.seats().iter().enumerate() {
+            if *owner == seat.raw()
+                && beacon_row_is_dark(world, row)
+                && let Some(id) = beacons.ids().get(row).copied()
+                && swap_rank(world, core, id).is_some()
+            {
+                order.push(id);
+            }
+        }
+    }
+    if let Some(dark) = order.get_mut(base..) {
+        // item 62: the key ends in the unique beacon id, so the order is total.
+        dark.sort_unstable_by_key(|id| (core::cmp::Reverse(swap_rank(world, core, *id)), *id));
+    }
+    let end = order.len();
+    let mut at = base;
+    while at < end {
         let Some(beacon) = order.get(at).copied() else {
             break;
         };
@@ -1049,41 +1237,43 @@ fn swap_in(world: &mut World, seat: SeatId, rules: PowerRules, order: &mut Vec<u
         if !is_dark(world, beacon) {
             continue;
         }
-        let rank = swap_rank(world, core, beacon);
-        order.truncate(dark);
+        let Some(rank) = swap_rank(world, core, beacon) else {
+            continue;
+        };
+        order.truncate(end);
         {
             let beacons = world.beacons();
-            let count = usize::try_from(beacons.len()).unwrap_or(0);
-            let mut row: usize = 0;
-            while row < count {
-                if beacons.seats().get(row).copied() == Some(seat.raw())
+            for (row, owner) in beacons.seats().iter().enumerate() {
+                if *owner == seat.raw()
                     && beacon_row_is_live(world, row)
                     && let Some(id) = beacons.ids().get(row).copied()
-                    && swap_rank(world, core, id) < rank
+                    && swap_rank(world, core, id).is_some_and(|lower| lower < rank)
                 {
                     order.push(id);
                 }
-                row = row.saturating_add(1);
             }
         }
-        if let Some(lower) = order.get_mut(dark..) {
+        if let Some(lower) = order.get_mut(end..) {
             // item 62: `shed_key` ends in the unique beacon id, so the order is
             // total.
             lower.sort_unstable_by_key(|id| shed_key(world, core, core_at, *id));
         }
-        relight(world, seat, rules, beacon, order, dark);
+        relight(world, seat, rules, beacon, order, end);
     }
-    order.clear();
+    order.truncate(base);
 }
 
 /// Try one swap: light `beacon`, then shed the lit beacons at `order[from..]`
 /// in that order, skipping any whose shed relieves nothing, until draw is no
-/// higher than supply. Committed, with its events, only when at least one
-/// beacon was shed and the load then fits; otherwise every flag is put back as
-/// it was and nothing is reported. `true` when the swap was committed.
+/// higher than supply. Committed only when at least one beacon was shed and
+/// the load then fits; otherwise every flag is put back as it was. `true` when
+/// the swap was committed. It reports nothing: [`settle`] reports the net
+/// change once the seat is settled.
 ///
 /// A beacon whose load fits without shedding anything is not relit here: what
-/// holds it dark is the revival margin, which the swap does not override.
+/// holds it dark is the revival margin, which the swap does not override. A
+/// committed swap asks for draw no higher than supply and not for the margin,
+/// so it can leave the seat's headroom anywhere from 0 kW up.
 fn relight(
     world: &mut World,
     seat: SeatId,
@@ -1092,7 +1282,9 @@ fn relight(
     order: &[u32],
     from: usize,
 ) -> bool {
-    let lower = order.get(from..).unwrap_or(&[]);
+    let Some(lower) = order.get(from..) else {
+        return false;
+    };
     if lower.is_empty() || !set_dark(world, beacon, false) {
         return false;
     }
@@ -1108,14 +1300,10 @@ fn relight(
         shed_any |= shed_if_it_relieves(world, seat, rules, *candidate);
     }
     if shed_any && headroom(world, seat, rules) >= 0 {
-        for candidate in lower {
-            if is_dark(world, *candidate) {
-                report(world, seat, *candidate, EventKind::BeaconBrownedOut);
-            }
-        }
-        report(world, seat, beacon, EventKind::BeaconRevived);
         return true;
     }
+    // Every beacon in `lower` was lit when the list was made, so each one dark
+    // now was shed by this attempt.
     for candidate in lower {
         if is_dark(world, *candidate) {
             set_dark(world, *candidate, false);
@@ -1203,6 +1391,43 @@ mod tests {
                 row.path()
             );
         }
+    }
+
+    #[test]
+    fn the_untyped_read_of_a_refused_table_moves_only_the_refused_row() {
+        // `PowerRules::of`'s residual fallback, pinned so that it is no wider
+        // than the pre-S1 read: one refused row moves that row alone, and
+        // every other row the phase sums keeps its committed value. The
+        // refusal itself belongs at load (see `PowerRules::of`).
+        let table = without(|m| {
+            if let Some(power) = m.power.as_mut() {
+                power.beacon_base_draw_kw = u32::MAX;
+            }
+        });
+        assert!(
+            PowerRules::read(&table).is_err(),
+            "the typed read refuses it"
+        );
+        let committed = PowerRules::of(&committed());
+        assert_eq!(
+            PowerRules::of(&table),
+            PowerRules {
+                beacon_base_draw: i32::MAX,
+                ..committed
+            }
+        );
+        let table = without(|m| {
+            if let Some(block) = m.structures.as_mut() {
+                block.mortar = None;
+            }
+        });
+        assert_eq!(
+            PowerRules::of(&table),
+            PowerRules {
+                mortar_draw: 0,
+                ..committed
+            }
+        );
     }
 
     #[test]
