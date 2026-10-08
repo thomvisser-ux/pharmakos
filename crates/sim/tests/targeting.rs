@@ -41,7 +41,7 @@ use pharmakos_sim::tables::{
     BeaconId, PRIORITY_NORMAL, SeatId, StructureKind, TargetKind, UnitId, own_beacon_name,
 };
 use pharmakos_sim::targeting::{
-    FeatureSpec, NO_FEATURE, Ranker, anchor_in_sphere, on_vent_counted,
+    FeatureSpec, NO_FEATURE, Ranker, anchor_in_sphere, covering_site, on_vent_counted,
 };
 use pharmakos_sim::voxels::{Material, VoxelEdit};
 use pharmakos_sim::world::{DamageOrder, DamageTarget, room_per_seat};
@@ -1334,6 +1334,67 @@ fn a_named_vent_whose_free_on_column_is_outside_the_sphere_is_illegal_site() {
         on_read(&world, centre, None, spec),
         Err(StepFailed::counted(StepFailure::IllegalSite, 1))
     );
+}
+
+#[test]
+fn a_covering_site_holds_the_anchor_point_its_covered_on_tests_first() {
+    // A structure that is not a Generator on a vent's anchor column moves its
+    // `on` column off the anchor point. A `covering` whose site's sphere held
+    // the `on` column alone would bind a site from which its own `covered {}`
+    // answers `no_target` (the sphere test reads the anchor point first), and
+    // the vent would still read as `UNCOVERED` once the beacon landed. The
+    // fixture is the second review's of PR #90: `vent_103_111` with a
+    // SurveyPost of seat 0's on its anchor column, and a beacon of seat 0's
+    // due north of it, its sphere reaching the vent's edge.
+    let zero = SeatId::new(SEAT);
+    let mut base = world_at(SEED, 2, &[180_000]);
+    let vent = base
+        .features()
+        .index_of_name("vent_103_111")
+        .expect("the golden seed carries the vent");
+    let [ax, ay] = base.features().get(vent).unwrap().anchor;
+    let home = core_of(&base, zero);
+    base.raise_structure(
+        zero,
+        home,
+        StructureKind::SurveyPost,
+        point([ax, ay, base.voxels().standing_z(ax, ay)]),
+    )
+    .expect("room");
+    let mut sited: Vec<i32> = Vec::new();
+    for by in [64, 65] {
+        let mut world = base.clone();
+        let centre = point([ax, by, world.voxels().standing_z(ax, by)]);
+        world
+            .place_beacon_directly(zero, centre, MandateKind::Build, PRIORITY_NORMAL)
+            .expect("room for a beacon");
+        let ground = world.ground();
+        let on = ground.on_column(vent, zero, None).expect("a free column");
+        assert_ne!(on, [ax, ay], "the anchor column is taken");
+        let Some([sx, sy]) = covering_site(&ground, zero, centre, vent) else {
+            continue;
+        };
+        let site = ground.standing(sx, sy).expect("a site stands");
+        assert!(
+            anchor_in_sphere(&ground, site, vent),
+            "beacon at y {by}: the site [{sx}, {sy}] holds the anchor point"
+        );
+        let bound =
+            on_read(&world, site, Some(vent), FeatureSpec::Covered).unwrap_or_else(|failed| {
+                panic!("beacon at y {by}: covered {{}} binds, not {failed:?}")
+            });
+        assert_eq!(
+            (bound.feature, bound.column),
+            (vent, on),
+            "beacon at y {by}"
+        );
+        sited.push(by);
+    }
+    // At the review's own beacon (y 64) the site it found, [103, 87], held the
+    // `on` column and not the anchor point; no site holds both now, so the
+    // `covering` fails `illegal_site` rather than its `covered {}`. One voxel
+    // closer, a site holds both and the `covered {}` binds.
+    assert_eq!(sited, [65]);
 }
 
 #[test]

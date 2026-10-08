@@ -44,8 +44,14 @@
 //! A named or `covered {}` `on` first tests the vent's **anchor point** (its
 //! anchor column's standing point, [`Ground::anchor_point`]) against the
 //! target sphere, and answers `no_target` outside it whatever stands on the
-//! vent: no structure can move that point, so no answer depends on a
-//! structure the seat cannot see (decisions-log item 133 (3) (c); item 134).
+//! vent: no structure can move that point, so no structure outside the
+//! target sphere decides a named vent (decisions-log item 133 (3) (c); item
+//! 134). That is the claim, and no more: the target sphere is the one the
+//! target is written into, which for a beacon not yet placed (`place_beacon`)
+//! is centred at its site and may reach past every sphere the seat holds,
+//! and the structure tests inside it read the whole footprint, whose columns
+//! may lie just outside it. S1 is unfogged (item 108 (1)); S3's fog work
+//! bases these reads on the seat's knowledge.
 //! [`Ground::on_column`] cannot be that first test, because it picks a free
 //! column by reading structures. Inside the sphere the structure tests follow
 //! and answer `illegal_site`.
@@ -501,6 +507,10 @@ impl Ranker {
 /// offsets.
 #[must_use]
 pub fn spiral_offsets(radius: i32) -> Vec<[i32; 2]> {
+    // Before `-radius`, which `i32::MIN` would overflow.
+    if radius < 0 {
+        return Vec::new();
+    }
     let limit = i64::from(radius) * i64::from(radius);
     let mut out: Vec<[i32; 2]> = Vec::new();
     for dy in -radius..=radius {
@@ -521,7 +531,15 @@ pub fn spiral_offsets(radius: i32) -> Vec<[i32; 2]> {
 /// `seat`'s own spheres, not on the column of one of its own live beacons),
 /// standable, outside every feature's footprint, **reachable** by the
 /// commander, and whose sphere holds the feature's `on` column
-/// (`docs/design/targeting.md`, "Sites"). `None` when no such column exists.
+/// (`docs/design/targeting.md`, "Sites") **and** its anchor point
+/// ([`anchor_in_sphere`]). `None` when no such column exists.
+///
+/// The anchor point is the sphere test a `covered {}` `on` asks first, so a
+/// site whose sphere held the `on` column alone (a structure on the anchor
+/// column moves the `on` column off it) would bind a `covering` its own
+/// `covered {}` then answers `no_target`, and leave the vent reading as
+/// `UNCOVERED` after the beacon lands. Where the anchor column is free the
+/// two points are one and the test adds nothing.
 ///
 /// Each ring of the spiral (the offsets at one squared distance) is searched
 /// in place for its least `(distance from the commander, y, x)` among the
@@ -536,6 +554,7 @@ pub fn covering_site(
     let [ax, ay] = ground.features.get(feature)?.anchor;
     let [ox, oy] = ground.on_column(feature, seat, None)?;
     let on_point = ground.standing(ox, oy)?;
+    let anchor_point = ground.anchor_point(feature)?;
     let [cx, cy] = column_of(commander);
     let start = ground.surface.node_of(cx, cy)?;
 
@@ -559,6 +578,7 @@ pub fn covering_site(
             if !ground.surface.walkable(node)
                 || ground.features.at_column(x, y).is_some()
                 || !ground.in_sphere(site, on_point)
+                || !ground.in_sphere(site, anchor_point)
                 || !ground.inside_own_sphere(seat, site)
                 || ground.stacks_on_own(seat, x, y)
                 || !ground.clusters.connected(ground.surface, start, node)
@@ -708,9 +728,11 @@ pub fn generator_on(ground: &Ground<'_>, x: i32, y: i32) -> bool {
 /// **The sphere test** a named or `covered {}` `on` asks first: whether the
 /// feature at `index` has its anchor point ([`Ground::anchor_point`]) within
 /// the beacon sphere's radius of `centre`, the sphere the target is written
-/// into. No structure moves that point, so the answer never depends on a
-/// structure the seat cannot see (decisions-log item 133 (3) (c)). `false`
-/// for an index the table does not hold.
+/// into. No structure moves that point, so no structure outside that sphere
+/// decides the answer (decisions-log item 133 (3) (c)); the module docs say
+/// what the claim does not cover. [`covering_site`] asks it of every site, so
+/// a `covering` never picks a site its own `covered {}` fails. `false` for
+/// an index the table does not hold.
 #[must_use]
 pub fn anchor_in_sphere(ground: &Ground<'_>, centre: [Fx; 3], index: usize) -> bool {
     ground
@@ -959,6 +981,15 @@ mod tests {
     /// The first `count` features "nearest" ranks from `origin`, in order,
     /// by name and with their travel cost.
     fn ranked(map: &mut Map, origin: [i32; 2], count: usize) -> Vec<(String, i64)> {
+        let (mut out, _) = ranked_all(map, origin);
+        out.truncate(count);
+        out
+    }
+
+    /// Every feature "nearest" ranks from `origin`, in order, by name and
+    /// with its travel cost, and how many the filter matched before
+    /// reachability ([`Ranker::matched`]).
+    fn ranked_all(map: &mut Map, origin: [i32; 2]) -> (Vec<(String, i64)>, u32) {
         let rules = rules();
         let beacons = BeaconTable::with_capacity(0);
         let structures = StructureTable::with_capacity(0);
@@ -979,10 +1010,7 @@ mod tests {
         };
         let mut ranker = Ranker::new(&ground, origin, |_| true);
         let mut out: Vec<(String, i64)> = Vec::new();
-        while out.len() < count {
-            let Some((feature, cost)) = ranker.next(&ground, &mut map.scratch) else {
-                break;
-            };
+        while let Some((feature, cost)) = ranker.next(&ground, &mut map.scratch) {
             let name = map
                 .features
                 .get(feature)
@@ -990,7 +1018,7 @@ mod tests {
                 .name();
             out.push((name, cost));
         }
-        out
+        (out, ranker.matched())
     }
 
     #[test]
@@ -1034,15 +1062,38 @@ mod tests {
         // A vent walled in by the ravine on every side is not a candidate:
         // "nearest" skips what the commander cannot reach rather than
         // answering with it.
-        let mut map = synthetic(
-            |x, y| {
-                (18..=26).contains(&x)
-                    && (18..=26).contains(&y)
-                    && !((21..=23).contains(&x) && (21..=23).contains(&y))
-            },
-            &[[22, 22], [50, 50]],
-        );
+        let mut map = synthetic(walled_in, &[[22, 22], [50, 50]]);
         assert_eq!(nearest(&mut map, [5, 5]), "vent_50_50");
+    }
+
+    /// A vent walled in by the ravine, at (22, 22).
+    fn walled_in(x: i32, y: i32) -> bool {
+        (18..=26).contains(&x)
+            && (18..=26).contains(&y)
+            && !((21..=23).contains(&x) && (21..=23).contains(&y))
+    }
+
+    #[test]
+    fn an_unreachable_vent_still_counts_as_matched() {
+        // The count is asked before reachability, from an origin on the map:
+        // both vents match, and only the reachable one is ranked...
+        let mut map = synthetic(walled_in, &[[22, 22], [50, 50]]);
+        let (order, matched) = ranked_all(&mut map, [5, 5]);
+        let names: Vec<&str> = order.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(names, ["vent_50_50"]);
+        assert_eq!(matched, 2);
+        // ...and a walled-in vent alone ranks nothing yet counts 1: the
+        // "1 matched, none reachable" a `no_target` carries.
+        let mut map = synthetic(walled_in, &[[22, 22]]);
+        assert_eq!(ranked_all(&mut map, [5, 5]), (Vec::new(), 1));
+    }
+
+    #[test]
+    fn a_negative_radius_has_no_offsets() {
+        // `i32::MIN` included, whose negation would overflow.
+        assert_eq!(spiral_offsets(-5), Vec::<[i32; 2]>::new());
+        assert_eq!(spiral_offsets(i32::MIN), Vec::<[i32; 2]>::new());
+        assert_eq!(spiral_offsets(0), vec![[0, 0]]);
     }
 
     /// Reading rule 2 in a world (`docs/design/targeting.md`, "Three reading
