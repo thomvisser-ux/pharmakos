@@ -258,12 +258,12 @@ description the lockup, product version `0.1.0-dev+skeleton`, file version `0.1.
 Godot rewrites `export_presets.cfg` when the editor saves presets, so the file keeps no
 comment, and its PLACEHOLDERs live here:
 
-- PLACEHOLDER: the product name and file description are the lockup, *PHARMAKOS: THE
-  SEALED ORDER*, until the owner confirms the name (plan T21); `config/name` stays
-  `Pharmakos`, so the window title is the bare word and `user://` does not move. OWNER,
-  with the org.
-- PLACEHOLDER: the icon (Godot's own until the art pass), the company name and the
-  copyright field are empty. OWNER, with the org, before the owner publishes a release.
+- PLACEHOLDER: the product name and file description — OWNER, with the org. They are
+  the lockup, *PHARMAKOS: THE SEALED ORDER*, until the owner confirms the name (plan T21);
+  `config/name` stays `Pharmakos`, so the window title is the bare word and `user://`
+  does not move.
+- PLACEHOLDER: the icon, the company name and the copyright field — OWNER, with the org,
+  before a release. The icon is Godot's own until the art pass; the other two are empty.
 
 The smoke check runs the same way from the editor and from the export:
 

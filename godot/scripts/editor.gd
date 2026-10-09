@@ -18,7 +18,7 @@
 #   * click one of your beacons: Visit & change (a priority row), Go here, or Recycle;
 #   * click the ground: Go here, or Place beacon - the ghost shows QUICK's verdict for this
 #     click (per click at the skeleton, not live on hover: plan T19 amendment).
-#     PLACEHOLDER: a live-on-hover legality ghost is S3/S6's (w6 notes A4 item 5), OWNER;
+#     PLACEHOLDER: the ghost per click, not live on hover — OWNER, S3/S6 (w6 notes A4 item 5);
 #   * Alt-click a beacon: the step's target becomes a selector - nearest, weakest, safest
 #     or most threatened own beacon, chosen when the step starts;
 #   * click a heat vent: "Place beacon covering this vent", a place-beacon step whose site
@@ -48,7 +48,7 @@
 #   * the own $/kW METER: `get_economy_forecast`'s four numbers, as they came, through
 #     strings.gd's frame. Headroom is the gateway's, never supply minus draw. When it is
 #     read is the bridge's rig's scheduling (crates/client-gdext/src/rig.rs).
-#     PLACEHOLDER: the meter's layout and refresh cadence, Tuning, OWNER.
+#     PLACEHOLDER: the meter's layout and refresh cadence — OWNER, S6, Tuning.
 #   * draft continuity through `get_draft`: the carried draft is fetched and opened every
 #     Lull (the bridge's editor).
 #
@@ -80,11 +80,13 @@
 # reproduces F1 by hand with (godot/README.md). `watch_check.gd`'s `_first_click_lands`
 # injects the clicks headless.
 #
-# PLACEHOLDER: the panel's layout, sizes and colours, the menu's wording and the ghost's
-# look are the skeleton's; the real editor's layout is S6's, OWNER (skeleton plan T19).
+# PLACEHOLDER: the panel's layout, sizes and colours, wording and look — OWNER, S6. The
+# panel's, the menu's wording and the ghost's look are the skeleton's; the real editor's
+# layout is S6's (skeleton plan T19).
 #
-# PLACEHOLDER: the segment clock and the "fits" pill are S3/S6's and are not built
-# (skeleton plan T19, PLACEHOLDERs line), OWNER. So is a rendered travel time: legs and the
+# PLACEHOLDER: the segment clock, the "fits" pill and a rendered travel time — OWNER, S3/S6.
+# The segment clock and the "fits" pill are S3/S6's and are not built
+# (skeleton plan T19, PLACEHOLDERs line). So is a rendered travel time: legs and the
 # whole route are shown as the raw game milliseconds the estimator answered, not the
 # generously rounded or whole-second figure decisions-log items 57 and 61 ask for, until the
 # gateway answers one (see strings.gd's `leg`), OWNER with plan-core/T18a, S3.
@@ -97,18 +99,18 @@ const Wizard := preload("res://scripts/wizard.gd")
 const RuleList := preload("res://scripts/rule_list.gd")
 
 ## How close, in screen pixels, a click must land to a beacon to pick it.
-## PLACEHOLDER: UI, OWNER at S6.
+## PLACEHOLDER: the pick distance — OWNER, at S6.
 const PICK_PIXELS := 28.0
-## The panel's width in pixels. PLACEHOLDER: layout, OWNER at S6.
+## The panel's width in pixels. PLACEHOLDER: the panel's width — OWNER, at S6.
 const PANEL_WIDTH := 380.0
-## The route's colour, and the ghost's by verdict. PLACEHOLDER: art, OWNER at S6.
+## The route's colour, and the ghost's by verdict. PLACEHOLDER: the colours — OWNER, at S6.
 const ROUTE_COLOUR := Color(0.95, 0.85, 0.35)
 const GHOST_COLOURS := {
 	"waiting": Color(0.8, 0.8, 0.8, 0.45),
 	"legal": Color(0.3, 0.9, 0.4, 0.5),
 	"illegal": Color(0.95, 0.25, 0.2, 0.5),
 }
-## How far above the ground the route is drawn, in voxels. PLACEHOLDER: art, OWNER at S6.
+## How far above the ground the route is drawn, in voxels. PLACEHOLDER: the lift — OWNER, at S6.
 const ROUTE_LIFT := 1.2
 
 ## Menu item ids.

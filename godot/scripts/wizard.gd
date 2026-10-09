@@ -19,22 +19,23 @@
 #
 # Accessibility (spec section 13): each page's accessible name is its label, the value field's
 # too, the mark's is its words, and the why's is its sentence - names generated from the
-# rendered text. PLACEHOLDER: accessibility polish beyond generated names is S6's, OWNER.
+# rendered text.
+# PLACEHOLDER: accessibility polish beyond generated names — OWNER, S6.
 #
-# PLACEHOLDER: the page layout (all pages in one column rather than one page at a time),
-# and a value's unit display, are S6's with the typed parameter catalogue, OWNER.
+# PLACEHOLDER: the page layout and a value's unit display — OWNER, S6, with the typed
+# parameter catalogue. All pages sit in one column rather than one page at a time.
 
 extends RefCounted
 
 const Strings := preload("res://scripts/strings.gd")
 
-## The width a label wraps at. PLACEHOLDER: layout, OWNER at S6.
+## The width a label wraps at. PLACEHOLDER: the wrap width — OWNER, at S6.
 const TEXT_WIDTH := 320.0
-## The mark's colour. PLACEHOLDER: art, OWNER at S6's art pass.
+## The mark's colour. PLACEHOLDER: the mark's colour — OWNER, at S6's art pass.
 const MARK_COLOUR := Color(0.55, 0.8, 1.0)
-## The colour a refusal is drawn in. PLACEHOLDER: art, OWNER at S6's art pass.
+## The colour a refusal is drawn in. PLACEHOLDER: the refusal's colour — OWNER, at S6's art pass.
 const REFUSAL_COLOUR := Color(0.95, 0.4, 0.35)
-## The gap between two pages, in pixels. PLACEHOLDER: layout, OWNER at S6.
+## The gap between two pages, in pixels. PLACEHOLDER: the page gap — OWNER, at S6.
 const PAGE_GAP := 10
 
 

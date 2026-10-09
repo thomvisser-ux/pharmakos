@@ -59,9 +59,10 @@ pub const SPEEDS: [u32; 3] = [1, 2, 4];
 
 /// How often, at most, the pacer asks for game time: 100 ms of wall time.
 ///
-/// PLACEHOLDER: at least 50 ms, so the admin token's budget of 600 calls per 200 steps is
-/// never approached — at 1x an ask of 100 ms runs two steps of the sim, so the pacer spends
-/// at most one call per two. OWNER, Tuning, with the rate limits at hardening.
+/// PLACEHOLDER: the pacer's period — OWNER, at hardening, with the rate limits. At least
+/// 50 ms, so the admin token's budget of 600 calls per 200 steps is never approached: at
+/// 1x an ask of 100 ms runs two steps of the sim, so the pacer spends at most one call per
+/// two. Tuning.
 pub const PACER_PERIOD_US: u64 = 100_000;
 
 /// The most one `advance_push` may ask for: the gateway's `MAX_ADVANCE_MS`, a wire bound
@@ -70,15 +71,17 @@ pub const MAX_ADVANCE_MS: i32 = 60_000;
 
 /// How much owed game time the pacer carries before it drops the rest: 5 seconds.
 ///
-/// PLACEHOLDER: a stalled host or a long hitch is caught up by at most this much, so a
-/// Push never plays a burst of minutes to make up for a frozen window. Tuning, OWNER.
+/// PLACEHOLDER: the backlog bound — OWNER, at hardening, Tuning. A stalled host or a long
+/// hitch is caught up by at most this much, so a Push never plays a burst of minutes to make
+/// up for a frozen window.
 pub const BACKLOG_BOUND_MS: u64 = 5_000;
 
 /// How often the host clock is reported outside a Push: every 250 ms of wall time.
 ///
-/// PLACEHOLDER: "about four times a second" (skeleton-plan-t16a-notes.md section A (2)).
-/// The rate budget of every token refills at this grain in a Lull, so the editor's
-/// verify-on-every-edit (T19) feels it. OWNER, with the rate limits at hardening.
+/// PLACEHOLDER: the host clock's report interval — OWNER, at hardening, with the rate
+/// limits. "About four times a second" (skeleton-plan-t16a-notes.md section A (2)). The
+/// rate budget of every token refills at this grain in a Lull, so the editor's
+/// verify-on-every-edit (T19) feels it.
 pub const CLOCK_REPORT_US: u64 = 250_000;
 
 /// The largest step one host-clock report may take: the gateway's own bound.
@@ -86,8 +89,9 @@ pub const MAX_CLOCK_STEP_MS: u64 = 60_000;
 
 /// How long a connection may send nothing before it sends a keep-alive call: 5 seconds.
 ///
-/// PLACEHOLDER: well inside the gateway's 30-second `READ_TIMEOUT` and the "at least every
-/// 10 s" the plan asks for. OWNER, at hardening, together with `READ_TIMEOUT`.
+/// PLACEHOLDER: the keep-alive interval — OWNER, at hardening, with `READ_TIMEOUT`. Well
+/// inside the gateway's 30-second `READ_TIMEOUT` and the "at least every 10 s" the plan
+/// asks for.
 pub const KEEPALIVE_US: u64 = 5_000_000;
 
 /// How long the editor must be left alone before FULL runs: 600 ms of wall time.

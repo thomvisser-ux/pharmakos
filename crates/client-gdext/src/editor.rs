@@ -75,17 +75,18 @@ use crate::wizard::{self, Instance, TemplateRow, Wizard};
 /// schema version this build does not speak, `E0006` a SCRIPT author. Every other
 /// diagnostic opens the file and shows as a row, because the editor can draw it.
 ///
-/// PLACEHOLDER: the list is the client's reading of the diagnostic catalogue's decode
+/// PLACEHOLDER: the Load refusal codes — OWNER, S6, with the editor's Load and Save as
+/// template. The list is the client's reading of the diagnostic catalogue's decode
 /// family. A column in the catalogue saying which codes refuse a load would make it the
-/// verifier's, and a new decode code would then need no change here. OWNER, S6, with the
-/// editor's Load and Save as template.
+/// verifier's, and a new decode code would then need no change here.
 pub const LOAD_REFUSALS: &[&str] = &["E0001", "E0002", "E0003", "E0004", "E0006"];
 
 /// The draft id the editor's "Save draft" keeps its copy under, so repeated saves replace
 /// one draft rather than filling the seat's store.
 ///
-/// PLACEHOLDER: one editor draft per seat is the skeleton's; named drafts and a draft
-/// browser are S6's (skeleton plan T19, PR 2 and S6).
+/// PLACEHOLDER: one editor draft per seat — OWNER, S6, with the draft browser. One draft
+/// per seat is the skeleton's; named drafts and a draft browser are S6's (skeleton plan
+/// T19, PR 2 and S6).
 pub const EDITOR_DRAFT_ID: &str = "editor";
 
 /// The draft id the gateway pre-loads last round's playbook under
@@ -203,8 +204,8 @@ pub enum Action {
     Go,
     /// Visit & change: an interface step with one row, the beacon's priority.
     ///
-    /// PLACEHOLDER: a priority row is the one change the skeleton's menu offers; the
-    /// mandate and build-target rows arrive with S3's pickers. OWNER, S3.
+    /// PLACEHOLDER: a priority row as the menu's one change — OWNER, S3, with the pickers.
+    /// The mandate and build-target rows arrive with S3's pickers.
     Visit(Priority),
     /// Recycle: an interface step with the recycle row.
     Recycle,
@@ -382,9 +383,9 @@ pub struct Route {
 
 /// The placement ghost's verdict (spec section 13, "a live legality ghost").
 ///
-/// PLACEHOLDER: the ghost is per click at the skeleton, not live on hover (plan T19
-/// amendment, `skeleton-plan-w6-notes.md` A4); a live-on-hover legality ghost is S3/S6's
-/// (A4 item 5). OWNER, S3/S6.
+/// PLACEHOLDER: the ghost per click, not live on hover — OWNER, S3/S6. The skeleton's
+/// ghost is per click (plan T19 amendment, `skeleton-plan-w6-notes.md` A4); a
+/// live-on-hover legality ghost is S3/S6's (A4 item 5).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum GhostState {
     /// The patched draft is being checked.
@@ -1949,10 +1950,11 @@ impl Editor {
     /// playbook from two rounds ago "last round's". The status line names the draft by the
     /// gateway's own label.
     ///
-    /// PLACEHOLDER: a resumed Lull opens `carried`, as spec section 13's continuity says,
+    /// PLACEHOLDER: a resumed Lull opens `carried` — OWNER, S6, with the draft browser.
+    /// A resumed Lull opens `carried`, as spec section 13's continuity says,
     /// and the seat's own `editor` draft of this round is listed, not opened. Opening it when
     /// present is a preference the spec does not state; a click that opens any listed draft
-    /// is a small draft browser ahead of S6's. OWNER, at S6, with the draft browser.
+    /// is a small draft browser ahead of S6's.
     fn carry_forward(&mut self) {
         let carried = self
             .drafts

@@ -53,18 +53,21 @@ const INBOUND_BYTES := 1048576
 
 ## How many times a dropped connection is reopened before the link gives up.
 ##
-## PLACEHOLDER: a local host that drops a connection more often than this has gone wrong
-## in a way a retry will not fix. OWNER, at hardening, with the transport's other numbers.
+## PLACEHOLDER: the reconnect bound — OWNER, at hardening, with the transport's numbers.
+## A local host that drops a connection more often than this has gone wrong in a way a
+## retry will not fix.
 const RECONNECTS := 5
 
 ## The match the lobby hosts until it has a match-settings screen.
 ##
-## PLACEHOLDER: the golden seed (so the live vista is the fixture's map), two seats with
+## PLACEHOLDER: the match the lobby hosts — OWNER, S6, with the settings screen.
+## The golden seed (so the live vista is the fixture's map), two seats with
 ## the human at seat 0 and the other played by the built-in operator (Easy, since T18:
 ## it plans, submits and says ready for its seat every round), the rules table's own
 ## segment ladder, and three rounds, the Probation-shaped match of skeleton-plan section
 ## 1.1 (decisions-log item 123 (2) 3; the sim's own default stays the spec's six). The
-## lobby's settings screen and the Probation preset are OWNER's, at S1.
+## lobby's settings screen and the Probation preset are the owner's, deferred to S6 by
+## decisions-log item 127 (10).
 const MATCH_SEED := "0x00000000ca5caded"
 const MATCH_SEATS := 2
 const HUMAN_SEAT := 0

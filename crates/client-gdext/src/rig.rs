@@ -82,8 +82,8 @@
 //! draw. When to poll is scheduling, which is this file's; what the numbers are is the
 //! gateway's.
 //!
-//! PLACEHOLDER: the meter's refresh cadence (once a Lull, once per advance in a Push) and
-//! its layout are the skeleton's. OWNER, Tuning, with the real lobby.
+//! PLACEHOLDER: the meter's refresh cadence and layout — OWNER, S6, with the real lobby.
+//! Once a Lull and once per advance in a Push are the skeleton's; Tuning.
 //!
 //! # A first phase of Push
 //!
@@ -110,8 +110,9 @@ use crate::view::{read_status, split_footer};
 /// never tips a burst of edits into `RATE_LIMITED`. `tests/rate_budget.rs` reads the
 /// gateway's constants out of its source and drives the rig against them.
 ///
-/// PLACEHOLDER: the margin is the client's; the numbers are OWNER's at hardening with the
-/// gateway's rate limits, and this follows them.
+/// PLACEHOLDER: the seat's calls per refill — OWNER, at hardening, with the gateway's
+/// rate limits. The margin is the client's; the numbers are the owner's, and this follows
+/// them.
 pub const SEAT_CALLS_PER_REFILL: u32 = 6;
 
 /// The admin connection's index.
@@ -373,8 +374,9 @@ pub struct Rig {
     /// Whether `set_ready` has gone out this Lull: the seat's orders are final, and the
     /// editor sends nothing more until the next Lull.
     ///
-    /// PLACEHOLDER: Ready is final for the rest of the Lull; an un-ready toggle that reopens
-    /// the editor (`set_ready {ready: false}`) is the real lobby's. OWNER, S6.
+    /// PLACEHOLDER: Ready final for the rest of the Lull — OWNER, S6, with the real lobby.
+    /// An un-ready toggle that reopens the editor (`set_ready {ready: false}`) is the real
+    /// lobby's.
     ready_sent: bool,
     /// The playbook editor.
     editor: Editor,
@@ -922,10 +924,10 @@ impl Rig {
                 // and the Lull goes on from it; an untimed one has had no countdown reported
                 // yet, and the Lull is as long as the rules say for its round
                 // (`first_lull_ms` for round 1, `lull_ms` after it).
-                // PLACEHOLDER: a resumed Lull restarts its timer in full — OWNER, at
-                // hardening. The timer is the client's (w6 notes A2, decisions-log item 99)
-                // and a new host has had no countdown reported, so quitting in a Lull buys
-                // planning time.
+                // PLACEHOLDER: a resumed Lull's timer restarts — OWNER, at hardening.
+                // The timer is the client's (w6 notes A2, decisions-log item 99) and a new
+                // host has had no countdown reported, so a resumed Lull restarts its timer in
+                // full and quitting in a Lull buys planning time.
                 let countdown = if footer.untimed {
                     self.lulls.for_round(footer.round)
                 } else {

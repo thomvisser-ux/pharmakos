@@ -73,9 +73,9 @@ pub const STATUS_KEY: &str = "_status";
 /// `ViewChunk`'s comment requires of every decoder and what lets a material be added to
 /// the wire without breaking this client.
 ///
-/// PLACEHOLDER: the seam and vent colours, and whether richness is visible at all. Art,
-/// like the mesher's palette itself; OWNER, at S6's art pass, when the palette grows the
-/// rows these three share today.
+/// PLACEHOLDER: the seam and vent colours — OWNER, at S6's art pass. Art, like the
+/// mesher's palette itself, and whether richness is visible at all; the palette grows the
+/// rows these three share today then.
 #[must_use]
 pub const fn palette_of(wire: u8) -> u8 {
     match wire {

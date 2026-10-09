@@ -9,12 +9,12 @@
 # NO SENTENCE IS PARSED HERE. The line layout is the gateway's contract
 # (`gp.api.v1.RenderPlanResponse`: one rule, step or block per line, the indent saying what
 # a line is), so a row needs nothing but its text. Chips, drag reordering and the pickers
-# are S3's (decisions-log item 111, decision C3). PLACEHOLDER: chip editing and drag
-# reordering, OWNER at S3.
+# are S3's (decisions-log item 111, decision C3).
+# PLACEHOLDER: chip editing and drag reordering — OWNER, at S3.
 
 extends RefCounted
 
-## The width a line wraps at. PLACEHOLDER: layout, OWNER at S6.
+## The width a line wraps at. PLACEHOLDER: the wrap width — OWNER, at S6.
 const LINE_WIDTH := 340.0
 
 

@@ -16,8 +16,8 @@
 # it would be time maths of the editor's own (AGENTS.md section 3 rule 4;
 # `crates/client-gdext/tests/no_arithmetic.rs`).
 #
-# PLACEHOLDER: the string table's file and format, and every wording below. OWNER, at S6,
-# with the one English string table (skeleton plan T19, PLACEHOLDERs).
+# PLACEHOLDER: the string table's file and format, and every wording below — OWNER, at S6.
+# With the one English string table (skeleton plan T19, PLACEHOLDERs).
 
 extends RefCounted
 
@@ -159,7 +159,8 @@ const TEXT := {
 	"status_dormant_disallowed": "Dormant beacons no longer allowed.",
 
 	# --- The route -------------------------------------------------------------
-	# PLACEHOLDER: travel times are shown as the raw game milliseconds the estimator
+	# PLACEHOLDER: travel times as raw game milliseconds — OWNER, S3, with plan-core/T18a.
+	# Travel times are shown as the raw game milliseconds the estimator
 	# answered, until the gateway answers a rendered figure (decisions-log items 57 and 61:
 	# a short route's ETA rounded generously or shown in whole seconds). OWNER, with
 	# plan-core/T18a, S3.

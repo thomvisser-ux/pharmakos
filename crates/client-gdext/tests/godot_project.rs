@@ -869,7 +869,7 @@ fn the_camera_ignores_its_keys_while_a_control_has_focus() {
 /// 1.1's Probation-shaped match. The config line carries the value in its sixth field and
 /// keeps its six tab-separated fields, so a remembered `last_match.txt` still parses; the
 /// PLACEHOLDER above the constants records the decision and keeps the settings screen and
-/// the Probation preset the owner's, at S1.
+/// the Probation preset the owner's, deferred to S6 by decisions-log item 127 (10).
 #[test]
 fn the_lobby_hosts_a_three_round_match() {
     let text = read("scripts/host_link.gd");
@@ -888,7 +888,13 @@ fn the_lobby_hosts_a_three_round_match() {
         .take_while(|line| line.starts_with("##"))
         .collect::<Vec<&str>>()
         .join(" ");
-    for needle in ["PLACEHOLDER", "item 123 (2) 3", "Probation preset", "at S1"] {
+    for needle in [
+        "PLACEHOLDER",
+        "item 123 (2) 3",
+        "Probation preset",
+        "OWNER, S6",
+        "item 127 (10)",
+    ] {
         assert!(
             block.contains(needle),
             "the round limit's PLACEHOLDER names `{needle}`: {block:?}"

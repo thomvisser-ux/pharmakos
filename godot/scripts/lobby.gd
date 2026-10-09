@@ -54,15 +54,16 @@
 # sees, beside the editor's own logging of Submit, Fix and Save (scripts/editor.gd): the
 # owner's way to reproduce F1 by hand (godot/README.md).
 #
-# PLACEHOLDER: `user://`'s remembered match is a per-machine convenience, not state: the
-# save itself is the gateway's, in the private match cache. OWNER, with the save browser,
-# S6. PLACEHOLDER: forgetting an ended match (item 113 (11)), and the New/Resume layout,
-# OWNER, S6. That layout includes what a refused Resume leaves: the refusal is shown, the
+# PLACEHOLDER: the remembered match in `user://` — OWNER, S6, with the save browser. It is
+# a per-machine convenience, not state: the save itself is the gateway's, in the private
+# match cache.
+# PLACEHOLDER: forgetting an ended match and the New/Resume layout — OWNER, S6. Forgetting
+# follows item 113 (11). That layout includes what a refused Resume leaves: the refusal is shown, the
 # chooser stays hidden and the line stays remembered, so the player restarts the client to
 # pick New match, and the next launch offers the same Resume again. Nothing is retried.
 #
-# PLACEHOLDER: the whole layout - a strip of buttons and a text column over the vista -
-# is the skeleton's; the real lobby is S6's.
+# PLACEHOLDER: the lobby's whole layout — OWNER, S6, with the real lobby. A strip of
+# buttons and a text column over the vista, the recap's line among them, are the skeleton's.
 
 extends Node
 
