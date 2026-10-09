@@ -10,20 +10,35 @@
 //! `list_templates`. Known enemies are what `get_view` shows of another seat;
 //! capabilities have no method until S4, so there is nothing to read for them.
 //!
-//! Three things are read **and never used** on purpose:
+//! # The features, by name
+//!
+//! Since S1's targeting (decisions-log item 127 (12); `docs/design/
+//! targeting.md`) every vent and seam has a **name**, `vent_<x>_<y>` or
+//! `seam_<x>_<y>`, and `get_map_summary.features` lists each one with its
+//! grade, whether it is still there, whether the seat's own spheres cover it
+//! and the travel to it from the commander, by the estimator "nearest" ranks
+//! with. That list is what the operator plans from: it no longer decodes the
+//! view's voxels to find a patch of vent or seam, and it derives no id and no
+//! site itself. A site comes from `estimate_route`'s `covering` waypoint
+//! ([`crate::candidates`]), which answers the column the sim's own `cover`
+//! would choose.
+//!
+//! # Read and never used, on purpose
 //!
 //! * the briefing's notebook -- "It ignores the notebook" (spec section 14);
 //! * the phase timer in `get_status`'s `status` and in every `_status`
 //!   footer, which the host clock moves ([`crate::wire`]);
 //! * a unit's or a structure's `id`, which is a handle minted per viewer in
 //!   the order it first saw the thing (decisions-log item 107 (5)). The
-//!   operator keys nothing on it; only a beacon's `b_NN`, which is public and
-//!   is what a playbook names, is ever used as a key.
+//!   operator keys nothing on it; only a beacon's `b_NN` and a feature's
+//!   name, which are what a playbook names, are ever used as keys;
+//! * the view's chunks: the ground is the gateway's to read now, through the
+//!   feature list and the estimates.
 
 use pharmakos_proto::json::Json;
 
-use crate::easy::{MAP_COLUMNS_MAX, PAGES_MAX};
-use crate::terrain::Terrain;
+use crate::easy::PAGES_MAX;
+use crate::tuning::Richness;
 use crate::wire::{
     Refused, Wire, array_of, bool_of, int_of, location_voxel, object, string, text_of, voxel,
 };
@@ -41,22 +56,85 @@ pub(crate) struct Beacon {
     pub(crate) core: bool,
     /// Own beacons only: false while it is browned out.
     pub(crate) powered: bool,
-    /// Own beacons only: its Quartermaster priority, by its proto name
-    /// (`"HIGH"`), translated from the lower-case wire value through
-    /// [`Wire::enum_name`] (decisions-log item 80; AGENTS.md section 3 rule
-    /// 4). Another seat's beacon carries no priority on the wire, so this is
-    /// empty for it.
-    pub(crate) priority: String,
+    /// Own beacons only: its Quartermaster priority, `None` for another
+    /// seat's beacon, which carries none on the wire, and for a value that
+    /// does not read.
+    pub(crate) priority: Option<Priority>,
+}
+
+/// A Quartermaster priority, in the brownout order's sense: the lowest sheds
+/// first (spec section 7; `crates/sim/src/power.rs`'s module doc).
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub(crate) enum Priority {
+    /// `LOW`: shed first.
+    Low,
+    /// `NORMAL`.
+    Normal,
+    /// `HIGH`: shed last of the knob's three.
+    High,
+}
+
+impl Priority {
+    /// The proto name, as [`Wire::enum_name`] translates it.
+    fn of(name: &str) -> Option<Priority> {
+        match name {
+            "LOW" => Some(Priority::Low),
+            "NORMAL" => Some(Priority::Normal),
+            "HIGH" => Some(Priority::High),
+            _ => None,
+        }
+    }
 }
 
 /// The seat's own economy as the world stands (`get_economy_forecast`'s
-/// present-state fields).
+/// present-state fields, `gateway.proto`'s fields 1 to 4).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub(crate) struct Economy {
     /// Whole $.
     pub(crate) treasury: i64,
-    /// Supply minus draw, whole kW.
-    pub(crate) headroom_kw: i64,
+    /// Supply, whole kW.
+    pub(crate) supply_kw: i64,
+    /// Draw, whole kW: what the seat's lit beacons draw.
+    pub(crate) draw_kw: i64,
+}
+
+/// Vent or seam: what a feature is.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub(crate) enum Kind {
+    /// A heat vent: a Generator stands on it.
+    Vent,
+    /// An ore seam: a Mine beacon's drones dig it.
+    Seam,
+}
+
+impl Kind {
+    /// The lower-case name, for the "why" note.
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            Kind::Vent => "heat vent",
+            Kind::Seam => "ore seam",
+        }
+    }
+}
+
+/// One vent or seam as `get_map_summary.features` answers it.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(crate) struct Feature {
+    /// Its name, `vent_<x>_<y>` or `seam_<x>_<y>`, as a playbook writes it.
+    pub(crate) id: String,
+    /// Vent or seam.
+    pub(crate) kind: Kind,
+    /// Its grade.
+    pub(crate) grade: Richness,
+    /// The generation anchor column, with no z.
+    pub(crate) anchor: [i32; 2],
+    /// False once it is lost.
+    pub(crate) live: bool,
+    /// True when one of the seat's own living beacons' spheres holds it.
+    pub(crate) covered: bool,
+    /// Travel from the commander, game milliseconds; `None` when no route
+    /// reaches it.
+    pub(crate) travel_ms: Option<i64>,
 }
 
 /// Everything the fixed reads told the operator.
@@ -74,14 +152,12 @@ pub(crate) struct Situation {
     pub(crate) beacons: Vec<Beacon>,
     /// The seat's own economy.
     pub(crate) economy: Economy,
+    /// Every vent and seam, in the gateway's feature id order.
+    pub(crate) features: Vec<Feature>,
     /// Where the seat's commander stands, if the view shows it.
     pub(crate) commander: Option<[i32; 3]>,
     /// Where each thing of another seat that the view shows stands, sorted.
     pub(crate) enemies: Vec<[i32; 3]>,
-    /// Where the seat's own Generators stand, sorted.
-    pub(crate) own_generators: Vec<[i32; 3]>,
-    /// The ground.
-    pub(crate) terrain: Terrain,
     /// The template ids the library lists, ascending.
     pub(crate) templates: Vec<String>,
     /// False when `get_view` did not reach its complete page within
@@ -95,12 +171,17 @@ impl Situation {
         self.beacons.iter().filter(|beacon| beacon.own)
     }
 
+    /// The seat's core, if the seat is shown one.
+    pub(crate) fn core(&self) -> Option<&Beacon> {
+        self.own_beacons().find(|beacon| beacon.core)
+    }
+
     /// Make the fixed reads.
     ///
     /// # Errors
     ///
-    /// The first refusal: a round the operator cannot read is a round it does
-    /// not plan.
+    /// The first refusal, and `MALFORMED` for a feature row that does not
+    /// read: a round the operator cannot read is a round it does not plan.
     pub(crate) fn read(wire: &mut Wire<'_, '_>, seat: u8) -> Result<Situation, Refused> {
         let own = format!("seat.{seat}");
 
@@ -108,7 +189,8 @@ impl Situation {
         let status = status.get("status").cloned().unwrap_or(Json::Null);
         // The round and the segment's length. The status also carries the
         // phase timer, which the host clock moves: never read.
-        let round = u32::try_from(int_of(&status, "round")).unwrap_or(0);
+        let round = u32::try_from(int_of(&status, "round"))
+            .map_err(|_| malformed("get_status", "the round is not a whole number of rounds"))?;
 
         // The notebook at the top of the briefing is never read (spec section
         // 14: the operator ignores it). The segment length is.
@@ -118,61 +200,23 @@ impl Situation {
             found => found,
         };
 
-        let mut beacons: Vec<Beacon> = Vec::new();
-        let mut cursor = String::new();
-        for _ in 0..PAGES_MAX {
-            let page = wire.call("list_beacons", object(vec![("cursor", string(&cursor))]))?;
-            for row in array_of(&page, "beacons") {
-                let Some(at) = row.get("at").and_then(voxel) else {
-                    continue;
-                };
-                let mine = text_of(row, "owner") == own;
-                let priority = Wire::enum_name(
-                    "gp.v1.InterfaceRow.QuartermasterPriority",
-                    row.get("priority"),
-                );
-                beacons.push(Beacon {
-                    id: text_of(row, "beacon_id").to_owned(),
-                    at,
-                    own: mine,
-                    core: mine && bool_of(row, "core"),
-                    powered: mine && bool_of(row, "powered"),
-                    priority: if mine {
-                        priority.unwrap_or_default()
-                    } else {
-                        String::new()
-                    },
-                });
-            }
-            text_of(&page, "next_cursor").clone_into(&mut cursor);
-            if cursor.is_empty() {
-                break;
-            }
-        }
-        beacons.sort_by(|a, b| a.id.cmp(&b.id));
-        beacons.dedup_by(|a, b| a.id == b.id);
+        let beacons = read_beacons(wire, &own)?;
 
         let forecast = wire.call("get_economy_forecast", object(vec![]))?;
         let economy = Economy {
             treasury: int_of(&forecast, "treasury_now"),
-            headroom_kw: int_of(&forecast, "headroom_kw_now"),
+            supply_kw: int_of(&forecast, "supply_kw_now"),
+            draw_kw: int_of(&forecast, "draw_kw_now"),
         };
 
         let map = wire.call("get_map_summary", object(vec![]))?;
-        let size = map.get("size").and_then(voxel).unwrap_or([0, 0, 0]);
         let match_seed = text_of(&map, "match_seed").to_owned();
-        // A size the operator cannot hold is a round it cannot read, said
-        // before anything is allocated for it.
-        let terrain = Terrain::new(size[0], size[1]).ok_or_else(|| Refused {
-            method: String::from("get_map_summary"),
-            code: String::from("MALFORMED"),
-            message: format!(
-                "a map of {} x {} columns is more than the operator holds ({MAP_COLUMNS_MAX})",
-                size[0], size[1]
-            ),
-        })?;
+        let features = array_of(&map, "features")
+            .iter()
+            .map(feature_of)
+            .collect::<Result<Vec<Feature>, Refused>>()?;
 
-        let seen = read_view(wire, &own, terrain)?;
+        let seen = read_view(wire, &own)?;
         let templates = read_templates(wire)?;
 
         Ok(Situation {
@@ -182,49 +226,135 @@ impl Situation {
             match_seed,
             beacons,
             economy,
+            features,
             commander: seen.commander,
             enemies: seen.enemies,
-            own_generators: seen.own_generators,
-            terrain: seen.terrain,
             templates,
             view_complete: seen.complete,
         })
     }
 }
 
-/// What `get_view` shows.
+/// A refusal the operator writes itself: the answer came and did not read.
+fn malformed(method: &str, message: &str) -> Refused {
+    Refused {
+        method: method.to_owned(),
+        code: String::from("MALFORMED"),
+        message: message.to_owned(),
+    }
+}
+
+/// One `gp.api.v1.MapFeature`, read.
+///
+/// # Errors
+///
+/// `MALFORMED` when the row has no name, or a kind or a grade that is not
+/// one of the wire's values: a feature the operator cannot read is not one it
+/// can plan around, and it says so rather than guessing.
+fn feature_of(row: &Json) -> Result<Feature, Refused> {
+    let id = text_of(row, "feature_id");
+    if id.is_empty() {
+        return Err(malformed("get_map_summary", "a feature with no name"));
+    }
+    let kind = match Wire::enum_name("gp.api.v1.MapFeature.Kind", row.get("kind")).as_deref() {
+        Some("VENT") => Kind::Vent,
+        Some("SEAM") => Kind::Seam,
+        _ => {
+            return Err(malformed(
+                "get_map_summary",
+                &format!("feature `{id}` is neither a vent nor a seam"),
+            ));
+        }
+    };
+    let grade = Wire::enum_name("gp.v1.ByRichness.Richness", row.get("grade"))
+        .as_deref()
+        .and_then(Richness::of)
+        .ok_or_else(|| {
+            malformed(
+                "get_map_summary",
+                &format!("feature `{id}` has no grade the operator reads"),
+            )
+        })?;
+    let axis = |name: &str| {
+        i32::try_from(int_of(row, name)).map_err(|_| {
+            malformed(
+                "get_map_summary",
+                &format!("feature `{id}`'s {name} is not a column"),
+            )
+        })
+    };
+    let reachable = bool_of(row, "reachable");
+    Ok(Feature {
+        id: id.to_owned(),
+        kind,
+        grade,
+        anchor: [axis("x")?, axis("y")?],
+        live: bool_of(row, "live"),
+        covered: bool_of(row, "covered"),
+        // `travel_ms` "is then 0 and means nothing" (`gateway.proto`): read as
+        // absent, never as a free walk.
+        travel_ms: reachable.then(|| int_of(row, "travel_ms")),
+    })
+}
+
+/// Every beacon `list_beacons` shows, ascending by id, at most
+/// [`PAGES_MAX`] pages.
+fn read_beacons(wire: &mut Wire<'_, '_>, own: &str) -> Result<Vec<Beacon>, Refused> {
+    let mut beacons: Vec<Beacon> = Vec::new();
+    let mut cursor = String::new();
+    for _ in 0..PAGES_MAX {
+        let page = wire.call("list_beacons", object(vec![("cursor", string(&cursor))]))?;
+        for row in array_of(&page, "beacons") {
+            let Some(at) = row.get("at").and_then(voxel) else {
+                continue;
+            };
+            let mine = text_of(row, "owner") == own;
+            let priority = Wire::enum_name(
+                "gp.v1.InterfaceRow.QuartermasterPriority",
+                row.get("priority"),
+            )
+            .as_deref()
+            .and_then(Priority::of);
+            beacons.push(Beacon {
+                id: text_of(row, "beacon_id").to_owned(),
+                at,
+                own: mine,
+                core: mine && bool_of(row, "core"),
+                powered: mine && bool_of(row, "powered"),
+                priority: if mine { priority } else { None },
+            });
+        }
+        text_of(&page, "next_cursor").clone_into(&mut cursor);
+        if cursor.is_empty() {
+            break;
+        }
+    }
+    beacons.sort_by(|a, b| a.id.cmp(&b.id));
+    beacons.dedup_by(|a, b| a.id == b.id);
+    Ok(beacons)
+}
+
+/// What `get_view` shows of who stands where.
 struct Seen {
-    terrain: Terrain,
     complete: bool,
     commander: Option<[i32; 3]>,
     enemies: Vec<[i32; 3]>,
-    own_generators: Vec<[i32; 3]>,
 }
 
-/// Read the view to its complete page: the ground from every chunk, and the
-/// entity list from the page that carries it.
-fn read_view(wire: &mut Wire<'_, '_>, own: &str, terrain: Terrain) -> Result<Seen, Refused> {
+/// Read the view to its complete page, which is the one that carries the
+/// entity list. Its chunks are not decoded: the ground is the gateway's.
+fn read_view(wire: &mut Wire<'_, '_>, own: &str) -> Result<Seen, Refused> {
     let mut seen = Seen {
-        terrain,
         complete: false,
         commander: None,
         enemies: Vec::new(),
-        own_generators: Vec::new(),
     };
     let mut cursor = String::new();
     for _ in 0..PAGES_MAX {
         let page = wire.call("get_view", object(vec![("cursor", string(&cursor))]))?;
-        for chunk in array_of(&page, "chunks") {
-            let origin = chunk.get("origin").and_then(voxel);
-            let decoded = pharmakos_proto::json::base64::decode(text_of(chunk, "voxels_rle"))
-                .and_then(|bytes| pharmakos_proto::chunk_rle::decode(&bytes).ok());
-            if let (Some(origin), Some(voxels)) = (origin, decoded) {
-                seen.terrain.add_chunk(origin, &voxels);
-            }
-        }
         if bool_of(&page, "complete") {
-            // The complete page is the one that carries the entity list. Read
-            // by what each thing is and where it stands, and never by its id.
+            // Read by what each thing is and where it stands, and never by its
+            // id.
             for entity in array_of(&page, "entities") {
                 let Some(at) = entity.get("at").and_then(location_voxel) else {
                     continue;
@@ -235,8 +365,6 @@ fn read_view(wire: &mut Wire<'_, '_>, own: &str, terrain: Terrain) -> Result<See
                 if owner == own {
                     if kind.as_deref() == Some("UNIT") && subtype == "commander" {
                         seen.commander = Some(seen.commander.map_or(at, |held| held.min(at)));
-                    } else if kind.as_deref() == Some("STRUCTURE") && subtype == "generator" {
-                        seen.own_generators.push(at);
                     }
                 } else if !owner.is_empty() {
                     seen.enemies.push(at);
@@ -248,12 +376,11 @@ fn read_view(wire: &mut Wire<'_, '_>, own: &str, terrain: Terrain) -> Result<See
         text_of(&page, "next_cursor").clone_into(&mut cursor);
         if cursor.is_empty() {
             // Not complete and no page after it: asking again from the empty
-            // cursor would fold the first page's chunks in twice.
+            // cursor would read the first page twice.
             break;
         }
     }
     seen.enemies.sort_unstable();
-    seen.own_generators.sort_unstable();
     Ok(seen)
 }
 

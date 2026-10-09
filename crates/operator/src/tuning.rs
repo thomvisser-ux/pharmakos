@@ -15,15 +15,16 @@
 //! number below comes from a row, and a row that is missing is an error
 //! rather than a default. proto3 JSON reads an absent scalar as zero, so a
 //! scalar row whose zero means nothing -- the sphere radius, both costs, the
-//! seam's size and the two interface times -- is refused at zero too. The
+//! seam's size and the three interface times -- is refused at zero too. The
 //! build drone's cost is not: a drone that costs nothing is a rule a table
 //! may state. The by-richness rows are refused only when the whole row is
 //! absent.
 //!
-//! `structures.beacon.draw_kw` is **not read**: since T14b a placed beacon is
-//! net zero on the grid (its key-core output equals its own base draw,
-//! decisions-log items 90 and 113 (5)), so no goal charges it
-//! ([`crate::candidates`]'s `PLACED_BEACON_ADDED_DRAW_KW`).
+//! `structures.beacon.draw_kw` is **not read**, and no goal charges a placed
+//! beacon any draw: since T14b a beacon is net zero on the grid through its own
+//! key-core (decisions-log items 90 and 113 (5); `crates/sim/src/power.rs`),
+//! which S1's plan, decision 14 (ruled by item 128), made the reading of the
+//! register's S1-14 rather than a guess.
 
 use pharmakos_proto::gp::v1::{ByRichness, RulesTable};
 
@@ -61,6 +62,17 @@ impl Richness {
         }
     }
 
+    /// The grade a proto name (`gp.v1.ByRichness.Richness`) spells: `"LEAN"`,
+    /// `"STANDARD"` or `"RICH"`.
+    pub(crate) fn of(name: &str) -> Option<Richness> {
+        match name {
+            "LEAN" => Some(Richness::Lean),
+            "STANDARD" => Some(Richness::Standard),
+            "RICH" => Some(Richness::Rich),
+            _ => None,
+        }
+    }
+
     fn pick(self, row: &ByRichness) -> u32 {
         match self {
             Richness::Lean => row.lean,
@@ -77,12 +89,16 @@ pub(crate) struct Tuning {
     pub(crate) sphere_radius_voxels: i64,
     /// `structures.beacon.cost_dollars`.
     pub(crate) beacon_cost_dollars: i64,
-    /// `structures.generator.cost_dollars`.
-    pub(crate) generator_cost_dollars: i64,
-    /// `units.build_drone.cost_dollars`: what the Build beacon a vent goal
-    /// places fabricates first, because the Generator is its work and it has
-    /// no drone.
-    pub(crate) build_drone_cost_dollars: i64,
+    /// What a tap goal spends, whole $: `structures.generator.cost_dollars`
+    /// plus `units.build_drone.cost_dollars` ([`crate::candidates`]). The
+    /// beacon may hold a build drone already, which the wire does not say, so
+    /// the drone is counted: an upper bound, so a tap the treasury cannot
+    /// carry is never composed.
+    pub(crate) tap_cost_dollars: i64,
+    /// What a Generator goal spends, whole $: the new beacon, its Generator,
+    /// and the build drone it fabricates first because the Generator is its
+    /// work and it has no drone -- the rules table's price for the route.
+    pub(crate) vent_cost_dollars: i64,
     /// `power.generator_output_kw`, by richness.
     generator_output_kw: ByRichness,
     /// `economy.ore_yield_per_voxel_dollars`, by richness.
@@ -90,8 +106,13 @@ pub(crate) struct Tuning {
     /// `economy.seam_voxels`.
     pub(crate) seam_voxels: i64,
     /// `interface_times.edit_settings_base_ms`: a one-field settings row,
-    /// which is what a placed beacon's initial Build target list is.
+    /// which is what the core's dig depth is ([`crate::compose`]'s
+    /// `deepen_core`).
     pub(crate) edit_settings_base_ms: i64,
+    /// `interface_times.build_target_ms`: one Build target, its own row since
+    /// S1's plan, decision 15 (decisions-log item 128 (3) (g)), whether it is
+    /// a placed beacon's initial target or an `add_build_target` row.
+    pub(crate) build_target_ms: i64,
     /// `interface_times.place_beacon_deploy_ms`.
     pub(crate) place_beacon_deploy_ms: i64,
 }
@@ -148,16 +169,34 @@ impl Tuning {
                 "interface_times.place_beacon_deploy_ms",
                 i64::from(times.place_beacon_deploy_ms),
             ),
+            (
+                "interface_times.build_target_ms",
+                i64::from(times.build_target_ms),
+            ),
         ] {
             if value <= 0 {
                 return Err(missing(row));
             }
         }
+        // The two route prices, summed once here: rows are `u32`, so the sums
+        // fit an `i64`, and a sum that did not would be a table refused
+        // rather than a price saturated.
+        let too_dear = || {
+            RulesError(String::from(
+                "a route's price does not fit a whole $ figure",
+            ))
+        };
+        let tap_cost_dollars = i64::from(generator_row.cost_dollars)
+            .checked_add(i64::from(build_drone.cost_dollars))
+            .ok_or_else(too_dear)?;
+        let vent_cost_dollars = tap_cost_dollars
+            .checked_add(i64::from(beacon_row.cost_dollars))
+            .ok_or_else(too_dear)?;
         Ok(Tuning {
+            tap_cost_dollars,
+            vent_cost_dollars,
             sphere_radius_voxels: i64::from(beacon.sphere_radius_voxels),
             beacon_cost_dollars: i64::from(beacon_row.cost_dollars),
-            generator_cost_dollars: i64::from(generator_row.cost_dollars),
-            build_drone_cost_dollars: i64::from(build_drone.cost_dollars),
             generator_output_kw: power
                 .generator_output_kw
                 .ok_or_else(|| missing("power.generator_output_kw"))?,
@@ -167,6 +206,7 @@ impl Tuning {
             seam_voxels: i64::from(economy.seam_voxels),
             edit_settings_base_ms: i64::from(times.edit_settings_base_ms),
             place_beacon_deploy_ms: i64::from(times.place_beacon_deploy_ms),
+            build_target_ms: i64::from(times.build_target_ms),
         })
     }
 

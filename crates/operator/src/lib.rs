@@ -40,15 +40,25 @@
 //! 30 candidates, one estimate each, 1 + 4 verifies -- and the call budget is
 //! derived from them ([`easy::EASY_CALL_BUDGET`]).
 //!
+//! # Names, not places (S1's targeting)
+//!
+//! Easy's row says "fixed targets only", and since S1 a fixed target is a
+//! name (decisions-log item 127 (12); `docs/design/targeting.md`): Easy plans
+//! from `get_map_summary`'s named vents and seams, asks `estimate_route` for
+//! the site the sim's own `covering` rule would choose, and writes
+//! `{"feature_id": "vent_324_16"}` where the templates' descriptions stand.
+//! It derives no id and keeps no site algorithm of its own.
+//!
 //! **No lookahead at any level**: barred by "no dry runs" (AGENTS.md section 3
 //! rule 2), which is also why this crate has no `[features]` and can never
 //! reach the sim's `research` feature.
 //!
-//! # What the skeleton's Easy does not do
+//! # What Easy does not do yet
 //!
 //! Spec section 14's Survey post, Defend guard, chatter and target spread are
-//! not built at Easy (decisions-log item 111, section A6). PLACEHOLDER: owner,
-//! at **S5**, with Normal and Hard.
+//! not built at Easy (decisions-log item 111, section A6).
+//!
+//! PLACEHOLDER: Easy's Survey post, Defend guard, chatter and target spread — owner, S5, with Normal and Hard
 
 pub mod easy;
 pub mod wire;
@@ -58,7 +68,6 @@ mod compose;
 mod playbook;
 mod safe;
 mod situation;
-mod terrain;
 mod tuning;
 
 pub use easy::{Advice, Easy, Played, Submitted, SuggestedValue, Suggestion};

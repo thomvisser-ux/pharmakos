@@ -34,27 +34,28 @@
 //! | term | calls |
 //! |---|---|
 //! | the fixed reads ([`FIXED_READS`]) | `get_status`, `get_briefing`, `get_economy_forecast`, `get_map_summary`, and at most [`PAGES_MAX`] pages each of `list_beacons`, `get_view` and `list_templates` |
-//! | one estimate per candidate | [`EASY_CANDIDATES`] `estimate_route` |
+//! | the tap probe ([`TAP_PROBE_CALLS`]) | one `resolve_refs` and one QUICK `verify_plan` over every tap Easy could make, when there is one (the register's S1-15) |
+//! | one estimate per candidate | [`EASY_CANDIDATES`] `estimate_route`, a placement's to a `covering` waypoint naming its feature |
 //! | one instantiate per template | [`EASY_TEMPLATES`] `instantiate_template`, each with its own values, to read what it declares |
 //! | the composition | [`COMPOSE_CALLS`]: one `patch_plan` filling the chosen template and inserting its goals |
 //! | the verifies | 1 `verify_plan`, then [`EASY_REPAIRS`] repairs of one `patch_plan` and one `verify_plan` each |
 //! | the safe playbook | [`SAFE_CALLS`]: at most [`SAFE_ESTIMATES`] `estimate_route`, one `instantiate_template` with the route, one `verify_plan` |
 //! | the commit | [`COMMIT_CALLS`]: at most two `submit_plan` (its own plan, then the safe one if the first was refused) and one `set_ready` |
 //!
-//! An advisor makes the fixed reads, the estimates, the instantiates and the
-//! safe playbook's calls, and nothing else ([`EASY_ADVISOR_CALL_BUDGET`]).
+//! An advisor makes the fixed reads, the tap probe, the estimates, the
+//! instantiates and the safe playbook's calls, and nothing else
+//! ([`EASY_ADVISOR_CALL_BUDGET`]).
 //! `easy_never_exceeds_its_derived_call_budget` asserts both on a worst-case
 //! scripted round, and the hosted tests in `crates/gamectl` assert them on
 //! every round they play.
 
 use pharmakos_proto::json::Json;
 
-use crate::candidates::{self, Candidate, Goal};
+use crate::candidates::{self, Candidate};
 use crate::compose::{self, Composed};
 use crate::playbook::{self, Declared};
 use crate::safe::{self, SafePlan};
-use crate::situation::Situation;
-use crate::terrain::Feature;
+use crate::situation::{Kind, Situation};
 use crate::tuning::{RulesError, Tuning};
 use crate::wire::{Call, Wire, array_of, bool_of, compact, object, string, text_of};
 
@@ -64,77 +65,68 @@ use crate::wire::{Call, Wire, array_of, bool_of, compact, object, string, text_o
 
 /// Easy's breadth: how many candidates are evaluated, one estimate each.
 ///
-/// PLACEHOLDER: spec section 14's Easy column gives 30; it has no rules row
-/// because the operator's rows are not in the table. Owner, at **S5**, with
-/// Normal and Hard.
+/// Spec section 14's Easy column gives 30; it has no rules row because the
+/// operator's rows are not in the table.
+///
+/// PLACEHOLDER: Easy's candidate count, spec section 14's 30 — owner, S5, with Normal and Hard
 pub const EASY_CANDIDATES: u32 = 30;
 
 /// Easy's k: how many of the candidates, best first by utility per second,
 /// go into composition.
 ///
-/// PLACEHOLDER: spec section 14's "top-3". Read as best-of-k with no draw
-/// (decision C15). Owner, at **S5**.
+/// Spec section 14's "top-3", read as best-of-k with no draw (decision C15).
+///
+/// PLACEHOLDER: Easy's k, spec section 14's top-3 — owner, S5, with Normal and Hard
 pub const EASY_TOP_K: usize = 3;
 
 /// How much of the segment Easy's route fills, per cent.
 ///
-/// PLACEHOLDER: spec section 14's 70 %. Owner, at **S5**.
+/// PLACEHOLDER: Easy's route fill, spec section 14's 70 % — owner, S5, with Normal and Hard
 pub const EASY_ROUTE_FILL_PERCENT: i64 = 70;
 
 /// How many times Easy repairs a plan that does not qualify, after its first
 /// verify ("verify and repair up to 4 times").
 ///
-/// PLACEHOLDER: spec section 14's 4, the same at every difficulty. Owner, at
-/// **S5**.
+/// PLACEHOLDER: the repair count, spec section 14's 4 at every difficulty — owner, S5, with Normal and Hard
 pub const EASY_REPAIRS: u32 = 4;
 
 /// How far an at-risk beacon may be for the safe playbook to raise it, game
-/// milliseconds of travel from the commander.
+/// milliseconds of travel from the commander: spec section 14's "within 60 s
+/// travel", kept by S1's plan, decision 14 (ruled by item 128; the register's
+/// S1-17).
 ///
-/// PLACEHOLDER: spec section 14's "within 60 s travel", with "at risk"
-/// itself undefined there. Owner, at **S1**, with the grid.
+/// PLACEHOLDER: the safe playbook's reach, ruled 60 s at S1, with no rules row for the operator's values — owner, S5, with the operator's rows
 pub const SAFE_REACH_MS: i64 = 60_000;
 
-/// How many beacons the safe playbook raises at most.
+/// How many beacons the safe playbook raises at most: spec section 14's "up
+/// to 2", kept by decision 14 (the register's S1-18).
 ///
-/// PLACEHOLDER: spec section 14's "up to 2". Owner, at **S1**, with the grid.
+/// PLACEHOLDER: the safe playbook's raise count, ruled 2 at S1, with no rules row for the operator's values — owner, S5, with the operator's rows
 pub const SAFE_MAX_RAISED: usize = 2;
 
-/// How many browned-out beacons the safe playbook estimates, nearest the
-/// commander in the ground plane first: twice what it may raise, so the
-/// nearest two by travel are found among the nearest four by distance.
+/// How many beacons at risk the safe playbook estimates, first in the shed
+/// order first: twice what it may raise, so that the two it raises are
+/// found among the next four to shed. A bound the spec does not state,
+/// needed so the safe playbook's calls are a term of the budget; kept by
+/// decision 14 (the register's S1-19).
 ///
-/// PLACEHOLDER: a bound the spec does not state, needed so the safe
-/// playbook's calls are a term of the budget. Owner, at **S1**, with the two
-/// above.
+/// PLACEHOLDER: the safe playbook's estimate bound, ruled 4 at S1, with no rules row for the operator's values — owner, S5, with the operator's rows
 pub const SAFE_ESTIMATES: u32 = 4;
+
+/// The `dig_max_depth` Easy and the safe playbook write to the core's Mine
+/// settings, so its starting drone works the starting seam below its top
+/// layer (decisions-log item 133 (3) (a); [`crate::compose::deepen_core`]):
+/// Expand & Mine's own value for a new Mine beacon, so the two agree.
+///
+/// PLACEHOLDER: the core's dig depth Easy and the safe playbook write, 4 as Expand & Mine's own — owner, S1's demo, with the economy's numbers (tune)
+pub const CORE_DIG_MAX_DEPTH: u32 = 4;
 
 /// How many pages of `list_beacons`, `get_view` and `list_templates` a round
 /// reads at most. Each is one page today: the whole map's keyframe is one
 /// 256 KiB page (201 558 bytes at the golden seed).
 ///
-/// PLACEHOLDER: a bound on paging, with the gateway's page sizes. Owner, at
-/// **hardening**, with the rate limits.
+/// PLACEHOLDER: a bound on paging, with the gateway's page sizes — owner, hardening, with the rate limits
 pub const PAGES_MAX: u32 = 4;
-
-/// The most ground columns (`size_x * size_y` from `get_map_summary`) the
-/// operator holds for one round: a bound on what it allocates for the view,
-/// so a size it cannot hold is a round it cannot read -- it then plans
-/// nothing and still says ready -- rather than an allocation that fails on
-/// the surface thread. The committed map is 384 x 384 = 147 456 columns;
-/// this is 1024 x 1024, eight bytes a column.
-///
-/// PLACEHOLDER: a bound the spec does not state, with the map sizes. Owner,
-/// at **S4**, with the symmetric map.
-pub const MAP_COLUMNS_MAX: i64 = 1024 * 1024;
-
-/// How far inside a sphere's radius a place must be for Easy to call it
-/// inside: whole-voxel positions are floored, and the sim measures between
-/// fixed-point positions.
-///
-/// PLACEHOLDER: a margin the spec does not state. Owner, at **S1**, when
-/// placement legality is on the wire as an estimate.
-pub const SPHERE_MARGIN_VOXELS: i64 = 2;
 
 /// The templates Easy knows how to fill, in the order it instantiates them.
 /// Which three ship is decision 10 (decisions-log item 81).
@@ -187,9 +179,10 @@ pub struct Weights {
 
 /// The Balanced weighting, the only one v1 ships (spec section 14).
 ///
-/// PLACEHOLDER: all ones, because the terms are already in one unit (points,
-/// where a whole $ is a point). The Balanced weights are Tuning. Owner, at
-/// **S5**.
+/// All ones, because the terms are already in one unit (points, where a
+/// whole $ is a point).
+///
+/// PLACEHOLDER: the Balanced weights, all ones — owner, S5
 pub const BALANCED: Weights = Weights {
     defence: 1,
     economy: 1,
@@ -202,18 +195,17 @@ pub const BALANCED: Weights = Weights {
 /// What a kW of supply is worth in points, so a Generator's output and a
 /// grid left short can be scored against a seam's $.
 ///
-/// PLACEHOLDER: a conversion the spec does not state. Owner, at **S5**, with
-/// the Balanced weights.
+/// PLACEHOLDER: the points a kW is worth, a conversion the spec does not state — owner, S5, with the Balanced weights
 pub const DOLLARS_PER_KW: i64 = 10;
 
 /// What one more beacon, and so one more sphere, is worth in points.
 ///
-/// PLACEHOLDER: Owner, at **S5**, with the Balanced weights.
+/// PLACEHOLDER: the points one more sphere is worth — owner, S5, with the Balanced weights
 pub const EXPANSION_POINTS_PER_BEACON: i64 = 100;
 
 /// What one thing of another seat in sight near a goal costs in points.
 ///
-/// PLACEHOLDER: Owner, at **S5**, with the Balanced weights.
+/// PLACEHOLDER: the points one thing of another seat near a goal costs — owner, S5, with the Balanced weights
 pub const RISK_POINTS_PER_ENEMY: i64 = 100;
 
 // ---------------------------------------------------------------------------
@@ -222,6 +214,9 @@ pub const RISK_POINTS_PER_ENEMY: i64 = 100;
 
 /// The fixed reads: four single calls and three paged reads.
 pub const FIXED_READS: u32 = 4 + 3 * PAGES_MAX;
+
+/// The tap probe: one `resolve_refs` and one QUICK `verify_plan`.
+pub const TAP_PROBE_CALLS: u32 = 2;
 
 /// The composition: one `patch_plan`.
 pub const COMPOSE_CALLS: u32 = 1;
@@ -238,6 +233,7 @@ pub const COMMIT_CALLS: u32 = 2 + 1;
 /// The most calls a built-in seat's round makes, derived term by term (see
 /// the module docs).
 pub const EASY_CALL_BUDGET: u32 = FIXED_READS
+    + TAP_PROBE_CALLS
     + EASY_CANDIDATES
     + EASY_TEMPLATES
     + COMPOSE_CALLS
@@ -247,7 +243,7 @@ pub const EASY_CALL_BUDGET: u32 = FIXED_READS
 
 /// The most calls an advisor's round makes.
 pub const EASY_ADVISOR_CALL_BUDGET: u32 =
-    FIXED_READS + EASY_CANDIDATES + EASY_TEMPLATES + SAFE_CALLS;
+    FIXED_READS + TAP_PROBE_CALLS + EASY_CANDIDATES + EASY_TEMPLATES + SAFE_CALLS;
 
 // ---------------------------------------------------------------------------
 // What comes back
@@ -370,27 +366,22 @@ impl Easy {
 
     /// Plan and submit.
     fn plan(&self, wire: &mut Wire<'_, '_>, situation: &Situation, round: &mut Played) {
-        let goals = candidates::enumerate(situation, &self.tuning);
+        let taps = candidates::legal_taps(wire, situation, &self.tuning);
+        let goals = candidates::enumerate(situation, &self.tuning, &taps);
         let evaluated = candidates::evaluate(wire, situation, &self.tuning, goals);
         let top = candidates::top_k(&evaluated);
         let declared = playbook::declare(wire, &situation.templates, &EASY_KNOWN_TEMPLATES);
 
-        if let Some(composed) = compose::compose(situation, &top, &declared) {
+        if let Some(composed) = compose::compose(situation, &self.tuning, &top, &declared) {
             if let Some(text) = verified(wire, &declared, &composed, &mut round.repairs) {
                 if submit(wire, &text) {
                     round.submitted = Submitted::Own;
-                    let why = composed
-                        .goals
-                        .first()
-                        .map(|first| {
-                            compose::why_for(
-                                &first.goal,
-                                first,
-                                composed.goals.len(),
-                                compose::fill_ms(situation),
-                            )
-                        })
-                        .unwrap_or_default();
+                    let why = match (composed.goals.first(), compose::fill_ms(situation)) {
+                        (Some(first), Some(fill)) => {
+                            compose::why_for(first, composed.goals.len(), fill)
+                        }
+                        _ => String::new(),
+                    };
                     round.why = compose::with_seed(situation, &why);
                     round.playbook_jsonc = Some(text);
                     return;
@@ -402,8 +393,7 @@ impl Easy {
         if let Some(safe) = safe::safe_playbook(wire, situation, &declared) {
             if submit(wire, &safe.jsonc) {
                 round.submitted = Submitted::Safe;
-                round.why =
-                    compose::with_seed(situation, &compose::why_safe(situation, &safe.raised));
+                round.why = compose::with_seed(situation, &safe::why_safe(situation, Some(&safe)));
                 round.playbook_jsonc = Some(safe.jsonc);
             }
         }
@@ -414,7 +404,8 @@ impl Easy {
         let mut wire = Wire::new(call);
         let mut advice = Advice::default();
         if let Ok(situation) = Situation::read(&mut wire, seat) {
-            let goals = candidates::enumerate(&situation, &self.tuning);
+            let taps = candidates::legal_taps(&mut wire, &situation, &self.tuning);
+            let goals = candidates::enumerate(&situation, &self.tuning, &taps);
             let evaluated = candidates::evaluate(&mut wire, &situation, &self.tuning, goals);
             let declared =
                 playbook::declare(&mut wire, &situation.templates, &EASY_KNOWN_TEMPLATES);
@@ -468,7 +459,7 @@ fn verified(
         if *repairs >= EASY_REPAIRS {
             return None;
         }
-        *repairs = repairs.saturating_add(1);
+        *repairs = repairs.checked_add(1)?;
         let next = if let Some(json_patch) = machine_fix(report) {
             // The removals name route steps by the index they had in the
             // composed text; a fix may have moved them, so from here on they
@@ -537,10 +528,12 @@ fn submit(wire: &mut Wire<'_, '_>, text: &str) -> bool {
 /// declaration order: own beacons and fixed targets only. Each `why` opens
 /// with the seed line (decision C15: recorded, unused).
 ///
-/// PLACEHOLDER: which templates the operator suggests for a human (all three
-/// Easy knows) and that a suggestion names only the seat's own beacons and
-/// fixed targets, never another seat's beacon (Easy's row). Owner, at **S5**
-/// (decisions-log item 111, section D).
+/// Which templates the operator suggests for a human (all three Easy knows),
+/// and that a suggestion names only the seat's own beacons and named
+/// features, never another seat's beacon (Easy's row; decisions-log item 111,
+/// section D).
+///
+/// PLACEHOLDER: the templates suggested to a human, and own beacons and named features only — owner, S5
 fn suggestions(
     situation: &Situation,
     tuning: &Tuning,
@@ -560,57 +553,35 @@ fn suggestions(
                 });
             }
         };
+        let covering = template.pointer_ending("/place_beacon/at/covering");
         let why = match template.template_id.as_str() {
-            EXPAND_AND_MINE => match candidates::best_for(evaluated, EXPAND_AND_MINE) {
-                Some(best) => {
-                    if let Goal::Mine { site, .. } = best.goal {
-                        put(
-                            template.pointer_ending("/move/to"),
-                            compose::location_text(site),
-                        );
-                        put(
-                            template.pointer_ending("/place_beacon/at"),
-                            compose::location_text(site),
-                        );
-                    }
-                    compose::why_for(&best.goal, best, 1, fill)
+            EXPAND_AND_MINE => match (candidates::best_for(evaluated, EXPAND_AND_MINE), fill) {
+                (Some(best), Some(fill)) => {
+                    put(covering, named_text(best.goal.feature()));
+                    compose::why_for(best, 1, fill)
                 }
-                None => compose::why_none(Feature::Seam),
+                _ => compose::why_none(Kind::Seam),
             },
-            HOLD_AND_BUILD => match candidates::best_for(evaluated, HOLD_AND_BUILD) {
-                Some(best) => {
-                    if let Goal::Generator { site, anchor, .. } = best.goal {
-                        // The walk is the site: the sim deploys only while the
-                        // commander stands within its interface range of it.
-                        put(
-                            template.pointer_ending("/move/to"),
-                            compose::location_text(site),
-                        );
-                        put(
-                            template.pointer_ending("/place_beacon/at"),
-                            compose::location_text(site),
-                        );
-                        put(
-                            template.pointer_ending("/anchor/voxel"),
-                            compose::voxel_text(anchor),
-                        );
-                    }
-                    if let Some(hold) = compose::hold_left(best, fill) {
+            HOLD_AND_BUILD => match (candidates::best_for(evaluated, HOLD_AND_BUILD), fill) {
+                (Some(best), Some(fill)) => {
+                    put(covering, named_text(best.goal.feature()));
+                    // The wizard's playbook is the template alone, with no
+                    // step at the core, so nothing is held back for one.
+                    if let Some(hold) = compose::hold_left(best, fill, 0) {
                         put(template.pointer_ending("/hold/ms"), hold.to_string());
                     }
-                    compose::why_for(&best.goal, best, 1, fill)
+                    compose::why_for(best, 1, fill)
                 }
-                None => compose::why_no_vent(candidates::no_vent(situation, tuning)),
+                _ => compose::why_no_vent(&candidates::no_vent(situation, tuning)),
             },
             SAFE_PLAYBOOK => {
-                let raised: &[String] = safe.map_or(&[], |plan| plan.raised.as_slice());
-                if let Some(plan) = safe.filter(|plan| !plan.raised.is_empty()) {
+                if let Some(plan) = safe.filter(|plan| !plan.own) {
                     put(
                         template.pointer_ending("/declarative/route"),
                         plan.route.clone(),
                     );
                 }
-                compose::why_safe(situation, raised)
+                safe::why_safe(situation, safe)
             }
             _ => continue,
         };
@@ -621,4 +592,10 @@ fn suggestions(
         });
     }
     out
+}
+
+/// The compact JSON text of a feature reference by name, as a parameter
+/// value: `{"feature_id":"vent_324_16"}`.
+fn named_text(feature: &str) -> String {
+    compact(&object(vec![("feature_id", string(feature))]))
 }

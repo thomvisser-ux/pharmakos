@@ -22,7 +22,9 @@
 //! on the power-short text, whose core is shed at the Push's first settle. On
 //! every snapshot, for every seat, the corpus records what Easy sealed, how
 //! many calls it made, whether its safe playbook qualified, and what that safe
-//! playbook raised unforced (T18b; decisions-log items 113 (4) and 114 (4)).
+//! playbook raised unforced (T18b; decisions-log items 113 (4) and 114 (4)),
+//! read as S1's plan, decision 14 reads "short" and "at risk" (the register's
+//! S1-21; `crates/operator/src/safe.rs`).
 //!
 //! # The scenario's Generator
 //!
@@ -284,18 +286,20 @@ struct Row {
     why_safe: String,
     /// The seat's `supply_kw_now` on this snapshot.
     supply_kw: i64,
+    /// The seat's `draw_kw_now` on this snapshot.
+    draw_kw: i64,
     /// The raise path forced through the real verifier (see
-    /// [`forced_raise`]): `None` when the seat has no own non-core beacon on
+    /// [`forced_raise`]): `None` when the seat has no own beacon at risk on
     /// this snapshot, else what was raised and whether it qualified FULL.
     forced: Option<Forced>,
 }
 
-/// What an advisor raised when told power is short and every own non-core
-/// beacon is dark, on a real `Surface`.
+/// What an advisor raised when told power is short, on a real `Surface`.
 #[derive(Clone, Debug)]
 struct Forced {
-    /// The own non-core beacons the seat has.
-    dark: Vec<String>,
+    /// The own beacons at risk on this snapshot: lit, not the core and not
+    /// HIGH.
+    at_risk: Vec<String>,
     /// What the safe playbook raised.
     raised: Vec<String>,
     /// The safe playbook it returned, verified FULL through the seat's door.
@@ -324,33 +328,11 @@ fn raised_by(advice: &pharmakos_operator::Advice) -> Vec<String> {
         .collect()
 }
 
-/// Every own non-core beacon the seat is shown, ascending by id.
-fn own_non_core(surface: &mut Surface, token: &Token, seat: u8) -> Vec<String> {
-    let beacons = result(
-        &call(surface, token, "list_beacons", params("{}")),
-        "list_beacons",
-    );
-    let own = format!("seat.{seat}");
-    let mut out: Vec<String> = match beacons.get("beacons") {
-        Some(Json::Array(rows)) => rows
-            .iter()
-            .filter(|row| row.get("owner") == Some(&Json::String(own.clone())))
-            .filter(|row| row.get("core") != Some(&Json::Bool(true)))
-            .filter_map(|row| match row.get("beacon_id") {
-                Some(Json::String(id)) => Some(id.clone()),
-                _ => None,
-            })
-            .collect(),
-        _ => Vec::new(),
-    };
-    out.sort();
-    out
-}
-
 /// What `list_beacons` shows of the seat's own power.
 #[derive(Clone, Debug)]
 struct OwnPower {
-    /// The own beacons at risk -- browned out, not the core, and not HIGH.
+    /// The own beacons the safe playbook may raise -- lit, not the core, and
+    /// not HIGH (decision 14's "at risk", before the shed order picks).
     at_risk: Vec<String>,
     /// The seat's core is browned out.
     core_dark: bool,
@@ -373,7 +355,7 @@ fn own_power(surface: &mut Surface, token: &Token, seat: u8) -> OwnPower {
     let core = |row: &Json| row.get("core") == Some(&Json::Bool(true));
     let mut at_risk: Vec<String> = rows
         .iter()
-        .filter(|row| row.get("owner") == Some(&own) && dark(row) && !core(row))
+        .filter(|row| row.get("owner") == Some(&own) && !dark(row) && !core(row))
         .filter(|row| row.get("priority") != Some(&Json::String(String::from("high"))))
         .filter_map(|row| match row.get("beacon_id") {
             Some(Json::String(id)) => Some(id.clone()),
@@ -447,41 +429,33 @@ fn set_member(object: &mut Json, key: &str, value: Json) {
 
 /// The raise path through the **real** verifier. An advisor for the seat
 /// runs against the real `Surface` through the seat's own token, with every
-/// call forwarded untouched except one answer rewritten: its `list_beacons`
-/// says every own non-core beacon is browned out. That alone is enough since
-/// T18b, because a dark own beacon is itself "power is short" (decisions-log
-/// item 113 (4)), so the forecast is no longer rewritten. Everything else --
-/// the forecast, the estimates, `instantiate_template` with the whole route,
-/// the FULL `verify_plan` -- is the gateway's own answer. `None` when the seat
-/// has no own non-core beacon to raise.
+/// call forwarded untouched except one answer rewritten: its
+/// `get_economy_forecast` says the draw is 1 kW above the supply, which is
+/// "power is short" (decision 14; the register's S1-21), while every beacon
+/// stays as `list_beacons` shows it. Everything else -- the beacons, the
+/// estimates, `instantiate_template` with the whole route, the FULL
+/// `verify_plan` -- is the gateway's own answer. `None` when the seat has no
+/// own beacon at risk (lit, not the core, not HIGH) to raise.
 fn forced_raise(surface: &mut Surface, token: &Token, seat: u8, rules: &str) -> Option<Forced> {
-    let dark = own_non_core(surface, token, seat);
-    if dark.is_empty() {
+    let at_risk = own_power(surface, token, seat).at_risk;
+    if at_risk.is_empty() {
         return None;
     }
-    let own = Json::String(format!("seat.{seat}"));
     let mut advisor = Easy::new(rules).expect("the rules text");
     let advice = {
         let mut rewriting = |method: &str, params: Json| {
             let mut answer = call(surface, token, method, params);
-            if method != "list_beacons" {
+            if method != "get_economy_forecast" {
                 return answer;
             }
             if let Json::Object(members) = &mut answer {
-                if let Some((_, Json::Object(fields))) =
-                    members.iter_mut().find(|(key, _)| key == "result")
-                {
-                    if let Some((_, Json::Array(rows))) =
-                        fields.iter_mut().find(|(key, _)| key == "beacons")
-                    {
-                        for row in rows.iter_mut() {
-                            if row.get("owner") == Some(&own)
-                                && row.get("core") != Some(&Json::Bool(true))
-                            {
-                                set_member(row, "powered", Json::Bool(false));
-                            }
-                        }
-                    }
+                if let Some((_, fields)) = members.iter_mut().find(|(key, _)| key == "result") {
+                    let supply = number(fields, "supply_kw_now");
+                    set_member(
+                        fields,
+                        "draw_kw_now",
+                        Json::Number(supply.saturating_add(1).to_string()),
+                    );
                 }
             }
             answer
@@ -505,7 +479,7 @@ fn forced_raise(surface: &mut Surface, token: &Token, seat: u8, rules: &str) -> 
         .and_then(|report| report.get("qualifies"))
         == Some(&Json::Bool(true));
     Some(Forced {
-        dark,
+        at_risk,
         raised: raised_by(&advice),
         qualifies,
         carries_raise: advice.safe_playbook_jsonc.contains("\"raise_b_"),
@@ -607,6 +581,7 @@ fn visit(
             estimated,
             why_safe,
             supply_kw: number(&forecast, "supply_kw_now"),
+            draw_kw: number(&forecast, "draw_kw_now"),
             forced,
         });
     }
@@ -751,13 +726,18 @@ fn easy_passes_the_verifier_on_every_snapshot_of_the_corpus() {
         );
         assert!(row.advisor_calls <= EASY_ADVISOR_CALL_BUDGET, "{row:#?}");
     }
-    // What it chose, said so a reader of a red build can see it: at the
-    // golden seed a seat whose seam is inside its route share expands beside
-    // it in round one, and a seat whose seam is not, or whose seam is already
-    // worked, seals its safe playbook.
+    // What it chose, said so a reader of a red build can see it: on the
+    // determinism seed seat 0's starting vent is inside its route share, so
+    // in round one it places a Build beacon covering that vent, by name
+    // (S1's targeting: Easy emits names), and a seat with nothing it does not
+    // cover yet inside its share seals its safe playbook. The starting seam is
+    // covered by the core from the first tick and is the core's to work.
     assert!(
-        rows.iter()
-            .any(|row| row.snapshot == "three-rounds/round-1" && row.note.contains("Mine beacon")),
+        rows.iter().any(|row| {
+            row.snapshot == "three-rounds/round-1"
+                && row.note.contains("covering the")
+                && row.note.contains("vent_")
+        }),
         "{rows:#?}"
     );
 }
@@ -784,51 +764,52 @@ fn the_safe_playbook_always_qualifies() {
             .all(|row| row.headroom_kw >= 0),
         "and the committed rules are not"
     );
-    // Never more than two raised. Said plainly, since a reader will look for
-    // the raise path here: on a real grid it does not fire, and the
-    // conclusion T18 drew stands though its mechanism has changed. Since
-    // T14b (decisions-log items 113 (5) and 114 (4)) a placed beacon adds no
-    // draw to the grid, so the committed rules never run short, and the
-    // power-short match's only dark beacon is its core: shed at the Push's
-    // first settle (1 kW of surplus against the starting force's 4 kW) and
-    // never revived (its revival costs 3 kW against 0 kW of headroom and a
-    // 2 kW margin), after which supply and draw are both 0 and a beacon Easy
-    // places later is pushed awake, adds no draw, meets no deficit and stays
-    // lit. The safe playbook never raises the core, so no corpus row holds a
-    // beacon at risk. `the_safe_playbook_raises_only_what_is_at_risk_unforced`
-    // below proves the gate and its why on this grid; `forced_raise` and the
-    // scripted client (crates/operator/tests/scripted.rs) remain the proof
-    // that a raise is composed. The definitions are the owner's at S1.
+    // Never more than two raised. Whether a raise fires unforced, and where,
+    // is `the_safe_playbook_raises_only_what_is_at_risk_unforced`'s named
+    // expectation; `forced_raise` and the scripted client
+    // (crates/operator/tests/scripted.rs) remain the proof that a raise is
+    // composed.
     assert!(rows.iter().all(|row| row.raised.len() <= 2), "{rows:#?}");
 }
 
-/// How many corpus rows the safe playbook raises anything on, unforced.
+/// The corpus rows the safe playbook raises anything on, unforced, as
+/// `(snapshot, seat)`: a named expectation, so a row that starts or stops
+/// raising says which seat, round and beacon moved, and the mechanism.
 ///
-/// **Zero**, and expected so (decisions-log item 114 (4), which corrects item
-/// 113 (5)'s premise): on T14b's grid no corpus row holds a dark non-core
-/// beacon (see the note in `the_safe_playbook_always_qualifies`). A row that
-/// raises means the grid or the corpus changed; the mechanism is said before
-/// this number is.
-const ROWS_THAT_RAISE: usize = 0;
+/// On the committed rules nothing is dark and the draw never outruns the
+/// supply, so no row there is short. The power-short match's core is shed at
+/// the Push's first settle (1 kW of surplus against the starting force's
+/// 4 kW) and never revived, so from round 2 on its seats are short. Seat 0
+/// placed `b_01` in round 1, a Build beacon covering its starting vent, which
+/// is lit (a placed beacon adds no draw): in round 2's Lull it is the seat's
+/// one beacon at risk (decision 14: lit and next in the shed order, since a
+/// raise relights), within reach, so it is raised to HIGH; in round 3 it is
+/// HIGH already and nothing is raised.
+const ROWS_THAT_RAISE: &[(&str, u8)] = &[("three-rounds-power-short/round-2", 0)];
 
-/// Decisions-log item 113 (4), hosted and unforced, on every corpus row with
-/// no answer rewritten: the advisor's safe playbook raises only the seat's own
-/// dark, non-core, non-HIGH beacons, at most `SAFE_MAX_RAISED`, and at least
-/// one whenever such a beacon is within `SAFE_REACH_MS` by the advisor's own
-/// estimate; and on every power-short row from round 2 on -- the core dark at
-/// 0 kW -- it raises and estimates nothing, and its why says power is short.
-///
-/// This proves the new gate and its why on a real grid, not that a raise
-/// fires: `forced_raise` stays the hosted proof that one is composed.
+/// Decisions-log item 128 (S1's plan, decision 14; the register's S1-21),
+/// hosted and unforced, on every corpus row with no answer rewritten: power
+/// is short exactly when an own beacon is dark or the draw is above the
+/// supply; the advisor's safe playbook raises only the seat's own lit,
+/// non-core, non-HIGH beacons, at most `SAFE_MAX_RAISED`, and at least one
+/// whenever such a beacon is within `SAFE_REACH_MS` by the advisor's own
+/// estimate while power is short; it estimates nothing while power is not
+/// short; and on every power-short row from round 2 on -- the core dark --
+/// its why says power is short and names the core.
 #[test]
 fn the_safe_playbook_raises_only_what_is_at_risk_unforced() {
     let rows = corpus();
     for row in rows {
         let what = format!("{} seat {}: {row:#?}", row.snapshot, row.seat);
+        let short = row.power.any_dark || row.draw_kw > row.supply_kw;
         assert!(row.raised.len() <= SAFE_MAX_RAISED, "{what}");
         assert!(
             row.raised.iter().all(|id| row.power.at_risk.contains(id)),
-            "raised only the seat's own dark, non-core, non-HIGH beacons: {what}"
+            "raised only the seat's own lit, non-core, non-HIGH beacons: {what}"
+        );
+        assert!(
+            short || (row.estimated.is_empty() && row.raised.is_empty()),
+            "nothing is estimated or raised while power is not short: {what}"
         );
         let reachable = row
             .estimated
@@ -844,34 +825,26 @@ fn the_safe_playbook_raises_only_what_is_at_risk_unforced() {
                 .all(|(id, _)| row.power.at_risk.contains(id)),
             "only a beacon at risk is ever estimated: {what}"
         );
-        // The safe playbook's own "power is short" (`crate::safe`'s
-        // `power_short`): any own beacon dark, whatever its priority, or the
-        // headroom below zero.
-        if !row.power.any_dark && row.headroom_kw >= 0 {
-            assert!(
-                row.why_safe.contains("Power is not short"),
-                "nothing dark and headroom at zero or more: {what}"
-            );
-        } else {
-            assert!(
-                !row.why_safe.contains("Power is not short"),
-                "an own beacon is dark or the headroom is below zero: {what}"
-            );
-        }
+        assert_eq!(
+            !row.why_safe.contains("Power is not short"),
+            short,
+            "the why says power is short exactly when it is: {what}"
+        );
     }
-    let raising = rows.iter().filter(|row| !row.raised.is_empty()).count();
-    eprintln!(
-        "unforced: {raising} of {} corpus rows raise anything",
-        rows.len()
-    );
+    let raising: Vec<(&str, u8)> = rows
+        .iter()
+        .filter(|row| !row.raised.is_empty())
+        .map(|row| (row.snapshot.as_str(), row.seat))
+        .collect();
+    eprintln!("unforced: corpus rows that raise anything: {raising:?}");
     assert_eq!(
         raising, ROWS_THAT_RAISE,
         "the named expectation moved: say which seat, round and beacon, and the mechanism"
     );
 
-    // The power-short match from round 2 on: a total blackout, the core dark
-    // and the headroom 0. Asserted as the precondition first, so a rules or
-    // grid change fails loudly here rather than quietly passing below.
+    // The power-short match from round 2 on: the core dark. Asserted as the
+    // precondition first, so a rules or grid change fails loudly here rather
+    // than quietly passing below.
     let blackout: Vec<&Row> = rows
         .iter()
         .filter(|row| {
@@ -885,16 +858,11 @@ fn the_safe_playbook_raises_only_what_is_at_risk_unforced() {
     );
     for row in blackout {
         let what = format!("{} seat {}: {row:#?}", row.snapshot, row.seat);
-        assert!(
-            row.power.core_dark && row.headroom_kw == 0,
-            "a total blackout: {what}"
-        );
-        assert!(row.raised.is_empty() && row.estimated.is_empty(), "{what}");
+        assert!(row.power.core_dark, "the core is dark: {what}");
         assert!(row.why_safe.contains("Power is short"), "{what}");
-        assert!(!row.why_safe.contains("Power is not short"), "{what}");
         assert!(
-            row.why_safe.contains("never raises the core") && !row.why_safe.contains(" kW"),
-            "the core, and no kW figure as the shortage: {what}"
+            row.why_safe.contains("because the core b_00"),
+            "the core, named as the shortage: {what}"
         );
     }
     // The corpus's own Generator (decisions-log item 113 (6) and (9): the kW
@@ -947,14 +915,14 @@ fn core_surplus_and_lean(rules: &str) -> (i64, i64) {
     (i64::from(power.core_surplus_kw), lean)
 }
 
-/// The raise path through the **real** verifier ([`forced_raise`]). The
-/// hosted corpus never raises by itself (see above), so on every snapshot
-/// where a seat has an own non-core beacon, an advisor is told power is
-/// short and those beacons are dark, and everything else is the gateway's
-/// own answer. Its safe playbook must raise them -- at most two, which only
-/// happens when `instantiate_template` accepted the whole route and the
-/// raised form qualified FULL, since `safe_playbook` otherwise falls back to
-/// nothing raised -- and must qualify FULL again when verified on its own.
+/// The raise path through the **real** verifier ([`forced_raise`]). On every
+/// snapshot where a seat has an own beacon at risk (lit, not the core, not
+/// HIGH), an advisor is told the draw is above the supply, and everything
+/// else is the gateway's own answer. Its safe playbook must raise them -- at
+/// most two, which only happens when `instantiate_template` accepted the
+/// whole route and the raised form qualified FULL, since `safe_playbook`
+/// otherwise falls back to the template's own route -- and must qualify FULL
+/// again when verified on its own.
 #[test]
 fn the_safe_playbook_with_beacons_raised_qualifies_through_the_real_verifier() {
     let forced: Vec<(&Row, &Forced)> = corpus()
@@ -963,13 +931,13 @@ fn the_safe_playbook_with_beacons_raised_qualifies_through_the_real_verifier() {
         .collect();
     assert!(
         !forced.is_empty(),
-        "some seat of the corpus has an own non-core beacon to raise"
+        "some seat of the corpus has an own beacon at risk to raise"
     );
     // Said in the output of a passing run too, for the PR's numbers.
     for (row, forced) in &forced {
         eprintln!(
-            "forced raise: {} seat {}: dark {:?}, raised {:?}",
-            row.snapshot, row.seat, forced.dark, forced.raised
+            "forced raise: {} seat {}: at risk {:?}, raised {:?}",
+            row.snapshot, row.seat, forced.at_risk, forced.raised
         );
     }
     for (row, forced) in forced {
@@ -980,8 +948,8 @@ fn the_safe_playbook_with_beacons_raised_qualifies_through_the_real_verifier() {
         );
         assert!(forced.raised.len() <= 2, "{what}");
         assert!(
-            forced.raised.iter().all(|id| forced.dark.contains(id)),
-            "it raised only the seat's own dark beacons: {what}"
+            forced.raised.iter().all(|id| forced.at_risk.contains(id)),
+            "it raised only the seat's own beacons at risk: {what}"
         );
         assert!(forced.carries_raise, "{what}");
         assert!(

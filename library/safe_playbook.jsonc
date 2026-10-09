@@ -14,22 +14,28 @@
 // `the_gateways_fallback_is_the_safe_template_with_nothing_raised` keeps the
 // two equal ("written once, tested twice", decisions-log item 81).
 //
-// PLACEHOLDER: spec section 14 names "the flee and rescue rules"; this has
-// the flee rule only, because nothing can be rescued before combat. Whether
-// and how it gains a rescue rule is the OWNER's, at S2/S5.
+// Spec section 14 names "the flee and rescue rules"; this has the flee rule
+// only, because nothing can be rescued before combat.
+//
+// PLACEHOLDER: whether and how the safe playbook gains a rescue rule — owner, S2/S5
 {
   "schema_version": {"major": 1, "minor": 0},
   "meta": {
     "parameters": [
       // Why: the priority raises are the one situational part of the safe
-      // playbook. When power is short -- an own beacon browned out, or the
-      // headroom below zero -- the operator adds one interface step per own
-      // browned-out beacon that is not the core, is not HIGH already and is
-      // within 60 s, nearest first and at most two, each setting
-      // Quartermaster priority to HIGH so it revives first and browns out
-      // last. A seat with power to spare gets the route as written here:
-      // nothing raised.
-      {"pointer": "/declarative/route", "label": "The route: to the safest beacon, then one priority raise per beacon at risk (none by default)"}
+      // playbook. When power is short -- the draw above the supply, or an own
+      // beacon browned out -- the operator adds one interface step per own
+      // lit beacon that is not the core, is not HIGH already and is next in
+      // the brownout order, within 60 s, at most two and walked to nearest
+      // first, each setting Quartermaster priority to HIGH so it browns out
+      // last. A raise also relights: in every settle a dark beacon swaps in
+      // when shedding the lit beacons ranked below it covers its load, and
+      // the core outranks every priority. The operator then ends the route
+      // at the core, setting how deep its starting drone digs, so the seat
+      // keeps earning from its starting seam (decisions-log item 133). As
+      // written here, for a seat no operator advises, nothing is raised and
+      // nothing is set.
+      {"pointer": "/declarative/route", "label": "The route: to the safest beacon, then one priority raise per beacon at risk and the core's dig depth (none by default)"}
     ],
     "title": "Safe playbook",
     "author_kind": "BUILTIN",

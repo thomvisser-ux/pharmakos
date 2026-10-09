@@ -21,19 +21,11 @@
 {
   "schema_version": {"major": 1, "minor": 0},
   "meta": {
-    "parameters": [
-      // Why: a beacon's sphere is the reach of its drones, so the seam it
-      // covers is the one it mines first.
-      {"pointer": "/declarative/route/0/place_beacon/at/covering", "label": "Which ore seam the Mine beacon covers: the nearest one you do not cover yet, or one by name"},
-      // Why: deeper digging reaches more ore and leaves more of the ground
-      // open under whatever stands on it. Whole voxels below the seam's top.
-      {"pointer": "/declarative/route/0/place_beacon/initial/mandate/mine/dig_max_depth", "label": "How deep the Mine mandate digs, in voxels"}
-    ],
     "title": "Expand & Mine",
     "author_kind": "BUILTIN",
     "note": "Place a Mine beacon covering an ore seam you do not cover yet, and walk home while it digs."
   },
-  "kind": "TEMPLATE",
+  "kind": "PLAYBOOK",
   "declarative": {
     "route": [
       // Why: the step walks to the site it reads, so its timeout bounds the
