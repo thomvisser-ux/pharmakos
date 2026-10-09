@@ -5,8 +5,10 @@
 //
 // What the built-in operator files for a seat that seals nothing verified
 // before the Lull ends, and what get_safe_plan shows, so a seat can see the
-// cost of a timeout. It leaves every beacon's configuration as it is: it
-// places nothing, recycles nothing and switches no mandate.
+// cost of a timeout. As written here it changes no beacon. The operator's
+// route may raise a beacon's Quartermaster priority and set how deep the
+// core's starting drone digs (decisions-log item 133); it never places,
+// recycles or switches a mandate.
 //
 // With nothing raised, which is this file's own value, it is also the
 // gateway's fallback for a seat no operator advises: crates/gateway's

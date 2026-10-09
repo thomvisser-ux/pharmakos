@@ -38,12 +38,15 @@ A **composed** plan is one of the library's templates, filled through
 `meta.note` saying what Easy chose and why, opening with the seed it recorded
 and did not use (decision C15). Since S1's targeting every target Easy
 writes is a **name** -- `{"feature_id": "vent_52_335"}` where the template's
-description stands -- and the route ends with `deepen_core`, the step that
+description stands -- and the route opens with `deepen_core`, the step that
 gives the core's Mine settings a `dig_max_depth` (decisions-log item 133 (3)
-(a)), appended by the patch as the route's last element. A seat with nothing
+(a)), inserted by the patch's last operation as the route's first element, so
+it lands however the rest of the route runs. Its walk and interface time are
+paid out of Hold & Build's hold, and a hold with nothing left for it is taken
+out; the visit goals keep the whole share. A seat with nothing
 inside its route share seals its own **safe playbook** instead: the Safe
 Playbook template instantiated with its route -- the walk to safety, any
-priority raise, and the same `deepen_core` -- whose `meta.note` is the
+priority raise, and the same `deepen_core`, last -- whose `meta.note` is the
 template's own and carries no seed (Easy records the seed of that round in
 its "why", which is not part of the playbook).
 

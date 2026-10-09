@@ -83,7 +83,7 @@
     { "assert": "event_fired", "event": "plan_sealed", "seat": 1, "by_tick": 1,
       "note": "Seat 1 sealed something. On its own this proves nothing about Easy -- the gateway's fallback would report the same line -- which is why the next assertion is here." },
     { "assert": "event_fired", "event": "beacon_placed", "seat": 1, "by_tick": 800,
-      "note": "Easy's own seal, played: seat 1's commander walked to the site covering its starting vent and deployed a Build beacon there, at tick 661. The gateway's fallback places nothing, so only a playbook Easy composed can report this." },
+      "note": "Easy's own seal, played: seat 1's commander walked to the site covering its starting vent and deployed a Build beacon there, at tick 736, after setting its core's dig depth at tick 71. The gateway's fallback places nothing, so only a playbook Easy composed can report this." },
     { "assert": "event_fired", "event": "beacon_placed", "seat": 0, "by_tick": 850,
       "note": "Seat 0's Build beacon, deployed at tick 721 on the site the covering rule read for vent_324_16: the step walked there itself (walk-in), since the sim deploys only while the commander stands within its interface range of the site." },
     { "assert": "event_fired", "event": "row_committed", "seat": 0, "by_tick": 900,

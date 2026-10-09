@@ -39,9 +39,9 @@
 //!   mandate, which the wire carries nowhere else.
 //!
 //! **No site is computed here.** Each placement's one estimate is
-//! `estimate_route` from the commander to a `covering` waypoint naming the
-//! feature, and its last leg ends on the column the sim's own `cover` would
-//! choose (S1-20's need, discharged by `tgtw` #84, item 133); a feature that
+//! `estimate_route` from the commander, by way of the core when the seat has
+//! one ([`evaluate`]), to a `covering` waypoint naming the feature, and its
+//! last leg ends on the column the sim's own `cover` would choose (S1-20's need, discharged by `tgtw` #84, item 133); a feature that
 //! no site covers is refused there and offers nothing. The skeleton's
 //! `site_for`, its expansion heuristics and its sphere margin are gone with
 //! it. Nothing looks ahead: the only evaluation is the estimate, which is an
@@ -127,10 +127,14 @@ pub(crate) struct Candidate {
     /// Where the commander goes for it: the site the estimate answered for a
     /// placement, the beacon for a tap.
     pub(crate) place: [i32; 3],
-    /// Game milliseconds the goal costs the route: travel, bounded as there
-    /// and back for a site the commander leaves again, plus the interface
-    /// time the rules table gives the change.
+    /// Game milliseconds the goal costs the route from the core: travel,
+    /// bounded as there and back for a site the commander leaves again, plus
+    /// the interface time the rules table gives the change.
     pub(crate) time_ms: i64,
+    /// Game milliseconds from the commander to the core, which a composed
+    /// route visits first ([`crate::compose::deepen_core`]): the same for
+    /// every candidate of a round, and 0 when the seat is shown no core.
+    pub(crate) lead_ms: i64,
     /// Whole $ it spends.
     pub(crate) cost_dollars: i64,
     /// Balanced utility, in points.
@@ -204,8 +208,13 @@ fn tap_pairs(situation: &Situation, tuning: &Tuning) -> Vec<(String, Feature)> {
             b_beacon,
         ))
     });
-    pairs.truncate(usize::try_from(EASY_CANDIDATES).unwrap_or(usize::MAX));
-    pairs
+    first(pairs, EASY_CANDIDATES)
+}
+
+/// The first `n` of `items`, in order: a cut by a `u32` count with no
+/// conversion to `usize` that could fail (or be defaulted).
+pub(crate) fn first<T>(items: Vec<T>, n: u32) -> Vec<T> {
+    items.into_iter().zip(0..n).map(|(item, _)| item).collect()
 }
 
 /// One `interface` step adding a Generator `on` a named vent to a beacon's
@@ -299,7 +308,9 @@ pub(crate) fn route_index(pointer: &str) -> Option<usize> {
 /// (`resolve_refs`: the sim's own `on_vent` rules) and the verifier raises no
 /// `E0503` at its step (the beacon is on the Build mandate). A refusal of
 /// either call leaves no tap: the operator cannot then say a tap would hold,
-/// so it composes none.
+/// so it composes none. An answer to `verify_plan` that carries no `report`
+/// is read as a refusal too: without one the operator cannot say no `E0503`
+/// was raised.
 pub(crate) fn legal_taps(
     wire: &mut Wire<'_, '_>,
     situation: &Situation,
@@ -336,8 +347,10 @@ pub(crate) fn legal_taps(
     ) else {
         return Vec::new();
     };
-    let report = verified.get("report").cloned().unwrap_or(Json::Null);
-    for diagnostic in array_of(&report, "diagnostics") {
+    let Some(report) = verified.get("report") else {
+        return Vec::new();
+    };
+    for diagnostic in array_of(report, "diagnostics") {
         if text_of(diagnostic, "code") != "E0503" {
             continue;
         }
@@ -402,13 +415,19 @@ pub(crate) fn enumerate(situation: &Situation, tuning: &Tuning, taps: &[Tap]) ->
         ));
     }
     keyed.sort_by(|(a, _), (b, _)| a.cmp(b));
-    keyed.truncate(usize::try_from(EASY_CANDIDATES).unwrap_or(usize::MAX));
-    keyed.into_iter().map(|(_, goal)| goal).collect()
+    first(keyed, EASY_CANDIDATES)
+        .into_iter()
+        .map(|(_, goal)| goal)
+        .collect()
 }
 
 /// Why Hold & Build has nothing to place this round, said about the vent
 /// the template's own description would read: the nearest by travel that the
-/// seat does not cover, ties to the lowest name.
+/// seat does not cover, ties to the lower anchor `y`, then the lower anchor
+/// `x`, as the sim's "nearest" breaks them (`crates/sim/src/targeting.rs`).
+/// The feature list's travel is whole game milliseconds where the sim ranks
+/// by its integer estimator cost, so two vents whose costs differ by less
+/// than a millisecond's worth read as a tie here.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub(crate) enum NoVent {
     /// The seat's commander is not in view, so nothing was weighed.
@@ -448,7 +467,10 @@ pub(crate) fn no_vent(situation: &Situation, tuning: &Tuning) -> NoVent {
     let Some(nearest) = reachable
         .iter()
         .filter(|feature| !feature.covered)
-        .min_by(|a, b| (a.travel_ms, &a.id).cmp(&(b.travel_ms, &b.id)))
+        .min_by_key(|feature| {
+            let [x, y] = feature.anchor;
+            (feature.travel_ms, y, x)
+        })
     else {
         return NoVent::AllCovered;
     };
@@ -473,9 +495,17 @@ fn last_leg_to(estimate: &Json) -> Option<[i32; 3]> {
         .and_then(location_voxel)
 }
 
-/// Evaluate every goal: one `estimate_route` each from the commander, then
-/// the Balanced utility. A goal the estimate refuses or calls unreachable is
-/// dropped; the call still counts.
+/// Evaluate every goal: one `estimate_route` each, then the Balanced
+/// utility. A goal the estimate refuses or calls unreachable is dropped; the
+/// call still counts.
+///
+/// A composed route visits the core first ([`crate::compose::deepen_core`]),
+/// so when the seat is shown a core each estimate's waypoints are the
+/// commander, the core's anchor, and the goal: the first leg is the
+/// candidate's `lead_ms`, the same for all of them, and the goal is costed
+/// from the core, where the route's walk to it starts. A `covering` waypoint
+/// ranks its site from the waypoint before it, as the step ranks from where
+/// the commander stands when it starts.
 pub(crate) fn evaluate(
     wire: &mut Wire<'_, '_>,
     situation: &Situation,
@@ -499,10 +529,15 @@ pub(crate) fn evaluate(
                 object(vec![("beacon_id", string(beacon))]),
             )]),
         };
-        let params = object(vec![(
-            "waypoints",
-            Json::Array(vec![crate::wire::voxel_location(commander), to]),
-        )]);
+        let mut waypoints = vec![crate::wire::voxel_location(commander)];
+        if let Some(core) = situation.core() {
+            waypoints.push(object(vec![(
+                "beacon_anchor",
+                object(vec![("beacon_id", string(&core.id))]),
+            )]));
+        }
+        waypoints.push(to);
+        let params = object(vec![("waypoints", Json::Array(waypoints))]);
         let Ok(estimate) = wire.call("estimate_route", params) else {
             continue;
         };
@@ -512,11 +547,18 @@ pub(crate) fn evaluate(
         let Some(place) = last_leg_to(&estimate) else {
             continue;
         };
-        let travel = int_of(&estimate, "ms");
-        if travel < 0 {
+        let Some(last) = array_of(&estimate, "legs").last() else {
+            continue;
+        };
+        let travel = int_of(last, "ms");
+        let Some(lead) = int_of(&estimate, "ms").checked_sub(travel) else {
+            continue;
+        };
+        if travel < 0 || lead < 0 {
             continue;
         }
-        if let Some(candidate) = score(situation, tuning, id, goal, place, travel) {
+        if let Some(mut candidate) = score(situation, tuning, id, goal, place, travel) {
+            candidate.lead_ms = lead;
             out.push(candidate);
         }
     }
@@ -603,6 +645,7 @@ fn score(
         goal,
         place,
         time_ms,
+        lead_ms: 0,
         cost_dollars: cost,
         utility,
         rate,

@@ -211,6 +211,18 @@ starts, at tick 3601 (was 4056): the step no longer walks before it reads
 its site, and the vent it names is covered by its own round-1 beacon. `against-easy.scenario.jsonc`'s seat 1 deadline moved with it, from
 550 to 800.
 
+The same lane's review fixes moved both chains again from tick 1, through
+Easy's seat 1 and the derived seat-0 file, and nothing else. Easy's composed
+route now **opens** with `deepen_core` (it ended with it), so seat 1's
+commander walks to its core first and commits the dig depth at tick 71, and
+every goal is costed from the core: seat 1's beacon lands at tick 736 (was
+661), its Generator completes at 1477, and in `against-easy-three-rounds` it
+first delivers ore at 1671 (was 1915), its core's drone digging from the
+start. Seat 0's derived hold is 9 900 ms (was 7 900): Easy costs the
+suggested vent from the core, 2 s nearer than from the commander. Seat 0's
+events do not move (721, 761, 1250, 1430 and 3601), and every deadline
+holds.
+
 `expand-east-segment` carries one more thing worth knowing before its chain is
 read. The playbook it seals **does not qualify against either seat's own frozen
 snapshot** on this map: `E0401` for `b_01`, which since S1 names each seat's own

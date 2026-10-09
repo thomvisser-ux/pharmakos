@@ -566,7 +566,9 @@ fn suggestions(
                 (Some(best), Some(fill)) => {
                     put(covering, named_text(best.goal.feature()));
                     // The wizard's playbook is the template alone, with no
-                    // step at the core, so nothing is held back for one.
+                    // step at the core, so nothing is held back for one. The
+                    // goal was costed from the core, where the commander
+                    // opens round 1.
                     if let Some(hold) = compose::hold_left(best, fill, 0) {
                         put(template.pointer_ending("/hold/ms"), hold.to_string());
                     }

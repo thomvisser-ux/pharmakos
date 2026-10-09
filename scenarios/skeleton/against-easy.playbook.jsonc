@@ -21,9 +21,9 @@
 //               emits names (S1's targeting). The step walks to the site the
 //               sim's covering rule reads when it starts, and the Generator's
 //               anchor is the vent that site covers;
-//   the hold    /declarative/route/1/hold/ms                   7 900 ms,
+//   the hold    /declarative/route/1/hold/ms                   9 900 ms,
 //               what is left of Easy's 70 % share of the segment after the
-//               route.
+//               route, which Easy costs from the core.
 //
 // crates/gamectl/tests/operator.rs's
 // the_scenario_generator_raises_supply_by_exactly_the_lean_vent holds this
@@ -78,7 +78,7 @@
           {"blueprint_id": "generator", "anchor": {"on": {"covered": {}}}, "rotation_quarter_turns": 0, "order": 1}
         ]}}}},
        "timeout_ms": 60000, "on_fail": {"action": "SKIP"}},
-      {"label": "hold", "hold": {"ms": 7900}}
+      {"label": "hold", "hold": {"ms": 9900}}
     ],
     "handlers": [
       // Why: bravery is an ordinary rule. Hurt and under fire, the commander

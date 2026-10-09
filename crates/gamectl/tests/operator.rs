@@ -897,10 +897,14 @@ fn the_safe_playbook_raises_only_what_is_at_risk_unforced() {
 }
 
 /// The corpus rows on the committed rules whose seat's supply shows a
-/// Generator: seed `0102...` seat 0, which seals Hold & Build in round 1
-/// (`tests/golden/operator/seed-0102030405060708/expected.seat-0.jsonc`) and
-/// shows the Generator on its vent -- a lean one -- by round 3.
-const GENERATOR_ROWS: &[(&str, u8)] = &[("three-rounds/round-3", 0)];
+/// Generator: seed `0102...` seats 0 and 2, which seal Hold & Build in
+/// round 1 (`tests/golden/operator/seed-0102030405060708/expected.seat-0.jsonc`
+/// and `expected.seat-2.jsonc`) and show the Generator on their vents --
+/// lean ones -- by round 3. Seat 2's route, 42 s to `vent_171_51` from its
+/// core, fills Easy's 42 s share exactly: it fits since the core's
+/// `deepen_core` step is paid out of the hold rather than out of the visit
+/// goals' share, and its hold, with nothing left for it, is taken out.
+const GENERATOR_ROWS: &[(&str, u8)] = &[("three-rounds/round-3", 0), ("three-rounds/round-3", 2)];
 
 /// The rules text's `power.core_surplus_kw` and the lean vent's
 /// `power.generator_output_kw`, kW.

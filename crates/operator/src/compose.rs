@@ -25,15 +25,26 @@
 //!
 //! # The core's dig depth
 //!
-//! Every composed route ends with one more step, at the seat's core: a
+//! Every composed route **opens** with one more step, at the seat's core: a
 //! settings row giving its Mine settings a `dig_max_depth`
 //! ([`deepen_core`]; decisions-log item 133 (3) (a)). The core is on the
 //! Build mandate, and its starting mining drone works the starting seam
 //! because a unit's kind is its job (item 127 (6)); at the default depth of
 //! 0 it takes the seam's top layer and stops, which is the demo's F2. The
 //! safe playbook ends with the same step ([`crate::safe`]), so a seat nobody
-//! edits keeps earning past round 2. Its interface time is held back from the
-//! share before any goal is inserted.
+//! edits keeps earning past round 2.
+//!
+//! It goes first so that it lands however the rest of the route runs: a
+//! setting persists, and the commander opens round 1 beside its core, so
+//! there it costs little more than its interface time. Every goal is costed
+//! from the core ([`crate::candidates::evaluate`]). The share is the visit
+//! goals' (spec section 14: "compose visit goals ... until the route fills
+//! its target share"), so the core's step is not inserted into it: its cost
+//! -- the walk from the commander to the core, each candidate's `lead_ms`,
+//! and the interface time -- comes out of Hold & Build's hold, so that route
+//! still ends at the share, and is otherwise carried by the part of the
+//! segment Easy leaves unfilled. A hold with nothing left for it is taken out
+//! rather than left at the template's own length.
 //!
 //! No lookahead of any kind: a goal is inserted on its own estimate, and
 //! nothing asks what the match would do with it (AGENTS.md section 3 rule 2).
@@ -147,11 +158,15 @@ pub(crate) fn compose(
 ) -> Option<Composed> {
     let fill = fill_ms(situation)?;
     let core = situation.core().map(|core| core.id.clone());
-    let share = match core {
-        Some(_) => fill.checked_sub(tuning.edit_settings_base_ms)?,
-        None => fill,
+    // The walk to the core is one estimate's first leg, the same for every
+    // candidate; the largest is taken so no reading of it is under-held. No
+    // candidate at all is nothing to compose.
+    let lead = top.iter().map(|candidate| candidate.lead_ms).max()?;
+    let held_back = match core {
+        Some(_) => tuning.edit_settings_base_ms.checked_add(lead)?,
+        None => 0,
     };
-    let goals = greedy(top, share, situation.economy.treasury);
+    let goals = greedy(top, fill, situation.economy.treasury);
     let first = goals.first()?;
     let template_id = match first.goal {
         Goal::Mine { .. } => EXPAND_AND_MINE,
@@ -160,11 +175,11 @@ pub(crate) fn compose(
     let template = declared
         .iter()
         .find(|held| held.template_id == template_id)?;
-    let held_back = match core {
-        Some(_) => tuning.edit_settings_base_ms,
-        None => 0,
-    };
-    let (mut patch, removals) = place_patch(template, &goals, fill, held_back)?;
+    // The core's step goes in at route 0 as the patch's last operation, so
+    // every pointer above it is the template's; the removals are applied to
+    // the patched text, where each step stands one further on.
+    let shift = usize::from(core.is_some());
+    let (mut patch, removals) = place_patch(template, &goals, fill, held_back, shift)?;
     let note = format!(
         "{} {}",
         seed_note(situation),
@@ -177,8 +192,7 @@ pub(crate) fn compose(
     };
     patch.push(op(kind, "/meta/note", Some(string(&note))));
     if let Some(core) = core {
-        // Appended last, so no pointer above it moves.
-        patch.push(op("add", "/declarative/route/-", Some(deepen_core(&core))));
+        patch.push(op("add", "/declarative/route/0", Some(deepen_core(&core))));
     }
     Some(Composed {
         template_id,
@@ -205,14 +219,18 @@ fn place_copy(step: &Json, below: &str, feature: &str, n: usize) -> Option<Json>
 /// step's description with its name (a tap replaces the whole step with its
 /// own `interface` step), and each further goal is one more step inserted
 /// after it. Hold & Build's declared hold -- the step after the place --
-/// fills what is left of the share once the core's depth is held back, and
-/// is replaced before any step is inserted ahead of it, since a JSON Patch
-/// applies its operations in order.
+/// fills what is left of the share once the core's step is paid for, or is
+/// taken out when nothing is left, and either is done before any step is
+/// inserted ahead of it, since a JSON Patch applies its operations in order.
+/// Each removal names its step `shift`
+/// places further on than the template does: where it stands once the
+/// core's step is in front of it.
 fn place_patch(
     template: &Declared,
     goals: &[Candidate],
     fill: i64,
     held_back: i64,
+    shift: usize,
 ) -> Option<(Vec<Json>, Vec<Vec<Json>>)> {
     let covering = template
         .pointer_ending("/place_beacon/at/covering")?
@@ -230,6 +248,14 @@ fn place_patch(
         let left = fill.checked_sub(used)?.checked_sub(held_back)?;
         if left > 0 {
             patch.push(op("replace", hold, Some(number(left))));
+        } else {
+            // A hold lasts a positive time, and none is left: the step goes,
+            // rather than keeping the template's own length past the share.
+            let step = hold.strip_suffix("/hold/ms")?;
+            if route_index(step)? <= place_index {
+                return None;
+            }
+            patch.push(op("remove", step, None));
         }
     }
     for (k, goal) in goals.iter().enumerate() {
@@ -256,9 +282,14 @@ fn place_patch(
                 step
             }
         };
-        let at = format!("/declarative/route/{}", place_index.checked_add(k)?);
-        patch.push(op("add", &at, Some(step)));
-        removals.push(vec![op("remove", &at, None)]);
+        let index = place_index.checked_add(k)?;
+        patch.push(op(
+            "add",
+            &format!("/declarative/route/{index}"),
+            Some(step),
+        ));
+        let shifted = format!("/declarative/route/{}", index.checked_add(shift)?);
+        removals.push(vec![op("remove", &shifted, None)]);
     }
     Some((patch, removals))
 }
@@ -271,10 +302,14 @@ pub(crate) fn hold_left(candidate: &Candidate, fill: i64, held_back: i64) -> Opt
         .filter(|left| *left > 0)
 }
 
-/// Whole seconds, rounded up, for a sentence. A duration here is never
-/// negative; one that were would read as none.
-pub(crate) fn seconds(ms: i64) -> u64 {
-    u64::try_from(ms).map_or(0, |ms| ms.div_ceil(1_000))
+/// Whole seconds, rounded up, for a sentence: "42 s". A duration here is
+/// never negative; one that were is written as it is, in milliseconds,
+/// rather than read as none.
+pub(crate) fn seconds(ms: i64) -> String {
+    u64::try_from(ms).map_or_else(
+        |_| format!("{ms} ms"),
+        |ms| format!("{} s", ms.div_ceil(1_000)),
+    )
 }
 
 /// "(x, y, z)".
@@ -309,7 +344,7 @@ pub(crate) fn why_for(candidate: &Candidate, goals: usize, fill: i64) -> String 
         .map(|others| format!(" and {others} more like it"))
         .unwrap_or_default();
     let tail = format!(
-        ": {} points for {} s of route (Easy fills {} s of the segment).",
+        ": {} points for {} of route (Easy fills {} of the segment).",
         candidate.utility,
         seconds(candidate.time_ms),
         seconds(fill)

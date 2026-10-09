@@ -9,9 +9,9 @@
     {
       "pointer": "/declarative/route/1/hold/ms",
       "label": "How long to hold by the new beacon, in game milliseconds",
-      "value": "77900",
+      "value": "79900",
       "suggested": true
     }
   ],
-  "why": "Easy, seat 0, round 1, seed 0x00000000ca5caded (recorded; Easy draws nothing at random). A Build beacon covering the lean heat vent vent_324_16, at (335, 18, 36) as its site reads now, with a Generator on the vent as its first Build target: 140 points for 49 s of route (Easy fills 126 s of the segment)."
+  "why": "Easy, seat 0, round 1, seed 0x00000000ca5caded (recorded; Easy draws nothing at random). A Build beacon covering the lean heat vent vent_324_16, at (335, 18, 36) as its site reads now, with a Generator on the vent as its first Build target: 140 points for 47 s of route (Easy fills 126 s of the segment)."
 }

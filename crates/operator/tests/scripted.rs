@@ -105,6 +105,8 @@ enum Verify {
     Qualifies,
     /// No playbook qualifies, and every report offers a machine-applicable fix.
     NeverButFixable,
+    /// Every playbook qualifies FULL, and a QUICK verify answers no `report`.
+    QuickUnreported,
 }
 
 /// How the scripted paged reads page.
@@ -464,47 +466,53 @@ impl Script {
 
     fn estimate_route(&self, params: &Json) -> Json {
         let waypoints = match params.get("waypoints") {
-            Some(Json::Array(items)) => items.clone(),
+            Some(Json::Array(items)) if items.len() >= 2 => items.clone(),
             _ => return Script::refuse("INVALID_ARGUMENT"),
         };
-        let (Some(from), Some(to)) = (waypoints.first(), waypoints.get(1)) else {
-            return Script::refuse("INVALID_ARGUMENT");
-        };
-        let (from, to) = match (self.place(from), self.place(to)) {
-            (Ok(from), Ok(to)) => (from, to),
-            (Err(code), _) | (_, Err(code)) => return Script::refuse(code),
-        };
-        let id = waypoints
-            .get(1)
-            .and_then(|w| w.get("beacon_anchor"))
-            .and_then(|a| a.get("beacon_id"))
-            .and_then(text)
-            .map(str::to_owned);
-        let ms = id
-            .and_then(|id| self.to_beacon_ms.get(&id).copied())
-            .unwrap_or_else(|| {
-                let dx = i64::from(from[0] - to[0]).abs();
-                let dy = i64::from(from[1] - to[1]).abs();
-                (dx + dy) * 500
-            });
-        // `Leg.to` in the DECLARED shape, a `gp.v1.Location`, unless asked
-        // for the bare voxel `main` wrote before T17.
-        let leg_to = if self.bare_legs {
-            voxel_json(to)
-        } else {
-            obj(vec![("voxel", voxel_json(to))])
-        };
+        let mut places: Vec<[i32; 3]> = Vec::new();
+        for waypoint in &waypoints {
+            match self.place(waypoint) {
+                Ok(at) => places.push(at),
+                Err(code) => return Script::refuse(code),
+            }
+        }
+        let mut legs: Vec<Json> = Vec::new();
+        let mut total = 0_i64;
+        for (index, pair) in places.windows(2).enumerate() {
+            let &[from, to] = pair else {
+                return Script::refuse("INTERNAL");
+            };
+            let id = waypoints
+                .get(index + 1)
+                .and_then(|w| w.get("beacon_anchor"))
+                .and_then(|a| a.get("beacon_id"))
+                .and_then(text)
+                .map(str::to_owned);
+            let ms = id
+                .and_then(|id| self.to_beacon_ms.get(&id).copied())
+                .unwrap_or_else(|| {
+                    let dx = i64::from(from[0] - to[0]).abs();
+                    let dy = i64::from(from[1] - to[1]).abs();
+                    (dx + dy) * 500
+                });
+            total += ms;
+            // `Leg.to` in the DECLARED shape, a `gp.v1.Location`, unless
+            // asked for the bare voxel `main` wrote before T17.
+            let leg_to = if self.bare_legs {
+                voxel_json(to)
+            } else {
+                obj(vec![("voxel", voxel_json(to))])
+            };
+            legs.push(obj(vec![
+                ("to", leg_to),
+                ("ms", num(ms)),
+                ("fogged", Json::Bool(false)),
+            ]));
+        }
         self.ok(obj(vec![
             ("reachable", Json::Bool(true)),
-            ("ms", num(ms)),
-            (
-                "legs",
-                Json::Array(vec![obj(vec![
-                    ("to", leg_to),
-                    ("ms", num(ms)),
-                    ("fogged", Json::Bool(false)),
-                ])]),
-            ),
+            ("ms", num(total)),
+            ("legs", Json::Array(legs)),
         ]))
     }
 
@@ -592,7 +600,10 @@ impl Script {
             })
             .collect();
         let quick = params.get("depth").and_then(text) == Some("quick");
-        let qualifies = diagnostics.is_empty() && (quick || self.verify == Verify::Qualifies);
+        if quick && self.verify == Verify::QuickUnreported {
+            return self.ok(obj(vec![]));
+        }
+        let qualifies = diagnostics.is_empty() && (quick || self.verify != Verify::NeverButFixable);
         if !quick && self.verify == Verify::NeverButFixable {
             diagnostics.push(read(
                 r#"{"code":"E0301","severity":"error","path":"/declarative/route/0","suggestions":[{"title":"fix","json_patch":"[{\"op\":\"remove\",\"path\":\"/meta/note\"}]","applicability":"machine_applicable"}]}"#,
@@ -839,11 +850,19 @@ fn safe_labels(transcript: &[String]) -> Vec<String> {
 }
 
 /// True when the round estimated a route to a beacon: the safe playbook's
-/// estimates, and a tap's, are the only ones that end on a `beacon_anchor`.
+/// estimates, and a tap's, are the only ones whose last waypoint is a
+/// `beacon_anchor` (a placement's goes by way of the core's anchor and ends
+/// on a `covering`).
 fn beacon_estimated(transcript: &[String]) -> bool {
-    transcript
-        .iter()
-        .any(|line| line.starts_with("estimate_route") && line.contains("beacon_anchor"))
+    transcript.iter().any(|line| {
+        line.strip_prefix("estimate_route ")
+            .and_then(|params| read(params).ok())
+            .and_then(|params| match params.get("waypoints") {
+                Some(Json::Array(items)) => items.last().cloned(),
+                _ => None,
+            })
+            .is_some_and(|last| last.get("beacon_anchor").is_some())
+    })
 }
 
 /// The why of an advice's suggestion for one template.
@@ -1506,10 +1525,13 @@ fn easy_names_the_vent_it_covers_and_writes_no_site_of_its_own() {
             .is_some_and(|path| path.contains("/move/") || path.ends_with("/voxel"))),
         "no walk and no voxel: {ops:#?}"
     );
+    // The core's step opens the route: inserted at route 0 by the patch's
+    // last operation, so no pointer before it moves.
     let last = ops.last().expect("an operation");
+    assert_eq!(last.get("op").and_then(text), Some("add"));
     assert_eq!(
         last.get("path").and_then(text),
-        Some("/declarative/route/-")
+        Some("/declarative/route/0")
     );
     assert_eq!(
         last.get("value")
@@ -1527,6 +1549,99 @@ fn easy_names_the_vent_it_covers_and_writes_no_site_of_its_own() {
             .contains("A Build beacon covering the lean heat vent vent_56_32, at (46, 32, 11)"),
         "{}",
         played.why
+    );
+}
+
+/// The composed route visits the core first, so every goal is estimated by
+/// way of the core's anchor, and the walk from the commander to the core is
+/// paid, with the step's interface time, out of Hold & Build's hold: a
+/// commander 5 s further from its core leaves a hold 5 s shorter, and the
+/// goal's own cost, which runs from the core, is the same.
+#[test]
+fn the_walk_to_the_core_is_estimated_and_paid_out_of_the_hold() {
+    let near = || {
+        let mut world = Script::busy(0);
+        world.features.retain(|feature| feature.id != "seam_20_60");
+        world
+    };
+    let hold_of = |world: Script| {
+        let (script, played) = play(world);
+        assert_eq!(played.submitted, Submitted::Own, "{:#?}", script.transcript);
+        let estimate = script
+            .transcript
+            .iter()
+            .find(|line| line.starts_with("estimate_route") && line.contains("vent_56_32"))
+            .cloned()
+            .expect("the vent estimated");
+        let core_at = estimate.find(r#""beacon_id": "b_00""#);
+        let vent_at = estimate.find("vent_56_32");
+        assert!(
+            core_at.is_some() && core_at < vent_at,
+            "by way of the core: {estimate}"
+        );
+        let ops = composing_ops(&script.transcript);
+        let hold = op_value(&ops, "replace", "/declarative/route/1/hold/ms")
+            .and_then(|value| match value {
+                Json::Number(n) => n.parse::<i64>().ok(),
+                _ => None,
+            })
+            .expect("the hold, a number");
+        (hold, played.why)
+    };
+    let (near_hold, near_why) = hold_of(near());
+    let mut far = near();
+    // Ten voxels further from the core (at 500 ms a voxel in the script).
+    far.entities
+        .iter_mut()
+        .filter(|entity| entity.subtype == "commander")
+        .for_each(|commander| commander.at = [32, 20, GROUND]);
+    let (far_hold, far_why) = hold_of(far);
+    assert_eq!(near_hold - far_hold, 5_000, "{near_hold} and {far_hold}");
+    let cost = |why: &str| {
+        why.split(" points for ")
+            .nth(1)
+            .map(|rest| rest.split(" of route").next().unwrap_or("").to_owned())
+    };
+    assert_eq!(cost(&near_why), cost(&far_why), "{near_why} / {far_why}");
+}
+
+/// A Hold & Build route whose goal fills the share leaves nothing for the
+/// hold once the core's step is paid for: the hold is taken out, not left at
+/// the template's own 30 s past the share.
+#[test]
+fn a_hold_with_nothing_left_for_it_is_taken_out() {
+    let world = || {
+        let mut world = Script::busy(0);
+        world.features.retain(|feature| feature.id != "seam_20_60");
+        world
+    };
+    let (script, _) = play(world());
+    let ops = composing_ops(&script.transcript);
+    let hold = op_value(&ops, "replace", "/declarative/route/1/hold/ms")
+        .and_then(|value| match value {
+            Json::Number(n) => n.parse::<i64>().ok(),
+            _ => None,
+        })
+        .expect("the hold, a number");
+    // The busy seat's segment fills 126 s; take the share down to 1 s less
+    // than the goal, the core's walk and its interface time, so the goal
+    // still fits and the hold has nothing.
+    let fill = 126_000 - hold - 1_000;
+    let mut tight = world();
+    tight.segment_ms = (fill * 100).div_euclid(70) + 1;
+    tight.remaining_ms = tight.segment_ms;
+    let (script, played) = play(tight);
+    assert_eq!(played.submitted, Submitted::Own, "{:#?}", script.transcript);
+    let ops = composing_ops(&script.transcript);
+    assert!(
+        op_value(&ops, "replace", "/declarative/route/1/hold/ms").is_none(),
+        "{ops:#?}"
+    );
+    assert!(
+        ops.iter()
+            .any(|op| op.get("op").and_then(text) == Some("remove")
+                && op.get("path").and_then(text) == Some("/declarative/route/1")),
+        "the hold step taken out: {ops:#?}"
     );
 }
 
@@ -1705,11 +1820,96 @@ fn a_covered_vent_inside_a_build_beacons_sphere_is_tapped_by_name() {
     assert!(!beacon_estimated(&script.transcript));
 
     // The `on` does not read from that beacon: no tap.
-    let mut unread = tap;
+    let mut unread = tap.clone();
     unread.on_reads.clear();
     let (script, played) = play(unread);
     assert_eq!(played.submitted, Submitted::Safe);
     assert!(!beacon_estimated(&script.transcript));
+
+    // A QUICK verify that answers no report cannot say no E0503 was raised:
+    // read as a refusal, so no tap (fail closed, as a refused call is).
+    let mut unreported = tap;
+    unreported.verify = Verify::QuickUnreported;
+    let (script, played) = play(unreported);
+    assert_eq!(
+        played.submitted,
+        Submitted::Safe,
+        "{:#?}",
+        script.transcript
+    );
+    assert!(!beacon_estimated(&script.transcript));
+}
+
+/// The shed order's last tie is the beacon's number, as the sim's row id
+/// orders it, not its name's text: of three lit NORMAL beacons equally far
+/// from the core, `b_99` and `b_100` are next to shed and raised, and
+/// `b_101` is not (by text, `b_100` and `b_101` would sort before `b_99`).
+#[test]
+fn the_shed_orders_last_tie_is_the_beacons_number() {
+    let mut script = Script::new(1);
+    script.supply = 10;
+    script.draw = 11;
+    for (id, at, ms) in [
+        ("b_99", [40, 32, GROUND], 3_000),
+        ("b_100", [24, 32, GROUND], 2_000),
+        ("b_101", [32, 40, GROUND], 1_000),
+    ] {
+        script.beacons.push(Beacon {
+            id: id.to_owned(),
+            at,
+            owner: 1,
+            core: false,
+            powered: true,
+            priority: "normal",
+        });
+        script.to_beacon_ms.insert(id.to_owned(), ms);
+    }
+    let (script, _) = advise(script);
+    assert_eq!(
+        safe_labels(&script.transcript),
+        ["to_safety", "raise_b_100", "raise_b_99", "deepen_core"]
+    );
+}
+
+/// The register's S1-14 as decision 14 reads it: a placed beacon adds no
+/// draw (net zero through its own key-core), so no goal is charged a kW
+/// shortfall. A seat whose supply only just carries its draw scores the same
+/// vent and the same seam for the same points as a seat with supply to
+/// spare.
+#[test]
+fn a_placed_beacon_is_charged_no_draw_however_tight_the_grid() {
+    let points = |supply: i64, draw: i64| {
+        let mut world = Script::busy(1);
+        world.supply = supply;
+        world.draw = draw;
+        let (_, advice) = advise(world);
+        [
+            why_of(&advice, "hold_and_build"),
+            why_of(&advice, "expand_and_mine"),
+        ]
+        .map(|why| {
+            why.split(": ")
+                .find(|part| part.contains(" points for "))
+                .map_or_else(|| panic!("a scored why: {why}"), str::to_owned)
+        })
+    };
+    let spare = points(10, 4);
+    let tight = points(10, 10);
+    assert_eq!(spare, tight);
+}
+
+/// The core's dig depth is Expand & Mine's own value for a new Mine beacon
+/// ([`CORE_DIG_MAX_DEPTH`]'s doc says the two agree): the template's declared
+/// `dig_max_depth`, read from the library as the gateway declares it.
+#[test]
+fn the_cores_dig_depth_is_expand_and_mines_own() {
+    let (_, declared) = template("expand_and_mine").expect("the template");
+    let own = declared
+        .iter()
+        .find(|(pointer, _)| pointer.ends_with("/mine/dig_max_depth"))
+        .map(|(_, value)| value.clone())
+        .expect("a declared dig depth");
+    assert_eq!(own, CORE_DIG_MAX_DEPTH.to_string());
 }
 
 /// `estimate_route`'s `Leg.to` is a `gp.v1.Location` as declared; `main`

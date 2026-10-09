@@ -73,7 +73,7 @@ use std::fmt::Write as _;
 
 use pharmakos_proto::json::Json;
 
-use crate::candidates::distance2;
+use crate::candidates::{distance2, first};
 use crate::compose::deepen_core;
 use crate::easy::{SAFE_ESTIMATES, SAFE_MAX_RAISED, SAFE_PLAYBOOK, SAFE_REACH_MS};
 use crate::playbook::{Declared, instantiate};
@@ -186,21 +186,48 @@ pub(crate) fn at_risk(beacon: &Beacon) -> bool {
         && matches!(beacon.priority, Some(Priority::Low | Priority::Normal))
 }
 
+/// A place in the brownout's order ([`shed_rank`]): priority, distance from
+/// the core (furthest first), the beacon's number, its name.
+type ShedRank<'b> = (
+    Option<Priority>,
+    std::cmp::Reverse<(bool, i64)>,
+    (bool, Option<u32>),
+    &'b str,
+);
+
 /// Where a lit beacon stands in the brownout's order, first-shed first:
 /// lowest priority, then furthest from the core, then the lowest id
 /// (`crates/sim/src/power.rs`'s `shed_key`, read from what the wire shows).
 /// A distance that does not fit, or a seat whose core is not shown, sorts as
 /// the furthest, so a beacon the operator cannot place in the order is read
 /// as the first at risk rather than the last.
-fn shed_rank(
-    beacon: &Beacon,
-    core: Option<[i32; 3]>,
-) -> (Option<Priority>, std::cmp::Reverse<(bool, i64)>, &str) {
+///
+/// Two readings stand in for the sim's: the distance is between the wire's
+/// whole voxels, where `shed_key` measures between the beacons' Q16.16
+/// positions, and the id is the number in the name, `b_7` before `b_100`,
+/// as the sim's row id orders them (the name's padding is a minimum, so the
+/// names themselves do not sort that way past 99). A name that is not
+/// `b_<number>` sorts after every numbered one, by its text.
+fn shed_rank(beacon: &Beacon, core: Option<[i32; 3]>) -> ShedRank<'_> {
     let distance = match core.and_then(|core| distance2(beacon.at, core)) {
         Some(d2) => (false, d2),
         None => (true, 0),
     };
-    (beacon.priority, std::cmp::Reverse(distance), &beacon.id)
+    (
+        beacon.priority,
+        std::cmp::Reverse(distance),
+        ordinal(&beacon.id),
+        &beacon.id,
+    )
+}
+
+/// A beacon name's number for ordering, `b_7` before `b_100`, and a name
+/// that is not `b_<number>` after every numbered one ([`shed_rank`]).
+fn ordinal(id: &str) -> (bool, Option<u32>) {
+    let number = id
+        .strip_prefix("b_")
+        .and_then(|digits| digits.parse::<u32>().ok());
+    (number.is_none(), number)
 }
 
 /// The beacons to raise: none unless power is short; else the beacons at
@@ -221,9 +248,8 @@ fn to_raise(wire: &mut Wire<'_, '_>, situation: &Situation) -> Vec<String> {
         .filter(|beacon| at_risk(beacon))
         .collect();
     next.sort_by(|a, b| shed_rank(a, core).cmp(&shed_rank(b, core)));
-    next.truncate(usize::try_from(SAFE_ESTIMATES).unwrap_or(usize::MAX));
-    let mut within: Vec<(i64, String)> = Vec::new();
-    for beacon in next {
+    let mut within: Vec<(i64, (bool, Option<u32>), String)> = Vec::new();
+    for beacon in first(next, SAFE_ESTIMATES) {
         let params = object(vec![(
             "waypoints",
             Json::Array(vec![
@@ -239,12 +265,12 @@ fn to_raise(wire: &mut Wire<'_, '_>, situation: &Situation) -> Vec<String> {
         };
         let ms = int_of(&estimate, "ms");
         if bool_of(&estimate, "reachable") && ms <= SAFE_REACH_MS {
-            within.push((ms, beacon.id.clone()));
+            within.push((ms, ordinal(&beacon.id), beacon.id.clone()));
         }
     }
     within.truncate(SAFE_MAX_RAISED);
     within.sort_unstable();
-    within.into_iter().map(|(_, id)| id).collect()
+    within.into_iter().map(|(_, _, id)| id).collect()
 }
 
 /// One raise: an interface step at a fixed own beacon, one row, priority
@@ -369,7 +395,7 @@ fn nothing_raised(situation: &Situation) -> String {
             return String::from("your commander is not in view, so no beacon was estimated");
         }
         return format!(
-            "no lit beacon next in the brownout order is within {} s",
+            "no lit beacon next in the brownout order is within {}",
             crate::compose::seconds(SAFE_REACH_MS)
         );
     }

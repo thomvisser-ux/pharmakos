@@ -34,11 +34,11 @@
   "meta": {
     "title": "Hold & Build",
     "author_kind": "BUILTIN",
-    "note": "Easy, seat 0, round 1, seed 0x0102030405060708 (recorded; Easy draws nothing at random). A Build beacon covering the lean heat vent vent_52_335, at (43, 344, 29) as its site reads now, with a Generator on the vent as its first Build target: 140 points for 39 s of route (Easy fills 42 s of the segment)."
+    "note": "Easy, seat 0, round 1, seed 0x0102030405060708 (recorded; Easy draws nothing at random). A Build beacon covering the lean heat vent vent_52_335, at (43, 344, 29) as its site reads now, with a Generator on the vent as its first Build target: 140 points for 40 s of route (Easy fills 42 s of the segment)."
   },
   "kind": "PLAYBOOK",
   "declarative": {
-    "route": [
+    "route": [{"label":"deepen_core","interface":{"beacon":{"beacon_id":"b_00"},"rows":[{"set_mandate_settings":{"mine":{"dig_max_depth":4}}}]},"on_fail":{"action":"SKIP"}},
       // Why: the step walks to the site it reads, so its timeout bounds the
       // walk as well as the deploy.
       {"label": "place_power", "place_beacon": {"at": {"covering": {"feature_id":"vent_52_335"}}, "tags": ["power"],
@@ -48,9 +48,7 @@
         "initial": {"mandate": {"build": {"targets": [
           {"blueprint_id": "generator", "anchor": {"on": {"covered": {}}}, "rotation_quarter_turns": 0, "order": 1}
         ]}}}},
-       "timeout_ms": 60000, "on_fail": {"action": "SKIP"}},
-      {"label": "hold", "hold": {"ms": 1100}}
-    ,{"label":"deepen_core","interface":{"beacon":{"beacon_id":"b_00"},"rows":[{"set_mandate_settings":{"mine":{"dig_max_depth":4}}}]},"on_fail":{"action":"SKIP"}}],
+       "timeout_ms": 60000, "on_fail": {"action": "SKIP"}}],
     "handlers": [
       // Why: bravery is an ordinary rule. Hurt and under fire, the commander
       // walks back to safety and waits before carrying on.

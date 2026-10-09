@@ -6,7 +6,7 @@ Route
   1. place_power: place a beacon at a site covering Heat vent (324, 16), tagged "power", on a Build mandate (14.5 s on site).
     Give up after 1:00.
     On failure, move on to the next step.
-  2. hold: hold for 77.9 s.
+  2. hold: hold for 79.9 s.
 
 Rules
   1. "flee", when the commander is at or below 40% HP and the commander took damage in the last 3 s:
