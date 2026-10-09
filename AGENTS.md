@@ -189,7 +189,26 @@ editor UI. Nothing else executes. Directories are under `crates/`; package names
    rows change (otherwise it only sets its Fix buttons' enabled state), `lobby.gd`'s speed label
    shown only in a Push (a branch on the bridge's phase string, for display), and the watch strip
    and editor hidden until a match is announced; a Fix button kept across a redraw still calls
-   `Editor::fix`, which refuses unless the rows are current and nothing is in flight. The client may compose a JSON Patch from a click; a verdict, a
+   `Editor::fix`, which refuses unless the rows are current and nothing is in flight; and, from S1's
+   `ui` (decisions-log item 136), `rig.rs`'s keyframe back-off, the keep-alive sum, which
+   `tests/no_arithmetic.rs` names word for word in `SCHEDULING_SUMS` (S1's plan, decision 17), the
+   rig's choice of a Lull's length by round (`LullLengths::for_round`) and its reading of
+   `_status.untimed` to hide the countdown, the recap read once per recap and drawn by `lobby.gd`
+   only in a recap or after the match ends (a branch on the bridge's phase string, for display),
+   with a refused read drawn as the gateway's refusal, `targeting.rs`'s spelling of `vent_<x>_<y>`
+   back into a kind and a column for the panel's words, its lax read of whether a reference is a
+   name or a description, `has_feature_refs`, which decides whether `resolve_refs` is asked at all
+   (otherwise the panel says no step names a vent or a seam), and its find of the "This round:"
+   sentence by the gateway's own lead words (`editor.gd` hides the heading when there is none), the
+   editor's vent pick by screen distance over `get_map_summary`'s features on
+   `ViewModel::ground_at`, and the E0601 checkbox: its removal patch, composed from a click,
+   `DORMANT_CODES`, the client's reading of the diagnostic catalogue for when the checkbox shows,
+   and `dormant_key`, a lax reader of the player's file for whether the option is set and under
+   which spelling; and, from S1's `oper` (decisions-log item 136), the editor's and the rig's
+   handling of `estimate_route`'s `NOT_FOUND`, whatever its cause (a `covering` that covers nothing,
+   a selector that ranks nothing, an unknown or unseen beacon), drawn as the route's answer
+   (unreachable, no polyline, the gateway's sentence) and not counted or reported as a refused call,
+   while any other refusal of the estimate still is one. The client may compose a JSON Patch from a click; a verdict, a
    travel time, a legality answer, a Fix and the patched text (`patch_plan`'s answer) still come
    from the gateway. The gateway's JSON-RPC answers are not canonical `gp.api.v1` JSON — they carry
    a `_status` footer and lower-case enum values (decisions-log item 80) — so every client of them,
@@ -373,7 +392,11 @@ Widening the snapshot has one more consequence to plan for: the fixture snapshot
 `report_hash`'s inputs, so every verifier report golden moves with it. Re-bless them in the same
 PR and say why (decisions-log item 109). A change to how an existing hashed column is *computed*
 moves the chains just as a new field does, with no field added: the PR re-blesses every chain and
-golden it moves and names the rule that moved them (decisions-log item 114).
+golden it moves and names the rule that moved them (decisions-log item 114). A column added to a
+table may be hashed as a block after the table's rows rather than inside each row, so a table that
+holds no row hashes the same bytes as before and a chain that never fills it does not move; the
+three places above still apply, and the PR still names every chain that moves (decisions-log item
+136, the target table's order, rotation and footprint blocks).
 
 For the chunk store there is a **fourth** place: a voxel write must *mark its chunk* so that
 `settle` refreshes the chunk's digest. Miss the mark and the bytes change while the digest does
@@ -407,7 +430,10 @@ per-path allow-list, so the mechanism is this and nothing else:
   exactly the lints in `WALL_ALLOW` (`xtask/src/main.rs`) and nothing else: the panic lints
   (`indexing_slicing`, `unwrap_used`) and the rounding lint (`integer_division`) stay denied inside a
   walled crate too, so a walled crate still reads slices through `get` and divides through
-  `checked_div`.
+  `checked_div`. A scoped run (`cargo xtask clippy -p <crate>`, which the versioned pre-commit hook
+  makes for each crate a commit touches) lints a walled crate named outright in pass 2, with the
+  wall's allowances, and any other value, a glob or a package-id URL included, in pass 1; the
+  research pass runs only unscoped (decisions-log item 136).
 - `cargo xtask wall-guard` then fails the build if `sim`, `plan-core`, `verifier`, `operator`,
   `gateway` or `gamectl` depends on a walled crate, transitively included. That list is
   `WALL_GUARDED_PACKAGES` in `xtask/src/main.rs` — the research guard's crates less the walled
@@ -451,8 +477,10 @@ to full quality once and changed only with the owner's explicit approval.
   is ever added* (there is none today — formatting is rustfmt's defaults for edition 2024, which is
   also what `scripts/pre-commit.sh` runs), and the `[profile.*]` blocks that keep
   `overflow-checks = true`
-- Determinism code: the state hash, the RNG stream enum, the fixed-point types, the snapshot and
-  replay formats, the tick loop, the `research` feature and the `fork` implementation
+- Determinism code: the state hash, the plan fingerprint (`pharmakos_sim::hash`, which a save
+  stamps beside every seal; decisions-log item 136), the RNG stream enum, the fixed-point types,
+  the snapshot and replay formats, the tick loop, the `research` feature and the `fork`
+  implementation
 - The formats a match leaves on a player's disk: the save container (`save.json`,
   `crates/gateway/src/save.rs`); the private replay's inputs — `match.json` (the seed, the settings
   and the rules hash, written by `crates/gateway/src/cache.rs`),
@@ -520,7 +548,16 @@ machine can run.
   from its `SOURCES` (decisions-log item 110 (4)). A sweep (the no-silent-fallback rule, say) that
   reaches callers outside the lane's own crate or named place stops at that edge and says so in
   the PR; the next owner of the callers' crate carries the rest, written into that lane's section
-  of the stage plan (decisions-log item 135).
+  of the stage plan (decisions-log item 135). Tests that pin another crate's output are granted as
+  named places, like a confinement-test line, in a crate no running lane owns: a lane that changes
+  the operator's behaviour or `library/` is granted, in its section of the stage plan, the tests and
+  goldens that pin that output — the operator's hosted tests in `crates/gamectl/tests`
+  (`operator.rs`, `operator_host.rs`, `wizard.rs`; §3 rule 3), `crates/gateway/tests/advice.rs`, the
+  client's wizard pins in `crates/client-gdext/tests/wizard.rs`, and the gateway's
+  `instantiate_suggested` golden with its byte copy `godot/fixtures/instantiate_suggested.json`. A
+  crate another running lane owns is not granted this way: the change is sequenced, as this item's
+  first rule says. An edit to an unowned crate that a lane finds it needs and was not granted is
+  disclosed in its PR, and the main session rules on it at the merge (decisions-log item 136).
 - Rebase on `main` before opening a PR. Never force-push `main`, never rewrite a pushed branch
   someone else is reviewing.
 - State in the PR which crates you touched, so the next agent can pick a disjoint set.

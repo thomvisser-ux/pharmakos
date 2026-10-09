@@ -182,7 +182,7 @@ range narrows to 12–49.
     point first, would answer `no_target`; where the anchor column is free the two points are one
     (`fog` #90, decisions-log item 135).
   - The operator's private `site_for`, which walks out from the nearest own beacon along the line to
-    the feature, is replaced by this rule in the sim.
+    the feature, is replaced by this rule in the sim (deleted by `oper` #96, decisions-log item 136).
 - **`on`**, legal only in `BuildTarget.anchor` (in `add_build_target`, a Build mandate's settings
   and `initial`).
   - The pick ranks only vents whose `on` column lies inside the target beacon's sphere (for an
@@ -282,9 +282,11 @@ that are contested ones, about 80 voxels away by the final pass's reading of the
 a single beacon's 48-voxel reach, so a carried "cover the nearest vent" finds nothing to cover in
 rounds 2 and 3. That outcome is deterministic, harmless and honest, and the Lull says so.
 
-Reaching those vents takes stepping-stone expansions, which the operator's `site_for` already does
-("one expansion out on the line towards it"). A `toward` site arm (`Location` 12) is S1's plan's
-open question. It is not adopted here, and S1's plan decides it.
+Reaching those vents takes stepping-stone expansions. The skeleton's operator made them with its
+private `site_for` ("one expansion out on the line towards it"), which `oper` #96 deleted with the
+site heuristics, so Easy, like a human seat, now reaches only the features a site covers. A `toward`
+site arm (`Location` 12) would make them; S1's plan, decision 3 (decisions-log item 128), deferred it
+to S3, and Easy's expansion past its reachable vents waits for it (decisions-log item 136 (3) (q)).
 
 ## The S1 slice
 
