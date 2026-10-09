@@ -196,32 +196,26 @@ the determinism chain (its harness writes none).
 
 **S1's operator (`oper`) moved the two `against-easy` chains from their first
 line (tick 1)** and no other (decisions-log items 127 (12) and 133 (3) (a); S1's
-plan, decision 14). Both seats' orders changed, and neither through the sim:
-seat 0's file is Hold & Build as Easy now fills it -- `place_beacon` covering
+plan, decision 14). Both seats' orders changed, and neither through the sim.
+Seat 0's file is Hold & Build as Easy now fills it -- `place_beacon` covering
 its starting vent by name, `vent_324_16`, with walk-in in place of the walk to
 a fixed site -- so its first step binds a feature on tick 1, which is hashed
-seat state; and seat 1's Easy no longer places a Mine beacon beside its
-starting seam, which its core covers and works, but a Build beacon covering its
-own starting vent with a Generator on it. Read in the events: seat 1's beacon
-lands at tick 661 (was 446), seat 0's at 721 (was 691), seat 0's initial Build
-target commits at 761 (was 731) and its Generator completes at 1250 (was 1276);
-in `against-easy-three-rounds` seat 0 first delivers ore at 1430 and seat 1 at
-1915 (were 2157 and 1823), and seat 0's carried deploy fails as round 2's step
-starts, at tick 3601 (was 4056): the step no longer walks before it reads
-its site, and the vent it names is covered by its own round-1 beacon. `against-easy.scenario.jsonc`'s seat 1 deadline moved with it, from
-550 to 800.
-
-The same lane's review fixes moved both chains again from tick 1, through
-Easy's seat 1 and the derived seat-0 file, and nothing else. Easy's composed
-route now **opens** with `deepen_core` (it ended with it), so seat 1's
-commander walks to its core first and commits the dig depth at tick 71, and
-every goal is costed from the core: seat 1's beacon lands at tick 736 (was
-661), its Generator completes at 1477, and in `against-easy-three-rounds` it
-first delivers ore at 1671 (was 1915), its core's drone digging from the
-start. Seat 0's derived hold is 9 900 ms (was 7 900): Easy costs the
-suggested vent from the core, 2 s nearer than from the commander. Seat 0's
-events do not move (721, 761, 1250, 1430 and 3601), and every deadline
-holds.
+seat state. Seat 1's Easy no longer places a Mine beacon beside its starting
+seam, which its core covers and works: its route opens with `deepen_core` (the
+core's dig depth, committed at tick 71) and then places a Build beacon covering
+its own starting vent, with a Generator on it, every goal costed from the core.
+Read in the events, against the chains `build` left: seat 1's beacon lands at
+tick 736 (its Mine beacon landed at 446) and its Generator completes at 1495;
+seat 0's beacon lands at 721 (was 691), its initial Build target commits at 771
+(was 741) and its Generator completes at 1260 (was 1286); in
+`against-easy-three-rounds` seat 0 first delivers ore at 1430 (as before) and
+seat 1 at 1671 (was 1787), its core's drone digging from the start, and seat
+0's carried deploy fails as round 2's step starts, at tick 3601 (was 4056): the
+step no longer walks before it reads its site, and the vent it names is
+covered by its own round-1 beacon. Seat 0's derived hold is 9 900 ms: Easy
+costs the suggested vent from the core. `against-easy.scenario.jsonc`'s seat 1
+deadline moved with it, from 550 to 800, and every other deadline holds. The
+determinism chain did not move.
 
 `expand-east-segment` carries one more thing worth knowing before its chain is
 read. The playbook it seals **does not qualify against either seat's own frozen

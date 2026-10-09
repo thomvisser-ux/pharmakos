@@ -62,10 +62,10 @@
     { "seat": 1, "kind": "builtin" }
   ],
 
-  // One segment, sized from the run before S1's targeting: seat 0's Generator
+  // One segment, sized from the run before S1's operator lane: seat 0's Generator
   // was completed at tick 1286 then, 64 300 ms after the segment's first tick,
   // and 64 300 ms plus a fifth is 77 160 ms, rounded up to a multiple of
-  // 10 000. Since the operator's S1 lane it is completed at tick @GEN0, which
+  // 10 000. Since the operator's S1 lane it is completed at tick 1260, which
   // the same rule still rounds to 80 000 ms: the step's walk to the covering
   // site, the deploy twelve seconds, the Build-target row two and a half
   // (`interface_times.build_target_ms`), and the drone the new beacon
@@ -87,9 +87,9 @@
     { "assert": "event_fired", "event": "beacon_placed", "seat": 0, "by_tick": 850,
       "note": "Seat 0's Build beacon, deployed at tick 721 on the site the covering rule read for vent_324_16: the step walked there itself (walk-in), since the sim deploys only while the commander stands within its interface range of the site." },
     { "assert": "event_fired", "event": "row_committed", "seat": 0, "by_tick": 900,
-      "note": "The new beacon's initial Build target -- its own row at `interface_times.build_target_ms`, 2.5 s, not a settings field (S1's plan, decision 15), the Generator on the vent it covers -- committed on site at tick @ROW0. Touch to change: an initial target is an interface row." },
+      "note": "The new beacon's initial Build target -- its own row at `interface_times.build_target_ms`, 2.5 s, not a settings field (S1's plan, decision 15), the Generator on the vent it covers -- committed on site at tick 771. Touch to change: an initial target is an interface row." },
     { "assert": "event_fired", "event": "structure_completed", "seat": 0, "by_tick": 1550,
-      "note": "The Generator on the lean vent, completed at tick @GEN0: the new beacon fabricated a build drone, which walked to the vent and raised it. Seat 0 orders no other structure in this segment. The kW it adds is asserted in crates/gamectl/tests/operator.rs." },
+      "note": "The Generator on the lean vent, completed at tick 1260: the new beacon fabricated a build drone, which walked to the vent and raised it. Seat 0 orders no other structure in this segment. The kW it adds is asserted in crates/gamectl/tests/operator.rs." },
     { "assert": "event_fired", "event": "segment_ended", "by_tick": 1600,
       "note": "The segment ends on the tick, not near it." },
     { "assert": "hash_chain_equals",
