@@ -15,7 +15,7 @@ use godot::meta::ToGodot;
 use pharmakos_proto::gp::api::v1::VerifyReport;
 use pharmakos_proto::json;
 
-use crate::editor::{Editor, Row, Selector, Target, rows_of};
+use crate::editor::{Editor, Route, Row, Selector, Target, rows_of};
 use crate::error::BridgeError;
 use crate::rig::{Meter, Recap};
 use crate::targeting::{Chip, ChipFeature, FeatureKind, FeatureName};
@@ -88,6 +88,31 @@ pub(crate) fn rows_of_report_text(text: &str) -> Result<Vec<Row>, BridgeError> {
     Ok(rows_of(&report))
 }
 
+/// The route as the panel draws it: the polyline, the legs' times, and what the gateway
+/// said about it.
+fn route_dictionary(route: &Route) -> VarDictionary {
+    let mut points = VarArray::new();
+    for [x, y, z] in &route.points {
+        points.push(&Vector3i::new(*x, *y, *z).to_variant());
+    }
+    let mut legs = PackedInt64Array::new();
+    for leg in &route.legs {
+        legs.push(*leg);
+    }
+    let mut drawn = VarDictionary::new();
+    drawn.set(&"points".to_variant(), &points.to_variant());
+    drawn.set(&"legs".to_variant(), &legs.to_variant());
+    drawn.set(&"whole".to_variant(), &route.whole.to_variant());
+    drawn.set(&"reachable".to_variant(), &route.reachable.to_variant());
+    drawn.set(&"readable".to_variant(), &route.readable.to_variant());
+    drawn.set(&"current".to_variant(), &route.current.to_variant());
+    drawn.set(
+        &"found_nothing".to_variant(),
+        &route.found_nothing.to_variant(),
+    );
+    drawn
+}
+
 /// Everything the editor's panel draws, as one dictionary.
 #[must_use]
 pub(crate) fn state_dictionary(editor: &Editor) -> VarDictionary {
@@ -105,23 +130,7 @@ pub(crate) fn state_dictionary(editor: &Editor) -> VarDictionary {
     put("rows_current", editor.rows_current().to_variant());
     put("qualifies", editor.qualifies().to_variant());
 
-    let route = editor.route();
-    let mut points = VarArray::new();
-    for [x, y, z] in &route.points {
-        points.push(&Vector3i::new(*x, *y, *z).to_variant());
-    }
-    let mut legs = PackedInt64Array::new();
-    for leg in &route.legs {
-        legs.push(*leg);
-    }
-    let mut drawn = VarDictionary::new();
-    drawn.set(&"points".to_variant(), &points.to_variant());
-    drawn.set(&"legs".to_variant(), &legs.to_variant());
-    drawn.set(&"whole".to_variant(), &route.whole.to_variant());
-    drawn.set(&"reachable".to_variant(), &route.reachable.to_variant());
-    drawn.set(&"readable".to_variant(), &route.readable.to_variant());
-    drawn.set(&"current".to_variant(), &route.current.to_variant());
-    put("route", drawn.to_variant());
+    put("route", route_dictionary(editor.route()).to_variant());
 
     let mut ghost = VarDictionary::new();
     if let Some(shown) = editor.ghost() {

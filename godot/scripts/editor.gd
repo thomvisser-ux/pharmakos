@@ -715,6 +715,8 @@ func _draw_route(route: Dictionary, has_text: bool) -> void:
 		return
 	if not route.get("current", false):
 		_route_label.text = Strings.text("route_waiting")
+	elif String(route.get("found_nothing", "")) != "":
+		_route_label.text = Strings.text("route_found_nothing", {"why": route.get("found_nothing", "")})
 	elif not route.get("reachable", true):
 		_route_label.text = Strings.text("route_none")
 	elif (route.get("legs", PackedInt64Array()) as PackedInt64Array).is_empty():

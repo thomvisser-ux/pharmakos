@@ -693,16 +693,22 @@ impl Rig {
                 .and_then(json_text)
                 .unwrap_or("")
                 .to_owned();
+            if purpose == Purpose::Plan {
+                // A refusal is an answer: the editor settles the call and says what it was.
+                // Some are the gateway's answer to a question rather than a refused call
+                // (an `estimate_route` waypoint that resolves to nothing): the editor draws
+                // those, and they are not reported as refusals.
+                let settled = self.editor.answered(Err((code.as_str(), message.as_str())));
+                self.sync_editor();
+                if matches!(settled, Ok(crate::editor::Settled::Answered)) {
+                    return Ok(answer);
+                }
+            }
             self.refused(purpose, &code);
             if purpose == Purpose::Recap {
                 // The recap column shows the refusal in place of the prose: the gateway's
                 // words, as they came.
                 self.recap.refusal = format!("{code}: {message}");
-            }
-            if purpose == Purpose::Plan {
-                // A refusal is an answer: the editor settles the call and says what it was.
-                let _ = self.editor.answered(Err((code.as_str(), message.as_str())));
-                self.sync_editor();
             }
             let said = format!("{code}: {message}");
             self.last_error = Some(said.clone());
@@ -797,7 +803,9 @@ impl Rig {
             Purpose::EndLull => self.wants.end_lull = false,
             Purpose::EndRecap => self.wants.end_recap = false,
             Purpose::Ready => self.wants.ready = false,
-            Purpose::Plan => self.editor.answered(Ok(result))?,
+            Purpose::Plan => {
+                self.editor.answered(Ok(result))?;
+            }
             Purpose::Meter => {
                 let (body, footer) = split_footer(result);
                 let forecast: GetEconomyForecastResponse = json::decode_json(&enums::canonical(
@@ -1565,6 +1573,58 @@ mod tests {
         )
         .expect("reads");
         rig
+    }
+
+    #[test]
+    fn a_covering_that_covers_nothing_is_the_gateways_answer_not_a_refusal() {
+        let mut rig = in_lull();
+        rig.editor_mut().set_seat("seat.0");
+        assert!(rig.editor_mut().load(
+            br#"{"declarative":{"route":[{"label":"p","place_beacon":{"at":{"covering":{"feature_id":"vent_1_1"}}}}]}}"#
+        ));
+        // A second apart, so the seat's rate budget never holds a call back.
+        let mut now: u64 = 2;
+        let estimate = loop {
+            assert!(now < 20_000_000, "the route was never priced");
+            let sent = rig.poll(now);
+            now += 1_000_000;
+            let Some(frame) = sent.iter().find(|frame| frame.link == SEAT) else {
+                continue;
+            };
+            if method_of(frame) == "estimate_route" {
+                break id_of(frame);
+            }
+            let reply = if method_of(frame) == "render_plan" {
+                r#"{"prose":"Playbook\n"}"#
+            } else if method_of(frame) == "resolve_refs" {
+                r#"{"refs":[]}"#
+            } else {
+                r#"{"report":{"qualifies":true,"depth":"quick"}}"#
+            };
+            rig.receive(SEAT, &answer(id_of(frame), reply, "lull"))
+                .expect("reads");
+            if rig.editor().has_text() && rig.editor().route().points.is_empty() {
+                // The commander, as the view finds it once the playbook is on screen.
+                rig.editor_mut().set_entities(&[crate::view::Entity {
+                    id: "u_1".to_owned(),
+                    kind: crate::view::EntityKind::Unit,
+                    subtype: "commander".to_owned(),
+                    owner: "seat.0".to_owned(),
+                    at: [358, 22, 36],
+                }]);
+            }
+        };
+        let refusal = format!(
+            r#"{{"jsonrpc":"2.0","id":{estimate},"error":{{"code":-32000,"message":"waypoint 1 covers nothing: its step would fail `no_target`","data":{{"code":"NOT_FOUND"}}}}}}"#
+        );
+        let got = rig.receive(SEAT, &refusal).expect("reads");
+        assert_eq!(got.error, None, "an answer, not a refused call");
+        assert_eq!(rig.last_error(), None);
+        assert_eq!(rig.editor().refusals(), 0);
+        assert_eq!(
+            rig.editor().route().found_nothing,
+            "waypoint 1 covers nothing: its step would fail `no_target`"
+        );
     }
 
     #[test]
