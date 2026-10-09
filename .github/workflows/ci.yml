@@ -80,11 +80,15 @@ on:
 permissions:
   contents: read
 
-# A newer push to a pull request's branch cancels that branch's stale run; a run on `main`
-# always finishes, so a merge never cancels the push run of the merge before it, and every
-# commit on `main` keeps its own verdict (decisions-log item 134 (2) (d)).
+# A newer push to a pull request's branch cancels that branch's stale run. On `main` every
+# commit gets a group of its own, keyed by its sha, so no run there is cancelled or replaced
+# and every commit keeps its own verdict (decisions-log item 134 (2) (d)). The sha is needed
+# as well as `cancel-in-progress: false`: GitHub keeps one running and one pending run per
+# group, and a third run queued in a shared group cancels the pending one whatever
+# `cancel-in-progress` says. The cost is that merges in quick succession run their matrices
+# side by side.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 env:
@@ -255,20 +259,26 @@ jobs:
       # The version is pinned, not the action's latest: a new cargo-deny release can add a
       # check or change a default and turn every pull request red at once, and it would reach
       # CI with no release-age cooldown. 0.20.2 (published 2026-07-09) is what CI and the
-      # local toolchain ran when it was pinned. Raise it in its own PR, with deny.toml
-      # checked against the new release's notes.
+      # local toolchain ran when it was pinned. Dependabot does not read `tool:`, so nothing
+      # raises it on its own: check it whenever Dependabot bumps install-action, and raise it
+      # in its own PR, with deny.toml checked against the new release's notes. `fallback:
+      # none` makes a version missing from the action's manifest fail the job rather than
+      # fall back to cargo-binstall with a warning.
       - name: Install cargo-deny
         if: steps.scope.outputs.prose_only != 'true'
         uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
         with:
           tool: cargo-deny@0.20.2
+          fallback: none
 
       - name: Install reuse
         if: matrix.reuse
         shell: bash
         run: |
           set -euo pipefail
-          pipx install reuse
+          # Pinned, as the package jobs pin it: a new reuse release could turn every pull
+          # request red at once and would reach CI with no release-age cooldown.
+          pipx install reuse==6.2.0
           # pipx puts its shims in ~/.local/bin, which is not on PATH for the steps that
           # follow unless we say so — and PHARMAKOS_REQUIRE_TOOLS turns "not found" into
           # a failure rather than a skip.
@@ -978,8 +988,8 @@ jobs:
     #
     # No cache step: the repository's cache store is past GitHub's 10 GB cap already. The
     # release test builds are the mesher's and the bench's, and the bench's links the sim,
-    # the verifier and the gateway, so this job builds more than it once did; it stays
-    # uncached until a measured run says the cost matters. It follows the docs-only fast
+    # the verifier and the gateway, so this job builds more than it once did; uncached, the
+    # three legs took one to two minutes in run 37995871913. It follows the docs-only fast
     # path like the building jobs: a prose-only pull request skips its steps and prints the
     # notice.
     runs-on: ${{ matrix.os }}
@@ -1200,7 +1210,7 @@ jobs:
           if command -v pipx > /dev/null 2>&1; then
             pipx=(pipx)
           else
-            python -m pip install --user pipx
+            python -m pip install --user pipx==1.17.10
             pipx=(python -m pipx)
           fi
           "${pipx[@]}" install reuse==6.2.0

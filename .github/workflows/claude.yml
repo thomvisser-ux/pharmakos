@@ -86,8 +86,9 @@ jobs:
           fi
 
       # CLAUDE_CODE_SUBPROCESS_ENV_SCRUB above makes Claude Code run its subprocesses under
-      # bubblewrap, and Claude Code 2.1.288 (agent SDK 0.3.288, which v1.0.240's lockfile
-      # pins at the pinned SHA; re-check both on a bump) refuses to start without it: run
+      # bubblewrap, and Claude Code 2.1.288 (v1.0.240's base-action/action.yml at the pinned
+      # SHA sets CLAUDE_CODE_VERSION, and its bun.lock pins agent SDK 0.3.288; re-check both
+      # on a bump) refuses to start without it: run
       # 36432629735 failed in "Run Claude Code" with "bubblewrap is required for subprocess
       # env scrubbing and isolation" (decisions-log item 124 (5)(d)). The fix keeps the
       # isolation rather than opting out of it. These are the steps the action runs itself,

@@ -10,15 +10,15 @@
 #      hierarchical_pathfinding are avoid-listed on technical grounds; rmcp and wasmi are
 #      barred because nothing user-written executes in v1 and no MCP server ships.
 #
-# Written against the current cargo-deny schema and NOT yet executed: cargo-deny is not
-# installed on this machine. Two schema notes, because getting them wrong turns the `deny`
-# step red rather than warning:
+# Written for cargo-deny 0.20.2, the version pinned in .github/workflows/ci.yml and installed
+# locally. Two schema notes, because getting them wrong turns the `deny` step red rather than
+# warning:
 #   * the `version = 2` keys under [licenses] and [advisories] are deliberately ABSENT.
 #     They were removed in current releases, which reject unknown fields outright, and
 #     their behaviour is the default now.
 #   * bans use `crate = "name"`, not the older `name =`/`version =` pair.
-# CI installs cargo-deny through taiki-e/install-action; if the version this file targets
-# ever matters, pin it there (.github/workflows/ci.yml) rather than guessing here.
+# CI installs cargo-deny through taiki-e/install-action, pinned there; raise the pin and this
+# file together, in their own pull request.
 
 [graph]
 # Check every OS we ship or test on, so a Windows-only or Linux-only dependency cannot
