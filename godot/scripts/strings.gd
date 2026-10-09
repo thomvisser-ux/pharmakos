@@ -169,6 +169,9 @@ const TEXT := {
 	"leg": "{ms} ms",
 	"route_whole": "Travel, as estimated: {ms} ms",
 	"route_none": "No route: the commander cannot get there.",
+	# The gateway's sentence when a waypoint resolves to nothing (a `covering` that covers
+	# nothing), shown as it came: its answer about the route, not a refused call.
+	"route_found_nothing": "No route: {why}",
 	"route_empty": "No step moves the commander yet.",
 	"route_waiting": "Estimating...",
 

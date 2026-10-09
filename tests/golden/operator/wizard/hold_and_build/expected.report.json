@@ -1,0 +1,44 @@
+{
+  "qualifies": true,
+  "depth": "full",
+  "diagnostics": [
+    {
+      "code": "I0003",
+      "severity": "info",
+      "path": "/declarative/route/0/place_beacon/initial/mandate/build/terraform",
+      "related_paths": [],
+      "message": "`terraform` is omitted and reads as NONE.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/0/place_beacon/initial/mandate/build/terraform\",\"value\":\"NONE\"}]",
+          "applicability": "machine_applicable"
+        }
+      ],
+      "map_refs": []
+    },
+    {
+      "code": "I0003",
+      "severity": "info",
+      "path": "/declarative/handlers/0/body/0/move/pace",
+      "related_paths": [],
+      "message": "`pace` is omitted and reads as DIRECT.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/handlers/0/body/0/move/pace\",\"value\":\"DIRECT\"}]",
+          "applicability": "machine_applicable"
+        }
+      ],
+      "map_refs": []
+    }
+  ],
+  "report_hash": "dq7YLYk2pOo=",
+  "rules_hash": "p1QGoPeYo6c=",
+  "plan_fingerprint": "eXVzv4kKF7o=",
+  "verifier_version": "0.1.0-s1",
+  "size_units": 6,
+  "size_budget": 128
+}

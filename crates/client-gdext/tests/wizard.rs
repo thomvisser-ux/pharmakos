@@ -139,31 +139,26 @@ fn the_pages_are_the_fixtures_parameters_as_they_came() {
 
     // The pins: what this fixture is today. They move when the golden does (the lane that
     // changes library/ or the operator re-copies the fixture and updates them).
-    // Hold & Build is place-and-build since T18b (decisions-log item 113 (6)): the walk,
-    // the site and the Generator's anchor are declared before the hold.
+    // Hold & Build is described since S1's targeting (decisions-log item 127 (12)): the vent
+    // the new beacon covers, which the suggestion names, is declared before the hold.
     let marks: Vec<bool> = instance.pages.iter().map(|page| page.suggested).collect();
     assert_eq!(
         marks,
-        [true, true, true, false],
-        "the walk, the site and the anchor are the operator's, the hold the template's"
+        [true, false],
+        "the vent is the operator's, the hold the template's"
     );
     let values: Vec<&str> = instance
         .pages
         .iter()
         .map(|page| page.value.as_str())
         .collect();
+    assert_eq!(values, [r#"{"feature_id":"vent_150_13"}"#, "30000"]);
     assert_eq!(
-        values,
-        [
-            r#"{"voxel":{"x":150,"y":25,"z":118}}"#,
-            r#"{"voxel":{"x":150,"y":25,"z":118}}"#,
-            r#"{"x":150,"y":13,"z":118}"#,
-            "30000"
-        ]
-    );
-    assert_eq!(
-        instance.pages.get(2).map(|page| page.label.as_str()),
-        Some("Where the Generator goes: a heat vent inside the new beacon's sphere")
+        instance.pages.first().map(|page| page.label.as_str()),
+        Some(
+            "Which heat vent the Build beacon covers: the nearest one you do not cover yet, or \
+             one by name"
+        )
     );
     assert_eq!(
         instance.pages.last().map(|page| page.label.as_str()),
@@ -290,6 +285,12 @@ fn using_the_wizard_puts_the_gateways_text_in_byte_for_byte_and_undo_takes_it_ba
         .expect("json")))
         .expect("reads");
     assert_eq!(editor.verdict(), Verdict::Quick);
+    // The fixture's playbook names a vent, so its chips are asked for before the rule list.
+    let resolve = editor.next_call(false).expect("the chips");
+    assert_eq!(resolve.method, "resolve_refs");
+    editor
+        .answered(Ok(&json::read(r#"{"refs":[]}"#).expect("json")))
+        .expect("reads");
     let render = editor.next_call(false).expect("the rule list");
     assert_eq!(render.method, "render_plan");
     editor

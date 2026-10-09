@@ -180,12 +180,18 @@ same run's notices gave their red-channel variance: **742** for the rows and
 * `expected.wizard.png` — `wizard_shot.tscn` drawing
   `godot/fixtures/instantiate_suggested.json` through the bridge's wizard decode
   and `scripts/wizard.gd`: the same panel holding the Hold & Build wizard's first
-  page — the label "Where to walk to before placing: the site itself", the raw
-  value `{"voxel":{"x":150,"y":25,"z":118}}` in the field with a "Send this
-  value" button, the mark "suggested by the built-in operator", the why ("A
-  Build beacon at the edge of your core's sphere holds the heat vent nearest
-  your core in its own."), and "Use this playbook" and "Close". No heading: a
-  hostless scene has no `list_templates` title.
+  page — the label "Which heat vent the Build beacon covers: the nearest one you
+  do not cover yet, or one by name" (on two lines), the raw value
+  `{"feature_id":"vent_150_13"}` in the field with a "Send this value" button,
+  the mark "suggested by the built-in operator", the why ("A Build beacon at
+  the edge of your core's sphere holds the heat vent nearest your core in its
+  own."), and "Use this playbook" and "Close". No heading: a hostless scene has
+  no `list_templates` title. Re-rendered by S1's `oper` lane (pull request
+  #96), taken from the `vista-screenshot` artefact of its first run, workflow
+  run 37884252755 (red-channel variance **632**), when the template's first
+  page became the vent's description and the operator's suggestion a name
+  (decisions-log item 127 (12)); the panel, the mark, the why and the buttons
+  did not move, only the label, which wraps, and the value.
 
 Both are flat UI panels on the placeholder theme, so a font, theme or layout
 change in Godot moves them as surely as a change to their input does.

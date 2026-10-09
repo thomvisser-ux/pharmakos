@@ -1,0 +1,28 @@
+{
+  "qualifies": true,
+  "depth": "full",
+  "diagnostics": [
+    {
+      "code": "I0003",
+      "severity": "info",
+      "path": "/declarative/handlers/0/body/0/move/pace",
+      "related_paths": [],
+      "message": "`pace` is omitted and reads as DIRECT.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/handlers/0/body/0/move/pace\",\"value\":\"DIRECT\"}]",
+          "applicability": "machine_applicable"
+        }
+      ],
+      "map_refs": []
+    }
+  ],
+  "report_hash": "0Cr3CEyVhcs=",
+  "rules_hash": "p1QGoPeYo6c=",
+  "plan_fingerprint": "D4gqdA0a4mc=",
+  "verifier_version": "0.1.0-s1",
+  "size_units": 5,
+  "size_budget": 128
+}

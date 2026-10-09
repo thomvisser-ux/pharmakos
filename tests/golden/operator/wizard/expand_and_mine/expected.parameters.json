@@ -1,0 +1,17 @@
+{
+  "parameters": [
+    {
+      "pointer": "/declarative/route/0/place_beacon/at/covering",
+      "label": "Which ore seam the Mine beacon covers: the nearest one you do not cover yet, or one by name",
+      "value": "{\"seam\":{\"rank\":\"NEAREST\",\"coverage\":\"UNCOVERED\"}}",
+      "suggested": false
+    },
+    {
+      "pointer": "/declarative/route/0/place_beacon/initial/mandate/mine/dig_max_depth",
+      "label": "How deep the Mine mandate digs, in voxels",
+      "value": "4",
+      "suggested": false
+    }
+  ],
+  "why": "Easy, seat 0, round 1, seed 0x00000000ca5caded (recorded; Easy draws nothing at random). No ore seam you do not cover yet is within reach and worth a beacon this round, so this template's own values stand."
+}

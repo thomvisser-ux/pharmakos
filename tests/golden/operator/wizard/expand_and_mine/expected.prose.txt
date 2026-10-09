@@ -1,0 +1,27 @@
+Expand & Mine
+Written from a built-in template.
+Place a Mine beacon covering an ore seam you do not cover yet, and walk home while it digs.
+
+Route
+  1. place_mine: place a beacon at a site covering the nearest scrap seam you do not cover yet (nearest by travel, read when the step starts), tagged "mine", on a Mine mandate, at normal Quartermaster priority (16.5 s on site).
+    Give up after 2:00.
+    On failure, move on to the next step.
+  2. back_home: walk to the safest own beacon.
+
+Rules
+  1. "flee", when the commander is at or below 40% HP and the commander took damage in the last 3 s:
+    1. flee_to_safety: walk to the safest own beacon.
+    2. flee_wait: hold for 8 s.
+    Then carry on with the route.
+    Fires at most 3 times, and no sooner than every 30 s.
+
+If the commander dies
+  On respawn, carry on from the step the route was on.
+  After 2 deaths the fallback takes over.
+
+Fallback
+  Hold at the safest own beacon.
+
+Budget
+  5 of 128 size units.
+  16.5 s standing at a beacon along the route.

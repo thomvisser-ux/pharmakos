@@ -1,40 +1,35 @@
 // SPDX-FileCopyrightText: 2026 Pharmakos contributors
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //
-// expand_and_mine.jsonc: the Expand & Mine template (decisions-log item 81).
+// safe_playbook.jsonc: the Safe Playbook template (spec section 14).
 //
-// It teaches the route and the economy: walk out, put a Mine beacon down
-// beside an ore seam, and walk home while its drones dig. Spec section 10's
-// worked example, expand_east, is one filled-in copy of it.
+// What the built-in operator files for a seat that seals nothing verified
+// before the Lull ends, and what get_safe_plan shows, so a seat can see the
+// cost of a timeout. As written here it changes no beacon. The operator's
+// route may raise a beacon's Quartermaster priority and set how deep the
+// core's starting drone digs (decisions-log item 133); it never places,
+// recycles or switches a mandate.
 //
-// This file cannot know where your seams are, so both places below are the
-// safest own beacon, which qualifies. Nothing in the sim keeps one beacon off
-// another's voxel, so they place a Mine beacon where the safest one stands.
-// The wizard asks for the site, and the built-in operator suggests one whose
-// new sphere holds a seam.
+// With nothing raised, which is this file's own value, it is also the
+// gateway's fallback for a seat no operator advises: crates/gateway's
+// SAFE_PLAYBOOK is this template instantiated with no parameters, and
+// `the_gateways_fallback_is_the_safe_template_with_nothing_raised` keeps the
+// two equal ("written once, tested twice", decisions-log item 81).
 //
-// The two sites' own values above are the values it ships with, by the
-// owner's choice at decisions-log item 119 (10): they qualify on any map, and
-// the wizard or the operator replaces them. The golden seed's suggested sites
-// were not taken instead, because they are right for one map and E0403 on any
-// other.
+// Spec section 14 names "the flee and rescue rules"; this has the flee rule
+// only, because nothing can be rescued before combat.
+//
+// PLACEHOLDER: whether and how the safe playbook gains a rescue rule — owner, S2/S5
 {
   "schema_version": {"major": 1, "minor": 0},
   "meta": {
-    "title": "Expand & Mine",
+    "title": "Safe playbook",
     "author_kind": "BUILTIN",
-    "note": "Easy, seat 1, round 1, seed 0x00000000ca5caded (recorded; Easy draws nothing at random). A Mine beacon at (349, 350, 29) beside the standard ore seam at (346, 345, 29): 640 points for 35 s of route (Easy fills 42 s of the segment)."
+    "note": "Move to the safest beacon, raise the priority of any beacon about to brown out, then stay with the safest beacon."
   },
   "kind": "PLAYBOOK",
   "declarative": {
-    "route": [
-      {"label": "to_site", "move": {"to": {"voxel":{"x":349,"y":350,"z":29}}, "pace": "AVOID_KNOWN_THREATS"}, "timeout_ms": 120000, "on_fail": {"action": "SKIP"}},
-      {"label": "place_mine", "place_beacon": {"at": {"voxel":{"x":349,"y":350,"z":29}}, "tags": ["mine"],
-        // Initial settings are interface rows: each one commits on its own.
-        "initial": {"priority": "NORMAL", "mandate": {"roe": "RETURN_FIRE", "mine": {"dig_max_depth": 4, "flee_on_threat": true}}}},
-       "on_fail": {"action": "SKIP"}},
-      {"label": "back_home", "move": {"to": {"safest": {}}}}
-    ],
+    "route": [{"label":"to_safety","move":{"to":{"safest":{}},"pace":"AVOID_KNOWN_THREATS"}},{"label":"deepen_core","interface":{"beacon":{"beacon_id":"b_00"},"rows":[{"set_mandate_settings":{"mine":{"dig_max_depth":4}}}]},"on_fail":{"action":"SKIP"}}],
     "handlers": [
       // Why: bravery is an ordinary rule. Hurt and under fire, the commander
       // walks back to safety and waits before carrying on.
@@ -43,8 +38,8 @@
        "resume": "CONTINUE", "cooldown_ms": 30000, "max_fires": 3}
     ]
   },
-  "on_death": {"on_respawn": "CONTINUE", "max_deaths_before_fallback": 2},
-  // Why: an expansion is the most exposed thing a seat does, so the tail waits
-  // at the safest beacon rather than out at the new one.
-  "fallback": {"hold": {"at": {"safest": {}}}}
+  "on_death": {"on_respawn": "CONTINUE"},
+  // Why: once the route is done, stay with the safest beacon rather than hold
+  // one spot, so the commander goes with it if another beacon becomes safer.
+  "fallback": {"shadow": {"beacon": {"safest": {}}}}
 }

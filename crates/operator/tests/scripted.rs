@@ -6,26 +6,30 @@
 //!
 //! The operator's only input is the wire (and the public rules text), which is
 //! what makes a scripted client an honest fixture (decisions-log item 111,
-//! section F, "Build 12"): it can put three browned-out beacons in front of
-//! the safe playbook, permute every viewer-scoped handle, or move the host
-//! clock, without a match or a host test seam. Every test that hosts a real
-//! match is in `crates/gamectl/tests/operator.rs`, where the adapter is.
+//! section F, "Build 12"): it can put three lit beacons in front of the safe
+//! playbook, permute every viewer-scoped handle, or move the host clock,
+//! without a match or a host test seam. Every test that hosts a real match is
+//! in `crates/gamectl/tests/operator.rs`, where the adapter is.
 //!
-//! The scripted gateway does not apply a patch or run a verifier: it records
-//! every call, method and params, into a transcript, and the tests compare
-//! transcripts -- which is a stronger claim than comparing the playbook
-//! alone, because every estimate, every patch and every submission is in it.
+//! The scripted world is the wire's since S1's targeting: a list of named
+//! vents and seams (`get_map_summary.features`), and an `estimate_route` that
+//! answers a `covering` waypoint with the site the world says the sim's
+//! covering rule would choose, or refuses it when none would. The scripted
+//! gateway does not apply a patch or run a verifier: it records every call,
+//! method and params, into a transcript, and the tests compare transcripts --
+//! which is a stronger claim than comparing the playbook alone, because every
+//! estimate, every patch and every submission is in it.
 #![allow(
     clippy::expect_used,
     clippy::unwrap_used,
     reason = "clippy.toml sets allow-expect-in-tests and allow-unwrap-in-tests, but that configuration only recognises #[test] functions and #[cfg(test)] modules -- not an integration test's helper functions. A panic is this file's failure report (clippy.toml's own wording)."
 )]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use pharmakos_operator::easy::{
-    EASY_ADVISOR_CALL_BUDGET, EASY_CALL_BUDGET, PAGES_MAX, SAFE_MAX_RAISED,
+    CORE_DIG_MAX_DEPTH, EASY_ADVISOR_CALL_BUDGET, EASY_CALL_BUDGET, PAGES_MAX, SAFE_MAX_RAISED,
 };
 use pharmakos_operator::{Easy, Submitted};
 use pharmakos_proto::json::{Json, read, write};
@@ -34,15 +38,8 @@ use pharmakos_proto::json::{Json, read, write};
 // The scripted world
 // ---------------------------------------------------------------------------
 
-/// A chunk's edge.
-const EDGE: usize = 32;
-/// The ground's top voxel.
-const GROUND: i32 = 10;
-/// The wire's material bytes (`gp.api.v1.ViewChunk`).
-const DIRT: u8 = 1;
-const STONE: u8 = 2;
-const SEAM_STANDARD: u8 = 4;
-const VENT_LEAN: u8 = 6;
+/// The ground's standing height.
+const GROUND: i32 = 11;
 
 /// One beacon in the scripted `list_beacons` answer.
 #[derive(Clone)]
@@ -66,13 +63,50 @@ struct Entity {
     at: [i32; 3],
 }
 
-/// How the scripted verifier answers.
+/// One vent or seam in the scripted `get_map_summary.features`.
+#[derive(Clone)]
+struct Feature {
+    /// `vent_<x>_<y>` or `seam_<x>_<y>`.
+    id: String,
+    /// The wire's lower-case kind.
+    kind: &'static str,
+    /// The wire's lower-case grade.
+    grade: &'static str,
+    anchor: [i32; 2],
+    live: bool,
+    covered: bool,
+    /// Travel from the commander; `None` when unreachable.
+    travel_ms: Option<i64>,
+    /// The site a `covering` waypoint naming it answers; `None` when the
+    /// gateway refuses it (`NOT_FOUND`, no site covers it).
+    site: Option<[i32; 3]>,
+}
+
+impl Feature {
+    fn new(kind: &'static str, grade: &'static str, anchor: [i32; 2]) -> Feature {
+        let [x, y] = anchor;
+        Feature {
+            id: format!("{kind}_{x}_{y}"),
+            kind,
+            grade,
+            anchor,
+            live: true,
+            covered: false,
+            travel_ms: Some(10_000),
+            site: Some([x - 4, y, GROUND]),
+        }
+    }
+}
+
+/// How the scripted verifier answers a FULL verify.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Verify {
     /// Every playbook qualifies.
     Qualifies,
     /// No playbook qualifies, and every report offers a machine-applicable fix.
     NeverButFixable,
+    /// Every playbook qualifies FULL, and a QUICK verify answers no `report`.
+    QuickUnreported,
 }
 
 /// How the scripted paged reads page.
@@ -95,17 +129,18 @@ struct Script {
     segment_ms: i64,
     remaining_ms: i64,
     notes: String,
-    size: [i32; 3],
-    /// Top material per column, `(x, y)`, beyond the plain dirt.
-    features: BTreeMap<(i32, i32), u8>,
-    /// Top voxel per column, `(x, y)`, where it is not [`GROUND`].
-    heights: BTreeMap<(i32, i32), i32>,
+    features: Vec<Feature>,
     beacons: Vec<Beacon>,
     entities: Vec<Entity>,
     treasury: i64,
-    headroom: i64,
+    supply: i64,
+    draw: i64,
     /// Travel from anywhere to a beacon, by id, overriding the distance rule.
     to_beacon_ms: BTreeMap<String, i64>,
+    /// The `(beacon, vent)` pairs `resolve_refs` reads an `on` for.
+    on_reads: BTreeSet<(String, String)>,
+    /// The beacons on the Build mandate; a tap at any other answers `E0503`.
+    build_beacons: BTreeSet<String>,
     /// How the paged reads page.
     paging: Paging,
     verify: Verify,
@@ -114,12 +149,14 @@ struct Script {
     refuse_everything: Option<&'static str>,
     /// Answer `Leg.to` as the bare voxel `main` wrote before T17.
     bare_legs: bool,
+    /// Answer one feature row with no grade.
+    malformed_feature: bool,
     transcript: Vec<String>,
 }
 
 impl Script {
-    /// A seat on a 64 x 64 map with its core in the middle, its commander
-    /// beside it, and nothing else.
+    /// A seat with its core `b_00` in the middle of a 64 x 64 map, its
+    /// commander beside it, and nothing else.
     fn new(seat: u8) -> Script {
         Script {
             seat,
@@ -127,12 +164,10 @@ impl Script {
             segment_ms: 180_000,
             remaining_ms: 180_000,
             notes: String::new(),
-            size: [64, 64, 32],
-            features: BTreeMap::new(),
-            heights: BTreeMap::new(),
+            features: Vec::new(),
             beacons: vec![Beacon {
-                id: String::from("b_01"),
-                at: [32, 32, GROUND + 1],
+                id: String::from("b_00"),
+                at: [32, 32, GROUND],
                 owner: seat,
                 core: true,
                 powered: true,
@@ -143,48 +178,61 @@ impl Script {
                 kind: "unit",
                 subtype: "commander",
                 owner: seat,
-                at: [32, 30, GROUND + 1],
+                at: [32, 30, GROUND],
             }],
             treasury: 200,
-            headroom: 6,
+            supply: 10,
+            draw: 4,
             to_beacon_ms: BTreeMap::new(),
+            on_reads: BTreeSet::new(),
+            build_beacons: BTreeSet::from([String::from("b_00")]),
             paging: Paging::One,
             verify: Verify::Qualifies,
             accept_submit: true,
             refuse_everything: None,
             bare_legs: false,
+            malformed_feature: false,
             transcript: Vec::new(),
         }
     }
 
-    /// Two seams and a vent inside the core's sphere, and an enemy scout and
-    /// two drones in sight, with viewer-scoped handles.
+    /// A seat with its starting seam covered by the core, a lean vent and a
+    /// standard seam it does not cover yet, and an enemy scout and a
+    /// Generator in sight, with viewer-scoped handles.
     fn busy(seat: u8) -> Script {
         let mut script = Script::new(seat);
-        for column in [(40, 36), (41, 36), (40, 37), (25, 25)] {
-            script.features.insert(column, SEAM_STANDARD);
-        }
-        script.features.insert((36, 26), VENT_LEAN);
+        let mut start = Feature::new("seam", "standard", [36, 34]);
+        start.covered = true;
+        start.travel_ms = Some(3_000);
+        script.features.push(start);
+        let mut vent = Feature::new("vent", "lean", [56, 32]);
+        vent.travel_ms = Some(14_000);
+        vent.site = Some([46, 32, GROUND]);
+        script.features.push(vent);
+        let mut far_seam = Feature::new("seam", "standard", [20, 60]);
+        far_seam.travel_ms = Some(20_000);
+        far_seam.site = Some([24, 52, GROUND]);
+        script.features.push(far_seam);
         script.entities.push(Entity {
             id: String::from("u_2"),
             kind: "unit",
             subtype: "build_drone",
             owner: seat,
-            at: [33, 33, GROUND + 1],
+            at: [33, 33, GROUND],
         });
         script.entities.push(Entity {
             id: String::from("u_3"),
             kind: "unit",
             subtype: "scout",
             owner: seat ^ 1,
-            at: [26, 26, GROUND + 1],
+            at: [26, 26, GROUND],
         });
         script.entities.push(Entity {
             id: String::from("s_1"),
             kind: "structure",
             subtype: "generator",
             owner: seat ^ 1,
-            at: [60, 60, GROUND + 1],
+            at: [60, 60, GROUND],
         });
         script
     }
@@ -215,19 +263,34 @@ impl Script {
         .unwrap()
     }
 
-    /// Where a `gp.v1.Location` is in the scripted world.
-    fn place(&self, location: &Json) -> Option<[i32; 3]> {
+    /// Where a `gp.v1.Location` waypoint is in the scripted world, or the
+    /// refusal a `covering` one that no site covers gets.
+    fn place(&self, location: &Json) -> Result<[i32; 3], &'static str> {
         if let Some(voxel) = location.get("voxel") {
-            return Some(voxel_of(voxel));
+            return Ok(voxel_of(voxel));
+        }
+        if let Some(name) = location
+            .get("covering")
+            .and_then(|covering| covering.get("feature_id"))
+            .and_then(text)
+        {
+            return self
+                .features
+                .iter()
+                .find(|feature| feature.id == name)
+                .and_then(|feature| feature.site)
+                .ok_or("NOT_FOUND");
         }
         let id = location
             .get("beacon_anchor")
             .and_then(|anchor| anchor.get("beacon_id"))
-            .and_then(text)?;
+            .and_then(text)
+            .ok_or("INVALID_ARGUMENT")?;
         self.beacons
             .iter()
             .find(|beacon| beacon.id == id)
             .map(|beacon| beacon.at)
+            .ok_or("NOT_FOUND")
     }
 
     /// The whole call closure.
@@ -251,21 +314,16 @@ impl Script {
             "list_beacons" => self.list_beacons(&cursor),
             "get_economy_forecast" => self.ok(obj(vec![
                 ("treasury_now", num(self.treasury)),
-                ("supply_kw_now", num(10)),
-                ("draw_kw_now", num(10 - self.headroom)),
-                ("headroom_kw_now", num(self.headroom)),
+                ("supply_kw_now", num(self.supply)),
+                ("draw_kw_now", num(self.draw)),
+                ("headroom_kw_now", num(self.supply - self.draw)),
             ])),
-            "get_map_summary" => self.ok(obj(vec![
-                ("size", voxel_json(self.size)),
-                (
-                    "match_seed",
-                    Json::String(String::from("0x0000000000005eed")),
-                ),
-            ])),
+            "get_map_summary" => self.map_summary(),
             "get_view" => self.get_view(&cursor),
             "list_templates" => self.list_templates(&cursor),
             "estimate_route" => self.estimate_route(params),
             "instantiate_template" => self.instantiate(params),
+            "resolve_refs" => self.resolve_refs(params),
             "patch_plan" => {
                 // Not applied: the patch is in the transcript, and the text
                 // gains one line saying it went through a patch.
@@ -278,16 +336,7 @@ impl Script {
                     ("inverse_json_patch", Json::String(String::from("[]"))),
                 ]))
             }
-            "verify_plan" => {
-                let report = match self.verify {
-                    Verify::Qualifies => obj(vec![("qualifies", Json::Bool(true))]),
-                    Verify::NeverButFixable => read(
-                        r#"{"qualifies":false,"diagnostics":[{"code":"E0301","severity":"error","path":"/declarative/route/0","suggestions":[{"title":"fix","json_patch":"[{\"op\":\"remove\",\"path\":\"/meta/note\"}]","applicability":"machine_applicable"}]}]}"#,
-                    )
-                    .unwrap(),
-                };
-                self.ok(obj(vec![("report", report)]))
-            }
+            "verify_plan" => self.verify_plan(params),
             "submit_plan" => {
                 let accepted = self.accept_submit;
                 self.accept_submit = true;
@@ -340,14 +389,41 @@ impl Script {
         ]))
     }
 
+    fn map_summary(&self) -> Json {
+        let rows: Vec<Json> = self
+            .features
+            .iter()
+            .enumerate()
+            .map(|(index, feature)| {
+                let mut row = vec![
+                    ("feature_id", Json::String(feature.id.clone())),
+                    ("kind", Json::String(feature.kind.to_owned())),
+                ];
+                if !(self.malformed_feature && index == 0) {
+                    row.push(("grade", Json::String(feature.grade.to_owned())));
+                }
+                row.push(("x", num(i64::from(feature.anchor[0]))));
+                row.push(("y", num(i64::from(feature.anchor[1]))));
+                row.push(("live", Json::Bool(feature.live)));
+                row.push(("covered", Json::Bool(feature.covered)));
+                row.push(("travel_ms", num(feature.travel_ms.unwrap_or(0))));
+                row.push(("reachable", Json::Bool(feature.travel_ms.is_some())));
+                obj(row)
+            })
+            .collect();
+        self.ok(obj(vec![
+            ("size", voxel_json([64, 64, 32])),
+            (
+                "match_seed",
+                Json::String(String::from("0x0000000000005eed")),
+            ),
+            ("features", Json::Array(rows)),
+        ]))
+    }
+
     fn get_view(&self, cursor: &str) -> Json {
         let next = self.next_page(cursor);
         let last = next.is_empty() && self.paging != Paging::ViewNeverComplete;
-        let chunks = if cursor.is_empty() {
-            self.chunks()
-        } else {
-            Vec::new()
-        };
         let entities: Vec<Json> = if last {
             self.entities
                 .iter()
@@ -366,7 +442,7 @@ impl Script {
         };
         self.ok(obj(vec![
             ("at_ms", num(0)),
-            ("chunks", Json::Array(chunks)),
+            ("chunks", Json::Array(Vec::new())),
             ("entities", Json::Array(entities)),
             ("next_cursor", Json::String(next)),
             ("complete", Json::Bool(last)),
@@ -390,47 +466,156 @@ impl Script {
 
     fn estimate_route(&self, params: &Json) -> Json {
         let waypoints = match params.get("waypoints") {
-            Some(Json::Array(items)) => items.clone(),
+            Some(Json::Array(items)) if items.len() >= 2 => items.clone(),
             _ => return Script::refuse("INVALID_ARGUMENT"),
         };
-        let (Some(from), Some(to)) = (
-            waypoints.first().and_then(|w| self.place(w)),
-            waypoints.get(1).and_then(|w| self.place(w)),
-        ) else {
-            return Script::refuse("INVALID_ARGUMENT");
-        };
-        let id = waypoints
-            .get(1)
-            .and_then(|w| w.get("beacon_anchor"))
-            .and_then(|a| a.get("beacon_id"))
-            .and_then(text)
-            .map(str::to_owned);
-        let ms = id
-            .and_then(|id| self.to_beacon_ms.get(&id).copied())
-            .unwrap_or_else(|| {
-                let dx = i64::from(from[0] - to[0]).abs();
-                let dy = i64::from(from[1] - to[1]).abs();
-                (dx + dy) * 1_000
-            });
-        // `Leg.to` in the DECLARED shape, a `gp.v1.Location`, unless asked
-        // for the bare voxel `main` wrote before T17.
-        let leg_to = if self.bare_legs {
-            voxel_json(to)
-        } else {
-            obj(vec![("voxel", voxel_json(to))])
-        };
+        let mut places: Vec<[i32; 3]> = Vec::new();
+        for waypoint in &waypoints {
+            match self.place(waypoint) {
+                Ok(at) => places.push(at),
+                Err(code) => return Script::refuse(code),
+            }
+        }
+        let mut legs: Vec<Json> = Vec::new();
+        let mut total = 0_i64;
+        for (index, pair) in places.windows(2).enumerate() {
+            let &[from, to] = pair else {
+                return Script::refuse("INTERNAL");
+            };
+            let id = waypoints
+                .get(index + 1)
+                .and_then(|w| w.get("beacon_anchor"))
+                .and_then(|a| a.get("beacon_id"))
+                .and_then(text)
+                .map(str::to_owned);
+            let ms = id
+                .and_then(|id| self.to_beacon_ms.get(&id).copied())
+                .unwrap_or_else(|| {
+                    let dx = i64::from(from[0] - to[0]).abs();
+                    let dy = i64::from(from[1] - to[1]).abs();
+                    (dx + dy) * 500
+                });
+            total += ms;
+            // `Leg.to` in the DECLARED shape, a `gp.v1.Location`, unless
+            // asked for the bare voxel `main` wrote before T17.
+            let leg_to = if self.bare_legs {
+                voxel_json(to)
+            } else {
+                obj(vec![("voxel", voxel_json(to))])
+            };
+            legs.push(obj(vec![
+                ("to", leg_to),
+                ("ms", num(ms)),
+                ("fogged", Json::Bool(false)),
+            ]));
+        }
         self.ok(obj(vec![
             ("reachable", Json::Bool(true)),
-            ("ms", num(ms)),
-            (
-                "legs",
-                Json::Array(vec![obj(vec![
-                    ("to", leg_to),
-                    ("ms", num(ms)),
-                    ("fogged", Json::Bool(false)),
-                ])]),
-            ),
+            ("ms", num(total)),
+            ("legs", Json::Array(legs)),
         ]))
+    }
+
+    /// The interface steps that add a Generator `on` a named vent, as
+    /// `(route index, beacon, vent)`.
+    fn taps_in(params: &Json) -> Vec<(usize, String, String)> {
+        let text_in = params.get("playbook_jsonc").and_then(text).unwrap_or("");
+        let Ok(playbook) = read(text_in) else {
+            return Vec::new();
+        };
+        let Some(Json::Array(route)) = playbook
+            .get("declarative")
+            .and_then(|declarative| declarative.get("route"))
+        else {
+            return Vec::new();
+        };
+        route
+            .iter()
+            .enumerate()
+            .filter_map(|(index, step)| {
+                let interface = step.get("interface")?;
+                let beacon = interface.get("beacon")?.get("beacon_id").and_then(text)?;
+                let Json::Array(rows) = interface.get("rows")? else {
+                    return None;
+                };
+                let vent = rows
+                    .first()?
+                    .get("add_build_target")?
+                    .get("target")?
+                    .get("anchor")?
+                    .get("on")?
+                    .get("feature_id")
+                    .and_then(text)?;
+                Some((index, beacon.to_owned(), vent.to_owned()))
+            })
+            .collect()
+    }
+
+    fn resolve_refs(&self, params: &Json) -> Json {
+        let refs: Vec<Json> = Script::taps_in(params)
+            .into_iter()
+            .map(|(index, beacon, vent)| {
+                let reads = self.on_reads.contains(&(beacon, vent.clone()));
+                obj(vec![
+                    (
+                        "pointer",
+                        Json::String(format!(
+                            "/declarative/route/{index}/interface/rows/0/add_build_target/target/anchor/on"
+                        )),
+                    ),
+                    (
+                        "feature_id",
+                        Json::String(if reads { vent } else { String::new() }),
+                    ),
+                    ("matched", num(i64::from(reads))),
+                    (
+                        "failure",
+                        Json::String(if reads {
+                            String::new()
+                        } else {
+                            String::from("illegal_site")
+                        }),
+                    ),
+                ])
+            })
+            .collect();
+        self.ok(obj(vec![("refs", Json::Array(refs))]))
+    }
+
+    fn verify_plan(&self, params: &Json) -> Json {
+        let mut diagnostics: Vec<Json> = Script::taps_in(params)
+            .into_iter()
+            .filter(|(_, beacon, _)| !self.build_beacons.contains(beacon))
+            .map(|(index, _, _)| {
+                obj(vec![
+                    ("code", Json::String(String::from("E0503"))),
+                    ("severity", Json::String(String::from("error"))),
+                    (
+                        "path",
+                        Json::String(format!(
+                            "/declarative/route/{index}/interface/rows/0/add_build_target"
+                        )),
+                    ),
+                ])
+            })
+            .collect();
+        let quick = params.get("depth").and_then(text) == Some("quick");
+        if quick && self.verify == Verify::QuickUnreported {
+            return self.ok(obj(vec![]));
+        }
+        let qualifies = diagnostics.is_empty() && (quick || self.verify != Verify::NeverButFixable);
+        if !quick && self.verify == Verify::NeverButFixable {
+            diagnostics.push(read(
+                r#"{"code":"E0301","severity":"error","path":"/declarative/route/0","suggestions":[{"title":"fix","json_patch":"[{\"op\":\"remove\",\"path\":\"/meta/note\"}]","applicability":"machine_applicable"}]}"#,
+            ).unwrap());
+        }
+        self.ok(obj(vec![(
+            "report",
+            obj(vec![
+                ("qualifies", Json::Bool(qualifies)),
+                ("diagnostics", Json::Array(diagnostics)),
+            ]),
+        )]))
     }
 
     fn instantiate(&self, params: &Json) -> Json {
@@ -454,37 +639,6 @@ impl Script {
             ("parameters", Json::Array(parameters)),
             ("why", Json::String(String::new())),
         ]))
-    }
-
-    /// The scripted map, 32^3 chunks, run-length encoded.
-    fn chunks(&self) -> Vec<Json> {
-        let mut out: Vec<Json> = Vec::new();
-        for cy in (0..self.size[1]).step_by(EDGE) {
-            for cx in (0..self.size[0]).step_by(EDGE) {
-                let mut voxels = vec![0_u8; EDGE * EDGE * EDGE];
-                for ly in 0..EDGE {
-                    for lx in 0..EDGE {
-                        let x = cx + i32::try_from(lx).unwrap();
-                        let y = cy + i32::try_from(ly).unwrap();
-                        let top = self.features.get(&(x, y)).copied().unwrap_or(DIRT);
-                        let height = self.heights.get(&(x, y)).copied().unwrap_or(GROUND);
-                        for z in 0..=height {
-                            let at = lx + EDGE * ly + EDGE * EDGE * usize::try_from(z).unwrap();
-                            *voxels.get_mut(at).unwrap() = if z == height { top } else { STONE };
-                        }
-                    }
-                }
-                let encoded = pharmakos_proto::chunk_rle::encode(&voxels);
-                out.push(obj(vec![
-                    ("origin", voxel_json([cx, cy, 0])),
-                    (
-                        "voxels_rle",
-                        Json::String(pharmakos_proto::json::base64::encode(&encoded)),
-                    ),
-                ]));
-            }
-        }
-        out
     }
 }
 
@@ -654,6 +808,14 @@ fn advise(mut script: Script) -> (Script, pharmakos_operator::Advice) {
     (script, advice)
 }
 
+/// The methods of a transcript, in order.
+fn methods(transcript: &[String]) -> Vec<&str> {
+    transcript
+        .iter()
+        .map(|line| line.split(' ').next().unwrap_or(""))
+        .collect()
+}
+
 /// The `instantiate_template` calls that named the Safe Playbook with a
 /// route, as the route's JSON.
 fn safe_routes(transcript: &[String]) -> Vec<Json> {
@@ -675,140 +837,8 @@ fn safe_routes(transcript: &[String]) -> Vec<Json> {
         .collect()
 }
 
-/// A power-short seat with three browned-out non-core beacons, all within
-/// 60 s by travel, the nearest by travel NOT the nearest by id.
-fn three_dark(seat: u8) -> Script {
-    let mut script = Script::new(seat);
-    script.headroom = -3;
-    for (id, at, ms) in [
-        ("b_04", [40, 40, GROUND + 1], 30_000),
-        ("b_05", [44, 44, GROUND + 1], 10_000),
-        ("b_06", [20, 20, GROUND + 1], 20_000),
-    ] {
-        script.beacons.push(Beacon {
-            id: id.to_owned(),
-            at,
-            owner: seat,
-            core: false,
-            powered: false,
-            priority: "normal",
-        });
-        script.to_beacon_ms.insert(id.to_owned(), ms);
-    }
-    script
-}
-
-// ---------------------------------------------------------------------------
-// The tests
-// ---------------------------------------------------------------------------
-
-/// Spec section 14: "If power is short and up to 2 at-risk beacons are within
-/// 60 s travel, raise their Quartermaster priority (nearest first ...)".
-/// Three browned-out non-core beacons, the nearest by travel being neither the
-/// lowest id nor the nearest in a straight line: the route is `to_safety`,
-/// then the two nearest by travel in that order, each one interface step with
-/// one `set_priority` row and nothing else.
-#[test]
-fn the_safe_playbook_raises_at_most_two_beacons_nearest_first() {
-    let (script, advice) = advise(three_dark(1));
-    let routes = safe_routes(&script.transcript);
-    assert_eq!(
-        routes.len(),
-        1,
-        "one instantiate with the route: {:#?}",
-        script.transcript
-    );
-    let Some(Json::Array(steps)) = routes.first() else {
-        panic!("the route is an array");
-    };
-    assert_eq!(steps.len(), 1 + SAFE_MAX_RAISED, "to_safety and two raises");
-    let labels: Vec<String> = steps
-        .iter()
-        .map(|step| step.get("label").and_then(text).unwrap_or("").to_owned())
-        .collect();
-    assert_eq!(labels, ["to_safety", "raise_b_05", "raise_b_06"]);
-    for step in steps.iter().skip(1) {
-        let interface = step.get("interface").expect("an interface step");
-        assert_eq!(
-            compact(interface.get("rows").unwrap()),
-            compact(&read(r#"[{"set_priority":"HIGH"}]"#).unwrap()),
-            "one row, priority HIGH: never recycle, switch mandate or place"
-        );
-        assert!(step.get("place_beacon").is_none() && step.get("move").is_none());
-    }
-    assert!(!advice.safe_playbook_jsonc.is_empty());
-    let safe = advice
-        .suggestions
-        .iter()
-        .find(|suggestion| suggestion.template_id == "safe_playbook")
-        .expect("a suggestion for the safe template");
-    assert_eq!(safe.parameters.len(), 1, "the route, whole");
-    assert_eq!(
-        safe.parameters.first().unwrap().pointer,
-        "/declarative/route"
-    );
-
-    // Out of reach: past 60 s nothing is raised.
-    let mut far = three_dark(1);
-    for ms in far.to_beacon_ms.values_mut() {
-        *ms = 61_000;
-    }
-    let (script, _) = advise(far);
-    assert!(
-        safe_routes(&script.transcript).is_empty(),
-        "nothing within 60 s"
-    );
-
-    // Nothing dark and the headroom at zero or more: power is not short, so
-    // nothing is raised and nothing is even estimated, and the why is the
-    // one T18 wrote, byte for byte (decisions-log item 113 (4)).
-    let mut spare = three_dark(1);
-    spare.headroom = 0;
-    for beacon in &mut spare.beacons {
-        beacon.powered = true;
-    }
-    let (script, advice) = advise(spare);
-    assert!(
-        safe_routes(&script.transcript).is_empty(),
-        "power is not short"
-    );
-    assert!(
-        !beacon_estimated(&script.transcript),
-        "and not even estimated"
-    );
-    assert_eq!(
-        safe_why(&advice),
-        format!(
-            "{SEED_LINE} Power is not short, so nothing is raised: move to the safest beacon and \
-             stay with it."
-        )
-    );
-}
-
-/// The seed line every "why" opens with (decision C15).
-const SEED_LINE: &str =
-    "Easy, seat 1, round 1, seed 0x0000000000005eed (recorded; Easy draws nothing at random).";
-
-/// True when the round estimated a route to a beacon: the safe playbook's
-/// estimates are the only ones that end on a `beacon_anchor`.
-fn beacon_estimated(transcript: &[String]) -> bool {
-    transcript
-        .iter()
-        .any(|line| line.starts_with("estimate_route") && line.contains("beacon_anchor"))
-}
-
-/// The why of an advice's Safe Playbook suggestion.
-fn safe_why(advice: &pharmakos_operator::Advice) -> String {
-    advice
-        .suggestions
-        .iter()
-        .find(|suggestion| suggestion.template_id == "safe_playbook")
-        .map(|suggestion| suggestion.why.clone())
-        .expect("a suggestion for the safe template")
-}
-
-/// The labels of the one raised route the round instantiated, or none.
-fn raised_labels(transcript: &[String]) -> Vec<String> {
+/// The labels of the one safe route the round instantiated, or none.
+fn safe_labels(transcript: &[String]) -> Vec<String> {
     let routes = safe_routes(transcript);
     let Some(Json::Array(steps)) = routes.first() else {
         return Vec::new();
@@ -819,111 +849,341 @@ fn raised_labels(transcript: &[String]) -> Vec<String> {
         .collect()
 }
 
-/// Decisions-log item 113 (4): a settled grid never shows a headroom below
-/// zero -- `brown_out` sheds until supply covers draw -- so the state a raise
-/// meets in a hosted match is a dark non-core beacon at 0 kW. It is raised,
-/// and the why gives no 0 kW headroom as the reason.
-#[test]
-fn a_dark_non_core_beacon_at_headroom_zero_is_raised() {
-    let mut settled = three_dark(1);
-    settled.headroom = 0;
-    let (script, advice) = advise(settled);
-    assert_eq!(
-        raised_labels(&script.transcript),
-        ["to_safety", "raise_b_05", "raise_b_06"]
-    );
-    let why = safe_why(&advice);
-    assert!(
-        why.contains("Power is short because b_04, b_05 and b_06 are browned out"),
-        "{why}"
-    );
-    assert!(
-        !why.contains("kW"),
-        "no headroom is given as the reason: {why}"
-    );
+/// True when the round estimated a route to a beacon: the safe playbook's
+/// estimates, and a tap's, are the only ones whose last waypoint is a
+/// `beacon_anchor` (a placement's goes by way of the core's anchor and ends
+/// on a `covering`).
+fn beacon_estimated(transcript: &[String]) -> bool {
+    transcript.iter().any(|line| {
+        line.strip_prefix("estimate_route ")
+            .and_then(|params| read(params).ok())
+            .and_then(|params| match params.get("waypoints") {
+                Some(Json::Array(items)) => items.last().cloned(),
+                _ => None,
+            })
+            .is_some_and(|last| last.get("beacon_anchor").is_some())
+    })
 }
 
-/// A dark beacon out of reach at 0 kW raises nothing, and the why says why
-/// without saying power is not short.
+/// The why of an advice's suggestion for one template.
+fn why_of(advice: &pharmakos_operator::Advice, template: &str) -> String {
+    advice
+        .suggestions
+        .iter()
+        .find(|suggestion| suggestion.template_id == template)
+        .map_or_else(
+            || panic!("a suggestion for {template}"),
+            |suggestion| suggestion.why.clone(),
+        )
+}
+
+/// The JSON Patch operations the one composing `patch_plan` carried.
+fn composing_ops(transcript: &[String]) -> Vec<Json> {
+    let patch = transcript
+        .iter()
+        .find_map(|line| line.strip_prefix("patch_plan "))
+        .and_then(|params| read(params).ok())
+        .and_then(|params| params.get("json_patch").and_then(text).map(str::to_owned))
+        .expect("one composing patch");
+    match read(&patch).expect("a JSON Patch") {
+        Json::Array(ops) => ops,
+        other => panic!("an array of operations, not {other:?}"),
+    }
+}
+
+/// The value of the first operation of `kind` at `path`.
+fn op_value(ops: &[Json], kind: &str, path: &str) -> Option<Json> {
+    ops.iter()
+        .find(|op| {
+            op.get("op").and_then(text) == Some(kind) && op.get("path").and_then(text) == Some(path)
+        })
+        .and_then(|op| op.get("value").cloned())
+}
+
+/// The seed line every "why" opens with (decision C15).
+const SEED_LINE: &str =
+    "Easy, seat 1, round 1, seed 0x0000000000005eed (recorded; Easy draws nothing at random).";
+
+/// The sentence every safe why ends with when the route writes the core's
+/// depth.
+fn deepen_sentence() -> String {
+    format!(
+        " Then set the core b_00 to dig {CORE_DIG_MAX_DEPTH} voxels deep, so its starting drone \
+         keeps working its seam below the top layer."
+    )
+}
+
+/// A power-short seat -- its draw 1 kW above its supply -- with four lit
+/// non-core beacons: `b_04` NORMAL, far from the core; `b_05` LOW, nearest the
+/// core; `b_06` NORMAL, near the core; `b_07` HIGH. The brownout's order over
+/// them sheds `b_05` first (lowest priority), then `b_04` (furthest), then
+/// `b_06`; `b_07` is HIGH and is not at risk. By travel `b_04` is nearer than
+/// `b_05`.
+fn short_with_four_lit(seat: u8) -> Script {
+    let mut script = Script::new(seat);
+    script.supply = 10;
+    script.draw = 11;
+    for (id, at, priority, ms) in [
+        ("b_04", [56, 56, GROUND], "normal", 10_000),
+        ("b_05", [34, 32, GROUND], "low", 30_000),
+        ("b_06", [36, 36, GROUND], "normal", 5_000),
+        ("b_07", [60, 60, GROUND], "high", 1_000),
+    ] {
+        script.beacons.push(Beacon {
+            id: id.to_owned(),
+            at,
+            owner: seat,
+            core: false,
+            powered: true,
+            priority,
+        });
+        script.to_beacon_ms.insert(id.to_owned(), ms);
+    }
+    script
+}
+
+// ---------------------------------------------------------------------------
+// The safe playbook
+// ---------------------------------------------------------------------------
+
+/// Spec section 14 as S1's plan, decision 14, reads it (the register's
+/// S1-21): power is short, and the beacons at risk are the lit ones next in
+/// the shed order. The two first in that order -- `b_05`, the lowest
+/// priority, then `b_04`, the furthest from the core -- are raised, walked to
+/// nearest by travel first, each one interface step with one `set_priority`
+/// row and nothing else; `b_06` comes after them in the order and `b_07` is
+/// HIGH already. The route ends at the core with its dig depth.
 #[test]
-fn a_dark_beacon_out_of_reach_at_headroom_zero_raises_nothing_and_says_why() {
-    let mut far = three_dark(1);
-    far.headroom = 0;
+fn the_safe_playbook_raises_the_next_two_in_the_shed_order_nearest_first() {
+    let (script, advice) = advise(short_with_four_lit(1));
+    let routes = safe_routes(&script.transcript);
+    assert_eq!(
+        routes.len(),
+        1,
+        "one instantiate with the route: {:#?}",
+        script.transcript
+    );
+    assert_eq!(
+        safe_labels(&script.transcript),
+        ["to_safety", "raise_b_04", "raise_b_05", "deepen_core"]
+    );
+    let Some(Json::Array(steps)) = routes.first() else {
+        panic!("the route is an array");
+    };
+    for step in steps.iter().skip(1).take(SAFE_MAX_RAISED) {
+        let interface = step.get("interface").expect("an interface step");
+        assert_eq!(
+            compact(interface.get("rows").unwrap()),
+            compact(&read(r#"[{"set_priority":"HIGH"}]"#).unwrap()),
+            "one row, priority HIGH: never recycle, switch mandate or place"
+        );
+        assert!(step.get("place_beacon").is_none() && step.get("move").is_none());
+    }
+    // Only the beacons at risk were estimated: never the HIGH one.
+    assert!(
+        !script
+            .transcript
+            .iter()
+            .any(|line| line.starts_with("estimate_route") && line.contains("b_07")),
+        "{:#?}",
+        script.transcript
+    );
+    let why = why_of(&advice, "safe_playbook");
+    assert_eq!(
+        why,
+        format!(
+            "{SEED_LINE} Power is short because the draw of 11 kW is above the supply of 10 kW: \
+             raise b_04 and b_05 to HIGH, nearest first, so they are the last of your lit \
+             beacons to brown out.{}",
+            deepen_sentence()
+        )
+    );
+    let safe = advice
+        .suggestions
+        .iter()
+        .find(|suggestion| suggestion.template_id == "safe_playbook")
+        .expect("a suggestion for the safe template");
+    assert_eq!(safe.parameters.len(), 1, "the route, whole");
+    assert_eq!(
+        safe.parameters.first().unwrap().pointer,
+        "/declarative/route"
+    );
+    assert!(!advice.safe_playbook_jsonc.is_empty());
+}
+
+/// Out of reach: past 60 s nothing is raised, the core still gets its depth,
+/// and the why says why without saying power is not short.
+#[test]
+fn a_beacon_at_risk_out_of_reach_is_not_raised_and_the_why_says_so() {
+    let mut far = short_with_four_lit(1);
     for ms in far.to_beacon_ms.values_mut() {
         *ms = 61_000;
     }
     let (script, advice) = advise(far);
-    assert!(safe_routes(&script.transcript).is_empty());
-    let why = safe_why(&advice);
+    assert_eq!(
+        safe_labels(&script.transcript),
+        ["to_safety", "deepen_core"]
+    );
+    let why = why_of(&advice, "safe_playbook");
     assert!(!why.contains("Power is not short"), "{why}");
     assert!(
-        why.contains("no browned-out beacon it may raise is within 60 s"),
+        why.contains("no lit beacon next in the brownout order is within 60 s"),
         "{why}"
     );
-    assert!(!why.contains("kW"), "{why}");
 }
 
-/// A beacon already HIGH is not raised again: the next nearest takes its
-/// place. And a seat whose only dark beacons are HIGH raises nothing, and
-/// estimates nothing, and says so.
+/// Power is not short -- nothing dark, the draw within the supply -- so
+/// nothing is raised and nothing is even estimated; the route is the walk to
+/// safety and the core's depth.
 #[test]
-fn a_beacon_already_high_is_not_raised_again() {
-    let mut one_high = three_dark(1);
-    one_high.headroom = 0;
-    for beacon in &mut one_high.beacons {
-        if beacon.id == "b_05" {
-            beacon.priority = "high";
-        }
-    }
-    let (script, _) = advise(one_high);
+fn power_not_short_raises_nothing_and_estimates_nothing() {
+    let mut spare = short_with_four_lit(1);
+    spare.draw = 10;
+    let (script, advice) = advise(spare);
     assert_eq!(
-        raised_labels(&script.transcript),
-        ["to_safety", "raise_b_06", "raise_b_04"],
-        "b_05 is HIGH already, so the next two by travel are raised"
+        safe_labels(&script.transcript),
+        ["to_safety", "deepen_core"]
     );
+    assert!(
+        !beacon_estimated(&script.transcript),
+        "and not even estimated"
+    );
+    assert_eq!(
+        why_of(&advice, "safe_playbook"),
+        format!(
+            "{SEED_LINE} Power is not short, so nothing is raised: move to the safest beacon and \
+             stay with it.{}",
+            deepen_sentence()
+        )
+    );
+}
 
-    let mut all_high = three_dark(1);
-    all_high.headroom = 0;
+/// A dark beacon is draw the supply did not carry: power is short though the
+/// forecast's draw is within its supply (a settle sheds until it is), and
+/// the lit beacons next in the shed order are raised. The dark one is not:
+/// raising it would only swap it in for a lit one.
+#[test]
+fn a_dark_beacon_makes_power_short_and_the_lit_ones_next_to_shed_are_raised() {
+    let mut settled = short_with_four_lit(1);
+    settled.draw = 10;
+    settled.beacons.push(Beacon {
+        id: String::from("b_08"),
+        at: [10, 10, GROUND],
+        owner: 1,
+        core: false,
+        powered: false,
+        priority: "normal",
+    });
+    let (script, advice) = advise(settled);
+    assert_eq!(
+        safe_labels(&script.transcript),
+        ["to_safety", "raise_b_04", "raise_b_05", "deepen_core"]
+    );
+    let why = why_of(&advice, "safe_playbook");
+    assert!(
+        why.contains("Power is short because b_08 is browned out:"),
+        "{why}"
+    );
+    assert!(!why.contains("kW"), "no draw is given as the reason: {why}");
+}
+
+/// Every lit non-core beacon HIGH already: nothing to raise, nothing
+/// estimated, and the why names them.
+#[test]
+fn beacons_already_high_are_not_raised_again() {
+    let mut all_high = short_with_four_lit(1);
     for beacon in &mut all_high.beacons {
         if !beacon.core {
             beacon.priority = "high";
         }
     }
     let (script, advice) = advise(all_high);
-    assert!(safe_routes(&script.transcript).is_empty(), "nothing raised");
+    assert_eq!(
+        safe_labels(&script.transcript),
+        ["to_safety", "deepen_core"]
+    );
     assert!(!beacon_estimated(&script.transcript), "nothing estimated");
-    let why = safe_why(&advice);
-    assert!(!why.contains("Power is not short"), "{why}");
+    let why = why_of(&advice, "safe_playbook");
     assert!(
-        why.contains("b_04, b_05 and b_06 are HIGH already"),
+        why.contains("b_04, b_05, b_06 and b_07 are HIGH already"),
         "{why}"
     );
 }
 
-/// Only the core is dark at 0 kW: a total blackout, the state the hosted
-/// power-short rows show from round 2 on (decisions-log item 114 (4)). The
-/// core is never raised, so nothing is raised and nothing is estimated, and
-/// the why says power is short because the core is browned out and that the
-/// safe playbook never raises it, giving no kW figure as the shortage.
+/// Only the core, and it dark: the state the hosted power-short rows show
+/// from round 2 on when a seat placed nothing. The core is never raised, so
+/// nothing is raised and nothing is estimated, and the why names the core as
+/// the shortage.
 #[test]
 fn only_the_core_dark_raises_nothing_and_says_the_core_is_never_raised() {
     let mut blackout = Script::new(1);
-    blackout.headroom = 0;
+    blackout.supply = 0;
+    blackout.draw = 0;
     if let Some(core) = blackout.beacons.first_mut() {
         core.powered = false;
     }
     let (script, advice) = advise(blackout);
-    assert!(safe_routes(&script.transcript).is_empty(), "nothing raised");
+    assert_eq!(
+        safe_labels(&script.transcript),
+        ["to_safety", "deepen_core"]
+    );
     assert!(!beacon_estimated(&script.transcript), "nothing estimated");
     assert_eq!(
-        safe_why(&advice),
+        why_of(&advice, "safe_playbook"),
         format!(
-            "{SEED_LINE} Power is short because the core b_01 is browned out, and the safe \
-             playbook never raises the core, so nothing is raised: move to the safest beacon and \
-             stay with it."
+            "{SEED_LINE} Power is short because the core b_00 is browned out, and no beacon of \
+             yours but the core is lit, and the safe playbook never raises the core, so nothing \
+             is raised: move to the safest beacon and stay with it.{}",
+            deepen_sentence()
         )
     );
 }
+
+/// The core's dig depth (decisions-log item 133 (3) (a)): the route ends with
+/// one interface step at the core, one `set_mandate_settings` row giving its
+/// Mine settings Easy's depth, skipped if it fails -- it switches no mandate,
+/// recycles nothing and places nothing. A seat whose core is not shown gets
+/// the template as written, at no call.
+#[test]
+fn the_safe_playbook_ends_by_setting_the_cores_dig_depth() {
+    let (script, _) = advise(Script::new(1));
+    let routes = safe_routes(&script.transcript);
+    let Some(Json::Array(steps)) = routes.first() else {
+        panic!("a route: {:#?}", script.transcript);
+    };
+    let deepen = steps.last().expect("a last step");
+    assert_eq!(
+        compact(deepen),
+        compact(
+            &read(&format!(
+                r#"{{"label":"deepen_core","interface":{{"beacon":{{"beacon_id":"b_00"}},"rows":[{{"set_mandate_settings":{{"mine":{{"dig_max_depth":{CORE_DIG_MAX_DEPTH}}}}}}}]}},"on_fail":{{"action":"SKIP"}}}}"#
+            ))
+            .unwrap()
+        )
+    );
+
+    let mut coreless = Script::new(1);
+    coreless.beacons.clear();
+    let (script, advice) = advise(coreless);
+    assert!(
+        safe_routes(&script.transcript).is_empty(),
+        "the template as written: {:#?}",
+        script.transcript
+    );
+    let safe = advice
+        .suggestions
+        .iter()
+        .find(|suggestion| suggestion.template_id == "safe_playbook")
+        .expect("a suggestion for the safe template");
+    assert!(
+        safe.parameters.is_empty(),
+        "the template's own route stands"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Reading the round
+// ---------------------------------------------------------------------------
 
 /// Decision C15: the (match, seat, round) seed is read, recorded in the
 /// "why", and unused -- in the why of a safe seal and of every suggestion
@@ -947,23 +1207,18 @@ fn the_seed_is_recorded_in_every_why() {
     }
 }
 
-/// A `get_map_summary` size the operator cannot hold is a round it cannot
-/// read: it asks for no view, plans nothing, and still says ready -- rather
-/// than allocating a column per `(x, y)` of a map it was told is 2^31 wide.
+/// A feature row the operator cannot read -- here one with no grade -- is a
+/// round it cannot read: it asks for no view, plans nothing, and still says
+/// ready, rather than guessing what the feature is.
 #[test]
-fn a_map_too_large_to_hold_is_a_round_not_read_and_ready_is_still_said() {
-    let mut huge = Script::busy(0);
-    huge.size = [i32::MAX, i32::MAX, 32];
-    let (script, played) = play(huge);
+fn a_feature_that_does_not_read_is_a_round_not_read_and_ready_is_still_said() {
+    let mut odd = Script::busy(0);
+    odd.malformed_feature = true;
+    let (script, played) = play(odd);
     assert_eq!(played.submitted, Submitted::Nothing);
     assert!(played.ready);
-    let methods: Vec<&str> = script
-        .transcript
-        .iter()
-        .map(|line| line.split(' ').next().unwrap_or(""))
-        .collect();
     assert_eq!(
-        methods,
+        methods(&script.transcript),
         [
             "get_status",
             "get_briefing",
@@ -1056,6 +1311,7 @@ fn the_operator_reads_no_notebook_and_writes_nothing_but_its_own_seal() {
         "get_view",
         "list_templates",
         "estimate_route",
+        "resolve_refs",
         "instantiate_template",
         "verify_plan",
         "patch_plan",
@@ -1098,33 +1354,37 @@ fn the_operator_reads_no_notebook_and_writes_nothing_but_its_own_seal() {
 
 /// Easy's call budget is derived from its evaluation units
 /// (`EASY_CALL_BUDGET`'s terms). The worst round the script can build --
-/// every paged read paged to its bound, more candidates than Easy evaluates,
-/// a plan that never qualifies but always offers a fix so every repair is
-/// spent, power short with more dark beacons than it estimates, and the safe
-/// playbook submitted -- stays inside it, as does the advisor's.
+/// every paged read paged to its bound, a tap to probe, more candidates than
+/// Easy evaluates, a plan that never qualifies but always offers a fix so
+/// every repair is spent, power short with more beacons at risk than it
+/// estimates, and the safe playbook submitted -- stays inside it, as does the
+/// advisor's.
 #[test]
 fn easy_never_exceeds_its_derived_call_budget() {
-    let mut worst = three_dark(1);
+    let mut worst = short_with_four_lit(1);
     worst.paging = Paging::ToTheBound;
     worst.verify = Verify::NeverButFixable;
     worst.treasury = 10_000;
-    for (i, y) in (20..=44).step_by(3).enumerate() {
-        for x in (20..=44).step_by(3) {
-            if (x, y) != (32, 32) && (x, y) != (32, 29) {
-                worst
-                    .features
-                    .insert((x, y), if i % 2 == 0 { SEAM_STANDARD } else { VENT_LEAN });
-            }
-        }
+    for n in 0..40 {
+        let kind = if n % 2 == 0 { "seam" } else { "vent" };
+        let mut feature = Feature::new(kind, "standard", [2 + n, 2]);
+        feature.travel_ms = Some(1_000 + i64::from(n));
+        worst.features.push(feature);
     }
-    for n in 7..12 {
+    let mut covered = Feature::new("vent", "rich", [40, 40]);
+    covered.covered = true;
+    worst.features.push(covered);
+    worst
+        .on_reads
+        .insert((String::from("b_00"), String::from("vent_40_40")));
+    for n in 8..12 {
         worst.beacons.push(Beacon {
             id: format!("b_{n:02}"),
-            at: [30 + n, 20, GROUND + 1],
+            at: [30 + n, 20, GROUND],
             owner: 1,
             core: false,
-            powered: false,
-            priority: "normal",
+            powered: true,
+            priority: "low",
         });
     }
     let (script, played) = play(worst.clone());
@@ -1136,6 +1396,13 @@ fn easy_never_exceeds_its_derived_call_budget() {
     assert!(
         estimates >= 30,
         "the candidates were cut at Easy's 30: {estimates}"
+    );
+    assert!(
+        script
+            .transcript
+            .iter()
+            .any(|line| line.starts_with("resolve_refs")),
+        "the tap was probed"
     );
     assert_eq!(played.repairs, 4, "every repair was spent");
     assert_eq!(played.submitted, Submitted::Safe);
@@ -1201,83 +1468,246 @@ fn a_built_in_seat_says_ready_even_when_it_could_plan_nothing() {
     );
 }
 
-/// The busy seat's round, told plainly: Easy fills Expand & Mine with a site
-/// beside a seam inside its core's sphere, and its note records the seed it
-/// did not use.
+// ---------------------------------------------------------------------------
+// Names, not places
+// ---------------------------------------------------------------------------
+
+/// A seat's round, told plainly: Easy fills Hold & Build with the vent
+/// it does not cover yet, **by name** in place of the template's description
+/// (S1's targeting: Easy emits names), estimated as a `covering` waypoint
+/// whose last leg is the site; it writes no walk (a `place_beacon` walks to
+/// its site itself), fills the hold, and ends the route at the core with its
+/// dig depth. Its note records the seed it did not use. The covered seam
+/// offers no goal and is never estimated.
 #[test]
-fn easy_fills_a_template_by_the_pointers_it_declares() {
-    let (script, played) = play(Script::busy(0));
-    assert_eq!(played.submitted, Submitted::Own);
-    let patch = script
-        .transcript
-        .iter()
-        .find_map(|line| line.strip_prefix("patch_plan "))
-        .and_then(|params| read(params).ok())
-        .and_then(|params| params.get("json_patch").and_then(text).map(str::to_owned))
-        .expect("one composing patch");
-    let ops = read(&patch).expect("a JSON Patch");
-    let Json::Array(ops) = ops else {
-        panic!("an array of operations");
-    };
-    let paths: Vec<&str> = ops
-        .iter()
-        .filter_map(|op| op.get("path").and_then(text))
-        .collect();
-    assert!(paths.contains(&"/meta/note"), "{paths:?}");
-    let note = ops
-        .iter()
-        .find(|op| op.get("path").and_then(text) == Some("/meta/note"))
-        .and_then(|op| op.get("value").and_then(text))
-        .unwrap();
+fn easy_names_the_vent_it_covers_and_writes_no_site_of_its_own() {
+    // The busy seat without its uncovered seam, whose Mine beacon would
+    // otherwise be worth more per second than the vent.
+    let mut world = Script::busy(0);
+    world.features.retain(|feature| feature.id != "seam_20_60");
+    let (script, played) = play(world);
+    assert_eq!(played.submitted, Submitted::Own, "{:#?}", script.transcript);
+    assert!(
+        script
+            .transcript
+            .iter()
+            .any(|line| line.starts_with("estimate_route")
+                && line.contains(r#""covering": { "feature_id": "vent_56_32" }"#)),
+        "{:#?}",
+        script.transcript
+    );
+    assert!(
+        !script
+            .transcript
+            .iter()
+            .any(|line| line.starts_with("estimate_route") && line.contains("seam_36_34")),
+        "the covered seam is the core's: no goal, no estimate"
+    );
+    let ops = composing_ops(&script.transcript);
+    assert_eq!(
+        op_value(
+            &ops,
+            "replace",
+            "/declarative/route/0/place_beacon/at/covering"
+        )
+        .map(|value| compact(&value)),
+        Some(compact(&read(r#"{"feature_id":"vent_56_32"}"#).unwrap())),
+        "{ops:#?}"
+    );
+    assert!(
+        op_value(&ops, "replace", "/declarative/route/1/hold/ms").is_some(),
+        "the hold fills the share: {ops:#?}"
+    );
+    assert!(
+        !ops.iter().any(|op| op
+            .get("path")
+            .and_then(text)
+            .is_some_and(|path| path.contains("/move/") || path.ends_with("/voxel"))),
+        "no walk and no voxel: {ops:#?}"
+    );
+    // The core's step opens the route: inserted at route 0 by the patch's
+    // last operation, so no pointer before it moves.
+    let last = ops.last().expect("an operation");
+    assert_eq!(last.get("op").and_then(text), Some("add"));
+    assert_eq!(
+        last.get("path").and_then(text),
+        Some("/declarative/route/0")
+    );
+    assert_eq!(
+        last.get("value")
+            .and_then(|step| step.get("label"))
+            .and_then(text),
+        Some("deepen_core")
+    );
+    let note = op_value(&ops, "replace", "/meta/note")
+        .and_then(|value| text(&value).map(str::to_owned))
+        .expect("the note");
     assert!(note.contains("seed 0x0000000000005eed"), "{note}");
     assert!(
-        played.why.contains("seed 0x0000000000005eed"),
+        played
+            .why
+            .contains("A Build beacon covering the lean heat vent vent_56_32, at (46, 32, 11)"),
         "{}",
         played.why
     );
+}
+
+/// The composed route visits the core first, so every goal is estimated by
+/// way of the core's anchor, and the walk from the commander to the core is
+/// paid, with the step's interface time, out of Hold & Build's hold: a
+/// commander 5 s further from its core leaves a hold 5 s shorter, and the
+/// goal's own cost, which runs from the core, is the same.
+#[test]
+fn the_walk_to_the_core_is_estimated_and_paid_out_of_the_hold() {
+    let near = || {
+        let mut world = Script::busy(0);
+        world.features.retain(|feature| feature.id != "seam_20_60");
+        world
+    };
+    let hold_of = |world: Script| {
+        let (script, played) = play(world);
+        assert_eq!(played.submitted, Submitted::Own, "{:#?}", script.transcript);
+        let estimate = script
+            .transcript
+            .iter()
+            .find(|line| line.starts_with("estimate_route") && line.contains("vent_56_32"))
+            .cloned()
+            .expect("the vent estimated");
+        let core_at = estimate.find(r#""beacon_id": "b_00""#);
+        let vent_at = estimate.find("vent_56_32");
+        assert!(
+            core_at.is_some() && core_at < vent_at,
+            "by way of the core: {estimate}"
+        );
+        let ops = composing_ops(&script.transcript);
+        let hold = op_value(&ops, "replace", "/declarative/route/1/hold/ms")
+            .and_then(|value| match value {
+                Json::Number(n) => n.parse::<i64>().ok(),
+                _ => None,
+            })
+            .expect("the hold, a number");
+        (hold, played.why)
+    };
+    let (near_hold, near_why) = hold_of(near());
+    let mut far = near();
+    // Ten voxels further from the core (at 500 ms a voxel in the script).
+    far.entities
+        .iter_mut()
+        .filter(|entity| entity.subtype == "commander")
+        .for_each(|commander| commander.at = [32, 20, GROUND]);
+    let (far_hold, far_why) = hold_of(far);
+    assert_eq!(near_hold - far_hold, 5_000, "{near_hold} and {far_hold}");
+    let cost = |why: &str| {
+        why.split(" points for ")
+            .nth(1)
+            .map(|rest| rest.split(" of route").next().unwrap_or("").to_owned())
+    };
+    assert_eq!(cost(&near_why), cost(&far_why), "{near_why} / {far_why}");
+}
+
+/// A Hold & Build route whose goal fills the share leaves nothing for the
+/// hold once the core's step is paid for: the hold is taken out, not left at
+/// the template's own 30 s past the share.
+#[test]
+fn a_hold_with_nothing_left_for_it_is_taken_out() {
+    let world = || {
+        let mut world = Script::busy(0);
+        world.features.retain(|feature| feature.id != "seam_20_60");
+        world
+    };
+    let (script, _) = play(world());
+    let ops = composing_ops(&script.transcript);
+    let hold = op_value(&ops, "replace", "/declarative/route/1/hold/ms")
+        .and_then(|value| match value {
+            Json::Number(n) => n.parse::<i64>().ok(),
+            _ => None,
+        })
+        .expect("the hold, a number");
+    // The busy seat's segment fills 126 s; take the share down to 1 s less
+    // than the goal, the core's walk and its interface time, so the goal
+    // still fits and the hold has nothing.
+    let fill = 126_000 - hold - 1_000;
+    let mut tight = world();
+    tight.segment_ms = (fill * 100).div_euclid(70) + 1;
+    tight.remaining_ms = tight.segment_ms;
+    let (script, played) = play(tight);
+    assert_eq!(played.submitted, Submitted::Own, "{:#?}", script.transcript);
+    let ops = composing_ops(&script.transcript);
     assert!(
-        paths.iter().any(|path| path.ends_with("/place_beacon/at"))
-            || paths.iter().any(|path| path.ends_with("/anchor/voxel")),
-        "{paths:?}"
+        op_value(&ops, "replace", "/declarative/route/1/hold/ms").is_none(),
+        "{ops:#?}"
+    );
+    assert!(
+        ops.iter()
+            .any(|op| op.get("op").and_then(text) == Some("remove")
+                && op.get("path").and_then(text) == Some("/declarative/route/1")),
+        "the hold step taken out: {ops:#?}"
     );
 }
 
-/// The JSON Patch operations the one composing `patch_plan` carried.
-fn composing_ops(transcript: &[String]) -> Vec<Json> {
-    let patch = transcript
-        .iter()
-        .find_map(|line| line.strip_prefix("patch_plan "))
-        .and_then(|params| read(params).ok())
-        .and_then(|params| params.get("json_patch").and_then(text).map(str::to_owned))
-        .expect("one composing patch");
-    match read(&patch).expect("a JSON Patch") {
-        Json::Array(ops) => ops,
-        other => panic!("an array of operations, not {other:?}"),
-    }
+/// The advisor suggests the same name for Hold & Build's covering page, and
+/// the hold; and Expand & Mine's covering page names the seam it does not
+/// cover yet.
+#[test]
+fn the_advisor_suggests_names_for_the_covering_pages() {
+    let (_, advice) = advise(Script::busy(1));
+    let page = |template: &str| {
+        advice
+            .suggestions
+            .iter()
+            .find(|suggestion| suggestion.template_id == template)
+            .unwrap_or_else(|| panic!("a {template} suggestion"))
+            .parameters
+            .iter()
+            .map(|value| (value.pointer.clone(), value.value.clone()))
+            .collect::<Vec<(String, String)>>()
+    };
+    let hold = page("hold_and_build");
+    assert_eq!(
+        hold.first(),
+        Some(&(
+            String::from("/declarative/route/0/place_beacon/at/covering"),
+            String::from(r#"{"feature_id":"vent_56_32"}"#)
+        ))
+    );
+    assert_eq!(
+        hold.get(1).map(|(pointer, _)| pointer.as_str()),
+        Some("/declarative/route/1/hold/ms")
+    );
+    assert_eq!(
+        page("expand_and_mine"),
+        [(
+            String::from("/declarative/route/0/place_beacon/at/covering"),
+            String::from(r#"{"feature_id":"seam_20_60"}"#)
+        )]
+    );
 }
 
 /// Spec section 14: "compose visit goals by greedy insertion by utility per
 /// second until the route fills its target share of the segment". Two seams
-/// inside the core's sphere and money for two beacons: the second site is
-/// inserted as one more walk-and-place before the walk home. Money for one:
-/// it is not.
+/// the seat does not cover and money for two beacons: the second is inserted
+/// as one more copy of the place step, named and numbered, before the walk
+/// home. Money for one: it is not.
 #[test]
 fn easy_inserts_goals_greedily_while_the_share_and_the_treasury_allow() {
     let mut rich = Script::new(0);
-    rich.features.insert((38, 30), SEAM_STANDARD);
-    rich.features.insert((26, 30), SEAM_STANDARD);
+    for (anchor, site) in [([40, 30], [36, 30, GROUND]), ([24, 30], [28, 30, GROUND])] {
+        let mut seam = Feature::new("seam", "rich", anchor);
+        seam.site = Some(site);
+        rich.features.push(seam);
+    }
     rich.treasury = 500;
     let (script, played) = play(rich.clone());
     assert_eq!(played.submitted, Submitted::Own);
     let ops = composing_ops(&script.transcript);
-    let added: Vec<String> = ops
-        .iter()
-        .filter(|op| op.get("op").and_then(text) == Some("add"))
-        .filter_map(|op| op.get("path").and_then(text).map(str::to_owned))
-        .collect();
+    let inserted = op_value(&ops, "add", "/declarative/route/1").expect("one more step");
     assert_eq!(
-        added,
-        ["/declarative/route/2", "/declarative/route/3"],
+        inserted.get("label").and_then(text),
+        Some("place_mine_2"),
+        "{ops:#?}"
+    );
+    assert!(
+        compact(&inserted).contains(r#""covering": { "feature_id": "seam_"#),
         "{ops:#?}"
     );
 
@@ -1285,238 +1715,201 @@ fn easy_inserts_goals_greedily_while_the_share_and_the_treasury_allow() {
     poor.treasury = 100;
     let (script, _) = play(poor);
     assert!(
-        composing_ops(&script.transcript)
-            .iter()
-            .all(|op| op.get("op").and_then(text) == Some("replace")),
-        "one beacon's worth of money, one site"
+        op_value(
+            &composing_ops(&script.transcript),
+            "add",
+            "/declarative/route/1"
+        )
+        .is_none(),
+        "one beacon's worth of money, one seam"
     );
 }
 
-/// A seat on a map wide enough for the band beyond its core's sphere, with a
-/// lean vent 32 voxels east of the core -- beyond the 24-voxel sphere, as the
-/// starting vent is at every seed -- and nothing else.
-fn vent_beyond_the_sphere() -> Script {
-    let mut script = Script::new(1);
-    script.size = [96, 64, 32];
-    for x in 63..=65 {
-        for y in 31..=33 {
-            script.features.insert((x, y), VENT_LEAN);
-        }
-    }
-    script
-}
-
-/// Where the scripted world puts that vent's site and anchor: the site at
-/// the edge of the core's sphere towards the vent, 22 voxels out (the sphere
-/// less Easy's 2-voxel margin), and the anchor the vent's centre column.
-const VENT_SITE: [i32; 3] = [54, 32, GROUND + 1];
-const VENT_ANCHOR: [i32; 3] = [64, 32, GROUND + 1];
-
-/// The whole-voxel squared distance, in 3-D.
-fn distance2(a: [i32; 3], b: [i32; 3]) -> i64 {
-    a.iter()
-        .zip(b)
-        .map(|(p, q)| {
-            let d = i64::from(p - q);
-            d * d
-        })
-        .sum()
-}
-
-/// Decisions-log item 113 (6): a vent in the band beyond the core's sphere is
-/// filled. Easy composes the reshaped Hold & Build for its own seat -- one
-/// `patch_plan`, and its own plan is what it submits -- walking to and
-/// placing a Build beacon at a site at the edge of the core's sphere, whose
-/// initial Build target is the Generator on the vent, inside the new
-/// beacon's sphere by 3-D squared distance.
+/// A feature no site covers -- `estimate_route` refuses its `covering`
+/// waypoint -- offers no goal; a feature the seat covers already offers no
+/// placement. With every vent within reach covered, Hold & Build's page says
+/// so and suggests nothing.
 #[test]
-fn a_vent_beyond_the_core_sphere_is_filled_with_a_build_beacon_at_its_edge() {
-    let (script, played) = play(vent_beyond_the_sphere());
-    assert_eq!(played.submitted, Submitted::Own, "{:#?}", script.transcript);
-    assert_eq!(
+fn a_covered_or_uncoverable_vent_offers_no_placement_and_the_page_says_why() {
+    let mut uncoverable = Script::new(1);
+    let mut vent = Feature::new("vent", "lean", [56, 32]);
+    vent.site = None;
+    uncoverable.features.push(vent);
+    let (script, played) = play(uncoverable);
+    assert_eq!(played.submitted, Submitted::Safe, "{played:#?}");
+    assert!(
         script
             .transcript
             .iter()
-            .filter(|line| line.starts_with("patch_plan"))
-            .count(),
-        1,
-        "patch_plan called once, to compose"
+            .any(|line| line.starts_with("estimate_route") && line.contains("vent_56_32")),
+        "it was asked"
+    );
+
+    let mut covered = Script::new(1);
+    let mut vent = Feature::new("vent", "lean", [40, 32]);
+    vent.covered = true;
+    covered.features.push(vent);
+    let (_, advice) = advise(covered);
+    let page = advice
+        .suggestions
+        .iter()
+        .find(|suggestion| suggestion.template_id == "hold_and_build")
+        .expect("a Hold & Build suggestion");
+    assert!(page.parameters.is_empty(), "{page:#?}");
+    assert!(
+        page.why
+            .contains("Every heat vent within reach is inside a sphere of yours already"),
+        "{}",
+        page.why
+    );
+}
+
+/// The register's S1-15 (decision 14): a vent the seat covers, inside the
+/// sphere of an existing own beacon on the Build mandate, is a tap -- one
+/// interface step adding a Generator `on` the vent by name to that beacon's
+/// list. The gateway is asked twice before anything is estimated: whether
+/// the `on` reads from that beacon (`resolve_refs`) and whether the beacon
+/// is on the Build mandate (a QUICK verify: no `E0503`).
+#[test]
+fn a_covered_vent_inside_a_build_beacons_sphere_is_tapped_by_name() {
+    let mut tap = Script::new(0);
+    let mut vent = Feature::new("vent", "rich", [40, 40]);
+    vent.covered = true;
+    tap.features.push(vent);
+    tap.on_reads
+        .insert((String::from("b_00"), String::from("vent_40_40")));
+    let (script, played) = play(tap.clone());
+    assert_eq!(played.submitted, Submitted::Own, "{:#?}", script.transcript);
+    let all = methods(&script.transcript);
+    let resolve = all.iter().position(|method| *method == "resolve_refs");
+    let estimate = all.iter().position(|method| *method == "estimate_route");
+    assert!(
+        resolve.is_some() && resolve < estimate,
+        "probed before it was estimated: {all:?}"
     );
     let ops = composing_ops(&script.transcript);
-    let value_at = |suffix: &str| {
-        ops.iter()
-            .find(|op| {
-                op.get("op").and_then(text) == Some("replace")
-                    && op
-                        .get("path")
-                        .and_then(text)
-                        .is_some_and(|p| p.ends_with(suffix))
-            })
-            .and_then(|op| op.get("value").cloned())
-            .unwrap_or_else(|| panic!("{suffix} is filled: {ops:#?}"))
-    };
-    let walk = value_at("/declarative/route/0/move/to");
-    let site = value_at("/declarative/route/1/place_beacon/at");
-    let anchor = value_at("/place_beacon/initial/mandate/build/targets/0/anchor/voxel");
+    let step = op_value(&ops, "replace", "/declarative/route/0").expect("the place step replaced");
+    assert_eq!(step.get("label").and_then(text), Some("add_generator"));
     assert_eq!(
-        voxel_of(walk.get("voxel").unwrap()),
-        VENT_SITE,
-        "the walk ends at the site"
-    );
-    assert_eq!(voxel_of(site.get("voxel").unwrap()), VENT_SITE);
-    assert_eq!(
-        voxel_of(&anchor),
-        VENT_ANCHOR,
-        "the Generator stands on the vent"
-    );
-    let core = [32, 32, GROUND + 1];
-    assert!(
-        distance2(core, VENT_ANCHOR) > 24 * 24,
-        "the vent is beyond the core's sphere"
+        compact(step.get("interface").unwrap()),
+        compact(
+            &read(
+                r#"{"beacon":{"beacon_id":"b_00"},"rows":[{"add_build_target":{"target":{"blueprint_id":"generator","anchor":{"on":{"feature_id":"vent_40_40"}}}}}]}"#
+            )
+            .unwrap()
+        )
     );
     assert!(
-        distance2(core, VENT_SITE) <= 24 * 24,
-        "the site is inside the core's sphere"
-    );
-    assert!(
-        distance2(VENT_SITE, VENT_ANCHOR) <= 24 * 24,
-        "the anchor is inside the new beacon's sphere, in 3-D"
-    );
-    assert!(
-        ops.iter().any(|op| op
-            .get("path")
-            .and_then(text)
-            .is_some_and(|p| p.ends_with("/hold/ms"))),
-        "the hold fills the share: {ops:#?}"
-    );
-    assert!(
-        played.why.contains("A Build beacon at (54, 32, 11)"),
+        played
+            .why
+            .contains("added on site to the Build list of b_00"),
         "{}",
         played.why
     );
-}
 
-/// The advisor suggests the same walk, site and anchor for the Hold & Build
-/// page, in the template's declaration order.
-#[test]
-fn the_advisor_suggests_the_same_walk_site_and_anchor_for_hold_and_build() {
-    let (_, advice) = advise(vent_beyond_the_sphere());
-    let page = advice
-        .suggestions
-        .iter()
-        .find(|suggestion| suggestion.template_id == "hold_and_build")
-        .expect("a Hold & Build suggestion");
-    let site = r#"{"voxel":{"x":54,"y":32,"z":11}}"#;
-    let filled: Vec<(&str, &str)> = page
-        .parameters
-        .iter()
-        .map(|value| (value.pointer.as_str(), value.value.as_str()))
-        .collect();
+    // Not on the Build mandate: the verifier's E0503, so no tap.
+    let mut mine = tap.clone();
+    mine.build_beacons.clear();
+    let (script, played) = play(mine);
     assert_eq!(
-        filled.get(..3).unwrap_or_default(),
-        [
-            ("/declarative/route/0/move/to", site),
-            ("/declarative/route/1/place_beacon/at", site),
-            (
-                "/declarative/route/1/place_beacon/initial/mandate/build/targets/0/anchor/voxel",
-                r#"{"x":64,"y":32,"z":11}"#
-            ),
-        ]
-    );
-    assert!(
-        page.why.contains("heat vent at (64, 32, 11)"),
-        "{}",
-        page.why
-    );
-}
-
-/// A vent whose anchor fails the 3-D sphere test from every edge site is not
-/// a goal: the vent's columns stand twenty voxels above the plain, so from
-/// the furthest site the core's sphere allows, the vent's centre is further
-/// than the new sphere reaches (decisions-log item 113 (15)). Nothing is
-/// estimated for it, Easy seals its safe playbook, and the page's why says so.
-#[test]
-fn a_vent_no_edge_site_holds_in_3d_is_not_a_goal_and_the_page_says_why() {
-    let mut raised = vent_beyond_the_sphere();
-    for x in 63..=65 {
-        for y in 31..=33 {
-            raised.heights.insert((x, y), GROUND + 20);
-        }
-    }
-    let (script, played) = play(raised.clone());
-    assert_eq!(played.submitted, Submitted::Safe, "{played:#?}");
-    assert!(
-        !script
-            .transcript
-            .iter()
-            .any(|line| line.starts_with("estimate_route")),
-        "no goal, so no estimate: {:#?}",
+        played.submitted,
+        Submitted::Safe,
+        "{:#?}",
         script.transcript
     );
-    let (_, advice) = advise(raised);
-    let page = advice
-        .suggestions
-        .iter()
-        .find(|suggestion| suggestion.template_id == "hold_and_build")
-        .expect("a Hold & Build suggestion");
-    assert!(page.parameters.is_empty(), "{page:#?}");
-    assert!(
-        page.why.contains(
-            "No site at the edge of your spheres puts the heat vent at (64, 32, 31) inside the \
-             new beacon's sphere"
-        ),
-        "{}",
-        page.why
+    assert!(!beacon_estimated(&script.transcript));
+
+    // The `on` does not read from that beacon: no tap.
+    let mut unread = tap.clone();
+    unread.on_reads.clear();
+    let (script, played) = play(unread);
+    assert_eq!(played.submitted, Submitted::Safe);
+    assert!(!beacon_estimated(&script.transcript));
+
+    // A QUICK verify that answers no report cannot say no E0503 was raised:
+    // read as a refusal, so no tap (fail closed, as a refused call is).
+    let mut unreported = tap;
+    unreported.verify = Verify::QuickUnreported;
+    let (script, played) = play(unreported);
+    assert_eq!(
+        played.submitted,
+        Submitted::Safe,
+        "{:#?}",
+        script.transcript
+    );
+    assert!(!beacon_estimated(&script.transcript));
+}
+
+/// The shed order's last tie is the beacon's number, as the sim's row id
+/// orders it, not its name's text: of three lit NORMAL beacons equally far
+/// from the core, `b_99` and `b_100` are next to shed and raised, and
+/// `b_101` is not (by text, `b_100` and `b_101` would sort before `b_99`).
+#[test]
+fn the_shed_orders_last_tie_is_the_beacons_number() {
+    let mut script = Script::new(1);
+    script.supply = 10;
+    script.draw = 11;
+    for (id, at, ms) in [
+        ("b_99", [40, 32, GROUND], 3_000),
+        ("b_100", [24, 32, GROUND], 2_000),
+        ("b_101", [32, 40, GROUND], 1_000),
+    ] {
+        script.beacons.push(Beacon {
+            id: id.to_owned(),
+            at,
+            owner: 1,
+            core: false,
+            powered: true,
+            priority: "normal",
+        });
+        script.to_beacon_ms.insert(id.to_owned(), ms);
+    }
+    let (script, _) = advise(script);
+    assert_eq!(
+        safe_labels(&script.transcript),
+        ["to_safety", "raise_b_100", "raise_b_99", "deepen_core"]
     );
 }
 
-/// The Hold & Build page's why names the true reason in the two cases the
-/// "two sphere reaches" sentence does not cover (the review of T18b): a vent
-/// straight above the nearest own beacon, outside its sphere, is a vent no
-/// edge site reaches because the ground rises too far; and a seat with no
-/// beacon has no sphere to stand a site in at all.
+/// The register's S1-14 as decision 14 reads it: a placed beacon adds no
+/// draw (net zero through its own key-core), so no goal is charged a kW
+/// shortfall. A seat whose supply only just carries its draw scores the same
+/// vent and the same seam for the same points as a seat with supply to
+/// spare.
 #[test]
-fn a_vent_above_the_core_or_a_seat_with_no_beacon_is_said_as_it_is() {
-    // The vent's columns stand twenty voxels above the plain over the core,
-    // and the core is reported at the bottom of the map, so the vent's centre
-    // is further above it than the sphere reaches, in its own column.
-    let mut above = Script::new(1);
-    for x in 31..=33 {
-        for y in 31..=33 {
-            above.features.insert((x, y), VENT_LEAN);
-            above.heights.insert((x, y), GROUND + 20);
-        }
-    }
-    above.beacons.first_mut().expect("the core").at = [32, 32, 1];
-    let (_, advice) = advise(above);
-    let page = advice
-        .suggestions
-        .iter()
-        .find(|suggestion| suggestion.template_id == "hold_and_build")
-        .expect("a Hold & Build suggestion");
-    assert!(page.parameters.is_empty(), "{page:#?}");
-    assert!(
-        page.why
-            .contains("No site at the edge of your spheres puts the heat vent")
-            && !page.why.contains("two sphere reaches"),
-        "{}",
-        page.why
-    );
+fn a_placed_beacon_is_charged_no_draw_however_tight_the_grid() {
+    let points = |supply: i64, draw: i64| {
+        let mut world = Script::busy(1);
+        world.supply = supply;
+        world.draw = draw;
+        let (_, advice) = advise(world);
+        [
+            why_of(&advice, "hold_and_build"),
+            why_of(&advice, "expand_and_mine"),
+        ]
+        .map(|why| {
+            why.split(": ")
+                .find(|part| part.contains(" points for "))
+                .map_or_else(|| panic!("a scored why: {why}"), str::to_owned)
+        })
+    };
+    let spare = points(10, 4);
+    let tight = points(10, 10);
+    assert_eq!(spare, tight);
+}
 
-    let mut bare = vent_beyond_the_sphere();
-    bare.beacons.clear();
-    let (_, advice) = advise(bare);
-    let page = advice
-        .suggestions
+/// The core's dig depth is Expand & Mine's own value for a new Mine beacon
+/// ([`CORE_DIG_MAX_DEPTH`]'s doc says the two agree): the template's declared
+/// `dig_max_depth`, read from the library as the gateway declares it.
+#[test]
+fn the_cores_dig_depth_is_expand_and_mines_own() {
+    let (_, declared) = template("expand_and_mine").expect("the template");
+    let own = declared
         .iter()
-        .find(|suggestion| suggestion.template_id == "hold_and_build")
-        .expect("a Hold & Build suggestion");
-    assert!(page.parameters.is_empty(), "{page:#?}");
-    assert!(
-        page.why.contains("You have no beacon") && !page.why.contains("two sphere reaches"),
-        "{}",
-        page.why
-    );
+        .find(|(pointer, _)| pointer.ends_with("/mine/dig_max_depth"))
+        .map(|(_, value)| value.clone())
+        .expect("a declared dig depth");
+    assert_eq!(own, CORE_DIG_MAX_DEPTH.to_string());
 }
 
 /// `estimate_route`'s `Leg.to` is a `gp.v1.Location` as declared; `main`

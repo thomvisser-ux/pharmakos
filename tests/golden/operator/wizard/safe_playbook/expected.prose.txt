@@ -1,0 +1,25 @@
+Safe playbook
+Written from a built-in template.
+Move to the safest beacon, raise the priority of any beacon about to brown out, then stay with the safest beacon.
+
+Route
+  1. to_safety: walk to the safest own beacon, avoiding known threats.
+  2. deepen_core: interface with beacon "b_00" and change its mandate settings (3.5 s on site).
+    On failure, move on to the next step.
+
+Rules
+  1. "flee", when the commander is at or below 40% HP and the commander took damage in the last 3 s:
+    1. flee_to_safety: walk to the safest own beacon.
+    2. flee_wait: hold for 8 s.
+    Then carry on with the route.
+    Fires at most 3 times, and no sooner than every 30 s.
+
+If the commander dies
+  On respawn, carry on from the step the route was on.
+
+Fallback
+  Stay with the safest own beacon.
+
+Budget
+  5 of 128 size units.
+  3.5 s standing at a beacon along the route.

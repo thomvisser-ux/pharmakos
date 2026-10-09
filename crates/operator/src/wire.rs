@@ -63,8 +63,18 @@ impl<'c, 'a> Wire<'c, 'a> {
 
     /// Call one method, and answer its `result` with the `_status` footer
     /// taken out, or the refusal.
+    ///
+    /// # Errors
+    ///
+    /// The gateway's refusal; and `OVER_BUDGET`, without calling, once the
+    /// count of calls would not fit, which no round within Easy's derived
+    /// budget reaches.
     pub(crate) fn call(&mut self, method: &str, params: Json) -> Result<Json, Refused> {
-        self.calls = self.calls.saturating_add(1);
+        self.calls = self.calls.checked_add(1).ok_or_else(|| Refused {
+            method: method.to_owned(),
+            code: String::from("OVER_BUDGET"),
+            message: String::from("the operator's call count does not fit"),
+        })?;
         let response = (self.call)(method, params);
         if let Some(result) = response.get("result") {
             return Ok(without_status(result));

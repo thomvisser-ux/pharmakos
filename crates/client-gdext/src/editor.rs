@@ -375,6 +375,21 @@ impl Verdict {
     }
 }
 
+/// What an answer to the editor's call was: an answer, or a refused call.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Settled {
+    /// A result, or an error the gateway answers a question with (an `estimate_route`
+    /// whose waypoint resolves to nothing): drawn, not counted as a refusal.
+    Answered,
+    /// The gateway refused the call; [`Editor::refusals`] counts it.
+    Refused,
+}
+
+/// The error code `estimate_route` answers a waypoint that resolves to nothing with: a
+/// `covering` that covers nothing, or a selector that ranks nothing, which would be a step
+/// failure at run time (`crates/gateway/src/surface/knowledge.rs`, `place_of`).
+const ESTIMATE_FOUND_NOTHING: &str = "NOT_FOUND";
+
 /// The route as the gateway priced it: where each leg ends and what it costs.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct Route {
@@ -391,6 +406,11 @@ pub struct Route {
     /// Whether every leg named where it ends. When one did not, `points` is empty and no
     /// polyline is drawn, rather than one to a point the gateway never named.
     pub readable: bool,
+    /// The gateway's `NOT_FOUND` sentence when a waypoint resolves to nothing — a
+    /// `covering` that covers nothing, a selector that ranks nothing — as it came, and
+    /// empty otherwise. That is the gateway's answer about the route, which the editor
+    /// draws (no polyline, the sentence), not a refused call.
+    pub found_nothing: String,
 }
 
 /// The placement ghost's verdict (spec section 13, "a live legality ghost").
@@ -1248,23 +1268,25 @@ impl Editor {
     }
 
     /// The answer to the call in flight: a result, or the gateway's refusal as
-    /// `(code, message)`.
+    /// `(code, message)`. Says whether it was an answer or a refused call: an
+    /// `estimate_route` whose waypoint resolves to nothing is the gateway's answer about
+    /// the route, drawn as such ([`Route::found_nothing`]), and not a refusal.
     ///
     /// # Errors
     ///
     /// [`BridgeError::Schema`] when a result is not the message its method answers with;
     /// the call is settled either way and nothing waits on it.
-    pub fn answered(&mut self, answer: Result<&Json, (&str, &str)>) -> Result<(), BridgeError> {
+    pub fn answered(
+        &mut self,
+        answer: Result<&Json, (&str, &str)>,
+    ) -> Result<Settled, BridgeError> {
         let Some(sent) = self.in_flight.take() else {
-            return Ok(());
+            return Ok(Settled::Answered);
         };
         self.touch();
         match answer {
-            Ok(result) => self.settle(sent, result),
-            Err((code, message)) => {
-                self.refused(&sent, code, message);
-                Ok(())
-            }
+            Ok(result) => self.settle(sent, result).map(|()| Settled::Answered),
+            Err((code, message)) => Ok(self.refused(&sent, code, message)),
         }
     }
 
@@ -2085,7 +2107,18 @@ impl Editor {
         self.touch();
     }
 
-    fn refused(&mut self, sent: &Sent, code: &str, message: &str) {
+    fn refused(&mut self, sent: &Sent, code: &str, message: &str) -> Settled {
+        if let (Sent::Estimate { revision }, ESTIMATE_FOUND_NOTHING) = (sent, code) {
+            if *revision == self.revision {
+                self.route = Route {
+                    current: true,
+                    found_nothing: message.to_owned(),
+                    ..Route::default()
+                };
+                self.touch();
+            }
+            return Settled::Answered;
+        }
         self.refusals = self.refusals.saturating_add(1);
         let detail = format!("{code}: {message}");
         match sent {
@@ -2107,6 +2140,7 @@ impl Editor {
             }
             _ => self.say("gateway_refused", &detail),
         }
+        Settled::Refused
     }
 }
 
@@ -3377,5 +3411,56 @@ mod tests {
         assert_eq!(editor.refusals(), 1);
         assert_eq!(editor.status().key, "gateway_refused");
         assert!(!editor.busy());
+    }
+
+    #[test]
+    fn a_waypoint_that_resolves_to_nothing_is_drawn_not_refused() {
+        let mut editor = loaded(EXPAND_EAST);
+        editor.set_entities(&[Entity {
+            id: "u_1".to_owned(),
+            kind: EntityKind::Unit,
+            subtype: "commander".to_owned(),
+            owner: "seat.0".to_owned(),
+            at: [358, 22, 36],
+        }]);
+        assert_eq!(method_of(editor.next_call(false)), "estimate_route");
+        let said = "waypoint 1 covers nothing: its step would fail `illegal_site`";
+        let settled = editor.answered(Err(("NOT_FOUND", said))).expect("settled");
+        assert_eq!(
+            settled,
+            Settled::Answered,
+            "the gateway's answer about the route"
+        );
+        assert_eq!(editor.refusals(), 0, "not a refused call");
+        let route = editor.route();
+        assert!(route.current, "it describes the text on screen");
+        assert!(!route.reachable);
+        assert!(
+            route.points.is_empty(),
+            "no polyline to a site the gateway never named"
+        );
+        assert_eq!(
+            route.found_nothing, said,
+            "the gateway's sentence, as it came"
+        );
+    }
+
+    #[test]
+    fn any_other_refusal_of_the_estimate_is_a_refused_call() {
+        let mut editor = loaded(EXPAND_EAST);
+        editor.set_entities(&[Entity {
+            id: "u_1".to_owned(),
+            kind: EntityKind::Unit,
+            subtype: "commander".to_owned(),
+            owner: "seat.0".to_owned(),
+            at: [358, 22, 36],
+        }]);
+        assert_eq!(method_of(editor.next_call(false)), "estimate_route");
+        let settled = editor
+            .answered(Err(("INVALID_ARGUMENT", "waypoint 1: off the map")))
+            .expect("settled");
+        assert_eq!(settled, Settled::Refused);
+        assert_eq!(editor.refusals(), 1);
+        assert!(editor.route().found_nothing.is_empty());
     }
 }

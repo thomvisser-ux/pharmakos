@@ -1,0 +1,11 @@
+{
+  "parameters": [
+    {
+      "pointer": "/declarative/route",
+      "label": "The route: to the safest beacon, then one priority raise per beacon at risk and the core's dig depth (none by default)",
+      "value": "[{\"label\":\"to_safety\",\"move\":{\"to\":{\"safest\":{}},\"pace\":\"AVOID_KNOWN_THREATS\"}},{\"label\":\"deepen_core\",\"interface\":{\"beacon\":{\"beacon_id\":\"b_00\"},\"rows\":[{\"set_mandate_settings\":{\"mine\":{\"dig_max_depth\":4}}}]},\"on_fail\":{\"action\":\"SKIP\"}}]",
+      "suggested": true
+    }
+  ],
+  "why": "Easy, seat 0, round 1, seed 0x00000000ca5caded (recorded; Easy draws nothing at random). Power is not short, so nothing is raised: move to the safest beacon and stay with it. Then set the core b_00 to dig 4 voxels deep, so its starting drone keeps working its seam below the top layer."
+}

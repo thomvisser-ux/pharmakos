@@ -1,0 +1,26 @@
+Hold & Build
+Written from a built-in template.
+Grow the grid: place a Build beacon covering a heat vent you do not cover yet, with a Generator on the vent as its first target, and hold by it.
+
+Route
+  1. place_power: place a beacon at a site covering Heat vent (324, 16), tagged "power", on a Build mandate (14.5 s on site).
+    Give up after 1:00.
+    On failure, move on to the next step.
+  2. hold: hold for 79.9 s.
+
+Rules
+  1. "flee", when the commander is at or below 40% HP and the commander took damage in the last 3 s:
+    1. flee_to_safety: walk to the safest own beacon.
+    2. flee_wait: hold for 8 s.
+    Then carry on with the route.
+    Fires at most 3 times, and no sooner than every 30 s.
+
+If the commander dies
+  On respawn, carry on from the step the route was on.
+
+Fallback
+  Stay with the safest own beacon.
+
+Budget
+  6 of 128 size units.
+  14.5 s standing at a beacon along the route.

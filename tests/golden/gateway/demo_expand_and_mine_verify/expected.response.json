@@ -9,14 +9,14 @@
         {
           "code": "I0003",
           "severity": "info",
-          "path": "/declarative/route/1/place_beacon/initial/mandate/mine/seam_choice",
+          "path": "/declarative/route/0/place_beacon/initial/mandate/mine/seam_choice",
           "related_paths": [],
           "message": "`seam_choice` is omitted and reads as NEAREST.",
           "beginner": "A setting left out takes its named default.",
           "suggestions": [
             {
               "title": "Write the default out",
-              "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/1/place_beacon/initial/mandate/mine/seam_choice\",\"value\":\"NEAREST\"}]",
+              "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/0/place_beacon/initial/mandate/mine/seam_choice\",\"value\":\"NEAREST\"}]",
               "applicability": "machine_applicable"
             }
           ],
@@ -25,7 +25,7 @@
         {
           "code": "I0003",
           "severity": "info",
-          "path": "/declarative/route/1/place_beacon/initial/mandate/mine/pillar_spacing",
+          "path": "/declarative/route/0/place_beacon/initial/mandate/mine/pillar_spacing",
           "related_paths": [],
           "message": "`pillar_spacing` is omitted and reads as 0, no pillars.",
           "beginner": "A setting left out takes its named default.",
@@ -35,14 +35,14 @@
         {
           "code": "I0003",
           "severity": "info",
-          "path": "/declarative/route/2/move/pace",
+          "path": "/declarative/route/1/move/pace",
           "related_paths": [],
           "message": "`pace` is omitted and reads as DIRECT.",
           "beginner": "A setting left out takes its named default.",
           "suggestions": [
             {
               "title": "Write the default out",
-              "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/2/move/pace\",\"value\":\"DIRECT\"}]",
+              "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/1/move/pace\",\"value\":\"DIRECT\"}]",
               "applicability": "machine_applicable"
             }
           ],
@@ -65,11 +65,11 @@
           "map_refs": []
         }
       ],
-      "report_hash": "4OgusMjqcpM=",
+      "report_hash": "yRkKBkHEH8E=",
       "rules_hash": "p1QGoPeYo6c=",
-      "plan_fingerprint": "N99cbTLg3pc=",
+      "plan_fingerprint": "rST3gzf3Lsk=",
       "verifier_version": "0.1.0-s1",
-      "size_units": 6,
+      "size_units": 5,
       "size_budget": 128
     },
     "_status": {

@@ -1,40 +1,54 @@
 // SPDX-FileCopyrightText: 2026 Pharmakos contributors
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //
-// expand_and_mine.jsonc: the Expand & Mine template (decisions-log item 81).
+// hold_and_build.jsonc: the Hold & Build template (decisions-log items 81 and
+// 113 (6)).
 //
-// It teaches the route and the economy: walk out, put a Mine beacon down
-// beside an ore seam, and walk home while its drones dig. Spec section 10's
-// worked example, expand_east, is one filled-in copy of it.
+// It teaches the grid: place a Build beacon covering a heat vent your spheres
+// do not reach yet, give it a Generator on that vent as its first Build target,
+// and hold by it while its drone builds. A Generator stands on a heat vent, and
+// it is how a seat's kW supply rises. The target is an initial setting, and
+// initial settings are interface rows the commander commits on site after the
+// deploy, so this is still touch to change.
 //
-// This file cannot know where your seams are, so both places below are the
-// safest own beacon, which qualifies. Nothing in the sim keeps one beacon off
-// another's voxel, so they place a Mine beacon where the safest one stands.
-// The wizard asks for the site, and the built-in operator suggests one whose
-// new sphere holds a seam.
+// Where the beacon goes is a description, not a place (docs/design/
+// targeting.md; decisions-log item 127 (12)): "the nearest vent you do not
+// cover yet". The step reads it when it starts, from where your commander
+// stands, and the sim chooses a legal site whose sphere holds that vent; the
+// step walks there itself, so no walk comes before it. The Generator's anchor
+// is "the vent this beacon was placed to cover", `covered`, so the target
+// always names the vent the site was chosen for. Your starting vent lies
+// outside your core's sphere at every seed (decisions-log items 90 and 95),
+// which is why a new beacon is placed rather than a target added to the core.
 //
-// The two sites' own values above are the values it ships with, by the
-// owner's choice at decisions-log item 119 (10): they qualify on any map, and
-// the wizard or the operator replaces them. The golden seed's suggested sites
-// were not taken instead, because they are right for one map and E0403 on any
-// other.
+// The wizard asks which vent: the description, or a vent by its name, such as
+// {"feature_id": "vent_324_16"}, which is what the built-in operator suggests.
+// A name is a fixed target for this map only; the description works on any.
+// A carried copy reads the description again every round, so it never places
+// a second beacon on a vent it already covers.
+//
+// The place-and-build shape is the owner's, confirmed at decisions-log item
+// 119 (9).
 {
   "schema_version": {"major": 1, "minor": 0},
   "meta": {
-    "title": "Expand & Mine",
+    "title": "Hold & Build",
     "author_kind": "BUILTIN",
-    "note": "Easy, seat 2, round 1, seed 0x0102030405060708 (recorded; Easy draws nothing at random). A Mine beacon at (188, 33, 26) beside the standard ore seam at (185, 36, 26): 640 points for 40 s of route (Easy fills 42 s of the segment)."
+    "note": "Easy, seat 2, round 1, seed 0x0102030405060708 (recorded; Easy draws nothing at random). A Build beacon covering the lean heat vent vent_171_51, at (177, 44, 26) as its site reads now, with a Generator on the vent as its first Build target: 140 points for 42 s of route (Easy fills 42 s of the segment)."
   },
   "kind": "PLAYBOOK",
   "declarative": {
-    "route": [
-      {"label": "to_site", "move": {"to": {"voxel":{"x":188,"y":33,"z":26}}, "pace": "AVOID_KNOWN_THREATS"}, "timeout_ms": 120000, "on_fail": {"action": "SKIP"}},
-      {"label": "place_mine", "place_beacon": {"at": {"voxel":{"x":188,"y":33,"z":26}}, "tags": ["mine"],
-        // Initial settings are interface rows: each one commits on its own.
-        "initial": {"priority": "NORMAL", "mandate": {"roe": "RETURN_FIRE", "mine": {"dig_max_depth": 4, "flee_on_threat": true}}}},
-       "on_fail": {"action": "SKIP"}},
-      {"label": "back_home", "move": {"to": {"safest": {}}}}
-    ],
+    "route": [{"label":"deepen_core","interface":{"beacon":{"beacon_id":"b_00"},"rows":[{"set_mandate_settings":{"mine":{"dig_max_depth":4}}}]},"on_fail":{"action":"SKIP"}},
+      // Why: the step walks to the site it reads, so its timeout bounds the
+      // walk as well as the deploy.
+      {"label": "place_power", "place_beacon": {"at": {"covering": {"feature_id":"vent_171_51"}}, "tags": ["power"],
+        // Initial settings are interface rows committed on site after the
+        // deploy: choosing the Build mandate is free, and a Build target is
+        // its own row.
+        "initial": {"mandate": {"build": {"targets": [
+          {"blueprint_id": "generator", "anchor": {"on": {"covered": {}}}, "rotation_quarter_turns": 0, "order": 1}
+        ]}}}},
+       "timeout_ms": 60000, "on_fail": {"action": "SKIP"}}],
     "handlers": [
       // Why: bravery is an ordinary rule. Hurt and under fire, the commander
       // walks back to safety and waits before carrying on.
@@ -43,8 +57,7 @@
        "resume": "CONTINUE", "cooldown_ms": 30000, "max_fires": 3}
     ]
   },
-  "on_death": {"on_respawn": "CONTINUE", "max_deaths_before_fallback": 2},
-  // Why: an expansion is the most exposed thing a seat does, so the tail waits
-  // at the safest beacon rather than out at the new one.
-  "fallback": {"hold": {"at": {"safest": {}}}}
+  "on_death": {"on_respawn": "CONTINUE"},
+  // Why: after the hold, stay with the safest beacon and its drones.
+  "fallback": {"shadow": {"beacon": {"safest": {}}}}
 }

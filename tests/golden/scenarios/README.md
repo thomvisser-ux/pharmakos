@@ -194,6 +194,29 @@ probe area. `deploy-and-visit`,
 `unaffordable-deploy` write no Build target and did not move, and neither did
 the determinism chain (its harness writes none).
 
+**S1's operator (`oper`) moved the two `against-easy` chains from their first
+line (tick 1)** and no other (decisions-log items 127 (12) and 133 (3) (a); S1's
+plan, decision 14). Both seats' orders changed, and neither through the sim.
+Seat 0's file is Hold & Build as Easy now fills it -- `place_beacon` covering
+its starting vent by name, `vent_324_16`, with walk-in in place of the walk to
+a fixed site -- so its first step binds a feature on tick 1, which is hashed
+seat state. Seat 1's Easy no longer places a Mine beacon beside its starting
+seam, which its core covers and works: its route opens with `deepen_core` (the
+core's dig depth, committed at tick 71) and then places a Build beacon covering
+its own starting vent, with a Generator on it, every goal costed from the core.
+Read in the events, against the chains `build` left: seat 1's beacon lands at
+tick 736 (its Mine beacon landed at 446) and its Generator completes at 1495;
+seat 0's beacon lands at 721 (was 691), its initial Build target commits at 771
+(was 741) and its Generator completes at 1260 (was 1286); in
+`against-easy-three-rounds` seat 0 first delivers ore at 1430 (as before) and
+seat 1 at 1671 (was 1787), its core's drone digging from the start, and seat
+0's carried deploy fails as round 2's step starts, at tick 3601 (was 4056): the
+step no longer walks before it reads its site, and the vent it names is
+covered by its own round-1 beacon. Seat 0's derived hold is 9 900 ms: Easy
+costs the suggested vent from the core. `against-easy.scenario.jsonc`'s seat 1
+deadline moved with it, from 550 to 800, and every other deadline holds. The
+determinism chain did not move.
+
 `expand-east-segment` carries one more thing worth knowing before its chain is
 read. The playbook it seals **does not qualify against either seat's own frozen
 snapshot** on this map: `E0401` for `b_01`, which since S1 names each seat's own

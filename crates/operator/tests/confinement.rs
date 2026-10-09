@@ -32,7 +32,6 @@ const SOURCES: &[&str] = &[
     "src/playbook.rs",
     "src/safe.rs",
     "src/situation.rs",
-    "src/terrain.rs",
     "src/tuning.rs",
     "src/wire.rs",
 ];

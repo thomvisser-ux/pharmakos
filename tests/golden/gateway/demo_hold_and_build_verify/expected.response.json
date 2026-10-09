@@ -9,14 +9,14 @@
         {
           "code": "I0003",
           "severity": "info",
-          "path": "/declarative/route/1/place_beacon/initial/mandate/build/terraform",
+          "path": "/declarative/route/0/place_beacon/initial/mandate/build/terraform",
           "related_paths": [],
           "message": "`terraform` is omitted and reads as NONE.",
           "beginner": "A setting left out takes its named default.",
           "suggestions": [
             {
               "title": "Write the default out",
-              "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/1/place_beacon/initial/mandate/build/terraform\",\"value\":\"NONE\"}]",
+              "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/0/place_beacon/initial/mandate/build/terraform\",\"value\":\"NONE\"}]",
               "applicability": "machine_applicable"
             }
           ],
@@ -39,11 +39,11 @@
           "map_refs": []
         }
       ],
-      "report_hash": "nGYGyQHSi/o=",
+      "report_hash": "lwGtGV7zYKc=",
       "rules_hash": "p1QGoPeYo6c=",
-      "plan_fingerprint": "uCNRaAE+97w=",
+      "plan_fingerprint": "OMCF5zKxCVY=",
       "verifier_version": "0.1.0-s1",
-      "size_units": 7,
+      "size_units": 6,
       "size_budget": 128
     },
     "_status": {

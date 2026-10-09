@@ -49,11 +49,13 @@
 #         through `patch_plan`; QUICK and FULL qualify; every rule-list row's accessible
 #         name is its line; the submission is accepted and the SUBMITTED BYTES EQUAL THE
 #         GATEWAY'S LAST TEXT (decisions-log item 112 (4)); the file is saved and
-#         `gamectl verify` is run on it: exit 0 for a file that places nothing; for one that
-#         places a beacon, its only errors must be E0403 at the placed sites, because
-#         `gamectl verify` checks against its reference seat view, not this match
-#         (crates/gamectl/src/seat.rs), and the live FULL at submit is that file's
-#         qualifying check;
+#         `gamectl verify` is run on it: its only errors may be the three the reference
+#         seat view makes of this match's names and places, because `gamectl verify`
+#         checks against that view, not this match (crates/gamectl/src/seat.rs): E0403 at
+#         a placed site (its spheres are not this match's), E0412 at a named feature (it
+#         holds no feature) and E0401 at a named beacon (its beacons are `b_01`, `b_02`
+#         and `e_01`, and this match's core is `b_00`). The live FULL at submit is that
+#         file's qualifying check;
 #   * THE PIN: Hold & Build instantiated with every parameter
 #     `fixtures/instantiate_suggested.json` lists typed explicitly (read from the fixture,
 #     never written here) is the fixture's `playbook_jsonc` byte for byte. An explicit value
@@ -484,7 +486,7 @@ func _template(id: String) -> bool:
 	if not editor.save_file(saved):
 		_failures.append("%s: the submitted playbook could not be saved" % id)
 		return false
-	_verify(id, saved, edited.get_string_from_utf8())
+	_verify(id, saved)
 	bridge_close_wizard()
 	return true
 
@@ -520,10 +522,11 @@ func _pages_drawn_as_they_came(id: String, wizard: Dictionary) -> bool:
 	return _failures.is_empty()
 
 
-## `gamectl verify` on the saved file: exit 0 when it places nothing; when it places a beacon,
-## the reference seat view's spheres will not hold this match's site, so its only errors
-## must be E0403 at the placed sites (the live FULL at submit is that file's check).
-func _verify(id: String, saved: String, text: String) -> void:
+## `gamectl verify` on the saved file. It checks against the reference seat view, not this
+## match, so its only errors may be the three that view makes of this match's names and
+## places: E0403 at a placed site, E0412 at a named feature and E0401 at a named beacon
+## (the live FULL at submit is that file's check).
+func _verify(id: String, saved: String) -> void:
 	var output := []
 	var code := OS.execute(_gamectl, PackedStringArray(["--root", _root, "verify", ProjectSettings.globalize_path(saved)]), output, true)
 	var report := "".join(output)
@@ -532,16 +535,14 @@ func _verify(id: String, saved: String, text: String) -> void:
 		var words := line.strip_edges().split(" ", false)
 		if words.size() >= 3 and words[0] == "error":
 			errors.append("%s %s" % [words[1], words[2]])
-	var places := "\"place_beacon\"" in text
-	if not places:
-		if code != 0:
-			_failures.append("%s: gamectl verify refused a file that places nothing (exit %d): %s" % [id, code, report])
-	else:
-		for error in errors:
-			if not (error.begins_with("E0403 ") and "/place_beacon/" in error):
-				_failures.append("%s: gamectl verify found more than E0403 at the placed sites: %s" % [id, error])
-		if code != 0 and errors.is_empty():
-			_failures.append("%s: gamectl verify failed with no error listed (exit %d): %s" % [id, code, report])
+	for error in errors:
+		var placed := error.begins_with("E0403 ") and "/place_beacon/" in error
+		var feature := error.begins_with("E0412 ") and error.ends_with("/feature_id")
+		var beacon := error.begins_with("E0401 ") and error.ends_with("/beacon_id")
+		if not (placed or feature or beacon):
+			_failures.append("%s: gamectl verify found more than the reference view's E0403, E0412 and E0401: %s" % [id, error])
+	if code != 0 and errors.is_empty():
+		_failures.append("%s: gamectl verify failed with no error listed (exit %d): %s" % [id, code, report])
 	print("[watch-check] %s: submitted and accepted; the bytes are the gateway's last text; gamectl verify exit %d%s" % [id, code, (" (errors: %s)" % ", ".join(errors)) if not errors.is_empty() else ""])
 
 

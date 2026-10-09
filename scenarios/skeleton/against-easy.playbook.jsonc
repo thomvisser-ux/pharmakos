@@ -13,15 +13,17 @@
 // that REUSE records one licence for a scenario file, and this comment block.
 //
 // The values are Easy's for seat 0, whose core b_00 stands at (358, 24, 36)
-// on this map and whose starting lean vent is centred on (324, 16, 35):
+// on this map and whose starting lean vent is vent_324_16:
 //
-//   the walk    /declarative/route/0/move/to          the site below;
-//   the site    /declarative/route/1/place_beacon/at  (337, 20, 36), at the
-//               edge of the core's sphere on the line to the vent, and the
-//               vent inside the new beacon's sphere;
-//   the anchor  .../build/targets/0/anchor/voxel      (324, 16, 35), the vent;
-//   the hold    /declarative/route/2/hold/ms          11 200 ms, what is left of
-//               Easy's 70 % share of the segment after the route.
+//   the vent    /declarative/route/0/place_beacon/at/covering  the starting
+//               vent by its name, {"feature_id": "vent_324_16"}, in place of
+//               the template's "nearest vent you do not cover yet": Easy
+//               emits names (S1's targeting). The step walks to the site the
+//               sim's covering rule reads when it starts, and the Generator's
+//               anchor is the vent that site covers;
+//   the hold    /declarative/route/1/hold/ms                   9 900 ms,
+//               what is left of Easy's 70 % share of the segment after the
+//               route, which Easy costs from the core.
 //
 // crates/gamectl/tests/operator.rs's
 // the_scenario_generator_raises_supply_by_exactly_the_lean_vent holds this
@@ -31,65 +33,52 @@
 // hold_and_build.jsonc: the Hold & Build template (decisions-log items 81 and
 // 113 (6)).
 //
-// It teaches the grid: walk out to the edge of your sphere on a heat vent's
-// side, place a Build beacon there whose own sphere holds the vent, give it a
-// Generator on the vent as its first Build target, and hold by it while its
-// drone builds. A Generator stands on a heat vent, and it is how a seat's kW
-// supply rises at the skeleton. The target is an initial setting, and initial
-// settings are interface rows the commander commits on site after the deploy,
-// so this is still touch to change.
+// It teaches the grid: place a Build beacon covering a heat vent your spheres
+// do not reach yet, give it a Generator on that vent as its first Build target,
+// and hold by it while its drone builds. A Generator stands on a heat vent, and
+// it is how a seat's kW supply rises. The target is an initial setting, and
+// initial settings are interface rows the commander commits on site after the
+// deploy, so this is still touch to change.
 //
-// Why a new beacon: your starting vent lies outside your core's sphere at every
-// seed (decisions-log items 90 and 95), and a Build target outside its own
-// beacon's sphere is dropped when its row commits. A beacon's site must lie
-// inside one of your own spheres, so the new one stands at the edge of your
-// core's sphere on the vent's side, and the vent lies inside its new sphere.
+// Where the beacon goes is a description, not a place (docs/design/
+// targeting.md; decisions-log item 127 (12)): "the nearest vent you do not
+// cover yet". The step reads it when it starts, from where your commander
+// stands, and the sim chooses a legal site whose sphere holds that vent; the
+// step walks there itself, so no walk comes before it. The Generator's anchor
+// is "the vent this beacon was placed to cover", `covered`, so the target
+// always names the vent the site was chosen for. Your starting vent lies
+// outside your core's sphere at every seed (decisions-log items 90 and 95),
+// which is why a new beacon is placed rather than a target added to the core.
 //
-// Why the walk is a parameter as well as the site: the sim deploys only while
-// the commander stands within its interface range (4 voxels) of the site, and
-// nothing checks the walk before the Push. With the site at the edge and the
-// walk left at the core, this file still qualifies and places nothing. So the
-// wizard asks for the walk, the site and the Generator's anchor, and the
-// built-in operator suggests a walk that ends at the site.
-//
-// This file cannot know where your vents are, so its own values are harmless
-// stand-ins: the walk and the site are the safest own beacon, and the anchor is
-// the map's corner. They qualify. Nothing in the sim keeps one beacon off
-// another's voxel, so they place a second beacon, on Build, where the safest one
-// stands; its Generator target at the corner is outside its sphere and is
-// dropped, so nothing is built.
+// The wizard asks which vent: the description, or a vent by its name, such as
+// {"feature_id": "vent_324_16"}, which is what the built-in operator suggests.
+// A name is a fixed target for this map only; the description works on any.
+// A carried copy reads the description again every round, so it never places
+// a second beacon on a vent it already covers.
 //
 // The place-and-build shape is the owner's, confirmed at decisions-log item
-// 119 (9): until item 113 (6) this template visited the safest beacon and
-// placed nothing, which committed a row and built no Generator. It overlaps
-// Expand & Mine, and on hilly ground a vent at the far edge of the band can
-// fail the sphere test.
-//
-// The three places' own values above are the values it ships with, by the
-// owner's choice at decisions-log item 119 (10): they qualify on any map, and
-// the wizard or the operator replaces them. The golden seed's suggested places
-// were not taken instead, because they are right for one map and E0403 on any
-// other.
+// 119 (9).
 {
   "schema_version": {"major": 1, "minor": 0},
   "meta": {
     "title": "Hold & Build",
     "author_kind": "BUILTIN",
-    "note": "Grow the grid: walk to the edge of your sphere on a heat vent's side, place a Build beacon there with a Generator on the vent as its first target, and hold by it."
+    "note": "Grow the grid: place a Build beacon covering a heat vent you do not cover yet, with a Generator on the vent as its first target, and hold by it."
   },
   "kind": "PLAYBOOK",
   "declarative": {
     "route": [
-      {"label": "to_site", "move": {"to": {"voxel":{"x":337,"y":20,"z":36}}, "pace": "DIRECT"}, "timeout_ms": 60000, "on_fail": {"action": "SKIP"}},
-      {"label": "place_power", "place_beacon": {"at": {"voxel":{"x":337,"y":20,"z":36}}, "tags": ["power"],
+      // Why: the step walks to the site it reads, so its timeout bounds the
+      // walk as well as the deploy.
+      {"label": "place_power", "place_beacon": {"at": {"covering": {"feature_id":"vent_324_16"}}, "tags": ["power"],
         // Initial settings are interface rows committed on site after the
-        // deploy: choosing the Build mandate is free, and its target list is
-        // one settings field.
+        // deploy: choosing the Build mandate is free, and a Build target is
+        // its own row.
         "initial": {"mandate": {"build": {"targets": [
-          {"blueprint_id": "generator", "anchor": {"voxel": {"x":324,"y":16,"z":35}}, "rotation_quarter_turns": 0, "order": 1}
+          {"blueprint_id": "generator", "anchor": {"on": {"covered": {}}}, "rotation_quarter_turns": 0, "order": 1}
         ]}}}},
-       "on_fail": {"action": "SKIP"}},
-      {"label": "hold", "hold": {"ms": 11200}}
+       "timeout_ms": 60000, "on_fail": {"action": "SKIP"}},
+      {"label": "hold", "hold": {"ms": 9900}}
     ],
     "handlers": [
       // Why: bravery is an ordinary rule. Hurt and under fire, the commander

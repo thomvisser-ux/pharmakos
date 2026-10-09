@@ -217,6 +217,25 @@ precedence = "aggregate"
 SPDX-FileCopyrightText = "2026 Pharmakos contributors"
 SPDX-License-Identifier = "GPL-3.0-or-later AND (MIT OR Apache-2.0)"
 
+# The wizard's goldens (S1's `oper`, crates/gamectl/tests/wizard.rs) sit in the
+# permissive tests/golden/operator/** area, and each case's playbook is a sealed
+# file instantiated from library/, permissive as that area is. Its other three files
+# are the game's outputs: the gateway's instantiate_template answer
+# (expected.parameters.json), the verifier's report (expected.report.json) and the
+# renderer's prose (expected.prose.txt), which quote the template's strings. They
+# take the render goldens' two licences, as the block above does and for the same
+# reason (decisions-log item 136). AFTER the tests/golden/operator/** block, so it
+# wins.
+[[annotations]]
+path = [
+    "tests/golden/operator/wizard/*/expected.parameters.json",
+    "tests/golden/operator/wizard/*/expected.report.json",
+    "tests/golden/operator/wizard/*/expected.prose.txt",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Pharmakos contributors"
+SPDX-License-Identifier = "GPL-3.0-or-later AND (MIT OR Apache-2.0)"
+
 # --- The rules table -------------------------------------------------------
 # rules/rules.v1.json is the canonical JSON of one gp.v1.RulesTable
 # (decisions-log item 78): the shape is schema and the values are data. It is

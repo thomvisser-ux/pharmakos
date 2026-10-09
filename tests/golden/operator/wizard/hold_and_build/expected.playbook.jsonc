@@ -32,24 +32,16 @@
 {
   "schema_version": {"major": 1, "minor": 0},
   "meta": {
-    "parameters": [
-      // Why: the one choice that decides whether a Generator is built. The new
-      // beacon's sphere holds the vent it covers, and the Generator goes on it.
-      {"pointer": "/declarative/route/0/place_beacon/at/covering", "label": "Which heat vent the Build beacon covers: the nearest one you do not cover yet, or one by name"},
-      // Why: holding keeps the commander by the new beacon while its build
-      // drone works. A duration is game milliseconds.
-      {"pointer": "/declarative/route/1/hold/ms", "label": "How long to hold by the new beacon, in game milliseconds"}
-    ],
     "title": "Hold & Build",
     "author_kind": "BUILTIN",
     "note": "Grow the grid: place a Build beacon covering a heat vent you do not cover yet, with a Generator on the vent as its first target, and hold by it."
   },
-  "kind": "TEMPLATE",
+  "kind": "PLAYBOOK",
   "declarative": {
     "route": [
       // Why: the step walks to the site it reads, so its timeout bounds the
       // walk as well as the deploy.
-      {"label": "place_power", "place_beacon": {"at": {"covering": {"vent": {"rank": "NEAREST", "coverage": "UNCOVERED"}}}, "tags": ["power"],
+      {"label": "place_power", "place_beacon": {"at": {"covering": {"feature_id":"vent_324_16"}}, "tags": ["power"],
         // Initial settings are interface rows committed on site after the
         // deploy: choosing the Build mandate is free, and a Build target is
         // its own row.
@@ -57,7 +49,7 @@
           {"blueprint_id": "generator", "anchor": {"on": {"covered": {}}}, "rotation_quarter_turns": 0, "order": 1}
         ]}}}},
        "timeout_ms": 60000, "on_fail": {"action": "SKIP"}},
-      {"label": "hold", "hold": {"ms": 30000}}
+      {"label": "hold", "hold": {"ms": 79900}}
     ],
     "handlers": [
       // Why: bravery is an ordinary rule. Hurt and under fire, the commander

@@ -486,8 +486,10 @@ fn a_two_seat_hosted_match_against_easy_reaches_the_recap_with_both_seats_sealed
     // wizard's page comes pre-filled with Easy's suggestion and its why.
     let safe = result(&human.call("get_safe_plan", &params("{}")), "get_safe_plan");
     let safe_playbook = text_of(&safe, "playbook_jsonc");
+    // Its route is the template's walk to safety, then the core's dig depth
+    // (decisions-log item 133 (3) (a)), as the advisor instantiated it.
     assert!(
-        safe_playbook.contains("\"label\": \"to_safety\""),
+        safe_playbook.contains("\"to_safety\"") && safe_playbook.contains("\"deepen_core\""),
         "{safe_playbook}"
     );
     let wizard = result(
