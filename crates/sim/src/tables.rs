@@ -811,11 +811,87 @@ impl BuildOrder {
     };
 }
 
+/// An area's footprint on the ground: every column from `min` to `max` in x
+/// and y, **both ends inclusive** -- the box a playbook's `Area` writes
+/// (`playbook.proto`: "a box is what the editor's drag-select produces and
+/// what an integer sim can test in three comparisons"), less its height.
+///
+/// A protected area and a probe area are tested on the **column**, whatever
+/// the height: a Build target stands on its column and a scout walks on the
+/// ground, so the box's `z` range decides nothing here (it only sets the
+/// height of the centre a scout walks to). The test is the box itself, four
+/// integer comparisons, so a column one step outside the box the author drew
+/// is outside the area (S1's `build` lane, from its review: a covering disc
+/// had protected ground the author never drew).
+///
+/// The type cannot hold an inside-out box: [`ColumnBox::new`] refuses one, as
+/// the verifier's E0406 does at plan time.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Default)]
+pub struct ColumnBox {
+    min: [i16; 2],
+    max: [i16; 2],
+}
+
+impl ColumnBox {
+    /// The columns from `min` to `max`, or `None` when `min` exceeds `max` on
+    /// either axis.
+    #[must_use]
+    pub const fn new(min: [i16; 2], max: [i16; 2]) -> Option<ColumnBox> {
+        let [lx, ly] = min;
+        let [hx, hy] = max;
+        if lx > hx || ly > hy {
+            return None;
+        }
+        Some(ColumnBox { min, max })
+    }
+
+    /// The lowest column, `[x, y]`.
+    #[must_use]
+    pub const fn min_column(self) -> [i16; 2] {
+        self.min
+    }
+
+    /// The highest column, `[x, y]`.
+    #[must_use]
+    pub const fn max_column(self) -> [i16; 2] {
+        self.max
+    }
+
+    /// Whether the column `(x, y)` lies inside the box, edges included.
+    #[must_use]
+    pub fn contains(self, x: i32, y: i32) -> bool {
+        let [lx, ly] = self.min;
+        let [hx, hy] = self.max;
+        i32::from(lx) <= x && x <= i32::from(hx) && i32::from(ly) <= y && y <= i32::from(hy)
+    }
+}
+
+/// Which list an area row belongs to: the two [`TargetKind`]s that are areas
+/// rather than points.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub enum AreaKind {
+    /// [`TargetKind::Protected`].
+    Protected,
+    /// [`TargetKind::Probe`].
+    Probe,
+}
+
+impl AreaKind {
+    /// The table kind the row is written under.
+    #[must_use]
+    pub const fn kind(self) -> TargetKind {
+        match self {
+            AreaKind::Protected => TargetKind::Protected,
+            AreaKind::Probe => TargetKind::Probe,
+        }
+    }
+}
+
 /// A beacon's mandate settings that are **lists**: Build targets, protected
 /// areas and Survey probe areas.
 ///
 /// One table rather than three, sorted by `(beacon, kind)`, because all three
-/// are the same shape — a place, a radius and a blueprint — and because a
+/// are the same shape — a place, a footprint and a blueprint — and because a
 /// mandate switch clears all of one beacon's rows at once (item 20).
 ///
 /// Hashed state: a target decides what a fabricator pays for and where a build
@@ -827,7 +903,7 @@ pub struct TargetTable {
     kind: Vec<u8>,
     blueprint: Vec<u8>,
     at: Vec<[Fx; 3]>,
-    radius: Vec<i32>,
+    area: Vec<ColumnBox>,
     built: Vec<u32>,
     feature: Vec<u32>,
     desc: Vec<u8>,
@@ -847,7 +923,7 @@ impl TargetTable {
             kind: Vec::with_capacity(n),
             blueprint: Vec::with_capacity(n),
             at: Vec::with_capacity(n),
-            radius: Vec::with_capacity(n),
+            area: Vec::with_capacity(n),
             built: Vec::with_capacity(n),
             feature: Vec::with_capacity(n),
             desc: Vec::with_capacity(n),
@@ -894,16 +970,19 @@ impl TargetTable {
         &self.blueprint
     }
 
-    /// The anchor column.
+    /// The anchor column: a Build target's place, or an area's centre (the
+    /// point a scout walks to).
     #[must_use]
     pub fn anchors(&self) -> &[[Fx; 3]] {
         &self.at
     }
 
-    /// The radius column, in whole voxels; zero for a point target.
+    /// The footprint column: an area row's [`ColumnBox`], the one test of
+    /// whether a column is inside it; [`ColumnBox::default`] on a Build row,
+    /// which is a point and has none.
     #[must_use]
-    pub fn radii(&self) -> &[i32] {
-        &self.radius
+    pub fn areas(&self) -> &[ColumnBox] {
+        &self.area
     }
 
     /// The structure realising each Build target, or [`BeaconId::NONE`]'s raw
@@ -970,39 +1049,58 @@ impl TargetTable {
         &self.rotation
     }
 
-    /// Append one row, keeping the table in `(beacon, kind)` order, at order 0
-    /// with no turn ([`BuildOrder::NONE`]).
+    /// Append one Build target written as a fixed voxel, keeping the table in
+    /// `(beacon, kind)` order, at order 0 with no turn ([`BuildOrder::NONE`]).
     ///
-    /// `false` when the table is full, which the caller reports as a step
-    /// failure rather than growing a column inside a tick.
-    pub fn add(
-        &mut self,
-        beacon: BeaconId,
-        kind: TargetKind,
-        blueprint: u8,
-        at: [Fx; 3],
-        radius: i32,
-    ) -> bool {
+    /// `false` when the table is full: the table never grows a column inside
+    /// a tick.
+    pub fn add(&mut self, beacon: BeaconId, blueprint: u8, at: [Fx; 3]) -> bool {
         self.add_bound(
             beacon,
-            kind,
+            TargetKind::Build,
             blueprint,
             at,
-            radius,
+            ColumnBox::default(),
             (u32::MAX, crate::targeting::DESCRIPTION_VOXEL),
             BuildOrder::NONE,
         )
     }
 
-    /// [`TargetTable::add`], for a Build target with its place in the build
-    /// order and its rotation, and -- for one written through `on` -- `bound`,
-    /// the feature it is bound to and how it was written.
+    /// Append one area row -- a protected area or a probe area -- with its
+    /// `centre` and its footprint, keeping the table in `(beacon, kind)` order.
+    ///
+    /// `false` when the table is full, for the reason [`TargetTable::add`]
+    /// gives.
+    pub fn add_area(
+        &mut self,
+        beacon: BeaconId,
+        kind: AreaKind,
+        centre: [Fx; 3],
+        area: ColumnBox,
+    ) -> bool {
+        self.add_bound(
+            beacon,
+            kind.kind(),
+            0,
+            centre,
+            area,
+            (u32::MAX, crate::targeting::DESCRIPTION_VOXEL),
+            BuildOrder::NONE,
+        )
+    }
+
+    /// The one writer of a row: [`TargetTable::add`] and
+    /// [`TargetTable::add_area`] go through it, and so does a Build target
+    /// with its place in the build order and its rotation, and -- for one
+    /// written through `on` -- `bound`, the feature it is bound to and how it
+    /// was written. `area` is the row's footprint, [`ColumnBox::default`] on a
+    /// Build row.
     ///
     /// A row goes after every row of its `(beacon, kind)`, so a beacon's
     /// targets keep their list position, which breaks a tie of `order`.
     #[allow(
         clippy::too_many_arguments,
-        reason = "one argument per column a row writes, as `StructureTable::push`; a parameter struct would be built at its two callers only to be taken apart here"
+        reason = "one argument per column a row writes, as `StructureTable::push`; a parameter struct would be built at its callers only to be taken apart here"
     )]
     pub fn add_bound(
         &mut self,
@@ -1010,7 +1108,7 @@ impl TargetTable {
         kind: TargetKind,
         blueprint: u8,
         at: [Fx; 3],
-        radius: i32,
+        area: ColumnBox,
         bound: (u32, u8),
         build: BuildOrder,
     ) -> bool {
@@ -1028,7 +1126,7 @@ impl TargetTable {
         self.kind.insert(slot, kind.id());
         self.blueprint.insert(slot, blueprint);
         self.at.insert(slot, at);
-        self.radius.insert(slot, radius);
+        self.area.insert(slot, area);
         self.built.insert(slot, BeaconId::NONE.raw());
         self.feature.insert(slot, bound.0);
         self.desc.insert(slot, bound.1);
@@ -1047,7 +1145,7 @@ impl TargetTable {
         self.kind.remove(slot);
         self.blueprint.remove(slot);
         self.at.remove(slot);
-        self.radius.remove(slot);
+        self.area.remove(slot);
         self.built.remove(slot);
         self.feature.remove(slot);
         self.desc.remove(slot);
@@ -1080,7 +1178,7 @@ impl TargetTable {
         if columns.kind.len() != n
             || columns.blueprint.len() != n
             || columns.at.len() != n
-            || columns.radius.len() != n
+            || columns.area.len() != n
             || columns.built.len() != n
             || columns.feature.len() != n
             || columns.desc.len() != n
@@ -1122,7 +1220,7 @@ impl TargetTable {
         self.kind = columns.kind;
         self.blueprint = columns.blueprint;
         self.at = columns.at;
-        self.radius = columns.radius;
+        self.area = columns.area;
         self.built = columns.built;
         self.feature = columns.feature;
         self.desc = columns.desc;
@@ -1144,8 +1242,8 @@ pub struct TargetColumns {
     pub blueprint: Vec<u8>,
     /// Anchors.
     pub at: Vec<[Fx; 3]>,
-    /// Radii in whole voxels.
-    pub radius: Vec<i32>,
+    /// Each area row's footprint; [`ColumnBox::default`] on a Build row.
+    pub area: Vec<ColumnBox>,
     /// The structure realising each Build target.
     pub built: Vec<u32>,
     /// The feature each Build target is bound to.

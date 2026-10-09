@@ -24,11 +24,12 @@ use pharmakos_proto::json;
 use pharmakos_sim::economy::Purchase;
 use pharmakos_sim::events::EventKind;
 use pharmakos_sim::interpreter::{Action, Plan, PlanError, Row};
+use pharmakos_sim::math::fixed::Fx;
 use pharmakos_sim::math::quantity::Money;
 use pharmakos_sim::runner::{MatchSettings, Runner};
 use pharmakos_sim::seams::MandateKind;
-use pharmakos_sim::snapshot::Snapshot;
-use pharmakos_sim::tables::{BeaconId, SeatId, StructureKind, TargetKind};
+use pharmakos_sim::snapshot::{Snapshot, SnapshotError};
+use pharmakos_sim::tables::{AreaKind, BeaconId, ColumnBox, SeatId, StructureKind, TargetKind};
 use pharmakos_sim::{RulesTable, World, WorldConfig, mandate_for};
 use std::path::PathBuf;
 
@@ -234,8 +235,7 @@ fn targets_build_in_their_order() {
 /// S1's plan, decision 5: protected areas are kept clear of construction. The
 /// target in the area is never paid for, though it is the highest-order one,
 /// and the one outside it is. The protected target stands on the box's
-/// **corner**, which the area's covering radius reaches (the half-diagonal,
-/// not the half-side the skeleton used).
+/// **corner**: the box is tested edges included.
 #[test]
 fn nothing_is_built_inside_a_protected_area() {
     let mut fixture = world();
@@ -273,6 +273,166 @@ fn nothing_is_built_inside_a_protected_area() {
             })
         ),
         "the protected target is not asked for: {request:?}"
+    );
+}
+
+/// A protected area is **the box the author drew**, not a disc around it: a
+/// target one column outside each of its four sides is built, and only the
+/// one inside it is not (S1's `build` lane, from its review -- a covering
+/// radius had protected the column east of this box, which the author never
+/// drew).
+#[test]
+fn a_target_one_column_outside_a_protected_box_is_built() {
+    let mut fixture = world();
+    fixture.set_treasury(SEAT, Money::new(RICH));
+    let [x, y, z] = core_voxel(&fixture);
+    let inside = [x + 6, y + 1, z];
+    let west = [x + 3, y + 1, z];
+    let east = [x + 9, y + 1, z];
+    let south = [x + 6, y - 2, z];
+    let north = [x + 6, y + 4, z];
+    let build = format!(
+        r#"{{"targets":[{},{},{},{},{}],"protected_areas":[{{"min":{{"x":{},"y":{},"z":{z}}},"max":{{"x":{},"y":{},"z":{z}}}}}]}}"#,
+        target(inside, 0, 0),
+        target(west, 1, 0),
+        target(east, 2, 0),
+        target(south, 3, 0),
+        target(north, 4, 0),
+        x + 4,
+        y - 1,
+        x + 8,
+        y + 3,
+    );
+    let (runner, queued, failed) = play(fixture, &visit_writing(&build), 1_600);
+    assert!(!failed, "nothing in the visit fails");
+    assert_eq!(
+        built(runner.world()),
+        vec![
+            (column(west), 0),
+            (column(east), 0),
+            (column(south), 0),
+            (column(north), 0),
+        ],
+        "every target outside the box is built, in its order, and the one          inside it is not: {queued:?}"
+    );
+}
+
+/// A probe area is the box too: a scout standing on one of its columns is
+/// inside it, whatever its height, and one column past its edge it walks to
+/// the area's centre.
+#[test]
+fn a_scout_is_inside_a_probe_area_exactly_on_its_box() {
+    let mut fixture = world();
+    let beacon = core(&fixture);
+    let [x, y, z] = core_voxel(&fixture);
+    let voxel = |v: i32| i16::try_from(v).expect("a voxel coordinate");
+    let at = |vx: i32, vy: i32, vz: i32| {
+        [
+            Fx::from_voxels(voxel(vx)),
+            Fx::from_voxels(voxel(vy)),
+            Fx::from_voxels(voxel(vz)),
+        ]
+    };
+    let area = ColumnBox::new([voxel(x + 4), voxel(y - 1)], [voxel(x + 8), voxel(y + 3)])
+        .expect("the box is the right way out");
+    let centre = at(x + 6, y + 1, z);
+    assert!(fixture.add_area(beacon, AreaKind::Probe, centre, area));
+    for inside in [
+        at(x + 4, y - 1, z),
+        at(x + 8, y + 3, z + 20),
+        at(x + 6, y + 1, z - 5),
+    ] {
+        assert_eq!(fixture.probe_to_enter(beacon, inside), None, "{inside:?}");
+    }
+    for outside in [
+        at(x + 3, y + 1, z),
+        at(x + 9, y + 1, z),
+        at(x + 6, y - 2, z),
+        at(x + 6, y + 4, z),
+        // The corner the old covering disc reached diagonally.
+        at(x + 9, y + 4, z),
+    ] {
+        assert_eq!(
+            fixture.probe_to_enter(beacon, outside),
+            Some(centre),
+            "{outside:?}"
+        );
+    }
+    // An inside-out box is no box at all, and a playbook that writes one is
+    // refused at the seal.
+    assert_eq!(ColumnBox::new([3, 0], [2, 0]), None);
+    let build = format!(
+        r#"{{"protected_areas":[{{"min":{{"x":{},"y":{y},"z":{z}}},"max":{{"x":{},"y":{y},"z":{z}}}}}]}}"#,
+        x + 1,
+        x,
+    );
+    assert_eq!(
+        Plan::compile(&playbook(&visit_writing(&build)), &rules()).err(),
+        Some(PlanError::AreaInsideOut)
+    );
+}
+
+/// An area's box rides the snapshot, and a restore refuses, by name, a value
+/// its column's type cannot hold -- a rotation past three quarter turns, an
+/// inside-out box -- rather than reporting it as ragged columns.
+#[test]
+fn an_area_rides_the_snapshot_and_a_value_out_of_range_is_refused_by_name() {
+    let mut fixture = world();
+    let beacon = core(&fixture);
+    let [x, y, z] = core_voxel(&fixture);
+    let voxel = |v: i32| i16::try_from(v).expect("a voxel coordinate");
+    let centre = [
+        Fx::from_voxels(voxel(x + 6)),
+        Fx::from_voxels(voxel(y + 1)),
+        Fx::from_voxels(voxel(z)),
+    ];
+    let area = ColumnBox::new([voxel(x + 4), voxel(y - 1)], [voxel(x + 8), voxel(y + 3)])
+        .expect("the box is the right way out");
+    assert!(fixture.add_area(beacon, AreaKind::Protected, centre, area));
+    assert!(fixture.add_target(
+        beacon,
+        StructureKind::Generator.id(),
+        [
+            Fx::from_voxels(voxel(x - 5)),
+            Fx::from_voxels(voxel(y)),
+            Fx::from_voxels(voxel(z)),
+        ]
+    ));
+    let snapshot = Snapshot::capture(&fixture);
+    let mut restored = world();
+    snapshot
+        .restore_into(&mut restored)
+        .expect("the snapshot restores");
+    assert_eq!(restored.targets().areas(), fixture.targets().areas());
+    assert_eq!(restored.state_hash(), fixture.state_hash());
+
+    let mut turned = snapshot.clone();
+    *turned.target_rotation.first_mut().expect("a target row") = 4;
+    assert_eq!(
+        turned.restore_into(&mut world()),
+        Err(SnapshotError::OutOfRange("target_rotation"))
+    );
+    let mut inside_out = snapshot.clone();
+    let row = fixture
+        .targets()
+        .kinds()
+        .iter()
+        .position(|kind| *kind == TargetKind::Protected.id())
+        .expect("the area's row");
+    // `[min x, min y, max x, max y]`: a min x past the max x.
+    *inside_out
+        .target_area
+        .get_mut(row * 4)
+        .expect("the area's min x") = voxel(x + 9);
+    assert_eq!(
+        inside_out.restore_into(&mut world()),
+        Err(SnapshotError::OutOfRange("target_area"))
+    );
+    let mut short = snapshot;
+    short.target_area.pop();
+    assert_eq!(
+        short.restore_into(&mut world()),
+        Err(SnapshotError::Ragged("target_area"))
     );
 }
 
@@ -340,6 +500,57 @@ fn unaffordable_targets_wait_for_the_highest_order_affordable_one() {
         vec![(column(high), 0), (column(low), 0)],
         "order 2 before order 7"
     );
+}
+
+/// The branch the test above cannot reach in S1, where a playbook names only
+/// the Generator: with targets at **different** prices, the mandate asks for
+/// the highest-order target the treasury covers, passing over a higher-order
+/// one it does not; and when it covers none, for the highest-order one, which
+/// the Quartermaster holds. The targets are written straight into the table,
+/// as a capability catalogue (S4) would let a playbook write them.
+#[test]
+fn an_affordable_target_is_asked_for_before_a_higher_order_one_that_is_not() {
+    let mut fixture = world();
+    let beacon = core(&fixture);
+    let [x, y, z] = core_voxel(&fixture);
+    let voxel = |v: i32| Fx::from_voxels(i16::try_from(v).expect("a voxel coordinate"));
+    let dear = StructureKind::Mortar;
+    let cheap = StructureKind::SurveyPost;
+    let (dear_cost, cheap_cost) = (fixture.structure_cost(dear), fixture.structure_cost(cheap));
+    assert!(
+        cheap_cost.raw() < dear_cost.raw(),
+        "the committed rules price a Survey post below a mortar"
+    );
+    // List order is the build order here: the dear target first.
+    assert!(fixture.add_target(beacon, dear.id(), [voxel(x + 3), voxel(y), voxel(z)]));
+    assert!(fixture.add_target(beacon, cheap.id(), [voxel(x - 3), voxel(y), voxel(z)]));
+    let asked = |world: &World| -> StructureKind {
+        let request = mandate_for(MandateKind::Build)
+            .expect("Build runs")
+            .request(world, core(world))
+            .expect("an unpaid target is asked for");
+        let row = match request.buys {
+            Purchase::Structure(row) => usize::try_from(row).expect("a row"),
+            Purchase::Unit(kind) => panic!("a structure, not a {kind:?}"),
+        };
+        world
+            .targets()
+            .blueprints()
+            .get(row)
+            .copied()
+            .and_then(StructureKind::from_id)
+            .expect("a blueprint")
+    };
+    fixture.set_treasury(SEAT, cheap_cost);
+    assert_eq!(
+        asked(&fixture),
+        cheap,
+        "the cheap target is the one covered"
+    );
+    fixture.set_treasury(SEAT, Money::new(cheap_cost.raw() - 1));
+    assert_eq!(asked(&fixture), dear, "none is covered: the highest order");
+    fixture.set_treasury(SEAT, dear_cost);
+    assert_eq!(asked(&fixture), dear, "both are covered: the highest order");
 }
 
 /// The compiled rows of a one-step route.

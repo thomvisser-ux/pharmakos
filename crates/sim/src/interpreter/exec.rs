@@ -44,7 +44,7 @@ use crate::knowledge::{AssetId, Position};
 use crate::math::fixed::Fx;
 use crate::math::quantity::Tick;
 use crate::programs::within;
-use crate::tables::{BeaconId, SeatId, TargetKind};
+use crate::tables::{AreaKind, BeaconId, SeatId, TargetKind};
 use crate::targeting::{DESCRIPTION_VOXEL, NO_FEATURE};
 use crate::world::{BuildEntry, World};
 
@@ -1389,14 +1389,14 @@ fn commit_row(
             }
             if !protected.is_empty() {
                 world.clear_targets(beacon, TargetKind::Protected);
-                for (centre, radius) in protected {
-                    world.add_target(beacon, TargetKind::Protected, 0, point_of(*centre), *radius);
+                for (centre, area) in protected {
+                    world.add_area(beacon, AreaKind::Protected, point_of(*centre), *area);
                 }
             }
             if !probes.is_empty() {
                 world.clear_targets(beacon, TargetKind::Probe);
-                for (centre, radius) in probes {
-                    world.add_target(beacon, TargetKind::Probe, 0, point_of(*centre), *radius);
+                for (centre, area) in probes {
+                    world.add_area(beacon, AreaKind::Probe, point_of(*centre), *area);
                 }
             }
             // A count past a byte is refused at the seal
@@ -1619,7 +1619,7 @@ fn pin_place(
         Place::Covering(_) => return Err(StepFailure::NoTarget),
     };
     let at = match (place, beacon) {
-        (Place::Voxel(voxel), _) => ground_point(world, voxel),
+        (Place::Voxel(voxel), _) => ground_point(world, voxel).ok_or(StepFailure::NoPath)?,
         (Place::Beacon(_), Some(id)) => beacon_at(world, id).ok_or(StepFailure::NoTarget)?,
         (Place::Beacon(_) | Place::Covering(_), None) | (Place::Covering(_), Some(_)) => {
             return Err(StepFailure::NoTarget);
@@ -1640,7 +1640,7 @@ fn resolve_place(
     place: Place,
 ) -> Option<[Fx; 3]> {
     match place {
-        Place::Voxel(voxel) => Some(ground_point(world, voxel)),
+        Place::Voxel(voxel) => ground_point(world, voxel),
         Place::Beacon(spec) => {
             let seen = view(world, seat, seat_index, state);
             resolve_beacon(&seen, spec).and_then(|id| beacon_at(world, id))
@@ -1769,8 +1769,15 @@ fn row_at<'a>(rows: &'a [Row], durations: &[i32], index: u32) -> Option<(&'a [Ro
 
 /// How many of a step's rows are left once `done` have committed: none once
 /// `done` reaches the end, which a resumed placement's restart row can.
+///
+/// Exact, not a fallback: a `done` no `usize` holds is past the end of any
+/// slice, so none are left -- the same answer the subtraction gives a `done`
+/// at or past `rows.len()`.
 fn rows_left(rows: &[Row], done: u32) -> usize {
-    slot_of(done).map_or(0, |done| rows.len().saturating_sub(done))
+    match slot_of(done) {
+        Some(done) => rows.len().saturating_sub(done),
+        None => 0,
+    }
 }
 
 /// A playbook's voxel, **standing on the ground under it**.
@@ -1788,14 +1795,17 @@ fn rows_left(rows: &[Row], done: u32) -> usize {
 /// A column off the map keeps the author's `z`: there is no ground to stand on,
 /// and the step then fails on its own terms — by timing out, or by
 /// `no_path` — rather than being silently moved somewhere legal.
-fn ground_point(world: &World, voxel: [i16; 3]) -> [Fx; 3] {
+///
+/// `None` when the ground's standing height is one no voxel coordinate holds,
+/// which a map this sim generates never has: the caller fails the step rather
+/// than keep a height the ground did not give.
+fn ground_point(world: &World, voxel: [i16; 3]) -> Option<[Fx; 3]> {
     let [x, y, z] = voxel;
-    let standing = world
-        .surface()
-        .node_of(i32::from(x), i32::from(y))
-        .and_then(|node| i16::try_from(world.surface().standing_z(node)).ok())
-        .unwrap_or(z);
-    point_of([x, y, standing])
+    let standing = match world.surface().node_of(i32::from(x), i32::from(y)) {
+        Some(node) => i16::try_from(world.surface().standing_z(node)).ok()?,
+        None => z,
+    };
+    Some(point_of([x, y, standing]))
 }
 
 /// Whole voxels to a position, as a playbook writes them. Total: the compile

@@ -175,13 +175,21 @@ left the rest** (S1's plan, decision 15 and decision 5; the register's S1-51).
 A Build target is now its own row at `interface_times.build_target_ms`
 (2.5 s) rather than one settings field at the edit's base rate (2 s), so a
 `place_beacon` whose initial settings carry one Generator target commits that
-row ten ticks later, and the beacon's mandate and the Quartermaster's payment
-follow ten ticks late: `against-easy` and `against-easy-three-rounds` first
-differ at tick 691, `cover-nearest-vent` and `brownout-by-recycle` at tick 721,
-each the tick the old, shorter row committed. A structure's rotation and a
-target's order are hashed from the same pull request (snapshot version 9), but
-they are bytes only where a target or a structure exists, which these four
-chains reach after the moved commit anyway. `deploy-and-visit`,
+row ten ticks later. The chains first differ **at the deploy tick** --
+`against-easy` and `against-easy-three-rounds` at tick 691, `cover-nearest-vent`
+and `brownout-by-recycle` at tick 721, the tick `beacon_placed` reports in both
+runs -- because the deploy is where the interpreter sets its first initial
+row's due tick, which is hashed interpreter state, and that tick is now 500 ms
+further off. The row then commits ten ticks late (`row_committed` at 741 where
+it was 731 in the `against-easy` pair, and at 771 in the other two), and the
+payment and the build follow ten ticks late (`structure_queued` at 776 in
+`cover-nearest-vent`, where it was 766; `structure_completed` at 1286 in the
+`against-easy` pair, where it was 1276). A structure's rotation and a
+target's order and footprint (the box an area writes, four whole-voxel columns
+per row) are hashed from the same pull request (snapshot version 9), but they
+are bytes only where a target or a structure exists, which these four chains
+reach after the moved deploy anyway; no committed scenario writes a protected or
+probe area. `deploy-and-visit`,
 `expand-east-segment`, `mine-to-depth`, `round-limit-audit` and
 `unaffordable-deploy` write no Build target and did not move, and neither did
 the determinism chain (its harness writes none).

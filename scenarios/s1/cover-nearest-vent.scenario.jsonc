@@ -11,7 +11,7 @@
 //           commander's column, takes `vent_324_16`, and walks the covering
 //           spiral to the first legal, reachable column whose sphere holds the
 //           vent; the commander walks there, deploys (the beacon lands at tick
-//           721) and the Generator is paid for at tick 766. Rounds 2 and 3 read
+//           721) and the Generator is paid for at tick 776. Rounds 2 and 3 read
 //           the same description again: the vents seat 0 does not cover are
 //           contested ones about 80 voxels out, beyond one beacon's reach, so
 //           the description matches and no candidate has a legal site -- the
@@ -55,7 +55,7 @@
     { "assert": "event_fired", "event": "beacon_placed", "seat": 0, "by_tick": 800,
       "note": "The covering beacon lands at tick 721, after a walk of about 24 voxels and the twelve-second deploy." },
     { "assert": "event_fired", "event": "structure_queued", "seat": 0, "by_tick": 800,
-      "note": "The Generator `on` the covered vent is paid for at tick 766, at the vent's anchor column." },
+      "note": "The Generator `on` the covered vent is paid for at tick 776, at the vent's anchor column." },
     { "assert": "event_fired", "event": "step_failed", "seat": 0, "by_tick": 3601,
       "note": "Seat 0's first failure is round 2's, at its first tick: the carried step finds no vent it can cover and fails `illegal_site` (id 6), the failure table's answer when candidates match and none has a legal site. Round 1 fails nothing." },
     { "assert": "event_fired", "event": "segment_ended", "by_tick": 10800,

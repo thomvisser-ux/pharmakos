@@ -638,15 +638,16 @@ impl Grid {
         usize::try_from(cy.checked_mul(self.w)?.checked_add(cx)?).ok()
     }
 
-    /// A cell's top and walkability, with `dug`'s exposed voxel taken out.
-    fn column(&self, cell: usize, dug: Option<Dug>) -> (i32, bool) {
-        let walk = self.walk.get(cell).copied().unwrap_or(false);
+    /// A cell's top and walkability, with `dug`'s exposed voxel taken out;
+    /// `None` for a cell past the box's arrays, which no walk reaches.
+    fn column(&self, cell: usize, dug: Option<Dug>) -> Option<(i32, bool)> {
+        let walk = self.walk.get(cell).copied()?;
         if let Some(dug) = dug
             && dug.cell == cell
         {
-            return (dug.top, walk && dug.top >= 0);
+            return Some((dug.top, walk && dug.top >= 0));
         }
-        (self.top.get(cell).copied().unwrap_or(-1), walk)
+        Some((self.top.get(cell).copied()?, walk))
     }
 
     /// Every cell that can walk, by one-voxel cardinal steps inside the box,
@@ -661,7 +662,7 @@ impl Grid {
         let mut depth: usize = 0;
         let mut cell: usize = 0;
         while cell < self.cells {
-            let (_, walk) = self.column(cell, dug);
+            let walk = self.column(cell, dug).is_some_and(|(_, walk)| walk);
             if walk
                 && !self.seam.get(cell).copied().unwrap_or(true)
                 && let Some(slot) = reach.reached.get_mut(cell)
@@ -679,7 +680,9 @@ impl Grid {
             let Some(here) = stack.get(depth).copied().map(usize::from) else {
                 break;
             };
-            let (from, _) = self.column(here, dug);
+            let Some((from, _)) = self.column(here, dug) else {
+                continue;
+            };
             let Ok(linear) = i32::try_from(here) else {
                 continue;
             };
@@ -699,7 +702,9 @@ impl Grid {
                 if reach.reached(next) {
                     continue;
                 }
-                let (to, walk) = self.column(next, dug);
+                let Some((to, walk)) = self.column(next, dug) else {
+                    continue;
+                };
                 if !walk || to.saturating_sub(from).abs() > 1 {
                     continue;
                 }

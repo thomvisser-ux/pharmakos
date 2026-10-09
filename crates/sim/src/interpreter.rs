@@ -94,7 +94,7 @@ use crate::features::FeatureKind;
 use crate::math::quantity::Ms;
 use crate::rules::RulesTable;
 use crate::seams::MandateKind;
-use crate::tables::{BuildOrder, QuarterTurns};
+use crate::tables::{BuildOrder, ColumnBox, QuarterTurns};
 use pharmakos_proto::gp;
 
 pub use crate::targeting::FeatureSpec;
@@ -473,11 +473,11 @@ pub enum Row {
         /// section 5's table at `interface_times.build_target_ms`, outside
         /// the edit's cap.
         targets: Vec<Target>,
-        /// The Build mandate's protected areas, as centre and radius in whole
-        /// voxels.
-        protected: Vec<([i16; 3], i32)>,
+        /// The Build mandate's protected areas, as the box's centre in whole
+        /// voxels and its footprint ([`crate::tables::ColumnBox`]).
+        protected: Vec<([i16; 3], ColumnBox)>,
         /// The Survey mandate's probe areas, same shape.
-        probes: Vec<([i16; 3], i32)>,
+        probes: Vec<([i16; 3], ColumnBox)>,
         /// The Survey mandate's scout count, which a beacon's column holds as
         /// a byte; a larger count is refused at the seal.
         scouts: u8,
@@ -1332,8 +1332,8 @@ fn compile_settings_row(
 ) -> Result<Row, PlanError> {
     let mut fields: u32 = u32::from(settings.roe != 0) + u32::from(settings.retreat_hp_pct != 0);
     let mut targets: Vec<Target> = Vec::new();
-    let mut protected: Vec<([i16; 3], i32)> = Vec::new();
-    let mut probes: Vec<([i16; 3], i32)> = Vec::new();
+    let mut protected: Vec<([i16; 3], ColumnBox)> = Vec::new();
+    let mut probes: Vec<([i16; 3], ColumnBox)> = Vec::new();
     let mut scouts: u8 = 0;
     let mut mine: Option<crate::mining::MineEdit> = None;
     if let Some(mandate) = settings.mandate.as_ref() {
@@ -1425,18 +1425,21 @@ fn compile_build_target(
     })
 }
 
-/// One area, as its centre and a radius in whole voxels.
+/// One area, as its centre in whole voxels and its footprint.
 ///
-/// The schema's `Area` is an axis-aligned box; the sim keeps a centre and a
-/// radius because every test it does on an area is a range check, and a range
-/// check in squared distance is the one form that needs no square root
-/// (AGENTS.md section 4.2). The radius is the box's **half-diagonal in x and
-/// y**, rounded up: the distance from the centre column to the farthest corner
-/// column of the box, so the circle covers every column of the box rather
-/// than being covered by it -- over-covering a protected area protects a
-/// little more ground, which is the safe direction. (Before S1's `build` lane
-/// it was the longer half-side, which left the box's corners outside.)
-fn compile_area(area: &gp::v1::Area, names: &Names<'_>) -> Result<([i16; 3], i32), PlanError> {
+/// The schema's `Area` is an axis-aligned box, and the sim keeps the box: an
+/// inside test is four integer comparisons on a column
+/// ([`ColumnBox::contains`]), with no square root and no rounding, so the
+/// ground an area covers is exactly the ground the author drew. (Before S1's
+/// `build` lane's review the sim kept a centre and a covering radius, which
+/// protected -- and, for a probe area, counted as visited -- columns outside
+/// the box.) The centre, each axis's midpoint rounded down, is the point a
+/// scout walks to. An inside-out box is refused
+/// ([`PlanError::AreaInsideOut`]), as the verifier's E0406 refuses it.
+fn compile_area(
+    area: &gp::v1::Area,
+    names: &Names<'_>,
+) -> Result<([i16; 3], ColumnBox), PlanError> {
     let min = area
         .min
         .as_ref()
@@ -1447,9 +1450,8 @@ fn compile_area(area: &gp::v1::Area, names: &Names<'_>) -> Result<([i16; 3], i32
         .ok_or(PlanError::MissingBlock("area.max"))?;
     let low = names.voxel(min)?;
     let high = names.voxel(max)?;
-    // Each axis's centre and the farthest column from it, from two voxel
-    // coordinates: both fit an `i16`, so their sum and difference fit an
-    // `i32` exactly and the centre lies between them.
+    // Each axis's centre from two voxel coordinates: both fit an `i16`, so
+    // their sum fits an `i32` exactly and the centre lies between them.
     let centre_of = |a: i16, b: i16| -> Result<i16, PlanError> {
         let mid = (i32::from(a) + i32::from(b)).div_euclid(2);
         i16::try_from(mid).map_err(|_| PlanError::VoxelOutOfRange {
@@ -1459,27 +1461,9 @@ fn compile_area(area: &gp::v1::Area, names: &Names<'_>) -> Result<([i16; 3], i32
     };
     let [lx, ly, lz] = low;
     let [hx, hy, hz] = high;
+    let footprint = ColumnBox::new([lx, ly], [hx, hy]).ok_or(PlanError::AreaInsideOut)?;
     let centre = [centre_of(lx, hx)?, centre_of(ly, hy)?, centre_of(lz, hz)?];
-    let reach = |a: i16, b: i16, c: i16| -> i64 {
-        (i64::from(c) - i64::from(a))
-            .abs()
-            .max((i64::from(b) - i64::from(c)).abs())
-    };
-    let [cx, cy, _] = centre;
-    let dx = reach(lx, hx, cx);
-    let dy = reach(ly, hy, cy);
-    let squared = dx * dx + dy * dy;
-    let root = squared.isqrt();
-    let radius = if root * root < squared {
-        root + 1
-    } else {
-        root
-    };
-    let radius = i32::try_from(radius).map_err(|_| PlanError::VoxelOutOfRange {
-        axis: "area",
-        value: i32::MAX,
-    })?;
-    Ok((centre, radius))
+    Ok((centre, footprint))
 }
 
 /// A Build target's anchor: a fixed voxel, or `on` a vent.
@@ -2109,6 +2093,9 @@ pub enum PlanError {
         /// What the playbook wrote.
         found: u32,
     },
+    /// An area whose `min` exceeds its `max` in x or y: a box that holds no
+    /// column (the verifier's E0406 at plan time).
+    AreaInsideOut,
     /// A voxel names a place outside the map (`map.size_*`).
     VoxelOutOfMap {
         /// `"x"`, `"y"` or `"z"`.
@@ -2258,6 +2245,9 @@ impl core::fmt::Display for PlanError {
                 f,
                 "a `rotation_quarter_turns` of {found} is past three quarter turns"
             ),
+            PlanError::AreaInsideOut => {
+                write!(f, "an area's `min` exceeds its `max` in x or y")
+            }
             PlanError::UnknownLabel(label) => {
                 write!(f, "`{label}` names no step in this playbook's route")
             }

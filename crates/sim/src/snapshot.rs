@@ -58,9 +58,9 @@ use crate::math::quantity::{Hp, Kw, Money, Tick};
 use crate::pathing::router::{RestoredRouter, first_route_digest_mismatch};
 use crate::runner::{DEFAULT_ROUND_LIMIT, MatchParts, MatchPhase, MatchState};
 use crate::tables::{
-    BeaconColumns, BeaconTable, CREDIT_SLOTS, CreditTable, SeatColumns, SeatId, SeatTable,
-    SightingColumns, SightingTable, StructureColumns, StructureTable, TargetColumns, TargetTable,
-    UnitColumns, UnitTable, WreckTable,
+    BeaconColumns, BeaconTable, CREDIT_SLOTS, ColumnBox, CreditTable, QuarterTurns, SeatColumns,
+    SeatId, SeatTable, SightingColumns, SightingTable, StructureColumns, StructureTable,
+    TargetColumns, TargetTable, UnitColumns, UnitTable, WreckTable,
 };
 use crate::voxels::{CHUNK_VOXELS, VoxelStore};
 use crate::world::{RestoredTables, World};
@@ -144,7 +144,9 @@ use serde::{Deserialize, Serialize};
 /// decision 5). It adds each Build target's place in the build order and its
 /// rotation (`BuildTarget.order` and `.rotation_quarter_turns`, which the
 /// mandate now builds by), and each structure's rotation, the facing the
-/// target that paid for it chose. A version-8 file is refused rather than
+/// target that paid for it chose; and it keeps a protected or probe area as
+/// the box the playbook wrote ([`crate::tables::ColumnBox`]) where version 8
+/// kept a centre and a covering radius. A version-8 file is refused rather than
 /// read: it carries no order, and a world restored from it would build its
 /// targets in list order where the unbroken run builds them by `order`. The
 /// gateway's save refuses a version-8 snapshot by its stamp first.
@@ -274,8 +276,10 @@ pub struct Snapshot {
     pub target_blueprint: Vec<u8>,
     /// Three raw Q16.16 coordinates per list setting's anchor.
     pub target_at: Vec<i32>,
-    /// Radii in whole voxels, per list setting.
-    pub target_radius: Vec<i32>,
+    /// Four whole-voxel columns per list setting, its footprint: the area's
+    /// `[min x, min y, max x, max y]` ([`crate::tables::ColumnBox`]), and four
+    /// zeroes on a Build target.
+    pub target_area: Vec<i16>,
     /// The structure realising each Build target.
     pub target_built: Vec<u32>,
     /// The feature each Build target is bound to, or
@@ -508,7 +512,7 @@ impl Default for Snapshot {
             target_kind: Vec::new(),
             target_blueprint: Vec::new(),
             target_at: Vec::new(),
-            target_radius: Vec::new(),
+            target_area: Vec::new(),
             target_built: Vec::new(),
             target_feature: Vec::new(),
             target_desc: Vec::new(),
@@ -595,6 +599,10 @@ pub enum SnapshotError {
     Encode(String),
     /// The decoded columns disagree in length: a truncated or edited file.
     Ragged(&'static str),
+    /// A column holds a value its type refuses -- a rotation past three
+    /// quarter turns, an inside-out area -- which no run of this sim writes:
+    /// an edited file, named by its column.
+    OutOfRange(&'static str),
     /// The map could not be regenerated from the snapshot's seed under the
     /// receiving world's rules table.
     Map(MapError),
@@ -667,6 +675,9 @@ impl core::fmt::Display for SnapshotError {
             SnapshotError::Encode(message) => write!(f, "encoding the snapshot: {message}"),
             SnapshotError::Ragged(table) => {
                 write!(f, "the `{table}` columns disagree in length")
+            }
+            SnapshotError::OutOfRange(column) => {
+                write!(f, "the `{column}` column holds a value this build refuses")
             }
             SnapshotError::Map(error) => {
                 write!(f, "regenerating the map from the snapshot's seed: {error}")
@@ -799,7 +810,7 @@ impl Snapshot {
             target_kind: targets.kinds().to_vec(),
             target_blueprint: targets.blueprints().to_vec(),
             target_at: axes_from_points(targets.anchors()),
-            target_radius: targets.radii().to_vec(),
+            target_area: axes_from_boxes(targets.areas()),
             target_built: targets.built().to_vec(),
             target_feature: targets.features().to_vec(),
             target_desc: targets.descriptions().to_vec(),
@@ -1026,7 +1037,7 @@ impl Snapshot {
             hp: self.structure_hp.iter().copied().map(Hp::new).collect(),
             home: self.structure_home.clone(),
             building: flags(&self.structure_building, "structure_building")?,
-            rotation: self.structure_rotation.clone(),
+            rotation: rotations(&self.structure_rotation, "structure_rotation")?,
         }) {
             return Err(SnapshotError::Ragged("structure"));
         }
@@ -1113,12 +1124,12 @@ impl Snapshot {
                 kind: self.target_kind.clone(),
                 blueprint: self.target_blueprint.clone(),
                 at: points_from_axes(&self.target_at).ok_or(SnapshotError::Ragged("target_at"))?,
-                radius: self.target_radius.clone(),
+                area: boxes_from_axes(&self.target_area)?,
                 built: self.target_built.clone(),
                 feature: self.target_feature.clone(),
                 desc: self.target_desc.clone(),
                 order: self.target_order.clone(),
-                rotation: self.target_rotation.clone(),
+                rotation: rotations(&self.target_rotation, "target_rotation")?,
             },
         ) {
             return Err(SnapshotError::Ragged("target"));
@@ -1390,6 +1401,49 @@ fn axes_from_points(points: &[[Fx; 3]]) -> Vec<i32> {
         }
     }
     out
+}
+
+/// Each footprint as its four whole-voxel columns, in
+/// [`Snapshot::target_area`]'s layout.
+fn axes_from_boxes(areas: &[ColumnBox]) -> Vec<i16> {
+    let mut out: Vec<i16> = Vec::with_capacity(areas.len().saturating_mul(4));
+    for area in areas {
+        let [lx, ly] = area.min_column();
+        let [hx, hy] = area.max_column();
+        out.extend_from_slice(&[lx, ly, hx, hy]);
+    }
+    out
+}
+
+/// [`axes_from_boxes`] read back: `Ragged` for a column that is not whole
+/// boxes, and `OutOfRange` for an inside-out box, which no run writes.
+fn boxes_from_axes(axes: &[i16]) -> Result<Vec<ColumnBox>, SnapshotError> {
+    let whole = axes.chunks_exact(4);
+    if !whole.remainder().is_empty() {
+        return Err(SnapshotError::Ragged("target_area"));
+    }
+    whole
+        .map(|chunk| match *chunk {
+            [lx, ly, hx, hy] => {
+                ColumnBox::new([lx, ly], [hx, hy]).ok_or(SnapshotError::OutOfRange("target_area"))
+            }
+            _ => Err(SnapshotError::Ragged("target_area")),
+        })
+        .collect()
+}
+
+/// A rotation column checked byte by byte: `OutOfRange(name)` for a byte past
+/// three quarter turns ([`QuarterTurns::new`]), which no run writes, rather
+/// than the table's own refusal, which can only say the columns were ragged.
+fn rotations(column: &[u8], name: &'static str) -> Result<Vec<u8>, SnapshotError> {
+    if column
+        .iter()
+        .all(|turns| QuarterTurns::new(u32::from(*turns)).is_some())
+    {
+        Ok(column.to_vec())
+    } else {
+        Err(SnapshotError::OutOfRange(name))
+    }
 }
 
 /// A column of flags, one byte each: `0` is false and `1` is true, and any

@@ -285,14 +285,14 @@ A diff here means one of six things, and the first is the only cheap one:
   many times the feed has been attached — deterministic on purpose, which is
   what lets a rendered cursor sit in a golden.
 * **only the `_status` footer's `phase_remaining_ms` moved.** The footer is the
-  opening Lull's, with 300 000 ms reported left: S1's first contract pull
+  opening Lull's, with the whole first Lull, 600 000 ms
+  (`match.first_lull_ms`), reported left. Its history: S1's first contract pull
   request moved it from 180 000 to 300 000 when it re-ruled the register's D-01
   (decisions-log item 127 (2)), and `godot/fixtures/view_keyframe.jsonl` was
-  re-copied with it. Since S1's `econ` the opening Lull is `match.first_lull_ms`
-  (600 000 ms); the producer pinned the report at 300 000 until S1's `build`
-  lane dropped the pin (decisions-log item 135 (2) (h)), so the footer now
-  reports the whole first Lull, 600 000 ms, and `godot/fixtures/` was
-  re-copied in the same commit, byte for byte. A timed footer carries no
+  re-copied with it; since S1's `econ` the opening Lull is
+  `match.first_lull_ms`, and the producer pinned the report at 300 000 until
+  S1's `build` lane dropped the pin (decisions-log item 135 (2) (h)), when
+  `godot/fixtures/` was re-copied in the same commit, byte for byte. A timed footer carries no
   `untimed` member: it is written only when true.
 
 The `.txt` header carries **two** byte figures and they are different numbers:
@@ -368,13 +368,13 @@ things moved:
   the edge of the core's sphere and place a Build beacon there (decisions-log
   item 113 (6)).
 
-The `_status` footer is the opening Lull's, with 300 000 ms reported left (S1's
-first contract pull request moved it from 180 000 to 300 000, with the
-`godot/fixtures/` copy). Since S1's `econ` the opening Lull is
-`match.first_lull_ms`, 600 000 ms; the producer pinned the report at 300 000
-until S1's `build` lane dropped the pin (decisions-log item 135 (2) (h)), so it
-now reports the whole first Lull, 600 000 ms, and the `godot/fixtures/` copy
-was re-copied in the same commit. Any other change in it means the footer's
+The `_status` footer is the opening Lull's, with the whole first Lull, 600 000
+ms (`match.first_lull_ms`), reported left. Its history: S1's first contract
+pull request moved it from 180 000 to 300 000, with the `godot/fixtures/` copy;
+since S1's `econ` the opening Lull is `match.first_lull_ms`, and the producer
+pinned the report at 300 000 until S1's `build` lane dropped the pin
+(decisions-log item 135 (2) (h)), when the `godot/fixtures/` copy was re-copied
+in the same commit. Any other change in it means the footer's
 shape did; a timed footer carries no `untimed` member, which is written only when
 true.
 

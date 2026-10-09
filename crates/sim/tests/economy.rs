@@ -33,8 +33,8 @@ use pharmakos_sim::power::{DarkLoad, PowerError, PowerRules, dark_load};
 use pharmakos_sim::runner::Runner;
 use pharmakos_sim::seams::MandateKind;
 use pharmakos_sim::tables::{
-    BeaconId, PRIORITY_HIGH, PRIORITY_LOW, PRIORITY_NORMAL, SeatId, StructureId, StructureKind,
-    TargetKind, UnitKind,
+    AreaKind, BeaconId, ColumnBox, PRIORITY_HIGH, PRIORITY_LOW, PRIORITY_NORMAL, SeatId,
+    StructureId, StructureKind, UnitKind,
 };
 use pharmakos_sim::voxels::{Material, Richness};
 use pharmakos_sim::world::{DamageOrder, DamageTarget, World, WorldConfig};
@@ -491,13 +491,7 @@ fn paid_means_yours_survives_a_mid_build_death() {
     // Give the core a Build target one voxel along, so the drones reach it.
     world.set_writ(core, MandateKind::Build);
     let anchor = offset(at, 1);
-    assert!(world.add_target(
-        core,
-        TargetKind::Build,
-        StructureKind::Generator.id(),
-        anchor,
-        0
-    ));
+    assert!(world.add_target(core, StructureKind::Generator.id(), anchor));
     let cost = world.structure_cost(StructureKind::Generator);
     let purse = treasury(&world, seat);
 
@@ -1988,13 +1982,7 @@ fn one_anchor_is_one_building() {
         !world.anchor_is_claimed(seat, anchor),
         "bare ground is nobody's yet"
     );
-    assert!(world.add_target(
-        core,
-        TargetKind::Build,
-        StructureKind::Generator.id(),
-        anchor,
-        0
-    ));
+    assert!(world.add_target(core, StructureKind::Generator.id(), anchor));
     assert!(
         world.anchor_is_claimed(seat, anchor),
         "a Build target claims the ground it names"
@@ -2160,10 +2148,8 @@ fn no_beacon_starves_another_within_a_band() {
         for step in 0..3_i16 {
             assert!(world.add_target(
                 beacon,
-                TargetKind::Build,
                 StructureKind::Generator.id(),
-                offset(at, first.saturating_add(step)),
-                0
+                offset(at, first.saturating_add(step))
             ));
         }
     }
@@ -2337,13 +2323,7 @@ impl HeldOrder {
         // clears them.
         world.set_writ(core, MandateKind::Build);
         assert!(
-            world.add_target(
-                core,
-                TargetKind::Build,
-                StructureKind::Generator.id(),
-                vent,
-                0
-            ),
+            world.add_target(core, StructureKind::Generator.id(), vent),
             "the Generator's target fits"
         );
         let survey = world
@@ -2510,8 +2490,13 @@ fn a_survey_beacon_fields_its_scout_count_and_stops_there() {
         .unwrap_or_default();
     world.set_writ(core, MandateKind::Survey);
     world.set_scouts(core, 1);
+    // A probe area nine columns square, its centre ten voxels east of the core.
+    let centre = offset(at, 10);
+    let column = |axis: Fx| i16::try_from(axis.floor_voxels()).expect("a voxel coordinate");
+    let [cx, cy] = [column(centre[0]), column(centre[1])];
+    let area = ColumnBox::new([cx - 4, cy - 4], [cx + 4, cy + 4]).expect("a box the right way out");
     assert!(
-        world.add_target(core, TargetKind::Probe, 0, offset(at, 10), 4),
+        world.add_area(core, AreaKind::Probe, centre, area),
         "the probe area fits"
     );
 

@@ -61,10 +61,10 @@ use crate::rules::RulesTable;
 use crate::runner::{MatchEndReason, MatchPhase, MatchSettings, MatchState};
 use crate::seams::{BeaconMandate, MandateKind, ProgramId, WorkCounter};
 use crate::tables::{
-    BeaconId, BeaconTable, BuildOrder, CreditTable, Csr, MovementColumns, NO_RESPAWN, NO_WORK,
-    NOT_ELIMINATED, PRIORITY_NORMAL, QuarterTurns, SeatId, SeatTable, SightingTable, StructureId,
-    StructureKind, StructureTable, TargetKind, TargetTable, UnitId, UnitKind, UnitTable,
-    WreckTable,
+    AreaKind, BeaconId, BeaconTable, BuildOrder, ColumnBox, CreditTable, Csr, MovementColumns,
+    NO_RESPAWN, NO_WORK, NOT_ELIMINATED, PRIORITY_NORMAL, QuarterTurns, SeatId, SeatTable,
+    SightingTable, StructureId, StructureKind, StructureTable, TargetKind, TargetTable, UnitId,
+    UnitKind, UnitTable, WreckTable,
 };
 use crate::targeting::{Ground, NO_FEATURE};
 use crate::voxels::{CHUNK_EDGE, Material, VoxelEdit, VoxelStore};
@@ -1393,27 +1393,31 @@ impl World {
     /// not write down: whether an area is re-scanned after the whole list is
     /// walked, and on what clock. Owner, at S3, with the reach window that
     /// decides when a scan goes stale.
+    ///
+    /// "Inside" is the area's own box on the scout's column
+    /// ([`ColumnBox::contains`]), whatever its height; the nearest area is the
+    /// one whose centre is nearest, ties to the lowest row.
     #[must_use]
     pub fn probe_to_enter(&self, beacon: BeaconId, here: [Fx; 3]) -> Option<[Fx; 3]> {
         let mut best: Option<(Sq, usize, [Fx; 3])> = None;
-        let count = usize::try_from(self.targets.len()).unwrap_or(0);
-        let mut row: usize = 0;
-        while row < count {
-            if self.targets.beacons().get(row).copied() == Some(beacon.raw())
-                && self.targets.kinds().get(row).copied() == Some(TargetKind::Probe.id())
-                && let Some(centre) = self.targets.anchors().get(row).copied()
-            {
-                let radius = self.targets.radii().get(row).copied().unwrap_or(0);
-                let reach = Fx::from_voxels(i16::try_from(radius).unwrap_or(0));
-                let distance = Sq::between(here, centre);
-                if distance <= Sq::of_radius(reach) {
-                    return None;
-                }
-                if best.is_none_or(|(bd, br, _)| (distance, row) < (bd, br)) {
-                    best = Some((distance, row, centre));
-                }
+        let [x, y] = crate::targeting::column_of(here);
+        let targets = &self.targets;
+        let rows = targets
+            .beacons()
+            .iter()
+            .zip(targets.kinds())
+            .zip(targets.anchors().iter().zip(targets.areas()));
+        for (row, ((owner, kind), (centre, area))) in rows.enumerate() {
+            if *owner != beacon.raw() || *kind != TargetKind::Probe.id() {
+                continue;
             }
-            row = row.saturating_add(1);
+            if area.contains(x, y) {
+                return None;
+            }
+            let distance = Sq::between(here, *centre);
+            if best.is_none_or(|(bd, br, _)| (distance, row) < (bd, br)) {
+                best = Some((distance, row, *centre));
+            }
         }
         best.map(|(_, _, at)| at)
     }
@@ -1826,20 +1830,28 @@ impl World {
         self.send_unit(unit, to);
     }
 
-    /// Add one list setting to a beacon: a Build target, a protected area or a
-    /// probe area. `false` when the table has no room.
+    /// Add one Build target to a beacon: `blueprint` at the fixed voxel `at`.
+    /// `false` when the table has no room.
     ///
     /// Public for the fixture reason above: a target normally arrives through a
     /// committed interface row.
-    pub fn add_target(
+    pub fn add_target(&mut self, beacon: BeaconId, blueprint: u8, at: [Fx; 3]) -> bool {
+        self.targets.add(beacon, blueprint, at)
+    }
+
+    /// Add one area to a beacon -- a protected area or a probe area -- with
+    /// the centre a scout walks to and the footprint every inside test reads
+    /// ([`ColumnBox`]). `false` when the table has no room.
+    ///
+    /// Public for the fixture reason above.
+    pub fn add_area(
         &mut self,
         beacon: BeaconId,
-        kind: TargetKind,
-        blueprint: u8,
-        at: [Fx; 3],
-        radius: i32,
+        kind: AreaKind,
+        centre: [Fx; 3],
+        area: ColumnBox,
     ) -> bool {
-        self.targets.add(beacon, kind, blueprint, at, radius)
+        self.targets.add_area(beacon, kind, centre, area)
     }
 
     /// Whether some Build target of `seat`'s already claims the anchor `at`.
@@ -1891,8 +1903,15 @@ impl World {
         bound: (u32, u8),
         build: BuildOrder,
     ) -> bool {
-        self.targets
-            .add_bound(beacon, TargetKind::Build, blueprint, at, 0, bound, build)
+        self.targets.add_bound(
+            beacon,
+            TargetKind::Build,
+            blueprint,
+            at,
+            ColumnBox::default(),
+            bound,
+            build,
+        )
     }
 
     /// Remove the Build target of `beacon` bound to `feature`: a target made
@@ -2054,7 +2073,7 @@ impl World {
                 TargetKind::Build,
                 entry.blueprint,
                 anchor,
-                0,
+                ColumnBox::default(),
                 (entry.feature, entry.desc),
                 entry.build,
             ) {
@@ -4045,7 +4064,6 @@ impl World {
         let kinds = self.targets.kinds();
         let blueprints = self.targets.blueprints();
         let anchors = self.targets.anchors();
-        let radii = self.targets.radii();
         let built = self.targets.built();
         let features = self.targets.features();
         let descriptions = self.targets.descriptions();
@@ -4054,7 +4072,6 @@ impl World {
             enc.u8(kinds.get(index).copied().unwrap_or(0));
             enc.u8(blueprints.get(index).copied().unwrap_or(0));
             encode_point(enc, anchors.get(index));
-            enc.i32(radii.get(index).copied().unwrap_or(0));
             enc.u32(built.get(index).copied().unwrap_or(BeaconId::NONE.raw()));
             enc.u32(features.get(index).copied().unwrap_or(NO_FEATURE));
             enc.u8(descriptions.get(index).copied().unwrap_or(0));
@@ -4067,6 +4084,17 @@ impl World {
         }
         for rotation in self.targets.rotations() {
             enc.u8(*rotation);
+        }
+        // Each row's footprint (S1's `build` lane, from its review: an area
+        // is its box, not a covering radius), four whole-voxel columns widened
+        // to `i32`, as a block after the rows like the two above: an area
+        // row's box, and the default box on a Build row.
+        for area in self.targets.areas() {
+            let [lx, ly] = area.min_column();
+            let [hx, hy] = area.max_column();
+            for axis in [lx, ly, hx, hy] {
+                enc.i32(i32::from(axis));
+            }
         }
     }
 

@@ -38,7 +38,7 @@ use pharmakos_sim::runner::{MatchPhase, MatchSettings, Runner};
 use pharmakos_sim::seams::MandateKind;
 use pharmakos_sim::snapshot::Snapshot;
 use pharmakos_sim::tables::{
-    BeaconId, PRIORITY_NORMAL, SeatId, StructureKind, TargetKind, UnitId, own_beacon_name,
+    BeaconId, PRIORITY_NORMAL, SeatId, StructureKind, UnitId, own_beacon_name,
 };
 use pharmakos_sim::targeting::{
     FeatureSpec, NO_FEATURE, Ranker, anchor_in_sphere, covering_site, on_vent_counted,
@@ -480,10 +480,8 @@ fn a_seats_structure_share_counts_its_ruins() {
         world.set_writ(core, MandateKind::Build);
         assert!(world.add_target(
             core,
-            TargetKind::Build,
             StructureKind::Generator.id(),
-            point(beside(&world, seat, 1, 0)),
-            0
+            point(beside(&world, seat, 1, 0))
         ));
     }
     let mut runner = Runner::new(world);
@@ -522,13 +520,7 @@ fn one_structure_per_voxel_holds_across_seats() {
     let core = core_of(&world, one);
     world.set_writ(core, MandateKind::Build);
     for at in [taken, free] {
-        assert!(world.add_target(
-            core,
-            TargetKind::Build,
-            StructureKind::Generator.id(),
-            at,
-            0
-        ));
+        assert!(world.add_target(core, StructureKind::Generator.id(), at));
     }
     let cost = world.structure_cost(StructureKind::Generator).raw();
     let purse = |world: &World| world.seats().treasuries().get(1).expect("seat 1").raw();
