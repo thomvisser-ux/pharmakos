@@ -231,6 +231,23 @@ fn the_inline_rules_table_is_the_committed_one() {
         "godot/scripts/mesher_rules.gd's RULES_JSON carries a Lull length that is no longer \
          rules/rules.v1.json's match.lull_ms. Update both together and say which moved."
     );
+    // Round 1's Lull has its own row (decisions-log item 127 (2)); the client times it, so
+    // its copy is pinned beside the later Lulls'.
+    let first_lull = |table: &pharmakos_proto::gp::v1::RulesTable| {
+        table.r#match.as_ref().map(|row| row.first_lull_ms)
+    };
+    let inline_first = first_lull(&table_from_json(json).expect("canonical"));
+    assert_eq!(
+        inline_first,
+        first_lull(&table_from_json(&text).expect("canonical")),
+        "godot/scripts/mesher_rules.gd's RULES_JSON carries a first Lull length that is no \
+         longer rules/rules.v1.json's match.first_lull_ms. Update both together and say which \
+         moved."
+    );
+    assert!(
+        inline_first.is_some_and(|length| length > 0),
+        "the inline table times round 1's Lull: {inline_first:?}"
+    );
     assert_eq!(
         map_extent(&table_from_json(json).expect("canonical")).ok(),
         map_extent(&table_from_json(&text).expect("canonical")).ok(),
@@ -852,7 +869,7 @@ fn the_camera_ignores_its_keys_while_a_control_has_focus() {
 /// 1.1's Probation-shaped match. The config line carries the value in its sixth field and
 /// keeps its six tab-separated fields, so a remembered `last_match.txt` still parses; the
 /// PLACEHOLDER above the constants records the decision and keeps the settings screen and
-/// the Probation preset the owner's, at S1.
+/// the Probation preset the owner's, deferred to S6 by decisions-log item 127 (10).
 #[test]
 fn the_lobby_hosts_a_three_round_match() {
     let text = read("scripts/host_link.gd");
@@ -871,7 +888,13 @@ fn the_lobby_hosts_a_three_round_match() {
         .take_while(|line| line.starts_with("##"))
         .collect::<Vec<&str>>()
         .join(" ");
-    for needle in ["PLACEHOLDER", "item 123 (2) 3", "Probation preset", "at S1"] {
+    for needle in [
+        "PLACEHOLDER",
+        "item 123 (2) 3",
+        "Probation preset",
+        "OWNER, S6",
+        "item 127 (10)",
+    ] {
         assert!(
             block.contains(needle),
             "the round limit's PLACEHOLDER names `{needle}`: {block:?}"
@@ -1137,5 +1160,140 @@ fn the_chooser_hides_the_watch_strip_and_the_editor_until_a_match_starts() {
             .copied(),
         Some("if String(state.get(\"phase\", \"\")) == \"push\":"),
         "the speed is named only in a Push: {process:?}"
+    );
+}
+
+/// **The countdown and the recap are the bridge's, drawn as they came** (S1's plan, task
+/// `ui`; decisions-log item 135). The lobby shows the bridge's `timer`, which is empty while
+/// the admin footer says the phase is `untimed`, and reads no footer field of its own; and it
+/// shows `get_recap`'s prose, through the bridge's `watch_recap`, only in a recap or after the
+/// match has ended - a branch on the bridge's phase string, for display.
+#[test]
+fn the_lobby_draws_the_bridges_countdown_and_the_gateways_recap() {
+    let lobby = read("scripts/lobby.gd");
+    let code = lobby_code(&lobby).join("\n");
+    for field in ["phase_remaining_ms", "untimed", "remaining_ms"] {
+        assert!(
+            !code.contains(field),
+            "lobby.gd reads `{field}` itself; the countdown is the bridge's `timer`"
+        );
+    }
+    let recap = gd_code(&lobby, "_draw_recap");
+    assert!(
+        recap
+            .iter()
+            .any(|line| line.contains("vista.bridge.watch_recap()")),
+        "the recap is the bridge's: {recap:?}"
+    );
+    assert!(
+        recap
+            .iter()
+            .any(|line| line.contains("phase == \"recap\" or phase == \"ended\"")),
+        "shown in a recap and after the match has ended: {recap:?}"
+    );
+    assert!(
+        recap
+            .iter()
+            .any(|line| line.contains("\"prose\": recap.get(\"prose\", \"\")")),
+        "the prose as it came: {recap:?}"
+    );
+    let process = gd_code(&lobby, "_process");
+    assert!(
+        process
+            .iter()
+            .any(|line| line.contains("_draw_recap(String(state.get(\"phase\", \"\")))")),
+        "drawn every frame from the bridge's phase: {process:?}"
+    );
+}
+
+/// **A click on a vent names it, and Alt-click describes it** (`docs/design/targeting.md`,
+/// "Surfaces"; S1's plan, task `ui`). The editor picks a vent from the features the bridge
+/// lists, offers "Place beacon covering this vent" with the vent's name as the target, and
+/// on Alt-click "the nearest vent you can cover" with the description as the target; the
+/// menu item asks the bridge for `place_covering`, whose step the bridge writes.
+#[test]
+fn a_vent_click_offers_a_beacon_covering_it_and_alt_click_the_nearest_you_can_cover() {
+    let editor = read("scripts/editor.gd");
+    let pick = gd_code(&editor, "_vent_under");
+    assert!(
+        pick.iter()
+            .any(|line| line.contains("bridge.editor_features()")),
+        "the vents are the bridge's: {pick:?}"
+    );
+    let click = gd_code(&editor, "_on_vent_clicked");
+    assert!(
+        click
+            .iter()
+            .any(|line| line.contains("_menu_target = {\"nearest_uncovered\": \"vent\"}")),
+        "Alt-click describes the vent: {click:?}"
+    );
+    assert!(
+        click
+            .iter()
+            .any(|line| line.contains("_menu_target = {\"feature\": String(vent[\"id\"])}")),
+        "a click names it: {click:?}"
+    );
+    assert!(
+        click.iter().any(|line| line.contains(
+            "Strings.text(\"menu_cover_nearest\" if alt else \"menu_cover\"), ITEM_COVER"
+        )),
+        "{click:?}"
+    );
+    let menu = gd_code(&editor, "_on_menu");
+    let cover = menu
+        .iter()
+        .position(|line| *line == "ITEM_COVER:")
+        .expect("the menu routes ITEM_COVER");
+    assert_eq!(
+        menu.get(cover.saturating_add(1)).copied(),
+        Some("act(\"place_covering\", target)")
+    );
+    let unhandled = gd_code(&editor, "_unhandled_input");
+    let beacon = unhandled
+        .iter()
+        .position(|line| line.contains("_beacon_under("))
+        .expect("beacons are picked");
+    let vent = unhandled
+        .iter()
+        .position(|line| line.contains("_vent_under("))
+        .expect("vents are picked");
+    let ground = unhandled
+        .iter()
+        .position(|line| line.contains("bridge.view_pick("))
+        .expect("the ground is picked");
+    assert!(
+        beacon < vent && vent < ground,
+        "a beacon, then a vent, then the ground: {unhandled:?}"
+    );
+}
+
+/// **The next BMI is labelled a prediction** (decisions-log item 135 (2) (g)): the BMI at
+/// the band held now, ignoring committed spend, and the meter says the key-core is netted
+/// out of draw (the register's S1-31). Both lines are the string table's.
+#[test]
+fn the_meter_labels_the_next_bmi_as_the_band_held_now_ignoring_committed_spend() {
+    let strings = read("scripts/strings.gd");
+    let row = |key: &str| {
+        strings
+            .lines()
+            .find(|line| line.trim_start().starts_with(&format!("\"{key}\":")))
+            .unwrap_or_else(|| panic!("strings.gd has no `{key}`"))
+            .to_owned()
+    };
+    let bmi = row("meter_bmi");
+    assert!(
+        bmi.contains("{bmi}")
+            && bmi.contains("band you hold now")
+            && bmi.contains("ignores the spend your orders have committed"),
+        "{bmi}"
+    );
+    assert!(row("meter_key_core").contains("key-core"));
+    let editor = read("scripts/editor.gd");
+    let meter = gd_code(&editor, "_draw_meter");
+    assert!(
+        meter
+            .iter()
+            .any(|line| line.contains("if meter.get(\"has_bmi_next_dollars\", false):")),
+        "a BMI the answer left out is not drawn as 0: {meter:?}"
     );
 }

@@ -22,10 +22,10 @@
 //! also the format `pharmakos_mesher::gpu_surface_bytes` charges the byte budget in, so
 //! the two agree by construction.
 //!
-//! PLACEHOLDER: the surface format's vertex layout. A heavier layout — a second UV set, a
-//! per-vertex material id, a real normal for a shaded material — is what item 54's
-//! `B = 512 KiB` margin exists for ("one doubling above the point where B stops binding").
-//! Owner, at S6's art pass; changing it means re-probing the strides and re-measuring B.
+//! PLACEHOLDER: the surface format's vertex layout — OWNER, at S6's art pass. A heavier
+//! layout (a second UV set, a per-vertex material id, a real normal for a shaded material)
+//! is what item 54's `B = 512 KiB` margin exists for ("one doubling above the point where B
+//! stops binding"); changing it means re-probing the strides and re-measuring B.
 //!
 //! # Why the quantisation is probed rather than assumed
 //!

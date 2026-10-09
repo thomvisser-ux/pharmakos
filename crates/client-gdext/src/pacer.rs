@@ -33,7 +33,12 @@
 //! four times a second in a Lull, a recap and after match end: `elapsed_ms` is wall time
 //! spent in the current phase, monotone, and reported in steps of at most 60 000 after a
 //! stall because the gateway refuses a larger step; `remaining_ms` is the Lull's countdown,
-//! read from the gateway's own footer when the Lull opened, and zero in every other phase.
+//! which starts from the rules table's length for the round (`first_lull_ms` for round 1,
+//! `lull_ms` after it) or from the countdown the footer already shows when this client
+//! rejoins a Lull it had timed, and is left out of the report in every phase with no
+//! countdown — an untimed Lull, a recap, the end of the match — because the gateway reads a
+//! report with no `remaining_ms` as no countdown and one with 0 as a timer that ran out
+//! (S1-11, decisions-log item 135).
 //!
 //! # The keep-alive
 //!
@@ -54,9 +59,10 @@ pub const SPEEDS: [u32; 3] = [1, 2, 4];
 
 /// How often, at most, the pacer asks for game time: 100 ms of wall time.
 ///
-/// PLACEHOLDER: at least 50 ms, so the admin token's budget of 600 calls per 200 steps is
-/// never approached — at 1x an ask of 100 ms runs two steps of the sim, so the pacer spends
-/// at most one call per two. OWNER, Tuning, with the rate limits at hardening.
+/// PLACEHOLDER: the pacer's period — OWNER, at hardening, with the rate limits. At least
+/// 50 ms, so the admin token's budget of 600 calls per 200 steps is never approached: at
+/// 1x an ask of 100 ms runs two steps of the sim, so the pacer spends at most one call per
+/// two. Tuning.
 pub const PACER_PERIOD_US: u64 = 100_000;
 
 /// The most one `advance_push` may ask for: the gateway's `MAX_ADVANCE_MS`, a wire bound
@@ -65,15 +71,18 @@ pub const MAX_ADVANCE_MS: i32 = 60_000;
 
 /// How much owed game time the pacer carries before it drops the rest: 5 seconds.
 ///
-/// PLACEHOLDER: a stalled host or a long hitch is caught up by at most this much, so a
-/// Push never plays a burst of minutes to make up for a frozen window. Tuning, OWNER.
+/// PLACEHOLDER: the backlog bound — OWNER, at hardening, with the pacer's period. The
+/// marker named no when before; this one is the register's M-04 proposal. A stalled host or
+/// a long hitch is caught up by at most this much, so a Push never plays a burst of minutes
+/// to make up for a frozen window.
 pub const BACKLOG_BOUND_MS: u64 = 5_000;
 
 /// How often the host clock is reported outside a Push: every 250 ms of wall time.
 ///
-/// PLACEHOLDER: "about four times a second" (skeleton-plan-t16a-notes.md section A (2)).
-/// The rate budget of every token refills at this grain in a Lull, so the editor's
-/// verify-on-every-edit (T19) feels it. OWNER, with the rate limits at hardening.
+/// PLACEHOLDER: the host clock's report interval — OWNER, at hardening, with the rate
+/// limits. "About four times a second" (skeleton-plan-t16a-notes.md section A (2)). The
+/// rate budget of every token refills at this grain in a Lull, so the editor's
+/// verify-on-every-edit (T19) feels it.
 pub const CLOCK_REPORT_US: u64 = 250_000;
 
 /// The largest step one host-clock report may take: the gateway's own bound.
@@ -81,8 +90,9 @@ pub const MAX_CLOCK_STEP_MS: u64 = 60_000;
 
 /// How long a connection may send nothing before it sends a keep-alive call: 5 seconds.
 ///
-/// PLACEHOLDER: well inside the gateway's 30-second `READ_TIMEOUT` and the "at least every
-/// 10 s" the plan asks for. OWNER, at hardening, together with `READ_TIMEOUT`.
+/// PLACEHOLDER: the keep-alive interval — OWNER, at hardening, with `READ_TIMEOUT`. Well
+/// inside the gateway's 30-second `READ_TIMEOUT` and the "at least every 10 s" the plan
+/// asks for.
 pub const KEEPALIVE_US: u64 = 5_000_000;
 
 /// How long the editor must be left alone before FULL runs: 600 ms of wall time.
@@ -252,12 +262,14 @@ impl Pacer {
             return None;
         }
         let limit = u64::try_from(MAX_ADVANCE_MS).unwrap_or(0);
-        let whole = self.owed_ms().min(limit);
-        if whole == 0 {
+        let due_ms = self.owed_ms().min(limit);
+        if due_ms == 0 {
             return None;
         }
-        let ask = i32::try_from(whole).unwrap_or(MAX_ADVANCE_MS);
-        self.owed_us = self.owed_us.saturating_sub(whole.saturating_mul(US_PER_MS));
+        let ask = i32::try_from(due_ms).unwrap_or(MAX_ADVANCE_MS);
+        self.owed_us = self
+            .owed_us
+            .saturating_sub(due_ms.saturating_mul(US_PER_MS));
         self.since_ask_us = 0;
         self.in_flight = Some(ask);
         Some(ask)
@@ -304,10 +316,13 @@ pub enum ClockPhase {
     /// A Push, or a phase not yet known: nothing is reported, because in a Push the sim's
     /// own progress is the gateway's clock.
     Silent,
-    /// A Lull whose countdown began at `total_ms`. Zero means untimed.
+    /// A Lull. `countdown_ms` is the countdown it began at, or `None` for an untimed Lull,
+    /// which is told to the gateway as no countdown at all rather than as a countdown at
+    /// zero (`report_host_clock` with no `remaining_ms`; the register's S1-11). A countdown
+    /// of zero is a timed Lull that has already run out.
     Lull {
-        /// The countdown the gateway's footer showed when the Lull opened.
-        total_ms: u64,
+        /// The countdown, in milliseconds, when the Lull opened; `None` when it has none.
+        countdown_ms: Option<u64>,
     },
     /// A recap, or the end of the match: `remaining_ms` is zero.
     Open,
@@ -368,10 +383,13 @@ impl HostClock {
     }
 
     /// The next `report_host_clock`, as `(elapsed_ms, remaining_ms)`, when one is due.
+    /// `remaining_ms` is `None` in every phase with no countdown — an untimed Lull, a recap,
+    /// the end of the match — so the report carries no countdown there, which the gateway
+    /// reads as none rather than as one that ran out (S1-11).
     ///
     /// After a stall the report is a step of at most [`MAX_CLOCK_STEP_MS`] beyond the last
     /// one the gateway accepted, so a long freeze is reported as several steps in a row.
-    pub fn next_report(&mut self) -> Option<(i32, i32)> {
+    pub fn next_report(&mut self) -> Option<(i32, Option<i32>)> {
         if self.phase == ClockPhase::Silent || self.pending_ms.is_some() {
             return None;
         }
@@ -383,14 +401,16 @@ impl HostClock {
             .spent_ms()
             .min(self.accepted_ms.saturating_add(MAX_CLOCK_STEP_MS));
         let countdown = match self.phase {
-            ClockPhase::Lull { total_ms } => total_ms.saturating_sub(report),
-            ClockPhase::Silent | ClockPhase::Open => 0,
+            ClockPhase::Lull {
+                countdown_ms: Some(total_ms),
+            } => Some(total_ms.saturating_sub(report)),
+            ClockPhase::Lull { countdown_ms: None } | ClockPhase::Silent | ClockPhase::Open => None,
         };
         self.pending_ms = Some(report);
         self.since_report_us = 0;
         Some((
             i32::try_from(report).unwrap_or(i32::MAX),
-            i32::try_from(countdown).unwrap_or(i32::MAX),
+            countdown.map(|left| i32::try_from(left).unwrap_or(i32::MAX)),
         ))
     }
 
@@ -410,8 +430,12 @@ impl HostClock {
     #[must_use]
     pub fn run_out(&self) -> bool {
         match self.phase {
-            ClockPhase::Lull { total_ms } => total_ms > 0 && self.spent_ms() >= total_ms,
-            ClockPhase::Silent | ClockPhase::Open => false,
+            ClockPhase::Lull {
+                countdown_ms: Some(total_ms),
+            } => self.spent_ms() >= total_ms,
+            ClockPhase::Lull { countdown_ms: None } | ClockPhase::Silent | ClockPhase::Open => {
+                false
+            }
         }
     }
 
@@ -419,10 +443,12 @@ impl HostClock {
     #[must_use]
     pub fn timer_text(&self) -> String {
         match self.phase {
-            ClockPhase::Lull { total_ms } if total_ms > 0 => {
-                clock_text(total_ms.saturating_sub(self.spent_ms()))
+            ClockPhase::Lull {
+                countdown_ms: Some(total_ms),
+            } => clock_text(total_ms.saturating_sub(self.spent_ms())),
+            ClockPhase::Lull { countdown_ms: None } | ClockPhase::Silent | ClockPhase::Open => {
+                String::new()
             }
-            ClockPhase::Lull { .. } | ClockPhase::Silent | ClockPhase::Open => String::new(),
         }
     }
 
@@ -607,23 +633,44 @@ mod tests {
     #[test]
     fn the_host_clock_reports_a_countdown_in_a_lull_and_zero_after_it() {
         let mut clock = HostClock::new();
-        clock.enter(ClockPhase::Lull { total_ms: 180_000 });
+        clock.enter(ClockPhase::Lull {
+            countdown_ms: Some(180_000),
+        });
         assert_eq!(
             clock.next_report(),
-            Some((0, 180_000)),
+            Some((0, Some(180_000))),
             "the first is at once"
         );
         clock.answered();
         clock.elapse(100_000);
         assert_eq!(clock.next_report(), None, "not before the cadence");
         clock.elapse(150_000);
-        assert_eq!(clock.next_report(), Some((250, 179_750)));
+        assert_eq!(clock.next_report(), Some((250, Some(179_750))));
         clock.answered();
         assert_eq!(clock.timer_text(), "2:59");
 
         clock.enter(ClockPhase::Open);
-        assert_eq!(clock.next_report(), Some((0, 0)));
+        assert_eq!(
+            clock.next_report(),
+            Some((0, None)),
+            "a recap has no countdown, so its report carries none (S1-11)"
+        );
         assert_eq!(clock.timer_text(), "");
+    }
+
+    /// An untimed Lull reports the time it spends and no countdown, so the gateway's footer
+    /// keeps it untimed rather than showing a timer at zero that ran out (S1-11's client
+    /// half, decisions-log item 135).
+    #[test]
+    fn an_untimed_lull_reports_no_countdown_and_shows_none() {
+        let mut clock = HostClock::new();
+        clock.enter(ClockPhase::Lull { countdown_ms: None });
+        assert_eq!(clock.next_report(), Some((0, None)));
+        clock.answered();
+        clock.elapse(250_000);
+        assert_eq!(clock.next_report(), Some((250, None)));
+        assert_eq!(clock.timer_text(), "");
+        assert!(!clock.run_out());
     }
 
     #[test]
@@ -631,35 +678,43 @@ mod tests {
         let mut clock = HostClock::new();
         clock.enter(ClockPhase::Open);
         clock.elapse(150_000_000);
-        assert_eq!(clock.next_report(), Some((60_000, 0)));
+        assert_eq!(clock.next_report(), Some((60_000, None)));
         clock.answered();
         assert_eq!(
             clock.next_report(),
-            Some((120_000, 0)),
+            Some((120_000, None)),
             "behind by more than a step, so the next is due at once"
         );
         clock.refused();
         assert_eq!(
             clock.next_report(),
-            Some((120_000, 0)),
+            Some((120_000, None)),
             "a refused step is taken again from the last accepted"
         );
         clock.answered();
         clock.elapse(250_000);
-        assert_eq!(clock.next_report(), Some((150_250, 0)));
+        assert_eq!(clock.next_report(), Some((150_250, None)));
     }
 
     #[test]
     fn a_timed_lull_runs_out_and_an_untimed_one_never_does() {
         let mut clock = HostClock::new();
-        clock.enter(ClockPhase::Lull { total_ms: 1_000 });
+        clock.enter(ClockPhase::Lull {
+            countdown_ms: Some(1_000),
+        });
         clock.elapse(999_000);
         assert!(!clock.run_out());
         clock.elapse(1_000);
         assert!(clock.run_out());
-        clock.enter(ClockPhase::Lull { total_ms: 0 });
+        clock.enter(ClockPhase::Lull { countdown_ms: None });
         clock.elapse(10_000_000_000);
         assert!(!clock.run_out());
+        // A timed Lull rejoined at zero has run out, and is not mistaken for an untimed one.
+        clock.enter(ClockPhase::Lull {
+            countdown_ms: Some(0),
+        });
+        assert!(clock.run_out());
+        assert_eq!(clock.timer_text(), "0:00");
     }
 
     #[test]

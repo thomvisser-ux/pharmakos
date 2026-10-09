@@ -16,10 +16,23 @@
 //! It **reads this crate's own source and the GDScript beside it**, strips comments and
 //! string literals (keeping a literal that is one identifier, a dictionary key), and fails
 //! on any line where a money, power or duration identifier
-//! appears next to an arithmetic operator. It is a text scan, not a type system — it will
-//! not catch arithmetic on a variable named `x` that happens to hold a cost, and it does
-//! not pretend to. What it does catch is the shape the rule is actually broken in:
-//! somebody writing `remaining_ms / 1000` or `cost * count` in a bridge file.
+//! appears next to an arithmetic operator **or an arithmetic method** — `saturating_add`,
+//! `checked_div`, `wrapping_mul`, `abs_diff`, `rem_euclid`, `.sum()`, GDScript's
+//! `posmod` and `snapped` and the like ([`ARITHMETIC_METHODS`]; the register's S1-44,
+//! ruled by S1's plan's decision 17, decisions-log item 128). It is a text scan, not a type
+//! system — it will not catch arithmetic on a variable named `x` that happens to hold a
+//! cost, and it does not pretend to. What it does catch is the shape the rule is actually
+//! broken in: somebody writing `remaining_ms / 1000`, `cost * count` or
+//! `deadline_us.saturating_add(period_us)` in a bridge file.
+//!
+//! A unit-test module in `src/` (everything after a file's `#[cfg(test)]` line) is not
+//! scanned: it drives a stand-in clock and answers as the gateway would, which is a test
+//! driver's arithmetic, never compiled into the client, as the checks' waits are a test
+//! driver's clock (`no_script_reads_a_clock_but_the_id_helper_and_the_checks_waits`).
+//!
+//! One sum outside the pacer is the design, named here and nowhere wider:
+//! [`SCHEDULING_SUMS`], `rig.rs`'s keyframe back-off, which is connection scheduling
+//! (AGENTS.md section 3 rule 4's "the connection scheduling in `rig.rs`").
 //!
 //! The scanner is itself tested, on snippets that must trip it and snippets that must not
 //! (`the_scanner_catches_what_it_is_for` and `the_scanner_does_not_trip_on_ordinary_code`).
@@ -45,7 +58,8 @@ use std::path::{Path, PathBuf};
 ///
 /// Drawn from the field names `gp.v1` and `gp.api.v1` actually use — every duration in
 /// the schema is an `int32` of game milliseconds and is spelled `..._ms` (decisions-log
-/// item 46), or is the bare key `ms` of an estimate's `Leg` and its whole route; money is
+/// item 46), or is the bare key `ms` of an estimate's `Leg` and its whole route, and the
+/// client's own wall durations are microseconds spelled `..._us` (`src/pacer.rs`); money is
 /// `$` and is spelled with `cost`, `credits`, `treasury` or `bmi`, and power is `kw`.
 /// `leg`, `legs`, `whole`, `travel` and `eta` are the names the editor holds the
 /// estimator's travel times under. `tick` and `frame` are here too: a frame count
@@ -55,6 +69,9 @@ const QUANTITIES: &[&str] = &[
     "ms",
     "millis",
     "milliseconds",
+    "us",
+    "micros",
+    "microseconds",
     "seconds",
     "secs",
     "duration",
@@ -248,9 +265,145 @@ fn quantities_in(code: &str) -> Vec<String> {
     found
 }
 
-/// Whether a line carries an arithmetic operator, as opposed to one of the many other
-/// things those characters mean in Rust.
+/// The prefixes of Rust's integer arithmetic methods: `checked_add`, `saturating_sub`,
+/// `wrapping_mul`, `overflowing_neg` and the rest of each family.
+const METHOD_PREFIXES: &[&str] = &[
+    "checked_",
+    "saturating_",
+    "wrapping_",
+    "overflowing_",
+    "unchecked_",
+    "strict_",
+];
+
+/// Arithmetic spelt as a method or a function call, in either language: the operations the
+/// families above prefix, the bare methods that compute (`pow`, `abs_diff`, `rem_euclid`,
+/// an iterator's `sum` and `product`), and GDScript's arithmetic functions (`posmod`,
+/// `fmod`, `snapped`). A call of one of these is arithmetic as surely as an operator is,
+/// which the operator scan alone let through (the register's S1-44).
+const ARITHMETIC_METHODS: &[&str] = &[
+    "add",
+    "sub",
+    "mul",
+    "div",
+    "rem",
+    "neg",
+    "pow",
+    "abs",
+    "shl",
+    "shr",
+    "abs_diff",
+    "div_euclid",
+    "rem_euclid",
+    "div_ceil",
+    "div_floor",
+    "next_multiple_of",
+    "midpoint",
+    "isqrt",
+    "sum",
+    "product",
+    "posmod",
+    "fposmod",
+    "fmod",
+    "snapped",
+    "snappedi",
+    "snappedf",
+];
+
+/// `std::time::Duration`'s unit conversions and scalings. Turning milliseconds into
+/// seconds is the arithmetic the rule forbids, spelt through a type instead of `/ 1000`
+/// (review of `ui`).
+const DURATION_CONVERSIONS: &[&str] = &[
+    "as_secs",
+    "as_secs_f32",
+    "as_secs_f64",
+    "as_millis",
+    "as_millis_f32",
+    "as_millis_f64",
+    "as_micros",
+    "as_nanos",
+    "subsec_millis",
+    "subsec_micros",
+    "subsec_nanos",
+    "from_secs",
+    "from_secs_f32",
+    "from_secs_f64",
+    "from_millis",
+    "from_micros",
+    "from_nanos",
+    "mul_f32",
+    "mul_f64",
+    "div_f32",
+    "div_f64",
+    "div_duration_f32",
+    "div_duration_f64",
+];
+
+/// Whether `word` names an arithmetic method: a family's prefix before an operation
+/// (`checked_add`, `saturating_add_signed`), a bare one ([`ARITHMETIC_METHODS`]), or a
+/// duration's conversion ([`DURATION_CONVERSIONS`]).
+fn is_arithmetic_method(word: &str) -> bool {
+    if DURATION_CONVERSIONS.contains(&word) {
+        return true;
+    }
+    let operation = METHOD_PREFIXES
+        .iter()
+        .find_map(|prefix| word.strip_prefix(prefix))
+        .unwrap_or(word);
+    ARITHMETIC_METHODS.contains(&operation)
+        || ARITHMETIC_METHODS.iter().any(|base| {
+            operation
+                .strip_prefix(base)
+                .is_some_and(|rest| rest.starts_with('_') && operation != word)
+        })
+}
+
+/// Whether a line calls or names an arithmetic method: such a word before `(` (spaces
+/// allowed between, as GDScript allows them), before a turbofish (`sum::<u64>()`), or
+/// after `::` as a path handed on uncalled (`fold(0, i64::saturating_add)`).
+fn has_arithmetic_call(code: &str) -> bool {
+    let characters: Vec<char> = code.chars().collect();
+    let is_word = |character: &char| character.is_ascii_alphanumeric() || *character == '_';
+    let mut index = 0;
+    while let Some(character) = characters.get(index) {
+        if !is_word(character) {
+            index = index.saturating_add(1);
+            continue;
+        }
+        let start = index;
+        while characters.get(index).is_some_and(is_word) {
+            index = index.saturating_add(1);
+        }
+        let word: String = characters
+            .get(start..index)
+            .unwrap_or_default()
+            .iter()
+            .collect::<String>()
+            .to_ascii_lowercase();
+        if !is_arithmetic_method(&word) {
+            continue;
+        }
+        let path =
+            start >= 2 && characters.get(start.saturating_sub(2)..start) == Some(&[':', ':'][..]);
+        let mut after = index;
+        while characters.get(after) == Some(&' ') {
+            after = after.saturating_add(1);
+        }
+        let called = characters.get(after) == Some(&'(')
+            || characters.get(index..index.saturating_add(3)) == Some(&[':', ':', '<'][..]);
+        if path || called {
+            return true;
+        }
+    }
+    false
+}
+
+/// Whether a line carries an arithmetic operator or an arithmetic method, as opposed to
+/// one of the many other things those characters mean in Rust.
 fn has_arithmetic(code: &str) -> bool {
+    if has_arithmetic_call(code) {
+        return true;
+    }
     let bytes = code.as_bytes();
     for (index, byte) in bytes.iter().enumerate() {
         let previous = index.checked_sub(1).and_then(|before| bytes.get(before));
@@ -299,12 +452,50 @@ fn has_arithmetic(code: &str) -> bool {
 /// sim. Every other file in this crate and in `godot/scripts/` is held to the whole rule.
 const PACING_MODULE: &str = "pacer.rs";
 
+/// **The sums outside the pacer that are connection scheduling, by file and exact line.**
+///
+/// `src/rig.rs`'s keyframe back-off: after a `get_view` page the bridge refused, the seat
+/// asks for a keyframe again no sooner than one keep-alive interval from now
+/// (`keyframe_not_before_us`), so a page this build can never read is not asked for in a
+/// loop. It is a question of *when* to ask, which AGENTS.md section 3 rule 4 gives the rig
+/// ("the connection scheduling in `rig.rs`"), and S1's plan's decision 17 (item 128) names
+/// it in that list. The allowance is that one line of code, word for word, in that one
+/// file, and it appears there once (`the_scheduling_sums_are_one_line_each`): any other
+/// line, the same identifier with a different computation on it included, is still an
+/// offence.
+const SCHEDULING_SUMS: &[(&str, &str)] = &[(
+    "rig.rs",
+    "self.keyframe_not_before_us = self.timing.now_us().saturating_add(KEEPALIVE_US);",
+)];
+
+/// The identifier each of [`SCHEDULING_SUMS`]'s lines assigns, for the one-line check.
+const SCHEDULING_IDENTIFIERS: &[&str] = &["keyframe_not_before_us"];
+
+/// Whether `code`, a line of `file` in `src/`, is one of [`SCHEDULING_SUMS`], word for
+/// word once comments are stripped.
+fn scheduling_sum(file: &str, code: &str) -> bool {
+    SCHEDULING_SUMS
+        .iter()
+        .any(|(owner, line)| *owner == file && code.trim() == *line)
+}
+
+/// Whether every quantity part of `word` is a time word.
+fn only_time(word: &str) -> bool {
+    word.split('_')
+        .chain(std::iter::once(word))
+        .filter(|part| QUANTITIES.contains(part))
+        .all(|part| TIME.contains(&part))
+}
+
 /// The fragments of [`QUANTITIES`] that mean time, which [`PACING_MODULE`] may compute
 /// with.
 const TIME: &[&str] = &[
     "ms",
     "millis",
     "milliseconds",
+    "us",
+    "micros",
+    "microseconds",
     "seconds",
     "secs",
     "duration",
@@ -316,6 +507,45 @@ const TIME: &[&str] = &[
     "frames",
 ];
 
+/// How many leading lines of a Rust file are scanned: all of them, unless the file ends in
+/// its unit-test module, in which case every line before that module's `#[cfg(test)]`.
+///
+/// The module is recognised in exactly one shape, the one rustfmt gives every test module
+/// in this crate: a `#[cfg(test)]` line, then `mod tests {`, and that module's closing `}`
+/// in column 0 as the file's last non-blank line, with no second `#[cfg(test)]` anywhere.
+/// Any other placement (a `#[cfg(test)]` helper, import or module mid-file) skips nothing,
+/// so the code after it is still scanned and a stray attribute fails loudly instead of
+/// hiding the rest of the file (`every_test_module_is_the_files_last_item` holds `src/` to
+/// the shape).
+fn scanned_lines(text: &str) -> usize {
+    let lines: Vec<&str> = text.lines().collect();
+    let all = lines.len();
+    let marks: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| line.trim() == "#[cfg(test)]")
+        .map(|(index, _)| index)
+        .collect();
+    let [start] = marks.as_slice() else {
+        return all;
+    };
+    let opens = lines
+        .get(start.saturating_add(1))
+        .is_some_and(|line| *line == "mod tests {");
+    let last = lines.iter().rposition(|line| !line.trim().is_empty());
+    let closes = lines
+        .iter()
+        .enumerate()
+        .skip(start.saturating_add(2))
+        .find(|(_, line)| **line == "}")
+        .map(|(index, _)| index);
+    if opens && closes.is_some() && closes == last {
+        *start
+    } else {
+        all
+    }
+}
+
 /// Every offending line, as `path:line: text`.
 fn offences(files: &[PathBuf]) -> Vec<String> {
     let mut found: Vec<String> = Vec::new();
@@ -323,27 +553,39 @@ fn offences(files: &[PathBuf]) -> Vec<String> {
         let Ok(text) = fs::read_to_string(path) else {
             continue;
         };
-        let pacing = path.file_name().and_then(|name| name.to_str()) == Some(PACING_MODULE)
-            && path
-                .parent()
-                .and_then(Path::file_name)
-                .and_then(|name| name.to_str())
-                == Some("src");
-        for (index, line) in text.lines().enumerate() {
+        let file = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default();
+        let in_src = path
+            .parent()
+            .and_then(Path::file_name)
+            .and_then(|name| name.to_str())
+            == Some("src");
+        let pacing = in_src && file == PACING_MODULE;
+        let rust = path.extension().and_then(|value| value.to_str()) == Some("rs");
+        // A unit-test module is a test driver, never compiled into the client (the module
+        // doc says why), and is skipped only in its one shape: see `scanned_lines`.
+        let scanned = if rust {
+            scanned_lines(&text)
+        } else {
+            text.lines().count()
+        };
+        for (index, line) in text.lines().enumerate().take(scanned) {
             let code = code_of(line);
             let mut named = quantities_in(&code);
+            if named.is_empty() || !has_arithmetic(&code) {
+                continue;
+            }
+            if in_src && scheduling_sum(file, &code) {
+                continue;
+            }
             if pacing {
                 // A word the pacer may compute with is one whose every quantity part is
                 // time: `owed_ms` passes, `remaining_kw` does not.
-                named.retain(|word| {
-                    !word
-                        .split('_')
-                        .chain(std::iter::once(word.as_str()))
-                        .filter(|part| QUANTITIES.contains(part))
-                        .all(|part| TIME.contains(&part))
-                });
+                named.retain(|word| !only_time(word));
             }
-            if named.is_empty() || !has_arithmetic(&code) {
+            if named.is_empty() {
                 continue;
             }
             found.push(format!(
@@ -386,6 +628,24 @@ fn the_scanner_catches_what_it_is_for() {
         "label.text = Strings.text(\"leg\", {\"ms\": legs[index] / 1000})",
         "_route_label.text = Strings.text(\"route_whole\", {\"ms\": route.get(\"whole\", 0) / 1000})",
         "var seconds_left = travel - 5",
+        // Arithmetic spelt as a method (the register's S1-44).
+        "let left = remaining_ms.saturating_sub(spent_ms);",
+        "let at = self.timing.now_us().saturating_add(KEEPALIVE_US);",
+        "let total = costs.iter().copied().sum::<i64>();",
+        "let whole = legs.iter().sum();",
+        "let dollars = treasury.checked_div(2)?;",
+        "let gap = deadline_us.abs_diff(now_us);",
+        "let wrapped = draw_kw.wrapping_add(1);",
+        "var cell := posmod(eta, 60)",
+        "var shown := snapped(travel, 1000)",
+        // Spellings the first widening missed (review of `ui`): a method path handed on
+        // uncalled, a space before the parenthesis, and a duration's unit conversion.
+        "let total_ms = legs_ms.iter().copied().fold(0, i64::saturating_add);",
+        "let total_ms = legs_ms.iter().copied().reduce(u64::wrapping_add);",
+        "var cell := posmod (eta, 60)",
+        "let secs = Duration::from_millis(remaining_ms).as_secs();",
+        "let shown = Duration::from_millis(travel_ms);",
+        "let left = remaining.as_millis();",
     ];
     for line in broken {
         let code = code_of(line);
@@ -411,6 +671,13 @@ fn the_scanner_does_not_trip_on_ordinary_code() {
         "print(\"legs %s\" % route.get(\"legs\"))",
         "second * CHUNK_EDGE + first",
         "label.text = Strings.text(\"leg\", {\"ms\": legs[index]})",
+        // A method that is not arithmetic, on a line that names a quantity, is not one.
+        "let shown = clock_text(owed_ms.min(limit));",
+        "self.calls = self.calls.saturating_add(1);",
+        "let addr = payload.address(travel_ms);",
+        "let sub = remaining.subscriber();",
+        "let summary_ms = shown(remaining_ms);",
+        "use std::time::Duration; // remaining_ms",
     ];
     for line in fine {
         let code = code_of(line);
@@ -442,6 +709,165 @@ let draw_kw = generator_kw + autocannon_kw;
     let _ = fs::remove_dir_all(&scratch);
     assert_eq!(found.len(), 1, "time passes, power does not: {found:?}");
     assert!(found.iter().all(|line| line.contains("_kw")), "{found:?}");
+}
+
+/// The scanner reads method calls: a family's prefix before an operation, and the bare
+/// operations, and nothing that merely starts with one of their letters.
+#[test]
+fn the_scanner_reads_an_arithmetic_method_by_its_name() {
+    for name in [
+        "checked_add",
+        "saturating_sub",
+        "wrapping_mul",
+        "overflowing_neg",
+        "saturating_add_signed",
+        "checked_div_euclid",
+        "abs_diff",
+        "rem_euclid",
+        "sum",
+        "posmod",
+    ] {
+        assert!(is_arithmetic_method(name), "{name}");
+    }
+    for name in [
+        "address",
+        "subscriber",
+        "summary",
+        "min",
+        "max",
+        "checked",
+        "added",
+        "text",
+    ] {
+        assert!(!is_arithmetic_method(name), "{name}");
+    }
+}
+
+/// A unit-test module is not scanned, and the line before it still is.
+#[test]
+fn a_unit_test_module_is_a_driver_and_is_not_scanned() {
+    let scratch = std::env::temp_dir().join(format!("pharmakos-nt-{}", std::process::id()));
+    let fake = scratch.join("src");
+    fs::create_dir_all(&fake).expect("scratch");
+    let path = fake.join("view.rs");
+    fs::write(
+        &path,
+        "let shown = remaining_ms - spent_ms;
+#[cfg(test)]
+mod tests {
+    let now = 1 + PACER_PERIOD_US;
+}
+",
+    )
+    .expect("scratch file");
+    let found = offences(std::slice::from_ref(&path));
+    let _ = fs::remove_dir_all(&scratch);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(found.iter().all(|line| line.contains(":1:")), "{found:?}");
+}
+
+/// A `#[cfg(test)]` anywhere but on the file's trailing test module skips nothing: a
+/// helper, an import or a second module mid-file leaves the rest of the file scanned
+/// (review of `ui`: a mid-file `#[cfg(test)]` used to end the scan).
+#[test]
+fn a_stray_test_attribute_hides_nothing() {
+    let scratch = std::env::temp_dir().join(format!("pharmakos-ns-{}", std::process::id()));
+    let fake = scratch.join("src");
+    fs::create_dir_all(&fake).expect("scratch");
+    let cases = [
+        // A test helper before production code.
+        "#[cfg(test)]
+fn helper() {}
+pub fn shown(remaining_ms: u64) -> u64 { remaining_ms / 1000 }
+",
+        // A test module that does not run to the end of the file.
+        "#[cfg(test)]
+mod tests {
+}
+pub fn shown(remaining_ms: u64) -> u64 { remaining_ms / 1000 }
+",
+        // Two test attributes, the second on a trailing module.
+        "#[cfg(test)]
+use std::fmt;
+pub fn shown(remaining_ms: u64) -> u64 { remaining_ms / 1000 }
+#[cfg(test)]
+mod tests {
+}
+",
+    ];
+    let mut missed: Vec<&str> = Vec::new();
+    for (index, case) in cases.iter().enumerate() {
+        let path = fake.join(format!("case{index}.rs"));
+        fs::write(&path, case).expect("scratch file");
+        if offences(std::slice::from_ref(&path)).is_empty() {
+            missed.push(case);
+        }
+    }
+    let _ = fs::remove_dir_all(&scratch);
+    assert!(missed.is_empty(), "the scan stopped early on {missed:?}");
+}
+
+/// Every `#[cfg(test)]` in `src/` is the one shape [`scanned_lines`] skips: the file's
+/// only test attribute, on a `mod tests` that runs to the end of the file. A file that
+/// breaks the shape is scanned whole, and this names it rather than leave the reason to
+/// a confusing offence.
+#[test]
+fn every_test_module_is_the_files_last_item() {
+    let mut wrong: Vec<String> = Vec::new();
+    for path in sources() {
+        if path.extension().and_then(|value| value.to_str()) != Some("rs") {
+            continue;
+        }
+        let text =
+            fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+        let marked = text.lines().any(|line| line.trim() == "#[cfg(test)]");
+        if marked && scanned_lines(&text) == text.lines().count() {
+            wrong.push(path.display().to_string());
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "these files carry a #[cfg(test)] that is not their trailing `mod tests`: {wrong:?}"
+    );
+}
+
+/// **The scheduling sums are one line each**: each allowed line appears exactly once in its
+/// file, the identifier it assigns carries arithmetic on no other line, and the allowance
+/// is the line word for word: the same identifier with any other computation is an offence.
+#[test]
+fn the_scheduling_sums_are_one_line_each() {
+    for ((owner, allowed), identifier) in SCHEDULING_SUMS.iter().zip(SCHEDULING_IDENTIFIERS) {
+        assert!(
+            allowed.contains(identifier),
+            "{allowed} assigns {identifier}"
+        );
+        let path = crate_root().join("src").join(owner);
+        let text =
+            fs::read_to_string(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+        let lines: Vec<String> = text
+            .lines()
+            .take(scanned_lines(&text))
+            .map(code_of)
+            .filter(|code| code.contains(identifier) && has_arithmetic(code))
+            .map(|code| code.trim().to_owned())
+            .collect();
+        assert_eq!(
+            lines,
+            vec![(*allowed).to_owned()],
+            "src/{owner}'s {identifier} is allowed its one sum and no other"
+        );
+    }
+    assert_eq!(SCHEDULING_SUMS.len(), SCHEDULING_IDENTIFIERS.len());
+    let code =
+        code_of("self.keyframe_not_before_us = self.timing.now_us().saturating_add(KEEPALIVE_US);");
+    assert!(scheduling_sum("rig.rs", &code));
+    assert!(!scheduling_sum("editor.rs", &code), "one file wide");
+    for other in [
+        "self.keyframe_not_before_us = now_us.saturating_add(cost_us);",
+        "let shown_secs = (self.keyframe_not_before_us - phase_remaining_ms) / 1000;",
+    ] {
+        assert!(!scheduling_sum("rig.rs", &code_of(other)), "{other}");
+    }
 }
 
 #[test]

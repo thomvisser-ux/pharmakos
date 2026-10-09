@@ -83,7 +83,8 @@
 #     completes every seat's, the host clock's answer says `all_ready`, and the admin
 #     connection calls `end_lull` (skeleton-plan-t16a-notes.md section B, "T19" (6));
 #   * the pacer at 4x plays the Push, and the admin connection's `_status` footer reaches
-#     RECAP; the seat connection then catches up before the rows are counted;
+#     RECAP; the seat connection then catches up before the rows are counted, and the
+#     recap is read once through `get_recap`, its prose round 1's (S1's plan, task `ui`);
 #   * THE RESUME LEG: Continue leads into round 2's Lull, where the carried draft is opened
 #     through `get_draft`; the host's standard input is closed (the host saves the Lull)
 #     and the host exits; then the scene is changed, so the bridge, its rig and its editor
@@ -265,6 +266,22 @@ func _run() -> void:
 		_failures.append("the seat connection never caught up after the recap began")
 		_finish()
 		return
+	# The recap's lines are get_recap's prose, read once the recap opened (S1's plan, `ui`).
+	if not await _until(func() -> bool: return int(vista.bridge.watch_recap().get("answers", 0)) > 0, EDIT_WAIT):
+		_failures.append("the recap was never read: %s" % vista.bridge.watch_recap())
+		_finish()
+		return
+	var recap: Dictionary = vista.bridge.watch_recap()
+	if String(recap.get("prose", "")) == "" or int(recap.get("round", 0)) != 1:
+		_failures.append("the recap is not round 1's prose: %s" % recap)
+		_finish()
+		return
+	# Read once, not in a loop: the one answer so far is the only one asked for.
+	if int(recap.get("answers", 0)) != 1:
+		_failures.append("the recap was read more than once: %s" % recap)
+		_finish()
+		return
+	print("[watch-check] recap: %s" % recap.get("prose", ""))
 
 	# Round 2: Continue, and the carried draft opens through get_draft.
 	vista.bridge.watch_command("end_recap", 0)

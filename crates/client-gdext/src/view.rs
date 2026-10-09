@@ -73,9 +73,9 @@ pub const STATUS_KEY: &str = "_status";
 /// `ViewChunk`'s comment requires of every decoder and what lets a material be added to
 /// the wire without breaking this client.
 ///
-/// PLACEHOLDER: the seam and vent colours, and whether richness is visible at all. Art,
-/// like the mesher's palette itself; OWNER, at S6's art pass, when the palette grows the
-/// rows these three share today.
+/// PLACEHOLDER: the seam and vent colours — OWNER, at S6's art pass. Art, like the
+/// mesher's palette itself, and whether richness is visible at all; the palette grows the
+/// rows these three share today then.
 #[must_use]
 pub const fn palette_of(wire: u8) -> u8 {
     match wire {
@@ -462,6 +462,21 @@ impl ViewModel {
             }
         }
         None
+    }
+
+    /// The ground at column `(x, y)` (sim axes): the empty voxel above the highest solid one
+    /// the chunks held show there, as a sim-axes `z`, which is where a marker or a pick point
+    /// for that column stands. `None` when this client holds no solid voxel in the column.
+    ///
+    /// Presentation, like [`ViewModel::pick`]: it reads only what this client was sent, and
+    /// says where to draw, never whether anything may stand there.
+    #[must_use]
+    pub fn ground_at(&self, x: i32, y: i32) -> Option<i32> {
+        let top = i32::try_from(self.extent.get(2).copied()?).ok()?;
+        (0..top)
+            .rev()
+            .find(|up| self.solid_world([x, *up, y]))
+            .and_then(|up| up.checked_add(1))
     }
 
     /// Whether the voxel at `world` (x east, y up, z north) is solid in the chunks held.
@@ -862,6 +877,21 @@ mod tests {
             None,
             "no direction"
         );
+    }
+
+    #[test]
+    fn the_ground_at_a_column_is_the_empty_voxel_on_top_of_it() {
+        let mut model = ViewModel::new(params(), budget(), EXTENT);
+        assert_eq!(model.ground_at(10, 20), None, "nothing held yet");
+        model
+            .apply(decode_page(&result(&[([0, 0, 0], floor(4, 2))], true)).expect("keyframe"))
+            .expect("applies");
+        assert_eq!(
+            model.ground_at(10, 20),
+            Some(4),
+            "where the pick stands, too"
+        );
+        assert_eq!(model.ground_at(40, 20), None, "a column with no chunk held");
     }
 
     #[test]

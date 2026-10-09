@@ -40,14 +40,16 @@
 //! | in | out | module |
 //! |---|---|---|
 //! | sim-order chunk bytes | mesher-order chunk bytes | [`chunks`] |
-//! | a `gp.v1.RulesTable` | the mesher's `DrainBudget` and `LightParams` | [`rules`] |
+//! | a `gp.v1.RulesTable` | the mesher's `DrainBudget` and `LightParams`, the map's extent, the two Lull lengths | [`rules`] |
 //! | `MeshBuffers` | an [`UploadOp`](upload::UploadOp) the engine executes | [`surface`], [`upload`] |
 //! | a `gp.api.v1` result as JSON | canonical JSON, schema-checked | [`api`] |
 //! | a `get_view` result | chunks on the drain queue, the entity list | [`view`] |
 //! | a gateway answer | the next JSON-RPC frame for each connection | [`rig`] |
 //! | a click on the map, a Load, a Fix | the editor's next planning call, and its rows | [`editor`] |
 //! | a template's instantiation, a plan's prose | the wizard's pages and the rule list | [`wizard`] |
-//! | a `get_economy_forecast` answer | the meter's four numbers, as they came | [`rig`] |
+//! | a `get_economy_forecast` answer | the meter's four numbers, the next BMI and the committed spend, as they came | [`rig`] |
+//! | a `get_recap` answer, or its refusal | the recap's prose, or the refusal, as it came | [`rig`] |
+//! | `get_map_summary`, `resolve_refs` and `get_briefing` answers | the vents to click, the chips and the "this round" line | [`targeting`], [`editor`] |
 //! | the wall clock | game milliseconds asked for, the host clock reported | [`pacer`] |
 //!
 //! Each of those is a copy or a lookup. The places where something is *decided* are all
@@ -125,6 +127,7 @@ pub mod panics;
 pub mod rig;
 pub mod rules;
 pub mod surface;
+pub mod targeting;
 pub mod upload;
 pub mod view;
 pub mod wizard;

@@ -73,14 +73,14 @@ use crate::api;
 use crate::chunks;
 use crate::editor::Action;
 use crate::editor_view::{
-    instance_dictionary, meter_dictionary, rows_array, rows_of_report_text, state_dictionary,
-    target_of,
+    instance_dictionary, meter_dictionary, name_into, recap_dictionary, rows_array,
+    rows_of_report_text, state_dictionary, target_of,
 };
 use crate::engine::ChunkRenderer;
 use crate::error::BridgeError;
 use crate::pacer::WallClock;
 use crate::panics::PanicCounter;
-use crate::rig::{Answer, Rig};
+use crate::rig::{Answer, LullLengths, Rig};
 use crate::rules::{self, MesherRules};
 use crate::surface::{ColourQuantisation, Surface, SurfaceProbe};
 use crate::upload::{DEFAULT_UPLOAD_PATH, ResidentSurface, UploadCounters, UploadPath, Uploader};
@@ -101,8 +101,9 @@ pub struct PharmakosBridge {
     /// Item 54's K, B and ageing term, as `configure` read them. Held so a caller can ask
     /// what this client is budgeted at without re-reading the table.
     budget: Option<DrainBudget>,
-    /// The Lull's length, `match.lull_ms`, as `configure` read it; `None` is untimed.
-    lull_ms: Option<u32>,
+    /// The two Lull lengths, `match.first_lull_ms` and `match.lull_ms`, as `configure` read
+    /// them; a `None` in either is a Lull with no countdown.
+    lulls: LullLengths,
     /// Reused across the frame's chunks, so a steady-state remesh allocates nothing.
     buffers: MeshBuffers,
     /// Reused across the frame's chunks, so the per-chunk transposition allocates once.
@@ -140,7 +141,7 @@ impl INode3D for PharmakosBridge {
             renderer: None,
             mesher: None,
             budget: None,
-            lull_ms: None,
+            lulls: LullLengths::default(),
             buffers: MeshBuffers::empty(),
             transposed: Vec::new(),
             view: None,
@@ -207,13 +208,16 @@ impl PharmakosBridge {
             rules::table_from_json(&text).and_then(|table| {
                 Ok((
                     rules::mesher_rules(&table)?,
-                    rules::lull_ms(&table),
+                    LullLengths {
+                        first_ms: Some(u64::from(rules::first_lull_ms(&table)?)),
+                        later_ms: Some(u64::from(rules::lull_ms(&table)?)),
+                    },
                     rules::map_extent(&table)?,
                 ))
             })
         });
         let mut report = VarDictionary::new();
-        let (parsed, lull_ms, extent) = match parsed {
+        let (parsed, lulls, extent) = match parsed {
             Some(Ok(parsed)) => parsed,
             Some(Err(error)) => {
                 godot_error!("[pharmakos] configure: {error}");
@@ -233,7 +237,7 @@ impl PharmakosBridge {
         self.mesher = Some(Mesher::new(parsed.light));
         self.budget = Some(parsed.budget);
         self.view = Some(ViewModel::new(parsed.light, parsed.budget, extent));
-        self.lull_ms = lull_ms;
+        self.lulls = lulls;
 
         let attached = self.attach_renderer(usize::try_from(chunks).unwrap_or(0));
 
@@ -545,12 +549,13 @@ impl PharmakosBridge {
             .unwrap_or(Vector3i::ZERO)
     }
 
-    /// Starts a fresh watch rig, with both connections closed, timing its Lulls by the
-    /// `match.lull_ms` row `configure` read (untimed when there was none).
+    /// Starts a fresh watch rig, with both connections closed, timing round 1's Lull by the
+    /// `match.first_lull_ms` row and every later one by `match.lull_ms`, as `configure` read
+    /// them (a Lull whose row is missing is untimed).
     #[func]
     fn watch_begin(&mut self) {
         let mut rig = Rig::new();
-        rig.set_lull_length(self.lull_ms.map_or(0, u64::from));
+        rig.set_lull_length(self.lulls);
         self.rig = Some(rig);
     }
 
@@ -694,7 +699,8 @@ impl PharmakosBridge {
             .unwrap_or(false)
     }
 
-    /// What the lobby shows: `phase`, `round`, `timer`, `speed`, `skipping`, `all_ready`,
+    /// What the lobby shows: `phase`, `round`, `timer` (empty while the footer is
+    /// `untimed`, which is also given), `speed`, `skipping`, `all_ready`,
     /// `drops_admin`, `drops_seat`, `calls_admin`, `calls_seat`, `view_settled`,
     /// `seat_settled`, `view_refusals`, `pending` and `last_error`.
     #[func]
@@ -765,8 +771,9 @@ impl PharmakosBridge {
             .unwrap_or_default()
     }
 
-    /// A map action: `go`, `visit_low`, `visit_normal`, `visit_high`, `recycle` or `place`,
-    /// at a target dictionary naming a `beacon`, a `selector` or a `voxel` (sim axes).
+    /// A map action: `go`, `visit_low`, `visit_normal`, `visit_high`, `recycle`, `place` or
+    /// `place_covering`, at a target dictionary naming a `beacon`, a `selector`, a `voxel`
+    /// (sim axes), a `feature` (its name) or `nearest_uncovered` (a feature kind).
     /// Returns whether the action was taken.
     #[func]
     fn editor_action(&mut self, action: GString, target: VarDictionary) -> bool {
@@ -834,6 +841,57 @@ impl PharmakosBridge {
         self.panics
             .guard("editor_submit", || rig.editor_mut().submit())
             .unwrap_or(false)
+    }
+
+    /// Tick (`on`) or clear the `allow_dormant_beacons` checkbox E0601 shows: the verifier's
+    /// own patch, or the option's removal, through `patch_plan`. Returns whether it was taken.
+    #[func]
+    fn editor_set_allow_dormant(&mut self, on: bool) -> bool {
+        let Some(rig) = self.rig.as_mut() else {
+            return false;
+        };
+        self.panics
+            .guard("editor_set_allow_dormant", || {
+                rig.editor_mut().set_allow_dormant(on)
+            })
+            .unwrap_or(false)
+    }
+
+    /// The features the map lists this Lull (`get_map_summary`), for the editor's vent
+    /// click: `id`, `kind`, `x` and `y` as the name spells them, `covered`, `live`, and
+    /// `at`, a `Vector3i` in the sim's axes standing on the ground the view holds at the
+    /// feature's anchor column. A feature whose column the view does not hold is left out:
+    /// there is nowhere to draw it.
+    #[func]
+    fn editor_features(&mut self) -> VarArray {
+        let (Some(rig), Some(model)) = (self.rig.as_ref(), self.view.as_ref()) else {
+            return VarArray::new();
+        };
+        self.panics
+            .guard("editor_features", || {
+                let mut out = VarArray::new();
+                for feature in rig.editor().features() {
+                    let Some(ground) = model.ground_at(feature.x, feature.y) else {
+                        continue;
+                    };
+                    let mut one = VarDictionary::new();
+                    one.set(&"id".to_variant(), &feature.id.to_variant());
+                    name_into(
+                        &mut one,
+                        crate::targeting::FeatureName::parse(&feature.id).as_ref(),
+                    );
+                    one.set(&"kind".to_variant(), &feature.kind.name().to_variant());
+                    one.set(&"covered".to_variant(), &feature.covered.to_variant());
+                    one.set(&"live".to_variant(), &feature.live.to_variant());
+                    one.set(
+                        &"at".to_variant(),
+                        &Vector3i::new(feature.x, feature.y, ground).to_variant(),
+                    );
+                    out.push(&one.to_variant());
+                }
+                out
+            })
+            .unwrap_or_default()
     }
 
     /// Save the notes box to the seat notebook.
@@ -971,6 +1029,19 @@ impl PharmakosBridge {
         };
         self.panics
             .guard("watch_meter", || meter_dictionary(rig.meter()))
+            .unwrap_or_default()
+    }
+
+    /// The recap: `answers`, `round` and `prose`, as the gateway last wrote it, and
+    /// `refusal`, its refusal of the read as it came (empty when none). Empty before
+    /// `watch_begin`.
+    #[func]
+    fn watch_recap(&mut self) -> VarDictionary {
+        let Some(rig) = self.rig.as_ref() else {
+            return VarDictionary::new();
+        };
+        self.panics
+            .guard("watch_recap", || recap_dictionary(rig.recap()))
             .unwrap_or_default()
     }
 
@@ -1147,6 +1218,7 @@ fn rig_state(rig: &Rig, pending: usize) -> VarDictionary {
     state.set(&"phase".to_variant(), &rig.phase().name().to_variant());
     state.set(&"round".to_variant(), &i64::from(rig.round()).to_variant());
     state.set(&"timer".to_variant(), &rig.timer_text().to_variant());
+    state.set(&"untimed".to_variant(), &rig.untimed().to_variant());
     state.set(&"speed".to_variant(), &i64::from(rig.speed()).to_variant());
     state.set(&"skipping".to_variant(), &rig.skipping().to_variant());
     state.set(&"all_ready".to_variant(), &rig.all_ready().to_variant());

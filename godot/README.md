@@ -206,6 +206,35 @@ host has announced; it names and resumes only through `host_link.gd`'s helpers; 
 on ENDED), and T22's run sheet ("quit in a Lull, resume from the lobby", w6 notes A5) is
 where a person sees it run.
 
+## The economy and targeting UI (S1's plan, task `ui`)
+
+Every word and number below is the gateway's, drawn as it came; the client times and
+schedules, and decides nothing (AGENTS.md section 3 rule 4).
+
+* **The Lull's countdown.** Round 1's Lull counts down from the rules table's
+  `match.first_lull_ms` and every later one from `match.lull_ms` (`scripts/mesher_rules.gd`
+  carries both; `tests/godot_project.rs` pins them to `rules/rules.v1.json`). The status line
+  shows no countdown while the admin connection's footer says `_status.untimed`, which it does
+  until the gateway has been told one, and a Lull with no length is reported with no
+  `remaining_ms` at all, never as a timer at 0 (decisions-log item 135; the register's S1-11).
+* **The recap.** In a recap and after the match ends, the lobby's column shows `get_recap`'s
+  prose: the settlement's, the shortfall's and the "found nothing" lines are its sentences.
+* **This round.** The panel shows the Lull's "This round: ..." sentence off `get_briefing`'s
+  prose, read every Lull and after every accepted seal (item 133 (3) (i)). With no sentence
+  (nothing sealed yet, the briefing not read yet, or a seal that reads the map nowhere) the
+  heading is hidden: the client words no claim about the orders of its own.
+* **The chips.** For every vent or seam the playbook names or describes, what it reads now,
+  how far, and the next candidate, from `resolve_refs` for the text on screen.
+* **The vent click.** A click on a heat vent offers "Place beacon covering this vent" (a name);
+  Alt-click offers "the nearest vent you can cover" (a description). The vents are those
+  `get_map_summary` lists this Lull.
+* **The meter.** Beside the four numbers: the next BMI, labelled as the BMI at the band held
+  now, ignoring committed spend (item 135 (2) (g)); the committed spend in a Lull; and that
+  supply and draw leave out each beacon's base draw, which its key-core supplies (S1-31). A
+  figure the answer leaves out is not drawn.
+* **E0601's checkbox.** "Allow dormant beacons" ticks in the verifier's own patch and clears
+  the option; the next report says what it costs.
+
 ## The export (T21)
 
 `cargo xtask package` (decisions-log item 117) builds this platform's unsigned zip: the
@@ -231,12 +260,12 @@ description the lockup, product version `0.1.0-dev+skeleton`, file version `0.1.
 Godot rewrites `export_presets.cfg` when the editor saves presets, so the file keeps no
 comment, and its PLACEHOLDERs live here:
 
-- PLACEHOLDER: the product name and file description are the lockup, *PHARMAKOS: THE
-  SEALED ORDER*, until the owner confirms the name (plan T21); `config/name` stays
-  `Pharmakos`, so the window title is the bare word and `user://` does not move. OWNER,
-  with the org.
-- PLACEHOLDER: the icon (Godot's own until the art pass), the company name and the
-  copyright field are empty. OWNER, with the org, before the owner publishes a release.
+- PLACEHOLDER: the product name and file description — OWNER, with the org. They are
+  the lockup, *PHARMAKOS: THE SEALED ORDER*, until the owner confirms the name (plan T21);
+  `config/name` stays `Pharmakos`, so the window title is the bare word and `user://`
+  does not move.
+- PLACEHOLDER: the icon, the company name and the copyright field — OWNER, with the org,
+  before a release. The icon is Godot's own until the art pass; the other two are empty.
 
 The smoke check runs the same way from the editor and from the export:
 

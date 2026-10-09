@@ -18,9 +18,15 @@
 #   * click one of your beacons: Visit & change (a priority row), Go here, or Recycle;
 #   * click the ground: Go here, or Place beacon - the ghost shows QUICK's verdict for this
 #     click (per click at the skeleton, not live on hover: plan T19 amendment).
-#     PLACEHOLDER: a live-on-hover legality ghost is S3/S6's (w6 notes A4 item 5), OWNER;
+#     PLACEHOLDER: the ghost per click, not live on hover — OWNER, S3/S6 (w6 notes A4 item 5);
 #   * Alt-click a beacon: the step's target becomes a selector - nearest, weakest, safest
 #     or most threatened own beacon, chosen when the step starts;
+#   * click a heat vent: "Place beacon covering this vent", a place-beacon step whose site
+#     is `covering` the vent by its name; Alt-click a vent: "the nearest vent you can
+#     cover", the same step with a description the sim ranks when the step starts
+#     (docs/design/targeting.md, "Surfaces"; S1's plan, task `ui`). The vents are the ones
+#     `get_map_summary` lists this Lull, drawn where the view holds their anchor column,
+#     and picked by screen distance as the beacons are;
 #   * the route is drawn as a polyline from the gateway's `estimate_route` legs, each leg
 #     labelled with its travel time. There are NO dashed legs at the skeleton: the estimator
 #     prices every leg over the whole generated map and the view agrees
@@ -42,9 +48,19 @@
 #   * the own $/kW METER: `get_economy_forecast`'s four numbers, as they came, through
 #     strings.gd's frame. Headroom is the gateway's, never supply minus draw. When it is
 #     read is the bridge's rig's scheduling (crates/client-gdext/src/rig.rs).
-#     PLACEHOLDER: the meter's layout and refresh cadence, Tuning, OWNER.
+#     PLACEHOLDER: the meter's layout and refresh cadence — OWNER, S6, Tuning.
 #   * draft continuity through `get_draft`: the carried draft is fetched and opened every
 #     Lull (the bridge's editor).
+#
+# S1 (S1's plan, task `ui`) adds, every one the gateway's words or numbers as they came:
+#   * the Lull's "THIS ROUND" sentence: the gateway's own sentence off the briefing's prose
+#     (decisions-log item 133 (3) (i)), read every Lull and after every accepted seal;
+#   * the CHIPS: for each vent or seam the playbook names or describes, what it reads now,
+#     how far, and what comes next, from `resolve_refs` for the text on screen;
+#   * the meter's NEXT BMI, labelled as the BMI at the band held now, ignoring committed
+#     spend (item 135 (2) (g)), the committed spend, and the key-core's netting (S1-31);
+#   * E0601's ALLOW DORMANT BEACONS checkbox: ticking it applies the verifier's own patch,
+#     clearing it removes the option, and the next report says what it costs.
 #
 # THE FIRST CLICK LANDS (F1, decisions-log item 126 (3); S1's plan, task `fixc`). At the
 # demo the first click on Fix or Submit after the panel had changed or scrolled did
@@ -64,11 +80,13 @@
 # reproduces F1 by hand with (godot/README.md). `watch_check.gd`'s `_first_click_lands`
 # injects the clicks headless.
 #
-# PLACEHOLDER: the panel's layout, sizes and colours, the menu's wording and the ghost's
-# look are the skeleton's; the real editor's layout is S6's, OWNER (skeleton plan T19).
+# PLACEHOLDER: the panel's layout, sizes and colours, wording and look — OWNER, S6. The
+# panel's, the menu's wording and the ghost's look are the skeleton's; the real editor's
+# layout is S6's (skeleton plan T19).
 #
-# PLACEHOLDER: the segment clock and the "fits" pill are S3/S6's and are not built
-# (skeleton plan T19, PLACEHOLDERs line), OWNER. So is a rendered travel time: legs and the
+# PLACEHOLDER: the segment clock, the "fits" pill and a rendered travel time — OWNER, S3/S6.
+# The segment clock and the "fits" pill are S3/S6's and are not built
+# (skeleton plan T19, PLACEHOLDERs line). So is a rendered travel time: legs and the
 # whole route are shown as the raw game milliseconds the estimator answered, not the
 # generously rounded or whole-second figure decisions-log items 57 and 61 ask for, until the
 # gateway answers one (see strings.gd's `leg`), OWNER with plan-core/T18a, S3.
@@ -81,24 +99,25 @@ const Wizard := preload("res://scripts/wizard.gd")
 const RuleList := preload("res://scripts/rule_list.gd")
 
 ## How close, in screen pixels, a click must land to a beacon to pick it.
-## PLACEHOLDER: UI, OWNER at S6.
+## PLACEHOLDER: the pick distance — OWNER, at S6.
 const PICK_PIXELS := 28.0
-## The panel's width in pixels. PLACEHOLDER: layout, OWNER at S6.
+## The panel's width in pixels. PLACEHOLDER: the panel's width — OWNER, at S6.
 const PANEL_WIDTH := 380.0
-## The route's colour, and the ghost's by verdict. PLACEHOLDER: art, OWNER at S6.
+## The route's colour, and the ghost's by verdict. PLACEHOLDER: the colours — OWNER, at S6.
 const ROUTE_COLOUR := Color(0.95, 0.85, 0.35)
 const GHOST_COLOURS := {
 	"waiting": Color(0.8, 0.8, 0.8, 0.45),
 	"legal": Color(0.3, 0.9, 0.4, 0.5),
 	"illegal": Color(0.95, 0.25, 0.2, 0.5),
 }
-## How far above the ground the route is drawn, in voxels. PLACEHOLDER: art, OWNER at S6.
+## How far above the ground the route is drawn, in voxels. PLACEHOLDER: the lift — OWNER, at S6.
 const ROUTE_LIFT := 1.2
 
 ## Menu item ids.
 const ITEM_GO := 1
 const ITEM_RECYCLE := 2
 const ITEM_PLACE := 3
+const ITEM_COVER := 4
 const ITEM_LOW := 11
 const ITEM_NORMAL := 12
 const ITEM_HIGH := 13
@@ -142,6 +161,12 @@ var _ghost: MeshInstance3D
 var _notes_loaded := false
 var _meter: Label
 var _meter_answers := -1
+var _forecast: Label
+var _this_round: Label
+var _this_round_box: VBoxContainer
+var _chips: Label
+var _dormant: CheckBox
+var _chips_drawn := ""
 var _templates_box: VBoxContainer
 var _wizard_box: VBoxContainer
 var _rules_status: Label
@@ -312,6 +337,21 @@ func meter_text() -> String:
 	return _meter.text
 
 
+## The meter's forecast lines as drawn: the next BMI, the committed spend, the key-core.
+func forecast_text() -> String:
+	return _forecast.text
+
+
+## The Lull's "this round" line as drawn.
+func this_round_text() -> String:
+	return _this_round.text
+
+
+## The chips as drawn, one line each.
+func chips_text() -> String:
+	return _chips.text
+
+
 ## Opens the wizard on template `id`, as its button does.
 func open_template(id: String) -> void:
 	bridge.editor_wizard_open(id)
@@ -357,6 +397,11 @@ func _unhandled_input(event: InputEvent) -> void:
 		_take_map_click()
 		_on_beacon_clicked(beacon, event.alt_pressed, event.position)
 		return
+	var vent := _vent_under(camera, event.position)
+	if not vent.is_empty():
+		_take_map_click()
+		_on_vent_clicked(vent, event.alt_pressed, event.position)
+		return
 	var picked: Dictionary = bridge.view_pick(camera.project_ray_origin(event.position), camera.project_ray_normal(event.position))
 	if picked.get("hit", false):
 		_take_map_click()
@@ -385,6 +430,39 @@ func _beacon_under(camera: Camera3D, at: Vector2) -> Dictionary:
 			best_distance = distance
 			best = beacon
 	return best
+
+
+## The heat vent nearest the click on screen, within PICK_PIXELS, as the bridge lists the
+## map's features this Lull; empty when there is none.
+func _vent_under(camera: Camera3D, at: Vector2) -> Dictionary:
+	var best := {}
+	var best_distance := PICK_PIXELS
+	for feature in bridge.editor_features():
+		if String(feature.get("kind", "")) != "vent":
+			continue
+		var where := _world(feature["at"])
+		if camera.is_position_behind(where):
+			continue
+		var distance := camera.unproject_position(where).distance_to(at)
+		if distance <= best_distance:
+			best_distance = distance
+			best = feature
+	return best
+
+
+## A click on a vent offers a beacon covering it, by its name; Alt-click offers the
+## description instead, "the nearest vent you can cover" (docs/design/targeting.md).
+func _on_vent_clicked(vent: Dictionary, alt: bool, at: Vector2) -> void:
+	_selector = ""
+	_beacon_label.text = Strings.text("feature_vent", {"x": vent.get("x", ""), "y": vent.get("y", "")})
+	if alt:
+		_menu_target = {"nearest_uncovered": "vent"}
+	else:
+		_menu_target = {"feature": String(vent["id"])}
+	_menu.clear()
+	_menu.add_item(Strings.text("menu_cover_nearest" if alt else "menu_cover"), ITEM_COVER)
+	_menu.position = Vector2i(at)
+	_menu.popup()
 
 
 func _on_beacon_clicked(beacon: Dictionary, alt: bool, at: Vector2) -> void:
@@ -445,6 +523,8 @@ func _on_menu(id: int) -> void:
 			act("recycle", target)
 		ITEM_PLACE:
 			act("place", target)
+		ITEM_COVER:
+			act("place_covering", target)
 		ITEM_LOW:
 			act("visit_low", target)
 		ITEM_NORMAL:
@@ -475,6 +555,9 @@ func _draw_state(state: Dictionary) -> void:
 	_draw_templates(state.get("templates", []))
 	_draw_wizard(state.get("wizard", {}), state.get("templates", []))
 	_draw_rules(state.get("prose", PackedStringArray()), state.get("prose_current", false), state.get("has_text", false))
+	_draw_this_round(String(state.get("this_round", "")))
+	_draw_chips(state.get("chips", []), state.get("chips_current", false), state.get("has_text", false))
+	_draw_dormant(state.get("dormant", {}))
 
 
 ## The meter: the gateway's four numbers put into strings.gd's frame as they came. Redrawn
@@ -488,6 +571,74 @@ func _draw_meter(meter: Dictionary) -> void:
 	else:
 		_meter.text = Strings.text("meter", {"treasury": meter.get("treasury_now"), "supply": meter.get("supply_kw_now"), "draw": meter.get("draw_kw_now"), "headroom": meter.get("headroom_kw_now")})
 	_meter.accessibility_name = _meter.text
+	var lines: PackedStringArray = []
+	if meter.get("has_bmi_next_dollars", false):
+		lines.append(Strings.text("meter_bmi", {"bmi": meter.get("bmi_next_dollars")}))
+	if meter.get("has_committed_dollars", false):
+		lines.append(Strings.text("meter_committed", {"committed": meter.get("committed_dollars")}))
+	if _meter_answers > 0:
+		lines.append(Strings.text("meter_key_core"))
+	_forecast.text = "\n".join(lines)
+	_forecast.accessibility_name = _forecast.text
+
+
+## The Lull's "this round" sentence, as the gateway wrote it, or nothing at all: with no
+## sentence (no seal yet, no briefing read yet, or a seal whose route reads the map nowhere)
+## the panel hides the heading rather than word a claim about the orders the gateway did
+## not make.
+func _draw_this_round(sentence: String) -> void:
+	_this_round.text = sentence
+	_this_round.accessibility_name = sentence
+	_this_round_box.visible = sentence != ""
+
+
+## One line per chip, each put together from the gateway's answer through strings.gd's
+## frames. Redrawn only when the chips changed.
+func _draw_chips(chips: Array, current: bool, has_text: bool) -> void:
+	var drawn := var_to_str([chips, current, has_text])
+	if drawn == _chips_drawn:
+		return
+	_chips_drawn = drawn
+	if has_text and not current:
+		_chips.text = Strings.text("chips_waiting")
+	elif chips.is_empty():
+		_chips.text = Strings.text("chips_none") if has_text else ""
+	else:
+		var lines: PackedStringArray = []
+		for chip in chips:
+			lines.append(chip_line(chip))
+		_chips.text = "\n".join(lines)
+	_chips.accessibility_name = _chips.text
+
+
+## One chip's line: what it reads now and next, as the gateway answered, and how it reads.
+static func chip_line(chip: Dictionary) -> String:
+	var now: Dictionary = chip.get("now", {})
+	if now.is_empty():
+		return Strings.text("chip_nothing", {"step": chip.get("step", 0), "failure": chip.get("failure", ""), "matched": chip.get("matched", 0)})
+	# The parts are joined, never added: a travel time is put into its frame as it came.
+	var parts: PackedStringArray = [Strings.text("chip_now", {"step": chip.get("step", 0), "feature": feature_text(now), "ms": now.get("travel_ms", 0)})]
+	var next: Dictionary = chip.get("next", {})
+	if not next.is_empty():
+		parts.append(Strings.text("chip_next", {"feature": feature_text(next), "ms": next.get("travel_ms", 0)}))
+	var how := "chip_how_%s_%s" % [chip.get("form", ""), chip.get("arm", "")]
+	if Strings.TEXT.has(how):
+		parts.append(Strings.text(how))
+	return "".join(parts)
+
+
+## A feature's name as the panel says it: "Heat vent (120, 88)", or its id when the bridge
+## could not spell it.
+static func feature_text(feature: Dictionary) -> String:
+	return Strings.text("feature_" + String(feature.get("kind", "")), {"x": feature.get("x", ""), "y": feature.get("y", ""), "id": feature.get("id", "")})
+
+
+## E0601's checkbox: shown when the rows name the option or the text sets it, ticked when
+## the text sets it, and taking a click only when the bridge's editor would take it.
+func _draw_dormant(dormant: Dictionary) -> void:
+	_dormant.visible = dormant.get("shown", false)
+	_dormant.set_pressed_no_signal(dormant.get("checked", false))
+	_dormant.disabled = not dormant.get("enabled", false)
 
 
 func _draw_templates(templates: Array) -> void:
@@ -657,6 +808,15 @@ func _build_panel() -> void:
 	_heading(column, "checks_heading")
 	_rows = VBoxContainer.new()
 	column.add_child(_rows)
+	_dormant = CheckBox.new()
+	_dormant.text = Strings.text("dormant_option")
+	_dormant.accessibility_name = _dormant.text
+	_dormant.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_dormant.custom_minimum_size = Vector2(PANEL_WIDTH - 40.0, 0)
+	_dormant.focus_mode = Control.FOCUS_NONE
+	_dormant.visible = false
+	_dormant.toggled.connect(func(on: bool) -> void: bridge.editor_set_allow_dormant(on))
+	column.add_child(_dormant)
 
 	_heading(column, "rules_heading")
 	_rules_status = _label(column)
@@ -665,6 +825,20 @@ func _build_panel() -> void:
 
 	_heading(column, "route_heading")
 	_route_label = _label(column)
+
+	_heading(column, "chips_heading")
+	_chips = _label(column)
+
+	# Below the checks and the route, so the rows and their Fix buttons keep their place at
+	# the panel's top (F1's first-click check clicks them unscrolled).
+	_this_round_box = VBoxContainer.new()
+	_this_round_box.visible = false
+	column.add_child(_this_round_box)
+	_heading(_this_round_box, "this_round_heading")
+	_this_round = _label(_this_round_box)
+
+	_heading(column, "forecast_heading")
+	_forecast = _label(column)
 
 	_heading(column, "notes_heading")
 	_notes = TextEdit.new()

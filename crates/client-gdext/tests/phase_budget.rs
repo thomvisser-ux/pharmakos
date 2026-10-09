@@ -39,7 +39,7 @@ mod common;
 
 use common::{Gateway, limits};
 use pharmakos_client_gdext::editor::{Action, Selector, Target};
-use pharmakos_client_gdext::rig::{ADMIN, Phase, Rig, SEAT};
+use pharmakos_client_gdext::rig::{ADMIN, LullLengths, Phase, Rig, SEAT};
 use pharmakos_client_gdext::view::{Entity, EntityKind};
 
 /// One frame of a fast headless client, in wall microseconds: a headless Godot draws as
@@ -52,7 +52,7 @@ const FRAME_US: u64 = 4_000;
 fn recap_then_burst(continue_after: usize, latency: usize, seat_first: bool) -> (Gateway, Rig) {
     let mut gateway = Gateway::new("recap");
     let mut rig = Rig::new();
-    rig.set_lull_length(0);
+    rig.set_lull_length(LullLengths::default());
     rig.opened(ADMIN);
     rig.opened(SEAT);
     rig.editor_mut().set_seat("seat.0");

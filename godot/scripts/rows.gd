@@ -22,24 +22,25 @@
 # Accessibility (spec section 13): each row's accessible name is its plain sentence, the
 # icon's is its severity word, and a Fix button's is its label - names generated from the
 # rendered text, not written beside it. Icons plus text: the colour is never the only
-# signal. PLACEHOLDER: accessibility polish beyond generated names (font scaling, reduced
-# motion, focus order) is S6's, OWNER (skeleton plan T19, PLACEHOLDERs).
+# signal.
+# PLACEHOLDER: accessibility polish beyond generated names — OWNER, S6. Font scaling,
+# reduced motion and focus order (skeleton plan T19, PLACEHOLDERs).
 
 extends RefCounted
 
 const Strings := preload("res://scripts/strings.gd")
 
-## The icon colours by severity. PLACEHOLDER: art, OWNER at S6's art pass.
+## The icon colours by severity. PLACEHOLDER: the icon colours — OWNER, at S6's art pass.
 const ICON_COLOURS := {
 	"error": Color(0.86, 0.26, 0.22),
 	"warning": Color(0.93, 0.66, 0.18),
 	"info": Color(0.35, 0.62, 0.9),
 }
-## The icon's size in pixels. PLACEHOLDER: art, OWNER at S6.
+## The icon's size in pixels. PLACEHOLDER: the icon's size — OWNER, at S6.
 const ICON_SIZE := Vector2(14, 14)
-## The width a row's sentence wraps at. PLACEHOLDER: layout, OWNER at S6.
+## The width a row's sentence wraps at. PLACEHOLDER: the wrap width — OWNER, at S6.
 const SENTENCE_WIDTH := 300.0
-## The gap between two rows, in pixels. PLACEHOLDER: layout, OWNER at S6.
+## The gap between two rows, in pixels. PLACEHOLDER: the row gap — OWNER, at S6.
 const ROW_GAP := 12
 ## The meta a container keeps the rows it drew under, and the one a Fix button carries.
 const DRAWN := "drawn_rows"

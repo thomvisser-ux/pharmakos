@@ -1,13 +1,14 @@
 # SPDX-FileCopyrightText: 2026 Pharmakos contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# The three rules-table rows the client reads, as canonical `gp.v1.RulesTable` JSON: the
+# The rules-table rows the client reads, as canonical `gp.v1.RulesTable` JSON: the
 # mesher row - item 54's drain budget (K surfaces and B bytes a frame, and the ageing
-# term) and the light bake's maximum and attenuation - `match.lull_ms`, the Lull's
-# planning timer, which the rules table says is "read by the host and the editor, never by
-# the sim" and which the watch rig counts down (the gateway shows what the client reports),
-# and the map's extent, `map.size_x`/`size_y`/`size_z`, outside which the view model takes
-# no chunk (the grid it builds is sized from the chunks it holds).
+# term) and the light bake's maximum and attenuation - the two Lull lengths,
+# `match.first_lull_ms` for round 1's Lull and `match.lull_ms` for every later one, which
+# the rules table says are "read by the host and the editor, never by the sim" and which the
+# watch rig counts down (the gateway shows what the client reports; decisions-log item 127
+# (2)), and the map's extent, `map.size_x`/`size_y`/`size_z`, outside which the view model
+# takes no chunk (the grid it builds is sized from the chunks it holds).
 #
 # Inline rather than read from `rules/rules.v1.json`, because a `res://` path cannot
 # escape the project folder and the rules table lives at the repository root; no gateway
@@ -27,4 +28,4 @@
 
 extends RefCounted
 
-const RULES_JSON := '{"revision":1,"mesher":{"surfacesPerFrame":4,"bytesPerFrame":524288,"ageFrames":2,"lightMax":15,"lightAtten":1},"match":{"lullMs":300000},"map":{"sizeX":384,"sizeY":384,"sizeZ":64}}'
+const RULES_JSON := '{"revision":1,"mesher":{"surfacesPerFrame":4,"bytesPerFrame":524288,"ageFrames":2,"lightMax":15,"lightAtten":1},"match":{"lullMs":300000,"firstLullMs":600000},"map":{"sizeX":384,"sizeY":384,"sizeZ":64}}'

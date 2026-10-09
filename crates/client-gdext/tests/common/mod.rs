@@ -99,6 +99,9 @@ pub(crate) struct Gateway {
     offset: i64,
     /// This phase's reported elapsed ticks, a high-water mark (`phase_elapsed`).
     phase_elapsed: i64,
+    /// The countdown last reported this phase (`lull_remaining_ms`); `None` until a report
+    /// carries one, while the footer says `untimed` (S1-11).
+    countdown: Option<i64>,
     all_ready: bool,
     /// The seat token's calls, by gateway tick.
     in_tick: BTreeMap<i64, u32>,
@@ -121,6 +124,7 @@ impl Gateway {
             round: 1,
             offset: 0,
             phase_elapsed: 0,
+            countdown: None,
             all_ready: false,
             in_tick: BTreeMap::new(),
             in_tick_in_lull: BTreeMap::new(),
@@ -140,6 +144,7 @@ impl Gateway {
     fn close_phase(&mut self) {
         self.offset += self.phase_elapsed;
         self.phase_elapsed = 0;
+        self.countdown = None;
     }
 
     /// The most seat calls counted in any one tick.
@@ -174,16 +179,7 @@ impl Gateway {
             );
         }
         let result = match method.as_str() {
-            "report_host_clock" => {
-                if let Some(Json::Number(spent)) = params.get("elapsed_ms") {
-                    let spent: i64 = spent.parse().expect("a number");
-                    // `to_ticks_floor`, kept as a high-water mark.
-                    self.phase_elapsed = self
-                        .phase_elapsed
-                        .max(spent.checked_div(MS_PER_TICK).unwrap_or(0));
-                }
-                format!(r#"{{"all_ready":{}}}"#, self.all_ready)
-            }
+            "report_host_clock" => self.report_host_clock(&params),
             "end_recap" => {
                 self.close_phase();
                 self.phase = "lull";
@@ -253,8 +249,35 @@ impl Gateway {
             .strip_suffix('}')
             .expect("a result is an object");
         let separator = if body.len() > 1 { "," } else { "" };
+        let footer = self.footer();
+        format!(r#"{{"jsonrpc":"2.0","id":{id},"result":{body}{separator}"_status":{footer}}}}}"#)
+    }
+
+    /// `report_host_clock`: the phase's reported time, floored to ticks and kept as a
+    /// high-water mark (`to_ticks_floor`), and the countdown when the report carries one.
+    fn report_host_clock(&mut self, params: &Json) -> String {
+        if let Some(Json::Number(spent)) = params.get("elapsed_ms") {
+            let spent: i64 = spent.parse().expect("a number");
+            self.phase_elapsed = self
+                .phase_elapsed
+                .max(spent.checked_div(MS_PER_TICK).unwrap_or(0));
+        }
+        if let Some(Json::Number(left)) = params.get("remaining_ms") {
+            self.countdown = Some(left.parse().expect("a number"));
+        }
+        format!(r#"{{"all_ready":{}}}"#, self.all_ready)
+    }
+
+    /// The `_status` footer: outside a Push, `sync_time`'s, with the countdown last reported,
+    /// or `untimed` when none has been this phase (S1-11).
+    fn footer(&self) -> String {
+        let clock = match (self.phase, self.countdown) {
+            ("push", _) => String::new(),
+            (_, Some(left)) => format!(r#","phase_remaining_ms":{left}"#),
+            (_, None) => r#","untimed":true"#.to_owned(),
+        };
         format!(
-            r#"{{"jsonrpc":"2.0","id":{id},"result":{body}{separator}"_status":{{"phase":"{}","round":{}}}}}}}"#,
+            r#"{{"phase":"{}","round":{}{clock}}}"#,
             self.phase, self.round
         )
     }
