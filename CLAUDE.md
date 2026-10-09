@@ -37,9 +37,9 @@ Read that file before your first edit. What follows is only the Claude Code-spec
 Open a PR and stop — do not merge, do not work around it — when a task takes you into:
 
 - a contract file: `proto/**`, `buf.*`, `clippy.toml`, workspace `[lints]`, `[profile.*]`,
-  determinism code (state hash, RNG streams, fixed-point types, snapshot/replay format, tick loop,
-  the `research` feature), `.github/workflows/**`, `xtask`'s definition of `ci` and of `package`,
-  licence files, or these harness docs (AGENTS.md §5);
+  determinism code (state hash, the plan fingerprint, RNG streams, fixed-point types,
+  snapshot/replay format, tick loop, the `research` feature), `.github/workflows/**`, `xtask`'s
+  definition of `ci` and of `package`, licence files, or these harness docs (AGENTS.md §5);
 - adding a dependency that is not on the approved list (AGENTS.md §3);
 - anything on the "what not to build in v1" list (AGENTS.md §11) — script runtimes, MCP, an SDK, a
   published API, AI seats, manual control, playbook flags/branch/repeat;

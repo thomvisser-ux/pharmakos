@@ -866,10 +866,13 @@ sections that add one name it in their Owns lines.
   (`CORE_DIG_MAX_DEPTH` = 4, register S1-52, `tune`'s); its walk and edit come out of Hold & Build's
   hold, not the 70 % share. A finisher pass rebased it onto `ui`'s merge, re-blessed over `build`
   and, in named places the main session granted in `crates/client-gdext` and `godot/` once `ui` had
-  merged, committed the wizard page pins and fixed the watch check (item 136 (3) (k), (l)). Edits
-  outside the grant (`crates/gamectl/tests/operator.rs`, `operator_host.rs`,
-  `crates/gateway/tests/advice.rs`, `scenarios/skeleton/against-easy*`, golden READMEs) were
-  accepted at the merge (item 136 (3) (g)); AGENTS.md §6 now grants such tests as named places. The
+  merged, committed the wizard page pins (item 136 (2)), drew every `NOT_FOUND` of the estimate as
+  the route's answer and fixed the watch check (item 136 (3) (k), (l)). Edits outside the grant
+  (`crates/gamectl/tests/operator.rs`, `operator_host.rs`, `crates/gateway/tests/advice.rs`,
+  `scenarios/skeleton/against-easy*`, golden READMEs) were accepted at the merge (item 136 (3)
+  (g)); AGENTS.md §6 now grants such tests as named places in a crate no running lane owns. With
+  `site_for` gone, Easy reaches only the features a site covers until S3's `toward` (item 136 (3)
+  (q)). The
   main session added `REUSE.toml`'s block for the wizard goldens' outputs (item 136 (3) (m)). The
   `against-easy` pair moved from tick 1; the determinism chain did not.
 
@@ -982,8 +985,8 @@ sections that add one name it in their Owns lines.
   rate, the band percents an `i32`, the sum bound counting the starting force) and the sim's edit
   cap always applying are item 136 (3) (b) and (e). One test edit in `crates/plan-core` outside its
   places was accepted ((3) (c)). The four chains with a Build target moved from their deploy tick;
-  every `report_hash` moved. Its "Found, not fixed" goes to S2's first `crates/sim` and verifier
-  lanes (item 136 (5)); its one new marker is S3-22.
+  every `report_hash` moved. Its "Found, not fixed" is ruled in item 136 (3) (r) to (t) and goes to
+  S2's first `crates/sim` and verifier lanes (item 136 (5)); its one new marker is S3-22.
 
 ### `tune` — the numbers, and the real determinism segment
 
@@ -993,7 +996,17 @@ sections that add one name it in their Owns lines.
   `determinism_playbook`, `DETERMINISM_UNITS_PER_SEAT`), `crates/sim/src/world.rs`
   (`fill_unit_table`, `WorldConfig::units_per_seat`, `draw_new_destinations`),
   `crates/sim/tests/determinism.rs`, `crates/sim/tests/allocations.rs` and `crates/sim/src/bin`;
-  and, from item 135, `scenarios/s1/brownout-by-recycle.playbook.jsonc`.
+  and, from item 135, `scenarios/s1/brownout-by-recycle.playbook.jsonc`; and, from item 136 (3)
+  (p), named places for the operator depth it tunes (S1-52): `CORE_DIG_MAX_DEPTH` in
+  `crates/operator/src/easy.rs`, Expand & Mine's `dig_max_depth` in `library/expand_and_mine.jsonc`
+  (the two agree, `the_cores_dig_depth_is_expand_and_mines_own`), and the tests and goldens that pin
+  Easy's and the safe playbook's output wherever the depth moves them: `tests/golden/operator/**`,
+  the `against-easy*` scenario files in `scenarios/skeleton/` and their chains under
+  `tests/golden/scenarios/`, `crates/gamectl/tests/operator.rs`, `operator_host.rs` and
+  `wizard.rs`, `crates/gateway/tests/advice.rs`, the gateway's `instantiate_suggested` golden with
+  its byte copy `godot/fixtures/instantiate_suggested.json`, and
+  `crates/operator/tests/scripted.rs`'s depth tests (`the_safe_playbook_ends_by_setting_the_cores_dig_depth`,
+  `the_cores_dig_depth_is_expand_and_mines_own`). One lane: no separate operator commit is needed.
   **Branch** `feat/rules-s1-numbers`, worktree `../pharmakos-tune`, target `D:/build/tune`.
 - **Builds:** runs `check` on the finished rules; proposes each economy row per decision 16 with a
   PLACEHOLDER naming the owner at S1's demo; S1-26 per decision 16: `DETERMINISM_TICKS` raised to a
@@ -1025,7 +1038,10 @@ sections that add one name it in their Owns lines.
 - **Implements:** item 127 (3); item 103 (3)'s walk speed; register S1-26 and the economy rows'
   owner PLACEHOLDERs.
 - **Needs:** `build`, `oper` merged; decision 16. **Acceptance:** the check's report attached to the
-  PR; every chain and `report_hash` golden re-blessed once, the rows named. **Contract PR:** yes
+  PR; every chain and `report_hash` golden re-blessed once, the rows named; if the core's depth
+  moves, the operator goldens, the `against-easy*` chains and any of the pinned tests and goldens
+  above that it moves are re-blessed in the same PR, each named with the depth as the reason.
+  **Contract PR:** yes
   (determinism harness, `xtask`; `rules.proto` only if a row retires). **Agent-days:** 2.5–3.
 
 ### `demo` — the run sheet, the P1 run and the register
@@ -1135,7 +1151,7 @@ Two splits already shorten it: targeting's preview surfaces (`tgtw`) leave the s
 | `mine` | all | **moved** (the harness's Mine beacon digs past the rim) | all, if the held seam bumps the snapshot |
 | `grid` | none committed (as run, item 135: none moved; `brownout-by-recycle`'s chain is new) | — | — |
 | `build` | those with a Build (as run, item 136: `against-easy`, `against-easy-three-rounds`, `cover-nearest-vent` and `brownout-by-recycle`, each from its deploy tick, a Build target now its own 2.5 s row) | — (the harness writes no Build target; as run, none moved) | all, if it adds hashed state (as run: all, `SNAPSHOT_VERSION` 9); and the gateway's `view_keyframe` and `instantiate_suggested` goldens in its gateway commit, the 300 000 ms pin dropped (item 135 (2) (h)) |
-| `oper` (Easy's sealed files) | `against-easy*` (as run, item 136: both, from tick 1, re-blessed over `build`) | — | the operator's and the `demo_*_verify` goldens (as run: and the `demo_*` render goldens, `instantiate_suggested`, the wizard PNG, and twelve new wizard goldens) |
+| `oper` (Easy's sealed files) | `against-easy*` (as run, item 136: both, from tick 1, re-blessed over `build`) | — | the operator's and the `demo_*_verify` goldens (as run: the verify and render pairs of `demo_against_easy`, `demo_expand_and_mine` and `demo_hold_and_build`, `instantiate_suggested`, the wizard PNG, and twelve new wizard goldens) |
 | `ui` (as run, item 136) | none | — | — (no golden moved; the three PNGs re-rendered byte-identical on CI's Linux leg) |
 | `fog` | none; event logs only if a count lands in a value (`expand-east-segment`'s, the guards transcript), and with bare ids decoding as themselves none is expected (as run, item 135: none moved) | — | — |
 | `econ` (as run, item 135) | none | — | — (gateway goldens only: three new cases, `briefing`, `economy_forecast` and `recap`, and twelve moved in the footer's `phase_remaining_ms` alone) |
@@ -1290,7 +1306,8 @@ question rather than interviewed.
   pass like "nearest" had.** A carried "cover the nearest vent" then finds nothing after round 1 on
   the golden seed and says so (targeting.md's finding). *Downside:* in S1 a seat expands past its
   first vent only by a positional step re-authored each Lull, and Easy's stepping stones wait for S5
-  (item 113 (7)), so the balance check sees little expansion.
+  (item 113 (7)), so the balance check sees little expansion. (As run, item 136 (3) (q): `oper`
+  deleted `site_for`, so Easy's stepping stones wait for S3's `toward` instead.)
 - *Adopt it in S1:* +2–3 ad (proto, sim spiral, verifier, editor, Easy). *Downside:* irreversible
   vocabulary designed under schedule pressure, on a stage already over.
 
@@ -1453,8 +1470,9 @@ reachability, withholding the seed from seat tokens (item 127 (13)), aligning `B
 budget, the forecast's what-ifs, its projected income and projection, `get_map_summary`'s terrain
 summary and the fog filter on its feature list (item 130 (3)), `decision_tick_ms`, P6's baseline at
 the playtest (item 126 (2) (e)). **S4:** the award fund, blueprints beyond the Generator,
-`queue_structure`, the symmetric generator. **S5:** Easy's stepping stones, Normal and Hard, P2's
-baseline (item 126 (2) (e)).
+`queue_structure`, the symmetric generator. **S5:** Normal and Hard, P2's baseline (item 126 (2)
+(e)); Easy's stepping stones come with S3's `toward` instead, `site_for` being deleted (item 136
+(3) (q)).
 **S6:** the lobby's settings screen and Probation's untimed Lulls (item 127 (10)). **v1.1:**
 publishing `resolve_refs`, `extract_template` and rebind. **Hardening:** H-05's resumed Lull timer;
 U-03, the casual fog policy's missing phase term (no casual match is reachable before S6's settings

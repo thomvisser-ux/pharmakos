@@ -204,10 +204,11 @@ editor UI. Nothing else executes. Directories are under `crates/`; package names
    `ViewModel::ground_at`, and the E0601 checkbox: its removal patch, composed from a click,
    `DORMANT_CODES`, the client's reading of the diagnostic catalogue for when the checkbox shows,
    and `dormant_key`, a lax reader of the player's file for whether the option is set and under
-   which spelling; and, from `oper` #96, the editor's and the rig's handling of `estimate_route`'s
-   `NOT_FOUND` for a `covering` that covers nothing, drawn as the route's answer (unreachable, no
-   polyline, the gateway's sentence) and not counted or reported as a refused call, while any other
-   refusal of the estimate still is one. The client may compose a JSON Patch from a click; a verdict, a
+   which spelling; and, from S1's `oper` (decisions-log item 136), the editor's and the rig's
+   handling of `estimate_route`'s `NOT_FOUND`, whatever its cause (a `covering` that covers nothing,
+   a selector that ranks nothing, an unknown or unseen beacon), drawn as the route's answer
+   (unreachable, no polyline, the gateway's sentence) and not counted or reported as a refused call,
+   while any other refusal of the estimate still is one. The client may compose a JSON Patch from a click; a verdict, a
    travel time, a legality answer, a Fix and the patched text (`patch_plan`'s answer) still come
    from the gateway. The gateway's JSON-RPC answers are not canonical `gp.api.v1` JSON — they carry
    a `_status` footer and lower-case enum values (decisions-log item 80) — so every client of them,
@@ -430,8 +431,8 @@ per-path allow-list, so the mechanism is this and nothing else:
   (`indexing_slicing`, `unwrap_used`) and the rounding lint (`integer_division`) stay denied inside a
   walled crate too, so a walled crate still reads slices through `get` and divides through
   `checked_div`. A scoped run (`cargo xtask clippy -p <crate>`, which the versioned pre-commit hook
-  makes for each crate a commit touches) lints a walled crate named outright in pass 2 with the
-  wall's allowances and any other value, a glob or a package-id URL included, in pass 1; the
+  makes for each crate a commit touches) lints a walled crate named outright in pass 2, with the
+  wall's allowances, and any other value, a glob or a package-id URL included, in pass 1; the
   research pass runs only unscoped (decisions-log item 136).
 - `cargo xtask wall-guard` then fails the build if `sim`, `plan-core`, `verifier`, `operator`,
   `gateway` or `gamectl` depends on a walled crate, transitively included. That list is
@@ -547,13 +548,16 @@ machine can run.
   from its `SOURCES` (decisions-log item 110 (4)). A sweep (the no-silent-fallback rule, say) that
   reaches callers outside the lane's own crate or named place stops at that edge and says so in
   the PR; the next owner of the callers' crate carries the rest, written into that lane's section
-  of the stage plan (decisions-log item 135). Tests that pin another crate's output are granted the
-  same way: the operator's hosted tests live in `crates/gamectl/tests` (§3 rule 3) and the client's
-  wizard pins in `crates/client-gdext/tests/wizard.rs`, so a lane that changes the operator's
-  behaviour or `library/` is granted the tests that pin its output as named places in its section
-  of the stage plan where no other running lane owns that crate, and is sequenced where one does.
-  An edit a lane finds it needs and was not granted is disclosed in its PR, and the main session
-  rules on it at the merge (decisions-log item 136).
+  of the stage plan (decisions-log item 135). Tests that pin another crate's output are granted as
+  named places, like a confinement-test line, in a crate no running lane owns: a lane that changes
+  the operator's behaviour or `library/` is granted, in its section of the stage plan, the tests and
+  goldens that pin that output — the operator's hosted tests in `crates/gamectl/tests`
+  (`operator.rs`, `operator_host.rs`, `wizard.rs`; §3 rule 3), `crates/gateway/tests/advice.rs`, the
+  client's wizard pins in `crates/client-gdext/tests/wizard.rs`, and the gateway's
+  `instantiate_suggested` golden with its byte copy `godot/fixtures/instantiate_suggested.json`. A
+  crate another running lane owns is not granted this way: the change is sequenced, as this item's
+  first rule says. An edit to an unowned crate that a lane finds it needs and was not granted is
+  disclosed in its PR, and the main session rules on it at the merge (decisions-log item 136).
 - Rebase on `main` before opening a PR. Never force-push `main`, never rewrite a pushed branch
   someone else is reviewing.
 - State in the PR which crates you touched, so the next agent can pick a disjoint set.
