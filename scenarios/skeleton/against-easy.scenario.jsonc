@@ -8,12 +8,12 @@
 // here:
 //
 //   seat 0  seals scenarios/skeleton/against-easy.playbook.jsonc through
-//           `submit_plan`: the reshaped Hold & Build, filled with the values
-//           the built-in operator suggests for seat 0 on this map. The
-//           commander walks to the edge of its core's sphere on the starting
-//           vent's side, places a Build beacon there whose initial Build
-//           target is a Generator on the vent, and the new beacon's drone
-//           builds it. `structure_completed` for seat 0 is that Generator: no
+//           `submit_plan`: Hold & Build, filled with the values the built-in
+//           operator suggests for seat 0 on this map -- its starting vent by
+//           name, `vent_324_16`. The `place_beacon` step walks to the site
+//           the sim's covering rule reads when it starts, places a Build
+//           beacon there whose initial Build target is a Generator on the
+//           vent it covers, and the new beacon's drone builds it. `structure_completed` for seat 0 is that Generator: no
 //           other structure is ordered for seat 0 in this segment. Its kW --
 //           the lean vent's 20 -- cannot be stated in this format, so
 //           crates/gamectl/tests/operator.rs asserts it from the forecast, in
@@ -22,12 +22,10 @@
 //           it, plans, submits and says ready through its own in-process
 //           token. Its own seal is proved by an event the gateway's fallback
 //           can never produce: seat 1's `beacon_placed`. The fallback places
-//           nothing, and its text is exactly what Easy seals when it has
-//           nothing to compose (crates/gateway/src/host.rs, decision C16), so
-//           a `plan_sealed` line alone would prove nothing. Two seats are
-//           enough: in a two-seat match Easy places a Mine beacon beside its
-//           starting seam in round one, as it does in the operator goldens'
-//           three-seat match.
+//           nothing (crates/gateway/src/host.rs, decision C16), so a
+//           `plan_sealed` line alone would prove nothing. Two seats are
+//           enough: in this segment Easy places a Build beacon covering seat
+//           1's starting vent, by name, with a Generator on it.
 //
 // Two seats and not one: a one-seat match is decided at its first Push tick,
 // because the last seat standing wins (decisions-log item 114 (2)), so nothing
@@ -43,7 +41,7 @@
 {
   "format": "pharmakos.scenario.v1",
   "name": "against-easy",
-  "summary": "Seat 0 seals Hold & Build as the built-in operator fills it for seat 0: it walks to the edge of its core's sphere on the starting vent's side, places a Build beacon whose initial Build target is a Generator on the lean vent, and the Generator is completed. Seat 1 is a builtin seat played by Easy, which places a Mine beacon beside its starting seam -- something the gateway's fallback safe playbook never does, so it is Easy's own seal. One 80-second segment, sized from the run.",
+  "summary": "Seat 0 seals Hold & Build as the built-in operator fills it for seat 0: it places a Build beacon covering its starting vent, vent_324_16, named, whose initial Build target is a Generator on that lean vent, and the Generator is completed. Seat 1 is a builtin seat played by Easy, which places a Build beacon covering its own starting vent -- something the gateway's fallback safe playbook never does, so it is Easy's own seal. One 80-second segment, sized from the run.",
 
   // The seed every committed scenario names, so the three are about one map.
   // Seat 0's commander opens at 358, 22, 36 and its core `b_00` stands at
@@ -64,10 +62,12 @@
     { "seat": 1, "kind": "builtin" }
   ],
 
-  // One segment, sized from the run: seat 0's Generator was completed at tick
-  // 1286, 64 300 ms after the segment's first tick, and 64 300 ms plus a fifth
-  // is 77 160 ms, rounded up to a multiple of 10 000. The walk took 446 ticks,
-  // the deploy twelve seconds, the Build-target row two and a half
+  // One segment, sized from the run before S1's targeting: seat 0's Generator
+  // was completed at tick 1286 then, 64 300 ms after the segment's first tick,
+  // and 64 300 ms plus a fifth is 77 160 ms, rounded up to a multiple of
+  // 10 000. Since the operator's S1 lane it is completed at tick @GEN0, which
+  // the same rule still rounds to 80 000 ms: the step's walk to the covering
+  // site, the deploy twelve seconds, the Build-target row two and a half
   // (`interface_times.build_target_ms`), and the drone the new beacon
   // fabricated walked to the vent and raised the Generator's 600 HP.
   "segments": [
@@ -82,14 +82,14 @@
       "note": "Seat 0's submission reached the match: sealed in the Lull, reported on the tick the Push opens on." },
     { "assert": "event_fired", "event": "plan_sealed", "seat": 1, "by_tick": 1,
       "note": "Seat 1 sealed something. On its own this proves nothing about Easy -- the gateway's fallback would report the same line -- which is why the next assertion is here." },
-    { "assert": "event_fired", "event": "beacon_placed", "seat": 1, "by_tick": 550,
-      "note": "Easy's own seal, played: seat 1's commander walked to a site beside its starting seam and deployed a Mine beacon, at tick 446. The gateway's fallback places nothing, so only a playbook Easy composed can report this." },
+    { "assert": "event_fired", "event": "beacon_placed", "seat": 1, "by_tick": 800,
+      "note": "Easy's own seal, played: seat 1's commander walked to the site covering its starting vent and deployed a Build beacon there, at tick 661. The gateway's fallback places nothing, so only a playbook Easy composed can report this." },
     { "assert": "event_fired", "event": "beacon_placed", "seat": 0, "by_tick": 850,
-      "note": "Seat 0's Build beacon, deployed at the edge of its core's sphere at tick 691: the walk ended at the site, which the sim requires, since it deploys only while the commander stands within its interface range of the site." },
+      "note": "Seat 0's Build beacon, deployed at tick 721 on the site the covering rule read for vent_324_16: the step walked there itself (walk-in), since the sim deploys only while the commander stands within its interface range of the site." },
     { "assert": "event_fired", "event": "row_committed", "seat": 0, "by_tick": 900,
-      "note": "The new beacon's initial Build target -- its own row at `interface_times.build_target_ms`, 2.5 s, not a settings field (S1's plan, decision 15) -- committed on site at tick 741. Touch to change: an initial target is an interface row." },
+      "note": "The new beacon's initial Build target -- its own row at `interface_times.build_target_ms`, 2.5 s, not a settings field (S1's plan, decision 15), the Generator on the vent it covers -- committed on site at tick @ROW0. Touch to change: an initial target is an interface row." },
     { "assert": "event_fired", "event": "structure_completed", "seat": 0, "by_tick": 1550,
-      "note": "The Generator on the lean vent, completed at tick 1286: the new beacon fabricated a build drone, which walked to the vent and raised it. Seat 0 orders no other structure in this segment. The kW it adds is asserted in crates/gamectl/tests/operator.rs." },
+      "note": "The Generator on the lean vent, completed at tick @GEN0: the new beacon fabricated a build drone, which walked to the vent and raised it. Seat 0 orders no other structure in this segment. The kW it adds is asserted in crates/gamectl/tests/operator.rs." },
     { "assert": "event_fired", "event": "segment_ended", "by_tick": 1600,
       "note": "The segment ends on the tick, not near it." },
     { "assert": "hash_chain_equals",

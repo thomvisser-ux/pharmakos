@@ -5,8 +5,8 @@
 // built-in operator (skeleton-plan section 1.1; decisions-log item 116 (6)(c)).
 //
 //   seat 0  seals scenarios/skeleton/against-easy.playbook.jsonc through
-//           `submit_plan` in every Lull: the reshaped Hold & Build as Easy
-//           fills it for seat 0 on this map, the file against-easy seals once.
+//           `submit_plan` in every Lull: Hold & Build as Easy fills it for
+//           seat 0 on this map, the file against-easy seals once.
 //           It qualifies in all three rounds (no run of this file prints a
 //           HARNESS line, and crates/gamectl/tests/scenarios.rs holds it to
 //           that), so every seal went through the door a player's does.
@@ -23,11 +23,13 @@
 // round 1 but one. So each beat is asserted at its first occurrence, and
 // **Easy's later rounds are pinned by the chain alone**: a probe of every event
 // kind for both seats found one first occurrence outside round 1 -- seat 0's
-// first `step_failed`, at tick 4056 in round 2, asserted below. Since S1's
-// targeting the sealed file's fixed site is the column its own round-1 beacon
-// stands on, and no stacking refuses it (`illegal_site`): the demo's F4, a
-// carried positional playbook placing a beacon on the same voxel every round,
-// now fails loudly instead (docs/design/targeting.md). A
+// first `step_failed`, at tick 3601 in round 2, asserted below. Since the
+// operator's S1 lane the sealed file names its vent, `vent_324_16`, and its
+// `place_beacon` walks to the site it reads: in round 2 that vent is covered
+// by seat 0's own round-1 beacon and has its Generator, so the carried step
+// fails as it starts rather than placing a second beacon -- the demo's F4,
+// a carried playbook placing again every round, fails loudly instead
+// (docs/design/targeting.md). A
 // `plan_sealed` for seat 1 in rounds 2 and 3 is not asserted either: round
 // 1's seal meets any later deadline, and the gateway's fallback emits the same
 // line (as against-easy.scenario.jsonc says).
@@ -81,13 +83,13 @@
   // recap's, which is on the tick.
   "assertions": [
     { "assert": "event_fired", "event": "beacon_placed", "seat": 0, "by_tick": 850,
-      "note": "Seat 0's Build beacon, deployed at the edge of its core's sphere at tick 691, its first." },
+      "note": "Seat 0's Build beacon, deployed at tick 721 on the site the covering rule read for vent_324_16, its first." },
     { "assert": "event_fired", "event": "structure_completed", "seat": 0, "by_tick": 1550,
-      "note": "The Generator on the lean vent, completed at tick 1286 by the drone the new beacon fabricated: seat 0's first completed structure." },
+      "note": "The Generator on the lean vent, completed at tick @GEN0 by the drone the new beacon fabricated: seat 0's first completed structure." },
     { "assert": "event_fired", "event": "ore_delivered", "seat": 1, "by_tick": 2200,
-      "note": "Seat 1's first ore delivery, at tick 1787. Seat 0 delivers first in this run, at tick 1430, since S1's `mine` lane moved its first dig (tests/golden/scenarios/README.md). The player's own ore is on T22's run sheet." },
+      "note": "Seat 1's first ore delivery, at tick @ORE1. Seat 0 delivers first in this run, at tick @ORE0 (tests/golden/scenarios/README.md). The player's own ore is on T22's run sheet." },
     { "assert": "event_fired", "event": "step_failed", "seat": 0, "by_tick": 4100,
-      "note": "Round 2: seat 0's carried deploy names the column its round-1 beacon stands on, and no stacking refuses it as the step starts, at tick 4056, with `illegal_site` (id 6) -- seat 0's first failure of the match. Before S1 it stacked a second beacon there (the demo's F4). The id is not pinned by the chain, which hashes no event (events are derived output: crates/sim/tests/runner.rs's `the_event_bus_is_not_in_the_state_encoding`); the chain pins the world the refusal leaves, with no second beacon on that column." },
+      "note": "Round 2: seat 0's carried deploy names vent_324_16, which its round-1 beacon covers and its Generator stands on, and the step fails as it starts, at tick @FAIL0 -- seat 0's first failure of the match. Before S1 it stacked a second beacon on the same column (the demo's F4). The failure's reason is not pinned by the chain, which hashes no event (events are derived output: crates/sim/tests/runner.rs's `the_event_bus_is_not_in_the_state_encoding`); the chain pins the world the refusal leaves, with no second beacon on that column." },
     { "assert": "event_fired", "event": "settled", "by_tick": 3600,
       "note": "Round 1's recap settles on the tick its Push ends, the first settlement of the match." },
     { "assert": "hash_chain_equals",

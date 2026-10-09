@@ -165,43 +165,22 @@ fn without_clock_or_notes(response: &Json) -> String {
     pharmakos_proto::json::write(&strip(response))
 }
 
-/// The Hold & Build pointers a suggestion fills since the template became
-/// place-and-build (decisions-log item 113 (6)): the walk, the site, and the
-/// Generator's anchor, in the template's declaration order.
-const HOLD_AND_BUILD_WALK: &str = "/declarative/route/0/move/to";
-const HOLD_AND_BUILD_SITE: &str = "/declarative/route/1/place_beacon/at";
-const HOLD_AND_BUILD_ANCHOR: &str =
-    "/declarative/route/1/place_beacon/initial/mandate/build/targets/0/anchor/voxel";
+/// The Hold & Build pointers since the templates were rewritten with
+/// descriptions (decisions-log item 127 (12); S1's plan, task `oper`): the
+/// vent the new beacon covers, which a suggestion fills with a vent's name,
+/// and the hold, in the template's declaration order.
+const HOLD_AND_BUILD_VENT: &str = "/declarative/route/0/place_beacon/at/covering";
+const HOLD_AND_BUILD_HOLD: &str = "/declarative/route/1/hold/ms";
 
-/// The Hold & Build suggestion every reading advisor below makes: the walk
-/// and the site twelve voxels along y from the anchor, and the Generator's
-/// anchor.
+/// The Hold & Build suggestion every reading advisor below makes: the vent
+/// whose anchor column is `anchor`'s x and y, by name.
 fn hold_and_build(anchor: [i32; 3], why: &str) -> Suggestion {
-    let site = format!(
-        r#"{{"voxel":{{"x":{},"y":{},"z":{}}}}}"#,
-        anchor[0],
-        anchor[1].saturating_add(12),
-        anchor[2]
-    );
     Suggestion {
         template_id: String::from("hold_and_build"),
-        parameters: vec![
-            SuggestedValue {
-                pointer: String::from(HOLD_AND_BUILD_WALK),
-                value: site.clone(),
-            },
-            SuggestedValue {
-                pointer: String::from(HOLD_AND_BUILD_SITE),
-                value: site,
-            },
-            SuggestedValue {
-                pointer: String::from(HOLD_AND_BUILD_ANCHOR),
-                value: format!(
-                    r#"{{"x":{},"y":{},"z":{}}}"#,
-                    anchor[0], anchor[1], anchor[2]
-                ),
-            },
-        ],
+        parameters: vec![SuggestedValue {
+            pointer: String::from(HOLD_AND_BUILD_VENT),
+            value: format!(r#"{{"feature_id":"vent_{}_{}"}}"#, anchor[0], anchor[1]),
+        }],
         why: why.to_owned(),
     }
 }
@@ -349,22 +328,12 @@ fn a_suggested_instantiation_reports_every_declared_parameter_in_order() {
         seen,
         [
             (
-                String::from(HOLD_AND_BUILD_WALK),
-                String::from(r#"{"voxel":{"x":150,"y":25,"z":118}}"#),
+                String::from(HOLD_AND_BUILD_VENT),
+                String::from(r#"{"feature_id":"vent_150_13"}"#),
                 true,
             ),
             (
-                String::from(HOLD_AND_BUILD_SITE),
-                String::from(r#"{"voxel":{"x":150,"y":25,"z":118}}"#),
-                true,
-            ),
-            (
-                String::from(HOLD_AND_BUILD_ANCHOR),
-                String::from(r#"{"x":150,"y":13,"z":118}"#),
-                true,
-            ),
-            (
-                String::from("/declarative/route/2/hold/ms"),
+                String::from(HOLD_AND_BUILD_HOLD),
                 String::from("30000"),
                 false,
             ),
@@ -384,7 +353,10 @@ fn a_suggested_instantiation_reports_every_declared_parameter_in_order() {
          in its own."
     );
     let playbook = text_of(&answer, "playbook_jsonc");
-    assert!(playbook.contains(r#""x":150,"y":13,"z":118"#), "{playbook}");
+    assert!(
+        playbook.contains(r#""feature_id":"vent_150_13""#),
+        "{playbook}"
+    );
     assert!(
         !playbook.contains("\"parameters\""),
         "a playbook carries no declaration"
@@ -465,21 +437,21 @@ fn an_explicit_parameter_beats_a_suggestion() {
             &human,
             "instantiate_template",
             r#"{"template_id":"hold_and_build","suggested":true,"parameters":[
-                 {"name":"/declarative/route/1/place_beacon/initial/mandate/build/targets/0/anchor/voxel",
-                  "value":"{\"x\":7,\"y\":8,\"z\":9}"}]}"#,
+                 {"name":"/declarative/route/0/place_beacon/at/covering",
+                  "value":"{\"feature_id\":\"vent_7_8\"}"}]}"#,
         ),
         "instantiate_template",
     );
-    let anchor = support::array_of(&answer, "parameters")
+    let vent = support::array_of(&answer, "parameters")
         .into_iter()
-        .find(|parameter| text_of(parameter, "pointer") == HOLD_AND_BUILD_ANCHOR)
-        .expect("the anchor's declaration");
-    assert_eq!(text_of(&anchor, "value"), r#"{"x":7,"y":8,"z":9}"#);
-    assert_eq!(anchor.get("suggested"), Some(&Json::Bool(false)));
+        .find(|parameter| text_of(parameter, "pointer") == HOLD_AND_BUILD_VENT)
+        .expect("the vent's declaration");
+    assert_eq!(text_of(&vent, "value"), r#"{"feature_id":"vent_7_8"}"#);
+    assert_eq!(vent.get("suggested"), Some(&Json::Bool(false)));
     let playbook = text_of(&answer, "playbook_jsonc");
     assert!(
-        !playbook.contains(r#""x":150,"y":13,"z":118"#),
-        "the suggested anchor lost: {playbook}"
+        !playbook.contains("vent_150_13"),
+        "the suggested vent lost: {playbook}"
     );
     assert_eq!(
         text_of(&answer, "why"),
@@ -543,13 +515,16 @@ fn advice_for_one_seat_never_reaches_another() {
             let value = text_of(
                 &support::array_of(&made, "parameters")
                     .into_iter()
-                    .find(|parameter| text_of(parameter, "pointer") == HOLD_AND_BUILD_ANCHOR)
-                    .expect("the anchor's parameter"),
+                    .find(|parameter| text_of(parameter, "pointer") == HOLD_AND_BUILD_VENT)
+                    .expect("the vent's parameter"),
                 "value",
             );
             assert_eq!(
                 value,
-                format!(r#"{{"x":{},"y":12,"z":100}}"#, 100_u8.saturating_add(seat)),
+                format!(
+                    r#"{{"feature_id":"vent_{}_12"}}"#,
+                    100_u8.saturating_add(seat)
+                ),
                 "{policy:?}: seat {seat}'s own suggestion"
             );
         }
@@ -1025,7 +1000,7 @@ fn a_suggestion_that_would_not_instantiate_is_dropped_and_audited() {
     let not_json = Suggestion {
         template_id: String::from("hold_and_build"),
         parameters: vec![SuggestedValue {
-            pointer: String::from("/declarative/route/2/hold/ms"),
+            pointer: String::from(HOLD_AND_BUILD_HOLD),
             value: String::from("30s"),
         }],
         why: String::from("Not JSON."),

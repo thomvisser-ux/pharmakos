@@ -335,9 +335,9 @@ changes entity positions and no terrain at all.
 One whole JSON-RPC response, exactly as the wire carries it: seat 0's
 `instantiate_template{template_id: "hold_and_build", suggested: true}` on the
 golden seed, in the opening Lull, after a **scripted** advisor filed a suggestion
-for the walk, the site and the Generator's anchor and none for the hold
-(decisions-log item 111, decision C2; the three places since Hold & Build became
-place-and-build, item 113 (6)). Produced by
+for the vent the new beacon covers, by name, and none for the hold
+(decisions-log item 111, decision C2; one name since S1's operator lane rewrote
+Hold & Build with a description, item 127 (12)). Produced by
 `a_suggested_instantiation_reports_every_declared_parameter_in_order`.
 
 It is a fixture as well as a golden: T19's second pull request copies it byte
@@ -366,7 +366,9 @@ things moved:
   **It moves whenever the template does**: T18b moved it, with every entry of
   `parameters` and the scripted `why`, when it reshaped Hold & Build to walk to
   the edge of the core's sphere and place a Build beacon there (decisions-log
-  item 113 (6)).
+  item 113 (6)); S1's `oper` moved it again, with `parameters`, when it
+  rewrote the template with a `covering` description and walk-in, so the walk,
+  the site and the anchor became one vent named by the suggestion.
 
 The `_status` footer is the opening Lull's, with the whole first Lull, 600 000
 ms (`match.first_lull_ms`), reported left. Its history: S1's first contract
