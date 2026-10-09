@@ -975,19 +975,24 @@ fn step_clippy(ctx: &Ctx) -> Result<Outcome, String> {
     let walled = walled_packages(&ctx.workspace)?;
     let mut notes: Vec<String> = Vec::new();
 
+    if !ctx.packages.is_empty() {
+        // A scoped run (the pre-commit hook's `cargo xtask clippy -p <crate>`)
+        // lints each named crate the way the unscoped run does: a deterministic
+        // crate in pass 1, a walled one in pass 2 with the wall's allowances.
+        for args in scoped_clippy_args(&ctx.packages, &walled, ctx.locked) {
+            run(ctx, &ctx.cargo, &args)?;
+        }
+        return Ok(Outcome::Done(format!(
+            "clean for {} (scoped run)",
+            ctx.packages.join(", ")
+        )));
+    }
+
     // Pass 1 — everything outside the wall, with the full deny set.
-    let mut args: Vec<String> = vec!["clippy".to_owned()];
-    if ctx.packages.is_empty() {
-        args.push("--workspace".to_owned());
-        for package in &walled {
-            args.push("--exclude".to_owned());
-            args.push(package.clone());
-        }
-    } else {
-        for package in &ctx.packages {
-            args.push("--package".to_owned());
-            args.push(package.clone());
-        }
+    let mut args: Vec<String> = vec!["clippy".to_owned(), "--workspace".to_owned()];
+    for package in &walled {
+        args.push("--exclude".to_owned());
+        args.push(package.clone());
     }
     args.push("--all-targets".to_owned());
     if ctx.locked {
@@ -999,13 +1004,6 @@ fn step_clippy(ctx: &Ctx) -> Result<Outcome, String> {
     }
     run(ctx, &ctx.cargo, &args)?;
     notes.push("deterministic crates clean".to_owned());
-
-    if !ctx.packages.is_empty() {
-        return Ok(Outcome::Done(format!(
-            "clean for {} (scoped run)",
-            ctx.packages.join(", ")
-        )));
-    }
 
     // Pass 2 — the walled crates, still `-D warnings`, with the float, cast,
     // hash-map and clock allowances that the wall exists to contain.
@@ -1056,6 +1054,57 @@ fn step_clippy(ctx: &Ctx) -> Result<Outcome, String> {
     notes.push(format!("research build clean ({feature})"));
 
     Ok(Outcome::Done(notes.join("; ")))
+}
+
+/// The `clippy` commands of a scoped run (`-p` given), in order: the named
+/// deterministic crates with the full deny set (pass 1), then the named walled
+/// crates with the deny set plus [`WALL_ALLOW`] (pass 2), each pass only when it
+/// names something. Without this split a scoped run linted a walled crate with
+/// pass 1's flags and stopped, so `cargo xtask clippy -p pharmakos-client-gdext`
+/// (the pre-commit hook's call) failed on the floats the wall exists to hold.
+///
+/// A `-p` value goes to pass 2 only when it names a walled crate outright, as
+/// `name` or `name@version`. Anything else, a glob or a package-id URL included,
+/// stays in pass 1: a value that might reach a walled crate is linted under the
+/// stricter set and fails loudly rather than lint a deterministic crate with
+/// the wall's allowances.
+///
+/// Cargo also lints a named crate's path dependencies that are workspace
+/// members, under the same flags. So pass 2 reaches whatever a walled crate
+/// depends on (`bench`: the sim, the verifier, the gateway), exactly as the
+/// unscoped pass 2 does; the deterministic crates' own check is pass 1.
+fn scoped_clippy_args(packages: &[String], walled: &[String], locked: bool) -> Vec<Vec<String>> {
+    let names_walled = |spec: &&String| {
+        let name = spec
+            .split_once('@')
+            .map_or(spec.as_str(), |(before, _)| before);
+        !spec.contains(['*', '?', '[', '#', ':', '/', '\\'])
+            && walled.iter().any(|walled| walled == name)
+    };
+    let (in_wall, outside): (Vec<&String>, Vec<&String>) = packages.iter().partition(names_walled);
+
+    let mut passes: Vec<Vec<String>> = Vec::new();
+    for (selected, allow) in [(outside, false), (in_wall, true)] {
+        if selected.is_empty() {
+            continue;
+        }
+        let mut args: Vec<String> = vec!["clippy".to_owned()];
+        for package in selected {
+            args.push("--package".to_owned());
+            args.push(package.clone());
+        }
+        args.push("--all-targets".to_owned());
+        if locked {
+            args.push("--locked".to_owned());
+        }
+        args.push("--".to_owned());
+        args.extend(DETERMINISM_DENY.iter().map(|flag| (*flag).to_owned()));
+        if allow {
+            args.extend(WALL_ALLOW.iter().map(|flag| (*flag).to_owned()));
+        }
+        passes.push(args);
+    }
+    passes
 }
 
 /// Overflow checks stay on — in debug, and above all in release, where cargo
@@ -3872,6 +3921,68 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
             assert!(error.contains(REQUIRE_TOOLS_VAR), "{error}");
             assert!(error.contains(&format!("`{wrong}`")), "{error}");
         }
+    }
+
+    /// A scoped run lints a walled crate with the wall's allowances and a
+    /// deterministic one without them, as the unscoped run does; a value that
+    /// does not name a walled crate outright stays under the stricter set.
+    #[test]
+    fn a_scoped_clippy_run_keeps_the_wall() {
+        let walled = strings(&["pharmakos-client-gdext", "pharmakos-mesher"]);
+        let pass = |packages: &[&str], allow: bool, locked: bool| {
+            let mut args = strings(&["clippy"]);
+            for package in packages {
+                args.push("--package".to_owned());
+                args.push((*package).to_owned());
+            }
+            args.push("--all-targets".to_owned());
+            if locked {
+                args.push("--locked".to_owned());
+            }
+            args.push("--".to_owned());
+            args.extend(DETERMINISM_DENY.iter().map(|flag| (*flag).to_owned()));
+            if allow {
+                args.extend(WALL_ALLOW.iter().map(|flag| (*flag).to_owned()));
+            }
+            args
+        };
+
+        // The pre-commit hook's call for a client commit: pass 2 alone.
+        assert_eq!(
+            scoped_clippy_args(&strings(&["pharmakos-client-gdext"]), &walled, false),
+            vec![pass(&["pharmakos-client-gdext"], true, false)]
+        );
+        // A deterministic crate alone: pass 1 alone, never the allowances.
+        assert_eq!(
+            scoped_clippy_args(&strings(&["pharmakos-sim"]), &walled, true),
+            vec![pass(&["pharmakos-sim"], false, true)]
+        );
+        // Both kinds: pass 1 first, then pass 2, each with its own crates.
+        assert_eq!(
+            scoped_clippy_args(
+                &strings(&[
+                    "pharmakos-mesher@0.1.0",
+                    "pharmakos-gateway",
+                    "pharmakos-sim"
+                ]),
+                &walled,
+                false
+            ),
+            vec![
+                pass(&["pharmakos-gateway", "pharmakos-sim"], false, false),
+                pass(&["pharmakos-mesher@0.1.0"], true, false),
+            ]
+        );
+        // A glob or an id URL may reach a walled crate and a deterministic one
+        // alike, so it stays under the stricter set.
+        for spec in ["pharmakos-*", "path+file:///repo/crates/mesher#0.1.0"] {
+            assert_eq!(
+                scoped_clippy_args(&strings(&[spec]), &walled, false),
+                vec![pass(&[spec], false, false)],
+                "{spec}"
+            );
+        }
+        assert!(scoped_clippy_args(&[], &walled, false).is_empty());
     }
 
     /// S1-05, as S1's plan's decision 9 rules it: the three consumers of the
