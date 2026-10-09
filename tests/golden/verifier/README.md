@@ -189,6 +189,14 @@ cargo xtask golden --bless              # accepts them
   (`Scope::encode`), and `REPORT_HASH_DOMAIN` went from `gp.api.v1/report/1` to
   `/2` with it, so input 2's bytes moved for every case, the cases with no map
   included (an empty feature list and an absent commander are bytes too).
+* **Every `report_hash` moved in S1's Build settings (`build`), and nothing
+  else in any report did.** `SNAPSHOT_VERSION` went from 8 to 9 (each Build
+  target's order and rotation, and each structure's rotation), and the version
+  is the snapshot's first field, so input 2's bytes moved for every case. The
+  `plan_fingerprint` of every case is unmoved: the fingerprint moved into the
+  sim's `hash` module with its value held (the register's S1-42), and
+  `crates/sim/tests/vectors.rs`'s `the_plan_fingerprint_is_unmoved` pins three
+  of these files' values.
 * **Every `report_hash` moved in S1's estimate stage (`proj`), the QUICK-only
   ones and the reports whose diagnostics stayed the same included.**
   `VERIFIER_VERSION` went from `0.1.0-skeleton` to `0.1.0-s1`, input 4 of the

@@ -28,7 +28,6 @@
 //! search reads the footprint of the seam the home beacon holds and sorts its
 //! candidates in a fixed array ([`crate::mining`]), so nothing allocates.
 
-use crate::economy::BUILD_HP_PER_SECOND;
 use crate::events::{Emission, EventKind};
 use crate::knowledge::{AssetId, Position};
 use crate::math::fixed::{Fx, Sq};
@@ -250,9 +249,10 @@ impl Program for BuildProgram {
             world.send_unit(unit, site);
             return;
         }
-        // On site: raise it. `BUILD_HP_PER_SECOND` divides the tick rate
-        // exactly, so there is no accumulator and no rounding rule — see the
-        // constant's own note.
+        // On site: raise it. `structures.build_hp_per_second` divides the tick
+        // rate exactly -- a table whose row does not is refused at load -- so
+        // there is no accumulator and no rounding rule
+        // (`RulesTable::build_hp_per_tick`).
         let kind = world
             .structures()
             .kinds()
@@ -263,7 +263,7 @@ impl Program for BuildProgram {
             return;
         };
         let full = world.structure_max_hp(kind);
-        let per_tick = Hp::new(hp_per_tick());
+        let per_tick = world.rules().build_hp_per_tick();
         let grown = world
             .structures()
             .hit_points()
@@ -471,17 +471,6 @@ impl Program for ScoutProgram {
         }
         idle_at_home(world, unit);
     }
-}
-
-/// Hit points one build drone adds per tick.
-///
-/// [`BUILD_HP_PER_SECOND`] is chosen a multiple of the tick rate precisely so
-/// that this is exact and there is no accumulator to keep hashed.
-fn hp_per_tick() -> i32 {
-    BUILD_HP_PER_SECOND
-        .checked_div(i32::try_from(crate::math::quantity::TICK_HZ).unwrap_or(20))
-        .unwrap_or(0)
-        .max(1)
 }
 
 /// What a full load of ore is worth, in `$`, for a drone working the seam that

@@ -1648,7 +1648,7 @@ fn a_beacons_key_core_supplies_exactly_its_base() {
         || panic!("a power block"),
         |block| block.beacon_base_draw_kw,
     );
-    let power = PowerRules::read(&rules).unwrap_or_else(|error| panic!("{error}"));
+    let power = PowerRules::read(rules.message()).unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(
         u32::try_from(power.beacon_base_draw).ok(),
         Some(row),

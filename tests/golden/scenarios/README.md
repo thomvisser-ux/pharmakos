@@ -170,6 +170,22 @@ low-priority Survey beacon's seven scouts in round 2, then recycles the
 Generator's beacon at tick 4911, and the next settle (4912) sheds the Survey
 beacon, which stays dark for the rest of the round.
 
+**S1's Build settings (`build`) moved the four chains with a Build target and
+left the rest** (S1's plan, decision 15 and decision 5; the register's S1-51).
+A Build target is now its own row at `interface_times.build_target_ms`
+(2.5 s) rather than one settings field at the edit's base rate (2 s), so a
+`place_beacon` whose initial settings carry one Generator target commits that
+row ten ticks later, and the beacon's mandate and the Quartermaster's payment
+follow ten ticks late: `against-easy` and `against-easy-three-rounds` first
+differ at tick 691, `cover-nearest-vent` and `brownout-by-recycle` at tick 721,
+each the tick the old, shorter row committed. A structure's rotation and a
+target's order are hashed from the same pull request (snapshot version 9), but
+they are bytes only where a target or a structure exists, which these four
+chains reach after the moved commit anyway. `deploy-and-visit`,
+`expand-east-segment`, `mine-to-depth`, `round-limit-audit` and
+`unaffordable-deploy` write no Build target and did not move, and neither did
+the determinism chain (its harness writes none).
+
 `expand-east-segment` carries one more thing worth knowing before its chain is
 read. The playbook it seals **does not qualify against either seat's own frozen
 snapshot** on this map: `E0401` for `b_01`, which since S1 names each seat's own

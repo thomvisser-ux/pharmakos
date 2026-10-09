@@ -755,6 +755,62 @@ impl TargetKind {
     }
 }
 
+/// Quarter turns about the vertical axis, 0 to 3: a Build target's
+/// `rotation_quarter_turns` and the facing of the structure built for it.
+///
+/// An integer because the sim is integer-only: there are no free rotations and
+/// no angles in a playbook (AGENTS.md section 4.2). The type cannot hold a
+/// fourth turn, so a value past 3 is refused where it is read
+/// ([`QuarterTurns::new`]) rather than wrapped.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Default)]
+pub struct QuarterTurns(u8);
+
+impl QuarterTurns {
+    /// No turn: the facing a structure has when nothing chose one.
+    pub const NONE: QuarterTurns = QuarterTurns(0);
+
+    /// `turns` quarter turns, or `None` past three.
+    #[must_use]
+    pub const fn new(turns: u32) -> Option<QuarterTurns> {
+        match turns {
+            0 => Some(QuarterTurns(0)),
+            1 => Some(QuarterTurns(1)),
+            2 => Some(QuarterTurns(2)),
+            3 => Some(QuarterTurns(3)),
+            _ => None,
+        }
+    }
+
+    /// The count, 0 to 3, as the canonical encoding writes it.
+    #[must_use]
+    pub const fn raw(self) -> u8 {
+        self.0
+    }
+}
+
+/// Where a Build target sits in its beacon's build order, and how the
+/// structure built for it faces (spec section 6's Build row: "blueprint,
+/// anchor, rotation, order"; S1's plan, decision 5).
+///
+/// The mandate builds the highest-order affordable target first: the lowest
+/// `order`, ties by list position (`playbook.proto`'s `BuildTarget.order`).
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Default)]
+pub struct BuildOrder {
+    /// `BuildTarget.order`: lower builds first.
+    pub order: u32,
+    /// `BuildTarget.rotation_quarter_turns`.
+    pub rotation: QuarterTurns,
+}
+
+impl BuildOrder {
+    /// Order 0, no turn: what a protected area, a probe area and a fixture's
+    /// target carry.
+    pub const NONE: BuildOrder = BuildOrder {
+        order: 0,
+        rotation: QuarterTurns::NONE,
+    };
+}
+
 /// A beacon's mandate settings that are **lists**: Build targets, protected
 /// areas and Survey probe areas.
 ///
@@ -775,6 +831,8 @@ pub struct TargetTable {
     built: Vec<u32>,
     feature: Vec<u32>,
     desc: Vec<u8>,
+    order: Vec<u32>,
+    rotation: Vec<u8>,
     capacity: u32,
 }
 
@@ -793,6 +851,8 @@ impl TargetTable {
             built: Vec::with_capacity(n),
             feature: Vec::with_capacity(n),
             desc: Vec::with_capacity(n),
+            order: Vec::with_capacity(n),
+            rotation: Vec::with_capacity(n),
             capacity,
         }
     }
@@ -895,7 +955,23 @@ impl TargetTable {
         &self.desc
     }
 
-    /// Append one row, keeping the table in `(beacon, kind)` order.
+    /// Each Build target's place in its beacon's build order
+    /// ([`BuildOrder::order`]); zero on every other row. Hashed: it decides
+    /// which target the mandate pays for first.
+    #[must_use]
+    pub fn orders(&self) -> &[u32] {
+        &self.order
+    }
+
+    /// Each Build target's rotation, as [`QuarterTurns::raw`]; zero on every
+    /// other row. Hashed: the structure built for the target takes it.
+    #[must_use]
+    pub fn rotations(&self) -> &[u8] {
+        &self.rotation
+    }
+
+    /// Append one row, keeping the table in `(beacon, kind)` order, at order 0
+    /// with no turn ([`BuildOrder::NONE`]).
     ///
     /// `false` when the table is full, which the caller reports as a step
     /// failure rather than growing a column inside a tick.
@@ -914,11 +990,20 @@ impl TargetTable {
             at,
             radius,
             (u32::MAX, crate::targeting::DESCRIPTION_VOXEL),
+            BuildOrder::NONE,
         )
     }
 
-    /// [`TargetTable::add`], for a Build target written through `on`: `bound`
-    /// is the feature it is bound to and how it was written.
+    /// [`TargetTable::add`], for a Build target with its place in the build
+    /// order and its rotation, and -- for one written through `on` -- `bound`,
+    /// the feature it is bound to and how it was written.
+    ///
+    /// A row goes after every row of its `(beacon, kind)`, so a beacon's
+    /// targets keep their list position, which breaks a tie of `order`.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one argument per column a row writes, as `StructureTable::push`; a parameter struct would be built at its two callers only to be taken apart here"
+    )]
     pub fn add_bound(
         &mut self,
         beacon: BeaconId,
@@ -927,22 +1012,18 @@ impl TargetTable {
         at: [Fx; 3],
         radius: i32,
         bound: (u32, u8),
+        build: BuildOrder,
     ) -> bool {
         if self.count >= self.capacity {
             return false;
         }
         let key = (beacon.raw(), kind.id());
-        let mut slot: usize = 0;
-        while slot < self.beacon.len() {
-            let here = (
-                self.beacon.get(slot).copied().unwrap_or(0),
-                self.kind.get(slot).copied().unwrap_or(0),
-            );
-            if here > key {
-                break;
-            }
-            slot = slot.saturating_add(1);
-        }
+        let slot = self
+            .beacon
+            .iter()
+            .zip(&self.kind)
+            .position(|(here, of)| (*here, *of) > key)
+            .unwrap_or(self.beacon.len());
         self.beacon.insert(slot, beacon.raw());
         self.kind.insert(slot, kind.id());
         self.blueprint.insert(slot, blueprint);
@@ -951,6 +1032,8 @@ impl TargetTable {
         self.built.insert(slot, BeaconId::NONE.raw());
         self.feature.insert(slot, bound.0);
         self.desc.insert(slot, bound.1);
+        self.order.insert(slot, build.order);
+        self.rotation.insert(slot, build.rotation.raw());
         self.count = self.count.saturating_add(1);
         true
     }
@@ -968,6 +1051,8 @@ impl TargetTable {
         self.built.remove(slot);
         self.feature.remove(slot);
         self.desc.remove(slot);
+        self.order.remove(slot);
+        self.rotation.remove(slot);
         self.count = self.count.saturating_sub(1);
     }
 
@@ -999,6 +1084,15 @@ impl TargetTable {
             || columns.built.len() != n
             || columns.feature.len() != n
             || columns.desc.len() != n
+            || columns.order.len() != n
+            || columns.rotation.len() != n
+        {
+            return false;
+        }
+        if !columns
+            .rotation
+            .iter()
+            .all(|turns| QuarterTurns::new(u32::from(*turns)).is_some())
         {
             return false;
         }
@@ -1032,6 +1126,8 @@ impl TargetTable {
         self.built = columns.built;
         self.feature = columns.feature;
         self.desc = columns.desc;
+        self.order = columns.order;
+        self.rotation = columns.rotation;
         true
     }
 }
@@ -1056,6 +1152,10 @@ pub struct TargetColumns {
     pub feature: Vec<u32>,
     /// How each Build target was written.
     pub desc: Vec<u8>,
+    /// Each Build target's place in the build order.
+    pub order: Vec<u32>,
+    /// Each Build target's rotation, 0 to 3.
+    pub rotation: Vec<u8>,
 }
 
 /// What one seat remembers seeing, with the tick it was seen at (spec section
@@ -2204,6 +2304,8 @@ pub struct StructureColumns {
     pub home: Vec<u32>,
     /// Whether each structure is still going up.
     pub building: Vec<bool>,
+    /// Each structure's rotation, 0 to 3 ([`QuarterTurns::raw`]).
+    pub rotation: Vec<u8>,
 }
 
 /// Beacons, structure-of-arrays.
@@ -2645,6 +2747,7 @@ pub struct StructureTable {
     hp: Vec<Hp>,
     home: Vec<u32>,
     building: Vec<bool>,
+    rotation: Vec<u8>,
 }
 
 impl StructureTable {
@@ -2661,6 +2764,7 @@ impl StructureTable {
             hp: Vec::with_capacity(n),
             home: Vec::with_capacity(n),
             building: Vec::with_capacity(n),
+            rotation: Vec::with_capacity(n),
         }
     }
 
@@ -2675,6 +2779,7 @@ impl StructureTable {
         self.hp.reserve(n);
         self.home.reserve(n);
         self.building.reserve(n);
+        self.rotation.reserve(n);
     }
 
     /// Append one structure.
@@ -2684,6 +2789,10 @@ impl StructureTable {
     /// the ground at one hit point with the flag set, and a build drone raises
     /// it. It supplies nothing, draws nothing and has no capability until the
     /// flag clears at full hit points.
+    ///
+    /// `rotation` is the facing the Build target that paid for it chose
+    /// (spec section 6's Build row); [`QuarterTurns::NONE`] for one that was
+    /// not built for a target.
     #[allow(
         clippy::too_many_arguments,
         reason = "one argument per column, as `UnitTable::push` above; the same reasoning applies"
@@ -2697,6 +2806,7 @@ impl StructureTable {
         hp: Hp,
         home: BeaconId,
         building: bool,
+        rotation: QuarterTurns,
     ) {
         self.id.push(id.raw());
         self.seat.push(seat.raw());
@@ -2705,6 +2815,7 @@ impl StructureTable {
         self.hp.push(hp);
         self.home.push(home.raw());
         self.building.push(building);
+        self.rotation.push(rotation.raw());
         self.count = self.count.saturating_add(1);
     }
 
@@ -2773,6 +2884,13 @@ impl StructureTable {
         &self.building
     }
 
+    /// The rotation column, as [`QuarterTurns::raw`]: the facing the Build
+    /// target that paid for each structure chose. Hashed and snapshotted.
+    #[must_use]
+    pub fn rotations(&self) -> &[u8] {
+        &self.rotation
+    }
+
     /// The under-construction column, to write into. The build program clears
     /// it at full hit points.
     pub fn building_mut(&mut self) -> &mut [bool] {
@@ -2805,6 +2923,14 @@ impl StructureTable {
             || columns.hp.len() != n
             || columns.home.len() != n
             || columns.building.len() != n
+            || columns.rotation.len() != n
+        {
+            return false;
+        }
+        if !columns
+            .rotation
+            .iter()
+            .all(|turns| QuarterTurns::new(u32::from(*turns)).is_some())
         {
             return false;
         }
@@ -2819,6 +2945,7 @@ impl StructureTable {
         self.hp = columns.hp;
         self.home = columns.home;
         self.building = columns.building;
+        self.rotation = columns.rotation;
         true
     }
 }

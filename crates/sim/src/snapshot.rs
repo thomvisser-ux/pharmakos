@@ -139,7 +139,16 @@ use serde::{Deserialize, Serialize};
 /// world restored from it would choose afresh where the unbroken run kept its
 /// choice -- a desync with nothing red in front of it. The gateway's save
 /// refuses a version-7 snapshot by its stamp before it reaches this check.
-pub const SNAPSHOT_VERSION: u32 = 8;
+///
+/// **Version 9 is S1's Build settings** (S1's plan, task `build`, and its
+/// decision 5). It adds each Build target's place in the build order and its
+/// rotation (`BuildTarget.order` and `.rotation_quarter_turns`, which the
+/// mandate now builds by), and each structure's rotation, the facing the
+/// target that paid for it chose. A version-8 file is refused rather than
+/// read: it carries no order, and a world restored from it would build its
+/// targets in list order where the unbroken run builds them by `order`. The
+/// gateway's save refuses a version-8 snapshot by its stamp first.
+pub const SNAPSHOT_VERSION: u32 = 9;
 
 /// A flat, fixed-width projection of the world.
 ///
@@ -247,6 +256,8 @@ pub struct Snapshot {
     pub structure_home: Vec<u32>,
     /// Whether each structure is still going up, `0` or `1`.
     pub structure_building: Vec<u8>,
+    /// Each structure's rotation in quarter turns, 0 to 3.
+    pub structure_rotation: Vec<u8>,
 
     /// Wreck ids.
     pub wreck_id: Vec<u32>,
@@ -273,6 +284,11 @@ pub struct Snapshot {
     /// How each Build target was written ([`crate::targeting::DESCRIPTION_VOXEL`]
     /// and its two siblings).
     pub target_desc: Vec<u8>,
+    /// Each Build target's place in the build order; zero on other rows.
+    pub target_order: Vec<u32>,
+    /// Each Build target's rotation in quarter turns, 0 to 3; zero on other
+    /// rows.
+    pub target_rotation: Vec<u8>,
 
     /// Whose memory each sighting is.
     pub sighting_seat: Vec<u8>,
@@ -484,6 +500,7 @@ impl Default for Snapshot {
             structure_hp: Vec::new(),
             structure_home: Vec::new(),
             structure_building: Vec::new(),
+            structure_rotation: Vec::new(),
             wreck_id: Vec::new(),
             wreck_pos: Vec::new(),
             wreck_salvage: Vec::new(),
@@ -495,6 +512,8 @@ impl Default for Snapshot {
             target_built: Vec::new(),
             target_feature: Vec::new(),
             target_desc: Vec::new(),
+            target_order: Vec::new(),
+            target_rotation: Vec::new(),
             sighting_seat: Vec::new(),
             sighting_asset: Vec::new(),
             sighting_owner: Vec::new(),
@@ -770,6 +789,7 @@ impl Snapshot {
             structure_hp: structures.hit_points().iter().map(|h| h.raw()).collect(),
             structure_home: structures.homes().to_vec(),
             structure_building: structures.building().iter().map(|b| u8::from(*b)).collect(),
+            structure_rotation: structures.rotations().to_vec(),
 
             wreck_id: wrecks.ids().to_vec(),
             wreck_pos: axes_from_points(wrecks.positions()),
@@ -783,6 +803,8 @@ impl Snapshot {
             target_built: targets.built().to_vec(),
             target_feature: targets.features().to_vec(),
             target_desc: targets.descriptions().to_vec(),
+            target_order: targets.orders().to_vec(),
+            target_rotation: targets.rotations().to_vec(),
 
             sighting_seat: sightings.seats().to_vec(),
             sighting_asset: sightings.assets().to_vec(),
@@ -1004,6 +1026,7 @@ impl Snapshot {
             hp: self.structure_hp.iter().copied().map(Hp::new).collect(),
             home: self.structure_home.clone(),
             building: flags(&self.structure_building, "structure_building")?,
+            rotation: self.structure_rotation.clone(),
         }) {
             return Err(SnapshotError::Ragged("structure"));
         }
@@ -1094,6 +1117,8 @@ impl Snapshot {
                 built: self.target_built.clone(),
                 feature: self.target_feature.clone(),
                 desc: self.target_desc.clone(),
+                order: self.target_order.clone(),
+                rotation: self.target_rotation.clone(),
             },
         ) {
             return Err(SnapshotError::Ragged("target"));

@@ -403,3 +403,70 @@ fn a_seat_that_was_never_placed_does_not_survive_a_no_survivor_end() {
         "and a seat that was never placed is not among them"
     );
 }
+
+/// The audit's public rank read (decisions-log item 135 (2) (e)), term by
+/// term in spec section 3's tie-break order: the score first, then enemy value
+/// destroyed, then fewer beacons lost; seats tied on every term share a rank,
+/// the next rank counts every seat ahead of it, and a seat with no line holds
+/// no place. The gateway's displayed standing reads this and keeps no copy.
+#[test]
+fn the_rank_follows_the_audits_tie_break_term_by_term() {
+    use core::num::NonZeroU32;
+    use pharmakos_sim::audit::{AuditLine, FinalAudit};
+    let line = |seat: u8, score: i64, destroyed: i64, beacons_lost: u32| AuditLine {
+        seat: SeatId::new(seat),
+        held: Money::new(score - destroyed),
+        destroyed: Money::new(destroyed),
+        score: Money::new(score),
+        beacons_lost,
+    };
+    let ranks = |lines: Vec<AuditLine>| -> Vec<Option<u32>> {
+        let audit = FinalAudit {
+            winners: Vec::new(),
+            lines,
+        };
+        audit
+            .lines
+            .iter()
+            .map(|held| {
+                audit
+                    .rank_of(held.seat)
+                    .expect("a rank")
+                    .map(NonZeroU32::get)
+            })
+            .collect()
+    };
+    assert_eq!(
+        ranks(vec![line(0, 100, 0, 0), line(1, 200, 0, 0)]),
+        vec![Some(2), Some(1)],
+        "the score decides first"
+    );
+    assert_eq!(
+        ranks(vec![line(0, 200, 50, 3), line(1, 200, 10, 0)]),
+        vec![Some(1), Some(2)],
+        "on a tied score, more destroyed ranks ahead, whatever was lost"
+    );
+    assert_eq!(
+        ranks(vec![line(0, 200, 10, 2), line(1, 200, 10, 1)]),
+        vec![Some(2), Some(1)],
+        "on a tied score and destroyed, fewer beacons lost ranks ahead"
+    );
+    assert_eq!(
+        ranks(vec![
+            line(0, 200, 10, 1),
+            line(1, 200, 10, 1),
+            line(2, 50, 0, 0)
+        ]),
+        vec![Some(1), Some(1), Some(3)],
+        "a tie on every term shares a rank, and the next counts both"
+    );
+    let alone = FinalAudit {
+        lines: vec![line(0, 1, 0, 0)],
+        winners: Vec::new(),
+    };
+    assert_eq!(alone.rank_of(SeatId::new(1)), Ok(None), "no line, no place");
+    // The key the rank reads is the one the audit names its winner by.
+    let tied = line(0, 200, 10, 1);
+    assert_eq!(tied.key(), line(1, 200, 10, 1).key());
+    assert!(line(0, 200, 10, 0).key() > tied.key());
+}

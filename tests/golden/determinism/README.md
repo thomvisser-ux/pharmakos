@@ -188,6 +188,13 @@ program has run. At tick 804 seat 0's core's drone (unit 3) took
 it, was finishing `[26, 343, 28]` on the same tick; it now takes it at tick 805
 instead, and the two runs agree again from tick 848.
 
+**S1's Build settings (`build`) moved nothing here.** The encoding gained each
+Build target's order and rotation and each structure's rotation (snapshot
+version 9), written as blocks after their tables' rows, and the harness writes
+no Build target and pays for no structure, so those blocks are empty on every
+tick; and decision 15's interface pricing changes only what a Build target
+row or a list element costs, which the harness playbook writes none of.
+
 ## What a diff means
 
 **The sim's behaviour changed.** That is all it can mean: the chain is a pure

@@ -20,8 +20,12 @@
 // built, and a verifier never runs the Quartermaster ahead (AGENTS.md section
 // 3 rule 2).
 //
-// `event_fired` has no value predicate (register M-05, with S1-41), so the
-// failure's id is pinned by the chain and by crates/sim/tests/deploy.rs's
+// `event_fired` has no value predicate (register M-05, with S1-41), and the
+// chain does not pin the failure's id either: events are derived output and
+// never hashed (crates/sim/src/world.rs; crates/sim/tests/runner.rs's
+// `the_event_bus_is_not_in_the_state_encoding`), so the chain pins only the
+// world the failure leaves -- the treasury the deploy did not charge. The id
+// is pinned by crates/sim/tests/deploy.rs's
 // `a_deploy_the_treasury_cannot_cover_fails_its_step`, which reads it.
 {
   "format": "pharmakos.scenario.v1",

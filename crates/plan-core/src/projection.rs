@@ -94,8 +94,14 @@ mod tests {
 
     #[test]
     fn a_missing_price_is_an_error_rather_than_free() {
+        // The deploy's price, `structures.beacon`: a table without the whole
+        // `structures` block no longer loads at all, since the sim refuses at
+        // load a table its power phase cannot read (decisions-log item 135
+        // (2) (b)), so the gap is the one row the projection alone reads.
         let mut message = rules().message().clone();
-        message.structures = None;
+        if let Some(block) = message.structures.as_mut() {
+            block.beacon = None;
+        }
         let gapped = RulesTable::from_message(&message).expect("the sim's view still builds");
         let error = project(&deploys(1), &context(), &gapped).expect_err("nothing is priced");
         assert!(error.message.contains("structures"), "{error}");

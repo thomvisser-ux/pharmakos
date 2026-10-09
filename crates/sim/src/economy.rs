@@ -48,27 +48,6 @@ use crate::math::quantity::{Kw, Money};
 use crate::rules::RulesTable;
 use crate::tables::{BeaconId, SeatId};
 
-/// PLACEHOLDER: hit points a working build drone adds to a structure per
-/// second of game time.
-///
-/// **A named constant rather than a rules-table row, deliberately**
-/// (AGENTS.md §12, decisions-log item 105(1)). Spec section 5's interface table
-/// prices queueing a structure at "5 s, **plus** fabricator construction time",
-/// so construction time is explicitly not one of the interface times, and no
-/// row in `gp.v1.RulesTable` carries it: revision 3 fills in every `$` and `kW`
-/// number the walking skeleton names and this is not one of them. Nothing in
-/// T14's acceptance asserts its *value* — only that a structure spends time
-/// under construction, which any positive rate gives — so the row is proposed
-/// by **S1's economy work**, which is the stage that has mining and building
-/// rates to be wrong about together (owner, at S1, as
-/// `structures.build_hp_per_second`).
-///
-/// Sixty is chosen so the number divides the tick rate exactly: 60 hit points a
-/// second is 3 a tick at 20 Hz, so construction needs no accumulator and no
-/// rounding rule, and the `structures.generator.hp` = 600 Generator of the
-/// plan's §1.1 demo goes up in ten seconds on one drone and five on two.
-pub const BUILD_HP_PER_SECOND: i32 = 60;
-
 /// The five urgency bands the Quartermaster fills in order (spec section 7).
 ///
 /// The ids are written out and additive only, for the reason every other wire

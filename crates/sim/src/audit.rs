@@ -59,6 +59,8 @@
 use crate::math::quantity::Money;
 use crate::tables::{NOT_ELIMINATED, SeatId};
 use crate::world::World;
+use core::cmp::Reverse;
+use core::num::NonZeroU32;
 
 /// One seat's line of the final audit.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -75,17 +77,53 @@ pub struct AuditLine {
     pub beacons_lost: u32,
 }
 
+/// A line's place in spec section 3's tie-break order, as one comparable
+/// value: **higher is better**, and two lines with equal keys are tied on every
+/// term. The terms, in order: the audit score, then enemy value destroyed,
+/// then fewer beacons lost.
+///
+/// Public so that a reader of the audit -- the gateway's displayed standing
+/// (the register's X-03) -- ranks by the sim's own order rather than a copy
+/// of it (decisions-log item 135 (2) (e)).
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct AuditKey {
+    score: i64,
+    destroyed: i64,
+    fewer_lost: Reverse<u32>,
+}
+
 impl AuditLine {
-    /// The line's rank key: higher is better, and two lines with the same key
-    /// are tied on every term.
-    fn key(&self) -> (i64, i64, i64) {
-        (
-            self.score.raw(),
-            self.destroyed.raw(),
-            i64::from(self.beacons_lost).saturating_neg(),
-        )
+    /// The line's rank key ([`AuditKey`]): higher is better, and two lines
+    /// with the same key are tied on every term.
+    #[must_use]
+    pub fn key(&self) -> AuditKey {
+        AuditKey {
+            score: self.score.raw(),
+            destroyed: self.destroyed.raw(),
+            fewer_lost: Reverse(self.beacons_lost),
+        }
     }
 }
+
+/// Why [`FinalAudit::rank_of`] could not answer.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum AuditRankError {
+    /// The rank is past what a `u32` numbers: more audited lines than any
+    /// seat id can name.
+    TooManyLines,
+}
+
+impl core::fmt::Display for AuditRankError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            AuditRankError::TooManyLines => {
+                write!(f, "the audit ranks more lines than a rank numbers")
+            }
+        }
+    }
+}
+
+impl std::error::Error for AuditRankError {}
 
 /// The final audit of a world as it stands.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
@@ -112,6 +150,29 @@ impl FinalAudit {
     #[must_use]
     pub fn is_shared(&self) -> bool {
         self.winners.len() > 1
+    }
+
+    /// `seat`'s 1-based rank on the audit, or `None` when it has no line (it
+    /// is out of the match, so on no standing): the number of lines
+    /// **strictly ahead** of its own in the tie-break order ([`AuditKey`]),
+    /// plus one, so seats tied on every term share a rank -- which the audit
+    /// calls a shared win -- and the next rank counts every seat ahead of it.
+    ///
+    /// # Errors
+    ///
+    /// [`AuditRankError::TooManyLines`] for a rank past what a `u32` numbers.
+    pub fn rank_of(&self, seat: SeatId) -> Result<Option<NonZeroU32>, AuditRankError> {
+        let Some(mine) = self.lines.iter().find(|line| line.seat == seat) else {
+            return Ok(None);
+        };
+        let key = mine.key();
+        let ahead = self.lines.iter().filter(|line| line.key() > key).count();
+        u32::try_from(ahead)
+            .ok()
+            .and_then(|ahead| ahead.checked_add(1))
+            .and_then(NonZeroU32::new)
+            .map(Some)
+            .ok_or(AuditRankError::TooManyLines)
     }
 }
 
@@ -146,7 +207,7 @@ pub fn final_audit(world: &World) -> FinalAudit {
 pub fn audit_winner(world: &World) -> Option<SeatId> {
     let count = seat_count(world);
     let latest = latest_fall(world);
-    let mut best: Option<((i64, i64, i64), SeatId)> = None;
+    let mut best: Option<(AuditKey, SeatId)> = None;
     let mut tied = false;
     let mut index: usize = 0;
     while index < count {

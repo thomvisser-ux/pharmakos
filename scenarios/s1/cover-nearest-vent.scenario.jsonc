@@ -19,8 +19,11 @@
 //           fallback holds;
 //   seat 1  seals nothing, so the gateway files the safe playbook for it.
 //
-// `event_fired` has no value predicate (register M-05), so the failure's id is
-// pinned by the chain and by crates/sim/tests/targeting.rs's
+// `event_fired` has no value predicate (register M-05), and the chain does not
+// pin the failure's id either: events are derived output and never hashed
+// (crates/sim/src/world.rs; crates/sim/tests/runner.rs's
+// `the_event_bus_is_not_in_the_state_encoding`), so the chain pins only the
+// world the failure leaves. The id is pinned by crates/sim/tests/targeting.rs's
 // `a_carried_covering_step_has_no_legal_site_after_round_one_on_the_golden_seed`,
 // which reads it. The verifier accepts `covering` and `on` since its
 // targeting lane (`tgtv`), so this file seals through `submit_plan` like any

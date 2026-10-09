@@ -61,9 +61,10 @@ use crate::rules::RulesTable;
 use crate::runner::{MatchEndReason, MatchPhase, MatchSettings, MatchState};
 use crate::seams::{BeaconMandate, MandateKind, ProgramId, WorkCounter};
 use crate::tables::{
-    BeaconId, BeaconTable, CreditTable, Csr, MovementColumns, NO_RESPAWN, NO_WORK, NOT_ELIMINATED,
-    PRIORITY_NORMAL, SeatId, SeatTable, SightingTable, StructureId, StructureKind, StructureTable,
-    TargetKind, TargetTable, UnitId, UnitKind, UnitTable, WreckTable,
+    BeaconId, BeaconTable, BuildOrder, CreditTable, Csr, MovementColumns, NO_RESPAWN, NO_WORK,
+    NOT_ELIMINATED, PRIORITY_NORMAL, QuarterTurns, SeatId, SeatTable, SightingTable, StructureId,
+    StructureKind, StructureTable, TargetKind, TargetTable, UnitId, UnitKind, UnitTable,
+    WreckTable,
 };
 use crate::targeting::{Ground, NO_FEATURE};
 use crate::voxels::{CHUNK_EDGE, Material, VoxelEdit, VoxelStore};
@@ -179,7 +180,7 @@ const BEACON_TABLE_ROOM: u32 = 40;
 /// than filled, which is what stops the unit table growing inside a tick. The
 /// real ceiling is spec section 7's "a seat can field only what its core
 /// surplus and vent Generators can power", which this only bounds.
-const UNIT_TABLE_ROOM: u32 = 300;
+pub(crate) const UNIT_TABLE_ROOM: u32 = 300;
 
 /// PLACEHOLDER: the world total of structures a match may build, shared
 /// equally per seat since S1 ("Build targets and structures follow",
@@ -196,7 +197,26 @@ const UNIT_TABLE_ROOM: u32 = 300;
 /// that seat cannot see -- the leak per-seat room exists to close. Counted
 /// that way, the shares add up to at most the total, and the table cannot fill
 /// before a share does.
-const STRUCTURE_TABLE_ROOM: u32 = 120;
+pub(crate) const STRUCTURE_TABLE_ROOM: u32 = 120;
+
+/// One entry of the Build target list a settings edit writes
+/// ([`World::replace_build_targets`]): the blueprint, the anchor, the feature an
+/// `on` anchor is bound to ([`NO_FEATURE`] for a fixed voxel) and how it was
+/// written, and its place in the build order with its rotation.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct BuildEntry {
+    /// The blueprint, as a [`StructureKind::id`].
+    pub(crate) blueprint: u8,
+    /// Where it goes.
+    pub(crate) anchor: [Fx; 3],
+    /// The feature an `on` anchor is bound to, or [`NO_FEATURE`].
+    pub(crate) feature: u32,
+    /// How the anchor was written ([`crate::targeting::DESCRIPTION_VOXEL`] and
+    /// its siblings).
+    pub(crate) desc: u8,
+    /// Its place in the build order, and its rotation.
+    pub(crate) build: BuildOrder,
+}
 
 /// One seat's share of a world total: the total divided by the seat count,
 /// **rounded down** (decisions-log item 127 (12)). A match of no seats has no
@@ -652,15 +672,9 @@ impl World {
             voxels,
             rules: config.rules.clone(),
             features,
-            spiral: crate::targeting::spiral_offsets(
-                config
-                    .rules
-                    .message()
-                    .beacon
-                    .as_ref()
-                    .and_then(|block| i32::try_from(block.sphere_radius_voxels).ok())
-                    .unwrap_or(0),
-            ),
+            spiral: crate::targeting::spiral_offsets(i32::from(
+                config.rules.sphere_radius_voxels(),
+            )),
             decision_units: crate::seams::UnitTally::new(),
             decision_work: vec![
                 WorkCounter::with_budget(u32::MAX);
@@ -1141,13 +1155,7 @@ impl World {
     /// A beacon's sphere of authority, `beacon.sphere_radius_voxels`.
     #[must_use]
     pub fn sphere_radius(&self) -> Fx {
-        let voxels = self
-            .rules
-            .message()
-            .beacon
-            .as_ref()
-            .map_or(0, |block| block.sphere_radius_voxels);
-        Fx::from_voxels(i16::try_from(voxels).unwrap_or(0))
+        Fx::from_voxels(self.rules.sphere_radius_voxels())
     }
 
     /// How close a walked route has to get before it counts as arrived,
@@ -1158,13 +1166,14 @@ impl World {
     /// keep in step.
     #[must_use]
     pub fn arrive_radius(&self) -> Fx {
-        let voxels = self
-            .rules
-            .message()
-            .commander
-            .as_ref()
-            .map_or(0, |block| block.arrive_radius_voxels);
-        Fx::from_voxels(i16::try_from(voxels).unwrap_or(0))
+        Fx::from_voxels(self.rules.arrive_radius_voxels())
+    }
+
+    /// How close the commander stands to interface with a beacon or deploy
+    /// one, `commander.interface_range_voxels` (spec section 5).
+    #[must_use]
+    pub fn interface_range(&self) -> Fx {
+        Fx::from_voxels(self.rules.interface_range_voxels())
     }
 
     /// One unit kind's build cost, `units.<kind>.cost_dollars`.
@@ -1607,6 +1616,21 @@ impl World {
         let Some(anchor) = self.targets.anchors().get(row).copied() else {
             return false;
         };
+        let Some(rotation) = self
+            .targets
+            .rotations()
+            .get(row)
+            .and_then(|turns| QuarterTurns::new(u32::from(*turns)))
+        else {
+            return false;
+        };
+        // **Nothing is built inside a protected area** of the beacon whose
+        // target this is (spec section 6's Build row; S1's plan, decision 5).
+        // The Build mandate skips such a target rather than asking for it
+        // ([`crate::mandate::next_unpaid_target`]); this is the backstop.
+        if crate::mandate::protected(self, beacon, anchor) {
+            return false;
+        }
         // **One structure per voxel, across seats** (targeting.md, "Sites"):
         // construction is refused where any live structure already stands, so
         // the first seat to build wins and the other's target is never paid
@@ -1624,7 +1648,7 @@ impl World {
         }
         let id = StructureId::new(self.structures.len());
         self.structures
-            .push(id, seat, kind, anchor, Hp::new(1), beacon, true);
+            .push(id, seat, kind, anchor, Hp::new(1), beacon, true, rotation);
         if let Some(slot) = self.targets.built_mut().get_mut(row) {
             *slot = id.raw();
         }
@@ -1713,7 +1737,8 @@ impl World {
         }
         let id = StructureId::new(self.structures.len());
         let hp = self.structure_max_hp(kind);
-        self.structures.push(id, seat, kind, at, hp, home, false);
+        self.structures
+            .push(id, seat, kind, at, hp, home, false, QuarterTurns::NONE);
         Some(id)
     }
 
@@ -1864,9 +1889,10 @@ impl World {
         blueprint: u8,
         at: [Fx; 3],
         bound: (u32, u8),
+        build: BuildOrder,
     ) -> bool {
         self.targets
-            .add_bound(beacon, TargetKind::Build, blueprint, at, 0, bound)
+            .add_bound(beacon, TargetKind::Build, blueprint, at, 0, bound, build)
     }
 
     /// Remove the Build target of `beacon` bound to `feature`: a target made
@@ -1991,14 +2017,14 @@ impl World {
     /// `collect` into a `Vec` here would be an allocation inside a tick, which
     /// `tests/allocations.rs` fails on.
     ///
-    /// Each entry is `(blueprint, anchor, feature, desc)`: a target written
-    /// through `on` carries the feature it is bound to and is **carried over by
-    /// feature id** rather than by anchor (`docs/design/targeting.md`,
-    /// "Sites"), so a re-written `on` target whose column moved keeps the
-    /// structure it already paid for.
+    /// Each [`BuildEntry`] carries the feature a target written through `on`
+    /// is bound to, and such a target is **carried over by feature id** rather
+    /// than by anchor (`docs/design/targeting.md`, "Sites"), so a re-written
+    /// `on` target whose column moved keeps the structure it already paid for.
+    /// Its place in the build order and its rotation are the new list's.
     pub(crate) fn replace_build_targets<I>(&mut self, beacon: BeaconId, list: I)
     where
-        I: Iterator<Item = (u8, [Fx; 3], u32, u8)> + Clone,
+        I: Iterator<Item = BuildEntry> + Clone,
     {
         let seat = usize::try_from(beacon.raw())
             .ok()
@@ -2009,14 +2035,15 @@ impl World {
         // the table's own ceiling, so an entry past it could not have been
         // added anyway.
         let mut carried = [BeaconId::NONE.raw(); TARGETS_PER_BEACON_SLOTS];
-        for (slot, (_, anchor, feature, _)) in list.clone().enumerate() {
+        for (slot, entry) in list.clone().enumerate() {
             let Some(cell) = carried.get_mut(slot) else {
                 break;
             };
-            *cell = self.built_at(beacon, anchor, feature);
+            *cell = self.built_at(beacon, entry.anchor, entry.feature);
         }
         self.clear_targets(beacon, TargetKind::Build);
-        for (slot, (blueprint, anchor, feature, desc)) in list.enumerate() {
+        for (slot, entry) in list.enumerate() {
+            let anchor = entry.anchor;
             if !crate::mandate::inside_sphere(self, beacon, anchor)
                 || self.anchor_is_claimed(seat, anchor)
             {
@@ -2025,10 +2052,11 @@ impl World {
             if !self.targets.add_bound(
                 beacon,
                 TargetKind::Build,
-                blueprint,
+                entry.blueprint,
                 anchor,
                 0,
-                (feature, desc),
+                (entry.feature, entry.desc),
+                entry.build,
             ) {
                 continue;
             }
@@ -2835,10 +2863,14 @@ impl World {
                 .get(index)
                 .copied()
                 .unwrap_or(Money::ZERO);
-            let headroom = Kw::new(
-                crate::power::supply_of(self, request.seat, rules)
-                    .saturating_sub(crate::power::draw_of(self, request.seat, rules)),
-            );
+            // An order the grid's headroom cannot be summed for is held, the
+            // answer the Quartermaster gives an order the headroom cannot run.
+            // The sum is exact (`crate::power::supply_of`), and the load-time
+            // bound of `PowerRules::read` keeps it inside a signed `kW`, so
+            // the hold is never taken under a table that loaded.
+            let Ok(headroom) = crate::power::headroom_of(self, request.seat, rules) else {
+                continue;
+            };
             if !self.quartermaster.approve(request, treasury, headroom) {
                 continue;
             }
@@ -3971,6 +4003,13 @@ impl World {
             enc.u32(structure_homes.get(index).copied().unwrap_or(u32::MAX));
             enc.bool(building.get(index).copied().unwrap_or(false));
         }
+        // S1's Build settings (snapshot version 9): each structure's rotation,
+        // the facing the target that paid for it chose, as a block after the
+        // rows, read straight off its own column. The table's count above
+        // fixes its length, since every column of the table is one length.
+        for rotation in self.structures.rotations() {
+            enc.u8(*rotation);
+        }
 
         enc.len(self.wrecks.len());
         let wreck_positions = self.wrecks.positions();
@@ -4011,6 +4050,15 @@ impl World {
             enc.u32(built.get(index).copied().unwrap_or(BeaconId::NONE.raw()));
             enc.u32(features.get(index).copied().unwrap_or(NO_FEATURE));
             enc.u8(descriptions.get(index).copied().unwrap_or(0));
+        }
+        // S1's Build settings (snapshot version 9): each row's place in the
+        // build order and its rotation, as blocks after the rows, read
+        // straight off their own columns (the count above fixes the length).
+        for order in self.targets.orders() {
+            enc.u32(*order);
+        }
+        for rotation in self.targets.rotations() {
+            enc.u8(*rotation);
         }
     }
 

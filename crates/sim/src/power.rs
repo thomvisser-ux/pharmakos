@@ -144,6 +144,8 @@ pub enum PowerRow {
     SurveyPost,
     /// `structures.resonance_spire`.
     ResonanceSpire,
+    /// The `units` block, whose starting force the draw bound counts.
+    Units,
 }
 
 impl PowerRow {
@@ -165,6 +167,27 @@ impl PowerRow {
             PowerRow::Mortar => "structures.mortar.draw_kw",
             PowerRow::SurveyPost => "structures.survey_post.draw_kw",
             PowerRow::ResonanceSpire => "structures.resonance_spire.draw_kw",
+            PowerRow::Units => "units",
+        }
+    }
+}
+
+/// Which of a seat's two `kW` sums a bound is over.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PowerSum {
+    /// The seat's supply ([`supply_of`]).
+    Supply,
+    /// The seat's draw ([`draw_of`]).
+    Draw,
+}
+
+impl PowerSum {
+    /// The sum's name, as a refusal says it.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            PowerSum::Supply => "supply",
+            PowerSum::Draw => "draw",
         }
     }
 }
@@ -183,6 +206,15 @@ pub enum PowerRulesError {
         /// What the table said.
         value: u32,
     },
+    /// The rows let a seat's supply or draw leave a signed 32-bit `kW`: the
+    /// largest the sum can reach -- each `kW` row times the table room it
+    /// counts over, summed ([`PowerRules::read`]) -- does not fit.
+    SumOutOfRange {
+        /// Which sum.
+        sum: PowerSum,
+        /// The largest the rows let it reach, in `kW`.
+        most: i128,
+    },
 }
 
 impl fmt::Display for PowerRulesError {
@@ -196,6 +228,12 @@ impl fmt::Display for PowerRulesError {
                 "`{}` is {value}, which does not fit a signed 32-bit kW",
                 row.path()
             ),
+            PowerRulesError::SumOutOfRange { sum, most } => write!(
+                f,
+                "under these rows a seat's {} can reach {most} kW, which does not fit a signed \
+                 32-bit kW",
+                sum.name()
+            ),
         }
     }
 }
@@ -203,12 +241,16 @@ impl fmt::Display for PowerRulesError {
 impl std::error::Error for PowerRulesError {}
 
 /// Why a power read could not answer.
+///
+/// No arm for the rules table: [`crate::rules::RulesTable::from_message`]
+/// refuses a table [`PowerRules::read`] refuses, so every world's table is one
+/// the phase reads.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PowerError {
-    /// The rules table is refused ([`PowerRules::read`]).
-    Rules(PowerRulesError),
     /// The seat is not seated in this match.
     NoSuchSeat(SeatId),
+    /// A beacon id the phase was handed has no row in the beacon table.
+    NoSuchBeacon(u32),
     /// A `kW` sum does not fit a signed 32-bit `kW`.
     Overflow,
 }
@@ -216,20 +258,14 @@ pub enum PowerError {
 impl fmt::Display for PowerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            PowerError::Rules(error) => write!(f, "{error}"),
             PowerError::NoSuchSeat(seat) => write!(f, "seat {} is not seated", seat.raw()),
+            PowerError::NoSuchBeacon(beacon) => write!(f, "beacon {beacon} has no row"),
             PowerError::Overflow => write!(f, "a kW sum does not fit a signed 32-bit kW"),
         }
     }
 }
 
 impl std::error::Error for PowerError {}
-
-impl From<PowerRulesError> for PowerError {
-    fn from(error: PowerRulesError) -> PowerError {
-        PowerError::Rules(error)
-    }
-}
 
 /// The `kW` rows the power phase reads, taken once per tick.
 ///
@@ -266,15 +302,33 @@ pub struct PowerRules {
 }
 
 impl PowerRules {
-    /// Read every `kW` row the phase needs, refusing a table that lacks one.
+    /// Read every `kW` row the phase needs, refusing a table that lacks one or
+    /// under which a seat's sums could leave a signed 32-bit `kW`.
+    ///
+    /// [`crate::rules::RulesTable::from_message`] calls this, once, and keeps
+    /// what it reads, so every world's table is one the phase can sum
+    /// (decisions-log item 135 (2) (b)).
+    ///
+    /// **The sum bound.** A seat's largest supply is its core's deep-bore
+    /// surplus plus the richest Generator output on every row of the structure
+    /// table (`STRUCTURE_TABLE_ROOM` in `crate::world`); its largest draw is
+    /// `power.kw_per_unit` on every unit it can field -- its starting force
+    /// (the commander, `units.starting_build_drones` and
+    /// `units.starting_mining_drones`) and the whole unit room
+    /// (`UNIT_TABLE_ROOM`) -- plus the heaviest capability structure's draw on
+    /// every row of the structure table. Each is an upper bound (a seat holds
+    /// only its share of each room), so a table both fit is one under which
+    /// [`supply_of`] and [`draw_of`] never leave an `i32`, and they add
+    /// without saturating.
     ///
     /// # Errors
     ///
     /// [`PowerRulesError::MissingRow`] naming the first absent block or row,
-    /// in the order the struct lists them, or
-    /// [`PowerRulesError::OutOfRange`] for a row above `i32::MAX`.
-    pub fn read(rules: &RulesTable) -> Result<PowerRules, PowerRulesError> {
-        let message = rules.message();
+    /// in the order the struct lists them (then the `units` block the bound
+    /// reads), [`PowerRulesError::OutOfRange`] for a row above `i32::MAX`, and
+    /// [`PowerRulesError::SumOutOfRange`] when a seat's largest supply or draw
+    /// does not fit a signed 32-bit `kW`.
+    pub fn read(message: &gp::v1::RulesTable) -> Result<PowerRules, PowerRulesError> {
         let power = message
             .power
             .as_ref()
@@ -291,7 +345,7 @@ impl PowerRules {
             row.ok_or(PowerRulesError::MissingRow(name))
                 .and_then(|row| kw(row.draw_kw, name))
         };
-        Ok(PowerRules {
+        let rules = PowerRules {
             core_surplus: kw(power.core_surplus_kw, PowerRow::CoreSurplus)?,
             generator_lean: kw(by_richness.lean, PowerRow::GeneratorLean)?,
             generator_standard: kw(by_richness.standard, PowerRow::GeneratorStandard)?,
@@ -306,58 +360,50 @@ impl PowerRules {
                 structures.resonance_spire.as_ref(),
                 PowerRow::ResonanceSpire,
             )?,
-        })
+        };
+        let units = message
+            .units
+            .as_ref()
+            .ok_or(PowerRulesError::MissingRow(PowerRow::Units))?;
+        rules.bound_sums(units)?;
+        Ok(rules)
     }
 
-    /// Every `kW` row the phase needs, for a caller with no error to return.
-    ///
-    /// This is [`PowerRules::read`] for the callers that cannot yet carry its
-    /// error: the power phase itself, the Quartermaster's headroom
-    /// (`crate::world`), the Build mandate's price (`crate::mandate`) and the
-    /// verifier's projection. On a table [`PowerRules::read`] accepts, which
-    /// the committed table is (a test says so), the two are equal.
-    ///
-    /// **On a table it refuses this read still falls back, silently**, and
-    /// that is the one fallback left in the module: each row is read as the
-    /// phase read it before the typed read existed, row by row, an absent row
-    /// as 0 and a row above `i32::MAX` as `i32::MAX`, so a refused row moves
-    /// only itself and a bad table settles no differently than it did before
-    /// S1. The fix is not here: the refusal belongs where the table is loaded,
-    /// once (`RulesTable::from_message` calling [`PowerRules::read`]), so that
-    /// no world can hold a table the phase refuses and this read becomes
-    /// infallible. That edit is outside the `grid` lane's named place, so its
-    /// pull request raises it for the main session to sequence.
+    /// Every `kW` row the phase needs: the rules table's own, read and bounded
+    /// once at load ([`crate::rules::RulesTable::power`]).
     #[must_use]
-    pub fn of(rules: &RulesTable) -> PowerRules {
-        match PowerRules::read(rules) {
-            Ok(read) => read,
-            Err(_) => PowerRules::row_by_row(rules),
-        }
+    pub const fn of(rules: &RulesTable) -> PowerRules {
+        rules.power()
     }
 
-    /// The pre-S1 read, row by row: an absent row is 0, an oversized one
-    /// `i32::MAX`. Reached only from [`PowerRules::of`] on a refused table.
-    fn row_by_row(rules: &RulesTable) -> PowerRules {
-        let message = rules.message();
-        let power = message.power.as_ref();
-        let by_richness = power.and_then(|block| block.generator_output_kw);
-        let structures = message.structures.as_ref();
-        let row =
-            |value: Option<u32>| value.map_or(0, |value| i32::try_from(value).unwrap_or(i32::MAX));
-        let draw = |kind: Option<&gp::v1::rules_table::StructureKind>| row(kind.map(|k| k.draw_kw));
-        PowerRules {
-            core_surplus: row(power.map(|block| block.core_surplus_kw)),
-            generator_lean: row(by_richness.map(|by| by.lean)),
-            generator_standard: row(by_richness.map(|by| by.standard)),
-            generator_rich: row(by_richness.map(|by| by.rich)),
-            per_unit: row(power.map(|block| block.kw_per_unit)),
-            revive_margin: row(power.map(|block| block.revive_margin_kw)),
-            beacon_base_draw: row(power.map(|block| block.beacon_base_draw_kw)),
-            autocannon_draw: draw(structures.and_then(|block| block.autocannon.as_ref())),
-            mortar_draw: draw(structures.and_then(|block| block.mortar.as_ref())),
-            survey_post_draw: draw(structures.and_then(|block| block.survey_post.as_ref())),
-            spire_draw: draw(structures.and_then(|block| block.resonance_spire.as_ref())),
+    /// Refuse the rows when a seat's largest supply or draw would not fit a
+    /// signed 32-bit `kW` ([`PowerRules::read`]'s sum bound). Every figure is
+    /// a non-negative `i32` row times a `u32` count, so `i128` holds each
+    /// product and the sum of a handful of them exactly.
+    fn bound_sums(self, units: &gp::v1::rules_table::Units) -> Result<(), PowerRulesError> {
+        let structure_room = i128::from(crate::world::STRUCTURE_TABLE_ROOM);
+        let fielded = i128::from(crate::world::UNIT_TABLE_ROOM)
+            + 1
+            + i128::from(units.starting_build_drones)
+            + i128::from(units.starting_mining_drones);
+        let richest = self
+            .generator_lean
+            .max(self.generator_standard)
+            .max(self.generator_rich);
+        // The heaviest draw any one structure row can carry: every kind's,
+        // folded from the first kind's rather than from a made-up zero.
+        let heaviest = StructureKind::ALL
+            .into_iter()
+            .map(|kind| self.structure_draw(kind))
+            .fold(self.structure_draw(StructureKind::Generator), i32::max);
+        let supply = i128::from(self.core_surplus) + i128::from(richest) * structure_room;
+        let draw = i128::from(self.per_unit) * fielded + i128::from(heaviest) * structure_room;
+        for (sum, most) in [(PowerSum::Supply, supply), (PowerSum::Draw, draw)] {
+            if most > i128::from(i32::MAX) {
+                return Err(PowerRulesError::SumOutOfRange { sum, most });
+            }
         }
+        Ok(())
     }
 
     /// What a live beacon's own key-core supplies: exactly that beacon's base
@@ -453,13 +499,11 @@ impl DarkLoad {
 ///
 /// # Errors
 ///
-/// [`PowerError::Rules`] when the world's rules table is refused by
-/// [`PowerRules::read`], [`PowerError::NoSuchSeat`] for a seat that is not
-/// seated, and [`PowerError::Overflow`] when a sum or a difference does not
-/// fit a signed 32-bit `kW`: every sum here is checked, where the columns'
-/// [`supply_of`] and [`draw_of`] saturate.
+/// [`PowerError::NoSuchSeat`] for a seat that is not seated, and
+/// [`PowerError::Overflow`] when a sum or a difference does not fit a signed
+/// 32-bit `kW`, which the load-time bound of [`PowerRules::read`] rules out.
 pub fn dark_load(world: &World, seat: SeatId) -> Result<DarkLoad, PowerError> {
-    let rules = PowerRules::read(world.rules())?;
+    let rules = PowerRules::of(world.rules());
     if world.seat_row(seat).is_none() {
         return Err(PowerError::NoSuchSeat(seat));
     }
@@ -496,36 +540,54 @@ pub fn dark_load(world: &World, seat: SeatId) -> Result<DarkLoad, PowerError> {
 /// swap in the same settle was dark before and is dark after, so it reports
 /// nothing; the feed never carries a revival and a shed of one beacon on one
 /// tick.
+///
+/// **Every sum is exact.** [`supply_of`] and [`draw_of`] add without
+/// saturating, and the load-time bound of [`PowerRules::read`] is what makes
+/// that safe: no seat's sum under a table that loaded can leave a signed
+/// 32-bit `kW`. A seat whose settle nevertheless reports an overflow is
+/// therefore a table and a world that disagree about the rooms; its columns
+/// then keep the values its last settle wrote, rather than a number nobody
+/// summed.
 pub(crate) fn settle(world: &mut World, order: &mut Vec<u32>) {
     let rules = PowerRules::of(world.rules());
-    let seats = usize::try_from(world.seats().len()).unwrap_or(0);
     let mut index: usize = 0;
-    while index < seats {
-        let raw = world.seats().seats().get(index).copied().unwrap_or(0);
+    while let Some(raw) = world.seats().seats().get(index).copied() {
         let seat = SeatId::new(raw);
-        if world.seats().is_alive(index) {
-            order.clear();
-            found_dark(world, seat, order);
-            let base = order.len();
-            brown_out(world, seat, rules, order, base);
-            revive(world, seat, rules, order, base);
-            swap_in(world, seat, rules, order, base);
-            report_changes(world, seat, order, base);
-            order.clear();
-        }
-        let supply = supply_of(world, seat, rules);
-        let draw = draw_of(world, seat, rules);
-        {
+        let settled = settle_seat(world, seat, index, rules, order);
+        order.clear();
+        if let Ok((supply, draw)) = settled {
             let columns = world.seats_mut().power_columns();
             if let Some(slot) = columns.supply.get_mut(index) {
-                *slot = Kw::new(supply);
+                *slot = supply;
             }
             if let Some(slot) = columns.draw.get_mut(index) {
-                *slot = Kw::new(draw);
+                *slot = draw;
             }
         }
         index = index.saturating_add(1);
     }
+}
+
+/// One seat's settle: for a seat still in the match, the brownout, the
+/// revival and the swap, with the net change reported; then the seat's supply
+/// and draw as the columns will hold them.
+fn settle_seat(
+    world: &mut World,
+    seat: SeatId,
+    index: usize,
+    rules: PowerRules,
+    order: &mut Vec<u32>,
+) -> Result<(Kw, Kw), PowerError> {
+    if world.seats().is_alive(index) {
+        order.clear();
+        found_dark(world, seat, order);
+        let base = order.len();
+        brown_out(world, seat, rules, order, base)?;
+        revive(world, seat, rules, order, base)?;
+        swap_in(world, seat, rules, order, base)?;
+        report_changes(world, seat, order, base);
+    }
+    Ok((supply_of(world, seat, rules)?, draw_of(world, seat, rules)?))
 }
 
 /// Whether two standing points are taps on **one** heat vent.
@@ -607,14 +669,18 @@ fn vent_already_tapped(
 /// No key-core output is in it: a key-core supplies exactly its own beacon's
 /// base, which [`draw_of`] leaves out for the same reason.
 ///
-/// It saturates at `i32::MAX` on a sum that does not fit, as it did before
-/// [`dark_load`]'s checked sums: its callers (the phase, the Quartermaster's
-/// headroom in `crate::world`) have no error to return yet, and a sum that
-/// large needs a row the load-time refusal [`PowerRules::of`] names would
-/// bound. [`dark_load`] reports the same overflow as a typed error.
-#[must_use]
-pub(crate) fn supply_of(world: &World, seat: SeatId, rules: PowerRules) -> i32 {
-    supply_under(world, seat, rules, Lighting::AsIs).unwrap_or(i32::MAX)
+/// The sum is exact and never saturates: [`PowerRules::read`] refuses at load
+/// any table under which a seat's supply could leave a signed 32-bit `kW`
+/// (decisions-log item 135 (2) (b)).
+///
+/// # Errors
+///
+/// [`PowerError::Overflow`] when the sum does not fit, which that bound rules
+/// out for a world built from a table that loaded.
+pub(crate) fn supply_of(world: &World, seat: SeatId, rules: PowerRules) -> Result<Kw, PowerError> {
+    supply_under(world, seat, rules, Lighting::AsIs)
+        .map(Kw::new)
+        .ok_or(PowerError::Overflow)
 }
 
 /// [`supply_of`] under a [`Lighting`], `None` when the sum does not fit.
@@ -654,10 +720,32 @@ fn supply_under(world: &World, seat: SeatId, rules: PowerRules, lighting: Lighti
 /// beacon is net zero and the column shows the net (see the module docs). A
 /// beacon with nothing homed to it adds nothing here.
 ///
-/// It saturates at `i32::MAX` for the reason [`supply_of`] gives.
-#[must_use]
-pub(crate) fn draw_of(world: &World, seat: SeatId, rules: PowerRules) -> i32 {
-    draw_under(world, seat, rules, Lighting::AsIs).unwrap_or(i32::MAX)
+/// Exact, never saturating, for the reason [`supply_of`] gives.
+///
+/// # Errors
+///
+/// [`PowerError::Overflow`] when the sum does not fit, which the load-time
+/// bound rules out.
+pub(crate) fn draw_of(world: &World, seat: SeatId, rules: PowerRules) -> Result<Kw, PowerError> {
+    draw_under(world, seat, rules, Lighting::AsIs)
+        .map(Kw::new)
+        .ok_or(PowerError::Overflow)
+}
+
+/// The seat's headroom: supply less draw, as the next settle reads them.
+///
+/// # Errors
+///
+/// [`PowerError::Overflow`] as [`supply_of`] and [`draw_of`] give it. Both
+/// are non-negative `i32`s, so their difference always fits.
+pub(crate) fn headroom_of(
+    world: &World,
+    seat: SeatId,
+    rules: PowerRules,
+) -> Result<Kw, PowerError> {
+    supply_of(world, seat, rules)?
+        .checked_sub(draw_of(world, seat, rules)?)
+        .ok_or(PowerError::Overflow)
 }
 
 /// [`draw_of`] under a [`Lighting`].
@@ -817,9 +905,10 @@ pub(crate) fn vent_under(world: &World, at: [Fx; 3]) -> Option<Richness> {
         })
 }
 
-/// The seat's headroom: supply less draw, as the next settle reads them.
-fn headroom(world: &World, seat: SeatId, rules: PowerRules) -> i32 {
-    supply_of(world, seat, rules).saturating_sub(draw_of(world, seat, rules))
+/// The seat's headroom in whole `kW` ([`headroom_of`]), for the phase's own
+/// comparisons.
+fn headroom(world: &World, seat: SeatId, rules: PowerRules) -> Result<i32, PowerError> {
+    headroom_of(world, seat, rules).map(Kw::raw)
 }
 
 /// Write one beacon's dormancy flag. `false` when the id names no row.
@@ -850,20 +939,31 @@ fn is_dark(world: &World, beacon: u32) -> bool {
 /// The flag is flipped, the headroom read with the same [`supply_of`] and
 /// [`draw_of`] the next settle reads, and the flag put back when the shed
 /// relieved nothing. Nothing observes the world between the two flips. `true`
-/// when the beacon is now shed.
-fn shed_if_it_relieves(world: &mut World, seat: SeatId, rules: PowerRules, beacon: u32) -> bool {
+/// when the beacon is now shed; on an error the flag is put back first.
+fn shed_if_it_relieves(
+    world: &mut World,
+    seat: SeatId,
+    rules: PowerRules,
+    beacon: u32,
+) -> Result<bool, PowerError> {
     if is_dark(world, beacon) {
-        return false;
+        return Ok(false);
     }
-    let before = headroom(world, seat, rules);
+    let before = headroom(world, seat, rules)?;
     if !set_dark(world, beacon, true) {
-        return false;
+        return Err(PowerError::NoSuchBeacon(beacon));
     }
-    if headroom(world, seat, rules) > before {
-        return true;
+    match headroom(world, seat, rules) {
+        Ok(after) if after > before => Ok(true),
+        Ok(_) => {
+            set_dark(world, beacon, false);
+            Ok(false)
+        }
+        Err(error) => {
+            set_dark(world, beacon, false);
+            Err(error)
+        }
     }
-    set_dark(world, beacon, false);
-    false
 }
 
 /// Report a beacon's change of state on the bus.
@@ -989,20 +1089,21 @@ fn brown_out(
     rules: PowerRules,
     order: &mut Vec<u32>,
     base: usize,
-) {
-    if headroom(world, seat, rules) >= 0 {
-        return;
+) -> Result<(), PowerError> {
+    if headroom(world, seat, rules)? >= 0 {
+        return Ok(());
     }
     shed_order(world, seat, order, base);
     let mut at = base;
     while let Some(beacon) = order.get(at).copied() {
-        if headroom(world, seat, rules) >= 0 {
+        if headroom(world, seat, rules)? >= 0 {
             break;
         }
         at = at.saturating_add(1);
-        shed_if_it_relieves(world, seat, rules, beacon);
+        shed_if_it_relieves(world, seat, rules, beacon)?;
     }
     order.truncate(base);
+    Ok(())
 }
 
 /// The brownout order's key for one beacon: the core last, then lowest
@@ -1011,22 +1112,23 @@ fn brown_out(
 /// item 62: the key ends in the beacon id, which is unique, so the order is
 /// total. `is_core` sorts last as a plain `bool`, which is the core's own rule;
 /// the distance is negated by `Reverse` so the furthest sheds first.
+///
+/// `None` when the id has no beacon row, or the seat no core site to measure
+/// from: such a beacon has no place in the order, and the lists the order
+/// sorts admit only beacons whose key is `Some`, rather than reading a missing
+/// priority as the lowest or a missing distance as zero.
 fn shed_key(
     world: &World,
     core: Option<BeaconId>,
     core_at: Option<[Fx; 3]>,
     id: u32,
-) -> (bool, u8, core::cmp::Reverse<Sq>, u32) {
+) -> Option<(bool, u8, core::cmp::Reverse<Sq>, u32)> {
     let beacons = world.beacons();
-    let row = usize::try_from(id).unwrap_or(usize::MAX);
-    let priority = beacons.priorities().get(row).copied().unwrap_or(0);
-    let at = beacons.positions().get(row).copied();
-    let distance = match (at, core_at) {
-        (Some(here), Some(there)) => Sq::between(here, there),
-        _ => Sq::ZERO,
-    };
+    let row = usize::try_from(id).ok()?;
+    let priority = beacons.priorities().get(row).copied()?;
+    let distance = Sq::between(beacons.positions().get(row).copied()?, core_at?);
     let is_core = core.is_some_and(|core| core.raw() == id);
-    (is_core, priority, core::cmp::Reverse(distance), id)
+    Some((is_core, priority, core::cmp::Reverse(distance), id))
 }
 
 /// Where the seat's core stands, or stood.
@@ -1046,13 +1148,13 @@ fn shed_order(world: &World, seat: SeatId, order: &mut Vec<u32>, base: usize) {
     let core = core_of(world, seat);
     let core_at = core_site(world, core);
     let beacons = world.beacons();
-    let count = usize::try_from(beacons.len()).unwrap_or(0);
-    let mut row: usize = 0;
-    while row < count {
-        if beacons.seats().get(row).copied() == Some(seat.raw()) && beacon_row_is_live(world, row) {
-            order.push(beacons.ids().get(row).copied().unwrap_or(0));
+    for (row, (owner, id)) in beacons.seats().iter().zip(beacons.ids()).enumerate() {
+        if *owner == seat.raw()
+            && beacon_row_is_live(world, row)
+            && shed_key(world, core, core_at, *id).is_some()
+        {
+            order.push(*id);
         }
-        row = row.saturating_add(1);
     }
     // item 62: `shed_key` ends in the unique beacon id, so the order is total.
     if let Some(list) = order.get_mut(base..) {
@@ -1068,7 +1170,13 @@ fn shed_order(world: &World, seat: SeatId, order: &mut Vec<u32>, base: usize) {
 /// and then be shed again next tick. That is the whole anti-flicker rule, and
 /// it holds only because [`revive_cost`] measures that load with the same
 /// [`supply_of`] and [`draw_of`] the next settle sheds by.
-fn revive(world: &mut World, seat: SeatId, rules: PowerRules, order: &mut Vec<u32>, base: usize) {
+fn revive(
+    world: &mut World,
+    seat: SeatId,
+    rules: PowerRules,
+    order: &mut Vec<u32>,
+    base: usize,
+) -> Result<(), PowerError> {
     let mut guard: u32 = 0;
     let limit = world.beacons().len();
     while guard <= limit {
@@ -1081,8 +1189,11 @@ fn revive(world: &mut World, seat: SeatId, rules: PowerRules, order: &mut Vec<u3
                 break;
             };
             at = at.saturating_add(1);
-            let cost = revive_cost(world, seat, rules, BeaconId::new(beacon));
-            if headroom(world, seat, rules).saturating_sub(cost) < rules.revive_margin {
+            let cost = revive_cost(world, seat, rules, BeaconId::new(beacon))?;
+            let after = headroom(world, seat, rules)?
+                .checked_sub(cost)
+                .ok_or(PowerError::Overflow)?;
+            if after < rules.revive_margin {
                 continue;
             }
             set_dark(world, beacon, false);
@@ -1094,6 +1205,7 @@ fn revive(world: &mut World, seat: SeatId, rules: PowerRules, order: &mut Vec<u3
         }
     }
     order.truncate(base);
+    Ok(())
 }
 
 /// The revival order's key for one beacon: every term of the shed key,
@@ -1101,14 +1213,16 @@ fn revive(world: &mut World, seat: SeatId, rules: PowerRules, order: &mut Vec<u3
 ///
 /// item 62: the key still ends in the unique beacon id, ascending, so it is
 /// total.
+///
+/// `None` exactly where [`shed_key`] is.
 fn revive_key(
     world: &World,
     core: Option<BeaconId>,
     core_at: Option<[Fx; 3]>,
     id: u32,
-) -> (bool, core::cmp::Reverse<u8>, Sq, u32) {
-    let (is_core, priority, core::cmp::Reverse(distance), id) = shed_key(world, core, core_at, id);
-    (!is_core, core::cmp::Reverse(priority), distance, id)
+) -> Option<(bool, core::cmp::Reverse<u8>, Sq, u32)> {
+    let (is_core, priority, core::cmp::Reverse(distance), id) = shed_key(world, core, core_at, id)?;
+    Some((!is_core, core::cmp::Reverse(priority), distance, id))
 }
 
 /// The order beacons come back in: the brownout order, backwards.
@@ -1117,19 +1231,13 @@ fn revive_order(world: &World, seat: SeatId, order: &mut Vec<u32>, base: usize) 
     let core = core_of(world, seat);
     let core_at = core_site(world, core);
     let beacons = world.beacons();
-    let count = usize::try_from(beacons.len()).unwrap_or(0);
-    let mut row: usize = 0;
-    while row < count {
-        let mine = beacons.seats().get(row).copied() == Some(seat.raw());
-        let alive = beacons
-            .hit_points()
-            .get(row)
-            .is_some_and(|hp| hp.is_alive());
-        let dormant = beacons.dormant().get(row).copied() == Some(true);
-        if mine && alive && dormant {
-            order.push(beacons.ids().get(row).copied().unwrap_or(0));
+    for (row, (owner, id)) in beacons.seats().iter().zip(beacons.ids()).enumerate() {
+        if *owner == seat.raw()
+            && beacon_row_is_dark(world, row)
+            && revive_key(world, core, core_at, *id).is_some()
+        {
+            order.push(*id);
         }
-        row = row.saturating_add(1);
     }
     // item 62: `revive_key` ends in the unique beacon id, so the order is total.
     if let Some(list) = order.get_mut(base..) {
@@ -1163,18 +1271,27 @@ fn revive_order(world: &World, seat: SeatId, order: &mut Vec<u32>, base: usize) 
 /// Nothing observes the world between the flip and the flip back: no event is
 /// emitted, no hash is taken and no other seat's grid is read, so the
 /// measurement leaves the world exactly as it found it.
-fn revive_cost(world: &mut World, seat: SeatId, rules: PowerRules, beacon: BeaconId) -> i32 {
-    let now = headroom(world, seat, rules);
-    let Ok(row) = usize::try_from(beacon.raw()) else {
-        return 0;
-    };
-    let Some(was) = world.beacons().dormant().get(row).copied() else {
-        return 0;
-    };
+///
+/// # Errors
+///
+/// [`PowerError::NoSuchBeacon`] for an id with no dormancy row, and
+/// [`PowerError::Overflow`] as [`headroom_of`] gives it or when the difference
+/// does not fit.
+fn revive_cost(
+    world: &mut World,
+    seat: SeatId,
+    rules: PowerRules,
+    beacon: BeaconId,
+) -> Result<i32, PowerError> {
+    let now = headroom(world, seat, rules)?;
+    let was = usize::try_from(beacon.raw())
+        .ok()
+        .and_then(|row| world.beacons().dormant().get(row).copied())
+        .ok_or(PowerError::NoSuchBeacon(beacon.raw()))?;
     set_dark(world, beacon.raw(), false);
     let awake = headroom(world, seat, rules);
     set_dark(world, beacon.raw(), was);
-    now.saturating_sub(awake)
+    now.checked_sub(awake?).ok_or(PowerError::Overflow)
 }
 
 /// The rank a swap compares (S1-22): the brownout order's first two terms, the
@@ -1207,7 +1324,13 @@ fn swap_rank(world: &World, core: Option<BeaconId>, id: u32) -> Option<(bool, u8
 /// No state is kept: the check reads the priorities and dormancy the tables
 /// already hold, every settle, so a raise committed on site is seen at the next
 /// settle and nothing else is.
-fn swap_in(world: &mut World, seat: SeatId, rules: PowerRules, order: &mut Vec<u32>, base: usize) {
+fn swap_in(
+    world: &mut World,
+    seat: SeatId,
+    rules: PowerRules,
+    order: &mut Vec<u32>,
+    base: usize,
+) -> Result<(), PowerError> {
     let core = core_of(world, seat);
     let core_at = core_site(world, core);
     order.truncate(base);
@@ -1248,6 +1371,7 @@ fn swap_in(world: &mut World, seat: SeatId, rules: PowerRules, order: &mut Vec<u
                     && beacon_row_is_live(world, row)
                     && let Some(id) = beacons.ids().get(row).copied()
                     && swap_rank(world, core, id).is_some_and(|lower| lower < rank)
+                    && shed_key(world, core, core_at, id).is_some()
                 {
                     order.push(id);
                 }
@@ -1258,9 +1382,10 @@ fn swap_in(world: &mut World, seat: SeatId, rules: PowerRules, order: &mut Vec<u
             // total.
             lower.sort_unstable_by_key(|id| shed_key(world, core, core_at, *id));
         }
-        relight(world, seat, rules, beacon, order, end);
+        relight(world, seat, rules, beacon, order, end)?;
     }
     order.truncate(base);
+    Ok(())
 }
 
 /// Try one swap: light `beacon`, then shed the lit beacons at `order[from..]`
@@ -1274,6 +1399,9 @@ fn swap_in(world: &mut World, seat: SeatId, rules: PowerRules, order: &mut Vec<u
 /// holds it dark is the revival margin, which the swap does not override. A
 /// committed swap asks for draw no higher than supply and not for the margin,
 /// so it can leave the seat's headroom anywhere from 0 kW up.
+///
+/// An error puts every flag back as it was, as a refused swap does, before it
+/// is returned.
 fn relight(
     world: &mut World,
     seat: SeatId,
@@ -1281,26 +1409,16 @@ fn relight(
     beacon: u32,
     order: &[u32],
     from: usize,
-) -> bool {
+) -> Result<bool, PowerError> {
     let Some(lower) = order.get(from..) else {
-        return false;
+        return Ok(false);
     };
     if lower.is_empty() || !set_dark(world, beacon, false) {
-        return false;
+        return Ok(false);
     }
-    if headroom(world, seat, rules) >= 0 {
-        set_dark(world, beacon, true);
-        return false;
-    }
-    let mut shed_any = false;
-    for candidate in lower {
-        if headroom(world, seat, rules) >= 0 {
-            break;
-        }
-        shed_any |= shed_if_it_relieves(world, seat, rules, *candidate);
-    }
-    if shed_any && headroom(world, seat, rules) >= 0 {
-        return true;
+    let attempt = try_swap(world, seat, rules, lower);
+    if let Ok(true) = attempt {
+        return Ok(true);
     }
     // Every beacon in `lower` was lit when the list was made, so each one dark
     // now was shed by this attempt.
@@ -1310,13 +1428,35 @@ fn relight(
         }
     }
     set_dark(world, beacon, true);
-    false
+    attempt.map(|_| false)
+}
+
+/// [`relight`]'s attempt, with `beacon` already lit: `true` when shedding
+/// from `lower` made the load fit and shed at least one beacon. A load that
+/// fits with nothing shed is not a swap (the revival margin holds it).
+fn try_swap(
+    world: &mut World,
+    seat: SeatId,
+    rules: PowerRules,
+    lower: &[u32],
+) -> Result<bool, PowerError> {
+    if headroom(world, seat, rules)? >= 0 {
+        return Ok(false);
+    }
+    let mut shed_any = false;
+    for candidate in lower {
+        if headroom(world, seat, rules)? >= 0 {
+            break;
+        }
+        shed_any |= shed_if_it_relieves(world, seat, rules, *candidate)?;
+    }
+    Ok(shed_any && headroom(world, seat, rules)? >= 0)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{PowerRow, PowerRules, PowerRulesError};
-    use crate::rules::RulesTable;
+    use super::{PowerRow, PowerRules, PowerRulesError, PowerSum};
+    use crate::rules::{RulesError, RulesTable};
 
     fn committed() -> RulesTable {
         let path = crate::default_rules_path()
@@ -1324,69 +1464,73 @@ mod tests {
         RulesTable::load(&path).unwrap_or_else(|error| panic!("the committed table: {error}"))
     }
 
-    fn without(edit: impl FnOnce(&mut pharmakos_proto::gp::v1::RulesTable)) -> RulesTable {
+    /// The committed table with one edit, as `RulesTable::from_message` takes
+    /// it: refused or not.
+    fn edited(
+        edit: impl FnOnce(&mut pharmakos_proto::gp::v1::RulesTable),
+    ) -> Result<RulesTable, RulesError> {
         let mut message = committed().message().clone();
         edit(&mut message);
-        RulesTable::from_message(&message).unwrap_or_else(|error| panic!("a table: {error}"))
+        RulesTable::from_message(&message)
     }
 
     #[test]
     fn the_committed_table_passes_the_typed_read() {
-        let read = PowerRules::read(&committed());
+        let read = PowerRules::read(committed().message());
         assert!(read.is_ok(), "{read:?}");
         assert_eq!(read.ok(), Some(PowerRules::of(&committed())));
     }
 
+    /// Decisions-log item 135 (2) (b): the power phase's refusal is the load's,
+    /// so no world holds a table the phase refuses and `PowerRules::of` has no
+    /// fallback to take. A table without `structures.mortar` is the case the
+    /// ruling names.
     #[test]
-    fn a_missing_row_is_refused_by_name_rather_than_read_as_zero() {
-        let cases: [(PowerRow, RulesTable); 7] = [
-            (PowerRow::Power, without(|m| m.power = None)),
-            (
-                PowerRow::GeneratorOutput,
-                without(|m| {
-                    if let Some(power) = m.power.as_mut() {
-                        power.generator_output_kw = None;
-                    }
-                }),
-            ),
-            (PowerRow::Structures, without(|m| m.structures = None)),
-            (
-                PowerRow::Autocannon,
-                without(|m| {
-                    if let Some(block) = m.structures.as_mut() {
-                        block.autocannon = None;
-                    }
-                }),
-            ),
-            (
-                PowerRow::Mortar,
-                without(|m| {
-                    if let Some(block) = m.structures.as_mut() {
-                        block.mortar = None;
-                    }
-                }),
-            ),
-            (
-                PowerRow::SurveyPost,
-                without(|m| {
-                    if let Some(block) = m.structures.as_mut() {
-                        block.survey_post = None;
-                    }
-                }),
-            ),
-            (
-                PowerRow::ResonanceSpire,
-                without(|m| {
-                    if let Some(block) = m.structures.as_mut() {
-                        block.resonance_spire = None;
-                    }
-                }),
-            ),
+    fn a_table_without_a_kw_row_is_refused_at_load_by_name() {
+        type Edit = fn(&mut pharmakos_proto::gp::v1::RulesTable);
+        assert_eq!(
+            edited(|m| {
+                if let Some(block) = m.structures.as_mut() {
+                    block.mortar = None;
+                }
+            }),
+            Err(RulesError::Power(PowerRulesError::MissingRow(
+                PowerRow::Mortar
+            )))
+        );
+        let cases: [(PowerRow, Edit); 7] = [
+            (PowerRow::Power, |m| m.power = None),
+            (PowerRow::GeneratorOutput, |m| {
+                if let Some(power) = m.power.as_mut() {
+                    power.generator_output_kw = None;
+                }
+            }),
+            (PowerRow::Autocannon, |m| {
+                if let Some(block) = m.structures.as_mut() {
+                    block.autocannon = None;
+                }
+            }),
+            (PowerRow::SurveyPost, |m| {
+                if let Some(block) = m.structures.as_mut() {
+                    block.survey_post = None;
+                }
+            }),
+            (PowerRow::ResonanceSpire, |m| {
+                if let Some(block) = m.structures.as_mut() {
+                    block.resonance_spire = None;
+                }
+            }),
+            (PowerRow::Units, |m| m.units = None),
+            (PowerRow::Mortar, |m| {
+                if let Some(block) = m.structures.as_mut() {
+                    block.mortar = None;
+                }
+            }),
         ];
-        for (row, table) in cases {
+        for (row, edit) in cases {
             assert_eq!(
-                PowerRules::read(&table),
-                Err(PowerRulesError::MissingRow(row)),
+                edited(edit),
+                Err(RulesError::Power(PowerRulesError::MissingRow(row))),
                 "{}",
                 row.path()
             );
@@ -1394,55 +1538,126 @@ mod tests {
     }
 
     #[test]
-    fn the_untyped_read_of_a_refused_table_moves_only_the_refused_row() {
-        // `PowerRules::of`'s residual fallback, pinned so that it is no wider
-        // than the pre-S1 read: one refused row moves that row alone, and
-        // every other row the phase sums keeps its committed value. The
-        // refusal itself belongs at load (see `PowerRules::of`).
-        let table = without(|m| {
-            if let Some(power) = m.power.as_mut() {
-                power.beacon_base_draw_kw = u32::MAX;
-            }
-        });
-        assert!(
-            PowerRules::read(&table).is_err(),
-            "the typed read refuses it"
-        );
-        let committed = PowerRules::of(&committed());
+    fn a_row_above_a_signed_kw_is_refused_rather_than_saturated() {
         assert_eq!(
-            PowerRules::of(&table),
-            PowerRules {
-                beacon_base_draw: i32::MAX,
-                ..committed
-            }
-        );
-        let table = without(|m| {
-            if let Some(block) = m.structures.as_mut() {
-                block.mortar = None;
-            }
-        });
-        assert_eq!(
-            PowerRules::of(&table),
-            PowerRules {
-                mortar_draw: 0,
-                ..committed
-            }
+            edited(|m| {
+                if let Some(power) = m.power.as_mut() {
+                    power.revive_margin_kw = u32::MAX;
+                }
+            }),
+            Err(RulesError::Power(PowerRulesError::OutOfRange {
+                row: PowerRow::ReviveMargin,
+                value: u32::MAX,
+            }))
         );
     }
 
+    /// Item 135 (2) (b)'s bound: each `kW` row times the table room it counts
+    /// over, summed, must fit a signed 32-bit `kW`, for supply and for draw.
+    /// The rows that fit one at a time are refused once a full table of them
+    /// would not: a Generator output the structure room (120) multiplies past
+    /// `i32::MAX`, and a unit draw the unit room (300) and the starting force
+    /// multiply past it.
     #[test]
-    fn a_row_above_a_signed_kw_is_refused_rather_than_saturated() {
-        let table = without(|m| {
-            if let Some(power) = m.power.as_mut() {
-                power.revive_margin_kw = u32::MAX;
+    fn a_table_whose_largest_supply_or_draw_leaves_a_signed_kw_is_refused() {
+        let share = |parts: u32| {
+            i32::MAX
+                .unsigned_abs()
+                .checked_div(parts)
+                .unwrap_or_else(|| panic!("a share"))
+        };
+        let generator = share(100);
+        let supply = edited(|m| {
+            if let Some(by) = m
+                .power
+                .as_mut()
+                .and_then(|p| p.generator_output_kw.as_mut())
+            {
+                by.rich = generator;
             }
         });
-        assert_eq!(
-            PowerRules::read(&table),
-            Err(PowerRulesError::OutOfRange {
-                row: PowerRow::ReviveMargin,
-                value: u32::MAX,
-            })
+        assert!(
+            matches!(
+                supply,
+                Err(RulesError::Power(PowerRulesError::SumOutOfRange {
+                    sum: PowerSum::Supply,
+                    ..
+                }))
+            ),
+            "{supply:?}"
         );
+        let unit = share(200);
+        let draw = edited(|m| {
+            if let Some(power) = m.power.as_mut() {
+                power.kw_per_unit = unit;
+            }
+        });
+        assert!(
+            matches!(
+                draw,
+                Err(RulesError::Power(PowerRulesError::SumOutOfRange {
+                    sum: PowerSum::Draw,
+                    ..
+                }))
+            ),
+            "{draw:?}"
+        );
+        let structure = share(100);
+        let heavy = edited(|m| {
+            if let Some(mortar) = m.structures.as_mut().and_then(|b| b.mortar.as_mut()) {
+                mortar.draw_kw = structure;
+            }
+        });
+        assert!(
+            matches!(
+                heavy,
+                Err(RulesError::Power(PowerRulesError::SumOutOfRange {
+                    sum: PowerSum::Draw,
+                    ..
+                }))
+            ),
+            "{heavy:?}"
+        );
+    }
+
+    /// The bound is exact at its edge: the largest unit draw whose full table
+    /// fits loads, and one `kW` more is refused.
+    #[test]
+    fn the_sum_bound_admits_exactly_the_tables_whose_sums_fit() {
+        let rules = committed();
+        let units = rules
+            .message()
+            .units
+            .unwrap_or_else(|| panic!("a units block"));
+        let power = PowerRules::of(&rules);
+        let heaviest = i64::from(
+            power
+                .mortar_draw
+                .max(power.survey_post_draw)
+                .max(power.spire_draw),
+        );
+        let fielded = i64::from(crate::world::UNIT_TABLE_ROOM)
+            + 1
+            + i64::from(units.starting_build_drones)
+            + i64::from(units.starting_mining_drones);
+        let room = i64::from(crate::world::STRUCTURE_TABLE_ROOM);
+        let largest = (i64::from(i32::MAX) - heaviest * room)
+            .checked_div(fielded)
+            .unwrap_or_else(|| panic!("a unit draw"));
+        let at = |per_unit: i64| {
+            edited(|m| {
+                if let Some(power) = m.power.as_mut() {
+                    power.kw_per_unit = u32::try_from(per_unit).unwrap_or_else(|_| panic!("a row"));
+                }
+            })
+        };
+        assert!(at(largest).is_ok(), "{:?}", at(largest));
+        assert!(matches!(
+            at(largest + 1),
+            Err(RulesError::Power(PowerRulesError::SumOutOfRange {
+                sum: PowerSum::Draw,
+                ..
+            }))
+        ));
     }
 }
