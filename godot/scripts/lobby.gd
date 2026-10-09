@@ -20,7 +20,8 @@
 #
 # THE RECAP (S1's plan, task `ui`): in a recap and once the match has ended, the column
 # shows `get_recap`'s prose as the gateway wrote it - the settlement's line, the shortfall's
-# and why a step found nothing ("3 matched, none reachable") are its sentences. Whether it is
+# and why a step found nothing ("3 matched, none reachable") are its sentences; a refused read
+# shows the gateway's refusal as it came (a lost segment_ended, item 135 (1)). Whether it is
 # shown is a branch on the bridge's phase string, for display, as the speed label's is. Every button is a request to the bridge;
 # nothing here computes a time, a price or a rule, and nothing here can show more of the
 # map than the gateway sent (AGENTS.md section 3 rule 4).
@@ -182,13 +183,19 @@ func _process(_delta: float) -> void:
 	_draw_recap(String(state.get("phase", "")))
 
 
-## The recap's prose, as the gateway wrote it, in a recap and after the match has ended.
+## The recap's prose, as the gateway wrote it, in a recap and after the match has ended;
+## or, when the gateway refused the read, its refusal as it came.
 func _draw_recap(phase: String) -> void:
 	var recap: Dictionary = vista.bridge.watch_recap()
-	var shown: bool = (phase == "recap" or phase == "ended") and int(recap.get("answers", 0)) > 0
+	var refusal := String(recap.get("refusal", ""))
+	var answered: bool = int(recap.get("answers", 0)) > 0 or refusal != ""
+	var shown: bool = (phase == "recap" or phase == "ended") and answered
 	_recap.visible = shown
 	if shown:
-		_recap.text = Strings.text("lobby_recap", {"round": recap.get("round", 0), "prose": recap.get("prose", "")})
+		if refusal != "":
+			_recap.text = Strings.text("lobby_recap_refused", {"refusal": refusal})
+		else:
+			_recap.text = Strings.text("lobby_recap", {"round": recap.get("round", 0), "prose": recap.get("prose", "")})
 		_recap.accessibility_name = _recap.text
 
 

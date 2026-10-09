@@ -268,6 +268,10 @@ pub struct Recap {
     pub round: u32,
     /// The prose, exactly as it came.
     pub prose: String,
+    /// The gateway's refusal of this recap's `get_recap`, `code: message` as it came, or
+    /// empty. A recap whose feed lost a `segment_ended` is refused with `INTERNAL` naming
+    /// the loss (decisions-log item 135 (1)), and that is the line the player is owed.
+    pub refusal: String,
 }
 
 /// One connection's state.
@@ -690,6 +694,11 @@ impl Rig {
                 .unwrap_or("")
                 .to_owned();
             self.refused(purpose, &code);
+            if purpose == Purpose::Recap {
+                // The recap column shows the refusal in place of the prose: the gateway's
+                // words, as they came.
+                self.recap.refusal = format!("{code}: {message}");
+            }
             if purpose == Purpose::Plan {
                 // A refusal is an answer: the editor settles the call and says what it was.
                 let _ = self.editor.answered(Err((code.as_str(), message.as_str())));
@@ -821,22 +830,33 @@ impl Rig {
                         .then_some(forecast.committed_dollars),
                 };
             }
-            Purpose::Recap => {
-                let (body, footer) = split_footer(result);
-                let recap: GetRecapResponse =
-                    json::decode_json(&enums::canonical("gp.api.v1.GetRecapResponse", &body))?;
-                let round = footer
-                    .as_ref()
-                    .and_then(|footer| read_status(footer).ok())
-                    .map_or(self.round, |status| status.round);
-                self.recap = Recap {
-                    answers: self.recap.answers.saturating_add(1),
-                    round,
-                    prose: recap.prose,
-                };
-            }
+            Purpose::Recap => self.take_recap(result)?,
             Purpose::Status => {}
         }
+        Ok(())
+    }
+
+    /// Takes in a `get_recap` answer: its prose, and the round its own footer names (the
+    /// rig's round when the answer carries no footer).
+    ///
+    /// # Errors
+    ///
+    /// [`BridgeError`] for an answer, or a footer, this build cannot read.
+    fn take_recap(&mut self, result: &Json) -> Result<(), BridgeError> {
+        let (body, footer) = split_footer(result);
+        let recap: GetRecapResponse =
+            json::decode_json(&enums::canonical("gp.api.v1.GetRecapResponse", &body))?;
+        let round = footer
+            .as_ref()
+            .map(read_status)
+            .transpose()?
+            .map_or(self.round, |status| status.round);
+        self.recap = Recap {
+            answers: self.recap.answers.saturating_add(1),
+            round,
+            prose: recap.prose,
+            refusal: String::new(),
+        };
         Ok(())
     }
 
@@ -887,12 +907,19 @@ impl Rig {
     /// # Errors
     ///
     /// [`BridgeError::Rpc`] for a timed footer whose countdown is negative, which no gateway
-    /// writes: the countdown is game milliseconds left.
+    /// writes: the countdown is game milliseconds left. Such a footer is refused before
+    /// anything moves, so the rig stays in the phase it was in and the next good footer
+    /// opens the Lull with its clock.
     fn observe(
         &mut self,
         footer: &pharmakos_proto::gp::api::v1::Status,
     ) -> Result<bool, BridgeError> {
         let phase = Phase::of(footer.phase);
+        let countdown = if phase == Phase::Lull && phase != self.phase {
+            self.lull_countdown(footer)?
+        } else {
+            None
+        };
         self.round = footer.round;
         self.untimed = footer.untimed;
         if phase == self.phase {
@@ -920,25 +947,6 @@ impl Rig {
                 self.reads.meter = true;
                 self.editor.lull_opened(footer.round);
                 self.timing.pacer.stop();
-                // A timed footer shows a countdown this client reported before a reconnect,
-                // and the Lull goes on from it; an untimed one has had no countdown reported
-                // yet, and the Lull is as long as the rules say for its round
-                // (`first_lull_ms` for round 1, `lull_ms` after it).
-                // PLACEHOLDER: a resumed Lull's timer restarts — OWNER, at hardening.
-                // The timer is the client's (w6 notes A2, decisions-log item 99) and a new
-                // host has had no countdown reported, so a resumed Lull restarts its timer in
-                // full and quitting in a Lull buys planning time.
-                let countdown = if footer.untimed {
-                    self.lulls.for_round(footer.round)
-                } else {
-                    Some(u64::try_from(footer.phase_remaining_ms).map_err(|_| {
-                        BridgeError::Rpc(format!(
-                            "a timed Lull's footer counts down {} ms, and a countdown is \
-                             never negative",
-                            footer.phase_remaining_ms
-                        ))
-                    })?)
-                };
                 self.timing.clock.enter(ClockPhase::Lull {
                     countdown_ms: countdown,
                 });
@@ -946,8 +954,10 @@ impl Rig {
             Phase::Recap | Phase::Ended => {
                 self.timing.pacer.stop();
                 self.timing.clock.enter(ClockPhase::Open);
-                // The recap's lines; at match end, the last recap with the outcome.
+                // The recap's lines; at match end, the last recap with the outcome. A
+                // refusal belongs to the read it answered, so the new read starts clean.
                 self.reads.recap = true;
+                self.recap.refusal.clear();
             }
             Phase::Unknown | Phase::Lobby => {
                 self.timing.pacer.stop();
@@ -955,6 +965,39 @@ impl Rig {
             }
         }
         Ok(true)
+    }
+
+    /// The countdown a Lull opened by `footer` starts from.
+    ///
+    /// A timed footer shows a countdown this client reported before a reconnect, and the
+    /// Lull goes on from it; an untimed one has had no countdown reported yet, and the Lull
+    /// is as long as the rules say for its round (`first_lull_ms` for round 1, `lull_ms`
+    /// after it).
+    ///
+    /// PLACEHOLDER: a resumed Lull's timer restarts — OWNER, at hardening. The timer is the
+    /// client's (w6 notes A2, decisions-log item 99) and a new host has had no countdown
+    /// reported, so a resumed Lull restarts its timer in full and quitting in a Lull buys
+    /// planning time.
+    ///
+    /// # Errors
+    ///
+    /// [`BridgeError::Rpc`] for a timed footer whose countdown is negative.
+    fn lull_countdown(
+        &self,
+        footer: &pharmakos_proto::gp::api::v1::Status,
+    ) -> Result<Option<u64>, BridgeError> {
+        if footer.untimed {
+            return Ok(self.lulls.for_round(footer.round));
+        }
+        u64::try_from(footer.phase_remaining_ms)
+            .map(Some)
+            .map_err(|_| {
+                BridgeError::Rpc(format!(
+                    "a timed Lull's footer counts down {} ms, and a countdown is never \
+                     negative",
+                    footer.phase_remaining_ms
+                ))
+            })
     }
 
     /// Chooses a speed; refused when it is not one of [`crate::pacer::SPEEDS`].
@@ -1687,6 +1730,44 @@ mod tests {
         assert!(refilled, "the recap's second report refilled nothing");
     }
 
+    /// A timed Lull footer with a negative countdown is refused before anything moves: the
+    /// rig stays in the recap it was in, and the next good footer opens the Lull with its
+    /// clock (review of `ui`: the phase used to move first, leaving a Lull whose clock
+    /// never started).
+    #[test]
+    fn a_refused_lull_footer_moves_nothing() {
+        let mut rig = in_lull();
+        let recap = pharmakos_proto::gp::api::v1::Status {
+            phase: pharmakos_proto::gp::api::v1::status::Phase::Recap.into(),
+            round: 1,
+            ..Default::default()
+        };
+        assert!(rig.observe(&recap).expect("a readable footer"));
+        let broken = pharmakos_proto::gp::api::v1::Status {
+            phase: pharmakos_proto::gp::api::v1::status::Phase::Lull.into(),
+            round: 2,
+            phase_remaining_ms: -1,
+            ..Default::default()
+        };
+        assert!(rig.observe(&broken).is_err());
+        assert_eq!(
+            rig.phase,
+            Phase::Recap,
+            "the refused footer moved the phase"
+        );
+        assert_eq!(rig.round, 1, "the refused footer moved the round");
+        let good = pharmakos_proto::gp::api::v1::Status {
+            phase_remaining_ms: 5_000,
+            ..broken
+        };
+        assert!(rig.observe(&good).expect("a readable footer"));
+        assert_eq!(rig.phase, Phase::Lull);
+        assert!(
+            !rig.timer_text().is_empty(),
+            "the Lull opened by the good footer shows its countdown"
+        );
+    }
+
     #[test]
     fn the_meter_shows_the_gateways_numbers_as_they_came() {
         let mut rig = Rig::new();
@@ -1919,6 +2000,49 @@ mod tests {
         assert_eq!(asked, 1, "once per recap, not in a loop");
         assert_eq!(rig.recap().prose, prose);
         assert_eq!(rig.recap().round, 1);
+    }
+
+    /// A refused `get_recap` is kept, as the gateway wrote it, for the recap column to
+    /// show (review of `ui`: an `INTERNAL` naming a lost `segment_ended`, item 135 (1),
+    /// used to reach only a warning), and it is not asked again in a loop.
+    #[test]
+    fn a_refused_recap_is_kept_for_the_column() {
+        let mut rig = in_push();
+        let sent = rig.poll(1 + PACER_PERIOD_US);
+        let advance = sent
+            .iter()
+            .find(|frame| frame.link == ADMIN)
+            .expect("an advance");
+        rig.receive(
+            ADMIN,
+            &answer(id_of(advance), r#"{"advanced_ms":400}"#, "recap"),
+        )
+        .expect("reads");
+        let mut asked = 0;
+        for step in 2..12_u64 {
+            rig.seat_calls_left = SEAT_CALLS_PER_REFILL;
+            let now = PACER_PERIOD_US.saturating_add(step);
+            for frame in rig.poll(now) {
+                let text = if method_of(&frame) == "get_recap" {
+                    asked += 1;
+                    format!(
+                        r#"{{"jsonrpc":"2.0","id":{},"error":{{"code":-32603,"message":"the feed lost segment_ended","data":{{"code":"INTERNAL"}}}}}}"#,
+                        id_of(&frame)
+                    )
+                } else {
+                    let result = match method_of(&frame).as_str() {
+                        "get_view" => r#"{"next_cursor":"c9","complete":true}"#,
+                        "get_segment_feed" => r#"{"events":[],"next_cursor":"f1"}"#,
+                        _ => "{}",
+                    };
+                    answer(id_of(&frame), result, "recap")
+                };
+                rig.receive(frame.link, &text).expect("reads");
+            }
+        }
+        assert_eq!(asked, 1, "a refusal is not asked again in a loop");
+        assert_eq!(rig.recap().refusal, "INTERNAL: the feed lost segment_ended");
+        assert_eq!(rig.recap().answers, 0);
     }
 
     /// The next BMI and the committed spend are kept as they came, and an answer that leaves

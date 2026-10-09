@@ -220,7 +220,9 @@ schedules, and decides nothing (AGENTS.md section 3 rule 4).
 * **The recap.** In a recap and after the match ends, the lobby's column shows `get_recap`'s
   prose: the settlement's, the shortfall's and the "found nothing" lines are its sentences.
 * **This round.** The panel shows the Lull's "This round: ..." sentence off `get_briefing`'s
-  prose, read every Lull and after every accepted seal (item 133 (3) (i)).
+  prose, read every Lull and after every accepted seal (item 133 (3) (i)). With no sentence
+  (nothing sealed yet, the briefing not read yet, or a seal that reads the map nowhere) the
+  heading is hidden: the client words no claim about the orders of its own.
 * **The chips.** For every vent or seam the playbook names or describes, what it reads now,
   how far, and the next candidate, from `resolve_refs` for the text on screen.
 * **The vent click.** A click on a heat vent offers "Place beacon covering this vent" (a name);

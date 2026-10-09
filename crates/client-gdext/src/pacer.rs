@@ -71,9 +71,10 @@ pub const MAX_ADVANCE_MS: i32 = 60_000;
 
 /// How much owed game time the pacer carries before it drops the rest: 5 seconds.
 ///
-/// PLACEHOLDER: the backlog bound — OWNER, at hardening, Tuning. A stalled host or a long
-/// hitch is caught up by at most this much, so a Push never plays a burst of minutes to make
-/// up for a frozen window.
+/// PLACEHOLDER: the backlog bound — OWNER, at hardening, with the pacer's period. The
+/// marker named no when before; this one is the register's M-04 proposal. A stalled host or
+/// a long hitch is caught up by at most this much, so a Push never plays a burst of minutes
+/// to make up for a frozen window.
 pub const BACKLOG_BOUND_MS: u64 = 5_000;
 
 /// How often the host clock is reported outside a Push: every 250 ms of wall time.

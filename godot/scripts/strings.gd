@@ -45,6 +45,8 @@ const TEXT := {
 	# The recap: the gateway's own prose - the settlement, the shortfall and why a step
 	# found nothing are its sentences (S1's plan, task `ui`) - under this heading.
 	"lobby_recap": "Recap of round {round}: {prose}",
+	# A refused get_recap: the gateway's refusal, code and message, as it came.
+	"lobby_recap_refused": "The recap could not be read: {refusal}",
 
 	# --- The credits overlay (scripts/credits.gd; decisions-log item 117 (11)) ------
 	# The game's licences by area are written here, never read from files at run time.
@@ -171,9 +173,9 @@ const TEXT := {
 	"route_waiting": "Estimating...",
 
 	# --- Targeting: the Lull's sentence and the chips (S1's plan, task `ui`) -----
-	# "This round" is the gateway's own sentence, shown as it came under this heading.
+	# "This round" is the gateway's own sentence, shown as it came under this heading; with
+	# no sentence the heading is hidden, never replaced by a claim of the client's own.
 	"this_round_heading": "This round",
-	"this_round_none": "Your orders read nothing off the map this round.",
 	"chips_heading": "What the map reads now",
 	"chips_waiting": "Reading the map...",
 	"chips_none": "No step names a vent or a seam.",

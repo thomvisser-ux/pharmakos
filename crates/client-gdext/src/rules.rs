@@ -94,31 +94,46 @@ pub fn mesher_rules(table: &RulesTable) -> Result<MesherRules, BridgeError> {
 /// The rules table's own comment says the row is "read by the host and the editor, never
 /// by the sim", and the gateway's `_status` footer shows the countdown the client reports
 /// rather than one of its own (skeleton-plan-t16a-notes.md section D: "the client counts,
-/// the gateway is told"), so the watch rig takes the Lull's length from here. `None` when
-/// the table carries no `match` block or a length of zero or less, which the rig treats
-/// as an untimed Lull rather than inventing a default.
-#[must_use]
-pub fn lull_ms(table: &RulesTable) -> Option<u32> {
-    table
+/// the gateway is told"), so the watch rig takes the Lull's length from here.
+///
+/// # Errors
+///
+/// [`BridgeError::MissingRules`] when the table carries no `match` block, and
+/// [`BridgeError::LullNotPositive`] for a length of zero or less: the gateway's own
+/// reading of the row (`LullLengths::from_rules`) refuses both, so the client refuses
+/// them too rather than read them as an untimed Lull (review of `ui`: no silent
+/// fallback).
+pub fn lull_ms(table: &RulesTable) -> Result<u32, BridgeError> {
+    let row = table
         .r#match
         .as_ref()
-        .and_then(|row| u32::try_from(row.lull_ms).ok())
-        .filter(|length| *length > 0)
+        .ok_or(BridgeError::MissingRules { row: "match" })?;
+    positive_lull("match.lull_ms", row.lull_ms)
 }
 
 /// The FIRST Lull's planning timer, `match.first_lull_ms`, in milliseconds: round 1's Lull,
 /// and every later Lull is [`lull_ms`] (spec section 3's ten and five minutes; decisions-log
 /// item 127 (2), S1's plan, decision 10).
 ///
-/// Read for the reason [`lull_ms`] is, and with the same reading of an absent or
-/// non-positive row: no countdown, never a default of this client's.
-#[must_use]
-pub fn first_lull_ms(table: &RulesTable) -> Option<u32> {
-    table
+/// Read for the reason [`lull_ms`] is.
+///
+/// # Errors
+///
+/// As [`lull_ms`]: no `match` block, or a length of zero or less.
+pub fn first_lull_ms(table: &RulesTable) -> Result<u32, BridgeError> {
+    let row = table
         .r#match
         .as_ref()
-        .and_then(|row| u32::try_from(row.first_lull_ms).ok())
+        .ok_or(BridgeError::MissingRules { row: "match" })?;
+    positive_lull("match.first_lull_ms", row.first_lull_ms)
+}
+
+/// A Lull row's length, refused unless it is positive.
+fn positive_lull(field: &'static str, value: i32) -> Result<u32, BridgeError> {
+    u32::try_from(value)
+        .ok()
         .filter(|length| *length > 0)
+        .ok_or(BridgeError::LullNotPositive { field, value })
 }
 
 /// The generated map's extent in voxels, `map.size_x`, `size_y` and `size_z`, in the SIM's
@@ -267,15 +282,42 @@ mod tests {
         let table = table_from_json(&text).expect("the committed table is canonical gp.v1 JSON");
         // Present, not pinned: both rows are the owner's to tune at S1's demo (the `tune`
         // lane), and `tests/godot_project.rs` holds the client's inline copy to them.
-        assert!(first_lull_ms(&table).is_some(), "match.first_lull_ms");
-        assert!(lull_ms(&table).is_some(), "match.lull_ms");
+        assert!(first_lull_ms(&table).is_ok(), "match.first_lull_ms");
+        assert!(lull_ms(&table).is_ok(), "match.lull_ms");
     }
 
+    /// The gateway refuses a table with no `match` block or a Lull row that is not a
+    /// positive length, so the client does too, never reading it as an untimed Lull.
     #[test]
-    fn a_table_with_no_match_row_times_no_lull() {
-        let table = table_with(Some(row()));
-        assert_eq!(first_lull_ms(&table), None);
-        assert_eq!(lull_ms(&table), None);
+    fn a_table_with_no_match_row_or_a_bad_length_is_refused() {
+        let mut table = table_with(Some(row()));
+        assert_eq!(
+            first_lull_ms(&table),
+            Err(BridgeError::MissingRules { row: "match" })
+        );
+        assert_eq!(
+            lull_ms(&table),
+            Err(BridgeError::MissingRules { row: "match" })
+        );
+        table.r#match = Some(pharmakos_proto::gp::v1::rules_table::Match {
+            lull_ms: 0,
+            first_lull_ms: -5,
+            ..Default::default()
+        });
+        assert_eq!(
+            first_lull_ms(&table),
+            Err(BridgeError::LullNotPositive {
+                field: "match.first_lull_ms",
+                value: -5
+            })
+        );
+        assert_eq!(
+            lull_ms(&table),
+            Err(BridgeError::LullNotPositive {
+                field: "match.lull_ms",
+                value: 0
+            })
+        );
     }
 
     #[test]

@@ -163,6 +163,7 @@ var _meter: Label
 var _meter_answers := -1
 var _forecast: Label
 var _this_round: Label
+var _this_round_box: VBoxContainer
 var _chips: Label
 var _dormant: CheckBox
 var _chips_drawn := ""
@@ -581,10 +582,14 @@ func _draw_meter(meter: Dictionary) -> void:
 	_forecast.accessibility_name = _forecast.text
 
 
-## The Lull's "this round" sentence, as the gateway wrote it.
+## The Lull's "this round" sentence, as the gateway wrote it, or nothing at all: with no
+## sentence (no seal yet, no briefing read yet, or a seal whose route reads the map nowhere)
+## the panel hides the heading rather than word a claim about the orders the gateway did
+## not make.
 func _draw_this_round(sentence: String) -> void:
-	_this_round.text = sentence if sentence != "" else Strings.text("this_round_none")
-	_this_round.accessibility_name = _this_round.text
+	_this_round.text = sentence
+	_this_round.accessibility_name = sentence
+	_this_round_box.visible = sentence != ""
 
 
 ## One line per chip, each put together from the gateway's answer through strings.gd's
@@ -826,8 +831,11 @@ func _build_panel() -> void:
 
 	# Below the checks and the route, so the rows and their Fix buttons keep their place at
 	# the panel's top (F1's first-click check clicks them unscrolled).
-	_heading(column, "this_round_heading")
-	_this_round = _label(column)
+	_this_round_box = VBoxContainer.new()
+	_this_round_box.visible = false
+	column.add_child(_this_round_box)
+	_heading(_this_round_box, "this_round_heading")
+	_this_round = _label(_this_round_box)
 
 	_heading(column, "forecast_heading")
 	_forecast = _label(column)

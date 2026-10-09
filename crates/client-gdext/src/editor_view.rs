@@ -257,6 +257,7 @@ pub(crate) fn recap_dictionary(recap: &Recap) -> VarDictionary {
     out.set(&"answers".to_variant(), &counter(recap.answers));
     out.set(&"round".to_variant(), &i64::from(recap.round).to_variant());
     out.set(&"prose".to_variant(), &recap.prose.to_variant());
+    out.set(&"refusal".to_variant(), &recap.refusal.to_variant());
     out
 }
 

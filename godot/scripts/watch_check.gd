@@ -276,6 +276,11 @@ func _run() -> void:
 		_failures.append("the recap is not round 1's prose: %s" % recap)
 		_finish()
 		return
+	# Read once, not in a loop: the one answer so far is the only one asked for.
+	if int(recap.get("answers", 0)) != 1:
+		_failures.append("the recap was read more than once: %s" % recap)
+		_finish()
+		return
 	print("[watch-check] recap: %s" % recap.get("prose", ""))
 
 	# Round 2: Continue, and the carried draft opens through get_draft.

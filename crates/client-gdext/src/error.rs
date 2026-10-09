@@ -39,6 +39,14 @@ pub enum BridgeError {
         /// Why it does not fit.
         because: &'static str,
     },
+    /// A Lull row of the rules table is not a positive length, which the gateway refuses
+    /// too (`LullLengths::from_rules`).
+    LullNotPositive {
+        /// The field, as `gp.v1.RulesTable` spells it.
+        field: &'static str,
+        /// The value the table carried.
+        value: i32,
+    },
     /// The mesher refused the chunk it was handed.
     Chunk(ChunkInputError),
     /// The mesher refused to mesh.
@@ -94,6 +102,11 @@ impl fmt::Display for BridgeError {
                 value,
                 because,
             } => write!(formatter, "rules field `{field}` is {value}: {because}"),
+            Self::LullNotPositive { field, value } => write!(
+                formatter,
+                "rules field `{field}` is {value}: a Lull's length is a positive number of \
+                 milliseconds, and the gateway refuses the table too"
+            ),
             Self::Chunk(error) => write!(formatter, "{error}"),
             Self::Mesh(error) => write!(formatter, "{error}"),
             Self::Schema { pointer, message } => {

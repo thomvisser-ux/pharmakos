@@ -99,10 +99,22 @@ const ROUTE_POINTER: &str = "/declarative/route";
 /// `options.allow_dormant_beacons`'s JSON Pointer: the option the E0601 checkbox sets.
 pub const DORMANT_OPTION: &str = "/declarative/options/allow_dormant_beacons";
 
+/// The playbook's `options` object, under which the checkbox's removal names the key in
+/// the spelling the text uses.
+const OPTIONS_POINTER: &str = "/declarative/options";
+
+/// The option's two spellings the playbook codec reads (`crates/proto/src/json/codec.rs`):
+/// the canonical `snake_case` one first, then proto JSON's `camelCase`.
+const DORMANT_KEYS: &[&str] = &["allow_dormant_beacons", "allowDormantBeacons"];
+
 /// The verifier codes that name the dormant-beacon option, and show its checkbox: E0601,
 /// the route adds draw beyond supply and the option is not set; W0603, the same with the
 /// option set, so the shortfall is accepted (`crates/verifier/src/estimate.rs`). The
 /// checkbox's reading of the verifier's catalogue, as [`LOAD_REFUSALS`] is Load's.
+///
+/// PLACEHOLDER: the dormant checkbox's codes — OWNER, S6, with the catalogue column. A
+/// column in the catalogue naming the codes an option answers would make the list the
+/// verifier's, as it would [`LOAD_REFUSALS`].
 pub const DORMANT_CODES: &[&str] = &["E0601", "W0603"];
 
 /// The `allow_dormant_beacons` checkbox as the panel draws it.
@@ -990,10 +1002,12 @@ impl Editor {
                 Some(patch) => patch,
                 None => return false,
             }
-        } else if self.text.as_deref().is_some_and(allows_dormant) {
+        } else if let Some(key) = self.text.as_deref().and_then(dormant_key) {
+            // The key as the text spells it, so a hand-written camelCase option is removed
+            // rather than refused by `patch_plan` for naming a key that is not there.
             json::write(&Json::Array(vec![object(vec![
                 ("op", text("remove")),
-                ("path", text(DORMANT_OPTION)),
+                ("path", text(&format!("{OPTIONS_POINTER}/{key}"))),
             ])]))
         } else {
             return false;
@@ -1013,7 +1027,7 @@ impl Editor {
     /// The checkbox as the panel draws it.
     #[must_use]
     pub fn dormant(&self) -> Dormant {
-        let checked = self.text.as_deref().is_some_and(allows_dormant);
+        let checked = self.text.as_deref().and_then(dormant_key).is_some();
         let named = self
             .rows
             .iter()
@@ -2348,20 +2362,16 @@ fn dormant_patch_of(report: &VerifyReport) -> Option<String> {
         .map(|suggestion| suggestion.json_patch.clone())
 }
 
-/// Whether the playbook `text` sets `options.allow_dormant_beacons`, read laxly as the
-/// route is: a text this walk cannot read sets nothing, and the verifier has the last word.
-fn allows_dormant(text: &str) -> bool {
-    json::read(&strip_comments(text)).is_ok_and(|document| {
-        let option = document
-            .get("declarative")
-            .and_then(|value| value.get("options"))
-            .and_then(|value| {
-                value
-                    .get("allow_dormant_beacons")
-                    .or_else(|| value.get("allowDormantBeacons"))
-            });
-        matches!(option, Some(Json::Bool(true)))
-    })
+/// The key under which the playbook `text` sets `options.allow_dormant_beacons` to true,
+/// in the spelling the text uses ([`DORMANT_KEYS`]), read laxly as the route is: a text
+/// this walk cannot read sets nothing, and the verifier has the last word.
+fn dormant_key(text: &str) -> Option<&'static str> {
+    let document = json::read(&strip_comments(text)).ok()?;
+    let options = document.get("declarative")?.get("options")?;
+    DORMANT_KEYS
+        .iter()
+        .copied()
+        .find(|key| matches!(options.get(key), Some(Json::Bool(true))))
 }
 
 /// A `verify_plan` answer's report.
@@ -3044,6 +3054,36 @@ mod tests {
         assert!(
             written.contains("remove") && written.contains("allow_dormant_beacons"),
             "{written}"
+        );
+    }
+
+    /// A hand-written option in proto JSON's `camelCase` shows ticked, and clearing it
+    /// removes that key as the text spells it (review of `ui`: the removal used to name
+    /// the `snake_case` key only, which `patch_plan` refuses for a key that is not there).
+    #[test]
+    fn the_dormant_checkbox_clears_the_key_the_text_spells() {
+        let mut editor = Editor::new("seat.0");
+        let camel = r#"{"declarative":{"route":[],"options":{"allowDormantBeacons":true}}}"#;
+        assert!(editor.load(camel.as_bytes()));
+        let _ = editor.next_call(false);
+        let w0603 = r#"{"code":"W0603","severity":"warning","path":"/declarative/route/0","beginner":"Some beacons will go dark."}"#;
+        editor
+            .answered(Ok(&quick_report(w0603, true)))
+            .expect("reads");
+        let shown = editor.dormant();
+        assert!(shown.shown && shown.checked && shown.enabled, "{shown:?}");
+        assert!(editor.set_allow_dormant(false));
+        let call = editor.next_call(false).expect("the removal");
+        let written = json::write(&call.params);
+        assert!(
+            written.contains("/declarative/options/allowDormantBeacons")
+                && !written.contains("allow_dormant_beacons"),
+            "{written}"
+        );
+        assert_eq!(dormant_key(camel), Some("allowDormantBeacons"));
+        assert_eq!(
+            dormant_key(r#"{"declarative":{"options":{"allow_dormant_beacons":false}}}"#),
+            None
         );
     }
 

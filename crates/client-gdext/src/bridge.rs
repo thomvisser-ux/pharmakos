@@ -209,8 +209,8 @@ impl PharmakosBridge {
                 Ok((
                     rules::mesher_rules(&table)?,
                     LullLengths {
-                        first_ms: rules::first_lull_ms(&table).map(u64::from),
-                        later_ms: rules::lull_ms(&table).map(u64::from),
+                        first_ms: Some(u64::from(rules::first_lull_ms(&table)?)),
+                        later_ms: Some(u64::from(rules::lull_ms(&table)?)),
                     },
                     rules::map_extent(&table)?,
                 ))
@@ -1032,8 +1032,9 @@ impl PharmakosBridge {
             .unwrap_or_default()
     }
 
-    /// The recap: `answers`, `round` and `prose`, as the gateway last wrote it. Empty
-    /// before `watch_begin`.
+    /// The recap: `answers`, `round` and `prose`, as the gateway last wrote it, and
+    /// `refusal`, its refusal of the read as it came (empty when none). Empty before
+    /// `watch_begin`.
     #[func]
     fn watch_recap(&mut self) -> VarDictionary {
         let Some(rig) = self.rig.as_ref() else {
