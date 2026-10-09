@@ -80,9 +80,12 @@ on:
 permissions:
   contents: read
 
+# A newer push to a pull request's branch cancels that branch's stale run; a run on `main`
+# always finishes, so a merge never cancels the push run of the merge before it, and every
+# commit on `main` keeps its own verdict (decisions-log item 134 (2) (d)).
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -249,11 +252,16 @@ jobs:
         # generated with. Raising it means regenerating the tree in the same commit.
         run: cargo install protoc-gen-prost --version 0.5.0 --locked
 
+      # The version is pinned, not the action's latest: a new cargo-deny release can add a
+      # check or change a default and turn every pull request red at once, and it would reach
+      # CI with no release-age cooldown. 0.20.2 (published 2026-07-09) is what CI and the
+      # local toolchain ran when it was pinned. Raise it in its own PR, with deny.toml
+      # checked against the new release's notes.
       - name: Install cargo-deny
         if: steps.scope.outputs.prose_only != 'true'
         uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
         with:
-          tool: cargo-deny
+          tool: cargo-deny@0.20.2
 
       - name: Install reuse
         if: matrix.reuse
@@ -956,17 +964,24 @@ jobs:
     # not; so its measuring step continues on error, and `cargo xtask perf-alarms` turns
     # a failed measurement into a `::warning::` and still exits 0.
     #
-    # What it publishes: the mesher p99 (crates/mesher/tests/perf_alarm.rs, run with
-    # `--release`, `--ignored` and `--nocapture` as its header says), and the allocations
-    # per tick as a notice only — crates/sim/tests/allocations.rs asserts zero in every
-    # leg's `test` step, so it is not run again here. The tick-minus-pathing mean is not
-    # built: a millisecond figure for the sim may come only from a walled crate driving it
-    # from outside (AGENTS.md section 4.5), none exists, and it moves to S2's G3′-real
-    # gate. The budgets come with S1's P1 and S2's G3′-real gates, which set them.
+    # What it publishes, one measurement after the other: the mesher p99
+    # (crates/mesher/tests/perf_alarm.rs, run with `--release`, `--ignored` and
+    # `--nocapture` as its header says); P1's timings from the walled `pharmakos-bench`
+    # (crates/bench/tests/perf_alarm.rs: QUICK's p50 and p99 over the committed verifier
+    # cases and `budget_128`, and a decision tick's ns per size unit in a hosted match),
+    # the walled crate AGENTS.md section 4.5 sanctions to read a clock while driving the
+    # verifier and the sim from outside (decisions-log item 131); and the allocations per
+    # tick as a notice only — crates/sim/tests/allocations.rs asserts zero in every leg's
+    # `test` step, so it is not run again here. The tick-minus-pathing mean the bench could
+    # now produce stays S2's G3′-real gate's. The budgets come with S1's P1 and S2's
+    # G3′-real gates, which set them.
     #
-    # No cache step: the repository's cache store is past GitHub's 10 GB cap already, and
-    # the mesher's release test build is small. It follows the docs-only fast path like the
-    # building jobs: a prose-only pull request skips its steps and prints the notice.
+    # No cache step: the repository's cache store is past GitHub's 10 GB cap already. The
+    # release test builds are the mesher's and the bench's, and the bench's links the sim,
+    # the verifier and the gateway, so this job builds more than it once did; it stays
+    # uncached until a measured run says the cost matters. It follows the docs-only fast
+    # path like the building jobs: a prose-only pull request skips its steps and prints the
+    # notice.
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
