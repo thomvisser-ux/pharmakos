@@ -35,7 +35,7 @@ mod common;
 
 use common::{EXPAND_EAST, Gateway, limits};
 use pharmakos_client_gdext::editor::{Action, Selector, Target};
-use pharmakos_client_gdext::rig::{ADMIN, Phase, Rig, SEAT, SEAT_CALLS_PER_REFILL};
+use pharmakos_client_gdext::rig::{ADMIN, LullLengths, Phase, Rig, SEAT, SEAT_CALLS_PER_REFILL};
 use pharmakos_client_gdext::view::{Entity, EntityKind};
 
 /// One frame of a 60 Hz client, in wall microseconds.
@@ -55,7 +55,7 @@ enum Order {
 fn burst(edits: usize, order: Order, latency: usize) -> (Gateway, Rig) {
     let mut gateway = Gateway::new("lull");
     let mut rig = Rig::new();
-    rig.set_lull_length(0);
+    rig.set_lull_length(LullLengths::default());
     rig.opened(ADMIN);
     rig.opened(SEAT);
     rig.editor_mut().set_seat("seat.0");

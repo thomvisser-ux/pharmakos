@@ -17,12 +17,15 @@ use pharmakos_proto::json;
 
 use crate::editor::{Editor, Row, Selector, Target, rows_of};
 use crate::error::BridgeError;
-use crate::rig::Meter;
+use crate::rig::{Meter, Recap};
+use crate::targeting::{Chip, ChipFeature, FeatureKind, FeatureName};
 use crate::wizard::{Instance, Wizard};
 
 /// The menu's target, from the dictionary GDScript builds: `voxel` (a `Vector3i` in the
 /// sim's axes), or `selector` (`nearest`, `weakest`, `safest`, `most_threatened`), or
-/// `beacon` (a `b_NN` id). `None` when it names none of the three.
+/// `feature` (a feature's name, `vent_<x>_<y>`), or `nearest_uncovered` (a feature kind,
+/// `vent` or `seam`: Alt-click's "the nearest vent you can cover"), or `beacon` (a
+/// `b_NN` id). `None` when it names none of them.
 #[must_use]
 pub(crate) fn target_of(dictionary: &VarDictionary) -> Option<Target> {
     let entry = |key: &str| dictionary.get(&key.to_variant());
@@ -37,6 +40,12 @@ pub(crate) fn target_of(dictionary: &VarDictionary) -> Option<Target> {
     };
     if let Some(selector) = named("selector") {
         return Selector::from_name(&selector).map(Target::Selector);
+    }
+    if let Some(feature) = named("feature") {
+        return Some(Target::Feature(feature));
+    }
+    if let Some(kind) = named("nearest_uncovered") {
+        return FeatureKind::from_name(&kind).map(Target::NearestUncovered);
     }
     named("beacon").map(Target::Beacon)
 }
@@ -167,7 +176,88 @@ pub(crate) fn state_dictionary(editor: &Editor) -> VarDictionary {
     }
     put("prose", prose.to_variant());
     put("prose_current", editor.prose_current().to_variant());
+
+    let mut chips = VarArray::new();
+    for chip in editor.chips() {
+        chips.push(&chip_dictionary(chip).to_variant());
+    }
+    put("chips", chips.to_variant());
+    put("chips_current", editor.chips_current().to_variant());
+    put(
+        "this_round",
+        editor.this_round().unwrap_or_default().to_variant(),
+    );
+    let dormant = editor.dormant();
+    let mut option = VarDictionary::new();
+    option.set(&"shown".to_variant(), &dormant.shown.to_variant());
+    option.set(&"checked".to_variant(), &dormant.checked.to_variant());
+    option.set(&"enabled".to_variant(), &dormant.enabled.to_variant());
+    put("dormant", option.to_variant());
     state
+}
+
+/// One chip as a dictionary: `pointer`, `step` (from 1; 0 for a reference outside the
+/// route), `arm` (`covering`, `on`, `other`), `form` (`name`, `description`,
+/// `covered`, `unknown`), `now` and `next` (each empty, or a feature: `id`, `kind`, `x`,
+/// `y` as the name spells them, and `travel_ms` as the gateway answered), `failure` and
+/// `matched`.
+fn chip_dictionary(chip: &Chip) -> VarDictionary {
+    let mut out = VarDictionary::new();
+    out.set(&"pointer".to_variant(), &chip.pointer.to_variant());
+    out.set(&"step".to_variant(), &count(chip.step.unwrap_or(0)));
+    out.set(&"arm".to_variant(), &chip.arm.name().to_variant());
+    out.set(&"form".to_variant(), &chip.form.name().to_variant());
+    out.set(
+        &"now".to_variant(),
+        &chip_feature(chip.now.as_ref()).to_variant(),
+    );
+    out.set(
+        &"next".to_variant(),
+        &chip_feature(chip.next.as_ref()).to_variant(),
+    );
+    out.set(&"failure".to_variant(), &chip.failure.to_variant());
+    out.set(
+        &"matched".to_variant(),
+        &i64::from(chip.matched).to_variant(),
+    );
+    out
+}
+
+/// One chip candidate as a dictionary; empty for none.
+fn chip_feature(feature: Option<&ChipFeature>) -> VarDictionary {
+    let mut out = VarDictionary::new();
+    let Some(feature) = feature else {
+        return out;
+    };
+    out.set(&"id".to_variant(), &feature.id.to_variant());
+    name_into(&mut out, feature.name.as_ref());
+    out.set(
+        &"travel_ms".to_variant(),
+        &i64::from(feature.travel_ms).to_variant(),
+    );
+    out
+}
+
+/// A feature name's parts, `kind`, `x` and `y` as the name spells them, put into `out`;
+/// `kind` is empty for a name this build cannot spell, which the panel shows as its id.
+pub(crate) fn name_into(out: &mut VarDictionary, name: Option<&FeatureName>) {
+    let (kind, x, y) = name.map_or(("", "", ""), |name| {
+        (name.kind.name(), name.x.as_str(), name.y.as_str())
+    });
+    out.set(&"kind".to_variant(), &kind.to_variant());
+    out.set(&"x".to_variant(), &x.to_variant());
+    out.set(&"y".to_variant(), &y.to_variant());
+}
+
+/// The recap as a dictionary: `answers` (zero before the first), `round` and `prose`, as
+/// the gateway wrote it.
+#[must_use]
+pub(crate) fn recap_dictionary(recap: &Recap) -> VarDictionary {
+    let mut out = VarDictionary::new();
+    out.set(&"answers".to_variant(), &counter(recap.answers));
+    out.set(&"round".to_variant(), &i64::from(recap.round).to_variant());
+    out.set(&"prose".to_variant(), &recap.prose.to_variant());
+    out
 }
 
 /// The wizard as a dictionary: empty when it is closed; otherwise `template_id`, `current`
@@ -224,7 +314,9 @@ pub(crate) fn instance_dictionary(instance: &Instance) -> VarDictionary {
 }
 
 /// The meter as a dictionary: `answers` (zero before the first), `phase` (the phase the
-/// last answer was served in), and the four fields under their wire names, as they came.
+/// last answer was served in), the four fields under their wire names, as they came, and
+/// `bmi_next_dollars` and `committed_dollars` as they came, each with a `has_` flag that
+/// is false when the answer left the field out (which is not 0).
 #[must_use]
 pub(crate) fn meter_dictionary(meter: Meter) -> VarDictionary {
     let mut out = VarDictionary::new();
@@ -246,6 +338,16 @@ pub(crate) fn meter_dictionary(meter: Meter) -> VarDictionary {
         &"headroom_kw_now".to_variant(),
         &i64::from(meter.headroom_kw_now).to_variant(),
     );
+    for (key, value) in [
+        ("bmi_next_dollars", meter.bmi_next_dollars),
+        ("committed_dollars", meter.committed_dollars),
+    ] {
+        out.set(
+            &format!("has_{key}").to_variant(),
+            &value.is_some().to_variant(),
+        );
+        out.set(&key.to_variant(), &value.map_or(0, i64::from).to_variant());
+    }
     out
 }
 

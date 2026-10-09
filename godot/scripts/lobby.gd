@@ -12,8 +12,16 @@
 # whether or not the window has focus.
 #
 # The Lull ends when every seat is ready or its timer runs out - the bridge's watch rig
-# decides that from the host clock's answer and calls `end_lull` itself. Ready is this
-# seat's `set_ready`. Continue leaves the recap. Every button is a request to the bridge;
+# decides that from the host clock's answer and calls `end_lull` itself. Round 1's Lull is
+# timed by the rules table's `first_lull_ms` and every later one by `lull_ms`, and the status
+# line shows no countdown while the admin footer says the phase has none (`_status.untimed`;
+# the bridge's `timer` is then empty; decisions-log item 135). Ready is this seat's
+# `set_ready`. Continue leaves the recap.
+#
+# THE RECAP (S1's plan, task `ui`): in a recap and once the match has ended, the column
+# shows `get_recap`'s prose as the gateway wrote it - the settlement's line, the shortfall's
+# and why a step found nothing ("3 matched, none reachable") are its sentences. Whether it is
+# shown is a branch on the bridge's phase string, for display, as the speed label's is. Every button is a request to the bridge;
 # nothing here computes a time, a price or a rule, and nothing here can show more of the
 # map than the gateway sent (AGENTS.md section 3 rule 4).
 #
@@ -74,6 +82,7 @@ const REMEMBERED := "user://last_match.txt"
 @onready var editor: CanvasLayer = $Editor
 
 var _status: Label
+var _recap: Label
 var _events: Label
 var _rows: Array[String] = []
 var _follow: Button
@@ -169,6 +178,22 @@ func _process(_delta: float) -> void:
 	if _forgotten:
 		parts.append(Strings.text("lobby_forgotten"))
 	_status.text = "  ".join(parts)
+	_draw_recap(String(state.get("phase", "")))
+
+
+## The recap's prose, as the gateway wrote it, in a recap and after the match has ended.
+func _draw_recap(phase: String) -> void:
+	var recap: Dictionary = vista.bridge.watch_recap()
+	var shown: bool = (phase == "recap" or phase == "ended") and int(recap.get("answers", 0)) > 0
+	_recap.visible = shown
+	if shown:
+		_recap.text = Strings.text("lobby_recap", {"round": recap.get("round", 0), "prose": recap.get("prose", "")})
+		_recap.accessibility_name = _recap.text
+
+
+## The recap as drawn, for a check to read.
+func recap_text() -> String:
+	return _recap.text if _recap.visible else ""
 
 
 func _notification(what: int) -> void:
@@ -232,6 +257,11 @@ func _build_ui() -> void:
 	layer.add_child(column)
 	_status = Label.new()
 	column.add_child(_status)
+	_recap = Label.new()
+	_recap.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_recap.custom_minimum_size = Vector2(560, 0)
+	_recap.visible = false
+	column.add_child(_recap)
 	_chooser = HBoxContainer.new()
 	_chooser.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	column.add_child(_chooser)

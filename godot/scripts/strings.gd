@@ -42,6 +42,9 @@ const TEXT := {
 	"lobby_resumed_failed": "The match host would not resume the last match: {reason}",
 	"lobby_forgotten": "The last match has ended, so there is nothing to resume.",
 	"lobby_about": "Credits",
+	# The recap: the gateway's own prose - the settlement, the shortfall and why a step
+	# found nothing are its sentences (S1's plan, task `ui`) - under this heading.
+	"lobby_recap": "Recap of round {round}: {prose}",
 
 	# --- The credits overlay (scripts/credits.gd; decisions-log item 117 (11)) ------
 	# The game's licences by area are written here, never read from files at run time.
@@ -100,6 +103,14 @@ const TEXT := {
 	# never supply minus draw: nothing here adds or subtracts anything.
 	"meter": "${treasury}   supply {supply} kW   draw {draw} kW   headroom {headroom} kW",
 	"meter_waiting": "Not read yet.",
+	"forecast_heading": "Your next settlement",
+	# The next BMI is a prediction, and says so (decisions-log item 135 (2) (g)): the BMI at
+	# the band held now, ignoring committed spend. Each line is left out when the answer
+	# left its figure out, which is not 0.
+	"meter_bmi": "Next BMI, at the band you hold now: ${bmi}. A prediction: it ignores the spend your orders have committed, and spending in the Push can move your band.",
+	"meter_committed": "Committed by your sealed orders and not yet paid: up to ${committed}.",
+	# The register's S1-31: the key-core is netted out of draw, and the meter says so.
+	"meter_key_core": "Supply and draw leave out each beacon's own base draw, which its key-core supplies.",
 
 	# --- What the checks said ----------------------------------------------------
 	"verdict_none": "Not checked yet.",
@@ -111,6 +122,9 @@ const TEXT := {
 	"qualifies_yes": "Ready to seal.",
 	"qualifies_no": "Cannot be sealed yet.",
 	"no_rows": "Nothing to fix.",
+	# E0601's checkbox: the option is the player's choice, and the verifier's next report
+	# says what it costs (E0601 becomes W0603).
+	"dormant_option": "Allow dormant beacons: let this route draw more power than you supply, so some beacons go dark.",
 	"severity_error": "Error",
 	"severity_warning": "Warning",
 	"severity_info": "Note",
@@ -139,6 +153,10 @@ const TEXT := {
 	"status_open_failed": "Could not read {path}.",
 	"status_wizard_used": "The template's playbook is in the editor. Undo takes it back.",
 	"status_wizard_refused": "The gateway refused that value: {detail}",
+	"status_dormant_allowing": "Allowing dormant beacons...",
+	"status_dormant_allowed": "Dormant beacons allowed.",
+	"status_dormant_disallowing": "No longer allowing dormant beacons...",
+	"status_dormant_disallowed": "Dormant beacons no longer allowed.",
 
 	# --- The route -------------------------------------------------------------
 	# PLACEHOLDER: travel times are shown as the raw game milliseconds the estimator
@@ -151,6 +169,29 @@ const TEXT := {
 	"route_empty": "No step moves the commander yet.",
 	"route_waiting": "Estimating...",
 
+	# --- Targeting: the Lull's sentence and the chips (S1's plan, task `ui`) -----
+	# "This round" is the gateway's own sentence, shown as it came under this heading.
+	"this_round_heading": "This round",
+	"this_round_none": "Your orders read nothing off the map this round.",
+	"chips_heading": "What the map reads now",
+	"chips_waiting": "Reading the map...",
+	"chips_none": "No step names a vent or a seam.",
+	# One chip per vent or seam the playbook names or describes. Every number is the
+	# gateway's, as it came; a travel time is game milliseconds (strings.gd's `leg`).
+	"chip_now": "Step {step}: now {feature}, {ms} ms",
+	"chip_next": "; next {feature}, {ms} ms",
+	"chip_how_description_covering": " - nearest by travel from the commander, read when the step starts",
+	"chip_how_description_on": " - nearest by travel from its beacon, read when the step starts",
+	"chip_how_description_other": " - nearest by travel, read when the step starts",
+	"chip_how_name_covering": " - named, read when the step starts",
+	"chip_how_name_on": " - named, read when the step starts",
+	"chip_how_name_other": " - named, read when the step starts",
+	"chip_how_covered_on": " - the feature its beacon was placed to cover, bound when it deploys",
+	"chip_nothing": "Step {step}: reads nothing now ({failure}; {matched} matched)",
+	"feature_vent": "Heat vent ({x}, {y})",
+	"feature_seam": "Scrap seam ({x}, {y})",
+	"feature_": "{id}",
+
 	# --- The map's menu --------------------------------------------------------
 	"beacon_heading": "Beacon {id}",
 	"menu_visit": "Visit & change",
@@ -160,6 +201,9 @@ const TEXT := {
 	"menu_go": "Go here",
 	"menu_recycle": "Recycle",
 	"menu_place": "Place beacon",
+	# A click on a vent names it; Alt-click describes it (docs/design/targeting.md).
+	"menu_cover": "Place beacon covering this vent",
+	"menu_cover_nearest": "Place beacon covering the nearest vent you can cover",
 	"menu_target": "Target, chosen when the step starts:",
 	"selector_nearest": "the nearest own beacon",
 	"selector_weakest": "the weakest own beacon",

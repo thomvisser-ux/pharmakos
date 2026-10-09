@@ -125,6 +125,7 @@ pub mod panics;
 pub mod rig;
 pub mod rules;
 pub mod surface;
+pub mod targeting;
 pub mod upload;
 pub mod view;
 pub mod wizard;

@@ -60,6 +60,7 @@ use pharmakos_proto::json::{self, Json};
 
 use crate::enums;
 use crate::error::BridgeError;
+use crate::targeting::{self, Chip, Feature, FeatureKind};
 use crate::view::{Entity, EntityKind, split_footer};
 use crate::wizard::{self, Instance, TemplateRow, Wizard};
 
@@ -93,6 +94,27 @@ pub const CARRIED_DRAFT_ID: &str = "carried";
 
 /// The route's JSON Pointer in a playbook.
 const ROUTE_POINTER: &str = "/declarative/route";
+
+/// `options.allow_dormant_beacons`'s JSON Pointer: the option the E0601 checkbox sets.
+pub const DORMANT_OPTION: &str = "/declarative/options/allow_dormant_beacons";
+
+/// The verifier codes that name the dormant-beacon option, and show its checkbox: E0601,
+/// the route adds draw beyond supply and the option is not set; W0603, the same with the
+/// option set, so the shortfall is accepted (`crates/verifier/src/estimate.rs`). The
+/// checkbox's reading of the verifier's catalogue, as [`LOAD_REFUSALS`] is Load's.
+pub const DORMANT_CODES: &[&str] = &["E0601", "W0603"];
+
+/// The `allow_dormant_beacons` checkbox as the panel draws it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct Dormant {
+    /// Whether the checkbox is drawn: the rows name the option, or the text sets it.
+    pub shown: bool,
+    /// Whether the text on screen sets the option.
+    pub checked: bool,
+    /// Whether a click is taken now: the rows describe the text on screen, no edit is on its
+    /// way, and there is a patch to apply.
+    pub enabled: bool,
+}
 
 /// A beacon selector: what Alt-click turns a fixed target into (spec section 13, "Alt-click
 /// turns a fixed target into nearest, weakest, safest or most threatened").
@@ -145,6 +167,12 @@ pub enum Target {
     Selector(Selector),
     /// A voxel of ground, in the sim's axes (x east, y north, z up).
     Voxel([i32; 3]),
+    /// A feature by its name, `vent_<x>_<y>`: what a click on a vent names
+    /// (`docs/design/targeting.md`, "Surfaces").
+    Feature(String),
+    /// "The nearest <kind> you can cover": what Alt-click turns a clicked feature into, a
+    /// description the sim ranks when the step starts.
+    NearestUncovered(FeatureKind),
 }
 
 /// A Quartermaster priority, as a Visit & change row sets it.
@@ -180,8 +208,11 @@ pub enum Action {
     Visit(Priority),
     /// Recycle: an interface step with the recycle row.
     Recycle,
-    /// Place beacon: a place-beacon step.
+    /// Place beacon: a place-beacon step at a voxel.
     Place,
+    /// Place beacon covering a feature: a place-beacon step whose site is `covering` the
+    /// feature a click named, or the description Alt-click made of it.
+    PlaceCovering,
 }
 
 impl Action {
@@ -196,6 +227,7 @@ impl Action {
             "visit_high" => Some(Self::Visit(Priority::High)),
             "recycle" => Some(Self::Recycle),
             "place" => Some(Self::Place),
+            "place_covering" => Some(Self::PlaceCovering),
             _ => None,
         }
     }
@@ -206,7 +238,7 @@ impl Action {
             Self::Go => "go",
             Self::Visit(_) => "visit",
             Self::Recycle => "recycle",
-            Self::Place => "place",
+            Self::Place | Self::PlaceCovering => "place",
         }
     }
 }
@@ -425,7 +457,7 @@ struct Preview {
     patched: String,
     inverse: String,
     /// QUICK's rows for the patched draft, and whether it qualified, once answered.
-    checked: Option<(Vec<Row>, bool)>,
+    checked: Option<(Vec<Row>, bool, Option<String>)>,
 }
 
 /// One planning call the editor owes, before it is sent.
@@ -477,6 +509,14 @@ enum Job {
     GetDraft {
         id: String,
     },
+    /// `get_map_summary`: the features the vent click picks from, read every Lull.
+    MapSummary,
+    /// The `allow_dormant_beacons` checkbox: `on`, the verifier's own patch from E0601;
+    /// off, the removal of the option the text sets.
+    SetOption {
+        patch: String,
+        on: bool,
+    },
 }
 
 impl Job {
@@ -492,6 +532,7 @@ impl Job {
                 | Self::PreviewCheck
                 | Self::UseWizard { .. }
                 | Self::GetDraft { .. }
+                | Self::SetOption { .. }
         )
     }
 }
@@ -559,6 +600,11 @@ enum Sent {
         id: String,
         round: u32,
     },
+    /// `resolve_refs` for the text at `revision`: the chips.
+    Resolve {
+        revision: u64,
+    },
+    MapSummary,
 }
 
 /// One call to send: the method and its params.
@@ -632,6 +678,19 @@ pub struct Editor {
     prose_revision: Option<u64>,
     /// The rule list (`render_plan`) is owed for the newest text.
     render_owed: bool,
+    /// The chips: what each feature reference in the text reads now, for the text at
+    /// `chips_revision`.
+    chips: Vec<Chip>,
+    chips_revision: Option<u64>,
+    /// The chips (`resolve_refs`) are owed for the newest text.
+    resolve_owed: bool,
+    /// The features the map lists, as the last `get_map_summary` this Lull answered.
+    features: Vec<Feature>,
+    /// The Lull's "this round" sentence, from the last briefing; `None` when it had none.
+    this_round: Option<String>,
+    /// The verifier's own patch that sets `allow_dormant_beacons`, from E0601's suggestion
+    /// in the report the rows came from; `None` when that report had no E0601.
+    dormant_patch: Option<String>,
 }
 
 impl Editor {
@@ -743,8 +802,9 @@ impl Editor {
             if let Some(preview) = self.preview.take() {
                 self.undo.push(Undo::Patch(preview.inverse));
                 self.accept_text(preview.patched);
-                if let Some((rows, qualifies)) = preview.checked {
+                if let Some((rows, qualifies, dormant)) = preview.checked {
                     self.rows = rows;
+                    self.dormant_patch = dormant;
                     self.verdict = Some(Verdict::Quick);
                     self.rows_revision = self.revision;
                     self.qualifies = qualifies;
@@ -909,6 +969,90 @@ impl Editor {
         self.touch();
     }
 
+    // --- The dormant-beacon option (S1's plan, task `ui`) --------------------------------
+
+    /// The `allow_dormant_beacons` checkbox, ticked (`on`) or cleared.
+    ///
+    /// Ticking it applies the verifier's own patch, the one E0601 suggests for the text on
+    /// screen, so the option is written where and how the verifier says; clearing it removes
+    /// the option the text sets, a patch composed from the click (AGENTS.md section 3 rule
+    /// 4: "the client may compose a JSON Patch from a click"). Whether the playbook may
+    /// leave beacons dark is the player's call, and what it costs is the verifier's next
+    /// report: E0601 becomes W0603, or back. Refused while the rows describe an older text
+    /// or an edit is on its way, as a Fix is, and when there is nothing to change.
+    pub fn set_allow_dormant(&mut self, on: bool) -> bool {
+        if !self.rows_current() || self.busy() {
+            return false;
+        }
+        let patch = if on {
+            match self.dormant_patch.clone() {
+                Some(patch) => patch,
+                None => return false,
+            }
+        } else if self.text.as_deref().is_some_and(allows_dormant) {
+            json::write(&Json::Array(vec![object(vec![
+                ("op", text("remove")),
+                ("path", text(DORMANT_OPTION)),
+            ])]))
+        } else {
+            return false;
+        };
+        self.queue.push_back(Job::SetOption { patch, on });
+        self.say(
+            if on {
+                "dormant_allowing"
+            } else {
+                "dormant_disallowing"
+            },
+            "",
+        );
+        true
+    }
+
+    /// The checkbox as the panel draws it.
+    #[must_use]
+    pub fn dormant(&self) -> Dormant {
+        let checked = self.text.as_deref().is_some_and(allows_dormant);
+        let named = self
+            .rows
+            .iter()
+            .any(|row| DORMANT_CODES.contains(&row.code.as_str()));
+        Dormant {
+            shown: checked || (self.rows_current() && named),
+            checked,
+            enabled: self.rows_current()
+                && !self.busy()
+                && (checked || self.dormant_patch.is_some()),
+        }
+    }
+
+    // --- Targeting (S1's plan, task `ui`) -------------------------------------------------
+
+    /// The chips: what each feature reference in the text reads now, in the file's order.
+    #[must_use]
+    pub fn chips(&self) -> &[Chip] {
+        &self.chips
+    }
+
+    /// Whether the chips describe the text on screen.
+    #[must_use]
+    pub fn chips_current(&self) -> bool {
+        self.text.is_some() && self.chips_revision == Some(self.revision)
+    }
+
+    /// The features the map lists, as `get_map_summary` last answered this Lull.
+    #[must_use]
+    pub fn features(&self) -> &[Feature] {
+        &self.features
+    }
+
+    /// The Lull's "this round" sentence, as the gateway wrote it; `None` when the last
+    /// briefing carried none.
+    #[must_use]
+    pub fn this_round(&self) -> Option<&str> {
+        self.this_round.as_deref()
+    }
+
     // --- What the rig tells the editor --------------------------------------------------
 
     /// A Lull opened, in `round`. The notes and the drafts are read again, the template list
@@ -918,16 +1062,26 @@ impl Editor {
     pub fn lull_opened(&mut self, round: u32) {
         let new_round = round != self.round;
         self.round = round;
-        if !self.known.notes {
-            self.queue.push_back(Job::Briefing);
+        if new_round {
+            // Last round's sentence and features describe last round's map.
+            self.this_round = None;
+            self.features.clear();
         }
+        // The briefing every Lull, not only the first: besides the notebook it carries the
+        // Lull's "this round" sentence (item 133 (3) (i)), which the new snapshot changes.
+        self.queue
+            .retain(|job| !matches!(job, Job::Briefing | Job::MapSummary));
+        self.queue.push_back(Job::Briefing);
         if !self.known.templates {
             self.queue.push_back(Job::Templates);
         }
         self.queue.push_back(Job::Drafts);
+        // The features the vent click picks from: their coverage moves every round.
+        self.queue.push_back(Job::MapSummary);
         if new_round && self.text.is_some() {
             self.owed.quick = true;
             self.owed.estimate = true;
+            self.resolve_owed = true;
             self.render_owed = true;
             self.full_done = None;
             self.owed.edited = true;
@@ -990,10 +1144,16 @@ impl Editor {
                 ));
             }
         }
-        // 3. The route, priced.
+        // 3. The route, priced; then the chips, what each feature reference reads now.
         if self.owed.estimate {
             self.owed.estimate = false;
             if let Some(call) = self.estimate_call() {
+                return Some(call);
+            }
+        }
+        if self.resolve_owed {
+            self.resolve_owed = false;
+            if let Some(call) = self.resolve_call() {
                 return Some(call);
             }
         }
@@ -1062,6 +1222,7 @@ impl Editor {
         !self.busy()
             && !self.owed.quick
             && !self.owed.estimate
+            && !self.resolve_owed
             && !self.render_owed
             && self.in_flight.is_none()
     }
@@ -1148,6 +1309,8 @@ impl Editor {
                     self.queue.push_front(Job::GetDraft { id });
                 }
             }
+            Sent::Resolve { .. } => self.resolve_owed = true,
+            Sent::MapSummary => self.queue.push_front(Job::MapSummary),
         }
         self.touch();
     }
@@ -1421,7 +1584,9 @@ impl Editor {
             job @ (Job::Templates
             | Job::Instantiate
             | Job::UseWizard { .. }
-            | Job::GetDraft { .. }) => return self.render_pr2(job),
+            | Job::GetDraft { .. }
+            | Job::MapSummary
+            | Job::SetOption { .. }) => return self.render_pr2(job),
         })
     }
 
@@ -1472,6 +1637,22 @@ impl Editor {
                 let params = object(vec![("draft_id", Json::String(id.clone()))]);
                 Some(self.send(Sent::GetDraft { id, round }, "get_draft", params))
             }
+            Job::MapSummary => {
+                Some(self.send(Sent::MapSummary, "get_map_summary", object(Vec::new())))
+            }
+            Job::SetOption { patch, on } => {
+                let playbook = self.text.clone()?;
+                let revision = self.revision;
+                let params = patch_params(&playbook, &patch);
+                Some(self.send(
+                    Sent::Edit {
+                        base: revision,
+                        retry: Box::new(Job::SetOption { patch, on }),
+                    },
+                    "patch_plan",
+                    params,
+                ))
+            }
             other => self.render(other),
         }
     }
@@ -1501,6 +1682,24 @@ impl Editor {
             Sent::Estimate { revision },
             "estimate_route",
             object(vec![("waypoints", Json::Array(waypoints))]),
+        ))
+    }
+
+    /// `resolve_refs` for the text on screen, when it holds a feature reference; a text
+    /// with none has no chips, and nothing is asked.
+    fn resolve_call(&mut self) -> Option<Call> {
+        let text = self.text.clone()?;
+        let revision = self.revision;
+        if !targeting::has_feature_refs(&text) {
+            self.chips.clear();
+            self.chips_revision = Some(revision);
+            self.touch();
+            return None;
+        }
+        Some(self.send(
+            Sent::Resolve { revision },
+            "resolve_refs",
+            object(vec![("playbook_jsonc", Json::String(text))]),
         ))
     }
 
@@ -1539,7 +1738,11 @@ impl Editor {
                         state,
                         sentence,
                     });
-                    preview.checked = Some((rows_of(&report), report.qualifies));
+                    preview.checked = Some((
+                        rows_of(&report),
+                        report.qualifies,
+                        dormant_patch_of(&report),
+                    ));
                 }
             }
             Sent::Quick { revision } => {
@@ -1570,6 +1773,7 @@ impl Editor {
                     json::decode_json(&body(result, "gp.api.v1.GetBriefingResponse"))?;
                 self.notes = response.notes;
                 self.known.notes = true;
+                self.this_round = targeting::this_round_of(&response.prose);
             }
             Sent::Notes { .. } => {
                 let response: SaveNotesResponse =
@@ -1594,7 +1798,9 @@ impl Editor {
             sent @ (Sent::Render { .. }
             | Sent::Templates
             | Sent::Instantiate { .. }
-            | Sent::GetDraft { .. }) => self.settle_pr2(sent, result)?,
+            | Sent::GetDraft { .. }
+            | Sent::Resolve { .. }
+            | Sent::MapSummary) => self.settle_pr2(sent, result)?,
         }
         Ok(())
     }
@@ -1635,6 +1841,15 @@ impl Editor {
                     self.say("carried", &response.label);
                 }
             }
+            Sent::Resolve { revision } => {
+                if revision == self.revision {
+                    if let Some(text) = self.text.as_deref() {
+                        self.chips = targeting::chips_of(result, text)?;
+                        self.chips_revision = Some(revision);
+                    }
+                }
+            }
+            Sent::MapSummary => self.features = targeting::features_of(result)?,
             other => return self.settle(other, result),
         }
         Ok(())
@@ -1649,8 +1864,11 @@ impl Editor {
             self.undo.push(Undo::Patch(answer.inverse_json_patch));
             self.drop_settled_ghost();
             self.accept_text(answer.playbook_jsonc);
-            if matches!(job, Job::Edit { .. }) {
-                self.say("fixed", "");
+            match job {
+                Job::Edit { .. } => self.say("fixed", ""),
+                Job::SetOption { on: true, .. } => self.say("dormant_allowed", ""),
+                Job::SetOption { on: false, .. } => self.say("dormant_disallowed", ""),
+                _ => {}
             }
         }
         Ok(())
@@ -1704,6 +1922,10 @@ impl Editor {
         }
         if response.accepted {
             self.sealed = Some(text);
+            // A re-seal changes the Lull's "this round" sentence at once (targeting.md,
+            // "Messages"), so the briefing is read again.
+            self.queue.retain(|job| !matches!(job, Job::Briefing));
+            self.queue.push_back(Job::Briefing);
             self.say("submitted", "");
         } else {
             self.say("submit_refused", "");
@@ -1762,6 +1984,9 @@ impl Editor {
         self.route = Route::default();
         self.prose.clear();
         self.prose_revision = None;
+        self.chips.clear();
+        self.chips_revision = None;
+        self.dormant_patch = None;
         self.owed = Owed {
             edited: true,
             ..Owed::default()
@@ -1789,6 +2014,7 @@ impl Editor {
         self.revision = self.revision.wrapping_add(1);
         self.owed.quick = true;
         self.owed.estimate = true;
+        self.resolve_owed = true;
         self.render_owed = true;
         self.owed.edited = true;
         self.route.current = false;
@@ -1797,6 +2023,7 @@ impl Editor {
 
     fn take_rows(&mut self, report: &VerifyReport, verdict: Verdict) {
         self.rows = rows_of(report);
+        self.dormant_patch = dormant_patch_of(report);
         self.verdict = Some(verdict);
         self.rows_revision = self.revision;
         self.qualifies = report.qualifies;
@@ -1897,19 +2124,47 @@ fn placement_verdict(report: &VerifyReport, step: Option<usize>) -> (GhostState,
 }
 
 /// The route step one map action adds, labelled `label`. `None` when the action cannot
-/// name that target: a visit or a recycle names a beacon, a placement names ground.
+/// name that target: a visit or a recycle names a beacon, a placement names ground, and a
+/// placement covering a feature names a feature or Alt-click's description of one.
 #[must_use]
 pub fn step_value(action: Action, target: &Target, label: &str) -> Option<Json> {
+    // A feature is a site only under `covering` (`gp.v1.Location.covering`, legal only in
+    // a place_beacon's `at`), so it is the one action a feature target can take.
+    let covering = match target {
+        Target::Feature(id) => Some(object(vec![("feature_id", Json::String(id.clone()))])),
+        Target::NearestUncovered(kind) => Some(object(vec![(
+            kind.name(),
+            object(vec![
+                ("rank", text("NEAREST")),
+                ("coverage", text("UNCOVERED")),
+            ]),
+        )])),
+        Target::Beacon(_) | Target::Selector(_) | Target::Voxel(_) => None,
+    };
+    match (action, covering) {
+        (Action::PlaceCovering, Some(reference)) => {
+            return Some(object(vec![
+                ("label", Json::String(label.to_owned())),
+                (
+                    "place_beacon",
+                    object(vec![("at", object(vec![("covering", reference)]))]),
+                ),
+            ]));
+        }
+        (Action::PlaceCovering, None) | (_, Some(_)) => return None,
+        (_, None) => {}
+    }
     let beacon_ref = match target {
         Target::Beacon(id) => Some(object(vec![("beacon_id", Json::String(id.clone()))])),
         Target::Selector(selector) => Some(selector.beacon_ref()),
-        Target::Voxel(_) => None,
+        Target::Voxel(_) | Target::Feature(_) | Target::NearestUncovered(_) => None,
     };
     let location = match target {
         Target::Voxel(at) => voxel_location(*at),
         Target::Beacon(_) | Target::Selector(_) => {
             object(vec![("beacon_anchor", beacon_ref.clone()?)])
         }
+        Target::Feature(_) | Target::NearestUncovered(_) => return None,
     };
     let kind = match action {
         Action::Go => ("move", object(vec![("to", location)])),
@@ -1939,6 +2194,7 @@ pub fn step_value(action: Action, target: &Target, label: &str) -> Option<Json> 
             };
             ("place_beacon", object(vec![("at", location)]))
         }
+        Action::PlaceCovering => return None,
     };
     Some(object(vec![
         ("label", Json::String(label.to_owned())),
@@ -2075,6 +2331,35 @@ pub fn route_waypoints(text: &str) -> Option<Vec<Json>> {
             })
             .collect(),
     )
+}
+
+/// The verifier's own patch for E0601, the dormant-beacon option, when `report` carries
+/// one: its first suggestion, whatever its applicability. The verifier marks it
+/// `MAYBE_INCORRECT` because leaving beacons dark is a choice, not a fix, which is why it
+/// is a checkbox the player ticks rather than a Fix button.
+fn dormant_patch_of(report: &VerifyReport) -> Option<String> {
+    report
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "E0601")
+        .and_then(|diagnostic| diagnostic.suggestions.first())
+        .map(|suggestion| suggestion.json_patch.clone())
+}
+
+/// Whether the playbook `text` sets `options.allow_dormant_beacons`, read laxly as the
+/// route is: a text this walk cannot read sets nothing, and the verifier has the last word.
+fn allows_dormant(text: &str) -> bool {
+    json::read(&strip_comments(text)).is_ok_and(|document| {
+        let option = document
+            .get("declarative")
+            .and_then(|value| value.get("options"))
+            .and_then(|value| {
+                value
+                    .get("allow_dormant_beacons")
+                    .or_else(|| value.get("allowDormantBeacons"))
+            });
+        matches!(option, Some(Json::Bool(true)))
+    })
 }
 
 /// A `verify_plan` answer's report.
@@ -2505,6 +2790,8 @@ mod tests {
             };
             let answer = match call.method {
                 "get_briefing" => read(r#"{"notes":"remember the vent"}"#),
+                "get_map_summary" => read(r#"{"features":[]}"#),
+                "resolve_refs" => read(r#"{"refs":[]}"#),
                 "list_drafts" => read(drafts),
                 "list_templates" => read(r#"{"templates":[]}"#),
                 "estimate_route" => read(r#"{"reachable":true}"#),
@@ -2528,6 +2815,236 @@ mod tests {
         panic!("the editor never went quiet");
     }
 
+    /// A click on a vent names it; Alt-click turns it into "the nearest vent you can cover"
+    /// (`docs/design/targeting.md`, "Surfaces"). Either is a place-beacon step whose site is
+    /// `covering`, and a feature is a target for nothing else.
+    #[test]
+    fn a_vent_click_places_a_beacon_covering_it_and_alt_click_describes_it() {
+        let named = step_value(
+            Action::PlaceCovering,
+            &Target::Feature("vent_120_88".to_owned()),
+            "place_1",
+        )
+        .expect("a name");
+        assert_eq!(
+            compact(&named),
+            r#"{"label":"place_1","place_beacon":{"at":{"covering":{"feature_id":"vent_120_88"}}}}"#
+        );
+        let described = step_value(
+            Action::PlaceCovering,
+            &Target::NearestUncovered(FeatureKind::Vent),
+            "place_2",
+        )
+        .expect("a description");
+        assert_eq!(
+            compact(&described),
+            r#"{"label":"place_2","place_beacon":{"at":{"covering":{"vent":{"rank":"NEAREST","coverage":"UNCOVERED"}}}}}"#
+        );
+        let vent = Target::Feature("vent_120_88".to_owned());
+        for action in [
+            Action::Go,
+            Action::Visit(Priority::Low),
+            Action::Recycle,
+            Action::Place,
+        ] {
+            assert!(step_value(action, &vent, "x").is_none(), "{action:?}");
+        }
+        assert!(
+            step_value(Action::PlaceCovering, &Target::Voxel([1, 2, 3]), "x").is_none(),
+            "covering names a feature, not a voxel"
+        );
+        // The route reader sends a covering site to the estimator as it is written.
+        let text = format!(
+            r#"{{"declarative":{{"route":[{}]}}}}"#,
+            json::write(&described)
+        );
+        let waypoints = route_waypoints(&text).expect("reads");
+        assert!(
+            waypoints
+                .first()
+                .map(compact)
+                .unwrap_or_default()
+                .contains("\"covering\""),
+            "{waypoints:?}"
+        );
+    }
+
+    /// The chips are `resolve_refs`' answer for the text on screen, asked after the route is
+    /// priced and only for a text that holds a feature reference.
+    #[test]
+    fn the_chips_are_asked_for_a_text_with_a_feature_reference_and_only_then() {
+        let mut editor = loaded(EXPAND_EAST);
+        drain(&mut editor, r#"{"drafts":[]}"#);
+        assert!(
+            editor.chips_current(),
+            "no reference: no call, and no chips"
+        );
+        assert!(editor.chips().is_empty());
+
+        assert!(editor.act(
+            Action::PlaceCovering,
+            &Target::Feature("vent_120_88".to_owned())
+        ));
+        let call = editor.next_call(false).expect("the patch");
+        assert_eq!(call.method, "patch_plan");
+        let covering = r#"{"declarative":{"route":[{"label":"place_1","place_beacon":{"at":{"covering":{"feature_id":"vent_120_88"}}}}]}}"#;
+        editor
+            .answered(Ok(&patched(covering, "[]")))
+            .expect("reads");
+        assert_eq!(method_of(editor.next_call(false)), "verify_plan");
+        editor.answered(Ok(&quick_report("", true))).expect("reads");
+        // No commander in this test, so no route to price: the chips come next.
+        let call = editor.next_call(false).expect("the chips");
+        assert_eq!(call.method, "resolve_refs");
+        assert!(json::write(&call.params).contains("vent_120_88"));
+        assert!(!editor.chips_current());
+        editor
+            .answered(Ok(&read(
+                r#"{"refs":[{"pointer":"/declarative/route/0/place_beacon/at/covering","feature_id":"vent_120_88","travel_ms":14000,"candidates":[{"feature_id":"vent_120_88","travel_ms":14000}],"matched":1,"failure":""}]}"#,
+            )))
+            .expect("reads");
+        assert!(editor.chips_current());
+        let chip = editor.chips().first().expect("one chip");
+        assert_eq!(chip.form, crate::targeting::ChipForm::Name);
+        assert_eq!(chip.now.as_ref().map(|now| now.travel_ms), Some(14_000));
+        // A dropped connection asks for the chips again.
+        assert!(editor.undo());
+        let _ = editor.next_call(false);
+        editor
+            .answered(Ok(&patched(covering.replace("88", "89").as_str(), "[]")))
+            .expect("reads");
+        let _ = editor.next_call(false);
+        editor.answered(Ok(&quick_report("", true))).expect("reads");
+        assert_eq!(method_of(editor.next_call(false)), "resolve_refs");
+        editor.dropped();
+        assert_eq!(method_of(editor.next_call(false)), "resolve_refs");
+    }
+
+    /// Every Lull reads the briefing (for the "this round" sentence, item 133 (3) (i)) and the
+    /// map's features; an accepted seal reads the briefing again, because a re-seal changes
+    /// the sentence at once.
+    #[test]
+    fn every_lull_and_every_seal_reads_the_this_round_sentence() {
+        let mut editor = loaded(EXPAND_EAST);
+        editor.lull_opened(1);
+        let mut asked: Vec<&str> = Vec::new();
+        for _ in 0..16 {
+            let Some(call) = editor.next_call(false) else {
+                break;
+            };
+            asked.push(call.method);
+            let answer = match call.method {
+                "get_briefing" => read(
+                    r#"{"notes":"n","prose":"Round 1 of 3, the Lull. This round: step 1 finds no vent you can cover."}"#,
+                ),
+                "get_map_summary" => read(
+                    r#"{"features":[{"feature_id":"vent_120_88","kind":"vent","grade":"rich","x":120,"y":88,"live":true},{"feature_id":"seam_3_4","kind":"seam","x":3,"y":4,"live":true,"covered":true}]}"#,
+                ),
+                "list_drafts" => read(r#"{"drafts":[]}"#),
+                "list_templates" => read(r#"{"templates":[]}"#),
+                "render_plan" => read(r#"{"prose":"Playbook\n"}"#),
+                "resolve_refs" => read(r#"{"refs":[]}"#),
+                _ => quick_report("", true),
+            };
+            editor.answered(Ok(&answer)).expect("reads");
+        }
+        assert!(
+            asked.contains(&"get_briefing") && asked.contains(&"get_map_summary"),
+            "{asked:?}"
+        );
+        assert_eq!(
+            editor.this_round(),
+            Some("This round: step 1 finds no vent you can cover.")
+        );
+        let features = editor.features();
+        assert_eq!(features.len(), 2);
+        assert_eq!(
+            features
+                .first()
+                .map(|feature| (feature.kind, feature.x, feature.y)),
+            Some((FeatureKind::Vent, 120, 88))
+        );
+        assert!(features.get(1).is_some_and(|feature| feature.covered));
+
+        assert!(editor.submit());
+        assert_eq!(method_of(editor.next_call(false)), "submit_plan");
+        editor
+            .answered(Ok(&read(
+                r#"{"report":{"qualifies":true,"depth":"full"},"accepted":true}"#,
+            )))
+            .expect("reads");
+        assert_eq!(
+            method_of(editor.next_call(false)),
+            "get_briefing",
+            "the sentence is read again after the seal"
+        );
+        editor
+            .answered(Ok(&read(
+                r#"{"notes":"n","prose":"Round 1 of 3, the Lull."}"#,
+            )))
+            .expect("reads");
+        assert_eq!(
+            editor.this_round(),
+            None,
+            "a briefing with no sentence has none"
+        );
+
+        // A new round forgets last round's sentence and features until they are read again.
+        editor.lull_opened(2);
+        assert_eq!(editor.this_round(), None);
+        assert!(editor.features().is_empty());
+    }
+
+    /// E0601's checkbox: ticking it applies the verifier's own patch, clearing it removes
+    /// the option the text sets, and either is refused while the rows are stale.
+    #[test]
+    fn the_dormant_checkbox_is_the_verifiers_patch_and_its_removal() {
+        let mut editor = Editor::new("seat.0");
+        assert!(editor.load(br#"{"declarative":{"route":[]}}"#));
+        let _ = editor.next_call(false);
+        let e0601 = r#"{"code":"E0601","severity":"error","path":"/declarative/route/0","beginner":"Short of power.","suggestions":[{"title":"Allow dormant beacons","json_patch":"[{\"op\":\"add\",\"path\":\"/declarative/options\",\"value\":{\"allow_dormant_beacons\":true}}]","applicability":"maybe_incorrect"}]}"#;
+        editor
+            .answered(Ok(&quick_report(e0601, false)))
+            .expect("reads");
+        let shown = editor.dormant();
+        assert!(shown.shown && shown.enabled && !shown.checked, "{shown:?}");
+        assert!(
+            editor
+                .rows()
+                .first()
+                .is_some_and(|row| row.fixes.is_empty()),
+            "a choice, not a Fix button"
+        );
+        assert!(!editor.set_allow_dormant(false), "nothing to clear");
+        assert!(editor.set_allow_dormant(true));
+        assert_eq!(editor.status().key, "dormant_allowing");
+        assert!(
+            !editor.dormant().enabled,
+            "not while the edit is on its way"
+        );
+        let call = editor.next_call(false).expect("the patch");
+        assert_eq!(call.method, "patch_plan");
+        assert!(json::write(&call.params).contains("allow_dormant_beacons"));
+        let allowed = r#"{"declarative":{"route":[],"options":{"allow_dormant_beacons":true}}}"#;
+        editor.answered(Ok(&patched(allowed, "[]"))).expect("reads");
+        assert_eq!(editor.status().key, "dormant_allowed");
+        assert!(editor.dormant().checked);
+        assert!(!editor.set_allow_dormant(false), "the rows are stale");
+        assert_eq!(method_of(editor.next_call(false)), "verify_plan");
+        let w0603 = r#"{"code":"W0603","severity":"warning","path":"/declarative/route/0","beginner":"Some beacons will go dark."}"#;
+        editor
+            .answered(Ok(&quick_report(w0603, true)))
+            .expect("reads");
+        assert!(editor.dormant().enabled);
+        assert!(editor.set_allow_dormant(false));
+        let call = editor.next_call(false).expect("the removal");
+        let written = json::write(&call.params);
+        assert!(
+            written.contains("remove") && written.contains("allow_dormant_beacons"),
+            "{written}"
+        );
+    }
+
     #[test]
     fn the_carried_draft_is_last_rounds_sealed_playbook_checked_again() {
         let mut editor = loaded(EXPAND_EAST);
@@ -2542,6 +3059,11 @@ mod tests {
             )))
             .expect("reads");
         assert_eq!(editor.sealed_bytes(), EXPAND_EAST.as_bytes());
+        // The seal changes the Lull's "this round" sentence, so the briefing is read again.
+        assert_eq!(method_of(editor.next_call(false)), "get_briefing");
+        editor
+            .answered(Ok(&read(r#"{"notes":"remember the vent"}"#)))
+            .expect("reads");
         // An edit after the submission, never submitted.
         assert!(editor.act(Action::Go, &Target::Beacon("b_00".to_owned())));
         let _ = editor.next_call(false);
@@ -2596,6 +3118,8 @@ mod tests {
                 }
                 "render_plan" => read(r#"{"prose":"Playbook\n"}"#),
                 "estimate_route" => read(r#"{"reachable":true}"#),
+                "get_map_summary" => read(r#"{"features":[]}"#),
+                "resolve_refs" => read(r#"{"refs":[]}"#),
                 _ => quick_report("", true),
             };
             editor.answered(Ok(&answer)).expect("reads");

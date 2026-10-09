@@ -36,6 +36,7 @@
 //! | `end_lull` once the Lull is ready to end | `set_ready`, once the human says so |
 //! | `end_recap` once the human continues | the editor's planning calls, in a Lull |
 //! | `advance_push`, when the pacer says | `get_economy_forecast`, for the meter |
+//! | | `get_recap`, once a recap opens or the match ends |
 //! | `report_host_clock`, outside a Push | `get_view` from the cursor after the match moved |
 //! | | `get_segment_feed` after the match moved |
 //! | a keep-alive `get_status` | a keep-alive `get_status` |
@@ -90,7 +91,9 @@
 //! 111, decision C8). The rig takes whatever phase the first admin footer names: a Push is
 //! paced from its first answer, and the editor waits for the next Lull.
 
-use pharmakos_proto::gp::api::v1::{GetEconomyForecastResponse, GetSegmentFeedResponse, status};
+use pharmakos_proto::gp::api::v1::{
+    GetEconomyForecastResponse, GetRecapResponse, GetSegmentFeedResponse, status,
+};
 use pharmakos_proto::json::{self, Json};
 
 use crate::editor::Editor;
@@ -175,6 +178,8 @@ enum Purpose {
     Plan,
     /// `get_economy_forecast`, for the meter.
     Meter,
+    /// `get_recap`, for the recap's lines.
+    Recap,
 }
 
 /// The own `$`/`kW` meter: the last `get_economy_forecast` answer, field for field, and
@@ -196,6 +201,13 @@ pub struct Meter {
     pub draw_kw_now: i32,
     /// `headroom_kw_now`, whole `kW`, as the gateway wrote it.
     pub headroom_kw_now: i32,
+    /// `bmi_next_dollars`, whole `$`: the BMI at the band the seat holds now, a prediction
+    /// that ignores committed spend (decisions-log item 135 (2) (g)). `None` when the answer
+    /// left it out — a seat out of the match, a match that has ended — which is not 0.
+    pub bmi_next_dollars: Option<i32>,
+    /// `committed_dollars`, whole `$`: the upper bound of what the seal orders and has not
+    /// yet paid. `None` when the answer left it out, which it does outside a Lull.
+    pub committed_dollars: Option<i32>,
 }
 
 impl Default for Meter {
@@ -207,8 +219,54 @@ impl Default for Meter {
             supply_kw_now: 0,
             draw_kw_now: 0,
             headroom_kw_now: 0,
+            bmi_next_dollars: None,
+            committed_dollars: None,
         }
     }
+}
+
+/// How long each Lull is declared to be, as the rules table says: `match.first_lull_ms` for
+/// round 1's and `match.lull_ms` for every later one (spec section 3's ten and five minutes;
+/// decisions-log item 127 (2)). `None` is a Lull with no countdown.
+///
+/// The client's to know because the Lull's timer is the client's: the gateway's footer
+/// shows the countdown this client reports and has none of its own before the first report
+/// (skeleton-plan-t16a-notes.md section D: "the client counts, the gateway is told").
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct LullLengths {
+    /// Round 1's Lull, in milliseconds.
+    pub first_ms: Option<u64>,
+    /// Every later Lull, in milliseconds.
+    pub later_ms: Option<u64>,
+}
+
+impl LullLengths {
+    /// The Lull that opens round `round`: the first Lull's for round 1, the later Lulls'
+    /// after it. Round 0, before any Lull, reads as the first, as the gateway's
+    /// `LullLengths::for_round` does.
+    #[must_use]
+    pub const fn for_round(self, round: u32) -> Option<u64> {
+        if round <= 1 {
+            self.first_ms
+        } else {
+            self.later_ms
+        }
+    }
+}
+
+/// The recap: the last `get_recap` answer's prose, as the gateway wrote it.
+///
+/// The settlement's line, the shortfall's and why a step found nothing ("3 matched, none
+/// reachable") are all sentences of that prose (`econ`, decisions-log item 135 (1)); the
+/// client draws them and words none of them.
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct Recap {
+    /// How many answers the recap has taken; zero before the first.
+    pub answers: u64,
+    /// The round the answer's own footer named.
+    pub round: u32,
+    /// The prose, exactly as it came.
+    pub prose: String,
 }
 
 /// One connection's state.
@@ -254,6 +312,15 @@ struct Due {
     feed: bool,
 }
 
+/// The reads the seat connection owes the panel, beside the view and the feed.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+struct Reads {
+    /// A `get_economy_forecast`, because a Lull opened or the match moved in a Push.
+    meter: bool,
+    /// A `get_recap`, because a recap opened or the match ended.
+    recap: bool,
+}
+
 /// What the human, the timer or the host clock asked for and the rig has not yet sent.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 struct Wants {
@@ -290,14 +357,17 @@ pub struct Rig {
     wants: Wants,
     all_ready: bool,
     last_error: Option<String>,
-    /// The Lull's length, from the rules table's `match.lull_ms`; zero is untimed.
-    lull_length: u64,
+    /// How long each Lull is, from the rules table's two Lull rows.
+    lulls: LullLengths,
+    /// Whether the admin connection's latest footer said the phase has no countdown
+    /// (`_status.untimed`): the lobby then shows none (S1-11's client half, item 135).
+    untimed: bool,
     /// How many `get_view` pages this client refused after the gateway served them.
     view_refusals: u32,
     /// After a refused page: the wall time before which no keyframe is asked again.
     keyframe_not_before_us: u64,
     /// Seat calls left before the gateway's clock next moves.
-    seat_budget: u32,
+    seat_calls_left: u32,
     /// Where this phase's clock reports stand, for the seat's budget.
     clock_reports: ClockReports,
     /// Whether `set_ready` has gone out this Lull: the seat's orders are final, and the
@@ -310,8 +380,10 @@ pub struct Rig {
     editor: Editor,
     /// The own `$`/`kW` meter.
     meter: Meter,
-    /// A `get_economy_forecast` is owed, because a Lull opened or the match moved in a Push.
-    meter_due: bool,
+    /// The recap's lines, as the gateway last wrote them.
+    recap: Recap,
+    /// The reads the seat connection owes the meter and the recap.
+    reads: Reads,
 }
 
 impl Default for Rig {
@@ -340,15 +412,17 @@ impl Rig {
             wants: Wants::default(),
             all_ready: false,
             last_error: None,
-            lull_length: 0,
+            lulls: LullLengths::default(),
+            untimed: true,
             view_refusals: 0,
             keyframe_not_before_us: 0,
-            seat_budget: SEAT_CALLS_PER_REFILL,
+            seat_calls_left: SEAT_CALLS_PER_REFILL,
             clock_reports: ClockReports::Unsent,
             ready_sent: false,
             editor: Editor::default(),
             meter: Meter::default(),
-            meter_due: false,
+            recap: Recap::default(),
+            reads: Reads::default(),
         }
     }
 
@@ -363,13 +437,10 @@ impl Rig {
         &self.editor
     }
 
-    /// Times every Lull at `length`, the rules table's `match.lull_ms`; zero is untimed.
-    ///
-    /// The gateway's footer shows the countdown this client reports and has none of its
-    /// own before the first report, so the Lull's length is the client's to know
-    /// (skeleton-plan-t16a-notes.md section D: "the client counts, the gateway is told").
-    pub fn set_lull_length(&mut self, length: u64) {
-        self.lull_length = length;
+    /// Times round 1's Lull at `lulls.first_ms` and every later one at `lulls.later_ms`, the
+    /// rules table's `match.first_lull_ms` and `match.lull_ms` ([`LullLengths`]).
+    pub fn set_lull_length(&mut self, lulls: LullLengths) {
+        self.lulls = lulls;
     }
 
     /// Connection `link` is open (again). A seat connection starts with a keyframe,
@@ -410,7 +481,8 @@ impl Rig {
                 self.clock_reports = ClockReports::Refilling;
             }
             Some((_, Purpose::Plan)) => self.editor.dropped(),
-            Some((_, Purpose::Meter)) => self.meter_due = true,
+            Some((_, Purpose::Meter)) => self.reads.meter = true,
+            Some((_, Purpose::Recap)) => self.reads.recap = true,
             _ => {}
         }
     }
@@ -477,14 +549,13 @@ impl Rig {
                 ClockReports::Unsent => ClockReports::FirstOut,
                 ClockReports::FirstOut | ClockReports::Refilling => ClockReports::Refilling,
             };
-            return Some((
-                Purpose::Clock,
-                "report_host_clock",
-                object(vec![
-                    ("elapsed_ms", number(i64::from(spent))),
-                    ("remaining_ms", number(i64::from(countdown))),
-                ]),
-            ));
+            // No countdown is left out rather than sent as 0, which the gateway would show as
+            // a timer that ran out (S1-11).
+            let mut params = vec![("elapsed_ms", number(i64::from(spent)))];
+            if let Some(countdown) = countdown {
+                params.push(("remaining_ms", number(i64::from(countdown))));
+            }
+            return Some((Purpose::Clock, "report_host_clock", object(params)));
         }
         if self.timing.keepalive_due(ADMIN) {
             return Some((Purpose::Status, "get_status", object(Vec::new())));
@@ -493,7 +564,7 @@ impl Rig {
     }
 
     fn seat_next(&mut self) -> Option<(Purpose, &'static str, Json)> {
-        if !self.idle(SEAT) || self.seat_budget == 0 {
+        if !self.idle(SEAT) || self.seat_calls_left == 0 {
             return None;
         }
         if let Some(cursor) = self.view_paging.clone() {
@@ -525,8 +596,11 @@ impl Rig {
         // The meter goes ahead of the view and the feed: in a Push all three fall due at
         // every advance, and a debug host can take longer than the pacer's period over a
         // view page, so a meter behind them would never be asked. It is one small call.
-        if self.meter_due {
+        if self.reads.meter {
             return Some((Purpose::Meter, "get_economy_forecast", object(Vec::new())));
+        }
+        if self.reads.recap {
+            return Some((Purpose::Recap, "get_recap", object(Vec::new())));
         }
         if self.due.view {
             let cursor = self.view_cursor.clone();
@@ -556,13 +630,14 @@ impl Rig {
         state.in_flight = Some((id, purpose));
         state.calls = state.calls.saturating_add(1);
         if link == SEAT {
-            self.seat_budget = self.seat_budget.saturating_sub(1);
+            self.seat_calls_left = self.seat_calls_left.saturating_sub(1);
         }
         self.timing.sent(link);
         match purpose {
             Purpose::View => self.due.view = false,
             Purpose::Feed => self.due.feed = false,
-            Purpose::Meter => self.meter_due = false,
+            Purpose::Meter => self.reads.meter = false,
+            Purpose::Recap => self.reads.recap = false,
             _ => {}
         }
         let text = json::write(&object(vec![
@@ -638,7 +713,7 @@ impl Rig {
         settled?;
         if link == ADMIN {
             if let (_, Some(footer)) = split_footer(result) {
-                answer.phase_changed = self.observe(&read_status(&footer)?);
+                answer.phase_changed = self.observe(&read_status(&footer)?)?;
             }
         }
         Ok(answer)
@@ -689,9 +764,9 @@ impl Rig {
                 if ran > 0 {
                     self.due.view = true;
                     self.due.feed = true;
-                    self.meter_due = true;
+                    self.reads.meter = true;
                     // The Push moved the gateway's clock, and with it every token's budget.
-                    self.seat_budget = SEAT_CALLS_PER_REFILL;
+                    self.seat_calls_left = SEAT_CALLS_PER_REFILL;
                 }
             }
             Purpose::Clock => {
@@ -700,7 +775,7 @@ impl Rig {
                 // every token's budget (the module doc's "Not every clock answer moves the
                 // clock").
                 if self.clock_reports == ClockReports::Refilling {
-                    self.seat_budget = SEAT_CALLS_PER_REFILL;
+                    self.seat_calls_left = SEAT_CALLS_PER_REFILL;
                 }
                 self.clock_reports = ClockReports::Refilling;
                 self.all_ready = matches!(result.get("all_ready"), Some(Json::Bool(true)));
@@ -725,6 +800,12 @@ impl Rig {
                     .as_ref()
                     .and_then(|footer| read_status(footer).ok())
                     .map_or(self.phase, |status| Phase::of(status.phase));
+                // The next BMI and the committed spend are left out of an answer that has
+                // none (item 135 (2) (g)), and an absent field is not 0, so their presence is
+                // read off the answer itself until the schema marks the two `optional`.
+                let present = |snake: &str, camel: &str| {
+                    body.get(snake).is_some() || body.get(camel).is_some()
+                };
                 self.meter = Meter {
                     answers: self.meter.answers.saturating_add(1),
                     phase: served,
@@ -732,6 +813,24 @@ impl Rig {
                     supply_kw_now: forecast.supply_kw_now,
                     draw_kw_now: forecast.draw_kw_now,
                     headroom_kw_now: forecast.headroom_kw_now,
+                    bmi_next_dollars: present("bmi_next_dollars", "bmiNextDollars")
+                        .then_some(forecast.bmi_next_dollars),
+                    committed_dollars: present("committed_dollars", "committedDollars")
+                        .then_some(forecast.committed_dollars),
+                };
+            }
+            Purpose::Recap => {
+                let (body, footer) = split_footer(result);
+                let recap: GetRecapResponse =
+                    json::decode_json(&enums::canonical("gp.api.v1.GetRecapResponse", &body))?;
+                let round = footer
+                    .as_ref()
+                    .and_then(|footer| read_status(footer).ok())
+                    .map_or(self.round, |status| status.round);
+                self.recap = Recap {
+                    answers: self.recap.answers.saturating_add(1),
+                    round,
+                    prose: recap.prose,
                 };
             }
             Purpose::Status => {}
@@ -777,16 +876,25 @@ impl Rig {
                 self.wants.ready = false;
                 self.ready_sent = false;
             }
-            Purpose::Plan | Purpose::Status | Purpose::Meter => {}
+            Purpose::Plan | Purpose::Status | Purpose::Meter | Purpose::Recap => {}
         }
     }
 
     /// Takes in an admin footer. Returns whether the phase moved.
-    fn observe(&mut self, footer: &pharmakos_proto::gp::api::v1::Status) -> bool {
+    ///
+    /// # Errors
+    ///
+    /// [`BridgeError::Rpc`] for a timed footer whose countdown is negative, which no gateway
+    /// writes: the countdown is game milliseconds left.
+    fn observe(
+        &mut self,
+        footer: &pharmakos_proto::gp::api::v1::Status,
+    ) -> Result<bool, BridgeError> {
         let phase = Phase::of(footer.phase);
         self.round = footer.round;
+        self.untimed = footer.untimed;
         if phase == self.phase {
-            return false;
+            return Ok(false);
         }
         self.phase = phase;
         // The new phase's clock starts from zero at the gateway, so its first report moves
@@ -807,30 +915,44 @@ impl Rig {
             }
             Phase::Lull => {
                 self.ready_sent = false;
-                self.meter_due = true;
+                self.reads.meter = true;
                 self.editor.lull_opened(footer.round);
                 self.timing.pacer.stop();
-                // A footer that already shows a countdown is one this client reported
-                // before a reconnect; otherwise the Lull is as long as the rules say.
-                // PLACEHOLDER: a resumed Lull restarts its timer in full, because the
-                // timer is the client's (w6 notes A2, decisions-log item 99), so quitting
-                // in a Lull buys planning time. OWNER, at hardening.
-                let shown = u64::try_from(footer.phase_remaining_ms).unwrap_or(0);
-                let total = if shown > 0 { shown } else { self.lull_length };
-                self.timing
-                    .clock
-                    .enter(ClockPhase::Lull { total_ms: total });
+                // A timed footer shows a countdown this client reported before a reconnect,
+                // and the Lull goes on from it; an untimed one has had no countdown reported
+                // yet, and the Lull is as long as the rules say for its round
+                // (`first_lull_ms` for round 1, `lull_ms` after it).
+                // PLACEHOLDER: a resumed Lull restarts its timer in full — OWNER, at
+                // hardening. The timer is the client's (w6 notes A2, decisions-log item 99)
+                // and a new host has had no countdown reported, so quitting in a Lull buys
+                // planning time.
+                let countdown = if footer.untimed {
+                    self.lulls.for_round(footer.round)
+                } else {
+                    Some(u64::try_from(footer.phase_remaining_ms).map_err(|_| {
+                        BridgeError::Rpc(format!(
+                            "a timed Lull's footer counts down {} ms, and a countdown is \
+                             never negative",
+                            footer.phase_remaining_ms
+                        ))
+                    })?)
+                };
+                self.timing.clock.enter(ClockPhase::Lull {
+                    countdown_ms: countdown,
+                });
             }
             Phase::Recap | Phase::Ended => {
                 self.timing.pacer.stop();
                 self.timing.clock.enter(ClockPhase::Open);
+                // The recap's lines; at match end, the last recap with the outcome.
+                self.reads.recap = true;
             }
             Phase::Unknown | Phase::Lobby => {
                 self.timing.pacer.stop();
                 self.timing.clock.enter(ClockPhase::Silent);
             }
         }
-        true
+        Ok(true)
     }
 
     /// Chooses a speed; refused when it is not one of [`crate::pacer::SPEEDS`].
@@ -895,10 +1017,28 @@ impl Rig {
         self.all_ready
     }
 
-    /// The Lull timer as the lobby shows it; empty outside a timed Lull.
+    /// The Lull timer as the lobby shows it: empty outside a timed Lull, and empty while the
+    /// admin connection's latest footer says the phase has no countdown (`_status.untimed`;
+    /// S1-11's client half, decisions-log item 135). The client draws what the footer says,
+    /// which is no countdown until the gateway has been told one.
     #[must_use]
     pub fn timer_text(&self) -> String {
+        if self.untimed {
+            return String::new();
+        }
         self.timing.clock.timer_text()
+    }
+
+    /// Whether the admin connection's latest footer said the phase has no countdown.
+    #[must_use]
+    pub const fn untimed(&self) -> bool {
+        self.untimed
+    }
+
+    /// The recap's lines, as the gateway last wrote them.
+    #[must_use]
+    pub const fn recap(&self) -> &Recap {
+        &self.recap
     }
 
     /// How many times connection `link` dropped while open.
@@ -1066,7 +1206,7 @@ mod tests {
     /// concerned: the seat's budget is refilled each round, as a clock report would.
     fn settle(rig: &mut Rig, now: u64) {
         for _ in 0..16 {
-            rig.seat_budget = SEAT_CALLS_PER_REFILL;
+            rig.seat_calls_left = SEAT_CALLS_PER_REFILL;
             let sent = rig.poll(now);
             if sent.is_empty() {
                 return;
@@ -1247,8 +1387,8 @@ mod tests {
                 .expect("an admin call");
             assert_eq!(method_of(clock), "report_host_clock", "{phase}");
             assert!(
-                clock.text.contains(r#""remaining_ms": 0"#),
-                "{phase}: {}",
+                !clock.text.contains("remaining_ms"),
+                "{phase} has no countdown, so the report carries none (S1-11): {}",
                 clock.text
             );
             rig.receive(ADMIN, &answer(id_of(clock), "{}", phase))
@@ -1402,6 +1542,16 @@ mod tests {
             ),
         )
         .expect("reads");
+        // The seal changes the Lull's "this round" sentence, so the briefing is read again,
+        // and Ready waits behind it too.
+        let sent = rig.poll(4);
+        let briefing = sent
+            .iter()
+            .find(|frame| frame.link == SEAT)
+            .expect("a seat call");
+        assert_eq!(method_of(briefing), "get_briefing");
+        rig.receive(SEAT, &answer(id_of(briefing), r#"{"notes":""}"#, "lull"))
+            .expect("reads");
         let sent = rig.poll(4);
         let next = sent
             .iter()
@@ -1479,7 +1629,7 @@ mod tests {
     /// as the gateway would in `phase`, and says the report's `elapsed_ms` and whether the
     /// answer refilled the seat's budget.
     fn clock_answer(rig: &mut Rig, now: u64, phase: &str) -> (i64, bool) {
-        rig.seat_budget = 0;
+        rig.seat_calls_left = 0;
         let sent = rig.poll(now);
         let clock = sent
             .iter()
@@ -1496,7 +1646,7 @@ mod tests {
             &answer(id_of(clock), r#"{"all_ready":false}"#, phase),
         )
         .expect("reads");
-        (elapsed, rig.seat_budget == SEAT_CALLS_PER_REFILL)
+        (elapsed, rig.seat_calls_left == SEAT_CALLS_PER_REFILL)
     }
 
     /// The gateway's clock outside a Push (`Surface::sync_time`) floors a phase's reported
@@ -1512,13 +1662,16 @@ mod tests {
         assert!(elapsed >= 250, "{elapsed}");
         assert!(refilled, "a report a whole interval on refilled nothing");
         // A phase change moves no tick, so it refills nothing.
-        rig.seat_budget = 0;
+        rig.seat_calls_left = 0;
         let footer = pharmakos_proto::gp::api::v1::Status {
             phase: pharmakos_proto::gp::api::v1::status::Phase::Recap.into(),
             ..Default::default()
         };
-        assert!(rig.observe(&footer));
-        assert_eq!(rig.seat_budget, 0, "the phase change refilled the budget");
+        assert!(rig.observe(&footer).expect("a readable footer"));
+        assert_eq!(
+            rig.seat_calls_left, 0,
+            "the phase change refilled the budget"
+        );
         // The recap's first report goes out at once, with almost nothing spent: it moves
         // no tick and refills nothing.
         let recap_opened = CLOCK_REPORT_US + 1;
@@ -1609,6 +1762,202 @@ mod tests {
             "read again after the match moved"
         );
         assert_eq!(rig.meter().phase, Phase::Push);
+    }
+
+    /// An answer whose footer is `footer`, a whole `_status` object.
+    fn answer_with(id: i64, result: &str, footer: &str) -> String {
+        let body = result.strip_suffix('}').expect("a result is an object");
+        let sep = if body.len() > 1 { "," } else { "" };
+        format!(r#"{{"jsonrpc":"2.0","id":{id},"result":{body}{sep}"_status":{footer}}}}}"#)
+    }
+
+    /// A rig timed by the committed table's two rows, whose first admin answer has `footer`.
+    fn opened_with(footer: &str) -> Rig {
+        let mut rig = Rig::new();
+        rig.set_lull_length(LullLengths {
+            first_ms: Some(600_000),
+            later_ms: Some(300_000),
+        });
+        rig.opened(ADMIN);
+        let sent = rig.poll(0);
+        let status = sent.first().expect("the first get_status");
+        rig.receive(ADMIN, &answer_with(id_of(status), "{}", footer))
+            .expect("reads");
+        rig
+    }
+
+    /// The countdown the rig reports next, read off the `report_host_clock` it sends.
+    fn reported_countdown(rig: &mut Rig, now: u64) -> Option<i64> {
+        let sent = rig.poll(now);
+        let clock = sent
+            .iter()
+            .find(|frame| frame.link == ADMIN && method_of(frame) == "report_host_clock")
+            .expect("a clock report");
+        json::read(&clock.text)
+            .expect("json")
+            .get("params")
+            .and_then(|params| params.get("remaining_ms"))
+            .and_then(json_integer)
+    }
+
+    /// Round 1's Lull counts down from `first_lull_ms` and every later one from `lull_ms`
+    /// (spec section 3's ten and five minutes; decisions-log item 127 (2)): the countdown is
+    /// the client's, and the gateway's footer is untimed until it is told one.
+    #[test]
+    fn the_first_lull_is_timed_by_its_own_row_and_later_lulls_by_the_other() {
+        let mut first =
+            opened_with(r#"{"phase":"lull","phase_remaining_ms":0,"round":1,"untimed":true}"#);
+        assert_eq!(reported_countdown(&mut first, 1), Some(600_000));
+        let mut later =
+            opened_with(r#"{"phase":"lull","phase_remaining_ms":0,"round":2,"untimed":true}"#);
+        assert_eq!(reported_countdown(&mut later, 1), Some(300_000));
+    }
+
+    /// A timed footer is a countdown this client reported before it reconnected: the Lull
+    /// goes on from it, including from zero, which has run out and ends the Lull.
+    #[test]
+    fn a_timed_footer_is_the_countdown_to_go_on_from() {
+        let mut rig = opened_with(r#"{"phase":"lull","phase_remaining_ms":42000,"round":1}"#);
+        assert_eq!(reported_countdown(&mut rig, 1), Some(42_000));
+        let mut ran_out = opened_with(r#"{"phase":"lull","phase_remaining_ms":0,"round":2}"#);
+        let sent = ran_out.poll(1);
+        assert!(
+            sent.iter()
+                .any(|frame| frame.link == ADMIN && method_of(frame) == "end_lull"),
+            "a Lull rejoined at zero has run out: {sent:?}"
+        );
+    }
+
+    /// A Lull the rules give no length is untimed: its reports carry no countdown, so the
+    /// gateway never shows a timer at zero that ran out (S1-11).
+    #[test]
+    fn an_untimed_lull_reports_no_countdown() {
+        let mut rig = Rig::new();
+        rig.opened(ADMIN);
+        let sent = rig.poll(0);
+        let status = sent.first().expect("the first get_status");
+        rig.receive(
+            ADMIN,
+            &answer_with(
+                id_of(status),
+                "{}",
+                r#"{"phase":"lull","round":1,"untimed":true}"#,
+            ),
+        )
+        .expect("reads");
+        assert_eq!(reported_countdown(&mut rig, 1), None);
+        assert_eq!(rig.timer_text(), "");
+    }
+
+    /// The lobby shows no countdown while the admin footer says the phase is untimed, and the
+    /// client's own countdown once the gateway has been told it (decisions-log item 135).
+    #[test]
+    fn no_countdown_is_shown_while_the_footer_is_untimed() {
+        let mut rig =
+            opened_with(r#"{"phase":"lull","phase_remaining_ms":0,"round":1,"untimed":true}"#);
+        assert!(rig.untimed());
+        assert_eq!(rig.timer_text(), "", "the footer has no countdown yet");
+        let sent = rig.poll(1);
+        let clock = sent
+            .iter()
+            .find(|frame| method_of(frame) == "report_host_clock")
+            .expect("the first report");
+        rig.receive(
+            ADMIN,
+            &answer_with(
+                id_of(clock),
+                r#"{"all_ready":false}"#,
+                r#"{"phase":"lull","phase_remaining_ms":600000,"round":1}"#,
+            ),
+        )
+        .expect("reads");
+        assert!(!rig.untimed());
+        assert_eq!(rig.timer_text(), "10:00");
+    }
+
+    /// A recap opening asks for `get_recap` on the seat connection and keeps its prose as
+    /// it came: the settlement's, the shortfall's and the "found nothing" lines are the
+    /// gateway's sentences (`econ`, decisions-log item 135 (1)).
+    #[test]
+    fn a_recap_is_read_once_and_drawn_as_the_gateway_wrote_it() {
+        let mut rig = in_push();
+        let sent = rig.poll(1 + PACER_PERIOD_US);
+        let advance = sent
+            .iter()
+            .find(|frame| frame.link == ADMIN)
+            .expect("an advance");
+        rig.receive(
+            ADMIN,
+            &answer(id_of(advance), r#"{"advanced_ms":400}"#, "recap"),
+        )
+        .expect("reads");
+        let prose = "Round 1 ran 20 ticks. The match continues. A step found nothing: 3 \
+                     matched, none reachable.";
+        let mut asked = 0;
+        for step in 2..12_u64 {
+            rig.seat_calls_left = SEAT_CALLS_PER_REFILL;
+            let now = PACER_PERIOD_US.saturating_add(step);
+            for frame in rig.poll(now) {
+                let result = match method_of(&frame).as_str() {
+                    "get_recap" => {
+                        asked += 1;
+                        assert_eq!(frame.link, SEAT, "the recap rides the seat connection");
+                        format!(
+                            r#"{{"prose":"{prose}","shortfall":{{"kw":10,"beacon_ids":["b_01"]}}}}"#
+                        )
+                    }
+                    "get_view" => r#"{"next_cursor":"c9","complete":true}"#.to_owned(),
+                    "get_segment_feed" => r#"{"events":[],"next_cursor":"f1"}"#.to_owned(),
+                    _ => "{}".to_owned(),
+                };
+                rig.receive(frame.link, &answer(id_of(&frame), &result, "recap"))
+                    .expect("reads");
+            }
+        }
+        assert_eq!(asked, 1, "once per recap, not in a loop");
+        assert_eq!(rig.recap().prose, prose);
+        assert_eq!(rig.recap().round, 1);
+    }
+
+    /// The next BMI and the committed spend are kept as they came, and an answer that leaves
+    /// one out leaves it absent rather than 0 (decisions-log item 135 (2) (g)).
+    #[test]
+    fn the_next_bmi_and_the_committed_spend_are_absent_when_the_answer_leaves_them_out() {
+        for (result, bmi, committed) in [
+            (
+                r#"{"treasury_now":200,"bmi_next_dollars":95,"committed_dollars":0}"#,
+                Some(95),
+                Some(0),
+            ),
+            (
+                r#"{"treasury_now":200,"bmi_next_dollars":95}"#,
+                Some(95),
+                None,
+            ),
+            (r#"{"treasury_now":200}"#, None, None),
+        ] {
+            let mut rig = in_push();
+            let sent = rig.poll(1 + PACER_PERIOD_US);
+            let advance = sent
+                .iter()
+                .find(|frame| frame.link == ADMIN)
+                .expect("an advance");
+            rig.receive(
+                ADMIN,
+                &answer(id_of(advance), r#"{"advanced_ms":400}"#, "push"),
+            )
+            .expect("reads");
+            let sent = rig.poll(2 + PACER_PERIOD_US);
+            let meter = sent
+                .iter()
+                .find(|frame| frame.link == SEAT)
+                .expect("the meter");
+            assert_eq!(method_of(meter), "get_economy_forecast");
+            rig.receive(SEAT, &answer(id_of(meter), result, "push"))
+                .expect("reads");
+            assert_eq!(rig.meter().bmi_next_dollars, bmi, "{result}");
+            assert_eq!(rig.meter().committed_dollars, committed, "{result}");
+        }
     }
 
     #[test]

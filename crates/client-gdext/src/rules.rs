@@ -106,6 +106,21 @@ pub fn lull_ms(table: &RulesTable) -> Option<u32> {
         .filter(|length| *length > 0)
 }
 
+/// The FIRST Lull's planning timer, `match.first_lull_ms`, in milliseconds: round 1's Lull,
+/// and every later Lull is [`lull_ms`] (spec section 3's ten and five minutes; decisions-log
+/// item 127 (2), S1's plan, decision 10).
+///
+/// Read for the reason [`lull_ms`] is, and with the same reading of an absent or
+/// non-positive row: no countdown, never a default of this client's.
+#[must_use]
+pub fn first_lull_ms(table: &RulesTable) -> Option<u32> {
+    table
+        .r#match
+        .as_ref()
+        .and_then(|row| u32::try_from(row.first_lull_ms).ok())
+        .filter(|length| *length > 0)
+}
+
 /// The generated map's extent in voxels, `map.size_x`, `size_y` and `size_z`, in the SIM's
 /// axes (x east, y north, z up).
 ///
@@ -236,6 +251,31 @@ mod tests {
             [384, 384, 64],
             "the map's extent (item 90)"
         );
+    }
+
+    /// Both Lull rows of the committed table: the first Lull's and every later one's (spec
+    /// section 3's ten and five minutes; decisions-log item 127 (2)).
+    #[test]
+    fn the_committed_table_times_the_first_lull_apart_from_the_rest() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("rules")
+            .join("rules.v1.json");
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("reading {}: {error}", path.display()));
+        let table = table_from_json(&text).expect("the committed table is canonical gp.v1 JSON");
+        // Present, not pinned: both rows are the owner's to tune at S1's demo (the `tune`
+        // lane), and `tests/godot_project.rs` holds the client's inline copy to them.
+        assert!(first_lull_ms(&table).is_some(), "match.first_lull_ms");
+        assert!(lull_ms(&table).is_some(), "match.lull_ms");
+    }
+
+    #[test]
+    fn a_table_with_no_match_row_times_no_lull() {
+        let table = table_with(Some(row()));
+        assert_eq!(first_lull_ms(&table), None);
+        assert_eq!(lull_ms(&table), None);
     }
 
     #[test]
