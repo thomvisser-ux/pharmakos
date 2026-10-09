@@ -30,6 +30,13 @@
 //!
 //! The `_status` footer is left out of every one: it carries the host clock,
 //! which is the lobby's and not the operator's.
+//!
+//! The same lobby, played on, is where the other half of the advisor's
+//! promise is checked: a human seat that never edits is filed the operator's
+//! safe playbook every round, whose route sets the core's dig depth
+//! (decisions-log item 133 (3) (a)), so the seat is still earning in the
+//! lobby's last round
+//! (`a_seat_nobody_edits_is_still_earning_in_the_lobbys_third_round`).
 #![allow(
     clippy::expect_used,
     clippy::unwrap_used,
@@ -39,7 +46,7 @@
 use std::path::{Path, PathBuf};
 
 use pharmakos_gamectl::host::{EasyOperators, LIBRARY_PATH};
-use pharmakos_gateway::fog::FogPolicy;
+use pharmakos_gateway::fog::{Audience, FogPolicy};
 use pharmakos_gateway::host::{Host, Settings, SphereVision};
 use pharmakos_gateway::limit::IN_PROCESS_LIMITS;
 use pharmakos_gateway::rpc::Request;
@@ -193,6 +200,67 @@ fn text_of(value: &Json, key: &str) -> String {
     }
 }
 
+/// The pointers a template declares, read from the library's own file, its
+/// comments taken out (a comment line in it is whole-line, `//` first).
+fn declared_pointers(template: &str) -> Vec<String> {
+    let text = std::fs::read_to_string(root().join(LIBRARY_PATH).join(format!("{template}.jsonc")))
+        .expect("the template file");
+    let body: String = text
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join(
+            "
+",
+        );
+    let json = pharmakos_proto::json::read(&body).expect("the template reads");
+    let Some(Json::Array(parameters)) = json.get("meta").and_then(|meta| meta.get("parameters"))
+    else {
+        panic!("{template}: declares no parameters");
+    };
+    parameters
+        .iter()
+        .map(|parameter| text_of(parameter, "pointer"))
+        .collect()
+}
+
+/// What the operator suggested, against what the template declares: every
+/// suggested value is for a declared parameter, and Hold & Build's vent is
+/// the operator's and a name (Easy's row: fixed targets only).
+fn check_suggested(template: &str, parameters: &[Json]) {
+    // Every value the operator suggested is for a parameter the
+    // template declares.
+    let declared_here = declared_pointers(template);
+    for parameter in parameters {
+        if parameter.get("suggested") == Some(&Json::Bool(true)) {
+            let pointer = text_of(parameter, "pointer");
+            assert!(
+                declared_here.contains(&pointer),
+                "{template}: the operator suggested {pointer}, undeclared: {declared_here:?}"
+            );
+        }
+    }
+    // Hold & Build's vent is the operator's, and it is a name (Easy's
+    // row: fixed targets only): the live wizard always pins one.
+    if template == "hold_and_build" {
+        let covering = parameters
+            .iter()
+            .find(|parameter| text_of(parameter, "pointer").ends_with("/place_beacon/at/covering"))
+            .expect("Hold & Build declares its vent");
+        assert_eq!(
+            covering.get("suggested"),
+            Some(&Json::Bool(true)),
+            "the vent is the operator's: {covering:?}"
+        );
+        let value =
+            pharmakos_proto::json::read(&text_of(covering, "value")).expect("the value reads");
+        assert!(
+            matches!(value.get("feature_id"), Some(Json::String(name)) if name.starts_with("vent_")),
+            "a vent by name: {value:?}"
+        );
+    }
+}
+
 /// Write one fresh golden of the `operator` area.
 fn write_golden(case: &str, file: &str, text: &str) {
     assert!(
@@ -242,6 +310,7 @@ fn the_wizards_live_suggestion_qualifies_and_is_goldened_for_every_template() {
             !parameters.is_empty(),
             "{template}: a template declares its parameters"
         );
+        check_suggested(template, parameters);
 
         let verified = call(
             &mut surface,
@@ -298,4 +367,94 @@ fn the_wizards_live_suggestion_qualifies_and_is_goldened_for_every_template() {
             },
         );
     }
+}
+
+/// A human seat nobody edits, in the lobby's match played to its round
+/// limit: it seals nothing, so at each Push the gateway files the safe
+/// playbook its Easy advisor gave it, which sets the core's dig depth, and
+/// the core's starting drone keeps working the starting seam below its top
+/// layer. At the default depth of 0 it takes the top layer and stops, which
+/// was the demo's F2 (item 133 (3) (a)).
+///
+/// Measured on this seed when it was written, `ore_delivered` lines per round
+/// for (the human seat, Easy's seat): (2, 1), (2, 3), (4, 4) over the three
+/// rounds, and on to (1, 1) and (0, 0) in a fourth and fifth round the lobby
+/// does not play: the starting seam is dry at depth 4 by round 5, which is
+/// evidence for `tune`'s `CORE_DIG_MAX_DEPTH` PLACEHOLDER rather than
+/// something this test pins.
+#[test]
+fn a_seat_nobody_edits_is_still_earning_in_the_lobbys_third_round() {
+    let rules = std::fs::read_to_string(root().join("rules").join("rules.v1.json"))
+        .expect("the rules text");
+    let host = Host::open_from(
+        &rules,
+        SEED,
+        SEATS,
+        &Settings {
+            segment_lengths_ms: Vec::new(),
+            round_limit: ROUND_LIMIT,
+            units_per_seat: 0,
+        },
+        Some(root().join(LIBRARY_PATH)),
+    )
+    .expect("the lobby's match");
+    let table = RulesTable::from_canonical_json(&rules).expect("a rules table");
+    let seats: Vec<SeatId> = (0..SEATS)
+        .filter_map(|raw| u8::try_from(raw).ok())
+        .map(SeatId::new)
+        .collect();
+    let mut surface = Surface::new(
+        &format!("oper-earning-{}", std::process::id()),
+        SEED,
+        table,
+        FogPolicy::fogged(),
+        &seats,
+    )
+    .expect("a surface");
+    surface.attach(host).expect("attached");
+    surface.open_lull().expect("the opening Lull");
+    let mut factory = EasyOperators::new(&rules).expect("the operator reads the rules text");
+    let mut easy = InProcessSeats::open(&mut surface, &seats, Some(HUMAN), &mut factory)
+        .expect("in-process seats");
+    let mut delivered: Vec<u32> = Vec::new();
+    for round in 1..=ROUND_LIMIT {
+        let lull = surface.lull_length(round);
+        surface.set_phase_remaining_ms(lull);
+        easy.plan(&mut surface);
+        assert!(
+            surface.begin_push().expect("the Push"),
+            "round {round} pushes"
+        );
+        let mut seen = 0_usize;
+        let mut human = 0_u32;
+        while let Some(report) = surface.step().expect("a tick") {
+            let events = surface.feed().events();
+            if events.len() < seen {
+                seen = 0;
+            }
+            for event in events.get(seen..).unwrap_or_default() {
+                let owner = match event.audience {
+                    Audience::Private(seat) => Some(seat),
+                    Audience::World { owner, .. } => owner,
+                    Audience::Public => None,
+                };
+                if owner == Some(SeatId::new(HUMAN)) && event.kind.to_string() == "ore_delivered" {
+                    human = human.checked_add(1).expect("a count");
+                }
+            }
+            seen = events.len();
+            if report.segment_ended {
+                break;
+            }
+        }
+        delivered.push(human);
+        surface.end_recap().expect("the recap ends");
+        if round < ROUND_LIMIT {
+            surface.open_lull().expect("the next Lull");
+        }
+    }
+    assert!(
+        delivered.last().is_some_and(|last| *last > 0),
+        "the seat nobody edits delivers ore in the lobby's last round: {delivered:?}"
+    );
 }
