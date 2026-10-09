@@ -10,7 +10,7 @@
 //
 //   seat 0  seals scenarios/s1/brownout-by-recycle.playbook.jsonc every round.
 //           Round 1: the covering beacon lands at tick 721 and its Generator
-//           is paid for at tick 766 (supply 10 -> 30 kW once it stands); the
+//           is paid for at tick 776 (supply 10 -> 30 kW once it stands); the
 //           Survey beacon cannot be paid for yet (`unaffordable`, failure id
 //           12), the wait for its scouts times out and aborts the route, and
 //           nothing is recycled. Round 2: the Survey beacon lands on low

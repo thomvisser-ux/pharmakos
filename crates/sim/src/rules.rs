@@ -73,6 +73,10 @@
 //! | [`unit_hp`](RulesTable::unit_hp), [`unit_draw_kw`](RulesTable::unit_draw_kw) | `units.<kind>.hp` / `.draw_kw` |
 //! | [`cost_per_second`](RulesTable::cost_per_second) | `commander.cost_per_second`, `units.<kind>.cost_per_second` |
 //! | [`mining_carry_voxels`](RulesTable::mining_carry_voxels) | `economy.mining_carry_voxels` |
+//! | [`sphere_radius_voxels`](RulesTable::sphere_radius_voxels) | `beacon.sphere_radius_voxels` |
+//! | [`arrive_radius_voxels`](RulesTable::arrive_radius_voxels), [`interface_range_voxels`](RulesTable::interface_range_voxels) | `commander.arrive_radius_voxels` / `.interface_range_voxels` |
+//! | [`build_hp_per_tick`](RulesTable::build_hp_per_tick) | `structures.build_hp_per_second` |
+//! | [`power`](RulesTable::power) | the `power` block and the `structures.*.draw_kw` rows ([`crate::power::PowerRules`]) |
 //!
 //! The map generator ([`crate::mapgen`]) reads a dozen more rows — the whole of
 //! `map`, `beacon`, `power`, `economy` and `units` — and reads them from
@@ -88,7 +92,8 @@
 //! `rules_hash`, because the hash already covered the row.
 
 use crate::encoding::Enc;
-use crate::math::quantity::{Hp, Kw};
+use crate::math::quantity::{Hp, Kw, TICK_HZ};
+use crate::power::{PowerRules, PowerRulesError};
 use crate::tables::UnitKind;
 use pharmakos_proto::gp;
 use std::fmt;
@@ -205,6 +210,24 @@ pub struct RulesTable {
     /// coordinate, so the resolver's sphere test reads it as it is and never
     /// substitutes a radius (decisions-log item 134, `fog`).
     sphere_radius_voxels: i16,
+    /// How close a walk has to get to count as arrived, in whole voxels. From
+    /// `commander.arrive_radius_voxels`; refused at load when it is not a voxel
+    /// length, so every range test reads it as it is (S1's `build` lane: the
+    /// interpreter's range test used to clamp it).
+    arrive_radius_voxels: i16,
+    /// How close the commander stands to interface or deploy, in whole voxels.
+    /// From `commander.interface_range_voxels`, refused at load as above.
+    interface_range_voxels: i16,
+    /// Hit points a working build drone adds per tick:
+    /// `structures.build_hp_per_second` over the tick rate (the register's
+    /// S1-24, read from its row since S1's `build` lane). Refused at load
+    /// unless the row is a positive multiple of [`TICK_HZ`], so construction
+    /// needs no accumulator and no rounding rule.
+    build_hp_per_tick: Hp,
+    /// Every `kW` row the power phase reads, refused at load by
+    /// [`PowerRules::read`] (decisions-log item 135 (2) (b)), so that no world
+    /// can hold a table the phase refuses.
+    power: PowerRules,
 }
 
 impl RulesTable {
@@ -311,6 +334,39 @@ impl RulesTable {
     #[must_use]
     pub const fn sphere_radius_voxels(&self) -> i16 {
         self.sphere_radius_voxels
+    }
+
+    /// How close a walk has to get to count as arrived, in whole voxels
+    /// (`commander.arrive_radius_voxels`): never negative, and always a voxel
+    /// length, because a table whose radius is neither does not load.
+    #[must_use]
+    pub const fn arrive_radius_voxels(&self) -> i16 {
+        self.arrive_radius_voxels
+    }
+
+    /// How close the commander stands to interface or deploy, in whole voxels
+    /// (`commander.interface_range_voxels`), read as
+    /// [`RulesTable::arrive_radius_voxels`] is.
+    #[must_use]
+    pub const fn interface_range_voxels(&self) -> i16 {
+        self.interface_range_voxels
+    }
+
+    /// Hit points one working build drone adds per tick
+    /// (`structures.build_hp_per_second` over [`TICK_HZ`]): positive, and
+    /// exact, because a row that is not a positive multiple of the tick rate
+    /// does not load.
+    #[must_use]
+    pub const fn build_hp_per_tick(&self) -> Hp {
+        self.build_hp_per_tick
+    }
+
+    /// Every `kW` row the power phase reads ([`PowerRules`]). Infallible: a
+    /// table [`PowerRules::read`] refuses, or under which a seat's supply or
+    /// draw could leave a signed 32-bit `kW`, does not load.
+    #[must_use]
+    pub const fn power(&self) -> PowerRules {
+        self.power
     }
 
     /// The per-round segment ladder (`match.segment_lengths_ms`).
@@ -435,10 +491,13 @@ impl RulesTable {
     ///
     /// Returns [`RulesError::MissingBlock`] when a block the sim reads is
     /// absent, [`RulesError::OutOfRange`] when a value does not fit the sim's
-    /// own type for it, or [`RulesError::Json`] when the message will not
-    /// render back to canonical JSON — which is what `rules_hash` is over, so
-    /// a table that cannot be rendered is a table that cannot be hashed and
-    /// must not become a [`RulesTable`].
+    /// own type for it, [`RulesError::Power`] when the power phase refuses the
+    /// table ([`PowerRules::read`]: a missing or oversized `kW` row, or rows
+    /// under which a seat's supply or draw could leave a signed 32-bit `kW`),
+    /// or [`RulesError::Json`] when the message will not render back to
+    /// canonical JSON — which is what `rules_hash` is over, so a table that
+    /// cannot be rendered is a table that cannot be hashed and must not become
+    /// a [`RulesTable`].
     pub fn from_message(message: &gp::v1::RulesTable) -> Result<RulesTable, RulesError> {
         let locomotion = message
             .locomotion
@@ -468,6 +527,7 @@ impl RulesTable {
             .economy
             .as_ref()
             .ok_or(RulesError::MissingBlock("economy"))?;
+        band_rows_of(economy)?;
         let mining_carry_voxels =
             NonZeroU32::new(economy.mining_carry_voxels).ok_or_else(|| RulesError::OutOfRange {
                 field: "economy.mining_carry_voxels".to_owned(),
@@ -475,22 +535,9 @@ impl RulesTable {
             })?;
 
         let sphere_radius_voxels = sphere_radius_of(message)?;
+        let typed = TypedRows::read(message, commander)?;
 
-        if matched.segment_lengths_ms.is_empty() {
-            return Err(RulesError::OutOfRange {
-                field: "match.segment_lengths_ms".to_owned(),
-                value: "an empty ladder; a match plays at least one segment".to_owned(),
-            });
-        }
-        if matched.segment_lengths_ms.len() > MAX_SEGMENT_LENGTHS {
-            return Err(RulesError::OutOfRange {
-                field: "match.segment_lengths_ms".to_owned(),
-                value: format!(
-                    "{} entries; the encoding is bounded at {MAX_SEGMENT_LENGTHS}",
-                    matched.segment_lengths_ms.len()
-                ),
-            });
-        }
+        let segment_lengths_ms = segment_lengths_of(matched)?;
 
         let canonical = pharmakos_proto::json::encode(message).map_err(RulesError::Json)?;
 
@@ -517,7 +564,7 @@ impl RulesTable {
                 "broadphase.cell_size_voxels",
                 broadphase.cell_size_voxels,
             )?,
-            segment_lengths_ms: matched.segment_lengths_ms.clone(),
+            segment_lengths_ms,
             map_size_voxels: [
                 signed("map.size_x", map.size_x)?,
                 signed("map.size_y", map.size_y)?,
@@ -541,6 +588,10 @@ impl RulesTable {
             )?,
             mining_carry_voxels,
             sphere_radius_voxels,
+            arrive_radius_voxels: typed.arrive_radius_voxels,
+            interface_range_voxels: typed.interface_range_voxels,
+            build_hp_per_tick: typed.build_hp_per_tick,
+            power: typed.power,
         })
     }
 
@@ -576,6 +627,122 @@ fn sphere_radius_of(message: &gp::v1::RulesTable) -> Result<i16, RulesError> {
     })
 }
 
+/// The rows S1's `build` lane reads typed at load, so the tick reads each as
+/// it is: the commander's two radii, the build rate and the power rows.
+struct TypedRows {
+    arrive_radius_voxels: i16,
+    interface_range_voxels: i16,
+    build_hp_per_tick: Hp,
+    power: PowerRules,
+}
+
+impl TypedRows {
+    fn read(
+        message: &gp::v1::RulesTable,
+        commander: &gp::v1::rules_table::Commander,
+    ) -> Result<TypedRows, RulesError> {
+        Ok(TypedRows {
+            arrive_radius_voxels: voxel_length(
+                "commander.arrive_radius_voxels",
+                commander.arrive_radius_voxels,
+            )?,
+            interface_range_voxels: voxel_length(
+                "commander.interface_range_voxels",
+                commander.interface_range_voxels,
+            )?,
+            build_hp_per_tick: build_hp_per_tick_of(message)?,
+            power: PowerRules::read(message).map_err(RulesError::Power)?,
+        })
+    }
+}
+
+/// `match.segment_lengths_ms` as the runner reads it: at least one segment,
+/// and no more than the encoding bounds.
+fn segment_lengths_of(matched: &gp::v1::rules_table::Match) -> Result<Vec<i32>, RulesError> {
+    if matched.segment_lengths_ms.is_empty() {
+        return Err(RulesError::OutOfRange {
+            field: "match.segment_lengths_ms".to_owned(),
+            value: "an empty ladder; a match plays at least one segment".to_owned(),
+        });
+    }
+    if matched.segment_lengths_ms.len() > MAX_SEGMENT_LENGTHS {
+        return Err(RulesError::OutOfRange {
+            field: "match.segment_lengths_ms".to_owned(),
+            value: format!(
+                "{} entries; the encoding is bounded at {MAX_SEGMENT_LENGTHS}",
+                matched.segment_lengths_ms.len()
+            ),
+        });
+    }
+    Ok(matched.segment_lengths_ms.clone())
+}
+
+/// The settlement band's two percents as `economy::band_percent` and
+/// `economy::bmi_for` read them: each a signed 32-bit percent. The band's
+/// percent for any place on any ladder lies between the leader's malus and the
+/// last place's bonus, so a table whose two rows fit is one whose ladder is
+/// always paid (S1's `build` lane, decisions-log item 134: `bmi_for`'s reads
+/// made typed).
+fn band_rows_of(economy: &gp::v1::rules_table::Economy) -> Result<(), RulesError> {
+    for (field, value) in [
+        (
+            "economy.scaling_last_place_bonus_percent",
+            economy.scaling_last_place_bonus_percent,
+        ),
+        (
+            "economy.scaling_leader_malus_percent",
+            economy.scaling_leader_malus_percent,
+        ),
+    ] {
+        if i32::try_from(value).is_err() {
+            return Err(RulesError::OutOfRange {
+                field: field.to_owned(),
+                value: format!("{value}; a band percent is a signed 32-bit percent"),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// A commander radius as the range tests read it: a voxel length.
+fn voxel_length(field: &'static str, value: u32) -> Result<i16, RulesError> {
+    i16::try_from(value).map_err(|_| RulesError::OutOfRange {
+        field: field.to_owned(),
+        value: format!("{value}; a radius is a voxel length, at most {}", i16::MAX),
+    })
+}
+
+/// `structures.build_hp_per_second` as hit points per tick: present, positive,
+/// and a whole multiple of the tick rate, so construction needs no accumulator
+/// and no rounding rule (the row's own note in `rules.proto`).
+fn build_hp_per_tick_of(message: &gp::v1::RulesTable) -> Result<Hp, RulesError> {
+    let structures = message
+        .structures
+        .as_ref()
+        .ok_or(RulesError::MissingBlock("structures"))?;
+    let per_second = structures.build_hp_per_second;
+    let refused = |why: &str| RulesError::OutOfRange {
+        field: "structures.build_hp_per_second".to_owned(),
+        value: format!("{per_second}; {why}"),
+    };
+    if per_second == 0 {
+        return Err(refused(
+            "a drone that adds nothing never finishes a structure",
+        ));
+    }
+    if per_second.checked_rem(TICK_HZ) != Some(0) {
+        return Err(refused(
+            "the rate must be whole hit points per tick at the tick rate, or construction would \
+             need an accumulator and a rounding rule",
+        ));
+    }
+    per_second
+        .checked_div(TICK_HZ)
+        .and_then(|per_tick| i32::try_from(per_tick).ok())
+        .map(Hp::new)
+        .ok_or_else(|| refused("past a hit-point count"))
+}
+
 /// The schema spells the move costs `uint32`; the sim's path arithmetic is
 /// signed, so the narrowing is a decision and gets one (AGENTS.md §4.3).
 fn signed(field: &'static str, value: u32) -> Result<i32, RulesError> {
@@ -609,6 +776,10 @@ pub enum RulesError {
         /// What the table said.
         value: String,
     },
+    /// The power phase refuses the table ([`PowerRules::read`]): a `kW` row
+    /// is missing or out of range, or the rows would let a seat's supply or
+    /// draw leave a signed 32-bit `kW`.
+    Power(PowerRulesError),
 }
 
 impl fmt::Display for RulesError {
@@ -624,6 +795,7 @@ impl fmt::Display for RulesError {
             RulesError::OutOfRange { field, value } => {
                 write!(f, "field `{field}`: `{value}` is out of range")
             }
+            RulesError::Power(error) => write!(f, "{error}"),
         }
     }
 }

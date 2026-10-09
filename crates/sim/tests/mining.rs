@@ -400,12 +400,12 @@ fn carve(runner: &mut Runner, seam: usize, count: Option<usize>) {
 
 /// The yield each of the two seams has left for the beacon at `row`.
 fn yields(world: &World, row: usize) -> [(String, i64); 2] {
-    let settings = settings_at(world, row);
+    let settings = settings_at(world, row).expect("the beacon's settings");
     [WEST, EAST].map(|name| {
         let (index, _) = seam_named(world, name);
         (
             name.to_owned(),
-            remaining_yield(world, row, index, settings),
+            remaining_yield(world, row, index, settings).expect("a seam and a beacon"),
         )
     })
 }
@@ -775,12 +775,12 @@ fn a_set_mandate_row_writes_the_settings_it_carries() {
     );
     assert_eq!(
         settings_at(&after, row_of(core)),
-        MineSettings {
+        Some(MineSettings {
             dig_max_depth: 2,
             pillar_spacing: 3,
             seam_choice: SeamChoice::Richest,
             flee_on_threat: false,
-        }
+        })
     );
 
     // An edit writes what it names and leaves the rest alone; a switch puts
@@ -796,14 +796,14 @@ fn a_set_mandate_row_writes_the_settings_it_carries() {
     let after = visit(edit);
     assert_eq!(
         settings_at(&after, row_of(core)),
-        MineSettings {
+        Some(MineSettings {
             flee_on_threat: true,
             ..MineSettings::default()
-        },
+        }),
         "the last row is a switch: it clears what the first two wrote"
     );
 
-    // The switch is priced as `plan-core` prices it: the switch, then the
+    // The switch is priced as the verifier prices it: the switch, then the
     // edit it carries.
     let route = compiled.route();
     let rows = match route.first().map(|step| &step.action) {
@@ -811,6 +811,7 @@ fn a_set_mandate_row_writes_the_settings_it_carries() {
         other => panic!("an interface step: {other:?}"),
     };
     let times = rules().message().interface_times.expect("interface times");
+    let card = compiled.interface_times();
     let first = rows.first().expect("a row");
     assert!(matches!(
         first,
@@ -820,8 +821,10 @@ fn a_set_mandate_row_writes_the_settings_it_carries() {
         }
     ));
     assert_eq!(
-        first.duration_ms(&rules()),
-        times.switch_mandate_ms + times.edit_settings_base_ms + times.edit_settings_per_field_ms,
+        first.duration_ms(card),
+        Ok(times.switch_mandate_ms
+            + times.edit_settings_base_ms
+            + times.edit_settings_per_field_ms),
         "eight seconds for the switch, and two fields of edit"
     );
     assert!(
@@ -840,7 +843,7 @@ fn a_set_mandate_row_writes_the_settings_it_carries() {
 fn a_switch_to_an_empty_s2_writ_prices_the_fields_beside_it() {
     // An empty Defend arm writes nothing of its own, but `retreat_hp_pct`
     // beside it is a field of the edit, priced as it is beside any other arm
-    // and as `plan-core` prices it: the switch plus one field.
+    // and as the verifier prices it: the switch plus one field.
     let route = concat!(
         r#"{"label":"switch","interface":{"beacon":{"beacon_id":"b_00"},"rows":["#,
         r#"{"set_mandate":{"defend":{},"retreat_hp_pct":50}},"#,
@@ -853,14 +856,15 @@ fn a_switch_to_an_empty_s2_writ_prices_the_fields_beside_it() {
         other => panic!("an interface step: {other:?}"),
     };
     let times = rules().message().interface_times.expect("interface times");
+    let card = compiled.interface_times();
     assert_eq!(
-        rows.first().expect("a row").duration_ms(&rules()),
-        times.switch_mandate_ms + times.edit_settings_base_ms,
+        rows.first().expect("a row").duration_ms(card),
+        Ok(times.switch_mandate_ms + times.edit_settings_base_ms),
         "the switch and one field"
     );
     assert_eq!(
-        rows.get(1).expect("a row").duration_ms(&rules()),
-        times.switch_mandate_ms,
+        rows.get(1).expect("a row").duration_ms(card),
+        Ok(times.switch_mandate_ms),
         "an empty arm alone is the switch alone"
     );
 }

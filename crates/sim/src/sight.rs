@@ -41,9 +41,9 @@
 //! with scouting (decision 13 of S1's plan, register S1-34), and the sightings
 //! join with S3's knowledge store.
 
-use crate::interpreter::cond::within;
 use crate::math::fixed::Fx;
 use crate::math::quantity::Hp;
+use crate::programs::within;
 use crate::tables::SeatId;
 use crate::world::World;
 
@@ -54,8 +54,9 @@ use crate::world::World;
 /// or move a beacon: a stale one draws last tick's spheres.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct Spheres {
-    /// `beacon.sphere_radius_voxels`, in whole voxels.
-    radius_voxels: i32,
+    /// `beacon.sphere_radius_voxels`, in whole voxels: a voxel length, which
+    /// the rules table refuses at load to be anything else.
+    radius_voxels: i16,
     /// One entry per living beacon: the seat that owns it and its centre.
     centres: Vec<(u8, [Fx; 3])>,
 }
@@ -77,7 +78,7 @@ impl Spheres {
         self.centres
             .iter()
             .filter(|(owner, _)| *owner == seat.raw())
-            .any(|(_, centre)| within(point, *centre, self.radius_voxels))
+            .any(|(_, centre)| within(point, *centre, Fx::from_voxels(self.radius_voxels)))
     }
 
     /// How many living beacons the snapshot holds, every seat's together.
@@ -94,8 +95,8 @@ impl Spheres {
 
     /// The radius every sphere has, in whole voxels.
     #[must_use]
-    pub const fn radius_voxels(&self) -> i32 {
-        self.radius_voxels
+    pub fn radius_voxels(&self) -> i32 {
+        i32::from(self.radius_voxels)
     }
 }
 
@@ -117,13 +118,7 @@ impl World {
     /// ruins and it powers nothing).
     #[must_use]
     pub fn spheres(&self) -> Spheres {
-        let radius_voxels = self
-            .rules()
-            .message()
-            .beacon
-            .as_ref()
-            .and_then(|block| i32::try_from(block.sphere_radius_voxels).ok())
-            .unwrap_or(0);
+        let radius_voxels = self.rules().sphere_radius_voxels();
         let beacons = self.beacons();
         let mut centres: Vec<(u8, [Fx; 3])> = Vec::with_capacity(beacons.ids().len());
         for row in 0..beacons.ids().len() {

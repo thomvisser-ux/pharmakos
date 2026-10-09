@@ -285,15 +285,15 @@ A diff here means one of six things, and the first is the only cheap one:
   many times the feed has been attached — deterministic on purpose, which is
   what lets a rendered cursor sit in a golden.
 * **only the `_status` footer's `phase_remaining_ms` moved.** The footer is the
-  opening Lull's, with 300 000 ms reported left: S1's first contract pull
+  opening Lull's, with the whole first Lull, 600 000 ms
+  (`match.first_lull_ms`), reported left. Its history: S1's first contract pull
   request moved it from 180 000 to 300 000 when it re-ruled the register's D-01
   (decisions-log item 127 (2)), and `godot/fixtures/view_keyframe.jsonl` was
-  re-copied with it. Since S1's `econ` the opening Lull is `match.first_lull_ms`
-  (600 000 ms), and the producer pins the report at 300 000 -- a countdown the
-  first Lull admits -- so that this file and its `godot/fixtures/` copy stay
-  byte for byte the same until the next `godot/` lane re-copies them at the
-  whole first Lull. A timed footer carries no `untimed` member: it is written
-  only when true.
+  re-copied with it; since S1's `econ` the opening Lull is
+  `match.first_lull_ms`, and the producer pinned the report at 300 000 until
+  S1's `build` lane dropped the pin (decisions-log item 135 (2) (h)), when
+  `godot/fixtures/` was re-copied in the same commit, byte for byte. A timed footer carries no
+  `untimed` member: it is written only when true.
 
 The `.txt` header carries **two** byte figures and they are different numbers:
 `run bytes` is what the encoder produced and what `VIEW_PAGE_BYTES` budgets,
@@ -368,14 +368,14 @@ things moved:
   the edge of the core's sphere and place a Build beacon there (decisions-log
   item 113 (6)).
 
-The `_status` footer is the opening Lull's, with 300 000 ms reported left (S1's
-first contract pull request moved it from 180 000 to 300 000, with the
-`godot/fixtures/` copy). Since S1's `econ` the opening Lull is
-`match.first_lull_ms`, 600 000 ms, and the producer pins the report at 300 000
--- a countdown the first Lull admits -- so that this file and its
-`godot/fixtures/` copy stay identical until the next `godot/` lane re-copies
-both at the whole first Lull. Any other change in it means the footer's shape
-did; a timed footer carries no `untimed` member, which is written only when
+The `_status` footer is the opening Lull's, with the whole first Lull, 600 000
+ms (`match.first_lull_ms`), reported left. Its history: S1's first contract
+pull request moved it from 180 000 to 300 000, with the `godot/fixtures/` copy;
+since S1's `econ` the opening Lull is `match.first_lull_ms`, and the producer
+pinned the report at 300 000 until S1's `build` lane dropped the pin
+(decisions-log item 135 (2) (h)), when the `godot/fixtures/` copy was re-copied
+in the same commit. Any other change in it means the footer's
+shape did; a timed footer carries no `untimed` member, which is written only when
 true.
 
 ### `demo_<playbook>_verify/` and `demo_<playbook>_render/`
@@ -434,7 +434,10 @@ What moves a demo case, and what a diff means:
   131 (4) (d): each feature's id, kind, grade, anchor, live bit and the seat's
   own covering beacon, and the commander's voxel). That second move changed
   the view's content and not its encoding, and no diagnostic moved with it:
-  only the `report_hash` line of each `_verify` case.
+  only the `report_hash` line of each `_verify` case. S1's `build` lane moved
+  that line again in all five, and nothing else: the snapshot's version went
+  from 8 to 9 with each Build target's order and rotation and each
+  structure's rotation, and the version is the snapshot's first field.
 * **The verifier or the renderer moved.** A new diagnostic, a changed lint or a
   changed `verifier_version` moves the `_verify` cases; a template string in
   `render_plan` moves every `_render` case. A report that stops qualifying is

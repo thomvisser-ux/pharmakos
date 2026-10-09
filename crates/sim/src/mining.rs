@@ -255,11 +255,12 @@ const AROUND: [[i32; 2]; 8] = [
 /// The four cardinal steps the flood takes.
 const CARDINAL: [[i32; 2]; 4] = [[1, 0], [0, 1], [-1, 0], [0, -1]];
 
-/// The Mine settings of the beacon at `row`, or the defaults when the row does
-/// not exist.
+/// The Mine settings of the beacon at `row`, or `None` when the row does not
+/// exist: a beacon that is not there has no settings, and reading it as the
+/// defaults would mine for it.
 #[must_use]
-pub fn settings_at(world: &World, row: usize) -> MineSettings {
-    world.beacons().mine_settings(row).unwrap_or_default()
+pub fn settings_at(world: &World, row: usize) -> Option<MineSettings> {
+    world.beacons().mine_settings(row)
 }
 
 /// The next dig for a drone homed to `beacon`: the nearest workable ore voxel
@@ -280,7 +281,7 @@ pub fn next_dig(world: &World, beacon: BeaconId) -> Option<Dig> {
         world,
         row,
         usize::try_from(seam).ok()?,
-        settings_at(world, row),
+        settings_at(world, row)?,
     )
 }
 
@@ -320,14 +321,19 @@ pub fn dig_waits(world: &World, beacon: BeaconId) -> bool {
 /// within its depth, off its pillars and clear of structures -- at the
 /// seam's own yield per voxel. "Richest means richest remaining" (spec
 /// section 6).
+///
+/// `None` when `seam` names no feature or `row` no beacon: a seam that is not
+/// there holds nothing for a beacon that is not there, and saying 0 would
+/// rank it.
 #[must_use]
-pub fn remaining_yield(world: &World, row: usize, seam: usize, settings: MineSettings) -> i64 {
-    let Some(feature) = world.features().get(seam) else {
-        return 0;
-    };
-    let Some(centre) = world.beacons().positions().get(row).copied() else {
-        return 0;
-    };
+pub fn remaining_yield(
+    world: &World,
+    row: usize,
+    seam: usize,
+    settings: MineSettings,
+) -> Option<i64> {
+    let feature = world.features().get(seam)?;
+    let centre = world.beacons().positions().get(row).copied()?;
     let limit = Sq::of_radius(world.sphere_radius());
     let mut total: i64 = 0;
     for column in &feature.footprint {
@@ -338,14 +344,15 @@ pub fn remaining_yield(world: &World, row: usize, seam: usize, settings: MineSet
         let mut z = column.top;
         while i64::from(z) >= deepest && z >= 0 {
             if let Some(dollars) = world.ore_yield_at([column.x, column.y, z])
-                && Sq::between(point(column.x, column.y, z), centre) <= limit
+                && point(column.x, column.y, z)
+                    .is_some_and(|voxel| Sq::between(voxel, centre) <= limit)
             {
                 total = total.saturating_add(dollars.raw());
             }
             z = z.saturating_sub(1);
         }
     }
-    total
+    Some(total)
 }
 
 /// The next dig in the seam at `seam` for the beacon at `row`, under
@@ -388,7 +395,11 @@ fn dig_in(world: &World, row: usize, seam: usize, settings: MineSettings) -> Opt
         if pillar(feature, settings, column.x, column.y) || blocked(world, column.x, column.y) {
             continue;
         }
-        let distance = Sq::between(point(column.x, column.y, z), centre);
+        // A voxel no coordinate holds is off every map, so in no sphere.
+        let Some(voxel) = point(column.x, column.y, z) else {
+            continue;
+        };
+        let distance = Sq::between(voxel, centre);
         if distance > limit {
             continue;
         }
@@ -468,8 +479,7 @@ fn pillar(feature: &Feature, settings: MineSettings, x: i32, y: i32) -> bool {
         return false;
     }
     let spacing = i64::from(settings.pillar_spacing);
-    let ax = i64::from(feature.anchor.first().copied().unwrap_or(0));
-    let ay = i64::from(feature.anchor.get(1).copied().unwrap_or(0));
+    let [ax, ay] = feature.anchor.map(i64::from);
     let on = |at: i32, anchor: i64| {
         i64::from(at)
             .saturating_sub(anchor)
@@ -517,13 +527,15 @@ fn reaches(world: &World, centre: [Fx; 3], feature: &Feature) -> bool {
         && cy.saturating_sub(reach) <= max_y
 }
 
-/// A point at whole-voxel coordinates.
-fn point(x: i32, y: i32, z: i32) -> [Fx; 3] {
-    [
-        Fx::from_voxels(i16::try_from(x).unwrap_or(0)),
-        Fx::from_voxels(i16::try_from(y).unwrap_or(0)),
-        Fx::from_voxels(i16::try_from(z).unwrap_or(0)),
-    ]
+/// A point at whole-voxel coordinates, or `None` for one no voxel coordinate
+/// holds -- off every map, so in no sphere -- rather than a point at the
+/// origin.
+fn point(x: i32, y: i32, z: i32) -> Option<[Fx; 3]> {
+    Some([
+        Fx::from_voxels(i16::try_from(x).ok()?),
+        Fx::from_voxels(i16::try_from(y).ok()?),
+        Fx::from_voxels(i16::try_from(z).ok()?),
+    ])
 }
 
 /// The seam's footprint box with a ring of one column around it: each
@@ -535,8 +547,10 @@ struct Grid {
     /// Its width and height, ring included.
     w: i32,
     h: i32,
+    /// How many cells the box holds, `w * h`, at most [`BOX_CELLS`].
+    cells: usize,
     /// Each cell's top solid z, or `-1`.
-    top: [i16; BOX_CELLS],
+    top: [i32; BOX_CELLS],
     /// Whether each cell can be stood on.
     walk: [bool; BOX_CELLS],
     /// Whether each cell is one of the seam's footprint columns.
@@ -580,6 +594,7 @@ impl Grid {
             y0,
             w,
             h,
+            cells,
             top: [-1; BOX_CELLS],
             walk: [false; BOX_CELLS],
             seam: [false; BOX_CELLS],
@@ -592,9 +607,8 @@ impl Grid {
                 let y = y0.saturating_add(cy);
                 if let (Some(cell), Some(node)) = (grid.index(x, y), world.surface().node_of(x, y))
                 {
-                    let top = world.surface().top(node);
                     if let Some(slot) = grid.top.get_mut(cell) {
-                        *slot = i16::try_from(top).unwrap_or(-1);
+                        *slot = world.surface().top(node);
                     }
                     if let Some(slot) = grid.walk.get_mut(cell) {
                         *slot = world.surface().walkable(node);
@@ -624,15 +638,16 @@ impl Grid {
         usize::try_from(cy.checked_mul(self.w)?.checked_add(cx)?).ok()
     }
 
-    /// A cell's top and walkability, with `dug`'s exposed voxel taken out.
-    fn column(&self, cell: usize, dug: Option<Dug>) -> (i32, bool) {
-        let walk = self.walk.get(cell).copied().unwrap_or(false);
+    /// A cell's top and walkability, with `dug`'s exposed voxel taken out;
+    /// `None` for a cell past the box's arrays, which no walk reaches.
+    fn column(&self, cell: usize, dug: Option<Dug>) -> Option<(i32, bool)> {
+        let walk = self.walk.get(cell).copied()?;
         if let Some(dug) = dug
             && dug.cell == cell
         {
-            return (dug.top, walk && dug.top >= 0);
+            return Some((dug.top, walk && dug.top >= 0));
         }
-        (i32::from(self.top.get(cell).copied().unwrap_or(-1)), walk)
+        Some((self.top.get(cell).copied()?, walk))
     }
 
     /// Every cell that can walk, by one-voxel cardinal steps inside the box,
@@ -645,10 +660,9 @@ impl Grid {
         };
         let mut stack = [0_u16; BOX_CELLS];
         let mut depth: usize = 0;
-        let cells = usize::try_from(self.w.saturating_mul(self.h)).unwrap_or(0);
         let mut cell: usize = 0;
-        while cell < cells {
-            let (_, walk) = self.column(cell, dug);
+        while cell < self.cells {
+            let walk = self.column(cell, dug).is_some_and(|(_, walk)| walk);
             if walk
                 && !self.seam.get(cell).copied().unwrap_or(true)
                 && let Some(slot) = reach.reached.get_mut(cell)
@@ -666,12 +680,18 @@ impl Grid {
             let Some(here) = stack.get(depth).copied().map(usize::from) else {
                 break;
             };
-            let (from, _) = self.column(here, dug);
+            let Some((from, _)) = self.column(here, dug) else {
+                continue;
+            };
             let Ok(linear) = i32::try_from(here) else {
                 continue;
             };
-            let hx = linear.checked_rem(self.w).unwrap_or(0);
-            let hy = linear.checked_div(self.w).unwrap_or(0);
+            // The width is at least the ring's two columns, so both are
+            // `Some`; a cell that had neither would have no place to step from.
+            let (Some(hx), Some(hy)) = (linear.checked_rem(self.w), linear.checked_div(self.w))
+            else {
+                continue;
+            };
             for [dx, dy] in CARDINAL {
                 let Some(next) = self.index(
                     self.x0.saturating_add(hx).saturating_add(dx),
@@ -682,7 +702,9 @@ impl Grid {
                 if reach.reached(next) {
                     continue;
                 }
-                let (to, walk) = self.column(next, dug);
+                let Some((to, walk)) = self.column(next, dug) else {
+                    continue;
+                };
                 if !walk || to.saturating_sub(from).abs() > 1 {
                     continue;
                 }
@@ -701,8 +723,7 @@ impl Grid {
 
     /// Whether every cell that walked out before the dig still does after it.
     fn strands_nothing(&self, before: &Reach, after: &Reach) -> bool {
-        let cells = usize::try_from(self.w.saturating_mul(self.h)).unwrap_or(0);
-        (0..cells).all(|cell| !before.reached(cell) || after.reached(cell))
+        (0..self.cells).all(|cell| !before.reached(cell) || after.reached(cell))
     }
 }
 
@@ -744,7 +765,7 @@ fn mines(world: &World, row: usize, beacon: BeaconId) -> bool {
 /// nothing. The "nearest" estimates a choice runs are counted on the decision's
 /// evaluation units.
 pub(crate) fn refresh_seams(world: &mut World, seat: SeatId) {
-    let count = usize::try_from(world.beacons().len()).unwrap_or(0);
+    let count = world.beacons().ids().len();
     let mut row: usize = 0;
     while row < count {
         let beacons = world.beacons();
@@ -758,14 +779,9 @@ pub(crate) fn refresh_seams(world: &mut World, seat: SeatId) {
             && alive
             && let Some(beacon) = beacon
             && mines(world, row, beacon)
+            && let Some(held) = world.beacons().seams().get(row).copied()
+            && let Some(settings) = settings_at(world, row)
         {
-            let held = world
-                .beacons()
-                .seams()
-                .get(row)
-                .copied()
-                .unwrap_or(NO_FEATURE);
-            let settings = settings_at(world, row);
             let keeps = held != NO_FEATURE
                 && usize::try_from(held)
                     .ok()
@@ -800,8 +816,9 @@ fn choose_seam(world: &mut World, row: usize, settings: MineSettings) -> u32 {
             }
             if settings.seam_choice == SeamChoice::Richest
                 && let Some(slot) = wealth.get_mut(index)
+                && let Some(left) = remaining_yield(world, row, index, settings)
             {
-                *slot = remaining_yield(world, row, index, settings);
+                *slot = left;
             }
         }
         index = index.saturating_add(1);
@@ -827,7 +844,11 @@ fn choose_seam(world: &mut World, row: usize, settings: MineSettings) -> u32 {
     });
     let mut best: Option<(usize, i64)> = None;
     while let Some((index, _)) = ranker.next(&ground, scratch) {
-        let yield_left = wealth.get(index).copied().unwrap_or(0);
+        // The ranker admits only indexes the work table marked, which are
+        // the wealth table's too.
+        let Some(yield_left) = wealth.get(index).copied() else {
+            continue;
+        };
         match settings.seam_choice {
             SeamChoice::Nearest | SeamChoice::Safest => {
                 best = Some((index, yield_left));

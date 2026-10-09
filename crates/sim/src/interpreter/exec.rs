@@ -32,19 +32,21 @@
 //!    route has ended — the fallback posture's.
 
 use crate::events::{Emission, EventKind};
-use crate::interpreter::cond::{self, View, resolve_beacon, within};
+use crate::interpreter::cond::{self, View, resolve_beacon};
 use crate::interpreter::state::{
     Binding, NO_INDEX, NO_TICK, PlanState, StepFailed, StepFailure, VisitState, deadline_of,
 };
 use crate::interpreter::{
-    Action, Anchor, FailAction, FeatureSpec, Place, Plan, PlanStep, Posture, REFLEX_HP_PERCENT,
-    Removal, Resume, Row, ticks_of,
+    Action, Anchor, FailAction, FeatureSpec, InterfaceTimes, Place, Plan, PlanStep, Posture,
+    REFLEX_HP_PERCENT, Removal, Resume, Row, ticks_of,
 };
 use crate::knowledge::{AssetId, Position};
 use crate::math::fixed::Fx;
 use crate::math::quantity::Tick;
-use crate::tables::{BeaconId, SeatId, TargetKind};
-use crate::world::World;
+use crate::programs::within;
+use crate::tables::{AreaKind, BeaconId, SeatId, TargetKind};
+use crate::targeting::{DESCRIPTION_VOXEL, NO_FEATURE};
+use crate::world::{BuildEntry, World};
 
 /// What one pass over the step in progress concluded.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -153,13 +155,11 @@ fn out_of_deaths(world: &World, seat_index: usize, plan: &Plan) -> bool {
     if limit == 0 {
         return false;
     }
-    let deaths = world
+    world
         .seats()
         .commander_deaths()
         .get(seat_index)
-        .copied()
-        .unwrap_or(0);
-    deaths >= limit
+        .is_some_and(|deaths| *deaths >= limit)
 }
 
 /// The fixed 20 % reflex. Returns `true` when it is holding the decision.
@@ -209,9 +209,11 @@ fn run_reflex(world: &mut World, seat: SeatId, seat_index: usize, state: &mut Pl
     }
     let arrived = {
         let seen = view(world, seat, seat_index, state);
-        let radius = arrive_radius(world);
-        seen.commander_at()
-            .is_some_and(|at| within(at, point_of(state.pinned_at), radius))
+        let radius = world.arrive_radius();
+        match (seen.commander_at(), pinned_point(state.pinned_at)) {
+            (Some(at), Some(target)) => within(at, target, radius),
+            _ => false,
+        }
     };
     // The reflex has the same two exits a `move` step has, and for the same
     // reason: while it holds the decision **nothing else in the playbook runs**,
@@ -226,7 +228,10 @@ fn run_reflex(world: &mut World, seat: SeatId, seat_index: usize, state: &mut Pl
             .beacon_row(beacon)
             .is_some_and(|row| seen.beacon_alive(row))
     });
-    if arrived || gone || sealed_in(world, seat) {
+    // A pinned target no point can stand on is a place the reflex can never
+    // reach, so it ends as a gone beacon does.
+    let unreachable = pinned_point(state.pinned_at).is_none();
+    if arrived || gone || unreachable || sealed_in(world, seat) {
         state.reflex_active = false;
         drop_step(world, seat, state);
         emit(world, tick, EventKind::ReflexCleared, seat, None, None, pct);
@@ -267,7 +272,9 @@ fn try_fire(
     let Some(index) = chosen else {
         return;
     };
-    let at = usize::try_from(index).unwrap_or(usize::MAX);
+    let Some(at) = slot_of(index) else {
+        return;
+    };
     let Some(rule) = plan.handlers().get(at) else {
         return;
     };
@@ -303,19 +310,18 @@ fn advance_body(
     state: &mut PlanState,
     plan: &Plan,
 ) {
-    let rule_at = usize::try_from(state.rule).unwrap_or(usize::MAX);
-    let Some(rule) = plan.handlers().get(rule_at) else {
+    let Some(rule) = slot_of(state.rule).and_then(|at| plan.handlers().get(at)) else {
         state.rule = NO_INDEX;
         return;
     };
     let index = state.rule_step;
-    let step_at = usize::try_from(index).unwrap_or(usize::MAX);
-    let Some(step) = rule.body.get(step_at) else {
+    let Some(step) = slot_of(index).and_then(|at| rule.body.get(at)) else {
         let resume = rule.resume;
         end_body(world, seat, state, plan, resume);
         return;
     };
-    let outcome = run_step(world, seat, seat_index, state, step, index);
+    let times = plan.interface_times();
+    let outcome = run_step(world, seat, seat_index, state, step, index, times);
     let body_len = rule.body.len();
     let resume = rule.resume;
     if outcome != Outcome::Running {
@@ -327,7 +333,7 @@ fn advance_body(
         Outcome::Complete | Outcome::Skipped => {
             drop_step(world, seat, state);
             state.rule_step = state.rule_step.saturating_add(1);
-            if usize::try_from(state.rule_step).unwrap_or(usize::MAX) >= body_len {
+            if !within_list(state.rule_step, body_len) {
                 end_body(world, seat, state, plan, resume);
             }
         }
@@ -336,7 +342,7 @@ fn advance_body(
             match step.on_fail {
                 FailAction::Skip => {
                     state.rule_step = state.rule_step.saturating_add(1);
-                    if usize::try_from(state.rule_step).unwrap_or(usize::MAX) >= body_len {
+                    if !within_list(state.rule_step, body_len) {
                         end_body(world, seat, state, plan, resume);
                     }
                 }
@@ -385,7 +391,7 @@ fn end_body(world: &mut World, seat: SeatId, state: &mut PlanState, plan: &Plan,
         None,
         i64::from(resume.id()),
     );
-    if ended || usize::try_from(state.cursor).unwrap_or(usize::MAX) >= plan.route().len() {
+    if ended || !within_list(state.cursor, plan.route().len()) {
         enter_fallback(world, seat, state, plan);
     }
 }
@@ -399,12 +405,19 @@ fn advance_route(
     plan: &Plan,
 ) {
     let index = state.cursor;
-    let at = usize::try_from(index).unwrap_or(usize::MAX);
-    let Some(step) = plan.route().get(at) else {
+    let Some(step) = slot_of(index).and_then(|at| plan.route().get(at)) else {
         enter_fallback(world, seat, state, plan);
         return;
     };
-    let outcome = run_step(world, seat, seat_index, state, step, index);
+    let outcome = run_step(
+        world,
+        seat,
+        seat_index,
+        state,
+        step,
+        index,
+        plan.interface_times(),
+    );
     // `None` means the route has ended and the fallback takes over. Every arm
     // below either leaves the cursor alone or moves it **forward**, which is
     // what bounds the number of steps a route can enter.
@@ -421,7 +434,7 @@ fn advance_route(
     state.clear_restart();
     drop_step(world, seat, state);
     match next {
-        Some(cursor) if usize::try_from(cursor).unwrap_or(usize::MAX) < plan.route().len() => {
+        Some(cursor) if within_list(cursor, plan.route().len()) => {
             state.cursor = cursor;
         }
         _ => enter_fallback(world, seat, state, plan),
@@ -436,6 +449,7 @@ fn run_step(
     state: &mut PlanState,
     step: &PlanStep,
     index: u32,
+    times: &InterfaceTimes,
 ) -> Outcome {
     let tick = world.tick();
     if state.stage == VisitState::NotStarted {
@@ -457,7 +471,7 @@ fn run_step(
         if state.rule == NO_INDEX && (state.reached == NO_INDEX || index > state.reached) {
             state.reached = index;
         }
-        match start_step(world, seat, seat_index, state, step, index) {
+        match start_step(world, seat, seat_index, state, step, index, times) {
             Ok(()) => {}
             Err(failure) => {
                 // A step that fails *while starting* — an unresolvable
@@ -482,7 +496,7 @@ fn run_step(
     if state.deadline != NO_TICK && tick.raw() >= state.deadline {
         return fail(world, seat, state, StepFailure::Timeout.into());
     }
-    match look(world, seat, seat_index, state, step, index) {
+    match look(world, seat, seat_index, state, step, index, times) {
         Outcome::Failed(failure) => fail(world, seat, state, failure.into()),
         other => other,
     }
@@ -533,6 +547,7 @@ fn start_step(
     state: &mut PlanState,
     step: &PlanStep,
     index: u32,
+    times: &InterfaceTimes,
 ) -> Result<(), StepFailed> {
     let tick = world.tick();
     let resuming =
@@ -557,7 +572,7 @@ fn start_step(
             walk_commander(world, seat, at);
             where_at = Some(at);
         }
-        Action::Interface { beacon, rows } => {
+        Action::Interface { beacon, rows, .. } => {
             let resolved = {
                 let seen = view(world, seat, seat_index, state);
                 // *Touch to change* is a rule about your **own** beacons:
@@ -576,8 +591,8 @@ fn start_step(
             state.pinned_beacon = resolved.raw();
             state.pinned_at = voxels_of(at);
             state.visit_beacon = resolved.raw();
-            if within(commander, at, interface_range(world)) {
-                begin_visit(world, state);
+            if within(commander, at, world.interface_range()) {
+                begin_visit(world, state, times);
                 visit = Some((resolved, at, rows.len()));
             } else {
                 walk_in(world, seat, commander, at)?;
@@ -609,12 +624,9 @@ fn start_step(
                 state.pinned_at = voxels_of(site);
                 state.visit_beacon = placed.raw();
                 state.visit_row = state.restart_row;
-                if within(commander, site, interface_range(world)) {
-                    begin_visit(world, state);
-                    let left = rows
-                        .len()
-                        .saturating_sub(usize::try_from(state.restart_row).unwrap_or(0));
-                    visit = Some((placed, site, left));
+                if within(commander, site, world.interface_range()) {
+                    begin_visit(world, state, times);
+                    visit = Some((placed, site, rows_left(rows, state.restart_row)));
                 } else {
                     walk_in(world, seat, commander, site)?;
                 }
@@ -633,7 +645,10 @@ fn start_step(
                             .ground()
                             .standing(x, y)
                             .ok_or(StepFailure::IllegalSite)?;
-                        state.bound_feature = u32::try_from(found.feature).unwrap_or(NO_INDEX);
+                        // A feature index past `u32` names no feature the
+                        // map's table can hold.
+                        state.bound_feature =
+                            u32::try_from(found.feature).map_err(|_| StepFailure::NoTarget)?;
                         state.pinned = true;
                         state.pinned_beacon = NO_INDEX;
                         state.pinned_at = voxels_of(point);
@@ -647,8 +662,8 @@ fn start_step(
                     return Err(StepFailure::IllegalSite.into());
                 }
                 bind_rows(world, seat, state, rows, site, None)?;
-                if within(commander, site, interface_range(world)) {
-                    begin_deploy(world, seat, state, site)?;
+                if within(commander, site, world.interface_range()) {
+                    begin_deploy(world, seat, state, site, times)?;
                 } else {
                     walk_in(world, seat, commander, site)?;
                 }
@@ -709,14 +724,8 @@ fn bind_rows(
             } => settings.as_ref(),
             other => other,
         };
-        let anchors: &[(u8, Anchor)] = match row {
-            Row::AddTarget { anchor, .. } => {
-                if let Anchor::On(spec) = anchor {
-                    let binding = bind_one(world, seat, centre, except, covered, *spec)?;
-                    state.bindings.push(binding);
-                }
-                continue;
-            }
+        let targets: &[crate::interpreter::Target] = match row {
+            Row::AddTarget { target } => core::slice::from_ref(target),
             Row::Settings { targets, .. } => targets,
             Row::Mandate { .. }
             | Row::Priority { .. }
@@ -725,9 +734,9 @@ fn bind_rows(
                 continue;
             }
         };
-        for (_, anchor) in anchors {
-            if let Anchor::On(spec) = anchor {
-                let binding = bind_one(world, seat, centre, except, covered, *spec)?;
+        for target in targets {
+            if let Anchor::On(spec) = target.anchor {
+                let binding = bind_one(world, seat, centre, except, covered, spec)?;
                 state.bindings.push(binding);
             }
         }
@@ -749,12 +758,16 @@ fn bind_one(
         crate::targeting::on_vent_counted(&ground, scratch, seat, centre, except, covered, spec)?
     };
     let [x, y] = site.column;
+    // The resolver chose a column of the surface, so it has a node; a column
+    // with none is no ground to build on.
     let z = world
         .surface()
         .node_of(x, y)
-        .map_or(0, |node| world.surface().standing_z(node));
+        .map(|node| world.surface().standing_z(node))
+        .ok_or(StepFailure::IllegalSite)?;
     Ok(Binding {
-        feature: u32::try_from(site.feature).unwrap_or(NO_INDEX),
+        // A feature index past `u32` names no feature the map's table holds.
+        feature: u32::try_from(site.feature).map_err(|_| StepFailure::NoTarget)?,
         at: [x, y, z],
     })
 }
@@ -763,20 +776,20 @@ fn bind_one(
 /// checks its bound features at each decision, and a lost one fails it
 /// `feature_lost` (targeting.md, "Three reading rules", 1).
 fn bindings_live(world: &World, state: &PlanState) -> bool {
-    let live = |feature: u32| -> bool {
-        feature == NO_INDEX || world.feature_is_live(usize::try_from(feature).unwrap_or(usize::MAX))
-    };
+    let live = |feature: u32| -> bool { feature == NO_INDEX || feature_live(world, feature) };
     live(state.bound_feature) && state.bindings.iter().all(|binding| live(binding.feature))
 }
 
 /// Begin the visit handshake (spec section 5: 1.5 s, once per visit). The walk
 /// in, if there was one, is over, so the step's timeout no longer runs: it
 /// bounds the walk up to arrival (targeting.md, "Companion changes").
-fn begin_visit(world: &World, state: &mut PlanState) {
+fn begin_visit(world: &World, state: &mut PlanState, times: &InterfaceTimes) {
     let tick = world.tick();
     state.deadline = NO_TICK;
     state.stage = VisitState::Handshake;
-    state.visit_due = tick.raw().saturating_add(ticks_of(handshake_ms(world)));
+    state.visit_due = tick
+        .raw()
+        .saturating_add(ticks_of(times.visit_handshake_ms()));
 }
 
 /// Begin the deploy at `site`: the site must still be legal, and spec section
@@ -793,6 +806,7 @@ fn begin_deploy(
     seat: SeatId,
     state: &mut PlanState,
     site: [Fx; 3],
+    times: &InterfaceTimes,
 ) -> Result<(), StepFailure> {
     if !site_is_legal(world, seat, site) {
         return Err(StepFailure::IllegalSite);
@@ -803,7 +817,9 @@ fn begin_deploy(
     let tick = world.tick();
     state.deadline = NO_TICK;
     state.stage = VisitState::Deploying;
-    state.visit_due = tick.raw().saturating_add(ticks_of(deploy_ms(world)));
+    state.visit_due = tick
+        .raw()
+        .saturating_add(ticks_of(times.place_beacon_deploy_ms()));
     Ok(())
 }
 
@@ -837,6 +853,7 @@ fn look(
     state: &mut PlanState,
     step: &PlanStep,
     index: u32,
+    times: &InterfaceTimes,
 ) -> Outcome {
     let tick = world.tick();
     if !bindings_live(world, state) {
@@ -847,7 +864,12 @@ fn look(
             let Some(at) = commander_at(world, seat) else {
                 return Outcome::Failed(StepFailure::CommanderDead);
             };
-            if within(at, point_of(state.pinned_at), arrive_radius(world)) {
+            // The pinned place came off a point the step resolved, so it
+            // stands on a point; one that does not is nowhere to walk to.
+            let Some(target) = pinned_point(state.pinned_at) else {
+                return Outcome::Failed(StepFailure::NoTarget);
+            };
+            if within(at, target, world.arrive_radius()) {
                 complete(world, seat, index);
                 return Outcome::Complete;
             }
@@ -872,39 +894,46 @@ fn look(
             Outcome::Running
         }
         Action::Broadcast => Outcome::Failed(StepFailure::NoMast),
-        Action::Interface { rows, .. } => {
+        Action::Interface {
+            rows, durations, ..
+        } => {
             if state.stage == VisitState::Running {
-                return walk_to_visit(world, seat, state, rows.len());
+                return walk_to_visit(world, seat, state, rows.len(), times);
             }
-            run_visit(world, seat, state, rows, index)
+            run_visit(world, seat, state, rows, durations, index)
         }
         Action::PlaceBeacon {
             mandate,
             rows,
+            durations,
             tags,
             ..
         } => {
             let _ = tags;
             if state.resumed {
                 if state.stage == VisitState::Running {
-                    let left = rows
-                        .len()
-                        .saturating_sub(usize::try_from(state.visit_row).unwrap_or(0));
-                    return walk_to_visit(world, seat, state, left);
+                    let left = rows_left(rows, state.visit_row);
+                    return walk_to_visit(world, seat, state, left, times);
                 }
-                return run_visit(world, seat, state, rows, index);
+                return run_visit(world, seat, state, rows, durations, index);
             }
             if state.stage == VisitState::Running {
-                return walk_to_deploy(world, seat, state);
+                return walk_to_deploy(world, seat, state, times);
             }
-            run_deploy(world, seat, state, *mandate, rows, index)
+            run_deploy(world, seat, state, *mandate, rows, durations, index)
         }
     }
 }
 
 /// One decision of a walk in to a visit: arrived within interface range, the
 /// handshake begins; a beacon gone or a commander sealed in ends the step.
-fn walk_to_visit(world: &mut World, seat: SeatId, state: &mut PlanState, rows: usize) -> Outcome {
+fn walk_to_visit(
+    world: &mut World,
+    seat: SeatId,
+    state: &mut PlanState,
+    rows: usize,
+    times: &InterfaceTimes,
+) -> Outcome {
     let tick = world.tick();
     let beacon = BeaconId::new(state.visit_beacon);
     let Some(row) = world_beacon_row(world, beacon) else {
@@ -924,8 +953,8 @@ fn walk_to_visit(world: &mut World, seat: SeatId, state: &mut PlanState, rows: u
     let Some(at) = world.beacons().positions().get(row).copied() else {
         return Outcome::Failed(StepFailure::BeaconGone);
     };
-    if within(commander, at, interface_range(world)) {
-        begin_visit(world, state);
+    if within(commander, at, world.interface_range()) {
+        begin_visit(world, state, times);
         emit(
             world,
             tick,
@@ -945,13 +974,22 @@ fn walk_to_visit(world: &mut World, seat: SeatId, state: &mut PlanState, rows: u
 
 /// One decision of a walk in to a deploy site: arrived within interface range,
 /// the deploy begins (and is charged); a commander sealed in ends the step.
-fn walk_to_deploy(world: &mut World, seat: SeatId, state: &mut PlanState) -> Outcome {
-    let site = point_of(state.pinned_at);
+fn walk_to_deploy(
+    world: &mut World,
+    seat: SeatId,
+    state: &mut PlanState,
+    times: &InterfaceTimes,
+) -> Outcome {
+    // The site was pinned off a point the step resolved; one no point stands
+    // on is no site to deploy at.
+    let Some(site) = pinned_point(state.pinned_at) else {
+        return Outcome::Failed(StepFailure::IllegalSite);
+    };
     let Some(commander) = commander_at(world, seat) else {
         return Outcome::Failed(StepFailure::CommanderDead);
     };
-    if within(commander, site, interface_range(world)) {
-        return match begin_deploy(world, seat, state, site) {
+    if within(commander, site, world.interface_range()) {
+        return match begin_deploy(world, seat, state, site, times) {
             Ok(()) => Outcome::Running,
             Err(failure) => Outcome::Failed(failure),
         };
@@ -972,6 +1010,7 @@ fn run_visit(
     seat: SeatId,
     state: &mut PlanState,
     rows: &[Row],
+    durations: &[i32],
     index: u32,
 ) -> Outcome {
     let tick = world.tick();
@@ -993,7 +1032,7 @@ fn run_visit(
     let Some(at) = world.beacons().positions().get(row_index).copied() else {
         return Outcome::Failed(StepFailure::BeaconGone);
     };
-    if !within(commander, at, interface_range(world)) {
+    if !within(commander, at, world.interface_range()) {
         return Outcome::Failed(StepFailure::OutOfRange);
     }
     if tick.raw() < state.visit_due {
@@ -1001,8 +1040,7 @@ fn run_visit(
     }
     if state.stage == VisitState::Handshake {
         state.stage = VisitState::Committing;
-        let first_at = usize::try_from(state.visit_row).unwrap_or(usize::MAX);
-        let Some(first) = rows.get(first_at) else {
+        let Some((_, _, first_ms)) = row_at(rows, durations, state.visit_row) else {
             emit(
                 world,
                 tick,
@@ -1015,13 +1053,10 @@ fn run_visit(
             complete(world, seat, index);
             return Outcome::Complete;
         };
-        state.visit_due = tick
-            .raw()
-            .saturating_add(ticks_of(first.duration_ms(world.rules())));
+        state.visit_due = tick.raw().saturating_add(ticks_of(first_ms));
         return Outcome::Running;
     }
-    let row_at = usize::try_from(state.visit_row).unwrap_or(usize::MAX);
-    let Some(row) = rows.get(row_at) else {
+    let Some((done, row, _)) = row_at(rows, durations, state.visit_row) else {
         emit(
             world,
             tick,
@@ -1034,9 +1069,7 @@ fn run_visit(
         complete(world, seat, index);
         return Outcome::Complete;
     };
-    let slots = rows
-        .get(..row_at)
-        .map_or(0, crate::interpreter::binding_slots);
+    let slots = crate::interpreter::binding_slots(done);
     if let Err(failure) = commit_row(world, row_index, seat, row, &state.bindings, slots) {
         return Outcome::Failed(failure);
     }
@@ -1053,11 +1086,8 @@ fn run_visit(
     if state.resumed {
         state.restart_row = state.visit_row;
     }
-    let next_at = usize::try_from(state.visit_row).unwrap_or(usize::MAX);
-    if let Some(next) = rows.get(next_at) {
-        state.visit_due = tick
-            .raw()
-            .saturating_add(ticks_of(next.duration_ms(world.rules())));
+    if let Some((_, _, next_ms)) = row_at(rows, durations, state.visit_row) {
+        state.visit_due = tick.raw().saturating_add(ticks_of(next_ms));
         return Outcome::Running;
     }
     emit(
@@ -1075,16 +1105,23 @@ fn run_visit(
 
 /// One decision's worth of a deploy: 12 s of standing still, then the beacon,
 /// then its initial settings at interface rates.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the deploy's step, its writ, its rows and their prices, each read here and nowhere else; a parameter struct would be built at the one caller only to be taken apart"
+)]
 fn run_deploy(
     world: &mut World,
     seat: SeatId,
     state: &mut PlanState,
     mandate: crate::seams::MandateKind,
     rows: &[Row],
+    durations: &[i32],
     index: u32,
 ) -> Outcome {
     let tick = world.tick();
-    let site = point_of(state.pinned_at);
+    let Some(site) = pinned_point(state.pinned_at) else {
+        return Outcome::Failed(StepFailure::IllegalSite);
+    };
     let Some(commander) = commander_at(world, seat) else {
         return Outcome::Failed(StepFailure::CommanderDead);
     };
@@ -1100,7 +1137,7 @@ fn run_deploy(
     // every decision of a visit for the same sentence of the same section. A
     // check that stopped once the beacon was in the ground would have let the
     // commander walk away and the rows commit behind it.
-    if !within(commander, site, interface_range(world)) {
+    if !within(commander, site, world.interface_range()) {
         return Outcome::Failed(StepFailure::OutOfRange);
     }
     if tick.raw() < state.visit_due {
@@ -1136,13 +1173,11 @@ fn run_deploy(
         // No handshake: the visit handshake is charged once per visit to an
         // existing beacon (spec section 5's table), and a deploy is the
         // commander standing over the thing it is building.
-        let Some(first) = rows.first() else {
+        let Some((_, _, first_ms)) = row_at(rows, durations, 0) else {
             complete(world, seat, index);
             return Outcome::Complete;
         };
-        state.visit_due = tick
-            .raw()
-            .saturating_add(ticks_of(first.duration_ms(world.rules())));
+        state.visit_due = tick.raw().saturating_add(ticks_of(first_ms));
         return Outcome::Running;
     }
     let beacon = BeaconId::new(state.visit_beacon);
@@ -1159,14 +1194,11 @@ fn run_deploy(
     {
         return Outcome::Failed(StepFailure::BeaconGone);
     }
-    let row_at = usize::try_from(state.visit_row).unwrap_or(usize::MAX);
-    let Some(row) = rows.get(row_at) else {
+    let Some((done, row, _)) = row_at(rows, durations, state.visit_row) else {
         complete(world, seat, index);
         return Outcome::Complete;
     };
-    let slots = rows
-        .get(..row_at)
-        .map_or(0, crate::interpreter::binding_slots);
+    let slots = crate::interpreter::binding_slots(done);
     if let Err(failure) = commit_row(world, row_index, seat, row, &state.bindings, slots) {
         return Outcome::Failed(failure);
     }
@@ -1181,11 +1213,8 @@ fn run_deploy(
     );
     state.visit_row = state.visit_row.saturating_add(1);
     state.restart_row = state.visit_row;
-    let next_at = usize::try_from(state.visit_row).unwrap_or(usize::MAX);
-    if let Some(next) = rows.get(next_at) {
-        state.visit_due = tick
-            .raw()
-            .saturating_add(ticks_of(next.duration_ms(world.rules())));
+    if let Some((_, _, next_ms)) = row_at(rows, durations, state.visit_row) {
+        state.visit_due = tick.raw().saturating_add(ticks_of(next_ms));
         return Outcome::Running;
     }
     complete(world, seat, index);
@@ -1236,10 +1265,9 @@ fn commit_row(
         .ids()
         .get(row)
         .copied()
-        .map_or(BeaconId::NONE, BeaconId::new);
-    let live = |world: &World, binding: &Binding| -> bool {
-        world.feature_is_live(usize::try_from(binding.feature).unwrap_or(usize::MAX))
-    };
+        .map(BeaconId::new)
+        .ok_or(StepFailure::BeaconGone)?;
+    let live = |world: &World, binding: &Binding| -> bool { feature_live(world, binding.feature) };
     match spec {
         Row::Mandate { kind, settings } => {
             // The switch first, which clears the old mandate's settings, then
@@ -1262,17 +1290,17 @@ fn commit_row(
         Row::Recycle => {
             world.recycle_beacon(seat, beacon);
         }
-        Row::AddTarget { blueprint, anchor } => {
-            let (at, bound) = match anchor {
-                Anchor::Voxel(voxel) => (point_of(*voxel), None),
+        Row::AddTarget { target } => {
+            let (at, bound) = match target.anchor {
+                Anchor::Voxel(voxel) => (point_of(voxel), (NO_FEATURE, DESCRIPTION_VOXEL)),
                 Anchor::On(feature) => {
                     let binding = bindings.get(slot).ok_or(StepFailure::NoTarget)?;
                     if !live(world, binding) {
                         return Err(StepFailure::FeatureLost);
                     }
                     (
-                        point_of(binding.at),
-                        Some((binding.feature, feature.description_id())),
+                        binding_point(binding).ok_or(StepFailure::IllegalSite)?,
+                        (binding.feature, feature.description_id()),
                     )
                 }
             };
@@ -1283,14 +1311,7 @@ fn commit_row(
             if crate::mandate::inside_sphere(world, beacon, at)
                 && !world.anchor_is_claimed(seat, at)
             {
-                match bound {
-                    None => {
-                        world.add_target(beacon, TargetKind::Build, *blueprint, at, 0);
-                    }
-                    Some(bound) => {
-                        world.add_bound_target(beacon, *blueprint, at, bound);
-                    }
-                }
+                world.add_bound_target(beacon, target.blueprint, at, bound, target.build);
             }
         }
         Row::RemoveTarget { anchor } => match anchor {
@@ -1298,8 +1319,14 @@ fn commit_row(
                 world.remove_target_at(beacon, point_of(*voxel));
             }
             Removal::Feature { kind, anchor } => {
-                if let Some(feature) = world.features().index_of(*kind, *anchor) {
-                    world.remove_bound_target(beacon, u32::try_from(feature).unwrap_or(NO_INDEX));
+                // A feature index past `u32` is no feature a target is bound
+                // to, so the removal names nothing and changes nothing.
+                if let Some(feature) = world
+                    .features()
+                    .index_of(*kind, *anchor)
+                    .and_then(|index| u32::try_from(index).ok())
+                {
+                    world.remove_bound_target(beacon, feature);
                 }
             }
         },
@@ -1323,57 +1350,59 @@ fn commit_row(
                 if !targets_live(world, spec, bindings, slot) {
                     return Err(StepFailure::FeatureLost);
                 }
+                // The bindings this list's `on` anchors read when the step
+                // started, in list order, and the point each one stands on;
+                // every one is checked here, before anything is written, so
+                // the iterator below reads them without a fallback.
+                let bound = bound_slice(targets, bindings, slot).ok_or(StepFailure::NoTarget)?;
+                if bound.iter().any(|binding| binding_point(binding).is_none()) {
+                    return Err(StepFailure::IllegalSite);
+                }
                 // Replacing is not abandoning: an anchor that survives the
                 // edit keeps the structure it has already been paid for, or
                 // the mandate would buy it a second time
-                // ([`World::replace_build_targets`]).
-                world.replace_build_targets(
-                    beacon,
-                    targets
-                        .iter()
-                        .enumerate()
-                        .map(|(at, (blueprint, anchor))| match anchor {
-                            Anchor::Voxel(voxel) => (
-                                *blueprint,
-                                point_of(*voxel),
-                                crate::targeting::NO_FEATURE,
-                                crate::targeting::DESCRIPTION_VOXEL,
-                            ),
-                            Anchor::On(feature) => {
-                                let before = targets.get(..at).map_or(0, |earlier| {
-                                    earlier.iter().filter(|(_, a)| a.binds()).count()
-                                });
-                                let binding = bindings
-                                    .get(slot.saturating_add(before))
-                                    .copied()
-                                    .unwrap_or(Binding {
-                                        feature: crate::targeting::NO_FEATURE,
-                                        at: [0; 3],
-                                    });
-                                (
-                                    *blueprint,
-                                    point_of(binding.at),
-                                    binding.feature,
-                                    feature.description_id(),
-                                )
-                            }
-                        }),
-                );
+                // ([`World::replace_build_targets`]). The list goes over as an
+                // iterator, so nothing here allocates inside a tick; each `on`
+                // anchor takes the next binding, and the two checks above are
+                // why there always is one, standing on a point.
+                let entries = targets.iter().scan(bound.iter(), |read, target| {
+                    let (anchor, feature, desc) = match target.anchor {
+                        Anchor::Voxel(voxel) => (point_of(voxel), NO_FEATURE, DESCRIPTION_VOXEL),
+                        Anchor::On(on) => {
+                            let binding = read.next()?;
+                            (
+                                binding_point(binding)?,
+                                binding.feature,
+                                on.description_id(),
+                            )
+                        }
+                    };
+                    Some(BuildEntry {
+                        blueprint: target.blueprint,
+                        anchor,
+                        feature,
+                        desc,
+                        build: target.build,
+                    })
+                });
+                world.replace_build_targets(beacon, entries);
             }
             if !protected.is_empty() {
                 world.clear_targets(beacon, TargetKind::Protected);
-                for (centre, radius) in protected {
-                    world.add_target(beacon, TargetKind::Protected, 0, point_of(*centre), *radius);
+                for (centre, area) in protected {
+                    world.add_area(beacon, AreaKind::Protected, point_of(*centre), *area);
                 }
             }
             if !probes.is_empty() {
                 world.clear_targets(beacon, TargetKind::Probe);
-                for (centre, radius) in probes {
-                    world.add_target(beacon, TargetKind::Probe, 0, point_of(*centre), *radius);
+                for (centre, area) in probes {
+                    world.add_area(beacon, AreaKind::Probe, point_of(*centre), *area);
                 }
             }
+            // A count past a byte is refused at the seal
+            // (`PlanError::ScoutsOutOfRange`), so the row carries a byte.
             if *scouts > 0 {
-                world.set_beacon_scouts(row, u8::try_from(*scouts).unwrap_or(u8::MAX));
+                world.set_beacon_scouts(row, *scouts);
             }
             // The Mine settings the row names, and nothing it is silent about
             // (`crate::mining::MineEdit`).
@@ -1396,13 +1425,37 @@ fn targets_live(world: &World, spec: &Row, bindings: &[Binding], slot: usize) ->
     if targets.is_empty() {
         return true;
     }
-    let used = targets.iter().filter(|(_, anchor)| anchor.binds()).count();
-    let end = slot.saturating_add(used);
-    bindings.get(slot..end).is_some_and(|bound| {
-        bound.iter().all(|binding| {
-            world.feature_is_live(usize::try_from(binding.feature).unwrap_or(usize::MAX))
-        })
+    bound_slice(targets, bindings, slot).is_some_and(|bound| {
+        bound
+            .iter()
+            .all(|binding| feature_live(world, binding.feature))
     })
+}
+
+/// The bindings a target list's `on` anchors read when the step started: the
+/// `used` of them from `slot`, `None` when the step holds fewer.
+fn bound_slice<'a>(
+    targets: &[crate::interpreter::Target],
+    bindings: &'a [Binding],
+    slot: usize,
+) -> Option<&'a [Binding]> {
+    let used = targets
+        .iter()
+        .filter(|target| target.anchor.binds())
+        .count();
+    bindings.get(slot..slot.checked_add(used)?)
+}
+
+/// Whether the feature at index `feature` of the map's table is live. An
+/// index past `usize` is no feature, so it is not.
+fn feature_live(world: &World, feature: u32) -> bool {
+    usize::try_from(feature).is_ok_and(|index| world.feature_is_live(index))
+}
+
+/// The point a binding's `on` column stands on: `None` for one no voxel
+/// coordinate holds, which no column the resolver chose can be.
+fn binding_point(binding: &Binding) -> Option<[Fx; 3]> {
+    pinned_point(binding.at)
 }
 
 /// The guaranteed tail (spec section 10): hold, shadow or patrol, for ever.
@@ -1420,9 +1473,16 @@ fn run_fallback(
             resolve_beacon(&seen, *beacon).and_then(|id| beacon_at(world, id))
         }
         Posture::Patrol(waypoints) => {
-            let at = usize::try_from(state.fallback_leg).unwrap_or(0);
-            let leg = waypoints.get(at).or_else(|| waypoints.first()).copied();
-            leg.and_then(|place| resolve_place(world, seat, seat_index, state, place))
+            // A leg past the patrol's end starts it over, the wrap the
+            // arrival below applies; the compile refuses a patrol with no
+            // waypoints, so the first is always there.
+            if !within_list(state.fallback_leg, waypoints.len()) {
+                state.fallback_leg = 0;
+            }
+            slot_of(state.fallback_leg)
+                .and_then(|at| waypoints.get(at))
+                .copied()
+                .and_then(|place| resolve_place(world, seat, seat_index, state, place))
         }
     };
     let Some(target) = target else {
@@ -1431,11 +1491,14 @@ fn run_fallback(
     let Some(at) = commander_at(world, seat) else {
         return;
     };
-    if within(at, target, arrive_radius(world)) {
+    if within(at, target, world.arrive_radius()) {
         if let Posture::Patrol(waypoints) = plan.fallback() {
             let next = state.fallback_leg.saturating_add(1);
-            let count = u32::try_from(waypoints.len()).unwrap_or(1).max(1);
-            state.fallback_leg = if next >= count { 0 } else { next };
+            state.fallback_leg = if within_list(next, waypoints.len()) {
+                next
+            } else {
+                0
+            };
             state.pinned = false;
         }
         return;
@@ -1556,7 +1619,7 @@ fn pin_place(
         Place::Covering(_) => return Err(StepFailure::NoTarget),
     };
     let at = match (place, beacon) {
-        (Place::Voxel(voxel), _) => ground_point(world, voxel),
+        (Place::Voxel(voxel), _) => ground_point(world, voxel).ok_or(StepFailure::NoPath)?,
         (Place::Beacon(_), Some(id)) => beacon_at(world, id).ok_or(StepFailure::NoTarget)?,
         (Place::Beacon(_) | Place::Covering(_), None) | (Place::Covering(_), Some(_)) => {
             return Err(StepFailure::NoTarget);
@@ -1577,7 +1640,7 @@ fn resolve_place(
     place: Place,
 ) -> Option<[Fx; 3]> {
     match place {
-        Place::Voxel(voxel) => Some(ground_point(world, voxel)),
+        Place::Voxel(voxel) => ground_point(world, voxel),
         Place::Beacon(spec) => {
             let seen = view(world, seat, seat_index, state);
             resolve_beacon(&seen, spec).and_then(|id| beacon_at(world, id))
@@ -1683,6 +1746,40 @@ fn emit(
     world.emit(tick, emission);
 }
 
+/// A `u32` position of the plan's lists as an index: `None` for one no
+/// `usize` holds, which is past the end of every list.
+fn slot_of(at: u32) -> Option<usize> {
+    usize::try_from(at).ok()
+}
+
+/// Whether the `u32` position `at` lies inside a list of `len` entries.
+fn within_list(at: u32, len: usize) -> bool {
+    slot_of(at).is_some_and(|at| at < len)
+}
+
+/// The row at `index` of a step's rows, with the rows before it and the price
+/// it was compiled at: `None` past the end, which is where a visit ends.
+/// `rows` and `durations` are one length, because the compile prices every row
+/// it compiles ([`crate::interpreter::Row::duration_ms`]).
+fn row_at<'a>(rows: &'a [Row], durations: &[i32], index: u32) -> Option<(&'a [Row], &'a Row, i32)> {
+    let at = slot_of(index)?;
+    let (done, rest) = rows.split_at_checked(at)?;
+    Some((done, rest.first()?, durations.get(at).copied()?))
+}
+
+/// How many of a step's rows are left once `done` have committed: none once
+/// `done` reaches the end, which a resumed placement's restart row can.
+///
+/// Exact, not a fallback: a `done` no `usize` holds is past the end of any
+/// slice, so none are left -- the same answer the subtraction gives a `done`
+/// at or past `rows.len()`.
+fn rows_left(rows: &[Row], done: u32) -> usize {
+    match slot_of(done) {
+        Some(done) => rows.len().saturating_sub(done),
+        None => 0,
+    }
+}
+
 /// A playbook's voxel, **standing on the ground under it**.
 ///
 /// The router puts a walker on a *column*: it routes to `node_at`, which
@@ -1698,74 +1795,44 @@ fn emit(
 /// A column off the map keeps the author's `z`: there is no ground to stand on,
 /// and the step then fails on its own terms — by timing out, or by
 /// `no_path` — rather than being silently moved somewhere legal.
-fn ground_point(world: &World, voxel: [i32; 3]) -> [Fx; 3] {
-    let mut at = point_of(voxel);
-    let x = voxel.first().copied().unwrap_or(0);
-    let y = voxel.get(1).copied().unwrap_or(0);
-    if let Some(node) = world.surface().node_of(x, y)
-        && let Some(slot) = at.get_mut(2)
-    {
-        *slot = Fx::from_voxels(i16::try_from(world.surface().standing_z(node)).unwrap_or(0));
-    }
-    at
+///
+/// `None` when the ground's standing height is one no voxel coordinate holds,
+/// which a map this sim generates never has: the caller fails the step rather
+/// than keep a height the ground did not give.
+fn ground_point(world: &World, voxel: [i16; 3]) -> Option<[Fx; 3]> {
+    let [x, y, z] = voxel;
+    let standing = match world.surface().node_of(i32::from(x), i32::from(y)) {
+        Some(node) => i16::try_from(world.surface().standing_z(node)).ok()?,
+        None => z,
+    };
+    Some(point_of([x, y, standing]))
 }
 
-/// Whole voxels to a position, as a playbook writes them.
-///
-/// Every coordinate is in range, because [`crate::interpreter::Plan::compile`]
-/// refuses a playbook whose voxel is outside the map
-/// ([`crate::interpreter::PlanError::VoxelOutOfMap`]) and the map is smaller
-/// than `i16` in every axis. The saturation below is therefore unreachable and
-/// is written as a total function rather than a panic.
-fn point_of(voxel: [i32; 3]) -> [Fx; 3] {
-    [
-        Fx::from_voxels(i16::try_from(voxel.first().copied().unwrap_or(0)).unwrap_or(0)),
-        Fx::from_voxels(i16::try_from(voxel.get(1).copied().unwrap_or(0)).unwrap_or(0)),
-        Fx::from_voxels(i16::try_from(voxel.get(2).copied().unwrap_or(0)).unwrap_or(0)),
-    ]
+/// Whole voxels to a position, as a playbook writes them. Total: the compile
+/// keeps only voxels a voxel coordinate holds
+/// ([`crate::interpreter::PlanError::VoxelOutOfMap`] and
+/// [`crate::interpreter::PlanError::VoxelOutOfRange`]).
+fn point_of(voxel: [i16; 3]) -> [Fx; 3] {
+    let [x, y, z] = voxel;
+    [Fx::from_voxels(x), Fx::from_voxels(y), Fx::from_voxels(z)]
+}
+
+/// A place the state holds in whole voxels, as a position: `None` for one no
+/// voxel coordinate holds. The state's places are written by [`voxels_of`]
+/// from positions, so every one the run wrote converts; a restored state
+/// that holds another is answered by the step's own failure, never by a
+/// position at the origin.
+fn pinned_point(voxel: [i32; 3]) -> Option<[Fx; 3]> {
+    let [x, y, z] = voxel;
+    Some(point_of([
+        i16::try_from(x).ok()?,
+        i16::try_from(y).ok()?,
+        i16::try_from(z).ok()?,
+    ]))
 }
 
 /// A position to whole voxels, for the pinned target the state carries.
 fn voxels_of(at: [Fx; 3]) -> [i32; 3] {
-    let axis = |index: usize| at.get(index).map_or(0, |value| value.floor_voxels());
-    [axis(0), axis(1), axis(2)]
-}
-
-fn arrive_radius(world: &World) -> i32 {
-    commander_row(world, |block| block.arrive_radius_voxels)
-}
-
-fn interface_range(world: &World) -> i32 {
-    commander_row(world, |block| block.interface_range_voxels)
-}
-
-fn commander_row(
-    world: &World,
-    pick: fn(&pharmakos_proto::gp::v1::rules_table::Commander) -> u32,
-) -> i32 {
-    world
-        .rules()
-        .message()
-        .commander
-        .as_ref()
-        .and_then(|block| i32::try_from(pick(block)).ok())
-        .unwrap_or(0)
-}
-
-fn handshake_ms(world: &World) -> i32 {
-    world
-        .rules()
-        .message()
-        .interface_times
-        .as_ref()
-        .map_or(0, |times| times.visit_handshake_ms)
-}
-
-fn deploy_ms(world: &World) -> i32 {
-    world
-        .rules()
-        .message()
-        .interface_times
-        .as_ref()
-        .map_or(0, |times| times.place_beacon_deploy_ms)
+    let [x, y, z] = at;
+    [x.floor_voxels(), y.floor_voxels(), z.floor_voxels()]
 }

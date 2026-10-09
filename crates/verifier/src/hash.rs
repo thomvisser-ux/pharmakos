@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Pharmakos contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `report_hash` and the plan fingerprint.
+//! `report_hash`, and the verifier's reader of the plan fingerprint.
 //!
 //! # One hash function, and it is the sim's
 //!
@@ -59,11 +59,11 @@
 //! `plan-core`'s (T8, decisions-log item 74), and they happen **before** this
 //! crate is called.
 
-use pharmakos_proto::fingerprint::{PLAN_FINGERPRINT_DOMAIN, canonical_input};
+use pharmakos_proto::fingerprint::canonical_input;
 use pharmakos_proto::gp::api::v1::verify_plan::Depth;
 use pharmakos_proto::gp::v1::Playbook;
 use pharmakos_proto::json;
-use pharmakos_sim::encoding::{Enc, digest};
+use pharmakos_sim::encoding::Enc;
 
 use crate::scope::Scope;
 
@@ -117,37 +117,23 @@ pub fn report_hash(
 
 /// The plan fingerprint for a decoded playbook (decisions-log item 77).
 ///
+/// The arithmetic is the sim's: [`pharmakos_sim::hash::plan_fingerprint`],
 /// `xxh3-64( PLAN_FINGERPRINT_DOMAIN || canonical_json_bytes )` under the
-/// project's one seed, where the canonical bytes are the playbook's own
-/// canonical JSON with `meta.fingerprint` cleared — clearing it is what makes
-/// the fingerprint checkable, because recomputing over the file as it stands
-/// would hash the old fingerprint into the new one.
-///
-/// PLACEHOLDER: this rule folded into the sim as `hash::plan_fingerprint` — owner of crates/sim, S1.
-///
-/// `crates/proto/src/fingerprint.rs` records that T2 would add a function of
-/// exactly this shape to the sim so the arithmetic has one home. T2 shipped
-/// without it, and this crate is the first caller, so the rule is applied here
-/// over the sim's own [`digest`] — which is the same one hash function under the
-/// same one seed, so nothing is duplicated but the call. **Owner/T-lane:** fold
-/// this into the sim as `hash::plan_fingerprint` the next time `crates/sim` is
-/// open (S1 at the latest); the value must not move when it is folded, and the
-/// report goldens are what prove it did not.
+/// project's one seed, over the playbook's canonical JSON with
+/// `meta.fingerprint` cleared. It lived here until S1's `build` lane folded it
+/// into the sim's `hash` module beside the state hash (the register's S1-42),
+/// with its value unmoved: the sim's `the_plan_fingerprint_is_unmoved` holds
+/// it to the fingerprints this crate's report goldens carry. This reader keeps
+/// the verifier's own question, "is there a fingerprint", for its two callers.
 ///
 /// Returns `None` when the playbook cannot be written as canonical JSON, which
 /// for a message that has just been decoded from canonical JSON means the codec
-/// has lost a field it can read but not write.
+/// has lost a field it can read but not write
+/// ([`pharmakos_sim::hash::FingerprintError`]); `E0008` and the report then
+/// carry no fingerprint rather than a made-up one.
 #[must_use]
 pub fn plan_fingerprint(playbook: &Playbook) -> Option<u64> {
-    let canonical: Vec<u8> = canonical_input(playbook).ok()?;
-    let mut bytes = Vec::with_capacity(
-        PLAN_FINGERPRINT_DOMAIN
-            .len()
-            .saturating_add(canonical.len()),
-    );
-    bytes.extend_from_slice(PLAN_FINGERPRINT_DOMAIN);
-    bytes.extend_from_slice(&canonical);
-    Some(digest(&bytes))
+    pharmakos_sim::hash::plan_fingerprint(playbook).ok()
 }
 
 /// The canonical JSON of a playbook, for a caller that wants the bytes the

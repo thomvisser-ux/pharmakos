@@ -32,7 +32,7 @@
     "why": "A Build beacon at the edge of your core's sphere holds the heat vent nearest your core in its own.",
     "_status": {
       "phase": "lull",
-      "phase_remaining_ms": 300000,
+      "phase_remaining_ms": 600000,
       "segment_length_ms": 1000,
       "round": 1
     }

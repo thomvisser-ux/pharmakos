@@ -156,7 +156,9 @@ fn the_economy_reads_agree_with_the_settlement_ledgers_credit() {
                 .expect("a settled seat is seated");
             let place = ladder_place(&ladder, index).expect("a settled seat is on the ladder");
             assert_eq!(
-                bmi_for(&rules, place.rank, place.living).raw(),
+                bmi_for(&rules, place.rank, place.living)
+                    .unwrap_or_else(|error| panic!("a place on the ladder is paid: {error}"))
+                    .raw(),
                 *credit,
                 "round {round}, seat {seat}: the ladder read places it at {place:?}"
             );

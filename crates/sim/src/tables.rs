@@ -755,11 +755,143 @@ impl TargetKind {
     }
 }
 
+/// Quarter turns about the vertical axis, 0 to 3: a Build target's
+/// `rotation_quarter_turns` and the facing of the structure built for it.
+///
+/// An integer because the sim is integer-only: there are no free rotations and
+/// no angles in a playbook (AGENTS.md section 4.2). The type cannot hold a
+/// fourth turn, so a value past 3 is refused where it is read
+/// ([`QuarterTurns::new`]) rather than wrapped.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Default)]
+pub struct QuarterTurns(u8);
+
+impl QuarterTurns {
+    /// No turn: the facing a structure has when nothing chose one.
+    pub const NONE: QuarterTurns = QuarterTurns(0);
+
+    /// `turns` quarter turns, or `None` past three.
+    #[must_use]
+    pub const fn new(turns: u32) -> Option<QuarterTurns> {
+        match turns {
+            0 => Some(QuarterTurns(0)),
+            1 => Some(QuarterTurns(1)),
+            2 => Some(QuarterTurns(2)),
+            3 => Some(QuarterTurns(3)),
+            _ => None,
+        }
+    }
+
+    /// The count, 0 to 3, as the canonical encoding writes it.
+    #[must_use]
+    pub const fn raw(self) -> u8 {
+        self.0
+    }
+}
+
+/// Where a Build target sits in its beacon's build order, and how the
+/// structure built for it faces (spec section 6's Build row: "blueprint,
+/// anchor, rotation, order"; S1's plan, decision 5).
+///
+/// The mandate builds the highest-order affordable target first: the lowest
+/// `order`, ties by list position (`playbook.proto`'s `BuildTarget.order`).
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Default)]
+pub struct BuildOrder {
+    /// `BuildTarget.order`: lower builds first.
+    pub order: u32,
+    /// `BuildTarget.rotation_quarter_turns`.
+    pub rotation: QuarterTurns,
+}
+
+impl BuildOrder {
+    /// Order 0, no turn: what a protected area, a probe area and a fixture's
+    /// target carry.
+    pub const NONE: BuildOrder = BuildOrder {
+        order: 0,
+        rotation: QuarterTurns::NONE,
+    };
+}
+
+/// An area's footprint on the ground: every column from `min` to `max` in x
+/// and y, **both ends inclusive** -- the box a playbook's `Area` writes
+/// (`playbook.proto`: "a box is what the editor's drag-select produces and
+/// what an integer sim can test in three comparisons"), less its height.
+///
+/// A protected area and a probe area are tested on the **column**, whatever
+/// the height: a Build target stands on its column and a scout walks on the
+/// ground, so the box's `z` range decides nothing here (it only sets the
+/// height of the centre a scout walks to). The test is the box itself, four
+/// integer comparisons, so a column one step outside the box the author drew
+/// is outside the area (S1's `build` lane, from its review: a covering disc
+/// had protected ground the author never drew).
+///
+/// The type cannot hold an inside-out box: [`ColumnBox::new`] refuses one, as
+/// the verifier's E0406 does at plan time.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Default)]
+pub struct ColumnBox {
+    min: [i16; 2],
+    max: [i16; 2],
+}
+
+impl ColumnBox {
+    /// The columns from `min` to `max`, or `None` when `min` exceeds `max` on
+    /// either axis.
+    #[must_use]
+    pub const fn new(min: [i16; 2], max: [i16; 2]) -> Option<ColumnBox> {
+        let [lx, ly] = min;
+        let [hx, hy] = max;
+        if lx > hx || ly > hy {
+            return None;
+        }
+        Some(ColumnBox { min, max })
+    }
+
+    /// The lowest column, `[x, y]`.
+    #[must_use]
+    pub const fn min_column(self) -> [i16; 2] {
+        self.min
+    }
+
+    /// The highest column, `[x, y]`.
+    #[must_use]
+    pub const fn max_column(self) -> [i16; 2] {
+        self.max
+    }
+
+    /// Whether the column `(x, y)` lies inside the box, edges included.
+    #[must_use]
+    pub fn contains(self, x: i32, y: i32) -> bool {
+        let [lx, ly] = self.min;
+        let [hx, hy] = self.max;
+        i32::from(lx) <= x && x <= i32::from(hx) && i32::from(ly) <= y && y <= i32::from(hy)
+    }
+}
+
+/// Which list an area row belongs to: the two [`TargetKind`]s that are areas
+/// rather than points.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub enum AreaKind {
+    /// [`TargetKind::Protected`].
+    Protected,
+    /// [`TargetKind::Probe`].
+    Probe,
+}
+
+impl AreaKind {
+    /// The table kind the row is written under.
+    #[must_use]
+    pub const fn kind(self) -> TargetKind {
+        match self {
+            AreaKind::Protected => TargetKind::Protected,
+            AreaKind::Probe => TargetKind::Probe,
+        }
+    }
+}
+
 /// A beacon's mandate settings that are **lists**: Build targets, protected
 /// areas and Survey probe areas.
 ///
 /// One table rather than three, sorted by `(beacon, kind)`, because all three
-/// are the same shape — a place, a radius and a blueprint — and because a
+/// are the same shape — a place, a footprint and a blueprint — and because a
 /// mandate switch clears all of one beacon's rows at once (item 20).
 ///
 /// Hashed state: a target decides what a fabricator pays for and where a build
@@ -771,10 +903,12 @@ pub struct TargetTable {
     kind: Vec<u8>,
     blueprint: Vec<u8>,
     at: Vec<[Fx; 3]>,
-    radius: Vec<i32>,
+    area: Vec<ColumnBox>,
     built: Vec<u32>,
     feature: Vec<u32>,
     desc: Vec<u8>,
+    order: Vec<u32>,
+    rotation: Vec<u8>,
     capacity: u32,
 }
 
@@ -789,10 +923,12 @@ impl TargetTable {
             kind: Vec::with_capacity(n),
             blueprint: Vec::with_capacity(n),
             at: Vec::with_capacity(n),
-            radius: Vec::with_capacity(n),
+            area: Vec::with_capacity(n),
             built: Vec::with_capacity(n),
             feature: Vec::with_capacity(n),
             desc: Vec::with_capacity(n),
+            order: Vec::with_capacity(n),
+            rotation: Vec::with_capacity(n),
             capacity,
         }
     }
@@ -834,16 +970,19 @@ impl TargetTable {
         &self.blueprint
     }
 
-    /// The anchor column.
+    /// The anchor column: a Build target's place, or an area's centre (the
+    /// point a scout walks to).
     #[must_use]
     pub fn anchors(&self) -> &[[Fx; 3]] {
         &self.at
     }
 
-    /// The radius column, in whole voxels; zero for a point target.
+    /// The footprint column: an area row's [`ColumnBox`], the one test of
+    /// whether a column is inside it; [`ColumnBox::default`] on a Build row,
+    /// which is a point and has none.
     #[must_use]
-    pub fn radii(&self) -> &[i32] {
-        &self.radius
+    pub fn areas(&self) -> &[ColumnBox] {
+        &self.area
     }
 
     /// The structure realising each Build target, or [`BeaconId::NONE`]'s raw
@@ -895,62 +1034,104 @@ impl TargetTable {
         &self.desc
     }
 
-    /// Append one row, keeping the table in `(beacon, kind)` order.
+    /// Each Build target's place in its beacon's build order
+    /// ([`BuildOrder::order`]); zero on every other row. Hashed: it decides
+    /// which target the mandate pays for first.
+    #[must_use]
+    pub fn orders(&self) -> &[u32] {
+        &self.order
+    }
+
+    /// Each Build target's rotation, as [`QuarterTurns::raw`]; zero on every
+    /// other row. Hashed: the structure built for the target takes it.
+    #[must_use]
+    pub fn rotations(&self) -> &[u8] {
+        &self.rotation
+    }
+
+    /// Append one Build target written as a fixed voxel, keeping the table in
+    /// `(beacon, kind)` order, at order 0 with no turn ([`BuildOrder::NONE`]).
     ///
-    /// `false` when the table is full, which the caller reports as a step
-    /// failure rather than growing a column inside a tick.
-    pub fn add(
-        &mut self,
-        beacon: BeaconId,
-        kind: TargetKind,
-        blueprint: u8,
-        at: [Fx; 3],
-        radius: i32,
-    ) -> bool {
+    /// `false` when the table is full: the table never grows a column inside
+    /// a tick.
+    pub fn add(&mut self, beacon: BeaconId, blueprint: u8, at: [Fx; 3]) -> bool {
         self.add_bound(
             beacon,
-            kind,
+            TargetKind::Build,
             blueprint,
             at,
-            radius,
+            ColumnBox::default(),
             (u32::MAX, crate::targeting::DESCRIPTION_VOXEL),
+            BuildOrder::NONE,
         )
     }
 
-    /// [`TargetTable::add`], for a Build target written through `on`: `bound`
-    /// is the feature it is bound to and how it was written.
+    /// Append one area row -- a protected area or a probe area -- with its
+    /// `centre` and its footprint, keeping the table in `(beacon, kind)` order.
+    ///
+    /// `false` when the table is full, for the reason [`TargetTable::add`]
+    /// gives.
+    pub fn add_area(
+        &mut self,
+        beacon: BeaconId,
+        kind: AreaKind,
+        centre: [Fx; 3],
+        area: ColumnBox,
+    ) -> bool {
+        self.add_bound(
+            beacon,
+            kind.kind(),
+            0,
+            centre,
+            area,
+            (u32::MAX, crate::targeting::DESCRIPTION_VOXEL),
+            BuildOrder::NONE,
+        )
+    }
+
+    /// The one writer of a row: [`TargetTable::add`] and
+    /// [`TargetTable::add_area`] go through it, and so does a Build target
+    /// with its place in the build order and its rotation, and -- for one
+    /// written through `on` -- `bound`, the feature it is bound to and how it
+    /// was written. `area` is the row's footprint, [`ColumnBox::default`] on a
+    /// Build row.
+    ///
+    /// A row goes after every row of its `(beacon, kind)`, so a beacon's
+    /// targets keep their list position, which breaks a tie of `order`.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one argument per column a row writes, as `StructureTable::push`; a parameter struct would be built at its callers only to be taken apart here"
+    )]
     pub fn add_bound(
         &mut self,
         beacon: BeaconId,
         kind: TargetKind,
         blueprint: u8,
         at: [Fx; 3],
-        radius: i32,
+        area: ColumnBox,
         bound: (u32, u8),
+        build: BuildOrder,
     ) -> bool {
         if self.count >= self.capacity {
             return false;
         }
         let key = (beacon.raw(), kind.id());
-        let mut slot: usize = 0;
-        while slot < self.beacon.len() {
-            let here = (
-                self.beacon.get(slot).copied().unwrap_or(0),
-                self.kind.get(slot).copied().unwrap_or(0),
-            );
-            if here > key {
-                break;
-            }
-            slot = slot.saturating_add(1);
-        }
+        let slot = self
+            .beacon
+            .iter()
+            .zip(&self.kind)
+            .position(|(here, of)| (*here, *of) > key)
+            .unwrap_or(self.beacon.len());
         self.beacon.insert(slot, beacon.raw());
         self.kind.insert(slot, kind.id());
         self.blueprint.insert(slot, blueprint);
         self.at.insert(slot, at);
-        self.radius.insert(slot, radius);
+        self.area.insert(slot, area);
         self.built.insert(slot, BeaconId::NONE.raw());
         self.feature.insert(slot, bound.0);
         self.desc.insert(slot, bound.1);
+        self.order.insert(slot, build.order);
+        self.rotation.insert(slot, build.rotation.raw());
         self.count = self.count.saturating_add(1);
         true
     }
@@ -964,10 +1145,12 @@ impl TargetTable {
         self.kind.remove(slot);
         self.blueprint.remove(slot);
         self.at.remove(slot);
-        self.radius.remove(slot);
+        self.area.remove(slot);
         self.built.remove(slot);
         self.feature.remove(slot);
         self.desc.remove(slot);
+        self.order.remove(slot);
+        self.rotation.remove(slot);
         self.count = self.count.saturating_sub(1);
     }
 
@@ -995,10 +1178,19 @@ impl TargetTable {
         if columns.kind.len() != n
             || columns.blueprint.len() != n
             || columns.at.len() != n
-            || columns.radius.len() != n
+            || columns.area.len() != n
             || columns.built.len() != n
             || columns.feature.len() != n
             || columns.desc.len() != n
+            || columns.order.len() != n
+            || columns.rotation.len() != n
+        {
+            return false;
+        }
+        if !columns
+            .rotation
+            .iter()
+            .all(|turns| QuarterTurns::new(u32::from(*turns)).is_some())
         {
             return false;
         }
@@ -1028,10 +1220,12 @@ impl TargetTable {
         self.kind = columns.kind;
         self.blueprint = columns.blueprint;
         self.at = columns.at;
-        self.radius = columns.radius;
+        self.area = columns.area;
         self.built = columns.built;
         self.feature = columns.feature;
         self.desc = columns.desc;
+        self.order = columns.order;
+        self.rotation = columns.rotation;
         true
     }
 }
@@ -1048,14 +1242,18 @@ pub struct TargetColumns {
     pub blueprint: Vec<u8>,
     /// Anchors.
     pub at: Vec<[Fx; 3]>,
-    /// Radii in whole voxels.
-    pub radius: Vec<i32>,
+    /// Each area row's footprint; [`ColumnBox::default`] on a Build row.
+    pub area: Vec<ColumnBox>,
     /// The structure realising each Build target.
     pub built: Vec<u32>,
     /// The feature each Build target is bound to.
     pub feature: Vec<u32>,
     /// How each Build target was written.
     pub desc: Vec<u8>,
+    /// Each Build target's place in the build order.
+    pub order: Vec<u32>,
+    /// Each Build target's rotation, 0 to 3.
+    pub rotation: Vec<u8>,
 }
 
 /// What one seat remembers seeing, with the tick it was seen at (spec section
@@ -2204,6 +2402,8 @@ pub struct StructureColumns {
     pub home: Vec<u32>,
     /// Whether each structure is still going up.
     pub building: Vec<bool>,
+    /// Each structure's rotation, 0 to 3 ([`QuarterTurns::raw`]).
+    pub rotation: Vec<u8>,
 }
 
 /// Beacons, structure-of-arrays.
@@ -2645,6 +2845,7 @@ pub struct StructureTable {
     hp: Vec<Hp>,
     home: Vec<u32>,
     building: Vec<bool>,
+    rotation: Vec<u8>,
 }
 
 impl StructureTable {
@@ -2661,6 +2862,7 @@ impl StructureTable {
             hp: Vec::with_capacity(n),
             home: Vec::with_capacity(n),
             building: Vec::with_capacity(n),
+            rotation: Vec::with_capacity(n),
         }
     }
 
@@ -2675,6 +2877,7 @@ impl StructureTable {
         self.hp.reserve(n);
         self.home.reserve(n);
         self.building.reserve(n);
+        self.rotation.reserve(n);
     }
 
     /// Append one structure.
@@ -2684,6 +2887,10 @@ impl StructureTable {
     /// the ground at one hit point with the flag set, and a build drone raises
     /// it. It supplies nothing, draws nothing and has no capability until the
     /// flag clears at full hit points.
+    ///
+    /// `rotation` is the facing the Build target that paid for it chose
+    /// (spec section 6's Build row); [`QuarterTurns::NONE`] for one that was
+    /// not built for a target.
     #[allow(
         clippy::too_many_arguments,
         reason = "one argument per column, as `UnitTable::push` above; the same reasoning applies"
@@ -2697,6 +2904,7 @@ impl StructureTable {
         hp: Hp,
         home: BeaconId,
         building: bool,
+        rotation: QuarterTurns,
     ) {
         self.id.push(id.raw());
         self.seat.push(seat.raw());
@@ -2705,6 +2913,7 @@ impl StructureTable {
         self.hp.push(hp);
         self.home.push(home.raw());
         self.building.push(building);
+        self.rotation.push(rotation.raw());
         self.count = self.count.saturating_add(1);
     }
 
@@ -2773,6 +2982,13 @@ impl StructureTable {
         &self.building
     }
 
+    /// The rotation column, as [`QuarterTurns::raw`]: the facing the Build
+    /// target that paid for each structure chose. Hashed and snapshotted.
+    #[must_use]
+    pub fn rotations(&self) -> &[u8] {
+        &self.rotation
+    }
+
     /// The under-construction column, to write into. The build program clears
     /// it at full hit points.
     pub fn building_mut(&mut self) -> &mut [bool] {
@@ -2805,6 +3021,14 @@ impl StructureTable {
             || columns.hp.len() != n
             || columns.home.len() != n
             || columns.building.len() != n
+            || columns.rotation.len() != n
+        {
+            return false;
+        }
+        if !columns
+            .rotation
+            .iter()
+            .all(|turns| QuarterTurns::new(u32::from(*turns)).is_some())
         {
             return false;
         }
@@ -2819,6 +3043,7 @@ impl StructureTable {
         self.hp = columns.hp;
         self.home = columns.home;
         self.building = columns.building;
+        self.rotation = columns.rotation;
         true
     }
 }

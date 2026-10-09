@@ -1160,7 +1160,8 @@ mod tests {
             beacon,
             StructureKind::Generator.id(),
             lost_at,
-            (lost_id, desc)
+            (lost_id, desc),
+            crate::tables::BuildOrder::NONE,
         ));
         let footprint = world
             .features()

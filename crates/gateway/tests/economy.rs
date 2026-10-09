@@ -378,13 +378,22 @@ fn many_scouts(scouts: u64) -> String {
     )
 }
 
+/// Review A of `econ` found that a seal whose projection leaves the sim's
+/// `$`/kW types or the forecast's int32 made the seat's own forecast answer
+/// INTERNAL; its door (`seal_commitment`, decisions-log item 135 (2) (d))
+/// refused such a seal. Since S1's `build` lane the sim's own compile refuses
+/// the only route this playbook found there -- a `scout_count` past the byte a
+/// beacon's column holds, which the sim used to clamp to 255 (decisions-log
+/// item 133 (5)) -- so these seals are refused one door earlier, by the
+/// compile, still `INVALID_ARGUMENT`, and the forecast still answers. The
+/// price door stands behind it as defence in depth.
 #[test]
-fn a_seal_that_does_not_price_is_refused_at_the_door_and_the_forecast_still_answers() {
+fn a_seal_that_does_not_price_is_refused_and_the_forecast_still_answers() {
     let mut surface = support::hosted(2, SEGMENT_MS, 3);
     let token = seat_token(&mut surface, 0);
     let mut left = FIRST_LULL_MS;
-    // 3e9 scouts: the draw leaves the sim's kW type. 3e8: the spend fits `$`
-    // and is past the forecast's int32.
+    // 3e9 scouts: the draw would leave the sim's kW type. 3e8: the spend
+    // would fit `$` and be past the forecast's int32. Both are past a byte.
     for scouts in [3_000_000_000_u64, 300_000_000] {
         let playbook = many_scouts(scouts);
         let verified = result(
@@ -422,8 +431,8 @@ fn a_seal_that_does_not_price_is_refused_at_the_door_and_the_forecast_still_answ
             .map(|message| format!("{message:?}"))
             .unwrap_or_default();
         assert!(
-            message.contains("cannot price its seal"),
-            "the price door refused it, not the compile: {message}"
+            message.contains("scout_count"),
+            "the sim's compile refused the count a beacon cannot hold: {message}"
         );
         let forecast = result(
             &call_in_lull(
@@ -610,7 +619,9 @@ fn the_band_and_the_next_bmi_are_the_sims_reads_and_a_push_that_spends_nothing_s
                 "round {round}, seat {raw}"
             );
             assert_eq!(
-                bmi_for(&rules, place.rank, place.living).raw(),
+                bmi_for(&rules, place.rank, place.living)
+                    .expect("a place on the ladder is paid")
+                    .raw(),
                 *credited,
                 "round {round}, seat {raw}: the band read places it where the Ledger paid it"
             );

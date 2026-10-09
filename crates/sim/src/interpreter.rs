@@ -94,6 +94,7 @@ use crate::features::FeatureKind;
 use crate::math::quantity::Ms;
 use crate::rules::RulesTable;
 use crate::seams::MandateKind;
+use crate::tables::{BuildOrder, ColumnBox, QuarterTurns};
 use pharmakos_proto::gp;
 
 pub use crate::targeting::FeatureSpec;
@@ -254,8 +255,9 @@ pub enum BeaconSpec {
 /// A place, fixed or late-bound.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Place {
-    /// Whole voxel coordinates, as a playbook writes them.
-    Voxel([i32; 3]),
+    /// Whole voxel coordinates, as a playbook writes them: inside the map and
+    /// a voxel coordinate on every axis, which [`Plan::compile`] checks.
+    Voxel([i16; 3]),
     /// The anchor of whichever beacon the selector picks.
     Beacon(BeaconSpec),
     /// `covering`: a site whose sphere holds a feature, found by
@@ -268,8 +270,9 @@ pub enum Place {
 /// (`docs/design/targeting.md`, "Sites").
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Anchor {
-    /// Whole voxel coordinates, as a playbook writes them.
-    Voxel([i32; 3]),
+    /// Whole voxel coordinates, as a playbook writes them, checked as
+    /// [`Place::Voxel`]'s are.
+    Voxel([i16; 3]),
     /// `on` a feature: its `on` column, chosen when the step starts
     /// ([`crate::targeting::on_vent`]).
     On(FeatureSpec),
@@ -287,8 +290,8 @@ impl Anchor {
 /// through `on`, which is keyed by its feature -- the feature, by name.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Removal {
-    /// The target anchored at this voxel.
-    Voxel([i32; 3]),
+    /// The target anchored at this voxel, checked as [`Place::Voxel`]'s are.
+    Voxel([i16; 3]),
     /// The target bound to this feature (`on {feature_id}`).
     Feature {
         /// The kind the name spells.
@@ -296,6 +299,123 @@ pub enum Removal {
         /// The anchor column the name spells.
         anchor: [i32; 2],
     },
+}
+
+/// One Build target as a row writes it: its blueprint, its anchor, and its
+/// place in the build order with its rotation (spec section 6's Build row:
+/// "blueprint, anchor, rotation, order"; S1's plan, decision 5).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Target {
+    /// The blueprint, as a [`crate::tables::StructureKind::id`].
+    pub blueprint: u8,
+    /// Where it goes.
+    pub anchor: Anchor,
+    /// Its place in the build order (lower first, ties by list position) and
+    /// the rotation the structure built for it takes.
+    pub build: BuildOrder,
+}
+
+/// Spec section 5's rate card, read out of the rules table **once, at the
+/// seal**: every interface time a visit or a deploy charges.
+///
+/// The rows are tuning data (AGENTS.md section 12) and live in the table;
+/// [`Plan::compile`] reads them with the playbook, refuses a table that lacks
+/// the block or carries a negative time, prices every row it compiles, and
+/// keeps both in the plan. A plan is an input compiled once from the playbook
+/// and the rules table (the sim is a pure function of the two), so nothing in
+/// a tick reads `interface_times.*` again, and nothing reads it as zero when
+/// the block is missing (S1's `build` lane; decisions-log item 133 (5)).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct InterfaceTimes {
+    visit_handshake: i32,
+    set_priority: i32,
+    edit_settings_base: i32,
+    edit_settings_per_field: i32,
+    edit_settings_max: i32,
+    build_target: i32,
+    switch_mandate: i32,
+    recycle: i32,
+    place_beacon_deploy: i32,
+}
+
+impl InterfaceTimes {
+    /// Read the rate card from `rules`.
+    ///
+    /// # Errors
+    ///
+    /// [`PlanError::MissingBlock`] when the table has no `interface_times`
+    /// block (proto3 cannot tell an absent block from one of zeroes, and a
+    /// table of zeroes would make every visit free), and
+    /// [`PlanError::NegativeRate`] naming a time below zero, which no duration
+    /// can be.
+    pub fn from_rules(rules: &RulesTable) -> Result<InterfaceTimes, PlanError> {
+        let times = rules
+            .message()
+            .interface_times
+            .as_ref()
+            .ok_or(PlanError::MissingBlock("rules.interface_times"))?;
+        let rate = |field: &'static str, value: i32| -> Result<i32, PlanError> {
+            if value < 0 {
+                Err(PlanError::NegativeRate(field))
+            } else {
+                Ok(value)
+            }
+        };
+        Ok(InterfaceTimes {
+            visit_handshake: rate(
+                "interface_times.visit_handshake_ms",
+                times.visit_handshake_ms,
+            )?,
+            set_priority: rate("interface_times.set_priority_ms", times.set_priority_ms)?,
+            edit_settings_base: rate(
+                "interface_times.edit_settings_base_ms",
+                times.edit_settings_base_ms,
+            )?,
+            edit_settings_per_field: rate(
+                "interface_times.edit_settings_per_field_ms",
+                times.edit_settings_per_field_ms,
+            )?,
+            edit_settings_max: rate(
+                "interface_times.edit_settings_max_ms",
+                times.edit_settings_max_ms,
+            )?,
+            build_target: rate("interface_times.build_target_ms", times.build_target_ms)?,
+            switch_mandate: rate("interface_times.switch_mandate_ms", times.switch_mandate_ms)?,
+            recycle: rate("interface_times.recycle_ms", times.recycle_ms)?,
+            place_beacon_deploy: rate(
+                "interface_times.place_beacon_deploy_ms",
+                times.place_beacon_deploy_ms,
+            )?,
+        })
+    }
+
+    /// The visit handshake, paid once per visit to a beacon that is already
+    /// there (`interface_times.visit_handshake_ms`).
+    #[must_use]
+    pub const fn visit_handshake_ms(&self) -> i32 {
+        self.visit_handshake
+    }
+
+    /// The `place_beacon` deploy the commander stays for
+    /// (`interface_times.place_beacon_deploy_ms`).
+    #[must_use]
+    pub const fn place_beacon_deploy_ms(&self) -> i32 {
+        self.place_beacon_deploy
+    }
+
+    /// Editing `fields` settings fields: nothing for none, otherwise the base
+    /// plus one step per **extra** field, capped at the maximum (spec section
+    /// 5: "2 s + 0.5 s per extra field, max 6 s"). Exact in `i64`: every rate
+    /// is a non-negative `i32` and the count a `u32`, so the uncapped product
+    /// and sum fit.
+    fn edit_settings_ms(&self, fields: u32) -> i64 {
+        let Some(extra) = fields.checked_sub(1) else {
+            return 0;
+        };
+        let uncapped = i64::from(self.edit_settings_base)
+            + i64::from(self.edit_settings_per_field) * i64::from(extra);
+        uncapped.min(i64::from(self.edit_settings_max))
+    }
 }
 
 /// One on-site change (spec section 5's change list).
@@ -319,23 +439,21 @@ pub enum Row {
     /// A `set_mandate` row carries a whole `MandateSettings`, the writ **and**
     /// its settings, and since S1's `mine` lane the settings it carries are
     /// written too, starting from the defaults the switch leaves (decisions-log
-    /// item 131 (5): the skeleton kept the kind alone and dropped them, while
-    /// the verifier's I0003 already read such a row as starting from the
-    /// defaults). They are priced as the edit they are, on top of the switch,
-    /// which is how `plan-core` prices the row too -- except for Build targets:
-    /// this crate counts a non-empty target list as one settings field, where
-    /// `plan-core` charges `build_target_ms` per target and counts no field for
-    /// the list. That divergence predates the row (it is
-    /// `set_mandate_settings`'s too) and is the owner's reading to settle;
-    /// `plan-core`'s `count` carries the PLACEHOLDER.
+    /// item 131 (5)). They are priced as the edit they are, on top of the
+    /// switch, which is how the verifier prices the row too (S1's plan,
+    /// decision 15, brought to the sim by S1's `build` lane: the register's
+    /// S1-51).
     Mandate {
         /// The writ the beacon takes.
         kind: MandateKind,
         /// The settings the row writes after the switch: a [`Row::Settings`]
-        /// with at least one field, or `None` when it writes none.
+        /// that writes something -- a settings field or a Build target -- or
+        /// `None` when it writes nothing. A Build arm that holds only targets
+        /// writes them, and its `on` anchors are bound like any other row's.
         settings: Option<Box<Row>>,
     },
-    /// Edit mandate settings — base plus per extra field, capped.
+    /// Edit mandate settings — base plus per extra field, capped, and each
+    /// Build target at its own rate (spec section 5; decision 15).
     ///
     /// It edits *within the current mandate* (`playbook.proto`'s own wording)
     /// and never switches the writ: switching is [`Row::Mandate`], at
@@ -345,18 +463,24 @@ pub enum Row {
         /// time, where choosing the mandate *type* is free (spec section 5) and
         /// only the settings cost time; **not** written by a committed row.
         kind: Option<MandateKind>,
-        /// How many settings fields the row writes. The first costs the base
-        /// time and each further one the per-field time, capped at the maximum.
+        /// How many settings fields the row writes: each scalar field set to a
+        /// non-default value, and **each element** of a protected-area or
+        /// probe-area list (decision 15; the register's S1-23 and S1-51). The
+        /// first costs the base time and each further one the per-field time,
+        /// capped at the maximum. Build targets are not fields.
         fields: u32,
-        /// The Build mandate's target list: blueprint and anchor.
-        targets: Vec<(u8, Anchor)>,
-        /// The Build mandate's protected areas, as centre and radius in whole
-        /// voxels.
-        protected: Vec<([i32; 3], i32)>,
+        /// The Build mandate's target list, each target its own row of spec
+        /// section 5's table at `interface_times.build_target_ms`, outside
+        /// the edit's cap.
+        targets: Vec<Target>,
+        /// The Build mandate's protected areas, as the box's centre in whole
+        /// voxels and its footprint ([`crate::tables::ColumnBox`]).
+        protected: Vec<([i16; 3], ColumnBox)>,
         /// The Survey mandate's probe areas, same shape.
-        probes: Vec<([i32; 3], i32)>,
-        /// The Survey mandate's scout count.
-        scouts: u32,
+        probes: Vec<([i16; 3], ColumnBox)>,
+        /// The Survey mandate's scout count, which a beacon's column holds as
+        /// a byte; a larger count is refused at the seal.
+        scouts: u8,
         /// The Mine mandate's settings the row writes, each only when the row
         /// names it ([`crate::mining::MineEdit`]); `None` when the row carries
         /// no Mine arm.
@@ -376,11 +500,9 @@ pub enum Row {
     /// Add one target to the beacon's Build mandate —
     /// `interface_times.build_target_ms`.
     AddTarget {
-        /// The blueprint, as a [`crate::tables::StructureKind::id`].
-        blueprint: u8,
-        /// Where it goes. Must lie inside one of your own spheres, which the
-        /// interpreter tests when the row commits.
-        anchor: Anchor,
+        /// The target. Its anchor must lie inside one of your own spheres,
+        /// which the interpreter tests when the row commits.
+        target: Target,
     },
     /// Remove the Build target anchored at this place —
     /// `interface_times.build_target_ms`.
@@ -396,36 +518,58 @@ pub enum Row {
 }
 
 impl Row {
-    /// How long this row takes to commit, in game milliseconds, from
-    /// `interface_times.*`.
+    /// How long this row takes to commit, in game milliseconds, at spec
+    /// section 5's rates as `times` read them from the rules table: the same
+    /// pricing the verifier's `interface` module quotes (decision 15). A
+    /// settings edit is its fields at the edit rate, capped, **plus** each
+    /// Build target at `build_target_ms`; a switch is `switch_mandate_ms` plus
+    /// the edit it carries.
     ///
-    /// Read from the rules table on every commit rather than cached in the
-    /// compiled plan, because a tuning value is data and the table is the one
-    /// place it lives (AGENTS.md §12).
-    #[must_use]
-    pub fn duration_ms(&self, rules: &RulesTable) -> i32 {
-        let times = rules.message().interface_times.as_ref();
-        let get = |pick: fn(&gp::v1::rules_table::InterfaceTimes) -> i32| -> i32 {
-            times.map_or(0, pick)
-        };
-        match self {
+    /// [`Plan::compile`] prices every row once, with the plan's own rate card,
+    /// and the visit charges the price it kept.
+    ///
+    /// # Errors
+    ///
+    /// [`PlanError::RowTooLong`] when the row would take longer than a signed
+    /// 32-bit count of milliseconds, which is longer than any segment.
+    pub fn duration_ms(&self, times: &InterfaceTimes) -> Result<i32, PlanError> {
+        let ms: i64 = match self {
             Row::Mandate { settings, .. } => {
-                let switch = get(|t| t.switch_mandate_ms);
-                settings.as_ref().map_or(switch, |edit| {
-                    switch.saturating_add(edit.duration_ms(rules))
-                })
+                let edit = match settings {
+                    Some(edit) => i64::from(edit.duration_ms(times)?),
+                    None => 0,
+                };
+                i64::from(times.switch_mandate) + edit
             }
-            Row::Priority { .. } => get(|t| t.set_priority_ms),
-            Row::Recycle => get(|t| t.recycle_ms),
-            Row::AddTarget { .. } | Row::RemoveTarget { .. } => get(|t| t.build_target_ms),
-            Row::Settings { fields, .. } => {
-                let base = get(|t| t.edit_settings_base_ms);
-                let per = get(|t| t.edit_settings_per_field_ms);
-                let max = get(|t| t.edit_settings_max_ms);
-                let extra = i32::try_from(fields.saturating_sub(1)).unwrap_or(0);
-                let total = base.saturating_add(per.saturating_mul(extra));
-                if max > 0 { total.min(max) } else { total }
+            Row::Priority { .. } => i64::from(times.set_priority),
+            Row::Recycle => i64::from(times.recycle),
+            Row::AddTarget { .. } | Row::RemoveTarget { .. } => i64::from(times.build_target),
+            Row::Settings {
+                fields, targets, ..
+            } => {
+                let count = i64::try_from(targets.len()).map_err(|_| PlanError::RowTooLong)?;
+                i64::from(times.build_target)
+                    .checked_mul(count)
+                    .and_then(|each| each.checked_add(times.edit_settings_ms(*fields)))
+                    .ok_or(PlanError::RowTooLong)?
             }
+        };
+        i32::try_from(ms).map_err(|_| PlanError::RowTooLong)
+    }
+
+    /// Whether a [`Row::Settings`] writes anything: a settings field or a
+    /// Build target. Every other row writes what it names.
+    #[must_use]
+    pub fn writes(&self) -> bool {
+        match self {
+            Row::Settings {
+                fields, targets, ..
+            } => *fields > 0 || !targets.is_empty(),
+            Row::Mandate { .. }
+            | Row::Priority { .. }
+            | Row::Recycle
+            | Row::AddTarget { .. }
+            | Row::RemoveTarget { .. } => true,
         }
     }
 
@@ -434,10 +578,11 @@ impl Row {
     #[must_use]
     pub fn binding_slots(&self) -> usize {
         match self {
-            Row::AddTarget { anchor, .. } => usize::from(anchor.binds()),
-            Row::Settings { targets, .. } => {
-                targets.iter().filter(|(_, anchor)| anchor.binds()).count()
-            }
+            Row::AddTarget { target } => usize::from(target.anchor.binds()),
+            Row::Settings { targets, .. } => targets
+                .iter()
+                .filter(|target| target.anchor.binds())
+                .count(),
             Row::Mandate { settings, .. } => {
                 settings.as_ref().map_or(0, |edit| edit.binding_slots())
             }
@@ -475,6 +620,9 @@ pub enum Action {
         beacon: BeaconSpec,
         /// The rows, applied in order, each committing on its own.
         rows: Vec<Row>,
+        /// What each row of `rows` takes to commit, in game milliseconds,
+        /// priced at the seal ([`Row::duration_ms`]); one per row.
+        durations: Vec<i32>,
     },
     /// Place a beacon: `interface_times.place_beacon_deploy_ms` of deploy, then
     /// the initial settings at interface rates.
@@ -485,6 +633,9 @@ pub enum Action {
         mandate: MandateKind,
         /// The initial settings, as the interface rows they are.
         rows: Vec<Row>,
+        /// What each row of `rows` takes to commit, priced at the seal; one
+        /// per row.
+        durations: Vec<i32>,
         /// How many author tags the step carries.
         ///
         /// PLACEHOLDER: the tags themselves are not stored, because a beacon
@@ -639,6 +790,7 @@ pub struct Plan {
     fallback: Posture,
     max_deaths_before_fallback: u32,
     max_bindings: usize,
+    times: InterfaceTimes,
 }
 
 impl Plan {
@@ -673,6 +825,13 @@ impl Plan {
     #[must_use]
     pub const fn max_bindings(&self) -> usize {
         self.max_bindings
+    }
+
+    /// The rate card the plan was priced at, read from the rules table at the
+    /// seal: the handshake and the deploy a step charges.
+    #[must_use]
+    pub const fn interface_times(&self) -> &InterfaceTimes {
+        &self.times
     }
 
     /// Compile a decoded playbook, or say exactly what is wrong with it.
@@ -722,26 +881,25 @@ impl Plan {
         // Refused here, for the reason `pharmakos-verifier`'s `limits.rs`
         // refuses the same gap: a missing block is a broken table, not a table
         // of zeroes.
-        if rules.message().interface_times.is_none() {
-            return Err(PlanError::MissingBlock("rules.interface_times"));
-        }
-        if rules.message().verifier.is_none() {
-            return Err(PlanError::MissingBlock("rules.verifier"));
-        }
+        let times = InterfaceTimes::from_rules(rules)?;
+        let limits = Limits::from_rules(rules)?;
 
         let names = Names {
             labels: &declarative.route,
             handlers: &declarative.handlers,
             extent: rules.map_size_voxels(),
+            times,
         };
 
         let mut route: Vec<PlanStep> = Vec::with_capacity(declarative.route.len());
         for (index, step) in declarative.route.iter().enumerate() {
-            let at = u32::try_from(index).unwrap_or(u32::MAX);
+            let at = u32::try_from(index).map_err(|_| PlanError::TooManySteps {
+                found: declarative.route.len(),
+                limit: MAX_ROUTE_STEPS,
+            })?;
             route.push(compile_step(step, &names, Some(at))?);
         }
 
-        let limits = Limits::from_rules(rules);
         let mut handlers: Vec<Rule> = Vec::with_capacity(declarative.handlers.len());
         for handler in &declarative.handlers {
             handlers.push(compile_handler(handler, &names, limits)?);
@@ -785,6 +943,7 @@ impl Plan {
             fallback,
             max_deaths_before_fallback: on_death.max_deaths_before_fallback,
             max_bindings,
+            times,
         })
     }
 }
@@ -801,12 +960,19 @@ struct Limits {
 }
 
 impl Limits {
-    fn from_rules(rules: &RulesTable) -> Limits {
-        let verifier = rules.message().verifier.as_ref();
-        Limits {
-            cooldown_min_ms: verifier.map_or(0, |block| block.handler_cooldown_min_ms),
-            max_fires: verifier.map_or(0, |block| block.max_fires_max),
-        }
+    /// The two rows, refused when the `verifier` block is absent: proto3
+    /// cannot tell an absent block from one of zeroes, and a `max_fires_max`
+    /// of nought would refuse every handler ever written.
+    fn from_rules(rules: &RulesTable) -> Result<Limits, PlanError> {
+        let verifier = rules
+            .message()
+            .verifier
+            .as_ref()
+            .ok_or(PlanError::MissingBlock("rules.verifier"))?;
+        Ok(Limits {
+            cooldown_min_ms: verifier.handler_cooldown_min_ms,
+            max_fires: verifier.max_fires_max,
+        })
     }
 }
 
@@ -817,6 +983,8 @@ struct Names<'a> {
     handlers: &'a [gp::v1::Handler],
     /// `map.size_*` in voxels, from the rules table.
     extent: [i32; 3],
+    /// The rate card every row is priced at.
+    times: InterfaceTimes,
 }
 
 impl Names<'_> {
@@ -831,22 +999,35 @@ impl Names<'_> {
     /// verifier says the same thing with a diagnostic and a JSON Pointer
     /// (`E0402`); this is the sim's own door, for a plan that reached it by
     /// another road.
-    fn voxel(&self, voxel: &gp::v1::Voxel) -> Result<(), PlanError> {
-        for (axis, value) in [(0_usize, voxel.x), (1, voxel.y), (2, voxel.z)] {
-            let limit = self.extent.get(axis).copied().unwrap_or(0);
+    ///
+    /// A voxel inside the map is also a voxel coordinate (`i16`) on every
+    /// axis, or it is refused with [`PlanError::VoxelOutOfRange`]: the sim
+    /// stands a point on a voxel through a 16-bit coordinate, so a map wider
+    /// than that has places no playbook can name.
+    fn voxel(&self, voxel: &gp::v1::Voxel) -> Result<[i16; 3], PlanError> {
+        let [size_x, size_y, size_z] = self.extent;
+        let axis = |name: &'static str, value: i32, limit: i32| -> Result<i16, PlanError> {
             if value < 0 || value >= limit {
                 return Err(PlanError::VoxelOutOfMap {
-                    axis: match axis {
-                        0 => "x",
-                        1 => "y",
-                        _ => "z",
-                    },
+                    axis: name,
                     value,
                     limit,
                 });
             }
-        }
-        Ok(())
+            i16::try_from(value).map_err(|_| PlanError::VoxelOutOfRange { axis: name, value })
+        };
+        Ok([
+            axis("x", voxel.x, size_x)?,
+            axis("y", voxel.y, size_y)?,
+            axis("z", voxel.z, size_z)?,
+        ])
+    }
+
+    /// Price `rows` at the plan's rate card, one duration per row.
+    fn price(&self, rows: &[Row]) -> Result<Vec<i32>, PlanError> {
+        rows.iter()
+            .map(|row| row.duration_ms(&self.times))
+            .collect()
     }
 
     /// The route index a label names.
@@ -970,7 +1151,12 @@ fn compile_action(step: &gp::v1::Step, names: &Names<'_>) -> Result<Action, Plan
             for row in &interface.rows {
                 rows.push(compile_row(row, names, false)?);
             }
-            Ok(Action::Interface { beacon, rows })
+            let durations = names.price(&rows)?;
+            Ok(Action::Interface {
+                beacon,
+                rows,
+                durations,
+            })
         }
         gp::v1::step::Kind::PlaceBeacon(place) => {
             let at = compile_place(place.at.as_ref(), names, true)?;
@@ -982,15 +1168,16 @@ fn compile_action(step: &gp::v1::Step, names: &Names<'_>) -> Result<Action, Plan
             let mut mandate = MandateKind::None;
             if let Some(initial) = place.initial.as_ref() {
                 if let Some(settings) = initial.mandate.as_ref() {
+                    // Choosing the mandate type is free at place_beacon time
+                    // (spec section 5): an initial `mandate` that names no arm
+                    // leaves the beacon on no writ, which is what proto3's
+                    // empty message says. Only the settings cost time, so a
+                    // row that writes nothing -- no field and no Build target
+                    // -- is not filed at all.
+                    mandate = mandate_of(settings).unwrap_or(MandateKind::None);
                     let row = compile_settings_row(settings, names, covering)?;
-                    if let Row::Settings { kind, fields, .. } = &row {
-                        mandate = kind.unwrap_or(MandateKind::None);
-                        // Choosing the mandate type is free at place_beacon
-                        // time (spec section 5); only the settings cost time,
-                        // so a row with no settings fields is not filed at all.
-                        if *fields > 0 {
-                            rows.push(row);
-                        }
+                    if row.writes() {
+                        rows.push(row);
                     }
                 }
                 if initial.priority != 0 {
@@ -999,10 +1186,12 @@ fn compile_action(step: &gp::v1::Step, names: &Names<'_>) -> Result<Action, Plan
                 }
             }
             let tags = u32::try_from(place.tags.len()).unwrap_or(u32::MAX);
+            let durations = names.price(&rows)?;
             Ok(Action::PlaceBeacon {
                 at,
                 mandate,
                 rows,
+                durations,
                 tags,
             })
         }
@@ -1051,8 +1240,9 @@ fn compile_row(
                 .target
                 .as_ref()
                 .ok_or(PlanError::MissingBlock("add_build_target.target"))?;
-            let (blueprint, anchor) = compile_build_target(target, names, covering)?;
-            Ok(Row::AddTarget { blueprint, anchor })
+            Ok(Row::AddTarget {
+                target: compile_build_target(target, names, covering)?,
+            })
         }
         gp::v1::interface_row::Row::RemoveBuildTarget(remove) => Ok(Row::RemoveTarget {
             anchor: compile_removal(remove.anchor.as_ref(), names)?,
@@ -1065,7 +1255,13 @@ fn compile_row(
 }
 
 /// The settings a `set_mandate` row writes after its switch, compiled as the
-/// settings edit they are; `None` when the row writes no settings field.
+/// settings edit they are; `None` when the row writes nothing.
+///
+/// **A Build arm that holds only targets still carries them** (decisions-log
+/// item 133 (5)): targets are not settings fields since decision 15 reached
+/// the sim, so "writes something" is a field **or** a target, and such a row
+/// carries a [`Row::Settings`] whose targets the step binds -- the reading the
+/// gateway's `resolve_playbook` holds the compiled plan to.
 ///
 /// An empty Defend or Attack arm writes nothing of its own: S2's settings are
 /// refused wherever they are written ([`mandate_fields`]), but a switch to an
@@ -1088,8 +1284,7 @@ fn compile_switch_settings(
         _ => false,
     };
     if empty_s2_arm {
-        let fields =
-            u32::from(settings.roe != 0).saturating_add(u32::from(settings.retreat_hp_pct != 0));
+        let fields = u32::from(settings.roe != 0) + u32::from(settings.retreat_hp_pct != 0);
         return Ok((fields > 0).then(|| {
             Box::new(Row::Settings {
                 kind: mandate_of(settings),
@@ -1103,11 +1298,7 @@ fn compile_switch_settings(
         }));
     }
     let row = compile_settings_row(settings, names, covering)?;
-    let fields = match &row {
-        Row::Settings { fields, .. } => *fields,
-        _ => 0,
-    };
-    Ok((fields > 0).then(|| Box::new(row)))
+    Ok(row.writes().then(|| Box::new(row)))
 }
 
 /// A Quartermaster priority's wire value, refused when it is one this build
@@ -1118,40 +1309,37 @@ fn compile_switch_settings(
 /// still paid `set_priority_ms` and reported a commit, for a priority nobody
 /// asked for.
 fn compile_priority(priority: i32) -> Result<u8, PlanError> {
-    match gp::v1::interface_row::QuartermasterPriority::try_from(priority) {
-        Ok(known) => Ok(u8::try_from(i32::from(known)).unwrap_or(0)),
-        Err(_) => Err(PlanError::UnknownEnum {
-            field: "set_priority",
-            value: priority,
-        }),
-    }
+    let unknown = PlanError::UnknownEnum {
+        field: "set_priority",
+        value: priority,
+    };
+    let known = gp::v1::interface_row::QuartermasterPriority::try_from(priority)
+        .map_err(|_| unknown.clone())?;
+    u8::try_from(i32::from(known)).map_err(|_| unknown)
 }
 
-/// One `set_mandate_settings` row: the writ it names, and how many settings
-/// fields it writes.
+/// One `set_mandate_settings` row: the writ it names, how many settings
+/// fields it writes, and the lists and values it writes.
 ///
 /// The field count is what spec section 5's "2 s + 0.5 s per extra field, max
 /// 6 s" is over, so it is counted here, once, where the schema says which
-/// fields there are.
+/// fields there are ([`mandate_fields`]); Build targets are counted apart, each
+/// its own row at `build_target_ms` (decision 15).
 fn compile_settings_row(
     settings: &gp::v1::MandateSettings,
     names: &Names<'_>,
     covering: bool,
 ) -> Result<Row, PlanError> {
-    let mut fields: u32 = 0;
-    if settings.roe != 0 {
-        fields = fields.saturating_add(1);
-    }
-    if settings.retreat_hp_pct != 0 {
-        fields = fields.saturating_add(1);
-    }
-    let mut targets: Vec<(u8, Anchor)> = Vec::new();
-    let mut protected: Vec<([i32; 3], i32)> = Vec::new();
-    let mut probes: Vec<([i32; 3], i32)> = Vec::new();
-    let mut scouts: u32 = 0;
+    let mut fields: u32 = u32::from(settings.roe != 0) + u32::from(settings.retreat_hp_pct != 0);
+    let mut targets: Vec<Target> = Vec::new();
+    let mut protected: Vec<([i16; 3], ColumnBox)> = Vec::new();
+    let mut probes: Vec<([i16; 3], ColumnBox)> = Vec::new();
+    let mut scouts: u8 = 0;
     let mut mine: Option<crate::mining::MineEdit> = None;
     if let Some(mandate) = settings.mandate.as_ref() {
-        fields = fields.saturating_add(mandate_fields(mandate)?);
+        fields = fields
+            .checked_add(mandate_fields(mandate)?)
+            .ok_or(PlanError::RowTooLong)?;
         match mandate {
             gp::v1::mandate_settings::Mandate::Build(build) => {
                 for target in &build.targets {
@@ -1165,7 +1353,11 @@ fn compile_settings_row(
                 for area in &survey.probe_areas {
                     probes.push(compile_area(area, names)?);
                 }
-                scouts = survey.scout_count;
+                scouts =
+                    u8::try_from(survey.scout_count).map_err(|_| PlanError::ScoutsOutOfRange {
+                        found: survey.scout_count,
+                        most: u8::MAX,
+                    })?;
             }
             gp::v1::mandate_settings::Mandate::Mine(settings) => {
                 mine = Some(crate::mining::MineEdit::of(settings).map_err(|value| {
@@ -1199,11 +1391,17 @@ fn compile_settings_row(
 /// than compiled to a structure this build cannot raise, so a playbook naming a
 /// capability structure fails loudly at the seal instead of silently building
 /// nothing (owner, at S4).
+///
+/// Its `order` and `rotation_quarter_turns` are kept (S1's plan, decision 5):
+/// the mandate builds the lowest order first, ties by list position, and the
+/// structure built for the target takes its rotation. A rotation past three
+/// quarter turns is refused ([`PlanError::RotationOutOfRange`]) rather than
+/// wrapped.
 fn compile_build_target(
     target: &gp::v1::BuildTarget,
     names: &Names<'_>,
     covering: bool,
-) -> Result<(u8, Anchor), PlanError> {
+) -> Result<Target, PlanError> {
     let blueprint = match target.blueprint_id.as_str() {
         "generator" => crate::tables::StructureKind::Generator.id(),
         _ => {
@@ -1213,22 +1411,35 @@ fn compile_build_target(
             });
         }
     };
-    Ok((
+    let rotation =
+        QuarterTurns::new(target.rotation_quarter_turns).ok_or(PlanError::RotationOutOfRange {
+            found: target.rotation_quarter_turns,
+        })?;
+    Ok(Target {
         blueprint,
-        compile_anchor(target.anchor.as_ref(), names, covering)?,
-    ))
+        anchor: compile_anchor(target.anchor.as_ref(), names, covering)?,
+        build: BuildOrder {
+            order: target.order,
+            rotation,
+        },
+    })
 }
 
-/// One area, as its centre and a radius in whole voxels.
+/// One area, as its centre in whole voxels and its footprint.
 ///
-/// The schema's `Area` is an axis-aligned box; the sim keeps a centre and a
-/// radius because every test it does on an area is a range check, and a range
-/// check in squared distance is the one form that needs no square root
-/// (AGENTS.md section 4.2). The radius is the box's **half-diagonal in x and
-/// y**, rounded up, so the circle covers the box rather than being covered by
-/// it - over-covering a protected area protects a little more ground, which is
-/// the safe direction.
-fn compile_area(area: &gp::v1::Area, names: &Names<'_>) -> Result<([i32; 3], i32), PlanError> {
+/// The schema's `Area` is an axis-aligned box, and the sim keeps the box: an
+/// inside test is four integer comparisons on a column
+/// ([`ColumnBox::contains`]), with no square root and no rounding, so the
+/// ground an area covers is exactly the ground the author drew. (Before S1's
+/// `build` lane's review the sim kept a centre and a covering radius, which
+/// protected -- and, for a probe area, counted as visited -- columns outside
+/// the box.) The centre, each axis's midpoint rounded down, is the point a
+/// scout walks to. An inside-out box is refused
+/// ([`PlanError::AreaInsideOut`]), as the verifier's E0406 refuses it.
+fn compile_area(
+    area: &gp::v1::Area,
+    names: &Names<'_>,
+) -> Result<([i16; 3], ColumnBox), PlanError> {
     let min = area
         .min
         .as_ref()
@@ -1237,26 +1448,22 @@ fn compile_area(area: &gp::v1::Area, names: &Names<'_>) -> Result<([i32; 3], i32
         .max
         .as_ref()
         .ok_or(PlanError::MissingBlock("area.max"))?;
-    names.voxel(min)?;
-    names.voxel(max)?;
-    let centre = [
-        min.x.saturating_add(max.x).div_euclid(2),
-        min.y.saturating_add(max.y).div_euclid(2),
-        min.z.saturating_add(max.z).div_euclid(2),
-    ];
-    let half_x = max
-        .x
-        .saturating_sub(min.x)
-        .abs()
-        .saturating_add(1)
-        .div_euclid(2);
-    let half_y = max
-        .y
-        .saturating_sub(min.y)
-        .abs()
-        .saturating_add(1)
-        .div_euclid(2);
-    Ok((centre, half_x.max(half_y)))
+    let low = names.voxel(min)?;
+    let high = names.voxel(max)?;
+    // Each axis's centre from two voxel coordinates: both fit an `i16`, so
+    // their sum fits an `i32` exactly and the centre lies between them.
+    let centre_of = |a: i16, b: i16| -> Result<i16, PlanError> {
+        let mid = (i32::from(a) + i32::from(b)).div_euclid(2);
+        i16::try_from(mid).map_err(|_| PlanError::VoxelOutOfRange {
+            axis: "area",
+            value: mid,
+        })
+    };
+    let [lx, ly, lz] = low;
+    let [hx, hy, hz] = high;
+    let footprint = ColumnBox::new([lx, ly], [hx, hy]).ok_or(PlanError::AreaInsideOut)?;
+    let centre = [centre_of(lx, hx)?, centre_of(ly, hy)?, centre_of(lz, hz)?];
+    Ok((centre, footprint))
 }
 
 /// A Build target's anchor: a fixed voxel, or `on` a vent.
@@ -1274,10 +1481,7 @@ fn compile_anchor(
 ) -> Result<Anchor, PlanError> {
     let location = place.ok_or(PlanError::MissingBlock("location"))?;
     match location.place.as_ref() {
-        Some(gp::v1::location::Place::Voxel(voxel)) => {
-            names.voxel(voxel)?;
-            Ok(Anchor::Voxel([voxel.x, voxel.y, voxel.z]))
-        }
+        Some(gp::v1::location::Place::Voxel(voxel)) => Ok(Anchor::Voxel(names.voxel(voxel)?)),
         Some(gp::v1::location::Place::On(reference)) => Ok(Anchor::On(compile_feature_ref(
             reference,
             FeatureSite::On { covering },
@@ -1305,10 +1509,7 @@ fn compile_removal(
 ) -> Result<Removal, PlanError> {
     let location = place.ok_or(PlanError::MissingBlock("location"))?;
     match location.place.as_ref() {
-        Some(gp::v1::location::Place::Voxel(voxel)) => {
-            names.voxel(voxel)?;
-            Ok(Removal::Voxel([voxel.x, voxel.y, voxel.z]))
-        }
+        Some(gp::v1::location::Place::Voxel(voxel)) => Ok(Removal::Voxel(names.voxel(voxel)?)),
         Some(gp::v1::location::Place::On(reference)) => match reference.r#ref.as_ref() {
             Some(gp::v1::feature_ref::Ref::FeatureId(id)) => {
                 let (kind, anchor) = crate::features::parse_feature_name(id)
@@ -1432,59 +1633,43 @@ fn compile_feature_ref(
     }
 }
 
-/// How many settings fields one mandate's own block writes.
+/// How many settings fields one mandate's own block writes, for spec section
+/// 5's edit rate.
 ///
-/// Build's target list and Survey's probe areas are the two that need a stage
-/// that does not exist, and both are refused rather than counted and dropped.
+/// **Each element of a list is one field** -- a protected area, a probe area
+/// -- and the edit's cap still bounds the whole (S1's plan, decision 15; the
+/// register's S1-23 and S1-51). **A Build target is not a field**: spec
+/// section 5 gives targets a row of their own at `build_target_ms` each,
+/// which [`Row::duration_ms`] charges apart, outside the cap. A scalar counts
+/// when it is set to a non-default value, which is what proto3's canonical
+/// JSON keeps and so what the author wrote. This is the verifier's `count`,
+/// field for field, so the Push charges a visit what the editor quotes.
 fn mandate_fields(mandate: &gp::v1::mandate_settings::Mandate) -> Result<u32, PlanError> {
+    let each = |list: usize| u32::try_from(list).map_err(|_| PlanError::RowTooLong);
+    let set = |written: bool| u32::from(written);
+    let sum = |parts: &[u32]| {
+        parts
+            .iter()
+            .try_fold(0_u32, |total, part| total.checked_add(*part))
+            .ok_or(PlanError::RowTooLong)
+    };
     match mandate {
-        gp::v1::mandate_settings::Mandate::Build(build) => {
-            // Targets and protected areas are **lists**, and spec section 5
-            // prices an edit by the number of fields it writes rather than by
-            // the number of entries in a list: a target list is one field
-            // however long it is, which is also what keeps a long list from
-            // buying more interface time than the cap allows.
-            let mut fields: u32 = 0;
-            if !build.targets.is_empty() {
-                fields = fields.saturating_add(1);
-            }
-            if !build.protected_areas.is_empty() {
-                fields = fields.saturating_add(1);
-            }
-            if build.repair_threshold_pct != 0 {
-                fields = fields.saturating_add(1);
-            }
-            if build.rebuild_destroyed {
-                fields = fields.saturating_add(1);
-            }
-            if build.terraform != 0 {
-                fields = fields.saturating_add(1);
-            }
-            Ok(fields)
-        }
-        gp::v1::mandate_settings::Mandate::Survey(survey) => {
-            let mut fields = u32::from(survey.scout_count != 0);
-            if !survey.probe_areas.is_empty() {
-                fields = fields.saturating_add(1);
-            }
-            Ok(fields)
-        }
-        gp::v1::mandate_settings::Mandate::Mine(mine) => {
-            let mut fields: u32 = 0;
-            if mine.dig_max_depth != 0 {
-                fields = fields.saturating_add(1);
-            }
-            if mine.flee_on_threat {
-                fields = fields.saturating_add(1);
-            }
-            if mine.seam_choice != 0 {
-                fields = fields.saturating_add(1);
-            }
-            if mine.pillar_spacing != 0 {
-                fields = fields.saturating_add(1);
-            }
-            Ok(fields)
-        }
+        gp::v1::mandate_settings::Mandate::Build(build) => sum(&[
+            set(build.repair_threshold_pct != 0),
+            set(build.rebuild_destroyed),
+            set(build.terraform != 0),
+            each(build.protected_areas.len())?,
+        ]),
+        gp::v1::mandate_settings::Mandate::Survey(survey) => sum(&[
+            set(survey.scout_count != 0),
+            each(survey.probe_areas.len())?,
+        ]),
+        gp::v1::mandate_settings::Mandate::Mine(mine) => sum(&[
+            set(mine.dig_max_depth != 0),
+            set(mine.flee_on_threat),
+            set(mine.seam_choice != 0),
+            set(mine.pillar_spacing != 0),
+        ]),
         gp::v1::mandate_settings::Mandate::Defend(_) => Err(PlanError::NotAtThisStage {
             construct: "Defend mandate settings",
             stage: "S2 (destruction and combat)",
@@ -1527,10 +1712,7 @@ fn compile_place(
 ) -> Result<Place, PlanError> {
     let location = place.ok_or(PlanError::MissingBlock("location"))?;
     match location.place.as_ref() {
-        Some(gp::v1::location::Place::Voxel(voxel)) => {
-            names.voxel(voxel)?;
-            Ok(Place::Voxel([voxel.x, voxel.y, voxel.z]))
-        }
+        Some(gp::v1::location::Place::Voxel(voxel)) => Ok(Place::Voxel(names.voxel(voxel)?)),
         Some(gp::v1::location::Place::BeaconAnchor(reference)) => {
             Ok(Place::Beacon(compile_beacon_ref(Some(reference), names)?))
         }
@@ -1601,6 +1783,7 @@ pub fn beacon_spec_of(
         labels: &[],
         handlers: &[],
         extent: rules.map_size_voxels(),
+        times: InterfaceTimes::from_rules(rules)?,
     };
     compile_beacon_ref(Some(reference), &names)
 }
@@ -1884,6 +2067,35 @@ pub enum PlanError {
         /// The route index it names.
         to: u32,
     },
+    /// A voxel inside the map is not a voxel coordinate (`i16`) on some axis:
+    /// a map wider than the sim's coordinates has places no playbook can name.
+    VoxelOutOfRange {
+        /// `"x"`, `"y"`, `"z"`, or `"area"` for an area too wide to cover.
+        axis: &'static str,
+        /// What the playbook wrote.
+        value: i32,
+    },
+    /// The rules table carries a negative interface time, which no duration
+    /// can be.
+    NegativeRate(&'static str),
+    /// A row would take longer than a signed 32-bit count of game
+    /// milliseconds to commit, which is longer than any segment.
+    RowTooLong,
+    /// A Survey `scout_count` past what a beacon's column holds.
+    ScoutsOutOfRange {
+        /// What the playbook wrote.
+        found: u32,
+        /// The most a beacon holds.
+        most: u8,
+    },
+    /// A Build target's `rotation_quarter_turns` past three.
+    RotationOutOfRange {
+        /// What the playbook wrote.
+        found: u32,
+    },
+    /// An area whose `min` exceeds its `max` in x or y: a box that holds no
+    /// column (the verifier's E0406 at plan time).
+    AreaInsideOut,
     /// A voxel names a place outside the map (`map.size_*`).
     VoxelOutOfMap {
         /// `"x"`, `"y"` or `"z"`.
@@ -2013,6 +2225,29 @@ impl core::fmt::Display for PlanError {
                 "a voxel's {axis} of {value} is outside the map, which runs 0 to {}",
                 limit.saturating_sub(1)
             ),
+            PlanError::VoxelOutOfRange { axis, value } => write!(
+                f,
+                "a voxel's {axis} of {value} is past the sim's voxel coordinates"
+            ),
+            PlanError::NegativeRate(field) => write!(
+                f,
+                "the rules table's `{field}` is negative; an interface time is a duration"
+            ),
+            PlanError::RowTooLong => write!(
+                f,
+                "a row would take longer to commit than a signed 32-bit count of milliseconds"
+            ),
+            PlanError::ScoutsOutOfRange { found, most } => write!(
+                f,
+                "a `scout_count` of {found} is past the {most} a beacon holds"
+            ),
+            PlanError::RotationOutOfRange { found } => write!(
+                f,
+                "a `rotation_quarter_turns` of {found} is past three quarter turns"
+            ),
+            PlanError::AreaInsideOut => {
+                write!(f, "an area's `min` exceeds its `max` in x or y")
+            }
             PlanError::UnknownLabel(label) => {
                 write!(f, "`{label}` names no step in this playbook's route")
             }

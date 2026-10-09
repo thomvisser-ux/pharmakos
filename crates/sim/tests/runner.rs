@@ -570,6 +570,8 @@ fn a_beacon_death_ruins_the_structures_homed_to_it() {
     // standing, not going up, because what it asserts is what happens to a
     // finished building when the beacon it is homed to dies.
     saved.structure_building.push(0);
+    // S1's Build settings: a structure's rotation, here none.
+    saved.structure_rotation.push(0);
     runner
         .restore(&saved)
         .expect("the edited snapshot restores");

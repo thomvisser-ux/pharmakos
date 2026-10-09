@@ -352,3 +352,42 @@ fn the_quantities_say_what_they_do_at_the_limit() {
     assert_eq!(Tick::new(4).since(Tick::new(9)), 0, "saturates at zero");
     assert_eq!(Tick::new(9).since(Tick::new(4)), 5);
 }
+
+/// S1-42: the plan fingerprint moved into this crate's `hash` module with its
+/// value unmoved. Pinned against the fingerprints the committed verifier
+/// goldens carry for three of its cases (`tests/golden/verifier/*/
+/// expected.report.json`, base64 there, hex here), over the very bytes those
+/// cases verify: a fingerprint that moved would refuse every save and every
+/// report already written.
+#[test]
+fn the_plan_fingerprint_is_unmoved() {
+    use pharmakos_proto::gp::v1::Playbook;
+    use pharmakos_sim::hash::plan_fingerprint;
+    let cases = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("verifier")
+        .join("tests")
+        .join("cases");
+    for (case, pinned) in [
+        ("expand_east", 0xb4f7_b813_f481_07ad_u64),
+        ("budget_128", 0x8c85_6401_4267_efef),
+        ("cover_the_nearest_vent", 0xf936_18e4_e517_7bbd),
+    ] {
+        let text = std::fs::read_to_string(cases.join(format!("{case}.json")))
+            .unwrap_or_else(|error| panic!("{case}: the verifier's case file: {error}"));
+        let playbook: Playbook = pharmakos_proto::json::decode(&text)
+            .unwrap_or_else(|error| panic!("{case}: a playbook: {error}"));
+        assert_eq!(
+            plan_fingerprint(&playbook).map(hex),
+            Ok(hex(pinned)),
+            "{case}: the fingerprint the verifier golden carries"
+        );
+        // A stamped fingerprint is cleared before hashing, so stamping the
+        // file with any value leaves the fingerprint where it was.
+        let mut stamped = playbook.clone();
+        if let Some(meta) = stamped.meta.as_mut() {
+            meta.fingerprint = vec![0xff; 8];
+        }
+        assert_eq!(plan_fingerprint(&stamped), plan_fingerprint(&playbook));
+    }
+}

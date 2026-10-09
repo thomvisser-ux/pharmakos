@@ -590,11 +590,3 @@ fn octile(cardinal: i64, diagonal: i64, a: [Fx; 3], b: [Fx; 3]) -> i64 {
         .saturating_mul(long.saturating_sub(short))
         .saturating_add(diagonal.saturating_mul(short))
 }
-
-/// Whether two places are within `voxels` of each other, by squared distance.
-///
-/// Range checks use r², never a square root (AGENTS.md §4.2).
-pub(crate) fn within(a: [Fx; 3], b: [Fx; 3], voxels: i32) -> bool {
-    let radius = Fx::from_voxels(i16::try_from(voxels.max(0)).unwrap_or(i16::MAX));
-    crate::math::fixed::Sq::between(a, b) <= crate::math::fixed::Sq::of_radius(radius)
-}

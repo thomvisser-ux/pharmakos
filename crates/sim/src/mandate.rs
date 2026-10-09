@@ -101,8 +101,8 @@ impl Mandate for Build {
     fn request(&self, world: &World, beacon: BeaconId) -> Option<SpendRequest> {
         let seat = seat_of(world, beacon)?;
         // The highest-order affordable target that is unbuilt (spec section 6,
-        // the Build row). "Order" is the target list's own order, which is the
-        // order the author wrote and the order the table keeps.
+        // the Build row): the lowest `order`, ties by list position, among the
+        // targets the treasury covers ([`next_unpaid_target`]).
         if let Some(row) = next_unpaid_target(world, beacon) {
             let blueprint = world
                 .targets()
@@ -160,14 +160,7 @@ impl Mandate for Survey {
     fn request(&self, world: &World, beacon: BeaconId) -> Option<SpendRequest> {
         let seat = seat_of(world, beacon)?;
         let row = usize::try_from(beacon.raw()).ok()?;
-        let wanted = u32::from(
-            world
-                .beacons()
-                .scout_counts()
-                .get(row)
-                .copied()
-                .unwrap_or(0),
-        );
+        let wanted = u32::from(world.beacons().scout_counts().get(row).copied()?);
         let have = drones_homed(world, beacon, UnitKind::Scout);
         // A count rather than a backlog: spec section 6's Survey row names
         // "scout count" as a setting, so this is the one mandate the player
@@ -201,18 +194,12 @@ fn unit_request(
     kind: UnitKind,
     urgency: Urgency,
 ) -> SpendRequest {
-    let draw = world
-        .rules()
-        .message()
-        .power
-        .as_ref()
-        .map_or(0, |power| i32::try_from(power.kw_per_unit).unwrap_or(0));
     SpendRequest {
         seat,
         beacon,
         urgency,
         cost: world.unit_cost(kind),
-        draw: Kw::new(draw),
+        draw: Kw::new(crate::power::PowerRules::of(world.rules()).per_unit),
         buys: Purchase::Unit(kind),
     }
 }
@@ -257,53 +244,119 @@ fn drones_homed(world: &World, beacon: BeaconId, kind: UnitKind) -> u32 {
     total
 }
 
-/// The first Build target of `beacon` nothing has been paid for yet and that
-/// can still be built.
+/// The Build target of `beacon` the mandate pays for next: **the highest-order
+/// affordable target that is unbuilt** (spec section 6, the Build row; S1's
+/// plan, decision 5), as a row of the target table.
 ///
-/// Two kinds of unpaid target are passed over (`docs/design/targeting.md`):
+/// "Highest-order" is the lowest `BuildTarget.order`, ties by list position
+/// (`playbook.proto`), which is the row's position among its beacon's targets:
+/// a settings edit writes its list in order and an added target goes after the
+/// rest. "Affordable" is a cost the seat's treasury covers now. An unaffordable
+/// target **waits**: it is passed over for the highest-order one the treasury
+/// covers, and asked for again once it is covered. When no unbuilt target is
+/// affordable the highest-order one is still the one asked for, so the
+/// Quartermaster holds it -- an order the treasury cannot cover is not a spend
+/// and fails nothing (spec section 7; only the deploy fails a step for want of
+/// money, decision 7) -- and the fabricator waits behind it, as before S1.
 ///
-/// * one whose column a live structure of **any** seat already stands on --
-///   one structure per voxel, so the first seat to build wins and the other's
-///   target fails, which here means it is never paid for;
-/// * one bound to a feature that is **lost** -- a name idles when its target
-///   is lost, and a held description that found nothing to read again idles
-///   with it ([`World`]'s re-read runs first, on the same tick).
+/// Passed over as unbuildable ([`buildable`]):
+///
+/// * a target whose column a live structure of **any** seat already stands
+///   on -- one structure per voxel, so the first seat to build wins and the
+///   other's target fails, which here means it is never paid for;
+/// * a target bound to a feature that is **lost** -- a name idles when its
+///   target is lost, and a held description that found nothing to read again
+///   idles with it ([`World`]'s re-read runs first, on the same tick);
+/// * a target inside one of the beacon's own **protected areas**, ground the
+///   mandate will not build on ([`protected`]).
 #[must_use]
 pub(crate) fn next_unpaid_target(world: &World, beacon: BeaconId) -> Option<usize> {
+    let treasury = seat_of(world, beacon)
+        .and_then(|seat| world.seat_row(seat))
+        .and_then(|index| world.seats().treasuries().get(index).copied())?;
     let targets = world.targets();
-    let count = usize::try_from(targets.len()).unwrap_or(0);
-    let mut row: usize = 0;
-    while row < count {
-        if targets.beacons().get(row).copied() == Some(beacon.raw())
-            && targets.kinds().get(row).copied() == Some(TargetKind::Build.id())
-            && targets.built().get(row).copied() == Some(BeaconId::NONE.raw())
-            && buildable(world, row)
+    let mut first: Option<(u32, usize)> = None;
+    let mut affordable: Option<(u32, usize)> = None;
+    let rows = targets
+        .beacons()
+        .iter()
+        .zip(targets.kinds())
+        .zip(targets.built().iter().zip(targets.orders()));
+    for (row, ((owner, kind), (built, order))) in rows.enumerate() {
+        if *owner != beacon.raw()
+            || *kind != TargetKind::Build.id()
+            || *built != BeaconId::NONE.raw()
+            || !buildable(world, beacon, row)
         {
-            return Some(row);
+            continue;
         }
-        row = row.saturating_add(1);
+        let Some(cost) = target_cost(world, row) else {
+            continue;
+        };
+        // item 62: the row is unique, so the key is a total order.
+        let key = (*order, row);
+        if first.is_none_or(|held| key < held) {
+            first = Some(key);
+        }
+        if cost.raw() <= treasury.raw() && affordable.is_none_or(|held| key < held) {
+            affordable = Some(key);
+        }
     }
-    None
+    affordable.or(first).map(|(_, row)| row)
 }
 
-/// Whether the Build target at `row` can still be built: nothing stands on its
-/// column, and the feature it is bound to, if any, is not lost.
-fn buildable(world: &World, row: usize) -> bool {
+/// What the Build target at `row` costs: its blueprint's build cost. `None` for
+/// a row whose blueprint this build does not name, which cannot be built.
+fn target_cost(world: &World, row: usize) -> Option<Money> {
+    let kind = world
+        .targets()
+        .blueprints()
+        .get(row)
+        .copied()
+        .and_then(StructureKind::from_id)?;
+    Some(world.structure_cost(kind))
+}
+
+/// Whether the Build target at `row` of `beacon` can still be built: nothing
+/// stands on its column, the feature it is bound to, if any, is not lost, and
+/// it lies in none of the beacon's protected areas.
+fn buildable(world: &World, beacon: BeaconId, row: usize) -> bool {
     let targets = world.targets();
-    let Some(anchor) = targets.anchors().get(row).copied() else {
+    let (Some(anchor), Some(feature)) = (
+        targets.anchors().get(row).copied(),
+        targets.features().get(row).copied(),
+    ) else {
         return false;
     };
     let [x, y] = crate::targeting::column_of(anchor);
-    if world.ground().structure_on(x, y) {
+    if world.ground().structure_on(x, y) || protected(world, beacon, anchor) {
         return false;
     }
-    let feature = targets
-        .features()
-        .get(row)
-        .copied()
-        .unwrap_or(crate::targeting::NO_FEATURE);
     feature == crate::targeting::NO_FEATURE
-        || world.feature_is_live(usize::try_from(feature).unwrap_or(usize::MAX))
+        || usize::try_from(feature).is_ok_and(|index| world.feature_is_live(index))
+}
+
+/// Whether `at` lies inside one of `beacon`'s own **protected areas**: ground
+/// its Build mandate will not build on (`playbook.proto`'s `protected_areas`;
+/// spec section 6's Build row; S1's plan, decision 5).
+///
+/// The test is on the **column**: `at`'s column is inside when it lies in the
+/// area's box, edges included, whatever its height
+/// ([`crate::tables::ColumnBox::contains`]).
+/// The box is the one the author drew, so a column one step outside it is
+/// outside the area.
+#[must_use]
+pub(crate) fn protected(world: &World, beacon: BeaconId, at: [Fx; 3]) -> bool {
+    let [x, y] = crate::targeting::column_of(at);
+    let targets = world.targets();
+    targets
+        .beacons()
+        .iter()
+        .zip(targets.kinds())
+        .zip(targets.areas())
+        .any(|((owner, kind), area)| {
+            *owner == beacon.raw() && *kind == TargetKind::Protected.id() && area.contains(x, y)
+        })
 }
 
 /// The first Build target of `beacon` that has a structure and is not finished.
@@ -312,34 +365,47 @@ fn buildable(world: &World, row: usize) -> bool {
 /// of the seat's that has taken damage inside the beacon's sphere. The second
 /// half is `repair_threshold_pct`'s, which is S2's with damage — at the
 /// skeleton only construction can leave a structure short of full hit points.
+///
+/// A target inside one of the beacon's protected areas is passed over: a
+/// protected area written after its structure was paid for keeps the ground
+/// clear of construction, so the drones leave the structure as it stands.
+///
+/// PLACEHOLDER: a paid structure under a later protected area stays unfinished — owner, S3
+///
+/// That is: a structure already paid for and still going up when a later edit
+/// protects its ground is left as it stands, for as long as the area holds --
+/// nothing finishes, refunds or ruins it, and the spec does not say which
+/// (S1's `build` lane, from its review).
 #[must_use]
 pub(crate) fn next_unfinished_target(world: &World, beacon: BeaconId) -> Option<u32> {
     let targets = world.targets();
-    let count = usize::try_from(targets.len()).unwrap_or(0);
-    let mut row: usize = 0;
-    while row < count {
-        if targets.beacons().get(row).copied() == Some(beacon.raw())
-            && targets.kinds().get(row).copied() == Some(TargetKind::Build.id())
+    let structures = world.structures();
+    let rows = targets
+        .beacons()
+        .iter()
+        .zip(targets.kinds())
+        .zip(targets.anchors().iter().zip(targets.built()));
+    for ((owner, kind), (at, built)) in rows {
+        if *owner != beacon.raw()
+            || *kind != TargetKind::Build.id()
+            || *built == BeaconId::NONE.raw()
+            || protected(world, beacon, *at)
         {
-            let built = targets
-                .built()
-                .get(row)
-                .copied()
-                .unwrap_or(BeaconId::NONE.raw());
-            if built != BeaconId::NONE.raw() {
-                let at = usize::try_from(built).unwrap_or(usize::MAX);
-                let unfinished = world.structures().building().get(at).copied() == Some(true);
-                let alive = world
-                    .structures()
-                    .hit_points()
-                    .get(at)
-                    .is_some_and(|hp| hp.is_alive());
-                if unfinished && alive {
-                    return Some(built);
-                }
-            }
+            continue;
         }
-        row = row.saturating_add(1);
+        // The link is a structure row the Quartermaster wrote when it paid;
+        // one that names no row is not a structure going up.
+        let Ok(index) = usize::try_from(*built) else {
+            continue;
+        };
+        let unfinished = structures.building().get(index).copied() == Some(true);
+        let alive = structures
+            .hit_points()
+            .get(index)
+            .is_some_and(|hp| hp.is_alive());
+        if unfinished && alive {
+            return Some(*built);
+        }
     }
     None
 }
@@ -348,30 +414,27 @@ pub(crate) fn next_unfinished_target(world: &World, beacon: BeaconId) -> Option<
 /// still going up.
 fn building_work(world: &World, beacon: BeaconId) -> u32 {
     let targets = world.targets();
-    let count = usize::try_from(targets.len()).unwrap_or(0);
+    let rows = targets
+        .beacons()
+        .iter()
+        .zip(targets.kinds())
+        .zip(targets.anchors().iter().zip(targets.built()));
     let mut work: u32 = 0;
-    let mut row: usize = 0;
-    while row < count {
-        if targets.beacons().get(row).copied() == Some(beacon.raw())
-            && targets.kinds().get(row).copied() == Some(TargetKind::Build.id())
-        {
-            let built = targets
-                .built()
-                .get(row)
-                .copied()
-                .unwrap_or(BeaconId::NONE.raw());
-            if built == BeaconId::NONE.raw() {
-                if buildable(world, row) {
-                    work = work.saturating_add(1);
-                }
-            } else {
-                let at = usize::try_from(built).unwrap_or(usize::MAX);
-                if world.structures().building().get(at).copied() == Some(true) {
-                    work = work.saturating_add(1);
-                }
-            }
+    for (row, ((owner, kind), (at, built))) in rows.enumerate() {
+        if *owner != beacon.raw() || *kind != TargetKind::Build.id() {
+            continue;
         }
-        row = row.saturating_add(1);
+        let outstanding = if *built == BeaconId::NONE.raw() {
+            buildable(world, beacon, row)
+        } else {
+            !protected(world, beacon, *at)
+                && usize::try_from(*built).is_ok_and(|index| {
+                    world.structures().building().get(index).copied() == Some(true)
+                })
+        };
+        if outstanding {
+            work = work.saturating_add(1);
+        }
     }
     work
 }
