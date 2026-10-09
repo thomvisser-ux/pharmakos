@@ -263,7 +263,16 @@ fn the_committed_list_is_the_whole_set() {
                 "expand-east-segment",
             ][..],
         ),
-        ("s1", &["round-limit-audit", "unaffordable-deploy"][..]),
+        (
+            "s1",
+            &[
+                "brownout-by-recycle",
+                "cover-nearest-vent",
+                "mine-to-depth",
+                "round-limit-audit",
+                "unaffordable-deploy",
+            ][..],
+        ),
     ] {
         let dir = root().join("scenarios").join(stage);
         for name in names {

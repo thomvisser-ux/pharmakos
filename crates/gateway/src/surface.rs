@@ -3228,6 +3228,8 @@ pub(crate) fn held_values(world: &pharmakos_sim::world::World) -> Vec<(SeatId, O
 
 /// The plan fingerprint of a playbook's canonical form (decisions-log item
 /// 77): what a save carries beside each seal, and what a resume recomputes.
+/// The arithmetic is the sim's ([`pharmakos_sim::hash::plan_fingerprint`],
+/// beside the state hash since S1's `build` lane, the register's S1-42).
 fn plan_fingerprint(playbook_jsonc: &str) -> Result<u64, Error> {
     let canonical = pharmakos_plan_core::canonicalise_text(playbook_jsonc).map_err(|error| {
         Error::internal(format!(
@@ -3235,8 +3237,10 @@ fn plan_fingerprint(playbook_jsonc: &str) -> Result<u64, Error> {
             error.message
         ))
     })?;
-    pharmakos_verifier::hash::plan_fingerprint(&canonical.playbook).ok_or_else(|| {
-        Error::internal("a sealed playbook's canonical form will not encode for its fingerprint")
+    pharmakos_sim::hash::plan_fingerprint(&canonical.playbook).map_err(|error| {
+        Error::internal(format!(
+            "a sealed playbook's canonical form will not encode for its fingerprint: {error}"
+        ))
     })
 }
 

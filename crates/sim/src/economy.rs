@@ -260,38 +260,39 @@ pub fn percent_of(amount: Money, percent: u32) -> Money {
 /// percent = (bonus * rank - malus * (living - 1 - rank)) / (living - 1)
 /// ```
 ///
-/// truncated toward zero. The **adjustment** is zero when `living` is one, so
-/// the seat is paid the unadjusted `economy.bmi_dollars`: a seat that is both
-/// the leader and the last place has nobody to catch up to, and the formula's
-/// denominator says the same thing by being empty rather than by dividing by
-/// nothing.
-#[must_use]
-pub fn bmi_for(rules: &RulesTable, rank: u32, living: u32) -> Money {
-    let Some(economy) = rules.message().economy.as_ref() else {
-        return Money::ZERO;
-    };
+/// truncated toward zero ([`band_percent`], the one copy of the formula). The
+/// **adjustment** is zero when `living` is one, so the seat is paid the
+/// unadjusted `economy.bmi_dollars`: a seat that is both the leader and the
+/// last place has nobody to catch up to. The indemnity is `bmi_dollars` plus
+/// that percent of it, truncated toward zero, the rounding [`percent_of`]
+/// states.
+///
+/// Every read is typed (S1's `build` lane; decisions-log item 134): the
+/// economy block, the place on the ladder and the arithmetic each refuse
+/// rather than answer 0 or clamp a rank onto the ladder. Under a table that
+/// loaded, a place on the ladder is always paid: `RulesTable::from_message`
+/// refuses a band percent no signed 32-bit percent holds, so for a `rank`
+/// below `living` none of the errors below can arise from the table.
+///
+/// # Errors
+///
+/// [`SettlementReadError::MissingEconomy`] when the table has no `economy`
+/// block, [`SettlementReadError::RankOffLadder`] when `rank` is not below
+/// `living`, and [`SettlementReadError::PercentOutOfRange`] when the band's
+/// arithmetic leaves its type.
+pub fn bmi_for(rules: &RulesTable, rank: u32, living: u32) -> Result<Money, SettlementReadError> {
+    let economy = rules
+        .message()
+        .economy
+        .as_ref()
+        .ok_or(SettlementReadError::MissingEconomy)?;
+    let percent = band_percent(rules, rank, living)?;
     let base = i64::from(economy.bmi_dollars);
-    if living <= 1 {
-        return Money::new(base);
-    }
-    let bonus = i64::from(economy.scaling_last_place_bonus_percent);
-    let malus = i64::from(economy.scaling_leader_malus_percent);
-    let rank = i64::from(rank.min(living.saturating_sub(1)));
-    let last = i64::from(living.saturating_sub(1));
-    let numerator = bonus
-        .checked_mul(rank)
-        .and_then(|up| {
-            malus
-                .checked_mul(last.saturating_sub(rank))
-                .map(|down| up - down)
-        })
-        .unwrap_or(0);
-    let percent = numerator.checked_div(last).unwrap_or(0);
-    let adjustment = base
-        .checked_mul(percent)
+    base.checked_mul(i64::from(percent))
         .and_then(|scaled| scaled.checked_div(100))
-        .unwrap_or(0);
-    Money::new(base.saturating_add(adjustment))
+        .and_then(|adjustment| base.checked_add(adjustment))
+        .map(Money::new)
+        .ok_or(SettlementReadError::PercentOutOfRange)
 }
 
 /// A seat's place on the settlement's ladder ([`ladder_place`]).
@@ -405,8 +406,8 @@ pub fn ladder_place(
 /// (spec section 7, "BMI scaling"). Linear from the leader's malus (negative)
 /// to the last place's bonus, and 0 for a seat alone on the ladder.
 ///
-/// Unlike [`bmi_for`], which the tick calls and which clamps a rank past the
-/// ladder's end, this read refuses one.
+/// [`bmi_for`] pays by it; like it, this read refuses a rank past the
+/// ladder's end rather than clamping it onto the ladder.
 ///
 /// # Errors
 ///
@@ -529,7 +530,7 @@ mod tests {
                     .checked_div(100)
                     .unwrap_or_else(|| panic!("a hundred divides"));
                 assert_eq!(
-                    Money::new(base + adjustment),
+                    Ok(Money::new(base + adjustment)),
                     bmi_for(&rules, rank, living),
                     "rank {rank} of {living} at {percent} %"
                 );
@@ -553,16 +554,25 @@ mod tests {
             band_percent(&rules, 0, 0),
             Err(SettlementReadError::RankOffLadder { rank: 0, living: 0 })
         );
-        // A bonus no whole percent holds is refused rather than wrapped.
+        // And so is `bmi_for`, which pays by it: a rank past the ladder is
+        // refused rather than clamped onto its last place.
+        assert_eq!(
+            super::bmi_for(&rules, 3, 3),
+            Err(SettlementReadError::RankOffLadder { rank: 3, living: 3 })
+        );
+        // A band percent no signed 32-bit percent holds is refused when the
+        // table loads, so a table a world can hold always pays its ladder.
         let mut message = rules.message().clone();
         if let Some(economy) = message.economy.as_mut() {
             economy.scaling_last_place_bonus_percent = u32::MAX;
         }
-        let wild = crate::rules::RulesTable::from_message(&message)
-            .unwrap_or_else(|error| panic!("the sim's view still builds: {error}"));
-        assert_eq!(
-            band_percent(&wild, 2, 3),
-            Err(SettlementReadError::PercentOutOfRange)
+        assert!(
+            matches!(
+                crate::rules::RulesTable::from_message(&message),
+                Err(crate::rules::RulesError::OutOfRange { ref field, .. })
+                    if field == "economy.scaling_last_place_bonus_percent"
+            ),
+            "a bonus past a signed percent does not load"
         );
     }
 

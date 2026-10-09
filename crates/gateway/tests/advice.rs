@@ -305,14 +305,12 @@ fn advice_of(surface: &Surface, seat: u8) -> Option<pharmakos_gateway::surface::
 /// `godot/fixtures/`.
 #[test]
 fn a_suggested_instantiation_reports_every_declared_parameter_in_order() {
+    // The footer of the golden this writes reports the whole first Lull,
+    // `first_lull_ms` (600 000 ms), as the hosted match opens it.
+    // `godot/fixtures/instantiate_suggested.json` is a byte-for-byte copy of
+    // it, re-copied in the same commit that dropped the 300 000 ms pin the
+    // `econ` lane kept (decisions-log item 135 (2) (h)).
     let mut surface = hosted();
-    // The footer of the golden this writes reports 300 000 ms left, as it has
-    // since S1's first contract pull request: `godot/fixtures/
-    // instantiate_suggested.json` is a byte-for-byte copy of it, and neither
-    // copy is the `econ` lane's to move. A countdown under the first Lull's
-    // 600 000 ms is one the gateway takes; re-copying the fixture at the whole
-    // first Lull is the next `godot/` lane's.
-    surface.set_phase_remaining_ms(pharmakos_sim::math::quantity::Ms::new(support::LULL_MS));
     let human = support::seat_token(&mut surface, 0);
     let _seats = run_seats(
         &mut surface,

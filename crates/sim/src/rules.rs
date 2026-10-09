@@ -527,6 +527,7 @@ impl RulesTable {
             .economy
             .as_ref()
             .ok_or(RulesError::MissingBlock("economy"))?;
+        band_rows_of(economy)?;
         let mining_carry_voxels =
             NonZeroU32::new(economy.mining_carry_voxels).ok_or_else(|| RulesError::OutOfRange {
                 field: "economy.mining_carry_voxels".to_owned(),
@@ -674,6 +675,33 @@ fn segment_lengths_of(matched: &gp::v1::rules_table::Match) -> Result<Vec<i32>, 
         });
     }
     Ok(matched.segment_lengths_ms.clone())
+}
+
+/// The settlement band's two percents as `economy::band_percent` and
+/// `economy::bmi_for` read them: each a signed 32-bit percent. The band's
+/// percent for any place on any ladder lies between the leader's malus and the
+/// last place's bonus, so a table whose two rows fit is one whose ladder is
+/// always paid (S1's `build` lane, decisions-log item 134: `bmi_for`'s reads
+/// made typed).
+fn band_rows_of(economy: &gp::v1::rules_table::Economy) -> Result<(), RulesError> {
+    for (field, value) in [
+        (
+            "economy.scaling_last_place_bonus_percent",
+            economy.scaling_last_place_bonus_percent,
+        ),
+        (
+            "economy.scaling_leader_malus_percent",
+            economy.scaling_leader_malus_percent,
+        ),
+    ] {
+        if i32::try_from(value).is_err() {
+            return Err(RulesError::OutOfRange {
+                field: field.to_owned(),
+                value: format!("{value}; a band percent is a signed 32-bit percent"),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// A commander radius as the range tests read it: a voxel length.

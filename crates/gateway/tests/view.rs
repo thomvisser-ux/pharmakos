@@ -878,15 +878,13 @@ fn the_view_one_tick_golden() {
 /// a fixture made by the consumer tests nothing but the consumer.
 #[test]
 fn the_view_keyframe_golden() {
+    // The footer this fixture carries reports the whole first Lull,
+    // `first_lull_ms` (600 000 ms), as the hosted match opens it.
+    // `godot/fixtures/view_keyframe.jsonl` is a byte-for-byte copy of it
+    // (`crates/client-gdext/tests/vista_fixture.rs`), re-copied in the same
+    // commit that dropped the 300 000 ms pin the `econ` lane kept (decisions-
+    // log item 135 (2) (h)).
     let mut surface = hosted(2, SEGMENT_MS, 3);
-    // The footer this fixture carries reports 300 000 ms left, as it has since
-    // S1's first contract pull request: `godot/fixtures/view_keyframe.jsonl`
-    // is a byte-for-byte copy of it (`crates/client-gdext/tests/
-    // vista_fixture.rs`), and neither copy is the `econ` lane's to move. A
-    // countdown under the first Lull's 600 000 ms is one the gateway takes;
-    // re-copying the fixture at the whole first Lull is the next `godot/`
-    // lane's.
-    surface.set_phase_remaining_ms(pharmakos_sim::math::quantity::Ms::new(support::LULL_MS));
     let token = seat_token(&mut surface, 0);
     let pages = view_pages(&mut surface, &token, "");
 

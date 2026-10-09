@@ -1335,11 +1335,14 @@ fn bmi_next(world: &pharmakos_sim::world::World, seat: SeatId) -> Result<Option<
     }
     let ladder: Vec<Option<Money>> = held.into_iter().map(|(_, value)| value).collect();
     let place = crate::surface::ladder_place(&ladder, index)?;
-    Ok(Some(pharmakos_sim::economy::bmi_for(
-        world.rules(),
-        place.rank,
-        place.living,
-    )))
+    pharmakos_sim::economy::bmi_for(world.rules(), place.rank, place.living)
+        .map(Some)
+        .map_err(|refused| {
+            Error::internal(format!(
+                "the sim's BMI read refused seat {}: {refused}",
+                seat.raw()
+            ))
+        })
 }
 
 /// A whole-`$` or whole-kW figure as the wire's `int32`.
@@ -1390,21 +1393,20 @@ pub(crate) struct Place {
 /// by the sim's one audit function ([`pharmakos_sim::audit::final_audit`],
 /// `fixs`'s X-08 audit, the register's X-03).
 ///
-/// The score is the seat's own audit line. The rank counts the audited seats
-/// that stand **strictly ahead** of it on the audit's terms in spec section
-/// 3's tie-break order -- the score, then enemy value destroyed, then fewer
-/// beacons lost -- so seats tied on every term share a rank, which is what
-/// the final audit calls a shared win. The order is read off the
-/// [`pharmakos_sim::audit::AuditLine`]'s public terms because the sim keeps
-/// its comparison key private ([`rank_among`] says what holds the copy to
-/// the sim).
+/// The score is the seat's own audit line. The rank is the audit's own
+/// ([`pharmakos_sim::audit::FinalAudit::rank_of`]): the audited seats that
+/// stand **strictly ahead** of it in spec section 3's tie-break order -- the
+/// score, then enemy value destroyed, then fewer beacons lost -- plus one, so
+/// seats tied on every term share a rank, which is what the final audit calls
+/// a shared win. The sim's read retired this crate's copy of the tie-break
+/// (decisions-log item 135 (2) (e)).
 ///
 /// # Errors
 ///
 /// [`crate::error::Code::Internal`] when the score does not fit the wire's
 /// `int32`, a treasury past two billion `$` that no match reaches: refused
 /// rather than saturated, because a saturated score would be a wrong answer
-/// told as a right one.
+/// told as a right one; and for a rank past what a `u32` numbers.
 pub(crate) fn displayed_place(
     world: &pharmakos_sim::world::World,
     seat: SeatId,
@@ -1415,49 +1417,10 @@ pub(crate) fn displayed_place(
         .map_err(|_| Error::internal("a seat's audit score does not fit the wire's int32"))?;
     let of = u32::try_from(audit.lines.len())
         .map_err(|_| Error::internal("more audited seats than a seat id can number"))?;
-    let rank = rank_among(&audit.lines, seat)?;
+    let rank = audit
+        .rank_of(seat)
+        .map_err(|refused| Error::internal(format!("the audit's rank refused: {refused}")))?;
     Ok(Place { rank, of, score })
-}
-
-/// `seat`'s 1-based rank among `lines`, or `None` when it has no line: the
-/// number of lines **strictly ahead** of its own, plus one, in spec section
-/// 3's tie-break order -- the score, then enemy value destroyed, then fewer
-/// beacons lost -- so lines tied on every term share a rank.
-///
-/// The order restates the sim's private `AuditLine::key`, which no public
-/// read exposes yet; the unit tests below hold each term to the spec's
-/// order, and `a_three_seat_world_ranks_as_its_final_audit_does` holds the
-/// whole to the sim's own audit. A public rank or key read in
-/// `pharmakos_sim::audit` would retire this copy (review A and B of `econ`).
-///
-/// # Errors
-///
-/// [`crate::error::Code::Internal`] for a rank past what a `u32` numbers,
-/// which more seats than a seat id holds would need.
-fn rank_among(
-    lines: &[pharmakos_sim::audit::AuditLine],
-    seat: SeatId,
-) -> Result<Option<NonZeroU32>, Error> {
-    let terms = |line: &pharmakos_sim::audit::AuditLine| {
-        (
-            line.score.raw(),
-            line.destroyed.raw(),
-            core::cmp::Reverse(line.beacons_lost),
-        )
-    };
-    let Some(mine) = lines.iter().find(|held| held.seat == seat) else {
-        return Ok(None);
-    };
-    let ahead = lines
-        .iter()
-        .filter(|other| terms(other) > terms(mine))
-        .count();
-    u32::try_from(ahead)
-        .ok()
-        .and_then(|ahead| ahead.checked_add(1))
-        .and_then(NonZeroU32::new)
-        .map(Some)
-        .ok_or_else(|| Error::internal("a rank past what a seat id can number"))
 }
 
 /// `gp.api.v1.Standing`'s fields for one seat, its `rank` left out when the
@@ -1581,9 +1544,9 @@ fn read_voxel(value: &Json, at: &str) -> Result<Voxel, Error> {
 
 #[cfg(test)]
 mod tests {
-    use super::{displayed_place, rank_among};
+    use super::displayed_place;
     use core::num::NonZeroU32;
-    use pharmakos_sim::audit::{AuditLine, final_audit};
+    use pharmakos_sim::audit::final_audit;
     use pharmakos_sim::math::quantity::Money;
     use pharmakos_sim::rules::RulesTable;
     use pharmakos_sim::runner::MatchSettings;
@@ -1591,62 +1554,11 @@ mod tests {
     use pharmakos_sim::world::{World, WorldConfig};
     use std::path::Path;
 
-    fn line(seat: u8, score: i64, destroyed: i64, beacons_lost: u32) -> AuditLine {
-        AuditLine {
-            seat: SeatId::new(seat),
-            held: Money::new(score.saturating_sub(destroyed)),
-            destroyed: Money::new(destroyed),
-            score: Money::new(score),
-            beacons_lost,
-        }
-    }
-
-    fn ranks(lines: &[AuditLine]) -> Vec<Option<u32>> {
-        lines
-            .iter()
-            .map(|held| {
-                rank_among(lines, held.seat)
-                    .expect("a rank")
-                    .map(NonZeroU32::get)
-            })
-            .collect()
-    }
-
-    /// Spec section 3's tie-break, term by term: the score first, then enemy
-    /// value destroyed, then fewer beacons lost; seats tied on every term
-    /// share a rank, and the next seat's rank counts both.
-    #[test]
-    fn the_rank_follows_the_audits_tie_break_term_by_term() {
-        assert_eq!(
-            ranks(&[line(0, 100, 0, 0), line(1, 200, 0, 0)]),
-            vec![Some(2), Some(1)],
-            "the score decides first"
-        );
-        assert_eq!(
-            ranks(&[line(0, 200, 50, 3), line(1, 200, 10, 0)]),
-            vec![Some(1), Some(2)],
-            "on a tied score, more destroyed ranks ahead, whatever was lost"
-        );
-        assert_eq!(
-            ranks(&[line(0, 200, 10, 2), line(1, 200, 10, 1)]),
-            vec![Some(2), Some(1)],
-            "on a tied score and destroyed, fewer beacons lost ranks ahead"
-        );
-        assert_eq!(
-            ranks(&[line(0, 200, 10, 1), line(1, 200, 10, 1), line(2, 50, 0, 0)]),
-            vec![Some(1), Some(1), Some(3)],
-            "a tie on every term shares a rank, and the next counts both"
-        );
-        assert_eq!(
-            rank_among(&[line(0, 1, 0, 0)], SeatId::new(1)).expect("an answer"),
-            None,
-            "a seat with no line holds no place"
-        );
-    }
-
-    /// The copy held to the sim's own audit over a world whose lines differ:
-    /// three seats, each with a different treasury, ranked in the order the
-    /// score says, and the seat ranked first is the audit's only winner.
+    /// The displayed standing over a world whose lines differ: three seats,
+    /// each with a different treasury, ranked in the order the score says by
+    /// the audit's own `rank_of`, and the seat ranked first is the audit's
+    /// only winner. The tie-break term by term is the sim's test
+    /// (`crates/sim/tests/audit.rs`).
     #[test]
     fn a_three_seat_world_ranks_as_its_final_audit_does() {
         let rules = RulesTable::load(

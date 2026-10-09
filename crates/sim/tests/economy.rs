@@ -2745,8 +2745,12 @@ fn a_tie_on_held_value_places_the_lower_seat_id_ahead() {
     );
 
     let rules = rules();
-    let leader = pharmakos_sim::economy::bmi_for(&rules, 0, SEATS);
-    let last = pharmakos_sim::economy::bmi_for(&rules, SEATS.saturating_sub(1), SEATS);
+    let bmi = |rank: u32| {
+        pharmakos_sim::economy::bmi_for(&rules, rank, SEATS)
+            .unwrap_or_else(|error| panic!("rank {rank} is on the ladder: {error}"))
+    };
+    let leader = bmi(0);
+    let last = bmi(SEATS.saturating_sub(1));
     assert!(
         leader.raw() < last.raw(),
         "the ladder has to run downhill for the assertion below to mean \
@@ -2756,7 +2760,7 @@ fn a_tie_on_held_value_places_the_lower_seat_id_ahead() {
         let rank = u32::from(*seat);
         assert_eq!(
             *value,
-            pharmakos_sim::economy::bmi_for(&rules, rank, SEATS).raw(),
+            bmi(rank).raw(),
             "seat {seat} is ranked at its own index on a level ladder, so the \
              lowest id takes the leader's malus and the highest last place's \
              bonus: {paid:?}"

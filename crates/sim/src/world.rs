@@ -3758,7 +3758,15 @@ impl World {
                 }
                 other = other.saturating_add(1);
             }
-            let bmi = crate::economy::bmi_for(&self.rules, rank, living);
+            // The rank counts living seats ahead, so it is below `living`, and
+            // a table that loaded holds its band percents in a signed percent
+            // (`RulesTable::from_message`): the read pays every place on the
+            // ladder. A seat it nevertheless refused is not paid a number
+            // nobody computed, and the bus says nothing for it.
+            let Ok(bmi) = crate::economy::bmi_for(&self.rules, rank, living) else {
+                index = index.saturating_add(1);
+                continue;
+            };
             self.credit_treasury(seat, bmi);
             self.emit(
                 tick,
