@@ -176,8 +176,11 @@ range narrows to 12–49.
     xy distance from the commander's column at step start, then y, then x. The spiral is bounded by
     the sphere radius and excludes every feature footprint.
   - It takes the first column that is a legal site (inside one of the seat's own spheres, no
-    stacking below), standable, reachable by the commander, and whose sphere holds the feature's
-    `on` column.
+    stacking below), standable, reachable by the commander, and whose sphere holds both the
+    feature's `on` column and its anchor point (the anchor column's standing point). The second
+    test keeps a `covering` from binding a site where its own `covered {}`, which tests the anchor
+    point first, would answer `no_target`; where the anchor column is free the two points are one
+    (`fog` #90, decisions-log item 135).
   - The operator's private `site_for`, which walks out from the nearest own beacon along the line to
     the feature, is replaced by this rule in the sim.
 - **`on`**, legal only in `BuildTarget.anchor` (in `add_build_target`, a Build mandate's settings
@@ -192,7 +195,11 @@ range narrows to 12–49.
     (y, x) order.
   - A named or `covered {}` vent whose anchor column's standing point lies outside the target
     beacon's sphere is `no_target`, tested before any structure, so no answer depends on a structure
-    the seat cannot see (decisions-log item 133 (3) (c), item 134).
+    the seat cannot see (decisions-log item 133 (3) (c), item 134). Built by `fog` #90 (item 135)
+    as the sim's `anchor_in_sphere`, which the gateway's preview reaches through `on_vent_counted`.
+    One residual is S3's fog work (the register's S3-20): an unplaced beacon's target sphere may
+    reach past every sphere the seat holds, and inside it the structure tests read the whole
+    footprint.
 - **One structure per voxel, across seats.** A queued Build target is a per-seat claim, so another
   seat's unbuilt target stays hidden. Construction is refused where any live structure already
   stands, which is `illegal_site`. The first seat to build wins, the other's target fails, and the
@@ -237,7 +244,11 @@ range narrows to 12–49.
 - **Ranking** happens where the pathing graph is: in the sim for the tick, and in the gateway for
   previews.
   - The gateway's `resolve_refs` answers over the frozen world. It is internal in S1, on
-    `ADVISOR_METHODS`, and published with v1.1.
+    `ADVISOR_METHODS`, and published with v1.1. Whenever the phase is not a Lull (a Push, a recap,
+    the lobby, an ended match) it answers `PHASE_CLOSED`: the dispatcher's planning door closes it
+    as a `plan`-scoped method, as it has since T9, and from `econ` #92 its handler holds its own
+    gate in a Push as well, as defence in depth (decisions-log item 135 (3), which corrects item
+    133 (3) (f)).
   - The editor cannot reach the sim (`CLIENT_WALL`) and the operator's library depends on proto
     alone, so both ask the gateway.
 - **The verifier** checks vocabulary, legality of placement (which arm where), filters and
