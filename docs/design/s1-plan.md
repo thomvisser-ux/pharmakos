@@ -859,6 +859,19 @@ sections that add one name it in their Owns lines.
   wizard's new golden; the templates round-trip, verify and render identically; the `against-easy*`
   chains re-blessed in this PR only if Easy's sealed files change (they do; the reason is named).
   **Agent-days:** 3–4.
+- **As run (item 136).** #96, merged as `fc8375c` (head `c9bcac4`), last of run 2. Built as the
+  section says, with S1-15's taps (at most two calls, `TAP_PROBE_CALLS`) and `MAP_COLUMNS_MAX` and
+  `terrain.rs`'s view-chunk decoder deleted with the site heuristics. The core's depth rides a
+  `deepen_core` step that opens every composed route and ends every operator-built safe playbook
+  (`CORE_DIG_MAX_DEPTH` = 4, register S1-52, `tune`'s); its walk and edit come out of Hold & Build's
+  hold, not the 70 % share. A finisher pass rebased it onto `ui`'s merge, re-blessed over `build`
+  and, in named places the main session granted in `crates/client-gdext` and `godot/` once `ui` had
+  merged, committed the wizard page pins and fixed the watch check (item 136 (3) (k), (l)). Edits
+  outside the grant (`crates/gamectl/tests/operator.rs`, `operator_host.rs`,
+  `crates/gateway/tests/advice.rs`, `scenarios/skeleton/against-easy*`, golden READMEs) were
+  accepted at the merge (item 136 (3) (g)); AGENTS.md §6 now grants such tests as named places. The
+  main session added `REUSE.toml`'s block for the wizard goldens' outputs (item 136 (3) (m)). The
+  `against-easy` pair moved from tick 1; the determinism chain did not.
 
 ### `ui` — `crates/client-gdext` + `godot/`: the economy and targeting UI
 
@@ -887,6 +900,13 @@ sections that add one name it in their Owns lines.
 - **Needs:** `econ` and `tgtw` merged; decision 17. **Acceptance:** vista and rows PNGs re-rendered
   on CI's Linux leg and looked at; `godot_project.rs` pins; the main session's local package run.
   **Agent-days:** 4–5.
+- **As run (item 136).** #98, merged as `f8fd5b6` (head `1fd96ab`), rebased onto `build`'s merge.
+  Built as the section says. Its commits could not pass the versioned pre-commit hook until #95
+  (`f5d130c`) fixed `cargo xtask clippy -p` for a walled crate; they were made with that fix applied
+  uncommitted, and #95 merged first. The "this round" heading is hidden when the gateway sends no
+  sentence; a refused `get_recap` is drawn as the refusal; both Lull rows are refused when missing
+  or not positive. `no_arithmetic.rs` skips a file's single trailing test module, beyond decision
+  17's text, accepted (item 136 (3) (f)). No golden moved. AGENTS.md §3 rule 4 names its pieces.
 
 ### `build` — `crates/sim`: Build settings and S1-42
 
@@ -954,6 +974,16 @@ sections that add one name it in their Owns lines.
   `report_hash` golden re-blessed if it adds hashed state.
 - **Contract PR:** yes in part (the fingerprint moves into the hash module; its value must not
   move). **Agent-days:** 4–5.
+- **As run (item 136).** #97, merged as `0c46db7` (head `3b2bd03`), first of run 2's lanes, rebased
+  onto #95. Built as the section says: an area is the column box the playbook writes, edges
+  included, for protected and probe areas alike; the target table hashes order, rotation and a
+  four-column footprint as blocks after its rows; `SNAPSHOT_VERSION` 9. Load-time refusals beyond
+  the section (the commander's radii fit an `i16`, the build rate a positive multiple of the tick
+  rate, the band percents an `i32`, the sum bound counting the starting force) and the sim's edit
+  cap always applying are item 136 (3) (b) and (e). One test edit in `crates/plan-core` outside its
+  places was accepted ((3) (c)). The four chains with a Build target moved from their deploy tick;
+  every `report_hash` moved. Its "Found, not fixed" goes to S2's first `crates/sim` and verifier
+  lanes (item 136 (5)); its one new marker is S3-22.
 
 ### `tune` — the numbers, and the real determinism segment
 
@@ -986,7 +1016,12 @@ sections that add one name it in their Owns lines.
   playbook, not only re-bless its chain; and `rules/README.md`'s `match.lull_ms` row ("Until S1's
   economy surfaces read `first_lull_ms`, the gateway and `gamectl` time every Lull with this
   row"), untrue since `econ` #92, is reworded: round 1 is timed by `first_lull_ms` and every later
-  Lull by this row.
+  Lull by this row. Carried by item 136: `rules/README.md`'s `structures.build_hp_per_second` row,
+  which still says the sim reads a constant, is reworded with the rest of the file; the rate loads
+  only as a positive multiple of the tick rate, so it moves in steps of 20 (item 136 (3) (b)); and
+  `CORE_DIG_MAX_DEPTH` (register S1-52), the core's dig depth Easy and the safe playbook write, is
+  tuned with the numbers: a review's probe found the starting seam dry at depth 4 by round 5 on both
+  seeds.
 - **Implements:** item 127 (3); item 103 (3)'s walk speed; register S1-26 and the economy rows'
   owner PLACEHOLDERs.
 - **Needs:** `build`, `oper` merged; decision 16. **Acceptance:** the check's report attached to the
@@ -1001,7 +1036,10 @@ sections that add one name it in their Owns lines.
   register's S1 rows closed or moved with their owners. Carried by item 133: the P1 run measures
   FULL against a late-match snapshot, since FULL decodes the whole snapshot on every call for
   `coming_segment_ms`; moving the length into `Scope` is a `report_hash` contract change and a
-  gateway change, the owner's with P1's FULL budget. **Implements:** AGENTS.md §10 items 6 and 8;
+  gateway change, the owner's with P1's FULL budget. Carried by item 136: the register already
+  marks the S1 rows item 136 (5) discharged, closed or moved; S1-42's and S1-51's rows close only
+  when their stale copies go (the next `proto/**` pull request, S2's first verifier lane), so
+  `demo` moves them to those owners if the copies outlast S1. **Implements:** AGENTS.md §10 items 6 and 8;
   item 33 (c). **Needs:** `tune` and `ui` merged. **Agent-days:** 1.5–2.
 
 ---
@@ -1063,6 +1101,15 @@ No chain moved in the run; `grid` added `brownout-by-recycle`'s chain. Next, eac
 word: `oper` (`grid` has merged), `build` (`fog` has merged; its gateway commit after `econ`), `ui`
 (after `econ`), then `tune` and `demo`.
 
+**As run (item 136).** On the owner's "resume. proceed sensibly." (2026-10-08) wave 4's second run
+launched three lanes at once on `main` at `7637a37`, with no launch docs pull request: `build`, `ui`
+and `oper`. `ui`'s fix pass found that a scoped `cargo xtask clippy -p` failed on any walled crate,
+so the pre-commit hook refused every commit to `crates/client-gdext`; its fix, #95 (`f5d130c`),
+merged first. Then `build` #97 (`0c46db7`), `ui` #98 (`f8fd5b6`) and `oper` #96 (`fc8375c`, after a
+finisher pass rebased it over both), all on 2026-10-09, each packaged locally first. `build` and
+`oper` moved the chains of section 4.2's ledger; the determinism chain did not move. Next, each on
+the owner's word: `tune`, then `demo`.
+
 **Totals.** 18 tasks in 17 lanes (`tgtv` and `proj` are one lane in two PRs), **about 71.5 ad**
 (63.5–79.5), against the code map's 62–74; this plan adds X-08's audit, the restore bug, the
 selector bug, S1-26 and S1-42 to it, and the reviews added `con1`'s and `con2`'s named places and
@@ -1087,8 +1134,9 @@ Two splits already shorten it: targeting's preview surfaces (`tgtw`) leave the s
 | `proj` (new codes) | — | — | all, if it moves the verifier version (the reports' `diagnostics` in any case) |
 | `mine` | all | **moved** (the harness's Mine beacon digs past the rim) | all, if the held seam bumps the snapshot |
 | `grid` | none committed (as run, item 135: none moved; `brownout-by-recycle`'s chain is new) | — | — |
-| `build` | those with a Build | — (the harness writes no Build target) | all, if it adds hashed state; and the gateway's `view_keyframe` and `instantiate_suggested` goldens in its gateway commit, the 300 000 ms pin dropped (item 135 (2) (h)) |
-| `oper` (Easy's sealed files) | `against-easy*` | — | the operator's and the `demo_*_verify` goldens |
+| `build` | those with a Build (as run, item 136: `against-easy`, `against-easy-three-rounds`, `cover-nearest-vent` and `brownout-by-recycle`, each from its deploy tick, a Build target now its own 2.5 s row) | — (the harness writes no Build target; as run, none moved) | all, if it adds hashed state (as run: all, `SNAPSHOT_VERSION` 9); and the gateway's `view_keyframe` and `instantiate_suggested` goldens in its gateway commit, the 300 000 ms pin dropped (item 135 (2) (h)) |
+| `oper` (Easy's sealed files) | `against-easy*` (as run, item 136: both, from tick 1, re-blessed over `build`) | — | the operator's and the `demo_*_verify` goldens (as run: and the `demo_*` render goldens, `instantiate_suggested`, the wizard PNG, and twelve new wizard goldens) |
+| `ui` (as run, item 136) | none | — | — (no golden moved; the three PNGs re-rendered byte-identical on CI's Linux leg) |
 | `fog` | none; event logs only if a count lands in a value (`expand-east-segment`'s, the guards transcript), and with bare ids decoding as themselves none is expected (as run, item 135: none moved) | — | — |
 | `econ` (as run, item 135) | none | — | — (gateway goldens only: three new cases, `briefing`, `economy_forecast` and `recap`, and twelve moved in the footer's `phase_remaining_ms` alone) |
 | `tune` (values; S1-26) | all | **moved** | all |

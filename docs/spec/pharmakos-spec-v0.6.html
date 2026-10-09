@@ -169,7 +169,7 @@ footer{margin-top:60px;padding-top:16px;border-top:1px solid var(--rule);color:v
     <h3>Amended in S1</h3>
     <ul>
       <li>The decisions log (<code>docs/design/decisions-log.md</code>, section 2.7) outranks this page, and S1's rulings amend it where marked <span class="tag t-dec">Decided</span> with an item number: walk-in and no stacking in <a href="#beacons">section 5</a>'s Placement row and <a href="#gameplan">section 10</a>'s steps, the targeting design (names, descriptions, the three reading rules, the failure codes; <code>docs/design/targeting.md</code>, item 127 (12)) in sections 6 and 10, and the grid rulings (items 127 (5) to (8), item 135 (2) (a)) in sections 5, 6 and 7.</li>
-      <li>Still to come with the lane that owns it: <a href="#editor">section 13</a>'s chip text and the editor's click on a vent (S1's <code>ui</code>).</li>
+      <li><a href="#editor">Section 13</a>'s map route: the click and Alt-click on a vent, and the line each vent or seam reference shows of what it reads now (S1's <code>ui</code>, item 136).</li>
     </ul>
   </div>
 </header>
@@ -618,6 +618,8 @@ footer{margin-top:60px;padding-top:16px;border-top:1px solid var(--rule);color:v
       <ul>
         <li>Click one of your beacons to choose Visit &amp; change, Go here or Recycle. Click the ground to Go here or Place beacon, with a live legality ghost. Click a known enemy beacon to target it with an Attack beacon.</li>
         <li>Alt-click turns a fixed target into a selector.</li>
+        <li><span class="tag t-dec">Decided</span> Click a heat vent to place a beacon covering it by its name (<code>covering {feature_id}</code>); Alt-click a vent to place one covering the nearest vent you can cover, a description (<code>covering {vent {NEAREST, UNCOVERED}}</code>). The vents are the map summary's, picked on the ground the view holds (S1, decisions-log items 127 (12) and 136).</li>
+        <li><span class="tag t-dec">Decided</span> Every step that names or describes a vent or a seam gets one line saying what it reads now, as the gateway answers it: the feature and the travel to it in game milliseconds, the next candidate in the gateway's own rank order, and how it reads — a description, nearest by travel from the commander or from its beacon; a name; or <code>covered {}</code>, the feature its beacon was placed to cover, bound when it deploys — each read when the step starts. A reference that reads nothing says why, with how many features matched. The editor computes none of it (S1, decisions-log items 127 (12) and 136).</li>
         <li>Routes draw as polylines with travel estimates; legs through fog are dashed.</li>
       </ul>
     </li>
