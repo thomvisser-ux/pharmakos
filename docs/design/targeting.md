@@ -196,9 +196,10 @@ range narrows to 12–49.
   - A named or `covered {}` vent whose anchor column's standing point lies outside the target
     beacon's sphere is `no_target`, tested before any structure, so no answer depends on a structure
     the seat cannot see (decisions-log item 133 (3) (c), item 134). Built by `fog` #90 (item 135)
-    as the sim's `anchor_in_sphere`, which the gateway's preview calls. One residual is S3's fog
-    work: an unplaced beacon's target sphere may reach past every sphere the seat holds, and inside
-    it the structure tests read the whole footprint.
+    as the sim's `anchor_in_sphere`, which the gateway's preview reaches through `on_vent_counted`.
+    One residual is S3's fog work (the register's S3-20): an unplaced beacon's target sphere may
+    reach past every sphere the seat holds, and inside it the structure tests read the whole
+    footprint.
 - **One structure per voxel, across seats.** A queued Build target is a per-seat claim, so another
   seat's unbuilt target stays hidden. Construction is refused where any live structure already
   stands, which is `illegal_site`. The first seat to build wins, the other's target fails, and the
@@ -243,9 +244,11 @@ range narrows to 12–49.
 - **Ranking** happens where the pathing graph is: in the sim for the tick, and in the gateway for
   previews.
   - The gateway's `resolve_refs` answers over the frozen world. It is internal in S1, on
-    `ADVISOR_METHODS`, and published with v1.1. In a Push and a recap it answers `PHASE_CLOSED`:
-    the dispatcher's planning door closes it as a `plan`-scoped method, and from `econ` #92 its
-    handler holds its own gate in a Push as well (decisions-log items 133 (3) (f) and 135).
+    `ADVISOR_METHODS`, and published with v1.1. Whenever the phase is not a Lull (a Push, a recap,
+    the lobby, an ended match) it answers `PHASE_CLOSED`: the dispatcher's planning door closes it
+    as a `plan`-scoped method, as it has since T9, and from `econ` #92 its handler holds its own
+    gate in a Push as well, as defence in depth (decisions-log item 135 (3), which corrects item
+    133 (3) (f)).
   - The editor cannot reach the sim (`CLIENT_WALL`) and the operator's library depends on proto
     alone, so both ask the gateway.
 - **The verifier** checks vocabulary, legality of placement (which arm where), filters and

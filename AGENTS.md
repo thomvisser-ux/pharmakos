@@ -128,11 +128,12 @@ editor UI. Nothing else executes. Directories are under `crates/`; package names
    The gateway, which hosts the match, is held to the same rule: its planning methods
    (`verify_plan`, `render_plan`, `patch_plan`, `instantiate_template`, `resolve_refs`) answer from
    the frozen snapshot and the rules table — `resolve_refs` ranks "nearest" through the sim's own
-   resolver (`targeting::cover`, `targeting::on_vent`, the `Ranker`) with a tally and scratch of its
-   own, over the hosted world (the frozen world in a Lull; in a Push and a recap the dispatcher's
-   planning door answers `PHASE_CLOSED`, as for every `plan`-scoped method, and the handler holds
-   its own gate in a Push as well, before it parses anything, decisions-log items 133 and 135), a
-   preview of what a step will bind and not a dry run, and
+   resolver (`targeting::cover`, `targeting::on_vent_counted`, the `Ranker`) with a tally and
+   scratch of its own, over the hosted world (the frozen world in a Lull; whenever the phase is not
+   a Lull — a Push, a recap, the lobby, an ended match — the dispatcher's planning door answers
+   `PHASE_CLOSED`, as for every `plan`-scoped method, and has since T9; from `econ` #92 the handler
+   holds its own gate in a Push as well, before it parses anything, as defence in depth,
+   decisions-log items 133 and 135), a preview of what a step will bind and not a dry run, and
    `get_map_summary`'s features (unfogged in S1, decisions-log item 130 (3) (a)) and
    `estimate_route`'s `covering` legs read the hosted world through the same resolver, a `covering`
    waypoint answering `PHASE_CLOSED` in a Push — its knowledge and view reads read the frozen
@@ -461,6 +462,14 @@ to full quality once and changed only with the owner's explicit approval.
   from T19 PR 2, the config line the lobby remembers in `user://last_match.txt`: the six
   `serve::Config` fields that `serve::ConfigLine` reads, without `resume`, and no token
   (decisions-log items 113 and 114)
+- The event vocabulary: an event kind's id and name (`EventKind`, `crates/sim/src/events.rs`), a
+  step failure's reason id and name (`StepFailure`, `crates/sim/src/interpreter/state.rs`) and an
+  event value's bit layout (`StepFailed`, beside it) are read by the interpreter transcripts, the
+  scenario files' event assertions and event logs, and the gateway's feed, recap and strings, so
+  each changes additively only: a new kind or reason takes a new id at the end and a new name, a
+  shipped name never changes, a retired id is never reused (`not_own`'s 10), and a new field in a
+  value takes bits every older value holds zero, so a value written before still decodes as itself
+  (decisions-log item 135)
 - CI: `.github/workflows/**`, `xtask/**`'s definition of what `ci` runs and of what
   `cargo xtask package` checks (`xtask/src/package.rs`, `xtask/src/zip.rs`), golden-file *formats*
   (including `tests/golden/package/`, the zips' manifests)
@@ -508,7 +517,10 @@ machine can run.
   line with it wherever the test lists the crate's sources by name, and the grant says so:
   `every_module_is_checked` in `crates/gamectl/tests/confinement.rs` (and its twin in
   `crates/operator/tests/confinement.rs`) fails on a `pub mod` in `src/lib.rs` that is missing
-  from its `SOURCES` (decisions-log item 110 (4)).
+  from its `SOURCES` (decisions-log item 110 (4)). A sweep (the no-silent-fallback rule, say) that
+  reaches callers outside the lane's own crate or named place stops at that edge and says so in
+  the PR; the next owner of the callers' crate carries the rest, written into that lane's section
+  of the stage plan (decisions-log item 135).
 - Rebase on `main` before opening a PR. Never force-push `main`, never rewrite a pushed branch
   someone else is reviewing.
 - State in the PR which crates you touched, so the next agent can pick a disjoint set.
