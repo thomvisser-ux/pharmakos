@@ -10,11 +10,12 @@ What the Seat Gateway does, written down: who sees which event, what a
 gateway accepts, what the spec's own worked session answers call by call, and —
 since T16a — what a **camera** is shown, since T18a what the editor's
 **wizard** is handed, since T22a what the stage demo's own playbooks verify
-and render to, and since S1's `tgtw` what a seat is told about the map's vents
-and seams. Produced by `crates/gateway/tests/goldens.rs`,
+and render to, since S1's `tgtw` what a seat is told about the map's vents
+and seams, and since S1's `econ` what a seat is told about its own economy.
+Produced by `crates/gateway/tests/goldens.rs`,
 `crates/gateway/tests/methods.rs`, `crates/gateway/tests/view.rs`,
-`crates/gateway/tests/advice.rs`, `crates/gateway/tests/demo_playbooks.rs` and
-`crates/gateway/tests/targeting.rs`;
+`crates/gateway/tests/advice.rs`, `crates/gateway/tests/demo_playbooks.rs`,
+`crates/gateway/tests/targeting.rs` and `crates/gateway/tests/economy.rs`;
 compared by `cargo xtask ci`'s `golden` step;
 re-blessed with `cargo xtask golden --bless`, which a pull request then has to
 explain (AGENTS.md §5).
@@ -24,10 +25,11 @@ The first four exist because the surface is the thing the whole roadmap inherits
 the rule *does*, in a table a reviewer can read without running anything — and
 it is the shape of that table, not any one line of it, that v1.1 publishes. The
 fifth is T13's, and is the method slice answering the session spec §12 prints.
-The next three are T16a's, the ninth is T18a's, the next ten are T22a's, and
-the last two are S1's targeting surfaces (task `tgtw`).
+The next three are T16a's, the ninth is T18a's, the next ten are T22a's, the
+next two are S1's targeting surfaces (task `tgtw`), and the last three are S1's
+economy surfaces (task `econ`).
 
-## The twenty-one cases
+## The twenty-four cases
 
 | Case | File | What it pins |
 | --- | --- | --- |
@@ -52,6 +54,9 @@ the last two are S1's targeting surfaces (task `tgtw`).
 | `demo_deploy_and_visit_render/` | `expected.response.json` | As above, for `scenarios/skeleton/deploy-and-visit.playbook.jsonc` as committed |
 | `map_summary/` | `expected.response.json` | Seat 0's `get_map_summary` in the opening Lull on the golden seed: every vent and seam, its grade, liveness, coverage by seat 0 and travel from its commander |
 | `resolve_refs/` | `expected.response.json` | Seat 0's `resolve_refs` in the same Lull for `scenarios/s1/cover-nearest-vent.playbook.jsonc`: what its `covering` and its `on {covered {}}` read, with every candidate in rank order |
+| `briefing/` | `expected.response.json` | Seat 0's `get_briefing` in the opening Lull on the golden seed: its own standing (score and displayed rank on the final audit's terms) and the prose |
+| `economy_forecast/` | `expected.response.json` | Seat 0's `get_economy_forecast` in the same Lull once it has sealed `scenarios/s1/cover-nearest-vent.playbook.jsonc`: the four present-state figures and the committed spend |
+| `recap/` | `expected.response.json` | Seat 0's `get_recap` in round 1's recap of the same match: the round's tick count and the seat's own settlement line |
 
 ## What a diff means, case by case
 
@@ -280,11 +285,15 @@ A diff here means one of six things, and the first is the only cheap one:
   many times the feed has been attached — deterministic on purpose, which is
   what lets a rendered cursor sit in a golden.
 * **only the `_status` footer's `phase_remaining_ms` moved.** The footer is the
-  opening Lull's, with the whole Lull reported left, so it is the rules table's
-  `match.lull_ms`: a Lull re-tune moves it and nothing a client draws. S1's
-  first contract pull request moved it from 180 000 to 300 000 when it re-ruled
-  the register's D-01 (decisions-log item 127 (2)), and
-  `godot/fixtures/view_keyframe.jsonl` was re-copied with it.
+  opening Lull's, with 300 000 ms reported left: S1's first contract pull
+  request moved it from 180 000 to 300 000 when it re-ruled the register's D-01
+  (decisions-log item 127 (2)), and `godot/fixtures/view_keyframe.jsonl` was
+  re-copied with it. Since S1's `econ` the opening Lull is `match.first_lull_ms`
+  (600 000 ms), and the producer pins the report at 300 000 -- a countdown the
+  first Lull admits -- so that this file and its `godot/fixtures/` copy stay
+  byte for byte the same until the next `godot/` lane re-copies them at the
+  whole first Lull. A timed footer carries no `untimed` member: it is written
+  only when true.
 
 The `.txt` header carries **two** byte figures and they are different numbers:
 `run bytes` is what the encoder produced and what `VIEW_PAGE_BYTES` budgets,
@@ -359,11 +368,15 @@ things moved:
   the edge of the core's sphere and place a Build beacon there (decisions-log
   item 113 (6)).
 
-The `_status` footer is the opening Lull's, with the whole Lull reported left,
-so its `phase_remaining_ms` is the rules table's `match.lull_ms`: a Lull re-tune
-moves it (S1's first contract pull request moved it from 180 000 to 300 000,
-with the `godot/fixtures/` copy). Any other change in it means the footer's
-shape did.
+The `_status` footer is the opening Lull's, with 300 000 ms reported left (S1's
+first contract pull request moved it from 180 000 to 300 000, with the
+`godot/fixtures/` copy). Since S1's `econ` the opening Lull is
+`match.first_lull_ms`, 600 000 ms, and the producer pins the report at 300 000
+-- a countdown the first Lull admits -- so that this file and its
+`godot/fixtures/` copy stay identical until the next `godot/` lane re-copies
+both at the whole first Lull. Any other change in it means the footer's shape
+did; a timed footer carries no `untimed` member, which is written only when
+true.
 
 ### `demo_<playbook>_verify/` and `demo_<playbook>_render/`
 
@@ -387,7 +400,8 @@ in round 1's Lull of a match opened as `gamectl host` opens the lobby's
 (`godot/scripts/host_link.gd`: seed `0x00000000ca5caded`, two seats, the rules
 table's own segment ladder, three rounds), through the `Host::open_from`,
 fogged `Surface::new`, `attach` and `open_lull` that `serve.rs` takes, with the
-client's first clock report (the whole Lull left). No in-process seat is
+client's first clock report (the whole first Lull left, `match.first_lull_ms`).
+No in-process seat is
 registered, because neither the built-in operator nor the advisor steps
 anything, so seat 0's frozen snapshot is the same without them. That is why
 `segment_length_ms` in the footer is the ladder's first Push, not the one-second
@@ -406,8 +420,10 @@ What moves a demo case, and what a diff means:
   `instantiate_template`, or the template's own values.
 * **The context moved** (item 109): the golden seed's map, the rules table (its
   `rules_hash` is in every report, so a tuning change moves every `_verify`
-  case, and the footer's `phase_remaining_ms` is `match.lull_ms`, so a Lull
-  re-tune moves every `_verify` and every `_render` case), the segment ladder
+  case, and the footer's `phase_remaining_ms` is `match.first_lull_ms`, so a
+  first-Lull re-tune moves every `_verify` and every `_render` case: S1's `econ`
+  moved it from 300 000 to 600 000 when the gateway began reading round 1's
+  Lull from that row), the segment ladder
   the footer names, or the frozen snapshot's shape. A
   widened snapshot moves every `report_hash` here with the verifier's own
   goldens, and the pull request re-blesses both and says why. So does a
@@ -469,9 +485,59 @@ What a diff means:
   `reachable`, which are a seat's own.
 
 The `_status` footer is the opening Lull's after the client frames the test
-reported before the call (`map_summary`'s is its second call, 299 900 of
-300 000 ms left; `resolve_refs`' its first, 299 950), with the test's
-60-second segment; a Lull re-tune moves it.
+reported before the call (`map_summary`'s is its second call, 599 900 of the
+first Lull's 600 000 ms left; `resolve_refs`' its first, 599 950), with the
+test's 60-second segment; a first-Lull re-tune moves it. S1's `econ` moved both
+by 300 000 ms when the tests began counting round 1 down from
+`match.first_lull_ms` rather than `match.lull_ms`.
+
+### `briefing/`, `economy_forecast/` and `recap/`
+
+S1's economy surfaces (S1's plan, task `econ`; the register's X-03, X-16,
+S1-11, S1-12 and S1-46), each one whole JSON-RPC answer to seat 0, produced by
+`crates/gateway/tests/economy.rs` on the golden seed in a two-seat, three-round
+match with a one-second segment: the briefing in the opening Lull, the forecast
+after the seat has sealed the cover-and-build playbook, and the recap once
+round 1's segment has ended (twenty ticks, which the Push spends walking, so
+nothing is paid but the settlement). Every number in them is the sim's or the
+verifier's:
+
+* **`standing`** is the seat's own audit line (`pharmakos_sim::audit`) and its
+  place among the audited seats on spec section 3's tie-break terms. At the
+  opening Lull both seats hold the same, so they tie and both read rank 1,
+  which `economy.rs`'s `the_displayed_rank_agrees_with_the_final_audit` holds
+  to the audit's own winners. A diff here is the economy's values (the
+  starting treasury, a structure's or unit's cost, value follows condition)
+  or the ranking.
+* **`committed_dollars`** is the verifier's projection over the seal
+  (`pharmakos_verifier::projection::project`): the beacon and the Generator in
+  its initial settings, at the rules table's prices. It moves with a price row,
+  with the projection's rules, or with the scenario playbook. It is written in
+  a Lull only.
+* **`bmi_next_dollars`** is the sim's `economy::bmi_for` at the sim's
+  `economy::ladder_place` over the living seats' held values as the world
+  stands: the BMI at the band the seat holds now, a prediction and not a
+  promise, because spending in the Push can move the ladder before the Ledger
+  reads it (`economy.rs`'s
+  `the_next_bmi_is_the_band_held_now_and_spending_in_the_push_can_move_it`).
+  Seat 0 leads the opening tie, so it is the leader's BMI; this recap's
+  `bmi_dollars` below happens to match it, because the twenty ticks spend
+  nothing. It moves with `economy.bmi_dollars` or the scaling rows.
+* **`settlement.bmi_dollars`** is the `settled` event's own value: the BMI
+  after the band's adjustment. Seat 0 leads a tie on held value (the lower
+  seat index wins a tie), so it draws the leader's malus. `award_dollars` is 0
+  until S4. `band_rank` (from 1, the leader first) and `band_percent` are the
+  sim's `economy::ladder_place` and `economy::band_percent` over the ladder as
+  the Ledger read it (decisions-log item 134 (2) (c)): band 1 at the leader's
+  malus. They move with the scaling rows or with the ladder's tie-break.
+  There is no `shortfall` here: the shipped grid carries the starting force.
+* **The prose** is `crates/gateway/src/strings.rs`'s; a wording change moves it
+  and nothing else.
+
+The forecast's and the briefing's `_status` footers are the opening Lull's
+after the client frames the test reported before each call, counted from the
+first Lull's 600 000 ms (`rules.match.first_lull_ms`); the recap's carries
+`"untimed": true`, which a recap always does, since it has no countdown.
 
 ## Conventions
 

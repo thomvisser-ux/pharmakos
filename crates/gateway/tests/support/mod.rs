@@ -46,8 +46,13 @@ pub const SEED: u64 = 0x0000_0000_ca5c_aded;
 /// A short segment: twenty ticks a test can run to the end.
 pub const SEGMENT_MS: i32 = 1_000;
 
-/// `rules.match.lull_ms`, which is what a client counts down.
+/// `rules.match.lull_ms`, which is what a client counts down in every Lull
+/// after the first.
 pub const LULL_MS: i32 = 300_000;
+
+/// `rules.match.first_lull_ms`, which is what a client counts down in round
+/// 1's Lull (decisions-log item 127 (2); `Surface::lull_length`).
+pub const FIRST_LULL_MS: i32 = 600_000;
 
 /// How much of the Lull a client reports having spent between two calls.
 pub const CLIENT_FRAME_MS: i32 = 50;
@@ -152,7 +157,7 @@ pub fn hosted_with(
     )
     .expect("a match");
     surface.attach(host).expect("attached");
-    surface.set_phase_remaining_ms(Ms::new(LULL_MS));
+    surface.set_phase_remaining_ms(Ms::new(FIRST_LULL_MS));
     surface.open_lull().expect("the opening Lull");
     surface
 }

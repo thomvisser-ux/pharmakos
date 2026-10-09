@@ -150,11 +150,11 @@ pub fn event_text(event: &Event) -> String {
 /// through the sim's one decode of its layout
 /// ([`pharmakos_sim::interpreter::StepFailed::decode`]), which since S1's
 /// `fog` also carries how many candidates a description matched; this line
-/// does not say the count yet (rendering it is `econ`'s or `ui`'s, decisions-log
-/// item 133 (3) (h)), so the Lull's counted sentence ([`this_round`]) is still
-/// the only one. A value that does not decode -- a failure id this build does
-/// not define, or bits its layout keeps zero -- is said as its code rather
-/// than guessed at.
+/// does not say the count (decisions-log item 133 (3) (h)): the recap's
+/// [`recap_step_failed`] does, and the Lull's counted sentence
+/// ([`this_round`]) says it before the Push. A value that does not decode --
+/// a failure id this build does not define, or bits its layout keeps zero --
+/// is said as its code rather than guessed at.
 fn step_failed(value: i64) -> String {
     use pharmakos_sim::interpreter::StepFailed;
     match StepFailed::decode(value) {
@@ -166,6 +166,46 @@ fn step_failed(value: i64) -> String {
         Err(refused) => format!(
             "A step failed with a failure this build does not name (code {}). Its \
              on_fail decided what came next.",
+            refused.value()
+        ),
+    }
+}
+
+/// The recap's line for one of the seat's own step failures in the segment
+/// that ended (`docs/design/targeting.md`, "Surfaces": "The recap names why a
+/// step found nothing"), `times` being how often the segment failed a step
+/// with this very value.
+///
+/// A `no_target` whose description matched something says how much it
+/// matched and that none of it was reachable -- "3 matched, none reachable"
+/// (targeting.md, "Unreachable") -- from the count `fog` put on the event and
+/// the sim's one decode of it
+/// ([`pharmakos_sim::interpreter::StepFailed::decode`]). Every other failure,
+/// and a `no_target` that matched nothing or read no feature, keeps the feed's
+/// words ([`step_failed`], whose sentence this does not change). A value that
+/// does not decode is said as its code, as the feed says it.
+#[must_use]
+pub fn recap_step_failed(value: i64, times: core::num::NonZeroUsize) -> String {
+    use pharmakos_sim::interpreter::{StepFailed, StepFailure};
+    let lead = match times.get() {
+        1 => String::from("A step"),
+        2 => String::from("Twice, a step"),
+        many => format!("{many} times, a step"),
+    };
+    match StepFailed::decode(value) {
+        Ok(StepFailed {
+            reason: StepFailure::NoTarget,
+            matched: Some(matched),
+        }) if matched > 0 => {
+            format!("{lead} found nothing: {matched} matched, none reachable.")
+        }
+        Ok(failed) => format!(
+            "{lead} failed ({}): {}.",
+            failed.reason.name(),
+            failure_reason(failed.reason)
+        ),
+        Err(refused) => format!(
+            "{lead} failed with a failure this build does not name (code {}).",
             refused.value()
         ),
     }
@@ -344,7 +384,8 @@ pub fn briefing(
     )
 }
 
-/// `get_recap`'s prose.
+/// `get_recap`'s prose, once a segment has ended: the round, how many ticks
+/// its segment ran, and how the match stands.
 ///
 /// `outcome` is the reason and **every** winner, in seat order: the last seat
 /// standing, the final audit's single winner, or the seats a shared win ties
@@ -352,11 +393,29 @@ pub fn briefing(
 /// win"). The recap names each of them.
 #[must_use]
 pub fn recap(round: u32, ticks: u32, outcome: Option<(MatchEndReason, &[u8])>) -> String {
-    let segment = format!("Round {round} ran {ticks} ticks.");
-    let Some((reason, winners)) = outcome else {
-        return format!("{segment} The match continues.");
+    format!("Round {round} ran {ticks} ticks. {}", ending(outcome))
+}
+
+/// `get_recap`'s prose when there is no segment end to read: before the first
+/// one (`first_round`), or in a match resumed since its last one, whose recap
+/// figures a resume does not carry (the surface module's PLACEHOLDER, owner
+/// at S7).
+#[must_use]
+pub fn no_recap(first_round: bool, outcome: Option<(MatchEndReason, &[u8])>) -> String {
+    let lead = if first_round {
+        "No round has ended yet."
+    } else {
+        "This match was resumed, and its last recap is not kept across a resume."
     };
-    let ended = format!("{segment} The match ended: {}.", reason.name());
+    format!("{lead} {}", ending(outcome))
+}
+
+/// How the match stands, for the recap.
+fn ending(outcome: Option<(MatchEndReason, &[u8])>) -> String {
+    let Some((reason, winners)) = outcome else {
+        return String::from("The match continues.");
+    };
+    let ended = format!("The match ended: {}.", reason.name());
     match (reason, winners) {
         (MatchEndReason::LastSeatStanding, [seat, ..]) => format!("{ended} Seat {seat} stands."),
         (_, []) => format!("{ended} The final audit names no winner."),
@@ -366,6 +425,58 @@ pub fn recap(round: u32, ticks: u32, outcome: Option<(MatchEndReason, &[u8])>) -
             seats_prose(several)
         ),
     }
+}
+
+/// The recap's settlement line, the seat's own (spec section 7,
+/// "Settlement"): what the Ledger credited it, at which band (its place on
+/// held value among the living seats, from 1 for the leader) and that band's
+/// adjustment in whole percent, and the award fund, which pays nobody until
+/// S4 brings the awards it is split by.
+#[must_use]
+pub fn settlement(bmi_dollars: i32, band_rank: u32, band_percent: i32) -> String {
+    format!(
+        "The Ledger settled and credited you $ {bmi_dollars}, your Basic Minimum Income at band \
+         {band_rank} ({band_percent:+} %). The award fund pays out from S4, when there are \
+         awards to split it by."
+    )
+}
+
+/// The recap's settlement line when its band cannot be told: the sim's event
+/// bus dropped a `settled` at this segment end, so the ladder the Ledger read
+/// cannot be rebuilt ([`feed_lost`] says how much was dropped).
+#[must_use]
+pub fn settlement_unbanded(bmi_dollars: i32) -> String {
+    format!(
+        "The Ledger settled and credited you $ {bmi_dollars}, your Basic Minimum Income at your \
+         band, which this recap cannot tell because the event feed lost part of the \
+         settlement. The award fund pays out from S4, when there are awards to split it by."
+    )
+}
+
+/// The recap's line when the sim's event bus dropped events in the segment
+/// for want of room (its per-tick cap): what follows may be short.
+#[must_use]
+pub fn feed_lost(dropped: u64) -> String {
+    format!(
+        "The event feed dropped {dropped} events this segment, so this recap may be missing \
+         some of what happened."
+    )
+}
+
+/// The recap's shortfall line, the seat's own: which of its beacons were
+/// dark when the segment ended, by name, and the kW their going dark shed
+/// (spec section 7, "flagged in plain language in the recap").
+#[must_use]
+pub fn shortfall(beacon_ids: &[String], shed_kw: i32) -> String {
+    let (verb, names) = match beacon_ids.split_last() {
+        None => ("was", String::from("none of your beacons")),
+        Some((last, [])) => ("was", last.clone()),
+        Some((last, rest)) => ("were", format!("{} and {last}", rest.join(", "))),
+    };
+    format!(
+        "When the segment ended, {names} {verb} dark: draw outran supply, and the brownout shed \
+         {shed_kw} kW."
+    )
 }
 
 /// `seats 0 and 1`, `seats 0, 1 and 2`.
@@ -405,23 +516,25 @@ pub fn beacon(id: &str, mandate: &str, hit_points: i32, own: bool) -> String {
 pub const UNRENDERABLE: &str = "This file has no canonical form yet, so there is nothing to read back. Verify it: the \
      diagnostics say where it stops being a playbook.";
 
-/// The seat's own displayed standing, when the audit that settles it has not
-/// been built.
-///
-/// PLACEHOLDER: the score and the rank are the full audit score of spec
-/// section 3. The audit now exists (`pharmakos_sim::audit`, which names a
-/// round-limit winner), but a seat's own live score and rank on the briefing
-/// are the economy's surfaces, S1's `econ` lane's (owner, at S1). Until then
-/// the standing carries the one number this surface shows -- how many seats
-/// are still standing -- and says so rather than showing a zero a player would
-/// read as a rank.
+/// `get_briefing`'s standing sentence: how many seats still stand, and the
+/// seat's own place on the displayed standing (spec section 3: "live
+/// standings show a seat its own score and displayed rank only", on the full
+/// audit score). `place` is the seat's rank and how many seats the standing
+/// ranks, or `None` for a seat out of the match, which holds no place; the
+/// score is its own either way (the register's X-03).
 #[must_use]
-pub fn standing(living: u32) -> String {
-    format!(
-        "{} still standing. Your score and rank are settled by the final audit, which the \
-         economy has not been built to run yet.",
-        count(living, "seat", "seats"),
-    )
+pub fn standing(living: u32, place: Option<(u32, u32)>, score: i32) -> String {
+    let standing = count(living, "seat", "seats");
+    match place {
+        Some((rank, of)) => format!(
+            "{standing} still standing. Your score is $ {score}, which ranks you {rank} of {of} on \
+             the final audit's terms."
+        ),
+        None => format!(
+            "{standing} still standing. You are out of the match, so you hold no place on the \
+             standing; your score is $ {score}."
+        ),
+    }
 }
 
 /// A phase, as a sentence says it.
@@ -474,7 +587,11 @@ fn capitalise(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{briefing, capitalise, clock, count, event_text, map_summary, recap, standing};
+    use super::{
+        briefing, capitalise, clock, count, event_text, failure_reason, feed_lost, map_summary,
+        no_recap, recap, recap_step_failed, settlement, settlement_unbanded, shortfall, standing,
+        step_failed,
+    };
     use pharmakos_sim::events::{Event, EventKind};
     use pharmakos_sim::math::quantity::{Ms, Tick};
     use pharmakos_sim::runner::{MatchEndReason, MatchPhase};
@@ -562,11 +679,124 @@ mod tests {
     }
 
     #[test]
+    fn the_recap_reads_a_segment_end_or_says_there_is_none() {
+        assert_eq!(
+            recap(2, 6_000, None),
+            "Round 2 ran 6000 ticks. The match continues."
+        );
+        assert_eq!(
+            no_recap(true, None),
+            "No round has ended yet. The match continues."
+        );
+        assert!(no_recap(false, None).starts_with("This match was resumed"));
+    }
+
+    #[test]
+    fn the_settlement_and_shortfall_lines_name_the_seats_own_figures() {
+        let line = settlement(113, 1, -10);
+        assert!(line.contains("credited you $ 113"), "{line}");
+        assert!(line.contains("at band 1 (-10 %)"), "{line}");
+        assert!(settlement(137, 2, 10).contains("at band 2 (+10 %)"));
+        assert!(
+            line.contains("S4"),
+            "the award fund is named as S4's: {line}"
+        );
+        assert_eq!(
+            shortfall(&[String::from("b_02")], 4),
+            "When the segment ended, b_02 was dark: draw outran supply, and the brownout shed \
+             4 kW."
+        );
+        assert_eq!(
+            shortfall(
+                &[
+                    String::from("b_01"),
+                    String::from("b_02"),
+                    String::from("b_04")
+                ],
+                12
+            ),
+            "When the segment ended, b_01, b_02 and b_04 were dark: draw outran supply, and the \
+             brownout shed 12 kW."
+        );
+    }
+
+    #[test]
+    fn a_feed_loss_is_said_and_the_unbanded_settlement_says_why() {
+        assert_eq!(
+            feed_lost(7),
+            "The event feed dropped 7 events this segment, so this recap may be missing some of \
+             what happened."
+        );
+        let line = settlement_unbanded(95);
+        assert!(line.contains("credited you $ 95"), "{line}");
+        assert!(
+            line.contains("event feed lost part of the settlement"),
+            "{line}"
+        );
+    }
+
+    #[test]
+    fn the_recaps_step_failure_says_how_much_matched_and_keeps_the_feeds_words_otherwise() {
+        use pharmakos_sim::interpreter::{StepFailed, StepFailure};
+        let times = |count: usize| core::num::NonZeroUsize::new(count).expect("a count");
+        let none_reachable = StepFailed::counted(StepFailure::NoTarget, 3).value();
+        assert_eq!(
+            recap_step_failed(none_reachable, times(1)),
+            "A step found nothing: 3 matched, none reachable."
+        );
+        assert_eq!(
+            recap_step_failed(none_reachable, times(2)),
+            "Twice, a step found nothing: 3 matched, none reachable."
+        );
+        assert_eq!(
+            recap_step_failed(none_reachable, times(4)),
+            "4 times, a step found nothing: 3 matched, none reachable."
+        );
+        // Nothing matched, or the step read no feature: the feed's words.
+        let words = "A step failed (no_target): it found nothing: nothing matched what it named, \
+                     or nothing it matched could be reached.";
+        assert_eq!(
+            recap_step_failed(
+                StepFailed::counted(StepFailure::NoTarget, 0).value(),
+                times(1)
+            ),
+            words
+        );
+        assert_eq!(
+            recap_step_failed(StepFailed::bare(StepFailure::NoTarget).value(), times(1)),
+            words
+        );
+        // Another failure keeps its words, counted or not.
+        assert_eq!(
+            recap_step_failed(
+                StepFailed::counted(StepFailure::IllegalSite, 1).value(),
+                times(1)
+            ),
+            format!(
+                "A step failed (illegal_site): {}.",
+                failure_reason(StepFailure::IllegalSite)
+            )
+        );
+        // The feed's own line does not say the count (`fog`'s words).
+        assert!(!step_failed(none_reachable).contains("none reachable"));
+        // A value that does not decode is said as its code.
+        assert_eq!(
+            recap_step_failed(10, times(1)),
+            "A step failed with a failure this build does not name (code 10)."
+        );
+    }
+
+    #[test]
     fn the_map_prose_and_the_standing_prose_say_what_they_know() {
         let prose = map_summary([384, 384, 64], "0x00000000ca5caded", 2);
         assert!(prose.contains("384 by 384 by 64"), "{prose}");
         assert!(prose.contains("0x00000000ca5caded"), "{prose}");
-        assert!(standing(2).starts_with("2 seats still standing."));
+        assert_eq!(
+            standing(2, Some((1, 2)), 412),
+            "2 seats still standing. Your score is $ 412, which ranks you 1 of 2 on the final \
+             audit's terms."
+        );
+        assert!(standing(1, None, 0).contains("You are out of the match"));
     }
 
     #[test]

@@ -20,7 +20,7 @@ use pharmakos_proto::json::Json;
 use pharmakos_sim::tables::SeatId;
 
 use support::{
-    LULL_MS, SEGMENT_MS, call, call_in_lull, code, core_beacon, hosted_as, quote, result,
+    FIRST_LULL_MS, SEGMENT_MS, call, call_in_lull, code, core_beacon, hosted_as, quote, result,
     seat_token, text_of,
 };
 
@@ -60,7 +60,7 @@ fn both_policies(match_id: &str) -> Vec<(&'static str, Surface)> {
 fn get_draft_answers_a_seat_its_own_draft() {
     for (policy, mut surface) in both_policies("m-t17-own-draft") {
         let token = seat_token(&mut surface, 0);
-        let mut left = LULL_MS;
+        let mut left = FIRST_LULL_MS;
         let playbook = pharmakos_gateway::host::SAFE_PLAYBOOK;
         let _ = result(
             &call_in_lull(
@@ -105,7 +105,7 @@ fn get_draft_never_reaches_another_seats_draft() {
     for (policy, mut surface) in both_policies("m-t17-other-draft") {
         let zero = seat_token(&mut surface, 0);
         let one = seat_token(&mut surface, 1);
-        let mut left = LULL_MS;
+        let mut left = FIRST_LULL_MS;
         let _ = result(
             &call_in_lull(
                 &mut surface,
@@ -186,7 +186,7 @@ fn a_legs_end_is_written_as_the_location_the_schema_declares() {
     let token = seat_token(&mut surface, 0);
     let (_, [cx, cy, cz]) = core_beacon(&surface, 0);
     let [bx, by, bz] = support::commander_voxel(&surface, 0);
-    let mut left = LULL_MS;
+    let mut left = FIRST_LULL_MS;
     let answer = result(
         &call_in_lull(
             &mut surface,
@@ -236,7 +236,7 @@ fn a_legs_end_is_written_as_the_location_the_schema_declares() {
 fn a_carried_draft_that_nothing_replaces_is_dropped() {
     let mut surface = hosted_as("m-t17-carried", FogPolicy::fogged(), 2, SEGMENT_MS, 3);
     let token = seat_token(&mut surface, 0);
-    let mut left = LULL_MS;
+    let mut left = FIRST_LULL_MS;
     let submitted = support::walk_east(&surface, 0, 3, 0);
     let _ = result(
         &call_in_lull(
@@ -276,7 +276,7 @@ fn a_carried_draft_that_nothing_replaces_is_dropped() {
     assert_eq!(round_three.drafts.len(), 0, "{:?}", round_three.drafts);
     assert!(round_three.continuity.is_none());
     let token = seat_token(&mut surface, 0);
-    let mut left = LULL_MS;
+    let mut left = FIRST_LULL_MS;
     let listed = result(
         &call_in_lull(&mut surface, &token, &mut left, "list_drafts", "{}"),
         "list_drafts",

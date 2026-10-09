@@ -67,9 +67,13 @@ const SEED: u64 = 0x0000_0000_ca5c_aded;
 /// a 1 000 ms Push is twenty ticks a test can run to the end.
 const SEGMENT_MS: i32 = 1_000;
 
-/// `rules.match.lull_ms`, which is what a client counts down and what the
-/// gateway derives its Lull tick from.
+/// `rules.match.lull_ms`, which is what a client counts down in every Lull
+/// after the first and what the gateway derives such a Lull's tick from.
 const LULL_MS: i32 = 300_000;
+
+/// `rules.match.first_lull_ms`, round 1's Lull, which is what a client counts
+/// down first (decisions-log item 127 (2); `Surface::lull_length`).
+const FIRST_LULL_MS: i32 = 600_000;
 
 // ---------------------------------------------------------------------------
 // A gateway with a match behind it
@@ -127,7 +131,7 @@ fn hosted_as(segment_ms: i32, fog: FogPolicy, library: Option<PathBuf>) -> Surfa
     )
     .expect("a match");
     surface.attach(host).expect("attached");
-    surface.set_phase_remaining_ms(Ms::new(LULL_MS));
+    surface.set_phase_remaining_ms(Ms::new(FIRST_LULL_MS));
     surface.open_lull().expect("the opening Lull");
     surface
 }
@@ -151,7 +155,7 @@ const CLIENT_FRAME_MS: i32 = 50;
 /// One call, as a client makes it: report the timer, then ask.
 ///
 /// The report is not decoration. A Lull consumes no sim tick, so the gateway's
-/// tick comes from `rules.match.lull_ms` minus what the client says is left
+/// tick comes from the Lull's declared length minus what the client says is left
 /// (`Surface::sync_time`) -- and everything counted in ticks, the rate limiter
 /// first among them, moves with it. A test that never moved the timer would be
 /// a client that froze its own clock and then complained about its budget.
@@ -347,7 +351,7 @@ fn the_specs_fourteen_call_walkthrough_runs_end_to_end() {
     let token = seat_token(&mut surface, 0);
     let (beacon, bx, by, bz) = own_beacon(&surface);
     let (cx, cy, cz) = commander_at(&surface);
-    let mut left = LULL_MS;
+    let mut left = FIRST_LULL_MS;
     let mut transcript = String::new();
     let mut row = |number: usize, method: &str, note: &str| {
         // Pushed piece by piece rather than through `format!`:
@@ -1529,7 +1533,7 @@ fn the_transport_bounds_refuse_rather_than_silently_correcting() {
     // rate limiter is counted in ticks and thirty-three saves in one of them is
     // a different refusal from the one this is about.
     let cap = pharmakos_gateway::surface::planning::MAX_DRAFTS;
-    let mut left = LULL_MS;
+    let mut left = FIRST_LULL_MS;
     for number in 0..cap {
         let saved = call(
             &mut surface,
@@ -1637,7 +1641,7 @@ fn an_auto_named_draft_never_lands_on_an_id_the_client_already_holds() {
 /// `MatchTime::tick` never goes backwards, in any phase or across any boundary.
 ///
 /// A Lull consumes no sim tick, so the gateway derives the Lull's elapsed ticks
-/// from `rules.match.lull_ms` and what the client says is left. The trap is the
+/// from the Lull's declared length and what the client says is left. The trap is the
 /// boundary: a derivation that only applied *inside* the Lull would drop the
 /// reported tick by a whole Lull the instant the Push began -- and
 /// `limit::RateLimiter::admit` refuses to refill a budget from a tick that went
@@ -1653,7 +1657,7 @@ fn the_gateways_tick_never_goes_backwards_across_a_phase_boundary() {
     };
 
     note("the opening Lull", &surface);
-    // Half of LULL_MS, then none of it, written out rather than divided: the
+    // Part of the first Lull, then none of it, written out rather than divided: the
     // rounding lint is denied inside a test too, and a literal is clearer than
     // a checked division for a number this file already fixes.
     for left in [90_000, 0] {
@@ -1715,7 +1719,7 @@ fn a_seat_calling_once_a_tick_through_a_push_is_never_rate_limited() {
 
     // The Lull, counted down by the client and used by it: a handful of
     // planning calls, the last of them with the timer at zero.
-    let mut left = LULL_MS;
+    let mut left = FIRST_LULL_MS;
     for _ in 0..4 {
         let response = call(&mut surface, &token, &mut left, "get_status", "{}");
         let _ = result(&response, "a planning call in the Lull");
@@ -1999,8 +2003,8 @@ fn two_seats_submit_different_playbooks_and_the_push_executes_both() {
     let mut surface = hosted_with(WALK_MS);
     let zero = seat_token(&mut surface, 0);
     let one = seat_token(&mut surface, 1);
-    let mut left_zero = LULL_MS;
-    let mut left_one = LULL_MS;
+    let mut left_zero = FIRST_LULL_MS;
+    let mut left_one = FIRST_LULL_MS;
 
     let from_zero = commander_voxel(&surface, 0);
     let from_one = commander_voxel(&surface, 1);
@@ -2123,8 +2127,8 @@ fn no_fog_policy_shows_one_seat_the_other_seats_orders() {
         let mut surface = hosted_as(WALK_MS, fog, None);
         let zero = seat_token(&mut surface, 0);
         let one = seat_token(&mut surface, 1);
-        let mut left_zero = LULL_MS;
-        let mut left_one = LULL_MS;
+        let mut left_zero = FIRST_LULL_MS;
+        let mut left_one = FIRST_LULL_MS;
 
         let playbook_zero = walk_east(&surface, 0, WALK_VOXELS, 0);
         let playbook_one = walk_east(&surface, 1, WALK_VOXELS, 2);
@@ -2211,7 +2215,7 @@ fn no_fog_policy_shows_one_seat_the_other_seats_orders() {
 fn a_seat_that_submitted_nothing_has_the_safe_playbook_sealed_into_the_world() {
     let mut surface = hosted_with(WALK_MS);
     let zero = seat_token(&mut surface, 0);
-    let mut left = LULL_MS;
+    let mut left = FIRST_LULL_MS;
     let playbook = walk_east(&surface, 0, WALK_VOXELS, 0);
     submit(&mut surface, &zero, &mut left, &playbook);
 
@@ -2238,8 +2242,8 @@ fn round_twos_submission_replaces_round_ones_in_the_world() {
     let mut surface = hosted_with(WALK_MS);
     let zero = seat_token(&mut surface, 0);
     let one = seat_token(&mut surface, 1);
-    let mut left_zero = LULL_MS;
-    let mut left_one = LULL_MS;
+    let mut left_zero = FIRST_LULL_MS;
+    let mut left_one = FIRST_LULL_MS;
 
     let round_one = walk_east(&surface, 0, WALK_VOXELS, 0);
     submit(&mut surface, &zero, &mut left_zero, &round_one);
@@ -2603,7 +2607,7 @@ fn assert_sim_refusal(response: &Json, what: &str, names: &str, stage: &str) {
 fn a_playbook_this_build_cannot_execute_is_a_method_error_and_keeps_the_old_seal() {
     let mut surface = hosted();
     let token = seat_token(&mut surface, 0);
-    let mut left = LULL_MS;
+    let mut left = FIRST_LULL_MS;
 
     // A seal to protect, made first.
     let good = pharmakos_gateway::host::SAFE_PLAYBOOK;

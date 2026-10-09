@@ -109,7 +109,7 @@
 //!
 //! * **saved** -- every seat's notebook, drafts and seal, and `lull_offset`;
 //! * **derived** -- `time` (round and phase from the restored runner),
-//!   `host`, `feed_anchor`, the fog policy's eliminations (from the restored
+//!   `host`, `lulls` (the Lulls' lengths, from the rules table), `feed_anchor`, the fog policy's eliminations (from the restored
 //!   seat table), `views` (the generated map re-encoded from the pristine
 //!   world, every chunk an edit touched re-marked, the stamp restarting, and
 //!   the view's id minted with the resume's generation folded in, so every
@@ -119,9 +119,11 @@
 //!   3's "seat tokens are reissued"), `limits` and `limiters`,
 //!   `lull_remaining_ms`, `reported_elapsed_ms` and `phase_elapsed` (the
 //!   client re-reports its clock), every ready flag, the operator's advice
-//!   (the advisor re-runs at a resumed Lull), and `feed`: a replayed Push
-//!   regenerates it, and a resumed Lull's is empty. PLACEHOLDER: the last
-//!   recap's events do not survive a resume -- **OWNER**, at **S7**.
+//!   (the advisor re-runs at a resumed Lull), `feed`: a replayed Push
+//!   regenerates it, and a resumed Lull's is empty, and `recap`, the last
+//!   segment's facts, which a segment that ends in this process sets again.
+//!   PLACEHOLDER: the last recap's events do not survive a resume -- **OWNER**,
+//!   at **S7**.
 //!
 //! # Secrecy
 //!
@@ -149,7 +151,7 @@ use crate::save::{
     Boundary, Continuation, Persistence, SavedMatch, SavedSeal, SavedSeat, SealedFile, SegmentChain,
 };
 use crate::scopes::{self, Scope};
-use crate::time::MatchTime;
+use crate::time::{LullLengths, MatchTime};
 use crate::token::{Grant, Handle, Subject, Token, TokenStore};
 use crate::viewfeed::ViewFeed;
 use pharmakos_proto::gp::api::v1::status::Phase;
@@ -157,7 +159,7 @@ use pharmakos_proto::gp::api::v1::verify_plan::Depth;
 use pharmakos_proto::gp::api::v1::{Method, VerifyReport};
 use pharmakos_proto::json::Json;
 use pharmakos_sim::interpreter::Plan;
-use pharmakos_sim::math::quantity::{Ms, Tick};
+use pharmakos_sim::math::quantity::{Kw, Money, Ms, Tick};
 use pharmakos_sim::rules::RulesTable;
 use pharmakos_sim::runner::{MatchPhase, TickReport};
 use pharmakos_sim::tables::SeatId;
@@ -364,6 +366,10 @@ pub struct Surface {
     match_id: String,
     match_seed: u64,
     rules: RulesTable,
+    /// The Lulls' declared lengths, read from `rules` once and typed
+    /// ([`LullLengths`]): round 1's is `match.first_lull_ms`, every later
+    /// one's `match.lull_ms`.
+    lulls: LullLengths,
     time: MatchTime,
     tokens: TokenStore,
     fog: FogPolicy,
@@ -419,6 +425,209 @@ pub struct Surface {
     /// The current segment's per-tick chain, as it is played: the private
     /// replay's third input, written at the segment's end.
     chain: Vec<(Tick, u64)>,
+    /// What the last segment's end left for its recap, read off the sim's own
+    /// events as they arrive ([`Surface::absorb_events`]). `None` until a
+    /// segment has ended in this process: a resume does not carry it, as it
+    /// does not carry the recap's events (the module doc's PLACEHOLDER).
+    recap: Option<RecapFacts>,
+    /// The `step_failed` events of the segment now being played, as
+    /// `(seat, value)` in the order the sim emitted them: moved into the
+    /// recap's record when the segment ends ([`Surface::note_for_the_recap`]).
+    segment_failures: Vec<(SeatId, i64)>,
+    /// How many events the sim's bus had dropped, ever, when the host loop
+    /// last drained it (`EventBus::dropped`): the mark the next drain's loss
+    /// is counted from.
+    bus_dropped: u64,
+    /// How many events the bus has dropped during the segment now being
+    /// played, before its end: moved into the recap's record when it ends.
+    segment_dropped: u64,
+    /// The events the bus dropped at a segment end whose own `segment_ended`
+    /// was among them, so no record of it was opened: `get_recap` refuses
+    /// rather than tell the segment before it ([`RecapLoss`]).
+    recap_lost: Option<u64>,
+}
+
+/// What one segment's end told the recap, as the sim reported it: the round,
+/// how many ticks the segment ran (`segment_ended`'s value), what the Ledger
+/// credited each seat (`settled`'s value), each seat's held value, which of
+/// each seat's beacons were dark when it ended and what their going dark
+/// shed, and which of each seat's steps failed during it.
+///
+/// Derived, unhashed gateway state, like the feed it is read beside. Kept
+/// because a recap reads the segment that has **closed**, and once it has
+/// closed the match state no longer says how long it ran: the sim moves the
+/// segment's start to the closing tick, so a count taken from it reads 0
+/// ticks for a round that ran in full (the recap's "Round N ran 0 ticks",
+/// found by the `check` lane; decisions-log item 130 (4)).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(crate) struct RecapFacts {
+    /// The round whose segment ended, from 1.
+    pub(crate) round: u32,
+    /// How many ticks it ran.
+    pub(crate) ticks: u32,
+    /// What the Ledger credited each seat at this settlement, whole `$`, in
+    /// the order the sim settled them (ascending seat).
+    pub(crate) settled: Vec<(SeatId, i64)>,
+    /// Each seat's own living beacons that were dark when the segment ended;
+    /// a seat with none dark is absent.
+    pub(crate) dark: Vec<DarkAtEnd>,
+    /// Each seat's held value as the world stood once the segment had ended,
+    /// the Ledger's credit included, by seat index: `None` for a seat that
+    /// is out of the match, which is off the settlement's ladder
+    /// ([`RecapFacts::band`]).
+    pub(crate) held: Vec<(SeatId, Option<Money>)>,
+    /// The segment's `step_failed` events, `(seat, value)`, in the order the
+    /// sim emitted them.
+    pub(crate) failures: Vec<(SeatId, i64)>,
+    /// How many events the sim's bus dropped for want of room during the
+    /// segment and at its end (`EventBus::dropped`, a per-tick cap): when it
+    /// is not 0, `failures` may be short and a `settled` may be missing.
+    pub(crate) dropped: u64,
+}
+
+/// Why [`RecapFacts::band`] tells no band.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(crate) enum BandError {
+    /// The sim's event bus dropped events at this segment, a `settled` among
+    /// them, so the ladder the Ledger read cannot be rebuilt: the band is not
+    /// told, and the rest of the recap still is.
+    FeedLost {
+        /// How many events the bus dropped during the segment and at its end.
+        dropped: u64,
+    },
+    /// The sim and this crate disagreeing about the settlement: `INTERNAL`.
+    Gateway(Error),
+}
+
+impl From<Error> for BandError {
+    fn from(error: Error) -> BandError {
+        BandError::Gateway(error)
+    }
+}
+
+/// A segment end whose record was lost with the events the bus dropped
+/// ([`Surface::recap_loss`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct RecapLoss {
+    /// How many events the bus dropped at that segment end.
+    pub(crate) dropped: u64,
+}
+
+/// One seat's dark beacons at a segment's end ([`RecapFacts::dark`]).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(crate) struct DarkAtEnd {
+    /// The seat.
+    pub(crate) seat: SeatId,
+    /// Its living dark beacons, by per-seat ordinal, ascending.
+    pub(crate) ordinals: Vec<u32>,
+    /// The **shed kW**: the draw the brownout order took off the seat's grid
+    /// net of the supply that went dark with it, the sim's own read
+    /// ([`pharmakos_sim::power::dark_load`], [`pharmakos_sim::power::DarkLoad::shed`]).
+    pub(crate) shed: Kw,
+}
+
+/// A seat's band at a settlement: its place on the ladder, from 1 for the
+/// leader (`gp.api.v1.Settlement.band_rank`), and the band's adjustment to
+/// the BMI in whole percent (`band_percent`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct Band {
+    /// From 1, the leader first.
+    pub(crate) rank: u32,
+    /// Whole percent, truncated toward zero.
+    pub(crate) percent: i32,
+}
+
+impl RecapFacts {
+    /// The band `seat` was settled at, read through the sim's own
+    /// [`pharmakos_sim::economy::ladder_place`] and
+    /// [`pharmakos_sim::economy::band_percent`] over the ladder as the Ledger
+    /// read it: each living seat's held value less the credit it was then
+    /// paid, as `crates/sim/tests/settlement.rs` recovers it (a recap
+    /// consumes no tick, and nothing else moves a treasury at that tick's
+    /// end). `None` for a seat that was not settled.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::Internal`] when a living seat has no credit or
+    /// is missing from the ladder, a subtraction overflows, or the sim's read
+    /// refuses: each is the sim and this crate disagreeing about the
+    /// settlement it just reported.
+    pub(crate) fn band(&self, rules: &RulesTable, seat: SeatId) -> Result<Option<Band>, BandError> {
+        if !self.settled.iter().any(|(held, _)| *held == seat) {
+            return Ok(None);
+        }
+        let ladder = self
+            .held
+            .iter()
+            .map(|(held, value)| {
+                value
+                    .map(|value| {
+                        let paid = self
+                            .settled
+                            .iter()
+                            .find(|(settled, _)| settled == held)
+                            .map(|(_, credit)| *credit)
+                            .ok_or_else(|| match self.dropped {
+                                0 => BandError::Gateway(Error::internal(format!(
+                                    "seat {} is in the match and the Ledger credited it nothing",
+                                    held.raw()
+                                ))),
+                                dropped => BandError::FeedLost { dropped },
+                            })?;
+                        value
+                            .raw()
+                            .checked_sub(paid)
+                            .map(Money::new)
+                            .ok_or_else(|| {
+                                BandError::Gateway(Error::internal(
+                                    "a seat's held value less its credit does not fit $",
+                                ))
+                            })
+                    })
+                    .transpose()
+            })
+            .collect::<Result<Vec<Option<Money>>, BandError>>()?;
+        let index = self
+            .held
+            .iter()
+            .position(|(held, _)| *held == seat)
+            .ok_or_else(|| {
+                Error::internal(format!(
+                    "the Ledger settled seat {}, which the seat table does not hold",
+                    seat.raw()
+                ))
+            })?;
+        let place = ladder_place(&ladder, index)?;
+        let rank = place
+            .rank
+            .checked_add(1)
+            .ok_or_else(|| Error::internal("a ladder place does not count from 1"))?;
+        let percent = pharmakos_sim::economy::band_percent(rules, place.rank, place.living)
+            .map_err(|refused| {
+                Error::internal(format!(
+                    "the sim's band read refused a settlement: {refused}"
+                ))
+            })?;
+        Ok(Some(Band { rank, percent }))
+    }
+}
+
+/// The sim's [`pharmakos_sim::economy::ladder_place`] for the seat at `index`
+/// on `ladder`.
+///
+/// # Errors
+///
+/// [`crate::error::Code::Internal`] when the sim's read refuses: the caller
+/// built the ladder from the seats in the match and asked of one of them.
+pub(crate) fn ladder_place(
+    ladder: &[Option<Money>],
+    index: usize,
+) -> Result<pharmakos_sim::economy::LadderPlace, Error> {
+    pharmakos_sim::economy::ladder_place(ladder, index).map_err(|refused| {
+        Error::internal(format!(
+            "the sim's ladder read refused a seat in the match: {refused}"
+        ))
+    })
 }
 
 impl Surface {
@@ -429,7 +638,8 @@ impl Surface {
     /// [`crate::error::Code::InvalidArgument`] for a match id
     /// [`crate::cache::MatchCache::valid_match_id`] refuses -- the same gate the
     /// filesystem uses, applied here so a match whose id could not be written
-    /// down never starts.
+    /// down never starts -- and for a rules table whose Lull rows are missing
+    /// or not positive ([`LullLengths::from_rules`]).
     pub fn new(
         match_id: &str,
         match_seed: u64,
@@ -442,6 +652,8 @@ impl Surface {
                 "`{match_id}` is not a match id this gateway will host"
             )));
         }
+        let lulls =
+            LullLengths::from_rules(&rules).map_err(|why| Error::invalid(why.to_string()))?;
         let mut slots: Vec<SeatState> = seats.iter().copied().map(SeatState::new).collect();
         slots.sort_by_key(|slot| slot.seat.raw());
         slots.dedup_by_key(|slot| slot.seat.raw());
@@ -449,6 +661,7 @@ impl Surface {
             match_id: match_id.to_owned(),
             match_seed,
             rules,
+            lulls,
             time: MatchTime::lobby(),
             tokens: TokenStore::new(),
             fog,
@@ -467,6 +680,11 @@ impl Surface {
             views: ViewFeed::new(),
             pending: Persistence::default(),
             chain: Vec::new(),
+            recap: None,
+            segment_failures: Vec::new(),
+            bus_dropped: 0,
+            segment_dropped: 0,
+            recap_lost: None,
         })
     }
 
@@ -623,6 +841,26 @@ impl Surface {
                 None => None,
                 Some(seal) => Some(restore_seal(held, seal, &rules)?),
             };
+            // A seal of the round the save resumes into prices, as the door
+            // that sealed it required (`Surface::seal_commitment`), so the
+            // forecast's `committed_dollars` answers after a resume as before
+            // it. A save holding one that does not was never written by a
+            // build with that door.
+            if let Some(seal) = sealed.as_ref()
+                && seal.round == self.host()?.runner().round()
+            {
+                self.seal_commitment(SeatId::new(held.seat), &seal.playbook_jsonc)
+                    .map_err(|unpriced| match unpriced {
+                        crate::surface::knowledge::Unpriced::Gateway(error) => error,
+                        crate::surface::knowledge::Unpriced::Playbook(why) => {
+                            Error::invalid(format!(
+                                "seat {}'s sealed playbook in this save does not price: {why}: \
+                                 the file is damaged",
+                                held.seat
+                            ))
+                        }
+                    })?;
+            }
             if let Some(slot) = self
                 .seats
                 .iter_mut()
@@ -868,6 +1106,7 @@ impl Surface {
             )));
         }
         let round = host.runner().round();
+        self.bus_dropped = host.world().event_bus().dropped();
         self.host = Some(host);
         self.sync_time();
         self.begin_segment(round, 0);
@@ -975,17 +1214,42 @@ impl Surface {
     /// not a budget the limiter spends, but it **is** what every seat reads
     /// off the `_status` footer as the time it has left to plan, so an
     /// unbounded one would let the lobby tell a seat its Lull lasts a day.
-    /// The bound is the Lull's own declared length, `rules.match.lull_ms` --
-    /// a tuning value read from the rules table and not a constant of this
-    /// crate's (AGENTS.md section 12) -- and it is refused rather than
-    /// clamped like the other three.
+    /// The bound is the Lull's own declared length for the round the match is
+    /// on ([`Surface::lull_length`]): `rules.match.first_lull_ms` for round
+    /// 1's Lull and `rules.match.lull_ms` for every later one -- tuning values
+    /// read from the rules table and not constants of this crate's (AGENTS.md
+    /// section 12) -- and it is refused rather than clamped like the other
+    /// three. The bound is always the **current** round's Lull: in a Push or
+    /// a recap the round has not moved on yet, so it is that round's Lull, not
+    /// the next one's. `report_host_clock` refuses a non-zero countdown
+    /// outside a Lull before it gets here (`serve_report_host_clock`), and a
+    /// countdown reported outside a Lull is not kept.
+    ///
+    /// This is the report **with** a countdown: a Lull it reaches is timed
+    /// from then on, even at 0. A report of the elapsed time alone goes
+    /// through `Surface::report_clock` with no countdown, and leaves a Lull
+    /// untimed (S1-11).
     ///
     /// # Errors
     ///
     /// [`crate::error::Code::InvalidArgument`] for a negative, backwards or
     /// jumping clock, and for a countdown longer than the Lull itself.
     pub fn set_host_clock(&mut self, elapsed: Ms, remaining: Ms) -> Result<(), Error> {
-        if elapsed.raw() < 0 || remaining.raw() < 0 {
+        self.report_clock(elapsed, Some(remaining))
+    }
+
+    /// [`Surface::set_host_clock`], with the countdown optional: `None` is a
+    /// host that reported only the time it has spent in the phase, which
+    /// says nothing about a countdown, so the countdown stays as it was last
+    /// reported -- and a Lull no host has put a countdown on stays untimed,
+    /// rather than reading as a timer at 0 that ran out (S1's plan, decision
+    /// 12; the register's S1-11).
+    ///
+    /// # Errors
+    ///
+    /// As [`Surface::set_host_clock`].
+    pub(crate) fn report_clock(&mut self, elapsed: Ms, remaining: Option<Ms>) -> Result<(), Error> {
+        if elapsed.raw() < 0 || remaining.is_some_and(|remaining| remaining.raw() < 0) {
             return Err(Error::invalid(
                 "a clock is reported in game milliseconds and neither figure is ever negative",
             ));
@@ -1008,20 +1272,38 @@ impl Surface {
                 crate::surface::control::MAX_CLOCK_STEP_MS
             )));
         }
-        let lull_ms = self.lull_ms();
-        if remaining.raw() > lull_ms {
+        let lull = self.lull_length(self.time.round);
+        if let Some(remaining) = remaining
+            && remaining > lull
+        {
             return Err(Error::invalid(format!(
-                "`remaining_ms` is what is left of a Lull and a Lull is {lull_ms} ms long; this \
-                 reports {} ms left, which is refused rather than clamped",
+                "`remaining_ms` is what is left of a Lull and this round's Lull is {} ms long; \
+                 this reports {} ms left, which is refused rather than clamped",
+                lull.raw(),
                 remaining.raw()
             )));
         }
         self.reported_elapsed_ms = Some(elapsed);
-        if self.time.phase == Phase::Lull {
+        if self.time.phase == Phase::Lull
+            && let Some(remaining) = remaining
+        {
             self.lull_remaining_ms = Some(remaining);
         }
         self.sync_time();
         Ok(())
+    }
+
+    /// How long the Lull that opens round `round` is declared to be:
+    /// `rules.match.first_lull_ms` for round 1 and `rules.match.lull_ms` for
+    /// every round after it ([`LullLengths::for_round`]).
+    ///
+    /// The host reads it to tell the gateway a Lull's whole length when it
+    /// spends no host time in one (`gamectl scenario run`, `gamectl seat
+    /// doctor`; AGENTS.md section 4.5), so a host and the gateway can never
+    /// disagree about which row a round's Lull is.
+    #[must_use]
+    pub const fn lull_length(&self, round: u32) -> Ms {
+        self.lulls.for_round(round)
     }
 
     /// True when every seat of the match has said it is ready.
@@ -1433,8 +1715,10 @@ impl Surface {
     ///
     /// So the tick here is the runner's **plus every tick of host time no sim
     /// tick covered**, derived from two numbers the gateway is given rather
-    /// than from a clock it read: `rules.match.lull_ms`, which is the Lull's
-    /// length, and the client's own answer to how much of it is left
+    /// than from a clock it read: the Lull's declared length
+    /// ([`Surface::lull_length`]: round 1's `rules.match.first_lull_ms`, every
+    /// later round's `rules.match.lull_ms`), and the client's own answer to how
+    /// much of it is left
     /// ([`Surface::set_phase_remaining_ms`]). That is decisions-log item 99's
     /// arrangement exactly -- "the Lull's timer stays on the client side of the
     /// wall" and what reaches the gateway is the host's answer, in ticks of
@@ -1457,23 +1741,24 @@ impl Surface {
     /// sim's tick, so anything that has to be in sim-tick space reads
     /// `host.runner().tick()` instead -- [`Surface::begin_segment`] is the one
     /// place that does. And the derivation applies to the **Lull** and to no
-    /// other phase: `rules.match.lull_ms` is a Lull's length and means nothing
-    /// measured against a recap, which has no declared length at all and simply
-    /// holds the tick still for as long as it lasts.
-    /// `rules.match.lull_ms`: how long a Lull is declared to be.
+    /// other phase: a Lull's length means nothing measured against a recap,
+    /// which has no declared length at all and simply holds the tick still for
+    /// as long as it lasts.
     ///
-    /// A tuning value, read from the rules table the surface was built with
-    /// rather than written into this crate as a constant (AGENTS.md section
-    /// 12). Zero when the table has no match settings, which is a table no
-    /// shipped match runs on.
-    fn lull_ms(&self) -> i32 {
-        self.rules
-            .message()
-            .r#match
-            .as_ref()
-            .map_or(0, |settings| settings.lull_ms)
-    }
-
+    /// # No countdown is told apart from one that ran out
+    ///
+    /// `untimed` is the footer's answer to "is `phase_remaining_ms` a timer at
+    /// all" (`gp.api.v1.Status.untimed`; S1's plan, decision 12, the register's
+    /// S1-11). The lobby, a recap and an ended match have no declared length
+    /// and are untimed; a Push is game time and never is; and a Lull is timed
+    /// once its host has reported a countdown for it, which is the only
+    /// evidence the gateway has of one, because the Lull's timer is the
+    /// client's (decisions-log item 99). A Lull no host has put a countdown on
+    /// -- before the first report that carries one, or one run with no timer
+    /// at all, as S6's untimed Probation Lulls will be, whose host reports
+    /// only the time it spends (`report_host_clock` with no `remaining_ms`)
+    /// -- reads `untimed` rather than a 0 a client would show as a timer that
+    /// ran out.
     fn sync_time(&mut self) {
         let Some(host) = self.host.as_ref() else {
             return;
@@ -1489,27 +1774,21 @@ impl Surface {
         let in_push = runner.phase() == MatchPhase::Push;
         let in_lull = runner.phase() == MatchPhase::Lull;
         let reported = self.lull_remaining_ms;
-        // PLACEHOLDER: what `_status.phase_remaining_ms` shows outside a Push
-        // is the client's own report, and zero when there is none -- which
-        // makes an UNTIMED Lull and a RECAP read identically to a Lull whose
-        // timer has just run out. A recap has no declared length at all, and
-        // `serve_report_host_clock` now refuses a countdown outside a Lull,
-        // so the recap's figure is fixed at zero by this lane rather than
-        // decided. Whether a recap and an untimed Lull should instead be a
-        // distinguishable "no countdown" is **OWNER**, at **S1**, with the
-        // recap screen.
+        // Outside a Push the figure is the client's own report, and 0 when
+        // there is none; `untimed` is what says that 0 is no countdown rather
+        // than one that ran out (S1-11, ruled by decision 12).
+        let untimed = match runner.phase() {
+            MatchPhase::Push => false,
+            MatchPhase::Lull => reported.is_none(),
+            MatchPhase::Recap | MatchPhase::Ended => true,
+        };
         let remaining = if in_push {
             let elapsed = runner.tick().since(state.segment_started());
             Ms::from_ticks(state.segment_ticks().saturating_sub(elapsed))
         } else {
             reported.unwrap_or(Ms::ZERO)
         };
-        let lull_ms = host
-            .rules()
-            .message()
-            .r#match
-            .as_ref()
-            .map_or(0, |settings| settings.lull_ms);
+        let lull_ms = self.lulls.for_round(runner.round()).raw();
         // In a Push the sim's own tick is the clock. Outside one, the host's
         // own report is taken first -- it is phase-neutral and is what a recap
         // and an ended match have -- and the Lull's countdown is the older
@@ -1543,6 +1822,7 @@ impl Surface {
             phase_remaining_ms: remaining,
             segment_length_ms: runner.frozen().coming_segment_ms(),
             round: runner.round(),
+            untimed,
         };
     }
 
@@ -1579,7 +1859,12 @@ impl Surface {
         };
         let drained = host.drain_events();
         let anchor = self.feed_anchor;
+        let ended = drained
+            .iter()
+            .any(|event| event.kind == pharmakos_sim::events::EventKind::SegmentEnded);
+        self.count_drops(ended)?;
         for event in drained {
+            self.note_for_the_recap(&event)?;
             let kind = Kind::new(event.kind.name()).map_err(|error| {
                 Error::internal(format!(
                     "the sim emitted `{}`, which this feed will not carry: {}",
@@ -1597,6 +1882,123 @@ impl Surface {
             })?;
         }
         Ok(())
+    }
+
+    /// Keep what a segment's end tells the recap ([`RecapFacts`]).
+    ///
+    /// `segment_ended` opens a new record, with the ticks the segment ran,
+    /// every seat's dark beacons and what they shed, and every seat's held
+    /// value, read off the world as it stands, which is the world at that
+    /// segment end: the host drains the bus right after the tick that closed
+    /// the segment ([`Surface::step`]). It takes the segment's `step_failed`
+    /// events with it, which arrive before it (the sim closes a segment at its
+    /// tick's end). Each `settled` that follows it in the same tick adds what
+    /// the Ledger credited one seat. Every other kind is the feed's alone.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::Internal`] when a `segment_ended` carries a tick
+    /// count that is not one, a `settled` arrives naming no seat or with no
+    /// segment end before it, a `step_failed` names no seat, or the grid's
+    /// shed read refuses: each is the sim and this crate disagreeing
+    /// about the event's shape.
+    fn note_for_the_recap(&mut self, event: &pharmakos_sim::events::Event) -> Result<(), Error> {
+        use pharmakos_sim::events::EventKind;
+        match event.kind {
+            EventKind::SegmentEnded => {
+                let ticks = u32::try_from(event.value).map_err(|_| {
+                    Error::internal(format!(
+                        "the sim ended a segment after {} ticks, which is not a tick count",
+                        event.value
+                    ))
+                })?;
+                let host = self.host()?;
+                let world = host.world();
+                let facts = RecapFacts {
+                    round: host.runner().round(),
+                    ticks,
+                    settled: Vec::new(),
+                    dark: dark_beacons(world)?,
+                    held: held_values(world),
+                    failures: std::mem::take(&mut self.segment_failures),
+                    dropped: core::mem::take(&mut self.segment_dropped),
+                };
+                self.recap = Some(facts);
+                self.recap_lost = None;
+            }
+            EventKind::StepFailed => {
+                let seat = event.seat.ok_or_else(|| {
+                    Error::internal("a step failed and the sim named no seat for it")
+                })?;
+                self.segment_failures.push((seat, event.value));
+            }
+            EventKind::Settled => {
+                let seat = event.seat.ok_or_else(|| {
+                    Error::internal("the Ledger settled a credit and named no seat for it")
+                })?;
+                let facts = self.recap.as_mut().ok_or_else(|| {
+                    Error::internal("the Ledger settled before any segment had ended")
+                })?;
+                facts.settled.push((seat, event.value));
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Count what the sim's bus dropped since the last drain
+    /// (`EventBus::dropped`, which counts every drop the bus ever made) and
+    /// put it where the recap will read it: on the segment now being played,
+    /// which its record takes when it ends, or -- when this drain carries a
+    /// `segment_ended` -- on that segment, since the drops of its closing tick
+    /// are its own. A segment end that left no `segment_ended` because the
+    /// bus dropped it is a lost record ([`RecapLoss`]): the recap refuses
+    /// rather than tell the segment before it. Called before the drain's
+    /// events are read, so the record this drain opens starts with the count.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::Internal`] when the bus's count goes down or a
+    /// sum overflows, which a bus that only ever counts up cannot do.
+    fn count_drops(&mut self, ended: bool) -> Result<(), Error> {
+        let host = self.host()?;
+        let now = host.world().event_bus().dropped();
+        let phase = host.runner().phase();
+        let round = host.runner().round();
+        let lost = now.checked_sub(self.bus_dropped).ok_or_else(|| {
+            Error::internal("the sim's event bus counted fewer drops than before")
+        })?;
+        self.bus_dropped = now;
+        if lost == 0 {
+            return Ok(());
+        }
+        self.segment_dropped = self
+            .segment_dropped
+            .checked_add(lost)
+            .ok_or_else(|| Error::internal("a segment dropped more events than a count holds"))?;
+        let unrecorded = self.recap.as_ref().is_none_or(|facts| facts.round != round);
+        if !ended && matches!(phase, MatchPhase::Recap | MatchPhase::Ended) && unrecorded {
+            // The segment closed in this drain and its `segment_ended` was
+            // dropped with the rest: no record of this round's end opens.
+            self.recap = None;
+            self.recap_lost = Some(core::mem::take(&mut self.segment_dropped));
+        }
+        Ok(())
+    }
+
+    /// A segment end whose record the bus's drops lost, when the last one
+    /// was ([`Surface::count_drops`]).
+    pub(crate) const fn recap_loss(&self) -> Option<RecapLoss> {
+        match self.recap_lost {
+            Some(dropped) => Some(RecapLoss { dropped }),
+            None => None,
+        }
+    }
+
+    /// What the last segment's end told the recap, when a segment has ended
+    /// in this process.
+    pub(crate) const fn recap_facts(&self) -> Option<&RecapFacts> {
+        self.recap.as_ref()
     }
 
     /// Who one sim event is for.
@@ -2140,7 +2542,7 @@ impl Surface {
             });
         }
 
-        for read in crate::targeting::feature_reads(world, Some(seat))? {
+        for read in crate::targeting::feature_reads(world, Some(seat)) {
             scope.push_feature(pharmakos_verifier::KnownFeature {
                 feature_id: read.name,
                 kind: match read.kind {
@@ -2441,7 +2843,7 @@ impl Surface {
 
             // Knowledge.
             Method::GetBriefing => self.get_briefing(subject, held, request),
-            Method::GetRecap => self.get_recap(request),
+            Method::GetRecap => self.get_recap(subject, request),
             Method::ListBeacons => self.list_beacons(subject, held, request, vision),
             Method::GetBeacon => self.get_beacon(subject, held, request, vision),
             Method::GetMapSummary => self.get_map_summary(subject, request),
@@ -2723,6 +3125,107 @@ impl Surface {
     }
 }
 
+/// Every seat's own living beacons that are dark as the world stands, by
+/// per-seat ordinal, with the kW their going dark shed: the seats in
+/// ascending id and each seat's ordinals ascending, which is
+/// `gp.api.v1.Shortfall.beacon_ids`' order. A seat with no dark beacon is
+/// left out. A beacon that has died is not dark: it is gone, and the recap's
+/// shortfall line is about the grid.
+///
+/// # Errors
+///
+/// [`crate::error::Code::Internal`] when the grid's shed read refuses a seat
+/// ([`pharmakos_sim::power::PowerError`]: its rules, its seat, or an
+/// overflow), which is never told as a 0, and when a beacon row has no
+/// dormancy, hit points, seat or ordinal: the beacon table's columns are one length by
+/// construction, so a short column is the sim and this crate disagreeing,
+/// and a beacon dropped from the recap over it would be a shortfall told
+/// short.
+fn dark_beacons(world: &pharmakos_sim::world::World) -> Result<Vec<DarkAtEnd>, Error> {
+    let beacons = world.beacons();
+    let column = |name: &str, row: usize| {
+        Error::internal(format!("the beacon table has no {name} for row {row}"))
+    };
+    let mut found: Vec<(u8, u32)> = Vec::new();
+    for row in 0..beacons.ids().len() {
+        let dormant = *beacons
+            .dormant()
+            .get(row)
+            .ok_or_else(|| column("dormancy", row))?;
+        let alive = beacons
+            .hit_points()
+            .get(row)
+            .ok_or_else(|| column("hit points", row))?
+            .is_alive();
+        if !(dormant && alive) {
+            continue;
+        }
+        let seat = *beacons
+            .seats()
+            .get(row)
+            .ok_or_else(|| column("seat", row))?;
+        let ordinal = *beacons
+            .ordinals()
+            .get(row)
+            .ok_or_else(|| column("ordinal", row))?;
+        found.push((seat, ordinal));
+    }
+    found.sort_unstable();
+    let mut grouped: Vec<(SeatId, Vec<u32>)> = Vec::new();
+    for (seat, ordinal) in found {
+        match grouped.last_mut() {
+            Some((held, ordinals)) if held.raw() == seat => ordinals.push(ordinal),
+            _ => grouped.push((SeatId::new(seat), vec![ordinal])),
+        }
+    }
+    grouped
+        .into_iter()
+        .map(|(seat, ordinals)| {
+            let shed = pharmakos_sim::power::dark_load(world, seat)
+                .and_then(pharmakos_sim::power::DarkLoad::shed)
+                .map_err(|refused| {
+                    Error::internal(format!(
+                        "the grid's shed read refused seat {}: {refused}",
+                        seat.raw()
+                    ))
+                })?;
+            // The brownout order sheds a beacon only when that relieves the
+            // grid, so a seat with a dark beacon has shed something: a shed
+            // of nothing or less is the sim and this crate disagreeing about
+            // the grid, and is never told as a shortfall.
+            if shed.raw() <= 0 {
+                return Err(Error::internal(format!(
+                    "seat {} has a dark beacon and the grid's read says its brownout shed {} kW",
+                    seat.raw(),
+                    shed.raw()
+                )));
+            }
+            Ok(DarkAtEnd {
+                seat,
+                ordinals,
+                shed,
+            })
+        })
+        .collect()
+}
+
+/// Every seat's held value as the world stands, by seat index, `None` for a
+/// seat out of the match ([`RecapFacts::held`]): the sim's own
+/// [`pharmakos_sim::world::World::held_value`], over the seats its seat table
+/// counts alive, as `crates/sim/tests/settlement.rs` builds the ladder.
+pub(crate) fn held_values(world: &pharmakos_sim::world::World) -> Vec<(SeatId, Option<Money>)> {
+    let seats = world.seats();
+    seats
+        .seats()
+        .iter()
+        .enumerate()
+        .map(|(index, raw)| {
+            let seat = SeatId::new(*raw);
+            (seat, seats.is_alive(index).then(|| world.held_value(seat)))
+        })
+        .collect()
+}
+
 /// The plan fingerprint of a playbook's canonical form (decisions-log item
 /// 77): what a save carries beside each seal, and what a resume recomputes.
 fn plan_fingerprint(playbook_jsonc: &str) -> Result<u64, Error> {
@@ -2828,6 +3331,61 @@ mod tests {
         RulesTable::load(&path).expect("the shipped rules table")
     }
 
+    /// A two-seat settlement record: both seats in the match, held at
+    /// `held` after the Ledger paid `settled`, with `dropped` events lost.
+    fn settlement(settled: &[(u8, i64)], dropped: u64) -> super::RecapFacts {
+        use pharmakos_sim::math::quantity::Money;
+        super::RecapFacts {
+            round: 1,
+            ticks: 20,
+            settled: settled
+                .iter()
+                .map(|(seat, credit)| (SeatId::new(*seat), *credit))
+                .collect(),
+            dark: Vec::new(),
+            held: vec![
+                (SeatId::new(0), Some(Money::new(400))),
+                (SeatId::new(1), Some(Money::new(410))),
+            ],
+            failures: Vec::new(),
+            dropped,
+        }
+    }
+
+    #[test]
+    fn a_band_reads_the_ladder_the_ledger_read_from_1() {
+        let facts = settlement(&[(0, 95), (1, 110)], 0);
+        // Held before payment: seat 0 at 305 leads seat 1 at 300.
+        let band = facts
+            .band(&rules(), SeatId::new(0))
+            .expect("a band")
+            .expect("seat 0 was settled");
+        assert_eq!(band.rank, 1);
+        let other = facts
+            .band(&rules(), SeatId::new(1))
+            .expect("a band")
+            .expect("seat 1 was settled");
+        assert_eq!(other.rank, 2);
+    }
+
+    #[test]
+    fn a_settled_lost_with_the_feed_refuses_only_the_band_and_names_the_loss() {
+        // Seat 1's `settled` was dropped: with a counted loss the band says
+        // so; with none it is the sim and the gateway disagreeing.
+        let lost = settlement(&[(0, 95)], 3);
+        assert_eq!(
+            lost.band(&rules(), SeatId::new(0)),
+            Err(super::BandError::FeedLost { dropped: 3 })
+        );
+        let unexplained = settlement(&[(0, 95)], 0);
+        match unexplained.band(&rules(), SeatId::new(0)) {
+            Err(super::BandError::Gateway(error)) => assert_eq!(error.code, Code::Internal),
+            other => panic!("a missing credit with no loss is INTERNAL, and it was {other:?}"),
+        }
+        // A seat whose own credit is missing was not settled: no band.
+        assert_eq!(lost.band(&rules(), SeatId::new(1)), Ok(None));
+    }
+
     fn surface() -> Surface {
         let mut surface = Surface::new(
             "m-0001",
@@ -2843,6 +3401,7 @@ mod tests {
             phase_remaining_ms: Ms::new(174_000),
             segment_length_ms: Ms::new(180_000),
             round: 1,
+            untimed: false,
         });
         surface
     }
@@ -3360,5 +3919,28 @@ mod tests {
             "the commander stands in the opening Lull"
         );
         assert_eq!(scope.commander(), commander);
+    }
+
+    /// `resolve_refs`' own phase gate, reached without the dispatcher: the
+    /// planning door in [`Surface::call`] closes every `plan`-scoped method in
+    /// a Push before any handler runs, so a test through `call` would pass
+    /// with this gate deleted (review A and B of `econ`). The request is not
+    /// even a playbook: the gate answers before anything is parsed.
+    #[test]
+    fn resolve_refs_closes_its_own_door_in_a_push() {
+        let mut surface = hosted();
+        assert!(surface.begin_push().expect("the Push begins"));
+        let error = surface
+            .resolve_refs(
+                Subject::Seat(SeatId::new(0)),
+                &request("resolve_refs", "{}"),
+            )
+            .expect_err("a preview of the frozen world in a Push");
+        assert_eq!(error.code, Code::PhaseClosed);
+        assert!(
+            error.message.contains("reads the frozen world"),
+            "the handler's own refusal: {}",
+            error.message
+        );
     }
 }

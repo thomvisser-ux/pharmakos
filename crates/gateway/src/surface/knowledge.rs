@@ -18,8 +18,11 @@
 //! read-only ([`crate::targeting`]), and rank by estimate rather than by
 //! running anything; and `get_economy_forecast` reads the calling seat's own
 //! row of the hosted world -- the frozen planning world in a Lull or a recap,
-//! the live one in a Push -- and projects nothing (AGENTS.md section 3
-//! rule 2).
+//! the live one in a Push -- and, in a Lull, prices the seat's own seal by the
+//! verifier's `$` projection, which is arithmetic over the file and runs
+//! nothing (AGENTS.md section 3 rule 2; spec section 11's allowed estimates).
+//! `get_briefing`'s standing and `get_recap`'s settlement read the sim's own
+//! audit and the Ledger's own `settled` events, and restate no rule of either.
 //!
 //! # Salience, per method
 //!
@@ -44,9 +47,11 @@
 //! else's beacons instead of its own would have been told the least useful half
 //! of what it can see.
 
+use core::num::{NonZeroU32, NonZeroUsize};
+
 use pharmakos_proto::gp::v1::Voxel;
 use pharmakos_proto::json::Json;
-use pharmakos_sim::math::quantity::Ms;
+use pharmakos_sim::math::quantity::{Money, Ms};
 use pharmakos_sim::runner::MatchEndReason;
 use pharmakos_sim::tables::SeatId;
 
@@ -55,7 +60,7 @@ use crate::error::Error;
 use crate::fog::{Audience, FogFilter, Viewer, Vision};
 use crate::rpc::Request;
 use crate::strings;
-use crate::surface::Surface;
+use crate::surface::{BandError, Surface};
 use crate::view;
 
 /// How many beacons one page of `list_beacons` carries at each rung.
@@ -143,7 +148,8 @@ impl Surface {
                 .filter(|row| world.seats().is_alive(*row))
                 .count(),
         )
-        .unwrap_or(0);
+        .map_err(|_| Error::internal("more living seats than a seat id can number"))?;
+        let place = displayed_place(world, seat)?;
         let segment_ms = host.runner().frozen().coming_segment_ms();
         let briefing = strings::briefing(
             host.runner().phase(),
@@ -153,7 +159,11 @@ impl Surface {
             beacons,
             units,
         );
-        let standing = strings::standing(living);
+        let standing = strings::standing(
+            living,
+            place.rank.map(|rank| (rank.get(), place.of)),
+            place.score,
+        );
         // The Lull's "this round" sentence, after the standing: what this
         // round's playbook does wherever its route reads the map. Never to an
         // advisor, which holds no `plan.submit`.
@@ -167,19 +177,13 @@ impl Surface {
             (String::from("notes"), Json::String(notes)),
             (
                 String::from("standing"),
-                // Spec section 3: a seat's OWN score and rank only. Both are
-                // the full audit score, which is the economy's, so this build
-                // carries the one number it knows and says so in the prose
-                // rather than showing a zero a player would read as a rank
-                // (`crate::strings::standing`).
-                Json::Object(vec![
-                    (String::from("rank"), Json::Number(String::from("0"))),
-                    (String::from("score"), Json::Number(String::from("0"))),
-                    (
-                        String::from("living_seats"),
-                        Json::Number(living.to_string()),
-                    ),
-                ]),
+                // Spec section 3: a seat's OWN score and displayed rank only,
+                // both on the full audit score ([`displayed_place`]). A seat
+                // out of the match holds no place, so its `rank` is left out
+                // rather than written as a 0 a reader would take for one, as
+                // `beacon_summary` leaves an unknown field out; its score is
+                // still its own held value.
+                Json::Object(standing_entries(place, living)),
             ),
             (
                 String::from("segment_length_ms"),
@@ -195,17 +199,63 @@ impl Surface {
         ]))
     }
 
-    /// `get_recap`: what the round did.
+    /// `get_recap`: what the last round did.
     ///
-    /// No seat-private content at all, so it takes no subject: the recap is a
-    /// match-wide statement, and the settlement lines that will be a seat's own
-    /// are `reserved 2 to 15` in `gp.api.v1.GetRecapResponse` until the economy
-    /// produces them.
-    pub(super) fn get_recap(&self, request: &Request) -> Result<Json, Error> {
+    /// The prose is match-wide and is told to every caller: which round last
+    /// ended, how many ticks its segment ran, and how the match ended when it
+    /// has. Both figures come from the segment's own end as the sim reported
+    /// it ([`crate::surface::RecapFacts`]): read off the match state once the
+    /// segment had closed, they said "Round N ran 0 ticks" for a round that
+    /// ran in full (decisions-log item 130 (4), found by the `check` lane).
+    ///
+    /// A **seat** is told its own settlement and shortfall as well (spec
+    /// section 7, "Settlement"; the register's X-16), as `settlement` and
+    /// `shortfall` and as two sentences after the match-wide ones. Both are
+    /// the seat's own, like every number on this surface: another seat's
+    /// income is on no wire, so a caller that is no seat -- `admin`, a
+    /// spectator -- is told the prose alone.
+    ///
+    /// * **The settlement**: `bmi_dollars` is what the Ledger credited the
+    ///   seat, the `settled` event's own value (the BMI after its band's
+    ///   adjustment), and `award_dollars` is 0, as `gateway.proto` says it is
+    ///   until S4 brings the awards the fund is split by. `band_rank` (from 1,
+    ///   the leader first) and `band_percent` are the sim's own reads,
+    ///   `economy::ladder_place` and `economy::band_percent`, over the ladder
+    ///   as the Ledger read it ([`crate::surface::RecapFacts::band`];
+    ///   decisions-log item 134 (2) (c)). When the sim's event bus dropped
+    ///   events at the segment, a `settled` among them, the ladder cannot be
+    ///   rebuilt: `band_rank` and `band_percent` are left out (a `band_rank`
+    ///   of 0, which counts from 1, says "not told") and the prose says why,
+    ///   while the rest of the recap is still told.
+    /// * **A feed loss**: when the bus dropped any event in the segment, the
+    ///   prose says how many, since the failures below may then be short. A
+    ///   segment end whose own `segment_ended` was dropped has no record, and
+    ///   the recap refuses as `INTERNAL`, naming the loss, rather than tell
+    ///   the round before it.
+    /// * **The shortfall**, only when one of the seat's own beacons was dark
+    ///   as the segment ended: `beacon_ids` names them, `b_NN`, ascending, and
+    ///   `kw` is the grid's own shed read at that segment end
+    ///   (`power::dark_load`'s `shed`; the same item).
+    /// * **Why a step found nothing**: one sentence per distinct `step_failed`
+    ///   the seat's playbook met in the segment, with how often, in the order
+    ///   each first happened ([`strings::recap_step_failed`]): "3 matched,
+    ///   none reachable" for a description that matched and reached nothing
+    ///   (`docs/design/targeting.md`, "Surfaces").
+    pub(super) fn get_recap(
+        &self,
+        subject: crate::token::Subject,
+        request: &Request,
+    ) -> Result<Json, Error> {
         let _ = detail::of(request)?;
         let host = self.host()?;
-        let state = host.world().match_state();
-        let ticks = host.runner().tick().since(state.segment_started());
+        if let Some(lost) = self.recap_loss() {
+            return Err(Error::internal(format!(
+                "the sim's event bus dropped {} events at the last segment end, its \
+                 `segment_ended` among them, so there is no record of that round to recap",
+                lost.dropped
+            )));
+        }
+        let facts = self.recap_facts();
         // Every winner: the last seat standing, or whoever the final audit
         // names, read from the world by the sim's one audit function rather
         // than stored, which is what lets a shared win name all its seats
@@ -223,17 +273,56 @@ impl Surface {
             };
             (outcome.reason, winners)
         });
-        let prose = strings::recap(
-            host.runner().round(),
-            ticks,
-            outcome
-                .as_ref()
-                .map(|(reason, winners)| (*reason, winners.as_slice())),
-        );
-        Ok(Json::Object(vec![(
-            String::from("prose"),
-            Json::String(prose),
-        )]))
+        let outcome = outcome
+            .as_ref()
+            .map(|(reason, winners)| (*reason, winners.as_slice()));
+        let mut prose = match facts {
+            Some(facts) => strings::recap(facts.round, facts.ticks, outcome),
+            None => strings::no_recap(
+                host.runner().round() <= 1
+                    && matches!(
+                        host.runner().phase(),
+                        pharmakos_sim::runner::MatchPhase::Lull
+                            | pharmakos_sim::runner::MatchPhase::Push
+                    ),
+                outcome,
+            ),
+        };
+        let mut entries = vec![];
+        if let (Some(seat), Some(facts)) = (subject.seat(), facts) {
+            if facts.dropped > 0 {
+                prose.push(' ');
+                prose.push_str(&strings::feed_lost(facts.dropped));
+            }
+            if let Some(settlement) = settlement_of(facts, host.world().rules(), seat, &mut prose)?
+            {
+                entries.push((String::from("settlement"), settlement));
+            }
+            if let Some(dark) = facts.dark.iter().find(|dark| dark.seat == seat) {
+                let names: Vec<String> = dark
+                    .ordinals
+                    .iter()
+                    .copied()
+                    .map(pharmakos_sim::tables::own_beacon_name)
+                    .collect();
+                let kw = dark.shed.raw();
+                prose.push(' ');
+                prose.push_str(&strings::shortfall(&names, kw));
+                entries.push((
+                    String::from("shortfall"),
+                    Json::Object(vec![
+                        (String::from("kw"), Json::Number(kw.to_string())),
+                        (
+                            String::from("beacon_ids"),
+                            Json::Array(names.into_iter().map(Json::String).collect()),
+                        ),
+                    ]),
+                ));
+            }
+            failure_lines(facts, seat, &mut prose)?;
+        }
+        entries.insert(0, (String::from("prose"), Json::String(prose)));
+        Ok(Json::Object(entries))
     }
 
     /// `list_beacons`: the beacons this seat may see, its own first.
@@ -434,7 +523,7 @@ impl Surface {
     fn map_features(&self, seat: Option<SeatId>) -> Result<Vec<Json>, Error> {
         let host = self.host()?;
         let world = host.world();
-        let reads = crate::targeting::feature_reads(world, seat)?;
+        let reads = crate::targeting::feature_reads(world, seat);
         let commander = seat.and_then(|seat| crate::targeting::commander_point(world, seat));
         let travel: Vec<(usize, i64)> = match commander {
             Some(commander) => {
@@ -490,8 +579,8 @@ impl Surface {
             .collect()
     }
 
-    /// `get_economy_forecast`: the seat's own `$` and kW as they stand, with
-    /// what-ifs.
+    /// `get_economy_forecast`: the seat's own `$` and kW as they stand, what
+    /// its sealed orders commit it to spend, and what-ifs.
     ///
     /// # The four present-state figures
     ///
@@ -502,26 +591,59 @@ impl Surface {
     /// They are the seat's **own**, as the world stands: the frozen planning
     /// world in a Lull or a recap, the live one in a Push — the world is not
     /// stepped in a Lull or a recap, so the hosted world *is* the frozen one
-    /// then. S1's projection, income and what-ifs land in new fields and never
-    /// redefine these (`gateway.proto`). A subject that is not a seat has no
-    /// economy and is refused, as it is refused a briefing; another seat's
-    /// economy is on no wire at all.
+    /// then. Later answers land in new fields and never redefine these
+    /// (`gateway.proto`). A subject that is not a seat has no economy and is
+    /// refused, as it is refused a briefing; another seat's economy is on no
+    /// wire at all.
+    ///
+    /// The live answer in a Push stays, as the owner ruled for S1
+    /// (decisions-log item 128, S1's plan, decision 12; the register's
+    /// S1-12): a seat's own economy is its own knowledge, which spec section 3
+    /// allows it live.
     ///
     /// Whole `$` and whole kW, `int32` on the wire like the `Treasury` and
     /// `KwHeadroom` predicates a playbook compares them against. A figure past
-    /// `i32` **saturates**: that is a treasury of two billion dollars, which
-    /// no match reaches, and a saturated figure still compares the way a
-    /// playbook's `Treasury` predicate would read it.
+    /// `int32` -- a treasury of two billion `$`, which no match reaches -- is
+    /// refused as [`crate::error::Code::Internal`] rather than saturated: a
+    /// saturated figure is a wrong answer told as a right one.
     ///
-    /// PLACEHOLDER: this method answers the **live** world during a Push,
-    /// although its name says "forecast"; spec section 3 allows a seat its own
-    /// score live and does not name `$` or kW. **OWNER**, at **S1**.
+    /// # What decision 12 adds in S1 (the register's S1-46)
+    ///
+    /// * **`committed_dollars`**, in a Lull: the `$` this round's seal orders,
+    ///   by the verifier's own projection
+    ///   ([`pharmakos_verifier::projection::project`], spec section 11's "`$`
+    ///   and kW projection (Quartermaster arithmetic)") -- the figure `W0602`
+    ///   compares with the treasury, summed over everything the route may
+    ///   order: the **upper bound** of the seal's unpaid orders, not an exact
+    ///   figure, because a step that may order something is counted in full.
+    ///   In a Lull none of it has been paid, so "not yet paid" holds of all
+    ///   of it; 0 when the seat has sealed nothing this round, which commits
+    ///   nothing. A seal always prices, because `submit_plan` refuses one
+    ///   that does not ([`Surface::seal_commitment`]). **Outside a Lull it
+    ///   is left out:** a Push pays its seal as it goes, and how much of it is
+    ///   still unpaid is the interpreter's to know, which this method does not
+    ///   read.
+    /// * **`bmi_next_dollars`**, in every phase: the BMI at the band the seat
+    ///   holds now (`gateway.proto`'s words) -- the sim's `economy::bmi_for`
+    ///   at the sim's `economy::ladder_place` over every living seat's held
+    ///   value as the world stands ([`bmi_next`]). It is a prediction, not
+    ///   what the next settlement will pay: held value counts a structure
+    ///   still going up at what it is worth so far, so spending in a Push can
+    ///   move the seat's rank before the Ledger reads the ladder. Left
+    ///   out for a seat that is out of the match, which is off the ladder and
+    ///   is paid no BMI, and once the match has ended, when no settlement is
+    ///   next.
     ///
     /// # What-ifs
     ///
     /// `gp.api.v1.WhatIf` still reserves 1 to 15, so a what-if that names
     /// anything is refused, and the count is bounded by the detail budget.
-    /// PLACEHOLDER: the what-if vocabulary and its answers are **S1**'s.
+    ///
+    /// What is left of S1-46 is the what-if vocabulary and its answers, the
+    /// projected income and the projection (S1's plan, decision 12;
+    /// decisions-log item 130 (3) (b); the register's S1-46).
+    ///
+    /// PLACEHOLDER: the what-if vocabulary and answers, projected income and projection (S1-46) — owner, S3
     pub(super) fn get_economy_forecast(
         &self,
         subject: crate::token::Subject,
@@ -552,30 +674,180 @@ impl Surface {
             return Err(Error::invalid("`what_ifs` is an array"));
         }
 
-        let seats = host.world().seats();
+        let economy = self.seat_economy(seat)?;
+        let pharmakos_sim::knowledge::SeatEconomy {
+            treasury,
+            supply,
+            draw,
+        } = economy;
+        let headroom = i64::from(supply.raw())
+            .checked_sub(i64::from(draw.raw()))
+            .ok_or_else(|| Error::internal("a seat's headroom does not fit a kW figure"))?;
+        let mut entries = vec![
+            (
+                String::from("treasury_now"),
+                wire_number(treasury.raw(), "treasury")?,
+            ),
+            (
+                String::from("supply_kw_now"),
+                wire_number(i64::from(supply.raw()), "supply")?,
+            ),
+            (
+                String::from("draw_kw_now"),
+                wire_number(i64::from(draw.raw()), "draw")?,
+            ),
+            (
+                String::from("headroom_kw_now"),
+                wire_number(headroom, "headroom")?,
+            ),
+        ];
+        let next = if host.runner().outcome().is_some() {
+            // An ended match settles nothing more.
+            None
+        } else {
+            bmi_next(host.world(), seat)?
+        };
+        if let Some(bmi_next) = next {
+            entries.push((
+                String::from("bmi_next_dollars"),
+                wire_number(bmi_next.raw(), "next BMI")?,
+            ));
+        }
+        if host.runner().phase() == pharmakos_sim::runner::MatchPhase::Lull {
+            let committed = self.committed_dollars(subject, seat)?;
+            entries.push((
+                String::from("committed_dollars"),
+                Json::Number(committed.to_string()),
+            ));
+        }
+        Ok(Json::Object(entries))
+    }
+
+    /// The `$` this round's seal orders, by the verifier's projection over it
+    /// ([`Surface::get_economy_forecast`] says why), or 0 when the seat has
+    /// sealed nothing this round.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::Internal`] when a seal of this round does not
+    /// price ([`Surface::seal_commitment`]): `submit_plan` refuses a playbook
+    /// that does not, and a resume refuses a save whose seal does not, against
+    /// the same frozen economy this reads -- so one that reaches here is the
+    /// gateway contradicting itself, not anything a seat could seal. The
+    /// verifier's FULL report alone does not promise it: its estimate stage
+    /// sums in `Tally` and never meets the projection's overflow (review A of
+    /// `econ`).
+    fn committed_dollars(
+        &self,
+        subject: crate::token::Subject,
+        seat: SeatId,
+    ) -> Result<i32, Error> {
+        let round = self.host()?.runner().round();
+        let Some(sealed) = self
+            .seat_state(subject, seat)?
+            .sealed
+            .as_ref()
+            .filter(|sealed| sealed.round == round)
+        else {
+            return Ok(0);
+        };
+        self.seal_commitment(seat, &sealed.playbook_jsonc)
+            .map_err(|unpriced| match unpriced {
+                Unpriced::Gateway(error) => error,
+                Unpriced::Playbook(why) => Error::internal(format!(
+                    "a sealed playbook will not price, which its seal should have refused: {why}"
+                )),
+            })
+    }
+
+    /// The seat's own economy, as the hosted world has it: what the forecast
+    /// reads, and what a seal is priced against.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::NotFound`] for a seat this match does not have,
+    /// and [`crate::error::Code::Internal`] when the seat table has no
+    /// treasury, supply or draw for it -- the table's columns are one length
+    /// by construction.
+    pub(super) fn seat_economy(
+        &self,
+        seat: SeatId,
+    ) -> Result<pharmakos_sim::knowledge::SeatEconomy, Error> {
+        let seats = self.host()?.world().seats();
         let row = seats
             .seats()
             .iter()
             .position(|held| *held == seat.raw())
             .ok_or_else(|| Error::not_found(format!("this match has no seat {}", seat.raw())))?;
-        let treasury = seats
-            .treasuries()
-            .get(row)
-            .copied()
-            .unwrap_or_default()
-            .raw();
-        let supply = seats.supplies().get(row).copied().unwrap_or_default().raw();
-        let draw = seats.draws().get(row).copied().unwrap_or_default().raw();
-        let treasury =
-            i32::try_from(treasury).unwrap_or(if treasury < 0 { i32::MIN } else { i32::MAX });
-        let headroom = supply.saturating_sub(draw);
-        let number = |value: i32| Json::Number(value.to_string());
-        Ok(Json::Object(vec![
-            (String::from("treasury_now"), number(treasury)),
-            (String::from("supply_kw_now"), number(supply)),
-            (String::from("draw_kw_now"), number(draw)),
-            (String::from("headroom_kw_now"), number(headroom)),
-        ]))
+        let column = |name: &str| Error::internal(format!("the seat table has no {name} row"));
+        Ok(pharmakos_sim::knowledge::SeatEconomy {
+            treasury: seats
+                .treasuries()
+                .get(row)
+                .copied()
+                .ok_or_else(|| column("treasury"))?,
+            supply: seats
+                .supplies()
+                .get(row)
+                .copied()
+                .ok_or_else(|| column("supply"))?,
+            draw: seats
+                .draws()
+                .get(row)
+                .copied()
+                .ok_or_else(|| column("draw"))?,
+        })
+    }
+
+    /// What a seal of `playbook_jsonc` by `seat` commits, in whole `$`, by the
+    /// verifier's projection against the seat's economy as the hosted world
+    /// has it: the figure the forecast's `committed_dollars` answers.
+    ///
+    /// The one place a seal is priced, so the door that seals it
+    /// (`submit_plan`), the resume that restores it and the forecast that
+    /// reads it cannot price it two ways. A playbook can qualify FULL and
+    /// still not price: the verifier's estimate sums in `Tally`, which never
+    /// overflows, while the projection narrows to the sim's `$` and kW types
+    /// -- one `scout_count` near the top of its `u32` is enough
+    /// ([`pharmakos_verifier::projection::ProjectionError::Overflow`]) -- and
+    /// a spend that fits `$` can still be past the wire's `int32`. Both are
+    /// [`Unpriced::Playbook`], which the door refuses rather than seal a
+    /// playbook whose own forecast could not answer.
+    ///
+    /// # Errors
+    ///
+    /// [`Unpriced::Playbook`] for a playbook the projection or the wire cannot
+    /// carry, and [`Unpriced::Gateway`] for the rest: no canonical form, a
+    /// rules table that does not price, a seat table missing a column.
+    pub(super) fn seal_commitment(
+        &self,
+        seat: SeatId,
+        playbook_jsonc: &str,
+    ) -> Result<i32, Unpriced> {
+        let canonical =
+            pharmakos_plan_core::canonicalise_text(playbook_jsonc).map_err(|error| {
+                Unpriced::Gateway(Error::internal(format!(
+                    "a playbook the verifier read has no canonical form: {}",
+                    error.message
+                )))
+            })?;
+        let economy = self.seat_economy(seat).map_err(Unpriced::Gateway)?;
+        let rules = self.host().map_err(Unpriced::Gateway)?.rules();
+        let prices = pharmakos_verifier::projection::Prices::from_rules(rules).map_err(|gap| {
+            Unpriced::Gateway(Error::internal(format!(
+                "the rules table does not price: {gap}"
+            )))
+        })?;
+        let projection =
+            pharmakos_verifier::projection::project(&canonical.playbook, economy, &prices)
+                .map_err(|why| Unpriced::Playbook(why.to_string()))?;
+        let spend = projection.spend.raw();
+        i32::try_from(spend).map_err(|_| {
+            Unpriced::Playbook(format!(
+                "it orders up to $ {spend}, past the `int32` the forecast's `committed_dollars` \
+                 carries"
+            ))
+        })
     }
 
     /// `estimate_route`: item 61's travel estimate, exposed.
@@ -945,6 +1217,143 @@ impl Surface {
     }
 }
 
+/// The recap's settlement for `seat`, the seat's own, and its sentence pushed
+/// onto `prose` ([`Surface::get_recap`] says what it carries). `None` when the
+/// Ledger credited the seat nothing at this segment end.
+///
+/// # Errors
+///
+/// [`crate::error::Code::Internal`] when the credit does not fit the wire's
+/// `int32`, or the band read finds the sim and this crate disagreeing
+/// ([`BandError::Gateway`]). A feed loss ([`BandError::FeedLost`]) is no
+/// error: the settlement is told without its band.
+fn settlement_of(
+    facts: &crate::surface::RecapFacts,
+    rules: &pharmakos_sim::rules::RulesTable,
+    seat: SeatId,
+    prose: &mut String,
+) -> Result<Option<Json>, Error> {
+    let credited = facts.settled.iter().find(|(held, _)| *held == seat);
+    let band = match facts.band(rules, seat) {
+        Ok(band) => band.map(Some),
+        // The rest of the recap is still told; only the band is not.
+        Err(BandError::FeedLost { .. }) => Some(None),
+        Err(BandError::Gateway(error)) => return Err(error),
+    };
+    if let (Some((_, credited)), Some(band)) = (credited, band) {
+        let bmi = i32::try_from(*credited).map_err(|_| {
+            Error::internal("the Ledger credited more than the wire's int32 carries")
+        })?;
+        prose.push(' ');
+        let mut settlement = vec![(String::from("bmi_dollars"), Json::Number(bmi.to_string()))];
+        match band {
+            Some(band) => {
+                prose.push_str(&strings::settlement(bmi, band.rank, band.percent));
+                settlement.push((
+                    String::from("band_rank"),
+                    Json::Number(band.rank.to_string()),
+                ));
+                settlement.push((
+                    String::from("band_percent"),
+                    Json::Number(band.percent.to_string()),
+                ));
+            }
+            None => prose.push_str(&strings::settlement_unbanded(bmi)),
+        }
+        settlement.push((
+            String::from("award_dollars"),
+            Json::Number(String::from("0")),
+        ));
+        return Ok(Some(Json::Object(settlement)));
+    }
+    Ok(None)
+}
+
+/// Why `seat`'s steps found nothing in the segment, pushed onto `prose`: each
+/// distinct `step_failed` value once, with how often it happened, in the order
+/// it first happened ([`strings::recap_step_failed`]).
+///
+/// # Errors
+///
+/// [`crate::error::Code::Internal`] for a count past `usize`, which no segment
+/// reaches: refused rather than saturated.
+fn failure_lines(
+    facts: &crate::surface::RecapFacts,
+    seat: SeatId,
+    prose: &mut String,
+) -> Result<(), Error> {
+    // Why the seat's steps found nothing, each distinct failure once
+    // with how often it happened, in the order it first happened.
+    let mut failures: Vec<(i64, NonZeroUsize)> = Vec::new();
+    for (_, value) in facts.failures.iter().filter(|(held, _)| *held == seat) {
+        match failures.iter_mut().find(|(seen, _)| seen == value) {
+            Some((_, times)) => {
+                *times = times.checked_add(1).ok_or_else(|| {
+                    Error::internal("a step failed more times than a count holds")
+                })?;
+            }
+            None => failures.push((*value, NonZeroUsize::MIN)),
+        }
+    }
+    for (value, times) in failures {
+        prose.push(' ');
+        prose.push_str(&strings::recap_step_failed(value, times));
+    }
+    Ok(())
+}
+
+/// Why a seal does not price ([`Surface::seal_commitment`]).
+pub(super) enum Unpriced {
+    /// The playbook orders more than the projection or the wire can carry:
+    /// something a seat sent, which the door refuses as `INVALID_ARGUMENT`.
+    Playbook(String),
+    /// The gateway disagreeing with itself or with the sim: the error as it
+    /// is, `INTERNAL` or `NOT_FOUND`.
+    Gateway(Error),
+}
+
+/// The BMI at the band `seat` holds now: the sim's
+/// [`pharmakos_sim::economy::bmi_for`] at the sim's
+/// [`pharmakos_sim::economy::ladder_place`] over each living seat's held value
+/// as the world stands ([`crate::surface::held_values`]), the ladder the Ledger
+/// reads when it settles. A prediction: the ladder can move before the next
+/// settlement ([`Surface::get_economy_forecast`] says how). `None` for a seat
+/// out of the match, which is off the ladder and is paid nothing.
+///
+/// # Errors
+///
+/// [`crate::error::Code::Internal`] when the seat table does not hold the
+/// seat, or the sim's ladder read refuses a seat in the match.
+fn bmi_next(world: &pharmakos_sim::world::World, seat: SeatId) -> Result<Option<Money>, Error> {
+    let held = crate::surface::held_values(world);
+    let index = held
+        .iter()
+        .position(|(held, _)| *held == seat)
+        .ok_or_else(|| Error::internal(format!("the seat table has no seat {}", seat.raw())))?;
+    if held.get(index).is_none_or(|(_, value)| value.is_none()) {
+        return Ok(None);
+    }
+    let ladder: Vec<Option<Money>> = held.into_iter().map(|(_, value)| value).collect();
+    let place = crate::surface::ladder_place(&ladder, index)?;
+    Ok(Some(pharmakos_sim::economy::bmi_for(
+        world.rules(),
+        place.rank,
+        place.living,
+    )))
+}
+
+/// A whole-`$` or whole-kW figure as the wire's `int32`.
+///
+/// # Errors
+///
+/// [`crate::error::Code::Internal`] for a figure past `int32`, which no match
+/// reaches: refused rather than saturated ([`Surface::get_economy_forecast`]).
+fn wire_number(value: i64, what: &str) -> Result<Json, Error> {
+    i32::try_from(value)
+        .map(|value| Json::Number(value.to_string()))
+        .map_err(|_| Error::internal(format!("this seat's {what} does not fit the wire's int32")))
+}
+
 /// How many rows of a seat column belong to one seat.
 ///
 /// A fold rather than `filter().count()`: the columns are `[u8]`, so clippy
@@ -960,6 +1369,110 @@ fn rows_of(column: &[u8], seat: SeatId) -> u32 {
             sum
         }
     })
+}
+
+/// A seat's place on the displayed standing (spec section 3): "live standings
+/// show a seat its own score and displayed rank only -- the full audit score,
+/// held value plus enemy value destroyed".
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct Place {
+    /// 1-based, the leader first, among the seats the final audit decides
+    /// between; `None` for a seat that is out of the match and so on no
+    /// standing. Seats tied on every term share a rank.
+    pub(crate) rank: Option<NonZeroU32>,
+    /// How many seats the standing ranks.
+    pub(crate) of: u32,
+    /// The seat's audit score, whole `$`.
+    pub(crate) score: i32,
+}
+
+/// `seat`'s place on the displayed standing, read off the world as it stands
+/// by the sim's one audit function ([`pharmakos_sim::audit::final_audit`],
+/// `fixs`'s X-08 audit, the register's X-03).
+///
+/// The score is the seat's own audit line. The rank counts the audited seats
+/// that stand **strictly ahead** of it on the audit's terms in spec section
+/// 3's tie-break order -- the score, then enemy value destroyed, then fewer
+/// beacons lost -- so seats tied on every term share a rank, which is what
+/// the final audit calls a shared win. The order is read off the
+/// [`pharmakos_sim::audit::AuditLine`]'s public terms because the sim keeps
+/// its comparison key private ([`rank_among`] says what holds the copy to
+/// the sim).
+///
+/// # Errors
+///
+/// [`crate::error::Code::Internal`] when the score does not fit the wire's
+/// `int32`, a treasury past two billion `$` that no match reaches: refused
+/// rather than saturated, because a saturated score would be a wrong answer
+/// told as a right one.
+pub(crate) fn displayed_place(
+    world: &pharmakos_sim::world::World,
+    seat: SeatId,
+) -> Result<Place, Error> {
+    let audit = pharmakos_sim::audit::final_audit(world);
+    let line = pharmakos_sim::audit::line_of(world, seat);
+    let score = i32::try_from(line.score.raw())
+        .map_err(|_| Error::internal("a seat's audit score does not fit the wire's int32"))?;
+    let of = u32::try_from(audit.lines.len())
+        .map_err(|_| Error::internal("more audited seats than a seat id can number"))?;
+    let rank = rank_among(&audit.lines, seat)?;
+    Ok(Place { rank, of, score })
+}
+
+/// `seat`'s 1-based rank among `lines`, or `None` when it has no line: the
+/// number of lines **strictly ahead** of its own, plus one, in spec section
+/// 3's tie-break order -- the score, then enemy value destroyed, then fewer
+/// beacons lost -- so lines tied on every term share a rank.
+///
+/// The order restates the sim's private `AuditLine::key`, which no public
+/// read exposes yet; the unit tests below hold each term to the spec's
+/// order, and `a_three_seat_world_ranks_as_its_final_audit_does` holds the
+/// whole to the sim's own audit. A public rank or key read in
+/// `pharmakos_sim::audit` would retire this copy (review A and B of `econ`).
+///
+/// # Errors
+///
+/// [`crate::error::Code::Internal`] for a rank past what a `u32` numbers,
+/// which more seats than a seat id holds would need.
+fn rank_among(
+    lines: &[pharmakos_sim::audit::AuditLine],
+    seat: SeatId,
+) -> Result<Option<NonZeroU32>, Error> {
+    let terms = |line: &pharmakos_sim::audit::AuditLine| {
+        (
+            line.score.raw(),
+            line.destroyed.raw(),
+            core::cmp::Reverse(line.beacons_lost),
+        )
+    };
+    let Some(mine) = lines.iter().find(|held| held.seat == seat) else {
+        return Ok(None);
+    };
+    let ahead = lines
+        .iter()
+        .filter(|other| terms(other) > terms(mine))
+        .count();
+    u32::try_from(ahead)
+        .ok()
+        .and_then(|ahead| ahead.checked_add(1))
+        .and_then(NonZeroU32::new)
+        .map(Some)
+        .ok_or_else(|| Error::internal("a rank past what a seat id can number"))
+}
+
+/// `gp.api.v1.Standing`'s fields for one seat, its `rank` left out when the
+/// seat holds no place.
+fn standing_entries(place: Place, living: u32) -> Vec<(String, Json)> {
+    let mut entries = Vec::with_capacity(3);
+    if let Some(rank) = place.rank {
+        entries.push((String::from("rank"), Json::Number(rank.get().to_string())));
+    }
+    entries.push((String::from("score"), Json::Number(place.score.to_string())));
+    entries.push((
+        String::from("living_seats"),
+        Json::Number(living.to_string()),
+    ));
+    entries
 }
 
 /// A seat's core: **its `b_00`**, the beacon the map generator pre-places
@@ -1064,4 +1577,126 @@ fn read_voxel(value: &Json, at: &str) -> Result<Voxel, Error> {
         y: axis("y")?,
         z: axis("z")?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{displayed_place, rank_among};
+    use core::num::NonZeroU32;
+    use pharmakos_sim::audit::{AuditLine, final_audit};
+    use pharmakos_sim::math::quantity::Money;
+    use pharmakos_sim::rules::RulesTable;
+    use pharmakos_sim::runner::MatchSettings;
+    use pharmakos_sim::tables::SeatId;
+    use pharmakos_sim::world::{World, WorldConfig};
+    use std::path::Path;
+
+    fn line(seat: u8, score: i64, destroyed: i64, beacons_lost: u32) -> AuditLine {
+        AuditLine {
+            seat: SeatId::new(seat),
+            held: Money::new(score.saturating_sub(destroyed)),
+            destroyed: Money::new(destroyed),
+            score: Money::new(score),
+            beacons_lost,
+        }
+    }
+
+    fn ranks(lines: &[AuditLine]) -> Vec<Option<u32>> {
+        lines
+            .iter()
+            .map(|held| {
+                rank_among(lines, held.seat)
+                    .expect("a rank")
+                    .map(NonZeroU32::get)
+            })
+            .collect()
+    }
+
+    /// Spec section 3's tie-break, term by term: the score first, then enemy
+    /// value destroyed, then fewer beacons lost; seats tied on every term
+    /// share a rank, and the next seat's rank counts both.
+    #[test]
+    fn the_rank_follows_the_audits_tie_break_term_by_term() {
+        assert_eq!(
+            ranks(&[line(0, 100, 0, 0), line(1, 200, 0, 0)]),
+            vec![Some(2), Some(1)],
+            "the score decides first"
+        );
+        assert_eq!(
+            ranks(&[line(0, 200, 50, 3), line(1, 200, 10, 0)]),
+            vec![Some(1), Some(2)],
+            "on a tied score, more destroyed ranks ahead, whatever was lost"
+        );
+        assert_eq!(
+            ranks(&[line(0, 200, 10, 2), line(1, 200, 10, 1)]),
+            vec![Some(2), Some(1)],
+            "on a tied score and destroyed, fewer beacons lost ranks ahead"
+        );
+        assert_eq!(
+            ranks(&[line(0, 200, 10, 1), line(1, 200, 10, 1), line(2, 50, 0, 0)]),
+            vec![Some(1), Some(1), Some(3)],
+            "a tie on every term shares a rank, and the next counts both"
+        );
+        assert_eq!(
+            rank_among(&[line(0, 1, 0, 0)], SeatId::new(1)).expect("an answer"),
+            None,
+            "a seat with no line holds no place"
+        );
+    }
+
+    /// The copy held to the sim's own audit over a world whose lines differ:
+    /// three seats, each with a different treasury, ranked in the order the
+    /// score says, and the seat ranked first is the audit's only winner.
+    #[test]
+    fn a_three_seat_world_ranks_as_its_final_audit_does() {
+        let rules = RulesTable::load(
+            &Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("..")
+                .join("..")
+                .join("rules")
+                .join("rules.v1.json"),
+        )
+        .expect("the shipped rules table");
+        let mut world = World::new(&WorldConfig {
+            match_seed: 0x0000_0000_ca5c_aded,
+            seats: 3,
+            units_per_seat: 0,
+            rules,
+            match_settings: MatchSettings {
+                segment_lengths_ms: vec![60_000],
+                round_limit: 3,
+            },
+        })
+        .expect("a world");
+        world.set_treasury(SeatId::new(0), Money::new(1_000));
+        world.set_treasury(SeatId::new(1), Money::new(3_000));
+        world.set_treasury(SeatId::new(2), Money::new(2_000));
+        let audit = final_audit(&world);
+        let place = |raw: u8| displayed_place(&world, SeatId::new(raw)).expect("a place");
+        let shown: Vec<Option<u32>> = (0..3)
+            .map(|raw| place(raw).rank.map(NonZeroU32::get))
+            .collect();
+        assert_eq!(shown, vec![Some(3), Some(1), Some(2)]);
+        assert_eq!(audit.winners, vec![SeatId::new(1)]);
+        for raw in 0..3_u8 {
+            let held = place(raw);
+            assert_eq!(held.of, 3);
+            let own = audit
+                .lines
+                .iter()
+                .find(|line| line.seat == SeatId::new(raw))
+                .expect("every seat is audited");
+            assert_eq!(i64::from(held.score), own.score.raw());
+            let ahead = audit
+                .lines
+                .iter()
+                .filter(|other| other.score > own.score)
+                .count();
+            assert_eq!(
+                held.rank.map(NonZeroU32::get),
+                u32::try_from(ahead).ok().and_then(|n| n.checked_add(1)),
+                "seat {raw}: with every score distinct, the rank is the score's order"
+            );
+        }
+    }
 }

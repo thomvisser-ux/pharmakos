@@ -1,0 +1,20 @@
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "notes": "",
+    "standing": {
+      "rank": 1,
+      "score": 320,
+      "living_seats": 2
+    },
+    "segment_length_ms": 1000,
+    "prose": "Round 1 of 3, the Lull. The coming segment runs 1 s. You hold 1 beacon and field 4 units. 2 seats still standing. Your score is $ 320, which ranks you 1 of 2 on the final audit's terms.",
+    "_status": {
+      "phase": "lull",
+      "phase_remaining_ms": 599950,
+      "segment_length_ms": 1000,
+      "round": 1
+    }
+  }
+}

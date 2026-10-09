@@ -30,7 +30,9 @@ use pharmakos_sim::math::quantity::{Ms, Tick};
 use pharmakos_sim::tables::SeatId;
 use std::collections::BTreeSet;
 
-use support::{LULL_MS, MATCH, SEGMENT_MS, admin_token, call, code, hosted, result, seat_token};
+use support::{
+    FIRST_LULL_MS, LULL_MS, MATCH, SEGMENT_MS, admin_token, call, code, hosted, result, seat_token,
+};
 
 // ---------------------------------------------------------------------------
 // Determinism, read in process
@@ -372,12 +374,12 @@ fn a_host_clock_that_runs_backwards_or_jumps_is_refused_not_clamped() {
         &mut surface,
         &admin,
         "report_host_clock",
-        &clock(10_000, LULL_MS.saturating_add(1)),
+        &clock(10_000, FIRST_LULL_MS.saturating_add(1)),
     );
     assert_eq!(
         code(&response),
         "INVALID_ARGUMENT",
-        "a countdown longer than the Lull `rules.match.lull_ms` declares: the footer every \
+        "a countdown longer than round 1's Lull `rules.match.first_lull_ms` declares: the footer every \
          seat reads says how long it has to plan, so the number is bounded at both ends"
     );
 
@@ -400,6 +402,155 @@ fn a_host_clock_that_runs_backwards_or_jumps_is_refused_not_clamped() {
         "report_host_clock",
     );
     assert!(surface.time().tick > after);
+}
+
+/// Each round's Lull bounds its own countdown: round 1's by
+/// `rules.match.first_lull_ms`, every later one's by `rules.match.lull_ms`
+/// (S1's plan, task `econ`'s acceptance line; decisions-log item 127 (2)).
+///
+/// It is the bound before the client learns the first Lull's length: a client
+/// that counts round 1 down from ten minutes is told the truth, and one that
+/// reports a minute more is refused rather than clamped.
+#[test]
+fn the_first_lulls_countdown_is_bounded_by_first_lull_ms_and_a_later_one_by_lull_ms() {
+    let mut surface = hosted(2, SEGMENT_MS, 2);
+    let admin = admin_token(&mut surface);
+    let clock = |elapsed: i32, remaining: i32| {
+        format!(r#"{{"elapsed_ms":{elapsed},"remaining_ms":{remaining}}}"#)
+    };
+    assert_eq!(surface.lull_length(1), Ms::new(600_000));
+    assert_eq!(FIRST_LULL_MS, 600_000, "the support constant is the row");
+
+    // Round 1: the whole first Lull is a countdown the gateway takes ...
+    let _ = result(
+        &call(
+            &mut surface,
+            &admin,
+            "report_host_clock",
+            &clock(0, 600_000),
+        ),
+        "a 600 000 ms first Lull",
+    );
+    assert_eq!(surface.time().phase_remaining_ms, Ms::new(600_000));
+    assert!(!surface.time().untimed, "a reported countdown is a timer");
+    // ... and a millisecond more is refused.
+    let refused = call(
+        &mut surface,
+        &admin,
+        "report_host_clock",
+        &clock(0, 600_001),
+    );
+    assert_eq!(code(&refused), "INVALID_ARGUMENT", "600 001 ms in round 1");
+
+    // Round 2's Lull is the later row's.
+    let _ = result(&call(&mut surface, &admin, "end_lull", "{}"), "end_lull");
+    let _ = result(
+        &call(&mut surface, &admin, "advance_push", r#"{"ms":60000}"#),
+        "advance_push",
+    );
+    assert_eq!(phase_name(&surface), "recap");
+    assert!(surface.time().untimed, "a recap has no countdown");
+    let _ = result(&call(&mut surface, &admin, "end_recap", "{}"), "end_recap");
+    assert_eq!(phase_name(&surface), "lull");
+    assert_eq!(surface.time().round, 2);
+    assert!(
+        surface.time().untimed,
+        "a Lull nobody has put a countdown on is untimed, not a timer at 0"
+    );
+    assert_eq!(surface.lull_length(2), Ms::new(300_000));
+    let _ = result(
+        &call(
+            &mut surface,
+            &admin,
+            "report_host_clock",
+            &clock(0, LULL_MS),
+        ),
+        "a 300 000 ms later Lull",
+    );
+    let refused = call(
+        &mut surface,
+        &admin,
+        "report_host_clock",
+        &clock(0, LULL_MS.saturating_add(1)),
+    );
+    assert_eq!(code(&refused), "INVALID_ARGUMENT", "300 001 ms in round 2");
+    let refused = call(
+        &mut surface,
+        &admin,
+        "report_host_clock",
+        &clock(0, 600_000),
+    );
+    assert_eq!(
+        code(&refused),
+        "INVALID_ARGUMENT",
+        "the first Lull's length is round 1's alone"
+    );
+}
+
+/// A host that reports only the time it spends -- no `remaining_ms` -- puts
+/// no countdown on a Lull, so the Lull stays untimed rather than reading as a
+/// timer at 0 that ran out (S1-11; review A of `econ`). A countdown once
+/// reported stays until the next report that carries one.
+#[test]
+fn an_elapsed_only_report_leaves_an_untimed_lull_untimed() {
+    let mut surface = hosted(2, SEGMENT_MS, 2);
+    let admin = admin_token(&mut surface);
+    let _ = result(&call(&mut surface, &admin, "end_lull", "{}"), "end_lull");
+    let _ = result(
+        &call(&mut surface, &admin, "advance_push", r#"{"ms":60000}"#),
+        "advance_push",
+    );
+    let _ = result(&call(&mut surface, &admin, "end_recap", "{}"), "end_recap");
+    assert_eq!(phase_name(&surface), "lull");
+    assert!(
+        surface.time().untimed,
+        "round 2's Lull has no countdown yet"
+    );
+    let before = surface.time().tick;
+
+    let _ = result(
+        &call(
+            &mut surface,
+            &admin,
+            "report_host_clock",
+            r#"{"elapsed_ms":1000}"#,
+        ),
+        "an elapsed-only report",
+    );
+    assert!(
+        surface.time().untimed,
+        "a report with no countdown is no countdown, not one at 0"
+    );
+    assert!(
+        surface.time().tick > before,
+        "the elapsed time still moves the clock"
+    );
+
+    let _ = result(
+        &call(
+            &mut surface,
+            &admin,
+            "report_host_clock",
+            r#"{"elapsed_ms":2000,"remaining_ms":120000}"#,
+        ),
+        "a report with a countdown",
+    );
+    assert!(!surface.time().untimed);
+    assert_eq!(surface.time().phase_remaining_ms, Ms::new(120_000));
+    let _ = result(
+        &call(
+            &mut surface,
+            &admin,
+            "report_host_clock",
+            r#"{"elapsed_ms":3000}"#,
+        ),
+        "a later elapsed-only report",
+    );
+    assert!(
+        !surface.time().untimed,
+        "the countdown already reported stays"
+    );
+    assert_eq!(surface.time().phase_remaining_ms, Ms::new(120_000));
 }
 
 /// The rate budget keeps moving in a recap and after match end, because the
@@ -485,7 +636,7 @@ fn all_ready_reaches_the_admin_and_nothing_else_about_a_seat_does() {
     let clock = |elapsed: i32| {
         format!(
             r#"{{"elapsed_ms":{elapsed},"remaining_ms":{}}}"#,
-            LULL_MS.saturating_sub(elapsed)
+            FIRST_LULL_MS.saturating_sub(elapsed)
         )
     };
 

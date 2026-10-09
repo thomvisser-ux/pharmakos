@@ -74,7 +74,7 @@
     },
     "_status": {
       "phase": "lull",
-      "phase_remaining_ms": 300000,
+      "phase_remaining_ms": 600000,
       "segment_length_ms": 180000,
       "round": 1
     }

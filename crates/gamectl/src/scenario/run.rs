@@ -298,7 +298,7 @@ pub fn play(root: &Path, scenario: &Scenario) -> Result<Played, Failure> {
 
         surface.end_recap().map_err(internal)?;
         if segment.index.saturating_add(1) < scenario.segments.len() {
-            surface.set_phase_remaining_ms(lull_ms(&surface)?);
+            surface.set_phase_remaining_ms(whole_lull(&surface)?);
             surface.open_lull().map_err(internal)?;
         }
     }
@@ -421,7 +421,7 @@ fn open(root: &Path, scenario: &Scenario, rules: RulesTable) -> Result<Surface, 
     )
     .map_err(internal)?;
     surface.attach(host).map_err(internal)?;
-    surface.set_phase_remaining_ms(lull_ms(&surface)?);
+    surface.set_phase_remaining_ms(whole_lull(&surface)?);
     surface.open_lull().map_err(internal)?;
     // The limits are left at the gateway's own defaults, deliberately. An
     // earlier draft raised them "because a scenario submits every seat's
@@ -679,23 +679,16 @@ fn phase_name(surface: &Surface) -> Result<&'static str, Failure> {
     Ok(surface.host().map_err(internal)?.runner().phase().name())
 }
 
-/// `rules.match.lull_ms`, which is what a client counts down and what the
-/// gateway derives its Lull tick from. Read from the table, never written here
-/// (AGENTS.md §12).
-fn lull_ms(surface: &Surface) -> Result<Ms, Failure> {
-    let host = surface.host().map_err(internal)?;
-    let lull = host
-        .rules()
-        .message()
-        .r#match
-        .as_ref()
-        .map(|block| block.lull_ms)
-        .ok_or_else(|| {
-            Failure::internal(
-                "the rules table carries no `match` block, so nothing says how long a Lull is",
-            )
-        })?;
-    Ok(Ms::new(lull))
+/// The whole of the Lull the match is about to open, which a scenario
+/// spends no host time in and so hands the gateway entire (AGENTS.md section
+/// 4.5): round 1's `rules.match.first_lull_ms` and every later round's
+/// `rules.match.lull_ms`, through the gateway's own typed read
+/// ([`Surface::lull_length`]), so the runner and the gateway cannot disagree
+/// about which row a round's Lull is (S1's plan, task `econ`). Read from the
+/// table, never written here (AGENTS.md section 12).
+fn whole_lull(surface: &Surface) -> Result<Ms, Failure> {
+    let round = surface.host().map_err(internal)?.runner().round();
+    Ok(surface.lull_length(round))
 }
 
 fn internal(mut error: pharmakos_gateway::Error) -> Failure {
@@ -865,4 +858,40 @@ fn write_actual(path: &Path, chain: &str) -> Result<(), Failure> {
     // 3 -- "--bless is not the fix for this one: fix the producer").
     std::fs::write(path, chain.as_bytes())
         .map_err(|error| Failure::internal(format!("writing {}: {error}", path.display())))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{open, whole_lull};
+    use std::path::Path;
+
+    /// The workspace root: this crate is `<root>/crates/gamectl`.
+    fn root() -> &'static Path {
+        Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."))
+    }
+
+    #[test]
+    fn a_scenario_opens_round_one_with_the_first_lulls_whole_length() {
+        let source = root().join("scenarios/skeleton/expand-east-segment.scenario.jsonc");
+        let scenario = crate::scenario::load(root(), &source).expect("a committed scenario");
+        let rules = super::load_rules(root(), &scenario).expect("its rules table");
+        let first = rules
+            .message()
+            .r#match
+            .as_ref()
+            .map(|block| block.first_lull_ms)
+            .expect("a match block");
+        let surface = open(root(), &scenario, rules).expect("the match opens");
+        assert_eq!(surface.time().round, 1);
+        assert_eq!(
+            surface.time().phase_remaining_ms.raw(),
+            first,
+            "round 1's Lull is handed over as `first_lull_ms`"
+        );
+        assert_eq!(whole_lull(&surface).expect("a Lull").raw(), first);
+        assert!(
+            !surface.time().untimed,
+            "a Lull handed its whole length is timed"
+        );
+    }
 }

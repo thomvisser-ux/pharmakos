@@ -5,7 +5,7 @@
     "prose": "Deploy beside the core\nWritten by hand.\nWalk a little west, deploy a Mine beacon inside the core's sphere, walk back and re-prioritise the core.\n\nRoute\n  1. to_site: walk to voxel 350, 22, 36, directly.\n    Give up after 30 s.\n    On failure, abandon the route.\n  2. place_west: place a beacon at voxel 350, 22, 36, tagged \"west\", on a Mine mandate, at normal Quartermaster priority (16.5 s on site).\n    Give up after 30 s.\n    On failure, abandon the route.\n  3. back_home: walk to beacon \"b_00\", directly.\n    Give up after 1:00.\n    On failure, abandon the route.\n  4. touch_core: interface with beacon \"b_00\" and set its Quartermaster priority to low (3 s on site).\n    Give up after 20 s.\n    On failure, abandon the route.\n\nIf the commander dies\n  On respawn, carry on from the step the route was on.\n  After 2 deaths the fallback takes over.\n\nFallback\n  Hold at the safest own beacon.\n\nBudget\n  4 of 128 size units.\n  19.5 s standing at a beacon along the route.\n",
     "_status": {
       "phase": "lull",
-      "phase_remaining_ms": 300000,
+      "phase_remaining_ms": 600000,
       "segment_length_ms": 180000,
       "round": 1
     }
