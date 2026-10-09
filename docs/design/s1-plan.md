@@ -813,7 +813,7 @@ sections that add one name it in their Owns lines.
 - **Needs:** `tgtw` merged; decision 12. **Acceptance:** method and walkthrough goldens; a test that
   the bound admits a 600 000 ms first Lull and refuses 600 001; `scenario run` and `seat doctor`
   pass round 1's Lull as `first_lull_ms`; no chain moves. **Agent-days:** 4–5.
-- **As run (item 135).** #92 (head `f905730`), merged as `ECON_MERGE` after `fog` and `grid`; the
+- **As run (item 135).** #92 (head `f905730`), merged as `25913f1` after `fog` and `grid`; the
   main session rebased it onto `59ff7ea` and added the merge-time commit of item 134 (2) (b) and
   (c) (`dc189c8`), reviewed by two lenses and fixed (`f905730`). Built: `time::LullLengths`, a typed
   read of both Lull lengths; `Status.untimed`; the recap's settlement and shortfall, with
@@ -1056,7 +1056,7 @@ drops its restated predicates only once `fog` has made them public. `oper` follo
 runs after `fog` (one author of `crates/sim`), its gateway commit after `econ`.
 
 **As run (item 135).** Wave 4's first run merged all three: `fog` #90 (`b94a1d5`, 2026-10-07),
-`grid` #91 (`59ff7ea`, 2026-10-08, rebased onto `fog`'s merge) and `econ` #92 (`ECON_MERGE`), whose
+`grid` #91 (`59ff7ea`, 2026-10-08, rebased onto `fog`'s merge) and `econ` #92 (`25913f1`), whose
 branch the main session rebased onto `59ff7ea` and finished with the merge-time commit of item 134
 (2) (b) and (c), the band, the shed kW, the next BMI and the sim's filters, reviewed by two lenses.
 No chain moved in the run; `grid` added `brownout-by-recycle`'s chain. Next, each on the owner's
