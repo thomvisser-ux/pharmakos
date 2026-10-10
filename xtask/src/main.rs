@@ -117,15 +117,16 @@
 //!
 //! # The PLACEHOLDER register
 //!
-//! `cargo xtask placeholders` is not a step either: `ci` and `list` do not
-//! know it. It collects every `PLACEHOLDER` marker in the tracked tree, parses
-//! each against the one-line grammar, `<what> — <who>, <when>` after the
-//! marker's colon ([`placeholders::GRAMMAR`]), prints the register grouped by
-//! when and by who, and lists the markers still to be reworded. With
-//! `--check` it fails while any marker is off the grammar. It becomes a `ci`
-//! step in S1's last `xtask` pull request (`tune`), once the lanes have
-//! reworded their markers (S1's plan, decision 9, ruling the register's
-//! S1-10); see [`placeholders`].
+//! `cargo xtask placeholders` collects every `PLACEHOLDER` marker in the
+//! tracked tree, parses each against the one-line grammar, `<what> — <who>,
+//! <when>` after the marker's colon ([`placeholders::GRAMMAR`]), prints the
+//! register grouped by when and by who, and lists the markers still to be
+//! reworded. With `--check` it fails while any marker is off the grammar.
+//! Since S1's last `xtask` pull request (`tune`), which reworded every marker
+//! off the grammar, the same check is the `placeholders` step of `ci` (S1's
+//! plan, decision 9, ruling the register's S1-10): the step prints only the
+//! count, or the markers that fail it, and the command prints the register;
+//! see [`placeholders`].
 //!
 //! # The research tests
 //!
@@ -626,6 +627,11 @@ const STEPS: &[Step] = &[
         about: "REUSE licence-manifest check",
         run: step_reuse,
     },
+    Step {
+        name: "placeholders",
+        about: "every PLACEHOLDER marker in the one-line grammar `<what> — <who>, <when>`",
+        run: step_placeholders,
+    },
     // Harness part 2. Both are required: a missing input fails, and only the
     // screenshot's platform statement (Linux only) skips.
     Step {
@@ -740,8 +746,10 @@ fn run_cli(args: &[String]) -> Result<bool, String> {
                 perf_alarms();
                 return Ok(true);
             }
-            // Not a step either, until S1's `tune` makes it one: the
-            // PLACEHOLDER register. `--check` is the only flag it reads.
+            // The PLACEHOLDER register, printed whole. The `placeholders`
+            // step runs the same check and prints only its verdict; this
+            // command, which `--check` makes fail off the grammar, is the one
+            // to read the register with. `--check` is the only flag it reads.
             "placeholders" => {
                 let check = args.iter().any(|arg| arg == "--check");
                 if let Some(other) = args
@@ -1842,6 +1850,35 @@ fn step_reuse(ctx: &Ctx) -> Result<Outcome, String> {
     Ok(Outcome::Done(
         "every file carries an SPDX header and the manifest is complete".to_owned(),
     ))
+}
+
+/// The PLACEHOLDER register's grammar, as a step (S1's plan, decision 9; the
+/// register's S1-10): every marker in the tracked tree is written in
+/// [`placeholders::GRAMMAR`] on one line, so the register can be collected by
+/// `cargo xtask placeholders` rather than by a person. Required: a tree that
+/// `git grep` cannot read fails, and so does any marker off the grammar, each
+/// one named. `cargo xtask placeholders` prints the whole register.
+fn step_placeholders(ctx: &Ctx) -> Result<Outcome, String> {
+    let register = placeholders::collect(&ctx.root, ctx.require_tools)?;
+    if !register.off_grammar.is_empty() {
+        let mut message = format!(
+            "{} marker(s) are off the grammar; reword each to `{}` on one line:",
+            register.off_grammar.len(),
+            placeholders::GRAMMAR
+        );
+        for (place, text) in &register.off_grammar {
+            message.push_str("\n      ");
+            message.push_str(place);
+            message.push_str("  ");
+            message.push_str(text);
+        }
+        return Err(message);
+    }
+    Ok(Outcome::Done(format!(
+        "{} marker(s) in {} file(s), every one in the grammar",
+        register.in_grammar(),
+        register.files
+    )))
 }
 
 /// Harness part 2, half one: the scenario files.
@@ -4195,8 +4232,17 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
     }
 
     #[test]
-    fn placeholders_is_not_a_step() {
-        assert!(STEPS.iter().all(|step| step.name != "placeholders"));
+    fn placeholders_is_a_step_after_reuse() {
+        // S1's plan, decision 9: `tune` made the register's check a step.
+        let names: Vec<&str> = STEPS.iter().map(|step| step.name).collect();
+        let at = names.iter().position(|name| *name == "placeholders");
+        assert!(at.is_some(), "{names:?}");
+        assert_eq!(
+            at.and_then(|index| index.checked_sub(1))
+                .and_then(|index| names.get(index)),
+            Some(&"reuse"),
+            "{names:?}"
+        );
     }
 
     #[test]

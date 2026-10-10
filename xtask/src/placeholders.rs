@@ -19,10 +19,10 @@
 //! stage, and everything after the marker's line free prose. This command
 //! (the register's S1-10) finds every marker in the tracked tree, parses each,
 //! prints the register grouped by when and by who, and lists the markers that
-//! are still off the grammar. It is **not a step** yet: the lanes reword their
-//! own markers first, and S1's last `xtask` pull request (`tune`) makes it one.
-//! Until then `--check` is how a lane asks whether its files are done, and the
-//! command otherwise always answers success.
+//! are still off the grammar. S1's last `xtask` pull request (`tune`) reworded
+//! the markers still off it and made the check the `placeholders` step of
+//! `cargo xtask ci`, which fails while any marker is off the grammar; the
+//! command prints the register, and with `--check` fails the same way.
 //!
 //! # What counts as a marker
 //!
@@ -255,9 +255,13 @@ impl Register {
     }
 }
 
-/// `cargo xtask placeholders [--check]`: prints the register; with `--check`,
-/// answers failure while a marker is off the grammar.
-pub(crate) fn run(root: &Path, require_tools: bool, check: bool) -> Result<bool, String> {
+/// The register over the tracked tree: `git grep` for the marker word, every
+/// path in [`EXCLUDED`] left out.
+///
+/// # Errors
+///
+/// When `git grep` cannot be run or cannot read the tree.
+pub(crate) fn collect(root: &Path, require_tools: bool) -> Result<Register, String> {
     let mut args: Vec<&str> = vec!["grep", "-n", "-I", "-w", "-e", WORD, "--", "."];
     args.extend_from_slice(EXCLUDED);
     let output = child_command(require_tools, "git", &args, root)
@@ -277,7 +281,13 @@ pub(crate) fn run(root: &Path, require_tools: bool, check: bool) -> Result<bool,
         }
     }
     let text = String::from_utf8_lossy(&output.stdout);
-    let register = Register::from_grep(&text);
+    Ok(Register::from_grep(&text))
+}
+
+/// `cargo xtask placeholders [--check]`: prints the register; with `--check`,
+/// answers failure while a marker is off the grammar.
+pub(crate) fn run(root: &Path, require_tools: bool, check: bool) -> Result<bool, String> {
+    let register = collect(root, require_tools)?;
     print!("{}", register.render());
     if check && !register.off_grammar.is_empty() {
         println!();
