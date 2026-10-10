@@ -136,9 +136,8 @@ pub struct Meta {
     /// Meaningful only when kind = TEMPLATE. instantiate_template removes the
     /// list as it sets kind to PLAYBOOK, so no playbook's fingerprint moves. On a
     /// hand-written PLAYBOOK it is round-tripped and never read, exactly as
-    /// `note` is; nothing is stripped. PLACEHOLDER: whether the verifier should
-    /// refuse it on a PLAYBOOK with a code of its own rather than round-trip it
-    /// is OWNER's, at S6 (a refusal is a new diagnostic catalogue code).
+    /// `note` is; nothing is stripped.
+    /// PLACEHOLDER: whether the verifier refuses it on a PLAYBOOK with a code of its own rather than round-trip it — owner, at S6 (a refusal is a new diagnostic catalogue code).
     ///
     /// Number 6, and not "the next free one" by accident: 5 stays held for
     /// team_id above.
@@ -196,9 +195,8 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.Meta".into() }fn type_
 /// Untyped until S6, on purpose: the value a wizard fills in is the JSON at
 /// `pointer`, written as it would be written in the file (a duration is game
 /// milliseconds), and the verifier refuses what does not fit, so the
-/// declaration does not have to carry the type. PLACEHOLDER: the typed
-/// parameter catalogue — a parameter's type, unit, range and choices — is
-/// OWNER's, at S6, with the editor and the library, and takes numbers 3 to 15.
+/// declaration does not have to carry the type.
+/// PLACEHOLDER: the typed parameter catalogue (a parameter's type, unit, range and choices) — owner, at S6, with the editor and the library, and it takes numbers 3 to 15.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct TemplateParameter {
     /// An RFC 6901 JSON Pointer into this file: where the value goes. The
@@ -237,7 +235,8 @@ impl ::prost::Name for Declarative {
 const NAME: &'static str = "Declarative";
 const PACKAGE: &'static str = "gp.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.v1.Declarative".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.Declarative".into() }}
-/// PLACEHOLDER STUB. "Options" is named as part of the v1 vocabulary but the
+/// PLACEHOLDER: the options beyond allow dormant beacons — owner, when the spec enumerates them.
+/// "Options" is named as part of the v1 vocabulary but the
 /// spec does not enumerate its fields. The one option the spec does pin down
 /// by name is "allow dormant beacons" (spec section 7: adding draw beyond
 /// supply is an error unless it is set).
@@ -552,7 +551,8 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RemoveBuildTargetRow".
 /// licence check is the verifier's (spec section 8).
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct QueueStructureRow {
-    /// PLACEHOLDER STUB: the capability catalogue is spec section 8's contract
+    /// PLACEHOLDER: the capability catalogue, a string id until then — owner, at S4, with its licences.
+    /// The capability catalogue is spec section 8's contract
     /// and its licences land at S4. A string id until then, exactly like
     /// seams.proto's builtin ids — it becomes a nested enum when that contract
     /// is written.
@@ -567,7 +567,8 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.QueueStructureRow".int
 /// order (spec section 6, the Build row).
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BuildTarget {
-    /// PLACEHOLDER STUB: the blueprint catalogue is spec section 8's contract.
+    /// PLACEHOLDER: the blueprint catalogue, one blueprint (the Generator) until then — owner, at S4, with its licences.
+    /// The blueprint catalogue is spec section 8's contract.
     /// The skeleton's minimal Build mandate ships one blueprint, the Generator.
     #[prost(string, tag="1")]
     pub blueprint_id: ::prost::alloc::string::String,
@@ -603,7 +604,8 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.BuildTarget".into() }f
 /// An axis-aligned box of voxels, inclusive at both ends. Protected areas,
 /// avoid areas and Survey probe areas are all of this shape.
 ///
-/// PLACEHOLDER STUB: the spec says "areas" without fixing their shape. A box
+/// PLACEHOLDER: an area's shape, a box — owner, if a polygon or a sphere is wanted.
+/// The spec says "areas" without fixing their shape. A box
 /// is what the editor's drag-select produces and what an integer sim can test
 /// in three comparisons; a polygon or a sphere would be an owner decision.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
@@ -676,7 +678,8 @@ impl ::prost::Name for HoldStep {
 const NAME: &'static str = "HoldStep";
 const PACKAGE: &'static str = "gp.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.v1.HoldStep".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.HoldStep".into() }}
-/// PLACEHOLDER STUB. The message bodies are named in spec section 10 ("Sent:
+/// PLACEHOLDER: the radio message bodies, field by field — owner, at S4, with the Radio Mast.
+/// The message bodies are named in spec section 10 ("Sent:
 /// mark target, threat at, go-code, rally") but not specified field by field.
 /// A radio message is untrusted data and is stamped by the engine with its
 /// sender and its Mast of origin; the author does not write those fields, and
@@ -1351,7 +1354,8 @@ const PACKAGE: &'static str = "gp.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.v1.FallbackShadow".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.FallbackShadow".into() }}
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct FallbackPatrol {
-    /// PLACEHOLDER STUB: the patrol route shape is not specified. A list of
+    /// PLACEHOLDER: the patrol route's shape, a list of locations — owner, when the spec specifies it.
+    /// The patrol route shape is not specified. A list of
     /// locations is the obvious reading of "patrol" and is what the editor's map
     /// route would produce.
     #[prost(message, repeated, tag="1")]
@@ -1954,7 +1958,8 @@ impl ::prost::Name for BuildSettings {
 const NAME: &'static str = "BuildSettings";
 const PACKAGE: &'static str = "gp.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.v1.BuildSettings".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.BuildSettings".into() }}
-/// PLACEHOLDER STUB — S2, with destruction and combat. Spec section 6's Defend
+/// PLACEHOLDER: Defend's settings — owner, at S2, with destruction and combat.
+/// Spec section 6's Defend
 /// row names: protect list (accepts `my commander`), engagement radius as a
 /// percentage of the sphere radius, pursue never / sphere edge / while in
 /// reach, auto-fortify, unit mix, picket. Numbers 1-15 are held so the first
@@ -1966,7 +1971,8 @@ impl ::prost::Name for DefendSettings {
 const NAME: &'static str = "DefendSettings";
 const PACKAGE: &'static str = "gp.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.v1.DefendSettings".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.DefendSettings".into() }}
-/// PLACEHOLDER STUB — S2, with destruction and combat. Spec section 6's Attack
+/// PLACEHOLDER: Attack's settings — owner, at S2, with destruction and combat.
+/// Spec section 6's Attack
 /// row names: target (fixed or selector, including `enemy commander`) and
 /// retarget rule, staging point, launch condition (force size, segment time or
 /// a broadcast go-code), retreat conditions, after-action, avoid areas,
@@ -3122,7 +3128,8 @@ pub struct BuiltinOperator {
     /// Which built-in operator. v1 ships Easy / Normal / Hard; Turtle, Raider
     /// and Economist weightings are roadmap (spec section 18).
     ///
-    /// PLACEHOLDER: a string id rather than an enum, because the operator
+    /// PLACEHOLDER: the operator id, a string rather than an enum — owner, at S5, when section 14's operator catalogue is written.
+    /// A string id rather than an enum, because the operator
     /// catalogue is section 14's contract, not this file's. Swap it for a nested
     /// enum when that contract is written.
     #[prost(string, tag="1")]
@@ -3175,7 +3182,8 @@ const PACKAGE: &'static str = "gp.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.v1.Mandate".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.Mandate".into() }}
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BuiltinMandate {
-    /// PLACEHOLDER: a string id rather than an enum, for the same reason as
+    /// PLACEHOLDER: the mandate id, a string rather than an enum — owner, when section 6's mandate catalogue is written.
+    /// A string id rather than an enum, for the same reason as
     /// BuiltinOperator. The five writs are Build, Defend, Attack, Mine and
     /// Survey; naming them is section 6's contract.
     #[prost(string, tag="1")]
@@ -3228,7 +3236,7 @@ const PACKAGE: &'static str = "gp.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.v1.Program".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.Program".into() }}
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BuiltinProgram {
-    /// PLACEHOLDER: string id, same reasoning as above.
+    /// PLACEHOLDER: the program id, a string rather than an enum, same reasoning as above — owner, at v1.2, when the script arm opens.
     #[prost(string, tag="1")]
     pub program_id: ::prost::alloc::string::String,
 }

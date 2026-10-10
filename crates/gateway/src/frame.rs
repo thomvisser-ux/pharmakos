@@ -27,7 +27,8 @@
 
 /// The largest single message the gateway will assemble, fragments summed.
 ///
-/// PLACEHOLDER: 256 KiB is a guess sized to hold any playbook the size budget
+/// PLACEHOLDER: the largest message, 256 KiB — owner, at hardening, alongside the rate limits.
+/// 256 KiB is a guess sized to hold any playbook the size budget
 /// allows (`rules/rules.v1.json`, `verifier.size_budget_units`) with room to
 /// spare. OWNER sets the real number at hardening, alongside the rate limits;
 /// it is a security parameter rather than a tuning value, so it is deliberately
@@ -37,8 +38,8 @@ pub const MAX_MESSAGE_BYTES: usize = 256 * 1024;
 
 /// The largest single frame the gateway will read.
 ///
-/// PLACEHOLDER: as [`MAX_MESSAGE_BYTES`] (OWNER, hardening). Equal to it today,
-/// so an unfragmented message of the maximum size is legal.
+/// PLACEHOLDER: the largest frame, as [`MAX_MESSAGE_BYTES`] — owner, at hardening.
+/// Equal to it today, so an unfragmented message of the maximum size is legal.
 pub const MAX_FRAME_BYTES: usize = MAX_MESSAGE_BYTES;
 
 /// The frame opcodes v1 speaks.

@@ -81,15 +81,16 @@ use crate::surface::{Draft, Sealed, Surface};
 
 /// The longest label a seat may hang on a draft.
 ///
-/// PLACEHOLDER: 120 characters is a working number, chosen so a label fits one
-/// line of the editor's draft list. OWNER settles it with the editor at **S6**.
+/// PLACEHOLDER: a draft label's 120 characters — owner, at S6, with the editor.
+/// 120 is a working number, chosen so a label fits one line of the editor's draft list.
 /// It is a **character** count and not a byte count, for the same reason the
 /// notebook's is (spec section 12 says 4,000 characters).
 pub const MAX_DRAFT_LABEL_CHARS: usize = 120;
 
 /// The most drafts one seat may hold at once.
 ///
-/// PLACEHOLDER: 32 is a working number. It exists because a draft is stored in
+/// PLACEHOLDER: 32 drafts a seat — owner, at hardening, with the rate limits.
+/// 32 is a working number. It exists because a draft is stored in
 /// the private match cache and an unbounded store is a way for one
 /// authenticated seat to fill a disk (AGENTS.md section 7's audit-log argument,
 /// applied to the thing beside it). OWNER settles it at hardening with the rate
@@ -98,7 +99,8 @@ pub const MAX_DRAFTS: usize = 32;
 
 /// The longest playbook text a method will take, in characters.
 ///
-/// PLACEHOLDER: 512 KiB of characters is far above item 94's 128-unit size
+/// PLACEHOLDER: a playbook's 512 KiB of characters — owner, at hardening.
+/// 512 KiB of characters is far above item 94's 128-unit size
 /// budget -- the worked example is 6 units and a few hundred bytes -- and far
 /// below anything that costs the process memory. It is a transport bound and
 /// not a game rule, so it is not a rules-table row, for the same reason

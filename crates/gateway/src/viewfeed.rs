@@ -60,7 +60,8 @@
 //! seed and the rules table, and the travel estimator already prices every leg
 //! as known ground.
 //!
-//! PLACEHOLDER: **OWNER**, at **S3**, with the knowledge store -- real terrain
+//! PLACEHOLDER: real terrain fog in the view — owner, at S3, with the knowledge store.
+//! With the knowledge store, real terrain
 //! fog (never seen, last known, the x1.5 cost bound) arrives as **one** mask
 //! that feeds both this view and `RouteAdapter::set_unknown_columns`, so the
 //! camera and the editor's dashed legs cannot disagree. The wire is ready for
@@ -83,7 +84,8 @@ use crate::fog::{Viewer, Vision};
 /// a chunk larger than the whole budget is delivered rather than being a hole
 /// no page can ever fill.
 ///
-/// PLACEHOLDER: 256 KiB is a working number with two technical reasons behind
+/// PLACEHOLDER: a view page's 256 KiB — owner, at hardening, with the rate limits.
+/// 256 KiB is a working number with two technical reasons behind
 /// it and no measurement of its own. Godot's `WebSocketPeer` defaults to an
 /// inbound buffer of about 64 KiB and the client has to raise it either way;
 /// and one page is answered by the single thread that owns the surface, so a

@@ -100,9 +100,8 @@ use crate::routes::RouteAdapter;
 /// client receives is and because the "why" note is the teaching half
 /// (spec section 13).
 ///
-/// PLACEHOLDER: the spec's rescue rule ("with the flee and rescue rules") is
-/// absent, because nothing can be rescued before combat: flee only. **OWNER**,
-/// at **S2/S5**.
+/// PLACEHOLDER: the spec's rescue rule ("with the flee and rescue rules") — owner, at S2/S5.
+/// It is absent, because nothing can be rescued before combat: flee only.
 pub const SAFE_PLAYBOOK: &str = concat!(
     "// The safe playbook: what is filed for you if the Lull ends with nothing\n",
     "// sealed and no built-in operator advised you. It spends nothing, places\n",
@@ -633,10 +632,9 @@ impl Host {
 /// reveal. A commander that walks out of its own spheres is still drawn to its
 /// owner -- that is ownership, not sight -- and sees no enemy entity or edit
 /// around it. Whether scouts join the live view was **ruled at the demo**:
-/// spheres only, for now (item 126 (2) (b), register D-25). PLACEHOLDER: a
-/// sight-radius row per unit and structure is the **owner**'s at **S2**, with
-/// scouting (decision 13 of S1's plan, register S1-34); Survey-lite's
-/// sightings join at **S3**.
+/// spheres only, for now (item 126 (2) (b), register D-25).
+/// PLACEHOLDER: a sight-radius row per unit and structure — owner, at S2, with scouting (decision 13 of S1's plan, register S1-34).
+/// Survey-lite's sightings join at **S3**.
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct SphereVision {
     /// The sim's own snapshot of every living beacon's sphere, rebuilt before

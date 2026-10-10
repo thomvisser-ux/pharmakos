@@ -132,14 +132,14 @@ pub struct RulesTable {
     /// Surfaces the mesher may drain per frame. `K = 4` (item 54). From
     /// `mesher.surfaces_per_frame`.
     ///
-    /// PLACEHOLDER: `tuning, owner — no measured frame-time reason separates
-    /// K = 4 from K = 8 on the spike machine (item 54)`; owner, at S6's art
-    /// pass, as `rules.proto` says (item 124 (5) (m)).
+    /// PLACEHOLDER: K, the surfaces the mesher drains per frame — owner, at S6's art pass, as `rules.proto` says (item 124 (5) (m)).
+    /// No measured frame-time reason separates K = 4 from K = 8 on the spike
+    /// machine (item 54).
     mesher_drain_surfaces: u32,
     /// Bytes the mesher may drain per frame. `B = 512 KiB` (item 54). From
     /// `mesher.bytes_per_frame`.
     ///
-    /// PLACEHOLDER: as above, owner, at S6's art pass.
+    /// PLACEHOLDER: B, as above — owner, at S6's art pass.
     mesher_drain_bytes: u32,
     /// Cost of a cardinal step. `10` (item 59). From
     /// `locomotion.step_cost_cardinal`.
@@ -167,14 +167,13 @@ pub struct RulesTable {
     /// Repaths served per tick, round-robin by `(seat, beacon, unit)`. `16`
     /// (item 69). From `locomotion.repath_cap_per_tick`.
     ///
-    /// PLACEHOLDER: re-derived at S2's exit once the burst frequency is a
-    /// measurement (item 69) — owner.
+    /// PLACEHOLDER: the repath cap — owner, at S2's exit, once the burst frequency is a measurement (item 69).
     repath_cap_per_tick: u32,
     /// The broadphase's cell edge, in whole voxels. From
     /// `broadphase.cell_size_voxels`.
     ///
-    /// PLACEHOLDER: `tuning, owner, S2 exit — tied to unit density` (item 67's
-    /// caveat). A performance knob, so it must never reach hashed state; the
+    /// PLACEHOLDER: the cell edge, tied to unit density — owner, at S2's exit (item 67's caveat).
+    /// A performance knob, so it must never reach hashed state; the
     /// broadphase takes its query radius in voxels and filters it exactly,
     /// precisely so that it cannot.
     csr_cell_size_voxels: i32,
@@ -184,12 +183,12 @@ pub struct RulesTable {
     segment_lengths_ms: Vec<i32>,
     /// The map extent in voxels, `[x, y, z]`. From `map.size_*`.
     ///
-    /// PLACEHOLDER: `tuning, owner, at the walking skeleton's demo` (item 90).
+    /// PLACEHOLDER: the map's size — owner, at S1's demo (item 90; the skeleton's demo kept it).
     map_size_voxels: [i32; 3],
     /// The commander's walking speed in cost units per second. `10` (item 90).
     /// From `commander.cost_per_second`.
     ///
-    /// PLACEHOLDER: `tuning, owner, at the walking skeleton's demo` (item 90).
+    /// PLACEHOLDER: the commander's speed — owner, at S1's demo (item 90; the skeleton's demo kept it).
     commander_cost_per_second: i32,
     /// The HPA\* cluster edge in voxels. `32` — one chunk footprint, a single
     /// abstract level (item 58). From `locomotion.hpa_cluster_voxels`.

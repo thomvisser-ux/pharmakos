@@ -159,7 +159,8 @@ impl FogPolicy {
 
     /// True when this seat sees the world without fog.
     ///
-    /// PLACEHOLDER: the casual policy has **no phase term**, so a casual match
+    /// PLACEHOLDER: the casual policy's missing phase term (register U-03) — owner, at hardening.
+    /// The casual policy has **no phase term**, so a casual match
     /// is unfogged in its Lull too, which is a known defect (items 107 (6) and
     /// 116 (6) (k); register U-03). It cannot show in S1, because `serve.rs`
     /// always fogs and the settings screen that would offer a casual match is

@@ -75,12 +75,13 @@ allow = [
 # Everything not listed is denied, including AGPL (would relicense the whole game),
 # proprietary and custom terms, and the Sonniss GDC audio licence (spec §15, Audio).
 exceptions = [
-    # PLACEHOLDER: per-crate carve-outs go here, each with the crate name and a reason.
+    # PLACEHOLDER: per-crate licence carve-outs, each with the crate name and a reason — owner, as each case arises (a section 5 change).
     # Example shape, kept commented so the file parses as-is:
     # { crate = "ring", allow = ["OpenSSL"], reason = "..." },
 ]
 
-# PLACEHOLDER: crates whose licence cannot be read from metadata get a [[licenses.clarify]]
+# PLACEHOLDER: a [[licenses.clarify]] entry for a crate whose licence metadata cannot be read — owner, as each case arises (a section 5 change).
+# Such a crate gets a [[licenses.clarify]]
 # entry here, naming the licence file and its hash. None known yet, so the table is left
 # out rather than stubbed — cargo-deny validates the fields.
 #
@@ -112,12 +113,11 @@ deny = [
 ]
 
 skip = [
-    # PLACEHOLDER: duplicate versions we have consciously accepted, each with a reason.
+    # PLACEHOLDER: duplicate versions we have consciously accepted, each with a reason — owner, as each case arises (a section 5 change).
 ]
 
 skip-tree = [
-    # PLACEHOLDER: dev-only subtrees (test harnesses, benchmark tooling) whose duplicate
-    # versions never reach a shipped binary.
+    # PLACEHOLDER: dev-only subtrees whose duplicate versions never reach a shipped binary — owner, as each case arises (a section 5 change).
 ]
 
 # ---------------------------------------------------------------------------
@@ -127,8 +127,8 @@ skip-tree = [
 db-urls = ["https://github.com/rustsec/advisory-db"]
 yanked = "deny"
 ignore = [
-    # PLACEHOLDER: advisory ids we have assessed and accepted, each with a reason and a
-    # review date. Empty is the intended steady state.
+    # PLACEHOLDER: advisory ids we have assessed and accepted, each with a reason and a review date — owner, as each case arises (a section 5 change).
+    # Empty is the intended steady state.
 ]
 
 # ---------------------------------------------------------------------------

@@ -42,10 +42,10 @@
 //!    what a budget cuts -- and the client is told exactly where the cut fell,
 //!    because the cursor comes back pointing at the next unread event.
 //!
-//! PLACEHOLDER: the per-method salience order for the read methods
-//! (`get_briefing`, `get_recap`, `list_beacons`, `query_area` and the rest;
-//! register X-02). The owner settles it at hardening, with H-07 and H-08; T9
-//! fixed the two rules above and the parameter's shape.
+//! PLACEHOLDER: the per-method salience order for the read methods (register X-02) — owner, at hardening, with H-07 and H-08.
+//! The read methods are `get_briefing`, `get_recap`, `list_beacons`,
+//! `query_area` and the rest; T9 fixed the two rules above and the
+//! parameter's shape.
 
 use crate::error::Error;
 use crate::rpc::Request;
@@ -57,7 +57,8 @@ const DETAIL_ENUM: &str = "gp.api.v1.ReadOptions.Detail";
 
 /// The detail a read method uses when the caller names none.
 ///
-/// PLACEHOLDER: `standard` is spec section 12's own middle rung and the one its
+/// PLACEHOLDER: an omitted `detail` reads as `standard` — owner, at hardening, with the budgets.
+/// `standard` is spec section 12's own middle rung and the one its
 /// worked example spells out (`get_briefing{detail:"standard"}`), but the spec
 /// does not say which rung an omitted `detail` means. OWNER settles it with the
 /// budgets at hardening; the shape does not depend on the answer.
@@ -131,7 +132,8 @@ pub const fn model_tokens(detail: Detail) -> u32 {
 
 /// How many feed events one page carries at this detail.
 ///
-/// PLACEHOLDER: 16 / 64 / 256 are working numbers, chosen so the three rungs
+/// PLACEHOLDER: the event ladder 16 / 64 / 256 — owner, at hardening, alongside T13's read-method budgets.
+/// 16 / 64 / 256 are working numbers, chosen so the three rungs
 /// step by a factor of four as spec section 12's token budgets roughly do, and
 /// so `full` meets [`crate::feed::MAX_PAGE_EVENTS`] exactly. OWNER sets the real
 /// ladder at hardening, alongside T13's read-method budgets.

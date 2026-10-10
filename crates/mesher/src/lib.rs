@@ -775,7 +775,8 @@ pub struct Surface {
 /// Reuse one of these across meshings: [`Mesher::mesh_chunk_into`] clears it and keeps its
 /// capacity, which is what makes a steady-state meshing allocate nothing.
 ///
-/// PLACEHOLDER: `normals` is carried here because the boundary was specified with it, but
+/// PLACEHOLDER: whether `normals` are uploaded at all (register X-04) — owner, at S6's art pass, with S6-05.
+/// `normals` is carried here because the boundary was specified with it, but
 /// G1's measured path-B surface format was position plus colour plus index only — the
 /// per-face shading factor is folded into the vertex colour and the material is unshaded,
 /// which is both the look the game wants and what keeps path B's buffers unambiguous.

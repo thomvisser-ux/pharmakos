@@ -54,8 +54,8 @@ use std::time::Duration;
 
 /// How long a connection may be silent before the socket read gives up.
 ///
-/// PLACEHOLDER: thirty seconds is a working number. OWNER settles it at
-/// hardening with the rate limits. A socket option, not a clock read.
+/// PLACEHOLDER: a thirty-second read timeout — owner, at hardening, with the rate limits.
+/// A socket option, not a clock read.
 pub const READ_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// How much a single socket read asks for.

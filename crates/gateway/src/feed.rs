@@ -69,8 +69,7 @@ pub const DIGEST_PERIOD: Ms = Ms::new(60_000);
 /// The ceiling above the `detail` ladder in [`crate::detail`]: `full` is the
 /// widest budget a client can name and this is the cap a client cannot raise.
 ///
-/// PLACEHOLDER: 256 is a working number. OWNER settles it with the read-method
-/// detail budgets at hardening.
+/// PLACEHOLDER: 256 events a page, a working number — owner, at hardening, with the read-method detail budgets.
 pub const MAX_PAGE_EVENTS: usize = 256;
 
 /// The longest a [`Kind`] may be.
@@ -477,7 +476,8 @@ impl ViewCursor {
 
 /// One 60-second digest of game time, with its per-kind counts (item 97).
 ///
-/// PLACEHOLDER: **the digest payload's exact contents** -- the skeleton plan's
+/// PLACEHOLDER: the digest payload's exact contents — owner, at S7 (watch & share).
+/// **The digest payload's exact contents** are the skeleton plan's
 /// own named T13 PLACEHOLDER. What this build carries is the window, the
 /// per-kind counts item 97 asks for, and the deterministic prose; what a
 /// digest is *for* -- the watch view's "what happened while I was reading" --

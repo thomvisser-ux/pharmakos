@@ -149,10 +149,7 @@ const HARNESS_EDIT_QUEUE: usize = 64;
 /// thing filling it (owner, at S2).
 const HARNESS_DAMAGE_QUEUE: usize = 256;
 
-/// PLACEHOLDER: the world total of beacons a match may place on top of the
-/// cores the generator pre-places, shared equally per seat -- owner, at S1's
-/// demo with the balance check's report; the totals are revisited at S2's
-/// G3'-real measurement (register S1-37).
+/// PLACEHOLDER: the world total of beacons a match may place on top of the cores, shared equally per seat — owner, at S1's demo, with the balance check's report; the totals are revisited at S2's G3'-real measurement (register S1-37).
 ///
 /// Forty is item 63's world total. Since S1 the room is **per seat**: each
 /// seat may place [`room_per_seat`] of the total, the total divided by the
@@ -169,10 +166,7 @@ const HARNESS_DAMAGE_QUEUE: usize = 256;
 /// the rules table.
 const BEACON_TABLE_ROOM: u32 = 40;
 
-/// PLACEHOLDER: the world total of units a match may fabricate on top of the
-/// starting force, shared equally per seat -- owner, at S1's demo with the
-/// balance check's report; the totals are revisited at S2's G3'-real
-/// measurement (register S1-37).
+/// PLACEHOLDER: the world total of units a match may fabricate on top of the starting force, shared equally per seat — owner, at S1's demo, with the balance check's report; the totals are revisited at S2's G3'-real measurement (register S1-37).
 ///
 /// Item 63 fixes the world total at **300 units**; since S1 each seat may
 /// fabricate [`room_per_seat`] of it on top of its own starting force (100 a
@@ -183,11 +177,7 @@ const BEACON_TABLE_ROOM: u32 = 40;
 /// surplus and vent Generators can power", which this only bounds.
 pub(crate) const UNIT_TABLE_ROOM: u32 = 300;
 
-/// PLACEHOLDER: the world total of structures a match may build, shared
-/// equally per seat since S1 ("Build targets and structures follow",
-/// `docs/design/targeting.md`) -- the per-seat split is the owner's at S1's
-/// demo with the balance check's report, like the two rooms above (register
-/// S1-37); the total is the owner's at S2 with the capability catalogue.
+/// PLACEHOLDER: the world total of structures a match may build, shared equally per seat since S1 ("Build targets and structures follow", `docs/design/targeting.md`) — owner, at S1's demo, with the balance check's report for the per-seat split (register S1-37); the total is the owner's at S2 with the capability catalogue.
 ///
 /// Three a beacon at [`BEACON_TABLE_ROOM`], which covers a Generator on every
 /// vent a map carries plus the Survey posts and turrets S2 adds. A seat's
@@ -1390,7 +1380,8 @@ impl World {
     /// ([`crate::survey`]).
     ///
     /// Named for what it does rather than for a visit it does not track.
-    /// PLACEHOLDER: **no probe area is ever recorded as visited**, so a Survey
+    /// PLACEHOLDER: no probe area is ever recorded as visited — owner, at S3, with the reach window.
+    /// **No probe area is ever recorded as visited**, so a Survey
     /// mandate carrying two or more areas only ever works the one its scout
     /// reaches first — inside that area this answers `None` for ever and
     /// [`crate::programs`] falls through to the stalest sighting. Working
@@ -2028,7 +2019,8 @@ impl World {
     /// second building in the same voxel while the first stayed at one hit
     /// point for ever with no target to finish it.
     ///
-    /// PLACEHOLDER: an anchor that appears in the old list and **not** in the
+    /// PLACEHOLDER: a dropped anchor strands what was paid for there — owner, at S2, with destruction and ruins.
+    /// An anchor that appears in the old list and **not** in the
     /// new one — a `remove_build_target`, or a replacement that drops it —
     /// strands whatever was already paid for there: the structure stays in the
     /// world, unfinished, and no drone returns to it. That is a reading, not a

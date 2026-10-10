@@ -31,7 +31,8 @@
 //! latest elimination tick are the ones the audit decides between — the seats
 //! that were still in until the tick that ended the match.
 //!
-//! PLACEHOLDER: who the audit decides between (the seats still in; on a
+//! PLACEHOLDER: who the audit decides between — owner, at S1's stage demo.
+//! It decides between the seats still in (on a
 //! no-survivor end, the seats that fell on the latest elimination tick). The
 //! spec does not spell it out; this is the reading that keeps an eliminated or
 //! never-placed seat from winning a match it was not in. The owner confirms or
@@ -44,7 +45,8 @@
 //!    value destroyed. "Unsmoothed" is the raw figure, not a displayed
 //!    standing.
 //!
-//!    PLACEHOLDER: "unsmoothed net worth" read as the audit score (held plus
+//!    PLACEHOLDER: "unsmoothed net worth" read as the audit score — owner, at S2, with the kill-credit split.
+//!    It is read as the audit score (held plus
 //!    destroyed) rather than as held value alone. The two readings agree while
 //!    [`destroyed_value`] is zero and rank score-tied seats in opposite
 //!    directions once it is not, so the owner rules on it at S2, with the
@@ -247,7 +249,8 @@ pub fn line_of(world: &World, seat: SeatId) -> AuditLine {
 
 /// The build cost of the enemy assets `seat` destroyed.
 ///
-/// PLACEHOLDER: always zero. Destruction credit is apportioned by the
+/// PLACEHOLDER: the value a seat destroyed, always zero — owner, at S2, with the kill-credit split.
+/// Always zero. Destruction credit is apportioned by the
 /// kill-credit split (spec section 3, item 18), whose counters exist
 /// ([`crate::credit`]) but which nothing books a destroyed asset's value
 /// against until S2 brings combat; the value a seat destroyed is tracked

@@ -52,7 +52,8 @@ pub const TOKEN_BYTES: usize = 32;
 
 /// How long a minted token stays valid, in ticks.
 ///
-/// PLACEHOLDER: `u32::MAX` is "the whole match", which is the only lifetime the
+/// PLACEHOLDER: a token's lifetime, `u32::MAX` (the whole match) — owner, at hardening, alongside the rate limits.
+/// `u32::MAX` is "the whole match", which is the only lifetime the
 /// skeleton can justify -- a token that expires mid-match would have to be
 /// reissued, and spec section 12 says no token is reissued mid-match. OWNER sets
 /// the real policy at hardening, alongside the rate limits; the likely shape is
