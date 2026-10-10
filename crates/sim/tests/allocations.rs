@@ -116,7 +116,7 @@ fn a_tick_allocates_nothing() {
     let world = World::new(&WorldConfig {
         match_seed: pharmakos_sim::DETERMINISM_MATCH_SEED,
         seats: pharmakos_sim::DETERMINISM_SEATS,
-        units_per_seat: pharmakos_sim::DETERMINISM_UNITS_PER_SEAT,
+        units_per_seat: 0,
         rules,
         match_settings: MatchSettings {
             // Long enough that the measured loop never reaches the segment's
@@ -137,13 +137,20 @@ fn a_tick_allocates_nothing() {
     let mut runner = Runner::new(world);
     // Every seat seals the harness playbook, for the same reason: the decision
     // phase returns immediately for a seat that sealed nothing, so without this
-    // the whole interpreter — selector resolution, the visit's row clocks, the
-    // reflex, the handler scan, and since S1 the walk in, the deploy's charge
-    // and the `covering` resolver with its "nearest" estimates and its spiral —
-    // would sit outside the one assertion that a tick allocates nothing (T11).
-    // Each seat deploys at its own harness site, which S1's no-stacking rule
-    // moved off the core's column (`pharmakos_sim::determinism_site`).
-    let sealed = pharmakos_sim::seal_determinism_playbooks(runner.world_mut())
+    // the whole interpreter — the `covering` resolver with its "nearest"
+    // estimates and its spiral, the walk in, the deploy's charge, the initial
+    // settings' interface rows, the Build target written `on` the covered
+    // vent, the hold, the handler scan and the guaranteed tail — would sit
+    // outside the one assertion that a tick allocates nothing (T11). Since
+    // S1's real determinism segment (decision 16) the playbook is the
+    // committed copy of Hold & Build's instantiation the chain runs.
+    let playbook = pharmakos_sim::determinism_playbook(
+        &std::path::Path::new("..")
+            .join("..")
+            .join(pharmakos_sim::DETERMINISM_PLAYBOOK_PATH),
+    )
+    .expect("the committed harness playbook reads");
+    let sealed = pharmakos_sim::seal_determinism_playbooks(runner.world_mut(), &playbook)
         .expect("the harness playbook compiles");
     assert_eq!(sealed, pharmakos_sim::DETERMINISM_SEATS, "every seat seals");
     assert!(runner.begin_push(), "a match opens in a Lull");
@@ -162,32 +169,41 @@ fn a_tick_allocates_nothing() {
         runner.clear_events();
         runner.world().encode(&mut enc);
     }
-    // The deploy window. The harness playbook's `place_beacon` step is the one
-    // thing in a tick that adds a **row to a table**: `BeaconTable::reserve`
-    // makes room for it at construction so the `push` cannot allocate, and that
-    // claim is only worth anything over a deploy the test actually performs.
-    // It is counted separately from the steady loop below because the
-    // encoding legitimately *grows* when a beacon lands — which is exactly what
-    // the fixed-stride assertion further down would otherwise read as a bug.
-    let before_deploy = allocations();
+    // The growth window. The harness playbook adds **rows to tables** inside
+    // a tick: its deploy a beacon (`BeaconTable::reserve`), the Build target it
+    // writes a structure (the structure table's room), and the fabricator the
+    // build drone that target asks for (`UNIT_TABLE_ROOM`). Each table makes
+    // room at construction so the `push` cannot allocate, and that claim is
+    // only worth anything over growth the test actually performs: at the
+    // committed table the deploys land at ticks 631 to 741 and the Generators
+    // are finished by tick 1 300. It is counted separately from the steady
+    // loop below because the encoding legitimately *grows* when a row lands —
+    // which is exactly what the fixed-stride assertion further down would
+    // otherwise read as a bug.
+    let before_growth = allocations();
     let beacons_before = runner.world().beacons().len();
-    for step in 0..400 {
+    let structures_before = runner.world().structures().len();
+    let units_before = runner.world().units().len();
+    for step in 0..GROWTH_TICKS {
         crater_at(runner.world_mut(), step + 50);
         runner.step().expect("the segment outlasts this test");
         runner.clear_events();
         runner.world().encode(&mut enc);
     }
-    let deploying = allocations() - before_deploy;
+    let growing = allocations() - before_growth;
     assert_eq!(
-        deploying, 0,
-        "the 400 ticks that deploy a beacon per seat allocated {deploying} times. A `place_beacon` \
-         step adds a beacon row inside a tick, and the room for it is reserved at construction \
-         (BeaconTable::reserve) precisely so that it cannot allocate."
+        growing, 0,
+        "the {GROWTH_TICKS} ticks that deploy a beacon, queue a Generator and fabricate a drone per \
+         seat allocated {growing} times. Each adds a table row inside a tick, and the room for it \
+         is reserved at construction precisely so that it cannot allocate."
     );
     assert!(
-        runner.world().beacons().len() > beacons_before,
-        "the harness playbook's deploy landed inside the counted window; without it this file \
-         never exercises the one in-tick table growth there is"
+        runner.world().beacons().len() > beacons_before
+            && runner.world().structures().len() > structures_before
+            && runner.world().units().len() > units_before,
+        "the harness playbook's deploy, its Generator and the drone it asks for all landed inside \
+         the counted window; without them this file never exercises the in-tick table growth \
+         there is"
     );
 
     let capacity_after_warmup = enc.encoded_len();
@@ -198,7 +214,7 @@ fn a_tick_allocates_nothing() {
         // work in it: a crater is the edit S2 will file by the thousand, and an
         // empty queue would leave `settle`, `mark` and `crater` outside the
         // property this file exists to defend.
-        crater_at(runner.world_mut(), step + 450);
+        crater_at(runner.world_mut(), step + 50 + GROWTH_TICKS);
         runner.step().expect("the segment outlasts this test");
         // A host drains every tick, and the bus is fixed-capacity: draining it
         // is what keeps an event emission inside the assertion instead of
@@ -220,6 +236,11 @@ fn a_tick_allocates_nothing() {
          fixed-stride after all"
     );
 }
+
+/// The ticks counted for table growth, after the 50-tick warm-up: long enough
+/// that every placed seat's deploy, Generator and fabricated drone land inside
+/// them (the last Generator is finished at tick 1 300 at the committed table).
+const GROWTH_TICKS: u32 = 1_400;
 
 /// Queue one crater on a fresh patch of ground, so the edit actually changes
 /// voxels and the whole voxel phase runs.

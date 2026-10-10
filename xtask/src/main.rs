@@ -411,18 +411,18 @@ const HASH_GOLDEN: &str = "tests/golden/determinism/expected.hashes.txt";
 /// The binary the `determinism` step runs once it exists.
 const DETERMINISM_BIN: &str = "determinism";
 
-/// PLACEHOLDER: 1 200 ticks, a one-minute smoke run — owner, S1, with the real segment.
-///
-/// 1 200 ticks is one minute at 20 Hz, a smoke run of the sim's harness
-/// segment list, until S1's `tune` lane raises it to a real segment (the
-/// register's S1-26): the full-segment chain T10 asked for is the demo
-/// scenario's, `scenarios/skeleton/
-/// against-easy-three-rounds`, whose three rounds are played and compared on
-/// all three operating systems, so lengthening this run would add leg time and
-/// a `crates/sim` determinism change for no new coverage (decisions-log item
-/// 116 (6)(e)). G4's bar (10 matches × 9 600 ticks) belongs in the nightly
-/// workflow rather than in every pull request.
-const DETERMINISM_TICKS: &str = "1200";
+/// The ticks the `determinism` step runs: 3 600, one full first-round Push
+/// (three minutes at 20 Hz on the rules table's 3 / 5 / 8 ladder), with every
+/// seat sealing the committed copy of the Hold & Build template's
+/// instantiation (`pharmakos_sim::DETERMINISM_PLAYBOOK_PATH`) on
+/// `DETERMINISM_MATCH_SEED` (S1's plan, decision 16; register S1-26). It was
+/// 1 200, a one-minute smoke run of a harness playbook over short harness
+/// segments, until S1's `tune` lane. The chain covers a real playbook's walk,
+/// deploy, Build target, fabrication and build, where the harness covered
+/// fifty walkers a seat; G4's bar (10 matches of 9 600 ticks) and G3'-real's
+/// load stay with the nightly workflow and S2. `crates/sim/tests/determinism.rs`'s
+/// `GOLDEN_TICKS` holds the same number.
+const DETERMINISM_TICKS: &str = "3600";
 
 /// The profile the determinism run uses: release optimisation with debug
 /// assertions still on, declared in the root `Cargo.toml`.

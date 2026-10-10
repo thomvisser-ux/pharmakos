@@ -844,14 +844,16 @@ fn a_host_that_drains_never_meets_a_full_bus() {
     // size, a host draining once a tick stays under the capacity **including on
     // the tick the capacity was sized against**, which is a seat's elimination
     // — one line per beacon of that seat plus one per structure homed to it.
-    // So this runs at the determinism harness's units per seat and kills a
+    // So this runs at fifty walkers a seat and kills a
     // seat's core inside the measured loop rather than measuring a handful of
     // phase transitions.
     let mut runner = Runner::new(
         World::new(&WorldConfig {
             match_seed: pharmakos_sim::DETERMINISM_MATCH_SEED,
             seats: 3,
-            units_per_seat: pharmakos_sim::DETERMINISM_UNITS_PER_SEAT,
+            // Fifty walkers a seat, the determinism harness's size until S1's
+            // real segment (decision 16) took them out of its chain.
+            units_per_seat: 50,
             rules: rules(),
             match_settings: MatchSettings {
                 segment_lengths_ms: vec![SHORT_MS],

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! `determinism --ticks N --out FILE [--seed HEX] [--rules PATH]`
-//! `[--save-at TICK --snapshot FILE] [--resume FILE]`
+//! `[--playbook PATH] [--save-at TICK --snapshot FILE] [--resume FILE]`
 //!
 //! The binary `cargo xtask ci`'s `determinism` step runs. It writes one line
 //! per tick, `tick<TAB>hash`, where the hash is sixteen lowercase hex digits,
@@ -11,6 +11,11 @@
 //! against the chains the other two operating systems produced.
 //!
 //! Tick 0 is the hash of the **initial state**, before any phase has run.
+//!
+//! Every seat seals the committed copy of the Hold & Build template's
+//! instantiation (`pharmakos_sim::DETERMINISM_PLAYBOOK_PATH`), and the match
+//! plays the rules table's own segment ladder: `cargo xtask ci` runs 3 600
+//! ticks, one full first-round Push (S1's plan, decision 16; register S1-26).
 //!
 //! # Save and resume, and why they are in the binary rather than only in a test
 //!
@@ -76,6 +81,7 @@ struct Cli {
     ticks: u32,
     out: PathBuf,
     rules_path: PathBuf,
+    playbook_path: PathBuf,
     seed: Option<u64>,
     resume: Option<PathBuf>,
     snapshot_out: Option<PathBuf>,
@@ -131,6 +137,15 @@ fn parse(args: &[String]) -> Result<Cli, String> {
             )
         })?,
     };
+    let playbook_path = match value_of(args, "--playbook") {
+        Some(text) => PathBuf::from(text),
+        None => pharmakos_sim::default_determinism_playbook_path().ok_or_else(|| {
+            format!(
+                "could not find {} from the working directory; pass --playbook PATH",
+                pharmakos_sim::DETERMINISM_PLAYBOOK_PATH
+            )
+        })?,
+    };
     let seed = match value_of(args, "--seed") {
         Some(text) => Some(
             u64::from_str_radix(text.trim_start_matches("0x"), 16)
@@ -157,6 +172,7 @@ fn parse(args: &[String]) -> Result<Cli, String> {
         ticks,
         out,
         rules_path,
+        playbook_path,
         seed,
         resume,
         snapshot_out,
@@ -166,26 +182,9 @@ fn parse(args: &[String]) -> Result<Cli, String> {
 
 /// The runner the run starts from: a fresh match, or a restored snapshot.
 fn build_runner(cli: &Cli) -> Result<Runner, String> {
-    let world = match cli.seed {
-        None => {
-            pharmakos_sim::determinism_world(&cli.rules_path).map_err(|error| error.to_string())?
-        }
-        Some(seed) => {
-            let rules = pharmakos_sim::RulesTable::load(&cli.rules_path)
-                .map_err(|error| error.to_string())?;
-            pharmakos_sim::World::new(&pharmakos_sim::WorldConfig {
-                match_seed: seed,
-                seats: pharmakos_sim::DETERMINISM_SEATS,
-                units_per_seat: pharmakos_sim::DETERMINISM_UNITS_PER_SEAT,
-                rules,
-                match_settings: pharmakos_sim::MatchSettings {
-                    segment_lengths_ms: pharmakos_sim::DETERMINISM_SEGMENT_LENGTHS_MS.to_vec(),
-                    round_limit: pharmakos_sim::DEFAULT_ROUND_LIMIT,
-                },
-            })
-            .map_err(|error| error.to_string())?
-        }
-    };
+    let seed = cli.seed.unwrap_or(pharmakos_sim::DETERMINISM_MATCH_SEED);
+    let world = pharmakos_sim::determinism_world_at(seed, &cli.rules_path, &cli.playbook_path)
+        .map_err(|error| error.to_string())?;
     let mut runner = Runner::new(world);
 
     if let Some(path) = cli.resume.as_ref() {
@@ -204,9 +203,9 @@ fn build_runner(cli: &Cli) -> Result<Runner, String> {
 ///
 /// **The harness is the host** (T10). A Lull and a recap consume no tick and
 /// end on the host's word, so this loop plays that part: it opens the Push the
-/// moment a Lull is reached and closes the recap the moment one opens, which is
-/// what puts whole segments — and the phase changes between them — inside a
-/// 1 200-tick chain. It also drains the event bus every tick, as any host does,
+/// moment a Lull is reached and closes the recap the moment one opens, so a
+/// run longer than the first segment carries on into the next one rather than
+/// stopping at its recap. It also drains the event bus every tick, as any host does,
 /// so the bus is never full and the run's totals are reported at the end.
 fn chain(runner: &mut Runner, cli: &Cli) -> Result<String, String> {
     // A resumed run numbers its lines from the snapshot's own tick, so the two
@@ -292,7 +291,7 @@ fn write_snapshot(runner: &Runner, path: &std::path::Path) -> Result<(), String>
 }
 
 const HELP: &str = "\
-determinism --ticks N --out FILE [--seed HEX] [--rules PATH]
+determinism --ticks N --out FILE [--seed HEX] [--rules PATH] [--playbook PATH]
             [--save-at TICK --snapshot FILE] [--resume FILE]
 
     --ticks N      how many per-tick hashes to write; tick 0 is the initial state
@@ -300,6 +299,9 @@ determinism --ticks N --out FILE [--seed HEX] [--rules PATH]
     --seed HEX     override the pinned harness match seed
     --rules PATH   the rules table (default: rules/rules.v1.json, probed from the
                    working directory and from two levels above it)
+    --playbook PATH  the playbook every seat seals (default:
+                   tests/golden/determinism/hold_and_build.playbook.json, probed
+                   the same way)
     --save-at TICK write a snapshot once TICK's hash has been emitted
     --snapshot FILE  where that snapshot goes; used with --save-at
     --resume FILE  start from a snapshot instead of a fresh world, numbering the

@@ -31,13 +31,18 @@ use pharmakos_sim::voxels::{Material, VoxelEdit, VoxelStore};
 use pharmakos_sim::world::{PHASE_ORDER, Phase};
 use pharmakos_sim::{RulesError, RulesTable, World, WorldConfig};
 
-/// The tick count `cargo xtask ci` runs the determinism binary at.
-///
-/// PLACEHOLDER: raised from 1 200 at S1 (owner; decisions-log item 116 (6)(e)
-/// kept the harness run through T20, because T20's demo scenario carries the
-/// full-segment chain). Keep it in step with `DETERMINISM_TICKS` in
+/// The tick count `cargo xtask ci` runs the determinism binary at: one full
+/// first-round Push, 3 600 ticks, three minutes at 20 Hz (S1's plan, decision
+/// 16; register S1-26). Keep it in step with `DETERMINISM_TICKS` in
 /// `xtask/src/main.rs`.
-const GOLDEN_TICKS: u32 = 1_200;
+const GOLDEN_TICKS: u32 = 3_600;
+
+/// Walkers per seat for the tests below that need a wide, moving unit table:
+/// the knob tests, the snapshot tests and the broadphase test. The chain's
+/// own harness fields none since S1's real segment (decision 16), so these
+/// tests field their own through `WorldConfig::units_per_seat`, at the fifty a
+/// seat the harness used to.
+const TEST_WALKERS: u32 = 50;
 
 /// The repository root, found by probing relative paths.
 fn repo_root() -> PathBuf {
@@ -76,38 +81,38 @@ fn rules_edited(edit: impl FnOnce(&mut gp::v1::RulesTable)) -> RulesTable {
     RulesTable::from_message(&message).expect("the edited table is still a table")
 }
 
+/// The committed harness playbook every seat seals.
+fn harness_playbook() -> gp::v1::Playbook {
+    pharmakos_sim::determinism_playbook(&repo_root().join(pharmakos_sim::DETERMINISM_PLAYBOOK_PATH))
+        .expect("the committed harness playbook is canonical gp.v1 JSON")
+}
+
+/// The determinism harness's own world, exactly as
+/// `pharmakos_sim::determinism_world` builds it: the chain this file checks
+/// and the chain the binary writes are one run, which is what
+/// `the_binary_reproduces_the_library_in_a_fresh_process` compares.
+fn harness(rules: RulesTable) -> World {
+    world_of(rules, 0)
+}
+
+/// The harness world with [`TEST_WALKERS`] walkers a seat.
 fn world_with(rules: RulesTable) -> World {
-    world_of(rules, pharmakos_sim::DETERMINISM_UNITS_PER_SEAT)
+    world_of(rules, TEST_WALKERS)
 }
 
-/// The harness's match settings, exactly as `pharmakos_sim::determinism_world`
-/// sets them: short segments, so a 1 200-tick chain covers whole segments and
-/// the phase changes between them (T10).
-fn harness_settings() -> MatchSettings {
-    MatchSettings {
-        segment_lengths_ms: pharmakos_sim::DETERMINISM_SEGMENT_LENGTHS_MS.to_vec(),
-        round_limit: pharmakos_sim::DEFAULT_ROUND_LIMIT,
-    }
-}
-
-/// The harness world at a chosen size, for the tests that need two worlds of
-/// different shapes.
-///
-/// It seals `pharmakos_sim::determinism_playbook` for every seat, exactly as
-/// `pharmakos_sim::determinism_world` does — otherwise the chain this file
-/// checks and the chain the binary writes would be two different runs, and
-/// `the_binary_reproduces_the_library_in_a_fresh_process` would be comparing
-/// nothing (T11).
+/// The harness world at a chosen size: every seat seals the harness playbook
+/// as `pharmakos_sim::determinism_world` has it, on the rules table's own
+/// ladder, with `units_per_seat` walkers a seat.
 fn world_of(rules: RulesTable, units_per_seat: u32) -> World {
     let mut world = World::new(&WorldConfig {
         match_seed: pharmakos_sim::DETERMINISM_MATCH_SEED,
         seats: pharmakos_sim::DETERMINISM_SEATS,
         units_per_seat,
         rules,
-        match_settings: harness_settings(),
+        match_settings: MatchSettings::default(),
     })
     .expect("the rules table describes a map and a broadphase grid");
-    let sealed = pharmakos_sim::seal_determinism_playbooks(&mut world)
+    let sealed = pharmakos_sim::seal_determinism_playbooks(&mut world, &harness_playbook())
         .expect("the harness playbook compiles");
     assert_eq!(sealed, pharmakos_sim::DETERMINISM_SEATS, "every seat seals");
     world
@@ -119,8 +124,7 @@ fn world_of(rules: RulesTable, units_per_seat: u32) -> World {
 /// that is what `src/bin/determinism.rs` does and
 /// `the_binary_reproduces_the_library_in_a_fresh_process` compares the two byte
 /// for byte. The host's part — opening a Push the moment a Lull is reached and
-/// closing a recap the moment one opens — is the same one the binary plays,
-/// and it is what puts whole segments inside the chain (T10).
+/// closing a recap the moment one opens — is the same one the binary plays.
 fn chain(world: World, ticks: u32) -> String {
     let mut runner = Runner::new(world);
     let mut out = String::with_capacity(usize::try_from(ticks).unwrap_or(0).saturating_mul(24));
@@ -151,7 +155,7 @@ fn chain(world: World, ticks: u32) -> String {
 
 #[test]
 fn the_hash_chain_matches_its_golden() {
-    let fresh = chain(world_with(rules()), GOLDEN_TICKS);
+    let fresh = chain(harness(rules()), GOLDEN_TICKS);
 
     // Hand the fresh output to `cargo xtask ci`'s golden step before asserting,
     // so a failure here still leaves it a readable first-difference report.
@@ -234,7 +238,7 @@ fn the_binary_reproduces_the_library_in_a_fresh_process() {
         runs.get(1),
         "two runs of the determinism binary disagree"
     );
-    let in_process = chain(world_with(rules()), 200);
+    let in_process = chain(harness(rules()), 200);
     assert_eq!(
         runs.first().map(Vec::as_slice),
         Some(in_process.as_bytes()),
@@ -1396,9 +1400,9 @@ fn the_map_is_inside_the_hash_and_not_merely_beside_it() {
     let alternative = World::new(&WorldConfig {
         match_seed: pharmakos_sim::DETERMINISM_MATCH_SEED ^ 1,
         seats: pharmakos_sim::DETERMINISM_SEATS,
-        units_per_seat: pharmakos_sim::DETERMINISM_UNITS_PER_SEAT,
+        units_per_seat: TEST_WALKERS,
         rules: rules(),
-        match_settings: harness_settings(),
+        match_settings: MatchSettings::default(),
     })
     .expect("a world on another seed");
     let mut base = world_with(rules());

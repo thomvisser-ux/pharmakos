@@ -20,10 +20,11 @@
 //!
 //! Every pull request that changes what a tick does **moves the hash chain**,
 //! and each one owes the explanation (AGENTS.md section 4.8, section 10 item
-//! 2). The values marked `PLACEHOLDER (harness)` below are the determinism
-//! harness's scaffolding, not tuning values: they are not in the rules table
-//! because they are not rules, and they go with S1-26's real determinism
-//! segment (owner, at S1, the `tune` lane).
+//! 2). The values marked `PLACEHOLDER (harness)` below are scaffolding sized
+//! for the skeleton, not tuning values: they are not in the rules table
+//! because they are not rules, and each names the stage that sizes it. S1's
+//! real determinism segment (decision 16; register S1-26) took the harness's
+//! walkers out of the chain and left the rest where they were.
 //!
 //! # The phase order is fixed
 //!
@@ -316,11 +317,16 @@ pub struct WorldConfig {
     /// occupies spawn zone `i`; a seat beyond the map's zones is seated but
     /// unplaced (see [`crate::mapgen`]).
     pub seats: u32,
-    /// PLACEHOLDER (harness): how many extra walking units each seat fields on
-    /// top of its starting force, so that the hash chain covers a wide table.
-    /// A real match passes zero. T14 fabricates units for real and kept this for
-    /// the determinism harness; it goes with S1-26's real determinism segment
-    /// (owner, at S1, the `tune` lane; decision 16 of S1's plan).
+    /// How many extra walking units each seat fields on top of its starting
+    /// force: raiders homed to nobody, wandering on [`Stream::Spawn`]
+    /// ([`World::draw_new_destinations`]), scaffolding that widens the unit
+    /// table. A real match passes zero, and since S1's real determinism
+    /// segment so does the determinism harness, whose chain covers a real
+    /// playbook instead (decision 16 of S1's plan; register S1-26). The
+    /// scenario format's `units_per_seat` key and the sim's own tests still
+    /// field them.
+    ///
+    /// PLACEHOLDER: the walkers' removal, with the scenario format's `units_per_seat` key — owner, at S2's G3'-real measurement, which measures load without them.
     pub units_per_seat: u32,
     /// The rules table, an **input** to the sim and never hashed state.
     pub rules: RulesTable,
@@ -593,7 +599,7 @@ impl World {
             seat_index = seat_index.saturating_add(1);
         }
 
-        let units = fill_unit_table(config, &generated, unit_count, [max_x, max_y]);
+        let units = fill_unit_table(config, &generated, unit_count, [max_x, max_y])?;
 
         let mut voxels = generated.voxels;
         let features = generated.features;
@@ -3046,16 +3052,17 @@ impl World {
     /// Give every unit that reached the end of a route somewhere new to be —
     /// **except a commander**.
     ///
-    /// PLACEHOLDER (harness): the destination is drawn from [`Stream::Spawn`] at
-    /// `(tick, seat, unit id)`, which is the wandering T2 introduced so that the
-    /// hash chain covers a moving table. It goes with
-    /// `WorldConfig::units_per_seat`, the walkers it exists to move, and with
-    /// S1-26's real determinism segment (owner, at S1, the `tune` lane).
+    /// The destination is drawn from [`Stream::Spawn`] at `(tick, seat, unit
+    /// id)`, which is the wandering T2 introduced so that the hash chain
+    /// covered a moving table. It moves the walkers of
+    /// `WorldConfig::units_per_seat` and goes with them (see that field's
+    /// PLACEHOLDER); the determinism harness fields none since S1's real
+    /// segment (decision 16; register S1-26).
     ///
     /// **A commander is not drawn for** (T11): where the commander goes is the
     /// playbook's to say, and a seat that has sealed none leaves its commander
-    /// standing where it is rather than wandering. That is the half of this
-    /// PLACEHOLDER the interpreter discharged, and it is one of the two reasons
+    /// standing where it is rather than wandering. That is the half of the
+    /// wandering the interpreter discharged, and it is one of the two reasons
     /// the determinism chain moved in T11's pull request.
     fn draw_new_destinations(&mut self) {
         if self.router.arrived().is_empty() {
@@ -4428,18 +4435,22 @@ fn commander_index(units: &UnitTable, seats: u32) -> Vec<u32> {
     commanders
 }
 
-/// The unit table: the generator's starting force first, then the harness's
-/// extra walkers, seat by seat.
+/// The unit table: the generator's starting force first, then the extra
+/// walkers of `WorldConfig::units_per_seat`, seat by seat.
 ///
 /// One pass, in that order, so unit ids stay **dense and in seat order** —
 /// which is what lets [`Csr`] use a row index as an id and what makes every
 /// sort key that ends in a unit id a total order (item 62).
+///
+/// Refuses with [`MapError::MissingBlock`] when walkers are asked for and the
+/// rules table has no `units.raider` row to give them hit points from, rather
+/// than inventing a number.
 fn fill_unit_table(
     config: &WorldConfig,
     generated: &crate::mapgen::GeneratedMap,
     capacity: u32,
     extent: [i16; 2],
-) -> UnitTable {
+) -> Result<UnitTable, MapError> {
     let mut units = UnitTable::with_capacity(capacity.saturating_add(UNIT_TABLE_ROOM));
     units.reserve(UNIT_TABLE_ROOM);
     let mut next_id: u32 = 0;
@@ -4466,29 +4477,24 @@ fn fill_unit_table(
         next_id = next_id.saturating_add(1);
     }
 
-    // PLACEHOLDER (harness): the extra walkers are raiders because a raider is
-    // the cheapest kind with a rules-table HP row that is not part of a seat's
-    // starting force, so they cannot be mistaken for one.
-    //
-    // **T14 narrowed this rather than discharging it, and says why.** The
-    // PLACEHOLDER used to name T14 as the task that deletes the walkers,
-    // because T14 is where a fabricator starts producing units for real. It
-    // does — but fabrication at 1 200 ticks produces a handful of drones, and
-    // the walkers are the *width* of the hash: four seats of fifty is the
-    // widest the unit table is ever asked to be, and narrowing it now would
-    // narrow the determinism chain's coverage on the very pull request that
-    // adds four tables to it. So the walkers stay, and the constant is deleted
-    // with `DETERMINISM_SEGMENT_LENGTHS_MS` when `DETERMINISM_TICKS` is raised
-    // to a real segment (owner, at S1; decisions-log item 116 (6)(e)).
+    // The extra walkers are raiders because a raider is the cheapest kind with
+    // a rules-table HP row that is not part of a seat's starting force, so
+    // they cannot be mistaken for one. The determinism harness fields none
+    // since S1's real segment (decision 16; register S1-26), whose chain
+    // covers a real playbook's fabrication instead; the scenario format's
+    // `units_per_seat` key and the sim's own tests still ask for them.
     //
     // They are homed to **nobody** ([`BeaconId::NONE`]): a unit with no home
     // beacon draws no kW, no mandate drives it and no dormancy parks it, which
     // is what keeps scaffolding out of the economy. Nothing a fabricator builds
     // is ever unhomed, so the state is unreachable in a real match.
+    if config.units_per_seat == 0 {
+        return Ok(units);
+    }
     let walker_hp = config
         .rules
         .unit_hp(UnitKind::Raider)
-        .unwrap_or(Hp::new(100));
+        .ok_or(MapError::MissingBlock("units.raider"))?;
     let max_x = extent.first().copied().unwrap_or(0);
     let max_y = extent.get(1).copied().unwrap_or(0);
     let mut seat_index: u32 = 0;
@@ -4519,7 +4525,7 @@ fn fill_unit_table(
         }
         seat_index = seat_index.saturating_add(1);
     }
-    units
+    Ok(units)
 }
 
 /// The core beacon of `seat` in a freshly generated map: its lowest-id row.
