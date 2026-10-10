@@ -71,8 +71,13 @@ fi
 # ---------------------------------------------------------------------------------------
 
 rust_files=$(printf '%s\n' "$staged" | grep -E '\.rs$' || true)
+# The generated prost tree is left out: `crates/proto/src/lib.rs` reaches it through
+# `include!`, so `cargo fmt` never formats it, and `crates/proto/tests/generated.rs`
+# holds it byte for byte to what `buf generate` writes. Checking it here would refuse
+# every regenerated tree. Its crate is still linted in step 3.
+fmt_files=$(printf '%s\n' "$rust_files" | grep -v -E '^crates/proto/src/generated/' || true)
 
-if [ -n "$rust_files" ]; then
+if [ -n "$fmt_files" ]; then
     if ! command -v rustfmt >/dev/null 2>&1; then
         echo "pre-commit: rustfmt is not installed (rustup component add rustfmt)" >&2
         exit 1
@@ -82,7 +87,7 @@ if [ -n "$rust_files" ]; then
     # normal case. A partially staged file (`git add -p`) is checked whole; that is the
     # one place the hook is stricter than the commit.
     # shellcheck disable=SC2086
-    if ! rustfmt --edition 2024 --check --quiet $rust_files; then
+    if ! rustfmt --edition 2024 --check --quiet $fmt_files; then
         echo >&2
         echo "pre-commit: formatting differs. Run \`cargo fmt --all\` (or \`cargo xtask ci --fix\`)," >&2
         echo "            stage the result, and commit again." >&2
