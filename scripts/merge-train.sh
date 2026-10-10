@@ -35,8 +35,9 @@
 # with the headless client check: it does not reproduce the Linux and macOS legs, the
 # watch-check run or the Linux vista render. So once the train has merged anything on a local
 # check, it watches main's own push run of the train's last commit and stops loudly unless
-# it is green; ci.yml's concurrency group cancels the push runs of the train's earlier
-# commits, so that run is the three-OS check of the whole combination.
+# it is green. That run is the three-OS check of the whole combination; ci.yml gives each
+# commit on main a concurrency group of its own, so the push runs of the train's earlier
+# commits run to the end beside it rather than being cancelled.
 #
 # A lane falls back to rebase, push and a full matrix when its own changes touch output that
 # only the three legs produce, each on its own OS, or that no local run executes: the

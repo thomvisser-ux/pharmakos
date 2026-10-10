@@ -86,8 +86,9 @@ jobs:
           fi
 
       # CLAUDE_CODE_SUBPROCESS_ENV_SCRUB above makes Claude Code run its subprocesses under
-      # bubblewrap, and Claude Code 2.1.278 (agent SDK 0.3.278, which v1.0.231's lockfile
-      # pins at the pinned SHA; re-check both on a bump) refuses to start without it: run
+      # bubblewrap, and Claude Code 2.1.288 (v1.0.240's base-action/action.yml at the pinned
+      # SHA sets CLAUDE_CODE_VERSION, and its bun.lock pins agent SDK 0.3.288; re-check both
+      # on a bump) refuses to start without it: run
       # 36432629735 failed in "Run Claude Code" with "bubblewrap is required for subprocess
       # env scrubbing and isolation" (decisions-log item 124 (5)(d)). The fix keeps the
       # isolation rather than opting out of it. These are the steps the action runs itself,
@@ -130,7 +131,7 @@ jobs:
 
       # No persisted credentials: claude-code-action brings its own App token. From checkout
       # v6 the job's read-only token sits in a RUNNER_TEMP file pulled in by an
-      # `includeIf.gitdir` entry; claude-code-action v1.0.231 clears the header from
+      # `includeIf.gitdir` entry; claude-code-action v1.0.240 clears the header from
       # .git/config and `include.path` files only, so git would keep sending that token ahead
       # of the App token and a push would be refused. Keep this line even if a later action
       # handles `includeIf`: nothing here needs the token. The action's first fetches run
