@@ -19,8 +19,8 @@ touches is data.** Playbooks and templates are JSONC files, edited in the in-gam
 or by hand. Opponents are the built-in operator. External scripting (v1.1) and live AI
 seats (v1.2) are roadmap, reserved now only as proto seams.
 
-**Status: the walking skeleton is closed (decisions-log item 126, 2026-09-29); S1, the economy, is
-next.** The toolchain is installed — rustc 1.98.1, `protoc` 36,
+**Status: the walking skeleton is closed (decisions-log item 126, 2026-09-29); S1, the economy, has
+merged every lane but `demo` (decisions-log item 137, 2026-10-11), and its stage demo is next.** The toolchain is installed — rustc 1.98.1, `protoc` 36,
 `buf` 1.73, `cargo-deny`, `reuse`, Godot 4.7.2 — the tree is formatted, and `cargo xtask ci` is
 green: sixteen steps, every one required, where a missing input fails. The skips left are the
 platform's and the caller's that `AGENTS.md`'s status paragraph names, and, locally, a missing

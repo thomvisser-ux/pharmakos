@@ -713,8 +713,8 @@ cargo xtask ci --fix      # rustfmt and the machine-applicable clippy fixes
    when there is no local `main` to compare against (decisions-log item 116 (6)(g) and (p)).
 9. **Licensing** — REUSE check: every file has an SPDX header or a `REUSE.toml` entry, and the
    manifest is complete; the `LICENSE` pointers are §8's rule, which no step checks. The
-   `placeholders` step runs after it and fails on any `PLACEHOLDER` marker off the register's
-   grammar (below; decisions-log item 137).
+   `placeholders` step, `cargo xtask placeholders --check`, runs after it and fails on any
+   `PLACEHOLDER` marker off the register's grammar (below; decisions-log item 137).
 10. **Scenarios** — the `scenario` step validates every committed scenario file and plays each with
     `gamectl scenario run` (map seed + playbooks + assertions on events and hashes). The
     `screenshot` step renders the vista, the diagnostic rows and the wizard's first page windowed
@@ -769,9 +769,10 @@ must be installed.
 **The PLACEHOLDER register.** `cargo xtask placeholders` collects every
 `PLACEHOLDER` marker in the tracked tree, parses each against the one-line grammar
 `<what> — <who>, <when>`, prints the register grouped by when and by who, and with `--check` fails
-while any marker is off the grammar. Since S1's `tune` it is also `ci`'s sixteenth step, the
-`placeholders` step, which runs after `reuse` and fails on any marker off the grammar
-(decisions-log items 128, 129 and 137).
+while any marker is off the grammar; without `--check` it lists the register and never fails.
+Since S1's `tune`, `cargo xtask placeholders --check` is one of the sixteen steps, `placeholders`,
+run after `reuse`, and it fails on any marker off the grammar (decisions-log items 128, 129 and
+137).
 
 Nightly, additionally: the three adversarial scenarios (§10) on a fixed seed set, and the fuzzer
 (10 000 generated playbooks, no panic). Both are jobs in `.github/workflows/nightly-scenarios.yml`
@@ -849,4 +850,5 @@ most of them have a reserved proto seam waiting — filling the seam early is th
 - Prose and identifiers use British spelling where the design docs do (`licence` the noun,
   `behaviour`, `armour`). Diagnostic codes and user-facing strings are English and live in one
   string table.
-- When you must guess, write `// PLACEHOLDER: <what, who decides, when>` and list it in your PR.
+- When you must guess, write `// PLACEHOLDER: <what> — <who>, <when>` (an em dash with a space on each side, the
+  grammar `cargo xtask placeholders --check` parses) and list it in your PR.

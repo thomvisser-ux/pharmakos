@@ -23,8 +23,9 @@ Read that file before your first edit. What follows is only the Claude Code-spec
    locally and fails under `PHARMAKOS_REQUIRE_TOOLS=1`, which CI and the merge train's local check
    set; the `--require-tools` flag covers the steps' own tools only. Wire the versioned hooks first
    (`git config core.hooksPath scripts/githooks`): an unwired clone fails the `test` step. The
-   `PLACEHOLDER` rule is unchanged: mark every guessed value `// PLACEHOLDER: <what, who decides,
-   when>` and list it in your PR.
+   `PLACEHOLDER` rule is unchanged: mark every guessed value `// PLACEHOLDER: <what> — <who>,
+   <when>` (an em dash with a space on each side, the grammar `cargo xtask placeholders --check`
+   parses) and list it in your PR.
 2. **Check the design precedence before implementing a rule**: `docs/design/decisions-log.md` §2.7 >
    the spec (`docs/spec/pharmakos-spec-v0.6.html`) > `docs/design/co-design-gameplan-api.md`. See
    `docs/design/README.md`. The co-design doc predates the v1 simplification and still describes
@@ -105,9 +106,9 @@ If `cargo xtask ci` is green locally and a `cargo xtask ci` leg is red in CI, th
 1 and 2 (`xtask/src/main.rs`, sixteen steps, covering AGENTS.md §9 items 1–10) and green; a failure
 in it is a bug to fix rather than a reason to reach for another command. `cargo xtask ci-scope`,
 `cargo xtask perf-alarms` and `cargo xtask package` sit outside the step table; `perf-alarms` never
-fails, and `package` runs alone (AGENTS.md §9). `cargo xtask placeholders` is also the sixteenth
-step, `placeholders`, which runs after `reuse` and fails on any marker off the register's grammar
-(decisions-log item 137).
+fails, and `package` runs alone (AGENTS.md §9). `cargo xtask placeholders` lists the register and never
+fails; its `--check` is one of the sixteen steps, `placeholders`, run after `reuse`, and fails on any
+marker off the register's grammar (decisions-log item 137).
 
 ## When you finish
 
