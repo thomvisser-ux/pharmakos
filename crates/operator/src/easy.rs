@@ -118,7 +118,16 @@ pub const SAFE_ESTIMATES: u32 = 4;
 /// layer (decisions-log item 133 (3) (a); [`crate::compose::deepen_core`]):
 /// Expand & Mine's own value for a new Mine beacon, so the two agree.
 ///
-/// PLACEHOLDER: the core's dig depth Easy and the safe playbook write, 4 as Expand & Mine's own — owner, S1's demo, with the economy's numbers (tune)
+/// PLACEHOLDER: the core's dig depth Easy and the safe playbook write, 4 as Expand & Mine's own — owner, S1's demo, with `tune`'s balance check report
+///
+/// Tuned with the numbers (register S1-52) and kept at 4: a seam is laid four
+/// voxels deep (depths 0 to 3 below its original top, the sim's
+/// `SEAM_VOXELS_PER_COLUMN`) and the sim digs depths 0 to `dig_max_depth`, so
+/// 4 already reaches all of it, and `tune`'s 80-match balance check gave a
+/// byte-identical report at 16. The starting seam runs dry by round 5 because
+/// it is finite (`economy.seam_voxels`, 150 voxels): in that check's six-round
+/// matches a seat's ore income totals close to the seam's whole yield by
+/// round 4 or 5 and is 0 after, at either depth.
 pub const CORE_DIG_MAX_DEPTH: u32 = 4;
 
 /// How many pages of `list_beacons`, `get_view` and `list_templates` a round
