@@ -22,7 +22,7 @@ seats (v1.2) are roadmap, reserved now only as proto seams.
 **Status: the walking skeleton is closed (decisions-log item 126, 2026-09-29); S1, the economy, is
 next.** The toolchain is installed — rustc 1.98.1, `protoc` 36,
 `buf` 1.73, `cargo-deny`, `reuse`, Godot 4.7.2 — the tree is formatted, and `cargo xtask ci` is
-green: fifteen steps, every one required, where a missing input fails. The skips left are the
+green: sixteen steps, every one required, where a missing input fails. The skips left are the
 platform's and the caller's that `AGENTS.md`'s status paragraph names, and, locally, a missing
 tool, which fails instead under `PHARMAKOS_REQUIRE_TOOLS=1`, as CI sets it. All four stack spikes (G4 cross-OS determinism with
 save/restore and fork equivalence, G1 mesher and remesh in Godot 4.7, G2+P3 pathing, G3′ synthetic

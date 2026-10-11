@@ -1043,6 +1043,21 @@ sections that add one name it in their Owns lines.
   above that it moves are re-blessed in the same PR, each named with the depth as the reason.
   **Contract PR:** yes
   (determinism harness, `xtask`; `rules.proto` only if a row retires). **Agent-days:** 2.5–3.
+- **As run (item 137).** #101, merged as `952fc0a` (head `e8b7378`), alone in wave 5, launched on
+  `0c47094` after #100. Its first workflow run died with the owner's session after four commits and
+  was relaunched over the same worktree. Built as the section says: the chain is 3 600 lines, the
+  initial state and the first Push's first 3 599 ticks, every seat sealing
+  `tests/golden/determinism/hold_and_build.playbook.json`, and it diverges at tick 0 (item 137 (2)
+  (d)); `placeholders` is `ci`'s sixteenth step, after `reuse`, once 106 off-grammar markers and nine
+  `PLACEHOLDER (harness):` markers were reworded across crates outside the grant, accepted at the
+  merge with `scripts/pre-commit.sh`'s skip of the generated prost tree and the `.license` sidecar
+  (item 137 (2) (h)). No rules value moved: the check's flags come from Easy's reach, not prices
+  (item 137 (2) (e)), so only the table's `note` changed, stating S1-35 and S1-22's swap, and
+  `rules_hash` moved every `report_hash` golden once; no scenario chain moved, and
+  `brownout-by-recycle`'s playbook needed no rewrite. `expand_east` cannot reach its first site in
+  120 s inside spec section 4's speed range ((2) (f)), and `CORE_DIG_MAX_DEPTH` stays 4, the seam
+  being finite rather than too deep ((2) (g)), so no operator golden moved. The proto carries stay
+  with the next `proto/**` lane ((2) (i)), and `allocations.rs` keeps no walkers ((2) (j)).
 
 ### `demo` — the run sheet, the P1 run and the register
 
@@ -1126,6 +1141,13 @@ finisher pass rebased it over both), all on 2026-10-09, each packaged locally fi
 `oper` moved the chains of section 4.2's ledger; the determinism chain did not move. Next, each on
 the owner's word: `tune`, then `demo`.
 
+**As run (item 137).** `.github`'s #100 (`0c47094`, 2026-10-09 EDT) merged first: `ci.yml`'s
+concurrency keyed by the commit's sha on `main`, which lifted the main session's hold on merges.
+On the owner's "resume" wave 5 launched `tune` alone on `0c47094` on 2026-10-10; its first run died
+with the owner's session after four commits and was relaunched on 2026-10-11 over the same worktree.
+`tune` #101 merged as `952fc0a` on 2026-10-11, packaged locally first. Next, on the owner's word:
+`demo`, carrying the owner's rulings of item 137 (4).
+
 **Totals.** 18 tasks in 17 lanes (`tgtv` and `proj` are one lane in two PRs), **about 71.5 ad**
 (63.5–79.5), against the code map's 62–74; this plan adds X-08's audit, the restore bug, the
 selector bug, S1-26 and S1-42 to it, and the reviews added `con1`'s and `con2`'s named places and
@@ -1155,10 +1177,10 @@ Two splits already shorten it: targeting's preview surfaces (`tgtw`) leave the s
 | `ui` (as run, item 136) | none | — | — (no golden moved; the three PNGs re-rendered byte-identical on CI's Linux leg) |
 | `fog` | none; event logs only if a count lands in a value (`expand-east-segment`'s, the guards transcript), and with bare ids decoding as themselves none is expected (as run, item 135: none moved) | — | — |
 | `econ` (as run, item 135) | none | — | — (gateway goldens only: three new cases, `briefing`, `economy_forecast` and `recap`, and twelve moved in the footer's `phase_remaining_ms` alone) |
-| `tune` (values; S1-26) | all | **moved** | all |
+| `tune` (values; S1-26) | all (as run, item 137: none, no value having moved) | **moved** (as run: from tick 0, 1 200 → 3 600 lines, re-blessed once) | all (as run: all, `rules_hash` moved by the table's `note` alone, and the five `demo_*_verify`, the operator wizard reports and the proto rules golden with it) |
 
 **Over the stage the scenario chains move six times** (`fixs`, `tgt`, `mine`, `build`, `oper`,
-`tune`), **the determinism chain four times** (`fixs`, `tgt`, `mine`, `tune`), and every
+`tune`; as run, item 137, five, `tune` moving none), **the determinism chain four times** (`fixs`, `tgt`, `mine`, `tune`), and every
 `report_hash` golden four times for certain (`con1`, `tgtv`, `tgt`, `tune`) and up to three more
 (`proj`, `mine`, `build`). X-12 and targeting together move the scenario chains and the determinism
 chain twice. Folding X-12 into `tgt` would save one determinism re-bless and one scenario re-bless,

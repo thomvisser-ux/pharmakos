@@ -14,7 +14,7 @@ and say so in your PR rather than guessing.
 
 **Status of this repository:** the toolchain is installed — rustc 1.98.1 (MSVC host on Windows),
 `protoc` 36, `buf` 1.73, `cargo-deny`, `reuse`, Godot 4.7.2 and its export templates — and
-`cargo xtask ci` is green: fifteen steps, every one required. A missing input is a failure, and
+`cargo xtask ci` is green: sixteen steps, every one required. A missing input is a failure, and
 only three skips remain, each
 a statement about the platform or the caller (`screenshot` off Linux, `stage-client` on macOS,
 `test-research` when `--package` leaves the sim out); a missing tool skips locally and fails under
@@ -658,7 +658,7 @@ cargo xtask ci --quick    # fmt, clippy, unit tests — the inner loop
 cargo xtask ci --fix      # rustfmt and the machine-applicable clippy fixes
 ```
 
-> **Status.** `xtask/src/main.rs` is green, and its fifteen steps cover items 1–10 below. Every step
+> **Status.** `xtask/src/main.rs` is green, and its sixteen steps cover items 1–10 below. Every step
 > is required: a step whose input is missing fails rather than skips (decisions-log item
 > 116 (6)(g)). A test that needs a tool (`crates/proto/tests/generated.rs` needs buf and
 > `protoc-gen-prost`) still skips, and lets its step report `ok`, unless
@@ -712,7 +712,9 @@ cargo xtask ci --fix      # rustfmt and the machine-applicable clippy fixes
    generated JSON Schema joins it with v1.1. The `buf` step fails, rather than skipping `breaking`,
    when there is no local `main` to compare against (decisions-log item 116 (6)(g) and (p)).
 9. **Licensing** — REUSE check: every file has an SPDX header or a `REUSE.toml` entry, and the
-   manifest is complete; the `LICENSE` pointers are §8's rule, which no step checks.
+   manifest is complete; the `LICENSE` pointers are §8's rule, which no step checks. The
+   `placeholders` step runs after it and fails on any `PLACEHOLDER` marker off the register's
+   grammar (below; decisions-log item 137).
 10. **Scenarios** — the `scenario` step validates every committed scenario file and plays each with
     `gamectl scenario run` (map seed + playbooks + assertions on events and hashes). The
     `screenshot` step renders the vista, the diagnostic rows and the wizard's first page windowed
@@ -764,11 +766,12 @@ ruled by decisions-log item 128). The command keeps the smoke run's user folders
 `<target>/package/data/` itself, and reads the export templates from Godot's own folder, where they
 must be installed.
 
-**The PLACEHOLDER register.** `cargo xtask placeholders` is not a step either: it collects every
+**The PLACEHOLDER register.** `cargo xtask placeholders` collects every
 `PLACEHOLDER` marker in the tracked tree, parses each against the one-line grammar
 `<what> — <who>, <when>`, prints the register grouped by when and by who, and with `--check` fails
-while any marker is off the grammar. It becomes a `ci` step in S1's last `xtask` pull request
-(`tune`), once the lanes have reworded their markers (decisions-log items 128 and 129).
+while any marker is off the grammar. Since S1's `tune` it is also `ci`'s sixteenth step, the
+`placeholders` step, which runs after `reuse` and fails on any marker off the grammar
+(decisions-log items 128, 129 and 137).
 
 Nightly, additionally: the three adversarial scenarios (§10) on a fixed seed set, and the fuzzer
 (10 000 generated playbooks, no panic). Both are jobs in `.github/workflows/nightly-scenarios.yml`
