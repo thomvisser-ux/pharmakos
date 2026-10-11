@@ -122,7 +122,7 @@ pub const MAX_CONDITION_DEPTH: u32 = 4;
 /// The most nodes one condition tree may hold (spec section 10: ≤ 24 nodes).
 pub const MAX_CONDITION_NODES: u32 = 24;
 
-/// PLACEHOLDER (harness): how many route steps one plan may hold.
+/// PLACEHOLDER: harness scaffolding, how many route steps one plan may hold — owner, at S3, with P1's real size budget.
 ///
 /// A route step is one unit of the playbook size budget
 /// (`verifier.size_budget_units`, item 94), so a plan can never hold more steps
@@ -133,8 +133,9 @@ pub const MAX_CONDITION_NODES: u32 = 24;
 /// size budget.
 pub const MAX_ROUTE_STEPS: usize = 256;
 
-/// PLACEHOLDER (harness): how many handlers one plan may hold, bounded for the
-/// reason [`MAX_ROUTE_STEPS`] is. Owner, at S3.
+/// PLACEHOLDER: harness scaffolding, how many handlers one plan may hold — owner, at S3.
+///
+/// Bounded for the reason [`MAX_ROUTE_STEPS`] is.
 pub const MAX_HANDLERS: usize = 64;
 
 /// Game milliseconds to whole ticks, rounding **up**.

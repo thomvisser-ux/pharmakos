@@ -2324,7 +2324,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Match".into
         pub commander_cost_per_second: u32,
         /// Build, mining and repair-reclaim drones all walk at the same speed.
         ///
-        /// PLACEHOLDER: tuning — owner, S1.
+        /// PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
         ///
         /// item 90: 10
         #[prost(uint32, tag="10")]
@@ -2448,7 +2448,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Mesher".int
         /// Base Maintenance Indemnity: the `$` a seat is paid per settlement
         /// (spec section 7).
         ///
-        /// PLACEHOLDER: tuning — owner, S1.
+        /// PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
         ///
         /// item 90: 100
         #[prost(uint32, tag="1")]
@@ -2457,7 +2457,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Mesher".int
         /// money is two indemnities" — stays a rule rather than being flattened
         /// into a second number that can drift away from the first.
         ///
-        /// PLACEHOLDER: tuning — owner, S1.
+        /// PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
         ///
         /// item 90: 2, so $ 200
         #[prost(uint32, tag="2")]
@@ -2466,12 +2466,12 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Mesher".int
         /// this many percent more, the leader this many percent less, linear
         /// between.
         ///
-        /// PLACEHOLDER: tuning — owner, S1.
+        /// PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
         ///
         /// item 90: 10
         #[prost(uint32, tag="3")]
         pub scaling_last_place_bonus_percent: u32,
-        /// PLACEHOLDER: tuning — owner, S1.
+        /// PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
         ///
         /// item 90: 5
         #[prost(uint32, tag="4")]
@@ -2487,7 +2487,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Mesher".int
         /// Recycling a standing asset refunds this percentage of its REMAINING
         /// value (spec section 7).
         ///
-        /// PLACEHOLDER: tuning — owner, S1.
+        /// PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
         ///
         /// item 90: 50
         #[prost(uint32, tag="6")]
@@ -2503,7 +2503,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Mesher".int
         /// The fabricator's backlog warning: outstanding work items per available
         /// drone, above which the Quartermaster reports a backlog.
         ///
-        /// PLACEHOLDER: tuning — owner, S1.
+        /// PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
         ///
         /// item 90: 2
         #[prost(uint32, tag="8")]
@@ -2512,21 +2512,21 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Mesher".int
         /// out of (item 90). With `seam_voxels` below, a seam is worth 300 / 600 /
         /// 1 200 `$`.
         ///
-        /// PLACEHOLDER: tuning — owner, S1.
+        /// PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
         ///
         /// item 90: 2 / 4 / 8
         #[prost(message, optional, tag="9")]
         pub ore_yield_per_voxel_dollars: ::core::option::Option<super::ByRichness>,
         /// Ore voxels in one scrap seam, whatever its richness.
         ///
-        /// PLACEHOLDER: tuning — owner, S1.
+        /// PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
         ///
         /// item 90: 150
         #[prost(uint32, tag="10")]
         pub seam_voxels: u32,
         /// Game milliseconds one mining drone spends per ore voxel.
         ///
-        /// PLACEHOLDER: tuning — owner, S1.
+        /// PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
         ///
         /// item 90: 2000
         #[prost(int32, tag="11")]
@@ -2567,14 +2567,14 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Economy".in
         /// The pre-placed key core's deep-bore surplus: supply a seat has before
         /// it builds anything.
         ///
-        /// PLACEHOLDER: tuning — owner, S1.
+        /// PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
         ///
         /// item 90: 10
         #[prost(uint32, tag="1")]
         pub core_surplus_kw: u32,
         /// A Generator's output, by the richness of the heat vent it sits on.
         ///
-        /// PLACEHOLDER: tuning — owner, S1.
+        /// PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
         ///
         /// item 90: 20 / 30 / 40
         #[prost(message, optional, tag="2")]
@@ -2614,7 +2614,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Economy".in
         /// Headroom a dormant asset needs before it may revive, so a grid on the
         /// edge does not oscillate.
         ///
-        /// PLACEHOLDER: tuning — owner, S1.
+        /// PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
         ///
         /// item 90: 2
         #[prost(uint32, tag="6")]
@@ -2622,7 +2622,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Economy".in
         /// A beacon's own draw. Net zero through its own key-core, which is why it
         /// is stated rather than assumed (item 90, spec section 5).
         ///
-        /// PLACEHOLDER: tuning — owner, S1.
+        /// PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
         ///
         /// item 90: 2
         #[prost(uint32, tag="7")]
@@ -2776,7 +2776,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Beacon".int
         /// the band against 2 x sphere_radius_voxels, not against the placement
         /// range.
         ///
-        /// PLACEHOLDER: tuning — owner, S1.
+        /// PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
         ///
         /// item 90: LEAN
         #[prost(enumeration="super::by_richness::Richness", tag="6")]
@@ -2794,7 +2794,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Beacon".int
         /// The one starting scrap seam in an occupied spawn zone. Inside the
         /// core's sphere, so the starting mining drone digs from tick one.
         ///
-        /// PLACEHOLDER: tuning — owner, S1.
+        /// PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
         ///
         /// item 90: STANDARD
         #[prost(enumeration="super::by_richness::Richness", tag="9")]
@@ -2812,17 +2812,17 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Beacon".int
         /// Contested features, toward the centre of the map: what expansion is
         /// for.
         ///
-        /// PLACEHOLDER: tuning — owner, S1.
+        /// PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
         ///
         /// item 90: 2
         #[prost(uint32, tag="12")]
         pub contested_standard_vents: u32,
-        /// PLACEHOLDER: tuning — owner, S1.
+        /// PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
         ///
         /// item 90: 1
         #[prost(uint32, tag="13")]
         pub contested_rich_vents: u32,
-        /// PLACEHOLDER: tuning — owner, S1.
+        /// PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
         ///
         /// item 90: 3
         #[prost(uint32, tag="14")]
@@ -2889,12 +2889,12 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.UnitKind".i
     /// tuning.
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct Units {
-        /// PLACEHOLDER: tuning — owner, S1.
+        /// PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
         ///
         /// item 90: 20 / 100 / 1 / 10
         #[prost(message, optional, tag="1")]
         pub build_drone: ::core::option::Option<UnitKind>,
-        /// PLACEHOLDER: tuning — owner, S1.
+        /// PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
         ///
         /// item 90: 20 / 100 / 1 / 10
         #[prost(message, optional, tag="2")]
@@ -2920,12 +2920,12 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.UnitKind".i
         pub scout: ::core::option::Option<UnitKind>,
         /// Build drones each occupied seat starts with (item 95: 2).
         ///
-        /// PLACEHOLDER: tuning — owner, S1.
+        /// PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
         #[prost(uint32, tag="6")]
         pub starting_build_drones: u32,
         /// Mining drones each occupied seat starts with (item 95: 1).
         ///
-        /// PLACEHOLDER: tuning — owner, S1.
+        /// PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
         #[prost(uint32, tag="7")]
         pub starting_mining_drones: u32,
     }
@@ -2974,7 +2974,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.StructureKi
         /// than three — the decoded row is still 80 / 600 / 0. First zero-valued
         /// row in the table, so it is said once here and once in rules/README.md.
         ///
-        /// PLACEHOLDER: tuning — owner, S1.
+        /// PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
         ///
         /// item 90: 80 / 600 / 0
         #[prost(message, optional, tag="2")]
@@ -2989,7 +2989,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.StructureKi
         /// item 90: 90 / 400 / 3
         #[prost(message, optional, tag="4")]
         pub mortar: ::core::option::Option<StructureKind>,
-        /// PLACEHOLDER: tuning — owner, S1.
+        /// PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
         ///
         /// item 90: 30 / 200 / 1
         #[prost(message, optional, tag="5")]

@@ -20,7 +20,7 @@
 //!
 //! Every pull request that changes what a tick does **moves the hash chain**,
 //! and each one owes the explanation (AGENTS.md section 4.8, section 10 item
-//! 2). The values marked `PLACEHOLDER (harness)` below are scaffolding sized
+//! 2). The values whose markers say "harness scaffolding" below are sized
 //! for the skeleton, not tuning values: they are not in the rules table
 //! because they are not rules, and each names the stage that sizes it. S1's
 //! real determinism segment (decision 16; register S1-26) took the harness's
@@ -128,12 +128,13 @@ pub const PHASE_ORDER: [Phase; 12] = [
     Phase::Hash,
 ];
 
-/// PLACEHOLDER (harness): the per-tick work budget the seam starts with. The
-/// number becomes meaningful at S5, when the operator's budget is measured in
-/// evaluation units (owner).
+/// PLACEHOLDER: harness scaffolding, the per-tick work budget the seam starts with — owner, at S5.
+///
+/// The number becomes meaningful at S5, when the operator's budget is measured
+/// in evaluation units.
 const HARNESS_WORK_BUDGET: u32 = 1_000_000;
 
-/// PLACEHOLDER (harness): how many voxel edits one tick's queue holds.
+/// PLACEHOLDER: harness scaffolding, how many voxel edits one tick's queue holds — owner, at S2.
 ///
 /// Fixed at construction because nothing in a tick allocates (G3' section 9.17),
 /// and sized against item 65's destruction rate — 20 craters a second is one a
@@ -141,7 +142,7 @@ const HARNESS_WORK_BUDGET: u32 = 1_000_000;
 /// the real number when combat is the thing filling the queue (owner, at S2).
 const HARNESS_EDIT_QUEUE: usize = 64;
 
-/// PLACEHOLDER (harness): how many damage orders one tick's queue holds.
+/// PLACEHOLDER: harness scaffolding, how many damage orders one tick's queue holds — owner, at S2.
 ///
 /// Fixed at construction for the reason the edit queue is: nothing in a tick
 /// allocates (G3' section 9.17). Sized above the edit queue because one crater
@@ -220,15 +221,16 @@ pub const fn room_per_seat(total: u32, seats: u32) -> u32 {
     }
 }
 
-/// PLACEHOLDER (harness): how many wrecks a match may hold at once.
+/// PLACEHOLDER: harness scaffolding, how many wrecks a match may hold at once — owner, at S2.
 ///
 /// Nothing produces a wreck at the skeleton — destruction is S2 — so this is
 /// room for the day one exists, sized with the structure room it mirrors
 /// (owner, at S2).
 const WRECK_TABLE_ROOM: u32 = 120;
 
-/// PLACEHOLDER (harness): how many list settings one beacon may carry — Build
-/// targets, protected areas and Survey probe areas together.
+/// PLACEHOLDER: harness scaffolding, how many list settings one beacon may carry — owner, at S3's exit.
+///
+/// Build targets, protected areas and Survey probe areas together.
 ///
 /// Eight, which is roomy against the worked example's one target and well
 /// inside `verifier.size_budget_units` (128 units, of which a target costs
@@ -248,7 +250,7 @@ const TARGETS_PER_BEACON: u32 = 8;
 const TARGETS_PER_BEACON_SLOTS: usize = 8;
 const _: () = assert!(TARGETS_PER_BEACON == 8 && TARGETS_PER_BEACON_SLOTS == 8);
 
-/// PLACEHOLDER (harness): how many sightings one seat remembers at once.
+/// PLACEHOLDER: harness scaffolding, how many sightings one seat remembers at once — owner, at S3.
 ///
 /// Sixty-four, **each**: the table holds this many rows for every seat and
 /// evicts against a seat's own count, so a seat that sees more forgets its own
@@ -276,9 +278,9 @@ pub(crate) const fn beacon_limit_of(seats: u32) -> u32 {
     seats.saturating_add(room_per_seat(BEACON_TABLE_ROOM, seats).saturating_mul(seats))
 }
 
-/// PLACEHOLDER (harness): the largest radius a broadphase query asks for, in
-/// **voxels**. S2's combat phase replaces it with a weapon's range out of the
-/// rules table (owner, at S2).
+/// PLACEHOLDER: harness scaffolding, the largest broadphase query radius in voxels — owner, at S2.
+///
+/// S2's combat phase replaces it with a weapon's range out of the rules table.
 ///
 /// In voxels because a query radius in cells would make the answer's membership
 /// depend on the cell edge, which the rules table declares a non-hashed tuning

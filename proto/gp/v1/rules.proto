@@ -205,7 +205,7 @@ message RulesTable {
 
     // Build, mining and repair-reclaim drones all walk at the same speed.
     //
-    // PLACEHOLDER: tuning — owner, S1.
+    // PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
     uint32 drone_cost_per_second = 10;       // item 90: 10
 
     // PLACEHOLDER: tuning — owner, S2.
@@ -285,23 +285,23 @@ message RulesTable {
     // Base Maintenance Indemnity: the `$` a seat is paid per settlement
     // (spec section 7).
     //
-    // PLACEHOLDER: tuning — owner, S1.
+    // PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
     uint32 bmi_dollars = 1;                        // item 90: 100
 
     // Starting `$` as a MULTIPLE of the BMI, so the spec's rule — "starting
     // money is two indemnities" — stays a rule rather than being flattened
     // into a second number that can drift away from the first.
     //
-    // PLACEHOLDER: tuning — owner, S1.
+    // PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
     uint32 starting_bmi_multiplier = 2;            // item 90: 2, so $ 200
 
     // Settlement scaling by standing (spec section 7): last place is paid
     // this many percent more, the leader this many percent less, linear
     // between.
     //
-    // PLACEHOLDER: tuning — owner, S1.
+    // PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
     uint32 scaling_last_place_bonus_percent = 3;   // item 90: 10
-    // PLACEHOLDER: tuning — owner, S1.
+    // PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
     uint32 scaling_leader_malus_percent = 4;       // item 90: 5
 
     // The award fund, as a percentage of one BMI per settlement (S4's
@@ -313,7 +313,7 @@ message RulesTable {
     // Recycling a standing asset refunds this percentage of its REMAINING
     // value (spec section 7).
     //
-    // PLACEHOLDER: tuning — owner, S1.
+    // PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
     uint32 recycle_refund_percent = 6;             // item 90: 50
 
     // A wreck or a ruin salvages this percentage of the thing's build cost
@@ -325,24 +325,24 @@ message RulesTable {
     // The fabricator's backlog warning: outstanding work items per available
     // drone, above which the Quartermaster reports a backlog.
     //
-    // PLACEHOLDER: tuning — owner, S1.
+    // PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
     uint32 backlog_threshold_per_drone = 8;        // item 90: 2
 
     // Ore yield in `$` per mined voxel, by the richness of the seam it came
     // out of (item 90). With `seam_voxels` below, a seam is worth 300 / 600 /
     // 1 200 `$`.
     //
-    // PLACEHOLDER: tuning — owner, S1.
+    // PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
     ByRichness ore_yield_per_voxel_dollars = 9;    // item 90: 2 / 4 / 8
 
     // Ore voxels in one scrap seam, whatever its richness.
     //
-    // PLACEHOLDER: tuning — owner, S1.
+    // PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
     uint32 seam_voxels = 10;                       // item 90: 150
 
     // Game milliseconds one mining drone spends per ore voxel.
     //
-    // PLACEHOLDER: tuning — owner, S1.
+    // PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
     int32 mining_ms_per_voxel = 11;                // item 90: 2000
 
     // Ore voxels a mining drone carries before it walks its load home, where
@@ -376,12 +376,12 @@ message RulesTable {
     // The pre-placed key core's deep-bore surplus: supply a seat has before
     // it builds anything.
     //
-    // PLACEHOLDER: tuning — owner, S1.
+    // PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
     uint32 core_surplus_kw = 1;                    // item 90: 10
 
     // A Generator's output, by the richness of the heat vent it sits on.
     //
-    // PLACEHOLDER: tuning — owner, S1.
+    // PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
     ByRichness generator_output_kw = 2;            // item 90: 20 / 30 / 40
 
     // Draw per fielded unit, every kind (item 91). Every per-kind `draw_kw`
@@ -413,13 +413,13 @@ message RulesTable {
     // Headroom a dormant asset needs before it may revive, so a grid on the
     // edge does not oscillate.
     //
-    // PLACEHOLDER: tuning — owner, S1.
+    // PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
     uint32 revive_margin_kw = 6;                   // item 90: 2
 
     // A beacon's own draw. Net zero through its own key-core, which is why it
     // is stated rather than assumed (item 90, spec section 5).
     //
-    // PLACEHOLDER: tuning — owner, S1.
+    // PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
     uint32 beacon_base_draw_kw = 7;                // item 90: 2
   }
 
@@ -524,7 +524,7 @@ message RulesTable {
     // the band against 2 x sphere_radius_voxels, not against the placement
     // range.
     //
-    // PLACEHOLDER: tuning — owner, S1.
+    // PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
     ByRichness.Richness start_vent_richness = 6;   // item 90: LEAN
     // PLACEHOLDER: tuning, stood at the skeleton's demo — owner, at S1's demo.
     uint32 vent_min_distance_voxels = 7;           // item 90: 28
@@ -534,7 +534,7 @@ message RulesTable {
     // The one starting scrap seam in an occupied spawn zone. Inside the
     // core's sphere, so the starting mining drone digs from tick one.
     //
-    // PLACEHOLDER: tuning — owner, S1.
+    // PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
     ByRichness.Richness start_seam_richness = 9;   // item 90: STANDARD
     // PLACEHOLDER: tuning, stood at the skeleton's demo — owner, at S1's demo.
     uint32 seam_min_distance_voxels = 10;          // item 90: 8
@@ -544,11 +544,11 @@ message RulesTable {
     // Contested features, toward the centre of the map: what expansion is
     // for.
     //
-    // PLACEHOLDER: tuning — owner, S1.
+    // PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
     uint32 contested_standard_vents = 12;          // item 90: 2
-    // PLACEHOLDER: tuning — owner, S1.
+    // PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
     uint32 contested_rich_vents = 13;              // item 90: 1
-    // PLACEHOLDER: tuning — owner, S1.
+    // PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
     uint32 contested_rich_seams = 14;              // item 90: 3
 
     // Minimum separation between any two occupied spawn centres, as a
@@ -595,9 +595,9 @@ message RulesTable {
   // occupied seat has exactly one of each by the spec's design, not by
   // tuning.
   message Units {
-    // PLACEHOLDER: tuning — owner, S1.
+    // PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
     UnitKind build_drone = 1;    // item 90: 20 / 100 / 1 / 10
-    // PLACEHOLDER: tuning — owner, S1.
+    // PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
     UnitKind mining_drone = 2;   // item 90: 20 / 100 / 1 / 10
 
     // Item 90's "repair-reclaim drone" under its short name. There is no
@@ -613,11 +613,11 @@ message RulesTable {
 
     // Build drones each occupied seat starts with (item 95: 2).
     //
-    // PLACEHOLDER: tuning — owner, S1.
+    // PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
     uint32 starting_build_drones = 6;
     // Mining drones each occupied seat starts with (item 95: 1).
     //
-    // PLACEHOLDER: tuning — owner, S1.
+    // PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
     uint32 starting_mining_drones = 7;
   }
 
@@ -652,13 +652,13 @@ message RulesTable {
     // than three — the decoded row is still 80 / 600 / 0. First zero-valued
     // row in the table, so it is said once here and once in rules/README.md.
     //
-    // PLACEHOLDER: tuning — owner, S1.
+    // PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
     StructureKind generator = 2;        // item 90: 80 / 600 / 0
     // PLACEHOLDER: tuning — owner, S2.
     StructureKind autocannon = 3;       // item 90: 60 / 500 / 2
     // PLACEHOLDER: tuning — owner, S2.
     StructureKind mortar = 4;           // item 90: 90 / 400 / 3
-    // PLACEHOLDER: tuning — owner, S1.
+    // PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
     StructureKind survey_post = 5;      // item 90: 30 / 200 / 1
     // PLACEHOLDER: tuning — owner, S3.
     StructureKind resonance_spire = 6;  // item 90: 120 / 500 / 3

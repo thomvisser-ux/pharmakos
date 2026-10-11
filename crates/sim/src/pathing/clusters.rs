@@ -54,11 +54,13 @@
 //! band's error, and G2 carried the fix to S3 rather than building it
 //! (skeleton plan §2.1).
 //!
-//! PLACEHOLDER: the corner entrance — four extra transitions a cluster, where
-//! the diagonal across the corner is legal, repairable from the same dirty set
-//! because a corner's legality depends only on the four columns around it. It
-//! is recorded here and deliberately not built, so that S3 inherits the fix
-//! rather than rediscovering it (owner, at S3).
+//! PLACEHOLDER: the corner entrance, unbuilt — owner, at S3.
+//!
+//! Four extra transitions a cluster, where the diagonal across the corner is
+//! legal, repairable from the same dirty set because a corner's legality
+//! depends only on the four columns around it. It is recorded here and
+//! deliberately not built, so that S3 inherits the fix rather than
+//! rediscovering it.
 //!
 //! # Every buffer is sized at construction, at a bound rather than a guess
 //!

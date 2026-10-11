@@ -841,9 +841,10 @@ fn a_bound_step_and_a_resumed_visit_round_trip_through_a_snapshot() {
     // Risk R2's mitigation for S1's new hashed state: the covering step's
     // bindings, a bound Build target, and a restarted placement resumed as a
     // visit all survive a save and restore mid-flight, hash-identically, and
-    // the restored world takes the same next tick. The harness playbook has
-    // no `on` anchor, so the determinism suite's round-trip never carries
-    // these columns with values in them; this does.
+    // the restored world takes the same next tick. The determinism suite's
+    // playbook (Hold & Build's instantiation since S1's real segment) does
+    // write a target `on` a covered vent, but its round-trips do not choose
+    // their snapshot ticks for these columns; this test does.
     let mut enc = Enc::with_capacity(64 * 1024);
     let sealed = || {
         let mut world = world_at(SEED, 2, &[180_000]);

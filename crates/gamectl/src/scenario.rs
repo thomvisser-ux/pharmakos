@@ -124,14 +124,16 @@ pub const DEFAULT_UNITS_PER_SEAT: u32 = 0;
 /// The most harness walkers a scenario may give one seat. The cap is the
 /// format's, for the reason [`MAX_SEGMENT_MS`] is: the sim sizes its unit table
 /// from the key before the first tick, so an unbounded count asked the runner
-/// for gigabytes and aborted it with no pointer. The determinism harness fields
-/// 50 (`pharmakos_sim::DETERMINISM_UNITS_PER_SEAT`), and the walkers are
-/// scaffolding due to go with it. `xtask/src/scenario.rs`'s
-/// `MAX_UNITS_PER_SEAT` holds the same number, and `tests/parity.rs` pins the
-/// pair.
-// PLACEHOLDER: 256 harness walkers per seat — owner, at S1's demo
-// A guess well above the determinism harness's 50; the cap goes with the
-// walkers when they go.
+/// for gigabytes and aborted it with no pointer. The determinism harness
+/// fielded 50 until S1's real segment (decision 16; register S1-26) and fields
+/// none now; the walkers are scaffolding due to go with this key.
+/// `xtask/src/scenario.rs`'s `MAX_UNITS_PER_SEAT` holds the same number, and
+/// `tests/parity.rs` pins the pair.
+// PLACEHOLDER: 256 harness walkers per seat — owner, at S2's G3'-real measurement
+// A guess well above the 50 the determinism harness used to field; the cap
+// goes with the walkers when they go, which
+// `pharmakos_sim::WorldConfig::units_per_seat`'s marker puts at the same
+// measurement.
 pub const MAX_UNITS_PER_SEAT: u32 = 256;
 const SEAT_KEYS: &[&str] = &["seat", "kind", "playbook"];
 const SEGMENT_KEYS: &[&str] = &["index", "length_ms", "note"];
