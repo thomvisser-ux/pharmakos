@@ -27,7 +27,8 @@
 //! | `golden`         | `tests/golden/**/expected.*` against the fresh `target/golden/**/actual.*`    |
 //! | `determinism`    | runs the determinism binary and compares its per-tick hash chain              |
 //! | `reuse`          | REUSE licence-manifest check                                                  |
-//! | `scenario`       | validates `scenarios/**`, then plays each with `gamectl scenario run`         |
+//! | `placeholders`   | every `PLACEHOLDER` marker in the tracked tree parses against the grammar     |
+//! | `scenario`     | validates `scenarios/**`, then plays each with `gamectl scenario run`         |
 //! | `screenshot`     | stages the client, renders the three shots under xvfb + lavapipe, compares    |
 //! | `stage-client`   | builds the gdext cdylib, stages it into `godot/bin` and imports the project   |
 //!
@@ -412,8 +413,10 @@ const HASH_GOLDEN: &str = "tests/golden/determinism/expected.hashes.txt";
 /// The binary the `determinism` step runs once it exists.
 const DETERMINISM_BIN: &str = "determinism";
 
-/// The ticks the `determinism` step runs: 3 600, one full first-round Push
-/// (three minutes at 20 Hz on the rules table's 3 / 5 / 8 ladder), with every
+/// The ticks the `determinism` step runs: 3 600 lines, the initial state and
+/// the first 3 599 ticks of the first-round Push (three minutes at 20 Hz on
+/// the rules table's 3 / 5 / 8 ladder), stopping one tick before the tick
+/// that closes the segment, which no chain this step writes holds; with every
 /// seat sealing the committed copy of the Hold & Build template's
 /// instantiation (`pharmakos_sim::DETERMINISM_PLAYBOOK_PATH`) on
 /// `DETERMINISM_MATCH_SEED` (S1's plan, decision 16; register S1-26). It was

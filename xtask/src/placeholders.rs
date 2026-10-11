@@ -28,7 +28,8 @@
 //!
 //! The whole word `PLACEHOLDER` followed by a colon is a marker and is judged
 //! against the grammar. Followed by ` STUB` or by a dash it is a marker in an
-//! older spelling, listed to be reworded. Anywhere else — "the module docs'
+//! older spelling, listed to be reworded, and so is a tag in parentheses
+//! before the colon (`PLACEHOLDER (harness):`). Anywhere else — "the module docs'
 //! PLACEHOLDER", "a PLACEHOLDER naming the task", `**PLACEHOLDER**` in
 //! `rules/README.md`'s delegated table, `HAS_PLACEHOLDERS` — it is a reference
 //! to a marker, not one, and is not counted.
@@ -38,7 +39,9 @@
 //! The same scope as the register's own grep (`docs/placeholders.md`, "How the
 //! numbers were made"), stated as git pathspecs in [`EXCLUDED`]: `docs/` (the
 //! register itself and the design record), the rule text in `AGENTS.md`,
-//! `CLAUDE.md` and `.claude/`, the generated prost tree (copies of the
+//! `CLAUDE.md` and `.claude/`, the other top-level `*.md` files (with those,
+//! the docs-only fast path's prose: a pull request that changes only them runs
+//! no `ci` step, so the step reads none of them), the generated prost tree (copies of the
 //! `.proto` comments, which are counted at their source), `tests/golden/`
 //! (outputs, whose markers are copies of their producers'), and this file,
 //! whose own text describes the grammar.
@@ -65,6 +68,7 @@ pub(crate) const EXCLUDED: &[&str] = &[
     ":!docs",
     ":!AGENTS.md",
     ":!CLAUDE.md",
+    ":(exclude,glob)*.md",
     ":!.claude",
     ":!crates/proto/src/generated",
     ":!tests/golden",
@@ -113,11 +117,25 @@ pub(crate) fn classify(text: &str) -> Line {
             };
         }
         let older = [" STUB", " -", " \u{2014}", " \u{2013}"];
-        if older.iter().any(|spelling| after.starts_with(spelling)) {
+        if older.iter().any(|spelling| after.starts_with(spelling)) || is_tagged(after) {
             found = Line::OffGrammar;
         }
     }
     found
+}
+
+/// Whether the text after the marker word is the older tagged spelling,
+/// `PLACEHOLDER (<tag>):`, as in `PLACEHOLDER (harness):`: a marker whose tag
+/// sits where the grammar's colon belongs, so it is listed to be reworded
+/// rather than passed over as a reference.
+fn is_tagged(after: &str) -> bool {
+    let Some(rest) = after.strip_prefix(" (") else {
+        return false;
+    };
+    let Some((tag, tail)) = rest.split_once(')') else {
+        return false;
+    };
+    !tag.is_empty() && !tag.contains(char::is_whitespace) && tail.starts_with(':')
 }
 
 fn is_word_char(character: char) -> bool {
@@ -349,6 +367,8 @@ mod tests {
             "// PLACEHOLDER STUB - the per-beacon detail.", // the older spelling
             "# PLACEHOLDER \u{2014} entries held back until",
             "    # PLACEHOLDER - DELETE THIS BLOCK",
+            "/// PLACEHOLDER (harness): the per-tick work budget the seam starts with.",
+            "/// PLACEHOLDER (harness): how many route steps one plan may hold.",
         ] {
             assert_eq!(classify(text), Line::OffGrammar, "{text}");
         }
@@ -363,6 +383,8 @@ mod tests {
             "| `match.lull_ms` | **PLACEHOLDER** \u{2014} Tuning, owner |",
             "    HAS_PLACEHOLDERS = 3;",
             "// two PLACEHOLDERs were discharged",
+            "// a named constant carrying a PLACEHOLDER (AGENTS.md section 12).",
+            "// the values marked PLACEHOLDER (see below) are scaffolding",
             "no marker here at all",
         ] {
             assert_eq!(classify(text), Line::Nothing, "{text}");
@@ -439,5 +461,21 @@ proto/b.proto:1:// PLACEHOLDER: tuning \u{2014} owner, S1\n";
         ] {
             assert!(EXCLUDED.contains(&excluded), "{excluded}");
         }
+    }
+
+    /// The docs-only fast path (AGENTS.md section 9) runs the DCO walk and
+    /// `reuse` in place of the suite for `docs/**`, `AGENTS.md`, `CLAUDE.md`,
+    /// `.claude/**` and top-level `*.md`, so the step reads none of them: a
+    /// marker a prose-only pull request added would otherwise first fail on
+    /// `main`'s push.
+    #[test]
+    fn the_register_leaves_out_what_the_docs_only_fast_path_skips_the_suite_for() {
+        for excluded in [":!docs", ":!AGENTS.md", ":!CLAUDE.md", ":!.claude"] {
+            assert!(EXCLUDED.contains(&excluded), "{excluded}");
+        }
+        assert!(
+            EXCLUDED.contains(&":(exclude,glob)*.md"),
+            "top-level markdown, and only top-level: `*` does not cross `/` under `glob`"
+        );
     }
 }
