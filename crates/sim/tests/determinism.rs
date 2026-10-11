@@ -793,9 +793,13 @@ fn the_rules_hash_is_pinned_to_the_committed_table() {
     // S1's `mine` lane made the tick read `economy.mining_carry_voxels` in
     // place of the constant it was proposed from, at the same value, so that
     // reading moved nothing either; the table and this hash are unchanged.
+    // It moved from a75406a0f798a3a7 with S1's `tune`, which changed only the
+    // table's `note`: two grid rulings no row holds (S1-35's commander in a
+    // blackout and S1-22's swap) and the economy rows' status after the
+    // balance check. No value and not `revision` moved, so the chain did not.
     assert_eq!(
         hex(rules().rules_hash()),
-        "a75406a0f798a3a7",
+        "b1f2eef0e75c5ae4",
         "the rules hash moved; say in the pull request which row changed and why"
     );
 }
