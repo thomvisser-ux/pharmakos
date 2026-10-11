@@ -150,9 +150,9 @@ pub const DETERMINISM_SEATS: u32 = 4;
 /// instantiation (`library/hold_and_build.jsonc` with its own values), in
 /// canonical `gp.v1` JSON without its comments.
 ///
-/// S1's plan, decision 16 (register S1-26): the chain covers one full
-/// first-round Push of a real playbook rather than a harness playbook written
-/// in code. It is a copy, not the template itself, so that a later edit to
+/// S1's plan, decision 16 (register S1-26): the chain covers the first-round
+/// Push of a real playbook, up to the tick before the one that closes it,
+/// rather than a harness playbook written in code. It is a copy, not the template itself, so that a later edit to
 /// the template does not move the chain; and it is canonical JSON rather than
 /// JSONC because the comment layer is `plan-core`'s and the sim reads only the
 /// codec's form ([`pharmakos_proto::json`]).

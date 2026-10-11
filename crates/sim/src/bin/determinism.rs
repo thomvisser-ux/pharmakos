@@ -14,8 +14,10 @@
 //!
 //! Every seat seals the committed copy of the Hold & Build template's
 //! instantiation (`pharmakos_sim::DETERMINISM_PLAYBOOK_PATH`), and the match
-//! plays the rules table's own segment ladder: `cargo xtask ci` runs 3 600
-//! ticks, one full first-round Push (S1's plan, decision 16; register S1-26).
+//! plays the rules table's own segment ladder: `cargo xtask ci` writes 3 600
+//! lines, the initial state and the first-round Push's first 3 599 ticks,
+//! stopping before the tick that closes the Push (S1's plan, decision 16;
+//! register S1-26).
 //!
 //! # Save and resume, and why they are in the binary rather than only in a test
 //!

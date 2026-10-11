@@ -116,6 +116,14 @@ fn a_tick_allocates_nothing() {
     let world = World::new(&WorldConfig {
         match_seed: pharmakos_sim::DETERMINISM_MATCH_SEED,
         seats: pharmakos_sim::DETERMINISM_SEATS,
+        // No walkers. The determinism harness fielded fifty a seat until S1's
+        // real segment (decision 16), and this test with it. A probe with
+        // fifty a seat on the committed playbook (S1's `tune` fix pass) held
+        // both allocation assertions below, but not the fixed-stride one: with
+        // walkers wandering through the steady window the encoding's length
+        // changed between ticks, so the window is no longer steady. The
+        // wide-table coverage lives in `tests/determinism.rs` (`TEST_WALKERS`);
+        // this test covers the real playbook's in-tick growth instead.
         units_per_seat: 0,
         rules,
         match_settings: MatchSettings {

@@ -21,9 +21,10 @@ by `validate_hash_file` in `xtask/src/main.rs`.
 
 ## What the committed chain covers (S1's `tune`)
 
-**One full first-round Push of a real playbook** (S1's plan, decision 16;
-register S1-26). `cargo xtask ci` runs 3 600 ticks — the first rung of the
-rules table's 3 / 5 / 8 ladder, three minutes at 20 Hz — on
+**The first-round Push of a real playbook** (S1's plan, decision 16;
+register S1-26). `cargo xtask ci` writes 3 600 lines — the initial state and
+the first 3 599 ticks of the first rung of the rules table's 3 / 5 / 8
+ladder, three minutes at 20 Hz less the tick that closes the segment — on
 `DETERMINISM_MATCH_SEED` with four seats, and every seat seals
 `hold_and_build.playbook.json`, the file beside this README: the Hold & Build
 template (`library/hold_and_build.jsonc`) instantiated with its own values and
@@ -65,7 +66,10 @@ Two consequences worth knowing before reading a diff:
   The harness fields none now; G3′'s walker load left the chain with them, and
   S2's G3′-real measures load. `WorldConfig::units_per_seat` still exists for
   the scenario format's key and the sim's own tests.
-* **No segment boundary.** The chain stops inside the first Push. A diff that
+* **No segment boundary.** The chain stops inside the first Push, one tick
+  before the tick that closes it (tick 3 600, whose `SegmentEnded`,
+  `RecapOpened`, respawn settlement and abandoned deploys no committed chain
+  holds; the scenario chains cover segment ends). A diff that
   begins at a tick that is `1 mod 5` is a decision moving (a decision falls on
   every fifth tick of a Push, `match.decision_tick_ms` being 250 ms, starting
   with the Push's first played tick); a diff at tick 0 is a change to what the

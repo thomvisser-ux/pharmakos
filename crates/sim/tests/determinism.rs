@@ -31,10 +31,10 @@ use pharmakos_sim::voxels::{Material, VoxelEdit, VoxelStore};
 use pharmakos_sim::world::{PHASE_ORDER, Phase};
 use pharmakos_sim::{RulesError, RulesTable, World, WorldConfig};
 
-/// The tick count `cargo xtask ci` runs the determinism binary at: one full
-/// first-round Push, 3 600 ticks, three minutes at 20 Hz (S1's plan, decision
-/// 16; register S1-26). Keep it in step with `DETERMINISM_TICKS` in
-/// `xtask/src/main.rs`.
+/// The line count `cargo xtask ci` runs the determinism binary at: 3 600, the
+/// initial state and the first-round Push's first 3 599 ticks, stopping before
+/// the tick that closes the Push (S1's plan, decision 16; register S1-26).
+/// Keep it in step with `DETERMINISM_TICKS` in `xtask/src/main.rs`.
 const GOLDEN_TICKS: u32 = 3_600;
 
 /// Walkers per seat for the tests below that need a wide, moving unit table:
@@ -294,8 +294,17 @@ fn a_snapshot_written_by_one_process_continues_the_chain_in_another() {
     // The other half of T2's acceptance line. The test above round-trips fifty
     // snapshots inside one process; a save file's actual job is to be written
     // by one process and read by a different one, so this spawns two: the first
-    // runs 400 ticks and drops a snapshot at tick 200, the second starts from
-    // that file and must produce the first run's remaining 200 lines exactly.
+    // runs 1 400 ticks and drops a snapshot at tick 700, the second starts from
+    // that file and must produce the first run's remaining 700 lines exactly.
+    //
+    // Tick 700 is inside the committed playbook's growth window
+    // (tests/golden/determinism/README.md): the seats' deploys are landing
+    // (ticks 631 to 741) and the Generators are being queued and their drones
+    // fabricated (686 to 801), and the resumed stretch carries that through
+    // the Generators' completion (1 093 to 1 300) and the hold's end (1 286 to
+    // 1 396). So the restored process must carry a deploy in the ground, a
+    // Build target, a fabrication and a structure under construction, not a
+    // quiet walk.
     let Some(target) = target_dir() else {
         panic!("could not find the cargo target directory");
     };
@@ -305,7 +314,7 @@ fn a_snapshot_written_by_one_process_continues_the_chain_in_another() {
     let snapshot_path = target.join("determinism-resume.snapshot.postcard");
 
     let first = std::process::Command::new(env!("CARGO_BIN_EXE_determinism"))
-        .args(["--ticks", "400", "--save-at", "200"])
+        .args(["--ticks", "1400", "--save-at", "700"])
         .arg("--out")
         .arg(&reference_path)
         .arg("--snapshot")
@@ -317,7 +326,7 @@ fn a_snapshot_written_by_one_process_continues_the_chain_in_another() {
     assert!(first.success(), "the first process failed");
 
     let second = std::process::Command::new(env!("CARGO_BIN_EXE_determinism"))
-        .args(["--ticks", "200"])
+        .args(["--ticks", "700"])
         .arg("--out")
         .arg(&resumed_path)
         .arg("--resume")
@@ -331,12 +340,12 @@ fn a_snapshot_written_by_one_process_continues_the_chain_in_another() {
     let reference = std::fs::read_to_string(&reference_path).expect("reading the first chain");
     let resumed = std::fs::read_to_string(&resumed_path).expect("reading the resumed chain");
 
-    let tail: Vec<&str> = reference.lines().skip(200).collect();
+    let tail: Vec<&str> = reference.lines().skip(700).collect();
     let continued: Vec<&str> = resumed.lines().collect();
-    assert_eq!(tail.len(), 200, "the reference run is the wrong length");
+    assert_eq!(tail.len(), 700, "the reference run is the wrong length");
     assert_eq!(
         continued.first().map(|l| l.split('\t').next()),
-        Some(Some("200")),
+        Some(Some("700")),
         "a resumed run numbers its lines from the snapshot's own tick"
     );
     assert_eq!(
@@ -1518,5 +1527,41 @@ fn the_wire_ids_of_the_new_enums_are_dense_and_unique() {
         world_with(rules()).beacons().mandates(),
         vec![MandateKind::Build.id(); 3].as_slice(),
         "every pre-placed core is on a Build mandate"
+    );
+}
+
+#[test]
+fn walkers_without_a_raider_row_are_refused_and_no_walkers_need_none() {
+    // `fill_unit_table` gives the scaffolding walkers a raider's hit points
+    // from the rules table. A table with no `units.raider` row has none to
+    // give, so a world that asks for walkers is refused with the row's name
+    // rather than built on an invented number; a world that asks for none
+    // never reads the row, and builds.
+    let no_raider = || {
+        rules_edited(|message| {
+            message
+                .units
+                .as_mut()
+                .expect("the committed table has a units block")
+                .raider = None;
+        })
+    };
+    let config = |units_per_seat: u32| WorldConfig {
+        match_seed: pharmakos_sim::DETERMINISM_MATCH_SEED,
+        seats: pharmakos_sim::DETERMINISM_SEATS,
+        units_per_seat,
+        rules: no_raider(),
+        match_settings: MatchSettings::default(),
+    };
+    assert!(
+        matches!(
+            World::new(&config(1)),
+            Err(pharmakos_sim::MapError::MissingBlock("units.raider"))
+        ),
+        "walkers with no raider row are refused, naming the row"
+    );
+    assert!(
+        World::new(&config(0)).is_ok(),
+        "a world with no walkers never reads the raider row"
     );
 }
