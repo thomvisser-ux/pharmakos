@@ -117,9 +117,11 @@ pub(crate) const MAX_SEGMENT_MS: i64 = 480_000;
 /// the first tick, so an unbounded count asked the runner for gigabytes and
 /// aborted it with no pointer. `gamectl`'s reader holds the same number, and
 /// `crates/gamectl/tests/parity.rs` pins the pair.
-// PLACEHOLDER: 256 harness walkers per seat — owner, at S1's demo
-// A guess well above the determinism harness's 50; the cap goes with the
-// walkers when they go.
+// PLACEHOLDER: 256 harness walkers per seat — owner, at S2's G3'-real measurement
+// A guess well above the 50 the determinism harness fielded until S1's real
+// segment (decision 16; register S1-26), which fields none; the cap goes with
+// the walkers when they go, which `pharmakos_sim::WorldConfig::units_per_seat`'s
+// marker puts at the same measurement.
 pub(crate) const MAX_UNITS_PER_SEAT: i64 = 256;
 
 /// The round a match ends on when a scenario names none: the sim's

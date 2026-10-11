@@ -29,16 +29,14 @@
 //!   replace until the timer ends.
 //!
 //! One file per match, `save.json`, replaced atomically (write, then rename).
-//! PLACEHOLDER: one slot, latest wins -- **OWNER**, at **S6** with a save
-//! browser, where a `save_match` method stays additive.
+//! PLACEHOLDER: one slot, latest wins — owner, at S6, with a save browser, where a `save_match` method stays additive.
 //!
 //! # What it holds (decision C10)
 //!
 //! * the **stamp**: [`SAVE_FORMAT_VERSION`], the rules hash, the verifier
 //!   version and [`pharmakos_sim::snapshot::SNAPSHOT_VERSION`]. A mismatch in
 //!   any of them is refused as [`crate::error::Code::InvalidArgument`].
-//!   PLACEHOLDER: a save from an older build is refused, with no converter --
-//!   **OWNER**, at hardening;
+//!   PLACEHOLDER: a save from an older build is refused, with no converter — owner, at hardening;
 //! * the **config line's** six values, which a resume line must repeat
 //!   exactly (decisions-log item 112 (8));
 //! * `lull_offset`, so the gateway's tick and the audit log's stamps stay
@@ -74,9 +72,8 @@
 //! newline -- which makes that format a contract on disk as well as under
 //! `tests/golden/`. The seed, the settings and the rules hash are in
 //! `match.json`. Nothing reads the replay in v1 but a test; spec section 15's
-//! third input, the event **log**, is not written. PLACEHOLDER: the replay's
-//! log, reader, scrub and recap use -- **OWNER**, at **S7** with the
-//! recordings.
+//! third input, the event **log**, is not written.
+//! PLACEHOLDER: the replay's log, reader, scrub and recap use — owner, at S7, with the recordings.
 
 use std::fmt::Write as _;
 

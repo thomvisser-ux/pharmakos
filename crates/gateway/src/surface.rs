@@ -122,8 +122,7 @@
 //!   (the advisor re-runs at a resumed Lull), `feed`: a replayed Push
 //!   regenerates it, and a resumed Lull's is empty, and `recap`, the last
 //!   segment's facts, which a segment that ends in this process sets again.
-//!   PLACEHOLDER: the last recap's events do not survive a resume -- **OWNER**,
-//!   at **S7**.
+//!   PLACEHOLDER: the last recap's events do not survive a resume — owner, at S7.
 //!
 //! # Secrecy
 //!
@@ -257,9 +256,8 @@ pub struct Continuity {
 /// is the longest a `feed_digest` wait can sensibly be, and well over a Lull's
 /// longest useful poll.
 ///
-/// PLACEHOLDER: 60 000 is a working number. OWNER settles it at hardening with
-/// the rate limits, which is where the question of how often a client may poll
-/// actually lives.
+/// PLACEHOLDER: the longest wait, 60 000 ms — owner, at hardening, with the rate limits,
+/// which is where the question of how often a client may poll actually lives.
 pub const MAX_WAIT_MS: i32 = 60_000;
 
 /// The draft id last round's playbook is pre-loaded under.
@@ -714,10 +712,10 @@ impl Surface {
     /// builds, and it does not catch tampering: the cache is plain local state
     /// (AGENTS.md section 7).
     ///
-    /// PLACEHOLDER: a resumed Lull's timer starts full, because the Lull timer
-    /// is the client's (decisions-log item 99) and the save does not carry
-    /// what was left, so quitting buys planning time -- **OWNER**, at
-    /// hardening.
+    /// PLACEHOLDER: a resumed Lull's timer starts full — owner, at hardening.
+    /// It starts full because the Lull timer is the client's (decisions-log
+    /// item 99) and the save does not carry what was left, so quitting buys
+    /// planning time.
     ///
     /// # Errors
     ///

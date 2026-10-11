@@ -31,13 +31,18 @@ use pharmakos_sim::voxels::{Material, VoxelEdit, VoxelStore};
 use pharmakos_sim::world::{PHASE_ORDER, Phase};
 use pharmakos_sim::{RulesError, RulesTable, World, WorldConfig};
 
-/// The tick count `cargo xtask ci` runs the determinism binary at.
-///
-/// PLACEHOLDER: raised from 1 200 at S1 (owner; decisions-log item 116 (6)(e)
-/// kept the harness run through T20, because T20's demo scenario carries the
-/// full-segment chain). Keep it in step with `DETERMINISM_TICKS` in
-/// `xtask/src/main.rs`.
-const GOLDEN_TICKS: u32 = 1_200;
+/// The line count `cargo xtask ci` runs the determinism binary at: 3 600, the
+/// initial state and the first-round Push's first 3 599 ticks, stopping before
+/// the tick that closes the Push (S1's plan, decision 16; register S1-26).
+/// Keep it in step with `DETERMINISM_TICKS` in `xtask/src/main.rs`.
+const GOLDEN_TICKS: u32 = 3_600;
+
+/// Walkers per seat for the tests below that need a wide, moving unit table:
+/// the knob tests, the snapshot tests and the broadphase test. The chain's
+/// own harness fields none since S1's real segment (decision 16), so these
+/// tests field their own through `WorldConfig::units_per_seat`, at the fifty a
+/// seat the harness used to.
+const TEST_WALKERS: u32 = 50;
 
 /// The repository root, found by probing relative paths.
 fn repo_root() -> PathBuf {
@@ -76,38 +81,38 @@ fn rules_edited(edit: impl FnOnce(&mut gp::v1::RulesTable)) -> RulesTable {
     RulesTable::from_message(&message).expect("the edited table is still a table")
 }
 
+/// The committed harness playbook every seat seals.
+fn harness_playbook() -> gp::v1::Playbook {
+    pharmakos_sim::determinism_playbook(&repo_root().join(pharmakos_sim::DETERMINISM_PLAYBOOK_PATH))
+        .expect("the committed harness playbook is canonical gp.v1 JSON")
+}
+
+/// The determinism harness's own world, exactly as
+/// `pharmakos_sim::determinism_world` builds it: the chain this file checks
+/// and the chain the binary writes are one run, which is what
+/// `the_binary_reproduces_the_library_in_a_fresh_process` compares.
+fn harness(rules: RulesTable) -> World {
+    world_of(rules, 0)
+}
+
+/// The harness world with [`TEST_WALKERS`] walkers a seat.
 fn world_with(rules: RulesTable) -> World {
-    world_of(rules, pharmakos_sim::DETERMINISM_UNITS_PER_SEAT)
+    world_of(rules, TEST_WALKERS)
 }
 
-/// The harness's match settings, exactly as `pharmakos_sim::determinism_world`
-/// sets them: short segments, so a 1 200-tick chain covers whole segments and
-/// the phase changes between them (T10).
-fn harness_settings() -> MatchSettings {
-    MatchSettings {
-        segment_lengths_ms: pharmakos_sim::DETERMINISM_SEGMENT_LENGTHS_MS.to_vec(),
-        round_limit: pharmakos_sim::DEFAULT_ROUND_LIMIT,
-    }
-}
-
-/// The harness world at a chosen size, for the tests that need two worlds of
-/// different shapes.
-///
-/// It seals `pharmakos_sim::determinism_playbook` for every seat, exactly as
-/// `pharmakos_sim::determinism_world` does — otherwise the chain this file
-/// checks and the chain the binary writes would be two different runs, and
-/// `the_binary_reproduces_the_library_in_a_fresh_process` would be comparing
-/// nothing (T11).
+/// The harness world at a chosen size: every seat seals the harness playbook
+/// as `pharmakos_sim::determinism_world` has it, on the rules table's own
+/// ladder, with `units_per_seat` walkers a seat.
 fn world_of(rules: RulesTable, units_per_seat: u32) -> World {
     let mut world = World::new(&WorldConfig {
         match_seed: pharmakos_sim::DETERMINISM_MATCH_SEED,
         seats: pharmakos_sim::DETERMINISM_SEATS,
         units_per_seat,
         rules,
-        match_settings: harness_settings(),
+        match_settings: MatchSettings::default(),
     })
     .expect("the rules table describes a map and a broadphase grid");
-    let sealed = pharmakos_sim::seal_determinism_playbooks(&mut world)
+    let sealed = pharmakos_sim::seal_determinism_playbooks(&mut world, &harness_playbook())
         .expect("the harness playbook compiles");
     assert_eq!(sealed, pharmakos_sim::DETERMINISM_SEATS, "every seat seals");
     world
@@ -119,8 +124,7 @@ fn world_of(rules: RulesTable, units_per_seat: u32) -> World {
 /// that is what `src/bin/determinism.rs` does and
 /// `the_binary_reproduces_the_library_in_a_fresh_process` compares the two byte
 /// for byte. The host's part — opening a Push the moment a Lull is reached and
-/// closing a recap the moment one opens — is the same one the binary plays,
-/// and it is what puts whole segments inside the chain (T10).
+/// closing a recap the moment one opens — is the same one the binary plays.
 fn chain(world: World, ticks: u32) -> String {
     let mut runner = Runner::new(world);
     let mut out = String::with_capacity(usize::try_from(ticks).unwrap_or(0).saturating_mul(24));
@@ -151,7 +155,7 @@ fn chain(world: World, ticks: u32) -> String {
 
 #[test]
 fn the_hash_chain_matches_its_golden() {
-    let fresh = chain(world_with(rules()), GOLDEN_TICKS);
+    let fresh = chain(harness(rules()), GOLDEN_TICKS);
 
     // Hand the fresh output to `cargo xtask ci`'s golden step before asserting,
     // so a failure here still leaves it a readable first-difference report.
@@ -234,7 +238,7 @@ fn the_binary_reproduces_the_library_in_a_fresh_process() {
         runs.get(1),
         "two runs of the determinism binary disagree"
     );
-    let in_process = chain(world_with(rules()), 200);
+    let in_process = chain(harness(rules()), 200);
     assert_eq!(
         runs.first().map(Vec::as_slice),
         Some(in_process.as_bytes()),
@@ -290,8 +294,17 @@ fn a_snapshot_written_by_one_process_continues_the_chain_in_another() {
     // The other half of T2's acceptance line. The test above round-trips fifty
     // snapshots inside one process; a save file's actual job is to be written
     // by one process and read by a different one, so this spawns two: the first
-    // runs 400 ticks and drops a snapshot at tick 200, the second starts from
-    // that file and must produce the first run's remaining 200 lines exactly.
+    // runs 1 400 ticks and drops a snapshot at tick 700, the second starts from
+    // that file and must produce the first run's remaining 700 lines exactly.
+    //
+    // Tick 700 is inside the committed playbook's growth window
+    // (tests/golden/determinism/README.md): the seats' deploys are landing
+    // (ticks 631 to 741) and the Generators are being queued and their drones
+    // fabricated (686 to 801), and the resumed stretch carries that through
+    // the Generators' completion (1 093 to 1 300) and the hold's end (1 286 to
+    // 1 396). So the restored process must carry a deploy in the ground, a
+    // Build target, a fabrication and a structure under construction, not a
+    // quiet walk.
     let Some(target) = target_dir() else {
         panic!("could not find the cargo target directory");
     };
@@ -301,7 +314,7 @@ fn a_snapshot_written_by_one_process_continues_the_chain_in_another() {
     let snapshot_path = target.join("determinism-resume.snapshot.postcard");
 
     let first = std::process::Command::new(env!("CARGO_BIN_EXE_determinism"))
-        .args(["--ticks", "400", "--save-at", "200"])
+        .args(["--ticks", "1400", "--save-at", "700"])
         .arg("--out")
         .arg(&reference_path)
         .arg("--snapshot")
@@ -313,7 +326,7 @@ fn a_snapshot_written_by_one_process_continues_the_chain_in_another() {
     assert!(first.success(), "the first process failed");
 
     let second = std::process::Command::new(env!("CARGO_BIN_EXE_determinism"))
-        .args(["--ticks", "200"])
+        .args(["--ticks", "700"])
         .arg("--out")
         .arg(&resumed_path)
         .arg("--resume")
@@ -327,12 +340,12 @@ fn a_snapshot_written_by_one_process_continues_the_chain_in_another() {
     let reference = std::fs::read_to_string(&reference_path).expect("reading the first chain");
     let resumed = std::fs::read_to_string(&resumed_path).expect("reading the resumed chain");
 
-    let tail: Vec<&str> = reference.lines().skip(200).collect();
+    let tail: Vec<&str> = reference.lines().skip(700).collect();
     let continued: Vec<&str> = resumed.lines().collect();
-    assert_eq!(tail.len(), 200, "the reference run is the wrong length");
+    assert_eq!(tail.len(), 700, "the reference run is the wrong length");
     assert_eq!(
         continued.first().map(|l| l.split('\t').next()),
-        Some(Some("200")),
+        Some(Some("700")),
         "a resumed run numbers its lines from the snapshot's own tick"
     );
     assert_eq!(
@@ -789,9 +802,13 @@ fn the_rules_hash_is_pinned_to_the_committed_table() {
     // S1's `mine` lane made the tick read `economy.mining_carry_voxels` in
     // place of the constant it was proposed from, at the same value, so that
     // reading moved nothing either; the table and this hash are unchanged.
+    // It moved from a75406a0f798a3a7 with S1's `tune`, which changed only the
+    // table's `note`: two grid rulings no row holds (S1-35's commander in a
+    // blackout and S1-22's swap) and the economy rows' status after the
+    // balance check. No value and not `revision` moved, so the chain did not.
     assert_eq!(
         hex(rules().rules_hash()),
-        "a75406a0f798a3a7",
+        "b1f2eef0e75c5ae4",
         "the rules hash moved; say in the pull request which row changed and why"
     );
 }
@@ -1396,9 +1413,9 @@ fn the_map_is_inside_the_hash_and_not_merely_beside_it() {
     let alternative = World::new(&WorldConfig {
         match_seed: pharmakos_sim::DETERMINISM_MATCH_SEED ^ 1,
         seats: pharmakos_sim::DETERMINISM_SEATS,
-        units_per_seat: pharmakos_sim::DETERMINISM_UNITS_PER_SEAT,
+        units_per_seat: TEST_WALKERS,
         rules: rules(),
-        match_settings: harness_settings(),
+        match_settings: MatchSettings::default(),
     })
     .expect("a world on another seed");
     let mut base = world_with(rules());
@@ -1510,5 +1527,41 @@ fn the_wire_ids_of_the_new_enums_are_dense_and_unique() {
         world_with(rules()).beacons().mandates(),
         vec![MandateKind::Build.id(); 3].as_slice(),
         "every pre-placed core is on a Build mandate"
+    );
+}
+
+#[test]
+fn walkers_without_a_raider_row_are_refused_and_no_walkers_need_none() {
+    // `fill_unit_table` gives the scaffolding walkers a raider's hit points
+    // from the rules table. A table with no `units.raider` row has none to
+    // give, so a world that asks for walkers is refused with the row's name
+    // rather than built on an invented number; a world that asks for none
+    // never reads the row, and builds.
+    let no_raider = || {
+        rules_edited(|message| {
+            message
+                .units
+                .as_mut()
+                .expect("the committed table has a units block")
+                .raider = None;
+        })
+    };
+    let config = |units_per_seat: u32| WorldConfig {
+        match_seed: pharmakos_sim::DETERMINISM_MATCH_SEED,
+        seats: pharmakos_sim::DETERMINISM_SEATS,
+        units_per_seat,
+        rules: no_raider(),
+        match_settings: MatchSettings::default(),
+    };
+    assert!(
+        matches!(
+            World::new(&config(1)),
+            Err(pharmakos_sim::MapError::MissingBlock("units.raider"))
+        ),
+        "walkers with no raider row are refused, naming the row"
+    );
+    assert!(
+        World::new(&config(0)).is_ok(),
+        "a world with no walkers never reads the raider row"
     );
 }

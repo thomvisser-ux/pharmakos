@@ -20,10 +20,11 @@
 //!
 //! Every pull request that changes what a tick does **moves the hash chain**,
 //! and each one owes the explanation (AGENTS.md section 4.8, section 10 item
-//! 2). The values marked `PLACEHOLDER (harness)` below are the determinism
-//! harness's scaffolding, not tuning values: they are not in the rules table
-//! because they are not rules, and they go with S1-26's real determinism
-//! segment (owner, at S1, the `tune` lane).
+//! 2). The values whose markers say "harness scaffolding" below are sized
+//! for the skeleton, not tuning values: they are not in the rules table
+//! because they are not rules, and each names the stage that sizes it. S1's
+//! real determinism segment (decision 16; register S1-26) took the harness's
+//! walkers out of the chain and left the rest where they were.
 //!
 //! # The phase order is fixed
 //!
@@ -127,12 +128,13 @@ pub const PHASE_ORDER: [Phase; 12] = [
     Phase::Hash,
 ];
 
-/// PLACEHOLDER (harness): the per-tick work budget the seam starts with. The
-/// number becomes meaningful at S5, when the operator's budget is measured in
-/// evaluation units (owner).
+/// PLACEHOLDER: harness scaffolding, the per-tick work budget the seam starts with — owner, at S5.
+///
+/// The number becomes meaningful at S5, when the operator's budget is measured
+/// in evaluation units.
 const HARNESS_WORK_BUDGET: u32 = 1_000_000;
 
-/// PLACEHOLDER (harness): how many voxel edits one tick's queue holds.
+/// PLACEHOLDER: harness scaffolding, how many voxel edits one tick's queue holds — owner, at S2.
 ///
 /// Fixed at construction because nothing in a tick allocates (G3' section 9.17),
 /// and sized against item 65's destruction rate — 20 craters a second is one a
@@ -140,7 +142,7 @@ const HARNESS_WORK_BUDGET: u32 = 1_000_000;
 /// the real number when combat is the thing filling the queue (owner, at S2).
 const HARNESS_EDIT_QUEUE: usize = 64;
 
-/// PLACEHOLDER (harness): how many damage orders one tick's queue holds.
+/// PLACEHOLDER: harness scaffolding, how many damage orders one tick's queue holds — owner, at S2.
 ///
 /// Fixed at construction for the reason the edit queue is: nothing in a tick
 /// allocates (G3' section 9.17). Sized above the edit queue because one crater
@@ -148,10 +150,7 @@ const HARNESS_EDIT_QUEUE: usize = 64;
 /// thing filling it (owner, at S2).
 const HARNESS_DAMAGE_QUEUE: usize = 256;
 
-/// PLACEHOLDER: the world total of beacons a match may place on top of the
-/// cores the generator pre-places, shared equally per seat -- owner, at S1's
-/// demo with the balance check's report; the totals are revisited at S2's
-/// G3'-real measurement (register S1-37).
+/// PLACEHOLDER: the world total of beacons a match may place on top of the cores, shared equally per seat — owner, at S1's demo, with the balance check's report; the totals are revisited at S2's G3'-real measurement (register S1-37).
 ///
 /// Forty is item 63's world total. Since S1 the room is **per seat**: each
 /// seat may place [`room_per_seat`] of the total, the total divided by the
@@ -168,10 +167,7 @@ const HARNESS_DAMAGE_QUEUE: usize = 256;
 /// the rules table.
 const BEACON_TABLE_ROOM: u32 = 40;
 
-/// PLACEHOLDER: the world total of units a match may fabricate on top of the
-/// starting force, shared equally per seat -- owner, at S1's demo with the
-/// balance check's report; the totals are revisited at S2's G3'-real
-/// measurement (register S1-37).
+/// PLACEHOLDER: the world total of units a match may fabricate on top of the starting force, shared equally per seat — owner, at S1's demo, with the balance check's report; the totals are revisited at S2's G3'-real measurement (register S1-37).
 ///
 /// Item 63 fixes the world total at **300 units**; since S1 each seat may
 /// fabricate [`room_per_seat`] of it on top of its own starting force (100 a
@@ -182,11 +178,7 @@ const BEACON_TABLE_ROOM: u32 = 40;
 /// surplus and vent Generators can power", which this only bounds.
 pub(crate) const UNIT_TABLE_ROOM: u32 = 300;
 
-/// PLACEHOLDER: the world total of structures a match may build, shared
-/// equally per seat since S1 ("Build targets and structures follow",
-/// `docs/design/targeting.md`) -- the per-seat split is the owner's at S1's
-/// demo with the balance check's report, like the two rooms above (register
-/// S1-37); the total is the owner's at S2 with the capability catalogue.
+/// PLACEHOLDER: the world total of structures a match may build, shared equally per seat since S1 ("Build targets and structures follow", `docs/design/targeting.md`) — owner, at S1's demo, with the balance check's report for the per-seat split (register S1-37); the total is the owner's at S2 with the capability catalogue.
 ///
 /// Three a beacon at [`BEACON_TABLE_ROOM`], which covers a Generator on every
 /// vent a map carries plus the Survey posts and turrets S2 adds. A seat's
@@ -229,15 +221,16 @@ pub const fn room_per_seat(total: u32, seats: u32) -> u32 {
     }
 }
 
-/// PLACEHOLDER (harness): how many wrecks a match may hold at once.
+/// PLACEHOLDER: harness scaffolding, how many wrecks a match may hold at once — owner, at S2.
 ///
 /// Nothing produces a wreck at the skeleton — destruction is S2 — so this is
 /// room for the day one exists, sized with the structure room it mirrors
 /// (owner, at S2).
 const WRECK_TABLE_ROOM: u32 = 120;
 
-/// PLACEHOLDER (harness): how many list settings one beacon may carry — Build
-/// targets, protected areas and Survey probe areas together.
+/// PLACEHOLDER: harness scaffolding, how many list settings one beacon may carry — owner, at S3's exit.
+///
+/// Build targets, protected areas and Survey probe areas together.
 ///
 /// Eight, which is roomy against the worked example's one target and well
 /// inside `verifier.size_budget_units` (128 units, of which a target costs
@@ -257,7 +250,7 @@ const TARGETS_PER_BEACON: u32 = 8;
 const TARGETS_PER_BEACON_SLOTS: usize = 8;
 const _: () = assert!(TARGETS_PER_BEACON == 8 && TARGETS_PER_BEACON_SLOTS == 8);
 
-/// PLACEHOLDER (harness): how many sightings one seat remembers at once.
+/// PLACEHOLDER: harness scaffolding, how many sightings one seat remembers at once — owner, at S3.
 ///
 /// Sixty-four, **each**: the table holds this many rows for every seat and
 /// evicts against a seat's own count, so a seat that sees more forgets its own
@@ -285,9 +278,9 @@ pub(crate) const fn beacon_limit_of(seats: u32) -> u32 {
     seats.saturating_add(room_per_seat(BEACON_TABLE_ROOM, seats).saturating_mul(seats))
 }
 
-/// PLACEHOLDER (harness): the largest radius a broadphase query asks for, in
-/// **voxels**. S2's combat phase replaces it with a weapon's range out of the
-/// rules table (owner, at S2).
+/// PLACEHOLDER: harness scaffolding, the largest broadphase query radius in voxels — owner, at S2.
+///
+/// S2's combat phase replaces it with a weapon's range out of the rules table.
 ///
 /// In voxels because a query radius in cells would make the answer's membership
 /// depend on the cell edge, which the rules table declares a non-hashed tuning
@@ -316,11 +309,16 @@ pub struct WorldConfig {
     /// occupies spawn zone `i`; a seat beyond the map's zones is seated but
     /// unplaced (see [`crate::mapgen`]).
     pub seats: u32,
-    /// PLACEHOLDER (harness): how many extra walking units each seat fields on
-    /// top of its starting force, so that the hash chain covers a wide table.
-    /// A real match passes zero. T14 fabricates units for real and kept this for
-    /// the determinism harness; it goes with S1-26's real determinism segment
-    /// (owner, at S1, the `tune` lane; decision 16 of S1's plan).
+    /// How many extra walking units each seat fields on top of its starting
+    /// force: raiders homed to nobody, wandering on [`Stream::Spawn`]
+    /// ([`World::draw_new_destinations`]), scaffolding that widens the unit
+    /// table. A real match passes zero, and since S1's real determinism
+    /// segment so does the determinism harness, whose chain covers a real
+    /// playbook instead (decision 16 of S1's plan; register S1-26). The
+    /// scenario format's `units_per_seat` key and the sim's own tests still
+    /// field them.
+    ///
+    /// PLACEHOLDER: the walkers' removal, with the scenario format's `units_per_seat` key — owner, at S2's G3'-real measurement, which measures load without them.
     pub units_per_seat: u32,
     /// The rules table, an **input** to the sim and never hashed state.
     pub rules: RulesTable,
@@ -593,7 +591,7 @@ impl World {
             seat_index = seat_index.saturating_add(1);
         }
 
-        let units = fill_unit_table(config, &generated, unit_count, [max_x, max_y]);
+        let units = fill_unit_table(config, &generated, unit_count, [max_x, max_y])?;
 
         let mut voxels = generated.voxels;
         let features = generated.features;
@@ -1384,7 +1382,8 @@ impl World {
     /// ([`crate::survey`]).
     ///
     /// Named for what it does rather than for a visit it does not track.
-    /// PLACEHOLDER: **no probe area is ever recorded as visited**, so a Survey
+    /// PLACEHOLDER: no probe area is ever recorded as visited — owner, at S3, with the reach window.
+    /// **No probe area is ever recorded as visited**, so a Survey
     /// mandate carrying two or more areas only ever works the one its scout
     /// reaches first — inside that area this answers `None` for ever and
     /// [`crate::programs`] falls through to the stalest sighting. Working
@@ -2022,7 +2021,8 @@ impl World {
     /// second building in the same voxel while the first stayed at one hit
     /// point for ever with no target to finish it.
     ///
-    /// PLACEHOLDER: an anchor that appears in the old list and **not** in the
+    /// PLACEHOLDER: a dropped anchor strands what was paid for there — owner, at S2, with destruction and ruins.
+    /// An anchor that appears in the old list and **not** in the
     /// new one — a `remove_build_target`, or a replacement that drops it —
     /// strands whatever was already paid for there: the structure stays in the
     /// world, unfinished, and no drone returns to it. That is a reading, not a
@@ -3046,16 +3046,17 @@ impl World {
     /// Give every unit that reached the end of a route somewhere new to be —
     /// **except a commander**.
     ///
-    /// PLACEHOLDER (harness): the destination is drawn from [`Stream::Spawn`] at
-    /// `(tick, seat, unit id)`, which is the wandering T2 introduced so that the
-    /// hash chain covers a moving table. It goes with
-    /// `WorldConfig::units_per_seat`, the walkers it exists to move, and with
-    /// S1-26's real determinism segment (owner, at S1, the `tune` lane).
+    /// The destination is drawn from [`Stream::Spawn`] at `(tick, seat, unit
+    /// id)`, which is the wandering T2 introduced so that the hash chain
+    /// covered a moving table. It moves the walkers of
+    /// `WorldConfig::units_per_seat` and goes with them (see that field's
+    /// PLACEHOLDER); the determinism harness fields none since S1's real
+    /// segment (decision 16; register S1-26).
     ///
     /// **A commander is not drawn for** (T11): where the commander goes is the
     /// playbook's to say, and a seat that has sealed none leaves its commander
-    /// standing where it is rather than wandering. That is the half of this
-    /// PLACEHOLDER the interpreter discharged, and it is one of the two reasons
+    /// standing where it is rather than wandering. That is the half of the
+    /// wandering the interpreter discharged, and it is one of the two reasons
     /// the determinism chain moved in T11's pull request.
     fn draw_new_destinations(&mut self) {
         if self.router.arrived().is_empty() {
@@ -4428,18 +4429,22 @@ fn commander_index(units: &UnitTable, seats: u32) -> Vec<u32> {
     commanders
 }
 
-/// The unit table: the generator's starting force first, then the harness's
-/// extra walkers, seat by seat.
+/// The unit table: the generator's starting force first, then the extra
+/// walkers of `WorldConfig::units_per_seat`, seat by seat.
 ///
 /// One pass, in that order, so unit ids stay **dense and in seat order** —
 /// which is what lets [`Csr`] use a row index as an id and what makes every
 /// sort key that ends in a unit id a total order (item 62).
+///
+/// Refuses with [`MapError::MissingBlock`] when walkers are asked for and the
+/// rules table has no `units.raider` row to give them hit points from, rather
+/// than inventing a number.
 fn fill_unit_table(
     config: &WorldConfig,
     generated: &crate::mapgen::GeneratedMap,
     capacity: u32,
     extent: [i16; 2],
-) -> UnitTable {
+) -> Result<UnitTable, MapError> {
     let mut units = UnitTable::with_capacity(capacity.saturating_add(UNIT_TABLE_ROOM));
     units.reserve(UNIT_TABLE_ROOM);
     let mut next_id: u32 = 0;
@@ -4466,29 +4471,24 @@ fn fill_unit_table(
         next_id = next_id.saturating_add(1);
     }
 
-    // PLACEHOLDER (harness): the extra walkers are raiders because a raider is
-    // the cheapest kind with a rules-table HP row that is not part of a seat's
-    // starting force, so they cannot be mistaken for one.
-    //
-    // **T14 narrowed this rather than discharging it, and says why.** The
-    // PLACEHOLDER used to name T14 as the task that deletes the walkers,
-    // because T14 is where a fabricator starts producing units for real. It
-    // does — but fabrication at 1 200 ticks produces a handful of drones, and
-    // the walkers are the *width* of the hash: four seats of fifty is the
-    // widest the unit table is ever asked to be, and narrowing it now would
-    // narrow the determinism chain's coverage on the very pull request that
-    // adds four tables to it. So the walkers stay, and the constant is deleted
-    // with `DETERMINISM_SEGMENT_LENGTHS_MS` when `DETERMINISM_TICKS` is raised
-    // to a real segment (owner, at S1; decisions-log item 116 (6)(e)).
+    // The extra walkers are raiders because a raider is the cheapest kind with
+    // a rules-table HP row that is not part of a seat's starting force, so
+    // they cannot be mistaken for one. The determinism harness fields none
+    // since S1's real segment (decision 16; register S1-26), whose chain
+    // covers a real playbook's fabrication instead; the scenario format's
+    // `units_per_seat` key and the sim's own tests still ask for them.
     //
     // They are homed to **nobody** ([`BeaconId::NONE`]): a unit with no home
     // beacon draws no kW, no mandate drives it and no dormancy parks it, which
     // is what keeps scaffolding out of the economy. Nothing a fabricator builds
     // is ever unhomed, so the state is unreachable in a real match.
+    if config.units_per_seat == 0 {
+        return Ok(units);
+    }
     let walker_hp = config
         .rules
         .unit_hp(UnitKind::Raider)
-        .unwrap_or(Hp::new(100));
+        .ok_or(MapError::MissingBlock("units.raider"))?;
     let max_x = extent.first().copied().unwrap_or(0);
     let max_y = extent.get(1).copied().unwrap_or(0);
     let mut seat_index: u32 = 0;
@@ -4519,7 +4519,7 @@ fn fill_unit_table(
         }
         seat_index = seat_index.saturating_add(1);
     }
-    units
+    Ok(units)
 }
 
 /// The core beacon of `seat` in a freshly generated map: its lowest-id row.

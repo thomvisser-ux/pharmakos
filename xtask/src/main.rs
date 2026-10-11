@@ -27,7 +27,8 @@
 //! | `golden`         | `tests/golden/**/expected.*` against the fresh `target/golden/**/actual.*`    |
 //! | `determinism`    | runs the determinism binary and compares its per-tick hash chain              |
 //! | `reuse`          | REUSE licence-manifest check                                                  |
-//! | `scenario`       | validates `scenarios/**`, then plays each with `gamectl scenario run`         |
+//! | `placeholders`   | every `PLACEHOLDER` marker in the tracked tree parses against the grammar     |
+//! | `scenario`     | validates `scenarios/**`, then plays each with `gamectl scenario run`         |
 //! | `screenshot`     | stages the client, renders the three shots under xvfb + lavapipe, compares    |
 //! | `stage-client`   | builds the gdext cdylib, stages it into `godot/bin` and imports the project   |
 //!
@@ -117,15 +118,16 @@
 //!
 //! # The PLACEHOLDER register
 //!
-//! `cargo xtask placeholders` is not a step either: `ci` and `list` do not
-//! know it. It collects every `PLACEHOLDER` marker in the tracked tree, parses
-//! each against the one-line grammar, `<what> — <who>, <when>` after the
-//! marker's colon ([`placeholders::GRAMMAR`]), prints the register grouped by
-//! when and by who, and lists the markers still to be reworded. With
-//! `--check` it fails while any marker is off the grammar. It becomes a `ci`
-//! step in S1's last `xtask` pull request (`tune`), once the lanes have
-//! reworded their markers (S1's plan, decision 9, ruling the register's
-//! S1-10); see [`placeholders`].
+//! `cargo xtask placeholders` collects every `PLACEHOLDER` marker in the
+//! tracked tree, parses each against the one-line grammar, `<what> — <who>,
+//! <when>` after the marker's colon ([`placeholders::GRAMMAR`]), prints the
+//! register grouped by when and by who, and lists the markers still to be
+//! reworded. With `--check` it fails while any marker is off the grammar.
+//! Since S1's last `xtask` pull request (`tune`), which reworded every marker
+//! off the grammar, the same check is the `placeholders` step of `ci` (S1's
+//! plan, decision 9, ruling the register's S1-10): the step prints only the
+//! count, or the markers that fail it, and the command prints the register;
+//! see [`placeholders`].
 //!
 //! # The research tests
 //!
@@ -411,18 +413,20 @@ const HASH_GOLDEN: &str = "tests/golden/determinism/expected.hashes.txt";
 /// The binary the `determinism` step runs once it exists.
 const DETERMINISM_BIN: &str = "determinism";
 
-/// PLACEHOLDER: 1 200 ticks, a one-minute smoke run — owner, S1, with the real segment.
-///
-/// 1 200 ticks is one minute at 20 Hz, a smoke run of the sim's harness
-/// segment list, until S1's `tune` lane raises it to a real segment (the
-/// register's S1-26): the full-segment chain T10 asked for is the demo
-/// scenario's, `scenarios/skeleton/
-/// against-easy-three-rounds`, whose three rounds are played and compared on
-/// all three operating systems, so lengthening this run would add leg time and
-/// a `crates/sim` determinism change for no new coverage (decisions-log item
-/// 116 (6)(e)). G4's bar (10 matches × 9 600 ticks) belongs in the nightly
-/// workflow rather than in every pull request.
-const DETERMINISM_TICKS: &str = "1200";
+/// The ticks the `determinism` step runs: 3 600 lines, the initial state and
+/// the first 3 599 ticks of the first-round Push (three minutes at 20 Hz on
+/// the rules table's 3 / 5 / 8 ladder), stopping one tick before the tick
+/// that closes the segment, which no chain this step writes holds; with every
+/// seat sealing the committed copy of the Hold & Build template's
+/// instantiation (`pharmakos_sim::DETERMINISM_PLAYBOOK_PATH`) on
+/// `DETERMINISM_MATCH_SEED` (S1's plan, decision 16; register S1-26). It was
+/// 1 200, a one-minute smoke run of a harness playbook over short harness
+/// segments, until S1's `tune` lane. The chain covers a real playbook's walk,
+/// deploy, Build target, fabrication and build, where the harness covered
+/// fifty walkers a seat; G4's bar (10 matches of 9 600 ticks) and G3'-real's
+/// load stay with the nightly workflow and S2. `crates/sim/tests/determinism.rs`'s
+/// `GOLDEN_TICKS` holds the same number.
+const DETERMINISM_TICKS: &str = "3600";
 
 /// The profile the determinism run uses: release optimisation with debug
 /// assertions still on, declared in the root `Cargo.toml`.
@@ -626,6 +630,11 @@ const STEPS: &[Step] = &[
         about: "REUSE licence-manifest check",
         run: step_reuse,
     },
+    Step {
+        name: "placeholders",
+        about: "every PLACEHOLDER marker in the one-line grammar `<what> — <who>, <when>`",
+        run: step_placeholders,
+    },
     // Harness part 2. Both are required: a missing input fails, and only the
     // screenshot's platform statement (Linux only) skips.
     Step {
@@ -740,8 +749,10 @@ fn run_cli(args: &[String]) -> Result<bool, String> {
                 perf_alarms();
                 return Ok(true);
             }
-            // Not a step either, until S1's `tune` makes it one: the
-            // PLACEHOLDER register. `--check` is the only flag it reads.
+            // The PLACEHOLDER register, printed whole. The `placeholders`
+            // step runs the same check and prints only its verdict; this
+            // command, which `--check` makes fail off the grammar, is the one
+            // to read the register with. `--check` is the only flag it reads.
             "placeholders" => {
                 let check = args.iter().any(|arg| arg == "--check");
                 if let Some(other) = args
@@ -1842,6 +1853,35 @@ fn step_reuse(ctx: &Ctx) -> Result<Outcome, String> {
     Ok(Outcome::Done(
         "every file carries an SPDX header and the manifest is complete".to_owned(),
     ))
+}
+
+/// The PLACEHOLDER register's grammar, as a step (S1's plan, decision 9; the
+/// register's S1-10): every marker in the tracked tree is written in
+/// [`placeholders::GRAMMAR`] on one line, so the register can be collected by
+/// `cargo xtask placeholders` rather than by a person. Required: a tree that
+/// `git grep` cannot read fails, and so does any marker off the grammar, each
+/// one named. `cargo xtask placeholders` prints the whole register.
+fn step_placeholders(ctx: &Ctx) -> Result<Outcome, String> {
+    let register = placeholders::collect(&ctx.root, ctx.require_tools)?;
+    if !register.off_grammar.is_empty() {
+        let mut message = format!(
+            "{} marker(s) are off the grammar; reword each to `{}` on one line:",
+            register.off_grammar.len(),
+            placeholders::GRAMMAR
+        );
+        for (place, text) in &register.off_grammar {
+            message.push_str("\n      ");
+            message.push_str(place);
+            message.push_str("  ");
+            message.push_str(text);
+        }
+        return Err(message);
+    }
+    Ok(Outcome::Done(format!(
+        "{} marker(s) in {} file(s), every one in the grammar",
+        register.in_grammar(),
+        register.files
+    )))
 }
 
 /// Harness part 2, half one: the scenario files.
@@ -4195,8 +4235,17 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
     }
 
     #[test]
-    fn placeholders_is_not_a_step() {
-        assert!(STEPS.iter().all(|step| step.name != "placeholders"));
+    fn placeholders_is_a_step_after_reuse() {
+        // S1's plan, decision 9: `tune` made the register's check a step.
+        let names: Vec<&str> = STEPS.iter().map(|step| step.name).collect();
+        let at = names.iter().position(|name| *name == "placeholders");
+        assert!(at.is_some(), "{names:?}");
+        assert_eq!(
+            at.and_then(|index| index.checked_sub(1))
+                .and_then(|index| names.get(index)),
+            Some(&"reuse"),
+            "{names:?}"
+        );
     }
 
     #[test]

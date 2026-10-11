@@ -59,7 +59,8 @@ const CLOCKWISE_FRONT: bool = true;
 
 /// The material palette, one RGB triple per material id. Id 0 is air and is never emitted.
 ///
-/// PLACEHOLDER: these are spike G1's colours, carried over so that the vista renders as
+/// PLACEHOLDER: spike G1's colours as the palette — owner, at S6's art polish.
+/// These are spike G1's colours, carried over so that the vista renders as
 /// something rather than as grey. They are art, not a rules-table row — nothing in
 /// `rules/rules.v1.json` names a palette — so they cannot be a parameter the caller fills.
 /// Owner replaces them at S6's art polish, and the geometry golden moves when they do.
@@ -79,7 +80,8 @@ pub const PALETTE: [[u8; 3]; 7] = [
 /// into the vertex colour rather than lit by a light, which is the look the game wants and
 /// what keeps path B's buffers unambiguous (G1 section 10.2).
 ///
-/// PLACEHOLDER: spike G1's factors, rounded to 256ths. Art, like [`PALETTE`]; owner at S6.
+/// PLACEHOLDER: spike G1's face shades, rounded to 256ths — owner, at S6's art polish.
+/// Art, like [`PALETTE`].
 pub const FACE_SHADE_256: [u32; 6] = [
     184, // -x  0.72
     210, // +x  0.82
@@ -94,7 +96,8 @@ pub const FACE_SHADE_256: [u32; 6] = [
 /// Spike G1's own split, in integers: its shader-side ramp was `0.25 + 0.75 * (light / 15)`
 /// (`spikes/g1-remesh/src/greedy.rs`), and 0.25 of 256 is exactly 64.
 ///
-/// PLACEHOLDER: art, like [`PALETTE`] and [`FACE_SHADE_256`], and not a rules-table row —
+/// PLACEHOLDER: the ambient floor, 64 256ths — owner, at S6's art polish.
+/// Art, like [`PALETTE`] and [`FACE_SHADE_256`], and not a rules-table row —
 /// `rules/rules.v1.json`'s `mesher` block names `light_max` and `light_atten` and no
 /// ambient term, so this cannot be a parameter the caller fills. Owner replaces it at S6's
 /// art polish; every line of the geometry golden moves when it does.

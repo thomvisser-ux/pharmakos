@@ -19,51 +19,61 @@ a later job byte-compares the three. That comparison is gate G4 in the flesh:
 identical hashes on three operating systems. The format is enforced line by line
 by `validate_hash_file` in `xtask/src/main.rs`.
 
-## What the committed chain covers (T11)
+## What the committed chain covers (S1's `tune`)
 
-**A sealed playbook, running.** Every seat seals
-`pharmakos_sim::determinism_playbook` — a harness playbook whose every target is
-a **selector** rather than a voxel, so the same file is legal for every seat on
-every spawn — and the chain therefore covers the interpreter's hashed state: the
-route cursor, the stage of the step in progress with its start tick and
-deadline, the pinned selector target, the visit's row and its commit tick, the
-reflex's marker, and the handler's fire count and cooldown.
+**The first-round Push of a real playbook** (S1's plan, decision 16;
+register S1-26). `cargo xtask ci` writes 3 600 lines — the initial state and
+the first 3 599 ticks of the first rung of the rules table's 3 / 5 / 8
+ladder, three minutes at 20 Hz less the tick that closes the segment — on
+`DETERMINISM_MATCH_SEED` with four seats, and every seat seals
+`hold_and_build.playbook.json`, the file beside this README: the Hold & Build
+template (`library/hold_and_build.jsonc`) instantiated with its own values and
+written in canonical `gp.v1` JSON without its comments. It is a committed
+copy, so a later edit to the template does not move this chain; its
+`.license` file says why it keeps the template's permissive terms.
 
-The harness route also **deploys a beacon**, which is the one thing a tick does
-that adds a row to a table: `crates/sim/tests/allocations.rs` counts the ticks
-around that deploy separately, so `BeaconTable::reserve` is asserted over a
-deploy that actually happens rather than described in a doc comment. It is why
-the beacon table's length is not the same on every tick of the chain.
+What the run does, at the committed rules table, for the three placed seats
+(the fourth is seated but unplaced on the three-zone map, so it has no core
+and no commander, and its seal never takes a step):
+
+* **tick 1** — the `place_power` step resolves "the nearest vent you do not
+  cover yet" (S1's resolver, its "nearest" estimates and its `covering`
+  spiral, inside the tick) and the commander walks to the site it chose;
+* **ticks 631 to 741** — each seat's deploy lands and is charged
+  (`structures.beacon.cost_dollars`), and its initial settings commit as
+  interface rows: the Build mandate, and a Generator target written `on` the
+  covered vent;
+* **ticks 686 to 801** — each Generator is queued (paid) and the fabricator
+  builds the drone that target asks for;
+* **ticks 1 093 to 1 300** — the Generators are finished, and each seat's
+  supply rises;
+* **ticks 1 286 to 1 396** — the 30-second hold ends and the guaranteed tail,
+  `shadow` the safest beacon, takes over for the rest of the Push;
+* throughout, each core's starting mining drone works the starting seam.
+
+So the chain covers the interpreter's hashed state on a real route (the
+cursor, the stage, the bound feature, the deploy's charge, the committed
+rows, the handler's untouched fire count and cooldown), the beacon, structure
+and unit tables growing inside a tick, the Build mandate, fabrication, the
+power grid and the Mine program. `crates/sim/tests/allocations.rs` counts the
+ticks of that growth separately, so every table's reserved room is asserted
+over growth that happens.
 
 Two consequences worth knowing before reading a diff:
 
-* A **commander's** destination is the playbook's to set. The harness's random
-  destination draw (`Stream::Spawn`) still moves the `units_per_seat` walkers and
-  no longer reaches a commander, so a seat that sealed nothing leaves its
-  commander standing where the generator put it.
-* A decision falls on every fifth tick of a Push — `match.decision_tick_ms` is
-  250 ms — starting with the Push's first played tick. A diff that begins on a
-  tick that is not `1 mod 5` of a segment's start is *not* a decision moving.
-
-## What the committed chain covers (T10)
-
-**Whole segments, and the phase changes between them.** One line per *Push*
-tick: a Lull and a recap consume no tick, because in the sim they are states
-rather than durations (the Lull's timer is a host concern the sim never reads —
-AGENTS.md §4.5). The determinism harness plays the host's part, opening the
-Push the moment a Lull is reached and closing the recap the moment one opens.
-
-The harness's own per-round length list is `DETERMINISM_SEGMENT_LENGTHS_MS` in
-`crates/sim/src/lib.rs` — 20 000 ms then 15 000 ms, so 400 ticks then 300 —
-chosen so that the 1 200-tick run covers `push → recap → lull → push` three
-times rather than sitting inside the first three-minute Push of item 68's real
-ladder. It is a **host** setting (item 40 makes the per-round list one), it is a
-PLACEHOLDER, and it goes when `DETERMINISM_TICKS` is raised to a real segment at
-S1 (owner; decisions-log item 116 (6)(e)).
-
-So a diff that starts exactly at tick 400, 700 or 1 000 is a segment-boundary
-change — the close, the round increment, or the coming segment's length — and a
-diff that starts at tick 0 is a change to what the encoding covers.
+* **No walkers.** Until S1 every seat fielded fifty harness walkers, raiders
+  homed to nobody wandering on `Stream::Spawn`, so the unit table was wide.
+  The harness fields none now; G3′'s walker load left the chain with them, and
+  S2's G3′-real measures load. `WorldConfig::units_per_seat` still exists for
+  the scenario format's key and the sim's own tests.
+* **No segment boundary.** The chain stops inside the first Push, one tick
+  before the tick that closes it (tick 3 600, whose `SegmentEnded`,
+  `RecapOpened`, respawn settlement and abandoned deploys no committed chain
+  holds; the scenario chains cover segment ends). A diff that
+  begins at a tick that is `1 mod 5` is a decision moving (a decision falls on
+  every fifth tick of a Push, `match.decision_tick_ms` being 250 ms, starting
+  with the Push's first played tick); a diff at tick 0 is a change to what the
+  encoding covers or to the map.
 
 ## What the committed chain covers (T14)
 
@@ -195,6 +205,29 @@ area writes, in place of the row's old radius) and each structure's rotation
 harness writes no target or area and pays for no structure, so the target
 table is empty and those blocks are empty on every tick; and decision 15's interface pricing changes only what a Build target
 row or a list element costs, which the harness playbook writes none of.
+
+## What moved it (S1's `tune`)
+
+**The harness itself was replaced, so the chain diverges at tick 0**, its
+first line (`433786586c2aae6e` became `2e681a05efd6c010`), and the file grew
+from 1 200 lines to 3 600. The rule that moved it is S1's plan, decision 16
+(register S1-26), and nothing else: no sim behaviour changed. Determinism code
+(AGENTS.md §5):
+
+* `DETERMINISM_TICKS` (`xtask/src/main.rs`) and `GOLDEN_TICKS`
+  (`crates/sim/tests/determinism.rs`) went from 1 200 to 3 600;
+* the harness's segment list (`DETERMINISM_SEGMENT_LENGTHS_MS`, 20 000 then
+  15 000 ms) was deleted, so the run plays the rules table's own ladder;
+* the harness playbook written in code (`determinism_playbook`, with its
+  deploy site `DETERMINISM_SITE_OFFSET_VOXELS`, register S1-50) was deleted,
+  and every seat seals `hold_and_build.playbook.json` instead;
+* the fifty walkers a seat (`DETERMINISM_UNITS_PER_SEAT`) were deleted, so the
+  unit table is narrower from tick 0.
+
+The sections from `What the committed chain covers (T14)` down to this one
+are history: each describes the chain as it stood when that lane moved it,
+and the ticks and harness steps they name are the old harness's. What the T14
+section says the encoding covers still holds.
 
 ## What a diff means
 

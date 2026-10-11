@@ -448,7 +448,8 @@ pub fn band_percent(
 /// The award fund one settlement releases, in `$`
 /// (`economy.award_fund_percent_of_bmi` of one unadjusted BMI).
 ///
-/// PLACEHOLDER: the fund is computed and **nobody is paid out of it**, because
+/// PLACEHOLDER: the award fund pays nobody — owner, at S4, with the licences and awards.
+/// The fund is computed and **nobody is paid out of it**, because
 /// it is "split among that round's winners in proportion to awards won" and no
 /// award exists to win — the award catalogue is spec section 7's Tuning row and
 /// lands with **S4**'s licences and awards. Releasing it to nobody is the

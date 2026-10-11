@@ -30,7 +30,8 @@
 //! module — and says so under that name rather than standing in for a
 //! guarantee nothing checks.
 //!
-//! PLACEHOLDER: whether the doctor details and the scenario diagnostics belong
+//! PLACEHOLDER: whether the doctor details and the scenario diagnostics join a string table — owner, at the stage that first wants a second language.
+//! Whether the doctor details and the scenario diagnostics belong
 //! in a string table at translation time, or whether a catalogue beside the
 //! checks is the right shape for them as it is for the verifier's. **OWNER**,
 //! at the stage that first wants a second language (AGENTS.md §11 puts

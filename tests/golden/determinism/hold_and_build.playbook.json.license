@@ -1,0 +1,10 @@
+SPDX-FileCopyrightText: 2026 Pharmakos contributors
+SPDX-License-Identifier: MIT OR Apache-2.0
+
+hold_and_build.playbook.json is the Hold & Build template (library/hold_and_build.jsonc),
+instantiated with its own values and written in canonical gp.v1 JSON without its comments:
+the playbook every seat of the determinism harness seals (S1's plan, decision 16; register
+S1-26). It is a copy of a permissive library/ file, so it keeps that file's terms, and
+REUSE.toml's tests/** block adds the game's, as it does for the template render goldens.
+It is committed rather than instantiated at run time so that a later edit to the template
+does not move the determinism chain.

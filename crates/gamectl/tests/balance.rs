@@ -63,12 +63,26 @@
 //!   `structures.generator.cost_dollars`, read from the rules table.
 //!
 //! Beside them, informational and not a flag: whether a Generator of the
-//! seat's ever stood (`get_view`'s `generator` subtype), and, per match-up,
-//! how many matches were decided before their round limit.
+//! seat's ever stood (`get_view`'s `generator` subtype); per match-up, how
+//! many matches were decided before their round limit; and the most a seat
+//! placed, paid for and fabricated in one match, the per-seat share of the
+//! fielding limits (register S1-37, which the owner rules on at S1's demo with
+//! this report).
 //!
-//! Not built here: decision 16's column on whether the spec's `expand_east`
-//! reaches its first site within its 120 s timeout (see the PLACEHOLDER at
-//! [`render`]).
+//! # Decision 16's column: the spec's `expand_east`
+//!
+//! S1's plan, decision 16 asks the report whether the spec's worked example,
+//! `examples/playbooks/expand_east.jsonc`, reaches its first site within its
+//! own timeout, so the owner can rule at S1's demo whether the commander's
+//! walking speed (inside spec section 4's 1 to 1.5 voxels a second) or the
+//! example moves (decisions-log item 103 (3)). The example is a playbook the
+//! verifier refuses, so no seat of these matches can submit it; the column is
+//! read instead from the committed `expand-east-segment` scenario, played
+//! through `gamectl scenario run`'s own `play` (which seals it through the
+//! scenario harness's documented door), and from `estimate_route` asked by
+//! each seat's own token on the same map: the walk from the seat's core to the
+//! example's site at the committed speed, and the speed that walk would need
+//! to fit the step's timeout.
 //!
 //! # How to run it
 //!
@@ -83,14 +97,20 @@
 //! and its summary printed. Nothing here reads a clock (AGENTS.md section
 //! 4.5): the wall time is the shell's to measure.
 //!
-//! Three tests are not ignored, so a change to what the gateway answers
+//! Five tests are not ignored, so a change to what the gateway answers
 //! fails `cargo xtask ci` rather than the next owner's run:
 //! [`one_short_match_reports_through_the_gateway`] plays one short match
 //! through the same reader (the forecast's fields, the feed's lines, the
 //! view's entity list); [`easy_seals_its_own_playbook_in_round_1`] pins how
-//! the report tells Easy's own seal from its safe one; and
+//! the report tells Easy's own seal from its safe one;
 //! [`the_flags_say_what_item_127_3_asks`] pins the flag rules and the line
-//! parsing on made-up readings.
+//! parsing on made-up readings; and
+//! [`the_expand_east_column_reads_the_first_step`] pins decision 16's column's
+//! event reading and speed arithmetic on made-up figures; and
+//! [`the_expand_east_column_asks_each_seats_estimate_route`] runs the column's
+//! gateway half, `estimate_route` from each seat's core to the site, through
+//! the same reader. The column's scenario half plays a committed scenario the
+//! `scenario` step already plays.
 #![allow(
     clippy::expect_used,
     clippy::unwrap_used,
@@ -111,7 +131,7 @@ use pharmakos_gateway::serve::InProcessSeats;
 use pharmakos_gateway::surface::{InProcess, Surface};
 use pharmakos_gateway::token::{Subject, Token};
 use pharmakos_proto::json::Json;
-use pharmakos_sim::math::quantity::Ms;
+use pharmakos_sim::math::quantity::{Ms, TICK_HZ};
 use pharmakos_sim::rules::RulesTable;
 use pharmakos_sim::tables::SeatId;
 
@@ -123,10 +143,9 @@ use pharmakos_sim::tables::SeatId;
 /// the scenario files'), then eighteen spread by the 64-bit golden ratio so
 /// that neighbouring entries share no bits.
 ///
-/// PLACEHOLDER: the balance check's seed set -- owner, at S1's demo with
-/// `tune`'s report. No decision names one: item 90's "tuning seed set" is the
-/// rules rows, not map seeds, and item 127 (3) says only "about twenty
-/// seeded matches".
+/// PLACEHOLDER: the balance check's seed set — owner, at S1's demo, with `tune`'s report.
+/// No decision names one: item 90's "tuning seed set" is the rules rows, not
+/// map seeds, and item 127 (3) says only "about twenty seeded matches".
 fn seeds() -> Vec<u64> {
     [pharmakos_sim::DETERMINISM_MATCH_SEED, SCENARIO_SEED]
         .into_iter()
@@ -224,18 +243,21 @@ fn seat_ids() -> Vec<SeatId> {
         .collect()
 }
 
-/// `match.lull_ms`, which the scenario runner hands the gateway for every
-/// Lull it spends no host time in (AGENTS.md section 4.5). `first_lull_ms` has
-/// no reader yet, so neither does this file.
-fn lull_ms(table: &RulesTable) -> Ms {
-    Ms::new(
-        table
-            .message()
-            .r#match
-            .as_ref()
-            .map(|block| block.lull_ms)
-            .expect("the rules table's match block"),
-    )
+/// The Lull length the host hands the gateway for a Lull it spends no host
+/// time in (AGENTS.md section 4.5), as `gamectl scenario run` does: round 1's
+/// `match.first_lull_ms` and every later round's `match.lull_ms` (decisions-log
+/// item 127 (2); `econ` #92 gave `first_lull_ms` its readers).
+fn lull_ms(table: &RulesTable, round: u32) -> Ms {
+    let block = table
+        .message()
+        .r#match
+        .as_ref()
+        .expect("the rules table's match block");
+    Ms::new(if round == 1 {
+        block.first_lull_ms
+    } else {
+        block.lull_ms
+    })
 }
 
 /// The Generator's price, whole `$`.
@@ -265,7 +287,7 @@ fn open(label: &str, seed: u64, rules: &str, rounds: u32, ladder: Vec<i32>) -> S
     )
     .expect("a match");
     let table = RulesTable::from_canonical_json(rules).expect("a rules table");
-    let lull = lull_ms(&table);
+    let lull = lull_ms(&table, 1);
     let mut surface = Surface::new(
         &match_id(label),
         seed,
@@ -782,7 +804,7 @@ fn seal_of(surface: &Surface, seat: u8, round: u32, template: Option<&str>) -> S
 fn play(seed: u64, matchup: Matchup, rounds: u32, rules: &str, ladder: Vec<i32>) -> MatchRun {
     let label = format!("{}-{rounds}-{seed:016x}", matchup.name());
     let mut surface = open(&label, seed, rules, rounds, ladder);
-    let lull = lull_ms(&RulesTable::from_canonical_json(rules).expect("a rules table"));
+    let table = RulesTable::from_canonical_json(rules).expect("a rules table");
     let mut factory = EasyOperators::new(rules).expect("the operator reads the rules text");
     let mut easy = InProcessSeats::open(
         &mut surface,
@@ -847,7 +869,7 @@ fn play(seed: u64, matchup: Matchup, rounds: u32, rules: &str, ladder: Vec<i32>)
         if decided || round == rounds {
             break;
         }
-        surface.set_phase_remaining_ms(lull);
+        surface.set_phase_remaining_ms(lull_ms(&table, round.saturating_add(1)));
         surface.open_lull().expect("the next Lull");
     }
     for run in &mut seats {
@@ -879,8 +901,8 @@ fn play(seed: u64, matchup: Matchup, rounds: u32, rules: &str, ladder: Vec<i32>)
 
 /// Item 127 (3)'s three conditions, for one seat of one match.
 ///
-/// PLACEHOLDER: the flags' readings of item 127 (3) -- owner, at S1's demo
-/// with `tune`'s report. No decision fixes them, and each is a guess: a flat
+/// PLACEHOLDER: the flags' readings of item 127 (3) — owner, at S1's demo, with `tune`'s report.
+/// No decision fixes them, and each is a guess: a flat
 /// treasury counts as ONLY-GROWS (`<=`); any `beacon_placed` counts as a new
 /// asset for STALLED, so a free stacked beacon hides a stall until X-12's
 /// charge and F4's cure land; and NEVER-AFFORDS-GENERATOR counts round 1's
@@ -1064,6 +1086,61 @@ fn render_match(out: &mut String, run: &MatchRun, generator_cost: i64) {
     }
 }
 
+/// One seat's use of its share of the fielding limits over one match
+/// (register S1-37), or the most of several.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+struct Usage {
+    /// Beacons placed over the match (`beacon_placed`).
+    placed: u32,
+    /// Structures paid for over the match (`structure_queued`).
+    paid: u32,
+    /// Units fabricated over the match (`unit_fabricated`).
+    fabricated: u32,
+    /// The most beacons it held at a reading.
+    beacons: u32,
+    /// The most structures it held at a reading.
+    structures: u32,
+    /// The most units it held at a reading, the commander included.
+    units: u32,
+}
+
+impl Usage {
+    fn of(seat: &SeatRun) -> Usage {
+        let mut usage = Usage::default();
+        for round in &seat.rounds {
+            usage.placed = usage.placed.saturating_add(round.tally.beacons_placed);
+            usage.paid = usage.paid.saturating_add(round.tally.structures_queued);
+            usage.fabricated = usage
+                .fabricated
+                .saturating_add(round.tally.units_fabricated);
+        }
+        let total =
+            |map: &BTreeMap<String, u32>| map.values().copied().fold(0_u32, u32::saturating_add);
+        for reading in seat
+            .rounds
+            .iter()
+            .map(|round| &round.start)
+            .chain(std::iter::once(&seat.end))
+        {
+            usage.beacons = usage.beacons.max(reading.beacons);
+            usage.structures = usage.structures.max(total(&reading.structures));
+            usage.units = usage.units.max(total(&reading.units));
+        }
+        usage
+    }
+
+    fn most(self, other: Usage) -> Usage {
+        Usage {
+            placed: self.placed.max(other.placed),
+            paid: self.paid.max(other.paid),
+            fabricated: self.fabricated.max(other.fabricated),
+            beacons: self.beacons.max(other.beacons),
+            structures: self.structures.max(other.structures),
+            units: self.units.max(other.units),
+        }
+    }
+}
+
 /// The summary: per match-up and length, how many seats raised each flag.
 fn render_summary(out: &mut String, runs: &[MatchRun], generator_cost: i64) {
     let _ = writeln!(
@@ -1146,6 +1223,21 @@ fn render_summary(out: &mut String, runs: &[MatchRun], generator_cost: i64) {
             });
         let _ = writeln!(out, "hold & build seat's seals by round: {seals:?}");
     }
+    // The per-seat share of the fielding limits (register S1-37): the most
+    // one seat placed, paid for and fabricated over a whole match, and the
+    // most beacons, structures and units it held at any reading.
+    let usage = runs
+        .iter()
+        .flat_map(|run| run.seats.iter())
+        .map(Usage::of)
+        .fold(Usage::default(), Usage::most);
+    let _ = writeln!(
+        out,
+        "per-seat share of the fielding limits (register S1-37), the most any one seat reached in \
+         one match: placed {} beacons, paid for {} structures, fabricated {} units; held {} \
+         beacons, {} structures, {} units (the commander included) at a reading",
+        usage.placed, usage.paid, usage.fabricated, usage.beacons, usage.structures, usage.units,
+    );
     let flagged: usize = runs
         .iter()
         .flat_map(|run| run.seats.iter())
@@ -1160,15 +1252,14 @@ fn render_summary(out: &mut String, runs: &[MatchRun], generator_cost: i64) {
     );
 }
 
-/// The whole report: a header, the summary, then every match.
-///
-/// PLACEHOLDER: decision 16's column -- whether the spec's `expand_east`
-/// reaches its first site within its 120 s timeout -- is not built here;
-/// `tune` (wave 5), which owns decision 16, adds it, or the owner moves it at
-/// S1's demo. The example is a playbook the verifier refuses
-/// (`expand-east-segment` seals it through the scenario harness's own door),
-/// so this file, which plays only what a seat may submit, cannot seal it.
-fn render(runs: &[MatchRun], generator_cost: i64, rules_hash: &str) -> String {
+/// The whole report: a header, the summary, decision 16's `expand_east`
+/// column when it was measured, then every match.
+fn render(
+    runs: &[MatchRun],
+    generator_cost: i64,
+    rules_hash: &str,
+    expand_east: Option<&ExpandEast>,
+) -> String {
     let mut out = String::new();
     let _ = writeln!(
         out,
@@ -1190,6 +1281,10 @@ fn render(runs: &[MatchRun], generator_cost: i64, rules_hash: &str) -> String {
     );
     out.push('\n');
     render_summary(&mut out, runs, generator_cost);
+    if let Some(column) = expand_east {
+        out.push('\n');
+        render_expand_east(&mut out, column);
+    }
     for run in runs {
         out.push('\n');
         render_match(&mut out, run, generator_cost);
@@ -1202,6 +1297,302 @@ fn report_path() -> PathBuf {
     Path::new(env!("CARGO_TARGET_TMPDIR"))
         .join("balance")
         .join("report.txt")
+}
+
+// ---------------------------------------------------------------------------
+// Decision 16's column: the spec's `expand_east`
+// ---------------------------------------------------------------------------
+
+/// The committed scenario the column reads, relative to the root.
+const EXPAND_EAST_SCENARIO: &str = "scenarios/skeleton/expand-east-segment.scenario.jsonc";
+
+/// The spec's worked example, which that scenario seals for both seats.
+const EXPAND_EAST_PLAYBOOK: &str = "examples/playbooks/expand_east.jsonc";
+
+/// Spec section 4's walking range for the commander, in **tenths of a voxel**
+/// a second: 1 to 1.5 voxels a second (item 90). The column turns it into cost
+/// units a second through the table's own `locomotion.step_cost_cardinal`
+/// ([`spec_cost_range`]), so the range follows the table if the step cost
+/// moves.
+const SPEC_COMMANDER_TENTHS_OF_VOXELS_PER_SECOND: std::ops::RangeInclusive<i64> = 10..=15;
+
+/// Spec section 4's walking range in cost units a second at a cardinal step
+/// cost of `cardinal`: each end is tenths of a voxel times the cost of one
+/// voxel, over ten. `None` when the arithmetic overflows or a bound is not a
+/// whole number of cost units, which no committed table produces.
+fn spec_cost_range(cardinal: i64) -> Option<std::ops::RangeInclusive<i64>> {
+    let convert = |tenths: i64| {
+        let scaled = tenths.checked_mul(cardinal)?;
+        (scaled.checked_rem(10)? == 0).then(|| scaled.checked_div(10))?
+    };
+    Some(
+        convert(*SPEC_COMMANDER_TENTHS_OF_VOXELS_PER_SECOND.start())?
+            ..=convert(*SPEC_COMMANDER_TENTHS_OF_VOXELS_PER_SECOND.end())?,
+    )
+}
+
+/// How one seat's first route step ended, read from the scenario's events.
+#[derive(Clone, PartialEq, Eq, Debug)]
+enum FirstStep {
+    /// `step_completed`: the commander arrived.
+    Arrived { tick: u32 },
+    /// `step_failed`. The scenario's event list carries the kind and not the
+    /// value, so the reason (a timeout, an illegal site, another refusal) is
+    /// not read here and the report does not name one.
+    Failed { tick: u32 },
+    /// `step_skipped`.
+    Skipped { tick: u32 },
+    /// The step never ended inside the segment.
+    Unfinished,
+}
+
+/// How seat `seat`'s first route step ended: the first `step_completed`,
+/// `step_failed` or `step_skipped` of that seat after its first
+/// `step_started`. The example has no rule that can fire before combat, so
+/// the first ending after the route starts is the first step's.
+fn first_step(events: &[(u32, String, Option<u8>)], seat: u8) -> FirstStep {
+    let mut started = false;
+    for (tick, kind, whose) in events {
+        if *whose != Some(seat) {
+            continue;
+        }
+        match kind.as_str() {
+            "step_started" => started = true,
+            "step_completed" if started => return FirstStep::Arrived { tick: *tick },
+            "step_failed" if started => return FirstStep::Failed { tick: *tick },
+            "step_skipped" if started => return FirstStep::Skipped { tick: *tick },
+            _ => {}
+        }
+    }
+    FirstStep::Unfinished
+}
+
+/// One seat's line of the column.
+#[derive(Clone, PartialEq, Eq, Debug)]
+struct ExpandEastSeat {
+    seat: u8,
+    /// How the scenario's first step ended.
+    first: FirstStep,
+    /// `estimate_route` from the seat's core to the site, game ms, or `None`
+    /// when the gateway answered that the site is unreachable.
+    estimate_ms: Option<i64>,
+}
+
+/// Decision 16's column, measured.
+#[derive(Clone, PartialEq, Eq, Debug)]
+struct ExpandEast {
+    /// The first step's site and timeout, read from the example.
+    site: [i32; 3],
+    timeout_ms: i64,
+    /// `commander.cost_per_second` in the committed table.
+    cost_per_second: i64,
+    /// `locomotion.step_cost_cardinal` in the committed table: the cost of one
+    /// voxel, which turns a cost rate into voxels a second.
+    step_cost_cardinal: i64,
+    seed: u64,
+    seats: Vec<ExpandEastSeat>,
+}
+
+/// The example's first step: its site and its timeout. Both are read from the
+/// file, so the column follows the example if the owner moves it.
+fn expand_east_first_step() -> ([i32; 3], i64) {
+    let text = std::fs::read_to_string(root().join(EXPAND_EAST_PLAYBOOK)).expect("the example");
+    let canonical = pharmakos_plan_core::canonical::canonical_json(&text).expect("canonical");
+    let playbook: pharmakos_proto::gp::v1::Playbook =
+        pharmakos_proto::json::decode(&canonical).expect("a playbook");
+    let step = playbook
+        .declarative
+        .as_ref()
+        .and_then(|declarative| declarative.route.first())
+        .cloned()
+        .expect("the example's first step");
+    let Some(pharmakos_proto::gp::v1::step::Kind::Move(walk)) = step.kind else {
+        panic!("the example's first step is a move");
+    };
+    let Some(pharmakos_proto::gp::v1::location::Place::Voxel(voxel)) =
+        walk.to.and_then(|to| to.place)
+    else {
+        panic!("the example's first step walks to a voxel");
+    };
+    ([voxel.x, voxel.y, voxel.z], i64::from(step.timeout_ms))
+}
+
+/// Measure the column: play the committed scenario, and ask each seat's own
+/// `estimate_route` for the walk from its core to the site on the same map.
+fn expand_east(rules: &str, table: &RulesTable) -> ExpandEast {
+    let root = root();
+    let scenario = pharmakos_gamectl::scenario::load(&root, Path::new(EXPAND_EAST_SCENARIO))
+        .expect("the committed expand-east-segment scenario loads");
+    let played = pharmakos_gamectl::scenario::run::play(&root, &scenario)
+        .expect("the committed expand-east-segment scenario plays");
+    let events: Vec<(u32, String, Option<u8>)> = played
+        .events
+        .iter()
+        .map(|fired| (fired.tick, fired.kind.clone(), fired.seat))
+        .collect();
+    let (site, timeout_ms) = expand_east_first_step();
+    let seed = scenario.seed;
+    let seats = expand_east_estimates(rules, seed, site)
+        .into_iter()
+        .map(|(seat, estimate_ms)| ExpandEastSeat {
+            seat,
+            first: first_step(&events, seat),
+            estimate_ms,
+        })
+        .collect();
+    ExpandEast {
+        site,
+        timeout_ms,
+        cost_per_second: table
+            .message()
+            .commander
+            .as_ref()
+            .map(|block| i64::from(block.cost_per_second))
+            .expect("the rules table's commander block"),
+        step_cost_cardinal: i64::from(table.step_cardinal()),
+        seed,
+        seats,
+    }
+}
+
+/// The column's gateway half: each seat's own `estimate_route` from its core
+/// to `site`, in a Lull of a match on `seed`, as `(seat, game ms)`, the ms
+/// `None` when the answer says the site is unreachable.
+fn expand_east_estimates(rules: &str, seed: u64, site: [i32; 3]) -> Vec<(u8, Option<i64>)> {
+    let [x, y, z] = site;
+    let mut surface = open("expand-east", seed, rules, 1, Vec::new());
+    seat_ids()
+        .iter()
+        .map(|seat| {
+            let token = in_process_token(&mut surface, seat.raw());
+            let answer = call(
+                &mut surface,
+                &token,
+                "estimate_route",
+                Json::Object(
+                    [(
+                        String::from("waypoints"),
+                        Json::Array(vec![
+                            object(vec![(
+                                "beacon_anchor",
+                                object(vec![("beacon_id", Json::String(String::from("b_00")))]),
+                            )]),
+                            object(vec![(
+                                "voxel",
+                                object(vec![
+                                    ("x", Json::Number(x.to_string())),
+                                    ("y", Json::Number(y.to_string())),
+                                    ("z", Json::Number(z.to_string())),
+                                ]),
+                            )]),
+                        ]),
+                    )]
+                    .into_iter()
+                    .collect(),
+                ),
+            );
+            // A refusal fails the run rather than reading as "no route": the
+            // call is well formed, so a refusal means the reader is wrong. An
+            // unreachable site is the answer's own `reachable` (false omitted).
+            let answer = result(&answer, "estimate_route from the core to the site");
+            let estimate_ms = (answer.get("reachable") == Some(&Json::Bool(true)))
+                .then(|| required(&answer, "ms"));
+            (seat.raw(), estimate_ms)
+        })
+        .collect()
+}
+
+/// The speed, in cost units a second, a walk of `estimate_ms` at
+/// `cost_per_second` would need to fit `timeout_ms`, rounded up.
+fn speed_needed(estimate_ms: i64, cost_per_second: i64, timeout_ms: i64) -> Option<i64> {
+    let cost = estimate_ms.checked_mul(cost_per_second)?;
+    let whole = cost.checked_div(timeout_ms)?;
+    let rest = cost.checked_rem(timeout_ms)?;
+    Some(if rest > 0 {
+        whole.saturating_add(1)
+    } else {
+        whole
+    })
+}
+
+/// Seconds, to one decimal place, from game milliseconds.
+fn seconds(ms: i64) -> String {
+    let whole = ms.checked_div(1_000).expect("a non-zero divisor");
+    let tenths = ms
+        .checked_rem(1_000)
+        .and_then(|rest| rest.checked_div(100))
+        .expect("a non-zero divisor");
+    format!("{whole}.{tenths}")
+}
+
+/// Whole seconds of game time, from a tick at the sim's tick rate.
+fn tick_seconds(tick: u32) -> u32 {
+    tick.checked_div(TICK_HZ).expect("a non-zero divisor")
+}
+
+/// A value given in tenths, to one decimal place.
+fn tenths(value: i64) -> String {
+    let whole = value.checked_div(10).expect("a non-zero divisor");
+    let rest = value.checked_rem(10).expect("a non-zero divisor");
+    format!("{whole}.{rest}")
+}
+
+/// Voxels a second, in tenths, at `cost_per_second` and a cardinal step cost of
+/// `cardinal`, rounded down.
+fn voxel_tenths_per_second(cost_per_second: i64, cardinal: i64) -> Option<i64> {
+    cost_per_second.checked_mul(10)?.checked_div(cardinal)
+}
+
+fn render_expand_east(out: &mut String, column: &ExpandEast) {
+    let range = spec_cost_range(column.step_cost_cardinal)
+        .expect("spec section 4's range is whole cost units at the table's cardinal step cost");
+    let _ = writeln!(
+        out,
+        "expand_east (decision 16): does the spec's worked example reach its first site {:?} within \
+         its {} s timeout? Seed 0x{:016x} (`{EXPAND_EAST_SCENARIO}`), commander speed {} cost/s \
+         ({} voxels/s); spec section 4's range is {}..={} cost/s.",
+        column.site,
+        seconds(column.timeout_ms),
+        column.seed,
+        column.cost_per_second,
+        voxel_tenths_per_second(column.cost_per_second, column.step_cost_cardinal)
+            .map_or_else(|| String::from("?"), tenths),
+        range.start(),
+        range.end(),
+    );
+    for seat in &column.seats {
+        let outcome = match seat.first {
+            FirstStep::Arrived { tick } => {
+                format!("yes, arrived at tick {tick} ({} s)", tick_seconds(tick))
+            }
+            FirstStep::Failed { tick } => format!(
+                "no, the step failed at tick {tick} ({} s)",
+                tick_seconds(tick)
+            ),
+            FirstStep::Skipped { tick } => format!("no, skipped at tick {tick}"),
+            FirstStep::Unfinished => String::from("no, the step never ended in the segment"),
+        };
+        let estimate = match seat.estimate_ms {
+            Some(ms) => {
+                let needed = speed_needed(ms, column.cost_per_second, column.timeout_ms);
+                let inside = needed.is_some_and(|speed| range.contains(&speed));
+                format!(
+                    "estimate_route from the core: {} s at {} cost/s; fitting {} s needs {} cost/s ({})",
+                    seconds(ms),
+                    column.cost_per_second,
+                    seconds(column.timeout_ms),
+                    needed.map_or_else(|| String::from("?"), |speed| speed.to_string()),
+                    if inside {
+                        "inside the spec's range"
+                    } else {
+                        "outside the spec's range"
+                    }
+                )
+            }
+            None => String::from("estimate_route from the core: no route"),
+        };
+        let _ = writeln!(out, "  seat {}: {outcome}; {estimate}", seat.seat);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1232,11 +1623,22 @@ fn balance_check_writes_its_report() {
             }
         }
     }
-    let text = render(&runs, cost, &pharmakos_sim::hex(table.rules_hash()));
+    let column = expand_east(&rules, &table);
+    let text = render(
+        &runs,
+        cost,
+        &pharmakos_sim::hex(table.rules_hash()),
+        Some(&column),
+    );
     let path = report_path();
     std::fs::create_dir_all(path.parent().expect("a folder")).expect("the report folder");
     std::fs::write(&path, &text).expect("the report");
-    let summary: String = text.split("\n\n").nth(1).unwrap_or_default().to_owned();
+    let summary: String = text
+        .split("\n\n")
+        .skip(1)
+        .take(2)
+        .collect::<Vec<_>>()
+        .join("\n\n");
     eprintln!("{summary}\nthe report: {}", path.display());
     assert_eq!(
         runs.len(),
@@ -1349,6 +1751,7 @@ fn one_short_match_reports_through_the_gateway() {
         std::slice::from_ref(&run),
         cost,
         &pharmakos_sim::hex(table.rules_hash()),
+        None,
     );
     assert!(
         text.contains("== hold-and-build-vs-easy / 2 rounds"),
@@ -1419,4 +1822,69 @@ fn the_flags_say_what_item_127_3_asks() {
     assert!(names_seat("A beacon of seat 1 was deployed.", 1));
     assert!(!names_seat("A beacon of seat 12 was deployed.", 1));
     assert!(!names_seat("A beacon of seat 0 was deployed.", 1));
+}
+
+/// Decision 16's column reads a seat's first step and the speed it would need
+/// the way the report says it does, on made-up events and figures.
+#[test]
+fn the_expand_east_column_reads_the_first_step() {
+    let events = vec![
+        (0, String::from("plan_sealed"), Some(0)),
+        (1, String::from("step_started"), Some(0)),
+        (1, String::from("step_started"), Some(1)),
+        (900, String::from("step_completed"), Some(1)),
+        (2_401, String::from("step_failed"), Some(0)),
+        (2_406, String::from("step_failed"), Some(0)),
+    ];
+    assert_eq!(first_step(&events, 0), FirstStep::Failed { tick: 2_401 });
+    assert_eq!(first_step(&events, 1), FirstStep::Arrived { tick: 900 });
+    assert_eq!(first_step(&events, 2), FirstStep::Unfinished);
+    // 150 s at 10 cost/s is 1 500 cost units; 120 s needs 12.5, so 13.
+    assert_eq!(speed_needed(150_000, 10, 120_000), Some(13));
+    assert_eq!(speed_needed(120_000, 10, 120_000), Some(10));
+    assert_eq!(speed_needed(1, 10, 0), None);
+    assert_eq!(seconds(120_000), "120.0");
+    assert_eq!(seconds(1_250), "1.2");
+    // Spec section 4's 1 to 1.5 voxels a second, at the item-59 step cost of
+    // 10 a voxel and at a doubled one.
+    assert_eq!(spec_cost_range(10), Some(10..=15));
+    assert_eq!(spec_cost_range(20), Some(20..=30));
+    assert_eq!(spec_cost_range(3), None, "1.5 voxels at 3 a voxel is 4.5");
+    assert_eq!(
+        voxel_tenths_per_second(10, 10).map(tenths),
+        Some(String::from("1.0"))
+    );
+    assert_eq!(
+        voxel_tenths_per_second(15, 10).map(tenths),
+        Some(String::from("1.5"))
+    );
+    assert_eq!(tick_seconds(2_401), 120);
+}
+
+/// Decision 16's column's gateway half, through the reader the report uses:
+/// every seat's own `estimate_route` from its core to the example's first
+/// site answers, on the expand-east scenario's seed. A refusal fails here
+/// (the reader turns one into a panic), so a change to what the gateway
+/// answers fails `cargo xtask ci` rather than the next 80-match run.
+#[test]
+fn the_expand_east_column_asks_each_seats_estimate_route() {
+    let root = root();
+    let scenario = pharmakos_gamectl::scenario::load(&root, Path::new(EXPAND_EAST_SCENARIO))
+        .expect("the committed expand-east-segment scenario loads");
+    let (site, _timeout_ms) = expand_east_first_step();
+    let estimates = expand_east_estimates(&rules_json(), scenario.seed, site);
+    assert_eq!(
+        estimates.iter().map(|(seat, _)| *seat).collect::<Vec<u8>>(),
+        seat_ids()
+            .iter()
+            .map(|seat| seat.raw())
+            .collect::<Vec<u8>>(),
+        "one answer a seat, in seat order"
+    );
+    for (seat, estimate_ms) in estimates {
+        assert!(
+            estimate_ms.is_some_and(|ms| ms > 0),
+            "seat {seat}: the site is reachable from the core on this map, at a positive time;              got {estimate_ms:?}"
+        );
+    }
 }

@@ -188,9 +188,8 @@ message Meta {
   // Meaningful only when kind = TEMPLATE. instantiate_template removes the
   // list as it sets kind to PLAYBOOK, so no playbook's fingerprint moves. On a
   // hand-written PLAYBOOK it is round-tripped and never read, exactly as
-  // `note` is; nothing is stripped. PLACEHOLDER: whether the verifier should
-  // refuse it on a PLAYBOOK with a code of its own rather than round-trip it
-  // is OWNER's, at S6 (a refusal is a new diagnostic catalogue code).
+  // `note` is; nothing is stripped.
+  // PLACEHOLDER: whether the verifier refuses it on a PLAYBOOK with a code of its own rather than round-trip it — owner, at S6 (a refusal is a new diagnostic catalogue code).
   //
   // Number 6, and not "the next free one" by accident: 5 stays held for
   // team_id above.
@@ -219,9 +218,8 @@ message Meta {
 // Untyped until S6, on purpose: the value a wizard fills in is the JSON at
 // `pointer`, written as it would be written in the file (a duration is game
 // milliseconds), and the verifier refuses what does not fit, so the
-// declaration does not have to carry the type. PLACEHOLDER: the typed
-// parameter catalogue — a parameter's type, unit, range and choices — is
-// OWNER's, at S6, with the editor and the library, and takes numbers 3 to 15.
+// declaration does not have to carry the type.
+// PLACEHOLDER: the typed parameter catalogue (a parameter's type, unit, range and choices) — owner, at S6, with the editor and the library, and it takes numbers 3 to 15.
 message TemplateParameter {
   // An RFC 6901 JSON Pointer into this file: where the value goes. The
   // wizard's edit is an RFC 6902 `replace` at this pointer, the same
@@ -253,7 +251,8 @@ message Declarative {
   Options options = 3;
 }
 
-// PLACEHOLDER STUB. "Options" is named as part of the v1 vocabulary but the
+// PLACEHOLDER: the options beyond allow dormant beacons — owner, when the spec enumerates them.
+// "Options" is named as part of the v1 vocabulary but the
 // spec does not enumerate its fields. The one option the spec does pin down
 // by name is "allow dormant beacons" (spec section 7: adding draw beyond
 // supply is an error unless it is set).
@@ -481,7 +480,8 @@ message RemoveBuildTargetRow {
 // Queues one licensed capability structure on the beacon's fabricator. The
 // licence check is the verifier's (spec section 8).
 message QueueStructureRow {
-  // PLACEHOLDER STUB: the capability catalogue is spec section 8's contract
+  // PLACEHOLDER: the capability catalogue, a string id until then — owner, at S4, with its licences.
+  // The capability catalogue is spec section 8's contract
   // and its licences land at S4. A string id until then, exactly like
   // seams.proto's builtin ids — it becomes a nested enum when that contract
   // is written.
@@ -491,7 +491,8 @@ message QueueStructureRow {
 // One entry in a Build mandate's target list: blueprint, anchor, rotation,
 // order (spec section 6, the Build row).
 message BuildTarget {
-  // PLACEHOLDER STUB: the blueprint catalogue is spec section 8's contract.
+  // PLACEHOLDER: the blueprint catalogue, one blueprint (the Generator) until then — owner, at S4, with its licences.
+  // The blueprint catalogue is spec section 8's contract.
   // The skeleton's minimal Build mandate ships one blueprint, the Generator.
   string blueprint_id = 1;
 
@@ -523,7 +524,8 @@ message BuildTarget {
 // An axis-aligned box of voxels, inclusive at both ends. Protected areas,
 // avoid areas and Survey probe areas are all of this shape.
 //
-// PLACEHOLDER STUB: the spec says "areas" without fixing their shape. A box
+// PLACEHOLDER: an area's shape, a box — owner, if a polygon or a sphere is wanted.
+// The spec says "areas" without fixing their shape. A box
 // is what the editor's drag-select produces and what an integer sim can test
 // in three comparisons; a polygon or a sphere would be an owner decision.
 message Area {
@@ -573,7 +575,8 @@ message HoldStep {
   int32 ms = 1;
 }
 
-// PLACEHOLDER STUB. The message bodies are named in spec section 10 ("Sent:
+// PLACEHOLDER: the radio message bodies, field by field — owner, at S4, with the Radio Mast.
+// The message bodies are named in spec section 10 ("Sent:
 // mark target, threat at, go-code, rally") but not specified field by field.
 // A radio message is untrusted data and is stamped by the engine with its
 // sender and its Mast of origin; the author does not write those fields, and
@@ -950,7 +953,8 @@ message FallbackShadow {
 }
 
 message FallbackPatrol {
-  // PLACEHOLDER STUB: the patrol route shape is not specified. A list of
+  // PLACEHOLDER: the patrol route's shape, a list of locations — owner, when the spec specifies it.
+  // The patrol route shape is not specified. A list of
   // locations is the obvious reading of "patrol" and is what the editor's map
   // route would produce.
   repeated Location waypoints = 1;
@@ -1333,7 +1337,8 @@ message BuildSettings {
   }
 }
 
-// PLACEHOLDER STUB — S2, with destruction and combat. Spec section 6's Defend
+// PLACEHOLDER: Defend's settings — owner, at S2, with destruction and combat.
+// Spec section 6's Defend
 // row names: protect list (accepts `my commander`), engagement radius as a
 // percentage of the sphere radius, pursue never / sphere edge / while in
 // reach, auto-fortify, unit mix, picket. Numbers 1-15 are held so the first
@@ -1342,7 +1347,8 @@ message DefendSettings {
   reserved 1 to 15;
 }
 
-// PLACEHOLDER STUB — S2, with destruction and combat. Spec section 6's Attack
+// PLACEHOLDER: Attack's settings — owner, at S2, with destruction and combat.
+// Spec section 6's Attack
 // row names: target (fixed or selector, including `enemy commander`) and
 // retarget rule, staging point, launch condition (force size, segment time or
 // a broadcast go-code), retreat conditions, after-action, avoid areas,

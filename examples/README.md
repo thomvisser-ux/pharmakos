@@ -107,7 +107,9 @@ or an enum value breaks files on disk even when the wire tags are untouched.
    (section 13, "comments survive a load-and-save unchanged") is the JSONC
    layer's, which preserves the author's text and uses the canonical form only
    to compare and verify. `crates/proto/src/json/codec.rs` lists this beside
-   its other mapping notes. **PLACEHOLDER:** T8 (plan-core) owns the
+   its other mapping notes.
+   PLACEHOLDER: whether the canonical encoder must emit a written default — owner, at plan-core's text-preserving layer (T8, decisions-log item 74).
+   T8 (plan-core) owns the
    text-preserving layer and is where the byte-for-byte claim is tested
    (decisions-log item 74). If T8 concludes the canonical encoder has to emit
    a written default after all, that is a change to the canonical form and an

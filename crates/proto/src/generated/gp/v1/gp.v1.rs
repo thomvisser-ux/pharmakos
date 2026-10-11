@@ -136,9 +136,8 @@ pub struct Meta {
     /// Meaningful only when kind = TEMPLATE. instantiate_template removes the
     /// list as it sets kind to PLAYBOOK, so no playbook's fingerprint moves. On a
     /// hand-written PLAYBOOK it is round-tripped and never read, exactly as
-    /// `note` is; nothing is stripped. PLACEHOLDER: whether the verifier should
-    /// refuse it on a PLAYBOOK with a code of its own rather than round-trip it
-    /// is OWNER's, at S6 (a refusal is a new diagnostic catalogue code).
+    /// `note` is; nothing is stripped.
+    /// PLACEHOLDER: whether the verifier refuses it on a PLAYBOOK with a code of its own rather than round-trip it — owner, at S6 (a refusal is a new diagnostic catalogue code).
     ///
     /// Number 6, and not "the next free one" by accident: 5 stays held for
     /// team_id above.
@@ -196,9 +195,8 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.Meta".into() }fn type_
 /// Untyped until S6, on purpose: the value a wizard fills in is the JSON at
 /// `pointer`, written as it would be written in the file (a duration is game
 /// milliseconds), and the verifier refuses what does not fit, so the
-/// declaration does not have to carry the type. PLACEHOLDER: the typed
-/// parameter catalogue — a parameter's type, unit, range and choices — is
-/// OWNER's, at S6, with the editor and the library, and takes numbers 3 to 15.
+/// declaration does not have to carry the type.
+/// PLACEHOLDER: the typed parameter catalogue (a parameter's type, unit, range and choices) — owner, at S6, with the editor and the library, and it takes numbers 3 to 15.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct TemplateParameter {
     /// An RFC 6901 JSON Pointer into this file: where the value goes. The
@@ -237,7 +235,8 @@ impl ::prost::Name for Declarative {
 const NAME: &'static str = "Declarative";
 const PACKAGE: &'static str = "gp.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.v1.Declarative".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.Declarative".into() }}
-/// PLACEHOLDER STUB. "Options" is named as part of the v1 vocabulary but the
+/// PLACEHOLDER: the options beyond allow dormant beacons — owner, when the spec enumerates them.
+/// "Options" is named as part of the v1 vocabulary but the
 /// spec does not enumerate its fields. The one option the spec does pin down
 /// by name is "allow dormant beacons" (spec section 7: adding draw beyond
 /// supply is an error unless it is set).
@@ -552,7 +551,8 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RemoveBuildTargetRow".
 /// licence check is the verifier's (spec section 8).
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct QueueStructureRow {
-    /// PLACEHOLDER STUB: the capability catalogue is spec section 8's contract
+    /// PLACEHOLDER: the capability catalogue, a string id until then — owner, at S4, with its licences.
+    /// The capability catalogue is spec section 8's contract
     /// and its licences land at S4. A string id until then, exactly like
     /// seams.proto's builtin ids — it becomes a nested enum when that contract
     /// is written.
@@ -567,7 +567,8 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.QueueStructureRow".int
 /// order (spec section 6, the Build row).
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BuildTarget {
-    /// PLACEHOLDER STUB: the blueprint catalogue is spec section 8's contract.
+    /// PLACEHOLDER: the blueprint catalogue, one blueprint (the Generator) until then — owner, at S4, with its licences.
+    /// The blueprint catalogue is spec section 8's contract.
     /// The skeleton's minimal Build mandate ships one blueprint, the Generator.
     #[prost(string, tag="1")]
     pub blueprint_id: ::prost::alloc::string::String,
@@ -603,7 +604,8 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.BuildTarget".into() }f
 /// An axis-aligned box of voxels, inclusive at both ends. Protected areas,
 /// avoid areas and Survey probe areas are all of this shape.
 ///
-/// PLACEHOLDER STUB: the spec says "areas" without fixing their shape. A box
+/// PLACEHOLDER: an area's shape, a box — owner, if a polygon or a sphere is wanted.
+/// The spec says "areas" without fixing their shape. A box
 /// is what the editor's drag-select produces and what an integer sim can test
 /// in three comparisons; a polygon or a sphere would be an owner decision.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
@@ -676,7 +678,8 @@ impl ::prost::Name for HoldStep {
 const NAME: &'static str = "HoldStep";
 const PACKAGE: &'static str = "gp.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.v1.HoldStep".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.HoldStep".into() }}
-/// PLACEHOLDER STUB. The message bodies are named in spec section 10 ("Sent:
+/// PLACEHOLDER: the radio message bodies, field by field — owner, at S4, with the Radio Mast.
+/// The message bodies are named in spec section 10 ("Sent:
 /// mark target, threat at, go-code, rally") but not specified field by field.
 /// A radio message is untrusted data and is stamped by the engine with its
 /// sender and its Mast of origin; the author does not write those fields, and
@@ -1351,7 +1354,8 @@ const PACKAGE: &'static str = "gp.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.v1.FallbackShadow".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.FallbackShadow".into() }}
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct FallbackPatrol {
-    /// PLACEHOLDER STUB: the patrol route shape is not specified. A list of
+    /// PLACEHOLDER: the patrol route's shape, a list of locations — owner, when the spec specifies it.
+    /// The patrol route shape is not specified. A list of
     /// locations is the obvious reading of "patrol" and is what the editor's map
     /// route would produce.
     #[prost(message, repeated, tag="1")]
@@ -1954,7 +1958,8 @@ impl ::prost::Name for BuildSettings {
 const NAME: &'static str = "BuildSettings";
 const PACKAGE: &'static str = "gp.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.v1.BuildSettings".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.BuildSettings".into() }}
-/// PLACEHOLDER STUB — S2, with destruction and combat. Spec section 6's Defend
+/// PLACEHOLDER: Defend's settings — owner, at S2, with destruction and combat.
+/// Spec section 6's Defend
 /// row names: protect list (accepts `my commander`), engagement radius as a
 /// percentage of the sphere radius, pursue never / sphere edge / while in
 /// reach, auto-fortify, unit mix, picket. Numbers 1-15 are held so the first
@@ -1966,7 +1971,8 @@ impl ::prost::Name for DefendSettings {
 const NAME: &'static str = "DefendSettings";
 const PACKAGE: &'static str = "gp.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.v1.DefendSettings".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.DefendSettings".into() }}
-/// PLACEHOLDER STUB — S2, with destruction and combat. Spec section 6's Attack
+/// PLACEHOLDER: Attack's settings — owner, at S2, with destruction and combat.
+/// Spec section 6's Attack
 /// row names: target (fixed or selector, including `enemy commander`) and
 /// retarget rule, staging point, launch condition (force size, segment time or
 /// a broadcast go-code), retreat conditions, after-action, avoid areas,
@@ -2318,7 +2324,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Match".into
         pub commander_cost_per_second: u32,
         /// Build, mining and repair-reclaim drones all walk at the same speed.
         ///
-        /// PLACEHOLDER: tuning — owner, S1.
+        /// PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
         ///
         /// item 90: 10
         #[prost(uint32, tag="10")]
@@ -2442,7 +2448,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Mesher".int
         /// Base Maintenance Indemnity: the `$` a seat is paid per settlement
         /// (spec section 7).
         ///
-        /// PLACEHOLDER: tuning — owner, S1.
+        /// PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
         ///
         /// item 90: 100
         #[prost(uint32, tag="1")]
@@ -2451,7 +2457,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Mesher".int
         /// money is two indemnities" — stays a rule rather than being flattened
         /// into a second number that can drift away from the first.
         ///
-        /// PLACEHOLDER: tuning — owner, S1.
+        /// PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
         ///
         /// item 90: 2, so $ 200
         #[prost(uint32, tag="2")]
@@ -2460,12 +2466,12 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Mesher".int
         /// this many percent more, the leader this many percent less, linear
         /// between.
         ///
-        /// PLACEHOLDER: tuning — owner, S1.
+        /// PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
         ///
         /// item 90: 10
         #[prost(uint32, tag="3")]
         pub scaling_last_place_bonus_percent: u32,
-        /// PLACEHOLDER: tuning — owner, S1.
+        /// PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
         ///
         /// item 90: 5
         #[prost(uint32, tag="4")]
@@ -2481,7 +2487,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Mesher".int
         /// Recycling a standing asset refunds this percentage of its REMAINING
         /// value (spec section 7).
         ///
-        /// PLACEHOLDER: tuning — owner, S1.
+        /// PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
         ///
         /// item 90: 50
         #[prost(uint32, tag="6")]
@@ -2497,7 +2503,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Mesher".int
         /// The fabricator's backlog warning: outstanding work items per available
         /// drone, above which the Quartermaster reports a backlog.
         ///
-        /// PLACEHOLDER: tuning — owner, S1.
+        /// PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
         ///
         /// item 90: 2
         #[prost(uint32, tag="8")]
@@ -2506,21 +2512,21 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Mesher".int
         /// out of (item 90). With `seam_voxels` below, a seam is worth 300 / 600 /
         /// 1 200 `$`.
         ///
-        /// PLACEHOLDER: tuning — owner, S1.
+        /// PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
         ///
         /// item 90: 2 / 4 / 8
         #[prost(message, optional, tag="9")]
         pub ore_yield_per_voxel_dollars: ::core::option::Option<super::ByRichness>,
         /// Ore voxels in one scrap seam, whatever its richness.
         ///
-        /// PLACEHOLDER: tuning — owner, S1.
+        /// PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
         ///
         /// item 90: 150
         #[prost(uint32, tag="10")]
         pub seam_voxels: u32,
         /// Game milliseconds one mining drone spends per ore voxel.
         ///
-        /// PLACEHOLDER: tuning — owner, S1.
+        /// PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
         ///
         /// item 90: 2000
         #[prost(int32, tag="11")]
@@ -2561,14 +2567,14 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Economy".in
         /// The pre-placed key core's deep-bore surplus: supply a seat has before
         /// it builds anything.
         ///
-        /// PLACEHOLDER: tuning — owner, S1.
+        /// PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
         ///
         /// item 90: 10
         #[prost(uint32, tag="1")]
         pub core_surplus_kw: u32,
         /// A Generator's output, by the richness of the heat vent it sits on.
         ///
-        /// PLACEHOLDER: tuning — owner, S1.
+        /// PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
         ///
         /// item 90: 20 / 30 / 40
         #[prost(message, optional, tag="2")]
@@ -2608,7 +2614,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Economy".in
         /// Headroom a dormant asset needs before it may revive, so a grid on the
         /// edge does not oscillate.
         ///
-        /// PLACEHOLDER: tuning — owner, S1.
+        /// PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
         ///
         /// item 90: 2
         #[prost(uint32, tag="6")]
@@ -2616,7 +2622,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Economy".in
         /// A beacon's own draw. Net zero through its own key-core, which is why it
         /// is stated rather than assumed (item 90, spec section 5).
         ///
-        /// PLACEHOLDER: tuning — owner, S1.
+        /// PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
         ///
         /// item 90: 2
         #[prost(uint32, tag="7")]
@@ -2770,7 +2776,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Beacon".int
         /// the band against 2 x sphere_radius_voxels, not against the placement
         /// range.
         ///
-        /// PLACEHOLDER: tuning — owner, S1.
+        /// PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
         ///
         /// item 90: LEAN
         #[prost(enumeration="super::by_richness::Richness", tag="6")]
@@ -2788,7 +2794,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Beacon".int
         /// The one starting scrap seam in an occupied spawn zone. Inside the
         /// core's sphere, so the starting mining drone digs from tick one.
         ///
-        /// PLACEHOLDER: tuning — owner, S1.
+        /// PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
         ///
         /// item 90: STANDARD
         #[prost(enumeration="super::by_richness::Richness", tag="9")]
@@ -2806,17 +2812,17 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Beacon".int
         /// Contested features, toward the centre of the map: what expansion is
         /// for.
         ///
-        /// PLACEHOLDER: tuning — owner, S1.
+        /// PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
         ///
         /// item 90: 2
         #[prost(uint32, tag="12")]
         pub contested_standard_vents: u32,
-        /// PLACEHOLDER: tuning — owner, S1.
+        /// PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
         ///
         /// item 90: 1
         #[prost(uint32, tag="13")]
         pub contested_rich_vents: u32,
-        /// PLACEHOLDER: tuning — owner, S1.
+        /// PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
         ///
         /// item 90: 3
         #[prost(uint32, tag="14")]
@@ -2883,12 +2889,12 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.UnitKind".i
     /// tuning.
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct Units {
-        /// PLACEHOLDER: tuning — owner, S1.
+        /// PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
         ///
         /// item 90: 20 / 100 / 1 / 10
         #[prost(message, optional, tag="1")]
         pub build_drone: ::core::option::Option<UnitKind>,
-        /// PLACEHOLDER: tuning — owner, S1.
+        /// PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
         ///
         /// item 90: 20 / 100 / 1 / 10
         #[prost(message, optional, tag="2")]
@@ -2914,12 +2920,12 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.UnitKind".i
         pub scout: ::core::option::Option<UnitKind>,
         /// Build drones each occupied seat starts with (item 95: 2).
         ///
-        /// PLACEHOLDER: tuning — owner, S1.
+        /// PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
         #[prost(uint32, tag="6")]
         pub starting_build_drones: u32,
         /// Mining drones each occupied seat starts with (item 95: 1).
         ///
-        /// PLACEHOLDER: tuning — owner, S1.
+        /// PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
         #[prost(uint32, tag="7")]
         pub starting_mining_drones: u32,
     }
@@ -2968,7 +2974,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.StructureKi
         /// than three — the decoded row is still 80 / 600 / 0. First zero-valued
         /// row in the table, so it is said once here and once in rules/README.md.
         ///
-        /// PLACEHOLDER: tuning — owner, S1.
+        /// PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
         ///
         /// item 90: 80 / 600 / 0
         #[prost(message, optional, tag="2")]
@@ -2983,7 +2989,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.StructureKi
         /// item 90: 90 / 400 / 3
         #[prost(message, optional, tag="4")]
         pub mortar: ::core::option::Option<StructureKind>,
-        /// PLACEHOLDER: tuning — owner, S1.
+        /// PLACEHOLDER: tuning — owner, at S1's demo, with tune's balance check report.
         ///
         /// item 90: 30 / 200 / 1
         #[prost(message, optional, tag="5")]
@@ -3122,7 +3128,8 @@ pub struct BuiltinOperator {
     /// Which built-in operator. v1 ships Easy / Normal / Hard; Turtle, Raider
     /// and Economist weightings are roadmap (spec section 18).
     ///
-    /// PLACEHOLDER: a string id rather than an enum, because the operator
+    /// PLACEHOLDER: the operator id, a string rather than an enum — owner, at S5, when section 14's operator catalogue is written.
+    /// A string id rather than an enum, because the operator
     /// catalogue is section 14's contract, not this file's. Swap it for a nested
     /// enum when that contract is written.
     #[prost(string, tag="1")]
@@ -3175,7 +3182,8 @@ const PACKAGE: &'static str = "gp.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.v1.Mandate".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.Mandate".into() }}
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BuiltinMandate {
-    /// PLACEHOLDER: a string id rather than an enum, for the same reason as
+    /// PLACEHOLDER: the mandate id, a string rather than an enum — owner, when section 6's mandate catalogue is written.
+    /// A string id rather than an enum, for the same reason as
     /// BuiltinOperator. The five writs are Build, Defend, Attack, Mine and
     /// Survey; naming them is section 6's contract.
     #[prost(string, tag="1")]
@@ -3228,7 +3236,7 @@ const PACKAGE: &'static str = "gp.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.v1.Program".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.Program".into() }}
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BuiltinProgram {
-    /// PLACEHOLDER: string id, same reasoning as above.
+    /// PLACEHOLDER: the program id, a string rather than an enum, same reasoning as above — owner, at v1.2, when the script arm opens.
     #[prost(string, tag="1")]
     pub program_id: ::prost::alloc::string::String,
 }

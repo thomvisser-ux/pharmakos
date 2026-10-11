@@ -36,7 +36,8 @@
 //! hashed: nothing in a tick reads such a total, and a field that affects
 //! nothing must not move a golden file.
 //!
-//! PLACEHOLDER: the counters that *do* read the split are the awards — "awards
+//! PLACEHOLDER: the awards' per-seat totals as hashed state — owner, at S4, with the licences.
+//! The counters that *do* read the split are the awards — "awards
 //! computed deterministically from sim counters", spec section 7 — and the
 //! award catalogue lands with **S4**'s licences. The day it does, the per-seat
 //! totals become hashed state and this module gains a table; the split itself

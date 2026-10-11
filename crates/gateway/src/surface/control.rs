@@ -55,7 +55,8 @@ use crate::surface::Surface;
 
 /// The longest stretch of game time one `advance_push` may ask for.
 ///
-/// PLACEHOLDER: 60 000 ms is a working number with a technical reason and no
+/// PLACEHOLDER: the largest stretch one `advance_push` may ask for, 60 000 ms — owner, at hardening.
+/// 60 000 ms is a working number with a technical reason and no
 /// measurement. **One thread owns the surface**, so a call that runs a
 /// thousand ticks is a stretch in which no other connection is answered and no
 /// other seat's editor gets a reply; sixty seconds of game time is three
@@ -66,7 +67,8 @@ pub const MAX_ADVANCE_MS: i32 = 60_000;
 
 /// The furthest one `report_host_clock` may carry the phase's clock forward.
 ///
-/// PLACEHOLDER: 60 000 ms, and the reason is **not** the one above. This input
+/// PLACEHOLDER: the furthest one clock report may carry the clock, 60 000 ms — owner, at hardening.
+/// 60 000 ms, and the reason is **not** the one above. This input
 /// is attested by the client: the gateway cannot check it against a clock,
 /// because it has none. A single unbounded report would therefore let the
 /// local lobby hand every token an arbitrary number of refilled rate-limit

@@ -432,9 +432,10 @@ pub fn instantiate_template(
 /// opens it — so a template that was hand-formatted opens looking as its
 /// author wrote it.
 ///
-/// PLACEHOLDER: the typed parameter catalogue — type, unit, range, choices —
-/// is the **owner**'s, at **S6**, with the editor and the library
-/// (`gp.v1.TemplateParameter` holds 3 to 15 for it). Until then a value is raw
+/// PLACEHOLDER: the typed parameter catalogue (type, unit, range, choices) — owner, at S6.
+///
+/// With the editor and the library (`gp.v1.TemplateParameter` holds 3 to 15
+/// for it). Until then a value is raw
 /// JSON and the verifier refuses what does not fit.
 ///
 /// # Errors

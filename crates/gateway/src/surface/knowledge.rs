@@ -65,7 +65,8 @@ use crate::view;
 
 /// How many beacons one page of `list_beacons` carries at each rung.
 ///
-/// PLACEHOLDER: 8 / 24 / 40 are working numbers. 40 is item 63's world total
+/// PLACEHOLDER: the beacon ladder 8 / 24 / 40 — owner, at hardening, with the rest of the read-method budgets.
+/// 8 / 24 / 40 are working numbers. 40 is item 63's world total
 /// for beacons, so `full` is "every beacon there could be" by construction, and
 /// the two rungs below it step roughly by three as spec section 12's token
 /// budgets do. OWNER sets the real ladder at hardening, with the rest of the
@@ -90,7 +91,8 @@ pub const fn beacon_budget(detail: Detail) -> usize {
 /// count is refused before any search runs, the same shape
 /// `get_economy_forecast` already refuses a surplus of what-ifs in.
 ///
-/// PLACEHOLDER: 64 is a working number -- a route with more legs than a
+/// PLACEHOLDER: 64 waypoints a route — owner, at hardening, with the rate limits.
+/// 64 is a working number -- a route with more legs than a
 /// playbook has steps at item 94's 128-unit budget is not a route an editor
 /// draws. OWNER settles it at hardening with the rate limits, beside
 /// [`crate::surface::MAX_WAIT_MS`] and the draft bounds.
@@ -98,7 +100,7 @@ pub const MAX_WAYPOINTS: usize = 64;
 
 /// How many what-if answers one `get_economy_forecast` carries at each rung.
 ///
-/// PLACEHOLDER: as [`beacon_budget`], and settled with it.
+/// PLACEHOLDER: the what-if ladder, as [`beacon_budget`] — owner, at hardening, settled with it.
 #[must_use]
 pub const fn what_if_budget(detail: Detail) -> usize {
     match detail {

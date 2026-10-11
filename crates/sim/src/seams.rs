@@ -31,8 +31,8 @@ use crate::tables::{SeatId, UnitId};
 /// §4.7), because a budget measured by a clock is a budget that differs between
 /// a fast machine and a slow one, which is a desync with extra steps.
 ///
-/// PLACEHOLDER: whether the counter becomes hashed state is settled by the
-/// stage that gives it teeth (owner, at S5 with the operator's budget). It is
+/// PLACEHOLDER: whether the work counter becomes hashed state — owner, at S5, with the operator's budget.
+/// The stage that gives it teeth settles it. It is
 /// **not** hashed today, and `tests/determinism.rs`'s
 /// `the_work_counter_is_not_in_the_state_encoding` asserts that, because a
 /// counter that affects nothing must not move a golden file.
@@ -297,7 +297,8 @@ impl IntentSink {
 /// The messages a seat may read. Radio carries data and never control, and is
 /// treated as untrusted input (AGENTS.md §1).
 ///
-/// PLACEHOLDER: the message vocabulary arrives at S4 with the Radio Mast. The
+/// PLACEHOLDER: the message vocabulary — owner, at S4, with the Radio Mast.
+/// The message vocabulary arrives at S4 with the Radio Mast. The
 /// type exists now because the trait below takes it, and adding a parameter to
 /// a trait later is a bigger change than filling a struct.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]

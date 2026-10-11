@@ -40,8 +40,8 @@
 //! beyond the ones it knows, so the format can grow a field without a new
 //! version; it is deliberately **not** `gp.api.v1`, because it is two lines
 //! between a parent and its own child and freezing it into the published
-//! schema would be freezing the wrong thing. PLACEHOLDER: **OWNER**, at v1.1,
-//! decides whether it becomes part of anything published.
+//! schema would be freezing the wrong thing.
+//! PLACEHOLDER: whether the config and announce lines become part of anything published — owner, at v1.1.
 //!
 //! # Death
 //!
@@ -159,7 +159,8 @@ use crate::token::{Handle, Subject, Token};
 
 /// How many connections the host serves at once.
 ///
-/// PLACEHOLDER: 8 is a working number with a technical reason and no
+/// PLACEHOLDER: eight connections at once — owner, at hardening, with the rate limits.
+/// 8 is a working number with a technical reason and no
 /// measurement. **A connection costs a thread**, because the transport is
 /// blocking threads and `std::sync` channels (decisions-log item 99) and not
 /// an async runtime; eight covers three seats, an editor, a lobby, a spectator
@@ -932,8 +933,8 @@ fn advisor_scopes() -> ScopeSet {
 ///
 /// **No spectator token is minted.** Spec section 5 gives the spectator camera
 /// to built-in-only matches and unlocks an eliminated human by *policy* rather
-/// than by token, and this demo has a human seat. PLACEHOLDER: **OWNER**, at
-/// **S5**, with the built-in-only match flow.
+/// than by token, and this demo has a human seat.
+/// PLACEHOLDER: the spectator token — owner, at S5, with the built-in-only match flow.
 fn mint_tokens(surface: &mut Surface, config: &Config) -> Result<Minted, Error> {
     let minted_at = surface.time().tick;
     // `observe` beside `admin`, because the lobby watches the match it

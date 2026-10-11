@@ -144,7 +144,8 @@ pub(crate) fn decide(world: &mut World, seat_index: usize, plan: &Plan, state: &
 /// Whether the commander has died more often this segment than the playbook's
 /// `on_death` block allows.
 ///
-/// PLACEHOLDER: `max_deaths_before_fallback` is a `uint32` and proto3 has no
+/// PLACEHOLDER: a `max_deaths_before_fallback` of zero reads as no limit — owner, at S3, with the rest of the guard vocabulary.
+/// `max_deaths_before_fallback` is a `uint32` and proto3 has no
 /// presence on one, so zero and unset are the same bytes. Zero reads as **no
 /// limit** here, because the alternative — the fallback taking over before the
 /// commander has died at all — makes the required `on_death` block impossible

@@ -36,7 +36,8 @@
 //! file — which is the skeleton plan's T15 acceptance line, and is why it is
 //! written that way rather than against a hash literal.
 //!
-//! PLACEHOLDER: verifying against a **real** match's frozen snapshot — the one
+//! PLACEHOLDER: verifying against a real match's frozen snapshot rather than the reference view — owner, at S3 (Save/Load).
+//! Verifying against a **real** match's frozen snapshot — the one
 //! the gateway hands the editor. The owner answered on 2026-09-27
 //! (decisions-log item 117 (1)): a shipped `gamectl verify` **keeps this
 //! reference view**. The live check at `submit_plan` is the authority, so a

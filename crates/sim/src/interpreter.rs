@@ -122,7 +122,7 @@ pub const MAX_CONDITION_DEPTH: u32 = 4;
 /// The most nodes one condition tree may hold (spec section 10: ≤ 24 nodes).
 pub const MAX_CONDITION_NODES: u32 = 24;
 
-/// PLACEHOLDER (harness): how many route steps one plan may hold.
+/// PLACEHOLDER: harness scaffolding, how many route steps one plan may hold — owner, at S3, with P1's real size budget.
 ///
 /// A route step is one unit of the playbook size budget
 /// (`verifier.size_budget_units`, item 94), so a plan can never hold more steps
@@ -133,8 +133,9 @@ pub const MAX_CONDITION_NODES: u32 = 24;
 /// size budget.
 pub const MAX_ROUTE_STEPS: usize = 256;
 
-/// PLACEHOLDER (harness): how many handlers one plan may hold, bounded for the
-/// reason [`MAX_ROUTE_STEPS`] is. Owner, at S3.
+/// PLACEHOLDER: harness scaffolding, how many handlers one plan may hold — owner, at S3.
+///
+/// Bounded for the reason [`MAX_ROUTE_STEPS`] is.
 pub const MAX_HANDLERS: usize = 64;
 
 /// Game milliseconds to whole ticks, rounding **up**.
@@ -607,7 +608,8 @@ pub enum Action {
         to: Place,
         /// The pace the author asked for.
         ///
-        /// PLACEHOLDER: `AVOID_KNOWN_THREATS` routes exactly as `DIRECT` does
+        /// PLACEHOLDER: `AVOID_KNOWN_THREATS` routes as `DIRECT` — owner, at S2.
+        /// `AVOID_KNOWN_THREATS` routes exactly as `DIRECT` does
         /// at the skeleton, because there are no known threats to avoid — the
         /// knowledge store and the threat weighting are S2's and S3's. Kept in
         /// the compiled plan so that the day it means something, nothing about
@@ -638,7 +640,8 @@ pub enum Action {
         durations: Vec<i32>,
         /// How many author tags the step carries.
         ///
-        /// PLACEHOLDER: the tags themselves are not stored, because a beacon
+        /// PLACEHOLDER: a beacon's tags are not stored — owner, at S3, with the full selector work.
+        /// The tags themselves are not stored, because a beacon
         /// has no tag column and a `Vec<String>` per beacon is neither
         /// fixed-width hashed state nor allocation-free inside a tick. Writing
         /// tags is legal and round-trips; *reading* them — a selector's tag
@@ -1078,7 +1081,8 @@ fn compile_step(
 
 /// The default when a step names no `on_fail`.
 ///
-/// PLACEHOLDER: the spec says "a step that times out fails, and `on_fail`
+/// PLACEHOLDER: an absent `on_fail` reads as `SKIP` — owner, at S3, with the rest of the guard vocabulary.
+/// The spec says "a step that times out fails, and `on_fail`
 /// decides what happens next" and does not say what an absent `on_fail` means —
 /// and proto3 has no presence on an enum, so an absent block and
 /// `ON_FAIL_UNSPECIFIED` are the same bytes. `SKIP` is taken because spec
@@ -1384,7 +1388,8 @@ fn compile_settings_row(
 
 /// One Build target: its blueprint and its anchor.
 ///
-/// PLACEHOLDER: the blueprint catalogue is spec section 8's contract and its
+/// PLACEHOLDER: the Generator as the one blueprint — owner, at S4, with the blueprint catalogue's licences.
+/// The blueprint catalogue is spec section 8's contract and its
 /// licences land at **S4**, so `blueprint_id` is a string in the schema and the
 /// skeleton's minimal Build mandate ships exactly one blueprint, the Generator,
 /// which is what the plan's wk-18.5 row names. Any other id is refused rather

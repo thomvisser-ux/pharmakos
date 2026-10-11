@@ -39,8 +39,8 @@
 //! the fan-out per edit is larger, and the drain queue absorbs more re-meshing per
 //! explosion than G1's figure suggests.
 //!
-//! PLACEHOLDER: `light_max` and `light_atten` are Tuning values, owner decides at S6's art
-//! polish; the fan-out they imply at the chosen pair is a number T12 measures on the first
+//! PLACEHOLDER: `light_max` and `light_atten`, Tuning values — owner, at S6's art polish.
+//! The fan-out they imply at the chosen pair is a number T12 measures on the first
 //! real vista, against G1's 8 chunks per explosion at radius 4. Nothing in this crate may
 //! choose them — they are rules-table rows, and the mesher cannot read the rules table.
 
@@ -407,7 +407,8 @@ impl LightField {
     /// face shaded at `light_max`. The two rules agree everywhere the map's edge is solid,
     /// which is every map the generator makes today.
     ///
-    /// PLACEHOLDER: whether the outside of the map lights its interior — seeding the six
+    /// PLACEHOLDER: whether the outside of the map lights its interior — owner, at S4's symmetric map, the first place a map could be open at its rim.
+    /// Seeding the six
     /// outer faces in [`LightField::bake_all`] — is a lighting rule nothing in the spec or
     /// the decisions log states, so it is not invented here. Owner decides if a map is ever
     /// open at its rim; S4's symmetric map is the first place that could arise, and the

@@ -76,7 +76,8 @@ use crate::tables::SeatId;
 /// elimination, which emits one line per beacon of that seat plus one per
 /// structure homed to it.
 ///
-/// PLACEHOLDER: 512 is a working number against a world total of 300 units and
+/// PLACEHOLDER: the event bus's 512 slots — owner, at hardening, with the read-method detail budgets.
+/// 512 is a working number against a world total of 300 units and
 /// 40 beacons (item 63). The owner settles it with the read-method detail
 /// budgets at hardening, alongside `MAX_PAGE_EVENTS`.
 pub const EVENT_BUS_CAPACITY: usize = 512;

@@ -861,8 +861,8 @@ message GetEconomyForecastResponse {
   // a dry run and never a model of anybody else (spec section 11).
   int32 committed_dollars = 6;
 
-  // PLACEHOLDER: the projected income, the projection and the what-if
-  // answers — owner, S3, with the what-if vocabulary. Decision 12 (item 128)
+  // PLACEHOLDER: the projected income, the projection and the what-if answers — owner, S3, with the what-if vocabulary.
+  // Decision 12 (item 128)
   // sends the what-ifs to S3 and fills only the next BMI and the committed
   // spend in S1; the projection's and the projected income's stage is S1's
   // plan task con2's reading, for the owner to confirm.

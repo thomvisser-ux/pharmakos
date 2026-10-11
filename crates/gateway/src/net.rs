@@ -39,7 +39,8 @@ use std::thread::JoinHandle;
 
 /// The port the lobby binds when it has no reason to choose another.
 ///
-/// PLACEHOLDER: unused. The host binds an ephemeral loopback port and the
+/// PLACEHOLDER: the unused default port, and removing it — owner, at hardening.
+/// Unused. The host binds an ephemeral loopback port and the
 /// lobby reads it from the announce line (`serve.rs`), which is what a
 /// single-machine game with a lobby that already knows the port does, and
 /// what the tests here use; packaging kept that and chose no port

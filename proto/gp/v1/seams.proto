@@ -55,7 +55,8 @@ message BuiltinOperator {
   // Which built-in operator. v1 ships Easy / Normal / Hard; Turtle, Raider
   // and Economist weightings are roadmap (spec section 18).
   //
-  // PLACEHOLDER: a string id rather than an enum, because the operator
+  // PLACEHOLDER: the operator id, a string rather than an enum — owner, at S5, when section 14's operator catalogue is written.
+  // A string id rather than an enum, because the operator
   // catalogue is section 14's contract, not this file's. Swap it for a nested
   // enum when that contract is written.
   string builtin_id = 1;
@@ -89,7 +90,8 @@ message Mandate {
 }
 
 message BuiltinMandate {
-  // PLACEHOLDER: a string id rather than an enum, for the same reason as
+  // PLACEHOLDER: the mandate id, a string rather than an enum — owner, when section 6's mandate catalogue is written.
+  // A string id rather than an enum, for the same reason as
   // BuiltinOperator. The five writs are Build, Defend, Attack, Mine and
   // Survey; naming them is section 6's contract.
   string builtin_id = 1;
@@ -123,7 +125,7 @@ message Program {
 }
 
 message BuiltinProgram {
-  // PLACEHOLDER: string id, same reasoning as above.
+  // PLACEHOLDER: the program id, a string rather than an enum, same reasoning as above — owner, at v1.2, when the script arm opens.
   string program_id = 1;
 }
 

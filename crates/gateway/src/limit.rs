@@ -44,7 +44,8 @@ use pharmakos_sim::math::quantity::Tick;
 
 /// Calls one token may make in a single tick.
 ///
-/// PLACEHOLDER: 8 is a guess -- generous for an editor that verifies on every
+/// PLACEHOLDER: calls a token may make in one tick, 8 — owner, at hardening.
+/// 8 is a guess -- generous for an editor that verifies on every
 /// keystroke, tight enough that a runaway loop is caught within one tick. OWNER
 /// sets the real number at hardening (skeleton plan T9: "rate-limit numbers and
 /// token lifetime"). It is deliberately not a rules-table row: a rules row is
@@ -54,12 +55,12 @@ pub const CALLS_PER_TICK: u32 = 8;
 
 /// Calls one token may make in a window of [`WINDOW_TICKS`].
 ///
-/// PLACEHOLDER: as [`CALLS_PER_TICK`] (OWNER, hardening).
+/// PLACEHOLDER: calls in one window, as [`CALLS_PER_TICK`] — owner, at hardening.
 pub const CALLS_PER_WINDOW: u32 = 600;
 
 /// The window, in ticks. 200 ticks is ten seconds of game time at 20 Hz.
 ///
-/// PLACEHOLDER: as [`CALLS_PER_TICK`] (OWNER, hardening).
+/// PLACEHOLDER: the window's length, as [`CALLS_PER_TICK`] — owner, at hardening.
 pub const WINDOW_TICKS: u32 = 200;
 
 /// The caps for a token the host minted for **itself**: a built-in seat's and
@@ -76,7 +77,8 @@ pub const WINDOW_TICKS: u32 = 200;
 /// these numbers, audited and fog-filtered, and a socket never gets them
 /// (`an_in_process_seat_finishes_a_round_under_its_limits_and_a_socket_does_not_get_them`).
 ///
-/// PLACEHOLDER: 128 calls in a tick and 1 200 in a window are working numbers,
+/// PLACEHOLDER: an in-process seat's 128 calls a tick and 1 200 a window — owner, at hardening, against T18's derived `EASY_CALL_BUDGET`.
+/// 128 calls in a tick and 1 200 in a window are working numbers,
 /// sized well above the scripted seats' rounds and above the plan's estimate
 /// of an Easy round (about fifty calls, and an advisor as much again). That an
 /// in-process seat has a rate of its own at all was **taken on the

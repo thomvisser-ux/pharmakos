@@ -36,7 +36,7 @@ use crate::seams::ProgramId;
 use crate::tables::{BeaconId, NO_WORK, SeatId, StructureId, UnitId, UnitKind};
 use crate::world::World;
 
-/// PLACEHOLDER: how far a unit sees, in whole voxels.
+/// PLACEHOLDER: how far a unit sees, in whole voxels — owner, at S2, with scouting.
 ///
 /// A named constant rather than a rules-table row (AGENTS.md §12): spec section
 /// 6 says a seat's reach is "your spheres, the live vision of your own units
@@ -63,7 +63,8 @@ pub const UNIT_VISION_RADIUS_VOXELS: i16 = 8;
 pub trait Program {
     /// The reserved `program_id` seam's value for this program.
     ///
-    /// PLACEHOLDER: the ids are this build's own numbering and nothing reads
+    /// PLACEHOLDER: the program ids are this build's own numbering — owner, at v1.2.
+    /// The ids are this build's own numbering and nothing reads
     /// them — [`crate::seams::ProgramId`] says why. The catalogue becomes a
     /// contract when the script arm opens, which is **v1.2** and not a stage of
     /// this plan (owner, at v1.2).

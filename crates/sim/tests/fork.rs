@@ -35,7 +35,9 @@ fn world() -> World {
     World::new(&WorldConfig {
         match_seed: pharmakos_sim::DETERMINISM_MATCH_SEED,
         seats: pharmakos_sim::DETERMINISM_SEATS,
-        units_per_seat: pharmakos_sim::DETERMINISM_UNITS_PER_SEAT,
+        // Fifty walkers a seat, the wide moving table the determinism harness
+        // fielded until S1's real segment (decision 16) took them out of it.
+        units_per_seat: 50,
         rules,
         match_settings: MatchSettings::default(),
     })

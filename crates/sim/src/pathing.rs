@@ -91,7 +91,8 @@ pub use surface::{NEIGHBOURS, Node, StepCosts, Surface};
 /// knob: a column whose surface is within [`HEADROOM_VOXELS`] of the world
 /// ceiling is not walkable.
 ///
-/// PLACEHOLDER: no `rules/rules.v1.json` row exists for it, because nothing has
+/// PLACEHOLDER: the headroom's rules-table row — owner, at S2, the stage that gives unit height a meaning.
+/// No `rules/rules.v1.json` row exists for it, because nothing has
 /// needed one — the generated terrain is clamped far below the ceiling, so the
 /// test never fires on a pristine map. Proposing the row belongs to the stage
 /// that gives unit height a meaning (owner, at S2).
@@ -100,13 +101,12 @@ pub const HEADROOM_VOXELS: i32 = 2;
 /// A border run longer than this gets a transition node at each end instead of
 /// one in the middle (spike G2's `LONG_RUN`).
 ///
-/// PLACEHOLDER: tuning — one of the seven values G2 §9.9 lists as "to become
-/// rules-table data at S3" (owner, at S3).
+/// PLACEHOLDER: tuning, one of the seven values G2 §9.9 lists as "to become rules-table data at S3" — owner, at S3.
 pub const LONG_RUN: i32 = 6;
 
 /// How far ahead the smoother looks for a shortcut.
 ///
-/// PLACEHOLDER: tuning, from the same G2 §9.9 list (owner, at S3).
+/// PLACEHOLDER: tuning, from the same G2 §9.9 list — owner, at S3.
 pub const SMOOTH_LOOKAHEAD: usize = 16;
 
 /// The most nodes one unit's route may hold.
@@ -118,6 +118,5 @@ pub const SMOOTH_LOOKAHEAD: usize = 16;
 /// 384 × 384, so a partial route is a detour-heavy route rather than an
 /// ordinary one.
 ///
-/// PLACEHOLDER: sized against the skeleton's 384-voxel map; the stage that
-/// changes the map's footprint re-derives it (owner, at S2).
+/// PLACEHOLDER: sized against the skeleton's 384-voxel map — owner, at S2, the stage that changes the map's footprint.
 pub const MAX_ROUTE_NODES: u32 = 1024;

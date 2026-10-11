@@ -93,23 +93,26 @@ use std::fmt;
 /// refuse to load rather than decode into a map of the wrong shape.
 pub const MAP_FILE_VERSION: u32 = 1;
 
-/// PLACEHOLDER: the terrain's own shape — the two noise octaves' lattice edges
+/// PLACEHOLDER: the terrain's own shape, not a rules-table row — owner, at S4's symmetric map.
+/// The terrain's own shape — the two noise octaves' lattice edges
 /// and amplitudes, and the surface skin's depth — is **not** a rules-table row
 /// today. The rows that exist describe the map's extent and its features; these
 /// four describe how lumpy it is. Owner, at S4's symmetric map, which is the
 /// stage that re-derives map generation anyway (skeleton plan decision 14).
 const TERRAIN_COARSE_SHIFT: u32 = 6;
-/// PLACEHOLDER: see [`TERRAIN_COARSE_SHIFT`].
+/// PLACEHOLDER: the terrain's shape, see [`TERRAIN_COARSE_SHIFT`] — owner, at S4's symmetric map.
 const TERRAIN_COARSE_AMPLITUDE: i32 = 8;
-/// PLACEHOLDER: see [`TERRAIN_COARSE_SHIFT`].
+/// PLACEHOLDER: the terrain's shape, see [`TERRAIN_COARSE_SHIFT`] — owner, at S4's symmetric map.
 const TERRAIN_FINE_SHIFT: u32 = 4;
-/// PLACEHOLDER: see [`TERRAIN_COARSE_SHIFT`].
+/// PLACEHOLDER: the terrain's shape, see [`TERRAIN_COARSE_SHIFT`] — owner, at S4's symmetric map.
 const TERRAIN_FINE_AMPLITUDE: i32 = 3;
-/// PLACEHOLDER: see [`TERRAIN_COARSE_SHIFT`]. How many voxels of the column's
+/// PLACEHOLDER: the terrain's skin, see [`TERRAIN_COARSE_SHIFT`] — owner, at S4's symmetric map.
+/// How many voxels of the column's
 /// top are dirt rather than stone.
 const TERRAIN_SKIN_VOXELS: i32 = 3;
 
-/// PLACEHOLDER: how far a zone centre may be jittered off its layout position,
+/// PLACEHOLDER: a zone centre's jitter, four voxels — owner, at S4, with the rest of map generation.
+/// How far a zone centre may be jittered off its layout position,
 /// in voxels. Four, inclusive at both ends, which leaves 30 cost units of slack
 /// against the spawn-distance rule at the committed table — the arithmetic is
 /// written out at [`zone_centres`]. Owner, with the rest of map generation at
@@ -152,13 +155,15 @@ pub(crate) const SEAM_VOXELS_PER_COLUMN: i32 = 4;
 /// and the feature table refuses a seam that outgrows them.
 const SEAM_DISC_RADIUS: i32 = 5;
 
-/// PLACEHOLDER: how many placements a contested feature may try before the
+/// PLACEHOLDER: a contested feature's 64 placement attempts — owner, at S4, with the rest of map generation.
+/// How many placements a contested feature may try before the
 /// generator gives up and reports a rules table it cannot satisfy. Sixty-four,
 /// which is far past what the committed table needs and still a bound rather
 /// than a loop. Owner, at S4, with the rest of map generation.
 const CONTESTED_ATTEMPTS: u32 = 64;
 
-/// PLACEHOLDER: a sixth of a turn in [`Angle`] units — the half-width of the
+/// PLACEHOLDER: a starting feature's sector half-width, a sixth of a turn — owner, at S4's symmetric map.
+/// A sixth of a turn in [`Angle`] units — the half-width of the
 /// inward sector a starting feature is placed in. It decides where every
 /// starting vent and seam can land, so it moves every committed seed when it
 /// moves. Owner, at S4's symmetric map.
@@ -1167,7 +1172,8 @@ fn terrain(seed: u64, width: i32, depth: i32, height_cap: i32) -> Vec<i32> {
     // The mean height is half the map's cap, which is what "a low-lying map"
     // means here: the sky has as much room as the rock.
     let base = height_cap >> 1;
-    // PLACEHOLDER: the terrain's floor and its headroom under the map's cap, in
+    // PLACEHOLDER: the terrain's floor and headroom, four and eight voxels — owner, at S4's symmetric map.
+    // The terrain's floor and its headroom under the map's cap, in
     // voxels. Four and eight, so no column is a bare floor and every column has
     // sky above it for a beacon sphere. Part of the same group as
     // `TERRAIN_COARSE_SHIFT`: the terrain's own shape, not a rules-table row.
@@ -1329,8 +1335,7 @@ fn set_height(heights: &mut [i32], width: i32, depth: i32, x: i32, y: i32, value
 /// `locomotion.step_cost_cardinal` = 10 is 80 — leaving 30 cost units of slack.
 /// The rule therefore holds by construction, and [`generate`] checks it anyway.
 ///
-/// PLACEHOLDER: a free placement with a separation search, and the three-way
-/// symmetry the spec asks for, belong to S4's symmetric map. Owner, at S4.
+/// PLACEHOLDER: a free placement with a separation search, and the spec's three-way symmetry — owner, at S4's symmetric map.
 fn zone_centres(
     seed: u64,
     width: i32,

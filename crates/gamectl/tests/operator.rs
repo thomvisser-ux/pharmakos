@@ -1172,8 +1172,7 @@ fn the_operator_reads_no_notebook_and_writes_nothing_but_its_own_seal() {
 /// `IN_PROCESS_LIMITS` against `EASY_CALL_BUDGET`: a round of Easy fits the
 /// in-process rate it is planned under, on the one Lull tick it has.
 ///
-/// PLACEHOLDER: both numbers are the owner's at hardening, with the rate
-/// limits (decisions-log item 111, section D).
+/// PLACEHOLDER: both numbers — owner, at hardening, with the rate limits (decisions-log item 111, section D).
 #[test]
 fn easy_fits_the_in_process_limits() {
     // Checked when this test compiles, so a budget that outgrew the limit
