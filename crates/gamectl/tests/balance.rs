@@ -97,7 +97,7 @@
 //! and its summary printed. Nothing here reads a clock (AGENTS.md section
 //! 4.5): the wall time is the shell's to measure.
 //!
-//! Four tests are not ignored, so a change to what the gateway answers
+//! Five tests are not ignored, so a change to what the gateway answers
 //! fails `cargo xtask ci` rather than the next owner's run:
 //! [`one_short_match_reports_through_the_gateway`] plays one short match
 //! through the same reader (the forecast's fields, the feed's lines, the
@@ -106,7 +106,11 @@
 //! [`the_flags_say_what_item_127_3_asks`] pins the flag rules and the line
 //! parsing on made-up readings; and
 //! [`the_expand_east_column_reads_the_first_step`] pins decision 16's column's
-//! event reading and speed arithmetic on made-up figures.
+//! event reading and speed arithmetic on made-up figures; and
+//! [`the_expand_east_column_asks_each_seats_estimate_route`] runs the column's
+//! gateway half, `estimate_route` from each seat's core to the site, through
+//! the same reader. The column's scenario half plays a committed scenario the
+//! `scenario` step already plays.
 #![allow(
     clippy::expect_used,
     clippy::unwrap_used,
@@ -127,7 +131,7 @@ use pharmakos_gateway::serve::InProcessSeats;
 use pharmakos_gateway::surface::{InProcess, Surface};
 use pharmakos_gateway::token::{Subject, Token};
 use pharmakos_proto::json::Json;
-use pharmakos_sim::math::quantity::Ms;
+use pharmakos_sim::math::quantity::{Ms, TICK_HZ};
 use pharmakos_sim::rules::RulesTable;
 use pharmakos_sim::tables::SeatId;
 
@@ -1305,16 +1309,36 @@ const EXPAND_EAST_SCENARIO: &str = "scenarios/skeleton/expand-east-segment.scena
 /// The spec's worked example, which that scenario seals for both seats.
 const EXPAND_EAST_PLAYBOOK: &str = "examples/playbooks/expand_east.jsonc";
 
-/// Spec section 4's walking range for the commander, in cost units a second
-/// (1 to 1.5 voxels a second at 10 cost a cardinal voxel; item 90).
-const SPEC_COMMANDER_COST_PER_SECOND: std::ops::RangeInclusive<i64> = 10..=15;
+/// Spec section 4's walking range for the commander, in **tenths of a voxel**
+/// a second: 1 to 1.5 voxels a second (item 90). The column turns it into cost
+/// units a second through the table's own `locomotion.step_cost_cardinal`
+/// ([`spec_cost_range`]), so the range follows the table if the step cost
+/// moves.
+const SPEC_COMMANDER_TENTHS_OF_VOXELS_PER_SECOND: std::ops::RangeInclusive<i64> = 10..=15;
+
+/// Spec section 4's walking range in cost units a second at a cardinal step
+/// cost of `cardinal`: each end is tenths of a voxel times the cost of one
+/// voxel, over ten. `None` when the arithmetic overflows or a bound is not a
+/// whole number of cost units, which no committed table produces.
+fn spec_cost_range(cardinal: i64) -> Option<std::ops::RangeInclusive<i64>> {
+    let convert = |tenths: i64| {
+        let scaled = tenths.checked_mul(cardinal)?;
+        (scaled.checked_rem(10)? == 0).then(|| scaled.checked_div(10))?
+    };
+    Some(
+        convert(*SPEC_COMMANDER_TENTHS_OF_VOXELS_PER_SECOND.start())?
+            ..=convert(*SPEC_COMMANDER_TENTHS_OF_VOXELS_PER_SECOND.end())?,
+    )
+}
 
 /// How one seat's first route step ended, read from the scenario's events.
 #[derive(Clone, PartialEq, Eq, Debug)]
 enum FirstStep {
     /// `step_completed`: the commander arrived.
     Arrived { tick: u32 },
-    /// `step_failed`: the step's timeout, or another refusal.
+    /// `step_failed`. The scenario's event list carries the kind and not the
+    /// value, so the reason (a timeout, an illegal site, another refusal) is
+    /// not read here and the report does not name one.
     Failed { tick: u32 },
     /// `step_skipped`.
     Skipped { tick: u32 },
@@ -1362,6 +1386,9 @@ struct ExpandEast {
     timeout_ms: i64,
     /// `commander.cost_per_second` in the committed table.
     cost_per_second: i64,
+    /// `locomotion.step_cost_cardinal` in the committed table: the cost of one
+    /// voxel, which turns a cost rate into voxels a second.
+    step_cost_cardinal: i64,
     seed: u64,
     seats: Vec<ExpandEastSeat>,
 }
@@ -1405,9 +1432,36 @@ fn expand_east(rules: &str, table: &RulesTable) -> ExpandEast {
         .collect();
     let (site, timeout_ms) = expand_east_first_step();
     let seed = scenario.seed;
+    let seats = expand_east_estimates(rules, seed, site)
+        .into_iter()
+        .map(|(seat, estimate_ms)| ExpandEastSeat {
+            seat,
+            first: first_step(&events, seat),
+            estimate_ms,
+        })
+        .collect();
+    ExpandEast {
+        site,
+        timeout_ms,
+        cost_per_second: table
+            .message()
+            .commander
+            .as_ref()
+            .map(|block| i64::from(block.cost_per_second))
+            .expect("the rules table's commander block"),
+        step_cost_cardinal: i64::from(table.step_cardinal()),
+        seed,
+        seats,
+    }
+}
+
+/// The column's gateway half: each seat's own `estimate_route` from its core
+/// to `site`, in a Lull of a match on `seed`, as `(seat, game ms)`, the ms
+/// `None` when the answer says the site is unreachable.
+fn expand_east_estimates(rules: &str, seed: u64, site: [i32; 3]) -> Vec<(u8, Option<i64>)> {
     let [x, y, z] = site;
     let mut surface = open("expand-east", seed, rules, 1, Vec::new());
-    let seats = seat_ids()
+    seat_ids()
         .iter()
         .map(|seat| {
             let token = in_process_token(&mut surface, seat.raw());
@@ -1443,25 +1497,9 @@ fn expand_east(rules: &str, table: &RulesTable) -> ExpandEast {
             let answer = result(&answer, "estimate_route from the core to the site");
             let estimate_ms = (answer.get("reachable") == Some(&Json::Bool(true)))
                 .then(|| required(&answer, "ms"));
-            ExpandEastSeat {
-                seat: seat.raw(),
-                first: first_step(&events, seat.raw()),
-                estimate_ms,
-            }
+            (seat.raw(), estimate_ms)
         })
-        .collect();
-    ExpandEast {
-        site,
-        timeout_ms,
-        cost_per_second: table
-            .message()
-            .commander
-            .as_ref()
-            .map(|block| i64::from(block.cost_per_second))
-            .expect("the rules table's commander block"),
-        seed,
-        seats,
-    }
+        .collect()
 }
 
 /// The speed, in cost units a second, a walk of `estimate_ms` at
@@ -1487,12 +1525,27 @@ fn seconds(ms: i64) -> String {
     format!("{whole}.{tenths}")
 }
 
-/// Whole seconds of game time, from a tick at 20 Hz.
+/// Whole seconds of game time, from a tick at the sim's tick rate.
 fn tick_seconds(tick: u32) -> u32 {
-    tick.checked_div(20).expect("a non-zero divisor")
+    tick.checked_div(TICK_HZ).expect("a non-zero divisor")
+}
+
+/// A value given in tenths, to one decimal place.
+fn tenths(value: i64) -> String {
+    let whole = value.checked_div(10).expect("a non-zero divisor");
+    let rest = value.checked_rem(10).expect("a non-zero divisor");
+    format!("{whole}.{rest}")
+}
+
+/// Voxels a second, in tenths, at `cost_per_second` and a cardinal step cost of
+/// `cardinal`, rounded down.
+fn voxel_tenths_per_second(cost_per_second: i64, cardinal: i64) -> Option<i64> {
+    cost_per_second.checked_mul(10)?.checked_div(cardinal)
 }
 
 fn render_expand_east(out: &mut String, column: &ExpandEast) {
+    let range = spec_cost_range(column.step_cost_cardinal)
+        .expect("spec section 4's range is whole cost units at the table's cardinal step cost");
     let _ = writeln!(
         out,
         "expand_east (decision 16): does the spec's worked example reach its first site {:?} within \
@@ -1502,9 +1555,10 @@ fn render_expand_east(out: &mut String, column: &ExpandEast) {
         seconds(column.timeout_ms),
         column.seed,
         column.cost_per_second,
-        seconds(column.cost_per_second.saturating_mul(100)),
-        SPEC_COMMANDER_COST_PER_SECOND.start(),
-        SPEC_COMMANDER_COST_PER_SECOND.end(),
+        voxel_tenths_per_second(column.cost_per_second, column.step_cost_cardinal)
+            .map_or_else(|| String::from("?"), tenths),
+        range.start(),
+        range.end(),
     );
     for seat in &column.seats {
         let outcome = match seat.first {
@@ -1512,7 +1566,7 @@ fn render_expand_east(out: &mut String, column: &ExpandEast) {
                 format!("yes, arrived at tick {tick} ({} s)", tick_seconds(tick))
             }
             FirstStep::Failed { tick } => format!(
-                "no, the step failed at tick {tick} ({} s), its timeout",
+                "no, the step failed at tick {tick} ({} s)",
                 tick_seconds(tick)
             ),
             FirstStep::Skipped { tick } => format!("no, skipped at tick {tick}"),
@@ -1521,8 +1575,7 @@ fn render_expand_east(out: &mut String, column: &ExpandEast) {
         let estimate = match seat.estimate_ms {
             Some(ms) => {
                 let needed = speed_needed(ms, column.cost_per_second, column.timeout_ms);
-                let inside =
-                    needed.is_some_and(|speed| SPEC_COMMANDER_COST_PER_SECOND.contains(&speed));
+                let inside = needed.is_some_and(|speed| range.contains(&speed));
                 format!(
                     "estimate_route from the core: {} s at {} cost/s; fitting {} s needs {} cost/s ({})",
                     seconds(ms),
@@ -1792,4 +1845,46 @@ fn the_expand_east_column_reads_the_first_step() {
     assert_eq!(speed_needed(1, 10, 0), None);
     assert_eq!(seconds(120_000), "120.0");
     assert_eq!(seconds(1_250), "1.2");
+    // Spec section 4's 1 to 1.5 voxels a second, at the item-59 step cost of
+    // 10 a voxel and at a doubled one.
+    assert_eq!(spec_cost_range(10), Some(10..=15));
+    assert_eq!(spec_cost_range(20), Some(20..=30));
+    assert_eq!(spec_cost_range(3), None, "1.5 voxels at 3 a voxel is 4.5");
+    assert_eq!(
+        voxel_tenths_per_second(10, 10).map(tenths),
+        Some(String::from("1.0"))
+    );
+    assert_eq!(
+        voxel_tenths_per_second(15, 10).map(tenths),
+        Some(String::from("1.5"))
+    );
+    assert_eq!(tick_seconds(2_401), 120);
+}
+
+/// Decision 16's column's gateway half, through the reader the report uses:
+/// every seat's own `estimate_route` from its core to the example's first
+/// site answers, on the expand-east scenario's seed. A refusal fails here
+/// (the reader turns one into a panic), so a change to what the gateway
+/// answers fails `cargo xtask ci` rather than the next 80-match run.
+#[test]
+fn the_expand_east_column_asks_each_seats_estimate_route() {
+    let root = root();
+    let scenario = pharmakos_gamectl::scenario::load(&root, Path::new(EXPAND_EAST_SCENARIO))
+        .expect("the committed expand-east-segment scenario loads");
+    let (site, _timeout_ms) = expand_east_first_step();
+    let estimates = expand_east_estimates(&rules_json(), scenario.seed, site);
+    assert_eq!(
+        estimates.iter().map(|(seat, _)| *seat).collect::<Vec<u8>>(),
+        seat_ids()
+            .iter()
+            .map(|seat| seat.raw())
+            .collect::<Vec<u8>>(),
+        "one answer a seat, in seat order"
+    );
+    for (seat, estimate_ms) in estimates {
+        assert!(
+            estimate_ms.is_some_and(|ms| ms > 0),
+            "seat {seat}: the site is reachable from the core on this map, at a positive time;              got {estimate_ms:?}"
+        );
+    }
 }
