@@ -72,8 +72,9 @@ none of the last two appeared.
 ## The lobby
 
 1. **Launch the game.**
-   - See: the chooser, "New match" and "Credits", and "Start a new match, or go on with the last
-     one." No speed buttons and no "Orders" panel: the watch strip and the editor stay hidden until
+   - See: the chooser, "New match" and "Credits", and "Resume last match" if an earlier match was
+     left unfinished (`lobby.gd` shows it only when a match is remembered), with "Start a new match,
+     or go on with the last one." No speed buttons and no "Orders" panel: the watch strip and the editor stay hidden until
      the host announces a match (`fixc`'s F6 work).
    - Proof: `crates/client-gdext/tests/godot_project.rs`
      `the_chooser_hides_the_watch_strip_and_the_editor_until_a_match_starts`; the shipped smoke
@@ -98,6 +99,9 @@ none of the last two appeared.
    - Under "Your economy": "$200   supply 10 kW   draw 4 kW   headroom 6 kW", with "Supply and draw
      leave out each beacon's own base draw, which its key-core supplies." Under "Your next
      settlement": "Next BMI, at the band you hold now: $<N>. A prediction: ..."
+   - Do (F6, by hand): turn the mouse wheel over the map to zoom in and out, and note that each
+     notch zooms. `fixc` left the camera's wheel zoom to the owner's check by hand (S1's plan, task
+     `fixc`); no test covers it.
    - Proof: `godot_project.rs` `the_lobby_hosts_a_three_round_match`; `crates/client-gdext/src/rig.rs`
      `the_first_lull_is_timed_by_its_own_row_and_later_lulls_by_the_other` (10:00 from
      `match.first_lull_ms`, 5:00 from `match.lull_ms`); `godot/scripts/watch_check.gd` in the
@@ -211,7 +215,9 @@ none of the last two appeared.
       appear for a build drone while the list has work. No test asserts that the fabricator makes
       build drones for a backlog and stops once it is covered: by hand only.
     - Your ore: "ore_delivered  A mining drone of seat 0 delivered ore worth $ <N>." from the top
-      layer of your starting seam, which your core's default settings dig (depth 0).
+      layer of your starting seam, which your core's default settings dig (depth 0): 24 voxels, worth
+      $ 64 and $ 32, all delivered this round (`crates/sim/tests/economy.rs`'s F2 figures; S1's plan,
+      task `fixs`). At depth 0 nothing is left to deliver in round 2.
 
 16. **The recap.**
     - See: "Round 1 - RECAP" and "Recap of round 1: Round 1 ran 3600 ticks. The match continues. The
@@ -237,13 +243,16 @@ none of the last two appeared.
 
 18. **Optional: W0706.** Click the ground inside your new beacon's sphere beside the covered vent and
     choose "Place beacon".
-    - See: a row "W0706 at .../voxel": "every vent a beacon at this fixed site could cover is already
-      covered: ...". Its suggestion, "Cover the nearest vent you do not cover yet", is not drawn as a
+    - See: a row "Warning", "A fixed site puts its beacon in the same place every time. A description
+      such as "the nearest vent you do not cover" reads the map again each round.", "W0706 at
+      /declarative/route/<n>/place_beacon/at/voxel". The row shows the diagnostic's sentence for a
+      beginner (`crates/verifier/src/strings.rs`); its message ("every vent a beacon at this fixed
+      site could cover is already covered: ...") is in the golden, not on screen. Its suggestion, "Cover the nearest vent you do not cover yet", is not drawn as a
       Fix button (see Deviations). Press "Undo".
     - Proof: `tests/golden/verifier/w0706_a_fixed_site_by_a_covered_vent/expected.report.json`.
       W0704 and W0705, the other two targeting lints, have goldens beside it
-      (`w0704_a_lost_feature`, `w0705_an_earlier_step_places_a_beacon`) and no Fix. On screen: by
-      hand only.
+      (`w0704_a_lost_feature`, `w0705_an_earlier_step_places_a_beacon`) and no Fix; neither is
+      produced on screen in this demo (see Deviations). W0706 on screen: by hand only.
 
 19. **E0601 and the checkbox.** Press "Load..." and choose `round2-e0601.jsonc`.
     - See: "Opened." A row "Error", "There is not enough power for everything this playbook switches
@@ -251,12 +260,17 @@ none of the last two appeared.
       draw more power than you supply, so some beacons go dark." "Quick check - Cannot be sealed
       yet." Press "Submit": "Not submitted: the check found errors." The Submit button stays enabled;
       the gateway refuses the seal (see Deviations). Tick the checkbox: "Allowing dormant
-      beacons...", "Dormant beacons allowed.", and E0601 becomes W0603. A W0602 row ("This playbook
-      spends more than the seat is likely to have.") may show beside it, depending on your treasury.
+      beacons...", "Dormant beacons allowed.", and E0601 becomes W0603, "Warning", "Some of what this playbook
+      switches on will have no power and will sit idle." A W0602 row ("This playbook
+      spends more than the seat is likely to have.") shows only if the file's committed spending
+      outruns your projected treasury, which this sheet cannot promise (see Deviations).
     - Proof: `editor.rs` `the_dormant_checkbox_is_the_verifiers_patch_and_its_removal`;
       `tests/golden/verifier/e0601_a_scout_count_past_every_supply`, `w0603_a_shortfall_allowed` and
       `w0602_spending_outruns_the_treasury`. The recipe was checked under `gamectl verify`'s
-      reference view only (E0601 for 34 kW beyond supply, W0602); in the match: by hand only.
+      reference view only (E0601 for 34 kW beyond supply, W0602), where it also gives E0403 (the
+      Survey site lies outside every sphere of the reference seat) and W0704 (no uncovered vent is
+      live there); in the match, round 1's covering beacon puts the site inside a sphere. In the
+      match: by hand only.
 
 20. **Load the round's real orders.** Press "Load..." and choose `round2-brownout.jsonc`, then
     "Submit", "Save as..." to keep it, and "Ready".
@@ -265,12 +279,20 @@ none of the last two appeared.
       scouts at (364, 30, 36), waits until headroom is at most 18 kW, walks to (338, 20, 36) and
       recycles the nearest Build beacon, which is the one round 1 placed.
     - Proof: `scenarios/s1/brownout-by-recycle.scenario.jsonc` plays this file for seat 0 on the same
-      seed, with a different round 1 and seat 1 on the gateway's safe playbook rather than Easy.
-      That it plays the same here: by hand only.
+      seed, with seat 1 on the gateway's safe playbook. A review of this sheet ran it again as a
+      scratch probe, not a committed scenario, with seat 1 `builtin` (Easy), as in the lobby: its
+      four event assertions held (`beacon_placed` by tick 800, `beacon_recycled` by 4911,
+      `beacon_browned_out` by 4912, `segment_ended` by 7200). The scenario's round 2 is 180 000 ms
+      against the lobby's 300 000 ms; the recycle lands about 65 s into it, so the longer Push does
+      not change it. The scenario's round 1 plays this file, not Hold & Build; that difference was
+      not probed. `gamectl verify` on the committed file gives E0403 and W0704 under its reference
+      view, as for step 19's copy; in the match, round 1's covering beacon puts the site inside a
+      sphere.
 
 ## Round 2's Push: the recycle and the brownout
 
-21. **The load, the recycle, the deficit.**
+21. **The load, the recycle, the deficit.** No "ore_delivered" row for seat 0 this round: the top
+    layer went in round 1, and the file writes no dig depth (see Deviations).
     - See: the Survey beacon lands, "A fabricator of seat 0 produced a unit." for each scout, then
       "beacon_recycled  A beacon of seat 0 was recycled on site for $ <N>.", half the beacon's
       remaining value (build cost × HP; $ 30 at full HP), with "beacon_destroyed" after it. The
@@ -321,9 +343,9 @@ none of the last two appeared.
 ## Round 3's Push and the end
 
 25. **The mining drone keeps delivering (F2's cure).** Use "4x" or "Skip" if you like.
-    - See: "ore_delivered" rows for seat 0 in round 3. The top layer alone would have left $ 24 of
-      it (item 133 (3) (a)); the core's depth 4 reaches the whole four-voxel seam, dug around
-      pillars at their spacing. A spent seam does not read as spent on screen (see Deviations).
+    - See: "ore_delivered" rows for seat 0 again in round 3, after none in round 2. The top layer was
+      spent in round 1, so these come from below the rim: the core's depth 4 reaches the whole
+      four-voxel seam, dug around pillars at their spacing. A spent seam does not read as spent on screen (see Deviations).
     - Proof: `scenarios/s1/mine-to-depth.scenario.jsonc` (round 1's delivery asserted; rounds 2 and
       3 pinned by its chain); `economy.rs` `a_starting_seam_yields_more_than_its_exposed_rim`;
       `crates/sim/tests/mining.rs` `digging_stops_at_the_max_depth`,
@@ -373,12 +395,33 @@ The raw log is `D:/build/s1-demo/p1-run.log`. Run 1's notices, as printed:
 | decision tick / ordinary tick | 85.8 / 49.4 µs | 85.4 / 49.4 µs | 86.0 / 49.7 µs |
 | units per seat a 50 ms tick would hold (3 seats) | 177 304 | 179 211 | 177 304 |
 
+**The CI runners, beside it.** The `perf alarms (<os>)` jobs of `main`'s push run for `49398cf`
+(run 38168063262) published, as `::notice::` annotations, never gated and never compared across
+operating systems:
+
+| Runner | QUICK p99 / p50, 72 cases | `budget_128` p99 / p50 | ns per size unit per decision tick | units per seat at a 50 ms tick |
+|---|---|---|---|---|
+| `windows-latest` | 1280.3 / 25.6 µs | 1366.2 / 1302.1 µs | 79 | 210 970 |
+| `macos-latest` | 751.5 / 18.0 µs | 1134.6 / 791.2 µs | 71 | 234 741 |
+| `ubuntu-latest` | 508.2 / 11.3 µs | 539.2 / 511.7 µs | 55 | 303 030 |
+
+On macOS the slowest case by p99 was `e0109_negative_duration` (1798.0 µs), not `budget_128`.
+
 **The verdict.** QUICK ≤ 5 ms p99 is met at the size budget with about 2.6× headroom (1899.4 µs,
 the worst of the three), so no fallback is taken. Byte-identical reports across the operating
 systems are held by the verifier goldens on every pull request. The per-rule cost is 93–94 ns per
 size unit per decision tick (three seats of 128 units), the input S3 sets the size budget from;
 the 177–179 k units a seat is the bench's ceiling at a 50 ms tick, not a budget.
-`verifier.size_budget_units` stays 128 until S3's exit. The map is `BENCH_SEED`
+`verifier.size_budget_units` stays 128 until S3's exit.
+
+**A gap: the counted units.** S1's plan section 5 item 3 asks for the per-rule cost in counted
+evaluation units per decision tick per seat as well as in nanoseconds. The sim counts them
+(`World::decision_work`, the unhashed counter `tgt` added), but no test or notice prints that figure
+at the size budget: `crates/sim/tests/targeting.rs` `the_decision_tick_counts_its_evaluation_units`
+pins small fixtures only (3 and 4 units for a handler, 423 for one covering resolution on the golden
+seed), and `pharmakos-bench` publishes nanoseconds alone. The count per decision tick per seat at
+128 size units is not recorded here; S3 sets the size budget from the nanosecond figure unless a
+lane adds the count to the bench's notice. The map is `BENCH_SEED`
 (`0x00000000ca5caded`, S1-49).
 
 **Not measured: FULL against a late-match snapshot.** Item 133 carried this to the P1 run: FULL
@@ -427,8 +470,10 @@ the owner's veto.
    a moved price: it cannot clear flags that come from a playbook that buys nothing.
 3. **Item 137 (2) (f), `expand_east`.** Recommended: move the example, giving the spec's worked
    example and `scenarios/skeleton/expand-east-segment` a timeout its walk can meet, or a nearer
-   first site. *Downside:* the spec's illustration of a timeout no longer shows a tight one, and the
-   tension between walk speed and map span (item 103 (3)) stays for S4's map re-derivation. *The
+   first site. *Downside:* it re-blesses `expand-east-segment`'s chain and event log, and changes the spec's
+   worked example and the scenario's stated purpose (the illustration of a timeout no longer shows
+   a tight one); the tension between walk speed and map span (item 103 (3)) stays for S4's map
+   re-derivation. *The
    other options:* the speed cannot fit inside spec section 4's 10–15 cost/s (it would need 25 and
    41); shrinking the map moves every chain and the mapgen golden for a stage that re-derives the
    map anyway.
@@ -437,7 +482,7 @@ the owner's veto.
    for S1. *Downside:* a six-round match's ore runs dry by round 4 or 5; the lobby's three rounds do
    not reach it. *The other option,* more ore (`seam_voxels`, or a second seam, which waits for S3's
    `toward`): a rules change that moves the rules hash and every chain.
-5. **The balance check's seed set and its flag readings** (`crates/gamectl/tests/balance.rs`, two
+5. **The balance check's seed set and its flag readings (S1-53, S1-54)** (`crates/gamectl/tests/balance.rs`, two
    markers). Recommended: accept the twenty seeds (the two golden seeds and eighteen spread by the
    64-bit golden ratio) and the three readings as written (a flat treasury counts as ONLY-GROWS; any
    `beacon_placed` counts as a new asset for STALLED; NEVER-AFFORDS-GENERATOR counts round 1's
@@ -466,7 +511,9 @@ the owner's veto.
    - **(b) (Recommended)** Leave FULL and its budget to S3's exit, where spec section 16 gates "FULL
      ≤50 ms p99 at the size budget", and measure it there with the `Scope` question. *Downside:* the
      `Scope` decision, a `report_hash` contract change, waits without a measurement, and if FULL's
-     snapshot decode proves slow, S3 carries the contract change alongside its own work.
+     snapshot decode proves slow, S3 carries the contract change alongside its own work. It
+     also leaves undone what item 133 and S1's plan's `demo` section assigned to this run, a FULL
+     measurement against a late-match snapshot, so the owner's ruling, not the plan, moves it.
 9. **Who the final audit decides between** (`crates/sim/src/audit.rs`, "owner, at S1's stage
    demo"; X-08). Recommended: confirm the reading, the seats still in the match (on a no-survivor
    end, the seats that fell on the latest elimination tick). *Downside:* the spec does not spell it
@@ -488,6 +535,20 @@ the owner's veto.
     reviewing at stage granularity, with the AI reviews standing in for a second human reviewer,
     which they are not; ending it puts every merge, contract pull requests included, back in the
     owner's hands.
+
+14. **The main session's calls under the standing instruction, items 129 to 137.** Handoff NEXT 3
+    lists them: among others item 137 (2) (a) to (j), item 136 (3)'s calls, item 135 (2)'s, item
+    134 (2)'s four, item 133 (3)'s ten, item 131 (4)'s six and item 130 (3) (a) and (b), the S3
+    re-stagings. Two of the last still say so in the proto: `gateway.proto`'s "for the owner to
+    confirm" on `GetMapSummaryResponse`'s held terrain summary (~765, S3-23) and on
+    `GetEconomyForecastResponse`'s projection and projected income (~868, S1-46). Recommended:
+    ratify them as a set, the two markers reworded by the next `proto/**` pull request. *Downside:*
+    anything the owner later disagrees with becomes a change, with its own pull request and, where a
+    call moved a chain or a golden, its re-bless.
+15. **A minimum beacon spacing (S1's plan, decision 10).** S1 rules "no stacking" only: two
+    beacons may not share a column, and nothing else spaces them. Recommended: keep it, no spacing
+    row. *Downside:* a seat may crowd beacons side by side, and a larger spacing wanted later is a
+    new rules row in a contract pull request that moves every chain.
 
 ## Deviations from section 1.1
 
@@ -522,7 +583,9 @@ not, or does it differently.
    W0704 and W0705 carry no suggestion; W0706's, "Cover the nearest vent you do not cover yet", is
    `MaybeIncorrect` (`crates/verifier/src/lint.rs`), and the editor draws only machine-applicable
    fixes as buttons (`editor.rs` `rows_of`). The only targeting diagnostic with a Fix button is
-   E0411's "Leave the coverage out".
+   E0411's "Leave the coverage out". W0704 and W0705 are not produced on screen in this demo at
+   all: no step of the sheet's playbooks names a lost feature in the match or reads a description
+   after an earlier placing step, so their goldens are the only proof.
 8. **The deficit sheds a Survey beacon; the fabricator hold and the idle expansion are tests only.**
    Section 1.1: a deficit "holds fabricator orders first, then darkens domes in the brownout order
    with an idle expansion kept lit". The committed demo of a deficit, `brownout-by-recycle`, sheds
@@ -559,9 +622,17 @@ not, or does it differently.
     deploy starts" and the full refund are visible only in the meter's treasury; `deploy.rs` says
     "No event carries a charge". The commander leaving mid-deploy fails the step `out_of_range` and
     refunds, in code, and no test drives that case (step 15).
-16. **F2's cure needs a written depth.** The starting drone digs below the rim only when the seat's
-    playbook writes a dig depth (item 133 (3) (a)); Hold & Build and the brownout file write none, so
-    the demo shows the cure through the safe playbook a timeout files (steps 24 and 25).
+16. **F2's cure needs a written depth, and round 2 does not "keep delivering".** The starting drone
+    digs below the rim only when the seat's playbook writes a dig depth (item 133 (3) (a)). At depth
+    0 seat 0's top layer, 24 voxels ($ 64 + $ 32), is all delivered in round 1, so round 2, whose
+    brownout file writes no depth, shows no `ore_delivered` for seat 0: section 1.1's "keeps
+    delivering in rounds 2 and 3" is round 3 only here. The demo shows the cure through the safe
+    playbook a timeout files (steps 21, 24 and 25); `mine-to-depth` pins deliveries in every round
+    for a seat that writes a depth.
+17. **W0602 is not guaranteed on screen.** Section 1.1: the editor shows "W0602 when committed
+    spending outruns the projected treasury". It does, but whether step 19's file outruns the
+    treasury depends on what the match has left in it; the golden
+    `w0602_spending_outruns_the_treasury` is the proof that holds.
 
 Smaller differences, each already decided elsewhere:
 
@@ -588,3 +659,6 @@ Not deviations; each is a stale comment or a carry for its next owner.
   gateway's strings as "Basic Minimum Income": the next `crates/sim` lane.
 - Expand & Mine's wizard page says "ore seam" and its rendered text "scrap seam": the next owner of
   `library/`.
+- `scenarios/README.md` (~161) still calls the determinism harness's 50 walkers "a PLACEHOLDER for
+  the owner at S1's demo"; `tune` #101 deleted them and S2-16 now holds the walker cap. The next lane
+  that touches `scenarios/`.
