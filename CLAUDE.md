@@ -56,14 +56,15 @@ Do not use bypass-permissions mode in this repository, and never against a real 
 contract-file rule depends on approval prompts actually happening; bypass mode removes the
 mechanism rather than speeding it up.
 
-**Owner's delegation for the walking skeleton and S1 (decisions-log §2.7 items 85, 86, 116 (2) and
-(9), and 120, from 2026-09-14; renewed for S1 by item 126 (2) (g), 2026-09-29).** Two relaxations
-apply to the owner's own Claude Code session only (the second also to the agents it launches), for
-the duration of the walking skeleton and of S1, which runs from the skeleton's close (item 126) to
-S1's stage demo, and are revoked by the owner's word at any time; at S1's stage demo the delegation
-returns to the owner:
+**Owner's delegation for the walking skeleton, S1 and S2 (decisions-log §2.7 items 85, 86, 116 (2)
+and (9), and 120, from 2026-09-14; renewed for S1 by item 126 (2) (g), 2026-09-29, and for S2 by
+item 141, 2026-10-14).** Two relaxations apply to the owner's own Claude Code session only (the
+second also to the agents it launches), for the duration of the walking skeleton, of S1 and of S2,
+which runs from S1's close to S2's stage demo, and are revoked by the owner's word at any time; at
+S2's stage demo the delegation returns to the owner, and whether it runs on into S3 is the owner's
+to say then:
 
-- The main assistant session may **merge** a PR of the skeleton or of S1, contract PRs included,
+- The main assistant session may **merge** a PR of the skeleton, of S1 or of S2, contract PRs included,
   once CI's checks are green on the branch — or, for a lane that `scripts/merge-train.sh --local-verify` checks
   locally (its base moved by more than prose, and it touches none of the paths the script sends back
   to the three-OS matrix), once CI's checks are green on its pre-rebase head and the script's

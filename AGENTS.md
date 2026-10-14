@@ -548,7 +548,12 @@ machine can run.
   from its `SOURCES` (decisions-log item 110 (4)). A sweep (the no-silent-fallback rule, say) that
   reaches callers outside the lane's own crate or named place stops at that edge and says so in
   the PR; the next owner of the callers' crate carries the rest, written into that lane's section
-  of the stage plan (decisions-log item 135). Tests that pin another crate's output are granted as
+  of the stage plan (decisions-log item 135). A sweep the stage plan needs finished across crates at
+  once, so that a check can then hold every file to it (S1's PLACEHOLDER grammar, which the
+  `placeholders` step parses, is the case that raised this), is granted in that lane's section of
+  the plan as a comment-only sweep: the lane may edit comments, and nothing else, in the crates the
+  grant lists, provided no other running lane owns them, and its PR lists every file it touched
+  outside its own crate (decisions-log items 137 and 141). Tests that pin another crate's output are granted as
   named places, like a confinement-test line, in a crate no running lane owns: a lane that changes
   the operator's behaviour or `library/` is granted, in its section of the stage plan, the tests and
   goldens that pin that output — the operator's hosted tests in `crates/gamectl/tests`
@@ -595,9 +600,9 @@ of that premise.
 - **Never run an agent in bypass-permissions mode against a real seat**, and do not use it in this
   repository. The contract-file rule in §5 depends on approval prompts actually happening. Game
   tools are reached through pre-approved allow rules; bypass mode is not a shortcut, it is the
-  removal of the mechanism. The owner's one exception, for the walking skeleton and S1 only, is
-  in CLAUDE.md: bypass mode in the owner's own session and the agents it launches, never against a
-  real seat (decisions-log items 86, 116 (9) and 126).
+  removal of the mechanism. The owner's one exception, for the walking skeleton, S1 and S2 only,
+  is in CLAUDE.md: bypass mode in the owner's own session and the agents it launches, never against
+  a real seat (decisions-log items 86, 116 (9), 126 and 141).
 - Rate limits and an audit log on the gateway are part of the feature, not a later hardening task.
 
 ## 8. Commits
@@ -639,7 +644,11 @@ of that premise.
   attribution is a shipping requirement, not a nicety). Audio comes from CC0/CC-BY sources only.
 - **The versioned hooks.** `scripts/githooks/` holds them, wired once per clone with
   `git config core.hooksPath scripts/githooks` (README, "Setting up a clone"): `pre-commit` runs
-  rustfmt and clippy on the crates a commit touches, and `pre-push` runs `cargo xtask fmt clippy`
+  rustfmt and clippy on the crates a commit touches, its rustfmt check leaving out the generated
+  prost tree (`crates/proto/src/generated/`), which `crates/proto/src/lib.rs` reaches through
+  `include!` so `cargo fmt` never formats it, and which `crates/proto/tests/generated.rs` holds byte
+  for byte to what `buf generate` writes (its crate is still linted; decisions-log items 137 and
+  141); and `pre-push` runs `cargo xtask fmt clippy`
   over the workspace and refuses a push of anything but HEAD's commit. `PHARMAKOS_SKIP_HOOKS=1` and
   `--no-verify` are for genuine emergencies, never a way past a failing check (decisions-log item
   132).
