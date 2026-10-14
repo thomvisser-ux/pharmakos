@@ -39,6 +39,7 @@ inventing it (`AGENTS.md` §12).
 | `co-design-gameplan-api.md` | Playbook schema, verifier, gateway API and editor UX, co-designed in depth. | Normative in shape; superseded where §2.7 conflicts |
 | `s1-plan.md` | S1, the economy: the tasks, lanes, waves, re-bless ledger, P1 and the owner's decisions, all ruled (decisions-log item 128). | Current: the working plan for S1 |
 | `targeting.md` | How a playbook names where and what: names and descriptions, the three reading rules, "nearest", sites, the S1 slice (decisions-log item 127 (12)). | Current; the later decision where the spec differs |
+| `radar-lab-research.md` | The radar lab's research memo: monostatic, Doppler, bistatic and passive, and solar-illuminated radar, with published validation cases, the lab's architecture and a phased build plan (decisions-log item 138 (4); the owner chose path 3 on 2026-10-14). | Research input; not a decision until ruled |
 | `handoff.md` | State of the design at the end of pass 6: what is decided, what is next, working conventions, the build plan in one line. Start here for orientation. | Current |
 | `6c-language-investigation.md` | The 36-agent investigation into the plan format and script language that produced the v1 simplification (JSONC now; TypeScript-family scripts run externally in v1.1; no embedded runtime). | Input to §2.7; roadmap material for v1.1 |
 | `review-agenda-draft5.md` | The draft-5 review agenda: 30 items, the editorial fixes applied, and the moot and rejected lists. | Historical |
