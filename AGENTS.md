@@ -548,12 +548,21 @@ machine can run.
   from its `SOURCES` (decisions-log item 110 (4)). A sweep (the no-silent-fallback rule, say) that
   reaches callers outside the lane's own crate or named place stops at that edge and says so in
   the PR; the next owner of the callers' crate carries the rest, written into that lane's section
-  of the stage plan (decisions-log item 135). A sweep the stage plan needs finished across crates at
-  once, so that a check can then hold every file to it (S1's PLACEHOLDER grammar, which the
-  `placeholders` step parses, is the case that raised this), is granted in that lane's section of
-  the plan as a comment-only sweep: the lane may edit comments, and nothing else, in the crates the
-  grant lists, provided no other running lane owns them, and its PR lists every file it touched
-  outside its own crate (decisions-log items 137 and 141). Tests that pin another crate's output are granted as
+  of the stage plan (decisions-log item 135). The one exception is a comment-only sweep: a sweep the
+  stage plan needs finished across crates at once, so that a check can then hold every file to it
+  (S1's PLACEHOLDER grammar, which the `placeholders` step parses, raised this), may be granted in
+  that lane's section of the plan. The lane may then edit comments, and nothing else, in the crates
+  and paths the grant lists. A comment in a contract path (§5) is still a contract change that the
+  PR names; a `.proto` comment edit regenerates the prost tree with `buf generate`, and only its doc
+  comments may move. The grant never covers SPDX or REUSE lines, the reason on an `#[allow]`, or a
+  JSONC file (its comments are data). A marker sweep keeps each marker's what, who and when, and
+  adds or removes none unless the grant names the change, and the PR shows `cargo xtask
+  placeholders` before and after. A crate a running lane owns (one whose PR has not merged) is left
+  out, and that lane's brief carries the sweep for it; the check that holds every file to the sweep
+  turns strict only once both have merged. The PR lists every file it touched outside its own crate,
+  and the main session checks at the merge that only comments changed there, reading by hand any
+  line that `git diff -U0` shows outside a whole-line comment (decisions-log items 137 and 141).
+  Tests that pin another crate's output are granted as
   named places, like a confinement-test line, in a crate no running lane owns: a lane that changes
   the operator's behaviour or `library/` is granted, in its section of the stage plan, the tests and
   goldens that pin that output — the operator's hosted tests in `crates/gamectl/tests`
@@ -644,14 +653,13 @@ of that premise.
   attribution is a shipping requirement, not a nicety). Audio comes from CC0/CC-BY sources only.
 - **The versioned hooks.** `scripts/githooks/` holds them, wired once per clone with
   `git config core.hooksPath scripts/githooks` (README, "Setting up a clone"): `pre-commit` runs
-  rustfmt and clippy on the crates a commit touches, its rustfmt check leaving out the generated
-  prost tree (`crates/proto/src/generated/`), which `crates/proto/src/lib.rs` reaches through
-  `include!` so `cargo fmt` never formats it, and which `crates/proto/tests/generated.rs` holds byte
-  for byte to what `buf generate` writes (its crate is still linted; decisions-log items 137 and
-  141); and `pre-push` runs `cargo xtask fmt clippy`
-  over the workspace and refuses a push of anything but HEAD's commit. `PHARMAKOS_SKIP_HOOKS=1` and
-  `--no-verify` are for genuine emergencies, never a way past a failing check (decisions-log item
-  132).
+  rustfmt on the files a commit stages and clippy on the crates it touches, and `pre-push` runs
+  `cargo xtask fmt clippy` over the workspace and refuses a push of anything but HEAD's commit.
+  `PHARMAKOS_SKIP_HOOKS=1` and `--no-verify` are for genuine emergencies, never a way past a failing
+  check (decisions-log item 132). The pre-commit rustfmt check leaves out the generated prost tree
+  (`crates/proto/src/generated/`): `crates/proto/src/lib.rs` reaches it through `include!`, so
+  `cargo fmt` never formats it, and `crates/proto/tests/generated.rs` holds it byte for byte to what
+  `buf generate` writes; clippy still lints its crate (decisions-log items 137 and 141).
 - An agent-written commit may add a `Co-Authored-By:` trailer above the sign-off. The sign-off
   itself must be a real identity that can make the DCO's assertion.
 
