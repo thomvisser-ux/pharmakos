@@ -844,10 +844,18 @@ receiver this way, so that adding an illuminator is a new scenario entry, not a 
   height, EIRP, centre frequency, bandwidth and signal model, from section 4.5's tables). The
   geometry code takes an illuminator at a finite distance or at infinity through one interface; the
   Sun is not a special case of the receiver, only of the illuminator.
-- **Optional platform motion.** A tethered drone wanders. The site carries an optional motion
-  model (none by default), so that the wander and its Doppler effect on the reference and
-  surveillance channels can be studied when the owner wants that fidelity (section 10). With
-  motion off, the site is static and the goldens of sections 7.6 and 7.8 apply unchanged.
+- **No platform motion (ruled, item 140 (3) (d)).** The owner ruled: *"ignore drone wobble to
+  simplify things - acknowledge this unrealism in comments"*. The receiver's position and height
+  are fixed for a run, whether a tower or a tethered drone sets the height. Drone wobble, the
+  position wander and the Doppler it puts on the reference channel, is not modelled, so the
+  goldens of sections 7.6 and 7.8 apply unchanged.
+- **Binding: the unrealism is stated in the code.** The receiver-site type carries a comment that
+  says plainly that a real tethered drone wanders and Doppler-shifts the reference channel, and that
+  the lab ignores this by the owner's choice (decisions-log item 140 (3) (d)). Every place that sets
+  or reads the receiver's height or position (the scenario decoder's field, the line-of-sight and
+  horizon calls, the multipath factor, the bistatic geometry and the CAF's delay and Doppler
+  reference) names it, at least as a one-line reference to that comment. A reviewer of phases 4
+  to 6 checks for it.
 
 ## 9. Phased build plan
 
@@ -881,7 +889,7 @@ veto) or **operator: intent, priority, risk or policy** (the owner's).
 ### Operator: intent, priority, risk or policy
 
 The owner ruled on questions 1, 2 and 4 on 2026-10-14 ("approve the crate, never ship, after S2";
-item 140 (3)). The rest stay open.
+item 140 (3) (a) to (c)) and on question 9 the same day (item 140 (3) (d)). The rest stay open.
 
 1. **Ruled 2026-10-14 (item 140 (3) (b)): never ships.** Item 138 (4) (b) had left it open. The
    lab is like `bench`: `publish = false`, outside `cargo xtask package`'s zips, and no shipped crate
@@ -914,11 +922,11 @@ item 140 (3)). The rest stay open.
    detect by a seeded draw against a tabulated `P_d` (chance on screen, still deterministic), or by
    a threshold on SNR (no chance)? This is a design-intent question with a determinism cost either
    way: a draw needs a new RNG stream (§4.7, additive).
-9. **Tethered-drone motion: a fidelity choice.** If the receiver rides a tethered drone (decisions-log
-   item 140 (2)), does the lab model the drone's position wander and the Doppler it puts on the
-   reference and surveillance channels, or treat the drone as a static mast at the chosen height?
-   *Recommendation:* static by default, with the motion model as an optional experiment (section
-   8.6), since the published passive goldens are all for static receivers.
+9. **Ruled 2026-10-14 (item 140 (3) (d)): no drone wobble.** "ignore drone wobble to simplify
+   things - acknowledge this unrealism in comments". The receiver's height is fixed for a run,
+   tower or tethered drone; the drone's position wander and the Doppler it puts on the reference
+   channel are not modelled, and the code says so wherever the receiver's height or position is
+   set or read (section 8.6).
 10. **When the secondary-illuminator phase runs.** Item 140 (2) is "future future" roadmap; phase 6
     is listed but not committed. Whether it runs straight after phase 5 or waits for a later ruling
     is the owner's.
