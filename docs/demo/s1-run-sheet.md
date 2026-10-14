@@ -535,6 +535,9 @@ the owner's veto.
     reviewing at stage granularity, with the AI reviews standing in for a second human reviewer,
     which they are not; ending it puts every merge, contract pull requests included, back in the
     owner's hands.
+    - *Ruled 2026-10-14 (item 141):* renewed for S2 on the same terms, effective at once, with no
+      gap between S1's stage demo and S1's close; at S2's stage demo the owner says whether it runs
+      on into S3.
 
 14. **The main session's calls under the standing instruction, items 129 to 137.** Handoff NEXT 3
     lists them: among others item 137 (2) (a) to (j), item 136 (3)'s calls, item 135 (2)'s, item
