@@ -5,10 +5,10 @@ SPDX-License-Identifier: MIT OR Apache-2.0
 
 # Radar lab: research memo
 
-**Status: research memo, not a decision.** Written on 2026-10-14 for decisions-log §2.7 item 138
-(4). It changes no code, no proto and no rules row. Where it and a §2.7 item disagree, the item
-wins; where it recommends something an item has not decided, the recommendation waits for a
-ruling (section 10).
+**Status: the radar lab's plan of record (decisions-log §2.7 item 140 (1)).** Written on
+2026-10-14 for item 138 (4) (f). It changes no code, no proto and no rules row. Its engineering
+calls (section 10) are decided, open to the owner's overrule; its operator questions (section 10)
+stay open. Where it and a §2.7 item disagree, the item wins.
 
 ## 0. Why this memo exists
 
@@ -18,6 +18,14 @@ making improvements and see how the modifications work in the sim."* That is ite
 **radar lab**, a walled, float-allowed crate built first as a test-bed whose models reproduce
 published results, and only later a source of modifications that are ported into the deterministic
 sim.
+
+The owner then added a later roadmap item, also recorded in decisions-log item 140 (2): *"future
+future roadmap addition of secondary illuminators of opportunity - receivable by the same passive
+receiver that is used for catching solar ioo. different antennae configurations but same relative
+location, height being variable by use of tower or tethered drone"*. It is roadmap, not committed
+scope (phase 6, section 9), but it binds the architecture now: the passive receiver is one site
+with a variable height, several antenna configurations and a set of illuminators (section 8.6), so
+the solar phase is built in a shape that takes a second illuminator without a rewrite.
 
 "Match published research" sets the bar for the lab: every model ships with **golden cases taken
 from a published source**, each with its inputs, the published output, the source's tolerance and
@@ -637,6 +645,10 @@ answers (section 2.5) and say so.
 | P-3 | O'Hagan 2006: ERP 4 kW (36 dBW); G_r 2.2 dBi; λ 3 m; σ_B 100 m²; B 150 kHz; F_n 4.5 dB; L 0 dB; SNR 10 dB | noise floor −148 dBW (V-calc −147.7); `R_T R_R` at 10 dB = 4.21 × 10⁸ m² (≈ 20.5 km at equal ranges); with G_p 47 dB, ≈ 307 km at equal ranges | ±0.5 dB; ±1 % | O'Hagan, Baker and Griffiths 2006 | inputs V; the two range figures V-calc only. **Partial:** the paper's own outputs (about 25 km, and 365 km with processing gain) are read off figures, and the 365 km contour is not identified, so they are not goldens |
 | P-4 | noise floors `k · 300 K · B`: FM 75 kHz; GSM 200 kHz; UMTS 3.84 MHz; DAB 1.536 MHz; DVB-T 7.61 MHz. Direct power, FM 100 kW EIRP at 10 km, 0 dBi, λ 3 m | −125, −120, −108, −112, −105 dBm; −12 dBm | ±0.5 dB | Pető and Seller 2017, Table 1 | V; V-calc −125.1, −120.8, −108.0, −112.0, −105.0 and −12.4 dBm (computed here) |
 
+The same passive cases (B-2 to B-4 and P-1 to P-4: the MathWorks passive example, O'Hagan,
+Howland, and Pető and Seller) are also the golden tests of phase 6, the secondary illuminators,
+run through the receiver site of section 8.6 rather than through a bare equation.
+
 ### 7.7 Solar position (phase 5)
 
 | Case | Inputs | Published output | Tolerance | Source | Flag |
@@ -697,7 +709,8 @@ None of these may become a golden until a V or V-calc value replaces it.
   (the binary name is a suggestion; `gamectl` stays the only shipped CLI). `publish = false`.
 - **Walled.** Its name joins `WALLED_PACKAGES` in `xtask/src/main.rs`, with `clippy.toml`'s header
   and AGENTS.md §4.9 in step. That is a §5 contract change (it widens the float, cast, hash-map and
-  clock allowance for the whole crate), so the PR that creates the crate opens and stops.
+  clock allowance for the whole crate). The owner approved it on 2026-10-14 (item 140 (3) (a)); phase
+  0's pull request carries it out and names the contract paths it touches.
 - **It reaches nothing of the game.** It depends on no `pharmakos-*` crate at all, in any phase:
   the physics needs no game type, and a dependency on the sim would only add a way to get the wall
   wrong. So it takes a `CLIENT_WALL` line, `("radar-lab", &["sim", "verifier", "plan-core",
@@ -710,8 +723,8 @@ None of these may become a golden until a V or V-calc value replaces it.
 - **Not in the cross-OS guard.** Its float outputs are not compared byte for byte across operating
   systems (item 138 (4) (b)). Its goldens compare against published values with a stated tolerance,
   which is the same on every OS, so its tests run in the ordinary `test` step on all three legs.
-- **Licence:** `GPL-3.0-or-later` like the rest of the game code (AGENTS.md §8), whatever the owner
-  decides about shipping.
+- **Licence:** `GPL-3.0-or-later` like the rest of the game code (AGENTS.md §8), although it never
+  ships (item 140 (3) (b)).
 
 ### 8.2 Floats: is f64 enough?
 
@@ -765,7 +778,7 @@ owner decision. Recommendation:
 | Complex numbers | `num-complex` | A 20-line `Complex64` struct in the crate. |
 | Scenario parsing | `serde_json` | A strict hand-written JSON reader in the crate, a few hundred lines with its own property test. Not a dependency. |
 
-So phases 1 to 5 need **no new dependency**, and the only candidate worth an owner ruling later is
+So phases 1 to 6 need **no new dependency**, and the only candidate worth an owner ruling later is
 `rustfft`. The workspace's supply-chain rules (cooldown, cargo-deny) apply to it unchanged if asked.
 
 ### 8.5 How the lab feeds the integer sim later
@@ -807,6 +820,35 @@ overflow Q16.16 and Q32.32. A port goes like this:
 None of this needs a metric scale until step 2; the scale (metres per voxel) is item 138 (4) (e)'s
 owner question and is listed again in section 10.
 
+### 8.6 The passive receiver site (binding from phase 4)
+
+Decisions-log item 140 (2) puts secondary illuminators of opportunity on the roadmap, received
+"by the same passive receiver that is used for catching solar ioo", with "different antennae
+configurations but same relative location, height being variable by use of tower or tethered
+drone". The roadmap phase is later, but the shape is binding now: phases 4 and 5 build the passive
+receiver this way, so that adding an illuminator is a new scenario entry, not a rewrite.
+
+- **One receiver site.** A position fixed relative to the scenario (the scenario's own frame, in
+  metres).
+- **A height that is a free parameter**, standing for a tower or a tethered drone. Line of sight
+  over the heightmap (section 2.5), the radar horizon (`d = √(2 k_e R_e h + h²)`; for example
+  22.6 km at 30 m and 41.2 km at 100 m, computed here) and the flat-earth multipath factor all take
+  it as an input, so raising the receiver changes all three at once.
+- **One or more antenna configurations at that site**, each with its own pattern, gain, band and
+  bandwidth: a Sun-tracking reference, a surveillance beam, later an FM or DVB-T reference pointed
+  at a transmitter. Each configuration feeds its own channel; a configuration names the band it
+  receives, and a scenario that pairs an illuminator with a configuration outside its band is a
+  typed decode error, not a silent zero.
+- **A set of illuminators.** The Sun first (phase 5: flux by band from section 5.2, position from
+  section 5.6, unpolarised, at infinity), later terrestrial transmitters (phase 6: position,
+  height, EIRP, centre frequency, bandwidth and signal model, from section 4.5's tables). The
+  geometry code takes an illuminator at a finite distance or at infinity through one interface; the
+  Sun is not a special case of the receiver, only of the illuminator.
+- **Optional platform motion.** A tethered drone wanders. The site carries an optional motion
+  model (none by default), so that the wander and its Doppler effect on the reference and
+  surveillance channels can be studied when the owner wants that fidelity (section 10). With
+  motion off, the site is static and the goldens of sections 7.6 and 7.8 apply unchanged.
+
 ## 9. Phased build plan
 
 Each phase is one pull request of one concern, opens and stops like any lane, and lands its golden
@@ -815,18 +857,21 @@ tolerance. Nothing in any phase touches the sim, the gateway or the client.
 
 | Phase | Scope | Golden cases | Contract paths |
 |---|---|---|---|
-| **0. The crate** | Empty walled crate, `publish = false`, a `CLIENT_WALL` line, joining `WALLED_PACKAGES` and `GUARDED_PACKAGES`; the scenario decoder with its caps and typed errors and a property test that a crafted file only returns the typed error; units-in-names convention; `Complex64`; dB helpers. | Decoder property test; dB round trips. | `xtask/**` (the two lists), `clippy.toml`'s header, AGENTS.md §3's crate map and §4.9. Owner approval. |
+| **0. The crate** (approved, item 140 (3) (a)) | Empty walled crate, `publish = false`, a `CLIENT_WALL` line, joining `WALLED_PACKAGES` and `GUARDED_PACKAGES`; the scenario decoder with its caps and typed errors and a property test that a crafted file only returns the typed error; units-in-names convention; `Complex64`; dB helpers. | Decoder property test; dB round trips. | `xtask/**` (the two lists), `clippy.toml`'s header, AGENTS.md §3's crate map and §4.9. Approved by the owner (item 140 (3) (a)). |
 | **1. Monostatic budget and detection** | Range equation (power and energy forms) with losses and system noise temperature; RCS of canonical shapes; Swerling 0 to 4 for one pulse and for `n` pulses; Albersheim; Shnidman; Marcum Q and the incomplete gamma by the published algorithms; coherent and noncoherent integration gain and loss. | R-1 to R-6, D-1 to D-11. | None beyond phase 0. |
 | **2. Line of sight, terrain and clutter** | Ray march over a heightmap (Amanatides–Woo traversal), 4/3-earth horizon, the optional flat-earth two-ray propagation factor (off by default), constant-gamma land clutter, pulse- and beam-limited clutter cell, signal-to-clutter ratio. | L-1 to L-3, C-1, C-2, and constructed masking cases. | None. |
 | **3. Doppler and MTI** | Doppler shift, PRF regimes, blind speeds and staggered PRF, single and double delay-line cancellers, improvement factor, MDV; the in-crate FFT; range-Doppler map of an LFM pulse train (matched filter, slow-time FFT). | M-1 to M-3, F-1. | None. |
-| **4. Bistatic and passive** | Bistatic geometry (range sum, bistatic angle, ovals of Cassini), bistatic radar equation, bistatic Doppler; a synthetic illuminator (band-limited noise or an FM-like signal); batched cross-ambiguity function; direct-path cancellation by ECA (least squares over a clutter subspace); the illuminator table. | B-1 to B-4, P-1 to P-4. | None. |
+| **4. Bistatic and passive** | The receiver site of section 8.6 (one site, a height parameter, antenna configurations, an illuminator set); bistatic geometry (range sum, bistatic angle, ovals of Cassini), bistatic radar equation, bistatic Doppler; a synthetic illuminator (band-limited noise or an FM-like signal); batched cross-ambiguity function; direct-path cancellation by ECA (least squares over a clutter subspace); the illuminator table. | B-1 to B-4, P-1 to P-4. | None. |
 | **5. The Sun** | Solar ephemeris (NREL SPA, with the Astronomical Almanac's low-precision formula as a cheaper second implementation checked against it); solar flux by band and its variability as a scenario input; the noise-illuminator correlation SNR; the vehicle-target integration-time table of section 5.5. | S-1 to S-3, N-1, N-2; section 5.5's table as a simulation target, not a golden. | None. |
-| **6. Experiments** | The owner's "later we will try making improvements and see how the modifications work in the sim": modifications are tried in the lab against the phase 1 to 5 baselines, and a modification that graduates is ported by the steps of section 8.5. | Each experiment states its own baseline. | Any port is sim determinism code (§5). |
+| **6. Secondary illuminators of opportunity (roadmap, not committed scope)** | Decisions-log item 140 (2): FM, DVB-T and the like, received at the same site by the same receiver as the Sun, through further antenna configurations at that site and a receiver height set by a tower or a tethered drone (section 8.6). Terrestrial illuminators join the Sun in the scenario's illuminator set; the CAF, ECA and illuminator models are phase 4's. | B-2 to B-4, P-1 to P-4 (the passive bistatic cases), run through the receiver site; L-1 to L-3 for the height. | None. |
+| **7. Experiments** | The owner's "later we will try making improvements and see how the modifications work in the sim": modifications are tried in the lab against the phase 1 to 6 baselines, and a modification that graduates is ported by the steps of section 8.5. | Each experiment states its own baseline. | Any port is sim determinism code (§5). |
 
 After phase 0, phase 3 needs phase 1's detection functions, phase 4 needs phase 3's FFT, and
-phase 5 needs phase 4's cross-ambiguity function; phase 2 depends only on phase 1. AGENTS.md §6's
+phase 5 needs phase 4's cross-ambiguity function and receiver site; phase 6 needs phase 5's site
+with the Sun in it; phase 2 depends only on phase 1. AGENTS.md §6's
 one-crate-one-agent rule means the lab's phases run **one at a time** in its own crate, within §6's
-cap of two to three lanes, beside whatever S2 lane runs in other crates.
+cap of two to three lanes. The lab starts **after S2** (item 140 (3) (c)); where the fun gate falls
+relative to it is not ruled.
 
 ## 10. Open questions
 
@@ -835,19 +880,25 @@ veto) or **operator: intent, priority, risk or policy** (the owner's).
 
 ### Operator: intent, priority, risk or policy
 
-1. **Does the lab ship, or never ship?** Item 138 (4) (b) left it open. *Recommendation:* never
-   ships, like `bench`: `publish = false`, outside `cargo xtask package`'s zips, so it adds nothing
+The owner ruled on questions 1, 2 and 4 on 2026-10-14 ("approve the crate, never ship, after S2";
+item 140 (3)). The rest stay open.
+
+1. **Ruled 2026-10-14 (item 140 (3) (b)): never ships.** Item 138 (4) (b) had left it open. The
+   lab is like `bench`: `publish = false`, outside `cargo xtask package`'s zips, and no shipped crate
+   depends on it, so it adds nothing
    to the game's licence, size or support surface, and a later decision to ship a radar view is a
    separate change. *Downside:* players and modders see no lab unless they build the repository.
-2. **Approving the crate itself**, which is a §5 contract change: `WALLED_PACKAGES`,
-   `GUARDED_PACKAGES`, a `CLIENT_WALL` line, `clippy.toml`'s header and AGENTS.md §3 and §4.9.
-3. **Dependencies.** Phases 1 to 5 need none (section 8.4). The one candidate is `rustfft` 6.4.1
+2. **Ruled 2026-10-14 (item 140 (3) (a)): the crate is approved.** The §5 contract change it needs
+   (`WALLED_PACKAGES`, `GUARDED_PACKAGES`, a `CLIENT_WALL` line, `clippy.toml`'s header and
+   AGENTS.md §3 and §4.9) is approved by the owner and carried out by phase 0's pull request, which
+   names the contract paths it touches.
+3. **Dependencies.** Phases 1 to 6 need none (section 8.4). The one candidate is `rustfft` 6.4.1
    (`MIT OR Apache-2.0`, six runtime dependencies, all `MIT OR Apache-2.0`), and only if the in-crate
    FFT is measured as a bottleneck. *Recommendation:* do not approve anything now.
-4. **Priority against the game.** Item 138 (4) recorded path 3's downside: the lab pulls effort from
-   the game, and the fun gate and v1 may slip. The owner has chosen path 3; what is still open is
-   whether the lab's phases run beside S2's lanes (one lab lane at a time within AGENTS.md §6's cap
-   of two to three) or between stages.
+4. **Ruled 2026-10-14 (item 140 (3) (c)): after S2.** Item 138 (4) recorded path 3's downside: the
+   lab pulls effort from the game, and the fun gate and v1 may slip. The owner ruled that S2 comes
+   first and the lab's phases follow. Where the fun gate falls relative to the lab is **not ruled**
+   and stays open.
 5. **The game's metric scale** (metres per voxel), item 138 (4) (e). It decides whether Earth
    curvature matters (section 2.5), whether walkers clear a ground radar's MDV (section 3.1), and
    whether solar detection of a vehicle takes seconds or hours (section 5.5). The lab needs no
@@ -863,9 +914,17 @@ veto) or **operator: intent, priority, risk or policy** (the owner's).
    detect by a seeded draw against a tabulated `P_d` (chance on screen, still deterministic), or by
    a threshold on SNR (no chance)? This is a design-intent question with a determinism cost either
    way: a draw needs a new RNG stream (§4.7, additive).
-9. **Which illuminators exist in the fiction.** FM, television and cellular towers are the real
-   world's illuminators of opportunity; whether any stand in Pharmakos' world, or only the Sun and
-   the seats' own transmitters, is lore.
+9. **Tethered-drone motion: a fidelity choice.** If the receiver rides a tethered drone (decisions-log
+   item 140 (2)), does the lab model the drone's position wander and the Doppler it puts on the
+   reference and surveillance channels, or treat the drone as a static mast at the chosen height?
+   *Recommendation:* static by default, with the motion model as an optional experiment (section
+   8.6), since the published passive goldens are all for static receivers.
+10. **When the secondary-illuminator phase runs.** Item 140 (2) is "future future" roadmap; phase 6
+    is listed but not committed. Whether it runs straight after phase 5 or waits for a later ruling
+    is the owner's.
+11. **Which illuminators exist in the fiction.** FM, television and cellular towers are the real
+    world's illuminators of opportunity, and item 140 (2) puts them on the lab's roadmap; whether any
+    stand in Pharmakos' world, or only the Sun and the seats' own transmitters, is lore.
 
 ### Engineering: decide
 
@@ -892,6 +951,9 @@ veto) or **operator: intent, priority, risk or policy** (the owner's).
     this use, and a hand-written decoder and error enum cost little. Decided; you can veto (asking
     for them would be an owner dependency decision).
 12. **Phase order** as section 9. Decided; you can veto.
+13. **One receiver site from phase 4** (section 8.6): a fixed position, a height parameter, antenna
+    configurations and an illuminator set, so phase 6 adds illuminators without a rewrite. Decided
+    on item 140 (2); you can veto the details.
 
 ## 11. References
 
