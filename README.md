@@ -21,7 +21,7 @@ seats (v1.2) are roadmap, reserved now only as proto seams.
 
 **Status: the walking skeleton is closed (decisions-log item 126, 2026-09-29); S1, the economy, had its
 stage demo reviewed on 2026-10-15 (decisions-log item 139) and closes when its last lane, `fixd`,
-merges; S2 is next.** The toolchain is installed — rustc 1.98.1, `protoc` 36,
+has merged and `main`'s push run on it is green; S2 is next.** The toolchain is installed — rustc 1.98.1, `protoc` 36,
 `buf` 1.73, `cargo-deny`, `reuse`, Godot 4.7.2 — the tree is formatted, and `cargo xtask ci` is
 green: sixteen steps, every one required, where a missing input fails. The skips left are the
 platform's and the caller's that `AGENTS.md`'s status paragraph names, and, locally, a missing

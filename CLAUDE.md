@@ -61,7 +61,8 @@ and (9), and 120, from 2026-09-14; renewed for S1 by item 126 (2) (g), 2026-09-2
 item 141, 2026-10-14).** Two relaxations apply to the owner's own Claude Code session only (the
 second also to the agents it launches), for the duration of the walking skeleton; of S1, which runs
 from the skeleton's close (item 126) to S1's stage demo; and of S2, which runs from S1's close (item
-139, the owner's review of S1's stage demo) to S2's stage demo. They are revoked by the owner's word
+139, the owner's review of S1's stage demo: S1 closes when its last lane, `fixd`, has merged and
+`main`'s push run on it is green) to S2's stage demo. They are revoked by the owner's word
 at any time. The owner made the renewal effective on its word of 2026-10-14, so there is no gap
 between S1's stage demo and S1's close (item 141 (1)). At S2's stage demo the delegation returns to
 the owner, who says then whether it runs on into S3:

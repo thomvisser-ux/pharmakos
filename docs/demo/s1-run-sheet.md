@@ -216,10 +216,11 @@ none of the last two appeared.
       appear for a build drone while the list has work. No test asserts that the fabricator makes
       build drones for a backlog and stops once it is covered: by hand only.
     - Your ore: "ore_delivered  A mining drone of seat 0 delivered ore worth $ <N>." from the top
-      layer of your starting seam, which your core's default settings dig (depth 0): 32 voxels, worth
-      $ 64 and $ 64, all delivered this round
+      layer of your starting seam, which your core's default settings dig (depth 0): two loads of 16
+      voxels, $ 64 and $ 64, delivered this round
       (`tests/golden/scenarios/expand-east-segment/expected.events.txt`; corrected by decisions-log
-      item 139 (2) from the skeleton's 24 voxels). At depth 0 nothing is left to deliver in round 2.
+      item 139 (2) from the skeleton demo's 24 voxels). At depth 0 the demo saw no ore for seat 0 in
+      round 2.
 
 16. **The recap.**
     - See: "Round 1 - RECAP" and "Recap of round 1: Round 1 ran 3600 ticks. The match continues. The
@@ -423,7 +424,8 @@ at the size budget: `crates/sim/tests/targeting.rs` `the_decision_tick_counts_it
 pins small fixtures only (3 and 4 units for a handler, 423 for one covering resolution on the golden
 seed), and `pharmakos-bench` publishes nanoseconds alone. The count per decision tick per seat at
 128 size units is not recorded here; S3 sets the size budget from the nanosecond figure unless a
-lane adds the count to the bench's notice. The map is `BENCH_SEED`
+lane adds the count to the bench's notice (item 139 (5): P1 met; the count goes to S3's
+size-budget lane). The map is `BENCH_SEED`
 (`0x00000000ca5caded`, S1-49).
 
 **Not measured: FULL against a late-match snapshot.** Item 133 carried this to the P1 run: FULL
@@ -458,9 +460,10 @@ range; and the starting seam is dry by round 4 or 5 at any depth, the seam being
 ## As played, 2026-10-14
 
 The main session drove the local zip of `49398cf` (SHA-256 checked) by computer use while the owner
-watched: a local match, the golden seed, two seats, three rounds. Steps 1 to 9, 11 to 14, 16, 17, 19
-to 22 and 24 to 26 matched the sheet. Step 10 was counted only in passing, the optional steps 18
-and 23 were skipped, and clicking one of Easy's beacons was not reached. Every Submit, Save and menu
+watched: a local match, the golden seed, two seats, three rounds. Steps 1 to 7, 11 to 14, 16, 17,
+19 to 22, 24 and 25 matched the sheet; step 8 differed (A), step 9 differed (C), and step 26
+matched but for the click on one of Easy's beacons, which was not reached. Step 10 was counted only
+in passing, and the optional steps 18 and 23 were skipped. Every Submit, Save and menu
 click landed the first time (F1), and the second instance in step 2 drew its chooser and did not
 hang (F3). The match ended on the round limit; seat 1 won the final audit, $ 1 156 to $ 941.
 
@@ -489,7 +492,7 @@ What differed, and where decisions-log item 139 (2) sends each:
 - **L.** Two I0003 notes with Fix buttons on Hold & Build, which the sheet does not mention. S3.
 - **M.** The unticked "Allow dormant beacons" checkbox drew no box until ticked. S3.
 - **N.** The second instance's start rotated the running instance's `godot.log` through the shared
-  `user://`; the first instance's log holds nothing after that. S3, with F3.
+  `user://`; the first instance's log holds nothing after that. S3, on its own: ruling 11 closes F3.
 
 ## Owner rulings at the demo
 
@@ -592,7 +595,9 @@ the owner's veto.
     new rules row in a contract pull request that moves every chain.
 
 *Ruled 2026-10-15 (decisions-log item 139 (1)):* rulings 1 to 12, 14 and 15 as recommended, as a
-set; ruling 8 is option (b), and ruling 3's move goes to S2.
+set; ruling 8 is option (b). Ruling 3's move goes to S2, the main session's call (the owner can
+veto). P1 counts as met, with the counted units carried to S3, and C gates neither the close nor
+the tag (item 139 (5)).
 
 ## Deviations from section 1.1
 
@@ -668,7 +673,7 @@ not, or does it differently.
     refunds, in code, and no test drives that case (step 15).
 16. **F2's cure needs a written depth, and round 2 does not "keep delivering".** The starting drone
     digs below the rim only when the seat's playbook writes a dig depth (item 133 (3) (a)). At depth
-    0 seat 0's top layer, 32 voxels ($ 64 + $ 64; item 139 (2)), is all delivered in round 1, so round 2, whose
+    0 seat 0's top layer is delivered in round 1 as two loads ($ 64 + $ 64; item 139 (2)), so round 2, whose
     brownout file writes no depth, shows no `ore_delivered` for seat 0: section 1.1's "keeps
     delivering in rounds 2 and 3" is round 3 only here. The demo shows the cure through the safe
     playbook a timeout files (steps 21, 24 and 25); `mine-to-depth` pins deliveries in every round
