@@ -5,9 +5,10 @@ SPDX-License-Identifier: MIT OR Apache-2.0
 
 # Changelog
 
-Each release's notes name its tag and commit, and are the newest section below at that commit
-(`.github/workflows/release.yml`). Sections run newest first, one per stage until the wk-35.5
-release; the development tags, `v0.1.0-dev.<n>`, take the section that is newest when each is cut.
+Each release's notes name its tag and commit, and are the section below headed with the version
+string the zips carry at that commit (`xtask/src/package.rs`'s `VERSION`;
+`.github/workflows/release.yml`). The skeleton's development tags, `v0.1.0-dev.<n>`, share the
+section below until the wk-35.5 release.
 
 ## 0.1.0-dev+skeleton
 

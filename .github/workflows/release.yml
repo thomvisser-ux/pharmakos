@@ -12,8 +12,10 @@
 #      "cut from green CI" means no rebuild, so no toolchain drift;
 #   4. downloads that run's `pharmakos-windows` and `pharmakos-linux` zips, renames them
 #      pharmakos-<tag>-<os>-x86_64.zip and writes SHA256SUMS.txt;
-#   5. takes the notes from CHANGELOG.md's newest section at that commit (its first `## `
-#      heading, which must read as a version), adding the tag and the commit;
+#   5. takes the notes from CHANGELOG.md's section headed with the package's version string,
+#      `xtask/src/package.rs`'s `VERSION` at that commit (the string the zips carry), and for a
+#      tag with no `-` suffix requires that string to be the tag's own version; adds the tag
+#      and the commit;
 #   6. creates a DRAFT with `gh release create --verify-tag`, a prerelease when the tag has
 #      a `-` suffix. The owner publishes it; nothing here publishes anything.
 #
@@ -154,12 +156,23 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gh api "repos/$GH_REPO/contents/CHANGELOG.md?ref=$SHA" --jq .content | base64 -d > changelog.md
-          # The newest section is the first `## ` heading (CHANGELOG.md runs newest first). It
-          # reaches $GITHUB_ENV below, so it must be one line of a version's characters.
-          heading="$(grep -m1 '^## ' changelog.md | sed 's/^## //' || true)"
+          # The heading is the version string the zips carry: `xtask/src/package.rs`'s VERSION
+          # at that commit, the one source (decisions-log item 142). It reaches $GITHUB_ENV
+          # below, so it must be one line of a version's characters; a rejected value is
+          # printed escaped, never raw, so it cannot start a workflow command.
+          gh api "repos/$GH_REPO/contents/xtask/src/package.rs?ref=$SHA" --jq .content | base64 -d > package.rs
+          heading="$(sed -n 's/^pub(crate) const VERSION: &str = "\([^"]*\)";$/\1/p' package.rs | head -n 1)"
           if ! printf '%s' "$heading" | grep -qxE '[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?'; then
-            echo "::error::CHANGELOG.md at $SHA has no \`## <version>\` section as its first heading (found: '$heading')"
+            printf '::error::xtask/src/package.rs at %s has no version-shaped VERSION (found: %q)\n' "$SHA" "$heading"
+            exit 1
+          fi
+          if [[ "$TAG" != *-* && "$heading" != "${TAG#v}" ]]; then
+            echo "::error::tag $TAG has no suffix, so the package version must be ${TAG#v}; it is $heading"
+            exit 1
+          fi
+          gh api "repos/$GH_REPO/contents/CHANGELOG.md?ref=$SHA" --jq .content | base64 -d > changelog.md
+          if ! grep -qxF "## $heading" changelog.md; then
+            echo "::error::CHANGELOG.md at $SHA has no \`## $heading\` section"
             exit 1
           fi
           {
@@ -169,7 +182,11 @@ jobs:
             awk -v h="## $heading" '$0 == h { on = 1; next } on && /^## / { exit } on { print }' changelog.md
           } > notes.md
           echo "VERSION=$heading" >> "$GITHUB_ENV"
+          # The notes are repository text: show them with workflow commands stopped.
+          stop="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
+          echo "::stop-commands::$stop"
           cat notes.md
+          echo "::$stop::"
 
       - name: Create the draft release
         # The only condition is a positive one: a pushed v* tag. A dispatch never gets here.
