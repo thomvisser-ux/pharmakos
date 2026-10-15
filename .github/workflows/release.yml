@@ -12,8 +12,8 @@
 #      "cut from green CI" means no rebuild, so no toolchain drift;
 #   4. downloads that run's `pharmakos-windows` and `pharmakos-linux` zips, renames them
 #      pharmakos-<tag>-<os>-x86_64.zip and writes SHA256SUMS.txt;
-#   5. takes the notes from CHANGELOG.md's `## 0.1.0-dev+skeleton` section at that commit,
-#      adding the tag and the commit;
+#   5. takes the notes from CHANGELOG.md's newest section at that commit (its first `## `
+#      heading, which must read as a version), adding the tag and the commit;
 #   6. creates a DRAFT with `gh release create --verify-tag`, a prerelease when the tag has
 #      a `-` suffix. The owner publishes it; nothing here publishes anything.
 #
@@ -154,10 +154,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          heading="0.1.0-dev+skeleton"
           gh api "repos/$GH_REPO/contents/CHANGELOG.md?ref=$SHA" --jq .content | base64 -d > changelog.md
-          if ! grep -qxF "## $heading" changelog.md; then
-            echo "::error::CHANGELOG.md at $SHA has no \`## $heading\` section"
+          # The newest section is the first `## ` heading (CHANGELOG.md runs newest first). It
+          # reaches $GITHUB_ENV below, so it must be one line of a version's characters.
+          heading="$(grep -m1 '^## ' changelog.md | sed 's/^## //' || true)"
+          if ! printf '%s' "$heading" | grep -qxE '[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]+)?'; then
+            echo "::error::CHANGELOG.md at $SHA has no \`## <version>\` section as its first heading (found: '$heading')"
             exit 1
           fi
           {
