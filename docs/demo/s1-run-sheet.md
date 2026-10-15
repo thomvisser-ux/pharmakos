@@ -29,7 +29,8 @@ seam below its rim. Steps that only a test can reach say so.
 **The zip.** No S1 tag was cut. `release.yml` takes a release's notes from `CHANGELOG.md`'s
 section headed `0.1.0-dev+skeleton`, a heading written into the workflow
 (`.github/workflows/release.yml`, `heading="0.1.0-dev+skeleton"`), so a tag cut now would carry the
-skeleton's notes. That heading is a carry for the next `.github/**` pull request. The demo uses a
+skeleton's notes. That heading is a carry for the next `.github/**` pull request (done by #108,
+decisions-log item 142). The demo uses a
 package of `main` at `49398cf` built locally:
 
 - Windows: `D:/build/s1-demo/pharmakos-s1-49398cf-windows-x86_64.zip`, 117 026 458 bytes, SHA-256
@@ -650,7 +651,7 @@ Smaller differences, each already decided elsewhere:
 Not deviations; each is a stale comment or a carry for its next owner.
 
 - `.github/workflows/release.yml` reads its notes from the hard-coded `0.1.0-dev+skeleton` heading,
-  so no S1 tag was cut: the next `.github/**` pull request.
+  so no S1 tag was cut: the next `.github/**` pull request (done by #108, decisions-log item 142).
 - `scenarios/s1/unaffordable-deploy.scenario.jsonc` still says the `$` projection that would warn
   about its fourth deploy "is S1's economy work, not yet built"; `proj` #85 built it. The next lane
   that touches `scenarios/s1/`.
