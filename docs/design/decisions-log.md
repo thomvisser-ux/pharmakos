@@ -1300,3 +1300,39 @@ Agenda:
     - `rules.proto`’s `lull_ms`, `mining_carry_voxels` and `build_hp_per_second` comments go to the next `proto/**` pull request, with S1-42’s row and ruling 14’s two markers;
     - Expand & Mine’s “ore seam” and “scrap seam” go to the next owner of `library/`.
   - **Earlier carries, unchanged:** S1-01’s MSRV sweep (item 129) and `gamectl --operator` for the nightly adversarial scenarios (S2-01, the run sheet) at S2’s start.
+- **Item 143, S1 closed: `fixd` merged and replayed, its harness carries, and two owner answers (2026-10-16).** This is the contract pull request #NNN. Its contract paths are this log, AGENTS.md (§3 rule 4, §9 item 10 and the status paragraph) and `docs/design/handoff.md`. It also touches the run sheet and README.md’s status line. Its calls are engineering calls made under the owner’s standing instruction of 2026-09-14 and open to the owner’s overrule, except (4) and (5), which are the owner’s.
+
+  **(1) `fixd` merged, and S1 closed.**
+  - `fixd` is #110, merged as `1dec001` and pinned to its reviewed head `3a52f4c`, with its fifteen checks green. Two adversarial reviews read its first commit, and a second commit applied them. The main session read the whole diff before merging it.
+  - The main session ran `cargo xtask package` locally on that head (decision 9). The zip’s manifest matched, `reuse` passed over the extracted zip, every committed scenario replayed with the packaged `gamectl`, and the smoke log held no `ERROR` line. A first run was killed mid-build by a machine crash (exit `0x40010004`) and was run again.
+  - **The replay in the packaged zip,** with the main session driving it by computer use:
+    - A: in round 1, after Submit, the panel read “This round: step 1 places a new beacon near (335, …), $ 60.” The finding was the run sheet’s timing, as the lane’s test showed.
+    - G: Save as… offered `round1.jsonc` after that file was loaded, and no name after the Hold & Build template or round 2’s carried draft. Save after the template opened Save as… with no name. Saving over the loaded file brought up the dialog’s “already exists. Do you want to replace it?”, which was declined.
+    - J: when round 2’s Lull ran out, the status line read “The Lull ran out, so the safe playbook was filed for you. The orders on screen were not sealed.” The verdict line read “Not sealed: the safe playbook was filed for you instead.” Nothing said “Ready to seal” outside a Lull.
+    - K: in round 1’s Push the map menu opened as ruled, and Go was refused at once: “Planning is closed during the Push; it opens again in the next Lull.” Once the match had ended, a click on the ground or a vent opened no menu, the panel said “The match has ended: there is nothing left to plan.”, and nothing waited on “Checking…”.
+  - **S1 closes with `main`’s push run on `1dec001`,** run 38909611194, green (items 139 (4) and 141 (1)). S2 is next, under the merge delegation item 141 renewed. AGENTS.md’s status paragraph and README.md’s status line now say so.
+
+  **(2) `fixd`’s harness carries.**
+  - **AGENTS.md §3 rule 4** names the client pieces `fixd` added, which schedule or draw without deciding:
+    - the editor’s door (`Door`, `Editor::set_door`), which the rig sets from the phase it reads and this seat’s Ready (`Rig::door`), and through which the editor refuses an ask outside an open Lull, drops what was queued and says why a check will not come (`Editor::unchecked`);
+    - the per-check refusal (`Check`), the gateway’s refusal shown on its own check’s line;
+    - `SealLine`, a branch on the door, the verifier’s `qualifies` and the filing;
+    - the rig’s read of the gateway’s `safe_playbook_filed` feed kind (`SAFE_PLAYBOOK_FILED_KIND`, held to the gateway’s source by a test);
+    - the text’s file (`Editor::file`, `Editor::saved_to`), which Save and Save as… read;
+    - the door’s gating of the Fix buttons’ and the E0601 checkbox’s enabled state;
+    - `editor.gd`’s `map_open`, a branch on the bridge’s phase string; `map_click`, the map’s click routing in its own function; and `unchecked_text`.
+  - **AGENTS.md §9 item 10** says that the headless watch check runs only in CI’s `client extension` jobs, outside `cargo xtask ci`. A change to `godot/scripts/` can therefore be green locally and red there. The lane that makes one runs the check by hand, with the job’s command. Giving `xtask` a step for it is a later `xtask` change, and nothing here makes it.
+  - **The run sheet’s step 8** now reads the “This round” sentence after step 11’s Submit.
+  - **A finding for S3’s `godot/` lane:** a headless Godot window ignores `get_window().size`. `watch_check.gd`’s `_camera_keys` and `_first_click_lands` rest on a resize, so their injected input may land in a 64-pixel window. Both pass, and whether they test what they say is worth a look.
+
+  **(3) Found in the replay, for S3’s editor lane** (with item 139 (2)’s D to M):
+  - In the final recap, a refused ask says planning “opens again in the next Lull”, although the match has ended and there is none.
+  - Round 2’s safe-playbook line stayed on the status line into round 3’s Lull, until something else replaced it.
+  - The Load dialog opened with the stray word “there” in its file name box.
+
+  **(4) A skip-Lull control (the owner’s question, 2026-10-16; the owner’s answer: “Rename/explain Ready; S3”).** Ready already ends a Lull at once. Pressed with nothing sealed, it ends the Lull too, and the gateway files the safe playbook, as round 3 of the replay showed. So no control is added. S3’s editor lane relabels Ready or explains it on the panel, saying what happens when nothing is sealed. *Downside:* one button does two things until then, and its words must keep anyone from filing the safe playbook by accident. The owner also asked that hand tests press Ready rather than wait out a Lull.
+
+  **(5) Matches past round 3 in the client (the owner’s question, 2026-10-16; the owner’s answer: “yes, add --rounds to S2’s plan”).**
+  - The lobby always starts a 3-round match (`godot/scripts/host_link.gd`’s `ROUND_LIMIT`), and the settings screen is S6’s (item 127 (10)). Only the headless balance check plays 6 rounds.
+  - S2’s plan, written at S2’s kickoff, gives its client lane a test-only launch option, `-- --rounds <n>`. It sets the config line’s round-limit field, which `serve::Config` already reads and checks, so S2’s stage demo can play a match past round 3. The line’s format does not change (AGENTS.md §5). The plan states which segment lengths rounds past the ladder take. The option is not shown in the lobby, and a refused value is the gateway’s refusal.
+  - *Downside:* a little client work in S2, and a launch option to keep out of the player’s view until S6’s settings screen.

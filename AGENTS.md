@@ -27,8 +27,8 @@ checked on every pull request that changes more than prose and on `main`'s push 
 spikes are closed, frozen at the `spike-end` tag and deleted from `main`;
 their measured results and their lessons for the skeleton live under `docs/spikes/`, and reading the
 spike code means `git worktree add ../pharmakos-spikes spike-end`. The walking skeleton is closed
-(decisions-log item 126, 2026-09-29), S1's stage demo is reviewed and S1 closes when its last lane,
-`fixd`, has merged and `main`'s push run on it is green (decisions-log item 139), and every crate in §3 has code; mark any value
+(decisions-log item 126, 2026-09-29), S1 is closed (decisions-log items 139 and 143, 2026-10-16), S2 is
+next, and every crate in §3 has code; mark any value
 you had to guess with a `PLACEHOLDER` comment naming who fixes it and when.
 
 ---
@@ -209,7 +209,15 @@ editor UI. Nothing else executes. Directories are under `crates/`; package names
    handling of `estimate_route`'s `NOT_FOUND`, whatever its cause (a `covering` that covers nothing,
    a selector that ranks nothing, an unknown or unseen beacon), drawn as the route's answer
    (unreachable, no polyline, the gateway's sentence) and not counted or reported as a refused call,
-   while any other refusal of the estimate still is one. The client may compose a JSON Patch from a click; a verdict, a
+   while any other refusal of the estimate still is one; and, from S1's `fixd` (decisions-log items 139 (2) and 143 (2)),
+   the editor's door (`Door`, `Editor::set_door`), which the rig sets from the phase it reads and this seat's Ready
+   (`Rig::door`), and through which the editor refuses an ask outside an open Lull, drops what was queued and says why a
+   check will not come (`Editor::unchecked`), with the gateway's refusal of a check shown on that check's own line
+   (`Check`); `SealLine`, a branch on the door, the verifier's `qualifies` and the filing; the rig's read of the
+   gateway's `safe_playbook_filed` feed kind (`SAFE_PLAYBOOK_FILED_KIND`, held to the gateway's source by a test); the
+   text's file (`Editor::file`, `Editor::saved_to`), which Save and Save as... read; the door's gating of the Fix
+   buttons' and the E0601 checkbox's enabled state; and `editor.gd`'s `map_open` (a branch on the bridge's phase
+   string), `map_click` (the map's click routing) and `unchecked_text`. The client may compose a JSON Patch from a click; a verdict, a
    travel time, a legality answer, a Fix and the patched text (`patch_plan`'s answer) still come
    from the gateway. The gateway's JSON-RPC answers are not canonical `gp.api.v1` JSON — they carry
    a `_status` footer and lower-case enum values (decisions-log item 80) — so every client of them,
@@ -739,7 +747,10 @@ cargo xtask ci --fix      # rustfmt and the machine-applicable clippy fixes
     under xvfb with lavapipe, on Linux only (in CI, the `vista screenshot (linux)` job), and
     compares each with its PNG golden (skeleton-plan decision 22; decisions-log item 116 (6)(a) and
     (h)); `--headless` selects Godot's dummy renderer, which cannot take a screenshot, so the step uses
-    it only for the import. The adversarial scenarios are nightly (below) and gated off until S2.
+    it only for the import. The headless watch check (`godot/scripts/watch_check.gd`, run against a real
+    `gamectl host`) runs only in CI's `client extension` jobs, outside `cargo xtask ci`, so a change to
+    `godot/scripts/` can be green locally and red there; the lane that makes one runs it by hand with the
+    job's command (decisions-log item 143 (2)). The adversarial scenarios are nightly (below) and gated off until S2.
 11. **Perf budgets** *(added per gate, not in `cargo xtask ci` today)* — the G3′ CI budget check
     (tick p99 within budget) lands with S2's exit measurement, and the verifier's QUICK ≤5 ms p99
     and FULL ≤50 ms p99 at the playbook size budget (P1) land with the verifier's gate. Until then,
