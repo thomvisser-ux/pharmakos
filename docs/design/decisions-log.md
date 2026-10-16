@@ -1361,7 +1361,7 @@ Agenda:
 
   **(9) S2’s plan: `docs/design/s2-plan.md`, added by this entry.**
   - It applies (1) to (8). It places every carry the record routes to S2 in a named lane or contract pull request, or leaves it out with its reason.
-  - After its two reviews it sizes the stage at about 126 agent-days in 27 tasks, about 13 plan-weeks against the spec’s 6. S1’s plan had sized its row about 40% over the spec’s weeks, and S1 closed about 2.5 calendar weeks after its plan was adopted. The cut order of (7) is written in its section 4.5, each cut tied to a checkpoint.
+  - After its two reviews it sizes the stage at about 128 agent-days in 27 tasks, about 13.5 plan-weeks against the spec’s 6. S1’s plan had sized its row about 40% over the spec’s weeks, and S1 closed about 2.5 calendar weeks after its plan was adopted. The cut order of (7) is written in its section 4.5, each cut tied to a checkpoint.
   - Its engineering calls, E1 to E33 in its section 2.3, are the main session’s, made under the owner’s standing instruction of 2026-09-14 and open to the owner’s overrule.
   - Its owner decisions, 1 to 43 in its sections 6 and 7, are ruled by (11): those that most shape play were put to the owner first, as item 127 (1) did, and the rest stand as their **(Recommended)** options.
 
@@ -1384,6 +1384,11 @@ Agenda:
   - **Decision 43, repair’s price:** restoring hit points costs that share of the asset’s build cost, filed under the Quartermaster’s Repair band; the commander is repaired free (the recommended option). *Downside:* repair can starve building in a war, and a seat with no money has drones standing beside damaged structures.
   - **Decision 37, a collapse several seats cut:** its credit is split equally among the distinct seats whose edits that tick removed a voxel next to the region, by largest remainder, ties to the lowest seat (the recommended option). *Downside:* a seat that chipped one voxel shares equally with the seat whose charge did the work.
   - **Every other decision of the plan’s sections 6 and 7 stands as its (Recommended) option,** open to the owner’s overrule, as item 127 (1) had it (the owner’s bulk answer). Decision 32 thereby grants the main session a new authority, separate from item 141’s merge delegation: it takes a planned cut of section 4.5 at that cut’s checkpoint, and any further cut is the owner’s. *Downside:* those decisions pass on the recommendation until S2’s demo shows them.
+
+  - **After a verification review of the plan (2026-10-16):** the plan grew to about 128 agent-days and about 13.5 plan-weeks, half a week past what decision 1 was ruled on. The main session’s readings under the owner’s standing instruction (“go with your recommendations”), each open to the owner’s veto:
+    - A wall box fills down to the ground, so a charge’s flat cut never detaches a region.
+    - Ruins count against no seat’s share. They are held in a reserve the size of the structure room, and a full reserve buries the oldest ruin, as decision 25 does for wrecks.
+  - **Collapse is built although play cannot reach it yet (the owner’s answer, the recommended option).** The review found that generated terrain has no overhangs and that every column is solid to bedrock, so with Mine never undermining (item 144 (3)) no ordinary play detaches a region. `fall` still builds the support rule, its seam and item 144 (1) to (3)’s credit rules. S2’s demo shows a collapse only in a staged headless run, and says so. The rule is ready when later terrain makes collapse reachable. *Downside:* about 6.5 agent-days for something players will not see in S2.
 
   **(12) The tag `v0.1.0-dev.3`, recorded here** (item 139 (3)). It was cut after #111 merged.
   - The dry `workflow_dispatch` of `release.yml`, run 38956987170 with `sha` set to `1dec001`, was green, and its notes carried S1’s lines.

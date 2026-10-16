@@ -2586,7 +2586,7 @@ recommended option, in the bulk answer (item 144 (11)).
 standing on the ground stays joined to its neighbours and the ground, so a charge at its footing
 removes a ball and nothing above it falls; on a generated 2.5D map, whose columns are solid to
 bedrock, a collapse needs something spanning a gap an attacker opened, such as a wall section whose
-last footing is cut. **Ruled:** the recommended option, in the bulk answer (item 144 (11)).
+last footing is cut. **Ruled:** the recommended option, in the bulk answer, and again by name once the verification review showed that no ordinary play reaches a collapse: `fall` is built and the demo stages it (item 144 (11)).
 **Applied, and its staging corrected** (operator item O1, adopted by the main session under the
 owner's standing instruction "go with your recommendations"; the owner can veto): **walls fill
 down to the ground**, so a wall box has no air under it (`site`), and a charge's flat cut, which
