@@ -146,7 +146,8 @@ none of the last two appeared.
    nearest vent you can cover", are the Alt-click menu's (step 9) and round 2's (step 17).
    - Proof: `tests/golden/gateway/demo_hold_and_build_render/expected.response.json`.
 
-8. **Read the chips and "This round".** Under "What the map reads now", one chip a reference: "Step
+8. **Read the chips and "This round".** *Corrected by decisions-log item 143 (2): the "This round"
+   sentence appears only once a playbook is sealed, so read it after step 11's Submit.* Under "What the map reads now", one chip a reference: "Step
    1: now Heat vent (<x>, <y>), <N> ms - nearest by travel from the commander, read when the step
    starts", and for the Generator "... - the feature its beacon was placed to cover, bound when it
    deploys". Under "This round": "This round: step 1 places a new beacon near (<x>, <y>), $ 60."
