@@ -27,12 +27,13 @@ decision 1 was interviewed although not marked, and the other **[play]** decisio
 bulk answer. Decision 32 thereby grants the main session a new authority, separate from item 141's
 merge delegation: it takes a planned cut of section 4.5 at that cut's checkpoint. The rulings move
 the size to about 126 agent-days and the critical path to about 61 working days, still about 13
-plan-weeks (sections 4.1 and 4.3).
+plan-weeks; the verification review's fixes, applied the same day, move them to about 128
+agent-days and 62.5 working days, about 13.5 plan-weeks (sections 4.1 and 4.3).
 
 **When the bulk ruling falls.** It fell on 2026-10-16, before wave 1, so no lane waits on it. The
 plan had it fall after `msrv` merges and before `con3` starts on day 2, with `msrv`, `redate`,
-`east`, `rnds`, `vfy1` and `base` running before it; each lane's Needs line still names the
-decisions it builds on, all of them now ruled.
+`east` and `base` running before it and `vfy1`, which needs no decision, starting beside `con3`;
+each lane's Needs line still names the decisions it builds on, all of them now ruled.
 
 Precedence throughout: `docs/design/decisions-log.md` §2.7 > `docs/spec/pharmakos-spec-v0.6.html` >
 `docs/design/co-design-gameplan-api.md` (`docs/design/README.md`); `docs/design/targeting.md` amends
@@ -85,8 +86,11 @@ presses Ready to end a Lull rather than waiting it out.
 1. **Round 1's Lull.** The wizard offers the S1 templates and two new ones, a Defend template that
    guards the core and the commander, and an Attack template that raids the nearest enemy beacon it
    knows of. The owner seals Hold & Build with three more targets: a short wall across the core's
-   approach, an autocannon and a mortar. The editor shows the wall's price, `$` 1 a voxel, in the
-   projection, and W0501 is gone from `seam_choice: SAFEST`.
+   approach, an autocannon and a mortar. Hold & Build omits `roe`, which reads as `RETURN_FIRE`
+   (decision 4), and a mortar on return fire waits to be hit before it shells anything, so the run
+   sheet has the owner set the Build beacon's `roe` to `FREE_FIRE` in the editor before sealing.
+   The editor shows the wall's price, `$` 1 a voxel, in the projection, and W0501 is gone from
+   `seam_choice: SAFEST`.
 2. **Round 1's Push.** With the Build beacon's `terraform` set to `BOTH`, a build drone levels the
    mortar's footprint before it builds: the ground under the target rises or falls to the anchor's
    height, a voxel at a time, and each voxel leaves the treasury at the wall's price. The wall goes
@@ -97,22 +101,27 @@ presses Ready to end a Lull rather than waiting it out.
    Hold & Build's repair threshold (decision 38). The Build beacon's repair drone walks to the
    mortar and repairs it, paying for the hit points it restores (decision 43), then salvages the
    wrecks, and the feed shows `$` coming in at 25 % of each wreck's build cost.
-4. **Round 3.** The owner's mortar shells the clump of Easy's raiders gathering in its range
-   (decision 41). The shell is slow and visible in flight, and lands where its target stood when it
-   was fired, so a raider that kept walking is missed (decision 3). It lands as a crater: inside its
-   ball the dirt is gone at once and the stone beneath it cracks, opening on the next shell, since
-   terrain resists a blast by material (decision 10). A unit standing where the shell lands takes
-   splash damage, the owner's own included, since friendly fire is on; the mortar never chooses a
-   landing point whose splash holds an own asset.
+4. **Round 3.** The owner's mortar, on `FREE_FIRE` since step 1, shells the clump of Easy's raiders
+   gathering in its range (decision 41). The shell is slow and visible in flight, and lands where
+   its target stood when it was fired, so a raider that kept walking is missed (decision 3). It
+   lands as a crater: inside its ball the dirt is gone at once and the stone beneath it cracks,
+   opening on the next shell, since terrain resists a blast by material (decision 10). A unit
+   standing where the shell lands takes splash damage, the owner's own included, since friendly fire
+   is on; the mortar never chooses a landing point whose splash holds an own asset.
 5. **Round 4.** The owner's Attack beacon, `breach_allowed`, gathers raiders at its staging point
    and launches on force size. Easy's wall blocks the route, so the breach asks the owner's mortars
    in range to shell the first wall column (wall voxels crack on the first blast and break on the
    next) and sends a raider carrying a demolition charge to the wall's footing; the fuse runs out
    and the charge cuts the wall and the ground under it flat down to the wall's footing, so the
-   raiders walk through the gap (decision 40). Where the run sheet stages it on the golden seed, a
-   wall section whose only footing the charge cut **collapses**: it falls, everything standing on it
-   falls with it and takes the support rule's flat damage, and the kill credit goes to the owner,
-   whose charge detached it (item 144 (1), (2); decision 39, which says why the beat is staged).
+   raiders walk through the gap (decision 40). Nothing falls: a wall is filled down to the ground,
+   so the charge's flat cut leaves nothing above it unsupported (decision 39). **The collapse is
+   staged, and the run sheet says so.** No geometry play can reach, on the golden seed or any
+   other, puts an asset on a region a blast can detach (decision 39 says why), so beside the zip
+   the run sheet runs `fall`'s headless `collapse_credits_the_blast`, whose terrain shelf is built
+   through test seams, and shows its event log: two of the owner's mortar craters cut the shelf's
+   last support, it falls, everything standing on it falls with it and takes the support rule's
+   flat damage, and the kill credit goes to the owner, whose craters detached it (item 144 (1),
+   (2)).
 6. **Round 5.** The owner's Attack beacon targets Easy's commander from its last sighting and
    retargets live while a raider sees it. Easy, whose commander died in round 4's breach, has added
    a Defend guard on it (spec §14; decision 35): its guards escort the commander inside that
@@ -122,9 +131,10 @@ presses Ready to end a Lull rather than waiting it out.
    dies it respawns at the core after the growing delay. A commander is not an asset, so its death
    credits nobody (spec §4).
 7. **A beacon falls.** The owner's mortars destroy one of Easy's beacons. Its mandate ends at once,
-   its structures turn to neutral ruins and its walls to neutral walls (decision 42), its units
-   retreat and re-home to Easy's nearest beacon, and the owner's repair drones salvage the ruins
-   inside their own sphere.
+   its structures turn to neutral ruins and its walls to neutral walls (decision 42; the sim reads
+   them neutral, and until the art pass the client still draws them in Easy's colour, E14), its
+   units retreat and re-home to Easy's nearest beacon, and the owner's repair drones salvage the
+   ruins inside their own sphere.
 8. **The recap** shows each seat's kills and losses, a "shared kill" where two seats' damage
    finished an asset, and the value each seat destroyed.
 9. **The end.** The match ends on the first tick Easy has no beacon left (`last_seat_standing`), or
@@ -144,7 +154,7 @@ report with its three-seat run's share of damage aimed at the trailing seat (dec
 | 1. `cargo xtask ci` green on the matrix, the OSes agreeing on the chains | Every lane green on the three-OS matrix; the cross-OS guard over every chain, digest and path hash, the new S2 scenarios' chains included | all; `demo2` |
 | 2. Hashes committed, every movement explained | The re-bless ledger of section 4.2; each chain-moving PR names the rule and the first tick that moved | `east`, `ids`, `fire`, `site`, `fall`, `dfnd`, `surv`, `atk`, `oprd`, `opra`, `tune2` |
 | 3. Golden playbooks round-trip, verify and render identically | The two new templates under `library/` with their `demo_*` verify and render goldens; the new constructs' render and canonical goldens under `tests/golden/plan-core/` and `tests/golden/verifier/`; each nightly arm qualifying under `night`'s per-PR test (the arms carry no golden of their own, E20) | `vfy2`, `oprd`, `opra`, `night`, `arms` |
-| 4. Headless scenarios assert on events **and** hashes | Nine new scenarios under `scenarios/s2/` (section 3 names each lane's), beside the nine committed today | `fire`, `site`, `fall`, `dfnd`, `surv`, `atk` |
+| 4. Headless scenarios assert on events **and** hashes | Eight new scenarios under `scenarios/s2/` (section 3 names each lane's), beside the nine committed today, each one a playbook reaches on its seed: a committed scenario has no placement key and `gamectl` reaches no host seam, so `fire`'s and `fall`'s staged cases are `crates/sim/tests` integration tests asserting events and hashes, and `fire`'s two scenarios move to `atk`, the first lane that makes them playable | `site`, `dfnd`, `surv`, `atk` |
 | 5. The nightly adversarial scenarios | Rusher, Turtle and Hunter against Easy on the fixed seed set, nightly, each with its written alarm band, every band acknowledged as Easy's at S2's close and re-baselined at S5 (item 144 (6)); `NIGHTLY_SCENARIOS_ENABLED` set by the owner (decision 30) | `night`, `arms`, `demo2` |
 | 6. Depth task and gate, or the written fallback | G3′-real certified by a recorded run (section 5), or the spec's fallback taken in writing | `g3h`, `g3r`, `demo2` |
 | 7. Docs in the same PR | The spec amendments and AGENTS.md sentences of section 4.4, the main session's docs PRs | main session |
@@ -167,7 +177,7 @@ lane's Needs line names the decisions it builds on).
 | Ruling | What it says | Task |
 |---|---|---|
 | 144 (1) | Everything on a detached region falls with it and takes one flat damage; the core's bore is never detachable | `fall`; the bore's geometry `fire` (E31) |
-| 144 (2) | Collapse's kill credit goes to the seat whose edit detached the region; an own edit credits nobody. It amends spec §3's "terrain … credits nobody", which the main session's docs PR says; several seats' edits on one tick are decision 37 | `fall` (the seat on the edit: `base` lays out `VoxelEdit`'s seat, `fire` fills it) |
+| 144 (2) | Collapse's kill credit goes to the seat whose edit detached the region; an own edit credits nobody. It amends spec §3's "terrain … credits nobody", which the main session's docs PR says; several seats' edits on one tick are decision 37 | `fall` (the seat on the edit: `base` lays out `VoxelEdit`'s seat and fills it on Mine's digs, `fire` on craters, `site` on terraform's and the wall's edits, `atk` on the charge's cut) |
 | 144 (3) | Mine never detaches a region carrying any seat's structure | `fall` (a named line in `mining.rs`, and a re-check when Voxels applies the dig) |
 | 144 (4) | Unit vision is a radius, no line of sight; line of sight a seam of the one sensor interface | `ids` (the seam), `con3` (the rows) |
 | 144 (5) | Terraform: FILL raises a footprint to its anchor's height, DIG lowers it, BOTH both; FILL and BOTH refill craters and trenches in the sphere to the generated surface; each voxel at the wall's cost | `site` |
@@ -218,7 +228,7 @@ aimed at the trailing seat (decision 36).
 | S2-05 | `HEADROOM_VOXELS` as a row | E26; `con3` (row), `ids` (reader) |
 | S2-06 | `MAX_ROUTE_NODES` | E27; `base` |
 | S2-07 | The edit and damage queues | engineering call E5; `base` |
-| S2-08 | The structure and wreck table totals | decision 25; `fire`, `tune2` |
+| S2-08 | The structure and wreck table totals | decision 25; `fire`, `ids` (the ruin reserve, E1), `tune2` |
 | S2-09 | The broadphase query radius | engineering call E11; `ids` (the padded query), `fire` (the constant deleted) |
 | S2-10 | A dropped Build target strands what was paid for | decision 26; `site` |
 | S2-11 | What a seat sees of an enemy asset | decision 5; `con4`, `wgw` |
@@ -239,7 +249,7 @@ aimed at the trailing seat (decision 36).
 | `initial_rows` in the sim's order; `hash.rs`'s `append_bytes` | item 136 (5) | `vfy1` |
 | A test of the `seal_commitment` door | item 136 (5) | `wgw` |
 | `oper`'s wire defaults (`int_of`, `text_of`, `bool_of`, `array_of`, `voxel`, `candidates::score`'s `time_ms.max(1)`) | item 136 (5) | `oprd` |
-| Whether to narrow the estimate's `NOT_FOUND` drawing, with `editor.rs`'s doc | item 136 (5), which gives it to "the next `crates/client-gdext` lane" | `view`. The next lane to touch the crate is `rnds`, but `rnds` edits `godot/scripts/host_link.gd` and only its pins in `crates/client-gdext/tests/godot_project.rs`, no source under `crates/client-gdext/src/`, so the first lane that owns the crate's sources, `view`, carries it, as item 136 (5) meant |
+| Whether to narrow the estimate's `NOT_FOUND` drawing, with `editor.rs`'s doc | item 136 (5), which gives it to "the next `crates/client-gdext` lane" | `view`. The next lanes to touch the crate are `con3` and `con4`, through named places (`rig.rs`' meter read, the `ViewEntity` and `BeaconSummary` literals), then `rnds`, which edits `godot/scripts/host_link.gd` and only its pins in `crates/client-gdext/tests/godot_project.rs`; none of them owns the crate's sources, so the first lane that does, `view`, carries it, as item 136 (5) meant |
 | `crates/client-gdext/src/rules.rs`' test comment (~283), "the owner's to tune at S1's demo", ruled by item 139 (1) ruling 6 | item 139 (6) | `view` |
 | The root `Cargo.toml`'s research NOTE, which names four of the six guarded crates | handoff NEXT 3 | `msrv` |
 | `gamectl`'s `b_01`-as-core texts (`scenario/run.rs`, `seat.rs`, `strings.rs`) | handoff NEXT 3 | `night` |
@@ -249,7 +259,7 @@ aimed at the trailing seat (decision 36).
 | `crates/sim/tests/allocations.rs` without walkers; a moving crowd's allocations | item 137 (2) (j) | `atk` |
 | `voxels.rs`'s "Nothing fills the queue yet" (~274), stale since `mine` | this plan's code check | `base` |
 | Expand & Mine's "ore seam", where the spec (§9) and the client say "scrap seam" | item 139 (6) | `oprd` |
-| `xtask/src/package.rs`'s Godot import isolated (`smoke_env`) | handoff NEXT 3 | **left out**: no S2 lane owns `package.rs`; it stays with that file's next owner |
+| `xtask/src/package.rs`'s Godot import isolated (`smoke_env`) | handoff NEXT 3 | **left out**: no S2 lane owns `package.rs` (`night` holds one named place in it, the replay's scenario list, and nothing else); it stays with that file's next owner |
 | The register's line (~411) giving `upload.rs`'s K and B to S2's exit, where `crates/mesher/src/upload.rs` (~44–49) says S6's art pass | digest | the main session's register edit with this plan's docs PR: the code is right |
 | `crates/verifier/src/limits.rs` (~203) dating the reach window S2/S3, where `rules.proto` (~727) says S3 | digest | `vfy1` rewords `limits.rs` to S3 |
 | `playbook.proto`'s `repair_threshold_pct` comment (~1308–1310, "once it falls below this percentage … 0 means never") and the header's "terraform's meaning beyond its enum is still unruled" (~1302), stale since item 144 (5) | the reviews | `con4`, with decision 38 |
@@ -279,29 +289,71 @@ and names the decision that puts that reading to the owner.
     id" reads oldest generation first, then lowest row: total and deterministic. A row-major packing
     (row in the high bits, so that lowest id is lowest row) was weighed and not taken, because it
     renumbers every id already written and breaks that rule.
-  - **Bounded by type, not by mask.** A `Row` newtype holds 0 to 4 095 and a `Generation` newtype a
+  - **Bounded by type, not by mask.** A `Row` newtype holds 0 to 4 094 and a `Generation` newtype a
     `u16`; `AssetId::tagged` takes a tag, a `Row` and a `Generation` and cannot truncate, and the
     masking constructor (`index & INDEX_MASK`, "truncated to them … a deterministic answer rather
-    than a panic") goes. A table whose room, derived at load, would exceed 4 096 rows is refused at
-    load with a typed error; the world totals (300 units, 40 beacons, item 63) and the wreck room of
-    decision 25 sit an order of magnitude under it.
-  - **Every row read goes through `row()`.** The 40 sites that read an id's raw value as a row
-    (`usize::try_from(x.raw())`, counted at `7a351e7`: `world.rs`, `mining.rs`, `power.rs`,
-    `mandate.rs`, `programs.rs`, `interpreter/{cond,exec}.rs`, and the gateway's `targeting.rs`
-    ~137 and ~1141) read `id.row().index()` instead, and `credit::asset_state` (~191), which reads
-    `id.index()` as a row and would silently book a kill against a reused row, reads the row and
-    checks the generation, answering none for a stale one (counted, E4).
+    than a panic") goes. A table whose room, derived at load, would exceed 4 095 rows is refused at
+    load with a typed error, so row 4 095 is never a real row; the world totals (300 units, 40
+    beacons, item 63) and the wreck room of decision 25 sit an order of magnitude under it.
+  - **A sentinel has no row.** `UnitId::NONE` and `BeaconId::NONE` are `u32::MAX` (`tables.rs` ~54,
+    ~2220), whose low bits under the new layout would read as generation 65 535 and row 4 095, and
+    `AssetId::of_unit(UnitId::NONE)` would mask it into a unit id today. So the sentinels stay in
+    storage, where the snapshot's fixed-width rule wants them, and never reach the API: every column
+    accessor that can hold one answers `Option<Id>`, `row()` and `generation()` of a sentinel
+    answer a typed `IdError::Sentinel`, and every `AssetId::of_*` refuses a sentinel with that error
+    instead of masking it. Test: `a_sentinel_id_has_no_row`.
+  - **Every row read goes through `row()`, in both patterns.** The 40 sites that read an id's raw
+    value as a row (`usize::try_from(x.raw())`, counted at `7a351e7`: `world.rs`, `mining.rs`,
+    `power.rs`, `mandate.rs`, `programs.rs`, `interpreter/{cond,exec}.rs`, and the gateway's
+    `targeting.rs` ~137 and ~1141) read `id.row().index()` instead. The second pattern is an id
+    column held as a bare `u32` and read as a row through `usize::try_from(*id)`, about seventeen
+    sites more, among them `structures.homes()` in `structures_built_by` (`world.rs` ~1544), the
+    target table's `built` links (`mandate.rs` ~398, ~431) and beacons (`world.rs` ~1879), the
+    sim's `targeting.rs` (~268) and the broadphase's items (`tables.rs` ~2026). Those columns become
+    columns of typed ids (`BeaconId`, `StructureId`, `UnitId`), whose raw value already carries the
+    generation, so the snapshot's bytes keep their width; `ids`' sweep covers both patterns, and the
+    sim's `no_silent_fallback_is_left` (E7) gains the second pattern so it cannot return.
+    `credit::asset_state` (~191), which reads `id.index()` as a row and would silently book a kill
+    against a reused row, reads the row and checks the generation, answering none for a stale one
+    (counted, E4).
+  - **A reference into a freed row is checked where it is read, never trusted.** A freed row's
+    holders are not all findable when it is freed (a target's `built` link, a structure's home, a
+    unit's home beacon, the attacker memory, a kill-credit slot, an Attack pin), so nothing relies
+    on clearing them: every read of a referenced row compares the reference's generation with the
+    row's, and a stale reference answers a typed `StaleRef`, counted under its enumerated reason
+    beside E4's drops, which the reader treats as "gone" (a `built` link to a freed structure is a
+    target not going up; a stale pin is the after-action's "moved or died"). A row's own columns
+    are reset on reuse (below), which is the other half.
   - **When a row is freed.** A dead row is freed only at the end of the Match phase, after
     `settle_beacon_deaths` (which finds the alive-to-dead edge against `beacon_alive`), the
     eliminations and the respawns have run, and after its death has settled (its wreck made, its
     kill credit booked; E2). The lowest free row is reused first and its generation goes up by one;
     a row whose generation would pass `u16::MAX` is never reused again (checked arithmetic, never a
     wrap), counted under its reason. **Commander rows are exempt**: `settle_respawns` respawns a
-    commander into its own row, so that row is never freed. On reuse every per-row column is reset,
-    each named in `ids`' PR and covered by a test that reuses a row after a death: the router's walk
+    commander into its own row, so that row is never freed. **Core rows are exempt too:**
+    `power::core_of` (`power.rs` ~800–819) takes a seat's core as its lowest beacon id and relies
+    on a dead core's row staying ("Brownout distance is measured from the core **or its former
+    site**", spec §5), and `World::beacon_max_hp` (`world.rs` ~1243–1255) and the brownout
+    order's `is_core` (`power.rs` ~1130) read it; a core row is generation 0 and never freed, so it
+    stays its seat's lowest id under the packed order and its site stays readable. Test:
+    `a_dead_core_still_anchors_the_brownout_order`. On reuse every per-row column is reset, each
+    named in `ids`' PR and covered by a test that reuses a row after a death: the router's walk
     state and route, the home beacon, the program and its job columns, the weapon cooldown, the
     kill-credit slots, the attacker memory (E12), the retreat state and any mandate-table row that
     names it.
+  - **A ruin holds a row of the world's, never a seat's.** Today a seat's structure share counts
+    every row it ever built, ruins included, through the home beacon's row, "correct only because a
+    row is never freed" (`structures_built_by`, `world.rs` ~1535–1549), so that one seat's churn
+    cannot fill the table and refuse another seat's build "for a reason that seat cannot see"
+    (`STRUCTURE_TABLE_ROOM`'s doc, ~181). Under reuse a seat's share counts its **live** structures,
+    from the owner column, and a ruin, which is neutral, counts against no seat's share: it holds a
+    row in a ruin reserve beside the shares, as large as the structure room, so every structure the
+    world can stand at once can turn to ruin together. A ruin that finds the reserve full buries the
+    oldest unsalvaged ruin first, counted and announced, which is decision 25's ruled rule for
+    wrecks applied to ruins, with the same in-world reason (the ash buries them); a ruin's row is
+    freed when it is salvaged or destroyed. So a seat's build is refused only when its own live
+    share is full, a refusal it can see, and never because of another seat's ruins. That applies an
+    owner rule where it reaches rather than inventing one; the owner can veto it with decision 25.
   - **`b_NN` names count placements, which become state.** `BeaconTable::push` derives a beacon's
     ordinal as `count_of(seat)`, the rows the seat holds alive or dead (`tables.rs` ~2465–2479), and
     `row_of_ordinal` resolves alive or dead (~2519); with reuse, ordinals would repeat and a dead
@@ -355,14 +407,17 @@ and names the decision that puts that reading to the owner.
   (64) and the damage queue (256) are guesses (S2-07). `base` sizes both at load from the world's
   table rooms. The damage queue's worst case is a sum and a product: one direct order per armed
   asset, plus, for splash, the shells that can land on one tick (the shell room, E13) times the most
-  assets a splash disc can hold (bounded by the unit, structure and beacon rooms together); the edit
-  queue's is one edit per live asset plus one crater per landing shell or detonating charge (the
-  support rule moves voxels through `set` itself and files no edit). Each bound is computed with
-  checked arithmetic, refused at load with a typed error if it overflows, and its bytes are reported
-  in G3′. `request_damage` and `request_voxel_edit` return a typed `QueueFull` error, propagated,
-  and a test holds that the sizing covers the worst case. Mining's existing back-off on a full queue
-  becomes a match on that error, and the host seams answer the typed error instead of a `bool`
-  (`base`'s named place in `host.rs`).
+  assets a splash disc can hold (bounded by the unit, structure and beacon rooms together); and, for
+  the Voxels phase, one fall-damage order per asset that can stand on or under a falling region (E2,
+  `fall`), bounded by the unit, structure, beacon and ruin rooms together. Combat's orders are
+  applied before Voxels files any, so the queue is sized to the larger of the two phases' bounds.
+  The edit queue's is one edit per live asset plus one crater per landing shell or detonating charge
+  (the support rule moves voxels through `set` itself and files no edit). Each bound is computed
+  with checked arithmetic, refused at load with a typed error if it overflows, and its bytes are
+  reported in G3′. `request_damage` and `request_voxel_edit` return a typed `QueueFull` error,
+  propagated, and a test holds that the sizing covers the worst case. Mining's existing back-off on
+  a full queue becomes a match on that error, and the host seams answer the typed error instead of a
+  `bool` (`base`'s named place in `host.rs`).
 - **E6. The broadphase cannot overflow, by construction.** `phase_broadphase` checks the rebuild
   with a `debug_assert!` only (`world.rs` ~2578), so a release build would query an empty grid.
   `base` sizes the grid from the unit table's room at construction and returns a typed error there
@@ -436,7 +491,11 @@ and names the decision that puts that reading to the owner.
   `RETURN_FIRE` and retreat read hashed state, which `fire` adds to the three places in its PR: a
   per-asset attacker memory (the last enemy that damaged it, as an id with its generation, and the
   tick), filled from each applied order's dealer and, for a shell, the shell's firer (E13); and a
-  per-unit retreat state (retreating or not, and toward which beacon).
+  per-unit retreat state (retreating or not, and toward which beacon). The dealer travels on the
+  order: `DamageOrder` carries a seat (`by`, `world.rs` ~497–511) and no asset, so `base` lays out
+  its source, an `Option<AssetId>` with its generation, `None` for every order on `main`, beside
+  `VoxelEdit`'s seat and in the same gateway named place (`crates/gateway/tests/support/mod.rs`'s
+  literals), so that `fire`, which fills it, breaks no gateway literal while `wgw` owns the gateway.
 - **E13. Shells are hashed entities.** A mortar shell in flight is a row in a new shell table
   (target point fixed at fire, landing tick, seat, the firer's id with its generation, weapon), in
   the hash, the snapshot and the goldens in `fire`'s PR. Its room is derived at load from firings,
@@ -452,41 +511,54 @@ and names the decision that puts that reading to the owner.
   voxels" (spec §9, friendly-fire avoidance) needs a wall voxel's owner, and the owner's
   per-material hardness (decision 10) needs a terrain voxel's damage level. `fire` gives both
   material ids from 9 up, so ownership and damage live in the voxels the chunk digests already hash
-  and no new table is needed: walls take one id per seat and level plus a neutral wall at each
-  level, two levels by the ruling (whole, cracked), which is ten ids at the sim's four seats (E19);
+  and no new table is needed: walls take one id per seat and level, two levels by the ruling
+  (whole, cracked), which is eight ids at the sim's four seats (E19), and no neutral wall id, since
+  whose a wall is now is read rather than written (below) and a neutral id would have no writer;
   terrain takes a cracked id for each level a terrain material can hold beyond its first, up to the
   catalogue's maximum of three levels, which is two ids for each of dirt, stone, the three ore
   grades and the three vent grades, sixteen in all, so the owner can tune any of `blast_levels` from
-  1 to 3 at the demo without a code change. The ids are wire values, additive and never withdrawn,
-  which is why the catalogue defines only the range the tuning needs and a row outside 1 to 3 is
-  refused at load with a typed error. That is 26 ids, 9 to 34, of the 247 a `u8` has free. What
-  each place needs:
+  1 to 3 at the demo without a code change; and **`BEDROCK`** takes one, the material generation
+  writes in the bottom `materials.bedrock_layers_voxels` layers of every column (`con3`'s row:
+  whole voxels counted up from z = 0, proposed 1, owner at S2's demo, 0 refused at load because the
+  support rule needs a floor). The ids are wire values, additive and never withdrawn, which is why
+  the catalogue defines only the range the tuning needs and a row outside 1 to 3 is refused at load
+  with a typed error. That is 25 ids, 9 to 33, of the 247 a `u8` has free. **Bedrock and the core's
+  bore never crack and are never removed:** a bedrock voxel has one level that no blast steps, a
+  bore voxel keeps its generated material and is skipped by every blast through the bore's derived
+  table (E31), a charge's cut stops above both, and neither is mined or levelled. What each place
+  needs:
   - **The sim's catalogue** (`crates/sim/src/voxels.rs`, `Material`): the new constants and
     `Material::ALL`; a level read and a "one blast later" read; `ore_richness` and `vent_richness`
     answering a cracked ore or vent id with its grade, so that Mine, the feature table's derived
     liveness and the bore's power read a cracked seam or vent as itself (AGENTS.md §4.8); a cracked
-    voxel is solid, so `is_solid`, pathing's tops and the support rule (`fall`) are unchanged.
-    Generation writes whole materials only, so no mapgen golden moves.
+    voxel is solid, and so is bedrock, so `is_solid`, pathing's tops and the support rule (`fall`)
+    are unchanged. Generation writes whole materials only, and bedrock in the bottom layers, which
+    changes the bottom layer of every chunk column: the mapgen digest goldens and every chain move
+    once for it, in `fire`, which re-blesses every chain anyway and names bedrock as a reason.
   - **The chunk codec** (`crates/proto/src/chunk_rle.rs`): nothing. It carries any byte; a cracked
     voxel among whole ones only splits a run, so a cratered chunk encodes in more runs, which `wgw`'s
     and `view`'s measurements (E28, the crater stream) count.
-  - **The wire's table**, `ViewChunk`'s comment in `gateway.proto`: `con4` writes every new id there,
-    wall and cracked terrain, additively. The gateway's `the_wire_material_table_is_the_sims`
-    (`crates/gateway/tests/view.rs` ~687) holds its `TABLE` to `Material::ALL`'s length, so `fire`,
-    which grows `Material::ALL` while `wgw` owns the gateway, is granted that `TABLE` as a named
-    place.
+  - **The wire's table**, `ViewChunk`'s comment in `gateway.proto`: `con4` writes every new id
+    there, wall, cracked terrain and bedrock, additively. The gateway's
+    `the_wire_material_table_is_the_sims` (`crates/gateway/tests/view.rs` ~687) holds its `TABLE` to
+    `Material::ALL`'s length, so `fire`, which grows `Material::ALL` while `wgw` owns the gateway,
+    is granted that `TABLE` as a named place.
   - **The client** (`crates/client-gdext/src/view.rs` `palette_of`, ~80) draws a material its table
     does not name as air, so on `main` between `fire`'s merge and `view`'s a cracked stone voxel
     draws as a hole and a wall as nothing; `view` therefore follows `fire` and maps every new id.
-  - **The mesher** (`crates/mesher`, `PALETTE`): rows for cracked terrain and for walls by seat and
-    level, art placeholders for S6's pass; its face mask is keyed by (material, light), so a cracked
-    voxel splits a quad, which `view`'s crater stream measures.
+  - **The mesher** (`crates/mesher`, `PALETTE`): rows for cracked terrain, bedrock and walls by
+    seat and level, art placeholders for S6's pass; its face mask is keyed by (material, light), so
+    a cracked voxel splits a quad, which `view`'s crater stream measures.
 
   Whose a wall is after its beacon dies or its seat is eliminated (decision 42) is **read, not
   written**: a seat's wall voxel counts as that seat's while it lies inside one of the seat's live
   spheres and as neutral otherwise, so a beacon's death rewrites no voxel and nothing waits for the
-  next Voxels phase. `view` does not start before `fire` merges (section 4.1). Ruins and built
-  structures stay entities with footprints.
+  next Voxels phase. The reading is the sim's alone. The client may not make it (AGENTS.md §3 rule
+  4: deciding whose a wall is from the spheres would be a gameplay decision), so it draws a wall
+  voxel by the seat its material names, whole or cracked, which is who built it; a neutral wall
+  looks like its builder's until S6's art pass, when, if the owner wants neutrality drawn, the
+  gateway marks it in the view. `view` does not start before `fire` merges (section 4.1). Ruins and
+  built structures stay entities with footprints.
 - **E15. The destroyed-value term, and the recap's tallies, are accumulated per seat.**
   `audit::destroyed_value` is always zero and `credit.rs` says the split is "emitted and not
   accumulated" (~33). `fire` adds a per-seat destroyed-value column, credited at each kill by the
@@ -502,7 +574,8 @@ and names the decision that puts that reading to the owner.
   `economy.salvage_percent` of its build cost; nothing produces a wreck today (`world.rs` ~226).
   `fire` makes them, in the settle function E2 runs after Combat and after Voxels, into a table
   whose room decision 25 rules; `site`'s drones salvage them. A ruin (a structure on a destroyed
-  beacon) stays a structure row turned neutral, as now.
+  beacon) stays a structure row turned neutral, as now, held in E1's ruin reserve and counted
+  against no seat's share.
 - **E17. The event vocabulary grows additively.** Each lane that needs a kind adds it at the end of
   `EventKind` (next free id 38) and each failure at the end of `StepFailure` (next free id 13, 10
   retired), with a new name, never renaming or reusing one (AGENTS.md §5, item 135 (2) (j)). Events
@@ -595,12 +668,21 @@ and names the decision that puts that reading to the owner.
   `end_tick`, which `step` calls in `PHASE_ORDER`, and the host offers a phase stepper that runs one
   phase per call and **hands control back between phases**: nothing in the tick calls into a walled
   crate and there is no callback (AGENTS.md §4.9), the bench timing each call from outside; a test
-  holds that stepping a match phase by phase leaves the same hash chain as stepping it whole; (2)
-  **the gate's layout.** Real play cannot reach the gate load: `map_ceiling_kw` 190 at `kw_per_unit`
-  1 powers 190 units, and 40 beacons by walk-in at the commander's one voxel a second do not fit one
-  segment. So the load generator is a **bench rules variant**, built in memory from
-  `rules/rules.v1.json` with named overrides (the power ceiling and the fielding totals at the gate
-  load), its own `rules_hash` printed in every report and never shipped, and a **layout seam**,
+  holds that stepping a match phase by phase leaves the same hash chain as stepping it whole.
+  **A half-finished tick is never exposed:** while the stepper holds a tick open (a phase has run
+  and `end_tick` has not), the host's capture, save and filing seams (`file_damage`,
+  `file_voxel_edit`) and its whole-tick `step` answer a typed `MidTick` refusal, never finishing
+  the tick silently or saving its half, and the stepper is a type-state (`PhasedTick`, which holds
+  the host's mutable borrow for the tick's length), so no code holding it can reach those seams at
+  all; the refusal covers a `PhasedTick` dropped mid-tick. Test:
+  `a_half_finished_tick_cannot_be_captured_saved_or_filed`; (2) **the gate's layout.** Real play
+  cannot reach the gate load: `map_ceiling_kw` 190 at `kw_per_unit` 1 powers 190 units, and 40
+  beacons by walk-in at the commander's one voxel a second do not fit one segment. So the load
+  generator is a **bench rules variant**, built in memory from `rules/rules.v1.json` with named
+  overrides (the power ceiling at the gate load; the fielding totals are world constants, not rows,
+  `UNIT_TABLE_ROOM` 300 and `BEACON_TABLE_ROOM` 40 in `world.rs` ~153–192, already at the gate's
+  300 units and 40 beacons, so the variant does not touch them), its own `rules_hash` printed in
+  every report and never shipped, and a **layout seam**,
   `Host::seed_layout`, that places the gate's 40 beacons with their mandates and their starting
   units through the constructors map generation uses, once, in the lobby before the first Lull, so
   the layout is an input like the seed; it is refused outside the lobby with a typed error. A
@@ -625,7 +707,8 @@ and names the decision that puts that reading to the owner.
   named in the PR.
 - **E33. Ids, versions and re-blesses are taken in merge order.** Two lanes running at once may both
   add an event kind (`site` and `fall`, `atk` and `surv`), or both re-bless the same goldens (`con3`
-  and `vfy1` every `report_hash` golden; `vfy2`, `wgw` and `fire` the gateway's). Ids are never
+  and `vfy1` every `report_hash` golden, and `ids` and `vfy2` again; `vfy2`, `wgw` and `fire` the
+  gateway's; `con4` and `night` `gamectl docs`' golden). Ids are never
   pre-chosen: a lane takes the next free `EventKind` and `StepFailure` ids and the next
   `SNAPSHOT_VERSION` on the `main` it rebases onto, and the lane that merges second renumbers its
   own in its rebase commit (its tests name kinds, not raw ids) and re-blesses after the rebase,
@@ -684,16 +767,27 @@ line names its places exactly. On the schedule of section 4.1 the pairs are: `ba
 driver, `tests/support/mod.rs` and `tests/confinement.rs`); `base`, then `ids`, with `con4`'s sim
 place (the Defend and Attack arms of `compile_settings_row` in `interpreter.rs` and their refusal
 table entries) while `con4` is open; `ids` and `con4` in `crates/gateway` (ids' `targeting.rs` row
-reads; con4's `ViewEntity` and `BeaconSummary` literals); `site` and `fall` in `crates/sim`; `atk`
-and `surv` in `crates/sim`. Lanes that would otherwise overlap are sequenced instead: `rnds` after
-`east` (both in `crates/client-gdext`), `vfy1` after `east` (east's verifier case and golden),
+reads; con4's `ViewEntity` and `BeaconSummary` literals); `fire` and `wgw` in `crates/gateway`
+(fire's `TABLE` in `tests/view.rs` and its event arms, E14 and E17; wgw owns the rest); `site` and
+`fall` in `crates/sim`; `atk` and `surv` in `crates/sim`. Lanes that would otherwise overlap are
+sequenced instead: `rnds` after `east` and after `con4` (east's client fixtures; `con3`'s
+`godot_project.rs` and `rig.rs` places and `con4`'s `ViewEntity` literals, all in
+`crates/client-gdext`, so `rnds` runs after `night` in its slot), `vfy1` after `east` (east's
+verifier case and golden),
 `night` after `east` (east's `crates/gamectl/tests`), `con4` after `vfy1` (con4's verifier places),
 and `g3h` and `view` apart in `xtask` (`view` adds the mesher stream's case to
 `crates/mesher/tests/perf_alarm.rs` only, and `g3h`, which holds `xtask` after `view` merges, adds
 its `perf_alarms` entry).
 
 **Re-blesses in the merge train (E33).** Where two running lanes re-bless the same goldens, the one
-that merges second rebases and re-blesses, its PR naming the re-bless and the lane it followed.
+that merges second rebases and re-blesses, its PR naming the re-bless and the lane it followed. **A
+`report_hash` re-bless reaches past the verifier's own goldens.** The verifier's version and
+`report_hash` are carried by `tests/golden/gateway/demo_*_verify/`,
+`tests/golden/gateway/walkthrough/`, `tests/golden/operator/wizard/*/` and
+`godot/fixtures/rows_report.json`, so every lane whose change moves `report_hash` (`vfy1`, `con3`,
+`ids`, `vfy2`, `wgw`, `fire`, `site`, `dfnd`, `atk`, `tune2`) is granted those as named places for
+the re-bless alone, in a crate no running lane owns, and its PR names them; where a running lane
+owns one (`wgw` the gateway's), the second to merge re-blesses.
 
 ---
 
@@ -813,12 +907,17 @@ that merges second rebases and re-blesses, its PR naming the re-bless and the la
     refusal), **E3**, **E4**, **E5** (both queues and the host seams' typed answers), **E6**,
     **E7** (the sim's whole sweep and its test), **E8**'s refusal table, its sim test and, last, the
     verifier's cross-check, and **E27** (S2-06).
-  - **`VoxelEdit`'s seat**, laid out now: every edit carries the editing seat (`Option<SeatId>`,
-    `None` for every edit on `main`, which are all seat-less), so that `fire`, which first fills it,
-    changes no gateway literal while `wgw` is running (the additive shape of A5's routing). The edit
-    queue is not state, so no chain moves.
-  - **E30's two seams** for the walled harness: the tick split into phases with a host-side stepper
-    that hands control back between phases, and the layout seam; the gateway test
+  - **`VoxelEdit`'s seat and `DamageOrder`'s source**, laid out now: every edit carries the editing
+    seat (`Option<SeatId>`) and every damage order its dealing asset (`Option<AssetId>`, E12), so
+    that `fire`, which fills both for combat, changes no gateway literal while `wgw` is running (the
+    additive shape of A5's routing). This lane fills the seat on Mine's digs (`programs.rs` ~624,
+    the mining drone's seat), because item 144 (2) names a dig among the edits whose seat collapse
+    credits; `fire` fills it on craters, `site` on terraform's levelling and refill and the wall's
+    voxels, `atk` on the charge's cut, and the host's test seams file seat-less edits. The queues
+    are not state, so no chain moves.
+  - **E30's two seams** for the walled harness: the tick split into phases with a host-side
+    stepper that hands control back between phases, a type-state whose open tick refuses capture,
+    save, filing and a whole-tick step with `MidTick`, and the layout seam; the gateway test
     `stepping_by_phase_hashes_as_stepping_whole`.
   - **The re-dating sweep's sim half** (item 139 (6); `redate` leaves the sim to this lane): the six
     markers in `world.rs`, `rules.rs` (~186, ~191) and `audit.rs` (~34) that name S1's demo,
@@ -839,13 +938,14 @@ that merges second rebases and re-blesses, its PR naming the re-bless and the la
   `a_zero_round_limit_is_refused`; `a_tick_past_the_last_is_an_error`; `no_silent_fallback_is_left`;
   `the_refusal_table_and_the_arms_agree`; `every_construct_the_sim_refuses_has_an_e_code` (the
   verifier's, last); `stepping_by_phase_hashes_as_stepping_whole`;
+  `a_half_finished_tick_cannot_be_captured_saved_or_filed`; `a_mine_dig_carries_its_seat`;
   `the_layout_seam_is_refused_outside_the_lobby`; **no chain and no `report_hash` golden moves** (no
   hashed field and no snapshot change; a chain that moves is a behaviour change the PR names, or a
   bug).
 - **Contract PR:** yes (determinism code: the tick loop's per-phase form; the event vocabulary,
-  `StepFailure`). **PLACEHOLDERs:** none new. **Agent-days:** 6–7.5. **Split seam:** ruling 10, the
-  refusals, E3 to E6 and E8's table as commit set 1; E7's sweep as set 2; `VoxelEdit`'s seat, E30's
-  seams and the gateway places as set 3; one PR.
+  `StepFailure`). **PLACEHOLDERs:** none new. **Agent-days:** 6.25–7.75. **Split seam:** ruling
+  10, the refusals, E3 to E6 and E8's table as commit set 1; E7's sweep as set 2; `VoxelEdit`'s
+  seat, `DamageOrder`'s source, E30's seams and the gateway places as set 3; one PR.
 
 ### `ids` — `crates/sim`: generational ids, live fielding and the sensor seam
 
@@ -857,10 +957,13 @@ that merges second rebases and re-blesses, its PR naming the re-bless and the la
   target `D:/build/ids`.
 - **Builds:**
   - **E1** in full: the additive id layout, `Row` and `Generation`, the load-time refusal of a room
-    over 4 096, every row read through `row()`, `credit::asset_state`'s generation check, rows freed
-    at the end of the Match phase with commander rows exempt and every per-row column reset on
-    reuse, the per-seat placement counter behind `b_NN` and its restore check, and the per-seat
-    beacons-lost counter; `SNAPSHOT_VERSION` 10.
+    over 4 095, the sentinels kept out of the API (`Option` accessors, `row()` and every `of_*`
+    refusing them), every row read through `row()` in both patterns, the bare-`u32` id columns made
+    typed, every reference read checked by generation (`StaleRef`, counted), `credit::asset_state`'s
+    generation check, rows freed at the end of the Match phase with commander and core rows exempt
+    and every per-row column reset on reuse, the structure share counted over live structures with
+    ruins in their reserve, the per-seat placement counter behind `b_NN` and its restore check, and
+    the per-seat beacons-lost counter; `SNAPSHOT_VERSION` 10.
   - **E10**, the sensor seam, reading vision radii from `con3`'s rows; `UNIT_VISION_RADIUS_VOXELS`
     deleted, S1-34's sim copy discharged; **E11**'s padded query, which every vision query and,
     from `fire`, every weapon query uses.
@@ -872,30 +975,40 @@ that merges second rebases and re-blesses, its PR naming the re-bless and the la
   `a_seat_that_lost_its_units_can_field_again` (attrition past the per-seat share);
   `a_reused_row_does_not_answer_to_its_old_id` (a stale kill-credit slot, a stale sighting and a
   stale event subject miss the new asset); `a_reused_row_starts_with_every_column_reset`;
-  `a_commander_row_is_never_freed`;
+  `a_commander_row_is_never_freed`; `a_dead_core_still_anchors_the_brownout_order`;
+  `a_sentinel_id_has_no_row`; `a_stale_reference_is_refused_and_counted` (a target's `built` link
+  and a structure's home into a reused row); `a_ruin_takes_no_seats_share`;
+  `a_full_ruin_reserve_buries_the_oldest_ruin`;
   `a_dead_beacon_still_answers_beacon_gone_after_its_row_is_reused`;
-  `an_id_written_before_decodes_as_itself`; `a_room_over_4096_rows_is_refused`;
+  `an_id_written_before_decodes_as_itself`; `a_room_over_4095_rows_is_refused`;
   `beacons_lost_survives_save_and_restore`; `the_placement_counter_survives_save_and_restore`;
   `a_unit_that_walked_into_range_this_tick_is_found`; `vision_reads_its_row`; **every chain**
   re-blessed once (the placement counter and beacons-lost columns move every one), the first
   diverging tick named per chain; every `report_hash` golden re-blessed (the snapshot version).
-- **Contract PR:** yes (determinism code: ids, the hash, the snapshot). **PLACEHOLDERs:** none new;
-  the vision rows' values are `con3`'s. **Agent-days:** 5–6.
+- **Contract PR:** yes (determinism code: ids, the hash, the snapshot; the event vocabulary, a
+  `ruin_buried` kind with its gateway arms, E17). **PLACEHOLDERs:** none new;
+  the vision rows' values are `con3`'s; the ruin reserve's size rides `STRUCTURE_TABLE_ROOM`'s
+  marker. **Agent-days:** 5.75–6.75 (three-quarters of a day of it for the core rows, the second
+  pattern's sites, the sentinels, the stale references and the ruin reserve, from the verification
+  review).
 
 ### `con3` — S2's rules rows and the next `proto/**` pull request's carries
 
 - **Owns:** `proto/gp/v1/rules.proto` and its generated tree, `proto/gp/api/v1/gateway.proto`'s and
   `playbook.proto`'s **comments and the two field changes named below**, `proto/buf.yaml`,
   `rules/rules.v1.json`, `rules/README.md` (after `redate`), the whole of `crates/proto` (its tests
-  pin the rules table and the messages S1-42 names), `tests/golden/{proto,docs}`, the re-bless of
+  pin the rules table and the messages S1-42 names), `tests/golden/{proto,docs}`,
+  `tests/golden/schema/` if `get_schema`'s answer moves for the two field changes, the re-bless of
   every `report_hash` golden under `tests/golden/verifier` (owned by `vfy1`, which merges first:
-  this lane re-blesses after its rebase, E33), and named places for the restatements that hold the
-  rules table equal: `godot/scripts/mesher_rules.gd`'s `RULES_JSON`
+  this lane re-blesses after its rebase, E33) and of the gateway's and the operator's that carry it
+  (`tests/golden/gateway/demo_*_verify/` and `walkthrough/`, `tests/golden/operator/wizard/*/`,
+  `godot/fixtures/rows_report.json`; section 3's preamble), and named places for the restatements
+  that hold the rules table equal: `godot/scripts/mesher_rules.gd`'s `RULES_JSON`
   (`crates/client-gdext/tests/godot_project.rs`), the gateway goldens that carry the table's
   `revision`; and, for the forecast's two fields made `optional`, `crates/client-gdext/src/rig.rs`'
-  meter read (~845–858, which reads `forecast.bmi_next_dollars` and `forecast.committed_dollars` as
-  plain integers behind a presence check) and its test. **Branch** `build/s2-rules-rows`, worktree
-  `../pharmakos-con3`, target `D:/build/con3`.
+  meter read (~845–858, which reads `forecast.bmi_next_dollars` and `forecast.committed_dollars`
+  as plain integers behind a presence check) and its test. **Branch** `build/s2-rules-rows`,
+  worktree `../pharmakos-con3`, target `D:/build/con3`.
 - **Builds:**
   - **Rows.** A row that replaces a constant holds today's constant, with decision 17's proposal in
     its owner PLACEHOLDER for `tune2` to apply, so no chain moves; a row nothing reads yet takes
@@ -903,15 +1016,18 @@ that merges second rebases and re-blesses, its PR naming the re-bless and the la
     (E26); per-kind `vision_radius_voxels` on `UnitKind` and `StructureKind` (S1-34; every kind 8
     today, the scouts' constant, so the sim's answer is unchanged until `ids` reads the rows and
     `tune2` sets them); a `Weapon` message (range, damage, cooldown, splash radius, crater radius,
-    shell speed) on the armed kinds — `units.raider`, `structures.autocannon`, `structures.mortar` —
-    and on the core (`beacon.core_weapon`); a `Combat` block (the under-attack window for Defend's
-    urgency band, the threat-route surcharge, the demolition charge's radius and fuse, the repair
-    rate, the terraform rate); a `Defend` block's `picket_radius_voxels` (spec §19); a `Collapse`
-    block (`max_region_voxels`, `fall_damage_hp`, `max_visits_per_tick`; item 138 (3), decision 11);
-    and a `Materials` block: `blast_levels`, one field per terrain kind — dirt, stone, ore and
-    vent, the ore and vent grades sharing their kind's — at decision 10's proposal (dirt 1, ore 1,
-    vent 1, stone 2; owner, at S2's demo), which nothing reads until `fire`; `wall_min_height_voxels`
-    per decision 40; the bedrock layer. A wall's two levels are the ruling's and the catalogue's
+    shell speed) on the armed kinds — `units.raider`, `structures.autocannon`, `structures.mortar`
+    — and on the core (`beacon.core_weapon`); a `Combat` block (the under-attack window for
+    Defend's urgency band, the threat-route surcharge, the demolition charge's radius and fuse, the
+    repair rate, the terraform rate); a `Defend` block's `picket_radius_voxels` (spec §19); a
+    `Collapse` block (`max_region_voxels`, `fall_damage_hp`, `max_visits_per_tick`; item 138 (3),
+    decision 11); and a `Materials` block: `blast_levels`, one field per terrain kind — dirt,
+    stone, ore and vent, the ore and vent grades sharing their kind's — at decision 10's proposal
+    (dirt 1, ore 1, vent 1, stone 2; owner, at S2's demo), which nothing reads until `fire`;
+    `wall_min_height_voxels` per decision 40; and `bedrock_layers_voxels`, the bottom layers of
+    every column that generation writes as `BEDROCK` (a `uint32` in whole voxels counted up from z =
+    0, proposed 1, owner at S2's demo; 0 refused at load, since the support rule needs a floor;
+    E14), which nothing reads until `fire`. A wall's two levels are the ruling's and the catalogue's
     (E14), not a row. Field numbers come from the free ranges of each message (`UnitKind` 5+,
     `StructureKind` 4+, `Beacon` 3+, `Locomotion` 13+, `RulesTable` 3–9 and 23+); the lane picks
     them and the reviews read them as a contract decision. `revision` 4 → 5.
@@ -927,8 +1043,10 @@ that merges second rebases and re-blesses, its PR naming the re-bless and the la
     made `optional` (item 135 (2) (f), (g)), with `rig.rs`' meter reading the presence the type now
     carries instead of its own key check; `ResolvedRef.reachable` added (item 133 (3) (i)), which
     `wgw` writes from `resolve_refs` (dropping the `travel_ms` 0 the item calls a magic value) and
-    `view` draws; until `wgw` merges the gateway writes the field's default, as it writes every
-    field of the message (`surface/planning.rs` ~953).
+    `view` draws. `resolve_refs`' answer is hand-written (`resolved_json`, `surface/planning.rs`
+    ~958), not generated from the message, so adding the field writes nothing: until `wgw` adds it
+    to `resolved_json` the answer simply lacks it, and no client reads it before `view`, which
+    follows `wgw`.
   - **The re-dating `redate` could not do:** `rules.proto`'s 47 markers (the generated copy
     regenerated), and `rules.v1.json`'s `note` with its golden copy, re-dated in the same rules
     re-bless.
@@ -941,7 +1059,8 @@ that merges second rebases and re-blesses, its PR naming the re-bless and the la
   **Acceptance:** `buf lint`; `buf breaking` in `WIRE_JSON` mode (making fields 5 and 6 `optional`
   is wire-compatible; any break stops the lane); `the_rules_table_is_in_canonical_form`;
   `the_restated_rows_agree`; every `report_hash` golden re-blessed with the reason "`rules_hash`
-  moved: S2's rows added, `revision` 5, the note re-dated", after `vfy1`'s; the gateway goldens that
+  moved: S2's rows added, `revision` 5, the note re-dated", after `vfy1`'s, the gateway's and the
+  operator's `report_hash` goldens with them; the gateway goldens that
   carry the forecast's two fields re-blessed if their JSON moves; `rig.rs`' meter test green over a
   forecast without the two fields; `godot_project.rs` green over `mesher_rules.gd`; **no chain
   moves**; the main session's local package run (`rules/` ships).
@@ -984,9 +1103,9 @@ that merges second rebases and re-blesses, its PR naming the re-bless and the la
     heading), the new entity kinds (`shell`, `wreck`, `ruin`), `BeaconSummary`'s enemy detail per
     decision 5 from its reserved 7–15, and `GetRecapResponse`'s kill and loss tally, shared kills
     and value destroyed from its reserved range; `ViewChunk`'s material table comment gains the wall
-    materials, one per seat and level and a neutral wall at each level, and the cracked terrain
-    materials, one for each level beyond a terrain material's first up to the catalogue's three, the
-    values `fire` then implements (E14, decisions 10 and 42).
+    materials, one per seat and level (no neutral id: neutrality is read, E14), the cracked terrain
+    materials, one for each level beyond a terrain material's first up to the catalogue's three, and
+    `BEDROCK`, the values `fire` then implements (E14, decisions 10 and 42).
   - **The scoped `buf.yaml` `ignore_only`** for each reserved range discharged, every discharge
     named (AGENTS.md §5).
   - **The new arms are refused until their lanes land:** the sim's compile answers
@@ -1015,17 +1134,22 @@ that merges second rebases and re-blesses, its PR naming the re-bless and the la
   holding a tab or a newline, because that would change the line's framing rather than its value.
   The option is not shown in the lobby. The config line's format and `last_match.txt` are unchanged
   (AGENTS.md §5).
-- **Implements:** item 143 (5). **Needs:** `east` merged (both lanes hold places in
-  `crates/client-gdext`); no decision. **Acceptance:** `godot_project.rs` pins the reader and the
-  unchanged line format; `watch_check.gd` run by hand with a refused value (`--rounds 0`) showing
-  the gateway's refusal; the PR names the reader for AGENTS.md §3 rule 4's list (section 4.4); the
-  main session's local package run (`godot/` ships). **Contract PR:** no. **Agent-days:** 0.5–1.
+- **Implements:** item 143 (5). **Needs:** `east` and `con4` merged (`east`, `con3` and `con4` hold
+  places in `crates/client-gdext`, `con3`'s in this lane's own `godot_project.rs`, so it starts
+  after `night` in its slot, on day 11); no decision. **Acceptance:** `godot_project.rs` pins the
+  reader and the unchanged line format; `watch_check.gd` run by hand with a refused value (`--rounds
+  0`) showing the gateway's refusal; the PR names the reader for AGENTS.md §3 rule 4's list
+  (section 4.4); the main session's local package run (`godot/` ships). **Contract PR:** no.
+  **Agent-days:** 0.5–1.
 
 ### `vfy1` — `crates/verifier`: S2's first verifier lane, the carries
 
-- **Owns:** `crates/verifier`, `tests/golden/verifier`, and the named place in
-  `godot/fixtures/rows_report.json` if its four goldens move. **Branch** `feat/verifier-s2-carries`,
-  worktree `../pharmakos-vfy1`, target `D:/build/vfy1`.
+- **Owns:** `crates/verifier`, `tests/golden/verifier`, the named place in
+  `godot/fixtures/rows_report.json` if its four goldens move, and, for the `VERIFIER_VERSION`
+  re-bless alone, the named places `tests/golden/gateway/demo_*_verify/`,
+  `tests/golden/gateway/walkthrough/` and `tests/golden/operator/wizard/*/`, which carry the version
+  and `report_hash` (no lane owns the gateway or the operator while this one runs). **Branch**
+  `feat/verifier-s2-carries`, worktree `../pharmakos-vfy1`, target `D:/build/vfy1`.
 - **Builds:** S2-14, a verifier E-code for a seal whose `$`/`kW` projection overflows the sim's
   types or the forecast's `int32` (what `Surface::seal_commitment` refuses, item 135 (2) (d));
   S2-15, an E-code for `scout_count` > 255 (what `PlanError::ScoutsOutOfRange` refuses); E8's
@@ -1039,16 +1163,24 @@ that merges second rebases and re-blesses, its PR naming the re-bless and the la
 - **Implements:** items 135 (2) (d), 136 (3) (r), (5); register S1-51, S2-14, S2-15. **Needs:**
   `msrv` and `east` merged (`east` holds a verifier case and golden); no decision. **Acceptance:** a
   case for each new code (`every_emitted_code_has_a_case`); the catalogue golden; the verifier's
-  `no_silent_fallback_is_left`; **every `report_hash` golden re-blessed** with the reason
-  "`VERIFIER_VERSION` 0.1.0-s2" (`append_bytes`' change should move no encoding, since no real
-  length reaches `u32::MAX`, and the PR says so). **Contract PR:** no. **Agent-days:** 3.25–4.25.
+  `no_silent_fallback_is_left`; **every `report_hash` golden re-blessed**, the gateway's and the
+  operator's included, with the reason "`VERIFIER_VERSION` 0.1.0-s2" (`append_bytes`' change should
+  move no encoding, since no real length reaches `u32::MAX`, and the PR says so). **Contract PR:**
+  no. **Agent-days:** 3.25–4.25.
 
 ### `night` — `crates/gamectl`, the nightly harness and its workflow (S2-01, M-01)
 
 - **Owns:** `crates/gamectl`, `xtask/src/scenario.rs`, `.github/workflows/nightly-scenarios.yml`,
   the new `scenarios/nightly/` (its README, `seeds.txt` and three placeholder arms that `arms`
-  replaces), and `scenarios/README.md`'s layout section (after `east`). **Branch**
-  `feat/gamectl-nightly`, worktree `../pharmakos-night`, target `D:/build/night`.
+  replaces), `scenarios/README.md`'s layout section (after `east`), and one named place in
+  `xtask/src/package.rs`, a contract path its PR names: the package's replay step (~478–508),
+  which replays every file `scenario::collect` finds, `scenarios/**/*.scenario.jsonc`, and so would
+  play the arms, which carry no golden chain, as if they were committed scenarios; it calls the
+  played set instead (below). It also re-blesses `tests/golden/docs/reference/expected.docs.txt` for
+  its new flags, since `gamectl docs` prints the CLI's usage lines: that golden is `con3`'s and then
+  `con4`'s while they are open, so this lane, which merges after both, re-blesses it after its
+  rebase (E33). **Branch** `feat/gamectl-nightly`, worktree `../pharmakos-night`, target
+  `D:/build/night`.
 - **Builds:**
   - **`gamectl scenario run <file> [--operator easy] [--seeds <file>] [--format json] [--out
     <path>]`**, in `cli.rs`'s `OPTIONS`, each refused outside `scenario run` as `--part` and
@@ -1081,27 +1213,36 @@ that merges second rebases and re-blesses, its PR naming the re-bless and the la
   - **Per-PR validation of the arm files (E20):** the `scenario` step already validates every
     committed `*.scenario.jsonc`; `xtask/src/scenario.rs` learns that a file under
     `scenarios/nightly/` carries no `hash_chain_equals` and is validated but not played against a
-    golden; a `gamectl` test verifies each arm's playbook (it must qualify) and plays each arm one
+    golden, through a `scenario::collect_played` that leaves `scenarios/nightly/` out, which the
+    `scenario` step and the package's replay both call, so `cargo xtask package` never replays an
+    arm; a `gamectl` test verifies each arm's playbook (it must qualify) and plays each arm one
     round on its own seed to the round's end with no refusal.
   - **Carried:** `gamectl`'s `b_01`-as-core texts (`scenario/run.rs` ~484, `seat.rs` ~27,
     `strings.rs` ~293) renamed to `b_00`; E7's sweep over `crates/gamectl` (10 counted).
 - **Implements:** item 116 (6) (j); item 144 (6); register S2-01, M-01. **Needs:** `msrv` and `east`
   merged (one `xtask`/`.github` PR at a time: none other is open; `east` holds places in
-  `crates/gamectl/tests`); the ruled decision 29. **Acceptance:** CLI tests for every
+  `crates/gamectl/tests`); the ruled decisions 18 and 29. **Acceptance:** CLI tests for every
   flag, its refusal elsewhere and an unknown operator; the seed decoder's property test; a result
-  golden for a two-seed run of a placeholder arm; `win_rate_percent` rounding pinned; the workflow
-  run once through its `force` input on the branch and its artifact attached to the PR; the G4 job's
-  compare green on that run; `no_silent_fallback_is_left` for `gamectl`. **Contract PR:** yes
-  (`xtask`'s scenario step, a workflow). **Agent-days:** 4.75–5.75.
+  golden for a two-seed run of a placeholder arm (a new golden format, so a contract path);
+  `win_rate_percent` rounding pinned; `collect_played` leaves the arms out, and the main session's
+  local package run shows the replay unchanged; the workflow run once through its `force` input on
+  the branch and its artifact attached to the PR; the G4 job's compare green on that run;
+  `no_silent_fallback_is_left` for `gamectl`. **Contract PR:** yes (`xtask`'s scenario step,
+  `xtask/src/package.rs`'s replay list, a workflow, the result golden's format). **Agent-days:**
+  4.75–5.75.
 
 ### `fire` — `crates/sim`: weapons, shells, materials, wrecks and the kill-credit split
 
 - **Owns:** `crates/sim`, every golden its changes move, the named places of section 3's preamble
   (the `strings.rs` and `surface.rs` arms always, E17), the `TABLE` of
   `the_wire_material_table_is_the_sims` in `crates/gateway/tests/view.rs` as a named place (E14:
-  `Material::ALL` grows while `wgw` owns the gateway, and the two edit different files), and its
-  scenarios' entries. **Branch** `feat/sim-combat`, worktree `../pharmakos-fire`, target
-  `D:/build/fire`.
+  `Material::ALL` grows while `wgw` owns the gateway, and the two edit different files; `wgw`'s
+  Owns line lists it as excepted), and the mapgen goldens that bedrock moves. It adds no committed
+  scenario: none of its cases is reachable by a playbook when it merges (the new blueprints are
+  buildable only from `site`, raiders are fielded only by Defend and Attack, and the scenario format
+  has no placement key and `gamectl` no host seam), so its staged cases are `crates/sim/tests`
+  integration tests and its two scenarios move to `atk`. **Branch** `feat/sim-combat`, worktree
+  `../pharmakos-fire`, target `D:/build/fire`.
 - **Builds:**
   - **Firing** (E2's choosing half, E12): the autocannon, the core's built-in autocannon (fed by the
     bore, never shed in a brownout, drawing no `kW`; item 123; spec §5), the mortar and the raider's
@@ -1121,18 +1262,20 @@ that merges second rebases and re-blesses, its PR naming the re-bless and the la
     built-in mandates aim to avoid your own assets"); a shell that lands on an own asset that walked
     under it still hurts it.
   - **Materials** per decision 10 (per-material hardness, the owner's ruling) and E14: wall
-    materials by seat and level and the neutral wall, with wall ownership read from the seat's live
-    spheres (decision 42); the cracked terrain materials up to the catalogue's three levels, with
-    `ore_richness` and `vent_richness` reading a cracked seam or vent as its grade;
-    `materials.blast_levels` read at load, a value outside 1 to 3 refused with a typed error. A
-    blast steps every voxel inside its crater radius down one level, wall and terrain alike, and a
+    materials by seat and level, with wall ownership read from the seat's live spheres (decision 42)
+    and no neutral id; `BEDROCK`, written by generation in the bottom
+    `materials.bedrock_layers_voxels` layers; the cracked terrain materials up to the catalogue's
+    three levels, with `ore_richness` and `vent_richness` reading a cracked seam or vent as its
+    grade; `materials.blast_levels` read at load, a value outside 1 to 3 refused with a typed error.
+    A blast steps every voxel inside its crater radius down one level, wall and terrain alike, and a
     voxel at its last level is removed, so at decision 10's proposal a shell clears dirt, ore and
     vent at once and cracks stone, which the next blast removes; it never removes bedrock or the
     core's bore, whose geometry this lane defines (E31). The demolition charge's cut, which removes
     whatever it holds down to the wall's footing at any level (decision 40), is `atk`'s and calls
     this lane's edit with the cut's shape. A crater that removes a vent's last exposed voxels loses
-    the vent, which the feature table's derived liveness already reads (AGENTS.md §4.8). The seat on
-    `VoxelEdit`, which `base` laid out, is filled for every crater.
+    the vent, which the feature table's derived liveness already reads (AGENTS.md §4.8). The seat
+    on `VoxelEdit`, which `base` laid out, is filled for every crater, and `DamageOrder`'s source
+    for every shot, shell and splash (E12).
   - **Deaths:** the settle function factored so that it runs after Combat and after Voxels (E2);
     wrecks into the table decision 25 sizes (E16); E32's proportional credit; the per-seat destroyed
     value and the kill and loss counters (E15), the audit's term and its first tie-break read as
@@ -1143,49 +1286,55 @@ that merges second rebases and re-blesses, its PR naming the re-bless and the la
   - **Events** (E17): `unit_destroyed`, `structure_destroyed`, `shell_landed`, `wreck_left`,
     `returned_fire`, `retreat_announced`, at the next free ids. No event per shot: shots are counted
     in the unhashed work counter instead, and the recap reads the hashed counters (E15).
-  - **Scenarios:** `scenarios/s2/mortar-breaks-wall` (a mortar, directed at a wall through a test
-    seam, shells it to a gap; craters; wall levels; a crater in stone that cracks before it opens)
-    and `scenarios/s2/raid-on-a-mortar` (raiders dive a mortar, the autocannon and the core's kill
-    them, wrecks left), each asserting events, hashes and no dropped event.
+  - **Staged integration tests, in place of scenarios** (`crates/sim/tests/combat.rs`):
+    `a_mortar_breaks_a_wall` (a mortar, directed at a wall through a test seam, shells it to a gap;
+    craters; wall levels; a crater in stone that cracks before it opens) and `a_raid_on_a_mortar`
+    (raiders placed through a test seam dive a mortar, the autocannon and the core's kill them,
+    wrecks left), each asserting events, the state hash at named ticks and no dropped event. The
+    committed scenarios of the same names are `atk`'s, the first lane whose playbooks reach them.
 - **Does not:** Build's placement of the new blueprints (`site`), collapse (`fall`), Defend and
   Attack (`dfnd`, `atk`; the breach's choice of a wall is `atk`'s, decision 41). Its tests place
   armed structures and units through test seams.
 - **Implements:** items 17, 123, 144 (1) (the bore), (8), (11) (per-material hardness); spec §3
   (kill credit, the audit), §5 (the core), §9; register S2-08, S2-09, X-08.
-- **Needs:** `base`, `ids`, `con3` and `con4` merged; the ruled decisions 3, 4, 7, 8, 10,
-  12, 21, 25, 41 and 42. **Acceptance:** `an_autocannon_kills_a_raider_in_range_and_not_out_of_it`;
+- **Needs:** `base`, `ids`, `con3` and `con4` merged; the ruled decisions 3, 4, 7, 8, 10, 12, 21,
+  25, 36, 41 and 42. **Acceptance:** `an_autocannon_kills_a_raider_in_range_and_not_out_of_it`;
   `return_fire_waits_for_damage`; `return_fire_answers_a_shell_by_its_firer`;
   `hold_fire_never_fires`; `fire_is_simultaneous` (two assets that kill each other on one tick both
   die); `a_volley_shares_its_kill_credit`; `a_shell_misses_a_unit_that_moved`;
   `splash_hurts_the_firers_own_unit`; `a_mortar_never_aims_where_its_splash_holds_an_own_asset`;
   `a_wall_voxel_breaks_on_its_last_level`; `stone_takes_two_blasts`; `dirt_goes_in_one_blast`;
   `a_cracked_seam_mines_and_a_cracked_vent_feeds_as_itself` (under a test rules variant that gives
-  ore and vent two levels); `a_blast_level_outside_the_catalogue_is_refused_at_load`;
-  the gateway's `the_wire_material_table_is_the_sims` green over the grown catalogue;
-  `a_wall_turns_neutral_when_its_last_sphere_dies`;
-  `bedrock_and_the_bore_survive_any_blast`; `the_bore_is_derived_and_pinned` (its mapgen golden);
+  ore and vent two levels); `a_blast_level_outside_the_catalogue_is_refused_at_load`; the gateway's
+  `the_wire_material_table_is_the_sims` green over the grown catalogue;
+  `a_wall_turns_neutral_when_its_last_sphere_dies`; `bedrock_and_the_bore_survive_any_blast`;
+  `the_bore_is_derived_and_pinned` (its mapgen golden);
   `a_crater_that_takes_a_vent_kills_its_feature`;
   `a_death_leaves_a_wreck_worth_the_salvage_percent`;
   `destroyed_value_is_the_settled_share_of_build_cost`; `the_shell_table_survives_save_and_restore`;
   `the_shell_table_cannot_fill`; `the_attacker_memory_survives_save_and_restore`;
-  `the_combat_stream_is_drawn_from_nowhere_else`; the two scenarios; every chain re-blessed (the new
-  per-seat and per-asset columns; the core's cooldown in every match), the first diverging tick
-  named (the material levels move nothing of their own: nothing blasts in a committed run before
-  this lane's, and generation writes whole materials only, so no mapgen golden moves); every
-  `report_hash` golden (`SNAPSHOT_VERSION` 11).
+  `the_combat_stream_is_drawn_from_nowhere_else`; `a_damage_order_carries_its_source`;
+  `generation_writes_bedrock_in_the_bottom_layers`; the two staged integration tests; every chain
+  re-blessed (the new per-seat and per-asset columns; the core's cooldown in every match; bedrock in
+  the bottom layer of every column), the first diverging tick named (the material levels move
+  nothing of their own: nothing blasts in a committed run before this lane's); the mapgen digest
+  goldens re-blessed once, for bedrock alone, the bore's golden added; every `report_hash` golden
+  (`SNAPSHOT_VERSION` 11).
 - **Contract PR:** yes (determinism code: the combat phase, the kill-credit split, the first
-  `Stream::Combat` draw, the snapshot, the material catalogue's new wire values; the event
-  vocabulary; the bore's golden, a new golden format). **PLACEHOLDERs:** none new (the levels are
-  `con3`'s row). **Agent-days:** 11–13.5, of which 1–1.5 is decision 10's per-material hardness
-  (the cracked catalogue, the level step for terrain, the readers of ore and vent, the load check
-  and their tests). **Split seam:** direct fire, the rules of engagement with the attacker memory and
-  retreat state, deaths, the settle function, wrecks, E32 and the counters as set 1; shells, splash,
-  materials and their levels, wall ownership, craters and the bore as set 2; one PR, re-blessed
-  once.
+  `Stream::Combat` draw, the snapshot, the material catalogue's new wire values and the bedrock
+  layer; the event vocabulary; the bore's golden, a new golden format). **PLACEHOLDERs:** none new
+  (the levels and the bedrock layer are `con3`'s rows). **Agent-days:** 10.75–13.25, of which
+  1–1.5 is decision 10's per-material hardness (the cracked catalogue, the level step for terrain,
+  the readers of ore and vent, the load check and their tests); integration tests in place of two
+  committed scenarios save a quarter-day. **Split seam:** direct fire, the rules of engagement with
+  the attacker memory and retreat state, deaths, the settle function, wrecks, E32 and the counters
+  as set 1; shells, splash, materials and their levels, bedrock, wall ownership, craters and the
+  bore as set 2; one PR, re-blessed once.
 
 ### `wgw` — `crates/gateway`: S2's surfaces
 
-- **Owns:** `crates/gateway` (except the event arms a running sim lane adds, E17),
+- **Owns:** `crates/gateway` (except, while `fire` is open, `fire`'s named places: the event arms it
+  adds, E17, and the `TABLE` of `the_wire_material_table_is_the_sims` in `tests/view.rs`, E14),
   `tests/golden/gateway`, and the byte copies under `godot/fixtures/` its goldens move. **Branch**
   `feat/gateway-combat`, worktree `../pharmakos-wgw`, target `D:/build/wgw`.
 - **Builds:** S2-11 per decision 5 in `get_view`'s entities and `BeaconSummary`; E9 (the prose
@@ -1193,12 +1342,14 @@ that merges second rebases and re-blesses, its PR naming the re-bless and the la
   `Sight`, `host.rs` `SphereVision`, ~636) reading the sim's sensor seam's live-view output instead
   of restating spheres; the recap's kill and loss tally, shared kills and value destroyed, read from
   the sim's hashed counters (E15); `ResolvedRef.reachable` written by `resolve_refs` (`con3`'s
-  field); the `seal_commitment` door's test (item 136 (5)); `host.rs`'s `SAFE_PLAYBOOK` marker
-  (~103) reworded to decision 6 (the gateway's own fallback, for a seat no operator advises, still
-  writes nothing); `verifier_scope`'s sightings for Attack's freshness (the seat's own sightings of
-  enemy beacons and of the enemy commander, with their ages; the S1 pattern of `tgtw` filling what
-  `tgtv` laid out, the layout `vfy2` set); E28's measurement: the bytes of a full entity list at the
-  gate load of 300 units, recorded in the PR; E7's sweep over `crates/gateway` (66 counted).
+  field) into its hand-written answer, `resolved_json` (`surface/planning.rs` ~958), which this lane
+  owns, the field otherwise absent from the wire; the `seal_commitment` door's test (item 136 (5));
+  `host.rs`'s `SAFE_PLAYBOOK` marker (~103) reworded to decision 6 (the gateway's own fallback, for
+  a seat no operator advises, still writes nothing); `verifier_scope`'s sightings for Attack's
+  freshness (the seat's own sightings of enemy beacons and of the enemy commander, with their ages;
+  the S1 pattern of `tgtw` filling what `tgtv` laid out, the layout `vfy2` set); E28's measurement:
+  the bytes of a full entity list at the gate load of 300 units, recorded in the PR; E7's sweep over
+  `crates/gateway` (66 counted).
 - **Implements:** items 104 (the gateway half), 133 (3) (i), 136 (5); register S1-34 (gateway),
   S2-02 (gateway's marker), S2-11, S2-12 (measured). **Needs:** `con4`, `ids` and `vfy2` merged; the
   ruled decisions 5 and 6. **Acceptance:**
@@ -1215,7 +1366,10 @@ that merges second rebases and re-blesses, its PR naming the re-bless and the la
 
 - **Owns:** `crates/verifier`, `crates/plan-core`, their goldens, the named place in
   `godot/fixtures/rows_report.json`, and, if it changes the verifier goldens' fixture, the named
-  place in `crates/bench/src/quick.rs` (item 131 (5)). **Branch** `feat/verifier-s2`, worktree
+  place in `crates/bench/src/quick.rs` (item 131 (5)), and, for the scope's re-bless, the
+  gateway's and the operator's `report_hash` goldens (`tests/golden/gateway/demo_*_verify/` and
+  `walkthrough/`, `tests/golden/operator/wizard/*/`; no gateway or operator lane runs beside it).
+  **Branch** `feat/verifier-s2`, worktree
   `../pharmakos-vfy2`, target `D:/build/vfy2`.
 - **Builds:** structure and semantic checks for `DefendSettings`, `AttackSettings`, the wall box
   (its height below `wall_min_height_voxels` an error with its own code, decision 40) and the new
@@ -1229,25 +1383,37 @@ that merges second rebases and re-blesses, its PR naming the re-bless and the la
   (`rules.proto` ~728) is an error with its own code; W0703's emitter (the reach window) where it
   reads the same sightings; `render_plan` prose and canonical form for every new construct; E8's
   codes for the constructs `con4` refuses; an I-level note where a Build beacon's
-  `repair_threshold_pct` is 0 (decision 38); E7's sweep over `crates/plan-core` (6 counted). The
+  `repair_threshold_pct` is 0 (decision 38); decision 4's I-level note for an omitted `roe`, which
+  extends `I0003`, the structure stage's note for an omitted setting and the named default it reads
+  as (`structure.rs` ~538), to `roe` reading as `RETURN_FIRE`, with its Fix writing the default out;
+  the demolition charge's `$` in the projection at decision 9's price; E7's sweep over
+  `crates/plan-core` (6 counted). The
   verifier never ranks and never models enemy behaviour (AGENTS.md §3 rule 2): freshness reads ages,
   nothing else.
 - **Implements:** items 13, 104 (the verifier half); spec §6, §11. **Needs:** `con4` and `vfy1`
-  merged; the ruled decisions 10, 13, 14, 15, 38 and 40. **Acceptance:** a case per new
-  code; `full_finds_what_quick_finds`; `the_verifier_never_ranks` unchanged; render and canonical
-  goldens for each new construct; `no_silent_fallback_is_left` for plan-core; every `report_hash`
-  golden re-blessed (the scope's layout). **Contract PR:** yes (`report_hash`'s scope encoding).
-  **Agent-days:** 5.25–6.25.
+  merged; the ruled decisions 4, 9, 10, 13, 14, 15, 38 and 40. **Acceptance:** a case per new
+  code; an `I0003` case for an omitted `roe`; `full_finds_what_quick_finds`;
+  `the_verifier_never_ranks` unchanged; render and canonical goldens for each new construct;
+  `no_silent_fallback_is_left` for plan-core; every `report_hash` golden re-blessed (the scope's
+  layout), the gateway's and the operator's with them; the `demo_*_verify` and wizard goldens moved
+  for the new `I0003` notes on the templates' omitted `roe`, each named. **Contract PR:** yes
+  (`report_hash`'s scope encoding). **Agent-days:** 5.5–6.5 (a quarter-day of it for the omitted
+  `roe`'s note).
 
 ### `site` — `crates/sim`: Build's S2 settings, the base kit's blueprints, repair and salvage
 
 - **Owns:** `crates/sim` except `fall`'s named places (listed in `fall`'s Owns line), every golden
-  it moves, the preamble's named places, its scenarios' entries. **Branch** `feat/sim-build-s2`,
+  it moves, the preamble's named places, its scenarios' entries, and, only if section 4.5's cut 2
+  is taken at its start, the verifier's refill note with its case and catalogue row and its
+  sentence in `rules/README.md` as named places. **Branch** `feat/sim-build-s2`,
   worktree `../pharmakos-site`, target `D:/build/site`.
 - **Builds:**
   - **The base kit's blueprints:** `autocannon`, `mortar` and `wall` as Build targets, the wall a
-    box of voxels at least `wall_min_height_voxels` high, built one voxel at a time at
-    `wall_cost_per_voxel` (decisions 10 and 40), the others at their rows.
+    box of voxels at least `wall_min_height_voxels` high above the ground in every column, built one
+    voxel at a time at `wall_cost_per_voxel` (decisions 10 and 40), the others at their rows. **A
+    wall is filled down to the ground:** every column of the box is filled from the ground's top up
+    to the box's top, so no wall voxel has air under it (operator item O1; decision 39), and each
+    wall voxel's edit carries the building seat.
   - **Terraform** (item 144 (5)): before building, a drone levels the target's footprint to its
     anchor's height — `FILL` raises, `DIG` lowers, `BOTH` both — each voxel at the wall's cost per
     voxel; `FILL` and `BOTH` also refill craters and trenches inside the beacon's sphere back to the
@@ -1256,7 +1422,14 @@ that merges second rebases and re-blesses, its PR naming the re-bless and the la
     derived per-column table, a pure function of the seed and the rules made with the map,
     regenerated by `Snapshot::restore_into` and never hashed per tick, as the feature table is
     (AGENTS.md §4.8), and pinned by a new `tests/golden/mapgen` file (a golden format, so a contract
-    path). Refill competes with building for drone time under the mandate's order.
+    path). Refill competes with building for drone time under the mandate's order. Every levelling
+    and refill edit carries the beacon's seat (`VoxelEdit`'s seat, which `base` laid out), so a
+    `DIG` that detaches a region is credited as any other edit is (decision 37). If section 4.5's
+    cut 2 is taken at this lane's start, the refill is dropped from the brief and, since `FILL` and
+    `BOTH` still level a footprint and nothing is refused, the lane adds in its place the verifier's
+    I-level note on a Build beacon whose `terraform` is `FILL` or `BOTH`, saying that the crater
+    refill is from S3, as a named place (no verifier lane runs then), and the same sentence to
+    `rules/README.md`.
   - **Repair threshold** (decision 38) and **rebuild destroyed** (item 128 (d)): an own structure
     below `repair_threshold_pct` of its HP is "damaged" for "highest-order affordable target that is
     unbuilt or damaged" and for repair, and 0 means a structure is never repaired; a destroyed
@@ -1270,7 +1443,16 @@ that merges second rebases and re-blesses, its PR naming the re-bless and the la
     repair row and the price decision 43 rules, filed under the Quartermaster's Repair band, then
     salvage wrecks and ruins of any seat inside the sphere for `$`.
   - **S2-10** per decision 26.
-  - **Scenarios:** `scenarios/s2/repair-and-salvage` and `scenarios/s2/terraform-refills-a-crater`.
+  - **Scenarios:** `scenarios/s2/repair-and-salvage` and `scenarios/s2/terraform-refills-a-crater`,
+    each reached by playbooks on its seed. Their damage source is the one a playbook can produce
+    once this lane merges, a mortar duel: two `playbook` seats each walk the commander to a Build
+    beacon near the map's centre in round 1 and build a mortar there in round 2, inside each other's
+    40-voxel range, each beacon writing `roe: FREE_FIRE` (decision 4's unset `RETURN_FIRE` would
+    wait to be hit). The shells damage the other seat's structures, which its repair drones repair
+    and pay for, a destroyed one leaves a wreck or a ruin they salvage, and the craters inside a
+    `FILL` beacon's sphere are refilled; a crater in stone cracks before it opens. The core's
+    autocannon, the other damage source, fires only at units (decision 8). The lane names in its PR
+    the sites it found on the seed; raiders, which only Defend and Attack field, are not needed.
 - **Implements:** items 128 (d), 144 (5); spec §4, §6's Build row, §7's Repair band, §8, §9;
   register S2-10.
 - **Needs:** `fire` merged; the ruled decisions 10, 15, 26, 38, 40, 42 and 43.
@@ -1281,13 +1463,17 @@ that merges second rebases and re-blesses, its PR naming the re-bless and the la
   `rebuild_destroyed_rebuilds_an_ordinary_target_only`; `a_repair_drone_heals_the_commander`;
   `a_repair_drone_heals_an_own_unit_in_the_sphere`; `repair_is_paid_for_under_the_repair_band`;
   `a_cracked_own_wall_is_repaired`; `any_seats_wreck_is_salvageable_inside_the_sphere`;
-  `a_wall_box_is_priced_per_voxel`; the two scenarios; chains with a Build re-blessed with reasons
+  `a_full_repair_costs_no_more_than_the_build` (from one hit point to full, at a cost and a maximum
+  whose quotient rounds every step); `a_wall_box_is_priced_per_voxel`;
+  `a_wall_has_no_air_under_it` (on sloped ground); `a_levelling_edit_carries_its_seat`; the two
+  scenarios; chains with a Build re-blessed with reasons
   (the determinism chain's Hold & Build writes `terraform` omitted, NONE, and nothing in it is
   damaged, so it should not move: if it does, the PR says why); the next `SNAPSHOT_VERSION` if drone
   jobs add state, every `report_hash` with it.
 - **Contract PR:** yes in part (hashed drone state, the event vocabulary, the generated-surface
-  golden). **Agent-days:** 7.5–9. **Split seam:** blueprints, repair and salvage as set 1;
-  terraform and S2-10 as set 2.
+  golden). **Agent-days:** 7.75–9.25 (a quarter-day of it for the wall filled to the ground, the
+  repair price's rounding and the scenarios' mortar duel, from the verification review). **Split
+  seam:** blueprints, repair and salvage as set 1; terraform and S2-10 as set 2.
 
 ### `fall` — named place in `crates/sim`: the support rule (item 138 (3), item 144 (1) to (3))
 
@@ -1297,8 +1483,12 @@ that merges second rebases and re-blesses, its PR naming the re-bless and the la
   the Voxels phase's edit application; the dig check's named lines in `crates/sim/src/mining.rs`;
   `VoxelStore::crater`'s return of the voxels it removed (`crates/sim/src/voxels.rs`), which the
   seeds read; its two kinds at the end of `EventKind` in `crates/sim/src/events.rs` and their
-  gateway arms (E17); `crates/sim/tests/support.rs`; a collapse-every-tick case in
-  `crates/sim/tests/allocations.rs`; its scenario's entries. It runs beside `site`, which lists
+  gateway arms (E17); its scratch, one field on `World` (`support: support::Scratch`, unhashed and
+  out of the snapshot, so it adds no hash, snapshot or table line) with its construction lines in
+  `World::new` and in the restore's construction of the world (`crates/sim/src/world.rs`);
+  `crates/sim/tests/support.rs`; a collapse-every-tick case in `crates/sim/tests/allocations.rs`.
+  It adds no committed scenario (`collapse-credits-the-blast` needs a geometry no playbook reaches,
+  decision 39, so it is the staged integration test below). It runs beside `site`, which lists
   these as excepted (AGENTS.md §6 named place). **Branch** `feat/sim-support-rule`, worktree
   `../pharmakos-fall`, target `D:/build/fall`.
 - **The design.** The rule sits behind one interface, `support::Collapse`, with one method the
@@ -1331,22 +1521,31 @@ that merges second rebases and re-blesses, its PR naming the re-bless and the la
     `max_region_voxels` (a radius-4 charge seeds about 200 voxels, so about 800 000 visits at 4 096
     a region); with them it is the budget. Both rows' worst cases are numbers G3′ measures (`g3h`:
     many seeds, several digs and a region of exactly the bound in one tick), not only means.
-  - **The fall, in order.** Detached regions fall in ascending order of their lowest voxel's z, then
-    of their identifying index, so a region that lies above another falls after it and lands on its
-    new position rather than floating; each region's drop is the smallest air gap under any of its
-    voxels, **recomputed against the drops already made this tick**. A falling region's vacated
-    voxels seed nothing, because anything face-connected to a detached region is in it, so one pass
-    in that order reaches the fixed point. The region drops rigidly, every voxel leaving and
-    returning through `set`, which marks its chunk (AGENTS.md §4.8).
+  - **The fall, in order, iterated until nothing moves.** Detached regions fall in ascending order
+    of their lowest voxel's z, then of their identifying index; each region's drop is the smallest
+    air gap under any of its voxels, **recomputed against the drops already made this tick**. One
+    pass is not enough: two regions can interlock (one's lowest voxel lies below the other's while
+    the other lies under part of it), so the first to fall can come to rest on a region that then
+    falls away and leaves it floating. So the pass repeats, in the same order recomputed from the
+    regions' current lowest voxels, until a pass moves no region. It ends: a region that moves comes
+    to rest on something and, at that moment, nothing rests on it, so no two regions can ever hold
+    each other up; and each pass that moves anything lowers some region by at least one voxel, so
+    the passes are bounded by the tick's region count times the map's height (64), each pass's work
+    by the regions' voxels, which the tick's visit budget already bounds. A pass count past that
+    bound is a typed internal error, never a silent stop. A falling region's vacated voxels seed
+    nothing, because anything face-connected to a detached region is in it. The region drops
+    rigidly, every voxel leaving and returning through `set`, which marks its chunk (AGENTS.md
+    §4.8). G3′'s adversarial tick (`g3h`) records the passes.
   - **What falls with it** ("everything", item 144 (1)). Every unit, structure, beacon, wreck, ruin
     and commander whose standing voxel or anchor column is in the region moves down with it; each of
     them that has hit points (units, structures, beacons, ruins, the commander) takes
-    `collapse.fall_damage_hp` once, and a ruin destroyed that way is gone, while a wreck has no hit
-    points, moves and keeps its salvage value. An asset under the voxels a region lands on is
-    handled per decision 11. A commander's fall damage credits nobody, because a commander is not an
-    asset (spec §4).
+    `collapse.fall_damage_hp` once a tick, however many passes move it, and a ruin destroyed that
+    way is gone, while a wreck has no hit points, moves and keeps its salvage value. An asset under
+    the voxels a region lands on is handled per decision 11. A commander's fall damage credits
+    nobody, because a commander is not an asset (spec §4).
   - **Credit.** The fall damage is filed with the seats whose edits this tick removed the region's
-    seeds' neighbours (`VoxelEdit`'s seat): one seat takes it all; several seats share it per
+    seeds' neighbours (`VoxelEdit`'s seat, which every edit a seat's asset files carries: a crater,
+    a Mine dig, a terraform edit, a charge's cut): one seat takes it all; several seats share it per
     decision 37; the asset's own seat's share and a seat-less edit's credit nobody (item 144 (2);
     spec §3). It is applied at the end of the Voxels phase, and the settle function then books it,
     makes the wrecks and credits destroyed value inside Voxels, so the Match phase sees the death on
@@ -1375,13 +1574,22 @@ that merges second rebases and re-blesses, its PR naming the re-bless and the la
     could still detach such a region jointly; so the Voxels phase **re-checks each dig when it
     applies it**, against the state the edits before it in the queue have made, and refuses a dig
     that would detach a structure-carrying region, counted under its reason
-    (`DigRefused::WouldUndermine`) and told to the drone, which picks again next tick. A crater
-    applied after a legal dig that then detaches the region is the crater's doing, credited to its
-    seat. Pillar spacing counts as support for free: an undug column is solid to bedrock. Mine's
-    searches count against neither row's budget but are bounded by `max_region_voxels` each, and G3′
-    measures them.
-- **Builds:** the design above; events `region_collapsed` and `asset_fell` (E17); scenario
-  `scenarios/s2/collapse-credits-the-blast`.
+    (`DigRefused::WouldUndermine`) and told to the drone, which picks again next tick. A dig may
+    still detach a region that carries no structure, such as one an enemy unit stands on, and is
+    credited like any other edit. Where a legal dig and a crater on one tick both seed the region
+    that falls, the credit follows decision 37: split equally among the distinct seats whose edits
+    that tick removed a voxel next to the region, the mining seat among them, the asset's own seat's
+    share and a seat-less edit's crediting nobody. Pillar spacing counts as support for free: an
+    undug column is solid to bedrock. Mine's searches count against neither row's budget but are
+    bounded by `max_region_voxels` each, and G3′ measures them.
+- **Builds:** the design above; events `region_collapsed` and `asset_fell` (E17); and, in place of
+  a committed scenario, the staged integration test `collapse_credits_the_blast`
+  (`crates/sim/tests/support.rs`), which `demo2`'s run sheet runs beside the demo: through test
+  seams it builds a terrain shelf that stands on one face-connected neck of ground and carries a
+  structure, a unit and the commander of seat 1, and has seat 0's mortar shells land so that two
+  craters cut the neck; the shelf falls, everything on it takes the flat damage once, the kill
+  credit goes to seat 0, and the test asserts the events, the state hash at named ticks and no
+  dropped event (decision 39 says why the geometry has to be staged).
 - **Implements:** items 138 (3), 144 (1) to (3). **Needs:** `fire` merged (the settle function, wall
   materials, the bore); the ruled decisions 11, 37 and 39. **Acceptance:**
   `a_region_cut_off_by_a_crater_falls`; `ground_beside_a_crater_is_supported_in_one_step`;
@@ -1392,15 +1600,20 @@ that merges second rebases and re-blesses, its PR naming the re-bless and the la
   beacon, a wreck, a ruin and the commander on it);
   `the_crater_seat_gets_the_kill_credit_and_an_own_crater_credits_nobody`;
   `two_seats_that_cut_one_region_share_its_credit`;
+  `a_dig_that_drops_an_enemy_unit_credits_the_mining_seat`;
+  `a_dig_and_a_crater_that_cut_one_region_split_its_credit`;
+  `interlocking_regions_come_to_rest_and_none_floats`; `collapse_credits_the_blast`;
   `the_last_beacon_lost_to_a_collapse_ends_the_match_that_tick`;
   `a_collapse_death_on_a_segments_last_tick_reaches_its_recap`;
   `mine_never_digs_a_voxel_that_would_drop_a_structure`;
   `two_digs_that_would_drop_a_structure_together_are_refused_at_apply`; `pillars_hold_a_roof`;
-  `collapse_allocates_nothing_in_the_tick`; the scenario; chains re-blessed only if a committed run
-  detaches a region (none is expected; one that does is named); no snapshot change (the rule holds
-  no state between ticks).
+  `collapse_allocates_nothing_in_the_tick`; chains re-blessed only if a committed run detaches a
+  region (none is expected; one that does is named); no snapshot change (the rule holds no state
+  between ticks).
 - **Contract PR:** yes (determinism code: the Voxels phase and its settle; the event vocabulary).
-  **PLACEHOLDERs:** none new (the constants are `con3`'s rows). **Agent-days:** 6–7.
+  **PLACEHOLDERs:** none new (the constants are `con3`'s rows). **Agent-days:** 6.25–7.25 (a
+  quarter-day of it for the iterated fall, the dig's credit and the scratch field, from the
+  verification review).
 
 ### `view` — `crates/client-gdext` + `godot/` + `crates/mesher`: drawing combat
 
@@ -1408,7 +1621,9 @@ that merges second rebases and re-blesses, its PR naming the re-bless and the la
   `feat/client-combat`, worktree `../pharmakos-view`, target `D:/build/view`.
 - **Builds:** HP on own assets and on visible enemies as decision 5 rules, from the view's fields;
   shells, wrecks and ruins as entities; a unit's heading where the view carries it; the wall
-  materials of `con4`'s table drawn (by seat, cracked, neutral; E14); the cracked terrain materials
+  materials of `con4`'s table drawn by the seat each material names, whole or cracked, which is
+  who built the wall (whose it is now, neutral or not, is the sim's reading, which the client may
+  not make: E14, decision 42), and bedrock drawn as rock; the cracked terrain materials
   drawn as cracked versions of their base (decision 10), so that a cracked stone voxel, which today's
   `palette_of` would draw as air, is ground, through new rows in the mesher's `PALETTE` (art
   placeholders for S6) and `palette_of`'s mapping of every new id, pinned by a test that walks the
@@ -1428,7 +1643,8 @@ that merges second rebases and re-blesses, its PR naming the re-bless and the la
   AGENTS.md §3 rule 4. Nothing here decides, times or validates (rule 4).
 - **Implements:** register S2-12's measurement; G1's stress headroom; item 144 (11)'s cracked
   terrain, drawn. **Needs:** `wgw` and `fire` merged (the client draws an unknown material as air,
-  so it waits for both the wire's table and the sim's materials, E14); the ruled decisions 5 and 10.
+  so it waits for both the wire's table and the sim's materials, E14); the ruled decisions 5, 10
+  and 42.
   **Acceptance:** vista and rows PNGs re-rendered on CI's Linux leg and looked at;
   `godot_project.rs` pins; `every_wire_material_draws` (no id the wire table names maps to air but
   air itself); the mesher's perf alarm case for the stream; `no_silent_fallback_is_left` in both
@@ -1447,7 +1663,8 @@ that merges second rebases and re-blesses, its PR naming the re-bless and the la
   stepper; the tick's p50, p99 and mean, ticks a second, the tick-minus-pathing mean (item 116 (6)
   (b)), the repath backlog against the cap, the broadphase's share with E11's pad, the support
   search's adversarial tick (many seeds from several charges, several digs whose Mine checks run in
-  Programs, and a region of exactly `max_region_voxels`), the per-tick visit budget's use,
+  Programs, and a region of exactly `max_region_voxels`) with the fall's passes on that tick
+  (interlocking regions included), the per-tick visit budget's use,
   kill-credit settlement at the run's death rate, the peak events per tick against the bus's 512
   (E15), the damage queue's bytes (E5), and live heap bytes over a full 8-minute segment through a
   counting global allocator (item 68; std-only, so no dependency) with tick p99 per minute (spike
@@ -1554,8 +1771,10 @@ that merges second rebases and re-blesses, its PR naming the re-bless and the la
     fuse row runs out, cutting wall and terrain inside its radius flat down to the wall's footing
     (decision 40), whatever each voxel's level, cracked or whole, stone included (decision 10:
     a cut that left stone standing would leave a step), with the carrier's seat on the edit, so the
-    gap is walkable. Intercepting the carrier is the counter: a carrier killed before it plants
-    drops a charge that never fires (decision 9).
+    gap is walkable; the cut stops above bedrock and the bore (E14). Because a wall is filled down
+    to the ground (`site`), the flat cut leaves nothing above it unsupported, so a breach never
+    causes a collapse (decision 39). Intercepting the carrier is the counter: a carrier killed
+    before it plants drops a charge that never fires (decision 9).
   - **Attack's state** (the pinned target, the staging and launch state, the wave count, a charge's
     carrier and fuse) in a hashed table of its own with a row per Attack beacon, hashing nothing
     while empty (E29).
@@ -1564,7 +1783,15 @@ that merges second rebases and re-blesses, its PR naming the re-bless and the la
   - **Scenarios:** `scenarios/s2/hunt-the-commander` and `scenarios/s2/breach-and-eliminate` (a
     breach whose route reopens through the charge's cut, asserted by a raider walking the gap; a
     beacon destroyed into ruins; the last beacon lost; the match ending `last_seat_standing` on that
-    tick).
+    tick); and the two that `fire` could not commit, because this is the first lane whose playbooks
+    reach them (`fire` keeps their staged twins as integration tests):
+    `scenarios/s2/raid-on-a-mortar` (an Attack beacon's raiders dive a mortar the other seat's Build
+    beacon built, the autocannon and the core kill them, wrecks left) and
+    `scenarios/s2/mortar-breaks-wall` (an Attack beacon with `breach_allowed` whose route a wall
+    seals asks its seat's mortar to shell the wall's first column, which cracks on the first shell
+    and breaks on the next, craters asserted, before the charge arrives). Each asserts events,
+    hashes and no dropped event, and this lane owns their path constants, `SCENARIOS` entries and
+    lines in `the_committed_list_is_the_whole_set`.
 - **Implements:** items 13, 104; spec §4 (hunting), §6's Attack row, §9 (breach, friendly fire);
   register S2-03. **Needs:** `dfnd` merged; the ruled decisions 9, 10, 12, 14, 40 and 41.
   **Acceptance:** `an_attack_waits_for_its_force_size`; `the_target_is_pinned_at_the_seal`;
@@ -1572,12 +1799,14 @@ that merges second rebases and re-blesses, its PR naming the re-bless and the la
   `avoid_known_threats_routes_around_range`; `a_breach_sends_a_charge_to_the_wall_and_resumes`;
   `a_charge_cuts_flat_to_the_footing_and_the_gap_is_walkable` (through whole stone);
   `only_a_breach_shells_an_enemy_wall`; `a_carrier_killed_before_it_plants_fires_nothing`;
-  `a_charge_crater_carries_its_seat`; `the_last_beacon_lost_ends_the_match_that_tick`; the
-  gateway's door row flipped; `allocations.rs` green with the crowd; the two scenarios; chains
-  re-blessed where Easy's playbooks now attack (none of the committed ones is expected to; any that
-  moves is named); the next `SNAPSHOT_VERSION` for Attack's state.
-- **Contract PR:** yes. **Agent-days:** 9–10.5. **Split seam:** the mandate, the pin and hunting as
-  set 1; breach, the charge, avoid areas and waves as set 2.
+  `a_charge_crater_carries_its_seat`; `a_breach_cut_drops_nothing`;
+  `the_last_beacon_lost_ends_the_match_that_tick`; the gateway's door row flipped; `allocations.rs`
+  green with the crowd; the four scenarios; chains re-blessed where Easy's playbooks now attack
+  (none of the committed ones is expected to; any that moves is named); the next
+  `SNAPSHOT_VERSION` for Attack's state.
+- **Contract PR:** yes. **Agent-days:** 9.5–11 (half a day of it for the two scenarios moved from
+  `fire`, from the verification review). **Split seam:** the mandate, the pin and hunting as set 1;
+  breach, the charge, avoid areas and waves as set 2; the four scenarios last.
 
 ### `oprd` → `opra` — `crates/operator` + `library/`: Easy under combat, one lane in two PRs
 
@@ -1606,7 +1835,8 @@ that merges second rebases and re-blesses, its PR naming the re-bless and the la
   attack score (`candidates.rs` ~54–55, "aiming at an enemy is S2's") and enemy-commander raids
   scored like any other target (spec §14); the wizard's suggestions under both templates. 2–2.5 ad.
 - **Implements:** spec §14 (S2's share); register S2-02. **Needs:** `oprd`: `dfnd` merged and the
-  ruled decisions 6, 35 and 38; `opra`: `atk` merged. **Acceptance:** the templates
+  ruled decisions 6, 12, 35 and 38; `opra`: `atk` merged and the ruled decision 14.
+  **Acceptance:** the templates
   round-trip, verify and render identically; the operator goldens, the wizard's,
   `instantiate_suggested`, the `demo_*` goldens and the package manifests moved and explained;
   `templates.rs` green over the longer `SHIPPED`; `against-easy*` re-blessed when Easy's sealed
@@ -1656,8 +1886,11 @@ that merges second rebases and re-blesses, its PR naming the re-bless and the la
   `crates/gamectl/src/scenario.rs` (`units_per_seat`, `MAX_UNITS_PER_SEAT`),
   `crates/gamectl/src/scenario/run.rs` (~47, ~391), `crates/gamectl/src/doctor.rs` (~326, ~462),
   `xtask/src/scenario.rs` (its twin), `crates/sim/src/world.rs` (`WorldConfig::units_per_seat` and
-  the walkers; no sim lane is running), and `scenarios/README.md`'s key; every chain and golden its
-  values move. **Branch** `feat/rules-s2-numbers`, worktree `../pharmakos-tune2`.
+  the walkers; no sim lane is running), and `scenarios/README.md`'s key; and, if `g3r` moves the
+  fielding totals, which are world constants and not rules rows, those constants as named places in
+  `crates/sim/src/world.rs` (`UNIT_TABLE_ROOM`, `BEACON_TABLE_ROOM`, `STRUCTURE_TABLE_ROOM`,
+  ~153–192, with their markers and the ruin reserve E1 sizes from the last); every chain and
+  golden its values move. **Branch** `feat/rules-s2-numbers`, worktree `../pharmakos-tune2`.
 - **Builds:** the balance check extended to combat (Easy against Easy and each template against
   Easy, 20 seeds, 3 and 6 rounds; per seat per round kills, losses, value destroyed, the time to the
   first kill, and how each match ended), with a **three-seat** run (three Easy seats, 20 seeds) that
@@ -1684,7 +1917,10 @@ that merges second rebases and re-blesses, its PR naming the re-bless and the la
 ### `demo2` — the run sheet, the certification and the register
 
 - **Owns:** `docs/demo/s2-run-sheet.md` and the register's S2 section (the main session's docs PR).
-  **Builds:** the run sheet for §1.1, staging decision 39's collapse beat on the golden seed; G3′'s
+  **Builds:** the run sheet for §1.1, with `FREE_FIRE` set on the owner's Build beacon in round 1's
+  Lull (step 1), and decision 39's collapse beat shown staged: `fall`'s `collapse_credits_the_blast`
+  run headless beside the zip and its event log shown, the sheet saying plainly that the beat is
+  staged and why; G3′'s
   certification **re-run on `tune2`'s final numbers** on the owner's machine under Windows and WSL2
   Linux and recorded, since `tune2` moves the power budget and the rows the gate load reads; the
   nightly report with each band acknowledged as Easy's; the register's S2 rows closed or moved with
@@ -1699,7 +1935,10 @@ that merges second rebases and re-blesses, its PR naming the re-bless and the la
 
 Three slots, never more. `crates/sim` has one author at a time; beside it run only the named places
 `fall` (beside `site`) and `surv` (beside `atk`), each a new or separate module with call lines and
-no hash, snapshot or table line of its own, as `grid` ran beside `mine` in S1. Days are working days
+no hash, snapshot or table line of its own (`fall`'s one unhashed scratch field on `World`
+included), as `grid` ran beside `mine` in S1, and `con4`'s sim place beside `base` and then `ids`
+(the Defend and Attack arms of `compile_settings_row` in `interpreter.rs` and their refusal-table
+entries, a few lines in an existing file, the owner listing them as excepted). Days are working days
 in plan units, five to a week, at each task's midpoint estimate; a task starts the day its inputs
 merge, and a lane opens its PR when green, so the order inside a wave is a merge order. **The bulk
 ruling** fell on 2026-10-16, before wave 1 (item 144 (11)), so no lane waits on it; the plan had it
@@ -1708,29 +1947,35 @@ fall after `msrv` merges (day 0.75) and before `con3` starts (day 2).
 | Wave | Days | Slot 1 — sim | Slot 2 | Slot 3 | The owner can see |
 |---|---|---|---|---|---|
 | 0 | 0–2 | **msrv** (0.75) → **base** starts | → **redate** (0.75) | → **east** (1.25) | 1.98 everywhere; `expand_east` reaches its site |
-| 1 | 0.75–13 | **base** (6.75) → **ids** (5.5, from 7.5) | **con3** (4.25, from 2) → **con4** (3.75, from 6.25) → **vfy2** starts (10) | **vfy1** (3.75, from 2) → **rnds** (0.75, from 5.75) → **night** (5.25, from 6.5) | `--rounds 6`; E8's verdicts agree with the compile; live fielding; the nightly harness forced once |
-| 2 | 13–25.25 | **fire** (12.25) | **vfy2** (5.75, to 15.75) → **wgw** (6.5, from 15.75) | idle by dependency from 11.75 | Shells, craters, cracked stone, wrecks, kill credit |
-| 3 | 25.25–33.5 | **site** (8.25) | **view** (7, from 25.25) → **g3h** (5, from 32.25) | **fall** (6.5, from 25.25, named place) | A wall going up, levelling, repair and salvage, a collapse; combat drawn |
-| 4 | 33.5–40.5 | **dfnd** (7) | **g3h** (to 37.25) | idle by dependency | Guards, pickets, the threat model, the rescue |
-| 5 | 40.5–50.25 | **atk** (9.75) | **surv** (3.5, named place) → **vfy3** (1.75, from 44) | **oprd** (3.25, from 40.5) | A raid, a hunt, a breach, a charge; full Survey |
-| 6 | 50.25–61 | **g3r** (3) → **tune2** (5.25, from 53.25) → **demo2** (2.5, from 58.5) | **opra** (2.25) → **arms** (2.5, from 52.5) | — | The S2 demo of §1.1 |
+| 1 | 0.75–14 | **base** (7) → **ids** (6.25, from 7.75) | **con3** (4.25, from 2) → **con4** (3.75, from 6.25) → **vfy2** starts (10) | **vfy1** (3.75, from 2) → **night** (5.25, from 5.75) → **rnds** (0.75, from 11) | `--rounds 6`; E8's verdicts agree with the compile; live fielding; the nightly harness forced once |
+| 2 | 14–26 | **fire** (12) | **vfy2** (6, to 16) → **wgw** (6.5, from 16) | idle by dependency from 11.75 | Shells, craters, cracked stone, wrecks, kill credit |
+| 3 | 26–34.5 | **site** (8.5) | **view** (7, from 26) → **g3h** (5, from 33) | **fall** (6.75, from 26, named place) | A wall going up, levelling, repair and salvage, the support rule (staged); combat drawn |
+| 4 | 34.5–41.5 | **dfnd** (7) | **g3h** (to 38) | idle by dependency | Guards, pickets, the threat model, the rescue |
+| 5 | 41.5–51.75 | **atk** (10.25) | **surv** (3.5, named place) → **vfy3** (1.75, from 45) | **oprd** (3.25, from 41.5) | A raid, a hunt, a breach, a charge; full Survey |
+| 6 | 51.75–62.5 | **g3r** (3) → **tune2** (5.25, from 54.75) → **demo2** (2.5, from 60) | **opra** (2.25) → **arms** (2.5, from 54) | — | The S2 demo of §1.1 |
+
+`rnds` runs after `night` rather than before it because `con3` and `con4` hold named places in
+`crates/client-gdext` until day 10, `con3`'s in `rnds`' own `godot_project.rs` (section 3's
+preamble); slot 3 ends on day 11.75 either way.
 
 The idle stretches are by dependency, not by choice: during `fire` nothing off the sim's path is
-ready once `night` and `wgw` are done, and during `dfnd` only `g3h` is (it starts after `view`,
+ready once `rnds` and `wgw` are done, and during `dfnd` only `g3h` is (it starts after `view`,
 which it follows in `xtask`, and builds against the combat it measures rather than starting earlier
 and being re-pointed twice). A lane that slips takes from that slack first.
 
-**Totals.** 27 tasks in 26 lanes (`oprd` and `opra` are one lane in two PRs), **about 126 ad**
-(113.5–140), including about 1.5 ad of re-blesses after rebases (E33) and about 1.75 ad for the
-owner's per-material hardness (decision 10: `fire` 1.25, `con3` 0.25, `view` 0.25). **Critical
-path:** `msrv` → `base` → `ids` → `fire` → `site` → `dfnd` → `atk` → `g3r` → `tune2` → `demo2`,
-**about 61 working days**, almost all of it the sim's serial lanes (`base` to `atk`, about 49.5
-days); per-material hardness adds 1.25 days to it, through `fire`. `opra` runs beside `g3r` and is
-shorter, so it is off the path. Slot utilisation is about 68 % of 183 slot-days.
+**Totals.** 27 tasks in 26 lanes (`oprd` and `opra` are one lane in two PRs), **about 128 ad**
+(115.5–142), including about 1.5 ad of re-blesses after rebases (E33), about 1.75 ad for the
+owner's per-material hardness (decision 10: `fire` 1.25, `con3` 0.25, `view` 0.25) and about 2 ad
+for the verification review's fixes (`ids` 0.75, `atk` 0.5, `base`, `site`, `fall` and `vfy2` a
+quarter each, `fire` a quarter less). **Critical path:** `msrv` → `base` → `ids` → `fire` →
+`site` → `dfnd` → `atk` → `g3r` → `tune2` → `demo2`, **about 62.5 working days**, almost
+all of it the sim's serial lanes (`base` to `atk`, about 51 days); per-material hardness adds 1.25
+days to it, through `fire`, and the verification review's fixes 1.5. `opra` runs beside `g3r` and is
+shorter, so it is off the path. Slot utilisation is about 68 % of 187.5 slot-days.
 
-**Token cost.** At the skeleton's wave-4 and wave-5 rates of 186–195 k sub-agent tokens per planned
-agent-day (item 115 (2)), 126 ad is about **23–25 M** tokens; at wave 6's 215–245 k, 27–31 M. The
-record holds no S1 rate to set beside them.
+**Token cost.** At the skeleton's wave-4 and wave-5 rates of 186–195 k sub-agent tokens per
+planned agent-day (item 115 (2)), 128 ad is about **24–25 M** tokens; at wave 6's 215–245 k,
+27.5–31.5 M. The record holds no S1 rate to set beside them.
 
 ### 4.2 The re-bless ledger: how many times the chains move, and why
 
@@ -1743,12 +1988,12 @@ record holds no S1 rate to set beside them.
 | `ids` (the placement counter and beacons-lost columns) | all | **moved** | all (snapshot 10) |
 | `vfy2` (`Scope`'s sightings) | — | — | all, after `ids`' |
 | `wgw` (the scope's content) | — | — | the gateway's, after `vfy2`'s |
-| `fire` (combat columns; the core's cooldown in every match; the material levels move nothing of their own, decision 10) | all, and its two new ones | **moved** | all (snapshot 11) |
+| `fire` (combat columns; the core's cooldown in every match; bedrock in the bottom layer, which moves the mapgen digest goldens too; the material levels move nothing of their own, decision 10) | all (its staged cases are `crates/sim/tests`, so it adds no committed scenario) | **moved** | all (snapshot 11) |
 | `site` | those with a Build, if drone state is hashed; its two new ones | — expected (Hold & Build's terraform reads NONE and nothing in it is damaged) | all if the snapshot bumps |
-| `fall` | its new one; none other expected (no committed run detaches a region) | — expected | — |
+| `fall` | none expected (no committed run detaches a region; its staged cases are `crates/sim/tests`) | — expected | — |
 | `dfnd` (Defend's table; the explored table laid out) | those reading `safest` or `SAFEST` with a threat in view or a wounded commander; its new one | — expected: both new tables hash nothing while empty (E29) | all (snapshot) |
 | `surv` (the explored table written) | those with a Survey beacon whose scouts now mark cells (`brownout-by-recycle`, `round-limit-audit` and `unaffordable-deploy` name one, each moving only if its Survey beacon is placed); its new one | — expected (the determinism playbook seals no Survey beacon) | — |
-| `atk` | its two new ones; any where Easy now attacks | — expected (E29) | all (snapshot) |
+| `atk` | its four new ones (two moved from `fire`); any where Easy now attacks | — expected (E29) | all (snapshot) |
 | `oprd` (Easy's sealed files; Hold & Build's threshold) | `against-easy*` | — | the operator's and the `demo_*` |
 | `opra` (Easy's sealed files) | `against-easy*` | — | the operator's and the `demo_*` |
 | `tune2` (values; walkers removed; the power budget) | all | **moved** | all (`rules_hash`) |
@@ -1764,9 +2009,9 @@ numbers come last because the check needs the finished rules.
 
 ### 4.3 Honest size
 
-About 126 ad and a 61-day critical path in plan units, against the spec's 6 weeks (30 days); with
-a week of float for contract reviews, about **13 plan-weeks** (13.2). The sim alone carries about
-59 ad, about 49.5 of it in series. S1's plan sized its row at about 7.1 plan-weeks against the
+About 128 ad and a 62.5-day critical path in plan units, against the spec's 6 weeks (30 days);
+with a week of float for contract reviews, about **13.5 plan-weeks**. The sim alone carries about
+61 ad, about 51 of it in series. S1's plan sized its row at about 7.1 plan-weeks against the
 spec's 5, about 40 % over; S2's row is larger than S1's in every layer, and the §2.7 additions
 (collapse, terraform, Defend's and Attack's full settings, the core's turret) are about 15 ad of it.
 The two reviews added about 18 ad and 11 days of path: the id design E1 needs and the whole-sim
@@ -1775,7 +2020,10 @@ fallback sweep (which made `base` two lanes, `base` and `ids`), the combat and c
 re-check, the per-tick budget, the bore, the shared credit, the attacker memory), the harness's
 seams and load generator, the sweep's other crates and the two-OS certification. The owner's
 rulings (item 144 (11)) then added about 1.75 ad and 1.25 days of path for per-material hardness
-(decision 10), almost all of it in `fire`. The cut order of section 4.5, now two cuts, takes about
+(decision 10), almost all of it in `fire`. The verification review's fixes, the same day, added
+about 2 ad and 1.5 days of path: E1's core rows, stale references, sentinels and ruin reserve in
+`ids`, the two scenarios `fire` could not commit moved to `atk`, the iterated fall, and the smaller
+corrections of `base`, `site` and `vfy2`. The cut order of section 4.5, now two cuts, takes about
 3.5 days off the path, the same as before, because the cut the owner removed, Survey's refresh, was
 off the path; it leaves the stage with no planned cut that only buys review time. Decision 1's
 second option, not taken, would have taken about 8.
@@ -1801,16 +2049,19 @@ fixture under `godot/`.
   §6's Build row (terraform's meaning, the base kit's blueprints, repair drones on work in hand,
   decision 38's threshold), §6's Common row (decision 4's unset `roe`), §7 (decision 43's repair
   price under the Repair band), §9 (the support rule, materials and terrain's blast levels by
-  material, decision 10, walls at least two high and the charge's cut, decisions 40 to 42, the
-  demolition charge's carrier), §14 (decision 35: Easy's Defend guard moves into S2), §17's S2 row
-  (the cuts taken, and Survey's refresh never among them, item 144 (11)), §19 (the kingmaking check
-  read from `tune2`'s three-seat run for S2, decision 36); AGENTS.md §3 rule 4's new client pieces
-  (`rnds`' `--rounds` reader, `view`'s), §9 item 11 (G3′'s alarm job and the certification on the
-  owner's machine), §10 item 5 (the bands read against Easy until S5); `docs/placeholders.md`'s S2
-  rows; `docs/design/README.md`'s row for this plan. AGENTS.md is a harness doc no lane edits.
+  material, decision 10, bedrock, walls at least two high and filled to the ground and the charge's
+  cut, decisions 39 to 42, the demolition charge's carrier, and that a collapse carrying an asset
+  does not happen in ordinary play, decision 39), §14 (decision 35: Easy's Defend guard moves into
+  S2), §17's S2 row (the cuts taken, and Survey's refresh never among them, item 144 (11)), §19
+  (the kingmaking check read from `tune2`'s three-seat run for S2, decision 36); AGENTS.md §3 rule
+  4's new client pieces (`rnds`' `--rounds` reader, `view`'s), §9 item 11 (G3′'s alarm job and
+  the certification on the owner's machine), §10 item 5 (the bands read against Easy until S5);
+  `docs/placeholders.md`'s S2 rows; `docs/design/README.md`'s row for this plan. AGENTS.md is a
+  harness doc no lane edits.
 - **Packaged locally before merging** (S1's decision 9): `redate` (`rules/README.md` ships), `con3`,
-  `rnds`, `view`, `oprd`, `opra`, `tune2`, and any lane given a named place under `godot/`,
-  `library/` or `rules/`.
+  `rnds`, `view`, `oprd`, `opra`, `tune2`, `night` (its named place in `xtask/src/package.rs`),
+  and any lane given a named place under `godot/`, `library/` or `rules/` (`site`'s
+  `rules/README.md` sentence if cut 2 is taken).
 
 ### 4.5 The cut order, written before the stage starts (item 144 (7), ruled by (11))
 
@@ -1821,7 +2072,10 @@ word, after the owner's line on decision 5 that intelligence and surveillance sh
 factor in the game, so full Survey ships in S2 whatever happens and item 13's refresh is not
 deferred. A cut construct is never silently ignored: the sim answers `NotAtThisStage("S3")` and the
 verifier its E-code (E8), so a playbook that uses it is refused with a reason and the rules text
-says "from S3".
+says "from S3". Cut 2 removes behaviour rather than a construct, so nothing is refused for it, and
+the player learns of it from the verifier's I-level note on a Build beacon whose `terraform` is
+`FILL` or `BOTH`, that the crater refill is from S3, and from the same sentence in the rules text
+(`site`'s brief carries both if the cut is taken).
 
 1. **Attack's waves.** One launch per segment remains; `waves` greater than one is refused. It saves
    about 1.5 ad and 1.5 days on the critical path (`atk`). It goes first because it is not named in
@@ -1842,38 +2096,42 @@ slip past them meets no planned cut that only buys review time: it is the owner'
 is taken before that work begins; "late" is the lane's start day against its planned start in
 section 4.1:
 
-- **At `site`'s start** (planned day 25.25, when `fire` merges): later than day 26.25, cut 1 is
-  taken and `atk`'s brief drops waves; later than day 27.75, cut 2 as well, and `site`'s brief drops
-  the refill.
-- **At `atk`'s and `surv`'s start** (planned day 40.5, when `dfnd` merges): later than day 41.5,
-  cut 1 if it was not taken. Later than day 44 (3.5 days late, more than cuts 1 and 2 together
-  absorb), no planned cut is left, since cut 2's work is done by then and Survey's refresh is never
-  cut: the main session puts the slip to the owner, and `surv`'s brief keeps the refresh pass.
+- **At `site`'s start** (planned day 26, when `fire` merges): later than day 27, cut 1 is taken and
+  `atk`'s brief drops waves; later than day 28.5, cut 2 as well, and `site`'s brief drops the refill
+  and carries the note in its place. Later than day 29.5 (3.5 days late, more than both cuts
+  absorb), both are taken and the main session also puts the slip to the owner.
+- **At `atk`'s and `surv`'s start** (planned day 41.5, when `dfnd` merges): later than day 42.5,
+  cut 1 if it was not taken. Cut 2's work is done by then, since `site` has merged, and Survey's
+  refresh is never cut, so cut 1 is the only cut left here, and it absorbs 1.5 days: later than day
+  43 with cut 1 spent, whether at this checkpoint or the first, no planned cut is left, and the main
+  session puts the slip to the owner; `surv`'s brief keeps the refresh pass whatever the answer.
 
 Beyond the second cut, any further cut is the owner's (decision 32, section 7).
 
 ### 4.6 The contract pull requests, in merge order
 
 Eighteen of S2's PRs touch an AGENTS.md §5 path: seventeen lanes' and the main session's
-firewall-runner PR. Each body names its paths; each new hashed field goes into the state hash, the
-snapshot round-trip and the goldens in the same PR (§4.8); each snapshot change bumps
-`SNAPSHOT_VERSION` (9 today, `crates/sim/src/snapshot.rs` ~153) and refuses an older snapshot with a
-clear message. `SAVE_FORMAT_VERSION` (2, `crates/gateway/src/save.rs` ~99) moves only if a lane
-changes the save container itself, which none is planned to; a save holding an older snapshot is
-refused through the snapshot's own version. Event kinds and step failures are added at the end with
-new names, their ids taken at rebase (E17, E33).
+firewall-runner PR. The main session's docs PRs (section 4.4), which touch AGENTS.md and
+`docs/design/`, contract paths too, are counted apart: they are the record's own PRs, take the
+docs-only fast path and queue on no lane. Each body names its paths; each new hashed field goes into
+the state hash, the snapshot round-trip and the goldens in the same PR (§4.8); each snapshot change
+bumps `SNAPSHOT_VERSION` (9 today, `crates/sim/src/snapshot.rs` ~153) and refuses an older snapshot
+with a clear message. `SAVE_FORMAT_VERSION` (2, `crates/gateway/src/save.rs` ~99) moves only if a
+lane changes the save container itself, which none is planned to; a save holding an older snapshot
+is refused through the snapshot's own version. Event kinds and step failures are added at the end
+with new names, their ids taken at rebase (E17, E33).
 
 | Order | PR | Contract paths |
 |---|---|---|
 | 1 | `msrv` | `clippy.toml`, the workspace manifest's `[workspace.package]`, `xtask/` where the fix pass edits it |
 | 2 | `con3` | `proto/gp/v1/rules.proto` and the generated tree, comments in `playbook.proto` and `gateway.proto`, `GetEconomyForecastResponse` 5 and 6 `optional`, `ResolvedRef.reachable`, `rules/rules.v1.json` (`rules_hash`), golden contents |
-| 3 | `base` | determinism code: the tick loop's per-phase form (E30); the event vocabulary (`StepFailure` `targets_unwritten`) |
+| 3 | `base` | determinism code: the tick loop's per-phase form and its `MidTick` refusal (E30); the event vocabulary (`StepFailure` `targets_unwritten`) |
 | 4 | `con4` | `playbook.proto` (the header's defaults list, decision 4), `gateway.proto`, `proto/buf.yaml`'s scoped `ignore_only`, the generated tree, the schema and docs goldens |
-| 5 | `night` | `xtask/src/scenario.rs` (what the `scenario` step checks), `.github/workflows/nightly-scenarios.yml` |
+| 5 | `night` | `xtask/src/scenario.rs` (what the `scenario` step checks), `xtask/src/package.rs`'s replay list (a named place: `collect_played`, so the package never replays an arm), `.github/workflows/nightly-scenarios.yml`, the nightly result golden (a new golden format) |
 | — | the firewall-runner PR (main session) | `.github/workflows/claude.yml`'s `runs-on` (item 142 (3)), in the gap between `night` and `g3h`, once the owner's first triggered `claude.yml` run has happened |
-| 6 | `ids` | determinism code: ids and generations, the placement counter, the beacons-lost column, `SNAPSHOT_VERSION` 10 |
+| 6 | `ids` | determinism code: ids and generations, the typed id columns, the placement counter, the beacons-lost column, the ruin reserve, `SNAPSHOT_VERSION` 10; the event vocabulary (`ruin_buried`) |
 | 7 | `vfy2` | `report_hash`'s `Scope` encoding |
-| 8 | `fire` | the combat phase, the kill-credit split (E32), `Stream::Combat`'s first draw, the shell table, wall and cracked terrain materials (new wire values in the chunk digests), the destroyed-value and tally columns, the attacker memory, `SNAPSHOT_VERSION` 11, event kinds, the bore's golden (a new golden format) |
+| 8 | `fire` | the combat phase, the kill-credit split (E32), `Stream::Combat`'s first draw, the shell table, wall, cracked terrain and bedrock materials (new wire values in the chunk digests; bedrock written by generation, moving the mapgen digest goldens), the destroyed-value and tally columns, the attacker memory, `SNAPSHOT_VERSION` 11, event kinds, the bore's golden (a new golden format) |
 | 9 | `fall` | the Voxels phase's order and its settle (E2); event kinds |
 | 10 | `site` | drone state and the snapshot if it adds any; the generated-surface golden (a new golden format); event kinds |
 | 11 | `g3h` | `xtask/src/main.rs`' perf-alarm list |
@@ -1900,7 +2158,8 @@ budget; shorter segments". Item 144 (8) names it S2's depth task (AGENTS.md §10
 `kw_per_unit` 1 the generator powers 190 units, and 40 beacons placed by walk-in, the commander
 walking one voxel a second, do not fit one segment. So the harness drives E30's load generator: a
 **bench rules variant**, built in memory from `rules/rules.v1.json` with named overrides (the power
-ceiling and the fielding totals raised to the gate load), its own `rules_hash` printed in every
+ceiling raised to the gate load; the fielding totals are world constants already at 300 units and
+40 beacons, E30), its own `rules_hash` printed in every
 report and never shipped; and the **gate's layout**, 40 beacons with their mandates (Build, Defend,
 Attack, Mine and Survey in the proportions the report states) and their starting units, placed once
 through `Host::seed_layout` in the lobby, so the layout is an input like the seed and the run
@@ -1973,8 +2232,10 @@ as recommended in the bulk answer. A lane that finds one of them wrong in the co
 the owner rather than building around it.
 
 **1. S2's size and schedule.** *Governs everything.* **Ruled:** the recommended option, put to the
-owner in the interview (item 144 (11)); with decision 10's ruling the size is about 126 ad and still
-about 13 plan-weeks (section 4.1).
+owner in the interview (item 144 (11)); with decision 10's ruling the size was about 126 ad and
+still about 13 plan-weeks, and with the verification review's engineering fixes it is about 128 ad
+and 13.5 plan-weeks (section 4.1), the half-week the review added being engineering the ruling
+already covers.
 - **(Recommended) Keep the whole row and let S2 run about 13 plan-weeks,** with section 4.5's cuts
   as the only planned reductions, taken at their checkpoints. *Downside:* later rows shift about
   seven plan-weeks unless absorbed; the gate date is the owner's.
@@ -2011,7 +2272,8 @@ shell that can be dodged" stops being true. **Ruled:** the recommended option, i
 owner-ruled exception list of four omitted settings; nothing enforces it for `roe`, and Hold &
 Build, the safe playbook and Easy's output all omit it. **Ruled:** the recommended option, put to
 the owner in the interview (item 144 (11)): unset reads as `RETURN_FIRE`, the fifth omitted-setting
-default.
+default. `con4` writes the header's entry and `vfy2` builds the I-level note, extending `I0003`, the
+note for an omitted setting and its named default.
 - **(Recommended) Unset reads as `RETURN_FIRE`, a fifth entry on the list, with an I-level note,
   which `con4` writes into the header (E25).** The spec's Common row says return fire and retreat
   "follow the rules of engagement and are always announced", and its worked example writes
@@ -2102,7 +2364,8 @@ form, which every lane builds:
 - **Walls.** A wall target is a box (`Area`) of voxels filled above the ground, at least
   `materials.wall_min_height_voxels` high (decision 40), each voxel at `wall_cost_per_voxel`. A wall
   voxel has two levels, whole and cracked: it cracks on its first blast and breaks on its second.
-  Wall material carries its seat, with a neutral wall at each level (E14, decision 42).
+  Wall material carries its seat; a wall outside every live sphere of its seat reads as neutral,
+  which no material id says (E14, decision 42). A wall is filled down to the ground (decision 39).
 - **Terrain resists a blast by material too.** `materials.blast_levels` gives each terrain kind its
   number of levels N, and a voxel of that kind takes N blasts: each blast inside a crater's radius
   steps it down one level, as walls do, and the blast at its last level removes it. The damage
@@ -2324,6 +2587,26 @@ standing on the ground stays joined to its neighbours and the ground, so a charg
 removes a ball and nothing above it falls; on a generated 2.5D map, whose columns are solid to
 bedrock, a collapse needs something spanning a gap an attacker opened, such as a wall section whose
 last footing is cut. **Ruled:** the recommended option, in the bulk answer (item 144 (11)).
+**Applied, and its staging corrected** (operator item O1, adopted by the main session under the
+owner's standing instruction "go with your recommendations"; the owner can veto): **walls fill
+down to the ground**, so a wall box has no air under it (`site`), and a charge's flat cut, which
+stops at the footing, never leaves anything above it unsupported: a breach never causes a
+collapse. That removes the geometry the recommended option staged, a wall section whose only
+footing the charge cuts, and the code leaves no other that play can reach with an asset on it. The
+generated terrain is a 1-Lipschitz heightmap with no overhangs, every column solid from bedrock up
+(`mapgen.rs`, "What it produces", 1), so there is no ridge, neck or shelf to cut; a mortar crater
+is a ball centred where its target stood, on a column top, so it leaves the ground under and
+beside it joined to bedrock; Mine never digs in or beside a structure's or beacon's column
+(`mining.rs`, "never under structures") and never detaches a region carrying one (item 144 (3)).
+The one free-standing terrain play can make is a Mine pillar (a `pillar_spacing` of 2 or more with
+the pit dug three or more layers round it; Expand & Mine writes none), whose top a crater landing
+beside it can drop, but which no unit can climb, so it carries nothing and its fall credits
+nobody. So **demo step 5's collapse is staged, and the run sheet says so:** the run sheet runs
+`fall`'s headless `collapse_credits_the_blast` beside the zip, whose terrain shelf, carrying a
+structure, a unit and the commander, is built through test seams and cut by two mortar craters,
+and shows its event log; a committed scenario cannot stage it, since the scenario format has no
+placement key and `gamectl` no host seam. The plan and the run sheet say plainly that a collapse
+carrying an asset does not happen in ordinary play until physics or a span limit.
 - **(Recommended) No span or cantilever limit: keep the face-connected rule; the run sheet stages
   demo step 5's collapse on the golden seed (a wall section whose only footing the charge cuts), and
   `collapse-credits-the-blast` pins the same geometry headless; the plan and the run sheet say
@@ -2344,7 +2627,9 @@ owner's choice against decision 10's recommendation (item 144 (11)). The ruled f
 10's: a wall voxel cracks, then breaks; the charge cuts flat down to the wall's footing and removes
 every voxel inside its cut whatever its level, stone included, so the gap stays walkable under
 hardness; mortar craters stay balls, stepping each voxel inside down a level; bedrock and the bore
-are never removed.
+are never removed. Since operator item O1 (decision 39), a wall is filled down to the ground, so
+the charge's cut, flat at the footing, never leaves wall or terrain above it unsupported, and a
+breach never causes a collapse.
 - **(Recommended) A demolition charge cuts wall material and terrain inside its radius only down
   to the wall's footing, a flat-bottomed cut level with the ground on either side, so its gap is
   walkable; mortar craters stay balls; a wall box is at least two voxels high
@@ -2379,7 +2664,11 @@ repair.
   only it covered turn neutral, as its ruins do, and on elimination all of the seat's walls do; a
   neutral wall is any seat's to shell or breach and nobody's to repair.** *Downside:* a wall its
   seat built at a sphere's edge and left outside every live sphere (after a recycle, say) is
-  neutral; wall repair competes with structures for drone time.
+  neutral; wall repair competes with structures for drone time. *As built* (E14): neutrality is
+  the sim's reading and is written into no voxel, so the catalogue holds no neutral wall id, and
+  the client, which may not make the reading (AGENTS.md §3 rule 4), draws a wall by the seat that
+  built it until S6's art pass, when the gateway would mark neutrality in the view if the owner
+  wants it drawn.
 - *Walls stay their seat's for good:* *Downside:* a dead seat's walls stay "enemy" to everyone, and
   nobody can repair them.
 
@@ -2394,6 +2683,14 @@ in the interview (item 144 (11)).
   Restoring an asset from one hit point to full costs no more than building it. *Downside:* repair
   can starve building in a war, and a seat with no money has drones standing beside damaged
   structures.
+- *The arithmetic as built* (the verification review's correction, an engineering call that keeps
+  the ruling): rounding up each step on its own would charge up to one `$` a step more than pro
+  rata, so a long repair could cost more than the build, against the ruling's own sentence above. So
+  the charge is cumulative and needs no state: the cost to full at h hit points is ⌈(max − h) ×
+  build cost ÷ max⌉, and a step from h to h′ charges the cost to full before it minus the cost
+  to full after it. One repair's charges then telescope to ⌈HP restored × build cost ÷ max⌉,
+  so a repair from one hit point to full costs at most the build; `site`'s
+  `a_full_repair_costs_no_more_than_the_build` holds it.
 - *Free repair (drone time only), the Repair band holding only the drones' fabrication:* *Downside:*
   repairing is always better than rebuilding, so attrition costs only time, and the band the spec
   put second has little to fill.
@@ -2477,19 +2774,19 @@ the rule that moved it, an invented rule where the spec is silent.
 
 | # | Risk | What closes it | Where | If it does not close |
 |---|---|---|---|---|
-| R1 | The sim's serial path (49.5 days) slips, `fire` above all, which per-material hardness grew | Split seams; checkpoints; section 4.5's two cuts (Survey's refresh never cut, item 144 (11)) | `base`, `ids`, `fire`, `site`, `dfnd`, `atk` | Past the two cuts, the owner's word: decision 1's second option or a further cut |
+| R1 | The sim's serial path (51 days) slips, `fire` above all, which per-material hardness grew | Split seams; checkpoints; section 4.5's two cuts (Survey's refresh never cut, item 144 (11)) | `base`, `ids`, `fire`, `site`, `dfnd`, `atk` | Past the two cuts, the owner's word: decision 1's second option or a further cut |
 | R2 | A new hashed field (generations, cooldowns, shells, explored cells, mandate state) is missed | §4.8's three places per PR; save/restore round-trips in each sim PR; lens A | every sim lane | The cross-OS guard and resume tests catch it as a bisect |
 | R3 | Repath bursts under craters break the p99 | The measured burst frequency; the cap re-derived | `g3h`, `g3r` | Section 5's fallback: a lower power budget |
 | R4 | The support search's worst case | `max_region_voxels` and `max_visits_per_tick` measured inside G3′, at an adversarial tick | `fall`, `g3h` | Lower bound rows, with their in-world reason (`g3r`) |
 | R5 | The broadphase grows super-linearly under combat queries | Its share measured; cell size from range (E11) | `g3h` | Item 67's rejected hierarchical grid, reconsidered on evidence |
 | R6 | Re-meshing under a crater stream misses G1's three frames; G1's Linux GPU half never runs | `view`'s stream through the CPU proxy on three runners; an incremental relight | `view` | Coarser destruction (G1's fallback), the owner's |
 | R7 | The nightlies measure Easy's weakness, not balance | Bands read against Easy (item 144 (6)) | `arms`, `demo2` | Re-baselined at S5 |
-| R8 | Eighteen contract PRs queue on review | One proto and one `xtask` PR at a time; the week of float | section 4 | Decision 1's extension grows |
+| R8 | Eighteen contract PRs, beside the main session's docs PRs, queue on review | One proto and one `xtask` PR at a time; the week of float | section 4 | Decision 1's extension grows |
 | R9 | The G3′ job is flaky on a shared runner | It is a loose alarm at the gate's numbers doubled, never the gate; the gate is certified on the owner's machine under Windows and WSL2 Linux (E18); five passes before it is required (decision 31) | `g3r`, `demo2` | It stays a non-required check |
 | R10 | E1 changes what an id is, and every chain with it | An additive layout that keeps every old id's value; one PR, early, re-blessed once with reasons; a test per reset column | `ids` | — |
 | R11 | Breach on a 2.5D graph | Breach as a cost mode over wall columns (E23) | `atk` | Breach by mortar only; the charge waits |
 | R12 | Friendly-fire avoidance leaves a mortar unable to fire near its own assets | The duel report's mortar lines | `tune2` | The owner re-rules avoidance at the demo |
-| R13 | Collapse is rare in ordinary play on a 2.5D map, so the row's feature is mostly unseen | Said plainly; the demo's beat staged; the scenario pins it (decision 39) | `fall`, `demo2` | A span limit, on the owner's word, or physics after v1 |
+| R13 | A collapse carrying an asset is unreachable in ordinary play (1-Lipschitz terrain solid from bedrock, walls filled to the ground, Mine's structure rule; only a Mine pillar's top, which carries nothing, can fall), so the row's feature is unseen in play | Said plainly; the demo's beat staged headless and said to be staged; `fall`'s `collapse_credits_the_blast` pins it through test seams (decision 39, operator item O1) | `fall`, `site`, `demo2` | A span limit, on the owner's word, or physics after v1 |
 | R14 | E7's whole-sim sweep (about 450 sites) grows `base` past its estimate | Its own commit set; the classification in the PR; the guard test | `base` | The sweep's last files carried by `ids` as a named commit, said in both PRs |
 | R15 | The bulk ruling comes late and holds `con3`, then `ids` | **Closed:** it fell on 2026-10-16, before wave 1 (item 144 (11)) | section 4.1 | — |
 | R17 | Per-material hardness (decision 10) makes craters in stone too shallow, or mortars too weak against dug-in ground | The duel report's dirt and stone lines at the proposed `blast_levels` | `tune2` | The owner re-tunes `blast_levels` at the demo, within the catalogue's 1 to 3 |
