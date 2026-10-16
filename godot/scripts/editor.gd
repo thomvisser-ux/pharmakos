@@ -86,10 +86,13 @@
 #     gateway's words and that the orders on screen were not sealed; "Ready to seal" is the
 #     bridge's `seal`, said only in an open Lull. The filed playbook is not shown: no read
 #     the seat's token holds returns it once the Push has begun.
-#   * K, A SHUT DOOR: the map offers its menus only in a Lull while the bridge's editor can
-#     send what they ask for (`map_open`); outside one a click says why. An ask the bridge
-#     will not send is refused at once, and a check that will not come - refused by the
-#     gateway, PHASE_CLOSED included, or shut out - says why in place of "Checking...".
+#   * K, A SHUT DOOR: once the match has ended the map offers no menu (`map_open`, a branch
+#     on the bridge's phase string) and a click says why; in a Push, a recap and after Ready
+#     the map offers what it always did (item 139 (2): "What the map offers in a Push is
+#     unchanged"). An ask the bridge will not send - the door is shut outside an open Lull -
+#     is refused at once with the reason, and a check that will not come - refused by the
+#     gateway, PHASE_CLOSED included, or shut out - says why on its own line in place of
+#     "Checking...", "Estimating...", "Rendering..." or "Reading the map...".
 #
 # Every button on the panel takes no keyboard focus. Run the game with `-- --log-input` and
 # the editor prints every press (button_down) and every handled click (pressed) on Submit,
@@ -436,10 +439,8 @@ func _unhandled_input(event: InputEvent) -> void:
 ## headless window, all editor panel, would not route an injected click to the map.
 func map_click(at: Vector2, alt: bool) -> bool:
 	if not map_open():
-		# No menu outside an open Lull (finding K): say why, and leave the click alone.
-		var door := _door()
-		if door != "open":
-			_say_local("status_closed_" + door, {})
+		# No menu once the match has ended (finding K): say why, and leave the click alone.
+		_say_local("status_closed_ended", {})
 		return false
 	var camera: Camera3D = vista.rig.camera
 	var beacon := _beacon_under(camera, at)
@@ -460,17 +461,13 @@ func map_click(at: Vector2, alt: bool) -> bool:
 	return false
 
 
-## Whether the map offers its menus: only in a Lull, by the bridge's phase string, and only
-## while the bridge's editor can send what a menu asks for - not once this seat is ready
+## Whether the map offers its menus: until the match has ended, by the bridge's phase string
 ## (S1's stage demo, finding K: after the match ended, a click still offered "Place beacon"
-## and the panel then waited on "Checking..." for a call the rig would never send).
+## and the panel then waited on "Checking..." for a call the rig would never send). In a
+## Push, a recap or after Ready the menus open as before, and what they ask for is refused
+## at once by the bridge's editor with the shut door's reason (item 139 (2)).
 func map_open() -> bool:
-	return String(bridge.watch_state().get("phase", "")) == "lull" and _door() == "open"
-
-
-## The bridge's planning door: `open`, `ready`, `push`, `recap` or `ended`.
-func _door() -> String:
-	return String(bridge.editor_state().get("door", "open"))
+	return String(bridge.watch_state().get("phase", "")) != "ended"
 
 
 ## The map surface took a left-click: it is handled here, so the camera rig never sees it,
@@ -604,8 +601,9 @@ func _draw_state(state: Dictionary) -> void:
 	_status.text = Strings.text("status_" + String(state.get("status_key", "")), {"detail": state.get("status_detail", "")})
 	var verdict := String(state.get("verdict", "none"))
 	var line := Strings.text("verdict_" + verdict)
-	# A check that will not come says why, in place of the words that wait for it.
-	var unchecked := unchecked_text(state)
+	# A check that will not come says why, on its own line, in place of the words that wait
+	# for it.
+	var unchecked := unchecked_text(state, "rows")
 	if state.get("busy", false) or (state.get("has_text", false) and not state.get("rows_current", false) and verdict != "refused"):
 		line = unchecked if unchecked != "" and not state.get("busy", false) else Strings.text("verdict_checking")
 	elif String(state.get("seal", "")) != "":
@@ -620,25 +618,27 @@ func _draw_state(state: Dictionary) -> void:
 		_beacon_label.text = String(state["beacon_prose"])
 	_draw_notes(state)
 	_draw_drafts(state.get("drafts", []))
-	_draw_route(state.get("route", {}), state.get("has_text", false), unchecked)
+	_draw_route(state.get("route", {}), state.get("has_text", false), unchecked_text(state, "route"))
 	_draw_ghost(state.get("ghost", {}))
 	_draw_templates(state.get("templates", []))
 	_draw_wizard(state.get("wizard", {}), state.get("templates", []))
-	_draw_rules(state.get("prose", PackedStringArray()), state.get("prose_current", false), state.get("has_text", false), unchecked)
+	_draw_rules(state.get("prose", PackedStringArray()), state.get("prose_current", false), state.get("has_text", false), unchecked_text(state, "prose"))
 	_draw_this_round(String(state.get("this_round", "")))
-	_draw_chips(state.get("chips", []), state.get("chips_current", false), state.get("has_text", false), unchecked)
+	_draw_chips(state.get("chips", []), state.get("chips_current", false), state.get("has_text", false), unchecked_text(state, "chips"))
 	_draw_dormant(state.get("dormant", {}))
 
 
-## Why the checks of the text on screen will not come, as the bridge's editor says
-## (`unchecked_key`: `refused`, with the gateway's words, or the shut door's name), or "" when
-## they are on their way (finding K). Shown in place of "Checking...", "Estimating...",
-## "Rendering..." and "Reading the map...", only where a check is not current.
-static func unchecked_text(state: Dictionary) -> String:
-	var key := String(state.get("unchecked_key", ""))
+## Why `check` (`rows`, `route`, `prose` or `chips`) of the text on screen will not come, as
+## the bridge's editor says (`unchecked[check]`: `key` is `refused`, with the gateway's
+## words in `detail`, or the shut door's name), or "" when it is on its way (finding K).
+## Shown in place of that check's "Checking...", "Estimating...", "Rendering..." or "Reading
+## the map...", only where it is not current; one check's refusal is not another's.
+static func unchecked_text(state: Dictionary, check: String) -> String:
+	var why: Dictionary = (state.get("unchecked", {}) as Dictionary).get(check, {})
+	var key := String(why.get("key", ""))
 	if key == "":
 		return ""
-	return Strings.text("unchecked_" + key, {"detail": state.get("unchecked_detail", "")})
+	return Strings.text("unchecked_" + key, {"detail": why.get("detail", "")})
 
 
 ## The meter: the gateway's four numbers put into strings.gd's frame as they came. Redrawn

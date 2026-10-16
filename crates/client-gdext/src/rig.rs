@@ -1820,7 +1820,7 @@ mod tests {
         let editor = rig.editor();
         assert!(!editor.rows_current(), "the edited text was never checked");
         assert_eq!(
-            editor.unchecked(),
+            editor.unchecked(crate::editor::Check::Rows),
             Some(crate::editor::Unchecked::Refused(format!(
                 "PHASE_CLOSED: {said}"
             ))),

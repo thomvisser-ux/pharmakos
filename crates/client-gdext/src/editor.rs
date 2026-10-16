@@ -450,6 +450,65 @@ pub enum Unchecked {
     Closed(Door),
 }
 
+/// One check of the text on screen, by the panel line that waits for it: a refusal is
+/// shown on its own check's line and nowhere else ([`Editor::unchecked`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Check {
+    /// QUICK and FULL, the verdict line and the rows ("Checking...").
+    Rows,
+    /// `estimate_route`, the route line ("Estimating...").
+    Route,
+    /// `render_plan`, the rules' prose ("Rendering...").
+    Prose,
+    /// `resolve_refs`, the chips ("Reading the map...").
+    Chips,
+}
+
+impl Check {
+    /// Every check, in the order the panel draws their lines.
+    pub const ALL: [Self; 4] = [Self::Rows, Self::Route, Self::Prose, Self::Chips];
+
+    /// The name GDScript reads the check's line under.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Rows => "rows",
+            Self::Route => "route",
+            Self::Prose => "prose",
+            Self::Chips => "chips",
+        }
+    }
+}
+
+/// The gateway's refusal of each check, `CODE: message`, with the revision it checked.
+#[derive(Clone, Default, PartialEq, Eq, Debug)]
+struct CheckRefusals {
+    rows: Option<(u64, String)>,
+    route: Option<(u64, String)>,
+    prose: Option<(u64, String)>,
+    chips: Option<(u64, String)>,
+}
+
+impl CheckRefusals {
+    const fn get(&self, check: Check) -> Option<&(u64, String)> {
+        match check {
+            Check::Rows => self.rows.as_ref(),
+            Check::Route => self.route.as_ref(),
+            Check::Prose => self.prose.as_ref(),
+            Check::Chips => self.chips.as_ref(),
+        }
+    }
+
+    const fn slot(&mut self, check: Check) -> &mut Option<(u64, String)> {
+        match check {
+            Check::Rows => &mut self.rows,
+            Check::Route => &mut self.route,
+            Check::Prose => &mut self.prose,
+            Check::Chips => &mut self.chips,
+        }
+    }
+}
+
 /// What the verdict line says after the verifier's word, if anything (finding J).
 ///
 /// "Ready to seal" and "Cannot be sealed yet" are said only while the door is open, because
@@ -835,8 +894,8 @@ pub struct Editor {
     dormant_patch: Option<String>,
     /// Whether the editor's calls can reach the gateway now, as the rig reads it.
     door: Door,
-    /// The gateway's refusal of a check, `CODE: message`, and the revision it checked.
-    check_refusal: Option<(u64, String)>,
+    /// The gateway's refusal of each check, `CODE: message`, and the revision it checked.
+    check_refusals: CheckRefusals,
     /// The file the text on screen was opened from or last saved to; `None` when it came
     /// from a template, a carried draft or nowhere (finding G: Save as offers this name, and
     /// no other file's).
@@ -1312,7 +1371,7 @@ impl Editor {
             self.render_owed = true;
             self.full_done = None;
             self.owed.edited = true;
-            self.check_refusal = None;
+            self.check_refusals = CheckRefusals::default();
         }
         if new_round && self.wizard.is_some() {
             let asks = self.wizard_asks.wrapping_add(1);
@@ -1373,11 +1432,12 @@ impl Editor {
         self.filed.is_some()
     }
 
-    /// Why the checks of the text on screen will not come, if they will not: the gateway
-    /// refused one, or the door is shut. Read only where a check is not current.
+    /// Why `check` of the text on screen will not come, if it will not: the gateway refused
+    /// that check of this text, or the door is shut. Read only where that check is not
+    /// current; another check's refusal is not this one's.
     #[must_use]
-    pub fn unchecked(&self) -> Option<Unchecked> {
-        if let Some((revision, said)) = &self.check_refusal {
+    pub fn unchecked(&self, check: Check) -> Option<Unchecked> {
+        if let Some((revision, said)) = self.check_refusals.get(check) {
             if *revision == self.revision {
                 return Some(Unchecked::Refused(said.clone()));
             }
@@ -1573,7 +1633,10 @@ impl Editor {
     }
 
     /// The seat connection dropped with a call in flight: an edit or a request the player
-    /// made is asked again once it is back; a check is owed again.
+    /// made is asked again once it is back; a check is owed again. With the door shut
+    /// (the call went out in the Lull's last moment), nothing is kept for a Lull that may
+    /// never come: what would be asked again is dropped as [`Editor::set_door`] drops it,
+    /// and the status line says the ask was not sent (finding K).
     ///
     /// Asking again is safe for every one of them: `patch_plan` is stateless on the gateway
     /// (it hands back the patched text and keeps nothing), the text on screen is still the
@@ -1630,6 +1693,10 @@ impl Editor {
             }
             Sent::Resolve { .. } => self.resolve_owed = true,
             Sent::MapSummary => self.queue.push_front(Job::MapSummary),
+        }
+        if self.door != Door::Open && self.shut() {
+            let key = format!("closed_{}", self.door.name());
+            self.say(&key, "");
         }
         self.touch();
     }
@@ -1839,7 +1906,7 @@ impl Editor {
 
     /// Every check of the text on screen is owed again.
     fn owe_checks(&mut self) {
-        self.check_refusal = None;
+        self.check_refusals = CheckRefusals::default();
         self.owed.quick = true;
         self.owed.estimate = true;
         self.resolve_owed = true;
@@ -2480,14 +2547,18 @@ impl Editor {
         let detail = format!("{code}: {message}");
         // A refused check of the text on screen will not come back by itself: the panel
         // says so, with the gateway's words, rather than "Checking..." for ever (finding K).
-        if let Sent::Quick { revision }
-        | Sent::Full { revision }
-        | Sent::Estimate { revision }
-        | Sent::Render { revision }
-        | Sent::Resolve { revision } = sent
-        {
-            if *revision == self.revision {
-                self.check_refusal = Some((*revision, detail.clone()));
+        // Each check's refusal is its own line's: a refused estimate leaves the chips'
+        // "Reading the map..." alone while their own answer is on its way.
+        let check = match sent {
+            Sent::Quick { revision } | Sent::Full { revision } => Some((Check::Rows, *revision)),
+            Sent::Estimate { revision } => Some((Check::Route, *revision)),
+            Sent::Render { revision } => Some((Check::Prose, *revision)),
+            Sent::Resolve { revision } => Some((Check::Chips, *revision)),
+            _ => None,
+        };
+        if let Some((check, revision)) = check {
+            if revision == self.revision {
+                *self.check_refusals.slot(check) = Some((revision, detail.clone()));
             }
         }
         match sent {
@@ -3883,7 +3954,11 @@ mod tests {
         editor
             .answered(Ok(&patched(r#"{"edited":1}"#, "[]")))
             .expect("reads");
-        assert_eq!(editor.unchecked(), None, "the check is on its way");
+        assert_eq!(
+            editor.unchecked(Check::Rows),
+            None,
+            "the check is on its way"
+        );
         assert_eq!(method_of(editor.next_call(false)), "verify_plan");
         let settled = editor
             .answered(Err(("INTERNAL", "the verifier could not run")))
@@ -3891,11 +3966,16 @@ mod tests {
         assert_eq!(settled, Settled::Refused);
         assert!(!editor.rows_current());
         assert_eq!(
-            editor.unchecked(),
+            editor.unchecked(Check::Rows),
             Some(Unchecked::Refused(
                 "INTERNAL: the verifier could not run".to_owned()
             ))
         );
+        // QUICK's refusal is the verdict line's alone: the route, the prose and the chips,
+        // whose own checks are still owed, keep their waiting words.
+        for other in [Check::Route, Check::Prose, Check::Chips] {
+            assert_eq!(editor.unchecked(other), None, "{other:?}");
+        }
         // A new edit is a new text, whose checks are owed again.
         drain(&mut editor, r#"{"drafts":[]}"#);
         assert!(editor.act(Action::Go, &Target::Beacon("b_01".to_owned())));
@@ -3903,7 +3983,55 @@ mod tests {
         editor
             .answered(Ok(&patched(r#"{"edited":2}"#, "[]")))
             .expect("reads");
-        assert_eq!(editor.unchecked(), None);
+        assert_eq!(editor.unchecked(Check::Rows), None);
+    }
+
+    /// A refused estimate says so on the route's line only; the chips, whose
+    /// `resolve_refs` is still on its way, keep "Reading the map..." (review of `fixd`).
+    #[test]
+    fn a_refusal_is_shown_on_its_own_checks_line_only() {
+        let mut editor = loaded(EXPAND_EAST);
+        editor.set_entities(&[Entity {
+            id: "u_1".to_owned(),
+            kind: EntityKind::Unit,
+            subtype: "commander".to_owned(),
+            owner: "seat.0".to_owned(),
+            at: [358, 22, 36],
+        }]);
+        assert_eq!(method_of(editor.next_call(false)), "estimate_route");
+        editor
+            .answered(Err(("INTERNAL", "no estimate")))
+            .expect("settled");
+        assert!(!editor.chips_current(), "the chips' own read is still owed");
+        assert_eq!(
+            editor.unchecked(Check::Route),
+            Some(Unchecked::Refused("INTERNAL: no estimate".to_owned()))
+        );
+        for other in [Check::Rows, Check::Prose, Check::Chips] {
+            assert_eq!(editor.unchecked(other), None, "{other:?}");
+        }
+    }
+
+    /// A call lost on a seat-connection drop with the door shut is not asked again behind a
+    /// door that may never open: nothing waits, and the status line says the ask was not
+    /// sent (review of `fixd`; before, a dropped edit was queued for the next Lull and the
+    /// panel said "Checking..." until then, or for ever after the match ended).
+    #[test]
+    fn a_call_dropped_behind_a_shut_door_is_not_kept() {
+        let mut editor = loaded(EXPAND_EAST);
+        drain(&mut editor, r#"{"drafts":[]}"#);
+        assert!(editor.act(Action::Go, &Target::Beacon("b_00".to_owned())));
+        assert_eq!(method_of(editor.next_call(false)), "patch_plan");
+        editor.set_door(Door::Ended);
+        editor.dropped();
+        assert!(!editor.busy(), "nothing is in flight or queued");
+        assert!(!editor.has_pending_jobs());
+        assert_eq!(editor.status().key, "closed_ended");
+        assert_eq!(
+            editor.unchecked(Check::Rows),
+            Some(Unchecked::Closed(Door::Ended))
+        );
+        assert!(editor.next_call(true).is_none());
     }
 
     /// Finding J: "Ready to seal" and "Cannot be sealed yet" are said only while the door is
@@ -3977,12 +4105,12 @@ mod tests {
         assert_eq!(editor.status().key, "closed_ready", "the edit was not sent");
         assert!(!editor.has_pending_jobs());
         assert_eq!(
-            editor.unchecked(),
+            editor.unchecked(Check::Rows),
             Some(Unchecked::Closed(Door::Ready)),
             "the loaded text's checks will not come"
         );
         editor.set_door(Door::Open);
-        assert_eq!(editor.unchecked(), None);
+        assert_eq!(editor.unchecked(Check::Rows), None);
         assert_eq!(
             method_of(editor.next_call(false)),
             "verify_plan",

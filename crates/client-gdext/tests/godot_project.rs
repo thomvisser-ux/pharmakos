@@ -1342,8 +1342,10 @@ fn the_panel_draws_the_this_round_sentence_the_bridge_holds() {
 /// path it read, Save hands it the path it wrote, and Save and Save as read the text's file
 /// back from the bridge's editor, which forgets it for a template's playbook and a carried
 /// draft (`editor.rs`'s `the_texts_file_is_the_one_it_was_opened_from_or_saved_to_and_no_other`).
-/// With no file, Save as offers no name; saving over a file that exists asks first, through
-/// the save dialog's own confirmation. The watch check's `_save_as_offers` reads the dialog.
+/// With no file, Save as offers no name. The save dialog is a save-file dialog, whose own
+/// confirmation asks before an overwrite: this pins the mode only, and the native dialog's
+/// prompt is the package hand check. The watch check's `_save_as_offers` reads the dialog,
+/// after the save as well, under a name the opened file does not share.
 #[test]
 fn save_as_offers_the_texts_own_file_and_no_other() {
     let editor = read("scripts/editor.gd");
@@ -1386,8 +1388,29 @@ fn save_as_offers_the_texts_own_file_and_no_other() {
             && check.contains("await _save_as_offers(\"\", \"%s: the carried draft\" % where)")
             && check.contains(
                 "await _save_as_offers(COMMITTED.get_file(), \"the opened committed playbook\")"
-            ),
-        "the watch check reads the dialog after a load, a template and a carried draft"
+            )
+            && check.contains("await _save_as_offers(SAVED.get_file(), \"the saved playbook\")"),
+        "the watch check reads the dialog after a load, a save, a template and a carried draft"
+    );
+    let saved = check
+        .lines()
+        .find_map(|line| line.strip_prefix("const SAVED := "))
+        .expect("the saved file");
+    let committed = check
+        .lines()
+        .find_map(|line| line.strip_prefix("const COMMITTED := "))
+        .expect("the committed file");
+    let base = |path: &str| {
+        path.trim_matches('"')
+            .rsplit('/')
+            .next()
+            .unwrap_or_default()
+            .to_owned()
+    };
+    assert_ne!(
+        base(saved),
+        base(committed),
+        "the saved file's name differs from the opened file's, so the check tells them apart"
     );
 }
 
@@ -1424,22 +1447,21 @@ fn the_verdict_line_says_ready_to_seal_only_by_the_bridges_word() {
     }
 }
 
-/// **K, a shut door** (S1's stage demo): the map offers its menus only in a Lull, by the
-/// bridge's phase string, while the bridge's editor can send what they ask for; the words
-/// that wait for a check give way to why it will not come; and every door the bridge can
-/// name has its sentences (`rig.rs`'s `after_the_match_ends_no_ask_waits_and_no_ghost_hangs`
-/// and `a_check_refused_as_the_lull_ends_says_so_and_nothing_waits`; the watch check's
-/// `_shut_in_the_push`).
+/// **K, a shut door** (S1's stage demo): once the match has ended the map offers no menu, by
+/// the bridge's phase string, and in a Push it offers what it always did (item 139 (2));
+/// the words that wait for a check give way, on that check's own line, to why it will not
+/// come; and every door the bridge can name has its sentences (`rig.rs`'s
+/// `after_the_match_ends_no_ask_waits_and_no_ghost_hangs` and
+/// `a_check_refused_as_the_lull_ends_says_so_and_nothing_waits`; the watch check's
+/// `_refused_in_the_push`).
 #[test]
-fn the_map_is_shut_outside_an_open_lull_and_nothing_waits_on_a_shut_door() {
+fn the_map_is_shut_once_the_match_ends_and_nothing_waits_on_a_shut_door() {
     use pharmakos_client_gdext::editor::Door;
 
     let editor = read("scripts/editor.gd");
     assert_eq!(
         gd_code(&editor, "map_open"),
-        [
-            "return String(bridge.watch_state().get(\"phase\", \"\")) == \"lull\" and _door() == \"open\""
-        ]
+        ["return String(bridge.watch_state().get(\"phase\", \"\")) != \"ended\""]
     );
     let unhandled = gd_code(&editor, "map_click");
     let gate = unhandled
@@ -1455,10 +1477,20 @@ fn the_map_is_shut_outside_an_open_lull_and_nothing_waits_on_a_shut_door() {
         "nothing is picked on a shut map: {unhandled:?}"
     );
     assert_eq!(
-        unhandled.get(gate + 4).copied(),
+        unhandled.get(gate + 2).copied(),
         Some("return false"),
         "a shut map offers no menu: {unhandled:?}"
     );
+    let state = gd_code(&editor, "_draw_state");
+    for check in pharmakos_client_gdext::editor::Check::ALL {
+        assert!(
+            state
+                .iter()
+                .any(|line| line.contains(&format!("unchecked_text(state, \"{}\")", check.name()))),
+            "each line reads its own check's reason, `{}`: {state:?}",
+            check.name()
+        );
+    }
     for (draw, waiting) in [
         ("_draw_chips", "chips_waiting"),
         ("_draw_rules", "rules_waiting"),
@@ -1486,15 +1518,21 @@ fn the_map_is_shut_outside_an_open_lull_and_nothing_waits_on_a_shut_door() {
         .expect("the Push begins");
     assert!(
         run.get(push + 1)
-            .is_some_and(|line| line.contains("await _shut_in_the_push()")),
-        "the shut map is checked as the Push begins: {run:?}"
+            .is_some_and(|line| line.contains("await _refused_in_the_push()")),
+        "the Push's map is checked as the Push begins: {run:?}"
     );
     assert!(
         run.iter()
             .any(|line| line.contains("await _map_click_opens_a_menu()")),
         "with its positive control in round 1's Lull: {run:?}"
     );
-    for check_click in ["_map_click_opens_a_menu", "_shut_in_the_push"] {
+    let push = gd_code(&check, "_refused_in_the_push");
+    assert!(
+        push.iter()
+            .any(|line| line.contains("if not taken or not opened:")),
+        "in the Push the map's menu opens as before: {push:?}"
+    );
+    for check_click in ["_map_click_opens_a_menu", "_refused_in_the_push"] {
         assert!(
             gd_code(&check, check_click)
                 .iter()
