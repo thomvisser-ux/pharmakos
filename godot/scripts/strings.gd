@@ -121,8 +121,19 @@ const TEXT := {
 	"verdict_submitted": "Checked at submission",
 	"verdict_refused": "Load refused",
 	"verdict_checking": "Checking...",
-	"qualifies_yes": "Ready to seal.",
-	"qualifies_no": "Cannot be sealed yet.",
+	# What follows the verdict, as the bridge's editor names it (`SealLine`): whether the
+	# text can be sealed is said only in an open Lull (S1's stage demo, finding J).
+	"seal_ready": "Ready to seal.",
+	"seal_not_ready": "Cannot be sealed yet.",
+	"seal_filed": "Not sealed: the safe playbook was filed for you instead.",
+	# A check that will not come, in place of "Checking...", "Estimating...",
+	# "Rendering..." and "Reading the map..." (finding K): the gateway refused it, with the
+	# gateway's words, or the planning door is shut.
+	"unchecked_refused": "Not checked: the gateway refused ({detail}).",
+	"unchecked_ready": "Not checked: you are ready, so your orders are final for this Lull.",
+	"unchecked_push": "Not checked: planning is closed during the Push.",
+	"unchecked_recap": "Not checked: planning is closed during the recap.",
+	"unchecked_ended": "Not checked: the match has ended.",
 	"no_rows": "Nothing to fix.",
 	# E0601's checkbox: the option is the player's choice, and the verifier's next report
 	# says what it costs (E0601 becomes W0603).
@@ -159,6 +170,14 @@ const TEXT := {
 	"status_dormant_allowed": "Dormant beacons allowed.",
 	"status_dormant_disallowing": "No longer allowing dormant beacons...",
 	"status_dormant_disallowed": "Dormant beacons no longer allowed.",
+	# An ask the editor did not send, because the planning door is shut (finding K).
+	"status_closed_ready": "You are ready: your orders are final for this Lull.",
+	"status_closed_push": "Planning is closed during the Push; it opens again in the next Lull.",
+	"status_closed_recap": "Planning is closed during the recap; it opens again in the next Lull.",
+	"status_closed_ended": "The match has ended: there is nothing left to plan.",
+	# The gateway's own line from this seat's feed, as it came, and what it means for the
+	# text on screen (finding J).
+	"status_safe_filed": "{detail} The orders on screen were not sealed.",
 
 	# --- The route -------------------------------------------------------------
 	# PLACEHOLDER: travel times as raw game milliseconds — OWNER, S3, with plan-core/T18a.

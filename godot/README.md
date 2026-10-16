@@ -59,7 +59,7 @@ exported build, whose extension list the package job's import wrote (decisions-l
 | `scenes/lobby.tscn` | the game at the skeleton: starts `gamectl host`, watches the match (T16), and edits the seat's orders (T19) |
 | `scenes/vista.tscn` | the vista: the bridge, the camera rig, the entity markers, the Pall |
 | `scenes/vista_shot.tscn` | the vista golden's scene: the keyframe fixture with **no host running** |
-| `scenes/watch_check.tscn` | the headless-driven run against a real `gamectl host` (CI's `client` job): the watch rig, the editor, the wizard, the meter, the camera's keys (`_camera_keys`: W held in the focused notes box leaves the camera still, and moves it once a right-click on the view has released the focus), the first click on the panel (`_first_click_lands`: one injected click on Submit, a Fix button and Save reaches its handler exactly once, with the rows redrawn under the press, with a map menu open and after a panel scroll), and a resume by a fresh client |
+| `scenes/watch_check.tscn` | the headless-driven run against a real `gamectl host` (CI's `client` job): the watch rig, the editor, the wizard, the meter, the camera's keys (`_camera_keys`: W held in the focused notes box leaves the camera still, and moves it once a right-click on the view has released the focus), the first click on the panel (`_first_click_lands`: one injected click on Submit, a Fix button and Save reaches its handler exactly once, with the rows redrawn under the press, with a map menu open and after a panel scroll), the name Save as... offers (`_save_as_offers`: the opened file's, the saved file's under a name of its own, and none after a template or a carried draft; the native dialog's overwrite prompt is the package hand check), the map in a Push (`_refused_in_the_push`: a click opens the menu as before, and its ghost, its Go and a submission are refused at once), and a resume by a fresh client |
 | `scenes/rows_shot.tscn` | the validation rows drawn from `fixtures/rows_report.json` with no host; `cargo xtask screenshot` compares it with `tests/golden/vista/expected.rows.png` |
 | `scenes/wizard_shot.tscn` | the wizard's first page drawn from `fixtures/instantiate_suggested.json` with no host; `cargo xtask screenshot` compares it with `tests/golden/vista/expected.wizard.png` |
 | `scenes/client_check.tscn` | T12's headless acceptance scene |
@@ -117,6 +117,14 @@ too. Every sentence the client writes itself is in `scripts/strings.gd`.
 What the editor sends and when is the bridge's (`crates/client-gdext/src/editor.rs` and
 `rig.rs`): the calls share the seat token's rate budget with the vista's polls, and Ready
 waits behind any submission still on its way.
+
+Since S1's stage demo (decisions-log item 139 (2), lane `fixd`): Save writes, and Save as...
+offers, the file the text on screen was opened from or last saved to, and no name after a
+template's playbook or a carried draft (saving over a file that exists asks first, in the
+save dialog); planning is the Lull's, so outside one the map offers no menu, an ask is
+refused at once with the reason, and a check that will not come says why instead of
+"Checking..."; and when the Lull runs out and the gateway files the safe playbook, the
+panel says the orders on screen were not sealed, and says "Ready to seal" only in a Lull.
 
 ## The demo's findings F1, F3 and F6 (S1's plan, task `fixc`)
 

@@ -80,6 +80,18 @@
 #     clicked at rest, not a click on a panel left scrolled. A press on the
 #     panel closes the menu; Save with no file opens Save as...; the Fix is applied and the
 #     submission is accepted;
+#   * SAVE AS OFFERS THE TEXT'S OWN FILE (S1's stage demo, finding G; `_save_as_offers`):
+#     the committed playbook's name once it is opened, the saved file's (a different name,
+#     so the two cannot be told apart by luck) once it is saved, and no name at all after a
+#     template's playbook is used or the carried draft opens; the native dialog's overwrite
+#     prompt is not something a headless run can show, so it stays the package hand check;
+#   * THE MAP'S ASKS ARE REFUSED AT ONCE IN A PUSH (finding K; `_refused_in_the_push`): a
+#     left-click on the ground beside the commander, through the map surface's own handler,
+#     opens the map's menu as it always did (item 139 (2): what the map offers in a Push is
+#     unchanged), its ghost and its Go are refused at once with the Push's reason, nothing
+#     the editor owes is left waiting, and a submission is refused at once. Its positive
+#     control, `_map_click_opens_a_menu`, frames the whole map as the lobby does and makes
+#     the same click in round 1's Lull, where the ghost is asked for and comes back;
 #   * Ready (`set_ready`) ends the Lull: the host is a two-seat match whose other seat the
 #     built-in operator plays and readies at every Lull's start (T18), so this seat's Ready
 #     completes every seat's, the host clock's answer says `all_ready`, and the admin
@@ -155,8 +167,9 @@ const WIZARD_FIXTURE := "res://fixtures/instantiate_suggested.json"
 ## The template the fixture instantiates (tests/golden/gateway/README.md says so); the one
 ## template this check names, to pin it.
 const PINNED_TEMPLATE := "hold_and_build"
-## Where the check saves the player's file, as a player would.
-const SAVED := "user://editor_check.jsonc"
+## Where the check saves the player's file, as a player would: a name other than the
+## committed playbook's, so Save as... offering it after the save is the save's doing.
+const SAVED := "user://editor_check_saved.jsonc"
 const NOTES := "watch check"
 ## What the first scene hands the second (Engine metadata, which survives a scene change).
 const CARRY := "pharmakos_watch_check"
@@ -244,6 +257,9 @@ func _run() -> void:
 	if not await _first_click_lands():
 		_finish()
 		return
+	if not await _map_click_opens_a_menu():
+		_finish()
+		return
 	var sealed: PackedByteArray = vista.bridge.editor_sealed_bytes()
 	print("[watch-check] round 1's sealed submission is %d bytes; the Lull's timer shows %s at Ready" % [sealed.size(), _state().get("timer", "")])
 
@@ -254,6 +270,9 @@ func _run() -> void:
 		_finish()
 		return
 	print("[watch-check] Ready ended the Lull; Push begun at 4x")
+	if not await _refused_in_the_push():
+		_finish()
+		return
 	var follow: Node3D = vista.my_commander()
 	if follow != null:
 		vista.rig.follow(follow)
@@ -362,7 +381,7 @@ func _carried(sealed: PackedByteArray, where: String) -> bool:
 		return false
 	if int(_editor().get("refusals", 0)) != 0:
 		_failures.append("%s: the gateway refused %s of the editor's calls" % [where, _editor().get("refusals")])
-	return true
+	return await _save_as_offers("", "%s: the carried draft" % where)
 
 
 ## The meter is drawn from an answer read in `phase`, and its text is strings.gd's frame over
@@ -450,6 +469,8 @@ func _template(id: String) -> bool:
 		return false
 	if vista.bridge.editor_bytes() != text.to_utf8_buffer():
 		_failures.append("%s: the editor's text is not the gateway's playbook_jsonc byte for byte" % id)
+		return false
+	if not await _save_as_offers("", "%s: the template's playbook" % id):
 		return false
 
 	# One map action through patch_plan: Alt-click the seat's own beacon, Go here.
@@ -693,6 +714,101 @@ func _hold_key(key: Key) -> void:
 	await get_tree().process_frame
 
 
+## Save as... offers `name` (the text's own file, or "" for none), and is closed again
+## (finding G). Returns false when it did not, with the reason recorded.
+func _save_as_offers(name: String, what: String) -> bool:
+	editor.open_save_as()
+	await get_tree().process_frame
+	var dialog: FileDialog = editor.save_dialog()
+	var offered := dialog.current_file
+	dialog.hide()
+	await get_tree().process_frame
+	if offered != name:
+		_failures.append("%s: Save as... offered `%s`, not `%s`" % [what, offered, name])
+		return false
+	print("[watch-check] %s: Save as... offers `%s`" % [what, offered])
+	return true
+
+
+## The positive control for `_refused_in_the_push`, in round 1's Lull: the whole map framed
+## as the lobby frames it, a left-click on the ground beside the commander through the map
+## surface's own handler (`editor.map_click`, which `_unhandled_input` calls) opens a map
+## menu and its ghost is asked for, so a ghost refused in the Push is the door's doing and
+## not a click that missed. The
+## click goes to the handler rather than through Input.parse_input_event because a headless
+## window is 64 pixels square and all editor panel, which would take an injected click. The
+## menu is closed again and the ghost the click asked for is waited out. Returns false when a
+## step failed, with the reason recorded.
+func _map_click_opens_a_menu() -> bool:
+	vista.frame_whole_map()
+	for _frame in KEY_FRAMES:
+		await get_tree().process_frame
+	var at := _ground_on_screen()
+	if at.x < 0.0:
+		_failures.append("the positive control: the camera does not show the ground beside the commander (%s)" % vista.my_commander_at())
+		return false
+	var taken: bool = editor.map_click(at, false)
+	var opened: bool = editor.menu_open()
+	editor.close_menu()
+	if not taken or not opened:
+		_failures.append("the positive control: a click on the map at %s opened no menu in the Lull (taken %s)" % [at, taken])
+		return false
+	if not await _editor_until(func(s: Dictionary) -> bool: return String(s.get("ghost", {}).get("state", "")) != "waiting" and not s.get("pending", true), "the positive control's ghost never came back"):
+		return false
+	print("[watch-check] the Lull: a click on the map at %s opened its menu" % at)
+	return true
+
+
+## Where the camera shows the ground 8 voxels west of this seat's commander, the spot
+## `_one_click`'s menu case clicks, or (-1, -1) when it is behind the camera or off screen.
+func _ground_on_screen() -> Vector2:
+	var commander: Vector3i = vista.my_commander_at()
+	var camera: Camera3D = vista.rig.camera
+	var where: Vector3 = editor._world(Vector3i(commander.x - 8, commander.y, commander.z))
+	if commander.x < 0 or camera.is_position_behind(where):
+		return Vector2(-1, -1)
+	var at := camera.unproject_position(where)
+	if not get_viewport().get_visible_rect().has_point(at):
+		return Vector2(-1, -1)
+	return at
+
+
+## In the Push (finding K): the same left-click through the map surface's own handler opens
+## the map's menu, as it always did (item 139 (2)); the ghost it asks for and the menu's Go
+## are refused at once with the Push's reason; nothing the editor owes is left waiting; and
+## a submission is refused at once too. Returns false when a step failed, with the reason
+## recorded.
+func _refused_in_the_push() -> bool:
+	var at := _ground_on_screen()
+	if at.x < 0.0:
+		_failures.append("the Push: the camera does not show the ground beside the commander")
+		return false
+	var taken: bool = editor.map_click(at, false)
+	var opened: bool = editor.menu_open()
+	await get_tree().process_frame
+	var after := _editor()
+	editor._on_menu(editor.ITEM_GO)
+	editor.close_menu()
+	var went := _editor()
+	var submitted: bool = vista.bridge.editor_submit()
+	var refused := _editor()
+	if _state().get("phase", "") != "push":
+		_failures.append("the Push ended before its map was checked: %s" % _state())
+		return false
+	if String(after.get("door", "")) != "push":
+		_failures.append("the editor's door in the Push is `%s`, not push" % after.get("door"))
+	if not taken or not opened:
+		_failures.append("a click on the map at %s opened no menu in the Push (taken %s)" % [at, taken])
+	if not (after.get("ghost", {}) as Dictionary).is_empty() or String(after.get("status_key", "")) != "closed_push":
+		_failures.append("the click's ghost was not refused at once in the Push: %s" % after)
+	if String(went.get("status_key", "")) != "closed_push" or went.get("pending", true) or went.get("busy", true):
+		_failures.append("the menu's Go was not refused at once in the Push: %s" % went)
+	if submitted or String(refused.get("status_key", "")) != "closed_push" or refused.get("pending", true):
+		_failures.append("a submission in the Push was not refused at once: %s" % refused)
+	print("[watch-check] the Push: a click on the map at %s opened its menu (door %s); its ghost, its Go and a submission were refused at once: %s" % [at, after.get("door"), Strings.text("status_" + String(refused.get("status_key", "")))])
+	return _failures.is_empty()
+
+
 ## The buttons F1 names, and the three cases each is clicked in.
 const CLICKED := ["fix", "save", "submit"]
 const CASES := ["redraw", "menu", "scroll"]
@@ -712,9 +828,8 @@ func _first_click_lands() -> bool:
 	var window_size := get_window().size
 	get_window().size = Vector2i(ProjectSettings.get_setting("display/window/size/viewport_width"), ProjectSettings.get_setting("display/window/size/viewport_height"))
 	await get_tree().process_frame
-	var kept_path: String = editor.file_path
-	# Save with no file opens Save as... (F6: "Save with no file does nothing visible").
-	editor.file_path = ""
+	# Save with no file opens Save as... (F6: "Save with no file does nothing visible"):
+	# `_one_click` opens each file from its bytes, so the text has no file to Save to.
 	var ok := true
 	for name in CLICKED:
 		for case in CASES:
@@ -723,7 +838,6 @@ func _first_click_lands() -> bool:
 				break
 		if not ok:
 			break
-	editor.file_path = kept_path
 	editor.close_menu()
 	get_window().size = window_size
 	await get_tree().process_frame
@@ -903,8 +1017,14 @@ func _edit() -> bool:
 		return false
 	if not _editor().get("qualifies", false):
 		_failures.append("QUICK did not qualify the committed playbook: %s" % [_editor().get("rows", [])])
+	if not await _save_as_offers(COMMITTED.get_file(), "the opened committed playbook"):
+		return false
 	if not editor.save_file(SAVED) or FileAccess.get_file_as_bytes(SAVED) != original:
 		_failures.append("opening and saving the committed playbook did not give its bytes back")
+	if editor.text_file() != SAVED:
+		_failures.append("the saved file is not the text's file: `%s`" % editor.text_file())
+	if not await _save_as_offers(SAVED.get_file(), "the saved playbook"):
+		return false
 	print("[watch-check] opened and saved %s byte for byte" % COMMITTED)
 	var loaded_revision := int(_editor().get("revision", 0))
 

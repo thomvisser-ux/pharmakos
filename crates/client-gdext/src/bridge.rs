@@ -745,6 +745,33 @@ impl PharmakosBridge {
             .unwrap_or(false)
     }
 
+    /// Load a playbook file's bytes, read from `path`: as `editor_load`, and once the editor
+    /// takes the text, `path` is the file it came from, which Save writes and Save as offers
+    /// (the editor state's `file`).
+    #[func]
+    fn editor_load_file(&mut self, bytes: PackedByteArray, path: GString) -> bool {
+        let Some(rig) = self.rig.as_mut() else {
+            return false;
+        };
+        let path = path.to_string();
+        self.panics
+            .guard("editor_load_file", || {
+                rig.editor_mut().open(bytes.as_slice(), Some(&path))
+            })
+            .unwrap_or(false)
+    }
+
+    /// The playbook on screen was written to `path`: from now on it is the text's file.
+    #[func]
+    fn editor_saved_to(&mut self, path: GString) {
+        let path = path.to_string();
+        if let Some(rig) = self.rig.as_mut() {
+            let _ = self
+                .panics
+                .guard("editor_saved_to", || rig.editor_mut().saved_to(&path));
+        }
+    }
+
     /// The playbook the editor holds, as the bytes Save writes; empty before a Load.
     #[func]
     fn editor_bytes(&mut self) -> PackedByteArray {

@@ -22,6 +22,20 @@
 //! seat connection's rate budget and the phase, and the pacer's idle timer
 //! ([`crate::pacer::IdleTimer`]) says when FULL is owed. This module holds no clock.
 //!
+//! # A shut door, and what S1's stage demo found (decisions-log item 139 (2))
+//!
+//! The rig tells the editor whether its calls can go out ([`Door`]): open in a Lull, shut
+//! once this seat is ready and in a Push, a recap and an ended match. With the door shut an
+//! ask is refused at once with the reason, what was queued is dropped rather than kept for a
+//! Lull that may never come, and a check that will not come says why
+//! ([`Editor::unchecked`]), as does a check the gateway refused, `PHASE_CLOSED` included
+//! (finding K). "Ready to seal" is said only with the door open, and once the gateway has
+//! filed this seat's safe playbook the editor says its text was not sealed ([`SealLine`];
+//! finding J). The editor keeps the file its text came from, so Save as offers that name
+//! and no other (finding G). Round 1's "This round" sentence comes with its first accepted
+//! Submit, because the gateway says it only of a sealed or carried playbook (finding A: the
+//! run sheet's timing, not a drop).
+//!
 //! # The order of the calls
 //!
 //! 1. an **edit** the player asked for — a Load, a map action, a Fix, an Undo, a placement
@@ -385,6 +399,154 @@ pub enum Settled {
     Refused,
 }
 
+/// Whether the editor's planning calls can reach the gateway now, as the watch rig reads it
+/// off the admin connection's footer and its own Ready (S1's stage demo, finding K;
+/// decisions-log item 139 (2)).
+///
+/// The gateway's planning door is open in a Lull and closed in a Push, a recap and an ended
+/// match (`PHASE_CLOSED`), and the rig sends no planning call once this seat is ready. A
+/// call the rig will not send never comes back, so the editor neither queues one while the
+/// door is shut nor keeps one it queued before: an ask is refused at once with the reason,
+/// and a check that will not come says why instead of "Checking...". Which phase it is
+/// stays the gateway's word; this is scheduling, as the rig's own Lull gate is.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Door {
+    /// A Lull, or a phase not yet known: the editor's calls go out in the Lull.
+    #[default]
+    Open,
+    /// A Lull in which this seat has said Ready: its orders are final until the next Lull.
+    Ready,
+    /// The Push plays.
+    Push,
+    /// The recap.
+    Recap,
+    /// The match is over.
+    Ended,
+}
+
+impl Door {
+    /// The name GDScript reads, and the suffix of the string-table keys that say why the
+    /// door is shut (`closed_push`, `unchecked_push`).
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::Ready => "ready",
+            Self::Push => "push",
+            Self::Recap => "recap",
+            Self::Ended => "ended",
+        }
+    }
+}
+
+/// Why the checks of the text on screen will not come: what the panel shows in place of
+/// "Checking...", "Estimating...", "Rendering..." and "Reading the map..." so none of them
+/// waits for an answer that is not on its way (finding K).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum Unchecked {
+    /// The gateway refused a check of this text: `CODE: message`, as it came.
+    Refused(String),
+    /// The door is shut, so no check is sent.
+    Closed(Door),
+}
+
+/// One check of the text on screen, by the panel line that waits for it: a refusal is
+/// shown on its own check's line and nowhere else ([`Editor::unchecked`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Check {
+    /// QUICK and FULL, the verdict line and the rows ("Checking...").
+    Rows,
+    /// `estimate_route`, the route line ("Estimating...").
+    Route,
+    /// `render_plan`, the rules' prose ("Rendering...").
+    Prose,
+    /// `resolve_refs`, the chips ("Reading the map...").
+    Chips,
+}
+
+impl Check {
+    /// Every check, in the order the panel draws their lines.
+    pub const ALL: [Self; 4] = [Self::Rows, Self::Route, Self::Prose, Self::Chips];
+
+    /// The name GDScript reads the check's line under.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Rows => "rows",
+            Self::Route => "route",
+            Self::Prose => "prose",
+            Self::Chips => "chips",
+        }
+    }
+}
+
+/// The gateway's refusal of each check, `CODE: message`, with the revision it checked.
+#[derive(Clone, Default, PartialEq, Eq, Debug)]
+struct CheckRefusals {
+    rows: Option<(u64, String)>,
+    route: Option<(u64, String)>,
+    prose: Option<(u64, String)>,
+    chips: Option<(u64, String)>,
+}
+
+impl CheckRefusals {
+    const fn get(&self, check: Check) -> Option<&(u64, String)> {
+        match check {
+            Check::Rows => self.rows.as_ref(),
+            Check::Route => self.route.as_ref(),
+            Check::Prose => self.prose.as_ref(),
+            Check::Chips => self.chips.as_ref(),
+        }
+    }
+
+    const fn slot(&mut self, check: Check) -> &mut Option<(u64, String)> {
+        match check {
+            Check::Rows => &mut self.rows,
+            Check::Route => &mut self.route,
+            Check::Prose => &mut self.prose,
+            Check::Chips => &mut self.chips,
+        }
+    }
+}
+
+/// What the verdict line says after the verifier's word, if anything (finding J).
+///
+/// "Ready to seal" and "Cannot be sealed yet" are said only while the door is open, because
+/// only then can this text be sealed; outside a Lull a playbook the gateway filed for this
+/// seat is said to be what was sealed, and otherwise nothing is added.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SealLine {
+    /// Nothing after the verdict.
+    None,
+    /// The last report qualifies the text on screen, and it can be sealed now.
+    Ready,
+    /// The last report does not qualify it.
+    NotReady,
+    /// The gateway filed this seat's safe playbook for the round: the text on screen was
+    /// not sealed.
+    Filed,
+}
+
+impl SealLine {
+    /// The name GDScript looks the words up by; empty for [`SealLine::None`].
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::None => "",
+            Self::Ready => "ready",
+            Self::NotReady => "not_ready",
+            Self::Filed => "filed",
+        }
+    }
+}
+
+/// The feed kind of the line a seat reads when the gateway filed its safe playbook
+/// (`pharmakos_gateway::surface::SAFE_PLAYBOOK_FILED_KIND`; the gateway's act at the Push's
+/// start, spec section 14). The client's reading of the gateway's feed vocabulary, as
+/// [`ESTIMATE_FOUND_NOTHING`] is of its error codes; a unit test holds it to the gateway's
+/// source.
+pub const SAFE_PLAYBOOK_FILED_KIND: &str = "safe_playbook_filed";
+
 /// The error code `estimate_route` answers a waypoint that resolves to nothing with: a
 /// `covering` that covers nothing, or a selector that ranks nothing, which would be a step
 /// failure at run time (`crates/gateway/src/surface/knowledge.rs`, `place_of`).
@@ -503,6 +665,8 @@ struct Preview {
 enum Job {
     Load {
         candidate: String,
+        /// The file the bytes were read from, when the player opened one.
+        file: Option<String>,
     },
     /// A Fix button's patch, the verifier's own.
     Edit {
@@ -576,8 +740,11 @@ enum Undo {
     /// The inverse patch `patch_plan` handed back for an edit.
     Patch(String),
     /// The text as it was before the wizard's playbook replaced it (`None`: there was no
-    /// text), restored as it was, byte for byte, with no call.
-    Restore(Option<String>),
+    /// text), restored as it was, byte for byte, with no call, and the file it came from.
+    Restore {
+        text: Option<String>,
+        file: Option<String>,
+    },
 }
 
 /// The call in flight, with what the answer is needed for.
@@ -585,6 +752,7 @@ enum Undo {
 enum Sent {
     Load {
         candidate: String,
+        file: Option<String>,
     },
     Edit {
         base: u64,
@@ -724,6 +892,17 @@ pub struct Editor {
     /// The verifier's own patch that sets `allow_dormant_beacons`, from E0601's suggestion
     /// in the report the rows came from; `None` when that report had no E0601.
     dormant_patch: Option<String>,
+    /// Whether the editor's calls can reach the gateway now, as the rig reads it.
+    door: Door,
+    /// The gateway's refusal of each check, `CODE: message`, and the revision it checked.
+    check_refusals: CheckRefusals,
+    /// The file the text on screen was opened from or last saved to; `None` when it came
+    /// from a template, a carried draft or nowhere (finding G: Save as offers this name, and
+    /// no other file's).
+    file: Option<String>,
+    /// The gateway's `safe_playbook_filed` line, when it filed this seat's safe playbook for
+    /// the round under way (the line comes in the seat's own feed; finding J).
+    filed: Option<String>,
 }
 
 impl Editor {
@@ -744,16 +923,46 @@ impl Editor {
 
     // --- What the player asks for -------------------------------------------------------
 
-    /// Load a file's bytes. Returns `false` when the bytes are not UTF-8 text, which no
-    /// playbook can be; otherwise the file is checked by QUICK before the editor takes it.
+    /// Load a playbook's bytes that came from no file of the player's (a check's fixture,
+    /// a pasted text): [`Editor::open`] with no file.
     pub fn load(&mut self, bytes: &[u8]) -> bool {
+        self.open(bytes, None)
+    }
+
+    /// Load a file's bytes, read from `file` when the player opened one. Returns `false`
+    /// when the bytes are not UTF-8 text, which no playbook can be, or when the door is
+    /// shut; otherwise the file is checked by QUICK before the editor takes it, and once it
+    /// is taken, `file` is the file the text came from ([`Editor::file`]).
+    pub fn open(&mut self, bytes: &[u8], file: Option<&str>) -> bool {
+        if self.shut_to_asks() {
+            return false;
+        }
         let Ok(candidate) = String::from_utf8(bytes.to_vec()) else {
             self.say("load_not_text", "");
             return false;
         };
-        self.queue.push_back(Job::Load { candidate });
+        self.queue.push_back(Job::Load {
+            candidate,
+            file: file.map(str::to_owned),
+        });
         self.touch();
         true
+    }
+
+    /// The text on screen was written to `file`, byte for byte: from now on it is the file
+    /// the text belongs to, which Save writes and Save as offers.
+    pub fn saved_to(&mut self, file: &str) {
+        if self.text.is_some() {
+            self.file = Some(file.to_owned());
+            self.touch();
+        }
+    }
+
+    /// The file the text on screen was opened from or last saved to, if it came from one:
+    /// not after a template's playbook, a carried draft, or a text loaded from no file.
+    #[must_use]
+    pub fn file(&self) -> Option<&str> {
+        self.file.as_deref()
     }
 
     /// The text the editor holds, as bytes: what Save writes. Empty with no text.
@@ -777,6 +986,9 @@ impl Editor {
     /// A map action. Returns whether it was taken: an action needs text to act on, and a
     /// target it can name (a visit or a recycle names a beacon, a placement names ground).
     pub fn act(&mut self, action: Action, target: &Target) -> bool {
+        if self.shut_to_asks() {
+            return false;
+        }
         if self.text.is_none() {
             self.say("no_playbook", "");
             return false;
@@ -805,6 +1017,9 @@ impl Editor {
     /// see [`GhostState`]'s PLACEHOLDER). The copy is patched against the text as it is
     /// when the preview goes out, after every edit queued ahead of it.
     pub fn preview_place(&mut self, at: [i32; 3]) -> bool {
+        if self.shut_to_asks() {
+            return false;
+        }
         if self.text.is_none() {
             self.say("no_playbook", "");
             return false;
@@ -864,6 +1079,9 @@ impl Editor {
     /// ("fixed"): the answer takes a round trip, and a click with nothing to show for it
     /// until then reads as a click that was lost (F1, decisions-log item 126 (3)).
     pub fn fix(&mut self, row: usize, fix: usize) -> bool {
+        if self.shut_to_asks() {
+            return false;
+        }
         if !self.rows_current() || self.busy() {
             return false;
         }
@@ -882,6 +1100,9 @@ impl Editor {
 
     /// Undo the last edit, with the inverse patch `patch_plan` handed back for it.
     pub fn undo(&mut self) -> bool {
+        if self.shut_to_asks() {
+            return false;
+        }
         if self.undo.is_empty() {
             return false;
         }
@@ -894,6 +1115,9 @@ impl Editor {
     /// submission taken says so at once ("submitting"), before its answer, for the reason
     /// [`Editor::fix`] gives.
     pub fn submit(&mut self) -> bool {
+        if self.shut_to_asks() {
+            return false;
+        }
         if self.text.is_none() {
             self.say("no_playbook", "");
             return false;
@@ -905,6 +1129,9 @@ impl Editor {
 
     /// Save the notes box through `save_notes`.
     pub fn save_notes(&mut self, notes: &str) {
+        if self.shut_to_asks() {
+            return;
+        }
         self.queue.push_back(Job::Notes {
             notes: notes.to_owned(),
         });
@@ -913,6 +1140,9 @@ impl Editor {
 
     /// Keep the text on screen as the seat's editor draft, through `save_draft`.
     pub fn save_draft(&mut self, label: &str) -> bool {
+        if self.shut_to_asks() {
+            return false;
+        }
         if self.text.is_none() {
             self.say("no_playbook", "");
             return false;
@@ -928,6 +1158,9 @@ impl Editor {
     /// (`skeleton-plan-t16a-notes.md` section B, "T19" (4): a click maps onto `get_beacon`
     /// through the beacon's `b_NN` id).
     pub fn describe_beacon(&mut self, id: &str) {
+        if self.shut_to_asks() {
+            return;
+        }
         self.beacon_prose.clear();
         self.queue.retain(|job| !matches!(job, Job::Beacon { .. }));
         self.queue.push_back(Job::Beacon { id: id.to_owned() });
@@ -938,6 +1171,9 @@ impl Editor {
 
     /// Ask for the template list again (it is read once, at the first Lull, on its own).
     pub fn list_templates(&mut self) {
+        if self.shut_to_asks() {
+            return;
+        }
         self.queue.retain(|job| !matches!(job, Job::Templates));
         self.queue.push_back(Job::Templates);
         self.touch();
@@ -946,6 +1182,9 @@ impl Editor {
     /// Open the wizard on `template_id`: `instantiate_template{suggested: true}` with no
     /// explicit value, whose answer's parameters are the pages.
     pub fn wizard_open(&mut self, template_id: &str) {
+        if self.shut_to_asks() {
+            return;
+        }
         self.wizard_asks = self.wizard_asks.wrapping_add(1);
         self.wizard = Some(Wizard::new(template_id, self.wizard_asks));
         self.ask_wizard();
@@ -955,6 +1194,9 @@ impl Editor {
     /// explicit value, with `suggested` still true, so every other page keeps the
     /// operator's value and mark. Returns whether that page is on screen.
     pub fn wizard_set(&mut self, pointer: &str, text: &str) -> bool {
+        if self.shut_to_asks() {
+            return false;
+        }
         let asks = self.wizard_asks.wrapping_add(1);
         let Some(wizard) = self.wizard.as_mut() else {
             return false;
@@ -972,6 +1214,9 @@ impl Editor {
     /// Put the wizard's playbook into the editor, byte for byte, as one edit Undo takes
     /// back. Refused while the pages on screen do not answer the newest ask.
     pub fn wizard_use(&mut self) -> bool {
+        if self.shut_to_asks() {
+            return false;
+        }
         let text = match self.wizard.as_ref() {
             Some(wizard) if wizard.current() => wizard
                 .instance
@@ -1014,6 +1259,9 @@ impl Editor {
     /// report: E0601 becomes W0603, or back. Refused while the rows describe an older text
     /// or an edit is on its way, as a Fix is, and when there is nothing to change.
     pub fn set_allow_dormant(&mut self, on: bool) -> bool {
+        if self.shut_to_asks() {
+            return false;
+        }
         if !self.rows_current() || self.busy() {
             return false;
         }
@@ -1057,6 +1305,7 @@ impl Editor {
             checked,
             enabled: self.rows_current()
                 && !self.busy()
+                && self.door == Door::Open
                 && (checked || self.dormant_patch.is_some()),
         }
     }
@@ -1098,9 +1347,11 @@ impl Editor {
         let new_round = round != self.round;
         self.round = round;
         if new_round {
-            // Last round's sentence and features describe last round's map.
+            // Last round's sentence and features describe last round's map, and a filing
+            // was last round's.
             self.this_round = None;
             self.features.clear();
+            self.filed = None;
         }
         // The briefing every Lull, not only the first: besides the notebook it carries the
         // Lull's "this round" sentence (item 133 (3) (i)), which the new snapshot changes.
@@ -1120,6 +1371,7 @@ impl Editor {
             self.render_owed = true;
             self.full_done = None;
             self.owed.edited = true;
+            self.check_refusals = CheckRefusals::default();
         }
         if new_round && self.wizard.is_some() {
             let asks = self.wizard_asks.wrapping_add(1);
@@ -1131,6 +1383,88 @@ impl Editor {
             self.ask_wizard();
         }
         self.touch();
+    }
+
+    /// Whether the editor's calls can reach the gateway now ([`Door`]). Shutting the door
+    /// drops what was queued and will never go out: the player's asks (the status line says
+    /// so when there were any), the checks owed (each then says why it will not come), a
+    /// ghost still waiting for its check, and a wizard still waiting for its answer. What is
+    /// in flight is answered as usual. Opening it again within the same Lull (a refused
+    /// Ready) owes the text's checks again; a new Lull's are owed by
+    /// [`Editor::lull_opened`].
+    pub fn set_door(&mut self, door: Door) {
+        if door == self.door {
+            return;
+        }
+        let was_open = self.door == Door::Open;
+        self.door = door;
+        if door == Door::Open {
+            if self.text.is_some() {
+                self.owe_checks();
+            }
+        } else if was_open && self.shut() {
+            self.say(&format!("closed_{}", door.name()), "");
+        }
+        self.touch();
+    }
+
+    /// The door, as the rig last set it.
+    #[must_use]
+    pub const fn door(&self) -> Door {
+        self.door
+    }
+
+    /// The gateway filed this seat's safe playbook for the round: its `safe_playbook_filed`
+    /// line, `said`, came in the seat's own feed. The status line says so with the
+    /// gateway's words and that the text on screen was not sealed; the "this round" sentence,
+    /// which described orders that were not sealed, goes. The filed playbook is not shown:
+    /// no read the seat's token holds returns it once the Push has begun (`get_safe_plan` is
+    /// a planning method, closed in a Push, and answers what would be filed, not what was).
+    pub fn safe_playbook_filed(&mut self, said: &str) {
+        self.filed = Some(said.to_owned());
+        self.this_round = None;
+        self.say("safe_filed", said);
+    }
+
+    /// Whether the gateway filed this seat's safe playbook for the round under way.
+    #[must_use]
+    pub const fn filed(&self) -> bool {
+        self.filed.is_some()
+    }
+
+    /// Why `check` of the text on screen will not come, if it will not: the gateway refused
+    /// that check of this text, or the door is shut. Read only where that check is not
+    /// current; another check's refusal is not this one's.
+    #[must_use]
+    pub fn unchecked(&self, check: Check) -> Option<Unchecked> {
+        if let Some((revision, said)) = self.check_refusals.get(check) {
+            if *revision == self.revision {
+                return Some(Unchecked::Refused(said.clone()));
+            }
+        }
+        (self.door != Door::Open).then_some(Unchecked::Closed(self.door))
+    }
+
+    /// What the verdict line says after the verifier's word ([`SealLine`]).
+    #[must_use]
+    pub fn seal_line(&self) -> SealLine {
+        if self.door != Door::Open {
+            return if self.filed.is_some() {
+                SealLine::Filed
+            } else {
+                SealLine::None
+            };
+        }
+        match self.verdict() {
+            Verdict::None | Verdict::Refused => SealLine::None,
+            Verdict::Quick | Verdict::Full | Verdict::Submitted => {
+                if self.qualifies() {
+                    SealLine::Ready
+                } else {
+                    SealLine::NotReady
+                }
+            }
+        }
     }
 
     /// The view's latest complete entity list: the editor finds its own commander in it,
@@ -1157,7 +1491,8 @@ impl Editor {
     ///
     /// The rig calls this only in a Lull, with the seat connection idle and budget left.
     pub fn next_call(&mut self, full_due: bool) -> Option<Call> {
-        if self.in_flight.is_some() {
+        // The rig asks only with the door open; a shut door sends nothing whoever asks.
+        if self.in_flight.is_some() || self.door != Door::Open {
             return None;
         }
         // 1. The edits, in order.
@@ -1284,14 +1619,24 @@ impl Editor {
             return Ok(Settled::Answered);
         };
         self.touch();
-        match answer {
+        let settled = match answer {
             Ok(result) => self.settle(sent, result).map(|()| Settled::Answered),
             Err((code, message)) => Ok(self.refused(&sent, code, message)),
+        };
+        // An answer that lands after the door shut (sent in the Lull's last moment) may owe
+        // more: a submission's briefing, a preview's check, a new text's checks. None of it
+        // will go out, so none of it is kept waiting.
+        if self.door != Door::Open {
+            self.shut();
         }
+        settled
     }
 
     /// The seat connection dropped with a call in flight: an edit or a request the player
-    /// made is asked again once it is back; a check is owed again.
+    /// made is asked again once it is back; a check is owed again. With the door shut
+    /// (the call went out in the Lull's last moment), nothing is kept for a Lull that may
+    /// never come: what would be asked again is dropped as [`Editor::set_door`] drops it,
+    /// and the status line says the ask was not sent (finding K).
     ///
     /// Asking again is safe for every one of them: `patch_plan` is stateless on the gateway
     /// (it hands back the patched text and keeps nothing), the text on screen is still the
@@ -1301,7 +1646,7 @@ impl Editor {
             return;
         };
         match sent {
-            Sent::Load { candidate } => self.queue.push_front(Job::Load { candidate }),
+            Sent::Load { candidate, file } => self.queue.push_front(Job::Load { candidate, file }),
             Sent::Edit { base, retry } => {
                 if base == self.revision {
                     self.queue.push_front(*retry);
@@ -1348,6 +1693,10 @@ impl Editor {
             }
             Sent::Resolve { .. } => self.resolve_owed = true,
             Sent::MapSummary => self.queue.push_front(Job::MapSummary),
+        }
+        if self.door != Door::Open && self.shut() {
+            let key = format!("closed_{}", self.door.name());
+            self.say(&key, "");
         }
         self.touch();
     }
@@ -1506,6 +1855,65 @@ impl Editor {
         self.changes = self.changes.wrapping_add(1);
     }
 
+    /// An ask made with the door shut: refused at once, with the reason on the status line,
+    /// rather than queued behind a door the rig will not open (finding K).
+    fn shut_to_asks(&mut self) -> bool {
+        if self.door == Door::Open {
+            return false;
+        }
+        let key = format!("closed_{}", self.door.name());
+        self.say(&key, "");
+        true
+    }
+
+    /// Drops what the shut door will never let out. Returns whether a player's ask was among
+    /// it, so the status line can say it was not sent.
+    fn shut(&mut self) -> bool {
+        let asked = self.queue.iter().any(|job| {
+            !matches!(
+                job,
+                Job::Briefing | Job::Drafts | Job::Templates | Job::MapSummary
+            )
+        });
+        let waiting_ghost = self
+            .ghost
+            .as_ref()
+            .is_some_and(|ghost| ghost.state == GhostState::Waiting);
+        self.queue.clear();
+        self.owed.quick = false;
+        self.owed.estimate = false;
+        self.resolve_owed = false;
+        self.render_owed = false;
+        if waiting_ghost
+            && !matches!(
+                self.in_flight,
+                Some(Sent::Preview { .. } | Sent::PreviewCheck)
+            )
+        {
+            self.ghost = None;
+            self.preview = None;
+        }
+        if self
+            .wizard
+            .as_ref()
+            .is_some_and(|wizard| wizard.answered != wizard.asked && wizard.refusal.is_none())
+            && !matches!(self.in_flight, Some(Sent::Instantiate { .. }))
+        {
+            self.wizard = None;
+        }
+        asked || waiting_ghost
+    }
+
+    /// Every check of the text on screen is owed again.
+    fn owe_checks(&mut self) {
+        self.check_refusals = CheckRefusals::default();
+        self.owed.quick = true;
+        self.owed.estimate = true;
+        self.resolve_owed = true;
+        self.render_owed = true;
+        self.owed.edited = true;
+    }
+
     fn say(&mut self, key: &str, detail: &str) {
         self.status = Status {
             key: key.to_owned(),
@@ -1530,9 +1938,9 @@ impl Editor {
         let current = self.text.clone();
         let revision = self.revision;
         Some(match job {
-            Job::Load { candidate } => {
+            Job::Load { candidate, file } => {
                 let params = verify_params(&candidate, "quick");
-                self.send(Sent::Load { candidate }, "verify_plan", params)
+                self.send(Sent::Load { candidate, file }, "verify_plan", params)
             }
             Job::Edit { patch } => {
                 let playbook = current?;
@@ -1632,10 +2040,10 @@ impl Editor {
     fn render_undo(&mut self) -> Option<Call> {
         let patch = match self.undo.last()? {
             Undo::Patch(patch) => patch.clone(),
-            Undo::Restore(_) => {
-                if let Some(Undo::Restore(before)) = self.undo.pop() {
+            Undo::Restore { .. } => {
+                if let Some(Undo::Restore { text, file }) = self.undo.pop() {
                     self.drop_settled_ghost();
-                    self.restore(before);
+                    self.restore(text, file);
                 }
                 return None;
             }
@@ -1662,8 +2070,12 @@ impl Editor {
                 Some(self.send(Sent::Instantiate { asked }, "instantiate_template", params))
             }
             Job::UseWizard { text } => {
-                let before = self.text.clone();
-                self.undo.push(Undo::Restore(before));
+                // The template's playbook is no file's: Save as offers no name for it, and
+                // Undo gives the text before it back with the file that text came from.
+                self.undo.push(Undo::Restore {
+                    text: self.text.clone(),
+                    file: self.file.take(),
+                });
                 self.drop_settled_ghost();
                 self.accept_text(text);
                 self.say("wizard_used", "");
@@ -1742,7 +2154,7 @@ impl Editor {
 
     fn settle(&mut self, sent: Sent, result: &Json) -> Result<(), BridgeError> {
         match sent {
-            Sent::Load { candidate } => self.settle_load(candidate, &report_of(result)?),
+            Sent::Load { candidate, file } => self.settle_load(candidate, file, result)?,
             Sent::Edit { base, retry } => self.settle_edit(base, &retry, result)?,
             Sent::Undo { base } => {
                 let answer = patch_of(result)?;
@@ -1874,6 +2286,8 @@ impl Editor {
                     self.undo.clear();
                     self.preview = None;
                     self.ghost = None;
+                    // Last round's seal, from the gateway: no file of the player's.
+                    self.file = None;
                     self.accept_text(response.playbook_jsonc);
                     self.say("carried", &response.label);
                 }
@@ -1912,7 +2326,13 @@ impl Editor {
     }
 
     /// Load's QUICK answer: refuse the file with the code and the pointer, or open it.
-    fn settle_load(&mut self, candidate: String, report: &VerifyReport) {
+    fn settle_load(
+        &mut self,
+        candidate: String,
+        file: Option<String>,
+        result: &Json,
+    ) -> Result<(), BridgeError> {
+        let report = &report_of(result)?;
         let refusal = report.diagnostics.iter().find(|diagnostic| {
             diagnostic.severity() == Severity::Error
                 && LOAD_REFUSALS.contains(&diagnostic.code.as_str())
@@ -1926,11 +2346,13 @@ impl Editor {
             self.undo.clear();
             self.preview = None;
             self.ghost = None;
+            self.file = file;
             self.accept_text(candidate);
             self.take_rows(report, Verdict::Quick);
             self.owed.quick = false;
             self.say("loaded", "");
         }
+        Ok(())
     }
 
     fn settle_drafts(&mut self, response: ListDraftsResponse) {
@@ -2008,8 +2430,10 @@ impl Editor {
         self.touch();
     }
 
-    /// Undo of the wizard's playbook: the text before it, as it was (`None`: no text).
-    fn restore(&mut self, before: Option<String>) {
+    /// Undo of the wizard's playbook: the text before it, as it was (`None`: no text), and
+    /// the file it came from.
+    fn restore(&mut self, before: Option<String>, file: Option<String>) {
+        self.file = file;
         if let Some(text) = before {
             self.accept_text(text);
             return;
@@ -2121,6 +2545,22 @@ impl Editor {
         }
         self.refusals = self.refusals.saturating_add(1);
         let detail = format!("{code}: {message}");
+        // A refused check of the text on screen will not come back by itself: the panel
+        // says so, with the gateway's words, rather than "Checking..." for ever (finding K).
+        // Each check's refusal is its own line's: a refused estimate leaves the chips'
+        // "Reading the map..." alone while their own answer is on its way.
+        let check = match sent {
+            Sent::Quick { revision } | Sent::Full { revision } => Some((Check::Rows, *revision)),
+            Sent::Estimate { revision } => Some((Check::Route, *revision)),
+            Sent::Render { revision } => Some((Check::Prose, *revision)),
+            Sent::Resolve { revision } => Some((Check::Chips, *revision)),
+            _ => None,
+        };
+        if let Some((check, revision)) = check {
+            if revision == self.revision {
+                *self.check_refusals.slot(check) = Some((revision, detail.clone()));
+            }
+        }
         match sent {
             Sent::Load { .. } => self.say("load_refused_by_gateway", &detail),
             Sent::Preview { .. } | Sent::PreviewCheck => {
@@ -3376,6 +3816,306 @@ mod tests {
             "the text on screen is kept; round 1's playbook is not last round's"
         );
         assert_eq!(editor.revision(), before, "nothing was opened over it");
+    }
+
+    /// Finding A of S1's stage demo: round 1's Lull drew no "This round" sentence. The
+    /// gateway says it only for a sealed or carried playbook (`Surface::this_round`), so in
+    /// round 1 there is none before the first Submit; after an accepted Submit the briefing
+    /// is asked again and its sentence is the one the panel draws. This passed on the code
+    /// the demo played: the sheet's step 8 read the panel before step 11's Submit.
+    #[test]
+    fn round_ones_sentence_comes_with_its_first_accepted_submit() {
+        let sentence = "This round: step 1 places a new beacon near (324, 16), $ 60.";
+        let mut editor = loaded(EXPAND_EAST);
+        editor.lull_opened(1);
+        let mut briefings = 0;
+        for _ in 0..16 {
+            let Some(call) = editor.next_call(false) else {
+                break;
+            };
+            let answer = match call.method {
+                // Nothing is sealed or carried in round 1, so the gateway's prose has no
+                // "This round" sentence.
+                "get_briefing" => {
+                    briefings += 1;
+                    read(r#"{"notes":"","prose":"Round 1 of 3, the Lull. You hold 1 beacon."}"#)
+                }
+                "get_map_summary" => read(r#"{"features":[]}"#),
+                "list_drafts" => read(r#"{"drafts":[]}"#),
+                "list_templates" => read(r#"{"templates":[]}"#),
+                "render_plan" => read(r#"{"prose":"Playbook\n"}"#),
+                "resolve_refs" => read(r#"{"refs":[]}"#),
+                _ => quick_report("", true),
+            };
+            editor.answered(Ok(&answer)).expect("reads");
+        }
+        assert_eq!(briefings, 1, "the Lull's briefing was read");
+        assert_eq!(
+            editor.this_round(),
+            None,
+            "no sentence before the first Submit"
+        );
+
+        assert!(editor.submit());
+        assert_eq!(method_of(editor.next_call(false)), "submit_plan");
+        editor
+            .answered(Ok(&read(
+                r#"{"report":{"qualifies":true,"depth":"full"},"accepted":true}"#,
+            )))
+            .expect("reads");
+        let call = editor.next_call(false).expect("the briefing again");
+        assert_eq!(call.method, "get_briefing", "asked again after the seal");
+        let changes = editor.changes();
+        editor
+            .answered(Ok(&read(&format!(
+                r#"{{"notes":"","prose":"Round 1 of 3, the Lull. You hold 1 beacon. {sentence}"}}"#
+            ))))
+            .expect("reads");
+        assert_eq!(
+            editor.this_round(),
+            Some(sentence),
+            "and its sentence is drawn"
+        );
+        assert!(editor.changes() > changes, "the panel is told to redraw");
+    }
+
+    /// Finding G: Save as offers the name of the file the text on screen came from, and no
+    /// name when it came from a template, a carried seal or no file at all, so one Enter
+    /// cannot overwrite another round's file unasked (the dialog confirms an overwrite).
+    #[test]
+    fn the_texts_file_is_the_one_it_was_opened_from_or_saved_to_and_no_other() {
+        let mut editor = Editor::new("seat.0");
+        assert!(editor.open(EXPAND_EAST.as_bytes(), Some("C:/plays/round1.jsonc")));
+        assert_eq!(
+            editor.file(),
+            None,
+            "not until QUICK has seen it and it opened"
+        );
+        let _ = editor.next_call(false);
+        editor.answered(Ok(&quick_report("", true))).expect("reads");
+        assert_eq!(editor.file(), Some("C:/plays/round1.jsonc"));
+        // An edit keeps the file: it is still that file's text.
+        assert!(editor.act(Action::Go, &Target::Beacon("b_00".to_owned())));
+        let _ = editor.next_call(false);
+        editor
+            .answered(Ok(&patched(r#"{"edited":1}"#, "[]")))
+            .expect("reads");
+        assert_eq!(editor.file(), Some("C:/plays/round1.jsonc"));
+        drain(&mut editor, r#"{"drafts":[]}"#);
+        // A refused Load changes nothing, the file included.
+        assert!(editor.open(b"{}", Some("C:/plays/bad.json")));
+        let _ = editor.next_call(false);
+        let e0003 =
+            r#"{"code":"E0003","severity":"error","path":"/declarative","message":"held back"}"#;
+        editor
+            .answered(Ok(&quick_report(e0003, false)))
+            .expect("reads");
+        assert_eq!(editor.file(), Some("C:/plays/round1.jsonc"));
+        // The wizard's playbook is no file's; Undo gives the text and its file back.
+        editor.queue.push_back(Job::UseWizard {
+            text: r#"{"wizard":1}"#.to_owned(),
+        });
+        drain(&mut editor, r#"{"drafts":[]}"#);
+        assert_eq!(editor.bytes(), br#"{"wizard":1}"#);
+        assert_eq!(editor.file(), None, "a template's playbook offers no name");
+        assert!(editor.undo());
+        assert_eq!(
+            method_of(editor.next_call(false)),
+            "verify_plan",
+            "the text before the wizard's comes back with no call, and is checked again"
+        );
+        editor.answered(Ok(&quick_report("", true))).expect("reads");
+        assert_eq!(editor.bytes(), br#"{"edited":1}"#);
+        assert_eq!(editor.file(), Some("C:/plays/round1.jsonc"));
+        drain(&mut editor, r#"{"drafts":[]}"#);
+        // Saving names the file from then on.
+        editor.saved_to("C:/plays/round1b.jsonc");
+        assert_eq!(editor.file(), Some("C:/plays/round1b.jsonc"));
+        // A carried draft is last round's seal, from the gateway: no file of the player's.
+        editor.lull_opened(2);
+        drain(
+            &mut editor,
+            r#"{"drafts":[{"draft_id":"carried","label":"carried from round 1","round":2}]}"#,
+        );
+        assert_eq!(editor.status().key, "carried");
+        assert_eq!(editor.file(), None, "the carried draft offers no name");
+        // And a text loaded from no file has none.
+        let bare = loaded(EXPAND_EAST);
+        assert_eq!(bare.file(), None);
+    }
+
+    /// Finding K, in a Lull: a check the gateway refuses says so, with the gateway's words,
+    /// where the panel would otherwise say "Checking..." until the next edit.
+    #[test]
+    fn a_refused_check_says_why_instead_of_checking() {
+        let mut editor = loaded(EXPAND_EAST);
+        assert!(editor.act(Action::Go, &Target::Beacon("b_00".to_owned())));
+        let _ = editor.next_call(false);
+        editor
+            .answered(Ok(&patched(r#"{"edited":1}"#, "[]")))
+            .expect("reads");
+        assert_eq!(
+            editor.unchecked(Check::Rows),
+            None,
+            "the check is on its way"
+        );
+        assert_eq!(method_of(editor.next_call(false)), "verify_plan");
+        let settled = editor
+            .answered(Err(("INTERNAL", "the verifier could not run")))
+            .expect("settled");
+        assert_eq!(settled, Settled::Refused);
+        assert!(!editor.rows_current());
+        assert_eq!(
+            editor.unchecked(Check::Rows),
+            Some(Unchecked::Refused(
+                "INTERNAL: the verifier could not run".to_owned()
+            ))
+        );
+        // QUICK's refusal is the verdict line's alone: the route, the prose and the chips,
+        // whose own checks are still owed, keep their waiting words.
+        for other in [Check::Route, Check::Prose, Check::Chips] {
+            assert_eq!(editor.unchecked(other), None, "{other:?}");
+        }
+        // A new edit is a new text, whose checks are owed again.
+        drain(&mut editor, r#"{"drafts":[]}"#);
+        assert!(editor.act(Action::Go, &Target::Beacon("b_01".to_owned())));
+        let _ = editor.next_call(false);
+        editor
+            .answered(Ok(&patched(r#"{"edited":2}"#, "[]")))
+            .expect("reads");
+        assert_eq!(editor.unchecked(Check::Rows), None);
+    }
+
+    /// A refused estimate says so on the route's line only; the chips, whose
+    /// `resolve_refs` is still on its way, keep "Reading the map..." (review of `fixd`).
+    #[test]
+    fn a_refusal_is_shown_on_its_own_checks_line_only() {
+        let mut editor = loaded(EXPAND_EAST);
+        editor.set_entities(&[Entity {
+            id: "u_1".to_owned(),
+            kind: EntityKind::Unit,
+            subtype: "commander".to_owned(),
+            owner: "seat.0".to_owned(),
+            at: [358, 22, 36],
+        }]);
+        assert_eq!(method_of(editor.next_call(false)), "estimate_route");
+        editor
+            .answered(Err(("INTERNAL", "no estimate")))
+            .expect("settled");
+        assert!(!editor.chips_current(), "the chips' own read is still owed");
+        assert_eq!(
+            editor.unchecked(Check::Route),
+            Some(Unchecked::Refused("INTERNAL: no estimate".to_owned()))
+        );
+        for other in [Check::Rows, Check::Prose, Check::Chips] {
+            assert_eq!(editor.unchecked(other), None, "{other:?}");
+        }
+    }
+
+    /// A call lost on a seat-connection drop with the door shut is not asked again behind a
+    /// door that may never open: nothing waits, and the status line says the ask was not
+    /// sent (review of `fixd`; before, a dropped edit was queued for the next Lull and the
+    /// panel said "Checking..." until then, or for ever after the match ended).
+    #[test]
+    fn a_call_dropped_behind_a_shut_door_is_not_kept() {
+        let mut editor = loaded(EXPAND_EAST);
+        drain(&mut editor, r#"{"drafts":[]}"#);
+        assert!(editor.act(Action::Go, &Target::Beacon("b_00".to_owned())));
+        assert_eq!(method_of(editor.next_call(false)), "patch_plan");
+        editor.set_door(Door::Ended);
+        editor.dropped();
+        assert!(!editor.busy(), "nothing is in flight or queued");
+        assert!(!editor.has_pending_jobs());
+        assert_eq!(editor.status().key, "closed_ended");
+        assert_eq!(
+            editor.unchecked(Check::Rows),
+            Some(Unchecked::Closed(Door::Ended))
+        );
+        assert!(editor.next_call(true).is_none());
+    }
+
+    /// Finding J: "Ready to seal" and "Cannot be sealed yet" are said only while the door is
+    /// open; outside a Lull nothing is added, unless the gateway filed this seat's safe
+    /// playbook, when the line says the text on screen was not sealed. A new round forgets
+    /// the filing.
+    #[test]
+    fn ready_to_seal_is_said_only_in_an_open_lull() {
+        let mut editor = loaded(EXPAND_EAST);
+        editor.lull_opened(3);
+        drain(&mut editor, r#"{"drafts":[]}"#);
+        let full = editor.next_call(true).expect("FULL");
+        assert!(full.full);
+        editor
+            .answered(Ok(&read(
+                r#"{"report":{"qualifies":true,"depth":"full","diagnostics":[]}}"#,
+            )))
+            .expect("reads");
+        assert_eq!(editor.verdict(), Verdict::Full);
+        assert_eq!(editor.seal_line(), SealLine::Ready);
+        editor.set_door(Door::Push);
+        assert_eq!(
+            editor.seal_line(),
+            SealLine::None,
+            "nothing is ready to seal in a Push"
+        );
+        editor.this_round = Some("This round: step 1 places a new beacon.".to_owned());
+        editor.safe_playbook_filed("The Lull ran out, so the safe playbook was filed for you.");
+        assert_eq!(editor.seal_line(), SealLine::Filed);
+        assert_eq!(editor.status().key, "safe_filed");
+        assert_eq!(
+            editor.this_round(),
+            None,
+            "the sentence described orders that were not sealed"
+        );
+        assert_eq!(editor.verdict(), Verdict::Full, "the verifier's word stays");
+        editor.set_door(Door::Open);
+        editor.lull_opened(4);
+        assert!(!editor.filed(), "a filing is its round's");
+    }
+
+    /// Finding K: shutting the door drops what will never go out, says so when the player
+    /// had asked for something, refuses asks at once, and opening it again in the same Lull
+    /// owes the text's checks again.
+    #[test]
+    fn a_shut_door_drops_what_waited_and_refuses_asks() {
+        let mut editor = loaded(EXPAND_EAST);
+        drain(&mut editor, r#"{"drafts":[]}"#);
+        let changes = editor.changes();
+        editor.set_door(Door::Recap);
+        assert!(editor.changes() > changes);
+        assert_eq!(
+            editor.status().key,
+            "loaded",
+            "with nothing asked, the status line keeps its word"
+        );
+        assert!(!editor.save_draft("x"));
+        assert_eq!(editor.status().key, "closed_recap");
+        editor.save_notes("kept in the box");
+        editor.describe_beacon("b_00");
+        editor.list_templates();
+        editor.wizard_open("hold_and_build");
+        assert!(editor.wizard().is_none());
+        assert!(!editor.has_pending_jobs());
+        assert!(editor.next_call(true).is_none());
+
+        // Ready, then a refused set_ready: the door opens again in the same Lull.
+        let mut editor = loaded(EXPAND_EAST);
+        assert!(editor.act(Action::Go, &Target::Beacon("b_00".to_owned())));
+        editor.set_door(Door::Ready);
+        assert_eq!(editor.status().key, "closed_ready", "the edit was not sent");
+        assert!(!editor.has_pending_jobs());
+        assert_eq!(
+            editor.unchecked(Check::Rows),
+            Some(Unchecked::Closed(Door::Ready)),
+            "the loaded text's checks will not come"
+        );
+        editor.set_door(Door::Open);
+        assert_eq!(editor.unchecked(Check::Rows), None);
+        assert_eq!(
+            method_of(editor.next_call(false)),
+            "verify_plan",
+            "its checks are owed again"
+        );
     }
 
     #[test]

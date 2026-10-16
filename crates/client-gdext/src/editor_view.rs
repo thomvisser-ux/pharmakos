@@ -15,7 +15,7 @@ use godot::meta::ToGodot;
 use pharmakos_proto::gp::api::v1::VerifyReport;
 use pharmakos_proto::json;
 
-use crate::editor::{Editor, Route, Row, Selector, Target, rows_of};
+use crate::editor::{Check, Editor, Route, Row, Selector, Target, Unchecked, rows_of};
 use crate::error::BridgeError;
 use crate::rig::{Meter, Recap};
 use crate::targeting::{Chip, ChipFeature, FeatureKind, FeatureName};
@@ -196,6 +196,25 @@ pub(crate) fn state_dictionary(editor: &Editor) -> VarDictionary {
         "this_round",
         editor.this_round().unwrap_or_default().to_variant(),
     );
+    put("door", editor.door().name().to_variant());
+    // Why each check will not come, by its line: `{"rows": {"key", "detail"}, ...}`, the
+    // key "" while the check is on its way (finding K; a refusal is its own check's).
+    let mut unchecked = VarDictionary::new();
+    for check in Check::ALL {
+        let (key, detail) = match editor.unchecked(check) {
+            None => (String::new(), String::new()),
+            Some(Unchecked::Refused(said)) => ("refused".to_owned(), said),
+            Some(Unchecked::Closed(door)) => (door.name().to_owned(), String::new()),
+        };
+        let mut why = VarDictionary::new();
+        why.set(&"key".to_variant(), &key.to_variant());
+        why.set(&"detail".to_variant(), &detail.to_variant());
+        unchecked.set(&check.name().to_variant(), &why.to_variant());
+    }
+    put("unchecked", unchecked.to_variant());
+    put("seal", editor.seal_line().name().to_variant());
+    put("filed", editor.filed().to_variant());
+    put("file", editor.file().unwrap_or_default().to_variant());
     let dormant = editor.dormant();
     let mut option = VarDictionary::new();
     option.set(&"shown".to_variant(), &dormant.shown.to_variant());
