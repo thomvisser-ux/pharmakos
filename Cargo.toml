@@ -22,7 +22,7 @@ members = [
 [workspace.package]
 version = "0.0.0"                # stays 0.0.0 until the wk-35.5 v0.1 gate (item 117 (2)); v1 is wk 63.5
 edition = "2024"
-rust-version = "1.85"            # PLACEHOLDER: the MSRV, below the 1.98.1 pin — owner, S1, see clippy.toml
+rust-version = "1.98"            # the pin's minor (S1-01, discharged by S2's `msrv`); see clippy.toml
 license = "GPL-3.0-or-later"     # crates/proto overrides this with MIT OR Apache-2.0
 authors = ["Pharmakos contributors"]
 repository = "https://example.invalid/pharmakos"  # PLACEHOLDER: the address — owner, the v0.1 gate
@@ -103,7 +103,8 @@ lexopt       = "0.3.2"
 # NOTE on the `research` feature: only crates/sim defines it. Any crate that depends on
 # pharmakos-sim must do so with default-features = false and must never name
 # features = ["research"]. `cargo xtask ci` enforces this for plan-core, verifier,
-# operator and gateway (spec §15, Determinism).
+# operator, gateway, gamectl and bench, the six crates of `GUARDED_PACKAGES` in
+# xtask/src/main.rs (spec §15, Determinism).
 
 # Lint levels live here rather than in .cargo/config.toml rustflags so they apply to our
 # crates only and never to third-party dependencies. Each member opts in with
