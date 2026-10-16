@@ -27,7 +27,8 @@ checked on every pull request that changes more than prose and on `main`'s push 
 spikes are closed, frozen at the `spike-end` tag and deleted from `main`;
 their measured results and their lessons for the skeleton live under `docs/spikes/`, and reading the
 spike code means `git worktree add ../pharmakos-spikes spike-end`. The walking skeleton is closed
-(decisions-log item 126, 2026-09-29), S1 is next, and every crate in §3 has code; mark any value
+(decisions-log item 126, 2026-09-29), S1's stage demo is reviewed and S1 closes when its last lane,
+`fixd`, has merged and `main`'s push run on it is green (decisions-log item 139), and every crate in §3 has code; mark any value
 you had to guess with a `PLACEHOLDER` comment naming who fixes it and when.
 
 ---

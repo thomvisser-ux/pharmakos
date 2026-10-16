@@ -1240,3 +1240,63 @@ Agenda:
     - So item 139’s pull request decides S1’s version string and its section together. It either keeps `0.1.0-dev+skeleton` under item 117 (2) and extends that section, or it moves to a new string with a new section. The second option means editing `xtask/src/package.rs` (a §5 path), `godot/export_presets.cfg`, the pin in `crates/client-gdext/tests/godot_project.rs` and `godot/README.md`, with a local `cargo xtask package` run, as a stated departure from item 117 (2).
     - `release.yml` is never run by PR CI, so after the merge the main session runs a dry `workflow_dispatch` on `main`’s head. The expected title is `(0.1.0-dev+skeleton)`. That run is recorded in item 139.
   - **The `ubuntu-24.04-firewall` runner,** item 137 (2) (c)’s other `.github` carry, is not done here, departing from that item’s “the next `.github/**` pull request”. Adopting it changes `claude.yml`’s `runs-on` after a live trial, and like the live check in (2) it needs an owner-triggered run. So it moves to the `.github/**` pull request after the owner’s first triggered `claude.yml` run. *Downside,* as item 137 recorded: until then `claude.yml`’s runner keeps unrestricted egress.
+- **Item 139, S1’s stage demo reviewed: the owner’s rulings, the closing lane `fixd`, and S1’s version (2026-10-15).** This is the owner’s review of S1’s stage demo, the item S1’s close waits on (items 126 and 141 (1)); items 140 to 142 were written before it. The demo was played on 2026-10-14 from `docs/demo/s1-run-sheet.md`, on the local package of `49398cf` (SHA-256 `17a4b034…`, checked), with the main session driving the zip by computer use while the owner watched. The sheet’s new section “As played, 2026-10-14” records what matched and findings A to N. On 2026-10-15 the main session put four questions to the owner, on the rulings, the findings, F3 and the version, and two more on this pull request’s reviews, each with its recommendation first and every option’s downside. The owner chose every recommendation. This is the contract pull request #109. Its contract paths are this log, `docs/design/s1-plan.md`, `docs/design/handoff.md`, AGENTS.md’s status paragraph and CLAUDE.md’s sentence on S1’s close. It also touches the run sheet, `docs/placeholders.md`, README.md’s status line and `CHANGELOG.md`, which ships in the zip.
+
+  **(1) The run sheet’s rulings 1 to 12, 14 and 15, accepted as a set (the owner’s answer: “Accept all as recommended”).** Ruling 13 was item 141’s.
+  - Ruling 1: `DETERMINISM_TICKS` stays 3 600.
+  - Ruling 2: decision 16 reads as “no value moves”.
+  - Ruling 3: `expand_east`’s example moves. The spec’s worked example and `scenarios/skeleton/expand-east-segment` get a timeout the walk can meet, or a nearer first site. The ruling names no time. The main session puts it in S2, in the S2 lane that next owns `scenarios/`, with the spec’s worked example in S2’s plan’s docs pull request: S1 closes on a client lane, and the move re-blesses that scenario’s chain and event log (decided; the owner can veto).
+  - Ruling 4: `CORE_DIG_MAX_DEPTH` stays 4 and `economy.seam_voxels` 150 for S1.
+  - Ruling 5: the balance check’s twenty seeds and its three flag readings stand (S1-53, S1-54).
+  - Ruling 6: every S1 economy row’s value, the two Lull rows and D-02 to D-19 stand for S1. The economy rows are checked again when Easy can reach past one beacon (S3’s `toward`).
+  - Ruling 7: the fielding limits stand (S1-37), revisited at S2’s G3′-real. `BENCH_SEED` `0x00000000ca5caded` is P1’s map (S1-49).
+  - Ruling 8, option (b): FULL and its budget, with the question of whether the coming segment’s length moves into `Scope` (item 133), go to S3’s exit, where spec section 16 gates FULL. This lifts from S1 what item 133 and S1’s plan’s `demo` section gave this run.
+  - Ruling 9: the final audit decides between the seats still in the match, and on a no-survivor end between the seats that fell on the latest elimination tick (X-08).
+  - Ruling 10: the Build list’s settings row is atomic. It writes the whole list or nothing, and fails its step with a new, additive `StepFailure` id. S2’s first `crates/sim` lane builds it (item 136 (5)).
+  - Ruling 11: F3 closes with no guard, since step 2’s second instance drew its chooser and did not hang. Item 129 (2) (c)’s carry is spent.
+  - Ruling 12: the sheet’s seventeen deviations are accepted with their named carries. Deviation 16’s ore figure is corrected below.
+  - Ruling 14: the main session’s calls of items 129 to 137 are ratified as a set. `gateway.proto`’s two “for the owner to confirm” markers (S3-23, S1-46) are reworded by the next `proto/**` pull request.
+  - Ruling 15: no minimum beacon spacing.
+  - *Downside,* as the sheet said: S1 closes on an economy Easy never exercised past round 1, FULL goes unmeasured until S3, and anything the owner later disagrees with becomes its own pull request, with a re-bless wherever a call moved a chain.
+
+  **(2) The demo’s findings (the owner’s answer: “A, G, J, K in one client lane”).**
+  - **A, G, J and K are fixed before S1 closes,** by one lane, `fixd` (S1’s plan, section 3), in `crates/client-gdext` and `godot/`.
+    - A: round 1’s Lull drew no “This round” sentence. The gateway says it only for a sealed or carried playbook (`Surface::this_round`), and the editor reads the briefing again after an accepted Submit (`settle_submit`). So the sentence may belong after round 1’s Submit, with the sheet’s step 8 reading it too early, before step 11’s Submit; the lane pins which with a test.
+    - G: Save as… pre-fills the last name saved, so one Enter overwrites another round’s file.
+    - J: after a timeout filed the safe playbook, the editor went on showing the carried orders as ready to seal.
+    - K: after the match ended, the map still offered its menus and the panel hung on “Checking…”.
+    - How each is cured is the main session’s call, written in the `fixd` section (decided; the owner can veto). G pre-fills the loaded file’s name and confirms an overwrite. J draws the gateway’s own words for the filed playbook and says “ready to seal” only in a Lull. K offers no map menu once the match has ended, and ends a refused call’s “Checking…” with the refusal. What the map offers in a Push is unchanged.
+  - **B is the sheet’s, not the code’s** (a read-only investigation; decided). Seat 0’s round-1 ore came as $ 64 + $ 64 where the sheet said $ 64 + $ 32: two loads of 16 voxels at $ 4 a voxel. `tests/golden/scenarios/expand-east-segment/expected.events.txt` has pinned those two loads on this seed since `mine`’s re-bless (`190a8ad`), which changed where the core digs from. The sheet quoted the skeleton demo’s 24 voxels, and the demo saw no ore for seat 0 in round 2. This pull request corrects the sheet’s step 15 and deviation 16.
+  - **C, Alt-click on a vent,** showed the plain menu, perhaps because an injected Alt does not reach Godot. It stays the owner’s hand check, with a click on one of Easy’s beacons, which the play-through did not reach (step 26).
+  - **D, E, F, H, I, L and M carry to S3,** the authoring stage, in the lanes that own the editor and the gateway’s strings:
+    - D: the right panel clipped at the window’s edge;
+    - E: “Shadow” and “Hold”, the fallback’s internal names, in the event list;
+    - F: “Step 0 started”, numbered from 0 where the route numbers from 1;
+    - H: a stale status line after Undo;
+    - I: Escape not closing the map menu;
+    - L: the two I0003 notes on Hold & Build, which the sheet does not mention;
+    - M: the unticked checkbox’s box not drawn.
+  - **N carries to S3 on its own,** as ruling 11’s downside: the `user://` folder is shared. A second instance’s start rotated the running instance’s `godot.log`, so the first instance logged nothing more. *Downside:* a tester who runs two instances loses the first one’s log until S3.
+  - *Downside* of the lane: S1 closes a lane, its two reviews and a local package run later, about a day.
+
+  **(3) S1’s version: keep `0.1.0-dev+skeleton`, extend its section, and tag (the owner’s answer: “Keep +skeleton, extend, tag”).**
+  - Item 117 (2)’s version string stands until the wk-35.5 release.
+  - This pull request adds S1’s lines to `CHANGELOG.md`’s `0.1.0-dev+skeleton` section, which `release.yml` reads by that string (item 142 (3)), and its preamble now says that every development tag shares the section.
+  - **The tag goes on the later of this pull request’s merge and `fixd`’s,** once `main`’s push run on that commit is green. The main session first runs a dry `workflow_dispatch` with `sha` set to that commit and checks that the notes include S1’s lines; only then does it push `v0.1.0-dev.3`, since `v-tags-immutable` lets no tag move or be deleted. The release is a draft that stays private until v0.1 at the gate (item 127 (4)).
+  - **Item 142 (3)’s dry runs.** Both were dispatched from `81d01a3`. Run 38742487342 failed because `main`’s head had no green push run yet. Run 38742525184 set `sha` to `5313381`, the newest commit with a green push run: a departure from item 142 (3)’s “on `main`’s head”. It was green and titled `(0.1.0-dev+skeleton)`, with the skeleton’s notes shown and workflow commands stopped. The dry run before the tag discharges item 142 (3) on a commit that carries S1’s lines.
+  - *Downside:* S1’s zips still say “+skeleton”, which may mislead a tester.
+
+  **(4) S1 closes when `fixd` has merged and `main`’s push run on it is green** (AGENTS.md §10 item 1). AGENTS.md’s status paragraph, README.md’s status line and CLAUDE.md’s sentence on S1’s close now say so, replacing “S1 is next” and “its stage demo is next” (item 141 (3)). S2 is next, under the merge delegation item 141 renewed, which runs on without a gap.
+
+  **(5) Two answers on this pull request’s reviews (2026-10-15, the recommended options).**
+  - **P1 is met for S1’s close (the owner’s answer: “Met; count carried to S3”).** S1’s plan section 5 item 3 asks for the decision tick’s cost in counted evaluation units as well as nanoseconds. The run sheet records only the nanoseconds at the size budget (“A gap: the counted units”). P1 counts as certified on QUICK’s p99 and the nanosecond figure, which takes AGENTS.md §10 item 6 as met. The count at the size budget goes to S3’s size-budget lane, which adds it to `pharmakos-bench`’s notice. *Downside:* part of S1’s depth task is undone at its close, and S3’s budget rests on wall-clock figures alone unless that lane adds the count.
+  - **C gates neither S1’s close nor the tag (the owner’s answer: “No gate; failure → S3”).** If either hand check fails, it becomes an S3 editor carry. *Downside:* if Alt-click really is broken, the `v0.1.0-dev.3` draft ships with it.
+
+  **(6) Carries, each to its next owner** (decided; the owner can veto).
+  - **The ruled PLACEHOLDER markers.** About 135 markers still name S1’s demo as their “when”: the S1 economy rows in `rules.proto` (and its generated prost copy) and `rules/README.md`, D-02 to D-19, S1-37, S1-49, S1-52 to S1-54, `audit.rs`’s X-08, and others in the sim, the operator, `bench` and `gamectl`. Rulings 4 to 9 settled them, and the `placeholders` step checks only the grammar, so nothing goes red. They are re-dated by a comment-only sweep, granted in S2’s plan under AGENTS.md §6 (item 141 (3)), with the `.proto` and generated comments in the next `proto/**` pull request. This pull request rewords the five rows of `docs/placeholders.md` that said “open for the owner’s ruling at S1’s demo”.
+  - **The run sheet’s “Found while writing this sheet”:**
+    - the `unaffordable-deploy` scenario’s stale comment and `scenarios/README.md`’s walker note (~161) go to the S2 lane that owns `scenarios/`, with ruling 3;
+    - `economy.rs`’s two expansions of BMI go to S2’s first `crates/sim` lane, with ruling 10;
+    - `rules.proto`’s `lull_ms`, `mining_carry_voxels` and `build_hp_per_second` comments go to the next `proto/**` pull request, with S1-42’s row and ruling 14’s two markers;
+    - Expand & Mine’s “ore seam” and “scrap seam” go to the next owner of `library/`.
+  - **Earlier carries, unchanged:** S1-01’s MSRV sweep (item 129) and `gamectl --operator` for the nightly adversarial scenarios (S2-01, the run sheet) at S2’s start.

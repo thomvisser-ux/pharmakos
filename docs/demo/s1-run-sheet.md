@@ -216,9 +216,11 @@ none of the last two appeared.
       appear for a build drone while the list has work. No test asserts that the fabricator makes
       build drones for a backlog and stops once it is covered: by hand only.
     - Your ore: "ore_delivered  A mining drone of seat 0 delivered ore worth $ <N>." from the top
-      layer of your starting seam, which your core's default settings dig (depth 0): 24 voxels, worth
-      $ 64 and $ 32, all delivered this round (`crates/sim/tests/economy.rs`'s F2 figures; S1's plan,
-      task `fixs`). At depth 0 nothing is left to deliver in round 2.
+      layer of your starting seam, which your core's default settings dig (depth 0): two loads of 16
+      voxels, $ 64 and $ 64, delivered this round
+      (`tests/golden/scenarios/expand-east-segment/expected.events.txt`; corrected by decisions-log
+      item 139 (2) from the skeleton demo's 24 voxels). At depth 0 the demo saw no ore for seat 0 in
+      round 2.
 
 16. **The recap.**
     - See: "Round 1 - RECAP" and "Recap of round 1: Round 1 ran 3600 ticks. The match continues. The
@@ -422,7 +424,8 @@ at the size budget: `crates/sim/tests/targeting.rs` `the_decision_tick_counts_it
 pins small fixtures only (3 and 4 units for a handler, 423 for one covering resolution on the golden
 seed), and `pharmakos-bench` publishes nanoseconds alone. The count per decision tick per seat at
 128 size units is not recorded here; S3 sets the size budget from the nanosecond figure unless a
-lane adds the count to the bench's notice. The map is `BENCH_SEED`
+lane adds the count to the bench's notice (item 139 (5): P1 met; the count goes to S3's
+size-budget lane). The map is `BENCH_SEED`
 (`0x00000000ca5caded`, S1-49).
 
 **Not measured: FULL against a late-match snapshot.** Item 133 carried this to the P1 run: FULL
@@ -453,6 +456,43 @@ one; ONLY-GROWS flags 130 of 160 seat-matches and STALLED 160 of 160, both from 
 seals its safe playbook from round 2, with no uncovered feature in one beacon's reach) rather than
 from a price; `expand_east` cannot reach its first site in 120 s at any speed in spec section 4's
 range; and the starting seam is dry by round 4 or 5 at any depth, the seam being finite.
+
+## As played, 2026-10-14
+
+The main session drove the local zip of `49398cf` (SHA-256 checked) by computer use while the owner
+watched: a local match, the golden seed, two seats, three rounds. Steps 1 to 7, 11 to 14, 16, 17,
+19 to 22, 24 and 25 matched the sheet; step 8 differed (A), step 9 differed (C), and step 26
+matched but for the click on one of Easy's beacons, which was not reached. Step 10 was counted only
+in passing, and the optional steps 18 and 23 were skipped. Every Submit, Save and menu
+click landed the first time (F1), and the second instance in step 2 drew its chooser and did not
+hang (F3). The match ended on the round limit; seat 1 won the final audit, $ 1 156 to $ 941.
+
+What differed, and where decisions-log item 139 (2) sends each:
+
+- **A.** Round 1's Lull showed no "This round" sentence; round 2's did. Lane `fixd`.
+- **B.** Round 1's ore came as $ 64 + $ 64, not $ 64 + $ 32: the sheet's error, corrected in step
+  15 and deviation 16.
+- **C.** Alt-click on a vent showed the plain menu, perhaps because an injected Alt does not reach
+  Godot. The owner's hand check.
+- **D.** At the maximised size the right panel was wider than the window, clipping lines and the
+  "Send this value" buttons. S3.
+- **E.** The event list named the fallback by its internal names, "Shadow" and "Hold", where the
+  playbook's prose says "Stay with the safest own beacon". S3.
+- **F.** The event list said "Step 0 started", numbered from 0, where the route numbers from 1. S3.
+- **G.** Save as… pre-filled the last name saved, not the file loaded, so one Enter overwrites
+  round 1's file. Lane `fixd`.
+- **H.** After Undo the status still said "The template's playbook is in the editor. Undo takes it
+  back." S3.
+- **I.** Escape did not close the map menu; a click elsewhere did. S3.
+- **J.** In round 3, after the timeout filed the safe playbook, the editor still showed round 2's
+  carried orders as "Full check - Ready to seal". Lane `fixd`.
+- **K.** After the match ended, map clicks still offered "Place beacon covering this vent" and "Go
+  here / Place beacon", and the panel then hung on "Checking…" and "Checking this spot…". Lane
+  `fixd`.
+- **L.** Two I0003 notes with Fix buttons on Hold & Build, which the sheet does not mention. S3.
+- **M.** The unticked "Allow dormant beacons" checkbox drew no box until ticked. S3.
+- **N.** The second instance's start rotated the running instance's `godot.log` through the shared
+  `user://`; the first instance's log holds nothing after that. S3, on its own: ruling 11 closes F3.
 
 ## Owner rulings at the demo
 
@@ -554,6 +594,11 @@ the owner's veto.
     row. *Downside:* a seat may crowd beacons side by side, and a larger spacing wanted later is a
     new rules row in a contract pull request that moves every chain.
 
+*Ruled 2026-10-15 (decisions-log item 139 (1)):* rulings 1 to 12, 14 and 15 as recommended, as a
+set; ruling 8 is option (b). Ruling 3's move goes to S2, the main session's call (the owner can
+veto). P1 counts as met, with the counted units carried to S3, and C gates neither the close nor
+the tag (item 139 (5)).
+
 ## Deviations from section 1.1
 
 Each sentence of section 1.1 was checked against the code and the tests at `49398cf`. Where the
@@ -628,7 +673,7 @@ not, or does it differently.
     refunds, in code, and no test drives that case (step 15).
 16. **F2's cure needs a written depth, and round 2 does not "keep delivering".** The starting drone
     digs below the rim only when the seat's playbook writes a dig depth (item 133 (3) (a)). At depth
-    0 seat 0's top layer, 24 voxels ($ 64 + $ 32), is all delivered in round 1, so round 2, whose
+    0 seat 0's top layer is delivered in round 1 as two loads ($ 64 + $ 64; item 139 (2)), so round 2, whose
     brownout file writes no depth, shows no `ore_delivered` for seat 0: section 1.1's "keeps
     delivering in rounds 2 and 3" is round 3 only here. The demo shows the cure through the safe
     playbook a timeout files (steps 21, 24 and 25); `mine-to-depth` pins deliveries in every round

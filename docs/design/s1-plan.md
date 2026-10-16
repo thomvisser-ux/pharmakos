@@ -1076,6 +1076,51 @@ sections that add one name it in their Owns lines.
   `demo` moves them to those owners if the copies outlast S1. **Implements:** AGENTS.md §10 items 6 and 8;
   item 33 (c). **Needs:** `tune` and `ui` merged. **Agent-days:** 1.5–2.
 
+### `fixd` — `crates/client-gdext` + `godot/`: the stage demo's findings A, G, J and K (item 139)
+
+- **Owns:** `crates/client-gdext`, `godot/`, their goldens (`tests/golden/vista/*.png`, re-rendered
+  on CI's Linux leg if they move). **Branch** `fix/client-s1-demo`, worktree `../pharmakos-fixd`,
+  target `D:/build/fixd`.
+- **Builds** (the findings are the run sheet's "As played, 2026-10-14"):
+  - **A, round 1's "This round" sentence.** The gateway says it only for a sealed or carried
+    playbook (`Surface::this_round`, `crates/gateway/src/surface/planning.rs`), and the editor reads
+    the briefing again after an accepted Submit (`editor.rs` `settle_submit`), so round 1's
+    sentence should appear from its first Submit; the sheet's step 8 read it before step 11's
+    Submit. Pin it with an `editor.rs` test: in round 1, no sentence before Submit; after an
+    accepted Submit, the briefing is asked again and its sentence is drawn. If the test shows the
+    client drops the sentence, fix the client. The PR says which it was; the sheet's wording is the
+    main session's.
+  - **G, Save as… pre-fills the last saved name,** so one Enter overwrites another round's file.
+    Pre-fill the name of the file the editor's text was loaded from, and no name when the text came
+    from a template, a carried seal or the gateway; saving over an existing file asks first (the
+    save dialog's own overwrite confirmation will do).
+  - **J, the editor after a timeout.** In round 3, after the timeout filed the safe playbook, the
+    editor went on showing round 2's carried orders as "Full check - Ready to seal". After the
+    gateway files this seat's safe playbook (its `safe_playbook_filed` event, or the seat's own
+    sealed state, whichever the wire already carries), the editor draws the gateway's own words for
+    it, any client wording a line in `godot/scripts/strings.gd`, and calls nothing "Ready to seal"
+    outside a Lull. It shows
+    the filed playbook only if a read the seat's token already holds returns it; it never composes
+    one. If none does, the PR says so rather than adding a gateway method.
+  - **K, after the match ends.** Map clicks still offered "Place beacon covering this vent" and "Go
+    here / Place beacon", and the panel then hung on "Checking…" and "Checking this spot…". Once the
+    rig reports the match ended, the map offers no menu (a branch on the bridge's phase string, as
+    `lobby.gd` already makes), and a planning call that is refused, `PHASE_CLOSED` included, ends
+    its "Checking…" with the gateway's refusal and never hangs. In a Push, a refused planning call
+    ends its "Checking…" the same way; what the map offers in a Push is unchanged.
+  - The cures above are the main session's calls (item 139 (2); the owner can veto).
+- **Does not:** C (the owner's hand check); D, E, F, H, I, L, M and N (S3's, item 139 (2));
+  anything in `crates/gateway`, `crates/sim`, `proto/` or the wire. If a finding needs one, stop and
+  say so in the PR.
+- **Implements:** item 139 (2). **Needs:** nothing merged; it launches once item 139's docs pull
+  request and this brief pass review, while that pull request is still in CI (item 115 (3)).
+- **Acceptance:** each of the four has a test that fails first (`editor.rs` or `rig.rs` unit tests,
+  `watch_check.gd`, `godot_project.rs` pins). A new client piece that schedules or draws without
+  deciding is named in the PR, for the main session to add to AGENTS.md §3 rule 4's list. Vista and
+  rows PNGs are re-rendered on CI's Linux leg, and looked at, if they move. The main session runs
+  `cargo xtask package` locally (decision 9) and replays A, G, J and K by hand in the packaged zip.
+- **Contract PR:** no. **PLACEHOLDERs:** none expected. **Agent-days:** 1–2.
+
 ---
 
 ## 4. The schedule

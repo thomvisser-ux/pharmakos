@@ -7,8 +7,8 @@ SPDX-License-Identifier: MIT OR Apache-2.0
 
 Each release's notes name its tag and commit, and are the section below headed with the version
 string the zips carry at that commit (`xtask/src/package.rs`'s `VERSION`;
-`.github/workflows/release.yml`). The skeleton's development tags, `v0.1.0-dev.<n>`, share the
-section below until the wk-35.5 release.
+`.github/workflows/release.yml`). The development tags, `v0.1.0-dev.<n>`, share the section
+below until the wk-35.5 release.
 
 ## 0.1.0-dev+skeleton
 
@@ -25,3 +25,17 @@ The walking skeleton: one match end to end, headless and in the client.
 - `gamectl`: `verify`, `schema`, `docs`, `scenario run`, `seat doctor` and `host`.
 - Unsigned zips for Windows x86_64 and Linux x86_64. No signing, no notarisation and no
   macOS build yet.
+
+S1, the economy, added to the same development builds:
+
+- One power grid per seat: a deficit sheds only a beacon whose shedding relieves it, and a
+  priority raise on site relights a dark beacon when a lower one can be shed.
+- A beacon's deploy is paid as it starts and refunded in full if it cannot finish.
+- Finite seams, mined to a depth the playbook sets.
+- The Build mandate's full settings, with build drones fabricated for the work in hand.
+- Targeting by description: "the nearest heat vent you do not cover yet", ranked by travel when
+  the step starts, with the editor's chips, the map's vent menu and the Lull's "This round"
+  sentence.
+- The verifier's money and time checks: the `$` and `kW` projection, the interface times, and a
+  lower bound on walking against the coming segment.
+- A first Lull of 10 minutes and later ones of 5, and Easy playing under the new rules.
