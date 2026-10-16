@@ -1365,4 +1365,4 @@ Agenda:
   - Its engineering calls, E1 to E25 in its section 2, are the main session’s, made under the owner’s standing instruction of 2026-09-14 and open to the owner’s overrule.
   - Its owner decisions in sections 6 and 7 stand as their **(Recommended)** options once the owner rules them in bulk (8). The main session puts those marked **[play]** to the owner first, as item 127 (1) did.
 
-  **(10) What this entry changes.** It adds `docs/design/s2-plan.md`, a row for it in `docs/design/README.md`, and handoff NEXT 1. This is the contract pull request #NNN. Its contract paths are this log, the new plan, `docs/design/README.md` and `docs/design/handoff.md`.
+  **(10) What this entry changes.** It adds `docs/design/s2-plan.md`, a row for it in `docs/design/README.md`, and handoff NEXT 1. This is the contract pull request #112. Its contract paths are this log, the new plan, `docs/design/README.md` and `docs/design/handoff.md`.
