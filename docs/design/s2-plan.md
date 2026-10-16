@@ -6,17 +6,33 @@
 **Adopted 2026-10-16 under decisions-log §2.7 item 144 (8).** The main session merges this plan
 after two adversarial reviews, under the merge delegation item 141 renewed for S2, and S2's first
 wave starts at once. The owner was interviewed on the questions that shape play before the plan was
-written (item 144 (1) to (7)); every other recommendation of sections 6 and 7 is put to the owner in
-bulk and stands as its **(Recommended)** option, open to the owner's overrule (item 144 (8), as item
-127 (1) did for S1). The **[play]** marks name the decisions the bulk question names one by one and
-puts first; **[risk]** marks a risk the owner accepts or refuses.
+written (item 144 (1) to (7)); every other recommendation of sections 6 and 7 was put to the owner
+in bulk, to stand as its **(Recommended)** option, open to the owner's overrule (item 144 (8), as
+item 127 (1) did for S1). The **[play]** marks name the play-shaping decisions, which were put
+first; **[risk]** marks a risk the owner accepts or refuses.
 
-**When the bulk ruling falls.** The owner rules sections 6 and 7 in bulk, the **[play]** decisions
-put first, **after `msrv` merges and before any lane that needs a decision starts**. Six lanes need
-none and run before it: `msrv`, `redate`, `east`, `rnds`, `vfy1` and `base` (each one's Needs line
-says so). `con3` is the first lane that waits on it (planned to start on day 2), then `con4` and
-`night`; `con3` has one and a half days of slack before `ids` needs it (section 4.1), so a ruling
-later than day 3.5 moves the critical path day for day.
+**Ruled 2026-10-16 (decisions-log item 144 (11)).** After the plan's two reviews, the owner was
+interviewed on decisions 1, 4, 5, 7, 9, 35, 37, 40 with 10, 41 and 43, and on section 4.5's cut
+order, and took the plan's recommendation on each except two. On decisions 10 and 40 the owner
+chose per-material hardness, against the recommendation: terrain resists a blast by material, as
+walls do, by a per-material blast-level row this plan proposes (decision 10 gives the ruled form).
+On the cut order, departing from the order this plan wrote and on the main session's recommendation
+made after decision 5's answer, the owner ruled that Survey's refresh pass is never cut, so full
+Survey ships in S2 whatever happens, two planned cuts remain, and any further cut is the owner's
+(section 4.5). To decision 5 the owner added: "I want intelligence and surveillance to be a huge
+factor in this game." Every other decision of sections 6 and 7 stands as its **(Recommended)**
+option, open to the owner's overrule (the owner's bulk answer, as item 127 (1) had it), and each
+decision below says how it was ruled. The interview and the **[play]** marks do not match exactly:
+decision 1 was interviewed although not marked, and the other **[play]** decisions passed with the
+bulk answer. Decision 32 thereby grants the main session a new authority, separate from item 141's
+merge delegation: it takes a planned cut of section 4.5 at that cut's checkpoint. The rulings move
+the size to about 126 agent-days and the critical path to about 61 working days, still about 13
+plan-weeks (sections 4.1 and 4.3).
+
+**When the bulk ruling falls.** It fell on 2026-10-16, before wave 1, so no lane waits on it. The
+plan had it fall after `msrv` merges and before `con3` starts on day 2, with `msrv`, `redate`,
+`east`, `rnds`, `vfy1` and `base` running before it; each lane's Needs line still names the
+decisions it builds on, all of them now ruled.
 
 Precedence throughout: `docs/design/decisions-log.md` §2.7 > `docs/spec/pharmakos-spec-v0.6.html` >
 `docs/design/co-design-gameplan-api.md` (`docs/design/README.md`); `docs/design/targeting.md` amends
@@ -83,10 +99,11 @@ presses Ready to end a Lull rather than waiting it out.
    wrecks, and the feed shows `$` coming in at 25 % of each wreck's build cost.
 4. **Round 3.** The owner's mortar shells the clump of Easy's raiders gathering in its range
    (decision 41). The shell is slow and visible in flight, and lands where its target stood when it
-   was fired, so a raider that kept walking is missed (decision 3). It lands as a crater, a ball of
-   terrain gone at once. A unit standing where the shell lands takes splash damage, the owner's own
-   included, since friendly fire is on; the mortar never chooses a landing point whose splash holds
-   an own asset.
+   was fired, so a raider that kept walking is missed (decision 3). It lands as a crater: inside its
+   ball the dirt is gone at once and the stone beneath it cracks, opening on the next shell, since
+   terrain resists a blast by material (decision 10). A unit standing where the shell lands takes
+   splash damage, the owner's own included, since friendly fire is on; the mortar never chooses a
+   landing point whose splash holds an own asset.
 5. **Round 4.** The owner's Attack beacon, `breach_allowed`, gathers raiders at its staging point
    and launches on force size. Easy's wall blocks the route, so the breach asks the owner's mortars
    in range to shell the first wall column (wall voxels crack on the first blast and break on the
@@ -137,11 +154,11 @@ report with its three-seat run's share of damage aimed at the trailing seat (dec
 
 Every item of the row, of §2.7's additions above, and of the register's S2 rows and carries (section
 2), and nothing else; less whatever the written cut order of section 4.5 has moved to S3 by the time
-the stage closes. Where the spec is silent the plan's readings are owner decisions (sections 6 and
-7), none built before it is ruled. The bulk ruling falls after `msrv` merges and before `con3`,
-`con4` or `night` starts; `msrv`, `redate`, `east`, `rnds`, `vfy1` and `base` need no decision and
-may run before it (the header says when, and each lane's Needs line names the decisions it waits
-on).
+the stage closes, which is at most Attack's waves and terraform's crater refill: Survey's refresh
+pass is never cut, on the owner's word (item 144 (11)). Where the spec is silent the plan's readings
+are owner decisions (sections 6 and 7), each now ruled (item 144 (11)); the bulk ruling fell on
+2026-10-16, before wave 1, so no lane waits on it (the header says how each was ruled, and each
+lane's Needs line names the decisions it builds on).
 
 ---
 
@@ -157,6 +174,7 @@ on).
 | 144 (6) | Nightlies play Easy, about twenty seeds, the 65 % band, acknowledged as Easy's at S2's close, re-baselined at S5 | `night`, `arms`, `demo2` |
 | 144 (7) | The whole row planned, with a cut order written in advance | section 4.5 |
 | 144 (8) | S2 runs as S1 did; G3′-real is the depth task with the spec's fallback; owner rows in bulk; numbers in range, checked headless, tuned at the demo; the plan merged after two reviews, wave 1 at once | section 5; `tune2`; section 4 |
+| 144 (11) | The owner's rulings on this plan: every decision of sections 6 and 7 as recommended, except per-material hardness for decisions 10 and 40; Survey's refresh pass never cut, so the cut order has two cuts; decision 32's authority to take them | sections 4.5, 6 and 7; `con3`, `con4`, `fire`, `view`, `atk`, `tune2` (hardness); `surv` (the refresh) |
 | 138 (3) | A bounded, incremental, totally ordered support rule; its place in the phase order, its cache invalidation, its allocations, its worst case measured in G3′; its constants as rows | `fall`, `con3`, `g3r`; design in section 3's `fall` |
 | 138 (4) (c) | Spheres, unit vision, pickets and Survey under one sensor interface with two outputs | `ids`; `dfnd` (pickets), `surv` (Survey) |
 | 128 (d) | Repair threshold, rebuild destroyed and terraform take effect in S2; `BuildSettings` 6 and 7 held until S2 | `site`; decision 38 for the threshold's reading, decision 15 for 6 and 7 |
@@ -171,7 +189,7 @@ on).
 | 143 (5) | `-- --rounds <n>`, test-only, in a client lane; the line's format unchanged | `rnds` |
 | 141 | The merge delegation runs to S2's stage demo; the radar lab starts after S2, beside S3 | section 4.3; decision 33 |
 | 135 (2) (d), (f), (g), (j); 136 (5) | `seal_commitment`'s E-code (S2-14); `committed_dollars`' comment and fields 5 and 6 `optional`; the event vocabulary additive; `build`'s "Found, not fixed" to S2's first sim and verifier lanes | `vfy1`, `con3`, every lane adding an event, `base` |
-| 13 | Freshness is a plan-time test; the target is pinned at the seal; Survey scouts refresh sightings before the next Lull | `vfy2` (the test), `atk` (the pin), `surv` (the refresh; cut 3) |
+| 13 | Freshness is a plan-time test; the target is pinned at the seal; Survey scouts refresh sightings before the next Lull | `vfy2` (the test), `atk` (the pin), `surv` (the refresh, never cut: item 144 (11)) |
 
 The spec's §19 tuning items for S2 are placed too: core HP and the turret (decision 17, `tune2`);
 the engagement radius as a percentage of the sphere (`con4`'s field, `tune2`'s value); the picket
@@ -180,8 +198,8 @@ radius (a `con3` row, `defend.picket_radius_voxels`, proposed 6 beyond the spher
 (a line of `tune2`'s balance report, from the generator's spawn pair and the two speed rows, never a
 gate); reach memory N (`verifier.reach_memory_ms`, already a row, which `tune2` reports against
 Survey's refresh interval and the Attack pin, and S3 re-reads with the reach filters); Survey's scan
-and refresh rules (`surv`, with cut 3); and the kingmaking check, the share of damage aimed at the
-trailing seat (decision 36).
+and refresh rules (`surv`, the refresh never cut); and the kingmaking check, the share of damage
+aimed at the trailing seat (decision 36).
 
 ### 2.1 The register's rows, each placed
 
@@ -430,17 +448,45 @@ and names the decision that puts that reading to the owner.
   no lead, so a unit that moves is missed: the spec's "slow arcing shell that can be dodged" is the
   shell's flight time, not a hit roll. That aim is a play reading, which decision 3 puts to the
   owner.
-- **E14. Walls know their owner through their material.** "Your own voxels" (spec §9, friendly-fire
-  avoidance) needs a wall voxel's owner. `fire` gives walls material ids from 9 up, one per seat and
-  damage level plus a neutral wall at each level (decision 10), so ownership and damage live in the
-  voxels the chunk digests already hash and no new table is needed. Whose a wall is after its beacon
-  dies or its seat is eliminated (decision 42) is **read, not written**: a seat's wall voxel counts
-  as that seat's while it lies inside one of the seat's live spheres and as neutral otherwise, so a
-  beacon's death rewrites no voxel and nothing waits for the next Voxels phase. The wire's material
-  table is `ViewChunk`'s comment in `gateway.proto`, so `con4` writes the new ids there; the client
-  draws a material its table does not name as air (`crates/client-gdext/src/view.rs` ~80), so `view`
-  must not ship before both `con4`'s table and `fire`'s materials are on `main`, and does not start
-  before `fire` merges (section 4.1). Ruins and built structures stay entities with footprints.
+- **E14. Walls know their owner, and every voxel its damage, through its material.** "Your own
+  voxels" (spec §9, friendly-fire avoidance) needs a wall voxel's owner, and the owner's
+  per-material hardness (decision 10) needs a terrain voxel's damage level. `fire` gives both
+  material ids from 9 up, so ownership and damage live in the voxels the chunk digests already hash
+  and no new table is needed: walls take one id per seat and level plus a neutral wall at each
+  level, two levels by the ruling (whole, cracked), which is ten ids at the sim's four seats (E19);
+  terrain takes a cracked id for each level a terrain material can hold beyond its first, up to the
+  catalogue's maximum of three levels, which is two ids for each of dirt, stone, the three ore
+  grades and the three vent grades, sixteen in all, so the owner can tune any of `blast_levels` from
+  1 to 3 at the demo without a code change. The ids are wire values, additive and never withdrawn,
+  which is why the catalogue defines only the range the tuning needs and a row outside 1 to 3 is
+  refused at load with a typed error. That is 26 ids, 9 to 34, of the 247 a `u8` has free. What
+  each place needs:
+  - **The sim's catalogue** (`crates/sim/src/voxels.rs`, `Material`): the new constants and
+    `Material::ALL`; a level read and a "one blast later" read; `ore_richness` and `vent_richness`
+    answering a cracked ore or vent id with its grade, so that Mine, the feature table's derived
+    liveness and the bore's power read a cracked seam or vent as itself (AGENTS.md §4.8); a cracked
+    voxel is solid, so `is_solid`, pathing's tops and the support rule (`fall`) are unchanged.
+    Generation writes whole materials only, so no mapgen golden moves.
+  - **The chunk codec** (`crates/proto/src/chunk_rle.rs`): nothing. It carries any byte; a cracked
+    voxel among whole ones only splits a run, so a cratered chunk encodes in more runs, which `wgw`'s
+    and `view`'s measurements (E28, the crater stream) count.
+  - **The wire's table**, `ViewChunk`'s comment in `gateway.proto`: `con4` writes every new id there,
+    wall and cracked terrain, additively. The gateway's `the_wire_material_table_is_the_sims`
+    (`crates/gateway/tests/view.rs` ~687) holds its `TABLE` to `Material::ALL`'s length, so `fire`,
+    which grows `Material::ALL` while `wgw` owns the gateway, is granted that `TABLE` as a named
+    place.
+  - **The client** (`crates/client-gdext/src/view.rs` `palette_of`, ~80) draws a material its table
+    does not name as air, so on `main` between `fire`'s merge and `view`'s a cracked stone voxel
+    draws as a hole and a wall as nothing; `view` therefore follows `fire` and maps every new id.
+  - **The mesher** (`crates/mesher`, `PALETTE`): rows for cracked terrain and for walls by seat and
+    level, art placeholders for S6's pass; its face mask is keyed by (material, light), so a cracked
+    voxel splits a quad, which `view`'s crater stream measures.
+
+  Whose a wall is after its beacon dies or its seat is eliminated (decision 42) is **read, not
+  written**: a seat's wall voxel counts as that seat's while it lies inside one of the seat's live
+  spheres and as neutral otherwise, so a beacon's death rewrites no voxel and nothing waits for the
+  next Voxels phase. `view` does not start before `fire` merges (section 4.1). Ruins and built
+  structures stay entities with footprints.
 - **E15. The destroyed-value term, and the recap's tallies, are accumulated per seat.**
   `audit::destroyed_value` is always zero and `credit.rs` says the split is "emitted and not
   accumulated" (~33). `fire` adds a per-seat destroyed-value column, credited at each kill by the
@@ -862,8 +908,11 @@ that merges second rebases and re-blesses, its PR naming the re-bless and the la
     urgency band, the threat-route surcharge, the demolition charge's radius and fuse, the repair
     rate, the terraform rate); a `Defend` block's `picket_radius_voxels` (spec §19); a `Collapse`
     block (`max_region_voxels`, `fall_damage_hp`, `max_visits_per_tick`; item 138 (3), decision 11);
-    and a `Materials` block (the wall's blast levels, `wall_min_height_voxels` per decision 40, the
-    bedrock layer). Field numbers come from the free ranges of each message (`UnitKind` 5+,
+    and a `Materials` block: `blast_levels`, one field per terrain kind — dirt, stone, ore and
+    vent, the ore and vent grades sharing their kind's — at decision 10's proposal (dirt 1, ore 1,
+    vent 1, stone 2; owner, at S2's demo), which nothing reads until `fire`; `wall_min_height_voxels`
+    per decision 40; the bedrock layer. A wall's two levels are the ruling's and the catalogue's
+    (E14), not a row. Field numbers come from the free ranges of each message (`UnitKind` 5+,
     `StructureKind` 4+, `Beacon` 3+, `Locomotion` 13+, `RulesTable` 3–9 and 23+); the lane picks
     them and the reviews read them as a contract decision. `revision` 4 → 5.
   - **The proto carries** (item 139 (6), item 136 (5), handoff NEXT 3): `rules.proto`'s comments on
@@ -885,9 +934,10 @@ that merges second rebases and re-blesses, its PR naming the re-bless and the la
     re-bless.
   - **E7's sweep** over `crates/proto`'s hand-written sources (the generated tree excepted).
 - **Implements:** items 133 (3) (i), 135 (2) (f) (g), 136 (5), 138 (3), 139 (1) ruling 14, 139 (6),
-  144 (4), (8); register S1-13, S1-34 (rows), S1-42, S2-05; spec §19's picket radius.
+  144 (4), (8), (11) (the blast-level row); register S1-13, S1-34 (rows), S1-42, S2-05; spec §19's
+  picket radius.
 - **Needs:** `msrv`, `redate` and `east` merged (`east` re-blesses `tests/golden/proto` and
-  `crates/proto`'s tests read it); the bulk ruling, for decisions 10, 11, 17 and 40.
+  `crates/proto`'s tests read it); the ruled decisions 10, 11, 17 and 40.
   **Acceptance:** `buf lint`; `buf breaking` in `WIRE_JSON` mode (making fields 5 and 6 `optional`
   is wire-compatible; any break stops the lane); `the_rules_table_is_in_canonical_form`;
   `the_restated_rows_agree`; every `report_hash` golden re-blessed with the reason "`rules_hash`
@@ -896,7 +946,8 @@ that merges second rebases and re-blesses, its PR naming the re-bless and the la
   forecast without the two fields; `godot_project.rs` green over `mesher_rules.gd`; **no chain
   moves**; the main session's local package run (`rules/` ships).
 - **Contract PR:** yes. **PLACEHOLDERs:** every new row's value (owner, S2's demo, with `tune2`'s
-  report); the power rows keep item 91's markers (owner, S2's exit, `g3r`). **Agent-days:** 3.5–4.5.
+  report); the power rows keep item 91's markers (owner, S2's exit, `g3r`). **Agent-days:**
+  3.75–4.75 (a quarter-day of it for decision 10's `blast_levels`).
 
 ### `con4` — S2's playbook and gateway wire
 
@@ -923,7 +974,7 @@ that merges second rebases and re-blesses, its PR naming the re-bless and the la
   - **`BuildTarget`**: the base kit's blueprint ids named in the catalogue comment — `autocannon`,
     `mortar` and `wall` beside `generator` — which amends the comment's "one blueprint until S4"
     (the licensed blueprints stay S4's); a wall target's box (`Area`) per decisions 10 and 40.
-  - **`BuildSettings` 6 and 7** per decision 15 (recommended: they stay reserved);
+  - **`BuildSettings` 6 and 7** stay reserved (decision 15, ruled as recommended);
     **`MandateSettings` 3 (`report_kinds`)** stays reserved (decision 16).
   - **`playbook.proto`'s comments:** the header's list of omitted settings that read as defaults
     gains `roe` as decision 4 rules it (E25); `repair_threshold_pct`'s comment (~1308–1310) states
@@ -933,14 +984,16 @@ that merges second rebases and re-blesses, its PR naming the re-bless and the la
     heading), the new entity kinds (`shell`, `wreck`, `ruin`), `BeaconSummary`'s enemy detail per
     decision 5 from its reserved 7–15, and `GetRecapResponse`'s kill and loss tally, shared kills
     and value destroyed from its reserved range; `ViewChunk`'s material table comment gains the wall
-    materials, one per seat and level and a neutral wall at each level (E14, decisions 10 and 42).
+    materials, one per seat and level and a neutral wall at each level, and the cracked terrain
+    materials, one for each level beyond a terrain material's first up to the catalogue's three, the
+    values `fire` then implements (E14, decisions 10 and 42).
   - **The scoped `buf.yaml` `ignore_only`** for each reserved range discharged, every discharge
     named (AGENTS.md §5).
   - **The new arms are refused until their lanes land:** the sim's compile answers
     `PlanError::NotAtThisStage` naming each construct, with its refusal-table entry, the verifier
     emits that construct's E-code (E8), and `render_plan` names it plainly.
 - **Implements:** items 104, 128 (d), 144 (5); register S2-11 (wire), S2-13.
-- **Needs:** `con3` and `vfy1` merged; the bulk ruling, for decisions 4, 5, 10, 13, 14, 15, 16, 38,
+- **Needs:** `con3` and `vfy1` merged; the ruled decisions 4, 5, 10, 13, 14, 15, 16, 38,
   40 and 42. **Acceptance:** `buf lint`; `buf breaking` green with the scoped ignore; the
   reserved-numbers golden moving for exactly the ranges discharged, each named; canonical JSON
   round-trips for every new message; a refusal test per new construct in the sim and the verifier;
@@ -1034,7 +1087,7 @@ that merges second rebases and re-blesses, its PR naming the re-bless and the la
     `strings.rs` ~293) renamed to `b_00`; E7's sweep over `crates/gamectl` (10 counted).
 - **Implements:** item 116 (6) (j); item 144 (6); register S2-01, M-01. **Needs:** `msrv` and `east`
   merged (one `xtask`/`.github` PR at a time: none other is open; `east` holds places in
-  `crates/gamectl/tests`); the bulk ruling, for decision 29. **Acceptance:** CLI tests for every
+  `crates/gamectl/tests`); the ruled decision 29. **Acceptance:** CLI tests for every
   flag, its refusal elsewhere and an unknown operator; the seed decoder's property test; a result
   golden for a two-seed run of a placeholder arm; `win_rate_percent` rounding pinned; the workflow
   run once through its `force` input on the branch and its artifact attached to the PR; the G4 job's
@@ -1044,8 +1097,11 @@ that merges second rebases and re-blesses, its PR naming the re-bless and the la
 ### `fire` — `crates/sim`: weapons, shells, materials, wrecks and the kill-credit split
 
 - **Owns:** `crates/sim`, every golden its changes move, the named places of section 3's preamble
-  (the `strings.rs` and `surface.rs` arms always, E17), and its scenarios' entries. **Branch**
-  `feat/sim-combat`, worktree `../pharmakos-fire`, target `D:/build/fire`.
+  (the `strings.rs` and `surface.rs` arms always, E17), the `TABLE` of
+  `the_wire_material_table_is_the_sims` in `crates/gateway/tests/view.rs` as a named place (E14:
+  `Material::ALL` grows while `wgw` owns the gateway, and the two edit different files), and its
+  scenarios' entries. **Branch** `feat/sim-combat`, worktree `../pharmakos-fire`, target
+  `D:/build/fire`.
 - **Builds:**
   - **Firing** (E2's choosing half, E12): the autocannon, the core's built-in autocannon (fed by the
     bore, never shed in a brownout, drawing no `kW`; item 123; spec §5), the mortar and the raider's
@@ -1064,12 +1120,19 @@ that merges second rebases and re-blesses, its PR naming the re-bless and the la
     point whose splash radius holds an own unit, structure, beacon or own wall voxel (spec §9: "the
     built-in mandates aim to avoid your own assets"); a shell that lands on an own asset that walked
     under it still hurts it.
-  - **Materials** per decision 10 and E14: wall materials by seat and damage level and the neutral
-    wall, with wall ownership read from the seat's live spheres (decision 42); a blast removes
-    terrain inside its crater radius, steps a wall voxel down one level, and never removes bedrock
-    or the core's bore, whose geometry this lane defines (E31). A crater that removes a vent's
-    voxels loses the vent, which the feature table's derived liveness already reads (AGENTS.md
-    §4.8). The seat on `VoxelEdit`, which `base` laid out, is filled for every crater.
+  - **Materials** per decision 10 (per-material hardness, the owner's ruling) and E14: wall
+    materials by seat and level and the neutral wall, with wall ownership read from the seat's live
+    spheres (decision 42); the cracked terrain materials up to the catalogue's three levels, with
+    `ore_richness` and `vent_richness` reading a cracked seam or vent as its grade;
+    `materials.blast_levels` read at load, a value outside 1 to 3 refused with a typed error. A
+    blast steps every voxel inside its crater radius down one level, wall and terrain alike, and a
+    voxel at its last level is removed, so at decision 10's proposal a shell clears dirt, ore and
+    vent at once and cracks stone, which the next blast removes; it never removes bedrock or the
+    core's bore, whose geometry this lane defines (E31). The demolition charge's cut, which removes
+    whatever it holds down to the wall's footing at any level (decision 40), is `atk`'s and calls
+    this lane's edit with the cut's shape. A crater that removes a vent's last exposed voxels loses
+    the vent, which the feature table's derived liveness already reads (AGENTS.md §4.8). The seat on
+    `VoxelEdit`, which `base` laid out, is filled for every crater.
   - **Deaths:** the settle function factored so that it runs after Combat and after Voxels (E2);
     wrecks into the table decision 25 sizes (E16); E32's proportional credit; the per-seat destroyed
     value and the kill and loss counters (E15), the audit's term and its first tie-break read as
@@ -1081,21 +1144,25 @@ that merges second rebases and re-blesses, its PR naming the re-bless and the la
     `returned_fire`, `retreat_announced`, at the next free ids. No event per shot: shots are counted
     in the unhashed work counter instead, and the recap reads the hashed counters (E15).
   - **Scenarios:** `scenarios/s2/mortar-breaks-wall` (a mortar, directed at a wall through a test
-    seam, shells it to a gap; craters; wall levels) and `scenarios/s2/raid-on-a-mortar` (raiders
-    dive a mortar, the autocannon and the core's kill them, wrecks left), each asserting events,
-    hashes and no dropped event.
+    seam, shells it to a gap; craters; wall levels; a crater in stone that cracks before it opens)
+    and `scenarios/s2/raid-on-a-mortar` (raiders dive a mortar, the autocannon and the core's kill
+    them, wrecks left), each asserting events, hashes and no dropped event.
 - **Does not:** Build's placement of the new blueprints (`site`), collapse (`fall`), Defend and
   Attack (`dfnd`, `atk`; the breach's choice of a wall is `atk`'s, decision 41). Its tests place
   armed structures and units through test seams.
-- **Implements:** items 17, 123, 144 (1) (the bore), (8); spec §3 (kill credit, the audit), §5 (the
-  core), §9; register S2-08, S2-09, X-08.
-- **Needs:** `base`, `ids`, `con3` and `con4` merged; the bulk ruling, for decisions 3, 4, 7, 8, 10,
+- **Implements:** items 17, 123, 144 (1) (the bore), (8), (11) (per-material hardness); spec §3
+  (kill credit, the audit), §5 (the core), §9; register S2-08, S2-09, X-08.
+- **Needs:** `base`, `ids`, `con3` and `con4` merged; the ruled decisions 3, 4, 7, 8, 10,
   12, 21, 25, 41 and 42. **Acceptance:** `an_autocannon_kills_a_raider_in_range_and_not_out_of_it`;
   `return_fire_waits_for_damage`; `return_fire_answers_a_shell_by_its_firer`;
   `hold_fire_never_fires`; `fire_is_simultaneous` (two assets that kill each other on one tick both
   die); `a_volley_shares_its_kill_credit`; `a_shell_misses_a_unit_that_moved`;
   `splash_hurts_the_firers_own_unit`; `a_mortar_never_aims_where_its_splash_holds_an_own_asset`;
-  `a_wall_voxel_breaks_on_its_last_level`; `a_wall_turns_neutral_when_its_last_sphere_dies`;
+  `a_wall_voxel_breaks_on_its_last_level`; `stone_takes_two_blasts`; `dirt_goes_in_one_blast`;
+  `a_cracked_seam_mines_and_a_cracked_vent_feeds_as_itself` (under a test rules variant that gives
+  ore and vent two levels); `a_blast_level_outside_the_catalogue_is_refused_at_load`;
+  the gateway's `the_wire_material_table_is_the_sims` green over the grown catalogue;
+  `a_wall_turns_neutral_when_its_last_sphere_dies`;
   `bedrock_and_the_bore_survive_any_blast`; `the_bore_is_derived_and_pinned` (its mapgen golden);
   `a_crater_that_takes_a_vent_kills_its_feature`;
   `a_death_leaves_a_wreck_worth_the_salvage_percent`;
@@ -1103,13 +1170,18 @@ that merges second rebases and re-blesses, its PR naming the re-bless and the la
   `the_shell_table_cannot_fill`; `the_attacker_memory_survives_save_and_restore`;
   `the_combat_stream_is_drawn_from_nowhere_else`; the two scenarios; every chain re-blessed (the new
   per-seat and per-asset columns; the core's cooldown in every match), the first diverging tick
-  named; every `report_hash` golden (`SNAPSHOT_VERSION` 11).
+  named (the material levels move nothing of their own: nothing blasts in a committed run before
+  this lane's, and generation writes whole materials only, so no mapgen golden moves); every
+  `report_hash` golden (`SNAPSHOT_VERSION` 11).
 - **Contract PR:** yes (determinism code: the combat phase, the kill-credit split, the first
-  `Stream::Combat` draw, the snapshot; the event vocabulary; the bore's golden, a new golden
-  format). **PLACEHOLDERs:** none new. **Agent-days:** 10–12. **Split seam:** direct fire, the rules
-  of engagement with the attacker memory and retreat state, deaths, the settle function, wrecks, E32
-  and the counters as set 1; shells, splash, materials, wall ownership, craters and the bore as set
-  2; one PR, re-blessed once.
+  `Stream::Combat` draw, the snapshot, the material catalogue's new wire values; the event
+  vocabulary; the bore's golden, a new golden format). **PLACEHOLDERs:** none new (the levels are
+  `con3`'s row). **Agent-days:** 11–13.5, of which 1–1.5 is decision 10's per-material hardness
+  (the cracked catalogue, the level step for terrain, the readers of ore and vent, the load check
+  and their tests). **Split seam:** direct fire, the rules of engagement with the attacker memory and
+  retreat state, deaths, the settle function, wrecks, E32 and the counters as set 1; shells, splash,
+  materials and their levels, wall ownership, craters and the bore as set 2; one PR, re-blessed
+  once.
 
 ### `wgw` — `crates/gateway`: S2's surfaces
 
@@ -1129,7 +1201,7 @@ that merges second rebases and re-blesses, its PR naming the re-bless and the la
   gate load of 300 units, recorded in the PR; E7's sweep over `crates/gateway` (66 counted).
 - **Implements:** items 104 (the gateway half), 133 (3) (i), 136 (5); register S1-34 (gateway),
   S2-02 (gateway's marker), S2-11, S2-12 (measured). **Needs:** `con4`, `ids` and `vfy2` merged; the
-  bulk ruling, for decisions 5 and 6. **Acceptance:**
+  ruled decisions 5 and 6. **Acceptance:**
   `an_enemy_beacons_prose_says_what_its_summary_says`; `the_view_shows_what_decision_5_rules` with a
   fogged and a visible enemy; `the_recap_names_a_shared_kill`;
   `the_recap_tally_reads_the_counters_not_the_feed`; `an_unreachable_pick_says_so` (`reachable`
@@ -1161,7 +1233,7 @@ that merges second rebases and re-blesses, its PR naming the re-bless and the la
   verifier never ranks and never models enemy behaviour (AGENTS.md §3 rule 2): freshness reads ages,
   nothing else.
 - **Implements:** items 13, 104 (the verifier half); spec §6, §11. **Needs:** `con4` and `vfy1`
-  merged; the bulk ruling, for decisions 10, 13, 14, 15, 38 and 40. **Acceptance:** a case per new
+  merged; the ruled decisions 10, 13, 14, 15, 38 and 40. **Acceptance:** a case per new
   code; `full_finds_what_quick_finds`; `the_verifier_never_ranks` unchanged; render and canonical
   goldens for each new construct; `no_silent_fallback_is_left` for plan-core; every `report_hash`
   golden re-blessed (the scope's layout). **Contract PR:** yes (`report_hash`'s scope encoding).
@@ -1179,11 +1251,12 @@ that merges second rebases and re-blesses, its PR naming the re-bless and the la
   - **Terraform** (item 144 (5)): before building, a drone levels the target's footprint to its
     anchor's height — `FILL` raises, `DIG` lowers, `BOTH` both — each voxel at the wall's cost per
     voxel; `FILL` and `BOTH` also refill craters and trenches inside the beacon's sphere back to the
-    generated surface, each voxel through `set` (AGENTS.md §4.8). The generated surface is a derived
-    per-column table, a pure function of the seed and the rules made with the map, regenerated by
-    `Snapshot::restore_into` and never hashed per tick, as the feature table is (AGENTS.md §4.8),
-    and pinned by a new `tests/golden/mapgen` file (a golden format, so a contract path). Refill
-    competes with building for drone time under the mandate's order.
+    generated surface, each voxel through `set` (AGENTS.md §4.8); a refill fills air only, so a
+    cracked terrain voxel, which is solid, stays cracked (decision 10). The generated surface is a
+    derived per-column table, a pure function of the seed and the rules made with the map,
+    regenerated by `Snapshot::restore_into` and never hashed per tick, as the feature table is
+    (AGENTS.md §4.8), and pinned by a new `tests/golden/mapgen` file (a golden format, so a contract
+    path). Refill competes with building for drone time under the mandate's order.
   - **Repair threshold** (decision 38) and **rebuild destroyed** (item 128 (d)): an own structure
     below `repair_threshold_pct` of its HP is "damaged" for "highest-order affordable target that is
     unbuilt or damaged" and for repair, and 0 means a structure is never repaired; a destroyed
@@ -1200,7 +1273,7 @@ that merges second rebases and re-blesses, its PR naming the re-bless and the la
   - **Scenarios:** `scenarios/s2/repair-and-salvage` and `scenarios/s2/terraform-refills-a-crater`.
 - **Implements:** items 128 (d), 144 (5); spec §4, §6's Build row, §7's Repair band, §8, §9;
   register S2-10.
-- **Needs:** `fire` merged; the bulk ruling, for decisions 10, 15, 26, 38, 40, 42 and 43.
+- **Needs:** `fire` merged; the ruled decisions 10, 15, 26, 38, 40, 42 and 43.
   **Acceptance:** `fill_raises_a_footprint_to_its_anchor`; `dig_lowers_it`;
   `fill_refills_a_crater_to_the_generated_surface`; `none_leaves_ground_as_it_is`;
   `each_levelled_voxel_costs_the_walls_price`; `a_wall_lower_than_the_minimum_is_refused`;
@@ -1310,7 +1383,7 @@ that merges second rebases and re-blesses, its PR naming the re-bless and the la
 - **Builds:** the design above; events `region_collapsed` and `asset_fell` (E17); scenario
   `scenarios/s2/collapse-credits-the-blast`.
 - **Implements:** items 138 (3), 144 (1) to (3). **Needs:** `fire` merged (the settle function, wall
-  materials, the bore); the bulk ruling, for decisions 11, 37 and 39. **Acceptance:**
+  materials, the bore); the ruled decisions 11, 37 and 39. **Acceptance:**
   `a_region_cut_off_by_a_crater_falls`; `ground_beside_a_crater_is_supported_in_one_step`;
   `a_region_above_another_lands_on_it_and_does_not_float`; `a_region_larger_than_the_bound_holds`;
   `the_tick_budget_labels_the_rest_supported_and_counts_them`;
@@ -1335,7 +1408,11 @@ that merges second rebases and re-blesses, its PR naming the re-bless and the la
   `feat/client-combat`, worktree `../pharmakos-view`, target `D:/build/view`.
 - **Builds:** HP on own assets and on visible enemies as decision 5 rules, from the view's fields;
   shells, wrecks and ruins as entities; a unit's heading where the view carries it; the wall
-  materials of `con4`'s table drawn (by seat, cracked, neutral; E14); the Attack beacon's target
+  materials of `con4`'s table drawn (by seat, cracked, neutral; E14); the cracked terrain materials
+  drawn as cracked versions of their base (decision 10), so that a cracked stone voxel, which today's
+  `palette_of` would draw as air, is ground, through new rows in the mesher's `PALETTE` (art
+  placeholders for S6) and `palette_of`'s mapping of every new id, pinned by a test that walks the
+  wire table; the Attack beacon's target
   drawn in the editor (`editor.rs` ~176); `ResolvedRef.reachable` drawn (`targeting.rs` ~246); the
   remesh under a crater stream: today more than 16 changed chunks re-bakes the whole map (`view.rs`
   `WHOLE_BAKE_ABOVE`, ~297, ~635) and one edit's light pad of 15 dirties more chunks than G1
@@ -1349,12 +1426,14 @@ that merges second rebases and re-blesses, its PR naming the re-bless and the la
   `crates/client-gdext` (34 counted) and `crates/mesher` (33 counted); E28's per-frame cost of the
   full entity list. Every new piece that schedules or draws without deciding is named in the PR for
   AGENTS.md §3 rule 4. Nothing here decides, times or validates (rule 4).
-- **Implements:** register S2-12's measurement; G1's stress headroom. **Needs:** `wgw` and `fire`
-  merged (the client draws an unknown material as air, so it waits for both the wire's table and the
-  sim's materials, E14); the bulk ruling, for decision 5. **Acceptance:** vista and rows PNGs
-  re-rendered on CI's Linux leg and looked at; `godot_project.rs` pins; the mesher's perf alarm case
-  for the stream; `no_silent_fallback_is_left` in both crates; the watch check by hand; the main
-  session's local package run. **Contract PR:** no. **Agent-days:** 6–7.5.
+- **Implements:** register S2-12's measurement; G1's stress headroom; item 144 (11)'s cracked
+  terrain, drawn. **Needs:** `wgw` and `fire` merged (the client draws an unknown material as air,
+  so it waits for both the wire's table and the sim's materials, E14); the ruled decisions 5 and 10.
+  **Acceptance:** vista and rows PNGs re-rendered on CI's Linux leg and looked at;
+  `godot_project.rs` pins; `every_wire_material_draws` (no id the wire table names maps to air but
+  air itself); the mesher's perf alarm case for the stream; `no_silent_fallback_is_left` in both
+  crates; the watch check by hand; the main session's local package run. **Contract PR:** no.
+  **Agent-days:** 6.25–7.75 (a quarter-day of it for the cracked terrain's drawing).
 
 ### `g3h` — `crates/bench` + `xtask`: the G3′-real harness
 
@@ -1377,9 +1456,9 @@ that merges second rebases and re-blesses, its PR naming the re-bless and the la
   `crates/bench` (4 counted).
 - **Implements:** items 63, 64, 68, 69, 116 (6) (b), 138 (3) (the worst case). **Needs:** `base` and
   `fire` merged to start (it rebases onto `site` and `fall` before it opens its PR, and `g3r`
-  re-points it at the finished sim); `view` merged (its `perf_alarms` entry); the bulk ruling, for
-  decision 2. **Acceptance:** `wall-guard` and the research guard green; the layout and the rules
-  variant reproducible from the report's seed and `rules_hash`; the notices on all three runners.
+  re-points it at the finished sim); `view` merged (its `perf_alarms` entry); the ruled decision 2.
+  **Acceptance:** `wall-guard` and the research guard green; the layout and the rules variant
+  reproducible from the report's seed and `rules_hash`; the notices on all three runners.
   **Contract PR:** yes (`xtask`). **Agent-days:** 4.5–5.5.
 
 ### `dfnd` — `crates/sim`: Defend, the threat model, the bodyguard
@@ -1403,8 +1482,8 @@ that merges second rebases and re-blesses, its PR naming the re-bless and the la
   beacon and no explored cell hashes as before, and one snapshot bump covers both. Scenario
   `scenarios/s2/guards-escort-the-commander`.
 - **Implements:** items 104, 138 (4) (c) (pickets); spec §6's Defend row, §4's bodyguard, §10's
-  reflex; register S2-02 (the sim's half), S2-04. **Needs:** `site` and `fall` merged; the bulk
-  ruling, for decisions 6, 12, 13 and 21. **Acceptance:**
+  reflex; register S2-02 (the sim's half), S2-04. **Needs:** `site` and `fall` merged; the ruled
+  decisions 6, 12, 13 and 21. **Acceptance:**
   `the_most_threatened_beacon_holds_the_most_threat`; `under_attack_reads_its_window`;
   `guards_escort_the_commander_inside_the_sphere_only`; `a_damaged_guard_walks_to_a_repair_drone`;
   `pursue_never_stops_at_the_engagement_radius`; `a_picket_sees_past_the_sphere`;
@@ -1427,11 +1506,12 @@ that merges second rebases and re-blesses, its PR naming the re-bless and the la
   target `D:/build/surv`.
 - **Builds:** spec §6's Survey row: scouts scan unexplored ground inside the probe areas first (the
   per-seat explored table over coarse cells); then re-check the sightings closest to leaving the
-  reach window, enemy beacons first, refreshing them before the next Lull (item 13; cut 3); avoiding
-  known threats (decision 12); reporting back through the feed. Scenario
+  reach window, enemy beacons first, refreshing them before the next Lull (item 13; this refresh
+  pass is never cut, on the owner's word, item 144 (11), so it ships in S2 whatever happens);
+  avoiding known threats (decision 12); reporting back through the feed. Scenario
   `scenarios/s2/survey-finds-the-enemy`.
 - **Implements:** spec §6's Survey row; item 13's refresh; item 138 (4) (c). **Needs:** `dfnd`
-  merged; the bulk ruling, for decision 12. **Acceptance:** `scouts_scan_unexplored_ground_first`;
+  merged; the ruled decision 12. **Acceptance:** `scouts_scan_unexplored_ground_first`;
   `the_stalest_sighting_is_refreshed_next`; `enemy_beacons_come_first`; the scenario; chains
   re-blessed where a committed run has a Survey beacon whose scouts now mark cells (the table goes
   non-empty), each named; no snapshot change. **Contract PR:** no (behaviour writing into a table
@@ -1472,9 +1552,10 @@ that merges second rebases and re-blesses, its PR naming the re-bless and the la
     (decision 9) to that column, resuming once the gap opens; the charge is bought at
     `demolition_charge_cost_dollars` when it is loaded, planted on arrival, and detonates when its
     fuse row runs out, cutting wall and terrain inside its radius flat down to the wall's footing
-    (decision 40), with the carrier's seat on the edit, so the gap is walkable. Intercepting the
-    carrier is the counter: a carrier killed before it plants drops a charge that never fires
-    (decision 9).
+    (decision 40), whatever each voxel's level, cracked or whole, stone included (decision 10:
+    a cut that left stone standing would leave a step), with the carrier's seat on the edit, so the
+    gap is walkable. Intercepting the carrier is the counter: a carrier killed before it plants
+    drops a charge that never fires (decision 9).
   - **Attack's state** (the pinned target, the staging and launch state, the wave count, a charge's
     carrier and fuse) in a hashed table of its own with a row per Attack beacon, hashing nothing
     while empty (E29).
@@ -1485,16 +1566,16 @@ that merges second rebases and re-blesses, its PR naming the re-bless and the la
     beacon destroyed into ruins; the last beacon lost; the match ending `last_seat_standing` on that
     tick).
 - **Implements:** items 13, 104; spec §4 (hunting), §6's Attack row, §9 (breach, friendly fire);
-  register S2-03. **Needs:** `dfnd` merged; the bulk ruling, for decisions 9, 12, 14, 40 and 41.
+  register S2-03. **Needs:** `dfnd` merged; the ruled decisions 9, 10, 12, 14, 40 and 41.
   **Acceptance:** `an_attack_waits_for_its_force_size`; `the_target_is_pinned_at_the_seal`;
   `a_hunted_commander_is_retargeted_while_seen_and_lost_when_not`;
   `avoid_known_threats_routes_around_range`; `a_breach_sends_a_charge_to_the_wall_and_resumes`;
-  `a_charge_cuts_flat_to_the_footing_and_the_gap_is_walkable`; `only_a_breach_shells_an_enemy_wall`;
-  `a_carrier_killed_before_it_plants_fires_nothing`; `a_charge_crater_carries_its_seat`;
-  `the_last_beacon_lost_ends_the_match_that_tick`; the gateway's door row flipped; `allocations.rs`
-  green with the crowd; the two scenarios; chains re-blessed where Easy's playbooks now attack (none
-  of the committed ones is expected to; any that moves is named); the next `SNAPSHOT_VERSION` for
-  Attack's state.
+  `a_charge_cuts_flat_to_the_footing_and_the_gap_is_walkable` (through whole stone);
+  `only_a_breach_shells_an_enemy_wall`; `a_carrier_killed_before_it_plants_fires_nothing`;
+  `a_charge_crater_carries_its_seat`; `the_last_beacon_lost_ends_the_match_that_tick`; the
+  gateway's door row flipped; `allocations.rs` green with the crowd; the two scenarios; chains
+  re-blessed where Easy's playbooks now attack (none of the committed ones is expected to; any that
+  moves is named); the next `SNAPSHOT_VERSION` for Attack's state.
 - **Contract PR:** yes. **Agent-days:** 9–10.5. **Split seam:** the mandate, the pin and hunting as
   set 1; breach, the charge, avoid areas and waves as set 2.
 
@@ -1513,9 +1594,10 @@ that merges second rebases and re-blesses, its PR naming the re-bless and the la
   or gamectl lane is running at either PR's start. **Branches** `feat/operator-defend` then
   `feat/operator-attack`.
 - **`oprd` builds** (after `dfnd`): the Defend template in `library/` (guard the core and "my
-  commander"); Easy's defence score from the threat model; a Defend guard on its commander when the
-  commander died recently (spec §14), if decision 35 brings it into S2, with `lib.rs`' marker
-  (~61) re-dated for the parts that stay S5's; S2-02's rescue per decision 6, which needs no new
+  commander"); Easy's defence score from the threat model; a Defend guard on its commander in the
+  round after a Push in which its commander died (spec §14; decision 35, which moved it from S5 to
+  S2), with `lib.rs`' marker (~61) re-dated for the three parts that stay S5's (the Survey post,
+  chatter and target spread); S2-02's rescue per decision 6, which needs no new
   vocabulary in the safe playbook or Easy's output (it rides `safest`); Hold & Build's
   `repair_threshold_pct` per decision 38; `wire.rs`' defaults (`int_of`, `text_of`, `bool_of`,
   `array_of`, `voxel`) and `candidates::score`'s `time_ms.max(1)` made typed reads (item 136 (5)),
@@ -1524,7 +1606,7 @@ that merges second rebases and re-blesses, its PR naming the re-bless and the la
   attack score (`candidates.rs` ~54–55, "aiming at an enemy is S2's") and enemy-commander raids
   scored like any other target (spec §14); the wizard's suggestions under both templates. 2–2.5 ad.
 - **Implements:** spec §14 (S2's share); register S2-02. **Needs:** `oprd`: `dfnd` merged and the
-  bulk ruling, for decisions 6, 35 and 38; `opra`: `atk` merged. **Acceptance:** the templates
+  ruled decisions 6, 35 and 38; `opra`: `atk` merged. **Acceptance:** the templates
   round-trip, verify and render identically; the operator goldens, the wizard's,
   `instantiate_suggested`, the `demo_*` goldens and the package manifests moved and explained;
   `templates.rs` green over the longer `SHIPPED`; `against-easy*` re-blessed when Easy's sealed
@@ -1544,7 +1626,7 @@ that merges second rebases and re-blesses, its PR naming the re-bless and the la
   the written bands in `scenarios/nightly/README.md` per decisions 18 and 29; a forced nightly run
   on its branch, its report attached; `demo2` forces it again on `tune2`'s numbers.
 - **Implements:** spec §15; item 144 (6); AGENTS.md §10 item 5. **Needs:** `night`, `atk` and `opra`
-  merged; the bulk ruling, for decisions 18, 29 and 36. **Acceptance:** each arm qualifies; the
+  merged; the ruled decisions 18, 29 and 36. **Acceptance:** each arm qualifies; the
   forced run's three results; every band written. **Contract PR:** no. **Agent-days:** 2–3.
 
 ### `g3r` — the certifying runs, the alarm job and the re-derived power rows
@@ -1563,7 +1645,7 @@ that merges second rebases and re-blesses, its PR naming the re-bless and the la
   totals (S1-37, S2-08), and `max_region_voxels` and `max_visits_per_tick` if their worst cases do
   not fit; G4's bar's first nightly result cited. If G3′ misses, the written fallback (section 5).
 - **Implements:** items 63–69, 91, 116 (6) (b), 138 (3); spec §16's G3′ row; AGENTS.md §9 item 11.
-  **Needs:** `atk`, `surv` and `g3h` merged; the bulk ruling, for decision 2. **Acceptance:** the
+  **Needs:** `atk`, `surv` and `g3h` merged; the ruled decision 2. **Acceptance:** the
   job green on its branch; the recorded figures from both OSes; the proposed rows handed to `tune2`
   in the PR body. **Contract PR:** yes (`xtask`, a workflow). **Agent-days:** 2.5–3.5.
 
@@ -1585,13 +1667,15 @@ that merges second rebases and re-blesses, its PR naming the re-bless and the la
   generator's spawn pairs, against spec §19's "about 1.5 early Pushes"; reach memory N against
   Survey's refresh interval; a duel report holding the kit's counter relations (spec §9's table:
   autocannon against raiders, mortar out-ranging the autocannon, raiders diving a mortar, a mortar
-  against a clump and a wall), each relation a line the owner reads, never a gate; every combat row
-  proposed per decision 17 with its evidence, the picket radius included; `g3r`'s power rows, repath
-  cap, cell size and totals; S2-16: `units_per_seat` and its cap removed from the scenario format (a
-  format change, every committed file has it absent), the walkers deleted from the sim, since G3′'s
-  load comes from E30's layout and never used them (decision 23); the rules text's note updated.
+  against a clump and a wall, and the shells a crater in dirt and in stone takes at the proposed
+  `blast_levels`, decision 10), each relation a line the owner reads, never a gate; every combat row
+  proposed per decision 17 with its evidence, the picket radius and the blast levels included;
+  `g3r`'s power rows, repath cap, cell size and totals; S2-16: `units_per_seat` and its cap removed
+  from the scenario format (a format change, every committed file has it absent), the walkers
+  deleted from the sim, since G3′'s load comes from E30's layout and never used them (decision 23);
+  the rules text's note updated.
 - **Implements:** item 144 (8); register S1-37, S2-08, S2-16, the S2 tuning rows; spec §19's S2
-  items. **Needs:** `opra` and `g3r` merged; the bulk ruling, for decisions 17, 23 and 36.
+  items. **Needs:** `opra` and `g3r` merged; the ruled decisions 17, 23 and 36.
   **Acceptance:** both reports attached, the three-seat figure in the balance report; every chain
   and `report_hash` golden re-blessed once, the rows named; `mapgen`'s goldens re-blessed if
   `map_ceiling_kw` moves the generator; the main session's local package run. **Contract PR:** yes
@@ -1618,33 +1702,34 @@ Three slots, never more. `crates/sim` has one author at a time; beside it run on
 no hash, snapshot or table line of its own, as `grid` ran beside `mine` in S1. Days are working days
 in plan units, five to a week, at each task's midpoint estimate; a task starts the day its inputs
 merge, and a lane opens its PR when green, so the order inside a wave is a merge order. **The bulk
-ruling** falls after `msrv` merges (day 0.75) and before `con3` starts (day 2); `msrv`, `redate`,
-`east`, `rnds`, `vfy1` and `base` need no decision. `con3` has slack until day 3.5 (it must merge
-before `ids` starts on day 7.5), so a ruling later than that moves the critical path day for day.
+ruling** fell on 2026-10-16, before wave 1 (item 144 (11)), so no lane waits on it; the plan had it
+fall after `msrv` merges (day 0.75) and before `con3` starts (day 2).
 
 | Wave | Days | Slot 1 — sim | Slot 2 | Slot 3 | The owner can see |
 |---|---|---|---|---|---|
 | 0 | 0–2 | **msrv** (0.75) → **base** starts | → **redate** (0.75) | → **east** (1.25) | 1.98 everywhere; `expand_east` reaches its site |
-| 1 | 0.75–13 | **base** (6.75) → **ids** (5.5, from 7.5) | **con3** (4, from 2) → **con4** (3.75, from 6) → **vfy2** starts (9.75) | **vfy1** (3.75, from 2) → **rnds** (0.75, from 5.75) → **night** (5.25, from 6.5) | `--rounds 6`; E8's verdicts agree with the compile; live fielding; the nightly harness forced once |
-| 2 | 13–24 | **fire** (11) | **vfy2** (5.75, to 15.5) → **wgw** (6.5, from 15.5) | idle by dependency from 11.75 | Shells, craters, wrecks, kill credit |
-| 3 | 24–32.25 | **site** (8.25) | **view** (6.75, from 24) → **g3h** (5, from 30.75) | **fall** (6.5, from 24, named place) | A wall going up, levelling, repair and salvage, a collapse; combat drawn |
-| 4 | 32.25–39.25 | **dfnd** (7) | **g3h** (to 35.75) | idle by dependency | Guards, pickets, the threat model, the rescue |
-| 5 | 39.25–49 | **atk** (9.75) | **surv** (3.5, named place) → **vfy3** (1.75, from 42.75) | **oprd** (3.25, from 39.25) | A raid, a hunt, a breach, a charge; full Survey |
-| 6 | 49–59.75 | **g3r** (3) → **tune2** (5.25, from 52) → **demo2** (2.5, from 57.25) | **opra** (2.25) → **arms** (2.5, from 51.25) | — | The S2 demo of §1.1 |
+| 1 | 0.75–13 | **base** (6.75) → **ids** (5.5, from 7.5) | **con3** (4.25, from 2) → **con4** (3.75, from 6.25) → **vfy2** starts (10) | **vfy1** (3.75, from 2) → **rnds** (0.75, from 5.75) → **night** (5.25, from 6.5) | `--rounds 6`; E8's verdicts agree with the compile; live fielding; the nightly harness forced once |
+| 2 | 13–25.25 | **fire** (12.25) | **vfy2** (5.75, to 15.75) → **wgw** (6.5, from 15.75) | idle by dependency from 11.75 | Shells, craters, cracked stone, wrecks, kill credit |
+| 3 | 25.25–33.5 | **site** (8.25) | **view** (7, from 25.25) → **g3h** (5, from 32.25) | **fall** (6.5, from 25.25, named place) | A wall going up, levelling, repair and salvage, a collapse; combat drawn |
+| 4 | 33.5–40.5 | **dfnd** (7) | **g3h** (to 37.25) | idle by dependency | Guards, pickets, the threat model, the rescue |
+| 5 | 40.5–50.25 | **atk** (9.75) | **surv** (3.5, named place) → **vfy3** (1.75, from 44) | **oprd** (3.25, from 40.5) | A raid, a hunt, a breach, a charge; full Survey |
+| 6 | 50.25–61 | **g3r** (3) → **tune2** (5.25, from 53.25) → **demo2** (2.5, from 58.5) | **opra** (2.25) → **arms** (2.5, from 52.5) | — | The S2 demo of §1.1 |
 
 The idle stretches are by dependency, not by choice: during `fire` nothing off the sim's path is
 ready once `night` and `wgw` are done, and during `dfnd` only `g3h` is (it starts after `view`,
 which it follows in `xtask`, and builds against the combat it measures rather than starting earlier
 and being re-pointed twice). A lane that slips takes from that slack first.
 
-**Totals.** 27 tasks in 26 lanes (`oprd` and `opra` are one lane in two PRs), **about 125 ad**
-(112–138), including about 1.5 ad of re-blesses after rebases (E33). **Critical path:** `msrv` →
-`base` → `ids` → `fire` → `site` → `dfnd` → `atk` → `g3r` → `tune2` → `demo2`, **about 59.75 working
-days**, almost all of it the sim's serial lanes (`base` to `atk`, about 48.25 days). `opra` runs
-beside `g3r` and is shorter, so it is off the path. Slot utilisation is about 69 % of 179 slot-days.
+**Totals.** 27 tasks in 26 lanes (`oprd` and `opra` are one lane in two PRs), **about 126 ad**
+(113.5–140), including about 1.5 ad of re-blesses after rebases (E33) and about 1.75 ad for the
+owner's per-material hardness (decision 10: `fire` 1.25, `con3` 0.25, `view` 0.25). **Critical
+path:** `msrv` → `base` → `ids` → `fire` → `site` → `dfnd` → `atk` → `g3r` → `tune2` → `demo2`,
+**about 61 working days**, almost all of it the sim's serial lanes (`base` to `atk`, about 49.5
+days); per-material hardness adds 1.25 days to it, through `fire`. `opra` runs beside `g3r` and is
+shorter, so it is off the path. Slot utilisation is about 68 % of 183 slot-days.
 
 **Token cost.** At the skeleton's wave-4 and wave-5 rates of 186–195 k sub-agent tokens per planned
-agent-day (item 115 (2)), 125 ad is about **23–24 M** tokens; at wave 6's 215–245 k, 27–31 M. The
+agent-day (item 115 (2)), 126 ad is about **23–25 M** tokens; at wave 6's 215–245 k, 27–31 M. The
 record holds no S1 rate to set beside them.
 
 ### 4.2 The re-bless ledger: how many times the chains move, and why
@@ -1653,12 +1738,12 @@ record holds no S1 rate to set beside them.
 |---|---|---|---|
 | `east` | `expand-east-segment` and its event log | — | `expand_east`'s |
 | `vfy1` (`VERIFIER_VERSION` 0.1.0-s2) | — | — | all |
-| `con3` (rows at today's constants) | — | — | all (`rules_hash`), after `vfy1`'s |
+| `con3` (rows at today's constants; `blast_levels`, which nothing reads yet) | — | — | all (`rules_hash`), after `vfy1`'s |
 | `base` | none expected (no hashed field, no snapshot change) | — | — |
 | `ids` (the placement counter and beacons-lost columns) | all | **moved** | all (snapshot 10) |
 | `vfy2` (`Scope`'s sightings) | — | — | all, after `ids`' |
 | `wgw` (the scope's content) | — | — | the gateway's, after `vfy2`'s |
-| `fire` (combat columns; the core's cooldown in every match) | all, and its two new ones | **moved** | all (snapshot 11) |
+| `fire` (combat columns; the core's cooldown in every match; the material levels move nothing of their own, decision 10) | all, and its two new ones | **moved** | all (snapshot 11) |
 | `site` | those with a Build, if drone state is hashed; its two new ones | — expected (Hold & Build's terraform reads NONE and nothing in it is damaged) | all if the snapshot bumps |
 | `fall` | its new one; none other expected (no committed run detaches a region) | — expected | — |
 | `dfnd` (Defend's table; the explored table laid out) | those reading `safest` or `SAFEST` with a threat in view or a wounded commander; its new one | — expected: both new tables hash nothing while empty (E29) | all (snapshot) |
@@ -1679,17 +1764,21 @@ numbers come last because the check needs the finished rules.
 
 ### 4.3 Honest size
 
-About 125 ad and a 59.75-day critical path in plan units, against the spec's 6 weeks (30 days); with
-a week of float for contract reviews, about **13 plan-weeks**. The sim alone carries about 58 ad,
-about 48 of it in series. S1's plan sized its row at about 7.1 plan-weeks against the spec's 5,
-about 40 % over; S2's row is larger than S1's in every layer, and the §2.7 additions (collapse,
-terraform, Defend's and Attack's full settings, the core's turret) are about 15 ad of it. The two
-reviews added about 18 ad and 11 days of path: the id design E1 needs and the whole-sim fallback
-sweep (which made `base` two lanes, `base` and `ids`), the combat and collapse corrections (the
-phase in which a collapse's death settles, the stale broadphase, the fall's order, Mine's re-check,
-the per-tick budget, the bore, the shared credit, the attacker memory), the harness's seams and load
-generator, the sweep's other crates and the two-OS certification. The cut order of section 4.5 takes
-about 3.5 days off the path; decision 1's second option takes about 8.
+About 126 ad and a 61-day critical path in plan units, against the spec's 6 weeks (30 days); with
+a week of float for contract reviews, about **13 plan-weeks** (13.2). The sim alone carries about
+59 ad, about 49.5 of it in series. S1's plan sized its row at about 7.1 plan-weeks against the
+spec's 5, about 40 % over; S2's row is larger than S1's in every layer, and the §2.7 additions
+(collapse, terraform, Defend's and Attack's full settings, the core's turret) are about 15 ad of it.
+The two reviews added about 18 ad and 11 days of path: the id design E1 needs and the whole-sim
+fallback sweep (which made `base` two lanes, `base` and `ids`), the combat and collapse corrections
+(the phase in which a collapse's death settles, the stale broadphase, the fall's order, Mine's
+re-check, the per-tick budget, the bore, the shared credit, the attacker memory), the harness's
+seams and load generator, the sweep's other crates and the two-OS certification. The owner's
+rulings (item 144 (11)) then added about 1.75 ad and 1.25 days of path for per-material hardness
+(decision 10), almost all of it in `fire`. The cut order of section 4.5, now two cuts, takes about
+3.5 days off the path, the same as before, because the cut the owner removed, Survey's refresh, was
+off the path; it leaves the stage with no planned cut that only buys review time. Decision 1's
+second option, not taken, would have taken about 8.
 
 Plan units are not calendar days. S1's 71.5-ad plan ran from its adoption on 2026-09-29 to its close
 on 2026-10-16. Its stops — the Windows CI leg, serial contract PRs, `MATRIX_ONLY`'s second matrix
@@ -1704,29 +1793,35 @@ fixture under `godot/`.
   `args.stage` = 'S2'; the task headings carry their ids in backticks ("### `base` —", "### `oprd` →
   `opra` —"), as S1's did. The environment's sentence on `cargo xtask determinism --bless` names the
   lanes whose section says the determinism chain moves (`ids`, `fire`, `tune2`).
-- **The bulk ruling gates the launches** of every lane whose Needs line names a decision; the first
-  `wave-lanes.js` run after `msrv` may launch `redate`, `east`, `vfy1`, `base` and `rnds` before it,
-  each when its inputs have merged.
+- **The bulk ruling no longer gates a launch:** it fell on 2026-10-16, before wave 1 (item 144
+  (11)), so every lane launches when its inputs have merged, and each lane's brief carries the
+  rulings its Needs line names.
 - **The main session's docs PRs** carry, beside the rulings: the spec's worked example with `east`'s
   site (§10); spec §3's "terrain … credits nobody" amended by item 144 (2) and decision 37; spec
   §6's Build row (terraform's meaning, the base kit's blueprints, repair drones on work in hand,
   decision 38's threshold), §6's Common row (decision 4's unset `roe`), §7 (decision 43's repair
-  price under the Repair band), §9 (the support rule, materials, walls at least two high and the
-  charge's cut, decisions 40 to 42, the demolition charge's carrier), §14 (decision 35, if Easy's
-  Defend guard moves into S2), §17's S2 row (the cuts taken), §19 (the kingmaking check read from
-  `tune2`'s three-seat run for S2, decision 36); AGENTS.md §3 rule 4's new client pieces (`rnds`'
-  `--rounds` reader, `view`'s), §9 item 11 (G3′'s alarm job and the certification on the owner's
-  machine), §10 item 5 (the bands read against Easy until S5); `docs/placeholders.md`'s S2 rows;
-  `docs/design/README.md`'s row for this plan. AGENTS.md is a harness doc no lane edits.
+  price under the Repair band), §9 (the support rule, materials and terrain's blast levels by
+  material, decision 10, walls at least two high and the charge's cut, decisions 40 to 42, the
+  demolition charge's carrier), §14 (decision 35: Easy's Defend guard moves into S2), §17's S2 row
+  (the cuts taken, and Survey's refresh never among them, item 144 (11)), §19 (the kingmaking check
+  read from `tune2`'s three-seat run for S2, decision 36); AGENTS.md §3 rule 4's new client pieces
+  (`rnds`' `--rounds` reader, `view`'s), §9 item 11 (G3′'s alarm job and the certification on the
+  owner's machine), §10 item 5 (the bands read against Easy until S5); `docs/placeholders.md`'s S2
+  rows; `docs/design/README.md`'s row for this plan. AGENTS.md is a harness doc no lane edits.
 - **Packaged locally before merging** (S1's decision 9): `redate` (`rules/README.md` ships), `con3`,
   `rnds`, `view`, `oprd`, `opra`, `tune2`, and any lane given a named place under `godot/`,
   `library/` or `rules/`.
 
-### 4.5 The cut order, written before the stage starts (item 144 (7))
+### 4.5 The cut order, written before the stage starts (item 144 (7), ruled by (11))
 
-If S2 runs late, these move to S3, in this order, and nothing else does without the owner's word. A
-cut construct is never silently ignored: the sim answers `NotAtThisStage("S3")` and the verifier its
-E-code (E8), so a playbook that uses it is refused with a reason and the rules text says "from S3".
+If S2 runs late, these two move to S3, in this order, and nothing else does without the owner's
+word. **Survey's refresh pass is never cut** (item 144 (11)): the plan's third cut, re-checking the
+sightings closest to leaving the reach window before the next Lull, left the order on the owner's
+word, after the owner's line on decision 5 that intelligence and surveillance should be a huge
+factor in the game, so full Survey ships in S2 whatever happens and item 13's refresh is not
+deferred. A cut construct is never silently ignored: the sim answers `NotAtThisStage("S3")` and the
+verifier its E-code (E8), so a playbook that uses it is refused with a reason and the rules text
+says "from S3".
 
 1. **Attack's waves.** One launch per segment remains; `waves` greater than one is refused. It saves
    about 1.5 ad and 1.5 days on the critical path (`atk`). It goes first because it is not named in
@@ -1739,28 +1834,23 @@ E-code (E8), so a playbook that uses it is refused with a reason and the rules t
    breach or a footprint's `DIG`; it goes no earlier because it is the spec's own counter to a moat
    (§9: "Build's fill and dig are what undo it"), and the Turtle arm's band is the place a missing
    counter would show.
-3. **Survey's refresh pass** (re-checking the sightings closest to leaving the reach window, enemy
-   beacons first, before the next Lull). Scouts still scan unexplored ground first. It saves about
-   1.5 ad, off the critical path (`surv` is a named place), so it buys review time rather than days.
-   It goes last because it is part of a named row item ("full Survey") and because it cuts a ruling,
-   not only a feature: item 13 rules that "Survey scouts refresh sightings before the next Lull",
-   and spec §14's "Vision and hunting" relies on it ("its scouts refresh those sightings before the
-   next Lull", for the operator's Survey post, which is S5's). Taken, it defers item 13's refresh to
-   S3, which builds the reach filters and the knowledge store's enemy-known predicates where a
-   refresh pass has its readers, and the main session's docs PR says so beside item 13.
+
+The two cuts together take about 3.5 days off the critical path and 3.5 ad. Without the third, a
+slip past them meets no planned cut that only buys review time: it is the owner's to rule.
 
 **Checkpoints** (decision 32), each tied to the start of the lane whose work a cut removes, so a cut
 is taken before that work begins; "late" is the lane's start day against its planned start in
 section 4.1:
 
-- **At `site`'s start** (planned day 24, when `fire` merges): later than day 25, cut 1 is taken and
-  `atk`'s brief drops waves; later than day 26.5, cut 2 as well, and `site`'s brief drops the
-  refill.
-- **At `atk`'s and `surv`'s start** (planned day 39.25, when `dfnd` merges): later than day 40.25,
-  cut 1 if it was not taken; later than day 42.75 (3.5 days late, more than cuts 1 and 2 together
-  absorb), cut 3, and `surv`'s brief drops the refresh pass.
+- **At `site`'s start** (planned day 25.25, when `fire` merges): later than day 26.25, cut 1 is
+  taken and `atk`'s brief drops waves; later than day 27.75, cut 2 as well, and `site`'s brief drops
+  the refill.
+- **At `atk`'s and `surv`'s start** (planned day 40.5, when `dfnd` merges): later than day 41.5,
+  cut 1 if it was not taken. Later than day 44 (3.5 days late, more than cuts 1 and 2 together
+  absorb), no planned cut is left, since cut 2's work is done by then and Survey's refresh is never
+  cut: the main session puts the slip to the owner, and `surv`'s brief keeps the refresh pass.
 
-Beyond the third cut, any further cut is the owner's (section 7).
+Beyond the second cut, any further cut is the owner's (decision 32, section 7).
 
 ### 4.6 The contract pull requests, in merge order
 
@@ -1783,7 +1873,7 @@ new names, their ids taken at rebase (E17, E33).
 | — | the firewall-runner PR (main session) | `.github/workflows/claude.yml`'s `runs-on` (item 142 (3)), in the gap between `night` and `g3h`, once the owner's first triggered `claude.yml` run has happened |
 | 6 | `ids` | determinism code: ids and generations, the placement counter, the beacons-lost column, `SNAPSHOT_VERSION` 10 |
 | 7 | `vfy2` | `report_hash`'s `Scope` encoding |
-| 8 | `fire` | the combat phase, the kill-credit split (E32), `Stream::Combat`'s first draw, the shell table, wall materials, the destroyed-value and tally columns, the attacker memory, `SNAPSHOT_VERSION` 11, event kinds, the bore's golden (a new golden format) |
+| 8 | `fire` | the combat phase, the kill-credit split (E32), `Stream::Combat`'s first draw, the shell table, wall and cracked terrain materials (new wire values in the chunk digests), the destroyed-value and tally columns, the attacker memory, `SNAPSHOT_VERSION` 11, event kinds, the bore's golden (a new golden format) |
 | 9 | `fall` | the Voxels phase's order and its settle (E2); event kinds |
 | 10 | `site` | drone state and the snapshot if it adds any; the generated-surface golden (a new golden format); event kinds |
 | 11 | `g3h` | `xtask/src/main.rs`' perf-alarm list |
@@ -1872,14 +1962,19 @@ spec's fallback is taken in writing, with the owner's word, and each lever answe
 ## 6. Owner decisions before the stage starts
 
 Recommendation first, marked **(Recommended)**, downsides for each option. **[play]** marks the
-play-shaping ones named one by one in the bulk question and put first; **[risk]** marks a risk the
-owner accepts or refuses. Hygiene and engineering are not asked here; they are section 2.3's calls.
-Decisions 35 to 43 came from the two reviews of this plan. Numbers 1 to 34 are kept as they were so
-that every reference to them holds; decisions 20, 24 and 27 turned out to be engineering and stand
-as E26, E27 and E28, their numbers left as pointers. The bulk ruling falls after `msrv` merges and
-before `con3` starts (section 4.1).
+play-shaping ones, put first; **[risk]** marks a risk the owner accepts or refuses. Hygiene and
+engineering are not asked here; they are section 2.3's calls. Decisions 35 to 43 came from the two
+reviews of this plan. Numbers 1 to 34 are kept as they were so that every reference to them holds;
+decisions 20, 24 and 27 turned out to be engineering and stand as E26, E27 and E28, their numbers
+left as pointers. **All ruled on 2026-10-16 (item 144 (11)),** before wave 1: each decision says how,
+and keeps its options for the record. The owner was interviewed on decisions 1, 4, 5, 7, 9, 35, 37,
+40 with 10, 41 and 43 and took the recommendation on each but 10 and 40; every other decision passed
+as recommended in the bulk answer. A lane that finds one of them wrong in the code raises it with
+the owner rather than building around it.
 
-**1. S2's size and schedule.** *Governs everything.*
+**1. S2's size and schedule.** *Governs everything.* **Ruled:** the recommended option, put to the
+owner in the interview (item 144 (11)); with decision 10's ruling the size is about 126 ad and still
+about 13 plan-weeks (section 4.1).
 - **(Recommended) Keep the whole row and let S2 run about 13 plan-weeks,** with section 4.5's cuts
   as the only planned reductions, taken at their checkpoints. *Downside:* later rows shift about
   seven plan-weeks unless absorbed; the gate date is the owner's.
@@ -1887,11 +1982,13 @@ before `con3` starts (section 4.1).
   combat phase), about 8 days off the path. *Downside:* two agents in the determinism crate at
   once, both bumping the snapshot and touching `tables.rs`, where a bad merge is a desync; S1's
   decision 1 refused the same trade.
-- *Take all three cuts now:* about 3.5 days off. *Downside:* the stage ships less than the row, a
-  moat lasts, Survey is "full" in name only, and item 13's refresh waits for S3.
+- *Take the cuts now:* about 3.5 days off. *Downside:* the stage ships less than the row and a moat
+  lasts. (As put to the owner this option took three cuts, Survey's refresh among them; the owner
+  has since ruled that one never cut, section 4.5.)
 
 **2. [risk] G3′'s seat count.** *Gates `g3h`.* The spec says "4 seats (headroom over v1's 3)"; v1
 has at most three, the generator places three zones and the gateway refuses a fourth (E19).
+**Ruled:** the recommended option, in the bulk answer, the owner accepting the risk (item 144 (11)).
 - **(Recommended) Measure at three seats with the world totals (100 units a seat), and report a
   fourth, unplaced seat's decision-tick cost as a separate line.** Item 63's world totals already
   give each of three seats more load than four seats would (75 each). *Downside:* the spec's literal
@@ -1907,11 +2004,14 @@ keeps walking dodges it. **(Recommended)** both, as E2 and E13. *Downside:* no "
 and a mortar is weak against anything that moves. *Alternatives:* fire resolves in seat order.
 *Downside:* the lowest seat wins every exact duel. A leading shell that aims at where a moving
 target will be. *Downside:* the sim models enemy movement for aim, and the spec's "slow arcing
-shell that can be dodged" stops being true.
+shell that can be dodged" stops being true. **Ruled:** the recommended option, in the bulk answer
+(item 144 (11)).
 
 **4. [play] An unset `roe`.** `playbook.proto`'s header makes unset an error and allows an
 owner-ruled exception list of four omitted settings; nothing enforces it for `roe`, and Hold &
-Build, the safe playbook and Easy's output all omit it.
+Build, the safe playbook and Easy's output all omit it. **Ruled:** the recommended option, put to
+the owner in the interview (item 144 (11)): unset reads as `RETURN_FIRE`, the fifth omitted-setting
+default.
 - **(Recommended) Unset reads as `RETURN_FIRE`, a fifth entry on the list, with an I-level note,
   which `con4` writes into the header (E25).** The spec's Common row says return fire and retreat
   "follow the rules of engagement and are always announced", and its worked example writes
@@ -1928,7 +2028,11 @@ Build, the safe playbook and Easy's output all omit it.
   determinism playbook must write it, and every operator and `demo_*` golden moves.
 - *Unset reads as `HOLD_FIRE`:* *Downside:* a seat that never wrote a `roe` never shoots back.
 
-**5. [play] S2-11: what a seat sees of an enemy asset.**
+**5. [play] S2-11: what a seat sees of an enemy asset.** **Ruled:** the recommended option, put to
+the owner in the interview (item 144 (11)). The owner added: "I want intelligence and surveillance
+to be a huge factor in this game." The line is why Survey's refresh pass is never cut (section 4.5),
+and it is the owner's to apply to later stages' sensing (pickets, the Sensor Spire, the reach
+filters); this plan adds no rule for it beyond the ruling.
 - **(Recommended) In live vision now: the asset's kind, position, heading and exact HP; from memory:
   kind, position and the sighting's age, nothing else; a beacon's mandate, power state, units by
   role and build progress are never shown.** Attack's "weak point" and `weakest` read HP, and a
@@ -1941,7 +2045,7 @@ Build, the safe playbook and Easy's output all omit it.
 **6. [play] S2-02: the safe playbook's rescue rule.** Spec §14 says "Otherwise shadow the safest
 beacon, with the flee and rescue rules" and states no rescue; spec §10's reflex, at the commander's
 HP ≤ 20 %, "walks the commander to the safest own beacon, and then the route continues from the step
-it was on".
+it was on". **Ruled:** the recommended option, in the bulk answer (item 144 (11)).
 - **(Recommended) Rescue rides `safest`, with no new vocabulary: while the commander is below full
   HP, `safest` ranks own beacons whose sphere holds a live repair drone ahead of those without, then
   by decision 12's threat-adjusted rank.** The reflex, the safe playbook's shadowing of the safest
@@ -1961,7 +2065,8 @@ it was on".
 **7. [play] X-08 and the destroyed-value term.** The score is held value plus enemy value destroyed
 (spec §3). `fixs` read the first tie-break, "unsmoothed net worth", as that score (`audit.rs`
 ~43–53), and the code's own note says the two readings agree only while destroyed value is zero and
-rank score-tied seats in opposite directions once it is not.
+rank score-tied seats in opposite directions once it is not. **Ruled:** the recommended option, put
+to the owner in the interview (item 144 (11)).
 - **(Recommended) "Unsmoothed net worth" is held value alone — the Ledger's raw figure,
   `World::held_value`, without the destroyed term — so among score-tied seats the one holding more
   wins, then the one that destroyed more, then fewer beacons lost, then a shared win; "enemy value
@@ -1975,13 +2080,14 @@ rank score-tied seats in opposite directions once it is not.
   value destroyed decides every tie and the destroyer beats the builder.
 
 **8. [play] What the core's autocannon fires at.** Spec §4: "so a single early raid can't eliminate
-a seat".
+a seat". **Ruled:** the recommended option, in the bulk answer (item 144 (11)).
 - **(Recommended) Enemy units only (the enemy commander included), nearest first.** *Downside:* an
   enemy mortar or wall built in its range is ignored; the raider is the mortar's counter (spec §9).
 - *Units and structures:* *Downside:* the core out-trades a siege by itself.
 
 **9. [play] Who carries a demolition charge.** Spec §9 names only "the carrier"; the commander
-carrying one is roadmap (§4).
+carrying one is roadmap (§4). **Ruled:** the recommended option, put to the owner in the interview
+(item 144 (11)).
 - **(Recommended) A raider of an Attack beacon with `breach_allowed`, loaded at `$` 15 when the
   breach needs it, planting at the breach point; a carrier killed before it plants drops a charge
   that never fires.** *Downside:* the raider's role widens; a charge cannot be placed by Build.
@@ -1990,17 +2096,47 @@ carrying one is roadmap (§4).
   its rows.
 
 **10. [play] Walls and materials.** Spec: a wall is "cheap blocking terrain", priced per voxel, "HP
-is by material" (`rules.proto` ~666).
-- **(Recommended) A wall target is a box (`Area`) of voxels filled above the ground, each at
-  `wall_cost_per_voxel`; a wall voxel has two levels (whole, cracked) and breaks on a blast at the
-  second; any blast removes dirt, stone, ore and vent voxels inside its crater radius; the bottom
-  layer is bedrock and the core's bore is never removed; wall material carries its seat, with a
-  neutral wall at each level (E14, decision 42).** *Downside:* stone is no harder than dirt.
-- *Per-material blast resistance for terrain too:* *Downside:* more rows and a tuning surface before
-  the duel report exists.
+is by material" (`rules.proto` ~666). **Ruled: per-material hardness, the owner's choice against the
+recommendation** (item 144 (11), put to the owner in the interview with decision 40). The ruled
+form, which every lane builds:
+- **Walls.** A wall target is a box (`Area`) of voxels filled above the ground, at least
+  `materials.wall_min_height_voxels` high (decision 40), each voxel at `wall_cost_per_voxel`. A wall
+  voxel has two levels, whole and cracked: it cracks on its first blast and breaks on its second.
+  Wall material carries its seat, with a neutral wall at each level (E14, decision 42).
+- **Terrain resists a blast by material too.** `materials.blast_levels` gives each terrain kind its
+  number of levels N, and a voxel of that kind takes N blasts: each blast inside a crater's radius
+  steps it down one level, as walls do, and the blast at its last level removes it. The damage
+  level is held in the material id, as E14 does for walls, so it lives in the voxels the chunk
+  digests already hash and no table is added; the catalogue holds up to three levels a kind, and a
+  row outside 1 to 3 is refused at load (E14 says what the sim, the codec, the wire table, the
+  client and the mesher each need). **Proposed** (a `con3` row, owner at S2's demo, with `tune2`'s
+  duel report): dirt 1, ore 1, vent 1, stone 2. A mortar shell therefore clears the dirt skin and
+  any ore or vent at once and cracks the stone beneath, and a second shell on the same ground digs
+  on, so a crater in rock costs two shells.
+- **Shapes.** Mortar craters stay balls, stepping each voxel inside down a level. A demolition
+  charge cuts flat down to the wall's footing and removes every voxel inside its cut whatever its
+  level, so its gap is walkable (decision 40; a cut that left cracked stone standing would leave a
+  step).
+- **Never removed:** bedrock (the bottom layer) and the core's bore (E31).
+- **Nothing restores cracked terrain in S2.** Repair restores own wall voxels only (decision 42),
+  and terraform's refill fills air, so a cracked voxel stays cracked.
+- *Downside, the owner's to accept:* more rows and a tuning surface before the duel report exists,
+  about 1.75 ad (`fire` 1–1.5, `con3` and `view` a quarter each) and 1.25 days of the critical path
+  through `fire`; a crater in stone is shallower than one in dirt, which the duel report's mortar
+  lines show.
+
+*For the record, the options as put to the owner:*
+- *(Recommended, not taken) A wall target is a box (`Area`) of voxels filled above the ground, each
+  at `wall_cost_per_voxel`; a wall voxel has two levels (whole, cracked) and breaks on a blast at
+  the second; any blast removes dirt, stone, ore and vent voxels inside its crater radius; the
+  bottom layer is bedrock and the core's bore is never removed; wall material carries its seat,
+  with a neutral wall at each level (E14, decision 42).* *Downside:* stone is no harder than dirt.
+- *(Taken, with the walls of the first option) Per-material blast resistance for terrain too:*
+  *Downside:* more rows and a tuning surface before the duel report exists.
 
 **11. [play] Collapse's constants, and an asset under a landing region.** Item 138 (3) asks for the
-constants as proposed rows.
+constants as proposed rows. **Ruled:** the recommended option, in the bulk answer (item 144 (11));
+the values stay proposals, the owner's at S2's demo.
 - **(Recommended) `collapse.max_region_voxels` = 4 096, `collapse.max_visits_per_tick` = 16 384
   (four regions' worth) and `collapse.fall_damage_hp` = 100 (all proposals, owner at S2's demo); an
   asset under the voxels a region lands on takes the same flat damage and stands on the new top.**
@@ -2012,7 +2148,8 @@ constants as proposed rows.
 - *An asset under a landing region is destroyed:* *Downside:* a second damage rule, unbounded.
 
 **12. [play] The threat model.** Spec §6 names threat-weighted targeting, `most_threatened`, "avoid
-known threats" and SAFEST without a formula.
+known threats" and SAFEST without a formula. **Ruled:** the recommended option, in the bulk answer
+(item 144 (11)).
 - **(Recommended) An enemy asset's threat is its weapon's damage per second (rows), zero if unarmed;
   `most_threatened` is the own beacon with the largest summed threat of enemy assets seen inside its
   sphere, ties to the lowest id; `beacon_under_attack` is the predicate's own window;
@@ -2024,6 +2161,7 @@ known threats" and SAFEST without a formula.
   built from weapon rows only, blind to unarmed threats like a charge carrier until it is armed.
 
 **13. [play] Defend's unstated settings.** Auto-fortify and unit mix have no stated meaning.
+**Ruled:** the recommended option, in the bulk answer (item 144 (11)).
 - **(Recommended) Defer both to S3's rule list, their numbers reserved, refused with E-codes; Defend
   fields raiders as guards and scouts as pickets on work in hand.** *Downside:* Defend reads thinner
   than the spec's row.
@@ -2031,13 +2169,15 @@ known threats" and SAFEST without a formula.
   the raiders' share of guards): *Downside:* two invented rules.
 
 **14. [play] Attack's settings' values.** The spec names the settings, not their options.
+**Ruled:** the recommended option, in the bulk answer (item 144 (11)).
 - **(Recommended) Retarget: `NEAREST_KNOWN` or `NONE`; after-action: `REGROUP_AT_STAGING` or
   `RETURN_HOME`; retreat: below a percentage of the launch force, or after a game time; weak point:
   the target beacon's lowest-HP structure inside its sphere, else the beacon; waves: launches per
   segment (cut 1).** *Downside:* a vocabulary written now, irreversible once files use it.
 
 **15. [play] `BuildSettings` 6 and 7** (reserved as `repair_drones`, `reclaim_drones`). Spec §6:
-"repair/reclaim drone fields", and "No fixed counts".
+"repair/reclaim drone fields", and "No fixed counts". **Ruled:** the recommended option, in the
+bulk answer (item 144 (11)).
 - **(Recommended) Both stay reserved; repair drones follow work in hand.** *Downside:* a player
   cannot turn salvage off.
 - *Two counts:* *Downside:* contradicts "no fixed counts". *A job switch:* *Downside:* a sixth
@@ -2045,12 +2185,13 @@ known threats" and SAFEST without a formula.
 
 **16. `report_kinds`** (`MandateSettings` 3). **(Recommended)** S3, with `get_reports`, which
 answers `INTERNAL` today; S2's announcements ride the feed. *Downside:* a beacon cannot filter its
-reports.
+reports. **Ruled:** the recommended option, in the bulk answer (item 144 (11)).
 
 **17. [play] Combat's numbers, and how they are set.** The spec gives HP, costs, `kW` and speeds
 (item 90) and no damage, range or rate. **(Recommended)** rows proposed from the kit's counter
 relations, all `PLACEHOLDER: tuning — owner, at S2's demo`, checked by `tune2`'s duel and balance
-reports, tuned at the demo:
+reports, tuned at the demo. **Ruled:** the recommended option, in the bulk answer (item 144 (11));
+the table gains decision 10's blast levels, and every number in it stays a proposal:
 
 | Row | Proposal |
 |---|---|
@@ -2065,18 +2206,22 @@ reports, tuned at the demo:
 | threat surcharge | ×4 step cost inside a known threat's range |
 | Defend's under-attack window | 10 000 ms |
 | picket radius | 6 voxels beyond the sphere edge (spec §19) |
+| terrain blast levels (`materials.blast_levels`) | dirt 1, ore 1, vent 1, stone 2, each from 1 to the catalogue's 3 (decision 10); a wall's two levels are the ruling's, not a row |
 | the collapse rows and the wall's minimum height | decisions 11 and 40 |
 | Hold & Build's repair threshold | 50 % (decision 38) |
 
 *Downside:* the numbers are as good as the duel report and Easy's play.
 
-**18. The alarm bands' wording.** **(Recommended)** "Rusher (Turtle, Hunter): an arm that is the
+**18. The alarm bands' wording.** **Ruled:** the recommended option, in the bulk answer (item 144
+(11)). **(Recommended)** "Rusher (Turtle, Hunter): an arm that is the
 sole winner — last seat standing, or the final audit's — in more than 13 of the 20 seeds (65 %)
 against Easy opens a tuning task. At S2 the band reads against Easy, which carries the Balanced
 weighting (item 144 (6)); it is re-baselined against Normal at S5." *Downside:* a shared win counts
 as no win, which favours not alarming.
 
-**19 to 28. The register's owner rows not decided above.**
+**19 to 28. The register's owner rows not decided above.** **Ruled:** each as recommended or as
+written, in the bulk answer (item 144 (11)); the owner vetoed none of the engineering calls named
+here.
 - **19. S2-03 and S2-04** are decision 12; **S2-01 and M-01** are `night`'s shape with decisions 18
   and 29 (Easy the one operator, item 144 (6)); **S2-07 and S2-09** are engineering calls E5 and
   E11, listed here for the owner's veto.
@@ -2084,22 +2229,24 @@ as no win, which favours not alarming.
 - **21. [play] The raider's target** (spec: "hits the nearest structure"). **(Recommended)** the
   nearest enemy structure or beacon by default; a raider guarding under Defend engages enemy units
   inside the engagement radius; under `RETURN_FIRE` it answers the unit that hit it. *Downside:*
-  Defend widens the raider's stated role.
-- **22. S1-34** becomes per-kind vision rows (decision 17's values).
+  Defend widens the raider's stated role. **Ruled** as recommended (bulk).
+- **22. S1-34** becomes per-kind vision rows (decision 17's values). **Ruled** as written (bulk).
 - **23. S1-37** stands at 40 / 300 / 120 world totals, now counting live assets (E1), re-derived by
   `g3r`; **S2-16**: the walkers and their 256 cap are removed from the scenario format and the sim
   by `tune2`, after G3′-real. G3′'s load comes from E30's layout seam and bench rules variant, never
   from the walkers, so nothing the gate measured depends on them. *Downside:* a scenario can no
-  longer add load by key; a load test drives a layout through the bench instead.
+  longer add load by key; a load test drives a layout through the bench instead. **Ruled** as
+  written (bulk).
 - **24.** Now **E27** (S2-06, `MAX_ROUTE_NODES`; engineering).
 - **25. [play] S2-08, the structure and wreck tables.** **(Recommended)** the wreck table's room
   equals the unit and structure rooms together, so every live asset can leave one; a wreck that
   finds it full replaces the oldest unsalvaged wreck, counted and announced (a proposed in-world
-  reason: the ash buries old wrecks). *Downside:* a rule, and wrecks that expire.
+  reason: the ash buries old wrecks). *Downside:* a rule, and wrecks that expire. **Ruled** as
+  recommended (bulk).
 - **26. [play] S2-10, a dropped paid target.** **(Recommended)** removing a paid target from the
   list recycles what stands for it, refunding 50 % of its remaining value, as recycling does (spec
   §7). *Downside:* an edit can lose money. *Alternative:* it stays, finished never. *Downside:* a
-  stranded asset.
+  stranded asset. **Ruled** as recommended (bulk).
 - **27.** Now **E28** (S2-12, `get_view`'s delta mode, decided by measurement; engineering).
 - **28. S2-13** is decisions 13 and 14.
 
@@ -2107,13 +2254,15 @@ as no win, which favours not alarming.
 once, the arm alternating seats by the seed's position; the arm wins a seed when it is the sole
 winner; `win_rate_percent` = wins × 100 / seeds, rounded down. *Downside:* the arm plays ten seeds
 from each seat, not every seed from both. *Alternative:* both sides per seed (40 matches an arm).
-*Downside:* "65 % of seeds" needs a new reading.
+*Downside:* "65 % of seeds" needs a new reading. **Ruled:** the recommended option, in the bulk
+answer (item 144 (11)).
 
 **35. [play] Easy's Defend guard on its commander: S2 or S5.** Spec §14: Easy "adds a Defend guard
 on its commander when the commander has died recently". The skeleton's notes sent "the commander's
 Defend guard" to S5 (`docs/design/skeleton-plan-w6-notes.md` ~418), and
 `crates/operator/src/lib.rs` (~61) carries "Easy's Survey post, Defend guard, chatter and target
-spread — owner, S5, with Normal and Hard".
+spread — owner, S5, with Normal and Hard". **Ruled:** the recommended option, put to the owner in
+the interview (item 144 (11)): the guard moves into S2's `oprd`, which builds it.
 - **(Recommended) Move the Defend guard into S2's `oprd`: Easy adds a Defend guard on its commander
   in the round after a Push in which its commander died** ("recently" read as the previous round's
   Push), `lib.rs`' marker re-dated for the three parts that stay S5's, and the main session's docs
@@ -2128,7 +2277,8 @@ spread — owner, S5, with Normal and Hard".
 **36. [risk] How S2 measures spec §19's kingmaking check.** Spec §19 checks "kingmaking and farming
 the weakest seat" in "the nightly adversarial scenarios (share of damage aimed at the trailing
 seat)"; the arms are two-seat (item 144 (6), decision 29), and with two seats there is no third seat
-to aim at the trailing one.
+to aim at the trailing one. **Ruled:** the recommended option, in the bulk answer, the owner
+accepting the risk (item 144 (11)); `tune2` builds the three-seat run.
 - **(Recommended) Keep the arms two-seat; `tune2`'s balance check adds a three-seat headless run
   (three Easy seats, the twenty seeds) and reports the share of damage aimed at the seat trailing in
   the Ledger's standing when it was dealt, from `fire`'s unhashed counter (E15); for S2, spec §19's
@@ -2142,7 +2292,8 @@ to aim at the trailing one.
 
 **37. [play] Collapse credit when several seats' edits cut one region.** Item 144 (2) gives the
 credit to "the seat whose edit detached the region"; the plan's first reading picked the seat of
-the region's lowest-index seed when more than one did.
+the region's lowest-index seed when more than one did. **Ruled:** the recommended option, put to
+the owner in the interview (item 144 (11)).
 - **(Recommended) Split the fall damage's credit equally among the distinct seats whose edits that
   tick removed a voxel next to the region (its seeds), as integers by largest remainder, ties to the
   lowest seat (spec §3's integer rule); the asset's own seat's share and a seat-less edit's credit
@@ -2155,7 +2306,8 @@ the region's lowest-index seed when more than one did.
 
 **38. [play] The repair threshold's reading.** `playbook.proto` says of `repair_threshold_pct`:
 "Repair a structure of yours inside this beacon's sphere once it falls below this percentage of its
-HP … 0 means never" (~1308–1310); the plan's first reading repaired regardless.
+HP … 0 means never" (~1308–1310); the plan's first reading repaired regardless. **Ruled:** the
+recommended option, in the bulk answer (item 144 (11)).
 - **(Recommended) Honour the field as written: a drone repairs an own structure once its HP falls
   below `repair_threshold_pct` of its maximum, and 0 means never; own units and the commander are
   always repaired below full (spec §4); Hold & Build and Easy write a threshold of 50 (a proposal,
@@ -2171,7 +2323,7 @@ HP … 0 means never" (~1308–1310); the plan's first reading repaired regardle
 standing on the ground stays joined to its neighbours and the ground, so a charge at its footing
 removes a ball and nothing above it falls; on a generated 2.5D map, whose columns are solid to
 bedrock, a collapse needs something spanning a gap an attacker opened, such as a wall section whose
-last footing is cut.
+last footing is cut. **Ruled:** the recommended option, in the bulk answer (item 144 (11)).
 - **(Recommended) No span or cantilever limit: keep the face-connected rule; the run sheet stages
   demo step 5's collapse on the golden seed (a wall section whose only footing the charge cuts), and
   `collapse-credits-the-blast` pins the same geometry headless; the plan and the run sheet say
@@ -2186,7 +2338,13 @@ last footing is cut.
 **40. [play] Walkability under destruction: the charge's cut and the wall's height.** A step is
 legal only when two tops differ by one voxel at most (`pathing/surface.rs` ~298, ~313). A radius-4
 ball leaves a rim step of two or more, a pit units cannot cross; a radius-2 mortar crater stays
-walkable; a one-voxel wall is climbable, and walkable on top.
+walkable; a one-voxel wall is climbable, and walkable on top. **Ruled:** the recommended option,
+put to the owner in the interview with decision 10 and joined there to per-material hardness, the
+owner's choice against decision 10's recommendation (item 144 (11)). The ruled form is decision
+10's: a wall voxel cracks, then breaks; the charge cuts flat down to the wall's footing and removes
+every voxel inside its cut whatever its level, stone included, so the gap stays walkable under
+hardness; mortar craters stay balls, stepping each voxel inside down a level; bedrock and the bore
+are never removed.
 - **(Recommended) A demolition charge cuts wall material and terrain inside its radius only down
   to the wall's footing, a flat-bottomed cut level with the ground on either side, so its gap is
   walkable; mortar craters stay balls; a wall box is at least two voxels high
@@ -2198,7 +2356,8 @@ walkable; a one-voxel wall is climbable, and walkable on top.
 
 **41. [play] What the autocannon and the mortar fire at, and when a wall is a target.** Wall voxels
 are not assets, so `FREE_FIRE` alone never aims at a wall, and the targeting rules of the two
-structures are unstated.
+structures are unstated. **Ruled:** the recommended option, put to the owner in the interview (item
+144 (11)).
 - **(Recommended) The autocannon: the nearest enemy unit in range, else the nearest enemy structure
   or beacon; the mortar: the enemy asset in range with the most enemy assets within its splash
   radius (a clump), ties nearest then lowest id, never a landing point whose splash holds an own
@@ -2211,7 +2370,9 @@ structures are unstated.
 
 **42. [play] Walls after the fight: repair, and whose walls remain.** Spec §6 lets repair drones
 "fix any structure of yours"; a wall voxel is not a structure, and nothing says whose a wall is once
-its beacon or its seat is gone.
+its beacon or its seat is gone. **Ruled:** the recommended option, in the bulk answer (item 144
+(11)); under decision 10's hardness it covers wall voxels only, and cracked terrain is nobody's to
+repair.
 - **(Recommended) A cracked own wall voxel inside a Build beacon's sphere is restored to whole by a
   repair drone at the wall's cost per voxel; a wall voxel counts as its seat's while it lies inside
   one of the seat's live spheres and as neutral otherwise (E14), so when a beacon dies the walls
@@ -2224,7 +2385,8 @@ its beacon or its seat is gone.
 
 **43. [play] What repair costs.** Spec §7 puts "repair" second in the Quartermaster's ladder
 ("defend under attack, then repair, units, build, mine"), so repair spends; the spec states no
-price, and the plan's first reading priced none.
+price, and the plan's first reading priced none. **Ruled:** the recommended option, put to the owner
+in the interview (item 144 (11)).
 - **(Recommended) Repair is paid pro rata: restoring hit points costs that share of the asset's
   build cost (HP restored × build cost ÷ maximum HP, an integer, rounded up per repair step), filed
   as a spend request under the Repair band, the drone waiting while it is unfilled; the commander,
@@ -2238,11 +2400,17 @@ price, and the plan's first reading priced none.
 
 ## 7. Owner decisions during the stage
 
+**All ruled on 2026-10-16 (item 144 (11)),** in the bulk answer, as recommended or, for 33 and 34,
+as written; the owner still acts on each when its moment comes (setting the variable, adding the
+check, the demo's questions, the fallback's word).
+
 **30. `NIGHTLY_SCENARIOS_ENABLED`.** A repository variable only the owner sets. **(Recommended)**
 set when `arms` has merged and its forced run on `tune2`'s numbers is attached. *Downside:*
-nightlies run on a stage-old Easy until S5.
+nightlies run on a stage-old Easy until S5. **Ruled:** the recommended option (bulk); the owner sets
+the variable then.
 
-**31. The G3′ alarm job as a required check.** **(Recommended)** the owner adds `g3 budget
+**31. The G3′ alarm job as a required check.** **Ruled:** the recommended option (bulk); the owner
+adds the check once it has passed five times. **(Recommended)** the owner adds `g3 budget
 (ubuntu-24.04)`, E18's loose regression alarm, to the ruleset's required checks after it has passed
 on `main` five times running. *Downside:* a regression that less than doubles the tick shows only in
 the owner's certification runs, not in CI, and a shared runner's very slow day can still redden
@@ -2251,9 +2419,12 @@ merges unless someone reads the job.
 
 **32. Taking a cut: a new authority, ruled with the bulk ruling.** Item 141 delegates merges,
 not scope, so taking a cut is not covered by the delegation; it is an authority the owner grants by
-ruling this decision. **(Recommended)** the owner grants the main session the authority to take
-section 4.5's next cut at its checkpoint, in the order written, and to record it in the decisions
-log the day it is taken; any cut beyond the third, or out of order, is put to the owner.
+ruling this decision. **Ruled:** the recommended option, in the bulk answer (item 144 (11)): the
+main session holds this authority, separate from item 141's merge delegation, over section 4.5's
+two cuts, Survey's refresh never among them. **(Recommended)** the owner grants the main session
+the authority to take section 4.5's next cut at its checkpoint, in the order written, and to record
+it in the decisions log the day it is taken; any cut beyond the second, or out of order, is put to
+the owner.
 *Downside:* a cut lands without a per-cut look. *Alternative:* each cut is put to the owner at its
 checkpoint. *Downside:* the lane whose work the cut removes waits on the answer, about a day of path
 each time.
@@ -2261,13 +2432,15 @@ each time.
 **33. At S2's stage demo:** whether the merge delegation runs on into S3, and whether it covers the
 radar lab's pull requests (items 140 (3) (a), 141 (1), (2)); the tuning of decision 17's numbers
 from `tune2`'s reports; each band acknowledged as Easy's (AGENTS.md §10 item 5); the three-seat
-kingmaking figure read (decision 36).
+kingmaking figure read (decision 36); and decision 10's blast levels tuned from the duel report.
+**Ruled:** stands as written (bulk); its questions are the owner's at the demo.
 
 **34. If G3′ misses:** section 5's fallback, lever by lever, with the owner's word: a lower map
 power budget for a per-tick miss, re-certified at the load that budget implies; shorter segments for
-a drift miss.
+a drift miss. **Ruled:** stands as written (bulk); the fallback is taken only on the owner's word.
 
-A lane that finds one of these wrong in the code raises it rather than building around it.
+A lane that finds one of these wrong in the code raises it with the owner rather than building
+around it.
 
 ---
 
@@ -2280,11 +2453,12 @@ a player times), reinforced wall, gate and shield, beacon capture, flowing water
 **Out because a later stage owns it.** **S3:** `report_kinds` and `get_reports` (decision 16); the
 own-beacon and enemy-knowledge condition blocks (`playbook.proto` 43–49, 60–69) and E0209;
 `list_known_enemies` and `query_area` (`INTERNAL` today); auto-fortify and unit mix (decision 13);
-the cut items taken (section 4.5); FULL and the size budget, P1's counted units (item 139 (5)); the
+the cut items taken (section 4.5: at most Attack's waves and the crater refill, never Survey's
+refresh); FULL and the size budget, P1's counted units (item 139 (5)); the
 editor findings of items 139 (2) and 143 (3), (4). **S4:** go-code launches, the Sensor Spire,
 licences and their blueprints, the symmetric map, the map re-derivation that re-sizes
-`MAX_ROUTE_NODES`. **S5:** Normal and Hard, target spread, Easy's Survey post and chatter (and its
-Defend guard if decision 35 keeps it there), three-seat arms (decision 36), the bands re-baselined.
+`MAX_ROUTE_NODES`. **S5:** Normal and Hard, target spread, Easy's Survey post and chatter (its
+Defend guard is S2's, decision 35), three-seat arms (decision 36), the bands re-baselined.
 **S6:** art and sound, HP bars beyond the plain ones `view` draws. **S7:** highlights and scrub.
 **After S2, beside S3:** the radar lab (items 140, 141 (2)). **Only on evidence:** the commander's
 armour, decoys and self-defence weapon, if Hunter's band shows hunting dominates (spec §4). **After
@@ -2303,7 +2477,7 @@ the rule that moved it, an invented rule where the spec is silent.
 
 | # | Risk | What closes it | Where | If it does not close |
 |---|---|---|---|---|
-| R1 | The sim's serial path (48.25 days) slips, `fire` above all | Split seams; checkpoints; section 4.5's cuts | `base`, `ids`, `fire`, `site`, `dfnd`, `atk` | Decision 1's second option, on the owner's word |
+| R1 | The sim's serial path (49.5 days) slips, `fire` above all, which per-material hardness grew | Split seams; checkpoints; section 4.5's two cuts (Survey's refresh never cut, item 144 (11)) | `base`, `ids`, `fire`, `site`, `dfnd`, `atk` | Past the two cuts, the owner's word: decision 1's second option or a further cut |
 | R2 | A new hashed field (generations, cooldowns, shells, explored cells, mandate state) is missed | §4.8's three places per PR; save/restore round-trips in each sim PR; lens A | every sim lane | The cross-OS guard and resume tests catch it as a bisect |
 | R3 | Repath bursts under craters break the p99 | The measured burst frequency; the cap re-derived | `g3h`, `g3r` | Section 5's fallback: a lower power budget |
 | R4 | The support search's worst case | `max_region_voxels` and `max_visits_per_tick` measured inside G3′, at an adversarial tick | `fall`, `g3h` | Lower bound rows, with their in-world reason (`g3r`) |
@@ -2317,7 +2491,8 @@ the rule that moved it, an invented rule where the spec is silent.
 | R12 | Friendly-fire avoidance leaves a mortar unable to fire near its own assets | The duel report's mortar lines | `tune2` | The owner re-rules avoidance at the demo |
 | R13 | Collapse is rare in ordinary play on a 2.5D map, so the row's feature is mostly unseen | Said plainly; the demo's beat staged; the scenario pins it (decision 39) | `fall`, `demo2` | A span limit, on the owner's word, or physics after v1 |
 | R14 | E7's whole-sim sweep (about 450 sites) grows `base` past its estimate | Its own commit set; the classification in the PR; the guard test | `base` | The sweep's last files carried by `ids` as a named commit, said in both PRs |
-| R15 | The bulk ruling comes late and holds `con3`, then `ids` | `con3`'s slack to day 3.5; the six lanes that need no decision run first | section 4.1 | The critical path moves day for day |
+| R15 | The bulk ruling comes late and holds `con3`, then `ids` | **Closed:** it fell on 2026-10-16, before wave 1 (item 144 (11)) | section 4.1 | — |
+| R17 | Per-material hardness (decision 10) makes craters in stone too shallow, or mortars too weak against dug-in ground | The duel report's dirt and stone lines at the proposed `blast_levels` | `tune2` | The owner re-tunes `blast_levels` at the demo, within the catalogue's 1 to 3 |
 | R16 | The certified figure differs between Windows and WSL2 Linux by more than the codegen's 10–20 % | Both measured, the slower deciding (spike G3′ step 7) | `g3r`, `demo2` | The budget is set by the slower, and the gap is recorded |
 
 ---
