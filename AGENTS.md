@@ -215,7 +215,9 @@ editor UI. Nothing else executes. Directories are under `crates/`; package names
    check will not come (`Editor::unchecked`), with the gateway's refusal of a check shown on that check's own line
    (`Check`); `SealLine`, a branch on the door, the verifier's `qualifies` and the filing; the rig's read of the
    gateway's `safe_playbook_filed` feed kind (`SAFE_PLAYBOOK_FILED_KIND`, held to the gateway's source by a test); the
-   text's file (`Editor::file`, `Editor::saved_to`), which Save and Save as... read; the door's gating of the Fix
+   text's file (`Editor::file`, `Editor::saved_to`), which `editor.gd`'s `text_file` reads and `open_save_as` offers
+   (the text's own file, or no name), as Save does; the filing (`Editor::safe_playbook_filed`, `Editor::filed`), the
+   gateway's words on the status line, the "This round" sentence dropped and the mark cleared at a new round; the door's gating of the Fix
    buttons' and the E0601 checkbox's enabled state; and `editor.gd`'s `map_open` (a branch on the bridge's phase
    string), `map_click` (the map's click routing) and `unchecked_text`. The client may compose a JSON Patch from a click; a verdict, a
    travel time, a legality answer, a Fix and the patched text (`patch_plan`'s answer) still come
