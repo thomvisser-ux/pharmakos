@@ -1063,25 +1063,35 @@ fn the_first_click_on_the_panel_reaches_its_handler() {
         "a map click is handled and releases the GUI focus (item 124 (5) (g))"
     );
     let unhandled = gd_code(&editor, "_unhandled_input");
-    for handler in ["_on_beacon_clicked(", "_on_ground_clicked("] {
-        let at = unhandled
-            .iter()
-            .position(|line| line.starts_with(handler))
-            .unwrap_or_else(|| panic!("_unhandled_input calls {handler}: {unhandled:?}"));
-        assert_eq!(
-            at.checked_sub(1)
-                .and_then(|before| unhandled.get(before))
-                .copied(),
-            Some("_take_map_click()"),
-            "the map click is taken before {handler}: {unhandled:?}"
-        );
-    }
     assert!(
         unhandled
             .first()
             .is_some_and(|line| line.contains("not visible")),
         "a hidden editor takes no map click: {unhandled:?}"
     );
+    assert_eq!(
+        unhandled.last().copied(),
+        Some("map_click(event.position, event.alt_pressed)"),
+        "a left press goes to the map surface's handler: {unhandled:?}"
+    );
+    let click = gd_code(&editor, "map_click");
+    for handler in [
+        "_on_beacon_clicked(",
+        "_on_vent_clicked(",
+        "_on_ground_clicked(",
+    ] {
+        let at = click
+            .iter()
+            .position(|line| line.starts_with(handler))
+            .unwrap_or_else(|| panic!("map_click calls {handler}: {click:?}"));
+        assert_eq!(
+            at.checked_sub(1)
+                .and_then(|before| click.get(before))
+                .copied(),
+            Some("_take_map_click()"),
+            "the map click is taken before {handler}: {click:?}"
+        );
+    }
 
     let lobby = read("scripts/lobby.gd");
     for container in ["column", "_chooser", "buttons"] {
@@ -1248,7 +1258,7 @@ fn a_vent_click_offers_a_beacon_covering_it_and_alt_click_the_nearest_you_can_co
         menu.get(cover.saturating_add(1)).copied(),
         Some("act(\"place_covering\", target)")
     );
-    let unhandled = gd_code(&editor, "_unhandled_input");
+    let unhandled = gd_code(&editor, "map_click");
     let beacon = unhandled
         .iter()
         .position(|line| line.contains("_beacon_under("))
@@ -1296,4 +1306,200 @@ fn the_meter_labels_the_next_bmi_as_the_band_held_now_ignoring_committed_spend()
             .any(|line| line.contains("if meter.get(\"has_bmi_next_dollars\", false):")),
         "a BMI the answer left out is not drawn as 0: {meter:?}"
     );
+}
+
+/// A string-table row of `strings.gd`, by its key.
+fn string_row(strings: &str, key: &str) -> String {
+    strings
+        .lines()
+        .find(|line| line.trim_start().starts_with(&format!("\"{key}\":")))
+        .unwrap_or_else(|| panic!("strings.gd has no `{key}`"))
+        .to_owned()
+}
+
+/// **A, round 1's "This round" sentence** (S1's stage demo; decisions-log item 139 (2)).
+/// `editor.rs`'s `round_ones_sentence_comes_with_its_first_accepted_submit` pins that the
+/// bridge's editor has the sentence after round 1's first accepted Submit; this pins that the
+/// panel draws whatever sentence the bridge holds, and hides the heading only when there is
+/// none.
+#[test]
+fn the_panel_draws_the_this_round_sentence_the_bridge_holds() {
+    let editor = read("scripts/editor.gd");
+    let state = gd_code(&editor, "_draw_state");
+    assert!(
+        state.contains(&"_draw_this_round(String(state.get(\"this_round\", \"\")))"),
+        "every redraw draws the bridge's sentence: {state:?}"
+    );
+    let draw = gd_code(&editor, "_draw_this_round");
+    assert!(
+        draw.contains(&"_this_round.text = sentence")
+            && draw.contains(&"_this_round_box.visible = sentence != \"\""),
+        "{draw:?}"
+    );
+}
+
+/// **G, Save as offers the text's own file** (S1's stage demo): Load hands the bridge the
+/// path it read, Save hands it the path it wrote, and Save and Save as read the text's file
+/// back from the bridge's editor, which forgets it for a template's playbook and a carried
+/// draft (`editor.rs`'s `the_texts_file_is_the_one_it_was_opened_from_or_saved_to_and_no_other`).
+/// With no file, Save as offers no name; saving over a file that exists asks first, through
+/// the save dialog's own confirmation. The watch check's `_save_as_offers` reads the dialog.
+#[test]
+fn save_as_offers_the_texts_own_file_and_no_other() {
+    let editor = read("scripts/editor.gd");
+    assert!(
+        !editor.contains("var file_path"),
+        "the editor keeps no file of its own beside the bridge's"
+    );
+    assert!(gd_code(&editor, "load_file").contains(&"return bridge.editor_load_file(bytes, path)"));
+    assert!(gd_code(&editor, "save_file").contains(&"bridge.editor_saved_to(path)"));
+    assert_eq!(
+        gd_code(&editor, "text_file"),
+        ["return String(bridge.editor_state().get(\"file\", \"\"))"]
+    );
+    let offer = gd_code(&editor, "open_save_as");
+    assert_eq!(
+        offer,
+        [
+            "var file := text_file()",
+            "if file == \"\":",
+            "_save_dialog.current_file = \"\"",
+            "else:",
+            "_save_dialog.current_path = file",
+            "_save_dialog.popup_centered_ratio(0.6)"
+        ],
+        "Save as offers the text's file, or no name"
+    );
+    let save = gd_code(&editor, "_save");
+    assert!(
+        save.contains(&"var file := text_file()") && save.contains(&"open_save_as()"),
+        "Save writes the text's file, or asks: {save:?}"
+    );
+    assert!(editor.contains("_button(buttons, \"save_as\", open_save_as)"));
+    assert!(
+        editor.contains("_save_dialog = _file_dialog(FileDialog.FILE_MODE_SAVE_FILE)"),
+        "the save dialog is a save-file dialog, whose own confirmation asks before an overwrite"
+    );
+    let check = read("scripts/watch_check.gd");
+    assert!(
+        check.contains("await _save_as_offers(\"\", \"%s: the template's playbook\" % id)")
+            && check.contains("await _save_as_offers(\"\", \"%s: the carried draft\" % where)")
+            && check.contains(
+                "await _save_as_offers(COMMITTED.get_file(), \"the opened committed playbook\")"
+            ),
+        "the watch check reads the dialog after a load, a template and a carried draft"
+    );
+}
+
+/// **J, after a timeout** (S1's stage demo): the verdict line's words about sealing are the
+/// bridge's `seal`, which says "Ready to seal" only in an open Lull and, outside one, that
+/// the safe playbook was filed (`editor.rs`'s `ready_to_seal_is_said_only_in_an_open_lull`;
+/// `rig.rs`'s `a_safe_playbook_filed_line_in_the_feed_reaches_the_editor`). The panel never
+/// decides it from `qualifies` itself.
+#[test]
+fn the_verdict_line_says_ready_to_seal_only_by_the_bridges_word() {
+    let editor = read("scripts/editor.gd");
+    let state = gd_code(&editor, "_draw_state");
+    assert!(
+        !state.iter().any(|line| line.contains("qualifies")),
+        "the panel decides nothing about sealing from `qualifies`: {state:?}"
+    );
+    assert!(
+        state
+            .iter()
+            .any(|line| line.contains("Strings.text(\"seal_\" + String(state[\"seal\"]))")),
+        "{state:?}"
+    );
+    let strings = read("scripts/strings.gd");
+    for name in ["ready", "not_ready", "filed"] {
+        string_row(&strings, &format!("seal_{name}"));
+    }
+    assert!(string_row(&strings, "seal_filed").contains("Not sealed"));
+    assert!(string_row(&strings, "status_safe_filed").contains("{detail}"));
+    for gone in ["qualifies_yes", "qualifies_no"] {
+        assert!(
+            !strings.contains(&format!("\"{gone}\"")),
+            "`{gone}` is gone"
+        );
+    }
+}
+
+/// **K, a shut door** (S1's stage demo): the map offers its menus only in a Lull, by the
+/// bridge's phase string, while the bridge's editor can send what they ask for; the words
+/// that wait for a check give way to why it will not come; and every door the bridge can
+/// name has its sentences (`rig.rs`'s `after_the_match_ends_no_ask_waits_and_no_ghost_hangs`
+/// and `a_check_refused_as_the_lull_ends_says_so_and_nothing_waits`; the watch check's
+/// `_shut_in_the_push`).
+#[test]
+fn the_map_is_shut_outside_an_open_lull_and_nothing_waits_on_a_shut_door() {
+    use pharmakos_client_gdext::editor::Door;
+
+    let editor = read("scripts/editor.gd");
+    assert_eq!(
+        gd_code(&editor, "map_open"),
+        [
+            "return String(bridge.watch_state().get(\"phase\", \"\")) == \"lull\" and _door() == \"open\""
+        ]
+    );
+    let unhandled = gd_code(&editor, "map_click");
+    let gate = unhandled
+        .iter()
+        .position(|line| *line == "if not map_open():")
+        .expect("the map click asks whether the map is open");
+    let pick = unhandled
+        .iter()
+        .position(|line| line.contains("_beacon_under("))
+        .expect("beacons are picked");
+    assert!(
+        gate < pick,
+        "nothing is picked on a shut map: {unhandled:?}"
+    );
+    assert_eq!(
+        unhandled.get(gate + 4).copied(),
+        Some("return false"),
+        "a shut map offers no menu: {unhandled:?}"
+    );
+    for (draw, waiting) in [
+        ("_draw_chips", "chips_waiting"),
+        ("_draw_rules", "rules_waiting"),
+        ("_draw_route", "route_waiting"),
+    ] {
+        let code = gd_code(&editor, draw);
+        assert!(
+            code.iter().any(|line| line.contains(&format!(
+                "unchecked if unchecked != \"\" else Strings.text(\"{waiting}\")"
+            ))),
+            "{draw} says why a check will not come: {code:?}"
+        );
+    }
+    let strings = read("scripts/strings.gd");
+    string_row(&strings, "unchecked_refused");
+    for door in [Door::Ready, Door::Push, Door::Recap, Door::Ended] {
+        string_row(&strings, &format!("unchecked_{}", door.name()));
+        string_row(&strings, &format!("status_closed_{}", door.name()));
+    }
+    let check = read("scripts/watch_check.gd");
+    let run = gd_code(&check, "_run");
+    let push = run
+        .iter()
+        .position(|line| line.contains("Ready ended the Lull; Push begun at 4x"))
+        .expect("the Push begins");
+    assert!(
+        run.get(push + 1)
+            .is_some_and(|line| line.contains("await _shut_in_the_push()")),
+        "the shut map is checked as the Push begins: {run:?}"
+    );
+    assert!(
+        run.iter()
+            .any(|line| line.contains("await _map_click_opens_a_menu()")),
+        "with its positive control in round 1's Lull: {run:?}"
+    );
+    for check_click in ["_map_click_opens_a_menu", "_shut_in_the_push"] {
+        assert!(
+            gd_code(&check, check_click)
+                .iter()
+                .any(|line| line.contains("editor.map_click(at, false)")),
+            "{check_click} clicks through the map surface's own handler"
+        );
+    }
 }

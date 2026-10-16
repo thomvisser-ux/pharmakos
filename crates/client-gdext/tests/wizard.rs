@@ -376,8 +376,35 @@ fn client_sources() -> Vec<PathBuf> {
     files
 }
 
+/// Whether `code` names `needle` whole: an occurrence with no identifier character just
+/// before or just after it. A template id inside a longer identifier is another name: the
+/// gateway's feed kind `safe_playbook_filed`, which the rig reads (S1's stage demo, finding
+/// J), is not the template `safe_playbook`.
+fn names(code: &str, needle: &str) -> bool {
+    let identifier = |character: Option<char>| {
+        character.is_some_and(|character| character.is_ascii_alphanumeric() || character == '_')
+    };
+    code.match_indices(needle).any(|(at, _)| {
+        let before = code.get(..at).and_then(|head| head.chars().next_back());
+        let after = code
+            .get(at.saturating_add(needle.len())..)
+            .and_then(|tail| tail.chars().next());
+        !identifier(before) && !identifier(after)
+    })
+}
+
 #[test]
 fn the_client_names_no_template() {
+    // The scan is not vacuous: a whole name is found, a longer identifier is not.
+    assert!(names("open(\"safe_playbook\")", "safe_playbook"));
+    assert!(names(
+        "/declarative/route/1/hold_ms",
+        "/declarative/route/1"
+    ));
+    assert!(!names(
+        "SAFE_KIND = \"safe_playbook_filed\"",
+        "safe_playbook"
+    ));
     // Every template id, declared pointer and label in library/, read from the files.
     let library = root().join("library");
     let mut needles: Vec<String> = Vec::new();
@@ -424,7 +451,7 @@ fn the_client_names_no_template() {
             text
         };
         for needle in &needles {
-            if code.contains(needle.as_str()) {
+            if names(&code, needle) {
                 found.push(format!("{} names `{needle}`", path.display()));
             }
         }

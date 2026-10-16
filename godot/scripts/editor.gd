@@ -32,7 +32,8 @@
 #     prices every leg over the whole generated map and the view agrees
 #     (skeleton-plan-t16a-notes.md section B, "T19" (2)).
 #
-# Files: Load and Save read and write the player's own JSONC file, byte for byte. The only
+# Files: Load and Save read and write the player's own JSONC file, byte for byte; Save writes
+# the file the text on screen came from (finding G, below). The only
 # files the client writes at all are that JSONC file, the lobby's one remembered config
 # line (`user://`, no token; scripts/lobby.gd) and the headless watch check's own `user://`
 # files. A file is opened only after QUICK has seen it; an out-of-vocabulary construct is
@@ -74,6 +75,22 @@
 #   * Submit and Fix say at once that they were taken ("Submitting...", "Fixing..."), from
 #     the bridge's status line, so a click whose answer is still on its way is not taken
 #     for a click that was lost.
+# S1'S STAGE DEMO (decisions-log item 139 (2); S1's plan, task `fixd`):
+#   * G, THE TEXT'S OWN FILE: Save writes, and Save as... offers, the file the text on
+#     screen was opened from or last saved to, which the bridge's editor keeps (`text_file`);
+#     after a template's playbook or a carried draft there is none, so Save opens Save as...
+#     with no name and one Enter cannot overwrite another round's file. Saving over a file
+#     that exists asks first: the save dialog's own confirmation.
+#   * J, AFTER A TIMEOUT: when the gateway files this seat's safe playbook (its
+#     `safe_playbook_filed` line in the seat's own feed), the status line says so with the
+#     gateway's words and that the orders on screen were not sealed; "Ready to seal" is the
+#     bridge's `seal`, said only in an open Lull. The filed playbook is not shown: no read
+#     the seat's token holds returns it once the Push has begun.
+#   * K, A SHUT DOOR: the map offers its menus only in a Lull while the bridge's editor can
+#     send what they ask for (`map_open`); outside one a click says why. An ask the bridge
+#     will not send is refused at once, and a check that will not come - refused by the
+#     gateway, PHASE_CLOSED included, or shut out - says why in place of "Checking...".
+#
 # Every button on the panel takes no keyboard focus. Run the game with `-- --log-input` and
 # the editor prints every press (button_down) and every handled click (pressed) on Submit,
 # Fix and Save, and the lobby every mouse button it sees in `_input`: the logging the owner
@@ -131,8 +148,6 @@ const COUNTED := ["submit", "fix", "save"]
 var bridge: Node = null
 var vista: Node3D = null
 
-## The file the player opened or last saved, if any.
-var file_path := ""
 ## Whether `--log-input` was given: every press and handled click on Submit, Fix and Save
 ## is printed, and the lobby prints the mouse buttons it sees.
 var log_input := false
@@ -201,22 +216,23 @@ func begin(seat: String) -> void:
 
 
 ## Opens the file at `path`: its bytes go to QUICK first, and the editor takes it only if
-## the verifier found nothing out of vocabulary.
+## the verifier found nothing out of vocabulary. Once it is taken, `path` is the text's
+## file (`text_file`).
 func load_file(path: String) -> bool:
 	var bytes := FileAccess.get_file_as_bytes(path)
 	if bytes.is_empty() and FileAccess.get_open_error() != OK:
 		_say_local("status_open_failed", {"path": path})
 		return false
-	file_path = path
-	return load_bytes(bytes)
+	return bridge.editor_load_file(bytes, path)
 
 
-## Opens a playbook from its bytes.
+## Opens a playbook from its bytes, which came from no file of the player's.
 func load_bytes(bytes: PackedByteArray) -> bool:
 	return bridge.editor_load(bytes)
 
 
-## Writes the playbook on screen to `path`, byte for byte.
+## Writes the playbook on screen to `path`, byte for byte; from then on `path` is the text's
+## file.
 func save_file(path: String) -> bool:
 	var bytes: PackedByteArray = bridge.editor_bytes()
 	var file := FileAccess.open(path, FileAccess.WRITE)
@@ -225,9 +241,29 @@ func save_file(path: String) -> bool:
 		return false
 	file.store_buffer(bytes)
 	file.close()
-	file_path = path
+	bridge.editor_saved_to(path)
 	_say_local("status_saved_file", {"path": path})
 	return true
+
+
+## The file the text on screen was opened from or last saved to, as the bridge's editor
+## keeps it, or "" when the text came from a template, a carried draft or no file (S1's
+## stage demo, finding G).
+func text_file() -> String:
+	return String(bridge.editor_state().get("file", ""))
+
+
+## Opens Save as..., offering the text's own file and no other (finding G): after a
+## template's playbook or a carried draft it offers no name, so one Enter cannot overwrite
+## another round's file. Saving over a file that exists asks first: the dialog's own
+## overwrite confirmation (FILE_MODE_SAVE_FILE).
+func open_save_as() -> void:
+	var file := text_file()
+	if file == "":
+		_save_dialog.current_file = ""
+	else:
+		_save_dialog.current_path = file
+	_save_dialog.popup_centered_ratio(0.6)
 
 
 ## A map action on a target: `go`, `visit_low`, `visit_normal`, `visit_high`, `recycle` or
@@ -391,21 +427,50 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if not event.pressed or event.button_index != MOUSE_BUTTON_LEFT:
 		return
+	map_click(event.position, event.alt_pressed)
+
+
+## A left-click on the map at `at` (screen pixels), Alt held or not: the map surface's menus
+## for the beacon, the vent or the ground under it. Returns whether the map took the click.
+## `_unhandled_input` calls it for every left press, and the watch check calls it where a
+## headless window, all editor panel, would not route an injected click to the map.
+func map_click(at: Vector2, alt: bool) -> bool:
+	if not map_open():
+		# No menu outside an open Lull (finding K): say why, and leave the click alone.
+		var door := _door()
+		if door != "open":
+			_say_local("status_closed_" + door, {})
+		return false
 	var camera: Camera3D = vista.rig.camera
-	var beacon := _beacon_under(camera, event.position)
+	var beacon := _beacon_under(camera, at)
 	if not beacon.is_empty():
 		_take_map_click()
-		_on_beacon_clicked(beacon, event.alt_pressed, event.position)
-		return
-	var vent := _vent_under(camera, event.position)
+		_on_beacon_clicked(beacon, alt, at)
+		return true
+	var vent := _vent_under(camera, at)
 	if not vent.is_empty():
 		_take_map_click()
-		_on_vent_clicked(vent, event.alt_pressed, event.position)
-		return
-	var picked: Dictionary = bridge.view_pick(camera.project_ray_origin(event.position), camera.project_ray_normal(event.position))
+		_on_vent_clicked(vent, alt, at)
+		return true
+	var picked: Dictionary = bridge.view_pick(camera.project_ray_origin(at), camera.project_ray_normal(at))
 	if picked.get("hit", false):
 		_take_map_click()
-		_on_ground_clicked(picked["at"], event.position)
+		_on_ground_clicked(picked["at"], at)
+		return true
+	return false
+
+
+## Whether the map offers its menus: only in a Lull, by the bridge's phase string, and only
+## while the bridge's editor can send what a menu asks for - not once this seat is ready
+## (S1's stage demo, finding K: after the match ended, a click still offered "Place beacon"
+## and the panel then waited on "Checking..." for a call the rig would never send).
+func map_open() -> bool:
+	return String(bridge.watch_state().get("phase", "")) == "lull" and _door() == "open"
+
+
+## The bridge's planning door: `open`, `ready`, `push`, `recap` or `ended`.
+func _door() -> String:
+	return String(bridge.editor_state().get("door", "open"))
 
 
 ## The map surface took a left-click: it is handled here, so the camera rig never sees it,
@@ -539,25 +604,41 @@ func _draw_state(state: Dictionary) -> void:
 	_status.text = Strings.text("status_" + String(state.get("status_key", "")), {"detail": state.get("status_detail", "")})
 	var verdict := String(state.get("verdict", "none"))
 	var line := Strings.text("verdict_" + verdict)
+	# A check that will not come says why, in place of the words that wait for it.
+	var unchecked := unchecked_text(state)
 	if state.get("busy", false) or (state.get("has_text", false) and not state.get("rows_current", false) and verdict != "refused"):
-		line = Strings.text("verdict_checking")
-	elif verdict != "none" and verdict != "refused":
-		line += " - " + Strings.text("qualifies_yes" if state.get("qualifies", false) else "qualifies_no")
+		line = unchecked if unchecked != "" and not state.get("busy", false) else Strings.text("verdict_checking")
+	elif String(state.get("seal", "")) != "":
+		# Whether the text can be sealed is the bridge's `seal`: said only in an open Lull,
+		# and outside one only that the gateway filed the safe playbook (finding J).
+		line += " - " + Strings.text("seal_" + String(state["seal"]))
 	_verdict.text = line
-	Rows.fill(_rows, state.get("rows", []), Callable(self, "_on_fix_pressed"), state.get("rows_current", false) and not state.get("busy", false), Callable(self, "_on_fix_down"))
+	var open: bool = String(state.get("door", "open")) == "open"
+	Rows.fill(_rows, state.get("rows", []), Callable(self, "_on_fix_pressed"), state.get("rows_current", false) and not state.get("busy", false) and open, Callable(self, "_on_fix_down"))
 	_undo_button.disabled = int(state.get("undo_depth", 0)) == 0
 	if state.get("beacon_prose", "") != "":
 		_beacon_label.text = String(state["beacon_prose"])
 	_draw_notes(state)
 	_draw_drafts(state.get("drafts", []))
-	_draw_route(state.get("route", {}), state.get("has_text", false))
+	_draw_route(state.get("route", {}), state.get("has_text", false), unchecked)
 	_draw_ghost(state.get("ghost", {}))
 	_draw_templates(state.get("templates", []))
 	_draw_wizard(state.get("wizard", {}), state.get("templates", []))
-	_draw_rules(state.get("prose", PackedStringArray()), state.get("prose_current", false), state.get("has_text", false))
+	_draw_rules(state.get("prose", PackedStringArray()), state.get("prose_current", false), state.get("has_text", false), unchecked)
 	_draw_this_round(String(state.get("this_round", "")))
-	_draw_chips(state.get("chips", []), state.get("chips_current", false), state.get("has_text", false))
+	_draw_chips(state.get("chips", []), state.get("chips_current", false), state.get("has_text", false), unchecked)
 	_draw_dormant(state.get("dormant", {}))
+
+
+## Why the checks of the text on screen will not come, as the bridge's editor says
+## (`unchecked_key`: `refused`, with the gateway's words, or the shut door's name), or "" when
+## they are on their way (finding K). Shown in place of "Checking...", "Estimating...",
+## "Rendering..." and "Reading the map...", only where a check is not current.
+static func unchecked_text(state: Dictionary) -> String:
+	var key := String(state.get("unchecked_key", ""))
+	if key == "":
+		return ""
+	return Strings.text("unchecked_" + key, {"detail": state.get("unchecked_detail", "")})
 
 
 ## The meter: the gateway's four numbers put into strings.gd's frame as they came. Redrawn
@@ -594,13 +675,13 @@ func _draw_this_round(sentence: String) -> void:
 
 ## One line per chip, each put together from the gateway's answer through strings.gd's
 ## frames. Redrawn only when the chips changed.
-func _draw_chips(chips: Array, current: bool, has_text: bool) -> void:
-	var drawn := var_to_str([chips, current, has_text])
+func _draw_chips(chips: Array, current: bool, has_text: bool, unchecked: String) -> void:
+	var drawn := var_to_str([chips, current, has_text, unchecked])
 	if drawn == _chips_drawn:
 		return
 	_chips_drawn = drawn
 	if has_text and not current:
-		_chips.text = Strings.text("chips_waiting")
+		_chips.text = unchecked if unchecked != "" else Strings.text("chips_waiting")
 	elif chips.is_empty():
 		_chips.text = Strings.text("chips_none") if has_text else ""
 	else:
@@ -677,8 +758,11 @@ func _draw_wizard(wizard: Dictionary, templates: Array) -> void:
 	Wizard.fill(_wizard_box, title, wizard, Callable(self, "wizard_send"), func() -> void: bridge.editor_wizard_use(), func() -> void: bridge.editor_wizard_close())
 
 
-func _draw_rules(lines: PackedStringArray, current: bool, has_text: bool) -> void:
-	_rules_status.text = Strings.text("rules_waiting") if has_text and not current else ""
+func _draw_rules(lines: PackedStringArray, current: bool, has_text: bool, unchecked: String) -> void:
+	if has_text and not current:
+		_rules_status.text = unchecked if unchecked != "" else Strings.text("rules_waiting")
+	else:
+		_rules_status.text = ""
 	var drawn := var_to_str(lines)
 	if drawn == _rules_drawn:
 		return
@@ -705,7 +789,7 @@ func _draw_drafts(drafts: Array) -> void:
 	_drafts.text = "\n".join(lines)
 
 
-func _draw_route(route: Dictionary, has_text: bool) -> void:
+func _draw_route(route: Dictionary, has_text: bool, unchecked: String) -> void:
 	for child in _route_labels.get_children():
 		child.queue_free()
 	var mesh: ImmediateMesh = _route_mesh.mesh
@@ -714,7 +798,7 @@ func _draw_route(route: Dictionary, has_text: bool) -> void:
 		_route_label.text = ""
 		return
 	if not route.get("current", false):
-		_route_label.text = Strings.text("route_waiting")
+		_route_label.text = unchecked if unchecked != "" else Strings.text("route_waiting")
 	elif String(route.get("found_nothing", "")) != "":
 		_route_label.text = Strings.text("route_found_nothing", {"why": route.get("found_nothing", "")})
 	elif not route.get("reachable", true):
@@ -789,7 +873,7 @@ func _build_panel() -> void:
 	column.add_child(buttons)
 	_button(buttons, "load", func() -> void: _load_dialog.popup_centered_ratio(0.6))
 	_count(_button(buttons, "save", _save), "save")
-	_button(buttons, "save_as", func() -> void: _save_dialog.popup_centered_ratio(0.6))
+	_button(buttons, "save_as", open_save_as)
 	_undo_button = _button(buttons, "undo", func() -> void: bridge.editor_undo())
 	_count(_button(buttons, "submit", _on_submit_pressed), "submit")
 	_status = _label(column)
@@ -900,14 +984,16 @@ func _build_map_nodes() -> void:
 	vista.add_child(_ghost)
 
 
-## Save: to the file the player opened or last saved, or, with no file yet, through the
-## Save as... dialog.
+## Save: to the file the text on screen was opened from or last saved to, or, when it came
+## from no file (a template, a carried draft), through the Save as... dialog (finding G: Save
+## used to write the last file saved, whatever the text on screen was).
 func _save() -> void:
 	_counted("save")
-	if file_path == "":
-		_save_dialog.popup_centered_ratio(0.6)
+	var file := text_file()
+	if file == "":
+		open_save_as()
 	else:
-		save_file(file_path)
+		save_file(file)
 
 
 func _on_submit_pressed() -> void:

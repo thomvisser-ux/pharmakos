@@ -85,6 +85,15 @@
 //! PLACEHOLDER: the meter's refresh cadence and layout — OWNER, S6, with the real lobby.
 //! Once a Lull and once per advance in a Push are the skeleton's; Tuning.
 //!
+//! # The editor's door
+//!
+//! The rig sends the editor's planning calls only in a Lull, and none once this seat is
+//! ready. It tells the editor so ([`Rig::door`], [`crate::editor::Door`]) every time the
+//! admin footer moves the phase and every time Ready goes out or is refused, so the editor
+//! never waits for a call the rig will not send (S1's stage demo, finding K). It also hands
+//! the editor the `safe_playbook_filed` line of the seat's own feed, so the panel can say the
+//! orders on screen were not sealed (finding J).
+//!
 //! # A first phase of Push
 //!
 //! A match resumed from a `sealed` save starts in its Push with no Lull (decisions-log item
@@ -96,7 +105,7 @@ use pharmakos_proto::gp::api::v1::{
 };
 use pharmakos_proto::json::{self, Json};
 
-use crate::editor::Editor;
+use crate::editor::{Door, Editor, SAFE_PLAYBOOK_FILED_KIND};
 use crate::enums;
 use crate::error::BridgeError;
 use crate::pacer::{CLOCK_REPORT_US, ClockPhase, KEEPALIVE_US, Timing, clock_text};
@@ -581,6 +590,7 @@ impl Rig {
         }
         if self.wants.ready && self.phase == Phase::Lull && !self.editor.has_pending_jobs() {
             self.ready_sent = true;
+            self.sync_door();
             return Some((
                 Purpose::Ready,
                 "set_ready",
@@ -767,6 +777,15 @@ impl Rig {
                     &body,
                 ))?;
                 answer.events = event_rows(&feed);
+                // The gateway filed this seat's safe playbook: a line in the seat's own feed
+                // (finding J). The editor says so, and that its text was not sealed.
+                if let Some(filed) = feed
+                    .events
+                    .iter()
+                    .find(|event| event.kind == SAFE_PLAYBOOK_FILED_KIND)
+                {
+                    self.editor.safe_playbook_filed(&filed.text);
+                }
                 if !feed.next_cursor.is_empty() {
                     self.feed_cursor = feed.next_cursor;
                 }
@@ -905,6 +924,7 @@ impl Rig {
             Purpose::Ready => {
                 self.wants.ready = false;
                 self.ready_sent = false;
+                self.sync_door();
             }
             Purpose::Plan | Purpose::Status | Purpose::Meter | Purpose::Recap => {}
         }
@@ -934,6 +954,10 @@ impl Rig {
             return Ok(false);
         }
         self.phase = phase;
+        if phase == Phase::Lull {
+            self.ready_sent = false;
+        }
+        self.sync_door();
         // The new phase's clock starts from zero at the gateway, so its first report moves
         // no tick; the change itself moved none either, so nothing is refilled.
         self.clock_reports = ClockReports::Unsent;
@@ -951,7 +975,6 @@ impl Rig {
                 self.timing.clock.enter(ClockPhase::Silent);
             }
             Phase::Lull => {
-                self.ready_sent = false;
                 self.reads.meter = true;
                 self.editor.lull_opened(footer.round);
                 self.timing.pacer.stop();
@@ -1006,6 +1029,26 @@ impl Rig {
                     footer.phase_remaining_ms
                 ))
             })
+    }
+
+    /// Whether the editor's planning calls can go out, from the phase the admin connection
+    /// last heard and this seat's Ready: the door the rig's own gate in `seat_next` keeps,
+    /// told to the editor so nothing waits behind it (finding K). Before any phase is known
+    /// the door is open, and the editor's calls wait for the Lull.
+    #[must_use]
+    pub const fn door(&self) -> Door {
+        match self.phase {
+            Phase::Lull if self.ready_sent => Door::Ready,
+            Phase::Unknown | Phase::Lobby | Phase::Lull => Door::Open,
+            Phase::Push => Door::Push,
+            Phase::Recap => Door::Recap,
+            Phase::Ended => Door::Ended,
+        }
+    }
+
+    fn sync_door(&mut self) {
+        let door = self.door();
+        self.editor.set_door(door);
     }
 
     /// Chooses a speed; refused when it is not one of [`crate::pacer::SPEEDS`].
@@ -1665,11 +1708,15 @@ mod tests {
         assert_eq!(method_of(next), "set_ready");
         rig.receive(SEAT, &answer(id_of(next), "{}", "lull"))
             .expect("reads");
-        // Ready means the orders are final: the editor sends nothing more this Lull.
-        assert!(rig.editor_mut().act(
+        // Ready means the orders are final: the editor sends nothing more this Lull, and an
+        // ask is refused at once rather than queued behind a door that stays shut (finding K).
+        assert_eq!(rig.editor().door(), Door::Ready);
+        assert!(!rig.editor_mut().act(
             crate::editor::Action::Go,
             &crate::editor::Target::Beacon("b_00".to_owned())
         ));
+        assert_eq!(rig.editor().status().key, "closed_ready");
+        assert!(!rig.editor().has_pending_jobs());
         assert!(
             !rig.poll(5)
                 .iter()
@@ -1678,23 +1725,208 @@ mod tests {
         );
     }
 
+    /// Planning is the Lull's: in a Push an ask is refused at once with the reason, and an
+    /// edit queued as the Lull ended is dropped and said to be, rather than waiting for a
+    /// Lull (finding K; before, a submission made in a Push waited for the next Lull and
+    /// said "Submitting..." until then, or for ever in the last round).
     #[test]
-    fn planning_calls_wait_for_a_lull() {
+    fn planning_asks_are_refused_at_once_outside_a_lull() {
         let mut rig = editing();
+        assert!(rig.editor_mut().act(
+            crate::editor::Action::Go,
+            &crate::editor::Target::Beacon("b_00".to_owned())
+        ));
         rig.end_lull();
         let sent = rig.poll(3);
         let end = sent
             .iter()
             .find(|frame| frame.link == ADMIN)
             .expect("end_lull");
+        assert!(
+            !sent.iter().any(|frame| frame.link == SEAT),
+            "the edit is held while the Lull ends: {sent:?}"
+        );
         rig.receive(ADMIN, &answer(id_of(end), "{}", "push"))
             .expect("reads");
         assert_eq!(rig.phase(), Phase::Push);
-        assert!(rig.editor_mut().submit());
-        settle(&mut rig, 4);
+        assert_eq!(rig.editor().door(), Door::Push);
         assert!(
-            rig.editor().has_pending_jobs(),
-            "planning is closed in a Push; the submission waits for the next Lull"
+            !rig.editor().has_pending_jobs(),
+            "the edit the Push shut out is dropped, not kept for a Lull"
+        );
+        assert_eq!(rig.editor().status().key, "closed_push");
+        assert!(
+            !rig.editor_mut().submit(),
+            "a submission in a Push is refused"
+        );
+        assert_eq!(rig.editor().status().key, "closed_push");
+        settle(&mut rig, 4);
+        assert!(!rig.editor().has_pending_jobs());
+        assert_eq!(rig.editor().refusals(), 0, "nothing was sent to be refused");
+    }
+
+    /// A refusal answer to the call in flight on the seat connection, with `code`.
+    fn refusal(id: i64, code: &str, message: &str) -> String {
+        format!(
+            r#"{{"jsonrpc":"2.0","id":{id},"error":{{"code":-32000,"message":"{message}","data":{{"code":"{code}"}}}}}}"#
+        )
+    }
+
+    /// A check sent in the Lull's last moment comes back `PHASE_CLOSED` once the Push has
+    /// begun: the editor settles it, and the panel says the check was refused, with the
+    /// gateway's words, instead of "Checking..." for the whole Push (finding K).
+    #[test]
+    fn a_check_refused_as_the_lull_ends_says_so_and_nothing_waits() {
+        let mut rig = editing();
+        assert!(rig.editor_mut().act(
+            crate::editor::Action::Go,
+            &crate::editor::Target::Beacon("b_00".to_owned())
+        ));
+        let patch = rig
+            .poll(3)
+            .into_iter()
+            .find(|frame| frame.link == SEAT)
+            .expect("the patch");
+        assert_eq!(method_of(&patch), "patch_plan");
+        rig.receive(
+            SEAT,
+            &answer(
+                id_of(&patch),
+                r#"{"playbook_jsonc":"{ }","inverse_json_patch":"[]"}"#,
+                "lull",
+            ),
+        )
+        .expect("reads");
+        let check = rig
+            .poll(4)
+            .into_iter()
+            .find(|frame| frame.link == SEAT)
+            .expect("the check");
+        assert_eq!(method_of(&check), "verify_plan");
+        // The Lull ends while the check is in flight.
+        rig.end_lull();
+        let end = rig
+            .poll(5)
+            .into_iter()
+            .find(|frame| frame.link == ADMIN)
+            .expect("end_lull");
+        rig.receive(ADMIN, &answer(id_of(&end), "{}", "push"))
+            .expect("reads");
+        let said = "`verify_plan` is a planning method, and planning is closed";
+        let got = rig
+            .receive(SEAT, &refusal(id_of(&check), "PHASE_CLOSED", said))
+            .expect("reads");
+        assert!(got.error.is_some(), "a refused call, reported as one");
+        let editor = rig.editor();
+        assert!(!editor.rows_current(), "the edited text was never checked");
+        assert_eq!(
+            editor.unchecked(),
+            Some(crate::editor::Unchecked::Refused(format!(
+                "PHASE_CLOSED: {said}"
+            ))),
+            "the panel shows the gateway's refusal in place of Checking..."
+        );
+        assert!(
+            !editor.busy() && !editor.has_pending_jobs(),
+            "nothing waits"
+        );
+        assert_eq!(editor.status().key, "gateway_refused");
+    }
+
+    /// Once the match has ended no planning call will ever go out: an ask is refused at
+    /// once, and a placement ghost queued as it ended is dropped rather than left on
+    /// "Checking this spot..." (finding K).
+    #[test]
+    fn after_the_match_ends_no_ask_waits_and_no_ghost_hangs() {
+        let mut rig = editing();
+        assert!(rig.editor_mut().preview_place([350, 22, 36]));
+        rig.end_lull();
+        let end = rig
+            .poll(3)
+            .into_iter()
+            .find(|frame| frame.link == ADMIN)
+            .expect("end_lull");
+        rig.receive(ADMIN, &answer(id_of(&end), "{}", "ended"))
+            .expect("reads");
+        assert_eq!(rig.phase(), Phase::Ended);
+        let editor = rig.editor_mut();
+        assert_eq!(editor.door(), Door::Ended);
+        assert!(editor.ghost().is_none(), "no ghost is left waiting");
+        assert_eq!(editor.status().key, "closed_ended");
+        assert!(!editor.has_pending_jobs());
+        assert!(!editor.preview_place([350, 22, 36]));
+        assert!(!editor.act(
+            crate::editor::Action::Go,
+            &crate::editor::Target::Beacon("b_00".to_owned())
+        ));
+        assert!(!editor.submit());
+        assert!(!editor.load(b"{}"));
+        assert!(editor.ghost().is_none() && !editor.has_pending_jobs());
+        assert_eq!(editor.status().key, "closed_ended");
+    }
+
+    /// The gateway's `safe_playbook_filed` line in this seat's own feed tells the editor
+    /// that the safe playbook was filed and its text was not sealed (finding J).
+    #[test]
+    fn a_safe_playbook_filed_line_in_the_feed_reaches_the_editor() {
+        let mut rig = in_push();
+        let advance = rig
+            .poll(1 + PACER_PERIOD_US)
+            .into_iter()
+            .find(|frame| frame.link == ADMIN)
+            .expect("an advance");
+        rig.receive(
+            ADMIN,
+            &answer(id_of(&advance), r#"{"advanced_ms":400}"#, "push"),
+        )
+        .expect("reads");
+        let said = "The Lull ran out, so the safe playbook was filed for you.";
+        let mut fed = false;
+        for step in 2..12_u64 {
+            rig.seat_calls_left = SEAT_CALLS_PER_REFILL;
+            for frame in rig.poll(PACER_PERIOD_US.saturating_add(step)) {
+                let result = match method_of(&frame).as_str() {
+                    "get_segment_feed" => {
+                        fed = true;
+                        format!(
+                            r#"{{"events":[{{"at_ms":0,"kind":"safe_playbook_filed","text":"{said}"}},{{"at_ms":0,"kind":"plan_sealed","text":"Seat 0 sealed its playbook."}}],"next_cursor":"f2"}}"#
+                        )
+                    }
+                    "get_view" => r#"{"next_cursor":"c9","complete":true}"#.to_owned(),
+                    _ => "{}".to_owned(),
+                };
+                rig.receive(frame.link, &answer(id_of(&frame), &result, "push"))
+                    .expect("reads");
+            }
+        }
+        assert!(fed, "the feed was read after the match moved");
+        let editor = rig.editor();
+        assert!(editor.filed());
+        assert_eq!(editor.status().key, "safe_filed");
+        assert_eq!(
+            editor.status().detail,
+            said,
+            "the gateway's words, as they came"
+        );
+        assert_eq!(
+            editor.seal_line(),
+            crate::editor::SealLine::Filed,
+            "outside a Lull the verdict line says the text was not sealed"
+        );
+    }
+
+    /// The feed kind the rig looks for is the one the gateway writes
+    /// (`crates/gateway/src/surface.rs`, `SAFE_PLAYBOOK_FILED_KIND`), read out of its source
+    /// because the client may not depend on the gateway (`CLIENT_WALL`).
+    #[test]
+    fn the_filed_kind_is_the_one_the_gateway_writes() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../gateway/src/surface.rs");
+        let source = std::fs::read_to_string(path).expect("the gateway's source");
+        assert!(
+            source.contains(&format!(
+                "pub const SAFE_PLAYBOOK_FILED_KIND: &str = \"{SAFE_PLAYBOOK_FILED_KIND}\";"
+            )),
+            "the gateway's filing kind is not `{SAFE_PLAYBOOK_FILED_KIND}`"
         );
     }
 

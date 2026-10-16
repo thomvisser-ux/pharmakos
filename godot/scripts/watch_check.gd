@@ -80,6 +80,14 @@
 #     clicked at rest, not a click on a panel left scrolled. A press on the
 #     panel closes the menu; Save with no file opens Save as...; the Fix is applied and the
 #     submission is accepted;
+#   * SAVE AS OFFERS THE TEXT'S OWN FILE (S1's stage demo, finding G; `_save_as_offers`):
+#     the committed playbook's name once it is opened, the saved file's once it is saved,
+#     and no name at all after a template's playbook is used or the carried draft opens;
+#   * THE MAP IS SHUT IN A PUSH (finding K; `_shut_in_the_push`): a left-click on the ground
+#     beside the commander, through the map surface's own handler, opens no menu and asks
+#     for no ghost, nothing the editor owes is left waiting, and a submission is refused at
+#     once. Its positive control, `_map_click_opens_a_menu`, frames the whole map as the
+#     lobby does and makes the same click in round 1's Lull, and a menu opens;
 #   * Ready (`set_ready`) ends the Lull: the host is a two-seat match whose other seat the
 #     built-in operator plays and readies at every Lull's start (T18), so this seat's Ready
 #     completes every seat's, the host clock's answer says `all_ready`, and the admin
@@ -244,6 +252,9 @@ func _run() -> void:
 	if not await _first_click_lands():
 		_finish()
 		return
+	if not await _map_click_opens_a_menu():
+		_finish()
+		return
 	var sealed: PackedByteArray = vista.bridge.editor_sealed_bytes()
 	print("[watch-check] round 1's sealed submission is %d bytes; the Lull's timer shows %s at Ready" % [sealed.size(), _state().get("timer", "")])
 
@@ -254,6 +265,9 @@ func _run() -> void:
 		_finish()
 		return
 	print("[watch-check] Ready ended the Lull; Push begun at 4x")
+	if not await _shut_in_the_push():
+		_finish()
+		return
 	var follow: Node3D = vista.my_commander()
 	if follow != null:
 		vista.rig.follow(follow)
@@ -362,7 +376,7 @@ func _carried(sealed: PackedByteArray, where: String) -> bool:
 		return false
 	if int(_editor().get("refusals", 0)) != 0:
 		_failures.append("%s: the gateway refused %s of the editor's calls" % [where, _editor().get("refusals")])
-	return true
+	return await _save_as_offers("", "%s: the carried draft" % where)
 
 
 ## The meter is drawn from an answer read in `phase`, and its text is strings.gd's frame over
@@ -450,6 +464,8 @@ func _template(id: String) -> bool:
 		return false
 	if vista.bridge.editor_bytes() != text.to_utf8_buffer():
 		_failures.append("%s: the editor's text is not the gateway's playbook_jsonc byte for byte" % id)
+		return false
+	if not await _save_as_offers("", "%s: the template's playbook" % id):
 		return false
 
 	# One map action through patch_plan: Alt-click the seat's own beacon, Go here.
@@ -693,6 +709,96 @@ func _hold_key(key: Key) -> void:
 	await get_tree().process_frame
 
 
+## Save as... offers `name` (the text's own file, or "" for none), and is closed again
+## (finding G). Returns false when it did not, with the reason recorded.
+func _save_as_offers(name: String, what: String) -> bool:
+	editor.open_save_as()
+	await get_tree().process_frame
+	var dialog: FileDialog = editor.save_dialog()
+	var offered := dialog.current_file
+	dialog.hide()
+	await get_tree().process_frame
+	if offered != name:
+		_failures.append("%s: Save as... offered `%s`, not `%s`" % [what, offered, name])
+		return false
+	print("[watch-check] %s: Save as... offers `%s`" % [what, offered])
+	return true
+
+
+## The positive control for `_shut_in_the_push`, in round 1's Lull: the whole map framed as
+## the lobby frames it, a left-click on the ground beside the commander through the map
+## surface's own handler (`editor.map_click`, which `_unhandled_input` calls) opens a map
+## menu, so a closed map in the Push is the door's doing and not a click that missed. The
+## click goes to the handler rather than through Input.parse_input_event because a headless
+## window is 64 pixels square and all editor panel, which would take an injected click. The
+## menu is closed again and the ghost the click asked for is waited out. Returns false when a
+## step failed, with the reason recorded.
+func _map_click_opens_a_menu() -> bool:
+	vista.frame_whole_map()
+	for _frame in KEY_FRAMES:
+		await get_tree().process_frame
+	var at := _ground_on_screen()
+	if at.x < 0.0:
+		_failures.append("the positive control: the camera does not show the ground beside the commander (%s)" % vista.my_commander_at())
+		return false
+	var taken: bool = editor.map_click(at, false)
+	var opened: bool = editor.menu_open()
+	editor.close_menu()
+	if not taken or not opened:
+		_failures.append("the positive control: a click on the map at %s opened no menu in the Lull (taken %s)" % [at, taken])
+		return false
+	if not await _editor_until(func(s: Dictionary) -> bool: return String(s.get("ghost", {}).get("state", "")) != "waiting" and not s.get("pending", true), "the positive control's ghost never came back"):
+		return false
+	print("[watch-check] the Lull: a click on the map at %s opened its menu" % at)
+	return true
+
+
+## Where the camera shows the ground 8 voxels west of this seat's commander, the spot
+## `_one_click`'s menu case clicks, or (-1, -1) when it is behind the camera or off screen.
+func _ground_on_screen() -> Vector2:
+	var commander: Vector3i = vista.my_commander_at()
+	var camera: Camera3D = vista.rig.camera
+	var where: Vector3 = editor._world(Vector3i(commander.x - 8, commander.y, commander.z))
+	if commander.x < 0 or camera.is_position_behind(where):
+		return Vector2(-1, -1)
+	var at := camera.unproject_position(where)
+	if not get_viewport().get_visible_rect().has_point(at):
+		return Vector2(-1, -1)
+	return at
+
+
+## In the Push (finding K): the same left-click through the map surface's own handler opens
+## no map menu and asks for no ghost; nothing the editor owes is left waiting; and a
+## submission is refused at once with the shut door's reason. Returns false when a step
+## failed, with the reason recorded.
+func _shut_in_the_push() -> bool:
+	var at := _ground_on_screen()
+	if at.x < 0.0:
+		_failures.append("the Push: the camera does not show the ground beside the commander")
+		return false
+	var taken: bool = editor.map_click(at, false)
+	await get_tree().process_frame
+	var after := _editor()
+	var submitted: bool = vista.bridge.editor_submit()
+	var refused := _editor()
+	if _state().get("phase", "") != "push":
+		_failures.append("the Push ended before its shut map was checked: %s" % _state())
+		return false
+	if String(after.get("door", "")) != "push":
+		_failures.append("the editor's door in the Push is `%s`, not push" % after.get("door"))
+	if taken or editor.menu_open():
+		_failures.append("a click on the map opened a menu in the Push")
+		editor.close_menu()
+	if not (after.get("ghost", {}) as Dictionary).is_empty():
+		_failures.append("a click on the map asked for a ghost in the Push: %s" % after.get("ghost"))
+	if after.get("pending", true) or after.get("busy", true):
+		_failures.append("the editor is waiting on a call in the Push: %s" % after)
+	if submitted or String(refused.get("status_key", "")) != "closed_push" or refused.get("pending", true):
+		_failures.append("a submission in the Push was not refused at once: %s" % refused)
+	print("[watch-check] the Push: a click on the map at %s opened no menu (door %s); a submission was refused: %s" % [at, after.get("door"), Strings.text("status_" + String(refused.get("status_key", "")))])
+	return _failures.is_empty()
+
+
 ## The buttons F1 names, and the three cases each is clicked in.
 const CLICKED := ["fix", "save", "submit"]
 const CASES := ["redraw", "menu", "scroll"]
@@ -712,9 +818,8 @@ func _first_click_lands() -> bool:
 	var window_size := get_window().size
 	get_window().size = Vector2i(ProjectSettings.get_setting("display/window/size/viewport_width"), ProjectSettings.get_setting("display/window/size/viewport_height"))
 	await get_tree().process_frame
-	var kept_path: String = editor.file_path
-	# Save with no file opens Save as... (F6: "Save with no file does nothing visible").
-	editor.file_path = ""
+	# Save with no file opens Save as... (F6: "Save with no file does nothing visible"):
+	# `_one_click` opens each file from its bytes, so the text has no file to Save to.
 	var ok := true
 	for name in CLICKED:
 		for case in CASES:
@@ -723,7 +828,6 @@ func _first_click_lands() -> bool:
 				break
 		if not ok:
 			break
-	editor.file_path = kept_path
 	editor.close_menu()
 	get_window().size = window_size
 	await get_tree().process_frame
@@ -903,8 +1007,12 @@ func _edit() -> bool:
 		return false
 	if not _editor().get("qualifies", false):
 		_failures.append("QUICK did not qualify the committed playbook: %s" % [_editor().get("rows", [])])
+	if not await _save_as_offers(COMMITTED.get_file(), "the opened committed playbook"):
+		return false
 	if not editor.save_file(SAVED) or FileAccess.get_file_as_bytes(SAVED) != original:
 		_failures.append("opening and saving the committed playbook did not give its bytes back")
+	if editor.text_file() != SAVED:
+		_failures.append("the saved file is not the text's file: `%s`" % editor.text_file())
 	print("[watch-check] opened and saved %s byte for byte" % COMMITTED)
 	var loaded_revision := int(_editor().get("revision", 0))
 
