@@ -194,11 +194,9 @@ impl Scratch {
     /// directed edge, which is eight per cell.
     #[must_use]
     pub fn new(nodes: u32, abstract_nodes: u32, cluster_cells: u32) -> Scratch {
-        let n = usize::try_from(nodes).unwrap_or(0);
-        let a = usize::try_from(abstract_nodes)
-            .unwrap_or(0)
-            .saturating_add(2);
-        let low_heap = usize::try_from(cluster_cells.saturating_mul(8)).unwrap_or(0);
+        let n = crate::math::index::row(nodes);
+        let a = crate::math::index::row(abstract_nodes).saturating_add(2);
+        let low_heap = crate::math::index::row(cluster_cells.saturating_mul(8));
         Scratch {
             epoch: 0,
             stamp: vec![0; n],
@@ -222,13 +220,11 @@ impl Scratch {
             // and not a measurement — unlike `abstract_heap` above, which is a
             // measured capacity and says so.
             abstract_path: Vec::with_capacity(a.saturating_add(2)),
-            raw: Vec::with_capacity(usize::try_from(crate::pathing::MAX_ROUTE_NODES).unwrap_or(0)),
-            leg: Vec::with_capacity(usize::try_from(cluster_cells).unwrap_or(0)),
-            line: Vec::with_capacity(usize::try_from(cluster_cells).unwrap_or(0)),
+            raw: Vec::with_capacity(crate::math::index::row(crate::pathing::MAX_ROUTE_NODES)),
+            leg: Vec::with_capacity(crate::math::index::row(cluster_cells)),
+            line: Vec::with_capacity(crate::math::index::row(cluster_cells)),
             prefix: Vec::with_capacity(
-                usize::try_from(crate::pathing::MAX_ROUTE_NODES)
-                    .unwrap_or(0)
-                    .saturating_add(1),
+                crate::math::index::row(crate::pathing::MAX_ROUTE_NODES).saturating_add(1),
             ),
             expansions: 0,
             endpoint_expansions: 0,
@@ -375,6 +371,7 @@ impl Scratch {
         usize::try_from(node)
             .ok()
             .and_then(|index| self.g.get(index).copied())
+            // E7: rule: a node the search never reached costs nothing yet
             .unwrap_or(0)
     }
 
@@ -406,6 +403,7 @@ impl Scratch {
             let next = usize::try_from(current)
                 .ok()
                 .and_then(|index| self.came.get(index).copied())
+                // E7: rule: a node the search never reached ends the walk back at the start
                 .unwrap_or(start);
             current = next;
             guard = guard.saturating_add(1);

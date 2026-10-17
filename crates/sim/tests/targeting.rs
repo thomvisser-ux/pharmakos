@@ -32,7 +32,6 @@ use pharmakos_sim::features::FeatureKind;
 use pharmakos_sim::interpreter::state::{StepFailed, StepFailedError, StepFailure};
 use pharmakos_sim::interpreter::{BeaconSpec, Plan, PlanError, resolve_beacon_in};
 use pharmakos_sim::math::fixed::Fx;
-use pharmakos_sim::math::quantity::Hp;
 use pharmakos_sim::pathing::search::Scratch;
 use pharmakos_sim::runner::{MatchPhase, MatchSettings, Runner};
 use pharmakos_sim::seams::MandateKind;
@@ -120,7 +119,7 @@ fn play(runner: &mut Runner, limit: u32, mut each: impl FnMut(&mut World, &[Even
     let mut kept: Vec<Event> = Vec::new();
     let mut ticks: u32 = 0;
     while ticks < limit && runner.phase() == MatchPhase::Push {
-        let Some(_) = runner.step() else {
+        let Some(_) = runner.step().unwrap() else {
             break;
         };
         let events = runner.events().to_vec();
@@ -193,7 +192,7 @@ fn play_all(runner: &mut Runner, limit: u32) -> Vec<Event> {
     let mut kept: Vec<Event> = Vec::new();
     let mut ticks: u32 = 0;
     while ticks < limit && runner.phase() == MatchPhase::Push {
-        if runner.step().is_none() {
+        if runner.step().unwrap().is_none() {
             break;
         }
         kept.extend(runner.events().iter().copied());
@@ -470,19 +469,28 @@ fn a_seats_structure_share_counts_its_ruins() {
             .expect("room in the table");
     }
     // The outpost falls, and its forty structures become neutral ruins.
-    assert!(world.request_damage(DamageOrder {
-        target: DamageTarget::Beacon(outpost),
-        amount: Hp::new(1_000_000),
-        by: SeatId::NEUTRAL,
-    }));
+    assert!(
+        world
+            .request_damage(DamageOrder {
+                target: DamageTarget::Beacon(outpost),
+                amount: pharmakos_sim::math::quantity::Damage::new(i64::from(1_000_000)).unwrap(),
+                by: SeatId::NEUTRAL,
+                source: None,
+            })
+            .is_ok()
+    );
     for seat in [zero, one] {
         let core = core_of(&world, seat);
         world.set_writ(core, MandateKind::Build);
-        assert!(world.add_target(
-            core,
-            StructureKind::Generator.id(),
-            point(beside(&world, seat, 1, 0))
-        ));
+        assert!(
+            world
+                .add_target(
+                    core,
+                    StructureKind::Generator.id(),
+                    point(beside(&world, seat, 1, 0))
+                )
+                .is_ok()
+        );
     }
     let mut runner = Runner::new(world);
     assert!(runner.begin_push(), "a match opens in a Lull");
@@ -520,7 +528,11 @@ fn one_structure_per_voxel_holds_across_seats() {
     let core = core_of(&world, one);
     world.set_writ(core, MandateKind::Build);
     for at in [taken, free] {
-        assert!(world.add_target(core, StructureKind::Generator.id(), at));
+        assert!(
+            world
+                .add_target(core, StructureKind::Generator.id(), at)
+                .is_ok()
+        );
     }
     let cost = world.structure_cost(StructureKind::Generator).raw();
     let purse = |world: &World| world.seats().treasuries().get(1).expect("seat 1").raw();
@@ -624,10 +636,15 @@ fn a_held_target_fails_only_when_lost() {
     let events = play(&mut runner, 400, |world, _| {
         if !destroyed && world.tick().raw() == 100 {
             for column in &footprint {
-                assert!(world.request_voxel_edit(VoxelEdit::Set {
-                    at: [column.x, column.y, column.top],
-                    material: Material::STONE,
-                }));
+                assert!(
+                    world
+                        .request_voxel_edit(VoxelEdit::Set {
+                            at: [column.x, column.y, column.top],
+                            material: Material::STONE,
+                            by: None,
+                        })
+                        .is_ok()
+                );
             }
             destroyed = true;
         }
@@ -747,11 +764,17 @@ fn a_restarted_step_resumes_at_the_beacon_it_placed() {
                 .iter()
                 .any(|event| event.kind == EventKind::BeaconPlaced)
         {
-            assert!(world.request_damage(DamageOrder {
-                target: DamageTarget::Unit(UnitId::new(commander.raw())),
-                amount: Hp::new(10_000),
-                by: SeatId::NEUTRAL,
-            }));
+            assert!(
+                world
+                    .request_damage(DamageOrder {
+                        target: DamageTarget::Unit(UnitId::new(commander.raw())),
+                        amount: pharmakos_sim::math::quantity::Damage::new(i64::from(10_000))
+                            .unwrap(),
+                        by: SeatId::NEUTRAL,
+                        source: None,
+                    })
+                    .is_ok()
+            );
             killed = true;
         }
     });
@@ -811,8 +834,8 @@ fn assert_round_trips(world: &World, fresh: &World, enc: &mut Enc) -> Snapshot {
     );
     let mut continued = world.clone();
     assert_eq!(
-        restored.step(enc),
-        continued.step(enc),
+        restored.step(enc).unwrap(),
+        continued.step(enc).unwrap(),
         "tick {tick}: the restored world diverges on the next tick"
     );
     decoded
@@ -893,11 +916,17 @@ fn a_bound_step_and_a_resumed_visit_round_trip_through_a_snapshot() {
                 .iter()
                 .any(|event| event.kind == EventKind::BeaconPlaced)
         {
-            assert!(world.request_damage(DamageOrder {
-                target: DamageTarget::Unit(UnitId::new(commander.raw())),
-                amount: Hp::new(10_000),
-                by: SeatId::NEUTRAL,
-            }));
+            assert!(
+                world
+                    .request_damage(DamageOrder {
+                        target: DamageTarget::Unit(UnitId::new(commander.raw())),
+                        amount: pharmakos_sim::math::quantity::Damage::new(i64::from(10_000))
+                            .unwrap(),
+                        by: SeatId::NEUTRAL,
+                        source: None,
+                    })
+                    .is_ok()
+            );
             killed = true;
         }
     });
@@ -937,10 +966,16 @@ fn the_walk_in_times_out_with_no_path() {
     // that climbs one voxel at a time can neither get down to it nor out.
     let top = runner.world().voxels().top_solid_z(pit[0], pit[1]).unwrap();
     for depth in 0..4 {
-        assert!(runner.world_mut().request_voxel_edit(VoxelEdit::Set {
-            at: [pit[0], pit[1], top - depth],
-            material: Material::AIR,
-        }));
+        assert!(
+            runner
+                .world_mut()
+                .request_voxel_edit(VoxelEdit::Set {
+                    at: [pit[0], pit[1], top - depth],
+                    material: Material::AIR,
+                    by: None,
+                })
+                .is_ok()
+        );
     }
     let treasury = *runner.world().seats().treasuries().first().expect("seat 0");
     let events = play(&mut runner, 200, |_, _| {});
@@ -1110,10 +1145,15 @@ fn a_set_mandate_whose_target_is_lost_writes_nothing() {
         }
         if started && !destroyed {
             for column in &footprint {
-                assert!(world.request_voxel_edit(VoxelEdit::Set {
-                    at: [column.x, column.y, column.top],
-                    material: Material::STONE,
-                }));
+                assert!(
+                    world
+                        .request_voxel_edit(VoxelEdit::Set {
+                            at: [column.x, column.y, column.top],
+                            material: Material::STONE,
+                            by: None,
+                        })
+                        .is_ok()
+                );
             }
             destroyed = true;
         }

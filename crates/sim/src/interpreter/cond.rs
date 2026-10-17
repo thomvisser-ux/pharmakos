@@ -108,14 +108,13 @@ impl View<'_> {
     }
 
     /// The commander's maximum hit points, from `commander.hp`.
+    ///
+    /// Read typed at load, so a table missing it was refused there.
     pub(crate) fn commander_max_hp(&self) -> i32 {
         self.world
             .rules()
-            .message()
-            .commander
-            .as_ref()
-            .and_then(|block| i32::try_from(block.hp).ok())
-            .unwrap_or(0)
+            .unit_hp(crate::tables::UnitKind::Commander)
+            .raw()
     }
 
     /// The commander's hit points as a whole percentage of its maximum.
@@ -141,7 +140,7 @@ impl View<'_> {
     /// A beacon's row, when the id names one.
     pub(crate) fn beacon_row(&self, beacon: BeaconId) -> Option<usize> {
         let beacons = self.world.beacons();
-        let count = usize::try_from(beacons.len()).unwrap_or(0);
+        let count = crate::math::index::row(beacons.len());
         let index = usize::try_from(beacon.raw()).ok()?;
         // Rows are dense and in id order, so the id is the row — checked rather
         // than assumed, because a snapshot could in principle carry otherwise.
@@ -234,6 +233,7 @@ pub(crate) fn evaluate(view: &View<'_>, condition: &Cond) -> bool {
                     .dormant()
                     .get(row)
                     .copied()
+                    // E7: cannot miss: `row` is a row `beacon_row` found in this table
                     .unwrap_or(false);
                 dormant != *powered
             }),
@@ -243,7 +243,8 @@ pub(crate) fn evaluate(view: &View<'_>, condition: &Cond) -> bool {
             view.state.reached != super::state::NO_INDEX && *index <= view.state.reached
         }
         Cond::RuleFired(index) => {
-            let at = usize::try_from(*index).unwrap_or(usize::MAX);
+            let at = crate::math::index::row(*index);
+            // E7: rule: a handler index the plan does not hold has never fired, and the compile refuses one
             view.state.fires.get(at).copied().unwrap_or(0) > 0
         }
     }
@@ -336,7 +337,7 @@ impl Board for View<'_> {
         self.seat
     }
     fn beacon_rows(&self) -> usize {
-        usize::try_from(self.world.beacons().len()).unwrap_or(0)
+        crate::math::index::row(self.world.beacons().len())
     }
     fn row_id(&self, row: usize) -> Option<u32> {
         self.world.beacons().ids().get(row).copied()
@@ -353,6 +354,7 @@ impl Board for View<'_> {
             .mandates()
             .get(row)
             .copied()
+            // E7: cannot miss: every caller's `row` is a row of the beacon table it read
             .unwrap_or(0)
     }
     fn row_at(&self, row: usize) -> Option<[Fx; 3]> {
@@ -402,6 +404,7 @@ impl Board for SnapshotBoard<'_> {
         self.snapshot.beacon_ordinal.get(row).copied()
     }
     fn row_mandate(&self, row: usize) -> u8 {
+        // E7: cannot miss: every caller's `row` is a row of the snapshot's beacon columns
         self.snapshot.beacon_mandate.get(row).copied().unwrap_or(0)
     }
     fn row_at(&self, row: usize) -> Option<[Fx; 3]> {

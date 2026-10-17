@@ -255,7 +255,7 @@ fn bench_repaths(bench: &mut Bench) {
             goal,
             &mut buffer,
         )
-        .is_none()
+        .is_err()
         {
             continue;
         }

@@ -1,0 +1,44 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// The expand-east-segment scenario's orders: spec section 10's worked
+// example, examples/playbooks/expand_east.jsonc, with ONE change, its first
+// site, so that the walk can meet its 120 s timeout on this scenario's map
+// (ruling 3 of S1's stage demo, decisions-log item 139 (1)).
+//
+// It lives beside its scenario rather than replacing the example because no
+// one site is legal both here and on the verifier's reference view: the
+// example's site is a property of that view (seat 0's core at (80, 11, 55)),
+// and this file's of this map (seed 0x00000000ca5caded, seat 0's core at
+// (358, 24, 36)). The site below is 20 voxels east of seat 0's core, inside
+// its sphere, about 20 s by `estimate_route`. Every other line is the
+// example's: its shape, its 120 s timeout, its handler, its tail and its
+// fallback.
+//
+// Seat 1 seals this same file, and the site is far outside its sphere: its
+// walk still times out, its deploy is still refused `illegal_site`, and its
+// tail still answers `no_target`, so the scenario keeps the example's record
+// of failing loudly beside seat 0's success.
+//
+// Every comment is on a line of its own, because crates/sim/tests/scenario.rs
+// reads this file by dropping whole comment lines before the canonical codec
+// decodes it (the sim may not depend on plan-core, AGENTS.md section 3).
+{ "schema_version": {"major":1,"minor":0},
+  "meta": {"title":"Expand & Mine east","author_kind":"HUMAN"},
+  "kind": "PLAYBOOK",
+  "declarative": {
+    "route": [
+      {"label":"to_site","move":{"to":{"voxel":{"x":378,"y":24,"z":36}},"pace":"AVOID_KNOWN_THREATS"},"timeout_ms":120000},
+      {"label":"place_east","place_beacon":{"at":{"voxel":{"x":378,"y":24,"z":36}},"tags":["east"],
+        // initial settings are interface rows: each one commits on its own
+        "initial":{"priority":"NORMAL","mandate":{"roe":"RETURN_FIRE","mine":{"dig_max_depth":4,"flee_on_threat":true}}}}},
+      {"label":"back_home","move":{"to":{"beacon_anchor":{"beacon_id":"b_01"}}}}
+    ],
+    "handlers": [
+      // bravery is an ordinary rule; the 20% reflex is fixed and always on top of it
+      {"id":"flee","when":{"all":{"items":[{"cmdr_hp_pct":{"cmp":"LE","pct":40}},{"cmdr_took_damage_within":{"ms":3000}}]}},
+       "body":[{"label":"f1","move":{"to":{"safest":{}}}},{"label":"f2","hold":{"ms":8000}}],
+       "resume":"CONTINUE","cooldown_ms":30000,"max_fires":3}
+    ]},
+  "on_death": {"on_respawn":"CONTINUE","max_deaths_before_fallback":2},
+  "fallback": {"hold":{"at":{"beacon_anchor":{"safest":{}}}}} }

@@ -245,7 +245,7 @@ pub fn percent_of(amount: Money, percent: u32) -> Money {
         .map_or(Money::ZERO, Money::new)
 }
 
-/// The Base Maintenance Indemnity one seat is paid at a settlement, after the
+/// The Basic Minimum Income one seat is paid at a settlement, after the
 /// standing adjustment (spec section 7, "BMI scaling").
 ///
 /// `rank` is the seat's place on held value among the **living** seats, from
@@ -263,7 +263,7 @@ pub fn percent_of(amount: Money, percent: u32) -> Money {
 /// truncated toward zero ([`band_percent`], the one copy of the formula). The
 /// **adjustment** is zero when `living` is one, so the seat is paid the
 /// unadjusted `economy.bmi_dollars`: a seat that is both the leader and the
-/// last place has nobody to catch up to. The indemnity is `bmi_dollars` plus
+/// last place has nobody to catch up to. The income is `bmi_dollars` plus
 /// that percent of it, truncated toward zero, the rounding [`percent_of`]
 /// states.
 ///
@@ -466,11 +466,12 @@ pub fn award_fund(rules: &RulesTable) -> Money {
     )
 }
 
-/// The `$` a seat starts with: `economy.starting_bmi_multiplier` indemnities.
+/// The `$` a seat starts with: `economy.starting_bmi_multiplier` Basic
+/// Minimum Incomes.
 ///
-/// A multiple rather than a second number, so the spec's rule — "starting money
-/// is two indemnities" — stays a rule that cannot drift away from the BMI it is
-/// a multiple of.
+/// A multiple rather than a second number, so the rule -- starting money is
+/// two Basic Minimum Incomes -- stays a rule that cannot drift away from the
+/// BMI it is a multiple of.
 #[must_use]
 pub fn starting_treasury(rules: &RulesTable) -> Money {
     let Some(economy) = rules.message().economy.as_ref() else {

@@ -126,7 +126,7 @@ fn seam_named<'a>(world: &'a World, name: &str) -> (usize, &'a Feature) {
 fn play(runner: &mut Runner, ticks: u32) {
     let mut left = ticks;
     while left > 0 && runner.phase() == MatchPhase::Push {
-        let Some(_) = runner.step() else {
+        let Some(_) = runner.step().unwrap() else {
             break;
         };
         runner.clear_events();
@@ -389,10 +389,16 @@ fn carve(runner: &mut Runner, seam: usize, count: Option<usize>) {
         .collect();
     for chunk in chosen.chunks(32) {
         for at in chunk {
-            assert!(runner.world_mut().request_voxel_edit(VoxelEdit::Set {
-                at: *at,
-                material: Material::AIR,
-            }));
+            assert!(
+                runner
+                    .world_mut()
+                    .request_voxel_edit(VoxelEdit::Set {
+                        at: *at,
+                        material: Material::AIR,
+                        by: None,
+                    })
+                    .is_ok()
+            );
         }
         play(runner, 1);
     }
@@ -671,10 +677,16 @@ fn a_second_dig_in_one_seam_box_waits_for_the_first_to_land() {
     let elsewhere = [other.x, other.y, other_top];
     assert!(!pharmakos_sim::mining::dig_waits(world, core));
     let carrying = carrying_of(world, drone);
-    assert!(runner.world_mut().request_voxel_edit(VoxelEdit::Set {
-        at: elsewhere,
-        material: Material::AIR,
-    }));
+    assert!(
+        runner
+            .world_mut()
+            .request_voxel_edit(VoxelEdit::Set {
+                at: elsewhere,
+                material: Material::AIR,
+                by: None,
+            })
+            .is_ok()
+    );
     assert!(pharmakos_sim::mining::dig_waits(runner.world(), core));
     let before = runner.world().clone();
     play(&mut runner, 1);
@@ -745,7 +757,7 @@ fn visit(route: &str) -> World {
     let mut ended = false;
     let mut ticks: u32 = 0;
     while !ended && ticks < 3_000 {
-        runner.step();
+        runner.step().unwrap();
         ended = runner
             .events()
             .iter()
