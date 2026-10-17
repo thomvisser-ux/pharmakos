@@ -683,12 +683,10 @@ message BeaconSummary {
   string owner = 3;
 
   // OWN beacons only: true for the seat's core, the beacon the map pre-places
-  // for it.
-  //
-  // PLACEHOLDER: the core read as the lowest-numbered beacon — owner, S1, a
-  // column the day a beacon carries a kind. True of every map the generator
-  // makes, because it places the core first, and the same rule the verifier's
-  // scope uses.
+  // for it. The core is the seat's `b_00`, its beacon of per-seat ordinal 0
+  // (the gateway's `core_beacon_of`, S1's `tgtw`, #84; the register's S1-13,
+  // closed): the generator places the core first, so it takes ordinal 0 on
+  // every map, and the verifier's scope reads the same rule.
   bool core = 4;
 
   // OWN beacons only: the Quartermaster priority, which orders brownouts
@@ -762,7 +760,8 @@ message GetMapSummaryResponse {
   // PLACEHOLDER: a fog-filtered terrain summary — owner, S3, with the
   // knowledge store that gives "fog-filtered" its meaning. The stage is S1's
   // plan task con2's reading (the plan names S1-48's features and not the
-  // terrain), for the owner to confirm.
+  // terrain), ratified with the main session's calls of items 129 to 137 by
+  // decisions-log item 139 (1) ruling 14 (the register's S3-23).
   reserved 6 to 15;
 }
 
@@ -853,19 +852,29 @@ message GetEconomyForecastResponse {
 
   // The BMI the seat would be credited at the next settlement, at the band
   // it holds now, whole $ (decisions-log item 128, S1's plan's decision 12;
-  // the register's S1-46).
-  int32 bmi_next_dollars = 5;
+  // the register's S1-46): a prediction, since held value counts a structure
+  // still going up at its worth so far and spending in a Push can move the
+  // rank (item 135 (2) (g)). Absent for a seat out of the match, which is off
+  // the ladder, and after the match ends, when no settlement is next.
+  // `optional`, so a reader tells absent from 0 by the field's presence
+  // (item 135 (2) (g); S2's plan, task con3).
+  optional int32 bmi_next_dollars = 5;
 
-  // The `$` the seat's standing orders have committed and not yet paid,
-  // whole $: the Quartermaster's own arithmetic over the seat's orders, never
-  // a dry run and never a model of anybody else (spec section 11).
-  int32 committed_dollars = 6;
+  // The `$` this round's seal orders and has not yet paid, whole $, in a
+  // Lull: an UPPER BOUND, because every step that may order something is
+  // counted in full, by the Quartermaster's own arithmetic over the seat's
+  // orders, never a dry run and never a model of anybody else (spec section
+  // 11; item 135 (2) (f)). 0 when the seat has sealed nothing this round.
+  // Absent outside a Lull: a Push pays the seal as it goes, and how much is
+  // still unpaid is not read here. `optional`, as `bmi_next_dollars` is.
+  optional int32 committed_dollars = 6;
 
   // PLACEHOLDER: the projected income, the projection and the what-if answers — owner, S3, with the what-if vocabulary.
   // Decision 12 (item 128)
   // sends the what-ifs to S3 and fills only the next BMI and the committed
   // spend in S1; the projection's and the projected income's stage is S1's
-  // plan task con2's reading, for the owner to confirm.
+  // plan task con2's reading, ratified with the main session's calls of
+  // items 129 to 137 by decisions-log item 139 (1) ruling 14.
   //
   // This method answers the LIVE world during a Push, although its name says
   // "forecast". Ruled for S1 by the owner (item 128, decision 12, the
@@ -1249,7 +1258,7 @@ message ResolvedRef {
   string feature_id = 2;
 
   // Travel from the origin to that feature, game milliseconds, by the
-  // estimator "nearest" ranks with. 0 when it reads nothing.
+  // estimator "nearest" ranks with. Meaningful only when `reachable` is true.
   int32 travel_ms = 3;
 
   // Every candidate that matched the reference's filters and is reachable,
@@ -1265,6 +1274,13 @@ message ResolvedRef {
   // the segment feed spells it (`no_target`, `illegal_site`). Empty when it
   // reads a feature.
   string failure = 6;
+
+  // True when a route reaches the feature it reads from the origin; false
+  // when it reads nothing, or reads a named pick the origin cannot reach,
+  // and `travel_ms` then means nothing (decisions-log item 133 (3) (i), which
+  // retires the `travel_ms` 0 a magic value stood for). S2's `wgw` writes it
+  // from `resolve_refs`; until then the answer lacks it.
+  bool reachable = 7;
 }
 
 // One feature a reference could read, and how far it is.

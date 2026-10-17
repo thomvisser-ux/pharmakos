@@ -68,35 +68,8 @@ breaking:
   # the next proto change that discharges nothing deletes it again, so an
   # un-reservation nobody intended never passes unnoticed (decisions-log items
   # 100 (10), 109 and 111).
-  ignore_only:
-    # S1's targeting proto (S1's plan, task con2; targeting.md's contract pull
-    # request 1). One rule, two files, four narrowed ranges, each number taken
-    # by the field it was held for and nothing else. con1's block for
-    # gp/v1/rules.proto is gone: that discharge is on main, both sides of the
-    # comparison now say `reserved 13 to 15`, and keeping the file listed
-    # would let a later un-reservation there pass unseen.
-    #
-    # gp/v1/playbook.proto, `Location`: 10 to 49 were held for a non-beacon
-    # selector catalogue ("an area, a seam, a vent"). Targeting's sites take
-    # 10 (`on`) and 11 (`covering`), both `FeatureRef`s (decisions-log item
-    # 127 (12), docs/design/targeting.md "Sites"), and the range narrows to
-    # 12-49, with 12 held for `toward` (S1's plan, decision 3).
-    #
-    # gp/api/v1/gateway.proto, three messages whose tails were held for
-    # exactly these fields, each a PLACEHOLDER that named them:
-    #   * `GetRecapResponse`: 2 and 3, the settlement lines and the shortfall
-    #     (the register's X-16); 4-15 stay held.
-    #   * `GetMapSummaryResponse`: 5, the vent and seam list (S1-48); 6-15
-    #     stay held for the terrain summary.
-    #   * `GetEconomyForecastResponse`: 5 and 6, the next BMI and the
-    #     committed spend (S1-46, decision 12); 7-15 stay held for S3's
-    #     projection and what-if answers.
-    #
-    # buf sees each old range go away and cannot tell a discharge from an
-    # un-reservation; tests/golden/proto/expected.reserved.txt shows each
-    # narrowing, which is the reviewable half. Inert once this change is on
-    # main. The next proto pull request replaces this block with its own, or
-    # deletes it if it discharges nothing.
-    RESERVED_MESSAGE_NO_DELETE:
-      - gp/v1/playbook.proto
-      - gp/api/v1/gateway.proto
+  #
+  # There is no block today. S1's targeting proto (`con2`, #75) held one for
+  # gp/v1/playbook.proto and gp/api/v1/gateway.proto; S2's rules rows (`con3`)
+  # discharge nothing, so they deleted it: every number they take comes from a
+  # range no `reserved` statement held.
