@@ -12,8 +12,8 @@
 # surprise on someone's machine (decisions-log item 123 (4); S1's plan, decision 9, ruling
 # the register's S1-01). The `toolchain:` input of every Rust install step in
 # .github/workflows/ names the same version, and `[workspace.package] rust-version` and
-# clippy.toml's `msrv` sit at or below it (clippy.toml says why they are not raised with
-# it yet); xtask's `the_toolchain_is_pinned_once_everywhere` holds all of them to that.
+# clippy.toml's `msrv` carry its minor (clippy.toml says how they move with it); xtask's
+# `the_toolchain_is_pinned_once_everywhere` holds all of them to that.
 channel = "1.98.1"
 components = ["rustfmt", "clippy"]
 targets = [

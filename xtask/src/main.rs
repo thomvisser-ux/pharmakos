@@ -4137,9 +4137,10 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
     /// it. The two workflows that install Rust, `ci.yml` and
     /// `nightly-scenarios.yml`, are read by name, and a listing of
     /// `.github/workflows/` fails the test when any other workflow installs
-    /// Rust, so a new one cannot go unchecked. `[workspace.package] rust-version` and `clippy.toml`'s `msrv` agree
-    /// with each other and sit at or below the pin: clippy.toml says why they
-    /// are not raised with it yet.
+    /// Rust, so a new one cannot go unchecked. `[workspace.package] rust-version`
+    /// and `clippy.toml`'s `msrv` agree with each other and carry the pin's
+    /// `major.minor`, so a raise of the pin cannot leave them behind: clippy.toml
+    /// says how they move with it.
     #[test]
     fn the_toolchain_is_pinned_once_everywhere() {
         /// `major.minor[.patch]` as numbers, for comparing versions.
@@ -4177,9 +4178,10 @@ pharmakos-mesher v0.1.0 (/repo/crates/mesher) (*)
             rust_version, msrv,
             "[workspace.package] rust-version and clippy.toml's msrv are one number"
         );
-        assert!(
-            numbers(msrv) <= numbers(channel),
-            "the MSRV ({msrv}) is above the pinned toolchain ({channel})"
+        assert_eq!(
+            numbers(msrv),
+            numbers(channel).into_iter().take(2).collect::<Vec<u32>>(),
+            "the MSRV ({msrv}) is not the pinned toolchain's major.minor ({channel})"
         );
         let pinned = format!("toolchain: {channel}");
         for (name, workflow) in [
