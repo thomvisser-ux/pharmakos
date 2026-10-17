@@ -202,3 +202,19 @@ cargo xtask golden --bless              # accepts them
   `VERIFIER_VERSION` went from `0.1.0-skeleton` to `0.1.0-s1`, input 4 of the
   five: a FULL report from this build finds what the skeleton's empty stage
   could not, so it is not comparable with one from before.
+* **Every `report_hash` moved in S2's first verifier lane (`vfy1`), the reports
+  whose diagnostics stayed the same included.** `VERIFIER_VERSION` went from
+  `0.1.0-s1` to `0.1.0-s2`, input 4 of the five: this build refuses, by a code
+  of its own, every construct the sim refuses at the seal (`E0009` to `E0017`),
+  a `scout_count` past a beacon's byte (`E0508`) and a seal the Ledger cannot
+  price (`E0603`), so its reports are not comparable with S1's. Each new code
+  has its own case, named for it. Three existing cases gained the new codes
+  beside the one they isolate: `e0404_impossible_filter` (`E0015` and
+  `E0016`: the sim refuses both filters until S3, so the warning's file no
+  longer qualifies), `e0601_a_scout_count_past_every_supply` (`E0508` and
+  `E0603`) and `e0601_found_before_an_unpriced_blueprint` (`E0010`). The
+  report hash's length prefixes became checked rather than saturating
+  (`HashError`); no input reaches `u32::MAX`, so that moved no encoding, which
+  was checked by running the goldens under the old version string: no
+  `report_hash` moved. `full_finds_what_quick_finds` holds in its S2 form: the
+  errors FULL may add are `E0601` and `E0603`.

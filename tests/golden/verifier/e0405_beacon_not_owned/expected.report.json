@@ -9,10 +9,10 @@
       "beginner": "A commander interfaces with your own beacons."
     }
   ],
-  "report_hash": "xkGFWbsobb8=",
+  "report_hash": "DeYo7xn0IoI=",
   "rules_hash": "sfLu8OdcWuQ=",
   "plan_fingerprint": "nrlmpyl5Hns=",
-  "verifier_version": "0.1.0-s1",
+  "verifier_version": "0.1.0-s2",
   "size_units": 1,
   "size_budget": 128
 }

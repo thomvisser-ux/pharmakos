@@ -26,7 +26,11 @@
 //! the lint stage raises `W0704` to `W0706`, the structure stage `I0003`, and
 //! `E0407` to `E0413` and `W0501` join their families at the end. S1's `proj`
 //! task fills the estimate stage: `E0601`, `W0601` to `W0603`, `W0701` and
-//! `I0001`, each a number the table already held.
+//! `I0001`, each a number the table already held. S2's first verifier lane
+//! (task `vfy1`) adds `E0009` to `E0017` at the end of the decode family, one
+//! per construct the sim refuses at the seal ([`crate::refusals`]), `E0508`
+//! (a `scout_count` past a beacon's byte) and `E0603` (a seal the Ledger
+//! cannot price).
 //!
 //! The label an unemitted row prints, `none at the skeleton (…)`, is kept as
 //! it was spelt when the table shipped, because `gamectl docs` quotes it; the
@@ -282,6 +286,65 @@ pub const CATALOGUE: &[Entry] = &[
         family: Family::DecodeAndVersion,
         severity: Severity::Warning,
         emitter: Emitter::Stage(Stage::Decode),
+    },
+    // E0009 to E0017: the constructs the sim refuses at the seal, one code
+    // each, keyed by the sim's name for it (`crate::refusals`; S2's plan, E8).
+    // They join the decode family because they are E0003's kin, a word the
+    // file may hold and this build cannot act on, and the structure stage
+    // raises them because the question is about the file alone.
+    Entry {
+        code: "E0009",
+        family: Family::DecodeAndVersion,
+        severity: Severity::Error,
+        emitter: Emitter::Stage(Stage::Structure),
+    },
+    Entry {
+        code: "E0010",
+        family: Family::DecodeAndVersion,
+        severity: Severity::Error,
+        emitter: Emitter::Stage(Stage::Structure),
+    },
+    Entry {
+        code: "E0011",
+        family: Family::DecodeAndVersion,
+        severity: Severity::Error,
+        emitter: Emitter::Stage(Stage::Structure),
+    },
+    Entry {
+        code: "E0012",
+        family: Family::DecodeAndVersion,
+        severity: Severity::Error,
+        emitter: Emitter::Stage(Stage::Structure),
+    },
+    Entry {
+        code: "E0013",
+        family: Family::DecodeAndVersion,
+        severity: Severity::Error,
+        emitter: Emitter::Stage(Stage::Structure),
+    },
+    Entry {
+        code: "E0014",
+        family: Family::DecodeAndVersion,
+        severity: Severity::Error,
+        emitter: Emitter::Stage(Stage::Structure),
+    },
+    Entry {
+        code: "E0015",
+        family: Family::DecodeAndVersion,
+        severity: Severity::Error,
+        emitter: Emitter::Stage(Stage::Structure),
+    },
+    Entry {
+        code: "E0016",
+        family: Family::DecodeAndVersion,
+        severity: Severity::Error,
+        emitter: Emitter::Stage(Stage::Structure),
+    },
+    Entry {
+        code: "E0017",
+        family: Family::DecodeAndVersion,
+        severity: Severity::Error,
+        emitter: Emitter::Stage(Stage::Structure),
     },
     // --- E01xx: limits and required blocks -----------------------------------
     Entry {
@@ -573,6 +636,14 @@ pub const CATALOGUE: &[Entry] = &[
         severity: Severity::Error,
         emitter: Emitter::NoneYet("S4, with licences"),
     },
+    // S2-15: a Survey `scout_count` past the byte a beacon's column holds,
+    // which the sim's compile refuses (`PlanError::ScoutsOutOfRange`).
+    Entry {
+        code: "E0508",
+        family: Family::SettingsAndRecycle,
+        severity: Severity::Error,
+        emitter: Emitter::Stage(Stage::Semantics),
+    },
     // A warning in the settings family, spelt with the `W` the spec gives a
     // family's warnings, as `W06xx` beside `E06xx`. Decisions-log item 127 (9)
     // and S1's plan's decision 6: `seam_choice: SAFEST` reads as NEAREST until
@@ -595,6 +666,16 @@ pub const CATALOGUE: &[Entry] = &[
         family: Family::EconomyPowerAndMessaging,
         severity: Severity::Error,
         emitter: Emitter::NoneYet("S4, with radio"),
+    },
+    // S2-14 (decisions-log item 135 (2) (d)): a seal the Ledger cannot price,
+    // which `submit_plan`'s third door refuses: the route's `$` or `kW`
+    // leaves the sim's types, or its spend is past the forecast's `int32`.
+    // The limit is the wire's, a technical one and not a balance cap.
+    Entry {
+        code: "E0603",
+        family: Family::EconomyPowerAndMessaging,
+        severity: Severity::Error,
+        emitter: Emitter::Stage(Stage::Estimate),
     },
     Entry {
         code: "W0601",
@@ -648,7 +729,7 @@ pub const CATALOGUE: &[Entry] = &[
         code: "W0703",
         family: Family::ScheduleConflictsAndStaleness,
         severity: Severity::Warning,
-        emitter: Emitter::NoneYet("S2/S3, with the reach window"),
+        emitter: Emitter::NoneYet("S3, with the reach window"),
     },
     // Targeting's three lints (docs/design/targeting.md, "Surfaces"), the
     // first codes the lint stage raises. Advice, never a refusal: each is a
@@ -833,14 +914,16 @@ mod tests {
 
     #[test]
     fn the_full_stages_refuse_only_what_the_spec_refuses() {
-        // Item 82, in its S1 form; it replaces the skeleton's
+        // Item 82, in its S2 form; it replaces the skeleton's
         // `nothing_hangs_off_the_empty_estimate_stage_and_every_lint_is_advice`. The
         // estimate stage is filled (S1's `proj`), and of everything FULL can
-        // add, exactly one code refuses a playbook: `E0601`, spec section 11's
+        // add, two codes refuse a playbook: `E0601`, spec section 11's
         // "adding draw beyond supply is an error unless 'allow dormant
-        // beacons' is set". An existing shortfall is "only a warning", a route
-        // that does not fit is advice, and a lint is advice (spec section 11:
-        // a playbook qualifies on zero errors).
+        // beacons' is set", and from S2 `E0603`, a seal the Ledger cannot
+        // price, which `submit_plan` refuses (item 135 (2) (d)). An existing
+        // shortfall is "only a warning", a route that does not fit is advice,
+        // and a lint is advice (spec section 11: a playbook qualifies on zero
+        // errors).
         let mut estimate_errors: Vec<&str> = Vec::new();
         let mut estimated: Vec<&str> = Vec::new();
         for row in CATALOGUE {
@@ -862,13 +945,14 @@ mod tests {
         }
         assert_eq!(
             estimate_errors,
-            ["E0601"],
-            "the estimate stage refuses only added draw beyond supply"
+            ["E0601", "E0603"],
+            "the estimate stage refuses only added draw beyond supply and a seal the Ledger \
+             cannot price"
         );
         assert_eq!(
             estimated,
             [
-                "E0601", "W0601", "W0602", "W0603", "W0604", "W0701", "W0707", "I0001"
+                "E0601", "E0603", "W0601", "W0602", "W0603", "W0604", "W0701", "W0707", "I0001"
             ],
             "the estimate stage raises the economy family and the schedule's three codes, and \
              E0602 waits for radio (S4)"

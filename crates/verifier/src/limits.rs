@@ -200,7 +200,7 @@ impl Limits {
     /// their freshness from it rather than declaring their own. Read but not yet
     /// compared against — `W0703` waits for the sightings that would be stale.
     ///
-    /// PLACEHOLDER: the reach window's tuning — owner, S2/S3 (item 90).
+    /// PLACEHOLDER: the reach window's tuning — owner, S3 (item 90).
     #[must_use]
     pub const fn reach_memory_ms(&self) -> i32 {
         self.reach_memory_ms

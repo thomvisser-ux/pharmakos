@@ -9,10 +9,10 @@
       "beginner": "The power the seat has is already less than the power it is using."
     }
   ],
-  "report_hash": "Fk8KnIVUckA=",
+  "report_hash": "UYocA7oY1CI=",
   "rules_hash": "sfLu8OdcWuQ=",
   "plan_fingerprint": "9Y5p5OPom34=",
-  "verifier_version": "0.1.0-s1",
+  "verifier_version": "0.1.0-s2",
   "size_units": 1,
   "size_budget": 128
 }

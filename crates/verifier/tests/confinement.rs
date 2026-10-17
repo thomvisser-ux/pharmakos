@@ -374,3 +374,136 @@ fn the_verifier_never_ranks() {
         "lib.rs no longer runs the estimate stage, so this scan proves nothing"
     );
 }
+
+/// The fallbacks that stay, each with the rule that makes its answer exact
+/// (S2's plan, engineering call E7, swept for this crate by task `vfy1`).
+///
+/// `(file, the line's code, why)`. A conversion that could fail by
+/// construction was rewritten so the failure cannot be written (the map size
+/// read as an array, the template filled by splitting at its braces, the
+/// walking bound dividing by a speed that cannot be zero, the vent and its
+/// covering beacon read in one pattern), and one that a host could reach
+/// returns a typed error (`report_hash`'s length prefixes, `HashError`).
+/// What is left saturates where saturating cannot change the answer.
+const KEPT_FALLBACKS: &[(&str, &str, &str)] = &[
+    (
+        "interface.rs",
+        "let extra = i32::try_from(fields.saturating_sub(1)).unwrap_or(i32::MAX);",
+        "spec section 5's cap: the edit is min(base + per-field x extra, max), so an extra \
+         past i32 prices at the cap, exactly as the true count would",
+    ),
+    (
+        "interface.rs",
+        "let targets = Ms::new(i32::try_from(targets).unwrap_or(i32::MAX));",
+        "a visit's figure saturates upwards past every segment, the module doc's rule; no \
+         playbook inside the size budget comes near it",
+    ),
+    (
+        "interface.rs",
+        "u32::try_from(list.len()).unwrap_or(u32::MAX)",
+        "a list's elements are priced under the edit's cap or saturate past every segment, so \
+         a count past u32 prices the same",
+    ),
+    (
+        "size.rs",
+        "u32::try_from(len).unwrap_or(u32::MAX)",
+        "the size meter is compared with a u32 budget row, so a saturated count fires E0110 as \
+         the true one would; inside verify the input's u32 byte length bounds it",
+    ),
+    (
+        "walking.rs",
+        "Ms::from_ticks(u32::try_from(ticks).unwrap_or(u32::MAX))",
+        "a lower bound lowered is still a lower bound, the one direction the walking bound may \
+         err in",
+    ),
+];
+
+/// Every `try_from(..).unwrap_or(..)` and `.get(..)…unwrap_or(..)` in the
+/// crate's shipped code, as `(file name, the line holding the unwrap)`.
+///
+/// A statement is read back from its `unwrap_or` line to the line that ends
+/// the statement before it, so a chain written over several lines is one
+/// finding. `.first()` and `.last()` count as `.get`.
+fn fallbacks() -> Vec<(String, String)> {
+    let mut found: Vec<(String, String)> = Vec::new();
+    for path in sources() {
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let lines = code_lines(&text);
+        for (index, (_, line)) in lines.iter().enumerate() {
+            if !line.contains("unwrap_or") {
+                continue;
+            }
+            let mut statement = line.clone();
+            let mut back = index;
+            while back > 0 {
+                back -= 1;
+                let Some((_, earlier)) = lines.get(back) else {
+                    break;
+                };
+                let end = earlier.trim_end();
+                if end.ends_with(';') || end.ends_with('{') || end.ends_with('}') {
+                    break;
+                }
+                statement.insert_str(0, earlier);
+            }
+            let converts = statement.contains("try_from(");
+            let reads = statement.contains(".get(")
+                || statement.contains(".first()")
+                || statement.contains(".last()");
+            if converts || reads {
+                found.push((name.clone(), line.trim().to_owned()));
+            }
+        }
+    }
+    found
+}
+
+#[test]
+fn no_silent_fallback_is_left() {
+    let found = fallbacks();
+    let mut unexplained: Vec<String> = Vec::new();
+    for (file, line) in &found {
+        let kept = KEPT_FALLBACKS
+            .iter()
+            .any(|(kept_file, code, _)| kept_file == file && line.contains(code));
+        if !kept {
+            unexplained.push(format!("{file}: {line}"));
+        }
+    }
+    assert!(
+        unexplained.is_empty(),
+        "a conversion or a read falls back to a value instead of saying what went wrong. \
+         Return a typed error, make the failure unrepresentable, or, where saturating is a rule \
+         that leaves the answer exact, add the line to KEPT_FALLBACKS with that rule:\n{}",
+        unexplained.join("\n")
+    );
+    for (file, code, why) in KEPT_FALLBACKS {
+        let count = found
+            .iter()
+            .filter(|(found_file, line)| found_file == file && line.contains(code))
+            .count();
+        assert_eq!(
+            count, 1,
+            "KEPT_FALLBACKS' entry in {file} (`{code}`, kept because {why}) matches {count} \
+             lines; an entry that matches nothing is stale, and one that matches two hides one"
+        );
+        assert!(!why.is_empty(), "{file}: a kept fallback names its rule");
+    }
+}
+
+#[test]
+fn the_fallback_scan_finds_what_it_looks_for() {
+    // The scan must see a kept fallback, or every assertion above passes over
+    // nothing.
+    let found = fallbacks();
+    assert!(
+        found.iter().any(|(file, _)| file == "walking.rs"),
+        "the fallback scan no longer sees walking.rs' kept conversion"
+    );
+}

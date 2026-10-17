@@ -29,11 +29,12 @@
 //!
 //! Scouts are the one unit a playbook **orders**: spec section 6's Survey row
 //! makes the count a setting, and the sim's Survey mandate fields scouts until
-//! the beacon has that many. The sim stores the count in a `u8` and clamps a
-//! larger one to 255 when the row commits (`set_beacon_scouts`); the projection
-//! counts the number the author wrote, in full, because that is what the
-//! playbook orders, and a count past the sim's column is past every supply the
-//! rules table can give a seat anyway.
+//! the beacon has that many. The sim stores the count in a `u8` and refuses a
+//! larger one at the seal (`PlanError::ScoutsOutOfRange`), which the semantics
+//! stage says first as `E0508`; the projection still counts the number the
+//! author wrote, in full, because that is what the playbook orders, and a
+//! count past the sim's column is past every supply the rules table can give a
+//! seat anyway.
 //!
 //! # How sure it is: what an order adds, and what it may add
 //!

@@ -276,10 +276,13 @@ impl Lints<'_> {
                 first = Some(vent);
             }
         }
-        let Some(vent) = first else {
+        // Only a covered vent is ever taken as `first`, so the beacon is there;
+        // reading it in the same pattern leaves no empty name to fall back on.
+        let Some((vent, beacon)) =
+            first.and_then(|vent| vent.covered_by.as_deref().map(|beacon| (vent, beacon)))
+        else {
             return;
         };
-        let beacon = vent.covered_by.as_deref().unwrap_or_default();
         self.out.emit(
             Diag::new("W0706", pointer::child(at, "voxel"))
                 .arg(

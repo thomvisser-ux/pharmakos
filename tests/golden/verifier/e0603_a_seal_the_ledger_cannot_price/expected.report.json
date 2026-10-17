@@ -1,0 +1,47 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0508",
+      "severity": "ERROR",
+      "path": "/declarative/route/0/interface/rows/0/set_mandate_settings/survey/scout_count",
+      "message": "`scout_count` is 4294967295; a beacon holds at most 255 scouts.",
+      "beginner": "A Survey beacon can field only so many scouts. Ask for fewer.",
+      "suggestions": [
+        {
+          "title": "Ask for as many scouts as a beacon holds",
+          "json_patch": "[{\"op\":\"replace\",\"path\":\"/declarative/route/0/interface/rows/0/set_mandate_settings/survey/scout_count\",\"value\":255}]",
+          "applicability": "MAYBE_INCORRECT"
+        }
+      ]
+    },
+    {
+      "code": "W0604",
+      "severity": "WARNING",
+      "path": "/declarative/route/0",
+      "message": "the playbook may add up to 4294967289 kW of draw beyond supply: an edit of a beacon that may already field what it orders is counted in full, because the view cannot see what the beacon fields.",
+      "beginner": "This playbook might switch on more than the seat's power can carry; it depends on what the beacons it edits already have."
+    },
+    {
+      "code": "W0602",
+      "severity": "WARNING",
+      "path": "/declarative/route/0",
+      "message": "committed spending of $ 42949672950 outruns the projected treasury of $ 200.",
+      "beginner": "This playbook spends more than the seat is likely to have."
+    },
+    {
+      "code": "E0603",
+      "severity": "ERROR",
+      "path": "/declarative/route/0",
+      "message": "the route orders up to $ 42949672950 and 4294967295 kW, past what the Ledger can price a seal at ($ 2147483647 and 2147483647 kW); order less in one playbook.",
+      "beginner": "This playbook asks for more than a seal can hold. The game would refuse it when you submit, so it is refused here first."
+    }
+  ],
+  "report_hash": "FJtRqCxf44o=",
+  "rules_hash": "sfLu8OdcWuQ=",
+  "plan_fingerprint": "9yGFg3XivWc=",
+  "verifier_version": "0.1.0-s2",
+  "size_units": 1,
+  "size_budget": 128
+}
+
