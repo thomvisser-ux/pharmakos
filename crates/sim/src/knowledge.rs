@@ -200,8 +200,9 @@ impl AssetId {
     /// Which kind this id belongs to.
     #[must_use]
     pub fn tag(self) -> u8 {
-        // The shift leaves four bits, so the narrowing cannot truncate.
-        u8::try_from(self.0 >> AssetId::TAG_SHIFT).unwrap_or(0)
+        // The shift leaves four bits, so the lowest byte is the whole of it.
+        let [low, ..] = (self.0 >> AssetId::TAG_SHIFT).to_le_bytes();
+        low
     }
 
     /// The index within the kind.

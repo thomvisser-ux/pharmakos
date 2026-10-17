@@ -27,7 +27,7 @@ use pharmakos_gateway::scopes::{Scope, ScopeSet};
 use pharmakos_gateway::surface::Surface;
 use pharmakos_gateway::token::{Subject, Token};
 use pharmakos_proto::json::Json;
-use pharmakos_sim::math::quantity::{Hp, Ms, Tick};
+use pharmakos_sim::math::quantity::{Damage, Ms, Tick};
 use pharmakos_sim::rules::RulesTable;
 use pharmakos_sim::runner::MatchSettings;
 use pharmakos_sim::tables::{BeaconId, SeatId};
@@ -467,7 +467,9 @@ pub fn erase(surface: &mut Surface, at: [i32; 3]) {
         host.file_voxel_edit(VoxelEdit::Set {
             at,
             material: Material::AIR,
-        }),
+            by: None,
+        })
+        .is_ok(),
         "the edit queue took the edit"
     );
 }
@@ -480,9 +482,11 @@ pub fn fell(surface: &mut Surface, seat: u8) {
         assert!(
             host.file_damage(DamageOrder {
                 target: DamageTarget::Beacon(id),
-                amount: Hp::new(i32::MAX),
+                amount: Damage::new(i64::from(i32::MAX)).expect("a positive amount"),
                 by: SeatId::NEUTRAL,
-            }),
+                source: None,
+            })
+            .is_ok(),
             "the damage queue took the order"
         );
     }

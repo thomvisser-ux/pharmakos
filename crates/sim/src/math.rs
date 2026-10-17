@@ -19,5 +19,6 @@
 //! anywhere else.
 
 pub mod fixed;
+pub mod index;
 pub mod quantity;
 pub mod random;

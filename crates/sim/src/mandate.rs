@@ -217,19 +217,18 @@ fn backlogged(world: &World, work: u32, drones: u32) -> bool {
     if drones == 0 {
         return true;
     }
-    let threshold = world
-        .rules()
-        .message()
-        .economy
-        .as_ref()
-        .map_or(0, |economy| economy.backlog_threshold_per_drone);
+    // Read typed at load: a table missing its economy block is refused there
+    // (decisions-log item 136 (5)), so this reads the row as it is. The
+    // product saturates by rule: a backlog past `u32::MAX` work items is no
+    // backlog any count of work can reach.
+    let threshold = world.rules().backlog_threshold_per_drone();
     work > drones.saturating_mul(threshold)
 }
 
 /// How many living units of `kind` are homed to `beacon`.
 fn drones_homed(world: &World, beacon: BeaconId, kind: UnitKind) -> u32 {
     let units = world.units();
-    let count = usize::try_from(units.len()).unwrap_or(0);
+    let count = crate::math::index::row(units.len());
     let mut total: u32 = 0;
     let mut row: usize = 0;
     while row < count {

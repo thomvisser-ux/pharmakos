@@ -258,6 +258,17 @@ pub enum MapError {
         /// How many units the world holds.
         units: u32,
     },
+    /// The lobby's match settings are refused
+    /// ([`crate::runner::MatchSettings::validate`]).
+    Settings(crate::runner::SettingsError),
+    /// A per-tick queue's room, derived at construction from the world's table
+    /// rooms (S2's plan, E5), does not fit: the checked sum or product
+    /// overflowed. Caught once, here, for the reason [`MapError::Unindexable`]
+    /// is.
+    Unsized {
+        /// Which queue.
+        queue: &'static str,
+    },
     /// The rules table's cluster edge cannot decompose the map.
     ///
     /// `locomotion.hpa_cluster_voxels` has to divide the footprint and to stay
@@ -323,6 +334,11 @@ impl fmt::Display for MapError {
             MapError::Unplaceable(what) => {
                 write!(f, "no legal position for {what} on this map")
             }
+            MapError::Settings(error) => write!(f, "the match settings are refused: {error}"),
+            MapError::Unsized { queue } => write!(
+                f,
+                "the {queue} queue's room, derived from the world's table rooms, does not fit"
+            ),
             MapError::Unclusterable { cluster_voxels } => write!(
                 f,
                 "locomotion.hpa_cluster_voxels is {cluster_voxels}, which does not divide this \
@@ -492,7 +508,7 @@ impl MapFile {
     /// Project a generated store into the flat form.
     #[must_use]
     pub fn capture(voxels: &VoxelStore, seed: u64) -> MapFile {
-        let count = usize::try_from(voxels.chunk_count()).unwrap_or(0);
+        let count = crate::math::index::row(voxels.chunk_count());
         let mut chunks: Vec<u8> =
             Vec::with_capacity(count.saturating_mul(crate::voxels::CHUNK_VOXELS));
         let mut chunk: u32 = 0;
@@ -577,6 +593,8 @@ impl MapFile {
 
 /// The rows the generator reads, pulled out of the message once.
 struct Numbers<'a> {
+    /// The typed view, for the rows the loader already read typed.
+    rules: &'a RulesTable,
     map: &'a gp::v1::rules_table::Map,
     beacon: &'a gp::v1::rules_table::Beacon,
     commander: &'a gp::v1::rules_table::Commander,
@@ -602,10 +620,10 @@ pub fn generate(seed: u64, rules: &RulesTable, seats: u32) -> Result<GeneratedMa
     let size = [map.size_x, map.size_y, map.size_z];
     let mut voxels = VoxelStore::new(size).ok_or(MapError::BadExtent { size })?;
     let (width, depth) = (
-        i32::try_from(map.size_x).unwrap_or(0),
-        i32::try_from(map.size_y).unwrap_or(0),
+        signed("map.size_x", map.size_x)?,
+        signed("map.size_y", map.size_y)?,
     );
-    let height_cap = i32::try_from(map.size_z).unwrap_or(0);
+    let height_cap = signed("map.size_z", map.size_z)?;
     if width <= 0 || depth <= 0 || height_cap <= 0 {
         return Err(MapError::BadExtent { size });
     }
@@ -614,7 +632,7 @@ pub fn generate(seed: u64, rules: &RulesTable, seats: u32) -> Result<GeneratedMa
 
     // 1. Terrain, 2. zones, 3. flatten, 4. the 1-Lipschitz closure.
     let mut heights = terrain(seed, width, depth, height_cap);
-    let radius = i32::try_from(map.spawn_zone_radius_voxels).unwrap_or(0);
+    let radius = signed("map.spawn_zone_radius_voxels", map.spawn_zone_radius_voxels)?;
     let centres = zone_centres(seed, width, depth, map.spawn_zones, radius)?;
     flatten_zones(&mut heights, width, depth, &centres, radius);
     smooth(&mut heights, width, depth);
@@ -648,7 +666,7 @@ pub fn generate(seed: u64, rules: &RulesTable, seats: u32) -> Result<GeneratedMa
     // no force, no money, no power. The determinism harness runs four seats on
     // a three-zone map on purpose (a wider table is a wider hash), so this is a
     // state the sim has rather than an error.
-    while u32::try_from(placed.seat_treasury.len()).unwrap_or(u32::MAX) < seats {
+    while placed.seat_treasury.len() < crate::math::index::row(seats) {
         placed.seat_treasury.push(Money::ZERO);
         placed.seat_supply.push(Kw::ZERO);
         placed.seat_draw.push(Kw::ZERO);
@@ -674,7 +692,7 @@ pub fn generate(seed: u64, rules: &RulesTable, seats: u32) -> Result<GeneratedMa
     let features = FeatureTable::new(footprints)?;
 
     // 9. The power ceiling.
-    let ceiling = i32::try_from(numbers.power.map_ceiling_kw).unwrap_or(i32::MAX);
+    let ceiling = signed("power.map_ceiling_kw", numbers.power.map_ceiling_kw)?;
     if supply_kw > ceiling {
         return Err(MapError::PowerCeiling {
             supply_kw,
@@ -757,16 +775,16 @@ fn realise_zones(
             why: "an unset richness; the map generator will not guess a grade".to_owned(),
         })?;
     let vent_band = Band {
-        min_voxels: i32::try_from(map.vent_min_distance_voxels).unwrap_or(0),
-        max_voxels: i32::try_from(map.vent_max_distance_voxels).unwrap_or(0),
+        min_voxels: signed("map.vent_min_distance_voxels", map.vent_min_distance_voxels)?,
+        max_voxels: signed("map.vent_max_distance_voxels", map.vent_max_distance_voxels)?,
         richness: vent_richness,
     };
     let seam_band = Band {
-        min_voxels: i32::try_from(map.seam_min_distance_voxels).unwrap_or(0),
-        max_voxels: i32::try_from(map.seam_max_distance_voxels).unwrap_or(0),
+        min_voxels: signed("map.seam_min_distance_voxels", map.seam_min_distance_voxels)?,
+        max_voxels: signed("map.seam_max_distance_voxels", map.seam_max_distance_voxels)?,
         richness: seam_richness,
     };
-    let core_surplus = i32::try_from(numbers.power.core_surplus_kw).unwrap_or(0);
+    let core_surplus = signed("power.core_surplus_kw", numbers.power.core_surplus_kw)?;
 
     let mut out = PlacedZones {
         beacons: BeaconTable::with_capacity(occupied),
@@ -779,13 +797,12 @@ fn realise_zones(
         footprints: Vec::new(),
     };
 
-    for (index, centre) in centres.iter().enumerate() {
-        let zone = u32::try_from(index).unwrap_or(u32::MAX);
-        let column = (
-            centre.first().copied().unwrap_or(0),
-            centre.get(1).copied().unwrap_or(0),
-        );
-        let core = [column.0, column.1, voxels.standing_z(column.0, column.1)];
+    // Zone ids count up with the centres, which `zone_centres` made from the
+    // `u32` `map.spawn_zones`, so a zone id is a `u32` by construction.
+    let mut zone: u32 = 0;
+    for centre in centres {
+        let [x, y, _] = *centre;
+        let core = [x, y, voxels.standing_z(x, y)];
         if zone >= occupied {
             out.zones.push(ZoneReport {
                 seat: None,
@@ -793,25 +810,32 @@ fn realise_zones(
                 vent: None,
                 seam: None,
             });
+            zone = zone.checked_add(1).ok_or(MapError::OutOfRange {
+                field: "map.spawn_zones",
+                why: "more zones than a zone id counts".to_owned(),
+            })?;
             continue;
         }
 
-        let seat = SeatId::new(u8::try_from(zone).unwrap_or(u8::MAX));
+        let seat = SeatId::new(u8::try_from(zone).map_err(|_| MapError::OutOfRange {
+            field: "seats",
+            why: format!("seat {zone} is past the {} a seat id holds", u8::MAX),
+        })?);
         out.beacons.push(
             BeaconId::new(zone),
             seat,
-            voxel_point(core),
+            voxel_point(core)?,
             BeaconMandate {
                 kind: MandateKind::Build,
                 program_id: ProgramId::NONE,
             },
-            Hp::new(i32::try_from(numbers.beacon.core_hp).unwrap_or(i32::MAX)),
+            numbers.rules.core_hp(),
             false,
         );
         numbers.push_starting_force(voxels, seat, core, &mut out.starting_units)?;
         out.seat_treasury.push(numbers.starting_treasury());
         out.seat_supply.push(Kw::new(core_surplus));
-        out.seat_draw.push(numbers.starting_draw());
+        out.seat_draw.push(numbers.starting_draw()?);
         out.supply_kw = out.supply_kw.saturating_add(core_surplus);
 
         let vent = place_vent(voxels, seed, zone, core, vent_band, &mut out.footprints)?;
@@ -826,13 +850,17 @@ fn realise_zones(
         )?;
         out.supply_kw = out
             .supply_kw
-            .saturating_add(numbers.generator_output(vent_richness));
+            .saturating_add(numbers.generator_output(vent_richness)?);
         out.zones.push(ZoneReport {
             seat: Some(seat.raw()),
             centre: core,
             vent: Some(vent),
             seam: Some(scrap),
         });
+        zone = zone.checked_add(1).ok_or(MapError::OutOfRange {
+            field: "map.spawn_zones",
+            why: "more zones than a zone id counts".to_owned(),
+        })?;
     }
     Ok(out)
 }
@@ -850,6 +878,7 @@ impl<'a> Numbers<'a> {
             .copied()
             .ok_or(MapError::MissingBlock("match.segment_lengths_ms"))?;
         Ok(Numbers {
+            rules,
             map: message.map.as_ref().ok_or(MapError::MissingBlock("map"))?,
             beacon: message
                 .beacon
@@ -945,12 +974,10 @@ impl<'a> Numbers<'a> {
     /// The octile ground cost between two whole-voxel columns (item 59's
     /// 10 / 14 per step).
     fn octile(&self, a: [i32; 3], b: [i32; 3]) -> i64 {
-        let dx = i64::from(a.first().copied().unwrap_or(0))
-            .saturating_sub(i64::from(b.first().copied().unwrap_or(0)))
-            .abs();
-        let dy = i64::from(a.get(1).copied().unwrap_or(0))
-            .saturating_sub(i64::from(b.get(1).copied().unwrap_or(0)))
-            .abs();
+        let ([ax, ay, _], [bx, by, _]) = (a, b);
+        // Two `i32`s apart fit an `i64`, so neither difference can overflow.
+        let dx = i64::from(ax).saturating_sub(i64::from(bx)).abs();
+        let dy = i64::from(ay).saturating_sub(i64::from(by)).abs();
         let (long, short) = if dx >= dy { (dx, dy) } else { (dy, dx) };
         i64::from(self.locomotion.step_cost_diagonal)
             .saturating_mul(short)
@@ -974,27 +1001,48 @@ impl<'a> Numbers<'a> {
     /// `power.kw_per_unit` and each drone draws its own kind's row. The core
     /// beacon draws nothing: item 90 says a beacon is net zero through its own
     /// key-core, and the pre-placed core is that core.
-    fn starting_draw(&self) -> Kw {
-        let build = self.units.build_drone.map_or(0, |k| k.draw_kw);
-        let mine = self.units.mining_drone.map_or(0, |k| k.draw_kw);
-        let total = u64::from(self.power.kw_per_unit)
-            .saturating_add(
-                u64::from(build).saturating_mul(u64::from(self.units.starting_build_drones)),
-            )
-            .saturating_add(
-                u64::from(mine).saturating_mul(u64::from(self.units.starting_mining_drones)),
-            );
-        Kw::new(i32::try_from(total).unwrap_or(i32::MAX))
+    ///
+    /// # Errors
+    ///
+    /// [`MapError::OutOfRange`] when the force's draw is past a signed 32-bit
+    /// `kW`, which the power rows' own load check
+    /// ([`crate::power::PowerRules::read`]) does not cover for the starting
+    /// counts.
+    fn starting_draw(&self) -> Result<Kw, MapError> {
+        let build = self.rules.unit_draw_kw(UnitKind::BuildDrone).raw();
+        let mine = self.rules.unit_draw_kw(UnitKind::MiningDrone).raw();
+        let refused = || MapError::OutOfRange {
+            field: "units.starting_build_drones",
+            why: "the starting force's draw is past a signed 32-bit kW".to_owned(),
+        };
+        let drones = |draw: i32, count: u32| {
+            i32::try_from(count)
+                .ok()
+                .and_then(|count| draw.checked_mul(count))
+        };
+        signed("power.kw_per_unit", self.power.kw_per_unit)?
+            .checked_add(drones(build, self.units.starting_build_drones).ok_or_else(refused)?)
+            .and_then(|sum| sum.checked_add(drones(mine, self.units.starting_mining_drones)?))
+            .map(Kw::new)
+            .ok_or_else(refused)
     }
 
-    fn generator_output(&self, richness: Richness) -> i32 {
-        let by = self.power.generator_output_kw.unwrap_or_default();
-        let raw = match richness {
-            Richness::Lean => by.lean,
-            Richness::Standard => by.standard,
-            Richness::Rich => by.rich,
-        };
-        i32::try_from(raw).unwrap_or(i32::MAX)
+    /// One Generator's output on a vent of `richness`, `power.generator_output_kw`.
+    ///
+    /// # Errors
+    ///
+    /// [`MapError::MissingBlock`] without the row, and
+    /// [`MapError::OutOfRange`] past a signed 32-bit `kW`.
+    fn generator_output(&self, richness: Richness) -> Result<i32, MapError> {
+        let by = self
+            .power
+            .generator_output_kw
+            .ok_or(MapError::MissingBlock("power.generator_output_kw"))?;
+        match richness {
+            Richness::Lean => signed("power.generator_output_kw.lean", by.lean),
+            Richness::Standard => signed("power.generator_output_kw.standard", by.standard),
+            Richness::Rich => signed("power.generator_output_kw.rich", by.rich),
+        }
     }
 
     /// Place the commander and the starting drones around `core`.
@@ -1005,48 +1053,38 @@ impl<'a> Numbers<'a> {
         core: [i32; 3],
         out: &mut Vec<StartingUnit>,
     ) -> Result<(), MapError> {
-        let commander_hp = Hp::new(i32::try_from(self.commander.hp).unwrap_or(i32::MAX));
-        let build = self
-            .units
-            .build_drone
-            .ok_or(MapError::MissingBlock("units.build_drone"))?;
-        let mine = self
-            .units
-            .mining_drone
-            .ok_or(MapError::MissingBlock("units.mining_drone"))?;
+        // Every row is read typed when the table loads, so each kind has its
+        // hit points (decisions-log item 136 (5)).
+        let commander_hp = self.rules.unit_hp(UnitKind::Commander);
+        let build = self.rules.unit_hp(UnitKind::BuildDrone);
+        let mine = self.rules.unit_hp(UnitKind::MiningDrone);
 
         let mut slot: u32 = 0;
-        let mut place = |kind: UnitKind, hp: Hp, slot: &mut u32| {
-            let offset = ring_offset(*slot);
-            let x = core.first().copied().unwrap_or(0).saturating_add(offset[0]);
-            let y = core.get(1).copied().unwrap_or(0).saturating_add(offset[1]);
+        let [core_x, core_y, _] = core;
+        let mut place = |kind: UnitKind, hp: Hp, slot: &mut u32| -> Result<(), MapError> {
+            let [dx, dy] = ring_offset(*slot);
+            let x = core_x.saturating_add(dx);
+            let y = core_y.saturating_add(dy);
             let z = voxels.standing_z(x, y);
             out.push(StartingUnit {
                 seat,
                 kind,
-                at: voxel_point([x, y, z]),
+                at: voxel_point([x, y, z])?,
                 hp,
             });
             *slot = slot.saturating_add(1);
+            Ok(())
         };
 
-        place(UnitKind::Commander, commander_hp, &mut slot);
+        place(UnitKind::Commander, commander_hp, &mut slot)?;
         let mut n: u32 = 0;
         while n < self.units.starting_build_drones {
-            place(
-                UnitKind::BuildDrone,
-                Hp::new(i32::try_from(build.hp).unwrap_or(i32::MAX)),
-                &mut slot,
-            );
+            place(UnitKind::BuildDrone, build, &mut slot)?;
             n = n.saturating_add(1);
         }
         let mut n: u32 = 0;
         while n < self.units.starting_mining_drones {
-            place(
-                UnitKind::MiningDrone,
-                Hp::new(i32::try_from(mine.hp).unwrap_or(i32::MAX)),
-                &mut slot,
-            );
+            place(UnitKind::MiningDrone, mine, &mut slot)?;
             n = n.saturating_add(1);
         }
         Ok(())
@@ -1078,25 +1116,41 @@ const RING: [[i32; 2]; 8] = [
     reason = "the ring the slot falls on; both operands are non-negative, so the rounding is floor and that is the point"
 )]
 fn ring_offset(slot: u32) -> [i32; 2] {
-    let ring = i32::try_from(slot / 8).unwrap_or(0).saturating_add(1);
-    let index = usize::try_from(slot % 8).unwrap_or(0);
-    let base = RING.get(index).copied().unwrap_or([0, 0]);
-    [
-        base.first().copied().unwrap_or(0).saturating_mul(ring),
-        base.get(1).copied().unwrap_or(0).saturating_mul(ring),
-    ]
+    // A ring past `i32::MAX` is a slot no starting force reaches; the
+    // multiplier saturates by rule, as every ring offset below does.
+    let ring = i32::try_from(slot / 8).map_or(i32::MAX, |ring| ring.saturating_add(1));
+    // `slot % 8` names one of the eight offsets, so the match is total.
+    let [o0, o1, o2, o3, o4, o5, o6, o7] = RING;
+    let [dx, dy] = match slot % 8 {
+        0 => o0,
+        1 => o1,
+        2 => o2,
+        3 => o3,
+        4 => o4,
+        5 => o5,
+        6 => o6,
+        _ => o7,
+    };
+    [dx.saturating_mul(ring), dy.saturating_mul(ring)]
 }
 
 /// Whole voxels to a Q16.16 point.
-fn voxel_point(at: [i32; 3]) -> [Fx; 3] {
-    let mut out = [Fx::ZERO; 3];
-    for axis in 0..3 {
-        let v = at.get(axis).copied().unwrap_or(0);
-        if let (Some(slot), Ok(narrow)) = (out.get_mut(axis), i16::try_from(v)) {
-            *slot = Fx::from_voxels(narrow);
-        }
-    }
-    out
+///
+/// # Errors
+///
+/// [`MapError::OutOfRange`] for a voxel past a voxel coordinate's `i16`, which
+/// no voxel of a map [`generate`] accepts can be.
+fn voxel_point(at: [i32; 3]) -> Result<[Fx; 3], MapError> {
+    let [x, y, z] = at;
+    let axis = |v: i32| {
+        i16::try_from(v)
+            .map(Fx::from_voxels)
+            .map_err(|_| MapError::OutOfRange {
+                field: "map.size_x",
+                why: format!("voxel {v} is past a voxel coordinate's {}", i16::MAX),
+            })
+    };
+    Ok([axis(x)?, axis(y)?, axis(z)?])
 }
 
 /// `ceil(a / b)` for non-negative `a` and positive `b`.
@@ -1124,7 +1178,9 @@ fn draw(seed: u64, phase: Phase, index: u32) -> StreamRng {
 fn corner(seed: u64, phase: Phase, lattice_width: u32, gx: u32, gy: u32) -> i32 {
     let index = gy.saturating_mul(lattice_width).saturating_add(gx);
     let bits = draw(seed, phase, index).next_u64();
-    i32::try_from(bits >> 56).unwrap_or(0)
+    // The top byte, `0 ..= 255` by its type.
+    let [top, ..] = bits.to_be_bytes();
+    i32::from(top)
 }
 
 /// One octave of integer value noise at `(x, y)`, `0 ..= 255`.
@@ -1132,12 +1188,16 @@ fn corner(seed: u64, phase: Phase, lattice_width: u32, gx: u32, gy: u32) -> i32 
 /// Bilinear interpolation in integers: the two horizontal blends are exact and
 /// the final `>> (2 * shift)` is a floor, which is the documented rounding —
 /// both operands are non-negative, so it cannot surprise anybody.
-fn octave(seed: u64, phase: Phase, shift: u32, lattice_width: u32, x: u32, y: u32) -> i32 {
+///
+/// `x` and `y` are a column of the map, never negative ([`terrain`]'s loops),
+/// so the lattice cell is the column shifted down and the fraction is the
+/// bits the shift drops.
+fn octave(seed: u64, phase: Phase, shift: u32, lattice_width: u32, x: i32, y: i32) -> i32 {
     let cell = 1_i32 << shift;
-    let gx = x >> shift;
-    let gy = y >> shift;
-    let fx = i32::try_from(x & ((1_u32 << shift) - 1)).unwrap_or(0);
-    let fy = i32::try_from(y & ((1_u32 << shift) - 1)).unwrap_or(0);
+    let gx = (x >> shift).unsigned_abs();
+    let gy = (y >> shift).unsigned_abs();
+    let fx = x & (cell - 1);
+    let fy = y & (cell - 1);
 
     let v00 = corner(seed, phase, lattice_width, gx, gy);
     let v10 = corner(seed, phase, lattice_width, gx.saturating_add(1), gy);
@@ -1164,9 +1224,12 @@ fn octave(seed: u64, phase: Phase, shift: u32, lattice_width: u32, x: u32, y: u3
 
 /// The raw heightmap: how many solid voxels each column carries, row-major
 /// (`height[y * width + x]`).
+///
+/// `width` and `depth` are positive ([`generate`] refuses anything else), so
+/// their magnitudes are the extents.
 fn terrain(seed: u64, width: i32, depth: i32, height_cap: i32) -> Vec<i32> {
-    let across = u32::try_from(width).unwrap_or(0);
-    let down = u32::try_from(depth).unwrap_or(0);
+    let across = width.unsigned_abs();
+    let down = depth.unsigned_abs();
     let coarse_width = (across >> TERRAIN_COARSE_SHIFT).saturating_add(2);
     let fine_width = (across >> TERRAIN_FINE_SHIFT).saturating_add(2);
     // The mean height is half the map's cap, which is what "a low-lying map"
@@ -1181,12 +1244,14 @@ fn terrain(seed: u64, width: i32, depth: i32, height_cap: i32) -> Vec<i32> {
     let floor = 4;
     let ceiling = height_cap.saturating_sub(8).max(floor);
 
+    // A capacity, so a product past `u32` saturates to a smaller first
+    // allocation rather than failing: the `Vec` still grows to fit.
     let mut heights: Vec<i32> =
-        Vec::with_capacity(usize::try_from(across.saturating_mul(down)).unwrap_or(0));
-    let mut y: u32 = 0;
-    while y < down {
-        let mut x: u32 = 0;
-        while x < across {
+        Vec::with_capacity(crate::math::index::row(across.saturating_mul(down)));
+    let mut y: i32 = 0;
+    while y < depth {
+        let mut x: i32 = 0;
+        while x < width {
             let coarse = octave(
                 seed,
                 Phase::TerrainCoarse,
@@ -1224,8 +1289,7 @@ fn terrain(seed: u64, width: i32, depth: i32, height_cap: i32) -> Vec<i32> {
 fn flatten_zones(heights: &mut [i32], width: i32, depth: i32, centres: &[[i32; 3]], radius: i32) {
     let r2 = radius.saturating_mul(radius);
     for centre in centres {
-        let cx = centre.first().copied().unwrap_or(0);
-        let cy = centre.get(1).copied().unwrap_or(0);
+        let [cx, cy, _] = *centre;
         let Some(level) = height_at(heights, width, depth, cx, cy) else {
             continue;
         };
@@ -1377,25 +1441,22 @@ fn zone_centres(
 
     let mut out: Vec<[i32; 3]> = Vec::with_capacity(3);
     let mut zone: u32 = 0;
+    let [first, second, third] = corners;
     while zone < 3 {
-        let pick =
-            usize::try_from((i64::from(zone).saturating_add(i64::from(rotation))).rem_euclid(3))
-                .unwrap_or(0);
-        let base = corners.get(pick).copied().unwrap_or([mid_x, mid_y]);
+        // `rem_euclid(3)` is 0, 1 or 2, so the match is total.
+        let [bx, by] = match (i64::from(zone).saturating_add(i64::from(rotation))).rem_euclid(3) {
+            0 => first,
+            1 => second,
+            _ => third,
+        };
         let mut jitter = draw(seed, Phase::Layout, zone.saturating_add(1));
         let dx = jitter.range_i32(-ZONE_JITTER_VOXELS, ZONE_JITTER_VOXELS);
         let dy = jitter.range_i32(-ZONE_JITTER_VOXELS, ZONE_JITTER_VOXELS);
+        // The clamp is the layout's rule: a jittered centre stays inside the
+        // band the zones fit in.
         out.push([
-            base.first()
-                .copied()
-                .unwrap_or(0)
-                .saturating_add(dx)
-                .clamp(lo_x, hi_x),
-            base.get(1)
-                .copied()
-                .unwrap_or(0)
-                .saturating_add(dy)
-                .clamp(lo_y, hi_y),
+            bx.saturating_add(dx).clamp(lo_x, hi_x),
+            by.saturating_add(dy).clamp(lo_y, hi_y),
             0,
         ]);
         zone = zone.saturating_add(1);
@@ -1416,18 +1477,13 @@ fn min_occupied_separation(
     numbers: &Numbers<'_>,
 ) -> Option<i64> {
     let mut best: Option<i64> = None;
-    let limit = usize::try_from(occupied).unwrap_or(0).min(centres.len());
-    let mut a: usize = 0;
-    while a < limit {
-        let mut b = a.saturating_add(1);
-        while b < limit {
-            if let (Some(pa), Some(pb)) = (centres.get(a), centres.get(b)) {
-                let cost = numbers.octile(*pa, *pb);
-                best = Some(best.map_or(cost, |b: i64| b.min(cost)));
-            }
-            b = b.saturating_add(1);
+    let limit = crate::math::index::row(occupied).min(centres.len());
+    let occupied = centres.iter().take(limit);
+    for (a, pa) in occupied.clone().enumerate() {
+        for pb in occupied.clone().skip(a.saturating_add(1)) {
+            let cost = numbers.octile(*pa, *pb);
+            best = Some(best.map_or(cost, |b: i64| b.min(cost)));
         }
-        a = a.saturating_add(1);
     }
     best
 }
@@ -1443,37 +1499,44 @@ fn min_occupied_separation(
 /// between the core and the contested middle is the walk the design wants, and
 /// a spawn zone sits a zone radius from the map edge, so an outward offset of
 /// up to `map.vent_max_distance_voxels` would fall off the map.
-fn sector_point(rng: &mut StreamRng, from: [i32; 3], toward: [i32; 2], distance: i32) -> [i32; 2] {
-    let dx = Fx::from_voxels(
-        i16::try_from(
-            toward
-                .first()
-                .copied()
-                .unwrap_or(0)
-                .saturating_sub(from.first().copied().unwrap_or(0)),
-        )
-        .unwrap_or(0),
-    );
-    let dy = Fx::from_voxels(
-        i16::try_from(
-            toward
-                .get(1)
-                .copied()
-                .unwrap_or(0)
-                .saturating_sub(from.get(1).copied().unwrap_or(0)),
-        )
-        .unwrap_or(0),
-    );
+///
+/// # Errors
+///
+/// [`MapError::OutOfRange`] when the map is too wide for a voxel coordinate,
+/// which [`generate`]'s extent check keeps from happening.
+fn sector_point(
+    rng: &mut StreamRng,
+    from: [i32; 3],
+    toward: [i32; 2],
+    distance: i32,
+) -> Result<[i32; 2], MapError> {
+    let [fx, fy, _] = from;
+    let [tx, ty] = toward;
+    let voxel = |v: i32| {
+        i16::try_from(v)
+            .map(Fx::from_voxels)
+            .map_err(|_| MapError::OutOfRange {
+                field: "map.size_x",
+                why: format!("{v} voxels is past a voxel coordinate's {}", i16::MAX),
+            })
+    };
+    let dx = voxel(tx.saturating_sub(fx))?;
+    let dy = voxel(ty.saturating_sub(fy))?;
     let base = Angle::from_delta(dx, dy);
+    // `range_i32(0, 2 * SECTOR_HALF_WIDTH)` lies in `0 ..= 2 * u16 half`, so it
+    // fits the angle's `u16`; the wrap below is the angle's own arithmetic.
     let spread = u16::try_from(rng.range_i32(0, i32::from(SECTOR_HALF_WIDTH).saturating_mul(2)))
-        .unwrap_or(0);
+        .map_err(|_| MapError::OutOfRange {
+            field: "map.vent_max_distance_voxels",
+            why: "a sector spread past an angle".to_owned(),
+        })?;
     let angle = Angle::from_raw(
         base.raw()
             .wrapping_add(spread)
             .wrapping_sub(SECTOR_HALF_WIDTH),
     );
 
-    let reach = Fx::from_voxels(i16::try_from(distance).unwrap_or(0));
+    let reach = voxel(distance)?;
     // Half a voxel, added before the floor, so the offset rounds to nearest and
     // the realised distance stays inside the band the rules table names.
     let half = Fx::from_raw(1 << 15);
@@ -1485,18 +1548,14 @@ fn sector_point(rng: &mut StreamRng, from: [i32; 3], toward: [i32; 2], distance:
         .saturating_mul_fx(reach)
         .saturating_add(half)
         .floor_voxels();
-    [
-        from.first().copied().unwrap_or(0).saturating_add(ox),
-        from.get(1).copied().unwrap_or(0).saturating_add(oy),
-    ]
+    Ok([fx.saturating_add(ox), fy.saturating_add(oy)])
 }
 
 /// The squared whole-voxel distance between two columns.
 fn columns_apart_squared(a: [i32; 3], b: [i32; 3]) -> i64 {
-    let dx = i64::from(a.first().copied().unwrap_or(0))
-        .saturating_sub(i64::from(b.first().copied().unwrap_or(0)));
-    let dy = i64::from(a.get(1).copied().unwrap_or(0))
-        .saturating_sub(i64::from(b.get(1).copied().unwrap_or(0)));
+    let ([ax, ay, _], [bx, by, _]) = (a, b);
+    let dx = i64::from(ax).saturating_sub(i64::from(bx));
+    let dy = i64::from(ay).saturating_sub(i64::from(by));
     dx.saturating_mul(dx).saturating_add(dy.saturating_mul(dy))
 }
 
@@ -1510,12 +1569,13 @@ fn stamp_surface_patch(
     footprint: &mut Vec<FootprintColumn>,
 ) -> u32 {
     let mut placed: u32 = 0;
+    let [ax, ay] = at;
     let mut dy = -radius;
     while dy <= radius {
         let mut dx = -radius;
         while dx <= radius {
-            let x = at.first().copied().unwrap_or(0).saturating_add(dx);
-            let y = at.get(1).copied().unwrap_or(0).saturating_add(dy);
+            let x = ax.saturating_add(dx);
+            let y = ay.saturating_add(dy);
             if let Some(z) = voxels.top_solid_z(x, y)
                 && voxels.set_pristine([x, y, z], material)
             {
@@ -1549,10 +1609,8 @@ fn place_vent(
         "a heat vent",
     )?;
     let apart2 = columns_apart_squared(spot, core);
-    let anchor = [
-        spot.first().copied().unwrap_or(0),
-        spot.get(1).copied().unwrap_or(0),
-    ];
+    let [x, y, _] = spot;
+    let anchor = [x, y];
     let mut footprint: Vec<FootprintColumn> = Vec::new();
     let placed = stamp_surface_patch(
         voxels,
@@ -1591,28 +1649,21 @@ fn band_point(
     band: Band,
     what: &'static str,
 ) -> Result<[i32; 3], MapError> {
-    let size = voxels.size();
+    let [size_x, size_y, _] = voxels.size();
     let toward = [
-        i32::try_from(size.first().copied().unwrap_or(0) >> 1).unwrap_or(0),
-        i32::try_from(size.get(1).copied().unwrap_or(0) >> 1).unwrap_or(0),
+        signed("map.size_x", size_x >> 1)?,
+        signed("map.size_y", size_y >> 1)?,
     ];
     let mut rng = draw(seed, phase, index);
     let distance = rng.range_i32(
         band.min_voxels.saturating_add(1),
         band.max_voxels.saturating_sub(1).max(band.min_voxels),
     );
-    let at = sector_point(&mut rng, core, toward, distance);
+    let [x, y] = sector_point(&mut rng, core, toward, distance)?;
     let z = voxels
-        .top_solid_z(
-            at.first().copied().unwrap_or(0),
-            at.get(1).copied().unwrap_or(0),
-        )
+        .top_solid_z(x, y)
         .ok_or(MapError::Unplaceable(what))?;
-    let spot = [
-        at.first().copied().unwrap_or(0),
-        at.get(1).copied().unwrap_or(0),
-        z,
-    ];
+    let spot = [x, y, z];
     let apart2 = columns_apart_squared(spot, core);
     let lo = i64::from(band.min_voxels).saturating_mul(i64::from(band.min_voxels));
     let hi = i64::from(band.max_voxels).saturating_mul(i64::from(band.max_voxels));
@@ -1631,17 +1682,19 @@ fn whole_distance(squared: i64) -> i32 {
     if squared <= 0 {
         return 0;
     }
-    let mut lo: i64 = 0;
-    let mut hi: i64 = 46_341; // floor(sqrt(i32::MAX)) + 1, so hi^2 stays in i64
+    // In `i32` by construction: the bisection never leaves `0 ..= 46 341`
+    // (floor(sqrt(i32::MAX)) + 1), and the square is taken in `i64`.
+    let mut lo: i32 = 0;
+    let mut hi: i32 = 46_341;
     while lo < hi {
         let mid = lo.saturating_add(hi).saturating_add(1) >> 1;
-        if mid.saturating_mul(mid) <= squared {
+        if i64::from(mid).saturating_mul(i64::from(mid)) <= squared {
             lo = mid;
         } else {
             hi = mid.saturating_sub(1);
         }
     }
-    i32::try_from(lo).unwrap_or(i32::MAX)
+    lo
 }
 
 /// Every `(dx, dy)` within `radius`, ordered by squared distance then by `dy`
@@ -1664,8 +1717,7 @@ fn disc_offsets(radius: i32) -> Vec<[i32; 2]> {
     // item 62: the key ends in `dx`, which is unique within a `dy` row, so the
     // order is total.
     out.sort_unstable_by_key(|o| {
-        let dx = o.first().copied().unwrap_or(0);
-        let dy = o.get(1).copied().unwrap_or(0);
+        let [dx, dy] = *o;
         (
             dx.saturating_mul(dx).saturating_add(dy.saturating_mul(dy)),
             dy,
@@ -1688,20 +1740,13 @@ fn stamp_seam(
 ) -> u32 {
     let ore = richness.ore();
     let mut placed: u32 = 0;
-    for offset in disc_offsets(SEAM_DISC_RADIUS) {
+    let [ax, ay] = at;
+    for [dx, dy] in disc_offsets(SEAM_DISC_RADIUS) {
         if placed >= wanted {
             break;
         }
-        let x = at
-            .first()
-            .copied()
-            .unwrap_or(0)
-            .saturating_add(offset.first().copied().unwrap_or(0));
-        let y = at
-            .get(1)
-            .copied()
-            .unwrap_or(0)
-            .saturating_add(offset.get(1).copied().unwrap_or(0));
+        let x = ax.saturating_add(dx);
+        let y = ay.saturating_add(dy);
         let Some(top) = voxels.top_solid_z(x, y) else {
             continue;
         };
@@ -1745,10 +1790,8 @@ fn place_seam(
         "a scrap seam",
     )?;
     let apart2 = columns_apart_squared(spot, core);
-    let anchor = [
-        spot.first().copied().unwrap_or(0),
-        spot.get(1).copied().unwrap_or(0),
-    ];
+    let [x, y, _] = spot;
+    let anchor = [x, y];
     let mut footprint: Vec<FootprintColumn> = Vec::new();
     let placed = stamp_seam(voxels, anchor, band.richness, wanted, &mut footprint);
     if placed != wanted {
@@ -1799,10 +1842,9 @@ fn place_contested(
     supply_kw: &mut i32,
     features: &mut Vec<MapFeature>,
 ) -> Result<Vec<Feature>, MapError> {
-    let width = extent.first().copied().unwrap_or(0);
-    let depth = extent.get(1).copied().unwrap_or(0);
+    let [width, depth] = extent;
     let map = numbers.map;
-    let sphere = i32::try_from(numbers.beacon.sphere_radius_voxels).unwrap_or(0);
+    let sphere = i32::from(numbers.rules.sphere_radius_voxels());
     let clear = i64::from(zone_radius.saturating_add(sphere));
     let clear2 = clear.saturating_mul(clear);
     let apart = i64::from(SEAM_DISC_RADIUS.saturating_mul(4));
@@ -1840,13 +1882,15 @@ fn place_contested(
     }
 
     let mut placed: Vec<Feature> = Vec::with_capacity(wanted.len());
-    for (index, (richness, is_vent)) in wanted.iter().enumerate() {
+    // Item ids count the wanted features, three `u32` counts summed, so an
+    // id is a `u32` when the sum is.
+    let mut item: u32 = 0;
+    for (richness, is_vent) in &wanted {
         let own_radius = if *is_vent {
             VENT_PATCH_RADIUS
         } else {
             SEAM_DISC_RADIUS
         };
-        let item = u32::try_from(index).unwrap_or(u32::MAX);
         let mut attempt: u32 = 0;
         let mut site: Option<[i32; 3]> = None;
         while attempt < CONTESTED_ATTEMPTS {
@@ -1889,13 +1933,11 @@ fn place_contested(
         let Some(spot) = site else {
             return Err(MapError::Unplaceable("a contested feature"));
         };
-        let at = [
-            spot.first().copied().unwrap_or(0),
-            spot.get(1).copied().unwrap_or(0),
-        ];
+        let [x, y, _] = spot;
+        let at = [x, y];
         let mut footprint: Vec<FootprintColumn> = Vec::new();
         let voxels_placed = if *is_vent {
-            *supply_kw = supply_kw.saturating_add(numbers.generator_output(*richness));
+            *supply_kw = supply_kw.saturating_add(numbers.generator_output(*richness)?);
             stamp_surface_patch(
                 voxels,
                 at,
@@ -1932,6 +1974,19 @@ fn place_contested(
             from_core_voxels: 0,
             voxels: voxels_placed,
         });
+        item = item.checked_add(1).ok_or(MapError::OutOfRange {
+            field: "map.contested_standard_vents",
+            why: "more contested features than a feature id counts".to_owned(),
+        })?;
     }
     Ok(placed)
+}
+
+/// A `uint32` row the generator computes with in signed voxels or `kW`:
+/// refused at generation when it does not fit, never substituted.
+fn signed(field: &'static str, value: u32) -> Result<i32, MapError> {
+    i32::try_from(value).map_err(|_| MapError::OutOfRange {
+        field,
+        why: format!("{value} is past a signed 32-bit value"),
+    })
 }

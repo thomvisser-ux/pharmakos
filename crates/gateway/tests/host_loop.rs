@@ -1448,7 +1448,7 @@ fn the_replay_files_reproduce_the_matchs_chain() {
         host.seal_plans(plans).expect("sealed in a Lull");
         assert!(host.begin_push());
         let mut chain = String::new();
-        while let Some(report) = host.step() {
+        while let Some(report) = host.step().expect("a whole tick") {
             let _ = writeln!(
                 chain,
                 "{}\t{}",

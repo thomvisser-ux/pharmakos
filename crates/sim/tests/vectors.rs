@@ -343,7 +343,10 @@ fn ms_per_tick_agrees_with_tick_hz() {
 
 #[test]
 fn the_quantities_say_what_they_do_at_the_limit() {
-    assert_eq!(Hp::new(10).damaged_by(Hp::new(30)), Hp::ZERO);
+    assert_eq!(
+        Hp::new(10).damaged_by(pharmakos_sim::math::quantity::Damage::new(30).unwrap()),
+        Hp::ZERO
+    );
     assert!(!Hp::ZERO.is_alive());
     assert!(Hp::new(1).is_alive());
     assert_eq!(Money::new(i64::MAX).checked_add(Money::new(1)), None);

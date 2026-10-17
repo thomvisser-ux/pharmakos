@@ -102,8 +102,14 @@ mod tests {
         if let Some(block) = message.structures.as_mut() {
             block.beacon = None;
         }
-        let gapped = RulesTable::from_message(&message).expect("the sim's view still builds");
-        let error = project(&deploys(1), &context(), &gapped).expect_err("nothing is priced");
-        assert!(error.message.contains("structures"), "{error}");
+        // Since S2's `base` lane the sim reads that row typed at load too
+        // (decisions-log item 136 (5)), so the table is refused before the
+        // projection can read it at all.
+        assert_eq!(
+            RulesTable::from_message(&message),
+            Err(pharmakos_sim::rules::RulesError::MissingBlock(
+                "structures.beacon"
+            ))
+        );
     }
 }

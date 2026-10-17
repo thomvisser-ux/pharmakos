@@ -68,7 +68,10 @@ fn play_segment(runner: &mut Runner, feed: &mut Vec<Event>) {
     assert!(runner.begin_push(), "the Push begins");
     feed.extend_from_slice(runner.events());
     runner.clear_events();
-    while runner.step().is_some_and(|report| !report.segment_ended) {
+    while runner
+        .play_tick()
+        .is_some_and(|report| !report.segment_ended)
+    {
         feed.extend_from_slice(runner.events());
         runner.clear_events();
     }
@@ -191,4 +194,17 @@ fn the_economy_reads_agree_with_the_settlement_ledgers_credit() {
     // item 62: (round, seat) is unique per line.
     credits.sort_unstable();
     assert_eq!(credits, golden, "the credits are the settlement golden's");
+}
+
+/// One whole tick of a Push, or `None` outside one; a refused tick is this
+/// file's failure report.
+trait PlayTick {
+    fn play_tick(&mut self) -> Option<pharmakos_sim::runner::TickReport>;
+}
+
+impl PlayTick for Runner {
+    fn play_tick(&mut self) -> Option<pharmakos_sim::runner::TickReport> {
+        self.step()
+            .unwrap_or_else(|error| panic!("the tick runs: {error}"))
+    }
 }

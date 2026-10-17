@@ -955,6 +955,7 @@ impl Snapshot {
         reason = "one block per table, and every block must run before the first assignment: a restore either applies in full or changes nothing, so the checks cannot be moved behind the writes"
     )]
     pub fn restore_into(&self, world: &mut World) -> Result<(), SnapshotError> {
+        // E7: rule: a capacity only; the seat table's restore checks the columns it is handed
         let seat_count = u32::try_from(self.seat_id.len()).unwrap_or(0);
         let mut seats = SeatTable::with_capacity(seat_count);
         if !seats.restore(SeatColumns {
@@ -972,6 +973,7 @@ impl Snapshot {
 
         let match_state = self.restore_match()?;
 
+        // E7: rule: a capacity only; the unit table's restore checks the columns it is handed
         let mut units = UnitTable::with_capacity(u32::try_from(self.unit_id.len()).unwrap_or(0));
         if !units.restore(UnitColumns {
             id: self.unit_id.clone(),
@@ -998,6 +1000,7 @@ impl Snapshot {
         // this sim plays; refused before the table is built or checked, so a
         // crafted column costs nothing to turn away.
         let beacon_limit = crate::world::beacon_limit_of(seat_count);
+        // E7: rule: a column past `u32` rows is past every beacon ceiling, and is refused just below
         let beacon_count = u32::try_from(self.beacon_id.len()).unwrap_or(u32::MAX);
         if beacon_count > beacon_limit {
             return Err(SnapshotError::OverBeaconCeiling {
@@ -1027,6 +1030,7 @@ impl Snapshot {
         }
 
         let mut structures =
+            // E7: rule: a capacity only; the structure table's restore checks the columns it is handed
             StructureTable::with_capacity(u32::try_from(self.structure_id.len()).unwrap_or(0));
         if !structures.restore(StructureColumns {
             id: self.structure_id.clone(),
@@ -1042,6 +1046,7 @@ impl Snapshot {
             return Err(SnapshotError::Ragged("structure"));
         }
 
+        // E7: rule: a capacity only; the wreck table's restore checks the columns it is handed
         let mut wrecks = WreckTable::with_capacity(u32::try_from(self.wreck_id.len()).unwrap_or(0));
         if !wrecks.restore(
             self.wreck_id.clone(),
@@ -1310,7 +1315,7 @@ impl Snapshot {
         }
         let mut packed: usize = 0;
         for len in &self.unit_route_len {
-            packed = packed.saturating_add(usize::try_from(*len).unwrap_or(usize::MAX));
+            packed = packed.saturating_add(crate::math::index::row(*len));
         }
         if packed != self.route_nodes.len() {
             return Err(SnapshotError::Ragged("route_nodes"));
@@ -1373,7 +1378,7 @@ impl Snapshot {
         // module docs: the claim there is only true if it is checked here). The
         // cost is one pass of xxh3 over 9.4 MB at a restore, a fraction of
         // regenerating the map above, and it is never paid inside a tick.
-        if self.chunk_digest.len() != usize::try_from(voxels.chunk_count()).unwrap_or(usize::MAX) {
+        if self.chunk_digest.len() != crate::math::index::row(voxels.chunk_count()) {
             return Err(SnapshotError::Ragged("chunk_digest"));
         }
         let mut chunks = ChunkDigests::new(0);

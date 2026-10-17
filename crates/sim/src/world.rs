@@ -51,7 +51,7 @@ use crate::interpreter::{Interpreter, Plan};
 use crate::knowledge::{AssetId, Position};
 use crate::mapgen::{self, MapError};
 use crate::math::fixed::{Angle, Fx, Sq};
-use crate::math::quantity::{Hp, Kw, Money, Ms, Tick};
+use crate::math::quantity::{Damage, Hp, Kw, Money, Ms, Tick};
 use crate::math::random::{Stream, StreamRng};
 use crate::pathing::clusters::Clusters;
 use crate::pathing::repair::{RepairReport, Repairer, repair};
@@ -59,17 +59,16 @@ use crate::pathing::router::{Router, ServeReport, WalkState};
 use crate::pathing::search::Scratch;
 use crate::pathing::surface::{StepCosts, Surface};
 use crate::rules::RulesTable;
-use crate::runner::{MatchEndReason, MatchPhase, MatchSettings, MatchState};
+use crate::runner::{Layout, LayoutRefused, MatchEndReason, MatchPhase, MatchSettings, MatchState};
 use crate::seams::{BeaconMandate, MandateKind, ProgramId, WorkCounter};
 use crate::tables::{
     AreaKind, BeaconId, BeaconTable, BuildOrder, ColumnBox, CreditTable, Csr, MovementColumns,
     NO_RESPAWN, NO_WORK, NOT_ELIMINATED, PRIORITY_NORMAL, QuarterTurns, SeatId, SeatTable,
-    SightingTable, StructureId, StructureKind, StructureTable, TargetKind, TargetTable, UnitId,
-    UnitKind, UnitTable, WreckTable,
+    SightingTable, StructureId, StructureKind, StructureTable, TargetKind, TargetTable,
+    TargetsFull, UnitId, UnitKind, UnitTable, WreckTable,
 };
 use crate::targeting::{Ground, NO_FEATURE};
-use crate::voxels::{CHUNK_EDGE, Material, VoxelEdit, VoxelStore};
-use pharmakos_proto::gp;
+use crate::voxels::{Material, VoxelEdit, VoxelStore};
 
 /// The twelve named phases of a tick, in the order they run.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
@@ -134,23 +133,7 @@ pub const PHASE_ORDER: [Phase; 12] = [
 /// in evaluation units.
 const HARNESS_WORK_BUDGET: u32 = 1_000_000;
 
-/// PLACEHOLDER: harness scaffolding, how many voxel edits one tick's queue holds — owner, at S2.
-///
-/// Fixed at construction because nothing in a tick allocates (G3' section 9.17),
-/// and sized against item 65's destruction rate — 20 craters a second is one a
-/// tick at 20 Hz, and 64 leaves room for a burst without ever growing. S2 sets
-/// the real number when combat is the thing filling the queue (owner, at S2).
-const HARNESS_EDIT_QUEUE: usize = 64;
-
-/// PLACEHOLDER: harness scaffolding, how many damage orders one tick's queue holds — owner, at S2.
-///
-/// Fixed at construction for the reason the edit queue is: nothing in a tick
-/// allocates (G3' section 9.17). Sized above the edit queue because one crater
-/// can hurt several things, and S2 sets the real number when combat is the
-/// thing filling it (owner, at S2).
-const HARNESS_DAMAGE_QUEUE: usize = 256;
-
-/// PLACEHOLDER: the world total of beacons a match may place on top of the cores, shared equally per seat — owner, at S1's demo, with the balance check's report; the totals are revisited at S2's G3'-real measurement (register S1-37).
+/// PLACEHOLDER: the world total of beacons a match may place on top of the cores, shared equally per seat — owner, at S2's G3'-real measurement, with `tune2`'s totals (ruling 7 of S1's stage demo, decisions-log item 139 (1), kept the total and the per-seat split for S1; register S1-37).
 ///
 /// Forty is item 63's world total. Since S1 the room is **per seat**: each
 /// seat may place [`room_per_seat`] of the total, the total divided by the
@@ -167,7 +150,7 @@ const HARNESS_DAMAGE_QUEUE: usize = 256;
 /// the rules table.
 const BEACON_TABLE_ROOM: u32 = 40;
 
-/// PLACEHOLDER: the world total of units a match may fabricate on top of the starting force, shared equally per seat — owner, at S1's demo, with the balance check's report; the totals are revisited at S2's G3'-real measurement (register S1-37).
+/// PLACEHOLDER: the world total of units a match may fabricate on top of the starting force, shared equally per seat — owner, at S2's G3'-real measurement, with `tune2`'s totals (ruling 7 of S1's stage demo, decisions-log item 139 (1), kept the total and the per-seat split for S1; register S1-37).
 ///
 /// Item 63 fixes the world total at **300 units**; since S1 each seat may
 /// fabricate [`room_per_seat`] of it on top of its own starting force (100 a
@@ -178,7 +161,7 @@ const BEACON_TABLE_ROOM: u32 = 40;
 /// surplus and vent Generators can power", which this only bounds.
 pub(crate) const UNIT_TABLE_ROOM: u32 = 300;
 
-/// PLACEHOLDER: the world total of structures a match may build, shared equally per seat since S1 ("Build targets and structures follow", `docs/design/targeting.md`) — owner, at S1's demo, with the balance check's report for the per-seat split (register S1-37); the total is the owner's at S2 with the capability catalogue.
+/// PLACEHOLDER: the world total of structures a match may build, shared equally per seat since S1 ("Build targets and structures follow", `docs/design/targeting.md`) — owner, at S2's G3'-real measurement, with `tune2`'s totals for the per-seat split (ruling 7 of S1's stage demo, decisions-log item 139 (1), kept it for S1; register S1-37); the total is the owner's at S2 with the capability catalogue (register S2-08).
 ///
 /// Three a beacon at [`BEACON_TABLE_ROOM`], which covers a Generator on every
 /// vent a map carries plus the Survey posts and turrets S2 adds. A seat's
@@ -208,6 +191,16 @@ pub(crate) struct BuildEntry {
     pub(crate) desc: u8,
     /// Its place in the build order, and its rotation.
     pub(crate) build: BuildOrder,
+}
+
+/// One old Build row of a beacon, read before a settings edit clears the
+/// list ([`World::replace_build_targets`]): what it was anchored at or bound
+/// to, and the structure it had been paid for.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct Carried {
+    anchor: [Fx; 3],
+    feature: u32,
+    built: u32,
 }
 
 /// One seat's share of a world total: the total divided by the seat count,
@@ -426,6 +419,20 @@ pub struct World {
     arrivals: Vec<u32>,
     /// This tick's voxel edits, drained by [`Phase::Voxels`].
     edits: Vec<VoxelEdit>,
+    /// The two queues' rooms (S2's plan, E5). Derived at construction from
+    /// the table rooms and kept by a restore, as [`World::unit_limit`] is.
+    rooms: QueueRooms,
+    /// What [`DamageDrop`] counted. Diagnostic; never hashed.
+    damage_drops: DamageDrops,
+    /// The next phase of the tick that is open, as an index into
+    /// [`PHASE_ORDER`], or `None` between ticks (S2's plan, E30). Never
+    /// hashed and never snapshotted: a snapshot is only ever taken between
+    /// ticks, and every seam that could take one refuses while a tick is open.
+    open_phase: Option<usize>,
+    /// Scratch for a settings edit's carry-over: every old Build row of the
+    /// beacon it edits, sized to the list-settings table at construction so
+    /// the carry covers every entry and allocates nothing (item 136 (5)).
+    carry: Vec<Carried>,
     /// Scratch for a crater's touched-chunk list, so an edit allocates nothing.
     touched: Vec<u32>,
     /// Scratch for broadphase queries, so a query allocates nothing.
@@ -497,8 +504,10 @@ pub enum DamageTarget {
 pub struct DamageOrder {
     /// What it hits.
     pub target: DamageTarget,
-    /// How much, clamped at zero hit points by [`Hp::damaged_by`].
-    pub amount: Hp,
+    /// How much: one to `i32::MAX` hit points, a [`Damage`] that cannot be
+    /// zero or negative (S2's plan, E3), clamped at zero hit points by
+    /// [`Hp::damaged_by`].
+    pub amount: Damage,
     /// Who dealt it, or [`SeatId::NEUTRAL`] when nobody did.
     ///
     /// The one thing kill credit cannot be computed without (item 17: "only
@@ -508,6 +517,255 @@ pub struct DamageOrder {
     /// with no enemy damage on the clock credits nobody, and this is the value
     /// that says so.
     pub by: SeatId,
+    /// The asset that dealt it, with its id's generation, or `None` for an
+    /// order nobody's asset dealt -- every order on `main` today, and a host's.
+    ///
+    /// Laid out by S2's `base` lane so that `fire`, which fills it for every
+    /// shot (the attacker memory `RETURN_FIRE` and retreat read, E12), changes
+    /// no literal of this struct while another lane owns the gateway.
+    pub source: Option<AssetId>,
+}
+
+/// Why a damage order applied nothing (S2's plan, E4).
+///
+/// Never silent: each is counted in [`World::dropped_damage`], an unhashed
+/// diagnostic beside [`WorkCounter`]. Two shots that kill one target in one
+/// tick are the normal case for [`DamageDrop::AlreadyDead`], and the count is
+/// what makes it visible rather than an error.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub enum DamageDrop {
+    /// The target names a row its table does not hold.
+    NoSuchRow,
+    /// The target names a row that has since been reused under a later
+    /// generation of its id. Every id is generation 0 until S2's `ids` lane
+    /// reuses rows (E1), so nothing produces this yet.
+    StaleGeneration,
+    /// The target was already dead when the order was applied.
+    AlreadyDead,
+}
+
+impl DamageDrop {
+    /// Every reason.
+    pub const ALL: [DamageDrop; 3] = [
+        DamageDrop::NoSuchRow,
+        DamageDrop::StaleGeneration,
+        DamageDrop::AlreadyDead,
+    ];
+
+    /// The reason's name.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            DamageDrop::NoSuchRow => "no_such_row",
+            DamageDrop::StaleGeneration => "stale_generation",
+            DamageDrop::AlreadyDead => "already_dead",
+        }
+    }
+}
+
+/// How many damage orders were dropped, by reason, since the world was built.
+/// Diagnostic, never hashed, never snapshotted.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct DamageDrops {
+    no_such_row: u64,
+    stale_generation: u64,
+    already_dead: u64,
+}
+
+impl DamageDrops {
+    /// How many were dropped for `reason`.
+    #[must_use]
+    pub const fn of(&self, reason: DamageDrop) -> u64 {
+        match reason {
+            DamageDrop::NoSuchRow => self.no_such_row,
+            DamageDrop::StaleGeneration => self.stale_generation,
+            DamageDrop::AlreadyDead => self.already_dead,
+        }
+    }
+
+    /// How many were dropped in all.
+    #[must_use]
+    pub const fn total(&self) -> u64 {
+        self.no_such_row
+            .saturating_add(self.stale_generation)
+            .saturating_add(self.already_dead)
+    }
+
+    /// Count one drop. A `u64` of drops cannot be reached by orders filed at
+    /// most a few hundred a tick, so the add saturates by rule rather than
+    /// failing a tick over a diagnostic.
+    const fn count(&mut self, reason: DamageDrop) {
+        let slot = match reason {
+            DamageDrop::NoSuchRow => &mut self.no_such_row,
+            DamageDrop::StaleGeneration => &mut self.stale_generation,
+            DamageDrop::AlreadyDead => &mut self.already_dead,
+        };
+        *slot = slot.saturating_add(1);
+    }
+}
+
+/// Which per-tick queue an order was refused from.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub enum Queue {
+    /// The voxel edits [`Phase::Voxels`] applies.
+    Edits,
+    /// The damage orders [`Phase::Combat`] applies.
+    Damage,
+}
+
+impl Queue {
+    /// The queue's name.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Queue::Edits => "voxel edit",
+            Queue::Damage => "damage",
+        }
+    }
+}
+
+/// Why an order could not be filed (S2's plan, E5 and E30).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum FileRefused {
+    /// The queue holds as many orders as its filer may file. A queue is sized
+    /// at construction so that the tick's own filers cannot fill it in a legal
+    /// world (E5); this is the typed answer, propagated, never a silent drop.
+    QueueFull {
+        /// Which queue.
+        queue: Queue,
+        /// How many orders its filer may hold in it.
+        room: usize,
+    },
+    /// A tick is open between two of its phases ([`World::tick_is_open`]): an
+    /// order filed now would land in a half-finished tick (E30).
+    MidTick,
+    /// A voxel edit names no voxel of the map, or a crater a negative radius:
+    /// refused where it is filed, so the voxel phase never meets one.
+    OffTheMap,
+}
+
+impl core::fmt::Display for FileRefused {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            FileRefused::QueueFull { queue, room } => write!(
+                f,
+                "the {} queue is full at the {room} orders its filer may hold",
+                queue.name()
+            ),
+            FileRefused::MidTick => write!(
+                f,
+                "a tick is open between two of its phases, and an order filed now would land in                  half of it"
+            ),
+            FileRefused::OffTheMap => write!(f, "the edit names no voxel of the map"),
+        }
+    }
+}
+
+impl std::error::Error for FileRefused {}
+
+/// Why a tick could not be begun, run or finished (S2's plan, E7 and E30).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TickError {
+    /// The tick counter is at its last value: there is no tick after it, and a
+    /// clock that stood still would say otherwise (E7).
+    PastTheLast,
+    /// A tick is already open between two of its phases: a whole-tick step,
+    /// or a second `begin_tick`, would run it twice or leave it half done.
+    MidTick,
+    /// No tick is open, so there is no phase to run and no tick to end.
+    NotOpen,
+    /// The phase asked for is not the open tick's next one: the phases run in
+    /// [`PHASE_ORDER`] and no other order.
+    OutOfOrder {
+        /// The phase asked for.
+        asked: Phase,
+        /// The phase that is next.
+        next: Phase,
+    },
+    /// The tick cannot end yet: a phase before the hash has not run.
+    Unfinished {
+        /// The phase that is next.
+        next: Phase,
+    },
+}
+
+impl core::fmt::Display for TickError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            TickError::PastTheLast => write!(f, "the tick counter has no tick after this one"),
+            TickError::MidTick => write!(f, "a tick is open between two of its phases"),
+            TickError::NotOpen => write!(f, "no tick is open"),
+            TickError::OutOfOrder { asked, next } => {
+                write!(f, "the open tick's next phase is {next:?}, not {asked:?}")
+            }
+            TickError::Unfinished { next } => write!(
+                f,
+                "the open tick cannot end before its {next:?} phase has run"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for TickError {}
+
+/// The rooms of the two per-tick queues, derived from the world's table rooms
+/// at construction (S2's plan, E5), with checked arithmetic: a room that would
+/// overflow is refused at load.
+///
+/// Each queue holds **two** allowances of its in-tick bound. One is the tick's
+/// own filers', which by construction they cannot fill. The other is a host's,
+/// filing between ticks through [`World::request_damage`] and
+/// [`World::request_voxel_edit`]: those are refused `QueueFull` once they
+/// would eat into the tick's own room, so a host's orders can never make a
+/// tick's filer fail.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct QueueRooms {
+    /// The most damage orders one tick's own filers can file.
+    pub damage: usize,
+    /// The most voxel edits one tick's own filers can file.
+    pub edits: usize,
+}
+
+impl QueueRooms {
+    /// The bounds, from the rooms of the unit, structure and beacon tables.
+    ///
+    /// **Damage.** The larger of two phases' bounds, because Combat's orders
+    /// are applied before Voxels files any (E2): Combat files one direct order
+    /// per armed asset, at most one per unit and structure row, and `fire`
+    /// adds the shells that can land on one tick times the most assets a splash
+    /// disc holds (E13); Voxels files one fall-damage order per asset that can
+    /// stand on or under a falling region, at most one per unit, structure and
+    /// beacon row, and S2's `ids` adds the ruin reserve (E1) and `fall` files
+    /// them (E2).
+    ///
+    /// **Edits.** One edit per live asset -- a unit's dig, a drone's levelling
+    /// -- at most one per unit, structure and beacon row, and `fire` and `atk`
+    /// add one crater per landing shell or detonating charge.
+    ///
+    /// # Errors
+    ///
+    /// [`MapError::Unsized`] when a sum overflows.
+    pub fn of(units: u32, structures: u32, beacons: u32) -> Result<QueueRooms, MapError> {
+        let as_room = |value: u32, queue: &'static str| {
+            usize::try_from(value).map_err(|_| MapError::Unsized { queue })
+        };
+        let combat = units
+            .checked_add(structures)
+            .ok_or(MapError::Unsized { queue: "damage" })?;
+        let voxels = combat
+            .checked_add(beacons)
+            .ok_or(MapError::Unsized { queue: "damage" })?;
+        let edits = voxels;
+        Ok(QueueRooms {
+            damage: as_room(combat.max(voxels), "damage")?,
+            edits: as_room(edits, "voxel edit")?,
+        })
+    }
+
+    /// A queue's whole capacity: the tick's own room and the host's.
+    fn capacity(room: usize, queue: &'static str) -> Result<usize, MapError> {
+        room.checked_mul(2).ok_or(MapError::Unsized { queue })
+    }
 }
 
 /// Every hashed table of a restored world, handed over in one piece.
@@ -555,14 +813,27 @@ impl World {
         reason = "one block per table and per derived index, every one of them sized from the same three numbers; splitting it would hand the pieces to each other as a parameter list as long as the body"
     )]
     pub fn new(config: &WorldConfig) -> Result<World, MapError> {
+        let settings = config
+            .match_settings
+            .validate(&config.rules)
+            .map_err(MapError::Settings)?;
+        // A seat id is a byte, and the last byte is `SeatId::NEUTRAL`.
+        if config.seats > u32::from(u8::MAX) {
+            return Err(MapError::OutOfRange {
+                field: "seats",
+                why: format!(
+                    "{} seats; a seat id is a byte below the neutral {}",
+                    config.seats,
+                    u8::MAX
+                ),
+            });
+        }
         let generated = mapgen::generate(config.match_seed, &config.rules, config.seats)?;
-        let extent = config.rules.map_size_voxels();
-        let max_x = i16::try_from(extent.first().copied().unwrap_or(0).saturating_sub(1))
-            .unwrap_or(i16::MAX);
-        let max_y = i16::try_from(extent.get(1).copied().unwrap_or(0).saturating_sub(1))
-            .unwrap_or(i16::MAX);
+        let [width, depth, _] = config.rules.map_size_voxels();
+        let [max_x, max_y, _] = config.rules.map_last_voxel();
 
         let harness_units = config.seats.saturating_mul(config.units_per_seat);
+        // E7: cannot miss: the generator places a force of `u32`-counted units for at most 255 seats
         let starting = u32::try_from(generated.starting_units.len()).unwrap_or(u32::MAX);
         let unit_count = starting.saturating_add(harness_units);
         // Every derived index that is sized per unit is sized for the room a
@@ -574,21 +845,24 @@ impl World {
             room_per_seat(UNIT_TABLE_ROOM, config.seats).saturating_mul(config.seats),
         );
 
+        // One row per seat, from the generator's per-seat columns, which it
+        // fills for every seat (an unplaced one with zeroes): the four walk
+        // together, and the seat ids are the bytes `0..seats`, which the check
+        // above keeps below the neutral byte.
         let mut seats = SeatTable::with_capacity(config.seats);
-        let mut seat_index: u32 = 0;
-        while seat_index < config.seats {
-            let at = usize::try_from(seat_index).unwrap_or(usize::MAX);
-            seats.push(
-                SeatId::new(u8::try_from(seat_index).unwrap_or(u8::MAX)),
-                generated
-                    .seat_treasury
-                    .get(at)
-                    .copied()
-                    .unwrap_or(Money::ZERO),
-                generated.seat_supply.get(at).copied().unwrap_or(Kw::ZERO),
-                generated.seat_draw.get(at).copied().unwrap_or(Kw::ZERO),
-            );
-            seat_index = seat_index.saturating_add(1);
+        for (((raw, treasury), supply), draw) in (0..=u8::MAX)
+            .take(crate::math::index::row(config.seats))
+            .zip(&generated.seat_treasury)
+            .zip(&generated.seat_supply)
+            .zip(&generated.seat_draw)
+        {
+            seats.push(SeatId::new(raw), *treasury, *supply, *draw);
+        }
+        if seats.len() != config.seats {
+            return Err(MapError::OutOfRange {
+                field: "seats",
+                why: "the generator seated fewer seats than the match has".to_owned(),
+            });
         }
 
         let units = fill_unit_table(config, &generated, unit_count, [max_x, max_y])?;
@@ -601,10 +875,7 @@ impl World {
 
         let Some(broadphase) = Csr::new(
             [0, 0],
-            [
-                extent.first().copied().unwrap_or(0),
-                extent.get(1).copied().unwrap_or(0),
-            ],
+            [width, depth],
             config.rules.csr_cell_size_voxels(),
             unit_ceiling,
         ) else {
@@ -638,10 +909,11 @@ impl World {
         let mut beacons = generated.beacons;
         let beacon_limit = beacon_limit_of(config.seats);
         beacons.reserve(beacon_limit.saturating_sub(beacons.len()));
-        let mut beacon_alive: Vec<bool> =
-            Vec::with_capacity(usize::try_from(beacon_limit).unwrap_or(0));
+        let mut beacon_alive: Vec<bool> = Vec::with_capacity(crate::math::index::row(beacon_limit));
         beacon_alive.extend(beacons.hit_points().iter().map(|hp| hp.is_alive()));
         let commanders = commander_index(&units, config.seats);
+
+        let rooms = QueueRooms::of(unit_ceiling, STRUCTURE_TABLE_ROOM, beacon_limit)?;
 
         let mut structures = StructureTable::with_capacity(STRUCTURE_TABLE_ROOM);
         structures.reserve(STRUCTURE_TABLE_ROOM);
@@ -665,7 +937,7 @@ impl World {
             ),
             chunks,
             router,
-            match_state: MatchState::new(&config.match_settings, &config.rules),
+            match_state: MatchState::new(&settings),
             interpreter: Interpreter::with_seats(config.seats),
             voxels,
             rules: config.rules.clone(),
@@ -676,7 +948,7 @@ impl World {
             decision_units: crate::seams::UnitTally::new(),
             decision_work: vec![
                 WorkCounter::with_budget(u32::MAX);
-                usize::try_from(config.seats).unwrap_or(0)
+                crate::math::index::row(config.seats)
             ],
             broadphase,
             repairer: Repairer::new(clusters.cluster_count()),
@@ -686,19 +958,25 @@ impl World {
             work: WorkCounter::with_budget(HARNESS_WORK_BUDGET),
             repair_report: RepairReport::default(),
             serve_report: ServeReport::default(),
-            arrivals: Vec::with_capacity(usize::try_from(unit_ceiling).unwrap_or(0)),
-            edits: Vec::with_capacity(HARNESS_EDIT_QUEUE),
+            arrivals: Vec::with_capacity(crate::math::index::row(unit_ceiling)),
+            edits: Vec::with_capacity(QueueRooms::capacity(rooms.edits, "voxel edit")?),
+            rooms,
+            damage_drops: DamageDrops::default(),
+            open_phase: None,
+            carry: Vec::with_capacity(crate::math::index::row(
+                beacon_limit.saturating_mul(TARGETS_PER_BEACON),
+            )),
             // Sized to the whole map rather than to the queue: one crater can
             // touch more chunks than the queue holds edits, and a scratch
             // buffer that has to grow is an allocation inside a tick.
-            touched: Vec::with_capacity(usize::try_from(chunk_total).unwrap_or(0)),
-            candidates: Vec::with_capacity(usize::try_from(unit_ceiling).unwrap_or(0)),
-            damage: Vec::with_capacity(HARNESS_DAMAGE_QUEUE),
-            requests: Vec::with_capacity(usize::try_from(beacon_limit).unwrap_or(0)),
-            power_order: Vec::with_capacity(usize::try_from(beacon_limit).unwrap_or(0)),
+            touched: Vec::with_capacity(crate::math::index::row(chunk_total)),
+            candidates: Vec::with_capacity(crate::math::index::row(unit_ceiling)),
+            damage: Vec::with_capacity(QueueRooms::capacity(rooms.damage, "damage")?),
+            requests: Vec::with_capacity(crate::math::index::row(beacon_limit)),
+            power_order: Vec::with_capacity(crate::math::index::row(beacon_limit)),
             credit_shares: Vec::with_capacity(crate::tables::CREDIT_SLOTS),
             credit_split: Vec::with_capacity(crate::tables::CREDIT_SLOTS),
-            settlement: Vec::with_capacity(usize::try_from(config.seats).unwrap_or(0)),
+            settlement: Vec::with_capacity(crate::math::index::row(config.seats)),
             quartermaster: SingleTreasury,
             events: EventBus::with_capacity(EVENT_BUS_CAPACITY),
             commanders,
@@ -931,6 +1209,7 @@ impl World {
         if index >= self.interpreter.len() {
             return false;
         }
+        // E7: rule: an event's value is derived output, never hashed, and saturates
         let steps = i64::try_from(plan.route().len()).unwrap_or(i64::MAX);
         let hp = self.commander_hp_of(seat);
         self.interpreter.seal(index, plan, hp);
@@ -961,7 +1240,7 @@ impl World {
     /// walls, craters and trenches — and none of it changes because a playbook
     /// rather than the harness chose the destination.
     pub(crate) fn set_unit_destination(&mut self, unit: u32, to: [Fx; 3]) {
-        let index = usize::try_from(unit).unwrap_or(usize::MAX);
+        let index = crate::math::index::row(unit);
         // **A destination that has not changed is not a new order.** Clearing
         // the route and asking for another one is what a *change* of mind
         // costs; doing it for an unchanged destination throws away the route
@@ -1177,46 +1456,44 @@ impl World {
     /// One unit kind's build cost, `units.<kind>.cost_dollars`.
     ///
     /// The commander has none: it is not purchasable and has no `units` row.
+    ///
+    /// Every row is refused at load when missing ([`RulesTable::unit`]), so
+    /// every kind has an answer.
     #[must_use]
-    pub fn unit_cost(&self, kind: UnitKind) -> Money {
-        let Some(units) = self.rules.message().units.as_ref() else {
-            return Money::ZERO;
-        };
-        let row = match kind {
-            UnitKind::Commander => None,
-            UnitKind::BuildDrone => units.build_drone,
-            UnitKind::MiningDrone => units.mining_drone,
-            UnitKind::RepairDrone => units.repair_drone,
-            UnitKind::Raider => units.raider,
-            UnitKind::Scout => units.scout,
-        };
-        row.map_or(Money::ZERO, |row| Money::new(i64::from(row.cost_dollars)))
+    pub const fn unit_cost(&self, kind: UnitKind) -> Money {
+        self.rules.unit(kind).cost
     }
 
     /// One unit kind's hit points at full condition.
     #[must_use]
-    pub fn unit_max_hp(&self, kind: UnitKind) -> Hp {
-        if matches!(kind, UnitKind::Commander) {
-            return self.commander_hp();
-        }
-        self.rules.unit_hp(kind).unwrap_or(Hp::ZERO)
+    pub const fn unit_max_hp(&self, kind: UnitKind) -> Hp {
+        self.rules.unit_hp(kind)
     }
 
     /// One structure kind's build cost, `structures.<kind>.cost_dollars`.
     ///
-    /// A wall has none: it is priced per voxel rather than per building, which
-    /// is why it is not a `StructureKind` row in the table.
+    /// **A wall is priced by the voxel**, `structures.wall_cost_per_voxel`,
+    /// and has no structure row by design (`rules.proto`), so its answer is the
+    /// price of one wall voxel and never reaches a row: a wall target's price
+    /// is that times its voxels (decision 40, `site`).
     #[must_use]
-    pub fn structure_cost(&self, kind: StructureKind) -> Money {
-        self.structure_row(kind)
-            .map_or(Money::ZERO, |row| Money::new(i64::from(row.cost_dollars)))
+    pub const fn structure_cost(&self, kind: StructureKind) -> Money {
+        match self.rules.structure(kind) {
+            Some(row) => row.cost,
+            None => self.rules.wall_cost_per_voxel(),
+        }
     }
 
-    /// One structure kind's hit points at full condition.
+    /// One structure kind's hit points at full condition, or `None` for a
+    /// wall, which has none of its own: its voxels are the wall, and they
+    /// crack and break (decision 40, `fire`). No structure row is ever a wall
+    /// ([`RulesTable::structure`]).
     #[must_use]
-    pub fn structure_max_hp(&self, kind: StructureKind) -> Hp {
-        self.structure_row(kind)
-            .map_or(Hp::ZERO, |row| Hp::new(i32::try_from(row.hp).unwrap_or(0)))
+    pub const fn structure_max_hp(&self, kind: StructureKind) -> Option<Hp> {
+        match self.rules.structure(kind) {
+            Some(row) => Some(row.hp),
+            None => None,
+        }
     }
 
     /// A placed beacon's build cost, `structures.beacon.cost_dollars`.
@@ -1227,13 +1504,8 @@ impl World {
     /// would make losing a core free at the audit, which is the opposite of
     /// what it costs.
     #[must_use]
-    pub fn beacon_cost(&self) -> Money {
-        self.rules
-            .message()
-            .structures
-            .as_ref()
-            .and_then(|block| block.beacon)
-            .map_or(Money::ZERO, |row| Money::new(i64::from(row.cost_dollars)))
+    pub const fn beacon_cost(&self) -> Money {
+        self.rules.beacon_row().cost
     }
 
     /// One beacon's hit points at full condition: `beacon.core_hp` for a seat's
@@ -1248,42 +1520,16 @@ impl World {
             .and_then(|seat| crate::power::core_of(self, seat))
             .is_some_and(|core| core.raw() == beacon.raw());
         if is_core {
-            return self
-                .rules
-                .message()
-                .beacon
-                .as_ref()
-                .map_or(Hp::ZERO, |block| {
-                    Hp::new(i32::try_from(block.core_hp).unwrap_or(0))
-                });
+            return self.rules.core_hp();
         }
-        self.rules
-            .message()
-            .structures
-            .as_ref()
-            .and_then(|block| block.beacon)
-            .map_or(Hp::ZERO, |row| Hp::new(i32::try_from(row.hp).unwrap_or(0)))
-    }
-
-    /// One structure kind's rules row.
-    fn structure_row(&self, kind: StructureKind) -> Option<gp::v1::rules_table::StructureKind> {
-        let structures = self.rules.message().structures.as_ref()?;
-        match kind {
-            StructureKind::Generator => structures.generator,
-            StructureKind::Autocannon => structures.autocannon,
-            StructureKind::Mortar => structures.mortar,
-            StructureKind::SurveyPost => structures.survey_post,
-            StructureKind::ResonanceSpire => structures.resonance_spire,
-            StructureKind::Wall => None,
-        }
+        self.rules.beacon_row().hp
     }
 
     /// The standing point above a voxel: one above the column's top solid
     /// voxel, the convention a walker uses.
     #[must_use]
     pub fn standing_point(&self, at: [i32; 3]) -> [Fx; 3] {
-        let x = at.first().copied().unwrap_or(0);
-        let y = at.get(1).copied().unwrap_or(0);
+        let [x, y, _] = at;
         // From the pathing surface, for the reason the dig search reads it
         // there (`crate::mining`): it is one array read rather than a walk
         // down the column, and it is the same number, refreshed in the same
@@ -1292,11 +1538,8 @@ impl World {
             || self.voxels.standing_z(x, y),
             |node| self.surface.standing_z(node),
         );
-        [
-            Fx::from_voxels(i16::try_from(x).unwrap_or(0)),
-            Fx::from_voxels(i16::try_from(y).unwrap_or(0)),
-            Fx::from_voxels(i16::try_from(z).unwrap_or(0)),
-        ]
+        // E7: rule: a voxel off the map stands at the origin; every voxel of the map is a coordinate (`RulesTable::map_last_voxel`)
+        [x, y, z].map(|v| Fx::from_voxels(i16::try_from(v).unwrap_or(0)))
     }
 
     /// The ore voxel a drone homed to `beacon` digs next, or `None`.
@@ -1349,7 +1592,7 @@ impl World {
         let centre = self.beacons.positions().get(row).copied()?;
         let limit = Sq::of_radius(self.sphere_radius());
         let mut best: Option<(Sq, u32)> = None;
-        let count = usize::try_from(self.wrecks.len()).unwrap_or(0);
+        let count = crate::math::index::row(self.wrecks.len());
         let mut at: usize = 0;
         while at < count {
             let value = self
@@ -1457,7 +1700,7 @@ impl World {
     /// units "park where they stand"), and what an idle unit at its beacon
     /// does.
     pub(crate) fn park_unit(&mut self, unit: u32) {
-        let index = usize::try_from(unit).unwrap_or(usize::MAX);
+        let index = crate::math::index::row(unit);
         let here = self.units.positions().get(index).copied();
         if let Some(here) = here
             && let Some(slot) = self.units.destinations_mut().get_mut(index)
@@ -1517,7 +1760,7 @@ impl World {
     /// How many units `seat` has fabricated this match: its rows past the ones
     /// the world was built with, dead or alive (a row is never freed).
     fn fabricated_by(&self, seat: SeatId) -> u32 {
-        let start = usize::try_from(self.unit_start).unwrap_or(usize::MAX);
+        let start = crate::math::index::row(self.unit_start);
         self.units
             .seats()
             .get(start..)
@@ -1606,7 +1849,7 @@ impl World {
     /// caller, the structure exists from this instant at its full build cost,
     /// and a build drone raises it (item 23).
     fn queue_target(&mut self, seat: SeatId, beacon: BeaconId, target: u32) -> bool {
-        let row = usize::try_from(target).unwrap_or(usize::MAX);
+        let row = crate::math::index::row(target);
         let Some(kind) = self
             .targets
             .blueprints()
@@ -1670,7 +1913,7 @@ impl World {
     /// A structure reached full hit points: it is finished, and starts
     /// supplying or drawing on the next tick's power phase.
     pub(crate) fn finish_structure(&mut self, structure: StructureId) {
-        let row = usize::try_from(structure.raw()).unwrap_or(usize::MAX);
+        let row = crate::math::index::row(structure.raw());
         if self.structures.building().get(row).copied() != Some(true) {
             return;
         }
@@ -1725,9 +1968,95 @@ impl World {
         Some(id)
     }
 
+    /// Place a lobby layout: every beacon of it, with its mandate, and its
+    /// starting units fabricated at it, or nothing (S2's plan, E30). The
+    /// runner is the caller, and checks the lobby
+    /// ([`crate::runner::Runner::seed_layout`]).
+    ///
+    /// Through the constructors play uses -- [`World::place_beacon`] and
+    /// [`World::fabricate`] -- so a layout's beacons and units are rows like
+    /// any other, inside each seat's shares of the world totals. Everything is
+    /// checked before the first row is written, so a refused layout leaves the
+    /// world as it was.
+    ///
+    /// # Errors
+    ///
+    /// [`LayoutRefused`]'s three world refusals: a seat this match has not
+    /// got, a column with no ground to stand on, a share that cannot hold it.
+    pub(crate) fn seed_layout(&mut self, layout: &Layout) -> Result<(), LayoutRefused> {
+        let seats = self.seats.len();
+        let beacon_share = room_per_seat(BEACON_TABLE_ROOM, seats);
+        let unit_share = room_per_seat(UNIT_TABLE_ROOM, seats);
+        let no_room = |what: &'static str| LayoutRefused::NoRoom { what };
+        let mut sites: Vec<[Fx; 3]> = Vec::with_capacity(layout.beacons.len());
+        for (index, beacon) in layout.beacons.iter().enumerate() {
+            if u32::from(beacon.seat.raw()) >= seats {
+                return Err(LayoutRefused::NoSuchSeat { seat: beacon.seat });
+            }
+            let [x, y] = beacon.column;
+            let site = self
+                .ground()
+                .standing(x, y)
+                .ok_or(LayoutRefused::OffTheMap {
+                    column: beacon.column,
+                })?;
+            sites.push(site);
+            // This seat's beacons and units in the layout up to and including
+            // this one, on top of what it holds already.
+            let of_seat = || {
+                layout
+                    .beacons
+                    .iter()
+                    .take(index.saturating_add(1))
+                    .filter(|other| other.seat == beacon.seat)
+            };
+            let placed = u32::try_from(of_seat().count())
+                .ok()
+                .and_then(|count| {
+                    self.beacons
+                        .count_of(beacon.seat)
+                        .checked_sub(1)
+                        .and_then(|held| held.checked_add(count))
+                })
+                .ok_or(no_room("beacon"))?;
+            if placed > beacon_share {
+                return Err(no_room("beacon"));
+            }
+            let mut units: u32 = self.fabricated_by(beacon.seat);
+            for other in of_seat() {
+                for (_, count) in &other.units {
+                    units = units.checked_add(*count).ok_or(no_room("unit"))?;
+                }
+            }
+            if units > unit_share {
+                return Err(no_room("unit"));
+            }
+        }
+        let beacons = u32::try_from(layout.beacons.len())
+            .ok()
+            .and_then(|count| self.beacons.len().checked_add(count))
+            .ok_or(no_room("beacon"))?;
+        if beacons > self.beacon_limit {
+            return Err(no_room("beacon"));
+        }
+        for (beacon, site) in layout.beacons.iter().zip(sites) {
+            let id = self
+                .place_beacon(beacon.seat, site, beacon.mandate)
+                .ok_or(no_room("beacon"))?;
+            for (kind, count) in &beacon.units {
+                for _ in 0..*count {
+                    self.fabricate(beacon.seat, id, *kind)
+                        .ok_or(no_room("unit"))?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Put a **finished** structure in the world directly, at full hit points.
     ///
-    /// Fixture API. `None` when the table is full.
+    /// Fixture API. `None` when the table is full, and for a wall, which is
+    /// voxels and never a structure row ([`World::structure_max_hp`]).
     pub fn raise_structure(
         &mut self,
         seat: SeatId,
@@ -1738,8 +2067,8 @@ impl World {
         if self.structures.len() >= STRUCTURE_TABLE_ROOM {
             return None;
         }
+        let hp = self.structure_max_hp(kind)?;
         let id = StructureId::new(self.structures.len());
-        let hp = self.structure_max_hp(kind);
         self.structures
             .push(id, seat, kind, at, hp, home, false, QuarterTurns::NONE);
         Some(id)
@@ -1834,22 +2163,35 @@ impl World {
     ///
     /// Public for the fixture reason above: a target normally arrives through a
     /// committed interface row.
-    pub fn add_target(&mut self, beacon: BeaconId, blueprint: u8, at: [Fx; 3]) -> bool {
+    ///
+    /// # Errors
+    ///
+    /// [`TargetsFull`] when the table has no room.
+    pub fn add_target(
+        &mut self,
+        beacon: BeaconId,
+        blueprint: u8,
+        at: [Fx; 3],
+    ) -> Result<(), TargetsFull> {
         self.targets.add(beacon, blueprint, at)
     }
 
     /// Add one area to a beacon -- a protected area or a probe area -- with
     /// the centre a scout walks to and the footprint every inside test reads
-    /// ([`ColumnBox`]). `false` when the table has no room.
+    /// ([`ColumnBox`]).
     ///
     /// Public for the fixture reason above.
+    ///
+    /// # Errors
+    ///
+    /// [`TargetsFull`] when the table has no room.
     pub fn add_area(
         &mut self,
         beacon: BeaconId,
         kind: AreaKind,
         centre: [Fx; 3],
         area: ColumnBox,
-    ) -> bool {
+    ) -> Result<(), TargetsFull> {
         self.targets.add_area(beacon, kind, centre, area)
     }
 
@@ -1869,7 +2211,7 @@ impl World {
     /// `docs/design/targeting.md`, "Sites").
     #[must_use]
     pub fn anchor_is_claimed(&self, seat: SeatId, at: [Fx; 3]) -> bool {
-        let count = usize::try_from(self.targets.len()).unwrap_or(0);
+        let count = crate::math::index::row(self.targets.len());
         let mut row: usize = 0;
         while row < count {
             let owned = self
@@ -1892,8 +2234,11 @@ impl World {
 
     /// Add a Build target written through `on`, bound to `feature` and
     /// written as `desc` ([`crate::targeting::DESCRIPTION_NAME`] or
-    /// [`crate::targeting::DESCRIPTION_NEAREST_VENT`]). `false` when the table
-    /// has no room.
+    /// [`crate::targeting::DESCRIPTION_NEAREST_VENT`]).
+    ///
+    /// # Errors
+    ///
+    /// [`TargetsFull`] when the table has no room.
     pub(crate) fn add_bound_target(
         &mut self,
         beacon: BeaconId,
@@ -1901,7 +2246,7 @@ impl World {
         at: [Fx; 3],
         bound: (u32, u8),
         build: BuildOrder,
-    ) -> bool {
+    ) -> Result<(), TargetsFull> {
         self.targets.add_bound(
             beacon,
             TargetKind::Build,
@@ -1917,7 +2262,7 @@ impl World {
     /// through `on` is keyed by its feature (targeting.md, "Sites"). `false`
     /// when none is.
     pub(crate) fn remove_bound_target(&mut self, beacon: BeaconId, feature: u32) -> bool {
-        let count = usize::try_from(self.targets.len()).unwrap_or(0);
+        let count = crate::math::index::row(self.targets.len());
         let mut row: usize = 0;
         while row < count {
             if self.targets.beacons().get(row).copied() == Some(beacon.raw())
@@ -1946,7 +2291,7 @@ impl World {
     /// one it needs yet. Run on decision ticks only, before the
     /// Quartermaster gathers, so a re-read target is the one it pays for.
     fn reread_lost_targets(&mut self) {
-        let count = usize::try_from(self.targets.len()).unwrap_or(0);
+        let count = crate::math::index::row(self.targets.len());
         let mut row: usize = 0;
         while row < count {
             let held = self.targets.descriptions().get(row).copied()
@@ -1958,8 +2303,8 @@ impl World {
                 .get(row)
                 .copied()
                 .unwrap_or(NO_FEATURE);
-            let lost = feature != NO_FEATURE
-                && !self.feature_is_live(usize::try_from(feature).unwrap_or(usize::MAX));
+            let lost =
+                feature != NO_FEATURE && !self.feature_is_live(crate::math::index::row(feature));
             if held && lost {
                 let beacon = self
                     .targets
@@ -1967,7 +2312,7 @@ impl World {
                     .get(row)
                     .copied()
                     .map_or(BeaconId::NONE, BeaconId::new);
-                let beacon_row = usize::try_from(beacon.raw()).unwrap_or(usize::MAX);
+                let beacon_row = crate::math::index::row(beacon.raw());
                 let centre = self.beacons.positions().get(beacon_row).copied();
                 let seat = self
                     .beacons
@@ -2001,6 +2346,7 @@ impl World {
                             *slot = at;
                         }
                         if let Some(slot) = self.targets.features_mut().get_mut(row) {
+                            // E7: rule: a feature index past `u32` names no feature, which is `NO_FEATURE`
                             *slot = u32::try_from(site.feature).unwrap_or(NO_FEATURE);
                         }
                     }
@@ -2041,34 +2387,48 @@ impl World {
     /// than by anchor (`docs/design/targeting.md`, "Sites"), so a re-written
     /// `on` target whose column moved keeps the structure it already paid for.
     /// Its place in the build order and its rotation are the new list's.
-    pub(crate) fn replace_build_targets<I>(&mut self, beacon: BeaconId, list: I)
+    pub(crate) fn replace_build_targets<I>(
+        &mut self,
+        beacon: BeaconId,
+        list: I,
+    ) -> Result<(), TargetsFull>
     where
         I: Iterator<Item = BuildEntry> + Clone,
     {
-        let seat = usize::try_from(beacon.raw())
-            .ok()
-            .and_then(|row| self.beacons.seats().get(row).copied())
-            .map_or(SeatId::NEUTRAL, SeatId::new);
-        // The carry-over has to be read before the list is cleared, and the
-        // read has nowhere to go but a fixed array. `TARGETS_PER_BEACON_SLOTS` is
-        // the table's own ceiling, so an entry past it could not have been
-        // added anyway.
-        let mut carried = [BeaconId::NONE.raw(); TARGETS_PER_BEACON_SLOTS];
-        for (slot, entry) in list.clone().enumerate() {
-            let Some(cell) = carried.get_mut(slot) else {
-                break;
-            };
-            *cell = self.built_at(beacon, entry.anchor, entry.feature);
+        let seat = self.seat_of_beacon(beacon);
+        // The carry-over has to be read before the list is cleared. It is read
+        // **whole**, every old Build row of the beacon with its `built` link,
+        // into a scratch buffer sized to the table's own capacity at
+        // construction, so no entry past the first eight loses what it was
+        // paid for (decisions-log item 136 (5)) and nothing allocates inside a
+        // tick.
+        self.carry.clear();
+        let count = self.targets.row_count();
+        for row in 0..count {
+            if self.targets.beacons().get(row).copied() == Some(beacon.raw())
+                && self.targets.kinds().get(row).copied() == Some(TargetKind::Build.id())
+                && let (Some(anchor), Some(feature), Some(built)) = (
+                    self.targets.anchors().get(row).copied(),
+                    self.targets.features().get(row).copied(),
+                    self.targets.built().get(row).copied(),
+                )
+            {
+                self.carry.push(Carried {
+                    anchor,
+                    feature,
+                    built,
+                });
+            }
         }
         self.clear_targets(beacon, TargetKind::Build);
-        for (slot, entry) in list.enumerate() {
+        for entry in list {
             let anchor = entry.anchor;
             if !crate::mandate::inside_sphere(self, beacon, anchor)
                 || self.anchor_is_claimed(seat, anchor)
             {
                 continue;
             }
-            if !self.targets.add_bound(
+            self.targets.add_bound(
                 beacon,
                 TargetKind::Build,
                 entry.blueprint,
@@ -2076,47 +2436,130 @@ impl World {
                 ColumnBox::default(),
                 (entry.feature, entry.desc),
                 entry.build,
-            ) {
-                continue;
-            }
-            let built = carried.get(slot).copied().unwrap_or(BeaconId::NONE.raw());
+            )?;
+            let built = self
+                .carry
+                .iter()
+                .find(|old| {
+                    if entry.feature == NO_FEATURE {
+                        old.anchor == anchor
+                    } else {
+                        old.feature == entry.feature
+                    }
+                })
+                .map_or(BeaconId::NONE.raw(), |old| old.built);
             if built != BeaconId::NONE.raw() {
                 self.set_built_at(beacon, anchor, built);
             }
         }
+        self.carry.clear();
+        Ok(())
     }
 
-    /// The structure `beacon`'s Build target at `at` -- or, for one bound to a
-    /// feature, its target bound to `feature` -- has already been paid for, or
-    /// [`BeaconId::NONE`]'s raw value when there is no such target.
-    fn built_at(&self, beacon: BeaconId, at: [Fx; 3], feature: u32) -> u32 {
-        let count = usize::try_from(self.targets.len()).unwrap_or(0);
-        let mut row: usize = 0;
-        while row < count {
-            let same = if feature == NO_FEATURE {
-                self.targets.anchors().get(row).copied() == Some(at)
-            } else {
-                self.targets.features().get(row).copied() == Some(feature)
-            };
-            if self.targets.beacons().get(row).copied() == Some(beacon.raw())
-                && self.targets.kinds().get(row).copied() == Some(TargetKind::Build.id())
-                && same
-            {
-                return self
-                    .targets
-                    .built()
-                    .get(row)
-                    .copied()
-                    .unwrap_or(BeaconId::NONE.raw());
+    /// Whether the list-settings table has room for everything a settings
+    /// row would write to `beacon`, once the lists the row replaces are gone:
+    /// the Build entries `build` would actually write, plus `areas` area rows,
+    /// after the beacon's rows of every kind in `replaces` are cleared.
+    ///
+    /// **The test ruling 10 needs before anything is written** (decisions-log
+    /// item 139 (1), ruling 10): a row either writes the whole of what it
+    /// names or nothing, and fails its step with
+    /// [`crate::interpreter::StepFailure::TargetsUnwritten`] when it cannot.
+    /// The Build count is the count [`World::replace_build_targets`] writes,
+    /// computed the same way: an entry outside the beacon's sphere, on an
+    /// anchor another of the seat's beacons already claims, or on an anchor an
+    /// earlier entry of the list already wrote, writes no row. Two entries on
+    /// one anchor agree on the first two tests, so an anchor is counted once
+    /// whichever of its entries is first.
+    ///
+    /// Read-only and allocation-free: the list is walked as a cloneable
+    /// iterator, once per entry for the duplicate test, which a list inside
+    /// the verifier's size budget keeps small.
+    ///
+    /// # Errors
+    ///
+    /// [`TargetsFull`] when the rows would not fit.
+    pub(crate) fn check_list_room<I, K>(
+        &self,
+        beacon: BeaconId,
+        build: Option<I>,
+        areas: usize,
+        replaces: &K,
+    ) -> Result<(), TargetsFull>
+    where
+        I: Iterator<Item = BuildEntry> + Clone,
+        K: IntoIterator<Item = TargetKind> + Clone,
+    {
+        let full = TargetsFull {
+            capacity: self.targets.capacity(),
+        };
+        let seat = self.seat_of_beacon(beacon);
+        let mut needed = areas;
+        if let Some(list) = build {
+            for (index, entry) in list.clone().enumerate() {
+                let anchor = entry.anchor;
+                if !crate::mandate::inside_sphere(self, beacon, anchor)
+                    || self.anchor_claimed_elsewhere(seat, anchor, beacon)
+                    || list
+                        .clone()
+                        .take(index)
+                        .any(|earlier| earlier.anchor == anchor)
+                {
+                    continue;
+                }
+                needed = needed.checked_add(1).ok_or(full)?;
             }
-            row = row.saturating_add(1);
         }
-        BeaconId::NONE.raw()
+        let count = self.targets.row_count();
+        let mut freed: usize = 0;
+        for row in 0..count {
+            let of_beacon = self.targets.beacons().get(row).copied() == Some(beacon.raw());
+            let cleared =
+                self.targets.kinds().get(row).is_some_and(|kind| {
+                    replaces.clone().into_iter().any(|gone| gone.id() == *kind)
+                });
+            if of_beacon && cleared {
+                freed = freed.checked_add(1).ok_or(full)?;
+            }
+        }
+        let capacity = usize::try_from(self.targets.capacity()).map_err(|_| full)?;
+        let kept = count.checked_sub(freed).ok_or(full)?;
+        let after = kept.checked_add(needed).ok_or(full)?;
+        if after > capacity {
+            return Err(full);
+        }
+        Ok(())
+    }
+
+    /// The seat that owns `beacon`, or [`SeatId::NEUTRAL`] for a row the table
+    /// does not hold.
+    fn seat_of_beacon(&self, beacon: BeaconId) -> SeatId {
+        usize::try_from(beacon.raw())
+            .ok()
+            .and_then(|row| self.beacons.seats().get(row).copied())
+            .map_or(SeatId::NEUTRAL, SeatId::new)
+    }
+
+    /// Whether a Build target of `seat`'s on a beacon **other than** `except`
+    /// claims `at`: [`World::anchor_is_claimed`] as it will read once
+    /// `except`'s own Build list is cleared.
+    fn anchor_claimed_elsewhere(&self, seat: SeatId, at: [Fx; 3], except: BeaconId) -> bool {
+        let count = self.targets.row_count();
+        (0..count).any(|row| {
+            let beacon = self.targets.beacons().get(row).copied();
+            beacon != Some(except.raw())
+                && beacon
+                    .and_then(|beacon| usize::try_from(beacon).ok())
+                    .and_then(|beacon| self.beacons.seats().get(beacon).copied())
+                    == Some(seat.raw())
+                && self.targets.kinds().get(row).copied() == Some(TargetKind::Build.id())
+                && self.targets.anchors().get(row).copied() == Some(at)
+        })
     }
 
     /// Write the `built` link of `beacon`'s Build target at `at`.
     fn set_built_at(&mut self, beacon: BeaconId, at: [Fx; 3], built: u32) {
-        let count = usize::try_from(self.targets.len()).unwrap_or(0);
+        let count = crate::math::index::row(self.targets.len());
         let mut row: usize = 0;
         while row < count {
             if self.targets.beacons().get(row).copied() == Some(beacon.raw())
@@ -2137,7 +2580,7 @@ impl World {
     /// all-or-nothing (spec section 5), so the list it replaces goes first.
     pub(crate) fn clear_targets(&mut self, beacon: BeaconId, kind: TargetKind) {
         let mut row: usize = 0;
-        while row < usize::try_from(self.targets.len()).unwrap_or(0) {
+        while row < crate::math::index::row(self.targets.len()) {
             if self.targets.beacons().get(row).copied() == Some(beacon.raw())
                 && self.targets.kinds().get(row).copied() == Some(kind.id())
             {
@@ -2155,7 +2598,7 @@ impl World {
     /// changed is not a stable reference (`playbook.proto`'s own words).
     /// `false` when no target is anchored there.
     pub(crate) fn remove_target_at(&mut self, beacon: BeaconId, at: [Fx; 3]) -> bool {
-        let count = usize::try_from(self.targets.len()).unwrap_or(0);
+        let count = crate::math::index::row(self.targets.len());
         let mut row: usize = 0;
         while row < count {
             if self.targets.beacons().get(row).copied() == Some(beacon.raw())
@@ -2242,7 +2685,7 @@ impl World {
             .seat_row(seat)
             .and_then(|index| self.seats.treasuries().get(index).copied())
             .unwrap_or(Money::ZERO);
-        let count = usize::try_from(self.beacons.len()).unwrap_or(0);
+        let count = crate::math::index::row(self.beacons.len());
         let mut row: usize = 0;
         while row < count {
             if self.beacons.seats().get(row).copied() == Some(seat.raw()) {
@@ -2262,7 +2705,7 @@ impl World {
             }
             row = row.saturating_add(1);
         }
-        let count = usize::try_from(self.structures.len()).unwrap_or(0);
+        let count = crate::math::index::row(self.structures.len());
         let mut row: usize = 0;
         while row < count {
             if self.structures.seats().get(row).copied() == Some(seat.raw())
@@ -2279,16 +2722,17 @@ impl World {
                     .get(row)
                     .copied()
                     .unwrap_or(Hp::ZERO);
-                let value = crate::economy::value_of(
-                    self.structure_cost(kind),
-                    hp.raw(),
-                    self.structure_max_hp(kind).raw(),
-                );
-                total = Money::new(total.raw().saturating_add(value.raw()));
+                // A wall has no structure row, and no row is one
+                // ([`World::structure_max_hp`]).
+                if let Some(max_hp) = self.structure_max_hp(kind) {
+                    let value =
+                        crate::economy::value_of(self.structure_cost(kind), hp.raw(), max_hp.raw());
+                    total = Money::new(total.raw().saturating_add(value.raw()));
+                }
             }
             row = row.saturating_add(1);
         }
-        let count = usize::try_from(self.units.len()).unwrap_or(0);
+        let count = crate::math::index::row(self.units.len());
         let mut row: usize = 0;
         while row < count {
             if self.units.seats().get(row).copied() == Some(seat.raw())
@@ -2391,23 +2835,53 @@ impl World {
         &mut self.work
     }
 
-    /// Ask for a voxel edit. Returns `false` when this tick's queue is full.
+    /// File a voxel edit for the next voxel phase, **between ticks**: what a
+    /// host's test seam and a test file through.
     ///
     /// **The order a filler owes.** The queue is applied in the order it was
     /// filled, so a phase that fills it must do so in an order that is itself
     /// deterministic — every sort key ending in a unique id, as everywhere else
     /// (item 62). A mining drone taking an ore voxel fills it (T14's program,
-    /// walked in unit-id order), and combat's craters are S2's; each walks its
-    /// own table in id order, which is the order the queue inherits.
+    /// walked in unit-id order, through the tick's own door), and combat's
+    /// craters are S2's; each walks its own table in id order, which is the
+    /// order the queue inherits.
     ///
-    /// A full queue drops nothing silently: the `false` is the report, and a
-    /// caller that cannot afford to lose an edit must handle it.
-    pub fn request_voxel_edit(&mut self, edit: VoxelEdit) -> bool {
-        if self.edits.len() >= HARNESS_EDIT_QUEUE {
-            return false;
+    /// # Errors
+    ///
+    /// [`FileRefused::MidTick`] while a tick is open,
+    /// [`FileRefused::OffTheMap`] for an edit that names no voxel of the map,
+    /// and [`FileRefused::QueueFull`] once a host's orders would take room the
+    /// tick's own filers are sized for ([`QueueRooms`]). Nothing is dropped
+    /// silently: the error is the report.
+    pub fn request_voxel_edit(&mut self, edit: VoxelEdit) -> Result<(), FileRefused> {
+        if self.open_phase.is_some() {
+            return Err(FileRefused::MidTick);
+        }
+        self.push_edit(edit, self.rooms.edits)
+    }
+
+    /// File a voxel edit from inside the tick: a program's dig, and S2's
+    /// craters. As [`World::request_voxel_edit`], against the whole queue.
+    ///
+    /// # Errors
+    ///
+    /// As [`World::request_voxel_edit`], less `MidTick`.
+    pub(crate) fn file_voxel_edit(&mut self, edit: VoxelEdit) -> Result<(), FileRefused> {
+        self.push_edit(edit, self.rooms.edits.saturating_mul(2))
+    }
+
+    fn push_edit(&mut self, edit: VoxelEdit, room: usize) -> Result<(), FileRefused> {
+        if !self.voxels.edit_is_on_the_map(&edit) {
+            return Err(FileRefused::OffTheMap);
+        }
+        if self.edits.len() >= room {
+            return Err(FileRefused::QueueFull {
+                queue: Queue::Edits,
+                room,
+            });
         }
         self.edits.push(edit);
-        true
+        Ok(())
     }
 
     /// How many edits are queued for this tick's voxel phase.
@@ -2427,17 +2901,14 @@ impl World {
     pub fn edit_queued_within(&self, bounds: [i32; 4]) -> bool {
         let [min_x, min_y, max_x, max_y] = bounds;
         self.edits.iter().any(|edit| {
-            let (x, y, reach) = match edit {
-                VoxelEdit::Set { at, .. } => (
-                    at.first().copied().unwrap_or(0),
-                    at.get(1).copied().unwrap_or(0),
-                    0,
-                ),
-                VoxelEdit::Crater { centre, radius } => (
-                    centre.first().copied().unwrap_or(0),
-                    centre.get(1).copied().unwrap_or(0),
-                    (*radius).max(0),
-                ),
+            // A filed crater's radius is never negative ([`FileRefused::OffTheMap`]).
+            let (x, y, reach) = match *edit {
+                VoxelEdit::Set { at: [x, y, _], .. } => (x, y, 0),
+                VoxelEdit::Crater {
+                    centre: [x, y, _],
+                    radius,
+                    ..
+                } => (x, y, radius),
             };
             x.saturating_add(reach) >= min_x
                 && x.saturating_sub(reach) <= max_x
@@ -2446,27 +2917,93 @@ impl World {
         })
     }
 
-    /// File a damage order for this tick's combat phase. `false` when the
-    /// queue is full.
+    /// File a damage order for the next combat phase, **between ticks**: what
+    /// a host's test seam and a test file through.
     ///
     /// **What is T10's here and what is S2's.** The *source* of damage — who
     /// fires, at what, for how much, with what spread off `Stream::Combat` —
-    /// is S2's and none of it exists. What exists is the drain: elimination,
-    /// local elimination and the commander's respawn are all consequences of
-    /// something dying, so T10 needs death to be a thing that can happen
-    /// before it can implement the rules that follow from it. S2 fills the
-    /// phase that files these orders; it does not have to change the way they
-    /// land.
+    /// is S2's `fire`, which files through the tick's own door. What exists is
+    /// the landing: elimination, local elimination and the commander's respawn
+    /// are all consequences of something dying, so T10 needs death to be a
+    /// thing that can happen before it can implement the rules that follow from
+    /// it.
     ///
     /// The queue is applied in the order it was filled, so a filler owes the
     /// same discipline the voxel queue's does: fill it in an order that is
     /// itself deterministic, every sort key ending in a unique id (item 62).
-    pub fn request_damage(&mut self, order: DamageOrder) -> bool {
-        if self.damage.len() >= HARNESS_DAMAGE_QUEUE {
-            return false;
+    ///
+    /// # Errors
+    ///
+    /// [`FileRefused::MidTick`] while a tick is open, and
+    /// [`FileRefused::QueueFull`] once a host's orders would take room the
+    /// tick's own filers are sized for ([`QueueRooms`]).
+    pub fn request_damage(&mut self, order: DamageOrder) -> Result<(), FileRefused> {
+        if self.open_phase.is_some() {
+            return Err(FileRefused::MidTick);
+        }
+        self.push_damage(order, self.rooms.damage)
+    }
+
+    /// File a damage order from inside the tick: S2's fire and fall damage,
+    /// which land in the same tick (E2). As [`World::request_damage`], against
+    /// the whole queue.
+    ///
+    /// # Errors
+    ///
+    /// [`FileRefused::QueueFull`], which the sizing makes unreachable in a
+    /// legal world.
+    ///
+    /// Compiled for tests only until S2's `fire` and `fall` file through it:
+    /// nothing in a tick deals damage yet, and the queue's sizing test is the
+    /// one caller today. `fire` drops the `cfg`.
+    #[cfg(test)]
+    pub(crate) fn file_damage(&mut self, order: DamageOrder) -> Result<(), FileRefused> {
+        self.push_damage(order, self.rooms.damage.saturating_mul(2))
+    }
+
+    fn push_damage(&mut self, order: DamageOrder, room: usize) -> Result<(), FileRefused> {
+        if self.damage.len() >= room {
+            return Err(FileRefused::QueueFull {
+                queue: Queue::Damage,
+                room,
+            });
         }
         self.damage.push(order);
-        true
+        Ok(())
+    }
+
+    /// The two queues' rooms ([`QueueRooms`]).
+    #[must_use]
+    pub const fn queue_rooms(&self) -> QueueRooms {
+        self.rooms
+    }
+
+    /// The bytes the two queues hold room for, which G3' reports (E5).
+    #[must_use]
+    pub fn queue_bytes(&self) -> usize {
+        let edits = self
+            .edits
+            .capacity()
+            .saturating_mul(core::mem::size_of::<VoxelEdit>());
+        let damage = self
+            .damage
+            .capacity()
+            .saturating_mul(core::mem::size_of::<DamageOrder>());
+        edits.saturating_add(damage)
+    }
+
+    /// How many orders a host has filed that no tick has applied yet: every
+    /// order in either queue between ticks, since nothing the tick files
+    /// outlives it (E2). A save refuses while this is not zero.
+    #[must_use]
+    pub fn pending_orders(&self) -> usize {
+        self.edits.len().saturating_add(self.damage.len())
+    }
+
+    /// Every damage order dropped, by reason (E4).
+    #[must_use]
+    pub const fn dropped_damage(&self) -> DamageDrops {
+        self.damage_drops
     }
 
     /// How many damage orders are queued for this tick's combat phase.
@@ -2541,45 +3078,111 @@ impl World {
     /// `enc` is the caller's buffer, reused across ticks: that is what makes a
     /// tick allocation-free (G3' section 9.17), and `tests/allocations.rs`
     /// asserts it.
-    pub fn step(&mut self, enc: &mut Enc) -> u64 {
-        self.tick = self.tick.next().unwrap_or(self.tick);
-        self.work.reset();
-        let mut hash = 0;
+    ///
+    /// The tick is [`World::begin_tick`], every phase of [`PHASE_ORDER`] but
+    /// the hash through [`World::run_phase`], and [`World::end_tick`] (S2's
+    /// plan, E30): stepping a world phase by phase leaves the same hash chain
+    /// as stepping it whole, because this is that.
+    ///
+    /// # Errors
+    ///
+    /// [`TickError::PastTheLast`] at the tick counter's last value, and
+    /// [`TickError::MidTick`] while a tick is open between phases.
+    pub fn step(&mut self, enc: &mut Enc) -> Result<u64, TickError> {
+        self.begin_tick()?;
         for phase in PHASE_ORDER {
-            match phase {
-                Phase::Broadphase => self.phase_broadphase(),
-                Phase::Programs => self.phase_programs(),
-                Phase::Movement => self.phase_movement(),
-                Phase::Combat => self.phase_combat(),
-                Phase::KillCredit => self.phase_kill_credit(),
-                Phase::Power => self.phase_power(),
-                Phase::Quartermaster => self.phase_quartermaster(),
-                Phase::Decision => self.phase_decision(),
-                Phase::Pathing => self.phase_pathing(),
-                Phase::Voxels => self.phase_voxels(),
-                Phase::Match => self.phase_match(),
-                Phase::Hash => hash = self.phase_hash(enc),
+            if phase != Phase::Hash {
+                self.run_phase(phase)?;
             }
         }
-        hash
+        self.end_tick(enc)
+    }
+
+    /// Open the next tick: move the clock and reset the tick's work counter.
+    ///
+    /// # Errors
+    ///
+    /// [`TickError::MidTick`] while a tick is already open, and
+    /// [`TickError::PastTheLast`] when the clock has no tick after this one:
+    /// a clock that stood still would say a tick ran that did not (E7).
+    pub fn begin_tick(&mut self) -> Result<(), TickError> {
+        if self.open_phase.is_some() {
+            return Err(TickError::MidTick);
+        }
+        self.tick = self.tick.next().ok_or(TickError::PastTheLast)?;
+        self.work.reset();
+        self.open_phase = Some(0);
+        Ok(())
+    }
+
+    /// Whether a tick is open between two of its phases.
+    #[must_use]
+    pub const fn tick_is_open(&self) -> bool {
+        self.open_phase.is_some()
+    }
+
+    /// The open tick's next phase, or `None` between ticks.
+    #[must_use]
+    pub fn next_phase(&self) -> Option<Phase> {
+        self.open_phase.and_then(|at| PHASE_ORDER.get(at)).copied()
+    }
+
+    /// Run the open tick's next phase, which must be `phase`.
+    ///
+    /// # Errors
+    ///
+    /// [`TickError::NotOpen`] between ticks, and [`TickError::OutOfOrder`]
+    /// for a phase that is not the next one -- the hash among them, which is
+    /// [`World::end_tick`]'s.
+    pub fn run_phase(&mut self, phase: Phase) -> Result<(), TickError> {
+        let next = self.next_phase().ok_or(TickError::NotOpen)?;
+        if phase != next || phase == Phase::Hash {
+            return Err(TickError::OutOfOrder { asked: phase, next });
+        }
+        match phase {
+            Phase::Broadphase => self.phase_broadphase(),
+            Phase::Programs => self.phase_programs(),
+            Phase::Movement => self.phase_movement(),
+            Phase::Combat => self.phase_combat(),
+            Phase::KillCredit => self.phase_kill_credit(),
+            Phase::Power => self.phase_power(),
+            Phase::Quartermaster => self.phase_quartermaster(),
+            Phase::Decision => self.phase_decision(),
+            Phase::Pathing => self.phase_pathing(),
+            Phase::Voxels => self.phase_voxels(),
+            Phase::Match => self.phase_match(),
+            Phase::Hash => {}
+        }
+        self.open_phase = self.open_phase.and_then(|at| at.checked_add(1));
+        Ok(())
+    }
+
+    /// Close the open tick with its hash phase, and return the tick's state
+    /// hash.
+    ///
+    /// # Errors
+    ///
+    /// [`TickError::NotOpen`] between ticks, and [`TickError::Unfinished`]
+    /// while a phase before the hash has not run.
+    pub fn end_tick(&mut self, enc: &mut Enc) -> Result<u64, TickError> {
+        let next = self.next_phase().ok_or(TickError::NotOpen)?;
+        if next != Phase::Hash {
+            return Err(TickError::Unfinished { next });
+        }
+        let hash = self.phase_hash(enc);
+        self.open_phase = None;
+        Ok(hash)
     }
 
     /// Rebuild the CSR uniform grid by counting sort (item 67).
     ///
-    /// [`Csr::rebuild`] answers `false` when the unit table is larger than the
-    /// grid it was built for, and leaves the grid **empty** — so swallowing
-    /// that answer buys a world that hashes correctly and then queries an empty
-    /// index for the rest of the match. [`World::new`] and
-    /// [`World::restore_tables`] are the only two ways to get a grid, and both
-    /// size it to the unit table, so a `false` here is a construction bug and
-    /// the assertion is how it surfaces at the tick that caused it.
+    /// Infallible by construction (S2's plan, E6): [`World::new`] sizes the
+    /// grid for [`World::unit_limit`] rows and returns a typed error there when
+    /// it will not fit, and the unit table never holds more than that --
+    /// [`World::fabricate`] refuses past it and a restore refuses a snapshot
+    /// over it ([`crate::snapshot::SnapshotError::OverCeiling`]).
     fn phase_broadphase(&mut self) {
-        let rebuilt = self.broadphase.rebuild(self.units.positions());
-        debug_assert!(
-            rebuilt,
-            "the unit table outgrew the broadphase grid; every query from here on would come \
-             back empty"
-        );
+        self.broadphase.rebuild(self.units.positions());
     }
 
     /// Units' and buildings' built-in programs: move, build, mine, scout and
@@ -2625,60 +3228,87 @@ impl World {
             .advance(&self.surface, kinds, hit_points, positions, headings);
     }
 
-    /// Fire and damage.
+    /// Fire and damage (S2's plan, E2).
     ///
-    /// **S2 fills the firing half**; `Stream::Combat` is reserved for it and is
-    /// drawn from nowhere else. What is here is the landing half: this tick's
-    /// [`DamageOrder`]s are applied in the order they were filed, and hit
-    /// points clamp at zero because nothing is more destroyed than destroyed
-    /// ([`Hp::damaged_by`]). T10 needs it because elimination, local
-    /// elimination and the commander's respawn are consequences of a death, and
-    /// a rule about a death cannot be written — or tested — against a world in
-    /// which nothing can die.
+    /// Three steps, in this order: (1) every armed asset chooses its target
+    /// from the post-Movement state, in total order, and fires -- S2's `fire`,
+    /// with `Stream::Combat` reserved for it and drawn from nowhere else; (2)
+    /// shells whose flight ends this tick land -- `fire` too; (3) **every order
+    /// filed so far is applied**, the host's from between ticks and this
+    /// tick's own from (1) and (2), so a shot lands in the tick it is fired and
+    /// no seat's shot lands before another's choice. Nothing the tick files is
+    /// pending at its end, which is why the queue is never state.
+    ///
+    /// T10 needed the landing half because elimination, local elimination and
+    /// the commander's respawn are consequences of a death, and a rule about a
+    /// death cannot be written -- or tested -- against a world in which nothing
+    /// can die.
     fn phase_combat(&mut self) {
-        // Walked by index against the length taken up front, rather than
-        // `mem::take` and put back: a take leaves `self.damage` a zero-capacity
-        // `Vec`, so an order filed *during* the phase would allocate inside a
-        // tick and then be thrown away by the put-back. S2 fills the phase that
-        // files these orders, and this is the shape that stays correct when it
-        // does — what was queued when the phase opened is applied, and anything
-        // filed while it ran waits for the next tick.
-        let count = self.damage.len();
+        self.apply_damage();
+    }
+
+    /// Apply every queued damage order in filing order, the orders filed while
+    /// it runs included, and empty the queue (E2).
+    ///
+    /// Kill credit is booked **before** the hit points are drained, because
+    /// item 17 clamps a seat's share to "hit points actually removed": after
+    /// the drain there is no longer anything to clamp against, and an overkill
+    /// of a thousand against a hundred-point drone would book a thousand. An
+    /// order that applies nothing is counted under its reason ([`DamageDrop`]).
+    ///
+    /// Walked by index rather than drained by `mem::take`, because a take
+    /// leaves `self.damage` a zero-capacity `Vec` and an order filed while it
+    /// ran would allocate inside a tick. The same function serves the Voxels
+    /// phase's fall damage (S2's `fall`).
+    fn apply_damage(&mut self) {
         let mut at: usize = 0;
-        while at < count {
-            let Some(order) = self.damage.get(at).copied() else {
-                break;
-            };
+        while let Some(order) = self.damage.get(at).copied() {
             at = at.saturating_add(1);
-            // Kill credit is booked **before** the hit points are drained,
-            // because item 17 clamps a seat's share to "hit points actually
-            // removed": after the drain there is no longer anything to clamp
-            // against, and an overkill of a thousand against a hundred-point
-            // drone would book a thousand.
-            self.book_credit(order);
-            match order.target {
-                DamageTarget::Unit(unit) => {
-                    let index = usize::try_from(unit.raw()).unwrap_or(usize::MAX);
-                    if let Some(slot) = self.units.hit_points_mut().get_mut(index) {
-                        *slot = slot.damaged_by(order.amount);
-                    }
-                }
-                DamageTarget::Beacon(beacon) => {
-                    let index = usize::try_from(beacon.raw()).unwrap_or(usize::MAX);
-                    if let Some(slot) = self.beacons.hit_points_mut().get_mut(index) {
-                        *slot = slot.damaged_by(order.amount);
-                    }
-                }
-                DamageTarget::Structure(structure) => {
-                    let index = usize::try_from(structure.raw()).unwrap_or(usize::MAX);
-                    if let Some(slot) = self.structures.hit_points_mut().get_mut(index) {
-                        *slot = slot.damaged_by(order.amount);
-                    }
+            match self.damage_slot(order.target) {
+                Err(reason) => self.damage_drops.count(reason),
+                Ok(alive) if !alive => self.damage_drops.count(DamageDrop::AlreadyDead),
+                Ok(_) => {
+                    self.book_credit(order);
+                    self.drain(order);
                 }
             }
         }
-        let applied = count.min(self.damage.len());
-        let _ = self.damage.drain(..applied);
+        self.damage.clear();
+    }
+
+    /// Whether a damage order's target is alive, or why it names nothing.
+    fn damage_slot(&self, target: DamageTarget) -> Result<bool, DamageDrop> {
+        let hp = match target {
+            DamageTarget::Unit(unit) => usize::try_from(unit.raw())
+                .ok()
+                .and_then(|row| self.units.hit_points().get(row)),
+            DamageTarget::Beacon(beacon) => usize::try_from(beacon.raw())
+                .ok()
+                .and_then(|row| self.beacons.hit_points().get(row)),
+            DamageTarget::Structure(structure) => usize::try_from(structure.raw())
+                .ok()
+                .and_then(|row| self.structures.hit_points().get(row)),
+        };
+        hp.map(|hp| hp.is_alive()).ok_or(DamageDrop::NoSuchRow)
+    }
+
+    /// Take one order's damage off its target's hit points. The target's row
+    /// was found by [`World::damage_slot`].
+    fn drain(&mut self, order: DamageOrder) {
+        let slot = match order.target {
+            DamageTarget::Unit(unit) => usize::try_from(unit.raw())
+                .ok()
+                .and_then(|row| self.units.hit_points_mut().get_mut(row)),
+            DamageTarget::Beacon(beacon) => usize::try_from(beacon.raw())
+                .ok()
+                .and_then(|row| self.beacons.hit_points_mut().get_mut(row)),
+            DamageTarget::Structure(structure) => usize::try_from(structure.raw())
+                .ok()
+                .and_then(|row| self.structures.hit_points_mut().get_mut(row)),
+        };
+        if let Some(slot) = slot {
+            *slot = slot.damaged_by(order.amount);
+        }
     }
 
     /// Book one damage order against the target's kill-credit counters
@@ -2690,12 +3320,12 @@ impl World {
     /// credits nobody" true without a second rule — and the amount is clamped
     /// to the hit points actually there to remove.
     fn book_credit(&mut self, order: DamageOrder) {
-        if !order.by.is_some() || order.amount.raw() <= 0 {
+        if !order.by.is_some() {
             return;
         }
         let (asset, owner, hp) = match order.target {
             DamageTarget::Unit(unit) => {
-                let row = usize::try_from(unit.raw()).unwrap_or(usize::MAX);
+                let row = crate::math::index::row(unit.raw());
                 (
                     AssetId::of_unit(unit),
                     self.units.seats().get(row).copied(),
@@ -2703,7 +3333,7 @@ impl World {
                 )
             }
             DamageTarget::Beacon(beacon) => {
-                let row = usize::try_from(beacon.raw()).unwrap_or(usize::MAX);
+                let row = crate::math::index::row(beacon.raw());
                 (
                     AssetId::of_beacon(beacon),
                     self.beacons.seats().get(row).copied(),
@@ -2711,7 +3341,7 @@ impl World {
                 )
             }
             DamageTarget::Structure(structure) => {
-                let row = usize::try_from(structure.raw()).unwrap_or(usize::MAX);
+                let row = crate::math::index::row(structure.raw());
                 (
                     AssetId::of_structure(structure),
                     self.structures.seats().get(row).copied(),
@@ -2816,7 +3446,7 @@ impl World {
         let mut row: u32 = 0;
         while row < count {
             let id = BeaconId::new(row);
-            let at = usize::try_from(row).unwrap_or(usize::MAX);
+            let at = crate::math::index::row(row);
             let seat = self.beacons.seats().get(at).copied().unwrap_or(0);
             let alive_seat = self
                 .seat_row(SeatId::new(seat))
@@ -2838,7 +3468,7 @@ impl World {
                 // allocator decide whether an order was filled. The buffer is
                 // reserved to the same number, so this never drops a request
                 // that the reservation left room for.
-                && out.len() < usize::try_from(self.beacon_limit).unwrap_or(0)
+                && out.len() < crate::math::index::row(self.beacon_limit)
             {
                 out.push(request);
             }
@@ -3068,18 +3698,14 @@ impl World {
         self.arrivals.extend_from_slice(self.router.arrived());
         let match_seed = self.match_seed;
         let tick = self.tick.raw();
-        let extent = self.rules.map_size_voxels();
-        let max_x = i16::try_from(extent.first().copied().unwrap_or(0).saturating_sub(1))
-            .unwrap_or(i16::MAX);
-        let max_y = i16::try_from(extent.get(1).copied().unwrap_or(0).saturating_sub(1))
-            .unwrap_or(i16::MAX);
+        let [max_x, max_y, _] = self.rules.map_last_voxel();
         let mut at = 0;
         while at < self.arrivals.len() {
             let Some(unit) = self.arrivals.get(at).copied() else {
                 break;
             };
             at = at.saturating_add(1);
-            let index = usize::try_from(unit).unwrap_or(usize::MAX);
+            let index = crate::math::index::row(unit);
             if self.units.kinds().get(index).copied() == Some(UnitKind::Commander.id()) {
                 continue;
             }
@@ -3115,10 +3741,13 @@ impl World {
         let mut touched = core::mem::take(&mut self.touched);
         for edit in &edits {
             match *edit {
-                VoxelEdit::Set { at, material } => {
+                // A set that changes nothing is an edit that marks nothing
+                // (`VoxelStore::set`), and an edit off the map was refused
+                // where it was filed, so neither answer is a drop.
+                VoxelEdit::Set { at, material, .. } => {
                     self.voxels.set(at, material);
                 }
-                VoxelEdit::Crater { centre, radius } => {
+                VoxelEdit::Crater { centre, radius, .. } => {
                     self.voxels.crater(centre, radius, &mut touched);
                 }
             }
@@ -3200,7 +3829,7 @@ impl World {
                 break;
             };
             at = at.saturating_add(1);
-            let index = usize::try_from(unit).unwrap_or(usize::MAX);
+            let index = crate::math::index::row(unit);
             let seat = self.units.seats().get(index).copied().unwrap_or(0);
             let position = self.units.positions().get(index).copied();
             let mut emission = Emission::of(EventKind::UnitSealedIn)
@@ -3226,7 +3855,7 @@ impl World {
     /// `rehome_units`, below).
     fn settle_beacon_deaths(&mut self) {
         let tick = self.tick;
-        let count = usize::try_from(self.beacons.len()).unwrap_or(0);
+        let count = crate::math::index::row(self.beacons.len());
         let mut index: usize = 0;
         while index < count {
             let alive = self
@@ -3270,7 +3899,7 @@ impl World {
 
     /// A beacon's writ ends with it: no mandate, no settings, no targets.
     fn end_mandate(&mut self, beacon: BeaconId) {
-        let row = usize::try_from(beacon.raw()).unwrap_or(usize::MAX);
+        let row = crate::math::index::row(beacon.raw());
         if let Some(slot) = self.beacons.mandates_mut().get_mut(row) {
             *slot = MandateKind::None.id();
         }
@@ -3293,7 +3922,7 @@ impl World {
     /// there is nowhere to re-home to and pretending otherwise would put a
     /// unit on a grid that does not exist.
     fn rehome_units(&mut self, seat: SeatId, gone: BeaconId) {
-        let count = usize::try_from(self.units.len()).unwrap_or(0);
+        let count = crate::math::index::row(self.units.len());
         let mut row: usize = 0;
         while row < count {
             let mine = self.units.seats().get(row).copied() == Some(seat.raw());
@@ -3324,7 +3953,7 @@ impl World {
     /// (item 62's convention, the same key [`World::respawn_point`] uses).
     fn nearest_living_beacon(&self, seat: SeatId, from: [Fx; 3]) -> Option<BeaconId> {
         let mut best: Option<(Sq, u32)> = None;
-        let count = usize::try_from(self.beacons.len()).unwrap_or(0);
+        let count = crate::math::index::row(self.beacons.len());
         let mut row: usize = 0;
         while row < count {
             if self.beacons.seats().get(row).copied() == Some(seat.raw())
@@ -3354,7 +3983,7 @@ impl World {
     /// having no seat, rather than from five flags that could disagree.
     fn ruin_structures(&mut self, home: Option<BeaconId>, seat: Option<SeatId>) {
         let tick = self.tick;
-        let count = usize::try_from(self.structures.len()).unwrap_or(0);
+        let count = crate::math::index::row(self.structures.len());
         let mut index: usize = 0;
         while index < count {
             let owner = self.structures.seats().get(index).copied().unwrap_or(0);
@@ -3390,7 +4019,7 @@ impl World {
     /// match".
     fn settle_eliminations(&mut self) {
         let tick = self.tick;
-        let seats = usize::try_from(self.seats.len()).unwrap_or(0);
+        let seats = crate::math::index::row(self.seats.len());
         let mut index: usize = 0;
         while index < seats {
             let raw = self.seats.seats().get(index).copied().unwrap_or(0);
@@ -3428,7 +4057,7 @@ impl World {
     /// and a disbanded unit is making none, and leaving it in the repath queue
     /// would spend the tick's cap on the dead.
     fn disband_units(&mut self, seat: SeatId) {
-        let count = usize::try_from(self.units.len()).unwrap_or(0);
+        let count = crate::math::index::row(self.units.len());
         let mut index: usize = 0;
         while index < count {
             if self.units.seats().get(index).copied() == Some(seat.raw()) {
@@ -3456,7 +4085,7 @@ impl World {
     /// come back to and does not.
     fn settle_respawns(&mut self, force: bool) {
         let tick = self.tick;
-        let seats = usize::try_from(self.seats.len()).unwrap_or(0);
+        let seats = crate::math::index::row(self.seats.len());
         let hp = self.commander_hp();
         let mut index: usize = 0;
         while index < seats {
@@ -3531,7 +4160,7 @@ impl World {
     fn settle_commander_deaths(&mut self) {
         let tick = self.tick;
         let (base, growth) = self.respawn_curve();
-        let seats = usize::try_from(self.seats.len()).unwrap_or(0);
+        let seats = crate::math::index::row(self.seats.len());
         let mut index: usize = 0;
         while index < seats {
             let raw = self.seats.seats().get(index).copied().unwrap_or(0);
@@ -3556,6 +4185,7 @@ impl World {
                     .copied()
                     .unwrap_or(0);
                 let delay = Ms::new(
+                    // E7: rule: the respawn delay saturates, as every respawn sum does
                     base.saturating_add(growth.saturating_mul(i32::try_from(deaths).unwrap_or(0))),
                 );
                 let due = tick.raw().saturating_add(delay.to_ticks_ceil());
@@ -3599,7 +4229,7 @@ impl World {
     fn check_match_end(&mut self) -> bool {
         let mut remaining: u32 = 0;
         let mut last: Option<SeatId> = None;
-        let seats = usize::try_from(self.seats.len()).unwrap_or(0);
+        let seats = crate::math::index::row(self.seats.len());
         let mut index: usize = 0;
         while index < seats {
             let raw = self.seats.seats().get(index).copied().unwrap_or(0);
@@ -3723,7 +4353,7 @@ impl World {
     /// dial between the seats still playing.
     fn settle_ledger(&mut self) {
         let tick = self.tick;
-        let count = usize::try_from(self.seats.len()).unwrap_or(0);
+        let count = crate::math::index::row(self.seats.len());
         // **The ladder is read once, before anybody is paid.** Ranking a seat
         // against treasuries that have already been credited would make the
         // band depend on the order the seats are walked in: the first seat
@@ -3814,7 +4444,7 @@ impl World {
     /// Whether a seat is standing, has fallen, or was never placed.
     fn seat_standing(&self, seat: u8) -> SeatStanding {
         let mut placed = false;
-        let count = usize::try_from(self.beacons.len()).unwrap_or(0);
+        let count = crate::math::index::row(self.beacons.len());
         let mut index: usize = 0;
         while index < count {
             if self.beacons.seats().get(index).copied() == Some(seat) {
@@ -3842,7 +4472,7 @@ impl World {
     fn respawn_point(&self, seat: u8, from: [Fx; 3]) -> Option<[Fx; 3]> {
         let mut core: Option<(u32, [Fx; 3], bool)> = None;
         let mut nearest: Option<(Sq, u32, [Fx; 3])> = None;
-        let count = usize::try_from(self.beacons.len()).unwrap_or(0);
+        let count = crate::math::index::row(self.beacons.len());
         let mut index: usize = 0;
         while index < count {
             if self.beacons.seats().get(index).copied() == Some(seat) {
@@ -3877,13 +4507,8 @@ impl World {
     }
 
     /// The commander's hit points, from `commander.hp`.
-    fn commander_hp(&self) -> Hp {
-        self.rules
-            .message()
-            .commander
-            .as_ref()
-            .and_then(|block| i32::try_from(block.hp).ok())
-            .map_or(Hp::ZERO, Hp::new)
+    const fn commander_hp(&self) -> Hp {
+        self.rules.unit_hp(UnitKind::Commander)
     }
 
     /// The respawn delay curve: `commander.respawn_base_ms` plus
@@ -3893,14 +4518,8 @@ impl World {
     /// Read from the rules table and never from a constant (AGENTS.md §12),
     /// which is also what makes the curve a tuning question rather than a code
     /// change.
-    fn respawn_curve(&self) -> (i32, i32) {
-        self.rules
-            .message()
-            .commander
-            .as_ref()
-            .map_or((0, 0), |block| {
-                (block.respawn_base_ms, block.respawn_growth_ms)
-            })
+    const fn respawn_curve(&self) -> (i32, i32) {
+        self.rules.respawn_curve()
     }
 
     /// Encode the world and digest it.
@@ -4260,13 +4879,10 @@ impl World {
         if unit_count > self.unit_limit {
             return false;
         }
-        let extent = self.rules.map_size_voxels();
+        let [width, depth, _] = self.rules.map_size_voxels();
         let Some(broadphase) = Csr::new(
             [0, 0],
-            [
-                extent.first().copied().unwrap_or(0),
-                extent.get(1).copied().unwrap_or(0),
-            ],
+            [width, depth],
             self.rules.csr_cell_size_voxels(),
             self.unit_limit,
         ) else {
@@ -4281,7 +4897,7 @@ impl World {
         // The interpreter's *state* is restored; its **plans** are not in the
         // file, because a playbook is an input exactly as the rules table is
         // (see `crate::interpreter::state::Interpreter::restore`).
-        let seat_width = usize::try_from(restored.seats.len()).unwrap_or(usize::MAX);
+        let seat_width = crate::math::index::row(restored.seats.len());
         if !self.interpreter.restore(&restored.plan, seat_width) {
             return false;
         }
@@ -4321,7 +4937,7 @@ impl World {
         self.beacon_limit = beacon_limit_of(self.seats.len());
         self.beacons
             .reserve(self.beacon_limit.saturating_sub(self.beacons.len()));
-        self.beacon_alive = Vec::with_capacity(usize::try_from(self.beacon_limit).unwrap_or(0));
+        self.beacon_alive = Vec::with_capacity(crate::math::index::row(self.beacon_limit));
         self.beacon_alive
             .extend(self.beacons.hit_points().iter().map(|hp| hp.is_alive()));
         self.match_state.restore(restored.match_state);
@@ -4345,7 +4961,7 @@ impl World {
         self.surface.refresh_all(&self.voxels);
         self.clusters.rebuild_all(&self.surface, &mut self.scratch);
         self.repairer = Repairer::new(self.clusters.cluster_count());
-        self.arrivals = Vec::with_capacity(usize::try_from(self.unit_limit).unwrap_or(0));
+        self.arrivals = Vec::with_capacity(crate::math::index::row(self.unit_limit));
         self.repair_report = RepairReport::default();
         self.serve_report = ServeReport::default();
         self.edits.clear();
@@ -4359,19 +4975,19 @@ impl World {
         // resumed feed a function of the restored state rather than of whatever
         // this world had been doing before.
         self.events.reset(self.tick);
-        self.touched = Vec::with_capacity(usize::try_from(self.voxels.chunk_count()).unwrap_or(0));
+        self.touched = Vec::with_capacity(crate::math::index::row(self.voxels.chunk_count()));
         // The query scratch is sized the same way, and for the same reason: a
         // query that has to grow its buffer is an allocation inside a tick.
-        self.candidates = Vec::with_capacity(usize::try_from(self.unit_limit).unwrap_or(0));
+        self.candidates = Vec::with_capacity(crate::math::index::row(self.unit_limit));
         // The three phase scratch buffers are re-reserved from the **restored**
         // counts for the same reason the tables are: they were sized at
         // construction from the config's seat count, and a snapshot of a match
         // with more seats raises `beacon_limit` and `seats.len()` past what
         // they were built for. A `power_order.push` past the reservation would
         // then allocate inside a tick, which `tests/allocations.rs` fails on.
-        self.requests = Vec::with_capacity(usize::try_from(self.beacon_limit).unwrap_or(0));
-        self.power_order = Vec::with_capacity(usize::try_from(self.beacon_limit).unwrap_or(0));
-        self.settlement = Vec::with_capacity(usize::try_from(self.seats.len()).unwrap_or(0));
+        self.requests = Vec::with_capacity(crate::math::index::row(self.beacon_limit));
+        self.power_order = Vec::with_capacity(crate::math::index::row(self.beacon_limit));
+        self.settlement = Vec::with_capacity(crate::math::index::row(self.seats.len()));
         true
     }
 }
@@ -4410,7 +5026,7 @@ enum SeatStanding {
 /// has, in unit-id order, which is the only commander a seat ever has (spec
 /// section 4: one per occupied seat).
 fn commander_index(units: &UnitTable, seats: u32) -> Vec<u32> {
-    let mut commanders = vec![UnitId::NONE.raw(); usize::try_from(seats).unwrap_or(0)];
+    let mut commanders = vec![UnitId::NONE.raw(); crate::math::index::row(seats)];
     let commander = UnitKind::Commander.id();
     for (index, kind) in units.kinds().iter().enumerate() {
         if *kind != commander {
@@ -4487,15 +5103,14 @@ fn fill_unit_table(
     if config.units_per_seat == 0 {
         return Ok(units);
     }
-    let walker_hp = config
-        .rules
-        .unit_hp(UnitKind::Raider)
-        .ok_or(MapError::MissingBlock("units.raider"))?;
-    let max_x = extent.first().copied().unwrap_or(0);
-    let max_y = extent.get(1).copied().unwrap_or(0);
+    let walker_hp = config.rules.unit_hp(UnitKind::Raider);
+    let [max_x, max_y] = extent;
     let mut seat_index: u32 = 0;
     while seat_index < config.seats {
-        let seat = SeatId::new(u8::try_from(seat_index).unwrap_or(u8::MAX));
+        let seat = SeatId::new(u8::try_from(seat_index).map_err(|_| MapError::OutOfRange {
+            field: "seats",
+            why: format!("seat {seat_index} is past the {} a seat id holds", u8::MAX),
+        })?);
         let mut n: u32 = 0;
         while n < config.units_per_seat {
             let mut rng = StreamRng::new(
@@ -4530,7 +5145,7 @@ fn fill_unit_table(
 /// generator's output before a [`World`] exists to ask.
 fn core_of_generated(generated: &crate::mapgen::GeneratedMap, seat: SeatId) -> BeaconId {
     let beacons = &generated.beacons;
-    let count = usize::try_from(beacons.len()).unwrap_or(0);
+    let count = crate::math::index::row(beacons.len());
     let mut best: Option<u32> = None;
     let mut row: usize = 0;
     while row < count {
@@ -4584,10 +5199,9 @@ fn mark_chunk_clusters(
     let Some(origin) = voxels.chunk_origin(chunk) else {
         return;
     };
-    let edge = i32::try_from(CHUNK_EDGE).unwrap_or(32);
+    let edge = crate::voxels::CHUNK_EDGE_I32;
     let size = clusters.size().max(1);
-    let x0 = origin.first().copied().unwrap_or(0);
-    let y0 = origin.get(1).copied().unwrap_or(0);
+    let [x0, y0, _] = origin;
     let mut cy = y0.div_euclid(size);
     while cy <= y0.saturating_add(edge.saturating_sub(1)).div_euclid(size) {
         let mut cx = x0.div_euclid(size);
@@ -4616,9 +5230,267 @@ fn ground_point(voxels: &VoxelStore, rng: &mut StreamRng, max_x: i16, max_y: i16
     let x = rng.range_i32(0, i32::from(max_x));
     let y = rng.range_i32(0, i32::from(max_y));
     let z = voxels.standing_z(x, y);
-    [
-        Fx::from_voxels(i16::try_from(x).unwrap_or(0)),
-        Fx::from_voxels(i16::try_from(y).unwrap_or(0)),
-        Fx::from_voxels(i16::try_from(z).unwrap_or(0)),
-    ]
+    // E7: cannot miss: `x` and `y` are drawn inside the map's last voxel and `z` stands on it, all coordinates
+    [x, y, z].map(|v| Fx::from_voxels(i16::try_from(v).unwrap_or(0)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        DamageDrop, DamageOrder, DamageTarget, FileRefused, Phase, Queue, TickError, World,
+        WorldConfig,
+    };
+    use crate::encoding::Enc;
+    use crate::math::quantity::{Damage, Tick};
+    use crate::rules::RulesTable;
+    use crate::runner::MatchSettings;
+    use crate::tables::{SeatId, UnitId};
+    use crate::voxels::{Material, VoxelEdit};
+
+    fn world() -> World {
+        let rules = RulesTable::load(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("..")
+                .join("..")
+                .join("rules")
+                .join("rules.v1.json"),
+        )
+        .unwrap_or_else(|error| panic!("the committed rules table loads: {error}"));
+        World::new(&WorldConfig {
+            match_seed: crate::DETERMINISM_MATCH_SEED,
+            seats: 2,
+            units_per_seat: 0,
+            rules,
+            match_settings: MatchSettings::default(),
+        })
+        .unwrap_or_else(|error| panic!("the committed table describes a world: {error}"))
+    }
+
+    fn hit(unit: u32, amount: i64) -> DamageOrder {
+        DamageOrder {
+            target: DamageTarget::Unit(UnitId::new(unit)),
+            amount: Damage::new(amount).unwrap_or_else(|error| panic!("{error}")),
+            by: SeatId::NEUTRAL,
+            source: None,
+        }
+    }
+
+    fn hp_of(world: &World, unit: u32) -> i32 {
+        world
+            .units()
+            .hit_points()
+            .get(crate::math::index::row(unit))
+            .map_or(i32::MIN, |hp| hp.raw())
+    }
+
+    /// S2's plan, E2: an order filed while the tick runs -- \`fire\`'s, from
+    /// inside Combat -- lands in that tick's Combat, and nothing is pending at
+    /// the tick's end.
+    #[test]
+    fn damage_filed_in_combat_lands_in_the_same_tick() {
+        let mut world = world();
+        let mut enc = Enc::with_capacity(64 * 1024);
+        let before = hp_of(&world, 0);
+        assert!(world.begin_tick().is_ok());
+        for phase in [Phase::Broadphase, Phase::Programs, Phase::Movement] {
+            assert!(world.run_phase(phase).is_ok());
+        }
+        // The tick's own door, as \`fire\` will file through it in Combat.
+        assert!(world.file_damage(hit(0, 7)).is_ok());
+        assert!(world.run_phase(Phase::Combat).is_ok());
+        assert_eq!(
+            hp_of(&world, 0),
+            before - 7,
+            "the hit landed in this tick's Combat"
+        );
+        assert_eq!(
+            world.queued_damage(),
+            0,
+            "and nothing waits for the next tick"
+        );
+        let mut next = world.next_phase();
+        while let Some(phase) = next {
+            if phase == Phase::Hash {
+                break;
+            }
+            assert!(world.run_phase(phase).is_ok());
+            next = world.next_phase();
+        }
+        assert!(world.end_tick(&mut enc).is_ok());
+        assert_eq!(world.pending_orders(), 0, "the queues are never state");
+    }
+
+    /// E5: each queue holds the tick's own worst case on top of whatever a host
+    /// filed, so a host's orders never make a tick's filer fail, and a full
+    /// queue is a typed error.
+    #[test]
+    fn the_queues_cannot_fill_in_a_legal_world() {
+        let mut world = world();
+        let rooms = world.queue_rooms();
+        assert!(rooms.damage > 0 && rooms.edits > 0);
+        for _ in 0..rooms.damage {
+            assert!(world.request_damage(hit(0, 1)).is_ok());
+        }
+        assert_eq!(
+            world.request_damage(hit(0, 1)),
+            Err(FileRefused::QueueFull {
+                queue: Queue::Damage,
+                room: rooms.damage
+            }),
+            "a host fills only its own share"
+        );
+        // The tick's own worst case still fits, all of it.
+        for _ in 0..rooms.damage {
+            assert!(world.file_damage(hit(0, 1)).is_ok());
+        }
+        assert!(matches!(
+            world.file_damage(hit(0, 1)),
+            Err(FileRefused::QueueFull {
+                queue: Queue::Damage,
+                ..
+            })
+        ));
+        let edit = VoxelEdit::Set {
+            at: [0, 0, 0],
+            material: Material::AIR,
+            by: None,
+        };
+        for _ in 0..rooms.edits {
+            assert!(world.request_voxel_edit(edit).is_ok());
+        }
+        assert!(matches!(
+            world.request_voxel_edit(edit),
+            Err(FileRefused::QueueFull {
+                queue: Queue::Edits,
+                ..
+            })
+        ));
+        for _ in 0..rooms.edits {
+            assert!(world.file_voxel_edit(edit).is_ok());
+        }
+        assert!(world.file_voxel_edit(edit).is_err());
+        assert!(world.queue_bytes() > 0, "G3' reports the queues' bytes");
+        // Off the map is refused where it is filed.
+        assert_eq!(
+            world.file_voxel_edit(VoxelEdit::Crater {
+                centre: [0, 0, 0],
+                radius: -1,
+                by: None
+            }),
+            Err(FileRefused::OffTheMap)
+        );
+    }
+
+    /// E7: the clock does not stand still at its last value.
+    #[test]
+    fn a_tick_past_the_last_is_an_error() {
+        let mut world = world();
+        world.tick = Tick::new(u32::MAX);
+        let mut enc = Enc::with_capacity(64 * 1024);
+        assert_eq!(world.step(&mut enc), Err(TickError::PastTheLast));
+        assert_eq!(
+            world.tick(),
+            Tick::new(u32::MAX),
+            "and the clock did not move"
+        );
+        assert!(!world.tick_is_open(), "no tick was opened");
+    }
+
+    /// E4: an order that applies nothing is counted under its reason.
+    #[test]
+    fn every_dropped_order_is_counted() {
+        let mut world = world();
+        let mut enc = Enc::with_capacity(64 * 1024);
+        let units = world.units().len();
+        assert!(
+            world
+                .request_damage(hit(units.saturating_add(5), 1))
+                .is_ok()
+        );
+        assert!(world.request_damage(hit(0, 1_000_000)).is_ok());
+        assert!(world.request_damage(hit(0, 1)).is_ok());
+        assert!(world.step(&mut enc).is_ok());
+        let drops = world.dropped_damage();
+        assert_eq!(
+            drops.of(DamageDrop::NoSuchRow),
+            1,
+            "a row the table does not hold"
+        );
+        assert_eq!(
+            drops.of(DamageDrop::AlreadyDead),
+            1,
+            "the second shot at a target the first killed"
+        );
+        assert_eq!(drops.of(DamageDrop::StaleGeneration), 0);
+        assert_eq!(drops.total(), 2);
+    }
+
+    /// Item 144 (2): a dig is among the edits whose seat collapse credits, so
+    /// a mining drone's dig carries the drone's seat into the edit queue.
+    #[test]
+    fn a_mine_dig_carries_its_seat() {
+        let mut world = world();
+        let seat = SeatId::new(0);
+        let core =
+            crate::power::core_of(&world, seat).unwrap_or_else(|| panic!("seat 0 has a core"));
+        world.set_writ(core, crate::seams::MandateKind::Mine);
+        world.set_mine_settings(core, crate::mining::MineSettings::default());
+        let mut runner = crate::runner::Runner::new(world);
+        assert!(runner.begin_push());
+        let mut found: Vec<Option<SeatId>> = Vec::new();
+        for _ in 0..4_000 {
+            let world = runner.world_mut();
+            assert!(world.begin_tick().is_ok());
+            assert!(world.run_phase(Phase::Broadphase).is_ok());
+            assert!(world.run_phase(Phase::Programs).is_ok());
+            found.extend(world.edits.iter().map(VoxelEdit::by));
+            let mut next = world.next_phase();
+            while let Some(phase) = next {
+                if phase == Phase::Hash {
+                    break;
+                }
+                assert!(world.run_phase(phase).is_ok());
+                next = world.next_phase();
+            }
+            let mut enc = Enc::with_capacity(64 * 1024);
+            assert!(world.end_tick(&mut enc).is_ok());
+            if found.contains(&Some(seat)) {
+                break;
+            }
+        }
+        assert!(
+            found.contains(&Some(seat)),
+            "seat 0's drone digs, and its dig is seat 0's"
+        );
+        assert!(
+            found.iter().all(Option::is_some),
+            "every dig carries the seat of the drone that dug it: {found:?}"
+        );
+    }
+
+    /// E30: the tick in phases refuses to run out of order, to end early, or
+    /// to take a whole-tick step or a host's order while it is open.
+    #[test]
+    fn the_phases_run_in_their_order_and_nothing_reaches_an_open_tick() {
+        let mut world = world();
+        let mut enc = Enc::with_capacity(64 * 1024);
+        assert_eq!(world.run_phase(Phase::Broadphase), Err(TickError::NotOpen));
+        assert!(world.begin_tick().is_ok());
+        assert_eq!(
+            world.run_phase(Phase::Combat),
+            Err(TickError::OutOfOrder {
+                asked: Phase::Combat,
+                next: Phase::Broadphase
+            })
+        );
+        assert_eq!(
+            world.end_tick(&mut enc),
+            Err(TickError::Unfinished {
+                next: Phase::Broadphase
+            })
+        );
+        assert_eq!(world.step(&mut enc), Err(TickError::MidTick));
+        assert_eq!(world.begin_tick(), Err(TickError::MidTick));
+        assert_eq!(world.request_damage(hit(0, 1)), Err(FileRefused::MidTick));
+    }
 }

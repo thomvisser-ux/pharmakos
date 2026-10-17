@@ -85,7 +85,7 @@ use crate::math::quantity::{MS_PER_TICK, Ms, Tick};
 use crate::rules::RulesTable;
 use crate::snapshot::{Snapshot, SnapshotError};
 use crate::tables::SeatId;
-use crate::world::World;
+use crate::world::{Phase, TickError, World};
 
 /// The round limit a host gets when it names none (spec section 3: "default 6,
 /// about 75 min").
@@ -242,6 +242,84 @@ pub struct MatchSettings {
     pub round_limit: u32,
 }
 
+impl MatchSettings {
+    /// Check what the lobby chose against the rules table, and give back the
+    /// settings [`MatchState::new`] takes (S2's plan, E7).
+    ///
+    /// The effective ladder is the host's list when it has one and the rules
+    /// table's otherwise (item 40). A round limit of zero, and a ladder entry
+    /// shorter than one tick, are **refused**, never clamped: the gateway
+    /// refuses both at the lobby already ([`MatchSettings`]'s host), and a sim
+    /// that quietly corrected them would play a match nobody asked for.
+    ///
+    /// # Errors
+    ///
+    /// [`SettingsError`], naming the setting.
+    pub fn validate(&self, rules: &RulesTable) -> Result<CheckedSettings, SettingsError> {
+        let round_limit =
+            core::num::NonZeroU32::new(self.round_limit).ok_or(SettingsError::ZeroRoundLimit)?;
+        let lengths = if self.segment_lengths_ms.is_empty() {
+            rules.segment_lengths_ms()
+        } else {
+            self.segment_lengths_ms.as_slice()
+        };
+        for (index, ms) in lengths.iter().enumerate() {
+            if *ms < MS_PER_TICK {
+                return Err(SettingsError::ShortSegment { index, ms: *ms });
+            }
+        }
+        if lengths.is_empty() {
+            return Err(SettingsError::NoSegment);
+        }
+        Ok(CheckedSettings {
+            segment_lengths_ms: lengths.to_vec(),
+            round_limit,
+        })
+    }
+}
+
+/// Match settings [`MatchSettings::validate`] has checked: a round limit of at
+/// least one, and a non-empty ladder whose every entry is at least one tick.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct CheckedSettings {
+    segment_lengths_ms: Vec<i32>,
+    round_limit: core::num::NonZeroU32,
+}
+
+/// Why [`MatchSettings::validate`] refused the lobby's settings.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SettingsError {
+    /// A match runs at least one round.
+    ZeroRoundLimit,
+    /// The effective ladder is empty.
+    NoSegment,
+    /// A ladder entry is shorter than one tick: a round that closes before
+    /// anything in it runs.
+    ShortSegment {
+        /// Which entry, from zero.
+        index: usize,
+        /// What it said, in game milliseconds.
+        ms: i32,
+    },
+}
+
+impl core::fmt::Display for SettingsError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            SettingsError::ZeroRoundLimit => {
+                write!(f, "a match runs at least one round: the round limit is 0")
+            }
+            SettingsError::NoSegment => write!(f, "the segment ladder is empty"),
+            SettingsError::ShortSegment { index, ms } => write!(
+                f,
+                "segment length {index} is {ms} ms, shorter than a tick of {MS_PER_TICK} ms"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for SettingsError {}
+
 impl Default for MatchSettings {
     fn default() -> MatchSettings {
         MatchSettings {
@@ -274,27 +352,18 @@ impl MatchState {
     /// The opening state: the first Lull of round one, with the coming
     /// segment's length already resolved.
     ///
-    /// The effective ladder is the host's list when it has one and the rules
-    /// table's otherwise (item 40). The rules loader refuses an empty
-    /// `match.segment_lengths_ms`, so the effective list is never empty.
-    ///
-    /// Both the host's list and the round limit are **clamped, not trusted**:
-    /// `round_limit` to at least one round, and every ladder entry to at least
-    /// one tick ([`clamp_ladder`]). A lobby that hands the sim a zero-length
-    /// round would otherwise get a Push that closes on its first tick while the
-    /// editor's clock showed zero, which is not a match anybody can play.
+    /// It takes settings [`MatchSettings::validate`] has checked, so the round
+    /// limit is at least one and every ladder entry at least one tick by type,
+    /// and nothing here clamps (S2's plan, E7). A lobby that handed the sim a
+    /// zero-length round is refused where it is handed over.
     #[must_use]
-    pub fn new(settings: &MatchSettings, rules: &RulesTable) -> MatchState {
-        let segment_lengths_ms = if settings.segment_lengths_ms.is_empty() {
-            clamp_ladder(rules.segment_lengths_ms().to_vec())
-        } else {
-            clamp_ladder(settings.segment_lengths_ms.clone())
-        };
+    pub fn new(settings: &CheckedSettings) -> MatchState {
+        let segment_lengths_ms = settings.segment_lengths_ms.clone();
         let coming_segment_ms = length_for_round(&segment_lengths_ms, 1);
         MatchState {
             phase: MatchPhase::Lull,
             round: 1,
-            round_limit: settings.round_limit.max(1),
+            round_limit: settings.round_limit.get(),
             segment_lengths_ms,
             segment_started: Tick::ZERO,
             segment_length_ms: 0,
@@ -377,6 +446,7 @@ impl MatchState {
         enc.u8(self.phase.id());
         enc.u32(self.round);
         enc.u32(self.round_limit);
+        // E7: cannot miss: the rules loader bounds the ladder at `MAX_SEGMENT_LENGTHS` entries
         enc.len(u32::try_from(self.segment_lengths_ms.len()).unwrap_or(u32::MAX));
         for length in &self.segment_lengths_ms {
             enc.i32(*length);
@@ -408,8 +478,9 @@ impl MatchState {
     ///
     /// The length is floored at one tick. This is the single point where a
     /// number becomes a Push's duration, so it is the one place that has to
-    /// hold the floor: the ladder is clamped on both the way in
-    /// ([`MatchState::new`]) and the way back ([`MatchState::from_parts`]), but
+    /// hold the floor: the ladder is refused on the way in
+    /// ([`MatchSettings::validate`]) and floored on the way back
+    /// ([`MatchState::from_parts`]), but
     /// [`MatchState::coming_segment_ms`] also travels in a save file, and a
     /// hand-edited one must not be able to describe a Push that closes before
     /// anything in it runs.
@@ -480,8 +551,8 @@ impl MatchState {
     ///
     /// **Structure is refused; values are normalised.** A phase id nothing
     /// names is a file this build cannot read, so it is turned away at the
-    /// door. A ladder entry shorter than a tick is a *value*, and it takes the
-    /// same clamp the host's list takes in [`MatchState::new`] — refusing it
+    /// door. A ladder entry shorter than a tick is a *value*, and it is floored
+    /// at one tick by stated rule (E7 keeps this one floor) — refusing it
     /// instead would make `Snapshot::default()` unrestorable, which is the one
     /// thing that default is hand-written to guarantee
     /// (`impl Default for Snapshot`, and it carries an empty ladder).
@@ -559,9 +630,8 @@ pub(crate) struct MatchParts {
 /// Every entry floored at one tick, because a round shorter than a tick is a
 /// round that closes before anything in it runs.
 ///
-/// The ladder's companion to `round_limit.max(1)`: a list arrives either from a
-/// lobby ([`MatchSettings`]) or from a save file ([`MatchState::from_parts`]),
-/// and neither is trusted. Idempotent, so the rules table's own ladder — every
+/// A save file's ladder ([`MatchState::from_parts`]) is not trusted; a lobby's
+/// is refused instead ([`MatchSettings::validate`]). Idempotent, so the rules table's own ladder — every
 /// entry minutes long — passes through unchanged and no committed hash moves.
 fn clamp_ladder(mut lengths: Vec<i32>) -> Vec<i32> {
     for ms in &mut lengths {
@@ -579,8 +649,10 @@ fn length_for_round(lengths: &[i32], round: u32) -> i32 {
     let Some(last) = lengths.len().checked_sub(1) else {
         return 0;
     };
-    let index = usize::try_from(round.saturating_sub(1)).unwrap_or(last);
-    lengths.get(index.min(last)).copied().unwrap_or(0)
+    // Rounds past the end take the last entry: item 40's rule, so the clamp
+    // is the rule and the lookup cannot miss.
+    let index = crate::math::index::row(round.saturating_sub(1)).min(last);
+    lengths.get(index).copied().unwrap_or(0) // E7: cannot miss: `index <= last`, the list's own last index
 }
 
 /// The planning snapshot, frozen at segment end (spec section 3).
@@ -707,6 +779,9 @@ pub struct Runner {
     world: World,
     enc: Enc,
     frozen: FrozenSnapshot,
+    /// Whether [`Runner::seed_layout`] has placed a layout. A host-side
+    /// fact, never hashed: the layout itself is in the world it placed.
+    laid_out: bool,
 }
 
 impl Runner {
@@ -735,6 +810,7 @@ impl Runner {
             // (G3′ §9.17), and `tests/allocations.rs` asserts it.
             enc: Enc::with_capacity(64 * 1024),
             frozen,
+            laid_out: false,
         }
     }
 
@@ -877,25 +953,68 @@ impl Runner {
     /// takes the frozen snapshot before returning, so a host that reads
     /// [`Runner::frozen`] on a `segment_ended` report gets the world as the
     /// segment left it.
-    pub fn step(&mut self) -> Option<TickReport> {
-        if self.phase() != MatchPhase::Push {
-            return None;
+    ///
+    /// # Errors
+    ///
+    /// [`TickError::MidTick`] while a [`PhasedTick`] left a tick open, and
+    /// [`TickError::PastTheLast`] when the clock has no tick after this one.
+    pub fn step(&mut self) -> Result<Option<TickReport>, TickError> {
+        if self.world.tick_is_open() {
+            return Err(TickError::MidTick);
         }
-        let hash = self.world.step(&mut self.enc);
+        if self.phase() != MatchPhase::Push {
+            return Ok(None);
+        }
+        let hash = self.world.step(&mut self.enc)?;
+        Ok(Some(self.close_tick(hash)))
+    }
+
+    /// One tick of the Push, **phase by phase**: the open tick, which the
+    /// caller runs one phase per call and finishes, getting control back
+    /// between phases (S2's plan, E30). `None` outside a Push.
+    ///
+    /// Nothing in the tick calls out and there is no callback: a walled harness
+    /// times each call from outside (AGENTS.md section 4.9). Stepping a match
+    /// this way leaves the same hash chain as [`Runner::step`], because that is
+    /// the same three calls.
+    ///
+    /// **A half-finished tick is never exposed.** The [`PhasedTick`] holds this
+    /// runner's mutable borrow for the tick's length, so nothing holding it can
+    /// capture, step whole or file into the world; and a [`PhasedTick`] dropped
+    /// mid-tick leaves the world's tick open, which [`Runner::step`],
+    /// [`Runner::capture`] and the world's filing seams refuse with `MidTick`
+    /// until a later call to this resumes and finishes it.
+    ///
+    /// # Errors
+    ///
+    /// [`TickError::PastTheLast`] when the clock has no tick after this one.
+    pub fn phased_tick(&mut self) -> Result<Option<PhasedTick<'_>>, TickError> {
+        if !self.world.tick_is_open() {
+            if self.phase() != MatchPhase::Push {
+                return Ok(None);
+            }
+            self.world.begin_tick()?;
+        }
+        Ok(Some(PhasedTick { runner: self }))
+    }
+
+    /// What a tick's end owes the host: the frozen snapshot when the segment
+    /// closed, and the report.
+    fn close_tick(&mut self, hash: u64) -> TickReport {
         let phase = self.phase();
         let segment_ended = phase != MatchPhase::Push;
         if segment_ended {
-            // Outside `World::step`, deliberately: a capture allocates, and a
-            // tick must not. It happens once a segment.
+            // Outside the tick, deliberately: a capture allocates, and a tick
+            // must not. It happens once a segment.
             self.frozen = FrozenSnapshot::of(&self.world);
         }
-        Some(TickReport {
+        TickReport {
             tick: self.world.tick(),
             hash,
             phase,
             segment_ended,
             match_ended: self.outcome().is_some(),
-        })
+        }
     }
 
     /// Close the recap: the next round's Lull, or the end of the match.
@@ -938,10 +1057,51 @@ impl Runner {
         true
     }
 
+    /// Place a lobby layout ([`Layout`]): once, in the lobby, before the first
+    /// Lull is planned against (S2's plan, E30). The frozen snapshot is taken
+    /// again afterwards, so the first Lull plans against the laid-out world.
+    ///
+    /// The lobby is a match that has not moved: its opening Lull of round one
+    /// at tick 0, never laid out before. A layout is an input like the seed,
+    /// placed before anything is planned against the world.
+    ///
+    /// # Errors
+    ///
+    /// [`LayoutRefused::NotInTheLobby`] outside it, and the world's refusals
+    /// of the layout ([`LayoutRefused`]), which leave the world as it was.
+    pub fn seed_layout(&mut self, layout: &Layout) -> Result<(), LayoutRefused> {
+        let lobby = !self.laid_out
+            && self.phase() == MatchPhase::Lull
+            && self.round() == 1
+            && self.tick() == Tick::ZERO
+            && !self.world.tick_is_open();
+        if !lobby {
+            return Err(LayoutRefused::NotInTheLobby);
+        }
+        self.world.seed_layout(layout)?;
+        self.laid_out = true;
+        self.frozen = FrozenSnapshot::of(&self.world);
+        Ok(())
+    }
+
     /// Capture the world as it stands.
+    ///
+    /// # Errors
+    ///
+    /// [`TickError::MidTick`] while a tick is open between phases: a capture
+    /// then would be of half a tick (S2's plan, E30). [`Snapshot::capture`]
+    /// itself stays infallible, because nothing else reaches a world mid-tick.
+    pub fn capture(&self) -> Result<Snapshot, TickError> {
+        if self.world.tick_is_open() {
+            return Err(TickError::MidTick);
+        }
+        Ok(Snapshot::capture(&self.world))
+    }
+
+    /// Whether a tick is open between two of its phases ([`PhasedTick`]).
     #[must_use]
-    pub fn capture(&self) -> Snapshot {
-        Snapshot::capture(&self.world)
+    pub const fn tick_is_open(&self) -> bool {
+        self.world.tick_is_open()
     }
 
     /// Restore a snapshot into the runner's world.
@@ -969,3 +1129,128 @@ impl Runner {
         Ok(())
     }
 }
+
+/// One tick of the Push, open between its phases ([`Runner::phased_tick`]).
+///
+/// A type-state: it holds the runner's mutable borrow for the tick's length,
+/// so no code holding it can reach the runner's capture, its whole-tick step
+/// or the world's filing seams. Run the phases with
+/// [`PhasedTick::run_next_phase`] and close the tick with
+/// [`PhasedTick::finish`].
+#[derive(Debug)]
+pub struct PhasedTick<'a> {
+    runner: &'a mut Runner,
+}
+
+impl PhasedTick<'_> {
+    /// The tick being run.
+    #[must_use]
+    pub const fn tick(&self) -> Tick {
+        self.runner.world.tick()
+    }
+
+    /// The next phase to run, or [`Phase::Hash`] once every other has run, when
+    /// all that is left is [`PhasedTick::finish`].
+    #[must_use]
+    pub fn next_phase(&self) -> Option<Phase> {
+        self.runner.world.next_phase()
+    }
+
+    /// Run the next phase and say which it was, or `None` when only the hash is
+    /// left. One phase per call, and control comes back after each.
+    ///
+    /// # Errors
+    ///
+    /// As [`World::run_phase`], which a tick opened by
+    /// [`Runner::phased_tick`] cannot meet.
+    pub fn run_next_phase(&mut self) -> Result<Option<Phase>, TickError> {
+        let Some(next) = self.runner.world.next_phase() else {
+            return Err(TickError::NotOpen);
+        };
+        if next == Phase::Hash {
+            return Ok(None);
+        }
+        self.runner.world.run_phase(next)?;
+        Ok(Some(next))
+    }
+
+    /// Run whatever phases are left, then the hash, and close the tick: the
+    /// report [`Runner::step`] would have given.
+    ///
+    /// # Errors
+    ///
+    /// As [`PhasedTick::run_next_phase`] and [`World::end_tick`].
+    pub fn finish(mut self) -> Result<TickReport, TickError> {
+        while self.run_next_phase()?.is_some() {}
+        let runner = self.runner;
+        let hash = runner.world.end_tick(&mut runner.enc)?;
+        Ok(runner.close_tick(hash))
+    }
+}
+
+/// A lobby layout: beacons placed before the first Lull, with their mandates
+/// and their starting units (S2's plan, E30), the walled harness's gate load.
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct Layout {
+    /// The beacons, placed in this order.
+    pub beacons: Vec<LayoutBeacon>,
+}
+
+/// One beacon of a [`Layout`].
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct LayoutBeacon {
+    /// Whose it is.
+    pub seat: SeatId,
+    /// The column it stands on, `[x, y]` in whole voxels; it stands on the
+    /// column's ground.
+    pub column: [i32; 2],
+    /// Its mandate.
+    pub mandate: crate::seams::MandateKind,
+    /// The units fabricated at it, homed to it: a kind and a count each.
+    pub units: Vec<(crate::tables::UnitKind, u32)>,
+}
+
+/// Why [`Runner::seed_layout`] refused a layout.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum LayoutRefused {
+    /// The match is not in the lobby: it has stepped, moved past its opening
+    /// Lull, or been laid out already.
+    NotInTheLobby,
+    /// A beacon names a seat this match has not got.
+    NoSuchSeat {
+        /// The seat named.
+        seat: SeatId,
+    },
+    /// A beacon's column has no ground on this map.
+    OffTheMap {
+        /// The column named.
+        column: [i32; 2],
+    },
+    /// A seat's share of the world totals cannot hold the layout.
+    NoRoom {
+        /// `beacon` or `unit`.
+        what: &'static str,
+    },
+}
+
+impl core::fmt::Display for LayoutRefused {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            LayoutRefused::NotInTheLobby => write!(f, "the match has left its lobby"),
+            LayoutRefused::NoSuchSeat { seat } => {
+                write!(f, "this match has no seat {}", seat.raw())
+            }
+            LayoutRefused::OffTheMap { column } => {
+                write!(f, "column {column:?} has no ground on this map")
+            }
+            LayoutRefused::NoRoom { what } => {
+                write!(
+                    f,
+                    "a seat's share of the world's {what}s cannot hold the layout"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for LayoutRefused {}

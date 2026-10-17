@@ -30,7 +30,7 @@
 //! what the repair tests and the reversed-route assertions rest on.
 
 use crate::pathing::HEADROOM_VOXELS;
-use crate::voxels::{CHUNK_EDGE, VoxelStore};
+use crate::voxels::{CHUNK_EDGE_I32, VoxelStore};
 
 /// A node of the search graph: one voxel column, `x + y * size_x`.
 pub type Node = u32;
@@ -178,6 +178,7 @@ impl Surface {
     /// How many nodes the graph holds: one per column.
     #[must_use]
     pub fn node_count(&self) -> u32 {
+        // E7: cannot miss: one node per column of a map whose columns are a `u32` count
         u32::try_from(self.top.len()).unwrap_or(0)
     }
 
@@ -198,7 +199,8 @@ impl Surface {
     /// [`Surface::node_of`] and is a caller bug rather than a game state.
     #[must_use]
     pub fn coord_of(&self, node: Node) -> (i32, i32) {
-        let sx = self.size.first().copied().unwrap_or(1).max(1);
+        let [size_x, _, _] = self.size;
+        let sx = size_x.max(1);
         let Ok(linear) = i32::try_from(node) else {
             return (0, 0);
         };
@@ -211,6 +213,7 @@ impl Surface {
         let Ok(index) = usize::try_from(node) else {
             return -1;
         };
+        // E7: rule: a node off the graph has no top, which is -1 everywhere in the graph
         i32::from(self.top.get(index).copied().unwrap_or(-1))
     }
 
@@ -220,6 +223,7 @@ impl Surface {
         let Ok(index) = usize::try_from(node) else {
             return false;
         };
+        // E7: rule: a node off the graph is not walkable
         self.walk.get(index).copied().unwrap_or(false)
     }
 
@@ -231,8 +235,7 @@ impl Surface {
 
     /// Recompute every column. Construction and restore only.
     pub fn refresh_all(&mut self, store: &VoxelStore) {
-        let sx = self.size.first().copied().unwrap_or(0);
-        let sy = self.size.get(1).copied().unwrap_or(0);
+        let [sx, sy, _] = self.size;
         let mut y = 0;
         while y < sy {
             let mut x = 0;
@@ -256,9 +259,8 @@ impl Surface {
         let Some(origin) = store.chunk_origin(chunk) else {
             return;
         };
-        let x0 = origin.first().copied().unwrap_or(0);
-        let y0 = origin.get(1).copied().unwrap_or(0);
-        let edge = i32::try_from(CHUNK_EDGE).unwrap_or(32);
+        let [x0, y0, _] = origin;
+        let edge = CHUNK_EDGE_I32;
         let mut dy = 0;
         while dy < edge {
             let mut dx = 0;
@@ -279,9 +281,10 @@ impl Surface {
             return;
         };
         let top = store.top_solid_z(x, y).unwrap_or(-1);
-        let sz = self.size.get(2).copied().unwrap_or(0);
+        let [_, _, sz] = self.size;
         let walkable = top >= 0 && top.saturating_add(HEADROOM_VOXELS) < sz;
         if let Some(slot) = self.top.get_mut(index) {
+            // E7: rule: a column whose top is past a voxel coordinate is not a column of this map; -1 is "no top"
             *slot = i16::try_from(top).unwrap_or(-1);
         }
         if let Some(slot) = self.walk.get_mut(index) {
@@ -362,6 +365,7 @@ impl Surface {
     /// How many walkable columns the graph holds. Diagnostic; never in a tick.
     #[must_use]
     pub fn walkable_count(&self) -> u32 {
+        // E7: rule: a diagnostic count, never in a tick, saturates
         u32::try_from(self.walk.iter().filter(|w| **w).count()).unwrap_or(u32::MAX)
     }
 

@@ -334,6 +334,7 @@ fn reconstruct(
         guard = guard.saturating_add(1);
     }
     path.reverse();
+    // E7: cannot miss: an abstract path holds at most the graph's nodes, a `u32` count
     let legs = u32::try_from(path.len().saturating_sub(1)).unwrap_or(0);
     let mut fogged = false;
     for node in &path {
@@ -345,10 +346,52 @@ fn reconstruct(
     AbstractResult { cost, legs, fogged }
 }
 
+/// Why [`route`] found no route: a typed `no_path`, each reason counted by the
+/// router rather than a silent stop (S2's plan, E27).
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub enum NoPath {
+    /// The walker's column or its goal's is not a node of the search graph:
+    /// off the map, or no ground to stand on.
+    Unplaced,
+    /// The abstract search, bounded by the graph, reached every node it could
+    /// and never the goal: the walker is sealed in (item 60).
+    Unreachable,
+    /// An abstract leg found no walk inside its cluster.
+    Unrefinable,
+    /// The smoothed walk could not be priced.
+    Unpriced,
+}
+
+impl NoPath {
+    /// Every reason.
+    pub const ALL: [NoPath; 4] = [
+        NoPath::Unplaced,
+        NoPath::Unreachable,
+        NoPath::Unrefinable,
+        NoPath::Unpriced,
+    ];
+
+    /// The reason's name.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            NoPath::Unplaced => "unplaced",
+            NoPath::Unreachable => "unreachable",
+            NoPath::Unrefinable => "unrefinable",
+            NoPath::Unpriced => "unpriced",
+        }
+    }
+}
+
 /// A full route: abstract search, per-leg refinement, then smoothing.
 ///
 /// Writes the column sequence into `out`, which the caller owns and which never
 /// grows past [`MAX_ROUTE_NODES`].
+///
+/// # Errors
+///
+/// A typed [`NoPath`], which the router counts under its reason (S2's plan,
+/// E27).
 pub fn route(
     surface: &Surface,
     clusters: &Clusters,
@@ -356,7 +399,7 @@ pub fn route(
     start: Node,
     goal: Node,
     out: &mut Vec<Node>,
-) -> Option<RouteOutcome> {
+) -> Result<RouteOutcome, NoPath> {
     out.clear();
     // A route is walked over terrain the sim can see in full, so nothing on it
     // is priced through fog and the multiplier is never reached. Fog belongs to
@@ -366,10 +409,11 @@ pub fn route(
         fog_numerator: 1,
         fog_denominator: 1,
     };
-    let result = abstract_search(surface, clusters, scratch, start, goal, Fog::Clear, speed)?;
+    let result = abstract_search(surface, clusters, scratch, start, goal, Fog::Clear, speed)
+        .ok_or(NoPath::Unreachable)?;
     if result.legs == 0 {
         out.push(start);
-        return Some(RouteOutcome {
+        return Ok(RouteOutcome {
             cost: 0,
             legs: 0,
             partial: false,
@@ -379,7 +423,7 @@ pub fn route(
     let capacity = clusters.abstract_capacity();
     let temp_start = capacity;
     let temp_goal = capacity.saturating_add(1);
-    let limit = usize::try_from(MAX_ROUTE_NODES).unwrap_or(0);
+    let limit = crate::math::index::row(MAX_ROUTE_NODES);
 
     let path = core::mem::take(&mut scratch.abstract_path);
     let mut raw = core::mem::take(&mut scratch.raw);
@@ -442,7 +486,7 @@ pub fn route(
     scratch.leg = leg;
     if !ok {
         scratch.raw = raw;
-        return None;
+        return Err(NoPath::Unrefinable);
     }
 
     let mut line = core::mem::take(&mut scratch.line);
@@ -451,8 +495,8 @@ pub fn route(
     scratch.raw = raw;
     scratch.line = line;
     scratch.prefix = prefix;
-    let cost = crate::pathing::search::route_cost(surface, out)?;
-    Some(RouteOutcome {
+    let cost = crate::pathing::search::route_cost(surface, out).ok_or(NoPath::Unpriced)?;
+    Ok(RouteOutcome {
         cost,
         legs: result.legs,
         partial,
@@ -563,6 +607,7 @@ fn abstract_cost(scratch: &Scratch, node: u32) -> i32 {
     usize::try_from(node)
         .ok()
         .and_then(|index| scratch.abstract_g.get(index).copied())
+        // E7: rule: an abstract node the query never reached costs nothing yet
         .unwrap_or(0)
 }
 
@@ -570,6 +615,7 @@ fn abstract_came(scratch: &Scratch, node: u32) -> u32 {
     usize::try_from(node)
         .ok()
         .and_then(|index| scratch.abstract_came.get(index).copied())
+        // E7: rule: a node the query never reached is its own predecessor, which ends the walk back
         .unwrap_or(node)
 }
 
@@ -691,7 +737,9 @@ pub fn smooth_into(
             let budget = prefix
                 .get(ahead)
                 .copied()
+                // E7: cannot miss: `ahead` and `index` are inside the prefix array the walk built
                 .unwrap_or(0)
+                // E7: cannot miss: as above
                 .saturating_sub(prefix.get(index).copied().unwrap_or(0));
             if let Some(cost) = straight_walk(surface, from, to, line)
                 && cost <= budget

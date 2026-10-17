@@ -235,6 +235,14 @@ const STEPPING: &[(&str, &str)] = &[
         "restoring a snapshot into the match belongs to the match host (T17's `Host::resume`): \
          a handler that could restore could put the whole world back to a moment of its choosing",
     ),
+    (
+        "phased_tick",
+        "the walled harness's phase stepper (S2's plan, E30) belongs to the match host",
+    ),
+    (
+        "seed_layout",
+        "the walled harness's layout seam (S2's plan, E30) belongs to the match host",
+    ),
 ];
 
 /// The two modules every method handler lives in.
@@ -668,6 +676,69 @@ fn no_wire_method_files_a_voxel_edit_or_a_damage_order() {
             "`{needle}` is guarded everywhere and defined nowhere, so this test guards nothing"
         );
     }
+}
+
+/// No handler and no dispatch arm reaches the walled harness's two seams, the
+/// phase stepper and the layout seam (S2's plan, E30).
+///
+/// [`STEPPING`] keeps both names out of every handler module and lets
+/// `surface.rs` reach the host's `phased_tick` through `host_mut()`, which a
+/// dispatch arm in `surface.rs` could do too. So this scan is stricter: the
+/// host's two seams and the surface's entry to the stepper, `phased_step`
+/// and `SurfaceTick`, may be named only in `host.rs`, which defines the
+/// seams, and in `surface.rs` on the lines of the entry's own definition --
+/// never in a dispatch arm. Only `crates/bench` and tests call them.
+#[test]
+fn no_wire_method_reaches_the_phase_stepper_or_the_layout_seam() {
+    const SEAMS: &[(&str, &str)] = &[
+        ("phased_tick", "the host's phase stepper"),
+        ("seed_layout", "the host's layout seam"),
+        ("phased_step", "the surface's entry to the phase stepper"),
+        ("SurfaceTick", "the surface's phased tick"),
+    ];
+    let findings = scan_except(SEAMS, &[HOST_MODULE, HOST_DRIVER_MODULE]);
+    assert!(
+        findings.is_empty(),
+        "a harness seam is reachable from a method:\n{}",
+        findings.join("\n")
+    );
+    let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
+    let text = std::fs::read_to_string(source.join(HOST_DRIVER_MODULE))
+        .expect("the surface is where it always was");
+    let lines = code_lines(&text);
+    // The entry's own lines: from `pub fn phased_step` to the end of
+    // `impl SurfaceTick`, which the file keeps together.
+    let start = lines
+        .iter()
+        .position(|(_, line)| line.trim_start().starts_with("pub fn phased_step"))
+        .expect("the surface defines its entry to the phase stepper");
+    let entry_end = lines
+        .iter()
+        .skip(start)
+        .position(|(_, line)| line.starts_with("    }"))
+        .map(|offset| start + offset)
+        .expect("the entry ends");
+    let tick_start = lines
+        .iter()
+        .position(|(_, line)| line.starts_with("pub struct SurfaceTick"))
+        .expect("the surface defines its phased tick");
+    let mut stray: Vec<String> = Vec::new();
+    for (index, (number, line)) in lines.iter().enumerate() {
+        let inside = (start..=entry_end).contains(&index) || index >= tick_start.saturating_sub(8);
+        for (needle, why) in SEAMS {
+            if uses(line, needle) && !inside {
+                stray.push(format!(
+                    "{HOST_DRIVER_MODULE}:{number}: `{needle}` ({why})\n    {}",
+                    line.trim()
+                ));
+            }
+        }
+    }
+    assert!(
+        stray.is_empty(),
+        "the surface names a harness seam outside the stepper's entry:\n{}",
+        stray.join("\n")
+    );
 }
 
 /// No method handler can file advice, or give a token a rate of its own

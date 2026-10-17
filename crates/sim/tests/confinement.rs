@@ -430,3 +430,167 @@ fn there_is_exactly_one_hash_seed_and_one_hash_function() {
          encoding starts: {hash_calls:?}"
     );
 }
+
+/// What a sanctioned fallback writes on its own line, or on one of the three
+/// lines above the `unwrap_or` (S2's plan, E7): `// E7: <why>`, naming the
+/// rule that makes the default right, or why the read cannot miss.
+const FALLBACK_MARKER: &str = "E7:";
+
+/// The files whose fallbacks S2's `base` lane did not sweep, each with the
+/// count it left and the reason, carried to the next owner of the sim (S2's
+/// plan, risk R14). The count may only fall: a new fallback in any of these
+/// files fails the test as surely as one anywhere else.
+const CARRIED: &[(&str, usize, &str)] = &[
+    (
+        "src/world.rs",
+        85,
+        "row reads of the unit, beacon, structure, seat and target columns, the state hash's \
+         walks among them, which `ids` retypes (E1: every row read through `row()`, typed id \
+         columns)",
+    ),
+    (
+        "src/tables.rs",
+        15,
+        "column reads inside the tables E1 retypes, carried to `ids`",
+    ),
+    (
+        "src/programs.rs",
+        21,
+        "per-unit row reads of the programs, carried to `ids` with E1's row reuse",
+    ),
+    (
+        "src/pathing/router.rs",
+        27,
+        "per-unit route columns, carried to `ids` with E1's reset of a reused row's walk state",
+    ),
+    (
+        "src/interpreter/state.rs",
+        37,
+        "per-seat and per-handler interpreter columns, carried to `ids`, the sim's next owner",
+    ),
+    (
+        "src/pathing/clusters.rs",
+        31,
+        "node-indexed arrays of the HPA* graph, sized at construction, carried to `ids`, the \
+         sim's next owner",
+    ),
+];
+
+/// The file's shipped code: everything before its first `#[cfg(test)] mod`,
+/// because a unit test may fall back as it likes.
+fn shipped(text: &str) -> &str {
+    let mut at = 0;
+    while let Some(found) = text.get(at..).and_then(|rest| rest.find("#[cfg(test)]")) {
+        let start = at.saturating_add(found);
+        let after = text
+            .get(start.saturating_add("#[cfg(test)]".len())..)
+            .unwrap_or_default();
+        if after.trim_start().starts_with("mod ") {
+            return text.get(..start).unwrap_or(text);
+        }
+        at = start.saturating_add(1);
+    }
+    text
+}
+
+/// Every unsanctioned fallback of E7's two patterns in `text`, as line
+/// numbers: a `.unwrap_or` (or its `_default` and `_else` forms) whose
+/// expression -- the text back to the statement's start, comments blanked --
+/// converts with `try_from` or reads with `.get`, `.get_mut`, `.first` or
+/// `.last`.
+fn fallbacks(text: &str) -> Vec<usize> {
+    let code: Vec<String> = shipped(text)
+        .lines()
+        .map(|line| match line.find("//") {
+            Some(at) => line.get(..at).unwrap_or_default().to_owned(),
+            None => line.to_owned(),
+        })
+        .collect();
+    let raw: Vec<&str> = text.lines().collect();
+    let joined = code.join("\n");
+    let mut found = Vec::new();
+    let mut from = 0;
+    while let Some(hit) = joined.get(from..).and_then(|rest| rest.find(".unwrap_or")) {
+        let at = from.saturating_add(hit);
+        from = at.saturating_add(1);
+        let start = joined
+            .get(..at)
+            .and_then(|before| before.rfind([';', '{', '}']))
+            .map_or(0, |boundary| boundary.saturating_add(1));
+        let chain = joined.get(start..at).unwrap_or_default();
+        let converts = chain.contains("try_from(");
+        let reads = [".get(", ".get_mut(", ".first()", ".last()"]
+            .iter()
+            .any(|read| chain.contains(read));
+        if !(converts || reads) {
+            continue;
+        }
+        let line = joined
+            .get(..at)
+            .map_or(0, |before| before.matches('\n').count());
+        let marked = (line.saturating_sub(3)..=line).any(|index| {
+            raw.get(index)
+                .is_some_and(|text| text.contains(FALLBACK_MARKER))
+        });
+        if !marked {
+            found.push(line.saturating_add(1));
+        }
+    }
+    found
+}
+
+/// S2's plan, E7: no silent fallback is left in the sim. A rules value is
+/// refused at load; a conversion or a read that cannot fail by construction is
+/// rewritten so its failure is unrepresentable; a reachable failure returns a
+/// typed error; a default that is a real rule says so, at the site, with
+/// [`FALLBACK_MARKER`]. This scan is what keeps the sweep from drifting back.
+#[test]
+fn no_silent_fallback_is_left() {
+    let mut findings: Vec<String> = Vec::new();
+    let mut carried_seen: Vec<(&str, usize)> = Vec::new();
+    for path in sources() {
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let lines = fallbacks(&text);
+        let name = path.to_string_lossy().replace('\\', "/");
+        if let Some((file, cap, why)) = CARRIED.iter().find(|(file, _, _)| name.ends_with(file)) {
+            carried_seen.push((file, lines.len()));
+            assert!(
+                lines.len() <= *cap,
+                "{name} holds {} unswept fallbacks, more than the {cap} carried ({why}): a new one \
+                 was added at one of lines {lines:?}",
+                lines.len()
+            );
+            continue;
+        }
+        for line in lines {
+            findings.push(format!("{name}:{line}"));
+        }
+    }
+    assert!(
+        findings.is_empty(),
+        "a silent fallback (S2's plan, E7): refuse it at load, make it unrepresentable, return a \
+         typed error, or name the rule with `// E7: <why>`:\n{}",
+        findings.join("\n")
+    );
+    for (file, cap, _) in CARRIED {
+        assert!(
+            carried_seen.iter().any(|(seen, _)| seen == file),
+            "{file} is carried with {cap} fallbacks and no longer exists"
+        );
+    }
+}
+
+#[test]
+fn the_fallback_scan_finds_what_it_is_for() {
+    let positive = "fn f(v: &[u32], n: i64) -> u32 {\n    let a = v.get(3).copied().unwrap_or(0);\n    let b = u32::try_from(n).unwrap_or(u32::MAX);\n    a + b\n}\n";
+    assert_eq!(fallbacks(positive), vec![2, 3], "both patterns are found");
+    let marked = "fn f(v: &[u32]) -> u32 {\n    // E7: rule: an empty list reads as zero\n    v.first().copied().unwrap_or(0)\n}\n";
+    assert!(fallbacks(marked).is_empty(), "a marked site is sanctioned");
+    let elsewhere = "fn f(o: Option<u32>) -> u32 {\n    o.unwrap_or(0)\n}\n#[cfg(test)]\nmod tests {\n    fn g(v: &[u32]) -> u32 { v.get(0).copied().unwrap_or(1) }\n}\n";
+    assert!(
+        fallbacks(elsewhere).is_empty(),
+        "neither a bare option nor a test module is the scan's business"
+    );
+}
