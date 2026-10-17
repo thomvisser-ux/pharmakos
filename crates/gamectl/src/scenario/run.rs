@@ -478,11 +478,12 @@ pub enum Door {
 /// # The second door exists because a committed scenario needs it, and it is
 /// never quiet
 ///
-/// `expand-east-segment.scenario.jsonc` seals the spec's own worked
-/// `expand_east` on the skeleton's map, and **that playbook does not qualify
-/// there**: it names `b_01`, which on this map is seat 1's core and is not in
-/// seat 0's view at all (`E0401`), and its site is two hundred and sixty voxels
-/// from seat 0's sphere (`E0403`). That is decisions-log item 103 (3)'s finding
+/// `expand-east-segment.scenario.jsonc` seals the spec's worked `expand_east`
+/// with its first site moved near seat 0's core (S2's `base`;
+/// `scenarios/skeleton/expand-east-segment.playbook.jsonc`), and **that
+/// playbook does not qualify there**: it names `b_01`, each seat's own first
+/// placed beacon, which neither seat has when it seals (`E0401`), and for seat
+/// 1 its site is far outside every sphere (`E0403`). That is decisions-log item 103 (3)'s finding
 /// one step further on than item 103 (3) took it: the scenario does not merely
 /// record a playbook that gets nowhere, it records one **no seat could ever
 /// have submitted**. Its chain was produced by `crates/sim/tests/scenario.rs`,

@@ -20,15 +20,22 @@
 // `gamectl scenario run`. The two agree, which is the point: the sim's runner
 // and a gateway-hosted match produce the same chain byte for byte.
 //
-// T15's note: seat 0 cannot *submit* this playbook — it does not qualify
-// against seat 0's own frozen snapshot on this map — so the runner seals it
-// through its one documented harness door and prints a `note` line saying so
-// on every run. crates/gamectl/src/scenario/run.rs has the whole of it, and
-// the owner has the question.
+// T15's note: a seat that cannot *submit* its playbook (it does not qualify
+// against that seat's own frozen snapshot on this map) has it sealed through
+// the runner's one documented harness door, with a `note` line saying so on
+// every run. crates/gamectl/src/scenario/run.rs has the whole of it.
+//
+// Since S2's `base` lane (ruling 3 of S1's stage demo, decisions-log item
+// 139 (1)) both seats seal scenarios/skeleton/expand-east-segment.playbook.jsonc:
+// the spec's worked example with its first site moved 20 voxels east of seat
+// 0's core, because no one site is legal both on this map and on the
+// verifier's reference view, where the example's site belongs. Seat 0 now
+// walks there, places its beacon and commits its rows; seat 1, whose core is
+// across the map, still fails loudly, which is the record this scenario kept.
 {
   "format": "pharmakos.scenario.v1",
   "name": "expand-east-segment",
-  "summary": "Two seats seal the worked example and it does not get far, loudly. The commander walks east for the whole of its 120 s timeout without arriving; the eastern site is outside both seats' spheres, so the deploy is refused with `illegal_site` rather than silently skipped; and the tail step, a walk to `b_01`, names each seat's own first placed beacon (per-seat names since S1's targeting), which neither has placed — so both seats are refused with `no_target` and take up their fallback. Nothing here places a beacon, fires a handler or commits a row: at these tuning values the spec's own worked playbook cannot complete its first step on this map, which is a tuning finding for the owner (see the pull request), not a defect this scenario hides.",
+  "summary": "Two seats seal the worked example with its first site moved 20 voxels east of seat 0's core. Seat 0's commander arrives at tick 381, well inside its 120 s timeout; it places its eastern beacon at tick 626, commits the beacon's two initial rows by tick 716, walks to `b_01` (the beacon it has just placed, so the walk completes at once) and, its route done, takes up its fallback at tick 721. Seat 1's core is across the map: its commander walks for the whole timeout without arriving (tick 2401), its deploy is refused with `illegal_site` rather than silently skipped (2406), and its tail, a walk to its own `b_01`, which it never placed, is refused with `no_target` (2411) before it takes up its fallback.",
 
   // The same seed the format's worked example names, so the two scenarios are
   // about the same map and a map bug shows up in both.
@@ -43,12 +50,12 @@
   "rules": "rules/rules.v1.json",
 
   "seats": [
-    // Both seats seal the spec's worked example. Its `b_01` is each seat's
-    // own first placed beacon, which neither places, and its eastern site is
-    // in neither seat's sphere, which is the point: the transcript shows a
-    // timeout, two refusals and a tail, none of them silent.
-    { "seat": 0, "kind": "playbook", "playbook": "examples/playbooks/expand_east.jsonc" },
-    { "seat": 1, "kind": "playbook", "playbook": "examples/playbooks/expand_east.jsonc" }
+    // Both seats seal the scenario's copy of the worked example. Seat 0
+    // reaches its site and places its `b_01` there; the site is in no sphere
+    // of seat 1's, so seat 1's transcript shows a timeout, two refusals and a
+    // tail, none of them silent.
+    { "seat": 0, "kind": "playbook", "playbook": "scenarios/skeleton/expand-east-segment.playbook.jsonc" },
+    { "seat": 1, "kind": "playbook", "playbook": "scenarios/skeleton/expand-east-segment.playbook.jsonc" }
   ],
 
   // Three minutes is the first rung of the 3 / 5 / 8 ladder (item 68).
@@ -63,10 +70,18 @@
   "assertions": [
     { "assert": "event_fired", "event": "step_started", "seat": 0, "by_tick": 20,
       "note": "The first decision is the Push's first played tick, so the route starts at the start of the segment." },
-    { "assert": "event_fired", "event": "step_failed", "seat": 0, "by_tick": 2410,
-      "note": "The first failure by this tick is the move's own 120 s timeout (reason 1), and the deploy's illegal site (reason 6) follows five ticks later. The assertion cannot yet tell them apart — `step_failed` carries the reason in `value` and this format has no value predicate — so it is written as what it is: the segment fails loudly rather than silently, twice, before tick 2410. A value predicate is T15's, with the rest of the assertion vocabulary." },
-    { "assert": "event_fired", "event": "fallback_engaged", "seat": 0, "by_tick": 2411,
-      "note": "Seat 0's tail step names `b_01`. Since S1's targeting a `b_NN` counts the seat's own beacons (decisions-log item 127 (13)), so `b_01` is seat 0's first placed beacon, and the deploy before it was refused: the walk fails with `no_target` (reason 2), so seat 0's route ends and its guaranteed tail takes over. Seat 1 seals the same file and does the same. Before S1 `b_01` was seat 1's core, seat 0 was refused with the retired `not_own` and seat 1 walked home." },
+    { "assert": "event_fired", "event": "step_completed", "seat": 0, "by_tick": 400,
+      "note": "Seat 0's walk to its moved site, about 20 s by `estimate_route`, arrives at tick 381, inside the 120 s timeout (ruling 3 of S1's stage demo)." },
+    { "assert": "event_fired", "event": "beacon_placed", "seat": 0, "by_tick": 640,
+      "note": "The deploy at the moved site: `place_east` places seat 0's `b_01` at tick 626." },
+    { "assert": "event_fired", "event": "row_committed", "seat": 0, "by_tick": 720,
+      "note": "The new beacon's two initial rows commit at ticks 686 and 716." },
+    { "assert": "event_fired", "event": "fallback_engaged", "seat": 0, "by_tick": 725,
+      "note": "The tail, a walk to seat 0's own `b_01`, completes where the commander stands (tick 721), and with the route done the guaranteed tail takes over." },
+    { "assert": "event_fired", "event": "step_failed", "seat": 1, "by_tick": 2410,
+      "note": "Seat 1's first failure by this tick is the move's own 120 s timeout (reason 1, tick 2401), and the deploy's illegal site (reason 6) follows five ticks later. The assertion cannot tell them apart (`step_failed` carries the reason in `value` and this format has no value predicate), so it is written as what it is: seat 1 fails loudly rather than silently, twice, before tick 2410." },
+    { "assert": "event_fired", "event": "fallback_engaged", "seat": 1, "by_tick": 2411,
+      "note": "Seat 1's tail step names `b_01`, which counts seat 1's own beacons (decisions-log item 127 (13)), and seat 1 placed none, so the walk fails with `no_target` (reason 2) and its guaranteed tail takes over." },
     { "assert": "event_fired", "event": "segment_ended", "by_tick": 3600,
       "note": "The segment ends on the tick, not near it." },
     { "assert": "hash_chain_equals",
