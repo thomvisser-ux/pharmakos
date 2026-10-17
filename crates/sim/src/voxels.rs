@@ -617,11 +617,11 @@ impl VoxelStore {
                         let inside = lx
                             .saturating_add(ly << CHUNK_SHIFT)
                             .saturating_add(z.saturating_sub(oz) << (CHUNK_SHIFT * 2));
-                        if let Ok(at) = usize::try_from(inside) {
-                            if let Some(cell) = data.get_mut(at) {
-                                *cell = material.raw();
-                                written = written.saturating_add(1);
-                            }
+                        if let Ok(at) = usize::try_from(inside)
+                            && let Some(cell) = data.get_mut(at)
+                        {
+                            *cell = material.raw();
+                            written = written.saturating_add(1);
                         }
                         z = z.saturating_add(1);
                     }
@@ -678,17 +678,17 @@ impl VoxelStore {
                         cy.saturating_add(dy),
                         cz.saturating_add(dz),
                     ];
-                    if let Some((chunk, _)) = self.address(at) {
-                        if self.set(at, Material::AIR) {
-                            removed = removed.saturating_add(1);
-                            if let Ok(index) = usize::try_from(chunk) {
-                                if matches!(self.touch_flag.get(index), Some(false)) {
-                                    if let Some(flag) = self.touch_flag.get_mut(index) {
-                                        *flag = true;
-                                    }
-                                    touched.push(chunk);
-                                }
+                    if let Some((chunk, _)) = self.address(at)
+                        && self.set(at, Material::AIR)
+                    {
+                        removed = removed.saturating_add(1);
+                        if let Ok(index) = usize::try_from(chunk)
+                            && matches!(self.touch_flag.get(index), Some(false))
+                        {
+                            if let Some(flag) = self.touch_flag.get_mut(index) {
+                                *flag = true;
                             }
+                            touched.push(chunk);
                         }
                     }
                     dx = dx.saturating_add(1);
@@ -699,10 +699,10 @@ impl VoxelStore {
         }
 
         for chunk in touched.iter() {
-            if let Ok(index) = usize::try_from(*chunk) {
-                if let Some(flag) = self.touch_flag.get_mut(index) {
-                    *flag = false;
-                }
+            if let Ok(index) = usize::try_from(*chunk)
+                && let Some(flag) = self.touch_flag.get_mut(index)
+            {
+                *flag = false;
             }
         }
         // item 62: the key IS the chunk index, which is unique in this list by
@@ -812,10 +812,8 @@ impl VoxelStore {
     pub fn modified_indices(&self) -> Vec<u32> {
         let mut out: Vec<u32> = Vec::new();
         for (index, flag) in self.modified.iter().enumerate() {
-            if *flag {
-                if let Ok(chunk) = u32::try_from(index) {
-                    out.push(chunk);
-                }
+            if *flag && let Ok(chunk) = u32::try_from(index) {
+                out.push(chunk);
             }
         }
         out

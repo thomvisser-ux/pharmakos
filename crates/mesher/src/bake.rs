@@ -453,10 +453,10 @@ impl LightField {
                     }
                     y -= 1;
                 }
-                if let Some(at) = self.column_offset(x, z) {
-                    if let Some(slot) = self.heights.get_mut(at) {
-                        *slot = height;
-                    }
+                if let Some(at) = self.column_offset(x, z)
+                    && let Some(slot) = self.heights.get_mut(at)
+                {
+                    *slot = height;
                 }
             }
         }
@@ -757,10 +757,10 @@ mod tests {
         for z in 0..voxels_z {
             for x in 0..voxels_x {
                 for y in 0..4 {
-                    if let Some(at) = map_offset(grid, x, y, z) {
-                        if let Some(slot) = materials.get_mut(at) {
-                            *slot = 1;
-                        }
+                    if let Some(at) = map_offset(grid, x, y, z)
+                        && let Some(slot) = materials.get_mut(at)
+                    {
+                        *slot = 1;
                     }
                 }
             }
@@ -799,19 +799,19 @@ mod tests {
             for x in 0..voxels_x {
                 let top = if x == 0 { 10 } else { 21 };
                 for y in 0..top.min(voxels_y) {
-                    if let Some(at) = map_offset(grid, x, y, z) {
-                        if let Some(slot) = materials.get_mut(at) {
-                            *slot = 1;
-                        }
+                    if let Some(at) = map_offset(grid, x, y, z)
+                        && let Some(slot) = materials.get_mut(at)
+                    {
+                        *slot = 1;
                     }
                 }
             }
         }
         for x in 1..voxels_x {
-            if let Some(at) = map_offset(grid, x, 10, 16) {
-                if let Some(slot) = materials.get_mut(at) {
-                    *slot = AIR;
-                }
+            if let Some(at) = map_offset(grid, x, 10, 16)
+                && let Some(slot) = materials.get_mut(at)
+            {
+                *slot = AIR;
             }
         }
         materials
@@ -884,20 +884,20 @@ mod tests {
             for x in 0..voxels_x {
                 let top = if x < 16 { 16 } else { 4 };
                 for y in 0..top {
-                    if let Some(at) = map_offset(grid, x, y, z) {
-                        if let Some(slot) = materials.get_mut(at) {
-                            *slot = 1;
-                        }
+                    if let Some(at) = map_offset(grid, x, y, z)
+                        && let Some(slot) = materials.get_mut(at)
+                    {
+                        *slot = 1;
                     }
                 }
             }
         }
         // Bore a tunnel into the cliff at y = 5, z = 16, from x = 15 back to x = 10.
         for x in 10..16 {
-            if let Some(at) = map_offset(grid, x, 5, 16) {
-                if let Some(slot) = materials.get_mut(at) {
-                    *slot = AIR;
-                }
+            if let Some(at) = map_offset(grid, x, 5, 16)
+                && let Some(slot) = materials.get_mut(at)
+            {
+                *slot = AIR;
             }
         }
         let mut field = LightField::new(grid, params);
@@ -926,10 +926,10 @@ mod tests {
         for y in 0..4 {
             for z in 20..24 {
                 for x in 20..24 {
-                    if let Some(at) = map_offset(grid, x, y, z) {
-                        if let Some(slot) = materials.get_mut(at) {
-                            *slot = AIR;
-                        }
+                    if let Some(at) = map_offset(grid, x, y, z)
+                        && let Some(slot) = materials.get_mut(at)
+                    {
+                        *slot = AIR;
                     }
                 }
             }
@@ -966,20 +966,20 @@ mod tests {
         for z in 0..voxels_z {
             for x in 0..voxels_x {
                 for y in 0..21.min(voxels_y) {
-                    if let Some(at) = map_offset(grid, x, y, z) {
-                        if let Some(slot) = materials.get_mut(at) {
-                            *slot = 1;
-                        }
+                    if let Some(at) = map_offset(grid, x, y, z)
+                        && let Some(slot) = materials.get_mut(at)
+                    {
+                        *slot = 1;
                     }
                 }
             }
         }
         for x in 0..CHUNK_EDGE {
             let x = i32::try_from(x).expect("32 fits in an i32");
-            if let Some(at) = map_offset(grid, x, 10, 16) {
-                if let Some(slot) = materials.get_mut(at) {
-                    *slot = AIR;
-                }
+            if let Some(at) = map_offset(grid, x, 10, 16)
+                && let Some(slot) = materials.get_mut(at)
+            {
+                *slot = AIR;
             }
         }
 
@@ -991,10 +991,10 @@ mod tests {
         // The edit: a sky shaft down column x = 24, seven voxels from the boundary.
         let (lo, hi) = ([24, 11, 16], [24, 20, 16]);
         for y in lo[1]..=hi[1] {
-            if let Some(at) = map_offset(grid, lo[0], y, lo[2]) {
-                if let Some(slot) = materials.get_mut(at) {
-                    *slot = AIR;
-                }
+            if let Some(at) = map_offset(grid, lo[0], y, lo[2])
+                && let Some(slot) = materials.get_mut(at)
+            {
+                *slot = AIR;
             }
         }
         field

@@ -65,17 +65,17 @@
 # `the_toolchain_is_pinned_once_everywhere` holds the two equal and at or below the
 # version rust-toolchain.toml pins.
 #
-# PLACEHOLDER: the MSRV stays 1.85 below the 1.98.1 pin — owner, S1, in a sweep when no
-# lane holds a crate. S1's plan (task con1, S1-01) raises it to 1.98 with the pin, and the
-# first contract pull request found it cannot: clippy's lints follow the MSRV, and 1.98
-# turns on the let-chain form of `collapsible_if` (let chains are stable from 1.88), the
-# constant-chunk-size and manual-implementation lints: 69 `collapsible_if` warnings and a
-# dozen others at that pull request's base, across all ten crates, eight of them outside
-# that lane's paths (AGENTS.md section 6).
-# Raising it is one mechanical pass of `cargo xtask ci --fix` over the whole tree, which
-# only a moment with no lane open can take; until then the lints stay at the 1.85 floor
-# and the code compiles on the pinned 1.98.1 as before.
-msrv = "1.85"
+# 1.98 is the pin's minor: the marker that held it at 1.85 is discharged (register S1-01,
+# by S2's `msrv` lane, decisions-log items 129 (2) (b) and 144). S1's `con1` took the
+# 1.98.1 pin but could not take the MSRV with it, because clippy's lints follow the MSRV:
+# 1.98 turns on the let-chain form of `collapsible_if` (let chains are stable from 1.88),
+# `chunks_exact_to_as_chunks` and `manual_is_multiple_of`, at sites across all ten crates,
+# most of them outside that lane's paths (AGENTS.md section 6). `msrv` (#113) raised it in
+# a moment with no lane open: one pass of `cargo xtask ci --fix` over the whole tree, and
+# four fixes by hand where clippy's suggestion did not apply. A later raise of the pin
+# moves this number with it; xtask's `the_toolchain_is_pinned_once_everywhere` holds the
+# two to the pin's major.minor.
+msrv = "1.98"
 
 # Nothing here is a published crate, so clippy may suggest API-breaking improvements.
 avoid-breaking-exported-api = false

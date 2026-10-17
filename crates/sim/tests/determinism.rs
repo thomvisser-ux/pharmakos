@@ -456,10 +456,10 @@ fn the_tables_move_every_tick_and_not_merely_the_header() {
             .get(HEADER_BYTES..)
             .unwrap_or_default()
             .to_vec();
-        if let Some(before) = previous {
-            if before != body {
-                moved = moved.saturating_add(1);
-            }
+        if let Some(before) = previous
+            && before != body
+        {
+            moved = moved.saturating_add(1);
         }
         previous = Some(body);
     }

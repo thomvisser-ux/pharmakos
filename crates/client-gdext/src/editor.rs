@@ -1046,20 +1046,18 @@ impl Editor {
             && self.preview.as_ref().is_some_and(|preview| {
                 preview.at == at && preview.base == self.revision && preview.checked.is_some()
             });
-        if ready {
-            if let Some(preview) = self.preview.take() {
-                self.undo.push(Undo::Patch(preview.inverse));
-                self.accept_text(preview.patched);
-                if let Some((rows, qualifies, dormant)) = preview.checked {
-                    self.rows = rows;
-                    self.dormant_patch = dormant;
-                    self.verdict = Some(Verdict::Quick);
-                    self.rows_revision = self.revision;
-                    self.qualifies = qualifies;
-                    self.owed.quick = false;
-                }
-                return true;
+        if ready && let Some(preview) = self.preview.take() {
+            self.undo.push(Undo::Patch(preview.inverse));
+            self.accept_text(preview.patched);
+            if let Some((rows, qualifies, dormant)) = preview.checked {
+                self.rows = rows;
+                self.dormant_patch = dormant;
+                self.verdict = Some(Verdict::Quick);
+                self.rows_revision = self.revision;
+                self.qualifies = qualifies;
+                self.owed.quick = false;
             }
+            return true;
         }
         if self.text.is_none() {
             return false;
@@ -1437,10 +1435,10 @@ impl Editor {
     /// current; another check's refusal is not this one's.
     #[must_use]
     pub fn unchecked(&self, check: Check) -> Option<Unchecked> {
-        if let Some((revision, said)) = self.check_refusals.get(check) {
-            if *revision == self.revision {
-                return Some(Unchecked::Refused(said.clone()));
-            }
+        if let Some((revision, said)) = self.check_refusals.get(check)
+            && *revision == self.revision
+        {
+            return Some(Unchecked::Refused(said.clone()));
         }
         (self.door != Door::Open).then_some(Unchecked::Closed(self.door))
     }
@@ -1546,17 +1544,18 @@ impl Editor {
             }
         }
         // 6. FULL, once the editor has been left alone.
-        if full_due && self.full_done != Some(self.revision) {
-            if let Some(text) = self.text.clone() {
-                let revision = self.revision;
-                let mut call = self.send(
-                    Sent::Full { revision },
-                    "verify_plan",
-                    verify_params(&text, "full"),
-                );
-                call.full = true;
-                return Some(call);
-            }
+        if full_due
+            && self.full_done != Some(self.revision)
+            && let Some(text) = self.text.clone()
+        {
+            let revision = self.revision;
+            let mut call = self.send(
+                Sent::Full { revision },
+                "verify_plan",
+                verify_params(&text, "full"),
+            );
+            call.full = true;
+            return Some(call);
         }
         None
     }
@@ -2271,12 +2270,12 @@ impl Editor {
             }
             Sent::Instantiate { asked } => {
                 let instance: Instance = wizard::instance_of(result)?;
-                if let Some(wizard) = self.wizard.as_mut() {
-                    if wizard.asked == asked {
-                        wizard.instance = Some(instance);
-                        wizard.answered = asked;
-                        wizard.refusal = None;
-                    }
+                if let Some(wizard) = self.wizard.as_mut()
+                    && wizard.asked == asked
+                {
+                    wizard.instance = Some(instance);
+                    wizard.answered = asked;
+                    wizard.refusal = None;
                 }
             }
             Sent::GetDraft { id: _, round } => {
@@ -2293,11 +2292,11 @@ impl Editor {
                 }
             }
             Sent::Resolve { revision } => {
-                if revision == self.revision {
-                    if let Some(text) = self.text.as_deref() {
-                        self.chips = targeting::chips_of(result, text)?;
-                        self.chips_revision = Some(revision);
-                    }
+                if revision == self.revision
+                    && let Some(text) = self.text.as_deref()
+                {
+                    self.chips = targeting::chips_of(result, text)?;
+                    self.chips_revision = Some(revision);
                 }
             }
             Sent::MapSummary => self.features = targeting::features_of(result)?,
@@ -2556,10 +2555,10 @@ impl Editor {
             Sent::Resolve { revision } => Some((Check::Chips, *revision)),
             _ => None,
         };
-        if let Some((check, revision)) = check {
-            if revision == self.revision {
-                *self.check_refusals.slot(check) = Some((revision, detail.clone()));
-            }
+        if let Some((check, revision)) = check
+            && revision == self.revision
+        {
+            *self.check_refusals.slot(check) = Some((revision, detail.clone()));
         }
         match sent {
             Sent::Load { .. } => self.say("load_refused_by_gateway", &detail),
@@ -2571,10 +2570,10 @@ impl Editor {
             Sent::Instantiate { asked } => {
                 // Shown as the gateway wrote it; the value stays as typed, for the player
                 // to change. Nothing is retried with another value.
-                if let Some(wizard) = self.wizard.as_mut() {
-                    if wizard.asked == *asked {
-                        wizard.refusal = Some(detail.clone());
-                    }
+                if let Some(wizard) = self.wizard.as_mut()
+                    && wizard.asked == *asked
+                {
+                    wizard.refusal = Some(detail.clone());
                 }
                 self.say("wizard_refused", &detail);
             }

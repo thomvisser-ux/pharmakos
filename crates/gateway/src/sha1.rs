@@ -62,30 +62,26 @@ pub fn digest(message: &[u8]) -> Digest {
         .wrapping_mul(8);
     padded.extend_from_slice(&bits.to_be_bytes());
 
-    for block in padded.chunks_exact(64) {
+    for block in padded.as_chunks::<64>().0 {
         compress(&mut state, block);
     }
 
     let mut out: Digest = [0; 20];
-    for (slot, word) in out.chunks_exact_mut(4).zip(state.iter()) {
-        slot.copy_from_slice(&word.to_be_bytes());
+    for (slot, word) in out.as_chunks_mut::<4>().0.iter_mut().zip(state.iter()) {
+        *slot = word.to_be_bytes();
     }
     out
 }
 
 /// One 64-byte block into the chaining state.
 ///
-/// `block` is always exactly 64 bytes: the only caller walks `chunks_exact(64)`.
-fn compress(state: &mut [u32; 5], block: &[u8]) {
+/// The type holds `block` to exactly 64 bytes: the only caller walks `as_chunks::<64>()`.
+fn compress(state: &mut [u32; 5], block: &[u8; 64]) {
     let mut schedule: [u32; 80] = [0; 80];
 
-    for (index, word) in block.chunks_exact(4).enumerate() {
-        let value = u32::from(word.first().copied().unwrap_or(0)) << 24
-            | u32::from(word.get(1).copied().unwrap_or(0)) << 16
-            | u32::from(word.get(2).copied().unwrap_or(0)) << 8
-            | u32::from(word.get(3).copied().unwrap_or(0));
+    for (index, word) in block.as_chunks::<4>().0.iter().enumerate() {
         if let Some(slot) = schedule.get_mut(index) {
-            *slot = value;
+            *slot = u32::from_be_bytes(*word);
         }
     }
     for index in 16_usize..80 {

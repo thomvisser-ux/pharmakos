@@ -774,15 +774,15 @@ mod tests {
         // used twice, which is what "append-only from the day they ship" means.
         let mut previous: Option<&Entry> = None;
         for row in CATALOGUE {
-            if let Some(before) = previous {
-                if before.family == row.family {
-                    assert!(
-                        before.code < row.code,
-                        "{} follows {} inside one family; a family's codes ascend",
-                        row.code,
-                        before.code
-                    );
-                }
+            if let Some(before) = previous
+                && before.family == row.family
+            {
+                assert!(
+                    before.code < row.code,
+                    "{} follows {} inside one family; a family's codes ascend",
+                    row.code,
+                    before.code
+                );
             }
             let count = CATALOGUE
                 .iter()

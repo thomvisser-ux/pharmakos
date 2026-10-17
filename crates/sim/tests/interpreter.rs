@@ -1217,7 +1217,7 @@ impl Shape {
             // file (AGENTS.md §5), so it waits for a reason bigger than
             // legibility.
             rng: StreamRng::new(CORPUS_SEED, Stream::Map, index, 0, 0),
-            clean: index % 3 != 0,
+            clean: !index.is_multiple_of(3),
             labels: 0,
         }
     }

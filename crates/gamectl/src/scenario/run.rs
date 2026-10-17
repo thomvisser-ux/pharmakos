@@ -253,13 +253,12 @@ pub fn play(root: &Path, scenario: &Scenario) -> Result<Played, Failure> {
         }
 
         for (seat, token) in scenario.seats.iter().zip(&tokens) {
-            if let SeatKind::Playbook(relative) = &seat.kind {
-                if let Door::Harness(codes) = seal(root, &mut surface, token, seat.seat, relative)?
-                {
-                    let note = strings::scenario_harness_seal(seat.seat, relative, &codes);
-                    if !played.notes.contains(&note) {
-                        played.notes.push(note);
-                    }
+            if let SeatKind::Playbook(relative) = &seat.kind
+                && let Door::Harness(codes) = seal(root, &mut surface, token, seat.seat, relative)?
+            {
+                let note = strings::scenario_harness_seal(seat.seat, relative, &codes);
+                if !played.notes.contains(&note) {
+                    played.notes.push(note);
                 }
             }
         }

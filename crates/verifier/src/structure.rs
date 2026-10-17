@@ -115,23 +115,23 @@ pub(crate) fn run(playbook: &Playbook, limits: &Limits, out: &mut Builder) {
         );
     }
 
-    if let Some(on_death) = playbook.on_death.as_ref() {
-        if on_death.on_respawn() == OnRespawn::Unspecified {
-            out.emit(
-                Diag::new("E0111", "/on_death/on_respawn")
-                    .arg("field", "on_respawn")
-                    .fix(
-                        "Continue the route after a respawn",
-                        // `add`: an unset enum is written by omitting the
-                        // member, so a `replace` would have nothing to land on.
-                        patch_add(
-                            "/on_death/on_respawn",
-                            &pharmakos_proto::json::Json::String("CONTINUE".to_owned()),
-                        ),
-                        Applicability::MaybeIncorrect,
+    if let Some(on_death) = playbook.on_death.as_ref()
+        && on_death.on_respawn() == OnRespawn::Unspecified
+    {
+        out.emit(
+            Diag::new("E0111", "/on_death/on_respawn")
+                .arg("field", "on_respawn")
+                .fix(
+                    "Continue the route after a respawn",
+                    // `add`: an unset enum is written by omitting the
+                    // member, so a `replace` would have nothing to land on.
+                    patch_add(
+                        "/on_death/on_respawn",
+                        &pharmakos_proto::json::Json::String("CONTINUE".to_owned()),
                     ),
-            );
-        }
+                    Applicability::MaybeIncorrect,
+                ),
+        );
     }
 
     if let Some(tail) = playbook.fallback.as_ref() {
@@ -400,10 +400,10 @@ enum Arm<'a> {
 
 impl Visit for Sites<'_> {
     fn entry(&mut self, at: &str, entry: &Step, _list: List, _index: usize) {
-        if let Some(step::Kind::Move(walk_to)) = entry.kind.as_ref() {
-            if walk_to.pace() == Pace::Unspecified {
-                self.default_note(&pointer::child(at, "move"), "pace", "DIRECT", true);
-            }
+        if let Some(step::Kind::Move(walk_to)) = entry.kind.as_ref()
+            && walk_to.pace() == Pace::Unspecified
+        {
+            self.default_note(&pointer::child(at, "move"), "pace", "DIRECT", true);
         }
     }
 

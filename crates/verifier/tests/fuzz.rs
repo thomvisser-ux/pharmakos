@@ -132,7 +132,7 @@ impl Shape {
     fn new(index: u32) -> Shape {
         Shape {
             rng: StreamRng::new(FUZZ_SEED, Stream::Map, index, 0, 0),
-            clean: index % 4 == 0,
+            clean: index.is_multiple_of(4),
             labels: 0,
             handlers: 0,
         }
@@ -906,26 +906,24 @@ fn check(index: u32, rules: &RulesTable, scope: &Scope, snapshot: &[u8]) -> (Ver
         .diagnostics
         .iter()
         .any(|diagnostic| diagnostic.code.starts_with("E000"));
-    if decoded {
-        if let Ok(playbook) = json::decode::<Playbook>(&text) {
-            let per_unit = i128::from(
-                rules
-                    .message()
-                    .power
-                    .as_ref()
-                    .map_or(0, |power| power.kw_per_unit),
+    if decoded && let Ok(playbook) = json::decode::<Playbook>(&text) {
+        let per_unit = i128::from(
+            rules
+                .message()
+                .power
+                .as_ref()
+                .map_or(0, |power| power.kw_per_unit),
+        );
+        let room = i128::from(SUPPLY.saturating_sub(DRAW));
+        if certain_scout_draw(&playbook, per_unit) > room {
+            applied = true;
+            assert!(
+                report
+                    .diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.code == "E0601" || diagnostic.code == "W0603"),
+                "run {index}: the route's deploys order draw beyond supply and nothing says so"
             );
-            let room = i128::from(SUPPLY.saturating_sub(DRAW));
-            if certain_scout_draw(&playbook, per_unit) > room {
-                applied = true;
-                assert!(
-                    report
-                        .diagnostics
-                        .iter()
-                        .any(|diagnostic| diagnostic.code == "E0601" || diagnostic.code == "W0603"),
-                    "run {index}: the route's deploys order draw beyond supply and nothing says so"
-                );
-            }
         }
     }
     (report, applied)

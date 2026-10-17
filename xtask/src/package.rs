@@ -1064,10 +1064,10 @@ fn glibc_floor(ctx: &Ctx, files: &[PathBuf]) -> Result<String, String> {
                 describe_exit(output.status)
             ));
         }
-        if let Some(version) = highest_glibc(&String::from_utf8_lossy(&output.stdout)) {
-            if best.as_ref().is_none_or(|current| version > *current) {
-                best = Some(version);
-            }
+        if let Some(version) = highest_glibc(&String::from_utf8_lossy(&output.stdout))
+            && best.as_ref().is_none_or(|current| version > *current)
+        {
+            best = Some(version);
         }
     }
     let best =

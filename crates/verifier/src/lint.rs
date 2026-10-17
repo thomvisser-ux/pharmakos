@@ -207,11 +207,11 @@ impl Visit for Lints<'_> {
         let uncovered = coverage == Coverage::Uncovered;
         let what = describe(kind, uncovered);
         self.matches_nothing(&here, kind, uncovered, what);
-        if let Some((list, index)) = self.current {
-            if let Some(earlier) = self.placements.before(list, index) {
-                self.out
-                    .emit(Diag::new("W0705", here).arg("what", what).related(earlier));
-            }
+        if let Some((list, index)) = self.current
+            && let Some(earlier) = self.placements.before(list, index)
+        {
+            self.out
+                .emit(Diag::new("W0705", here).arg("what", what).related(earlier));
         }
     }
 

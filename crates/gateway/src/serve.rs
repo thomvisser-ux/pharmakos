@@ -424,12 +424,12 @@ impl Config {
         // Decisions-log item 110 (5): v1 plays one to three seats, and a lobby
         // that asked for more is told so here, before a map is generated.
         Host::check_seats(seats)?;
-        if let Some(seat) = human_seat {
-            if u32::from(seat) >= seats {
-                return Err(Error::invalid(format!(
-                    "this match has {seats} seats and the human is seat {seat}"
-                )));
-            }
+        if let Some(seat) = human_seat
+            && u32::from(seat) >= seats
+        {
+            return Err(Error::invalid(format!(
+                "this match has {seats} seats and the human is seat {seat}"
+            )));
         }
         Ok(Config {
             match_id,
@@ -1033,26 +1033,26 @@ impl InProcessSeats {
         let mut advised: Vec<Advised> = Vec::new();
         for raw in ordered {
             let subject = Subject::Seat(SeatId::new(raw));
-            if Some(raw) != human_seat {
-                if let Some(operator) = operators.built_in(raw) {
-                    let (token, handle) =
-                        surface
-                            .tokens()
-                            .mint(subject, &match_id, seat_scopes(), minted_at)?;
-                    surface.register_in_process(
-                        handle,
-                        InProcess {
-                            limits: crate::limit::IN_PROCESS_LIMITS,
-                            scratch_view: false,
-                        },
-                    );
-                    played.push(Played {
-                        seat: raw,
-                        token,
-                        operator,
-                    });
-                    continue;
-                }
+            if Some(raw) != human_seat
+                && let Some(operator) = operators.built_in(raw)
+            {
+                let (token, handle) =
+                    surface
+                        .tokens()
+                        .mint(subject, &match_id, seat_scopes(), minted_at)?;
+                surface.register_in_process(
+                    handle,
+                    InProcess {
+                        limits: crate::limit::IN_PROCESS_LIMITS,
+                        scratch_view: false,
+                    },
+                );
+                played.push(Played {
+                    seat: raw,
+                    token,
+                    operator,
+                });
+                continue;
             }
             if let Some(advisor) = operators.advisor(raw) {
                 let (token, handle) =
@@ -1245,10 +1245,10 @@ impl Writer {
                 refused.push(("write replay chain", error));
             }
         }
-        if let Some(state) = pending.save {
-            if let Err(error) = self.write_save(state) {
-                refused.push(("write save", error));
-            }
+        if let Some(state) = pending.save
+            && let Err(error) = self.write_save(state)
+        {
+            refused.push(("write save", error));
         }
         let tick = surface.time().tick;
         for (action, error) in &refused {

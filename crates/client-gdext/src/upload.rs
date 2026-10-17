@@ -470,7 +470,9 @@ impl ResidentSurface {
 
 fn read_positions(bytes: &[u8]) -> Vec<[f32; 3]> {
     bytes
-        .chunks_exact(VERTEX_STRIDE)
+        .as_chunks::<VERTEX_STRIDE>()
+        .0
+        .iter()
         .map(|vertex| {
             [
                 read_f32(vertex, 0),
@@ -492,7 +494,9 @@ fn read_f32(bytes: &[u8], offset: usize) -> f32 {
 
 fn read_colours(bytes: &[u8]) -> Vec<[u8; 4]> {
     bytes
-        .chunks_exact(ATTRIBUTE_STRIDE)
+        .as_chunks::<ATTRIBUTE_STRIDE>()
+        .0
+        .iter()
         .map(|colour| {
             let mut out = [0_u8; 4];
             out.copy_from_slice(colour);

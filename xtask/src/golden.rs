@@ -210,18 +210,17 @@ pub(crate) fn compare_tree(
             .components()
             .next()
             .map(|component| component.as_os_str().to_string_lossy().into_owned())
+            && !areas.contains(&area)
         {
-            if !areas.contains(&area) {
-                areas.push(area.clone());
-                let readme = golden_root.join(&area).join("README.md");
-                if !readme.is_file() {
-                    failures.push(format!(
-                        "{area}: no tests/golden/{area}/README.md. Every golden area says what a \
+            areas.push(area.clone());
+            let readme = golden_root.join(&area).join("README.md");
+            if !readme.is_file() {
+                failures.push(format!(
+                    "{area}: no tests/golden/{area}/README.md. Every golden area says what a \
                          diff in it means — which behaviour moved, whether a move is ever \
                          legitimate, and what to check before blessing it. The person reading the \
                          red build is usually not the person who wrote the golden."
-                    ));
-                }
+                ));
             }
         }
 

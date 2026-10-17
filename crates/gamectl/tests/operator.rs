@@ -448,15 +448,15 @@ fn forced_raise(surface: &mut Surface, token: &Token, seat: u8, rules: &str) -> 
             if method != "get_economy_forecast" {
                 return answer;
             }
-            if let Json::Object(members) = &mut answer {
-                if let Some((_, fields)) = members.iter_mut().find(|(key, _)| key == "result") {
-                    let supply = number(fields, "supply_kw_now");
-                    set_member(
-                        fields,
-                        "draw_kw_now",
-                        Json::Number(supply.saturating_add(1).to_string()),
-                    );
-                }
+            if let Json::Object(members) = &mut answer
+                && let Some((_, fields)) = members.iter_mut().find(|(key, _)| key == "result")
+            {
+                let supply = number(fields, "supply_kw_now");
+                set_member(
+                    fields,
+                    "draw_kw_now",
+                    Json::Number(supply.saturating_add(1).to_string()),
+                );
             }
             answer
         };

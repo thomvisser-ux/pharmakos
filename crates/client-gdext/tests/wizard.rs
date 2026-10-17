@@ -425,10 +425,10 @@ fn the_client_names_no_template() {
         // route step's `label` is not a declaration's.
         for line in text.lines().filter(|line| line.contains("\"pointer\": \"")) {
             for key in ["\"pointer\": \"", "\"label\": \""] {
-                if let Some(rest) = line.split(key).nth(1) {
-                    if let Some(value) = rest.split('"').next() {
-                        needles.push(value.to_owned());
-                    }
+                if let Some(rest) = line.split(key).nth(1)
+                    && let Some(value) = rest.split('"').next()
+                {
+                    needles.push(value.to_owned());
                 }
             }
         }

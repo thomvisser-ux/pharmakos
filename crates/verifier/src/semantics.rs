@@ -280,13 +280,13 @@ impl Visit for Semantics<'_> {
         if settings.mandate.is_none() {
             self.out.emit(Diag::new("E0502", at));
         }
-        if let Some(mandate_settings::Mandate::Mine(mine)) = settings.mandate.as_ref() {
-            if mine.seam_choice() == SeamChoice::Safest {
-                self.out.emit(Diag::new(
-                    "W0501",
-                    pointer::child(&pointer::child(at, "mine"), "seam_choice"),
-                ));
-            }
+        if let Some(mandate_settings::Mandate::Mine(mine)) = settings.mandate.as_ref()
+            && mine.seam_choice() == SeamChoice::Safest
+        {
+            self.out.emit(Diag::new(
+                "W0501",
+                pointer::child(&pointer::child(at, "mine"), "seam_choice"),
+            ));
         }
         self.percent(at, "retreat_hp_pct", settings.retreat_hp_pct);
         if let Some(mandate_settings::Mandate::Build(build)) = settings.mandate.as_ref() {

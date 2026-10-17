@@ -429,11 +429,11 @@ impl ViewFeed {
             let base = generated.get(slot).map_or(&[][..], Vec::as_slice);
             let bytes = entitled_bytes(*chunk, voxels, base, seat, sight.unfogged, vision);
             if let Some(at) = state.entitled.iter().position(|held| held.chunk == *chunk) {
-                if let Some(held) = state.entitled.get_mut(at) {
-                    if held.bytes != bytes {
-                        held.bytes = bytes;
-                        held.changed_at = *seq;
-                    }
+                if let Some(held) = state.entitled.get_mut(at)
+                    && held.bytes != bytes
+                {
+                    held.bytes = bytes;
+                    held.changed_at = *seq;
                 }
             } else {
                 // A chunk entering this viewer's list for the FIRST time has

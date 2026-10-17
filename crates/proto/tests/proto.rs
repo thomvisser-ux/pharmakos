@@ -152,10 +152,10 @@ fn populate(message: &Message, visiting: &mut BTreeSet<String>) -> Json {
     let mut oneofs_filled: BTreeSet<i32> = BTreeSet::new();
 
     for field in &message.fields {
-        if let Some(index) = field.oneof_index {
-            if !oneofs_filled.insert(index) {
-                continue;
-            }
+        if let Some(index) = field.oneof_index
+            && !oneofs_filled.insert(index)
+        {
+            continue;
         }
         let value = match field.kind {
             ScalarKind::Double | ScalarKind::Float => {

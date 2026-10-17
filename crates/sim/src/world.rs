@@ -2987,7 +2987,9 @@ impl World {
         if elapsed == 0 {
             return false;
         }
-        elapsed.saturating_sub(1) % self.decision_ticks() == 0
+        elapsed
+            .saturating_sub(1)
+            .is_multiple_of(self.decision_ticks())
     }
 
     /// `match.decision_tick_ms` in whole ticks, at least one.

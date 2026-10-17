@@ -1277,10 +1277,10 @@ fn commit_row(
             // one way the settings can fail -- a lost `on` target -- is tested
             // before the switch writes anything, so a failed row leaves the
             // old writ, its settings and its held seam exactly as they were.
-            if let Some(settings) = settings {
-                if !targets_live(world, settings, bindings, slot) {
-                    return Err(StepFailure::FeatureLost);
-                }
+            if let Some(settings) = settings
+                && !targets_live(world, settings, bindings, slot)
+            {
+                return Err(StepFailure::FeatureLost);
             }
             world.set_beacon_mandate(row, *kind);
             if let Some(settings) = settings {

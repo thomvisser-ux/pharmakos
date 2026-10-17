@@ -214,12 +214,12 @@ fn chain(runner: &mut Runner, cli: &Cli) -> Result<String, String> {
     // chains line up without either side having to know the other's offset.
     let first_tick: u32 = runner.tick().raw();
     let past_the_end = first_tick.saturating_add(cli.ticks);
-    if let Some(at) = cli.save_at {
-        if at < first_tick || at >= past_the_end {
-            return Err(format!(
-                "--save-at {at} is outside this run's ticks {first_tick}..{past_the_end}"
-            ));
-        }
+    if let Some(at) = cli.save_at
+        && (at < first_tick || at >= past_the_end)
+    {
+        return Err(format!(
+            "--save-at {at} is outside this run's ticks {first_tick}..{past_the_end}"
+        ));
     }
 
     let mut text =
@@ -246,10 +246,10 @@ fn chain(runner: &mut Runner, cli: &Cli) -> Result<String, String> {
         text.push('\t');
         text.push_str(&hex(hash));
         text.push('\n');
-        if cli.save_at == Some(tick) {
-            if let Some(path) = cli.snapshot_out.as_ref() {
-                write_snapshot(runner, path)?;
-            }
+        if cli.save_at == Some(tick)
+            && let Some(path) = cli.snapshot_out.as_ref()
+        {
+            write_snapshot(runner, path)?;
         }
         written = written.saturating_add(1);
     }
