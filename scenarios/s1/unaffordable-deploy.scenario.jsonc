@@ -15,10 +15,16 @@
 //           at tick 961, and the fallback takes over;
 //   seat 1  seals nothing, so the gateway files the safe playbook for it.
 //
-// The playbook passes the verifier: the `$` projection that would warn about
-// the fourth deploy at plan time (E0601, W06xx) is S1's economy work, not yet
-// built, and a verifier never runs the Quartermaster ahead (AGENTS.md section
-// 3 rule 2).
+// The playbook qualifies, with two warnings, against seat 0's own snapshot
+// on this map. The verifier's `$` projection
+// (`crates/verifier/src/projection.rs`, built by S1's `proj` #85) prices the
+// four deploys at plan time and warns W0602, "committed spending of $ 240
+// outruns the projected treasury of $ 200"; its schedule check, over the
+// walking lower bound (`crates/verifier/src/walking.rs`), warns W0701, "the
+// route needs at least 61000 ms if every step runs, and the coming segment is
+// 60000 ms". A warning does not stop a seal, and a verifier never runs the
+// Quartermaster ahead (AGENTS.md section 3 rule 2), so the failure itself is
+// the sim's to report as the fourth deploy starts, and this scenario pins it.
 //
 // `event_fired` has no value predicate (register M-05, with S1-41), and the
 // chain does not pin the failure's id either: events are derived output and

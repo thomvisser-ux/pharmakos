@@ -143,7 +143,7 @@ use pharmakos_sim::tables::SeatId;
 /// the scenario files'), then eighteen spread by the 64-bit golden ratio so
 /// that neighbouring entries share no bits.
 ///
-/// PLACEHOLDER: the balance check's seed set — owner, at S1's demo, with `tune`'s report.
+/// PLACEHOLDER: the balance check's seed set — owner, at S2's demo, with `tune2`'s balance report, which extends this check to combat on these seeds (item 139 (1) ruling 5: it stands for S1, after `tune`'s report).
 /// No decision names one: item 90's "tuning seed set" is the rules rows, not
 /// map seeds, and item 127 (3) says only "about twenty seeded matches".
 fn seeds() -> Vec<u64> {
@@ -901,7 +901,7 @@ fn play(seed: u64, matchup: Matchup, rounds: u32, rules: &str, ladder: Vec<i32>)
 
 /// Item 127 (3)'s three conditions, for one seat of one match.
 ///
-/// PLACEHOLDER: the flags' readings of item 127 (3) — owner, at S1's demo, with `tune`'s report.
+/// PLACEHOLDER: the flags' readings of item 127 (3) — owner, at S2's demo, with `tune2`'s balance report (item 139 (1) ruling 5: they stand for S1, after `tune`'s report).
 /// No decision fixes them, and each is a guess: a flat
 /// treasury counts as ONLY-GROWS (`<=`); any `beacon_placed` counts as a new
 /// asset for STALLED, so a free stacked beacon hides a stall until X-12's
