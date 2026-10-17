@@ -157,9 +157,12 @@ same format string:
   (`crates/sim/tests/scenario.rs`, `crates/gateway/tests/methods.rs`). At
   most 256, for the reason a segment is capped below: the sim sizes its unit
   table from the key before the first tick, so an unbounded count aborted the
-  runner on an allocation with no pointer. The number is a guess well above the
-  determinism harness's 50 (a PLACEHOLDER for the owner at S1's demo), and
-  `crates/gamectl/tests/parity.rs` holds both readers to it.
+  runner on an allocation with no pointer. The number is a guess, first set
+  well above the fifty walkers a seat the determinism harness then fielded,
+  which `tune` #101 deleted (decisions-log item 137). The cap and the walkers'
+  removal are the register's S2-16 now, a PLACEHOLDER for the owner at S2's
+  G3′-real measurement, and `crates/gamectl/tests/parity.rs` holds both
+  readers to it.
 * **`round_limit`** — the round the match ends on. Absent, it is the sim's
   default of six (spec §3), a lobby setting rather than a tuning row
   (decisions-log item 102 (7)). A scenario that plays a match to its end names
