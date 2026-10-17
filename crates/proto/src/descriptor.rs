@@ -304,7 +304,7 @@ fn parse_file(bytes: &[u8], schema: &mut Schema) -> Result<(), WireError> {
         let (number, value) = reader.field()?;
         match (number, value) {
             // FileDescriptorProto.package = 2.
-            (2, Value::Delimited(payload)) => package = utf8(payload),
+            (2, Value::Delimited(payload)) => package = utf8(payload)?,
             // .message_type = 4, .enum_type = 5, .extension = 7.
             (4, Value::Delimited(payload)) => messages.push(payload),
             (5, Value::Delimited(payload)) => enums.push(payload),
@@ -343,7 +343,7 @@ fn parse_message(bytes: &[u8], scope: &str, schema: &mut Schema) -> Result<(), W
             // DescriptorProto: name = 1, field = 2, nested_type = 3,
             // enum_type = 4, oneof_decl = 8, reserved_range = 9,
             // reserved_name = 10.
-            (1, Value::Delimited(payload)) => name = utf8(payload),
+            (1, Value::Delimited(payload)) => name = utf8(payload)?,
             (2, Value::Delimited(payload)) => field_payloads.push(payload),
             (3, Value::Delimited(payload)) => nested.push(payload),
             (4, Value::Delimited(payload)) => enums.push(payload),
@@ -351,9 +351,10 @@ fn parse_message(bytes: &[u8], scope: &str, schema: &mut Schema) -> Result<(), W
             (9, Value::Delimited(payload)) => {
                 // DescriptorProto.ReservedRange's end is EXCLUSIVE.
                 let (start, end) = range(payload)?;
-                message.reserved_ranges.push((start, end.saturating_sub(1)));
+                let last = end.checked_sub(1).ok_or(WireError::OutOfRange)?;
+                message.reserved_ranges.push((start, last));
             }
-            (10, Value::Delimited(payload)) => message.reserved_names.push(utf8(payload)),
+            (10, Value::Delimited(payload)) => message.reserved_names.push(utf8(payload)?),
             _ => {}
         }
     }
@@ -393,21 +394,27 @@ fn parse_field(bytes: &[u8]) -> Result<Field, WireError> {
         match (field_number, value) {
             // FieldDescriptorProto: name = 1, number = 3, label = 4,
             // type = 5, type_name = 6, oneof_index = 9, json_name = 10.
-            (1, Value::Delimited(payload)) => name = utf8(payload),
-            (3, Value::Varint(raw)) => number = signed32(raw),
+            (1, Value::Delimited(payload)) => name = utf8(payload)?,
+            (3, Value::Varint(raw)) => number = signed32(raw)?,
             (4, Value::Varint(raw)) => label = raw,
             (5, Value::Varint(raw)) => {
                 kind = ScalarKind::from_number(raw).ok_or(WireError::BadWireType)?;
             }
             (6, Value::Delimited(payload)) => {
-                utf8(payload)
+                utf8(payload)?
                     .trim_start_matches('.')
                     .clone_into(&mut type_name);
             }
-            (9, Value::Varint(raw)) => oneof_index = Some(signed32(raw)),
-            (10, Value::Delimited(payload)) => json_name = utf8(payload),
+            (9, Value::Varint(raw)) => oneof_index = Some(signed32(raw)?),
+            (10, Value::Delimited(payload)) => json_name = utf8(payload)?,
             _ => {}
         }
+    }
+
+    // Protobuf field numbers run 1 to 536 870 911, and the codec's writer
+    // relies on it (`wire::Writer`'s `tag`).
+    if !(1..=536_870_911).contains(&number) {
+        return Err(WireError::BadFieldNumber);
     }
 
     Ok(Field {
@@ -433,13 +440,13 @@ fn parse_enum(bytes: &[u8], scope: &str) -> Result<Enum, WireError> {
         match (number, value) {
             // EnumDescriptorProto: name = 1, value = 2, reserved_range = 4,
             // reserved_name = 5.
-            (1, Value::Delimited(payload)) => name = utf8(payload),
+            (1, Value::Delimited(payload)) => name = utf8(payload)?,
             (2, Value::Delimited(payload)) => value_payloads.push(payload),
             (4, Value::Delimited(payload)) => {
                 // EnumReservedRange's end is INCLUSIVE, unlike a message's.
                 parsed.reserved_ranges.push(range(payload)?);
             }
-            (5, Value::Delimited(payload)) => parsed.reserved_names.push(utf8(payload)),
+            (5, Value::Delimited(payload)) => parsed.reserved_names.push(utf8(payload)?),
             _ => {}
         }
     }
@@ -463,8 +470,8 @@ fn parse_enum_value(bytes: &[u8]) -> Result<EnumValue, WireError> {
         let (field_number, value) = reader.field()?;
         match (field_number, value) {
             // EnumValueDescriptorProto: name = 1, number = 2, options = 3.
-            (1, Value::Delimited(payload)) => name = utf8(payload),
-            (2, Value::Varint(raw)) => number = signed32(raw),
+            (1, Value::Delimited(payload)) => name = utf8(payload)?,
+            (2, Value::Varint(raw)) => number = signed32(raw)?,
             (3, Value::Delimited(payload)) => options = payload.to_vec(),
             _ => {}
         }
@@ -481,7 +488,7 @@ fn oneof_name(bytes: &[u8]) -> Result<String, WireError> {
     while !reader.is_done() {
         let (number, value) = reader.field()?;
         if let (1, Value::Delimited(payload)) = (number, value) {
-            return Ok(utf8(payload));
+            return utf8(payload);
         }
     }
     Ok(String::new())
@@ -494,8 +501,8 @@ fn range(bytes: &[u8]) -> Result<(i32, i32), WireError> {
     while !reader.is_done() {
         let (number, value) = reader.field()?;
         match (number, value) {
-            (1, Value::Varint(raw)) => start = signed32(raw),
-            (2, Value::Varint(raw)) => end = signed32(raw),
+            (1, Value::Varint(raw)) => start = signed32(raw)?,
+            (2, Value::Varint(raw)) => end = signed32(raw)?,
             _ => {}
         }
     }
@@ -503,13 +510,18 @@ fn range(bytes: &[u8]) -> Result<(i32, i32), WireError> {
 }
 
 /// A descriptor `int32` arrives as a varint that was sign-extended to 64 bits.
-fn signed32(raw: u64) -> i32 {
+/// One that does not fit is a corrupt descriptor, refused rather than read as
+/// some other number.
+fn signed32(raw: u64) -> Result<i32, WireError> {
     let wide = crate::wire::u64_bits_to_i64(raw);
-    i32::try_from(wide).unwrap_or(0)
+    i32::try_from(wide).map_err(|_| WireError::OutOfRange)
 }
 
-fn utf8(payload: &[u8]) -> String {
-    String::from_utf8_lossy(payload).into_owned()
+/// A descriptor string. Protobuf strings are UTF-8, so one that is not is a
+/// corrupt descriptor, refused rather than repaired with replacement
+/// characters into a name nothing declared.
+fn utf8(payload: &[u8]) -> Result<String, WireError> {
+    String::from_utf8(payload.to_vec()).map_err(|_| WireError::NotUtf8)
 }
 
 fn join(scope: &str, name: &str) -> String {

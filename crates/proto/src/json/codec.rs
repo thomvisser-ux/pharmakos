@@ -596,8 +596,9 @@ fn write_scalar(
                     format!("expected a string, found {}", value.kind()),
                 ));
             };
-            writer.delimited_field(field.number, text.as_bytes());
-            Ok(())
+            writer
+                .delimited_field(field.number, text.as_bytes())
+                .map_err(|_| Error::at(pointer, "a string too long for its length prefix"))
         }
         ScalarKind::Bytes => {
             let Json::String(text) = value else {
@@ -608,8 +609,9 @@ fn write_scalar(
             };
             let bytes =
                 base64::decode(text).ok_or_else(|| Error::at(pointer, "not valid base64"))?;
-            writer.delimited_field(field.number, &bytes);
-            Ok(())
+            writer
+                .delimited_field(field.number, &bytes)
+                .map_err(|_| Error::at(pointer, "bytes too long for their length prefix"))
         }
         ScalarKind::Enum => {
             let declared = schema.enumeration(&field.type_name).ok_or_else(|| {
@@ -653,8 +655,9 @@ fn write_scalar(
                 )
             })?;
             let payload = json_to_message(schema, nested, value, pointer, depth.saturating_add(1))?;
-            writer.delimited_field(field.number, &payload);
-            Ok(())
+            writer
+                .delimited_field(field.number, &payload)
+                .map_err(|_| Error::at(pointer, "a message too long for its length prefix"))
         }
     }
 }
