@@ -80,7 +80,7 @@ const MATCH_ID: &str = "m-bench";
 /// scenario plays (`scenarios/**`), so the map is one the project already
 /// pins.
 ///
-/// PLACEHOLDER: the map P1's per-unit figure is certified on — owner, at S1's demo P1 run.
+/// PLACEHOLDER: the map P1's per-unit figure is certified on — owner, at S3's exit, with FULL and the size budget, where P1 is certified again (item 139 (1) ruling 7: it is P1's map for S1).
 pub const BENCH_SEED: u64 = 0x0000_0000_ca5c_aded;
 
 /// The seats S1's plan section 5 item 3 states the implied budget for.

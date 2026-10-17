@@ -118,7 +118,7 @@ pub const SAFE_ESTIMATES: u32 = 4;
 /// layer (decisions-log item 133 (3) (a); [`crate::compose::deepen_core`]):
 /// Expand & Mine's own value for a new Mine beacon, so the two agree.
 ///
-/// PLACEHOLDER: the core's dig depth Easy and the safe playbook write, 4 as Expand & Mine's own — owner, S1's demo, with `tune`'s balance check report
+/// PLACEHOLDER: the core's dig depth Easy and the safe playbook write, 4 as Expand & Mine's own — owner, S3, with the balance check re-run once `toward` lets Easy reach past one beacon (item 139 (1) rulings 4 and 6: it stands at 4 for S1, after `tune`'s balance check report)
 ///
 /// Tuned with the numbers (register S1-52) and kept at 4: a seam is laid four
 /// voxels deep (depths 0 to 3 below its original top, the sim's
