@@ -358,14 +358,13 @@ pub fn review(text: &str, policy: &Policy) -> Result<Upgrade, Refusal> {
         return Err(Refusal::UnsupportedVersion(version.to_owned()));
     }
 
-    if let Some(origin) = header(&headers, "Origin")? {
-        if !policy
+    if let Some(origin) = header(&headers, "Origin")?
+        && !policy
             .allowed_origins
             .iter()
             .any(|allowed| allowed == origin)
-        {
-            return Err(Refusal::ForeignOrigin(origin.to_owned()));
-        }
+    {
+        return Err(Refusal::ForeignOrigin(origin.to_owned()));
     }
 
     let key = header(&headers, "Sec-WebSocket-Key")?.ok_or(Refusal::MissingKey)?;

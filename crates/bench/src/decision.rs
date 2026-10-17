@@ -583,15 +583,13 @@ mod tests {
         // Everything else is the committed case: put the ids back and compare.
         let mut restored = hosted;
         let mut put_back = |entry: &mut Step| {
-            if let Some(step::Kind::Move(movement)) = entry.kind.as_mut() {
-                if let Some(Location {
+            if let Some(step::Kind::Move(movement)) = entry.kind.as_mut()
+                && let Some(Location {
                     place: Some(location::Place::BeaconAnchor(anchor)),
                 }) = movement.to.as_mut()
-                {
-                    if matches!(anchor.r#ref, Some(beacon_ref::Ref::Safest(_))) {
-                        anchor.r#ref = Some(beacon_ref::Ref::BeaconId("b_01".to_owned()));
-                    }
-                }
+                && matches!(anchor.r#ref, Some(beacon_ref::Ref::Safest(_)))
+            {
+                anchor.r#ref = Some(beacon_ref::Ref::BeaconId("b_01".to_owned()));
             }
         };
         if let Some(declarative) = restored.declarative.as_mut() {

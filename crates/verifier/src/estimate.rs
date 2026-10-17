@@ -290,10 +290,11 @@ fn schedule(body: &Declarative, input: &Input<'_>, out: &mut Builder) {
             here = target.map(|to| (to, radius));
         }
         elapsed = plus(elapsed, on_site);
-        if let Some(length) = segment {
-            if first_late.is_none() && elapsed > length {
-                first_late = Some(pointer::at(ROUTE, index));
-            }
+        if let Some(length) = segment
+            && first_late.is_none()
+            && elapsed > length
+        {
+            first_late = Some(pointer::at(ROUTE, index));
         }
     }
 

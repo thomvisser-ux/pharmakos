@@ -241,7 +241,7 @@ fn an_index_array_change_is_rebuilt_on_both_paths_and_still_matches() {
     // The same vertices, with every triangle's last two indices swapped: the array a
     // remesh produces when a quad moves between face directions.
     let mut flipped_indices = first.indices().to_vec();
-    for triangle in flipped_indices.chunks_exact_mut(3) {
+    for triangle in flipped_indices.as_chunks_mut::<3>().0 {
         triangle.swap(1, 2);
     }
     let flipped = Surface::new(

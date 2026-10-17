@@ -33,15 +33,15 @@ fn main() -> ExitCode {
         .write_all(outcome.out.as_bytes())
         .and_then(|()| std::io::stdout().flush());
     let _ = std::io::stderr().write_all(outcome.err.as_bytes());
-    if let Err(error) = written {
-        if error.kind() != std::io::ErrorKind::BrokenPipe {
-            let _ = writeln!(
-                std::io::stderr(),
-                "{}",
-                pharmakos_gamectl::strings::unwritable_output(&error.to_string())
-            );
-            return ExitCode::from(pharmakos_gamectl::exit::Exit::Internal.code());
-        }
+    if let Err(error) = written
+        && error.kind() != std::io::ErrorKind::BrokenPipe
+    {
+        let _ = writeln!(
+            std::io::stderr(),
+            "{}",
+            pharmakos_gamectl::strings::unwritable_output(&error.to_string())
+        );
+        return ExitCode::from(pharmakos_gamectl::exit::Exit::Internal.code());
     }
     ExitCode::from(outcome.code.code())
 }

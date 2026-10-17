@@ -419,26 +419,26 @@ fn selector(superlative: &str, filter: Option<&BeaconFilter>) -> String {
     };
     sentence.push(' ');
     sentence.push_str(side);
-    if let Some(writ) = filter.map(BeaconFilter::mandate) {
-        if writ != beacon_filter::MandateKind::Unspecified {
-            sentence.push(' ');
-            sentence.push_str(match writ {
-                beacon_filter::MandateKind::Build => s::MANDATE_BUILD,
-                beacon_filter::MandateKind::Defend => s::MANDATE_DEFEND,
-                beacon_filter::MandateKind::Attack => s::MANDATE_ATTACK,
-                beacon_filter::MandateKind::Survey => s::MANDATE_SURVEY,
-                beacon_filter::MandateKind::Mine => s::MANDATE_MINE,
-                beacon_filter::MandateKind::Unspecified => "",
-            });
-        }
+    if let Some(writ) = filter.map(BeaconFilter::mandate)
+        && writ != beacon_filter::MandateKind::Unspecified
+    {
+        sentence.push(' ');
+        sentence.push_str(match writ {
+            beacon_filter::MandateKind::Build => s::MANDATE_BUILD,
+            beacon_filter::MandateKind::Defend => s::MANDATE_DEFEND,
+            beacon_filter::MandateKind::Attack => s::MANDATE_ATTACK,
+            beacon_filter::MandateKind::Survey => s::MANDATE_SURVEY,
+            beacon_filter::MandateKind::Mine => s::MANDATE_MINE,
+            beacon_filter::MandateKind::Unspecified => "",
+        });
     }
     sentence.push(' ');
     sentence.push_str(s::BEACON_NOUN);
-    if let Some(tags) = filter.map(|filter| &filter.tags) {
-        if !tags.is_empty() {
-            let quoted: Vec<String> = tags.iter().map(|tag| format!("\"{tag}\"")).collect();
-            let _ = write!(sentence, " {} {}", s::TAGGED, join(&quoted));
-        }
+    if let Some(tags) = filter.map(|filter| &filter.tags)
+        && !tags.is_empty()
+    {
+        let quoted: Vec<String> = tags.iter().map(|tag| format!("\"{tag}\"")).collect();
+        let _ = write!(sentence, " {} {}", s::TAGGED, join(&quoted));
     }
     format!("{sentence} ({})", s::SELECTOR_NOTE)
 }
@@ -632,14 +632,14 @@ fn blocks(book: &Playbook, out: &mut String) {
         },
         out,
     );
-    if let Some(limit) = death.map(|death| death.max_deaths_before_fallback) {
-        if limit != 0 {
-            line(
-                1,
-                &format!("After {limit} deaths the fallback takes over."),
-                out,
-            );
-        }
+    if let Some(limit) = death.map(|death| death.max_deaths_before_fallback)
+        && limit != 0
+    {
+        line(
+            1,
+            &format!("After {limit} deaths the fallback takes over."),
+            out,
+        );
     }
 
     heading(s::HEADING_FALLBACK, out);
@@ -649,12 +649,11 @@ fn blocks(book: &Playbook, out: &mut String) {
         .declarative
         .as_ref()
         .and_then(|body| body.options.as_ref())
+        && options_said(*options)
     {
-        if options_said(*options) {
-            heading(s::HEADING_OPTIONS, out);
-            if options.allow_dormant_beacons {
-                line(1, s::ALLOW_DORMANT, out);
-            }
+        heading(s::HEADING_OPTIONS, out);
+        if options.allow_dormant_beacons {
+            line(1, s::ALLOW_DORMANT, out);
         }
     }
 }

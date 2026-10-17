@@ -179,10 +179,10 @@ impl EnumValue {
             let Ok((found, value)) = reader.field() else {
                 return None;
             };
-            if found == number {
-                if let Value::Varint(raw) = value {
-                    return Some(raw);
-                }
+            if found == number
+                && let Value::Varint(raw) = value
+            {
+                return Some(raw);
             }
         }
         None
@@ -284,10 +284,10 @@ fn parse(bytes: &[u8]) -> Result<Schema, WireError> {
     while !reader.is_done() {
         let (number, value) = reader.field()?;
         // FileDescriptorSet.file = 1.
-        if number == 1 {
-            if let Value::Delimited(payload) = value {
-                parse_file(payload, &mut schema)?;
-            }
+        if number == 1
+            && let Value::Delimited(payload) = value
+        {
+            parse_file(payload, &mut schema)?;
         }
     }
     Ok(schema)

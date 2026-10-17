@@ -622,10 +622,10 @@ impl PharmakosBridge {
             // The rig has already moved its cursor past this page; a page the bridge
             // refuses is lost unless the rig is told, so it asks for a keyframe again.
             let applied = self.apply_view(&result);
-            if applied.is_none() {
-                if let Some(rig) = self.rig.as_mut() {
-                    let _ = self.panics.guard("watch_receive", || rig.view_refused());
-                }
+            if applied.is_none()
+                && let Some(rig) = self.rig.as_mut()
+            {
+                let _ = self.panics.guard("watch_receive", || rig.view_refused());
             }
             report.set(
                 &"view".to_variant(),
@@ -1683,10 +1683,8 @@ fn mesh_case(
                     && (12..20).contains(&y)
                     && z.saturating_add(2) >= height;
                 let solid = z < height && !bitten;
-                if solid {
-                    if let Some(slot) = sim_order.get_mut(chunks::sim_voxel_index(x, y, z)) {
-                        *slot = u8::try_from(1 + (case % 3)).unwrap_or(1);
-                    }
+                if solid && let Some(slot) = sim_order.get_mut(chunks::sim_voxel_index(x, y, z)) {
+                    *slot = u8::try_from(1 + (case % 3)).unwrap_or(1);
                 }
             }
         }

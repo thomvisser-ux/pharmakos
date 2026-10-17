@@ -84,10 +84,10 @@ fn cratered(grid: ChunkGrid) -> Vec<u8> {
     for z in 0..voxels_z {
         for x in 0..voxels_x {
             for y in 0..24 {
-                if let Some(at) = map_offset(grid, x, y, z) {
-                    if let Some(slot) = materials.get_mut(at) {
-                        *slot = u8::try_from(1 + ((y >> 3_u32) % 3)).unwrap_or(1);
-                    }
+                if let Some(at) = map_offset(grid, x, y, z)
+                    && let Some(slot) = materials.get_mut(at)
+                {
+                    *slot = u8::try_from(1 + ((y >> 3_u32) % 3)).unwrap_or(1);
                 }
             }
         }
@@ -96,12 +96,11 @@ fn cratered(grid: ChunkGrid) -> Vec<u8> {
         for y in 0..24 {
             for x in 0..voxels_x {
                 let squared = (x - 16_i32).pow(2) + (y - 22_i32).pow(2) + (z - 16_i32).pow(2);
-                if squared <= 121 {
-                    if let Some(at) = map_offset(grid, x, y, z) {
-                        if let Some(slot) = materials.get_mut(at) {
-                            *slot = AIR;
-                        }
-                    }
+                if squared <= 121
+                    && let Some(at) = map_offset(grid, x, y, z)
+                    && let Some(slot) = materials.get_mut(at)
+                {
+                    *slot = AIR;
                 }
             }
         }

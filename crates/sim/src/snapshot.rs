@@ -1418,16 +1418,14 @@ fn axes_from_boxes(areas: &[ColumnBox]) -> Vec<i16> {
 /// [`axes_from_boxes`] read back: `Ragged` for a column that is not whole
 /// boxes, and `OutOfRange` for an inside-out box, which no run writes.
 fn boxes_from_axes(axes: &[i16]) -> Result<Vec<ColumnBox>, SnapshotError> {
-    let whole = axes.chunks_exact(4);
-    if !whole.remainder().is_empty() {
+    let (whole, remainder) = axes.as_chunks::<4>();
+    if !remainder.is_empty() {
         return Err(SnapshotError::Ragged("target_area"));
     }
     whole
-        .map(|chunk| match *chunk {
-            [lx, ly, hx, hy] => {
-                ColumnBox::new([lx, ly], [hx, hy]).ok_or(SnapshotError::OutOfRange("target_area"))
-            }
-            _ => Err(SnapshotError::Ragged("target_area")),
+        .iter()
+        .map(|&[lx, ly, hx, hy]| {
+            ColumnBox::new([lx, ly], [hx, hy]).ok_or(SnapshotError::OutOfRange("target_area"))
         })
         .collect()
 }
@@ -1467,11 +1465,11 @@ fn flags(column: &[u8], name: &'static str) -> Result<Vec<bool>, SnapshotError> 
     reason = "the length is a multiple of three by the test above, so the division is exact"
 )]
 fn points_from_axes(axes: &[i32]) -> Option<Vec<[Fx; 3]>> {
-    if axes.len() % 3 != 0 {
+    if !axes.len().is_multiple_of(3) {
         return None;
     }
     let mut out = Vec::with_capacity(axes.len() / 3);
-    for chunk in axes.chunks_exact(3) {
+    for chunk in axes.as_chunks::<3>().0 {
         out.push([
             Fx::from_raw(*chunk.first()?),
             Fx::from_raw(*chunk.get(1)?),

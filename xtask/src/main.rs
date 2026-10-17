@@ -2933,10 +2933,8 @@ fn parse_workspace(metadata: &str) -> Result<Workspace, String> {
                     .get("kind")
                     .and_then(Json::as_array)
                     .is_some_and(|kinds| kinds.iter().any(|kind| kind.as_str() == Some("bin")));
-                if is_bin {
-                    if let Some(target_name) = target.get("name").and_then(Json::as_str) {
-                        bins.push(target_name.to_owned());
-                    }
+                if is_bin && let Some(target_name) = target.get("name").and_then(Json::as_str) {
+                    bins.push(target_name.to_owned());
                 }
             }
         }
@@ -3299,10 +3297,10 @@ impl JsonParser<'_> {
 fn workspace_root() -> Result<PathBuf, String> {
     if let Ok(dir) = env::var("CARGO_MANIFEST_DIR") {
         let manifest_dir = PathBuf::from(dir);
-        if let Some(parent) = manifest_dir.parent() {
-            if parent.join("Cargo.toml").is_file() {
-                return Ok(parent.to_path_buf());
-            }
+        if let Some(parent) = manifest_dir.parent()
+            && parent.join("Cargo.toml").is_file()
+        {
+            return Ok(parent.to_path_buf());
         }
     }
     let mut current = env::current_dir()

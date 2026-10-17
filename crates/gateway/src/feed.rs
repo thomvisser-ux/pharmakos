@@ -584,13 +584,13 @@ impl SegmentFeed {
                 "an event's time is game milliseconds since the segment began, never negative",
             ));
         }
-        if let Some(last) = self.events.last() {
-            if event.at_ms < last.at_ms {
-                return Err(Error::invalid(
-                    "events reach the bus in time order; one behind a cursor could never be \
+        if let Some(last) = self.events.last()
+            && event.at_ms < last.at_ms
+        {
+            return Err(Error::invalid(
+                "events reach the bus in time order; one behind a cursor could never be \
                      delivered",
-                ));
-            }
+            ));
         }
         self.events.push(event);
         Ok(())

@@ -381,30 +381,27 @@ impl Easy {
         let top = candidates::top_k(&evaluated);
         let declared = playbook::declare(wire, &situation.templates, &EASY_KNOWN_TEMPLATES);
 
-        if let Some(composed) = compose::compose(situation, &self.tuning, &top, &declared) {
-            if let Some(text) = verified(wire, &declared, &composed, &mut round.repairs) {
-                if submit(wire, &text) {
-                    round.submitted = Submitted::Own;
-                    let why = match (composed.goals.first(), compose::fill_ms(situation)) {
-                        (Some(first), Some(fill)) => {
-                            compose::why_for(first, composed.goals.len(), fill)
-                        }
-                        _ => String::new(),
-                    };
-                    round.why = compose::with_seed(situation, &why);
-                    round.playbook_jsonc = Some(text);
-                    return;
-                }
-            }
+        if let Some(composed) = compose::compose(situation, &self.tuning, &top, &declared)
+            && let Some(text) = verified(wire, &declared, &composed, &mut round.repairs)
+            && submit(wire, &text)
+        {
+            round.submitted = Submitted::Own;
+            let why = match (composed.goals.first(), compose::fill_ms(situation)) {
+                (Some(first), Some(fill)) => compose::why_for(first, composed.goals.len(), fill),
+                _ => String::new(),
+            };
+            round.why = compose::with_seed(situation, &why);
+            round.playbook_jsonc = Some(text);
+            return;
         }
         // Nothing worth doing, or a plan that would not qualify: the seat's
         // own safe playbook, submitted on its own token.
-        if let Some(safe) = safe::safe_playbook(wire, situation, &declared) {
-            if submit(wire, &safe.jsonc) {
-                round.submitted = Submitted::Safe;
-                round.why = compose::with_seed(situation, &safe::why_safe(situation, Some(&safe)));
-                round.playbook_jsonc = Some(safe.jsonc);
-            }
+        if let Some(safe) = safe::safe_playbook(wire, situation, &declared)
+            && submit(wire, &safe.jsonc)
+        {
+            round.submitted = Submitted::Safe;
+            round.why = compose::with_seed(situation, &safe::why_safe(situation, Some(&safe)));
+            round.playbook_jsonc = Some(safe.jsonc);
         }
     }
 

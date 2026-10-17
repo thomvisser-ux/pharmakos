@@ -189,16 +189,16 @@ fn walk_entry(entry: &Step, at: &str, visitor: &mut dyn Visit) {
                 Some(location::Place::Covering(feature)) => Some(feature),
                 _ => None,
             };
-            if let Some(initial) = place.initial.as_ref() {
-                if let Some(settings) = initial.mandate.as_ref() {
-                    walk_mandate(
-                        settings,
-                        &pointer::child(&pointer::child(&here, "initial"), "mandate"),
-                        Carrier::Initial,
-                        deploy,
-                        visitor,
-                    );
-                }
+            if let Some(initial) = place.initial.as_ref()
+                && let Some(settings) = initial.mandate.as_ref()
+            {
+                walk_mandate(
+                    settings,
+                    &pointer::child(&pointer::child(&here, "initial"), "mandate"),
+                    Carrier::Initial,
+                    deploy,
+                    visitor,
+                );
             }
         }
         Some(step::Kind::WaitUntil(wait)) => {

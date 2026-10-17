@@ -950,10 +950,10 @@ mod tests {
         for y in 0..CHUNK_EDGE {
             for z in 0..CHUNK_EDGE {
                 for x in 0..CHUNK_EDGE {
-                    if (x + y + z) % 2 == 0 {
-                        if let Some(slot) = materials.get_mut(voxel_index(x, y, z)) {
-                            *slot = 1;
-                        }
+                    if (x + y + z) % 2 == 0
+                        && let Some(slot) = materials.get_mut(voxel_index(x, y, z))
+                    {
+                        *slot = 1;
                     }
                 }
             }

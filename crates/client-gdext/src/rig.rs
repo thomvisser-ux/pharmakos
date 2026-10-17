@@ -510,15 +510,15 @@ impl Rig {
             self.wants.end_lull = true;
         }
         let mut out = Vec::new();
-        if let Some((purpose, method, params)) = self.admin_next() {
-            if let Some(frame) = self.send(ADMIN, purpose, method, params) {
-                out.push(frame);
-            }
+        if let Some((purpose, method, params)) = self.admin_next()
+            && let Some(frame) = self.send(ADMIN, purpose, method, params)
+        {
+            out.push(frame);
         }
-        if let Some((purpose, method, params)) = self.seat_next() {
-            if let Some(frame) = self.send(SEAT, purpose, method, params) {
-                out.push(frame);
-            }
+        if let Some((purpose, method, params)) = self.seat_next()
+            && let Some(frame) = self.send(SEAT, purpose, method, params)
+        {
+            out.push(frame);
         }
         out
     }
@@ -550,14 +550,14 @@ impl Rig {
         if self.wants.end_recap && self.phase == Phase::Recap {
             return Some((Purpose::EndRecap, "end_recap", object(Vec::new())));
         }
-        if self.phase == Phase::Push {
-            if let Some(ask) = self.timing.pacer.next_ask() {
-                return Some((
-                    Purpose::Advance,
-                    "advance_push",
-                    object(vec![("ms", number(i64::from(ask)))]),
-                ));
-            }
+        if self.phase == Phase::Push
+            && let Some(ask) = self.timing.pacer.next_ask()
+        {
+            return Some((
+                Purpose::Advance,
+                "advance_push",
+                object(vec![("ms", number(i64::from(ask)))]),
+            ));
         }
         if let Some((spent, countdown)) = self.timing.clock.next_report() {
             self.clock_reports = match self.clock_reports {
@@ -738,10 +738,10 @@ impl Rig {
         let settled = self.settle(purpose, result, &mut answer);
         self.sync_editor();
         settled?;
-        if link == ADMIN {
-            if let (_, Some(footer)) = split_footer(result) {
-                answer.phase_changed = self.observe(&read_status(&footer)?)?;
-            }
+        if link == ADMIN
+            && let (_, Some(footer)) = split_footer(result)
+        {
+            answer.phase_changed = self.observe(&read_status(&footer)?)?;
         }
         Ok(answer)
     }

@@ -643,13 +643,13 @@ fn check_event_fired(assertion: &Json, base: &str, problems: &mut Vec<Problem>) 
             "required: the event name the runner waits for",
         ));
     }
-    if let Some(seat) = assertion.get("seat") {
-        if integer(Some(seat)).is_none_or(|number| number < 0) {
-            problems.push(Problem::new(
-                &format!("{base}/seat"),
-                "optional, but when present it is a seat id: an integer of 0 or more",
-            ));
-        }
+    if let Some(seat) = assertion.get("seat")
+        && integer(Some(seat)).is_none_or(|number| number < 0)
+    {
+        problems.push(Problem::new(
+            &format!("{base}/seat"),
+            "optional, but when present it is a seat id: an integer of 0 or more",
+        ));
     }
     match assertion.get("by_tick").map(|value| integer(Some(value))) {
         None => problems.push(Problem::new(

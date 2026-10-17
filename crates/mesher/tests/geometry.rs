@@ -115,10 +115,10 @@ struct Case {
 
 /// The map's extent, so a case can write voxels without repeating the arithmetic.
 fn set(materials: &mut [u8], grid: ChunkGrid, x: i32, y: i32, z: i32, material: u8) {
-    if let Some(at) = map_offset(grid, x, y, z) {
-        if let Some(slot) = materials.get_mut(at) {
-            *slot = material;
-        }
+    if let Some(at) = map_offset(grid, x, y, z)
+        && let Some(slot) = materials.get_mut(at)
+    {
+        *slot = material;
     }
 }
 

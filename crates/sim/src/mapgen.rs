@@ -634,10 +634,10 @@ pub fn generate(seed: u64, rules: &RulesTable, seats: u32) -> Result<GeneratedMa
     let occupied = seats.min(map.spawn_zones);
     let required = numbers.required_separation()?;
     let pair = min_occupied_separation(&centres, occupied, &numbers);
-    if let Some(found) = pair {
-        if found < required {
-            return Err(MapError::SpawnsTooClose { found, required });
-        }
+    if let Some(found) = pair
+        && found < required
+    {
+        return Err(MapError::SpawnsTooClose { found, required });
     }
     let min_separation = pair.unwrap_or(0);
 
@@ -1310,10 +1310,10 @@ fn height_at(heights: &[i32], width: i32, depth: i32, x: i32, y: i32) -> Option<
 }
 
 fn set_height(heights: &mut [i32], width: i32, depth: i32, x: i32, y: i32, value: i32) {
-    if let Some(index) = height_index(width, depth, x, y) {
-        if let Some(slot) = heights.get_mut(index) {
-            *slot = value;
-        }
+    if let Some(index) = height_index(width, depth, x, y)
+        && let Some(slot) = heights.get_mut(index)
+    {
+        *slot = value;
     }
 }
 
@@ -1516,11 +1516,11 @@ fn stamp_surface_patch(
         while dx <= radius {
             let x = at.first().copied().unwrap_or(0).saturating_add(dx);
             let y = at.get(1).copied().unwrap_or(0).saturating_add(dy);
-            if let Some(z) = voxels.top_solid_z(x, y) {
-                if voxels.set_pristine([x, y, z], material) {
-                    placed = placed.saturating_add(1);
-                    footprint.push(FootprintColumn { x, y, top: z });
-                }
+            if let Some(z) = voxels.top_solid_z(x, y)
+                && voxels.set_pristine([x, y, z], material)
+            {
+                placed = placed.saturating_add(1);
+                footprint.push(FootprintColumn { x, y, top: z });
             }
             dx = dx.saturating_add(1);
         }

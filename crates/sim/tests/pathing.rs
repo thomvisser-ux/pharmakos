@@ -1497,7 +1497,7 @@ impl CapQueue {
 ///   crater a tick, which is also the stability floor below which a cap never
 ///   drains. Nine, plus a tenth on nine ticks in twenty, is 9.45 in integers.
 fn demand_at(tick: u32) -> i32 {
-    if tick % 64 == 0 {
+    if tick.is_multiple_of(64) {
         74
     } else {
         9 + i32::from(tick % 20 < 9)
@@ -1641,7 +1641,7 @@ fn run_segment(units: u32, cap: u32, ticks: u32) -> (bool, Vec<i64>, u32, u64, u
         queue.serve(&mut served);
         minute_total += i64::from(queue.backlog());
         tick += 1;
-        if tick % 1_200 == 0 {
+        if tick.is_multiple_of(1_200) {
             by_minute.push(minute_total.div_euclid(1_200));
             minute_total = 0;
         }
