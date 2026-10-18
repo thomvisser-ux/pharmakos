@@ -1,0 +1,36 @@
+# SPDX-FileCopyrightText: 2026 Pharmakos contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# The nightly adversarial scenarios' fixed seed set (S2's plan, task `night`;
+# decisions-log item 144 (6): "a fixed seed set of about twenty seeds").
+#
+# One seed per line: `0x` and exactly sixteen lowercase hex digits, the
+# spelling a scenario's `map.seed` takes. `#` starts a comment. Order matters:
+# a seed's position decides the arm's seat, the first, third, fifth... seed
+# putting the arm on seat 0 and the others on seat 1 (decision 29), so the
+# twenty give each arm ten matches from each seat. The first ten are also G4's
+# bar, ten seeded matches of 9 600 ticks on each of the three operating
+# systems, in the nightly workflow's `g4` job.
+#
+# A seed changed here is a new night, not a re-run of an old one: say so in
+# the pull request that changes it, because every arm's win rate moves with it.
+0xc8764d7edb5586ae
+0x5457da22336da9d8
+0x1053383ac7ec2c92
+0x7513bda5dd0fc8a0
+0xf3cb002680986de3
+0xca8b43828b863916
+0xd53c68db1d969e0e
+0xe042d32c3886b777
+0x9e1165c60e56ecf8
+0x41902d7745cbf51e
+0xfb5fdd8e9365339d
+0xecb1488cd9cf7d3c
+0xbb4e152c2f89a2ad
+0x820e815b8a28448e
+0x0c91c843ec327e9c
+0xdd5600ca3d550f38
+0x20555e7dcc32bf8b
+0xa3e85cc2e5c9f106
+0x137398771c6557e6
+0xc9e9c89d96b11aef

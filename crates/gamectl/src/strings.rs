@@ -200,6 +200,33 @@ pub fn flag_elsewhere(command: &str, flag: &str, owner: &str) -> String {
     )
 }
 
+/// The working directory could not be read, so no relative path can be.
+#[must_use]
+pub fn no_working_directory(why: &str) -> String {
+    format!(
+        "{BINARY}: the working directory cannot be read ({why}), and every path is read against it."
+    )
+}
+
+/// A flag's value that is none of the values it takes, naming them.
+#[must_use]
+pub fn bad_value(flag: &str, given: &str, values: &[&str]) -> String {
+    let named: Vec<String> = values.iter().map(|value| format!("`{value}`")).collect();
+    format!(
+        "{BINARY}: `{flag} {given}` is not a value it takes; it takes {}.",
+        named.join(" or ")
+    )
+}
+
+/// A flag that only means something beside another one, given without it.
+#[must_use]
+pub fn flag_needs(command: &str, flag: &str, needs: &str) -> String {
+    format!(
+        "{BINARY} {command}: `{flag}` shapes the result a run over `{needs}` writes, and there is \
+         no `{needs}` here. It is refused rather than ignored."
+    )
+}
+
 /// Whatever `lexopt` refused, with the command it was refused under.
 #[must_use]
 pub fn bad_argument(error: &lexopt::Error) -> String {
@@ -290,9 +317,9 @@ pub fn verify_diagnostic(severity: &str, code: &str, path: &str, message: &str) 
 pub fn verify_footer() -> String {
     String::from(
         "  Verified against the reference seat view (`gamectl seat doctor` prints it): one seat, \
-         a core Build beacon `b_01`, a Mine beacon `b_02` tagged `east`, one known enemy beacon \
-         `e_01`. A playbook is verified against a real match's frozen snapshot by the gateway, \
-         not here.",
+         a core Build beacon `b_01` (the fixture's own id; a live seat's core is `b_00`), a Mine \
+         beacon `b_02` tagged `east`, one known enemy beacon `e_01`. A playbook is verified \
+         against a real match's frozen snapshot by the gateway, not here.",
     )
 }
 
@@ -510,4 +537,58 @@ pub fn scenario_harness_seal(seat: u8, path: &str, codes: &str) -> String {
          match played the orders the scenario names; no client could have given them. See \
          crates/gamectl/src/scenario/run.rs and decisions-log item 103 (3)."
     )
+}
+
+// ---------------------------------------------------------------------------
+// scenario run --seeds (the nightly harness; S2's plan, task `night`)
+// ---------------------------------------------------------------------------
+
+/// An arm's playbook that `submit_plan` refused during a run over a seed
+/// file. A nightly result is a claim about a match a player could have
+/// played, so the harness door is not taken.
+#[must_use]
+pub fn nightly_arm_refused(seat: u8, path: &str, round: u32, codes: &str) -> String {
+    format!(
+        "seat {seat}'s playbook `{path}` was refused by `submit_plan` in round {round} ({codes}). \
+         A run over a seed file plays every playbook through the verifier's door and never the \
+         harness's, so the arm is broken on this seed rather than a result."
+    )
+}
+
+/// A scenario run over a seed file that does not seat one `playbook` seat
+/// and one `builtin` seat.
+#[must_use]
+pub fn nightly_layout(path: &str) -> String {
+    format!(
+        "{path}: a run over a seed file plays an arm against the built-in operator, so the \
+         scenario seats exactly two seats, one `playbook` seat (the arm) and one `builtin` seat \
+         (S2's plan, decision 29)."
+    )
+}
+
+/// `--operator` given for a scenario that seats no `builtin` seat.
+#[must_use]
+pub fn operator_unused(path: &str) -> String {
+    format!(
+        "{BINARY} scenario run: `--operator` names the operator a `builtin` seat plays, and \
+         `{path}` seats none. It is refused rather than ignored."
+    )
+}
+
+/// The seed file, refused, with the decoder's own sentence.
+#[must_use]
+pub fn seeds_refused(path: &str, why: &str) -> String {
+    format!("the seed file `{path}` cannot be read as one: {why}.")
+}
+
+/// The result could not be written to `--out`.
+#[must_use]
+pub fn result_unwritable(path: &str, why: &str) -> String {
+    format!("the result could not be written to `{path}`: {why}")
+}
+
+/// The line a run over a seed file prints when its result went to a file.
+#[must_use]
+pub fn result_written(path: &str, seeds: usize, wins: usize) -> String {
+    format!("{seeds} seed(s) played, the arm the sole winner of {wins}; the result is in `{path}`.")
 }

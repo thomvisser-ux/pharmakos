@@ -42,7 +42,9 @@
 //! pointer — the same convention the verifier's diagnostic catalogue uses, so a
 //! scenario failure reads like every other failure in the project.
 
+pub mod nightly;
 pub mod run;
+pub mod seeds;
 
 use std::path::Path;
 
@@ -60,6 +62,19 @@ pub const SUFFIX: &str = ".scenario.jsonc";
 
 /// The rules table a scenario runs against when it does not name one.
 pub const DEFAULT_RULES: &str = "rules/rules.v1.json";
+
+/// Where the nightly adversarial arms live, as path components from the
+/// repository root (S2's plan, E20).
+///
+/// An arm is an ordinary scenario file with two differences, both read from
+/// where it lives rather than from a key, because the format gains no key for
+/// the nightlies: it carries **no `hash_chain_equals`**, since a nightly run
+/// replaces its map seed and no arm keeps a chain of its own; and it seats
+/// exactly one `playbook` seat, the arm, and one `builtin` seat, Easy, which a
+/// run over a seed file alternates between the two seats ([`nightly`]).
+/// `xtask/src/scenario.rs` holds the same rule, and its `collect_played` leaves
+/// these files out of every replay against a golden.
+pub const NIGHTLY_DIR: [&str; 2] = ["scenarios", "nightly"];
 
 /// The assertion vocabulary, in full.
 ///
@@ -230,8 +245,11 @@ pub struct Scenario {
     pub seats: Vec<Seat>,
     /// One or more segments, in order.
     pub segments: Vec<Segment>,
-    /// At least one assertion, and at least one of each kind.
+    /// At least one assertion, and at least one of each kind -- except for a
+    /// nightly arm, which asserts on events alone ([`NIGHTLY_DIR`]).
     pub assertions: Vec<Assertion>,
+    /// Whether the file is a nightly arm, under [`NIGHTLY_DIR`].
+    pub nightly: bool,
 }
 
 impl Scenario {
@@ -245,17 +263,18 @@ impl Scenario {
     }
 }
 
-/// Ticks in a segment of `length_ms` game milliseconds.
+/// Ticks in a segment of `length_ms` game milliseconds, rounded down.
 ///
-/// `checked_div` rather than `/`: `integer_division` is denied workspace-wide
-/// and this crate is not a walled one, so the rounding is written down. A
-/// length is validated positive before it gets here, and the tick length is a
-/// sim constant that is never zero, so the `unwrap_or` is unreachable rather
-/// than a default anybody relies on.
+/// The sim's own conversion ([`Ms::to_ticks_floor`]), so the rounding is
+/// written once in the tree rather than a second time here: an earlier
+/// version divided with `checked_div` and fell back to zero twice over, a
+/// silent fallback S2's sweep (E7) removed. A length is validated positive
+/// before it gets here.
+///
+/// [`Ms::to_ticks_floor`]: pharmakos_sim::math::quantity::Ms::to_ticks_floor
 #[must_use]
 pub fn ticks_of(length_ms: i32) -> u32 {
-    let per_tick = pharmakos_sim::math::quantity::MS_PER_TICK;
-    u32::try_from(length_ms.checked_div(per_tick).unwrap_or(0)).unwrap_or(0)
+    pharmakos_sim::math::quantity::Ms::new(length_ms).to_ticks_floor()
 }
 
 /// One problem with one place in the file.
@@ -322,7 +341,8 @@ pub fn load(root: &Path, source: &Path) -> Result<Scenario, Failure> {
             ))
         })?;
 
-    let scenario = read(root, &display, &json, &mut problems);
+    let nightly = is_nightly(root, source);
+    let scenario = read(root, &display, nightly, &json, &mut problems);
     if problems.0.is_empty() {
         return scenario.ok_or_else(|| {
             Failure::internal("a scenario with no problems did not come back read")
@@ -356,7 +376,33 @@ fn check_bytes(bytes: &[u8], problems: &mut Problems) {
     }
 }
 
-fn read(root: &Path, source: &str, json: &Json, problems: &mut Problems) -> Option<Scenario> {
+/// Whether `source` names a file under [`NIGHTLY_DIR`], read from the
+/// repository root. A path outside the root (a test's scratch copy) is not an
+/// arm.
+fn is_nightly(root: &Path, source: &Path) -> bool {
+    let relative = if source.is_absolute() {
+        match source.strip_prefix(root) {
+            Ok(relative) => relative,
+            Err(_) => return false,
+        }
+    } else {
+        source
+    };
+    let mut parts = relative
+        .components()
+        .filter(|part| !matches!(part, std::path::Component::CurDir));
+    NIGHTLY_DIR
+        .iter()
+        .all(|wanted| parts.next().is_some_and(|part| part.as_os_str() == *wanted))
+}
+
+fn read(
+    root: &Path,
+    source: &str,
+    nightly: bool,
+    json: &Json,
+    problems: &mut Problems,
+) -> Option<Scenario> {
     let Json::Object(members) = json else {
         problems.at("", "a scenario file is a JSON object");
         return None;
@@ -386,9 +432,12 @@ fn read(root: &Path, source: &str, json: &Json, problems: &mut Problems) -> Opti
     let (seed, generator) = read_map(json, problems);
     let rules = read_rules(root, json, problems);
     let seats = read_seats(root, json, problems);
+    if nightly {
+        check_arm_seats(&seats, problems);
+    }
     let segments = read_segments(json, problems);
     let (units_per_seat, round_limit) = read_match_settings(json, segments.len(), problems);
-    let assertions = read_assertions(root, json, problems);
+    let assertions = read_assertions(root, json, nightly, problems);
 
     Some(Scenario {
         source: source.to_owned(),
@@ -402,7 +451,29 @@ fn read(root: &Path, source: &str, json: &Json, problems: &mut Problems) -> Opti
         seats,
         segments,
         assertions,
+        nightly,
     })
+}
+
+/// A nightly arm seats one `playbook` seat and one `builtin` seat, in either
+/// order (E20; decision 29).
+fn check_arm_seats(seats: &[Seat], problems: &mut Problems) {
+    let playbooks = seats
+        .iter()
+        .filter(|seat| matches!(seat.kind, SeatKind::Playbook(_)))
+        .count();
+    let builtin = seats
+        .iter()
+        .filter(|seat| seat.kind == SeatKind::Builtin)
+        .count();
+    if seats.len() != 2 || playbooks != 1 || builtin != 1 {
+        problems.at(
+            "/seats",
+            "a nightly arm seats exactly two seats: one `playbook` seat, the arm, and one \
+             `builtin` seat, Easy, which a run over a seed file alternates between seat 0 and \
+             seat 1 (S2's plan, decision 29)",
+        );
+    }
 }
 
 fn read_map(json: &Json, problems: &mut Problems) -> (Option<u64>, Option<String>) {
@@ -484,9 +555,8 @@ fn read_seats(root: &Path, json: &Json, problems: &mut Problems) -> Vec<Seat> {
             continue;
         };
         unknown_keys(&base, members, SEAT_KEYS, problems);
-        let wanted = i64::try_from(index).unwrap_or(-1);
         match integer(seat.get("seat")) {
-            Some(Ok(number)) if number == wanted => {}
+            Some(Ok(number)) if usize::try_from(number).is_ok_and(|number| number == index) => {}
             Some(Ok(number)) => problems.at(
                 &format!("{base}/seat"),
                 format!(
@@ -543,10 +613,13 @@ fn read_seats(root: &Path, json: &Json, problems: &mut Problems) -> Vec<Seat> {
                 continue;
             }
         };
-        read.push(Seat {
-            seat: u8::try_from(index).unwrap_or(0),
-            kind,
-        });
+        // A file of more seats than a `u8` numbers has already been told it
+        // has too many; the seat past the range is not read at all rather
+        // than read as seat 0.
+        let Ok(seat) = u8::try_from(index) else {
+            continue;
+        };
+        read.push(Seat { seat, kind });
     }
     read
 }
@@ -567,9 +640,8 @@ fn read_segments(json: &Json, problems: &mut Problems) -> Vec<Segment> {
             continue;
         };
         unknown_keys(&base, members, SEGMENT_KEYS, problems);
-        let wanted = i64::try_from(index).unwrap_or(-1);
         match integer(segment.get("index")) {
-            Some(Ok(number)) if number == wanted => {}
+            Some(Ok(number)) if usize::try_from(number).is_ok_and(|number| number == index) => {}
             Some(Ok(number)) => problems.at(
                 &format!("{base}/index"),
                 format!("segments run in order from 0; expected {index}, found {number}"),
@@ -672,7 +744,12 @@ fn read_match_settings(json: &Json, segments: usize, problems: &mut Problems) ->
     (units_per_seat, round_limit.unwrap_or(default_limit))
 }
 
-fn read_assertions(root: &Path, json: &Json, problems: &mut Problems) -> Vec<Assertion> {
+fn read_assertions(
+    root: &Path,
+    json: &Json,
+    nightly: bool,
+    problems: &mut Problems,
+) -> Vec<Assertion> {
     let Some(Json::Array(assertions)) = json.get("assertions") else {
         problems.at(
             "/assertions",
@@ -723,55 +800,17 @@ fn read_assertions(root: &Path, json: &Json, problems: &mut Problems) -> Vec<Ass
                     read.push(fired);
                 }
             }
+            "hash_chain_equals" if nightly => problems.at(
+                &format!("{base}/assert"),
+                "a nightly arm carries no hash chain: a run over a seed file replaces its map \
+                 seed, so a chain for the file's own seed would pin a match the nightly never \
+                 plays (S2's plan, E20)",
+            ),
             "hash_chain_equals" => {
                 unknown_keys(&base, members, HASH_CHAIN_KEYS, problems);
                 on_hashes = true;
-                if let Some(Json::String(golden)) = assertion.get("golden") {
-                    // The chain need not exist yet: the task that first
-                    // drives the run commits it. Everything else about the
-                    // path is checked, because
-                    // `tests/golden/../../../etc/x.hashes.txt` satisfies
-                    // both the prefix and the suffix.
-                    check_path(root, &format!("{base}/golden"), golden, false, problems);
-                    // `tests/golden/scenarios/` and not merely `tests/golden/`,
-                    // which is where a review found this. The runner writes the
-                    // run's fresh chain to `<target>/golden/<area>/actual.…`
-                    // (`crate::actual_for`), so a scenario naming
-                    // `tests/golden/determinism/expected.hashes.txt` would
-                    // overwrite the determinism area's fresh output in the
-                    // shared target directory — the file
-                    // `crates/sim/tests/determinism.rs` writes and compares in
-                    // the same `cargo test` run. Nothing committed does it; a
-                    // scenario written next year would.
-                    //
-                    // Stricter than `xtask/src/scenario.rs`'s reader, in the
-                    // same direction as the `event_fired` name resolution above
-                    // and for the same reason: this is the thing that decides
-                    // whether a scenario passed, and `xtask` shells it.
-                    if !golden.starts_with("tests/golden/scenarios/") {
-                        problems.at(
-                            &format!("{base}/golden"),
-                            "a scenario's committed chain lives under \
-                                 `tests/golden/scenarios/<name>/`, where the `golden` step and \
-                                 `cargo xtask golden --bless` can see it and where it cannot \
-                                 collide with another area's fresh output",
-                        );
-                    }
-                    if !golden.ends_with(".hashes.txt") {
-                        problems.at(
-                            &format!("{base}/golden"),
-                            "a hash chain is named `expected.hashes.txt`, so that the format \
-                                 is readable from the name",
-                        );
-                    }
-                    read.push(Assertion::HashChainEquals {
-                        golden: golden.clone(),
-                    });
-                } else {
-                    problems.at(
-                        &format!("{base}/golden"),
-                        "required: the committed chain, as a path from the repository root",
-                    );
+                if let Some(chain) = read_hash_chain(root, assertion, &base, problems) {
+                    read.push(chain);
                 }
             }
             other => problems.at(
@@ -784,7 +823,14 @@ fn read_assertions(root: &Path, json: &Json, problems: &mut Problems) -> Vec<Ass
         }
     }
 
-    if !assertions.is_empty() && (!on_events || !on_hashes) {
+    if nightly && !assertions.is_empty() && !on_events {
+        problems.at(
+            "/assertions",
+            "a nightly arm asserts on events: its run on its own seed checks them, and it carries \
+             no hash chain (S2's plan, E20)",
+        );
+    }
+    if !nightly && !assertions.is_empty() && (!on_events || !on_hashes) {
         problems.at(
             "/assertions",
             "a scenario asserts on events AND on the hash chain (AGENTS.md §10 item 4): events \
@@ -793,6 +839,62 @@ fn read_assertions(root: &Path, json: &Json, problems: &mut Problems) -> Vec<Ass
         );
     }
     read
+}
+
+fn read_hash_chain(
+    root: &Path,
+    assertion: &Json,
+    base: &str,
+    problems: &mut Problems,
+) -> Option<Assertion> {
+    if let Some(Json::String(golden)) = assertion.get("golden") {
+        // The chain need not exist yet: the task that first
+        // drives the run commits it. Everything else about the
+        // path is checked, because
+        // `tests/golden/../../../etc/x.hashes.txt` satisfies
+        // both the prefix and the suffix.
+        check_path(root, &format!("{base}/golden"), golden, false, problems);
+        // `tests/golden/scenarios/` and not merely `tests/golden/`,
+        // which is where a review found this. The runner writes the
+        // run's fresh chain to `<target>/golden/<area>/actual.…`
+        // (`crate::actual_for`), so a scenario naming
+        // `tests/golden/determinism/expected.hashes.txt` would
+        // overwrite the determinism area's fresh output in the
+        // shared target directory — the file
+        // `crates/sim/tests/determinism.rs` writes and compares in
+        // the same `cargo test` run. Nothing committed does it; a
+        // scenario written next year would.
+        //
+        // Stricter than `xtask/src/scenario.rs`'s reader, in the
+        // same direction as the `event_fired` name resolution above
+        // and for the same reason: this is the thing that decides
+        // whether a scenario passed, and `xtask` shells it.
+        if !golden.starts_with("tests/golden/scenarios/") {
+            problems.at(
+                &format!("{base}/golden"),
+                "a scenario's committed chain lives under \
+                     `tests/golden/scenarios/<name>/`, where the `golden` step and \
+                     `cargo xtask golden --bless` can see it and where it cannot \
+                     collide with another area's fresh output",
+            );
+        }
+        if !golden.ends_with(".hashes.txt") {
+            problems.at(
+                &format!("{base}/golden"),
+                "a hash chain is named `expected.hashes.txt`, so that the format \
+                     is readable from the name",
+            );
+        }
+        Some(Assertion::HashChainEquals {
+            golden: golden.clone(),
+        })
+    } else {
+        problems.at(
+            &format!("{base}/golden"),
+            "required: the committed chain, as a path from the repository root",
+        );
+        None
+    }
 }
 
 fn read_event_fired(assertion: &Json, base: &str, problems: &mut Problems) -> Option<Assertion> {
