@@ -53,6 +53,8 @@
 //! reduced by the radius at the far end, and by the radius the commander may
 //! have stopped short of the near end by, before the octile sum.
 
+use core::num::NonZeroU64;
+
 use pharmakos_proto::gp::v1::Voxel;
 use pharmakos_sim::math::quantity::{Ms, TICK_HZ};
 use pharmakos_sim::rules::RulesTable;
@@ -64,7 +66,9 @@ use crate::limits::RulesGap;
 pub struct Walk {
     cardinal: i64,
     diagonal: i64,
-    cost_per_second: i64,
+    /// Positive by construction, so the bound divides by it without a case
+    /// for zero.
+    cost_per_second: NonZeroU64,
     arrive_radius: i64,
     interface_range: i64,
 }
@@ -98,13 +102,15 @@ impl Walk {
         let cardinal = non_negative("locomotion.step_cost_cardinal", rules.step_cardinal())?;
         let diagonal = non_negative("locomotion.step_cost_diagonal", rules.step_diagonal())?;
         non_negative("locomotion.climb_surcharge", rules.climb_surcharge())?;
-        let cost_per_second = i64::from(rules.commander_cost_per_second());
-        if cost_per_second <= 0 {
-            return Err(RulesGap::NotPositive {
-                field: "commander.cost_per_second",
-                value: cost_per_second,
-            });
-        }
+        let speed = i64::from(rules.commander_cost_per_second());
+        let cost_per_second =
+            u64::try_from(speed)
+                .ok()
+                .and_then(NonZeroU64::new)
+                .ok_or(RulesGap::NotPositive {
+                    field: "commander.cost_per_second",
+                    value: speed,
+                })?;
         Ok(Walk {
             cardinal,
             diagonal,
@@ -160,10 +166,21 @@ impl Walk {
         // carry less than one tick's speed in from the leg before, so it
         // arrives no sooner than tick `floor(cost * TICK_HZ / speed)` (the
         // module doc, "Why down").
-        let ticks = cost
-            .saturating_mul(i64::from(TICK_HZ))
-            .checked_div(self.cost_per_second)
-            .unwrap_or(i64::MAX);
+        //
+        // Every term above is non-negative (each axis is floored at zero and
+        // `from_rules` refuses a negative step cost), so `unsigned_abs` is the
+        // value itself, and the division is by a speed that cannot be zero.
+        // The floor is the point ("Why down"), and the standard library's
+        // division by a `NonZeroU64` is the one that cannot panic, so it is
+        // named rather than written with `/`.
+        let ticks = core::ops::Div::div(
+            cost.unsigned_abs().saturating_mul(u64::from(TICK_HZ)),
+            self.cost_per_second,
+        );
+        // A bound past `u32::MAX` ticks (about seven years of game time) is
+        // lowered to it, and a lower bound lowered is still a lower bound: the
+        // one direction this figure may ever err in (the module doc, "Why
+        // down"). No leg on a map reaches it.
         Ms::from_ticks(u32::try_from(ticks).unwrap_or(u32::MAX))
     }
 }

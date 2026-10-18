@@ -10,10 +10,10 @@
       "beginner": "This playbook spends more than the seat is likely to have."
     }
   ],
-  "report_hash": "HUZW4TA96kk=",
+  "report_hash": "fiZjkSmpKrM=",
   "rules_hash": "gCjUE4Tm3i8=",
   "plan_fingerprint": "1YIySXchqG0=",
-  "verifier_version": "0.1.0-s1",
+  "verifier_version": "0.1.0-s2",
   "size_units": 3,
   "size_budget": 128
 }

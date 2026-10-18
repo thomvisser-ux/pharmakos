@@ -752,7 +752,7 @@ gp.v1.Playbook.Kind
 
 ## Diagnostics
 
-71 codes. A code is language-neutral, append-only and never
+83 codes. A code is language-neutral, append-only and never
 reused; only an ERROR stops a playbook qualifying. `none at the skeleton` names the
 task that owes the emitter, which is honesty about coverage rather than a gap.
 
@@ -770,7 +770,7 @@ E0003  ERROR  decode and version  raised at: decode
   This is a word the game keeps for later. It is refused rather than quietly ignored, so nothing you wrote disappears without you seeing it.
 
 E0004  ERROR  decode and version  raised at: decode
-  schema version {found} is not supported; this build speaks {supported}.
+  the schema version is {found}, and this build speaks {supported}.
   The file says it was written for a different version of the game.
 
 E0005  ERROR  decode and version  raised at: decode
@@ -788,6 +788,46 @@ E0007  ERROR  decode and version  raised at: decode
 E0008  WARNING  decode and version  raised at: decode
   the recorded fingerprint does not match these bytes; the verifier has recomputed it.
   The stamp on this file was out of date. It has been worked out again for you.
+
+E0009  ERROR  decode and version  raised at: structure
+  a `queue_structure` row has no effect until S4, with the capability catalogue and its licences; it is refused rather than ignored.
+  Queuing a capability building comes later in the game. Nothing you wrote is dropped: take the row out yourself.
+
+E0010  ERROR  decode and version  raised at: structure
+  a Build target names `{id}`; only `generator` can be built until S4, with the capability catalogue and its licences.
+  Generators are the only buildings a Build beacon can make for now.
+
+E0011  ERROR  decode and version  raised at: structure
+  a Build target is anchored on `{arm}`; until S3 a target stands on a voxel or `on` a vent.
+  A building is placed on a spot on the map, not on whichever beacon a selector picks. Pick the spot.
+
+E0012  ERROR  decode and version  raised at: structure
+  Defend mandate settings have no effect until S2's Defend mandate lands; they are refused rather than ignored.
+  A Defend beacon cannot be given settings in this build yet.
+
+E0013  ERROR  decode and version  raised at: structure
+  Attack mandate settings have no effect until S2's Attack mandate lands; they are refused rather than ignored.
+  An Attack beacon cannot be given settings in this build yet.
+
+E0014  ERROR  decode and version  raised at: structure
+  selector `most_threatened` has no effect until S2's threat model, which is what it ranks by; it is refused rather than ignored.
+  "Most threatened" needs threats to weigh, and this build has none yet. Name the beacon, or pick it another way.
+
+E0015  ERROR  decode and version  raised at: structure
+  selector filter `side: ENEMY_KNOWN` has no effect until S3, with the seat's knowledge store; it is refused rather than ignored.
+  Picking among enemy beacons comes later. For now a selector picks among your own.
+
+E0016  ERROR  decode and version  raised at: structure
+  selector filter `tags` has no effect until S3: a beacon has no tag column to read yet, so writing tags is legal and filtering on them is not.
+  Tags on a beacon are kept, but nothing can pick a beacon by its tags yet.
+
+E0017  ERROR  decode and version  raised at: structure
+  predicate `beacon_under_attack` has no effect until S2's combat gives a beacon a damage history to ask about; it is refused rather than read as true or false.
+  Asking whether a beacon is under attack comes with combat. Until then the question has no answer, so it cannot be asked.
+
+E0018  ERROR  decode and version  raised at: decode
+  `{field}` carries {value}, which is not a value this build names; it is refused rather than read as a default.
+  This setting holds a number the game does not know. Nothing is guessed for you: write one of the setting's names instead.
 
 E0101  ERROR  limits and required blocks  raised at: structure
   {what} is required and is missing.
@@ -973,6 +1013,10 @@ E0507  ERROR  settings and recycle  raised at: none at the skeleton (S4, with li
   `{id}` needs a licence this seat does not hold.
   The seat has not earned the right to build this yet.
 
+E0508  ERROR  settings and recycle  raised at: semantics
+  `scout_count` is {found}; a beacon holds at most {most} scouts.
+  A Survey beacon can field only so many scouts. Ask for fewer.
+
 W0501  WARNING  settings and recycle  raised at: semantics
   `seam_choice` SAFEST reads as NEAREST until S2's threat model arrives.
   "Safest" needs threats to weigh, and they come later. Until then this beacon digs the nearest seam.
@@ -984,6 +1028,10 @@ E0601  ERROR  economy, power and messaging  raised at: estimate
 E0602  ERROR  economy, power and messaging  raised at: none at the skeleton (S4, with radio)
   a broadcast needs a Radio Mast, and coverage at the place it is sent from.
   Nothing can be sent without a mast.
+
+E0603  ERROR  economy, power and messaging  raised at: estimate
+  the route orders up to {found}, past what the Ledger can price a seal at ({most}); order less in one playbook.
+  This playbook asks for more than a seal can hold. The game would refuse it when you submit, so it is refused here first.
 
 W0601  WARNING  economy, power and messaging  raised at: estimate
   the grid is already {found} kW short.
@@ -1009,7 +1057,7 @@ W0702  WARNING  schedule, conflicts and staleness  raised at: none at the skelet
   `{id}` can never fire: `{winner}` is earlier and its condition is true first.
   An earlier rule always wins, so this one never gets a turn.
 
-W0703  WARNING  schedule, conflicts and staleness  raised at: none at the skeleton (S2/S3, with the reach window)
+W0703  WARNING  schedule, conflicts and staleness  raised at: none at the skeleton (S3, with the reach window)
   the sighting this rests on is {found} ms old; the reach window is {max} ms.
   What the seat remembers here may be too old to act on.
 

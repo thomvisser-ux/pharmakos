@@ -1,0 +1,19 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0010",
+      "severity": "ERROR",
+      "path": "/declarative/route/0/interface/rows/0/add_build_target/target/blueprint_id",
+      "message": "a Build target names `autocannon`; only `generator` can be built until S4, with the capability catalogue and its licences.",
+      "beginner": "Generators are the only buildings a Build beacon can make for now."
+    }
+  ],
+  "report_hash": "H7TRAJocE1I=",
+  "rules_hash": "gCjUE4Tm3i8=",
+  "plan_fingerprint": "dDLQOITWNok=",
+  "verifier_version": "0.1.0-s2",
+  "size_units": 2,
+  "size_budget": 128
+}
+

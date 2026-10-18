@@ -116,7 +116,7 @@ pub(crate) fn run(playbook: &Playbook, limits: &Limits, out: &mut Builder) {
     }
 
     if let Some(on_death) = playbook.on_death.as_ref()
-        && on_death.on_respawn() == OnRespawn::Unspecified
+        && on_death.on_respawn == i32::from(OnRespawn::Unspecified)
     {
         out.emit(
             Diag::new("E0111", "/on_death/on_respawn")
@@ -401,7 +401,7 @@ enum Arm<'a> {
 impl Visit for Sites<'_> {
     fn entry(&mut self, at: &str, entry: &Step, _list: List, _index: usize) {
         if let Some(step::Kind::Move(walk_to)) = entry.kind.as_ref()
-            && walk_to.pace() == Pace::Unspecified
+            && walk_to.pace == i32::from(Pace::Unspecified)
         {
             self.default_note(&pointer::child(at, "move"), "pace", "DIRECT", true);
         }
@@ -450,7 +450,7 @@ impl Visit for Sites<'_> {
         match settings.mandate.as_ref() {
             Some(mandate_settings::Mandate::Mine(mine)) => {
                 let here = pointer::child(at, "mine");
-                if mine.seam_choice() == SeamChoice::Unspecified {
+                if mine.seam_choice == i32::from(SeamChoice::Unspecified) {
                     self.default_note(&here, "seam_choice", "NEAREST", true);
                 }
                 if mine.pillar_spacing == 0 {
@@ -460,7 +460,7 @@ impl Visit for Sites<'_> {
                 }
             }
             Some(mandate_settings::Mandate::Build(build))
-                if build.terraform() == Terraform::Unspecified =>
+                if build.terraform == i32::from(Terraform::Unspecified) =>
             {
                 self.default_note(&pointer::child(at, "build"), "terraform", "NONE", true);
             }
@@ -487,12 +487,12 @@ impl Sites<'_> {
                 }
                 return;
             }
-            feature_ref::Ref::Vent(pick) => (pick.rank(), pick.coverage()),
-            feature_ref::Ref::Seam(pick) => (pick.rank(), pick.coverage()),
+            feature_ref::Ref::Vent(pick) => (pick.rank, pick.coverage),
+            feature_ref::Ref::Seam(pick) => (pick.rank, pick.coverage),
         };
         let here = pointer::child(at, arm_name(chosen));
         let (rank, coverage) = pick;
-        if rank == Rank::Unspecified {
+        if rank == i32::from(Rank::Unspecified) {
             self.out.emit(
                 Diag::new("E0111", pointer::child(&here, "rank"))
                     .arg("field", "rank")
@@ -508,7 +508,7 @@ impl Sites<'_> {
             );
         }
         match arm {
-            Arm::Covering if coverage == Coverage::Unspecified => self.out.emit(
+            Arm::Covering if coverage == i32::from(Coverage::Unspecified) => self.out.emit(
                 Diag::new("E0111", pointer::child(&here, "coverage"))
                     .arg("field", "coverage")
                     .fix(
@@ -520,7 +520,7 @@ impl Sites<'_> {
                         Applicability::MaybeIncorrect,
                     ),
             ),
-            Arm::On { .. } if coverage != Coverage::Unspecified => {
+            Arm::On { .. } if coverage != i32::from(Coverage::Unspecified) => {
                 self.out
                     .emit(Diag::new("E0411", pointer::child(&here, "coverage")).fix(
                         strings::FIX_DROP_COVERAGE,
@@ -584,7 +584,7 @@ fn walk_handler(handler: &Handler, at: &str, limits: &Limits, out: &mut Builder)
         Some(when) => walk_condition_root(when, &pointer::child(at, "when"), out),
     }
     firing_limits(handler, at, limits, out);
-    if handler.resume() == Resume::Unspecified {
+    if handler.resume == i32::from(Resume::Unspecified) {
         out.emit(
             Diag::new("E0111", pointer::child(at, "resume"))
                 .arg("field", "resume")

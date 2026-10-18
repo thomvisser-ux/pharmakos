@@ -1,5 +1,4 @@
 {
-  "qualifies": true,
   "depth": "FULL",
   "diagnostics": [
     {
@@ -15,6 +14,20 @@
           "applicability": "MACHINE_APPLICABLE"
         }
       ]
+    },
+    {
+      "code": "E0015",
+      "severity": "ERROR",
+      "path": "/declarative/route/0/move/to/beacon_anchor/nearest/filter/side",
+      "message": "selector filter `side: ENEMY_KNOWN` has no effect until S3, with the seat's knowledge store; it is refused rather than ignored.",
+      "beginner": "Picking among enemy beacons comes later. For now a selector picks among your own."
+    },
+    {
+      "code": "E0016",
+      "severity": "ERROR",
+      "path": "/declarative/route/0/move/to/beacon_anchor/nearest/filter/tags",
+      "message": "selector filter `tags` has no effect until S3: a beacon has no tag column to read yet, so writing tags is legal and filtering on them is not.",
+      "beginner": "Tags on a beacon are kept, but nothing can pick a beacon by its tags yet."
     },
     {
       "code": "E0404",
@@ -34,10 +47,10 @@
       ]
     }
   ],
-  "report_hash": "CV/jVGghwr8=",
+  "report_hash": "smhXYpko3/s=",
   "rules_hash": "gCjUE4Tm3i8=",
   "plan_fingerprint": "xVJqfV5ZLUk=",
-  "verifier_version": "0.1.0-s1",
+  "verifier_version": "0.1.0-s2",
   "size_units": 1,
   "size_budget": 128
 }

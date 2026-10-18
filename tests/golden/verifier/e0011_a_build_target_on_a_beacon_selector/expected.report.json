@@ -1,0 +1,33 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "I0003",
+      "severity": "INFO",
+      "path": "/declarative/route/0/place_beacon/initial/mandate/build/terraform",
+      "message": "`terraform` is omitted and reads as NONE.",
+      "beginner": "A setting left out takes its named default.",
+      "suggestions": [
+        {
+          "title": "Write the default out",
+          "json_patch": "[{\"op\":\"add\",\"path\":\"/declarative/route/0/place_beacon/initial/mandate/build/terraform\",\"value\":\"NONE\"}]",
+          "applicability": "MACHINE_APPLICABLE"
+        }
+      ]
+    },
+    {
+      "code": "E0011",
+      "severity": "ERROR",
+      "path": "/declarative/route/0/place_beacon/initial/mandate/build/targets/0/anchor/beacon_anchor",
+      "message": "a Build target is anchored on `beacon_anchor`; until S3 a target stands on a voxel or `on` a vent.",
+      "beginner": "A building is placed on a spot on the map, not on whichever beacon a selector picks. Pick the spot."
+    }
+  ],
+  "report_hash": "xEXFsb5aC7E=",
+  "rules_hash": "gCjUE4Tm3i8=",
+  "plan_fingerprint": "2DRyFKcosIU=",
+  "verifier_version": "0.1.0-s2",
+  "size_units": 2,
+  "size_budget": 128
+}
+

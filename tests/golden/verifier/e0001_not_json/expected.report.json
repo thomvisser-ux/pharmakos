@@ -9,9 +9,9 @@
       "beginner": "This file is not a playbook the game can read. The message says where reading stopped."
     }
   ],
-  "report_hash": "p4wcYlF2w5o=",
+  "report_hash": "LBI8rGwpVFI=",
   "rules_hash": "gCjUE4Tm3i8=",
-  "verifier_version": "0.1.0-s1",
+  "verifier_version": "0.1.0-s2",
   "size_budget": 128
 }
 
