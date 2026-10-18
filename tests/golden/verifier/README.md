@@ -218,3 +218,9 @@ cargo xtask golden --bless              # accepts them
   was checked by running the goldens under the old version string: no
   `report_hash` moved. `full_finds_what_quick_finds` holds in its S2 form: the
   errors FULL may add are `E0601` and `E0603`.
+  Its review's fix pass added `E0018` (an enum number this build does not
+  name, read raw rather than through prost's getter, which would answer the
+  default) with its case `e0018_an_enum_number_this_build_does_not_name`, and
+  `E0004`'s message now says a missing `schema_version` is missing rather
+  than "0.0" (`e0004_no_schema_version`); of the committed reports only
+  `e0004_unsupported_version`'s message moved, and no `report_hash` did.

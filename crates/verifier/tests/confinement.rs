@@ -378,19 +378,46 @@ fn the_verifier_never_ranks() {
 /// The fallbacks that stay, each with the rule that makes its answer exact
 /// (S2's plan, engineering call E7, swept for this crate by task `vfy1`).
 ///
-/// `(file, the line's code, why)`. A conversion that could fail by
-/// construction was rewritten so the failure cannot be written (the map size
-/// read as an array, the template filled by splitting at its braces, the
-/// walking bound dividing by a speed that cannot be zero, the vent and its
-/// covering beacon read in one pattern), and one that a host could reach
-/// returns a typed error (`report_hash`'s length prefixes, `HashError`).
-/// What is left saturates where saturating cannot change the answer.
+/// `(file, the line's code, why)`. The scan below finds **every** fallback
+/// call in the shipped code (`unwrap_or`, `unwrap_or_default`,
+/// `unwrap_or_else`, `map_or`, `map_or_else`), not only the two patterns E7
+/// counted, so each default the crate reads in place of a value is either
+/// rewritten or written down here with its reason. Rewritten so the failure
+/// cannot be written: the map size read as an array, the template filled by
+/// splitting at its braces, the walking bound dividing by a speed that cannot
+/// be zero, the vent and its covering beacon read in one pattern, the decoder's
+/// unknown-field name read with the field test, and the schema version read as
+/// present or missing. Typed instead: `report_hash`'s length prefixes
+/// (`HashError`).
 const KEPT_FALLBACKS: &[(&str, &str, &str)] = &[
+    (
+        "catalogue.rs",
+        "strings::text(self.code).map_or(\"\", |row| row.message)",
+        "unreachable: `the_two_tables_name_the_same_codes` holds every catalogue code to a \
+         string row, and the catalogue golden pins both",
+    ),
+    (
+        "catalogue.rs",
+        "strings::text(self.code).map_or(\"\", |row| row.beginner)",
+        "unreachable, as the message above",
+    ),
+    (
+        "estimate.rs",
+        "let at = first.unwrap_or_else(|| ROUTE.to_owned());",
+        "only a pointer: a refused projection always has a first step, and were it ever not \
+         so, E0603 is still raised, at the route",
+    ),
     (
         "interface.rs",
         "let extra = i32::try_from(fields.saturating_sub(1)).unwrap_or(i32::MAX);",
         "spec section 5's cap: the edit is min(base + per-field x extra, max), so an extra \
          past i32 prices at the cap, exactly as the true count would",
+    ),
+    (
+        "interface.rs",
+        ".unwrap_or_default(),",
+        "an absent `initial` is proto3's empty message: it writes no row, which is what an \
+         empty row list says",
     ),
     (
         "interface.rs",
@@ -405,10 +432,49 @@ const KEPT_FALLBACKS: &[(&str, &str, &str)] = &[
          a count past u32 prices the same",
     ),
     (
+        "interface.rs",
+        "playbook.declarative.as_ref().map_or(Ms::ZERO, |body| {",
+        "a playbook with no declarative block has no route, so it stands at no beacon; the \
+         block's absence is E0101's",
+    ),
+    (
+        "report.rs",
+        "catalogue::entry(diag.code).map_or(Severity::Error, |row| row.severity);",
+        "unreachable: `nothing_outside_the_catalogue_is_ever_emitted` holds every emitted code \
+         to a row, and an unknown code would refuse rather than pass",
+    ),
+    (
+        "size.rs",
+        "initial.mandate.as_ref().map_or(0, mandate_units)",
+        "an absent mandate block holds no Build target or area, so it occupies no unit (item \
+         94's unit list)",
+    ),
+    (
         "size.rs",
         "u32::try_from(len).unwrap_or(u32::MAX)",
         "the size meter is compared with a u32 budget row, so a saturated count fires E0110 as \
          the true one would; inside verify the input's u32 byte length bounds it",
+    ),
+    (
+        "structure.rs",
+        "Some(condition::Node::All(all)) => all.items.iter().map(tree_depth).max().unwrap_or(0),",
+        "an empty group nests nothing below it, so it adds no depth; the empty group itself is \
+         E0203's",
+    ),
+    (
+        "structure.rs",
+        "Some(condition::Node::Any(any)) => any.items.iter().map(tree_depth).max().unwrap_or(0),",
+        "as an empty `all`, above",
+    ),
+    (
+        "structure.rs",
+        "Some(condition::Node::Not(not)) => not.item.as_deref().map_or(0, tree_depth),",
+        "a `not` with no item nests nothing; the missing item is E0101's",
+    ),
+    (
+        "structure.rs",
+        "Some(condition::Node::Not(not)) => not.item.as_deref().map_or(0, tree_nodes),",
+        "a `not` with no item holds no node below it; the missing item is E0101's",
     ),
     (
         "walking.rs",
@@ -418,12 +484,9 @@ const KEPT_FALLBACKS: &[(&str, &str, &str)] = &[
     ),
 ];
 
-/// Every `try_from(..).unwrap_or(..)` and `.get(..)…unwrap_or(..)` in the
-/// crate's shipped code, as `(file name, the line holding the unwrap)`.
-///
-/// A statement is read back from its `unwrap_or` line to the line that ends
-/// the statement before it, so a chain written over several lines is one
-/// finding. `.first()` and `.last()` count as `.get`.
+/// Every fallback call in the crate's shipped code, as `(file name, the
+/// line)`: `unwrap_or` (and so `unwrap_or_default` and `unwrap_or_else`),
+/// `map_or` and `map_or_else`.
 fn fallbacks() -> Vec<(String, String)> {
     let mut found: Vec<(String, String)> = Vec::new();
     for path in sources() {
@@ -434,29 +497,11 @@ fn fallbacks() -> Vec<(String, String)> {
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default();
-        let lines = code_lines(&text);
-        for (index, (_, line)) in lines.iter().enumerate() {
-            if !line.contains("unwrap_or") {
-                continue;
-            }
-            let mut statement = line.clone();
-            let mut back = index;
-            while back > 0 {
-                back -= 1;
-                let Some((_, earlier)) = lines.get(back) else {
-                    break;
-                };
-                let end = earlier.trim_end();
-                if end.ends_with(';') || end.ends_with('{') || end.ends_with('}') {
-                    break;
-                }
-                statement.insert_str(0, earlier);
-            }
-            let converts = statement.contains("try_from(");
-            let reads = statement.contains(".get(")
-                || statement.contains(".first()")
-                || statement.contains(".last()");
-            if converts || reads {
+        for (_, line) in code_lines(&text) {
+            if line.contains("unwrap_or")
+                || line.contains("map_or(")
+                || line.contains("map_or_else(")
+            {
                 found.push((name.clone(), line.trim().to_owned()));
             }
         }
@@ -478,9 +523,9 @@ fn no_silent_fallback_is_left() {
     }
     assert!(
         unexplained.is_empty(),
-        "a conversion or a read falls back to a value instead of saying what went wrong. \
-         Return a typed error, make the failure unrepresentable, or, where saturating is a rule \
-         that leaves the answer exact, add the line to KEPT_FALLBACKS with that rule:\n{}",
+        "a value falls back to a default instead of saying what went wrong. Return a typed \
+         error, make the failure unrepresentable, or, where the default is a rule that leaves \
+         the answer exact, add the line to KEPT_FALLBACKS with that rule:\n{}",
         unexplained.join("\n")
     );
     for (file, code, why) in KEPT_FALLBACKS {
@@ -499,9 +544,16 @@ fn no_silent_fallback_is_left() {
 
 #[test]
 fn the_fallback_scan_finds_what_it_looks_for() {
-    // The scan must see a kept fallback, or every assertion above passes over
-    // nothing.
+    // The scan must see the kept fallbacks, or every assertion above passes
+    // over nothing.
     let found = fallbacks();
+    assert_eq!(
+        found.len(),
+        KEPT_FALLBACKS.len(),
+        "the fallback scan sees {} lines and the list keeps {}",
+        found.len(),
+        KEPT_FALLBACKS.len()
+    );
     assert!(
         found.iter().any(|(file, _)| file == "walking.rs"),
         "the fallback scan no longer sees walking.rs' kept conversion"

@@ -33,8 +33,10 @@
 //!
 //! * a `broadcast`'s place is not compiled at all (radio is S4's), so nothing
 //!   under one is judged;
-//! * a selector's filter under `most_threatened` is never compiled, because
-//!   the selector is refused first, so it is not judged either;
+//! * a selector's filter under `most_threatened`, the beacon of a
+//!   `beacon_under_attack` predicate and the selector in a Build target's
+//!   `beacon_anchor` are never compiled, because the construct around them is
+//!   refused first, so they are not judged either;
 //! * a `set_mandate` row whose Defend or Attack arm is empty writes nothing the
 //!   sim refuses (`compile_switch_settings`): only an arm in a
 //!   `set_mandate_settings` row, a `place_beacon`'s `initial`, or a non-empty
@@ -102,11 +104,22 @@ struct Refusals<'a> {
     out: &'a mut Builder,
 }
 
-/// Whether a pointer lies under a `broadcast` step, whose place the sim never
-/// compiles. A pointer token is a field name or an index, and `broadcast` is a
-/// field name only of `Step`, so the segment is unambiguous.
-fn under_broadcast(at: &str) -> bool {
+/// Whether a pointer lies where the sim's compile never reads a selector, so
+/// that nothing there is judged:
+///
+/// * under a `broadcast` step, whose place the sim never compiles;
+/// * under `beacon_under_attack`, which the sim refuses before it reads the
+///   predicate's beacon;
+/// * under a Build target's (or a removal's) `beacon_anchor`, which the sim
+///   refuses before it reads the selector in it.
+///
+/// A pointer token is a field name or an index, and each of `broadcast`,
+/// `beacon_under_attack` and the pair `anchor`/`beacon_anchor` names exactly
+/// one place in `gp.v1`, so the segments are unambiguous.
+fn not_compiled(at: &str) -> bool {
     at.contains("/broadcast/")
+        || at.contains("/beacon_under_attack/")
+        || at.contains("/anchor/beacon_anchor")
 }
 
 impl Visit for Refusals<'_> {
@@ -172,7 +185,7 @@ impl Visit for Refusals<'_> {
     }
 
     fn beacon(&mut self, at: &str, reference: &BeaconRef) {
-        if under_broadcast(at) {
+        if not_compiled(at) {
             return;
         }
         if let Some(beacon_ref::Ref::MostThreatened(_)) = reference.r#ref.as_ref() {
@@ -183,11 +196,12 @@ impl Visit for Refusals<'_> {
 
     fn filter(&mut self, at: &str, filter: &BeaconFilter) {
         // Under `most_threatened` the sim refuses the selector before it reads
-        // the filter, and under a broadcast it reads neither.
-        if under_broadcast(at) || at.ends_with("/most_threatened/filter") {
+        // the filter, and in the places `not_compiled` names it reads neither.
+        if not_compiled(at) || at.ends_with("/most_threatened/filter") {
             return;
         }
-        if filter.side() == Side::EnemyKnown {
+        // Read raw: a number `Side` does not name is `E0018`'s, never `OWN`.
+        if Side::try_from(filter.side) == Ok(Side::EnemyKnown) {
             self.out
                 .emit(Diag::new("E0015", pointer::child(at, "side")));
         }

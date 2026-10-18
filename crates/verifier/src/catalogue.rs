@@ -28,7 +28,8 @@
 //! task fills the estimate stage: `E0601`, `W0601` to `W0603`, `W0701` and
 //! `I0001`, each a number the table already held. S2's first verifier lane
 //! (task `vfy1`) adds `E0009` to `E0017` at the end of the decode family, one
-//! per construct the sim refuses at the seal ([`crate::refusals`]), `E0508`
+//! per construct the sim refuses at the seal ([`crate::refusals`]), `E0018`
+//! (an enum number this build does not name, [`crate::enums`]), `E0508`
 //! (a `scout_count` past a beacon's byte) and `E0603` (a seal the Ledger
 //! cannot price).
 //!
@@ -345,6 +346,15 @@ pub const CATALOGUE: &[Entry] = &[
         family: Family::DecodeAndVersion,
         severity: Severity::Error,
         emitter: Emitter::Stage(Stage::Structure),
+    },
+    // An enum carrying a number this build does not name, read raw rather
+    // than through prost's getter, which would answer the default
+    // (`crate::enums`).
+    Entry {
+        code: "E0018",
+        family: Family::DecodeAndVersion,
+        severity: Severity::Error,
+        emitter: Emitter::Stage(Stage::Decode),
     },
     // --- E01xx: limits and required blocks -----------------------------------
     Entry {

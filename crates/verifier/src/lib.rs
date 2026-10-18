@@ -129,6 +129,7 @@ pub mod strings;
 pub mod walking;
 
 mod decode;
+mod enums;
 mod estimate;
 mod lint;
 mod pointer;
@@ -169,7 +170,8 @@ pub use walking::Walk;
 /// estimate stage (task `proj`): a FULL report from that build found what the
 /// skeleton's empty stage could not. `0.1.0-s2` from S2's first verifier lane
 /// (task `vfy1`): this build refuses, by a code of its own, every construct
-/// the sim refuses at the seal (`E0009` to `E0017`, the plan's E8), a
+/// the sim refuses at the seal (`E0009` to `E0017`, the plan's E8), an
+/// enum number this build does not name (`E0018`), a
 /// `scout_count` past a beacon's byte (`E0508`) and a seal the Ledger cannot
 /// price (`E0603`), so its reports are not comparable with S1's either.
 pub const VERIFIER_VERSION: &str = "0.1.0-s2";

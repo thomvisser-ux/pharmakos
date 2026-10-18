@@ -591,7 +591,8 @@ fn full_finds_what_quick_finds() {
             if extra.severity == i32::from(Severity::Error) {
                 assert!(
                     extra.code == "E0601" || extra.code == "E0603",
-                    "{case}: FULL added `{}`, an error other than added draw beyond supply or a                      seal the Ledger cannot price",
+                    "{case}: FULL added `{}`, an error other than added draw beyond supply or a \
+                     seal the Ledger cannot price",
                     extra.code
                 );
                 refused = true;

@@ -72,7 +72,7 @@ pub const VERIFIER_STRINGS: &[Text] = &[
     },
     Text {
         code: "E0004",
-        message: "schema version {found} is not supported; this build speaks {supported}.",
+        message: "the schema version is {found}, and this build speaks {supported}.",
         beginner: "The file says it was written for a different version of the game.",
     },
     Text {
@@ -159,6 +159,13 @@ pub const VERIFIER_STRINGS: &[Text] = &[
                   a damage history to ask about; it is refused rather than read as true or false.",
         beginner: "Asking whether a beacon is under attack comes with combat. Until then the \
                    question has no answer, so it cannot be asked.",
+    },
+    Text {
+        code: "E0018",
+        message: "`{field}` carries {value}, which is not a value this build names; it is refused \
+                  rather than read as a default.",
+        beginner: "This setting holds a number the game does not know. Nothing is guessed for \
+                   you: write one of the setting's names instead.",
     },
     // --- E01xx: limits and required blocks -----------------------------------
     Text {
