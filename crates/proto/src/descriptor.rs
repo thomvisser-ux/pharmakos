@@ -350,9 +350,9 @@ fn parse_message(bytes: &[u8], scope: &str, schema: &mut Schema) -> Result<(), W
             (8, Value::Delimited(payload)) => message.oneofs.push(oneof_name(payload)?),
             (9, Value::Delimited(payload)) => {
                 // DescriptorProto.ReservedRange's end is EXCLUSIVE.
-                let (start, end) = range(payload)?;
-                let last = end.checked_sub(1).ok_or(WireError::OutOfRange)?;
-                message.reserved_ranges.push((start, last));
+                message
+                    .reserved_ranges
+                    .push(message_reserved_range(payload)?);
             }
             (10, Value::Delimited(payload)) => message.reserved_names.push(utf8(payload)?),
             _ => {}
@@ -444,7 +444,7 @@ fn parse_enum(bytes: &[u8], scope: &str) -> Result<Enum, WireError> {
             (2, Value::Delimited(payload)) => value_payloads.push(payload),
             (4, Value::Delimited(payload)) => {
                 // EnumReservedRange's end is INCLUSIVE, unlike a message's.
-                parsed.reserved_ranges.push(range(payload)?);
+                parsed.reserved_ranges.push(enum_reserved_range(payload)?);
             }
             (5, Value::Delimited(payload)) => parsed.reserved_names.push(utf8(payload)?),
             _ => {}
@@ -494,6 +494,31 @@ fn oneof_name(bytes: &[u8]) -> Result<String, WireError> {
     Ok(String::new())
 }
 
+/// A message's reserved range, as the inclusive pair the schema keeps.
+/// `DescriptorProto.ReservedRange`'s end is EXCLUSIVE; a range that ends
+/// before it starts, or holds no number, is a corrupt descriptor.
+fn message_reserved_range(bytes: &[u8]) -> Result<(i32, i32), WireError> {
+    let (start, end) = range(bytes)?;
+    let last = end.checked_sub(1).ok_or(WireError::OutOfRange)?;
+    ordered(start, last)
+}
+
+/// An enum's reserved range. `EnumReservedRange`'s end is INCLUSIVE, unlike
+/// a message's; one that ends before it starts is a corrupt descriptor.
+fn enum_reserved_range(bytes: &[u8]) -> Result<(i32, i32), WireError> {
+    let (start, end) = range(bytes)?;
+    ordered(start, end)
+}
+
+/// An inclusive range, refused when its start is past its end.
+const fn ordered(start: i32, last: i32) -> Result<(i32, i32), WireError> {
+    if start > last {
+        Err(WireError::OutOfRange)
+    } else {
+        Ok((start, last))
+    }
+}
+
 fn range(bytes: &[u8]) -> Result<(i32, i32), WireError> {
     let mut start: i32 = 0;
     let mut end: i32 = 0;
@@ -533,5 +558,37 @@ fn join(scope: &str, name: &str) -> String {
         joined.push('.');
         joined.push_str(name);
         joined
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{WireError, enum_reserved_range, message_reserved_range};
+
+    /// A `ReservedRange` as wire bytes: `start` = 1 and `end` = 2, varints.
+    fn range_bytes(start: u8, end: u8) -> [u8; 4] {
+        [0x08, start, 0x10, end]
+    }
+
+    #[test]
+    fn a_reserved_range_that_ends_before_it_starts_is_refused() {
+        // A message's end is exclusive: 13..16 holds 13 to 15.
+        assert_eq!(message_reserved_range(&range_bytes(13, 16)), Ok((13, 15)));
+        assert_eq!(message_reserved_range(&range_bytes(7, 8)), Ok((7, 7)));
+        // An empty range (start == end, exclusive) and an inverted one.
+        assert_eq!(
+            message_reserved_range(&range_bytes(9, 9)),
+            Err(WireError::OutOfRange)
+        );
+        assert_eq!(
+            message_reserved_range(&range_bytes(12, 3)),
+            Err(WireError::OutOfRange)
+        );
+        // An enum's end is inclusive.
+        assert_eq!(enum_reserved_range(&range_bytes(4, 4)), Ok((4, 4)));
+        assert_eq!(
+            enum_reserved_range(&range_bytes(5, 4)),
+            Err(WireError::OutOfRange)
+        );
     }
 }

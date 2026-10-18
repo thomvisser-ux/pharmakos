@@ -20,7 +20,8 @@
 //! `buf generate`'s, and `tests/generated.rs` holds it to a fresh generation.
 //!
 //! A statement may stay only through [`ALLOWED`], each entry with the reason
-//! it is a real rule rather than a fallback. The list is empty: every site the
+//! it is a real rule rather than a fallback. It holds one, the codec's
+//! unknown-enum spelling, which the mapping requires; every other site the
 //! sweep found was rewritten so the failure is unrepresentable (the chunk
 //! codec and base64 read whole triples by type, the varint writer reads its
 //! low byte off the value's bytes) or returns a typed error (the descriptor's
@@ -30,14 +31,47 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 /// Statements allowed to keep a fallback: (file, a fragment of the statement,
-/// the reason). Empty, and an entry needs its reason.
-const ALLOWED: &[(&str, &str, &str)] = &[];
+/// the reason). An entry needs its reason.
+const ALLOWED: &[(&str, &str, &str)] = &[(
+    "json/codec.rs",
+    "declared.value_by_number(number).map_or_else(",
+    "the proto3 JSON mapping's rule, not a fallback: an enum value the schema does not name is written as its number, so a reader of a newer value keeps it",
+)];
 
 /// What reads a value that may be missing or may not fit.
 const RISKY: &[&str] = &["try_from(", ".get(", ".first()", ".last()", ".checked_"];
 
-/// What answers a made-up value when it is.
-const FALLBACK: &str = ".unwrap_or(";
+/// What answers a made-up value when it is: the prefix, so `unwrap_or`,
+/// `unwrap_or_default` and `unwrap_or_else` all count.
+const FALLBACK: &str = ".unwrap_or";
+
+/// A `map_or` or `map_or_else` whose default is a constant answers a made-up
+/// value just as `unwrap_or` does, whatever it reads; these are the openings
+/// of such a default, whitespace removed.
+const CONSTANT_DEFAULTS: &[&str] = &[
+    ".map_or(0",
+    ".map_or(1",
+    ".map_or(2",
+    ".map_or(3",
+    ".map_or(4",
+    ".map_or(5",
+    ".map_or(6",
+    ".map_or(7",
+    ".map_or(8",
+    ".map_or(9",
+    ".map_or(-",
+    ".map_or(\"",
+    ".map_or(false",
+    ".map_or(true",
+    ".map_or(None",
+    ".map_or(String::new()",
+    ".map_or(Vec::new()",
+    ".map_or(Default::default()",
+    ".map_or(u",
+    ".map_or(i",
+    ".map_or_else(||",
+    ".map_or_else(|_|",
+];
 
 fn source_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("src")
@@ -106,7 +140,10 @@ fn collapsed(statement: &str) -> String {
 
 fn flagged(statement: &str) -> bool {
     let tight: String = statement.split_whitespace().collect();
-    tight.contains(FALLBACK) && RISKY.iter().any(|risky| tight.contains(risky))
+    (tight.contains(FALLBACK) && RISKY.iter().any(|risky| tight.contains(risky)))
+        || CONSTANT_DEFAULTS
+            .iter()
+            .any(|opening| tight.contains(opening))
 }
 
 #[test]
@@ -166,6 +203,10 @@ fn the_scan_sees_each_spelling_of_the_class() {
         "let low = triple.get(1).copied().unwrap_or(0)",
         "let first = chunk\n    .first()\n    .copied()\n    .unwrap_or(0)",
         "let trailing = bytes.len().checked_rem(RUN_BYTES).unwrap_or(0)",
+        "let low = triple.get(1).copied().unwrap_or_default()",
+        "let n = u8::try_from(x).unwrap_or_else(|_| 0)",
+        "let ms = resolved.travel_ms.map_or(0, Ms::raw)",
+        "let text = found.map_or_else(|| String::from(\"none\"), str::to_owned)",
     ] {
         assert!(flagged(statement), "missed: {statement}");
     }

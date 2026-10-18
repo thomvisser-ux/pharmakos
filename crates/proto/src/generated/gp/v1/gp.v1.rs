@@ -2370,7 +2370,8 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Match".into
         /// swaps the constant for the row.
         ///
         /// PLACEHOLDER: tuning, today's constant — owner, at S2's demo, with
-        /// `tune2`'s report (decision 17 proposes no change from 2).
+        /// `tune2`'s report. E26 keeps today's 2; decision 17 proposes nothing for
+        /// it.
         ///
         /// S2-05: 2
         #[prost(uint32, tag="13")]
@@ -3043,9 +3044,9 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.UnitKind".i
     /// `power.kw_per_unit` (moving at S2's exit under `g3r` and `tune2`), and the
     /// drones' `cost_per_second` restates `locomotion.drone_cost_per_second`.
     ///
-    /// PLACEHOLDER: every kind's `vision_radius_voxels`, today's 8 — owner, at
-    /// S2's demo, with `tune2`'s report. Decision 17 proposes scout 24, raider
-    /// 12 and the three drones 8 (S1-34; S2's plan, decision 22).
+    /// PLACEHOLDER: unit vision, today's 8 — owner, at S2's demo, with `tune2`'s
+    /// report. Every kind's `vision_radius_voxels`: decision 17 proposes scout
+    /// 24, raider 12 and the three drones 8 (S1-34; S2's plan, decision 22).
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct Units {
         /// PLACEHOLDER: tuning — owner, at S3, with the balance check re-run once
@@ -3073,9 +3074,9 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.UnitKind".i
         pub repair_drone: ::core::option::Option<UnitKind>,
         /// PLACEHOLDER: tuning — owner, S2.
         ///
-        /// PLACEHOLDER: the raider's gun, decision 17's proposal — owner, at S2's
-        /// demo, with `tune2`'s duel report. Range 4, 8 HP, 500 ms (a mortar in 25
-        /// s alone).
+        /// PLACEHOLDER: the raider's gun — owner, at S2's demo, with `tune2`'s duel
+        /// report. Decision 17's proposal: range 4, 8 HP, 500 ms (a mortar in 25 s
+        /// alone).
         ///
         /// item 90: 30 / 120 / 1 / 12; gun 4 / 8 / 500
         #[prost(message, optional, tag="4")]
@@ -3185,10 +3186,11 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Weapon".int
     /// The buildable structures, plus the two things priced per voxel or per
     /// charge rather than per building.
     ///
-    /// PLACEHOLDER: every kind's `vision_radius_voxels`, today's 8 — owner, at
-    /// S2's demo, with `tune2`'s report. Decision 17 proposes autocannon 20,
-    /// mortar 12, Generator and survey post 8; it proposes none for a beacon,
-    /// which sees by its sphere, or for the resonance spire (S3).
+    /// PLACEHOLDER: structure vision, today's 8 — owner, at S2's demo, with
+    /// `tune2`'s report. Every kind's `vision_radius_voxels`: decision 17
+    /// proposes autocannon 20, mortar 12, Generator and survey post 8; it
+    /// proposes none for a beacon, which sees by its sphere, or for the
+    /// resonance spire (S3).
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct Structures {
         /// A placed beacon. Its draw is `power.beacon_base_draw_kw` restated here
@@ -3202,7 +3204,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Weapon".int
         /// out). A reader pricing a new beacon's effect on headroom counts 0 kW,
         /// not this row.
         ///
-        /// PLACEHOLDER: tuning — owner, at S2's demo for the cost and HP, with
+        /// PLACEHOLDER: tuning — owner, at S2's demo, for the cost and HP only, with
         /// `tune2`'s balance report (item 139 (1) ruling 6: it stands for S1, after
         /// it stood at the skeleton's demo and at S1's). `draw_kw` restates
         /// `power.beacon_base_draw_kw` and moves with it.
@@ -3225,8 +3227,8 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Weapon".int
         pub generator: ::core::option::Option<StructureKind>,
         /// PLACEHOLDER: tuning — owner, S2.
         ///
-        /// PLACEHOLDER: the autocannon's gun, decision 17's proposal — owner, at
-        /// S2's demo, with `tune2`'s duel report. Range 20, 12 HP, 250 ms: 48 HP a
+        /// PLACEHOLDER: the autocannon's gun — owner, at S2's demo, with `tune2`'s
+        /// duel report. Decision 17's proposal: range 20, 12 HP, 250 ms, 48 HP a
         /// second, a raider in 2.5 s.
         ///
         /// item 90: 60 / 500 / 2; gun 20 / 12 / 250
@@ -3234,9 +3236,9 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Weapon".int
         pub autocannon: ::core::option::Option<StructureKind>,
         /// PLACEHOLDER: tuning — owner, S2.
         ///
-        /// PLACEHOLDER: the mortar's shell, decision 17's proposal — owner, at S2's
-        /// demo, with `tune2`'s duel report. Range 40, 60 HP flat within a splash
-        /// of 3, crater 2, 4 000 ms, 8 voxels a second (5 s at full range).
+        /// PLACEHOLDER: the mortar's shell — owner, at S2's demo, with `tune2`'s
+        /// duel report. Decision 17's proposal: range 40, 60 HP flat within a
+        /// splash of 3, crater 2, 4 000 ms, 8 voxels a second (5 s at full range).
         ///
         /// item 90: 90 / 400 / 3; 40 / 60 / 4000
         #[prost(message, optional, tag="4")]
