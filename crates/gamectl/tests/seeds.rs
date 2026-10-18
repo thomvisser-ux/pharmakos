@@ -10,20 +10,23 @@
 //! panics. The generator is the project's own seeded split streams
 //! (`pharmakos_sim::math::random::StreamRng`, as the verifier's fuzz target
 //! uses), so a failing case is reproducible from its index alone, and it
-//! writes *shaped* files — seeds, near-seeds, comments, blank lines, carriage
-//! returns, bytes that are not UTF-8, overlong lines, repeats — because
+//! writes *shaped* files: seeds, near-seeds, comments, blank lines, carriage
+//! returns, bytes that are not UTF-8, overlong lines and repeats, because
 //! uniform noise would meet one refusal almost every time.
 //!
-//! Beyond "no panic", every answer is checked against what the file says:
-//! accepted seeds are distinct, at most the cap, and listed on increasing
-//! lines that exist in the file; a refusal's line exists in the file.
+//! **It has an oracle.** Every generated line carries the class it was
+//! generated as ([`Line`]), and [`expected`] computes from the classes alone,
+//! never from the text, what the decoder must answer: the seeds in order, or
+//! the one refusal the format's order of checks gives (the file's encoding,
+//! then line by line its length, a carriage return, a malformed line, a
+//! repeat, the count). Each case asserts the decoder's answer equals it.
 #![allow(
     clippy::expect_used,
     clippy::unwrap_used,
     reason = "clippy.toml sets allow-expect-in-tests and allow-unwrap-in-tests, but that configuration only recognises #[test] functions and #[cfg(test)] modules -- not an integration test's helper functions. A panic is this file's failure report (clippy.toml's own wording)."
 )]
 
-use pharmakos_gamectl::scenario::seeds::{self, MAX_LINE_BYTES, MAX_SEEDS, SeedFileError};
+use pharmakos_gamectl::scenario::seeds::{self, Listed, MAX_LINE_BYTES, MAX_SEEDS, SeedFileError};
 use pharmakos_sim::math::random::{Stream, StreamRng};
 
 /// The generator's seed. Any value; fixed so a failure reproduces.
@@ -32,14 +35,34 @@ const PROPERTY_SEED: u64 = 0x5eed_f11e_0000_0001;
 /// Cases per run: cheap, since each file is small.
 const CASES: u32 = 4_000;
 
-/// One crafted line. A `clean` file draws only lines the format accepts
-/// (blank, a comment, a fresh seed with or without a trailing comment), so
-/// accepted files are as common as refused ones.
-fn line(rng: &mut StreamRng, pool: &[u64], clean: bool) -> Vec<u8> {
-    let pick = |rng: &mut StreamRng, len: usize| -> usize {
-        let top = i32::try_from(len).unwrap().saturating_sub(1);
-        usize::try_from(rng.range_i32(0, top)).unwrap()
-    };
+/// What a generated line is, which is all the oracle reads.
+#[derive(Clone, Copy, Debug)]
+enum Line {
+    /// Nothing, or spaces: skipped.
+    Blank,
+    /// A `#` comment on its own: skipped.
+    Comment,
+    /// This seed, spelled as the format says, with or without spaces and a
+    /// trailing comment.
+    Seed(u64),
+    /// Not a seed, not blank and not a comment: refused as malformed.
+    Malformed,
+    /// A seed followed by a carriage return.
+    CarriageReturn,
+    /// Bytes that are not UTF-8, which refuse the whole file.
+    NotUtf8,
+    /// A comment longer than the line cap.
+    TooLong,
+}
+
+fn pick(rng: &mut StreamRng, len: usize) -> usize {
+    let top = i32::try_from(len).unwrap().saturating_sub(1);
+    usize::try_from(rng.range_i32(0, top)).unwrap()
+}
+
+/// One crafted line and its class. A `clean` file draws only lines the format
+/// accepts, so accepted files are as common as refused ones.
+fn line(rng: &mut StreamRng, pool: &[u64], clean: bool) -> (Vec<u8>, Line) {
     let draw = rng.range_i32(0, 11);
     let draw = if clean {
         *[0, 1, 4, 11]
@@ -49,11 +72,23 @@ fn line(rng: &mut StreamRng, pool: &[u64], clean: bool) -> Vec<u8> {
         draw
     };
     match draw {
-        0 => Vec::new(),
-        1 => b"# a comment".to_vec(),
-        2 | 3 => seeds::spell(*pool.get(pick(rng, pool.len())).unwrap()).into_bytes(),
-        4 => format!("  {}  # trailing", seeds::spell(rng.next_u64())).into_bytes(),
-        5 => seeds::spell(rng.next_u64()).to_uppercase().into_bytes(),
+        0 => (b"   ".to_vec(), Line::Blank),
+        1 => (b"# a comment".to_vec(), Line::Comment),
+        2 | 3 => {
+            let seed = *pool.get(pick(rng, pool.len())).unwrap();
+            (seeds::spell(seed).into_bytes(), Line::Seed(seed))
+        }
+        4 => {
+            let seed = rng.next_u64();
+            (
+                format!("  {}  # trailing", seeds::spell(seed)).into_bytes(),
+                Line::Seed(seed),
+            )
+        }
+        5 => (
+            seeds::spell(rng.next_u64()).to_uppercase().into_bytes(),
+            Line::Malformed,
+        ),
         6 => {
             // A seed one digit short or long.
             let mut text = seeds::spell(rng.next_u64());
@@ -62,108 +97,116 @@ fn line(rng: &mut StreamRng, pool: &[u64], clean: bool) -> Vec<u8> {
             } else {
                 text.push('7');
             }
-            text.into_bytes()
+            (text.into_bytes(), Line::Malformed)
         }
-        7 => format!("{}\r", seeds::spell(rng.next_u64())).into_bytes(),
-        8 => vec![0xff, 0xfe, b'0', b'x'],
-        9 => vec![b'#'; MAX_LINE_BYTES.saturating_add(1)],
+        7 => (
+            format!("{}\r", seeds::spell(rng.next_u64())).into_bytes(),
+            Line::CarriageReturn,
+        ),
+        8 => (vec![0xff, 0xfe, b'0', b'x'], Line::NotUtf8),
+        9 => (vec![b'#'; MAX_LINE_BYTES.saturating_add(1)], Line::TooLong),
         10 => {
-            // Bytes from a small alphabet the format uses, in any order.
-            let alphabet = b"0x#a f9\t";
-            let len = pick(rng, 40);
-            (0..len)
-                .map(|_| *alphabet.get(pick(rng, alphabet.len())).unwrap())
-                .collect()
+            // `zz` and then bytes from the format's own alphabet, `#` left
+            // out: never blank, never a comment, never a seed.
+            let alphabet = b"0xaf9 ";
+            let len = pick(rng, 20);
+            let mut text = b"zz".to_vec();
+            text.extend((0..len).map(|_| *alphabet.get(pick(rng, alphabet.len())).unwrap()));
+            (text, Line::Malformed)
         }
-        _ => seeds::spell(rng.next_u64()).into_bytes(),
+        _ => {
+            let seed = rng.next_u64();
+            (seeds::spell(seed).into_bytes(), Line::Seed(seed))
+        }
     }
 }
 
-/// One crafted file: up to sixty lines, each joined by LF.
-fn file(index: u32) -> Vec<u8> {
+/// One crafted file, up to sixty lines joined by LF, and the class of every
+/// line the decoder will number (a trailing LF makes a last, blank line).
+fn file(index: u32) -> (Vec<u8>, Vec<Line>) {
     let mut rng = StreamRng::new(PROPERTY_SEED, Stream::Map, index, 0, 0);
     let pool: Vec<u64> = (0..4).map(|_| rng.next_u64()).collect();
     let clean = rng.range_i32(0, 1) == 0;
     let lines = rng.range_i32(0, 60);
     let mut bytes = Vec::new();
+    let mut classes = Vec::new();
     for at in 0..lines {
         if at > 0 {
             bytes.push(b'\n');
         }
-        bytes.extend(line(&mut rng, &pool, clean));
+        let (text, class) = line(&mut rng, &pool, clean);
+        bytes.extend(text);
+        classes.push(class);
+    }
+    if lines == 0 {
+        classes.push(Line::Blank);
     }
     if rng.range_i32(0, 1) == 0 {
         bytes.push(b'\n');
+        classes.push(Line::Blank);
     }
-    bytes
+    (bytes, classes)
 }
 
-/// How many lines the decoder can number in `bytes`.
-fn lines_in(bytes: &[u8]) -> usize {
-    bytes.split(|byte| *byte == b'\n').count()
+/// What the decoder must answer for a file of these classes.
+fn expected(classes: &[Line]) -> Result<Vec<Listed>, SeedFileError> {
+    if classes.iter().any(|class| matches!(class, Line::NotUtf8)) {
+        return Err(SeedFileError::NotUtf8);
+    }
+    let mut listed: Vec<Listed> = Vec::new();
+    for (index, class) in classes.iter().enumerate() {
+        let line = index.saturating_add(1);
+        match *class {
+            Line::TooLong => return Err(SeedFileError::LineTooLong { line }),
+            Line::CarriageReturn => return Err(SeedFileError::CarriageReturn { line }),
+            Line::Malformed => return Err(SeedFileError::Malformed { line }),
+            // A line that is not UTF-8 refused the whole file above.
+            Line::Blank | Line::Comment | Line::NotUtf8 => {}
+            Line::Seed(seed) => {
+                if let Some(first) = listed.iter().find(|item| item.seed == seed) {
+                    return Err(SeedFileError::Duplicate {
+                        line,
+                        first: first.line,
+                    });
+                }
+                if listed.len() >= MAX_SEEDS {
+                    return Err(SeedFileError::TooManySeeds { line });
+                }
+                listed.push(Listed { seed, line });
+            }
+        }
+    }
+    if listed.is_empty() {
+        return Err(SeedFileError::Empty);
+    }
+    Ok(listed)
 }
 
 #[test]
-fn a_crafted_file_only_ever_returns_seeds_or_the_typed_error() {
+fn a_crafted_file_gets_exactly_the_answer_its_lines_call_for() {
     let mut accepted = 0_u32;
     let mut refused = 0_u32;
     for index in 0..CASES {
-        let bytes = file(index);
-        let lines = lines_in(&bytes);
-        match seeds::decode(&bytes) {
-            Ok(listed) => {
-                accepted = accepted.saturating_add(1);
-                assert!(!listed.is_empty(), "case {index}: an empty set is refused");
-                assert!(listed.len() <= MAX_SEEDS, "case {index}");
-                for (first, second) in listed.iter().zip(listed.iter().skip(1)) {
-                    assert!(first.line < second.line, "case {index}: lines in order");
-                }
-                for (at, item) in listed.iter().enumerate() {
-                    assert!(item.line >= 1 && item.line <= lines, "case {index}");
-                    assert!(
-                        listed
-                            .iter()
-                            .skip(at.saturating_add(1))
-                            .all(|other| other.seed != item.seed),
-                        "case {index}: seed {} listed twice",
-                        seeds::spell(item.seed)
-                    );
-                }
-            }
+        let (bytes, classes) = file(index);
+        let answer = seeds::decode(&bytes);
+        assert_eq!(answer, expected(&classes), "case {index}: {classes:?}");
+        match answer {
+            Ok(_) => accepted = accepted.saturating_add(1),
             Err(error) => {
                 refused = refused.saturating_add(1);
-                let line = match error {
-                    SeedFileError::CarriageReturn { line }
-                    | SeedFileError::LineTooLong { line }
-                    | SeedFileError::Malformed { line }
-                    | SeedFileError::TooManySeeds { line } => Some(line),
-                    SeedFileError::Duplicate { line, first } => {
-                        assert!(first < line, "case {index}: {error}");
-                        Some(line)
-                    }
-                    SeedFileError::TooLarge | SeedFileError::NotUtf8 | SeedFileError::Empty => None,
-                };
-                if let Some(line) = line {
-                    assert!(line >= 1 && line <= lines, "case {index}: {error}");
-                }
                 assert!(!error.to_string().is_empty(), "case {index}");
             }
         }
     }
     // Both halves were exercised, or the property is being asserted over
     // nothing.
-    assert!(
-        accepted > CASES.checked_div(20).unwrap(),
-        "only {accepted} files were accepted"
-    );
-    assert!(
-        refused > CASES.checked_div(20).unwrap(),
-        "only {refused} files were refused"
-    );
+    let floor = CASES.checked_div(20).unwrap();
+    assert!(accepted > floor, "only {accepted} files were accepted");
+    assert!(refused > floor, "only {refused} files were refused");
 }
 
 #[test]
-fn a_file_past_the_caps_is_refused_and_not_read_in_full() {
+fn a_file_past_the_caps_is_refused() {
     let big = vec![b'#'; seeds::MAX_FILE_BYTES.saturating_add(1)];
     assert_eq!(seeds::decode(&big), Err(SeedFileError::TooLarge));
     let mut many = String::new();
@@ -175,34 +218,50 @@ fn a_file_past_the_caps_is_refused_and_not_read_in_full() {
         many.len() <= seeds::MAX_FILE_BYTES,
         "the count cap is met first"
     );
-    assert!(matches!(
+    assert_eq!(
         seeds::decode(many.as_bytes()),
-        Err(SeedFileError::TooManySeeds { .. })
-    ));
+        Err(SeedFileError::TooManySeeds {
+            line: MAX_SEEDS.saturating_add(1)
+        })
+    );
+}
+
+/// The balance check's twenty (`tests/balance.rs`' `seeds`), restated: the
+/// determinism harness's seed, the scenario files' seed, then n times the
+/// 64-bit golden ratio for n = 1 to 18. The nightly set is these, in this
+/// order, so the nightly and the balance report play the same maps (S2's
+/// plan, task `arms`).
+fn balance_seeds() -> Vec<u64> {
+    [pharmakos_sim::DETERMINISM_MATCH_SEED, 0x0000_0000_ca5c_aded]
+        .into_iter()
+        .chain((1..=18_u64).map(|n| n.wrapping_mul(0x9e37_79b9_7f4a_7c15)))
+        .collect()
 }
 
 #[test]
-fn the_committed_seed_sets_decode() {
+fn the_committed_seed_sets_are_the_balance_checks() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
         .nth(2)
         .unwrap()
         .to_path_buf();
-    let nightly = seeds::decode(&std::fs::read(root.join("scenarios/nightly/seeds.txt")).unwrap())
-        .expect("the nightly set decodes");
+    let read = |relative: &str| -> Vec<u64> {
+        seeds::decode(&std::fs::read(root.join(relative)).unwrap())
+            .unwrap_or_else(|error| panic!("{relative}: {error}"))
+            .iter()
+            .map(|item| item.seed)
+            .collect()
+    };
+    let nightly = read("scenarios/nightly/seeds.txt");
     assert_eq!(
-        nightly.len(),
-        20,
-        "decisions-log item 144 (6): about twenty seeds"
+        nightly,
+        balance_seeds(),
+        "the nightly set is the balance check's twenty"
     );
-    let two = seeds::decode(
-        &std::fs::read(root.join("scenarios/nightly/fixture/two.seeds.txt")).unwrap(),
-    )
-    .expect("the fixture's pair decodes");
-    let firsts: Vec<u64> = nightly.iter().take(2).map(|item| item.seed).collect();
-    let pair: Vec<u64> = two.iter().map(|item| item.seed).collect();
+    let two = read("scenarios/nightly/fixture/two.seeds.txt");
     assert_eq!(
-        pair, firsts,
-        "the fixture's two are the nightly set's first two"
+        two,
+        nightly.iter().take(2).copied().collect::<Vec<u64>>(),
+        "the fixture's pair is the nightly set's first two"
     );
 }

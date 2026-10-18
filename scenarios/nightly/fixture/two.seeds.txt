@@ -4,5 +4,5 @@
 # Two seeds for the nightly result's golden
 # (tests/golden/scenarios/nightly-result/expected.result.json): the first puts
 # the arm on seat 0 and the second on seat 1. The first two of ../seeds.txt.
-0xc8764d7edb5586ae
-0x5457da22336da9d8
+0x0102030405060708
+0x00000000ca5caded

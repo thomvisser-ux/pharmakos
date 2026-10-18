@@ -12,25 +12,31 @@
 # bar, ten seeded matches of 9 600 ticks on each of the three operating
 # systems, in the nightly workflow's `g4` job.
 #
+# They are the S1 balance check's twenty (crates/gamectl/tests/balance.rs,
+# `seeds`): the determinism harness's seed, the scenario files' seed, then
+# n x 0x9e3779b97f4a7c15 for n = 1 to 18, so the nightly and the balance
+# report play the same maps (S2's plan, task `arms`). Committed, never
+# regenerated; crates/gamectl/tests/seeds.rs holds the two lists equal.
+#
 # A seed changed here is a new night, not a re-run of an old one: say so in
 # the pull request that changes it, because every arm's win rate moves with it.
-0xc8764d7edb5586ae
-0x5457da22336da9d8
-0x1053383ac7ec2c92
-0x7513bda5dd0fc8a0
-0xf3cb002680986de3
-0xca8b43828b863916
-0xd53c68db1d969e0e
-0xe042d32c3886b777
-0x9e1165c60e56ecf8
-0x41902d7745cbf51e
-0xfb5fdd8e9365339d
-0xecb1488cd9cf7d3c
-0xbb4e152c2f89a2ad
-0x820e815b8a28448e
-0x0c91c843ec327e9c
-0xdd5600ca3d550f38
-0x20555e7dcc32bf8b
-0xa3e85cc2e5c9f106
-0x137398771c6557e6
-0xc9e9c89d96b11aef
+0x0102030405060708
+0x00000000ca5caded
+0x9e3779b97f4a7c15
+0x3c6ef372fe94f82a
+0xdaa66d2c7ddf743f
+0x78dde6e5fd29f054
+0x1715609f7c746c69
+0xb54cda58fbbee87e
+0x538454127b096493
+0xf1bbcdcbfa53e0a8
+0x8ff34785799e5cbd
+0x2e2ac13ef8e8d8d2
+0xcc623af8783354e7
+0x6a99b4b1f77dd0fc
+0x08d12e6b76c84d11
+0xa708a824f612c926
+0x454021de755d453b
+0xe3779b97f4a7c150
+0x81af155173f23d65
+0x1fe68f0af33cb97a

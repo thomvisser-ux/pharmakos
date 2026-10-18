@@ -89,7 +89,10 @@ The band (decision 18): an arm that is the sole winner in more than 13 of the
 decoder caps the file at 64 KiB, a line at 256 bytes and the set at 1 024
 seeds, and refuses a malformed line or a repeated seed with its line number
 (`crates/gamectl/src/scenario/seeds.rs`, whose property test is
-`crates/gamectl/tests/seeds.rs`). Its first ten seeds are also G4's bar: the
+`crates/gamectl/tests/seeds.rs`). The twenty are the S1 balance check's
+(`crates/gamectl/tests/balance.rs`), so the nightly and the balance report
+play the same maps; they are committed and never regenerated, and
+`tests/seeds.rs` holds the two lists equal. Its first ten seeds are also G4's bar: the
 workflow's `g4` job plays ten seeded matches of 9 600 ticks on each of the
 three operating systems and byte-compares their chains. A seed changed here
 is a new night, and the pull request that changes it says so.
