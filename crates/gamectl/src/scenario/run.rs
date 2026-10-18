@@ -32,12 +32,17 @@
 //! here *drives* one: the guard is against driving it, and that is the claim
 //! `tests/confinement.rs` makes over the source text. Said exactly, because a
 //! review found the earlier wording stronger than the test — this file does
-//! **read** the runner, through `Host::runner()`, for three values a report
-//! needs: the tick a Lull is standing on, the phase a refused `begin_push` was
-//! in, and the round a seal belongs to. `Host::runner` hands out a `&Runner`
-//! and every stepping method on it needs `&mut`, so the reach cannot become a
-//! second way to play a match; if T16a gives `Surface` accessors for those
-//! three, this file should take them and `.runner()` should join the needles.
+//! **read** the runner, through `Host::runner()`, and the world, through
+//! `Host::world()`, for what a report needs and nothing else: the tick a Lull
+//! is standing on (`tick()`), the phase a refused `begin_push` was in and
+//! whether a match played to its end has ended (`phase()`), the round a seal
+//! belongs to, a refusal is named in and a nightly match reached (`round()`),
+//! how the match ended (`outcome()`), and on a shared win the final audit's
+//! tied seats (`audit::final_audit(host.world())`, a pure read). `Host::runner`
+//! hands out a `&Runner` and `Host::world` a `&World`, and every stepping
+//! method needs `&mut`, so the reach cannot become a second way to play a
+//! match; if `Surface` gains accessors for these, this file should take them
+//! and `.runner()` should join the needles.
 //!
 //! # The match settings a file may name
 //!
@@ -399,8 +404,8 @@ fn play_until(root: &Path, scenario: &Scenario, mut until: Until<'_>) -> Result<
 /// Seal every `playbook` seat's file for the Lull the match stands in.
 ///
 /// A seat the verifier refuses goes through the harness door with a note, as
-/// [`seal`] says, except in a run to the match's end (`nightly`), where a
-/// refusal is a broken arm and fails the run.
+/// [`seal`] says, except in a run to the match's end (`nightly`), where
+/// [`seal`] fails the run on a refusal instead: a broken arm.
 fn seal_all(
     root: &Path,
     surface: &mut Surface,
@@ -413,15 +418,9 @@ fn seal_all(
         let SeatKind::Playbook(relative) = &seat.kind else {
             continue;
         };
-        let Door::Harness(codes) = seal(root, surface, token, seat.seat, relative)? else {
+        let Door::Harness(codes) = seal(root, surface, token, seat.seat, relative, nightly)? else {
             continue;
         };
-        if nightly {
-            return Err(Failure::new(
-                Exit::Failed,
-                strings::nightly_arm_refused(seat.seat, relative, round(surface)?, &codes),
-            ));
-        }
         let note = strings::scenario_harness_seal(seat.seat, relative, &codes);
         if !notes.contains(&note) {
             notes.push(note);
@@ -704,6 +703,7 @@ fn seal(
     token: &Token,
     seat: u8,
     relative: &str,
+    nightly: bool,
 ) -> Result<Door, Failure> {
     let playbook = std::fs::read_to_string(root.join(relative)).map_err(|error| {
         Failure::input(strings::unreadable(
@@ -729,6 +729,14 @@ fn seal(
     let answer = surface.call(Some(token), &request, &Blind);
 
     if let Some(error) = answer.get("error") {
+        // In a run to the match's end, a refusal of any kind is a broken arm
+        // on this seed and round, as the module docs promise.
+        if nightly {
+            return Err(Failure::new(
+                Exit::Failed,
+                strings::nightly_arm_refused(seat, relative, round(surface)?, &message_of(error)),
+            ));
+        }
         return Err(Failure::input(strings::scenario_playbook_refused(
             seat,
             relative,
@@ -755,49 +763,16 @@ fn seal(
         }
     }
 
-    // The codes, not the count. "2 diagnostics" sends the reader back to the
-    // tool; the codes and their pointers say what is wrong on their own, and
-    // this line is read by somebody who has just watched a build go red.
-    let mut codes: Vec<String> = Vec::new();
-    if let Some(Json::Array(items)) = result
-        .and_then(|result| result.get("report"))
-        .and_then(|report| report.get("diagnostics"))
-    {
-        for item in items {
-            let code = match item.get("code") {
-                Some(Json::String(code)) => code.clone(),
-                _ => String::from("?"),
-            };
-            let path = match item.get("path") {
-                Some(Json::String(path)) => path.clone(),
-                _ => String::new(),
-            };
-            codes.push(format!("{code} at {path}"));
-        }
+    let codes = codes_of(result)?;
+    // A nightly run never takes the harness door: the refusal fails the run,
+    // naming the round, before anything is sealed.
+    if nightly {
+        return Err(Failure::new(
+            Exit::Failed,
+            strings::nightly_arm_refused(seat, relative, round(surface)?, &codes),
+        ));
     }
-    // Decoded, not stored as its own text. `Sealed::report_hash` is documented
-    // as "eight big-endian bytes" and the wire spells it base64
-    // (`surface/planning.rs`), so `text.into_bytes()` would have put twelve
-    // ASCII characters where the eight bytes go — latent today because nothing
-    // outside tests reads the field, and T17's restore path is named as the
-    // first reader. Reviewed finding, wave 5.
-    let report_hash = match result
-        .and_then(|result| result.get("report"))
-        .and_then(|report| report.get("report_hash"))
-    {
-        // A `report_hash` that is not base64 is this build's gateway and this
-        // runner disagreeing about the wire, not a playbook a scenario got
-        // wrong, so it is refused rather than sealed as no bytes (S2's sweep,
-        // E7; the site vfy1 found).
-        Some(Json::String(text)) => {
-            pharmakos_proto::json::base64::decode(text).ok_or_else(|| {
-                Failure::internal(format!(
-                    "`submit_plan` answered with a `report_hash` that is not base64 ({text:?})"
-                ))
-            })?
-        }
-        _ => Vec::new(),
-    };
+    let report_hash = report_hash_of(result)?;
 
     // The second door. Compiled by the route `compile_playbook` takes, so the
     // plan is the one a submission would have produced.
@@ -830,7 +805,74 @@ fn seal(
         filed_by_the_gateway: false,
         plan,
     });
-    Ok(Door::Harness(codes.join("; ")))
+    Ok(Door::Harness(codes))
+}
+
+/// The refused report's codes and pointers, `CODE at /pointer`, joined.
+fn codes_of(result: Option<&Json>) -> Result<String, Failure> {
+    // The codes, not the count. "2 diagnostics" sends the reader back to the
+    // tool; the codes and their pointers say what is wrong on their own, and
+    // this line is read by somebody who has just watched a build go red.
+    let mut codes: Vec<String> = Vec::new();
+    if let Some(Json::Array(items)) = result
+        .and_then(|result| result.get("report"))
+        .and_then(|report| report.get("diagnostics"))
+    {
+        for item in items {
+            // A diagnostic always carries its code, so one without is the
+            // wire's shape having moved, refused rather than shown as `?`.
+            let Some(Json::String(code)) = item.get("code") else {
+                return Err(Failure::internal(format!(
+                    "`submit_plan` answered with a diagnostic that has no code ({item:?})"
+                )));
+            };
+            // An absent `path` is proto3 JSON's omitted empty string: the
+            // document's root pointer, which is spelled as nothing. Present
+            // and not a string is the wire's shape having moved.
+            let path = match item.get("path") {
+                Some(Json::String(path)) => path.as_str(),
+                None => "",
+                Some(other) => {
+                    return Err(Failure::internal(format!(
+                        "`submit_plan` answered with a diagnostic path that is not a string \
+                         ({other:?})"
+                    )));
+                }
+            };
+            codes.push(format!("{code} at {path}"));
+        }
+    }
+    Ok(codes.join("; "))
+}
+
+/// The report's `report_hash`, decoded.
+fn report_hash_of(result: Option<&Json>) -> Result<Vec<u8>, Failure> {
+    // Decoded, not stored as its own text. `Sealed::report_hash` is documented
+    // as "eight big-endian bytes" and the wire spells it base64
+    // (`surface/planning.rs`), so `text.into_bytes()` would have put twelve
+    // ASCII characters where the eight bytes go — latent today because nothing
+    // outside tests reads the field, and T17's restore path is named as the
+    // first reader. Reviewed finding, wave 5.
+    match result
+        .and_then(|result| result.get("report"))
+        .and_then(|report| report.get("report_hash"))
+    {
+        // A `report_hash` that is not base64 is this build's gateway and this
+        // runner disagreeing about the wire, not a playbook a scenario got
+        // wrong, so it is refused rather than sealed as no bytes (S2's sweep,
+        // E7; the site vfy1 found).
+        Some(Json::String(text)) => pharmakos_proto::json::base64::decode(text).ok_or_else(|| {
+            Failure::internal(format!(
+                "`submit_plan` answered with a `report_hash` that is not base64 ({text:?})"
+            ))
+        }),
+        // Every report carries its hash (spec section 11), so a refused
+        // playbook's answer without one is the wire's shape having moved, and
+        // it is refused rather than sealed as empty bytes (S2's sweep, E7).
+        other => Err(Failure::internal(format!(
+            "`submit_plan` answered with no `report_hash` string ({other:?})"
+        ))),
+    }
 }
 
 // ---------------------------------------------------------------------------

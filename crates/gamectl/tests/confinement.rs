@@ -91,14 +91,18 @@ fn every_module_is_checked() {
 ///
 /// # What this does *not* forbid, since a review asked
 ///
-/// The crate reads the runner: `crate::scenario::run` calls `Host::runner()`
-/// for the tick a Lull is standing on, the phase a refused `begin_push` was in,
-/// and the round a seal belongs to. `.runner()` is deliberately **not** a
+/// The crate reads the runner and the world: `crate::scenario::run` calls
+/// `Host::runner()` for the tick a Lull is standing on (`tick()`), the phase a
+/// refused `begin_push` was in and whether a match played to its end has ended
+/// (`phase()`), the round a seal belongs to, a refusal is named in and a
+/// nightly match reached (`round()`) and how the match ended (`outcome()`),
+/// and `Host::world()` for the final audit's tied seats on a shared win
+/// (`audit::final_audit`, a pure read). `.runner()` is deliberately **not** a
 /// needle, because the guard is against *driving* a `Runner`, not against
-/// naming one — and `Host::runner` hands out a `&Runner` whose every stepping
-/// method needs `&mut`, so the reach cannot grow into a second way to play a
-/// match. If T16a gives `Surface` accessors for those three values, the runner
-/// takes them and `.runner()` joins the list below.
+/// naming one — and `Host::runner` hands out a `&Runner` and `Host::world` a
+/// `&World`, whose every stepping method needs `&mut`, so the reach cannot
+/// grow into a second way to play a match. If `Surface` gains accessors for
+/// those values, the runner takes them and `.runner()` joins the list below.
 #[test]
 fn nothing_here_drives_a_match_except_through_the_gateway() {
     const FORBIDDEN: &[(&str, &str)] = &[
@@ -322,7 +326,15 @@ fn the_crate_takes_the_sim_with_default_features_off() {
 /// call in the shipped code (`unwrap_or`, `unwrap_or_default`,
 /// `unwrap_or_else`, `map_or`, `map_or_else`), as the verifier's twin of this
 /// test does, so each default this crate reads in place of a value is either
-/// rewritten or written down here with its reason. Rewritten in the sweep:
+/// rewritten or written down here with its reason.
+///
+/// **Its limit:** it reads method calls, so a default written as a `match`
+/// arm (`_ => Vec::new()`) is invisible to it. The sweep read those by hand:
+/// the `report_hash`, a diagnostic's code and its path in `scenario/run.rs`
+/// now refuse what is missing or misshapen (an absent path is proto3's empty
+/// root pointer, by the wire's rule); `message_of`'s `_` arm renders the
+/// whole error rather than defaulting; and the readers' `_ => None` and
+/// `_ => problems.at(..)` arms each record a problem or name a refusal. Rewritten in the sweep:
 /// the operands split with `split_first` rather than read past a checked
 /// first, the segment's ticks read through the sim's own `Ms::to_ticks_floor`,
 /// the seat and segment indices compared as `usize`, a seat past a `u8` not

@@ -147,7 +147,10 @@ fn one_round(arm: &str, arm_seat: u8) -> scenario::Scenario {
 
 /// E20: an arm's playbook qualifies, and the arm plays a round on its own
 /// seed through `submit_plan` from either seat, with no refusal and both seats
-/// sealed. One test per arm, so the four rounds run side by side.
+/// sealed. On the file's own seat layout the round is checked against the
+/// file's own event assertions, through `run::check`, and every one must hold,
+/// so an arm's assertions are never dead text. One test per arm, so the rounds
+/// run side by side.
 fn qualifies_and_plays_a_round_through_the_door(arm: &str) {
     let loaded = scenario::load(&root(), Path::new(arm)).expect("a valid arm");
     for seat in &loaded.seats {
@@ -162,10 +165,25 @@ fn qualifies_and_plays_a_round_through_the_door(arm: &str) {
             );
         }
     }
+    let own_seat = loaded
+        .seats
+        .iter()
+        .find(|seat| matches!(seat.kind, SeatKind::Playbook(_)))
+        .map(|seat| seat.seat)
+        .expect("an arm seats a playbook");
     for arm_seat in [0_u8, 1] {
         let cut = one_round(arm, arm_seat);
         let played = run::play(&root(), &cut)
             .unwrap_or_else(|failure| panic!("{arm} on seat {arm_seat}: {}", failure.message));
+        if arm_seat == own_seat {
+            let (report, failed) = run::check(&root(), &cut, &played)
+                .unwrap_or_else(|failure| panic!("{arm}: {}", failure.message));
+            assert_eq!(
+                failed, 0,
+                "{arm}'s own assertions on its own seed:\n{report}"
+            );
+            assert!(!cut.assertions.is_empty(), "{arm} asserts on events");
+        }
         assert!(
             played.notes.is_empty(),
             "{arm} on seat {arm_seat} went through the harness door: {:?}",
