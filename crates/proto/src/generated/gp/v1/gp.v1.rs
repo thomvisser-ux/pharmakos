@@ -2481,7 +2481,7 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.RulesTable.Mesher".int
     /// `proto/buf.yaml` told buf about the discharge until it was on `main`).
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct Economy {
-        /// Base Maintenance Indemnity: the `$` a seat is paid per settlement
+        /// Basic Minimum Income (BMI): the `$` a seat is paid per settlement
         /// (spec section 7).
         ///
         /// PLACEHOLDER: tuning — owner, at S3, with the balance check re-run once

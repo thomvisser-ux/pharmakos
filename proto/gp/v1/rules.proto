@@ -311,7 +311,7 @@ message RulesTable {
   message Economy {
     reserved 13 to 15;
 
-    // Base Maintenance Indemnity: the `$` a seat is paid per settlement
+    // Basic Minimum Income (BMI): the `$` a seat is paid per settlement
     // (spec section 7).
     //
     // PLACEHOLDER: tuning — owner, at S3, with the balance check re-run once
