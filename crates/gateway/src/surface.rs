@@ -1393,18 +1393,25 @@ impl Surface {
     /// filed safe playbook will not compile or the runner refuses a seal, and
     /// while a phased tick is open ([`Surface::phased_step`]): the runner's
     /// `false` for that case becomes a typed refusal here, so a control
-    /// handler never reads it as "not in a Lull".
+    /// handler never reads it as "not in a Lull", and an audit line with no
+    /// subject (`open push`).
     pub fn begin_push(&mut self) -> Result<bool, Error> {
-        self.refuse_mid_tick("open a Push")?;
+        self.refuse_mid_tick("open push", "open a Push")?;
         self.seal_and_open_push()
     }
 
     /// Refuse a host transition while a phased tick is open (S2's plan, E30).
-    fn refuse_mid_tick(&self, what: &str) -> Result<(), Error> {
+    /// The refusal is an audit line, host-side as `save sealed`'s is, under
+    /// `action` (`open push`, `end recap`): it is the host's own bug, and
+    /// one the log should show rather than only the caller.
+    fn refuse_mid_tick(&mut self, action: &str, what: &str) -> Result<(), Error> {
         if self.host()?.runner().tick_is_open() {
-            return Err(Error::internal(format!(
+            let error = Error::internal(format!(
                 "this match would not {what}: a tick is open between two of its phases"
-            )));
+            ));
+            let tick = self.time.tick;
+            self.audit.refused(tick, None, None, action, &error);
+            return Err(error);
         }
         Ok(())
     }
@@ -1665,9 +1672,9 @@ impl Surface {
     /// # Errors
     ///
     /// As [`Surface::host`], and [`crate::error::Code::Internal`] while a
-    /// phased tick is open, as [`Surface::begin_push`].
+    /// phased tick is open, as [`Surface::begin_push`], audited the same way.
     pub fn end_recap(&mut self) -> Result<bool, Error> {
-        self.refuse_mid_tick("end its recap")?;
+        self.refuse_mid_tick("end recap", "end its recap")?;
         let ended = self.host_mut()?.end_recap();
         if ended && self.host()?.runner().phase() == MatchPhase::Ended {
             // Spec section 12 unlocks the fog at match end. Since S1's `fixs`

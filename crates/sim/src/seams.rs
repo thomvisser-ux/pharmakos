@@ -208,6 +208,20 @@ pub enum MandateKind {
 }
 
 impl MandateKind {
+    /// The kind a wire id names, or `None` for one this build does not define.
+    #[must_use]
+    pub const fn from_id(id: u8) -> Option<MandateKind> {
+        match id {
+            0 => Some(MandateKind::None),
+            1 => Some(MandateKind::Build),
+            2 => Some(MandateKind::Defend),
+            3 => Some(MandateKind::Attack),
+            4 => Some(MandateKind::Mine),
+            5 => Some(MandateKind::Survey),
+            _ => None,
+        }
+    }
+
     /// The wire id. Additive only: never reuse, never renumber.
     #[must_use]
     pub const fn id(self) -> u8 {

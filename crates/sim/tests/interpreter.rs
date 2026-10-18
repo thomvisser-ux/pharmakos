@@ -1844,24 +1844,8 @@ fn the_refusal_table_and_the_arms_agree() {
     files.sort();
     for path in &files {
         let text = std::fs::read_to_string(path).expect("a source file");
-        let mut from = 0;
-        while let Some(hit) = text
-            .get(from..)
-            .and_then(|rest| rest.find("NotAtThisStage {"))
-        {
-            let at = from + hit;
-            from = at + 1;
-            let body = text
-                .get(at..)
-                .and_then(|rest| rest.split('}').next())
-                .unwrap_or_default();
-            if body.contains("construct: \"") {
-                stray.push(format!(
-                    "{}: {}",
-                    path.display(),
-                    body.lines().next().unwrap_or_default()
-                ));
-            }
+        for line in stray_refusals(&text) {
+            stray.push(format!("{}: {line}", path.display()));
         }
     }
     assert!(
@@ -1886,4 +1870,55 @@ fn the_refusal_table_and_the_arms_agree() {
             "{constant} is in the table and no arm refuses with it"
         );
     }
+}
+
+/// Every `NotAtThisStage { .. }` in `text` whose body spells a construct of
+/// its own (`construct: "..."`), by its first line: the reverse scan of
+/// [`the_refusal_table_and_the_arms_agree`].
+fn stray_refusals(text: &str) -> Vec<String> {
+    let mut stray = Vec::new();
+    let mut from = 0;
+    while let Some(hit) = text
+        .get(from..)
+        .and_then(|rest| rest.find("NotAtThisStage {"))
+    {
+        let at = from + hit;
+        from = at + 1;
+        let body = text
+            .get(at..)
+            .and_then(|rest| rest.split('}').next())
+            .unwrap_or_default();
+        if body.contains("construct: \"") {
+            stray.push(body.lines().next().unwrap_or_default().to_owned());
+        }
+    }
+    stray
+}
+
+/// The reverse scan's positive control (S2's #116 reviews, D): a planted
+/// refusal that spells its own construct is found, on one line or across
+/// several, and the table's own construction from a constant is not.
+#[test]
+fn the_reverse_refusal_scan_finds_a_planted_refusal() {
+    let planted = "fn arm() -> PlanError {
+    PlanError::NotAtThisStage { construct: \"planted\", stage: \"S9\" }
+}
+";
+    assert_eq!(
+        stray_refusals(planted),
+        vec!["NotAtThisStage { construct: \"planted\", stage: \"S9\" ".to_owned()]
+    );
+    let spread = "PlanError::NotAtThisStage {
+        construct: \"spread\",
+        stage: \"S9\",
+    }";
+    assert_eq!(stray_refusals(spread), vec!["NotAtThisStage {".to_owned()]);
+    let tabled = "PlanError::NotAtThisStage {
+        construct: refusal.name,
+        stage: refusal.stage,
+    }";
+    assert!(
+        stray_refusals(tabled).is_empty(),
+        "a construction from the table is not a stray"
+    );
 }

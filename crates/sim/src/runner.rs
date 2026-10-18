@@ -560,28 +560,45 @@ impl MatchState {
         *self = restored;
     }
 
-    /// Rebuild from a snapshot's flat columns. `None` when the phase or the end
-    /// reason is not one this build defines — a file from another version, or
-    /// an edited one, refused rather than restored into a phase that does not
-    /// exist — and when the settings are ones a lobby would be refused
-    /// ([`MatchSettings::validate`]): a round limit of zero, a ladder entry
-    /// shorter than a tick, or a ladder past the encoding's bound (S2's plan,
-    /// E7). An **empty** ladder restores, as `Snapshot::default()`'s does; its
-    /// coming segment is floored at one tick where it becomes a Push
+    /// Rebuild from a snapshot's flat columns.
+    ///
+    /// # Errors
+    ///
+    /// [`PartsRefused::Structure`] when the phase or the end reason is not one
+    /// this build defines -- a file from another version, or an edited one,
+    /// refused rather than restored into a phase that does not exist -- and
+    /// [`PartsRefused::Settings`] when the settings are ones a lobby would be
+    /// refused ([`MatchSettings::validate`]): a round limit of zero, a ladder
+    /// entry shorter than a tick, or a ladder past the encoding's bound (S2's
+    /// plan, E7). An **empty** ladder restores, as `Snapshot::default()`'s
+    /// does; its coming segment is floored at one tick where it becomes a Push
     /// ([`MatchState::open_push`]).
-    #[must_use]
-    pub(crate) fn from_parts(parts: MatchParts) -> Option<MatchState> {
-        let phase = MatchPhase::from_id(parts.phase)?;
-        if parts.round_limit == 0
-            || parts.segment_lengths_ms.len() > crate::rules::MAX_SEGMENT_LENGTHS
-            || parts.segment_lengths_ms.iter().any(|ms| *ms < MS_PER_TICK)
+    pub(crate) fn from_parts(parts: MatchParts) -> Result<MatchState, PartsRefused> {
+        let phase = MatchPhase::from_id(parts.phase).ok_or(PartsRefused::Structure)?;
+        if parts.round_limit == 0 {
+            return Err(PartsRefused::Settings(SettingsError::ZeroRoundLimit));
+        }
+        if parts.segment_lengths_ms.len() > crate::rules::MAX_SEGMENT_LENGTHS {
+            return Err(PartsRefused::Settings(SettingsError::TooManySegments {
+                found: parts.segment_lengths_ms.len(),
+            }));
+        }
+        if let Some((index, ms)) = parts
+            .segment_lengths_ms
+            .iter()
+            .enumerate()
+            .find(|(_, ms)| **ms < MS_PER_TICK)
         {
-            return None;
+            return Err(PartsRefused::Settings(SettingsError::ShortSegment {
+                index,
+                ms: *ms,
+            }));
         }
         let outcome = if parts.end_reason == 0 {
             None
         } else {
-            let reason = MatchEndReason::from_id(parts.end_reason)?;
+            let reason =
+                MatchEndReason::from_id(parts.end_reason).ok_or(PartsRefused::Structure)?;
             let winner = if parts.winner == SeatId::NEUTRAL.raw() {
                 None
             } else {
@@ -593,7 +610,7 @@ impl MatchState {
                 at: Tick::new(parts.ended_at),
             })
         };
-        Some(MatchState {
+        Ok(MatchState {
             phase,
             round: parts.round,
             round_limit: parts.round_limit,
@@ -629,6 +646,15 @@ impl MatchState {
             ended_at,
         }
     }
+}
+
+/// Why [`MatchState::from_parts`] refused a snapshot's match state.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum PartsRefused {
+    /// A phase or an end reason this build does not define.
+    Structure,
+    /// Settings a lobby would be refused.
+    Settings(SettingsError),
 }
 
 /// The match state as fixed-width columns, the shape [`Snapshot`] carries.

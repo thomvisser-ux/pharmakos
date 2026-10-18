@@ -1190,25 +1190,36 @@ fn a_layout_is_refused_after_a_seal_for_a_commander_and_a_second_time() {
 /// default snapshot's empty ladder still restores.
 #[test]
 fn a_save_files_degenerate_settings_are_refused() {
+    use pharmakos_sim::runner::SettingsError;
     let mut runner = runner(2, &[SHORT_MS]);
     let good = runner.capture().unwrap();
-    let edits: [SnapshotEdit; 3] = [
-        ("a zero round limit", |s: &mut Snapshot| {
-            s.match_round_limit = 0;
-        }),
-        ("a ladder entry under a tick", |s: &mut Snapshot| {
-            s.match_segment_lengths_ms = vec![SHORT_MS, 10];
-        }),
-        ("a ladder past its bound", |s: &mut Snapshot| {
-            s.match_segment_lengths_ms = vec![SHORT_MS; 9];
-        }),
+    let edits: [(SnapshotEdit, SettingsError); 3] = [
+        (
+            ("a zero round limit", |s: &mut Snapshot| {
+                s.match_round_limit = 0;
+            }),
+            SettingsError::ZeroRoundLimit,
+        ),
+        (
+            ("a ladder entry under a tick", |s: &mut Snapshot| {
+                s.match_segment_lengths_ms = vec![SHORT_MS, 10];
+            }),
+            SettingsError::ShortSegment { index: 1, ms: 10 },
+        ),
+        (
+            ("a ladder past its bound", |s: &mut Snapshot| {
+                s.match_segment_lengths_ms = vec![SHORT_MS; 9];
+            }),
+            SettingsError::TooManySegments { found: 9 },
+        ),
     ];
-    for (name, edit) in edits {
+    for ((name, edit), cause) in edits {
         let mut bad = good.clone();
         edit(&mut bad);
-        assert!(
-            matches!(runner.restore(&bad), Err(SnapshotError::MatchState { .. })),
-            "{name} is refused"
+        assert_eq!(
+            runner.restore(&bad).err(),
+            Some(SnapshotError::Settings(cause)),
+            "{name} is refused under its own cause"
         );
     }
     let mut empty = good;

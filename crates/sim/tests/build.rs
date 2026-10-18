@@ -921,3 +921,149 @@ fn point(at: [i32; 3]) -> [Fx; 3] {
         Fx::from_voxels(i16::try_from(z).expect("a voxel")),
     ]
 }
+
+/// S2's #116 reviews, C: every byte-coded column `restore_into` reads names a
+/// value this build defines, or the restore is refused by the column's name --
+/// a unit's kind and walk state, a structure's kind, a target's blueprint (a
+/// wall has no structure row, so it is no blueprint), a beacon's mandate and
+/// priority, a sighting's kind, every seat byte and the interpreter's four
+/// flag bytes. Each spoil is one byte of an otherwise good file, and the good
+/// file restores, so each refusal is the byte's own. Nothing is normalised.
+#[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one spoil per coded column, each a line of the table; split, the halves would share the whole fixture"
+)]
+fn an_unknown_byte_in_a_coded_column_is_refused_by_name() {
+    type Spoil = (&'static str, fn(&mut Snapshot));
+    let mut fixture = world();
+    let beacon = core(&fixture);
+    let [x, y, z] = core_voxel(&fixture);
+    let voxel = |v: i32| i16::try_from(v).expect("a voxel coordinate");
+    assert!(
+        fixture
+            .add_target(
+                beacon,
+                StructureKind::Generator.id(),
+                [
+                    Fx::from_voxels(voxel(x - 5)),
+                    Fx::from_voxels(voxel(y)),
+                    Fx::from_voxels(voxel(z)),
+                ]
+            )
+            .is_ok()
+    );
+    let mut good = Snapshot::capture(&fixture);
+    // A sighting row, so the sighting column has a byte to spoil: seat 0
+    // remembers seat 1's core.
+    good.sighting_seat.push(0);
+    good.sighting_asset.push(
+        pharmakos_sim::knowledge::AssetId::tagged(pharmakos_sim::knowledge::AssetId::TAG_BEACON, 1)
+            .raw(),
+    );
+    good.sighting_owner.push(1);
+    good.sighting_kind
+        .push(pharmakos_sim::knowledge::AssetKind::Beacon.id());
+    good.sighting_at.extend([0, 0, 0]);
+    good.sighting_seen_at.push(0);
+    // A finished Generator homed to seat 0's core, so the structure column
+    // has a byte to spoil (the skeleton's map places no structures).
+    let at = *fixture
+        .beacons()
+        .positions()
+        .first()
+        .expect("seat 0's core");
+    good.structure_id.push(0);
+    good.structure_seat.push(0);
+    good.structure_kind.push(StructureKind::Generator.id());
+    good.structure_pos
+        .extend([at[0].raw(), at[1].raw(), at[2].raw()]);
+    good.structure_hp.push(500);
+    good.structure_home.push(beacon.raw());
+    good.structure_building.push(0);
+    good.structure_rotation.push(0);
+    // A kill-credit row: seat 1 has dealt 10 hit points to seat 0's core, and
+    // the other two slots hold nobody.
+    good.credit_asset.push(
+        pharmakos_sim::knowledge::AssetId::tagged(pharmakos_sim::knowledge::AssetId::TAG_BEACON, 0)
+            .raw(),
+    );
+    good.credit_seat
+        .extend([1, SeatId::NEUTRAL.raw(), SeatId::NEUTRAL.raw()]);
+    good.credit_damage.extend([10, 0, 0]);
+    good.restore_into(&mut world())
+        .expect("the control restores: every column names a defined value");
+    assert!(!good.unit_kind.is_empty(), "the fixture has a unit row");
+
+    let spoils: [Spoil; 20] = [
+        ("credit_seat", |s| {
+            *s.credit_seat.first_mut().expect("a credit row") = 3;
+        }),
+        ("plan_reflex_armed", |s| {
+            *s.plan_reflex_armed.first_mut().expect("a seat") = 2;
+        }),
+        ("plan_reflex_active", |s| {
+            *s.plan_reflex_active.first_mut().expect("a seat") = 2;
+        }),
+        ("plan_resumed", |s| {
+            *s.plan_resumed.first_mut().expect("a seat") = 2;
+        }),
+        ("seat_id", |s| {
+            s.seat_id.swap(0, 1);
+        }),
+        ("unit_seat", |s| {
+            *s.unit_seat.first_mut().expect("a unit") = 3;
+        }),
+        ("structure_seat", |s| {
+            *s.structure_seat.first_mut().expect("a structure") = SeatId::NEUTRAL.raw();
+        }),
+        ("sighting_seat", |s| {
+            *s.sighting_seat.first_mut().expect("a sighting") = 3;
+        }),
+        ("sighting_owner", |s| {
+            *s.sighting_owner.first_mut().expect("a sighting") = 3;
+        }),
+        ("plan_pinned", |s| {
+            *s.plan_pinned.first_mut().expect("a seat") = 2;
+        }),
+        ("unit_kind", |s| {
+            *s.unit_kind.first_mut().expect("a unit") = 0;
+        }),
+        ("unit_walk_state", |s| {
+            *s.unit_walk_state.first_mut().expect("a unit") = u8::MAX;
+        }),
+        ("structure_kind", |s| {
+            *s.structure_kind.first_mut().expect("a structure") = 0;
+        }),
+        ("structure_kind", |s| {
+            *s.structure_kind.first_mut().expect("a structure") = StructureKind::Wall.id();
+        }),
+        ("target_blueprint", |s| {
+            *s.target_blueprint.first_mut().expect("a target") = 200;
+        }),
+        ("target_blueprint", |s| {
+            *s.target_blueprint.first_mut().expect("a target") = StructureKind::Wall.id();
+        }),
+        ("beacon_mandate", |s| {
+            *s.beacon_mandate.first_mut().expect("a beacon") = 6;
+        }),
+        ("beacon_priority", |s| {
+            *s.beacon_priority.first_mut().expect("a beacon") = 0;
+        }),
+        ("beacon_priority", |s| {
+            *s.beacon_priority.first_mut().expect("a beacon") = 4;
+        }),
+        ("sighting_kind", |s| {
+            *s.sighting_kind.first_mut().expect("a sighting") = 6;
+        }),
+    ];
+    for (column, spoil) in spoils {
+        let mut bad = good.clone();
+        spoil(&mut bad);
+        assert_eq!(
+            bad.restore_into(&mut world()),
+            Err(SnapshotError::OutOfRange(column)),
+            "an unknown {column} byte is refused by name"
+        );
+    }
+}

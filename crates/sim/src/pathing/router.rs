@@ -297,7 +297,7 @@ impl Router {
             .ok()
             .and_then(|index| self.state.get(index).copied())
             .unwrap_or(0);
-        // E7: rule: a unit off the table, or a byte no state names, is idle
+        // E7: cannot miss: a restore refuses a walk-state byte no state names (`Snapshot::check_codes`), and a unit off the table is idle by rule
         WalkState::from_id(id).unwrap_or_default()
     }
 
@@ -654,7 +654,7 @@ impl Router {
                 .get(index)
                 .copied()
                 .and_then(UnitKind::from_id)
-                // E7: rule: a row with no kind this build names does not walk
+                // E7: cannot miss: a restore refuses a kind byte no kind names (`Snapshot::check_codes`)
                 .map_or(0, |kind| self.speed_of(kind));
             if speed <= 0 {
                 continue;
