@@ -232,6 +232,9 @@ const fn failure_reason(failure: pharmakos_sim::interpreter::StepFailure) -> &'s
         StepFailure::CommanderDead => "the commander died",
         StepFailure::FeatureLost => "the vent or seam it was bound to is gone",
         StepFailure::Unaffordable => "the treasury could not cover it",
+        StepFailure::TargetsUnwritten => {
+            "the beacon's list settings had no room for the whole list, so nothing was written"
+        }
     }
 }
 

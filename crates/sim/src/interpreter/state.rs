@@ -409,7 +409,7 @@ impl Interpreter {
     /// Room for `seats` seats, none of which has sealed anything.
     #[must_use]
     pub fn with_seats(seats: u32) -> Interpreter {
-        let count = usize::try_from(seats).unwrap_or(0);
+        let count = usize::try_from(seats).unwrap_or(usize::MAX);
         Interpreter {
             plans: vec![None; count],
             states: vec![PlanState::default(); count],
@@ -426,6 +426,12 @@ impl Interpreter {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.states.is_empty()
+    }
+
+    /// Whether any seat has sealed a plan.
+    #[must_use]
+    pub fn any_sealed(&self) -> bool {
+        self.plans.iter().any(Option::is_some)
     }
 
     /// One seat's sealed plan, when it has one.
@@ -599,8 +605,8 @@ impl Interpreter {
             let Some(stage) = parts.stage.get(at).copied().and_then(VisitState::from_id) else {
                 return false;
             };
-            let count =
-                usize::try_from(parts.rule_count.get(at).copied().unwrap_or(0)).unwrap_or(0);
+            let count = usize::try_from(parts.rule_count.get(at).copied().unwrap_or(0))
+                .unwrap_or(usize::MAX);
             let to = rule_at.saturating_add(count);
             let (Some(fires), Some(ready)) =
                 (parts.fires.get(rule_at..to), parts.ready.get(rule_at..to))
@@ -897,6 +903,13 @@ pub enum StepFailure {
     /// reading rules" and "Failure"). A step checks its bound features at each
     /// decision, and no row ever commits a lost target.
     FeatureLost,
+    /// A settings or target row could not write the whole of what it names:
+    /// the beacons' list-settings table had no room for every entry, part-way
+    /// through. The row writes **nothing**, so the beacon keeps its old lists
+    /// exactly as they were, and the step fails rather than leave a list half
+    /// written (ruling 10 of S1's stage demo, decisions-log item 139 (1); item
+    /// 136 (5)).
+    TargetsUnwritten,
 }
 
 impl StepFailure {
@@ -905,7 +918,7 @@ impl StepFailure {
     /// `tests/interpreter.rs`'s `every_step_failure_has_a_unique_id` walks it,
     /// which is what makes the ordering claim checked rather than asserted —
     /// the array was out of order when it was only a doc comment.
-    pub const ALL: [StepFailure; 11] = [
+    pub const ALL: [StepFailure; 12] = [
         StepFailure::Timeout,
         StepFailure::NoTarget,
         StepFailure::NoPath,
@@ -917,6 +930,7 @@ impl StepFailure {
         StepFailure::CommanderDead,
         StepFailure::FeatureLost,
         StepFailure::Unaffordable,
+        StepFailure::TargetsUnwritten,
     ];
 
     /// The id `not_own` carried until S1: **retired, never reused**. It told a
@@ -940,6 +954,7 @@ impl StepFailure {
             StepFailure::CommanderDead => 9,
             StepFailure::FeatureLost => 11,
             StepFailure::Unaffordable => 12,
+            StepFailure::TargetsUnwritten => 13,
         }
     }
 
@@ -958,6 +973,7 @@ impl StepFailure {
             StepFailure::CommanderDead => "commander_dead",
             StepFailure::FeatureLost => "feature_lost",
             StepFailure::Unaffordable => "unaffordable",
+            StepFailure::TargetsUnwritten => "targets_unwritten",
         }
     }
 

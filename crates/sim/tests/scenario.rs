@@ -163,7 +163,7 @@ fn play() -> (String, String) {
     let mut log = String::from(HEADER);
     let mut tick: u32 = 0;
     while tick < SEGMENT_TICKS {
-        let Some(report) = runner.step() else {
+        let Some(report) = runner.step().unwrap() else {
             break;
         };
         for event in runner.events() {
@@ -203,7 +203,7 @@ fn the_scenarios_playbook_is_the_example_but_its_site() {
     // one thing, the first site, which both the walk and the deploy name; the
     // rest of what decides the run -- the steps, the timeout, the handler, the
     // tail, `on_death` and the fallback -- is the example's.
-    let mut copy = playbook();
+    let copy = playbook();
     let mut original = example();
     let site = |playbook: &gp::v1::Playbook| -> Vec<String> {
         playbook
@@ -228,20 +228,36 @@ fn the_scenarios_playbook_is_the_example_but_its_site() {
             "each of the first two steps names the moved site: {step}"
         );
     }
-    // Put the example's site back into the copy, and the two are one playbook.
-    let original_route: Vec<gp::v1::Step> = original
-        .declarative
-        .as_ref()
-        .map(|body| body.route.iter().take(2).cloned().collect())
-        .unwrap_or_default();
-    if let Some(body) = copy.declarative.as_mut() {
-        for (step, theirs) in body.route.iter_mut().zip(original_route) {
-            *step = theirs;
-        }
-    }
+    // Put the example's site back into the copy, voxel for voxel and nothing
+    // else, and the two are one playbook: a drift in the steps' timeout, pace
+    // or anything but the site fails here.
+    let site_of = |playbook: &gp::v1::Playbook| {
+        playbook
+            .declarative
+            .as_ref()
+            .and_then(|body| body.route.first())
+            .and_then(|step| match step.kind.as_ref() {
+                Some(gp::v1::step::Kind::Move(walk)) => walk.to.as_ref(),
+                _ => None,
+            })
+            .and_then(|to| match to.place.as_ref() {
+                Some(gp::v1::location::Place::Voxel(voxel)) => Some(*voxel),
+                _ => None,
+            })
+            .expect("the first step walks to a voxel")
+    };
+    let theirs = format!("{:?}", site_of(&original));
+    let ours = format!("{:?}", site_of(&copy));
+    let restored = format!("{copy:?}").replace(&ours, &theirs);
+    assert_eq!(
+        restored.matches(&theirs).count(),
+        2,
+        "the site appears exactly twice, in the walk and in the deploy"
+    );
     original.meta = copy.meta.clone();
     assert_eq!(
-        copy, original,
+        restored,
+        format!("{original:?}"),
         "apart from its site, the scenario's playbook is the worked example"
     );
 }

@@ -931,6 +931,9 @@ impl Surface {
 
     /// The match as a save holds it.
     fn saved_match(&self, boundary: Boundary) -> Result<SavedMatch, Error> {
+        // No save while a tick is open or a host-filed order waits for the next
+        // tick: a save holds no queue (S2's plan, E2 and E30).
+        self.host()?.check_savable()?;
         let round = self.host()?.runner().round();
         let snapshot = self.snapshot_bytes()?;
         let mut seats: Vec<SavedSeat> = Vec::with_capacity(self.seats.len());
@@ -1387,9 +1390,23 @@ impl Surface {
     /// # Errors
     ///
     /// As [`Surface::host`], plus [`crate::error::Code::Internal`] when a
-    /// filed safe playbook will not compile or the runner refuses a seal.
+    /// filed safe playbook will not compile or the runner refuses a seal, and
+    /// while a phased tick is open ([`Surface::phased_step`]): the runner's
+    /// `false` for that case becomes a typed refusal here, so a control
+    /// handler never reads it as "not in a Lull".
     pub fn begin_push(&mut self) -> Result<bool, Error> {
+        self.refuse_mid_tick("open a Push")?;
         self.seal_and_open_push()
+    }
+
+    /// Refuse a host transition while a phased tick is open (S2's plan, E30).
+    fn refuse_mid_tick(&self, what: &str) -> Result<(), Error> {
+        if self.host()?.runner().tick_is_open() {
+            return Err(Error::internal(format!(
+                "this match would not {what}: a tick is open between two of its phases"
+            )));
+        }
+        Ok(())
     }
 
     /// [`Surface::begin_push`]'s body, which [`Surface::resume`] shares for a
@@ -1552,7 +1569,28 @@ impl Surface {
     ///
     /// As [`Surface::host`].
     pub fn step(&mut self) -> Result<Option<TickReport>, Error> {
-        let report = self.host_mut()?.step();
+        let report = self.host_mut()?.step()?;
+        self.after_tick(report)
+    }
+
+    /// One tick of the Push **phase by phase**, for the walled harness
+    /// (`crates/bench`, S2's plan, E30), or `None` outside a Push: the entry
+    /// to [`Host::phased_tick`], through which the tick is run one phase per
+    /// call, control coming back between phases, and finished with the same
+    /// bookkeeping as [`Surface::step`]. **Host-side**: no handler and no
+    /// dispatch arm reaches it (`tests/confinement.rs`).
+    ///
+    /// # Errors
+    ///
+    /// As [`Surface::host`] and [`Host::phased_tick`].
+    pub fn phased_step(&mut self) -> Result<Option<SurfaceTick<'_>>, Error> {
+        let open = self.host_mut()?.phased_tick()?.is_some();
+        Ok(open.then_some(SurfaceTick { surface: self }))
+    }
+
+    /// What every tick's end owes the surface: the clock, the feed, the
+    /// private replay's chain, the fog and the view stamp.
+    fn after_tick(&mut self, report: Option<TickReport>) -> Result<Option<TickReport>, Error> {
         self.sync_time();
         self.absorb_events()?;
 
@@ -1626,8 +1664,10 @@ impl Surface {
     ///
     /// # Errors
     ///
-    /// As [`Surface::host`].
+    /// As [`Surface::host`], and [`crate::error::Code::Internal`] while a
+    /// phased tick is open, as [`Surface::begin_push`].
     pub fn end_recap(&mut self) -> Result<bool, Error> {
+        self.refuse_mid_tick("end its recap")?;
         let ended = self.host_mut()?.end_recap();
         if ended && self.host()?.runner().phase() == MatchPhase::Ended {
             // Spec section 12 unlocks the fog at match end. Since S1's `fixs`
@@ -3305,6 +3345,50 @@ pub(crate) fn call_action(method: &str) -> String {
 /// added at T13 is phase-gated by the annotation it already carries.
 const fn planning(scope: Scope) -> bool {
     matches!(scope, Scope::Plan | Scope::PlanSubmit)
+}
+
+/// One tick of the Push, open between its phases ([`Surface::phased_step`]).
+///
+/// A type-state holding the surface's mutable borrow for the tick's length,
+/// so nothing holding it can save, file or step a whole tick. Each call reaches
+/// the host's own [`Host::phased_tick`], which resumes the open tick.
+#[derive(Debug)]
+pub struct SurfaceTick<'a> {
+    surface: &'a mut Surface,
+}
+
+impl SurfaceTick<'_> {
+    /// Run the next phase and say which it was, or `None` when only the hash
+    /// is left.
+    ///
+    /// # Errors
+    ///
+    /// As [`Surface::host`], and [`crate::error::Code::Internal`] when the sim
+    /// refuses the phase.
+    pub fn run_next_phase(&mut self) -> Result<Option<pharmakos_sim::world::Phase>, Error> {
+        let Some(mut tick) = self.surface.host_mut()?.phased_tick()? else {
+            return Err(Error::internal("no tick is open to run a phase of"));
+        };
+        tick.run_next_phase()
+            .map_err(|refused| Error::internal(format!("the phase would not run: {refused}")))
+    }
+
+    /// Run whatever phases are left and close the tick, with the bookkeeping
+    /// [`Surface::step`] does: the report it would have given.
+    ///
+    /// # Errors
+    ///
+    /// As [`SurfaceTick::run_next_phase`].
+    pub fn finish(self) -> Result<Option<TickReport>, Error> {
+        let report = {
+            let Some(tick) = self.surface.host_mut()?.phased_tick()? else {
+                return Err(Error::internal("no tick is open to finish"));
+            };
+            tick.finish()
+                .map_err(|refused| Error::internal(format!("the tick would not end: {refused}")))?
+        };
+        self.surface.after_tick(Some(report))
+    }
 }
 
 #[cfg(test)]

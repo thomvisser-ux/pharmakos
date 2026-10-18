@@ -652,8 +652,12 @@ pub enum SnapshotError {
         /// The unit the digests disagree at, the lowest one.
         unit: u32,
     },
+    /// A tick is open between two of its phases: a restore into it would
+    /// leave half a tick behind (S2's plan, E30).
+    MidTick,
     /// The match state names a phase or an end reason this build does not
-    /// define. A file from another version or an edited one: refused rather
+    /// define, or settings a lobby would be refused (a zero round limit, a
+    /// ladder entry under a tick, a ladder past its bound). A file from another version or an edited one: refused rather
     /// than restored into a match that is in no phase at all, which is a world
     /// whose next tick would do nothing and whose hash would say so.
     MatchState {
@@ -705,6 +709,7 @@ impl core::fmt::Display for SnapshotError {
                 "the snapshot's route digest for unit {unit} is not the digest of the route \
                  nodes it carries"
             ),
+            SnapshotError::MidTick => write!(f, "a tick is open between two of its phases"),
             SnapshotError::MatchState { phase, end_reason } => write!(
                 f,
                 "the snapshot's match phase {phase} or end reason {end_reason} is not one this \

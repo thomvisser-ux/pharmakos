@@ -418,7 +418,8 @@ fn write_routes(
             *start,
             *goal,
             &mut buffer,
-        );
+        )
+        .ok();
         let digest = pharmakos_sim::pathing::router::route_digest(&buffer, &mut digest_bytes);
         match (estimated, walked) {
             (Some(estimated), Some(walked)) => writeln!(
@@ -849,8 +850,8 @@ fn no_path_is_answered_by_the_oracle() {
             outside,
             &mut buffer,
         ),
-        None,
-        "a sealed-in walker has no route either"
+        Err(pharmakos_sim::pathing::route::NoPath::Unreachable),
+        "a sealed-in walker has no route either, and says why"
     );
 }
 
@@ -1076,9 +1077,7 @@ fn every_unit_kind_walks_at_the_speed_its_rules_row_names() {
     let rules = rules();
     let router = pharmakos_sim::pathing::router::Router::new(4, &rules);
     for kind in UnitKind::ALL {
-        let row = rules
-            .cost_per_second(kind)
-            .unwrap_or_else(|| panic!("{kind:?} has no cost_per_second row"));
+        let row = rules.cost_per_second(kind);
         assert_eq!(
             router.speed_of(kind),
             row,
@@ -1096,7 +1095,7 @@ fn the_repath_cap_is_served_round_robin_and_never_exceeded() {
     let mut enc = pharmakos_sim::encoding::Enc::with_capacity(64 * 1024);
     let mut tick = 0;
     while tick < 60 {
-        let _ = world.step(&mut enc);
+        let _ = world.step(&mut enc).unwrap();
         assert!(
             world.serve_report().served <= cap,
             "tick {tick} served {} repaths against a cap of {cap}",
@@ -1123,23 +1122,20 @@ fn a_walker_arrives_on_the_tick_the_estimate_promised() {
     let mut world = harness_world(0);
     let mut enc = pharmakos_sim::encoding::Enc::with_capacity(64 * 1024);
     // One tick to serve the first repaths, so every unit has a route.
-    let _ = world.step(&mut enc);
-    let _ = world.step(&mut enc);
+    let _ = world.step(&mut enc).unwrap();
+    let _ = world.step(&mut enc).unwrap();
     let unit = (0..world.router().len())
         .find(|unit| world.router().state(*unit) == WalkState::Walking)
         .expect("a unit is walking by the second tick");
     let route = world.router().route(unit).to_vec();
     let kind = UnitKind::from_id(world.units().kinds()[usize::try_from(unit).expect("fits")])
         .expect("a unit kind");
-    let speed = world
-        .rules()
-        .cost_per_second(kind)
-        .expect("every kind has a speed row");
+    let speed = world.rules().cost_per_second(kind);
     let promised = walked_ticks(world.surface(), &route, speed).expect("the route is walkable");
 
     let mut ticks = 0;
     while world.router().route_cursor(unit) + 1 < u32::try_from(route.len()).expect("fits") {
-        let _ = world.step(&mut enc);
+        let _ = world.step(&mut enc).unwrap();
         ticks += 1;
         assert!(
             ticks <= promised + 2,
@@ -1153,13 +1149,17 @@ fn a_walker_arrives_on_the_tick_the_estimate_promised() {
 }
 
 #[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one case per construct or step, each the whole of what it checks; split, the halves would share every fixture"
+)]
 fn a_sealed_in_walker_parks_and_is_re_armed_when_the_graph_changes() {
     // Item 60's designed state: park and report, never a repath loop — and try
     // again exactly when the graph that refused the route has been repaired.
     let mut world = harness_world(0);
     let mut enc = pharmakos_sim::encoding::Enc::with_capacity(64 * 1024);
-    let _ = world.step(&mut enc);
-    let _ = world.step(&mut enc);
+    let _ = world.step(&mut enc).unwrap();
+    let _ = world.step(&mut enc).unwrap();
 
     // Wall the first unit in: a solid voxel five above each of its eight
     // neighbours' surfaces. The columns stay walkable, and every step out of
@@ -1186,14 +1186,19 @@ fn a_sealed_in_walker_parks_and_is_re_armed_when_the_graph_changes() {
         }
     }
     for at in &wall {
-        assert!(world.request_voxel_edit(VoxelEdit::Set {
-            at: *at,
-            material: Material::STONE,
-        }));
+        assert!(
+            world
+                .request_voxel_edit(VoxelEdit::Set {
+                    at: *at,
+                    material: Material::STONE,
+                    by: None,
+                })
+                .is_ok()
+        );
     }
     let mut tick = 0;
     while tick < 12 {
-        let _ = world.step(&mut enc);
+        let _ = world.step(&mut enc).unwrap();
         tick += 1;
     }
     assert_eq!(
@@ -1223,7 +1228,7 @@ fn a_sealed_in_walker_parks_and_is_re_armed_when_the_graph_changes() {
     let parked = world.router().served_total();
     let mut tick = 0;
     while tick < 25 {
-        let _ = world.step(&mut enc);
+        let _ = world.step(&mut enc).unwrap();
         tick += 1;
     }
     assert_eq!(
@@ -1246,14 +1251,19 @@ fn a_sealed_in_walker_parks_and_is_re_armed_when_the_graph_changes() {
     // Take the wall down again: the repair publishes the clusters it rebuilt,
     // and the walker standing in one of them is re-armed.
     for at in &wall {
-        assert!(world.request_voxel_edit(VoxelEdit::Set {
-            at: *at,
-            material: Material::AIR,
-        }));
+        assert!(
+            world
+                .request_voxel_edit(VoxelEdit::Set {
+                    at: *at,
+                    material: Material::AIR,
+                    by: None,
+                })
+                .is_ok()
+        );
     }
     let mut tick = 0;
     while tick < 12 {
-        let _ = world.step(&mut enc);
+        let _ = world.step(&mut enc).unwrap();
         tick += 1;
     }
     assert!(
@@ -1373,12 +1383,17 @@ fn a_restored_world_rebuilds_the_graph_it_was_saved_with() {
             let x = 40 + tick * 7;
             let y = 60 + tick * 5;
             let z = world.voxels().top_solid_z(x, y).unwrap_or(0);
-            assert!(world.request_voxel_edit(VoxelEdit::Crater {
-                centre: [x, y, z],
-                radius: 3,
-            }));
+            assert!(
+                world
+                    .request_voxel_edit(VoxelEdit::Crater {
+                        centre: [x, y, z],
+                        radius: 3,
+                        by: None,
+                    })
+                    .is_ok()
+            );
         }
-        let _ = world.step(&mut enc);
+        let _ = world.step(&mut enc).unwrap();
         tick += 1;
     }
     let fingerprint = world.clusters().fingerprint();
@@ -1406,8 +1421,8 @@ fn a_restored_world_rebuilds_the_graph_it_was_saved_with() {
     let mut n = 0;
     while n < 25 {
         assert_eq!(
-            world.step(&mut a),
-            restored.step(&mut b),
+            world.step(&mut a).unwrap(),
+            restored.step(&mut b).unwrap(),
             "the chain diverged {n} ticks after the restore"
         );
         n += 1;
@@ -1520,7 +1535,7 @@ fn the_model_serves_what_the_router_serves() {
     let mut served: Vec<u32> = Vec::new();
     let mut tick = 0;
     while tick < 16 {
-        let _ = world.step(&mut enc);
+        let _ = world.step(&mut enc).unwrap();
         model.serve(&mut served);
         assert_eq!(
             world.router().served_this_tick(),

@@ -693,7 +693,7 @@ fn supply_under(world: &World, seat: SeatId, rules: PowerRules, lighting: Lighti
         total = total.checked_add(rules.core_surplus)?;
     }
     let structures = world.structures();
-    let count = usize::try_from(structures.len()).unwrap_or(0);
+    let count = usize::try_from(structures.len()).unwrap_or(usize::MAX);
     let mut row: usize = 0;
     while row < count {
         if structure_counts(world, seat, row, lighting)
@@ -752,7 +752,7 @@ pub(crate) fn headroom_of(
 fn draw_under(world: &World, seat: SeatId, rules: PowerRules, lighting: Lighting) -> Option<i32> {
     let mut total: i32 = unit_draw_of(world, seat, rules, lighting)?;
     let structures = world.structures();
-    let count = usize::try_from(structures.len()).unwrap_or(0);
+    let count = usize::try_from(structures.len()).unwrap_or(usize::MAX);
     let mut row: usize = 0;
     while row < count {
         if structure_counts(world, seat, row, lighting) {
@@ -778,7 +778,7 @@ fn draw_under(world: &World, seat: SeatId, rules: PowerRules, lighting: Lighting
 fn unit_draw_of(world: &World, seat: SeatId, rules: PowerRules, lighting: Lighting) -> Option<i32> {
     let mut total: i32 = 0;
     let units = world.units();
-    let count = usize::try_from(units.len()).unwrap_or(0);
+    let count = usize::try_from(units.len()).unwrap_or(usize::MAX);
     let mut row: usize = 0;
     while row < count {
         let mine = units.seats().get(row).copied() == Some(seat.raw());
@@ -804,7 +804,7 @@ fn unit_draw_of(world: &World, seat: SeatId, rules: PowerRules, lighting: Lighti
 #[must_use]
 pub(crate) fn core_of(world: &World, seat: SeatId) -> Option<BeaconId> {
     let beacons = world.beacons();
-    let count = usize::try_from(beacons.len()).unwrap_or(0);
+    let count = usize::try_from(beacons.len()).unwrap_or(usize::MAX);
     let mut best: Option<u32> = None;
     let mut row: usize = 0;
     while row < count {

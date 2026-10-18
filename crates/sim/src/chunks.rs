@@ -51,7 +51,7 @@ impl ChunkDigests {
     #[must_use]
     pub fn new(count: u32) -> ChunkDigests {
         ChunkDigests {
-            digests: vec![0; usize::try_from(count).unwrap_or(0)],
+            digests: vec![0; usize::try_from(count).unwrap_or(usize::MAX)],
         }
     }
 

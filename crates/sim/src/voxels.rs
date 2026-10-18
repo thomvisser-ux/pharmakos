@@ -54,10 +54,15 @@ use std::sync::Arc;
 
 use crate::chunks::ChunkDigests;
 use crate::encoding::{Enc, digest};
+use crate::tables::SeatId;
 
 /// The chunk edge, in voxels. Item 55: 32, and not a rules-table row — it is
 /// the snapshot and state-hash layout rather than a tuning value.
 pub const CHUNK_EDGE: u32 = 32;
+
+/// [`CHUNK_EDGE`] as the signed voxel coordinate a chunk origin is measured in.
+pub const CHUNK_EDGE_I32: i32 = 32;
+const _: () = assert!(CHUNK_EDGE == 32 && CHUNK_EDGE_I32 == 32);
 
 /// `log2(CHUNK_EDGE)`: a voxel address splits by this shift.
 pub const CHUNK_SHIFT: u32 = 5;
@@ -271,9 +276,17 @@ impl Material {
 ///
 /// The queue is filled by other phases and drained by the voxel phase, so a
 /// write to the store is never interleaved with a read of it inside a tick.
-/// Nothing fills the queue yet — combat's craters are S2's and construction's
-/// sets are T14's; [`crate::world::World::request_voxel_edit`] documents the
-/// order a filler owes.
+/// A mining drone's dig fills it today (T14's program); combat's craters are
+/// S2's `fire`, terraform's levelling and the wall's voxels `site`'s, and the
+/// demolition charge's cut `atk`'s. [`crate::world::World::request_voxel_edit`]
+/// documents the order a filler owes.
+///
+/// **Every edit carries the seat that made it**, `by`, or `None` for an edit
+/// nobody's: a host's test seam, a test. Collapse credits the seat whose edit
+/// detached a region (decisions-log item 144 (2)), so the seat travels with
+/// the edit rather than being reconstructed afterwards, as a damage order's
+/// dealer does. S2's `base` lane laid it out and fills it on Mine's digs;
+/// `fire`, `site` and `atk` fill it on theirs.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum VoxelEdit {
     /// Set one voxel to a material.
@@ -282,14 +295,29 @@ pub enum VoxelEdit {
         at: [i32; 3],
         /// What to write.
         material: Material,
+        /// The seat whose edit it is, or `None`.
+        by: Option<SeatId>,
     },
     /// Turn a ball of whole voxels to air.
     Crater {
         /// The ball's centre, in whole voxels.
         centre: [i32; 3],
-        /// The ball's radius, in whole voxels.
+        /// The ball's radius, in whole voxels. A filed crater's is never
+        /// negative ([`crate::world::FileRefused::OffTheMap`]).
         radius: i32,
+        /// The seat whose edit it is, or `None`.
+        by: Option<SeatId>,
     },
+}
+
+impl VoxelEdit {
+    /// The seat whose edit it is, or `None` for an edit nobody's.
+    #[must_use]
+    pub const fn by(&self) -> Option<SeatId> {
+        match *self {
+            VoxelEdit::Set { by, .. } | VoxelEdit::Crater { by, .. } => by,
+        }
+    }
 }
 
 /// The chunk store: the voxels, their copy-on-write sharing, and the two sets
@@ -459,6 +487,17 @@ impl VoxelStore {
         Some((chunk, usize::try_from(inside).ok()?))
     }
 
+    /// Whether an edit can be applied to this map: a set names a voxel of it,
+    /// and a crater's radius is not negative (a crater whose ball misses the
+    /// map is still an edit, one that changes nothing).
+    #[must_use]
+    pub fn edit_is_on_the_map(&self, edit: &VoxelEdit) -> bool {
+        match *edit {
+            VoxelEdit::Set { at, .. } => self.address(at).is_some(),
+            VoxelEdit::Crater { radius, .. } => radius >= 0,
+        }
+    }
+
     /// The origin voxel of a chunk, or `None` when the index is off the map.
     #[must_use]
     pub fn chunk_origin(&self, chunk: u32) -> Option<[i32; 3]> {
@@ -569,10 +608,13 @@ impl VoxelStore {
         skin: Material,
         bulk: Material,
     ) -> u32 {
-        let Ok(width) = i32::try_from(self.size.first().copied().unwrap_or(0)) else {
+        // The generator refuses a map wider than a signed voxel coordinate
+        // before it fills one (`crate::mapgen::generate`), so this never returns.
+        let [size_x, _, _] = self.size;
+        let Ok(width) = i32::try_from(size_x) else {
             return 0;
         };
-        let edge = i32::try_from(CHUNK_EDGE).unwrap_or(0);
+        let edge = CHUNK_EDGE_I32;
         let mut written: u32 = 0;
         let mut chunk: u32 = 0;
         while chunk < self.chunk_count() {
@@ -580,11 +622,7 @@ impl VoxelStore {
                 chunk = chunk.saturating_add(1);
                 continue;
             };
-            let (ox, oy, oz) = (
-                origin.first().copied().unwrap_or(0),
-                origin.get(1).copied().unwrap_or(0),
-                origin.get(2).copied().unwrap_or(0),
-            );
+            let [ox, oy, oz] = origin;
             let Ok(index) = usize::try_from(chunk) else {
                 chunk = chunk.saturating_add(1);
                 continue;
@@ -652,11 +690,7 @@ impl VoxelStore {
         let Some(r2) = radius.checked_mul(radius) else {
             return 0;
         };
-        let (cx, cy, cz) = (
-            centre.first().copied().unwrap_or(0),
-            centre.get(1).copied().unwrap_or(0),
-            centre.get(2).copied().unwrap_or(0),
-        );
+        let [cx, cy, cz] = centre;
 
         let mut removed: u32 = 0;
         let mut dz = -radius;

@@ -23,7 +23,7 @@ use pharmakos_proto::gp;
 use pharmakos_proto::json;
 use pharmakos_sim::economy::Purchase;
 use pharmakos_sim::events::EventKind;
-use pharmakos_sim::interpreter::{Action, Plan, PlanError, Row};
+use pharmakos_sim::interpreter::{Action, Plan, PlanError, Row, StepFailure};
 use pharmakos_sim::math::fixed::Fx;
 use pharmakos_sim::math::quantity::Money;
 use pharmakos_sim::runner::{MatchSettings, Runner};
@@ -131,7 +131,7 @@ fn play(world: World, route: &str, ticks: u32) -> (Runner, Vec<u32>, bool) {
     let mut queued = Vec::new();
     let mut failed = false;
     for _ in 0..ticks {
-        if runner.step().is_none() {
+        if runner.step().unwrap().is_none() {
             break;
         }
         for event in runner.events() {
@@ -336,7 +336,11 @@ fn a_scout_is_inside_a_probe_area_exactly_on_its_box() {
     let area = ColumnBox::new([voxel(x + 4), voxel(y - 1)], [voxel(x + 8), voxel(y + 3)])
         .expect("the box is the right way out");
     let centre = at(x + 6, y + 1, z);
-    assert!(fixture.add_area(beacon, AreaKind::Probe, centre, area));
+    assert!(
+        fixture
+            .add_area(beacon, AreaKind::Probe, centre, area)
+            .is_ok()
+    );
     for inside in [
         at(x + 4, y - 1, z),
         at(x + 8, y + 3, z + 20),
@@ -388,16 +392,24 @@ fn an_area_rides_the_snapshot_and_a_value_out_of_range_is_refused_by_name() {
     ];
     let area = ColumnBox::new([voxel(x + 4), voxel(y - 1)], [voxel(x + 8), voxel(y + 3)])
         .expect("the box is the right way out");
-    assert!(fixture.add_area(beacon, AreaKind::Protected, centre, area));
-    assert!(fixture.add_target(
-        beacon,
-        StructureKind::Generator.id(),
-        [
-            Fx::from_voxels(voxel(x - 5)),
-            Fx::from_voxels(voxel(y)),
-            Fx::from_voxels(voxel(z)),
-        ]
-    ));
+    assert!(
+        fixture
+            .add_area(beacon, AreaKind::Protected, centre, area)
+            .is_ok()
+    );
+    assert!(
+        fixture
+            .add_target(
+                beacon,
+                StructureKind::Generator.id(),
+                [
+                    Fx::from_voxels(voxel(x - 5)),
+                    Fx::from_voxels(voxel(y)),
+                    Fx::from_voxels(voxel(z)),
+                ]
+            )
+            .is_ok()
+    );
     let snapshot = Snapshot::capture(&fixture);
     let mut restored = world();
     snapshot
@@ -481,7 +493,7 @@ fn unaffordable_targets_wait_for_the_highest_order_affordable_one() {
     runner.world_mut().set_treasury(SEAT, Money::new(RICH));
     let mut paid = Vec::new();
     for _ in 0..40 {
-        if runner.step().is_none() {
+        if runner.step().unwrap().is_none() {
             break;
         }
         paid.extend(
@@ -522,8 +534,16 @@ fn an_affordable_target_is_asked_for_before_a_higher_order_one_that_is_not() {
         "the committed rules price a Survey post below a mortar"
     );
     // List order is the build order here: the dear target first.
-    assert!(fixture.add_target(beacon, dear.id(), [voxel(x + 3), voxel(y), voxel(z)]));
-    assert!(fixture.add_target(beacon, cheap.id(), [voxel(x - 3), voxel(y), voxel(z)]));
+    assert!(
+        fixture
+            .add_target(beacon, dear.id(), [voxel(x + 3), voxel(y), voxel(z)])
+            .is_ok()
+    );
+    assert!(
+        fixture
+            .add_target(beacon, cheap.id(), [voxel(x - 3), voxel(y), voxel(z)])
+            .is_ok()
+    );
     let asked = |world: &World| -> StructureKind {
         let request = mandate_for(MandateKind::Build)
             .expect("Build runs")
@@ -748,4 +768,156 @@ fn the_build_rate_is_the_rows_and_a_rate_with_a_remainder_is_refused() {
             "{refused} hit points a second"
         );
     }
+}
+
+/// Ruling 10 of S1's stage demo (decisions-log item 139 (1)): a settings row
+/// that cannot write its whole Build list writes **nothing**, and fails its
+/// step with `targets_unwritten`. The list-settings table is filled to its
+/// capacity, and a row that frees the core's one row and names two would need
+/// one more.
+#[test]
+fn a_build_list_that_cannot_be_written_whole_writes_nothing() {
+    let mut fixture = world();
+    fixture.set_treasury(SEAT, Money::new(RICH));
+    let [x, y, z] = core_voxel(&fixture);
+    let core = core(&fixture);
+    // The core's old list: one target, which the edit must leave in place.
+    let old = [x + 6, y, z];
+    assert!(
+        fixture
+            .add_target(core, StructureKind::Generator.id(), point(old))
+            .is_ok()
+    );
+    // Fill the rest of the table on another seat's core: the edit frees the
+    // core's one old row and names two, one more than the table holds.
+    let other = fixture
+        .beacons()
+        .row_of_ordinal(SeatId::new(1), 0)
+        .map(|row| BeaconId::new(u32::try_from(row).expect("a beacon row")))
+        .expect("seat 1 has a core");
+    let capacity = fixture.targets().capacity();
+    let mut filled = fixture.targets().len();
+    let mut step: i16 = 0;
+    while filled < capacity {
+        let at = [Fx::from_voxels(step), Fx::ZERO, Fx::ZERO];
+        assert!(
+            fixture
+                .add_target(other, StructureKind::Generator.id(), at)
+                .is_ok()
+        );
+        filled = fixture.targets().len();
+        step = step.saturating_add(1);
+    }
+    let build = format!(
+        r#"{{"targets":[{},{}]}}"#,
+        target([x + 3, y + 2, z], 1, 0),
+        target([x + 3, y - 2, z], 2, 0),
+    );
+    // The money is gone first, so nothing the old list holds is paid for
+    // while the visit runs.
+    fixture.set_treasury(SEAT, Money::new(0));
+    let plan = Plan::compile(&playbook(&visit_writing(&build)), &rules()).expect("compiles");
+    let mut runner = Runner::new(fixture);
+    runner
+        .seal_playbook(SEAT, plan)
+        .expect("a Lull takes a seal");
+    assert!(runner.begin_push());
+    let mut reasons = Vec::new();
+    for _ in 0..400 {
+        if runner.step().unwrap().is_none() {
+            break;
+        }
+        for event in runner.events() {
+            if event.seat == Some(SEAT) && event.kind == EventKind::StepFailed {
+                reasons.push(
+                    pharmakos_sim::interpreter::StepFailed::decode(event.value)
+                        .expect("a step_failed value decodes")
+                        .reason,
+                );
+            }
+        }
+        runner.clear_events();
+    }
+    assert_eq!(
+        reasons,
+        vec![StepFailure::TargetsUnwritten],
+        "the row fails its step with `targets_unwritten`, once"
+    );
+    assert_eq!(StepFailure::TargetsUnwritten.id(), 13);
+    assert_eq!(StepFailure::TargetsUnwritten.name(), "targets_unwritten");
+    let world = runner.world();
+    let anchors: Vec<[Fx; 3]> = world
+        .targets()
+        .beacons()
+        .iter()
+        .zip(world.targets().anchors())
+        .filter(|(beacon, _)| **beacon == core.raw())
+        .map(|(_, at)| *at)
+        .collect();
+    assert_eq!(
+        anchors,
+        vec![point(old)],
+        "the core keeps its old list exactly as it was"
+    );
+    assert_eq!(world.targets().len(), capacity, "nothing was written");
+}
+
+/// A settings edit that keeps a paid target's anchor keeps the structure it
+/// paid for, for **every** entry and not only the first eight (decisions-log
+/// item 136 (5)): nine targets are paid for, the list is written again in
+/// another order, and nothing is bought twice.
+#[test]
+fn every_paid_target_survives_a_settings_edit() {
+    let mut fixture = world();
+    fixture.set_treasury(SEAT, Money::new(RICH));
+    let [x, y, z] = core_voxel(&fixture);
+    let anchors: Vec<[i32; 3]> = [-2, 0, 2]
+        .into_iter()
+        .flat_map(|dy| [3, 5, 7].map(|dx| [x + dx, y + dy, z]))
+        .collect();
+    let list = |reversed: bool| {
+        let mut entries: Vec<String> = anchors
+            .iter()
+            .enumerate()
+            .map(|(order, at)| target(*at, u32::try_from(order).expect("a small order"), 0))
+            .collect();
+        if reversed {
+            entries.reverse();
+        }
+        format!(r#"{{"targets":[{}]}}"#, entries.join(","))
+    };
+    let route = format!(
+        r#"{},{{"label":"wait","hold":{{"ms":20000}}}},{}"#,
+        visit_writing(&list(false)),
+        visit_writing(&list(true)).replacen("\"build\"", "\"again\"", 1)
+    );
+    let (runner, queued, failed) = play(fixture, &route, 1_600);
+    assert!(!failed, "nothing in either visit fails");
+    assert_eq!(
+        queued.len(),
+        9,
+        "nine targets, nine structures, and the second edit buys none again: {queued:?}"
+    );
+    let world = runner.world();
+    let paid = world
+        .targets()
+        .built()
+        .iter()
+        .zip(world.targets().kinds())
+        .filter(|(built, kind)| **kind == TargetKind::Build.id() && **built != BeaconId::NONE.raw())
+        .count();
+    assert_eq!(
+        paid, 9,
+        "every one of the nine keeps its `built` link, the ninth included"
+    );
+}
+
+/// A voxel as a point, the shape a target's anchor is stored in.
+fn point(at: [i32; 3]) -> [Fx; 3] {
+    let [x, y, z] = at;
+    [
+        Fx::from_voxels(i16::try_from(x).expect("a voxel")),
+        Fx::from_voxels(i16::try_from(y).expect("a voxel")),
+        Fx::from_voxels(i16::try_from(z).expect("a voxel")),
+    ]
 }

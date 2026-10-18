@@ -43,7 +43,6 @@ use pharmakos_proto::json::{self, Json};
 use pharmakos_sim::events::{Event, EventKind};
 use pharmakos_sim::interpreter::state::{NO_INDEX, StepFailure};
 use pharmakos_sim::interpreter::{Plan, PlanError, VisitState};
-use pharmakos_sim::math::quantity::Hp;
 use pharmakos_sim::math::random::{Stream, StreamRng};
 use pharmakos_sim::runner::{DEFAULT_ROUND_LIMIT, MatchSettings, Runner};
 use pharmakos_sim::tables::SeatId;
@@ -173,16 +172,21 @@ fn transcript(case: &str) -> String {
             if *at == tick {
                 let commander = runner.world().commander_of(SeatId::new(CASE_SEAT));
                 assert!(
-                    runner.world_mut().request_damage(DamageOrder {
-                        target: DamageTarget::Unit(commander),
-                        amount: Hp::new(*amount),
-                        by: SeatId::NEUTRAL,
-                    }),
+                    runner
+                        .world_mut()
+                        .request_damage(DamageOrder {
+                            target: DamageTarget::Unit(commander),
+                            amount: pharmakos_sim::math::quantity::Damage::new(i64::from(*amount))
+                                .unwrap(),
+                            by: SeatId::NEUTRAL,
+                            source: None,
+                        })
+                        .is_ok(),
                     "the damage queue has room"
                 );
             }
         }
-        if runner.step().is_none() {
+        if runner.step().unwrap().is_none() {
             break;
         }
         for event in runner.events() {
@@ -387,7 +391,7 @@ fn a_jump_only_goes_forward() {
     let mut seen_two = false;
     let mut body = String::new();
     for _ in 0..200 {
-        if runner.step().is_none() {
+        if runner.step().unwrap().is_none() {
             break;
         }
         for event in runner.events() {
@@ -699,16 +703,21 @@ fn rows_of_the_visit_case(damage: &[(u32, i32)]) -> Vec<u32> {
             if *at == tick {
                 let commander = runner.world().commander_of(SeatId::new(CASE_SEAT));
                 assert!(
-                    runner.world_mut().request_damage(DamageOrder {
-                        target: DamageTarget::Unit(commander),
-                        amount: Hp::new(*amount),
-                        by: SeatId::NEUTRAL,
-                    }),
+                    runner
+                        .world_mut()
+                        .request_damage(DamageOrder {
+                            target: DamageTarget::Unit(commander),
+                            amount: pharmakos_sim::math::quantity::Damage::new(i64::from(*amount))
+                                .unwrap(),
+                            by: SeatId::NEUTRAL,
+                            source: None,
+                        })
+                        .is_ok(),
                     "the damage queue has room"
                 );
             }
         }
-        if runner.step().is_none() {
+        if runner.step().unwrap().is_none() {
             break;
         }
         for event in runner.events() {
@@ -770,7 +779,7 @@ fn a_move_to_a_voxel_arrives_on_the_ground_under_it() {
     assert!(runner.begin_push());
     let mut body = String::new();
     for _ in 0..400 {
-        if runner.step().is_none() {
+        if runner.step().unwrap().is_none() {
             break;
         }
         for event in runner.events() {
@@ -834,7 +843,7 @@ fn a_move_a_commander_cannot_walk_fails_with_no_path() {
     wall_in_the_commander(runner.world_mut());
     let mut body = String::new();
     for _ in 0..200 {
-        if runner.step().is_none() {
+        if runner.step().unwrap().is_none() {
             break;
         }
         for event in runner.events() {
@@ -871,10 +880,15 @@ fn wall_in_the_commander(world: &mut World) {
                 .voxels()
                 .top_solid_z(x + dx, y + dy)
                 .expect("a column with a floor");
-            assert!(world.request_voxel_edit(VoxelEdit::Set {
-                at: [x + dx, y + dy, top + 5],
-                material: Material::STONE,
-            }));
+            assert!(
+                world
+                    .request_voxel_edit(VoxelEdit::Set {
+                        at: [x + dx, y + dy, top + 5],
+                        material: Material::STONE,
+                        by: None,
+                    })
+                    .is_ok()
+            );
         }
     }
 }
@@ -924,7 +938,7 @@ fn a_playbook_reads_only_its_own_seats_beacons() {
     assert!(runner.begin_push());
     let mut body = String::new();
     for _ in 0..40 {
-        if runner.step().is_none() {
+        if runner.step().unwrap().is_none() {
             break;
         }
         for event in runner.events() {
@@ -1039,7 +1053,7 @@ fn a_seat_with_no_playbook_leaves_its_commander_where_it_stands() {
     let before = runner.world().units().positions()[index];
     assert!(runner.begin_push());
     for _ in 0..100 {
-        if runner.step().is_none() {
+        if runner.step().unwrap().is_none() {
             break;
         }
         runner.clear_events();
@@ -1075,7 +1089,10 @@ fn the_interpreters_state_survives_a_save_and_a_restore() {
         .seal_playbook(SeatId::new(CASE_SEAT), plan.clone());
     assert!(runner.begin_push());
     for _ in 0..60 {
-        runner.step().expect("the segment outlasts the test");
+        runner
+            .step()
+            .unwrap()
+            .expect("the segment outlasts the test");
         runner.clear_events();
     }
     assert_eq!(
@@ -1084,7 +1101,7 @@ fn the_interpreters_state_survives_a_save_and_a_restore() {
         "the save is taken mid-visit, with a row's clock running"
     );
 
-    let snapshot = runner.capture();
+    let snapshot = runner.capture().unwrap();
     let before = runner.world().state_hash();
 
     let mut resumed = Runner::new(fresh_world());
@@ -1101,8 +1118,8 @@ fn the_interpreters_state_survives_a_save_and_a_restore() {
     // And the two run on identically from there, which is the property a save
     // exists for.
     for _ in 0..120 {
-        let one = runner.step().map(|report| report.hash);
-        let two = resumed.step().map(|report| report.hash);
+        let one = runner.step().unwrap().map(|report| report.hash);
+        let two = resumed.step().unwrap().map(|report| report.hash);
         assert_eq!(one, two, "the resumed run diverged from the saved one");
         runner.clear_events();
         resumed.clear_events();
@@ -1154,7 +1171,7 @@ fn every_playbook_halts() {
         let mut highest: u32 = 0;
         let mut reached_tail = false;
         for _ in 0..ticks {
-            if runner.step().is_none() {
+            if runner.step().unwrap().is_none() {
                 break;
             }
             runner.clear_events();
@@ -1669,4 +1686,204 @@ fn subjects_of(body: &str, kind: EventKind) -> Vec<String> {
 
 fn field(row: &str, at: usize) -> Option<&str> {
     row.split('\t').nth(at)
+}
+
+/// One playbook per construct the compile refuses for its stage: `step` goes
+/// in the route, `handler` in the handlers, either may be empty.
+fn refusal_case(step: &str, handler: &str) -> gp::v1::Playbook {
+    let route = if step.is_empty() {
+        r#"{"label": "stay", "hold": {"ms": 1000}}"#.to_owned()
+    } else {
+        step.to_owned()
+    };
+    let text = format!(
+        r#"{{
+  "schema_version": {{"major": 1, "minor": 0}},
+  "meta": {{"title": "A refused construct", "author_kind": "HUMAN"}},
+  "kind": "PLAYBOOK",
+  "declarative": {{"route": [{route}], "handlers": [{handler}]}},
+  "on_death": {{"on_respawn": "CONTINUE", "max_deaths_before_fallback": 2}},
+  "fallback": {{"hold": {{"at": {{"safest": {{}}}}}}}}
+}}"#
+    );
+    decode(&text)
+}
+
+#[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one case per construct or step, each the whole of what it checks; split, the halves would share every fixture"
+)]
+fn the_refusal_table_and_the_arms_agree() {
+    // S2's plan, E8: the sim's refusal table is what the verifier keys its
+    // E-codes by, so it has to be exactly the compile's refusals. One
+    // playbook per entry, each refused with that entry's error, holds the
+    // table to the arms; the source scan below holds the arms to the table.
+    let interface = |row: &str| {
+        format!(
+            r#"{{"label": "q", "interface": {{"beacon": {{"safest": {{}}}}, "rows": [{row}]}}}}"#
+        )
+    };
+    let walk = |to: &str| format!(r#"{{"label": "m", "move": {{"to": {to}, "pace": "DIRECT"}}}}"#);
+    let cases: Vec<(&str, String, String)> = vec![
+        (
+            "queue_structure",
+            interface(r#"{"queue_structure": {"blueprint_id": "radio_mast"}}"#),
+            String::new(),
+        ),
+        (
+            "build_target_blueprint",
+            interface(
+                r#"{"add_build_target": {"target": {"blueprint_id": "mortar", "anchor": {"voxel": {"x": 10, "y": 10, "z": 10}}}}}"#,
+            ),
+            String::new(),
+        ),
+        (
+            "build_target_beacon_anchor",
+            interface(
+                r#"{"add_build_target": {"target": {"blueprint_id": "generator", "anchor": {"safest": {}}}}}"#,
+            ),
+            String::new(),
+        ),
+        (
+            "defend_settings",
+            interface(r#"{"set_mandate_settings": {"defend": {}}}"#),
+            String::new(),
+        ),
+        (
+            "attack_settings",
+            interface(r#"{"set_mandate_settings": {"attack": {}}}"#),
+            String::new(),
+        ),
+        (
+            "most_threatened",
+            walk(r#"{"beacon_anchor": {"most_threatened": {}}}"#),
+            String::new(),
+        ),
+        (
+            "filter_side_enemy_known",
+            walk(r#"{"beacon_anchor": {"nearest": {"filter": {"side": "ENEMY_KNOWN"}}}}"#),
+            String::new(),
+        ),
+        (
+            "filter_tags",
+            walk(r#"{"beacon_anchor": {"nearest": {"filter": {"side": "OWN", "tags": ["east"]}}}}"#),
+            String::new(),
+        ),
+        (
+            "beacon_under_attack",
+            String::new(),
+            r#"{"id": "h", "when": {"beacon_under_attack": {"beacon": {"safest": {}}, "within_ms": 1000}}, "body": [{"label": "b", "hold": {"ms": 1000}}], "resume": "CONTINUE", "cooldown_ms": 1000, "max_fires": 1}"#
+                .to_owned(),
+        ),
+    ];
+    let named: Vec<&str> = cases.iter().map(|(name, _, _)| *name).collect();
+    let table: Vec<&str> = pharmakos_sim::interpreter::REFUSALS
+        .iter()
+        .map(|refusal| refusal.name)
+        .collect();
+    assert_eq!(
+        named, table,
+        "every entry of the refusal table has a case here, in the table's order"
+    );
+    for (name, step, handler) in &cases {
+        let error = compile(&refusal_case(step, handler)).unwrap_err();
+        let refusal = pharmakos_sim::interpreter::Refusal::of(&error);
+        assert_eq!(
+            refusal.map(|refusal| refusal.name),
+            Some(*name),
+            "the {name} case is refused with the table's own entry, not with {error}"
+        );
+        assert_eq!(
+            refusal.map(pharmakos_sim::interpreter::Refusal::error),
+            Some(error)
+        );
+    }
+
+    // And the other direction: no arm spells a refusal of its own. Every
+    // `construct:` written in the interpreter's source is one of the table's
+    // entries, and every entry's constant is used by an arm.
+    let source = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("interpreter.rs"),
+    )
+    .expect("the interpreter's source");
+    let written = source
+        .lines()
+        .filter(|line| line.trim_start().starts_with("construct: \""))
+        .count();
+    assert_eq!(
+        written,
+        table.len(),
+        "a `construct:` outside the refusal table is a refusal the verifier cannot see"
+    );
+    // And no other file of the crate builds the error itself: every
+    // `NotAtThisStage { .. }` in `crates/sim/src` is the enum's own
+    // definition, its `Display` arm, `Refusal::of`'s match or
+    // `Refusal::error`'s construction from the table, none of which writes a
+    // construct of its own.
+    let mut stray: Vec<String> = Vec::new();
+    let mut stack = vec![PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src")];
+    let mut files: Vec<PathBuf> = Vec::new();
+    while let Some(dir) = stack.pop() {
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "the listing is collected and sorted before use, which is clippy.toml's sanctioned use of read_dir"
+        )]
+        let entries = std::fs::read_dir(&dir).expect("a source directory");
+        for entry in entries {
+            let path = entry.expect("a directory entry").path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                files.push(path);
+            }
+        }
+    }
+    files.sort();
+    for path in &files {
+        let text = std::fs::read_to_string(path).expect("a source file");
+        let mut from = 0;
+        while let Some(hit) = text
+            .get(from..)
+            .and_then(|rest| rest.find("NotAtThisStage {"))
+        {
+            let at = from + hit;
+            from = at + 1;
+            let body = text
+                .get(at..)
+                .and_then(|rest| rest.split('}').next())
+                .unwrap_or_default();
+            if body.contains("construct: \"") {
+                stray.push(format!(
+                    "{}: {}",
+                    path.display(),
+                    body.lines().next().unwrap_or_default()
+                ));
+            }
+        }
+    }
+    assert!(
+        stray.is_empty(),
+        "a `NotAtThisStage` built outside the refusal table is a refusal the verifier cannot see:\n{}",
+        stray.join("\n")
+    );
+    for constant in [
+        "REFUSE_QUEUE_STRUCTURE",
+        "REFUSE_BUILD_BLUEPRINT",
+        "REFUSE_BUILD_BEACON_ANCHOR",
+        "REFUSE_DEFEND_SETTINGS",
+        "REFUSE_ATTACK_SETTINGS",
+        "REFUSE_MOST_THREATENED",
+        "REFUSE_ENEMY_KNOWN",
+        "REFUSE_FILTER_TAGS",
+        "REFUSE_BEACON_UNDER_ATTACK",
+    ] {
+        let uses = source.matches(&format!("{constant}.error()")).count();
+        assert!(
+            uses >= 1,
+            "{constant} is in the table and no arm refuses with it"
+        );
+    }
 }

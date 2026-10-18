@@ -139,7 +139,7 @@ fn chain(world: World, ticks: u32) -> String {
                     MatchPhase::Recap => assert!(runner.end_recap(), "a recap closes"),
                 }
             }
-            match runner.step() {
+            match runner.step().unwrap() {
                 Some(report) => report.hash,
                 None => break,
             }
@@ -255,7 +255,7 @@ fn save_and_restore_round_trips_hash_identically() {
     let mut enc = Enc::with_capacity(64 * 1024);
     for round in 0..50 {
         for _ in 0..10 {
-            let _ = world.step(&mut enc);
+            let _ = world.step(&mut enc).unwrap();
         }
         let before = world.state_hash();
         let bytes = Snapshot::capture(&world)
@@ -277,8 +277,8 @@ fn save_and_restore_round_trips_hash_identically() {
         // wrong for the next is the desync this test exists to catch.
         let mut continued = world.clone();
         assert_eq!(
-            restored.step(&mut enc),
-            continued.step(&mut enc),
+            restored.step(&mut enc).unwrap(),
+            continued.step(&mut enc).unwrap(),
             "round {round}: the restored world diverges on the next tick"
         );
         assert_eq!(
@@ -388,7 +388,7 @@ fn a_restore_resizes_the_derived_index_to_the_restored_world() {
     let mut big = world_with(rules());
     let mut enc = Enc::with_capacity(64 * 1024);
     for _ in 0..20 {
-        let _ = big.step(&mut enc);
+        let _ = big.step(&mut enc).unwrap();
     }
     let expected_units = big.units().len();
 
@@ -401,7 +401,7 @@ fn a_restore_resizes_the_derived_index_to_the_restored_world() {
 
     // One more tick, then ask the index for everything: a grid that was not
     // resized answers with nothing at all.
-    assert_eq!(small.step(&mut enc), big.step(&mut enc));
+    assert_eq!(small.step(&mut enc).unwrap(), big.step(&mut enc).unwrap());
     let centre = [Fx::from_voxels(192), Fx::from_voxels(192), Fx::ZERO];
     let found = small.candidates_near(centre, Fx::from_voxels(1_024)).len();
     assert_eq!(
@@ -450,7 +450,7 @@ fn the_tables_move_every_tick_and_not_merely_the_header() {
     let mut previous: Option<Vec<u8>> = None;
     let mut moved = 0_u32;
     for _ in 0..200 {
-        let _ = world.step(&mut enc);
+        let _ = world.step(&mut enc).unwrap();
         let body = enc
             .as_bytes()
             .get(HEADER_BYTES..)
@@ -668,7 +668,7 @@ fn the_broadphase_answer_does_not_depend_on_the_cell_size() {
         let mut world = world_with(altered);
         let mut enc = Enc::with_capacity(64 * 1024);
         for _ in 0..20 {
-            let _ = world.step(&mut enc);
+            let _ = world.step(&mut enc).unwrap();
         }
         answers.push(world.candidates_near(centre, radius).to_vec());
         everything.push(world.candidates_near(centre, whole_map).len());
@@ -711,7 +711,7 @@ fn the_broadphase_answer_does_not_depend_on_the_cell_size() {
     let mut world = world_with(rules());
     let mut enc = Enc::with_capacity(64 * 1024);
     for _ in 0..20 {
-        let _ = world.step(&mut enc);
+        let _ = world.step(&mut enc).unwrap();
     }
     let near = world.candidates_near(centre, radius).to_vec();
     let positions: Vec<[Fx; 3]> = world.units().positions().to_vec();
@@ -756,7 +756,7 @@ fn a_tick_advances_the_clock_by_exactly_one() {
     let mut enc = Enc::with_capacity(64 * 1024);
     assert_eq!(world.tick(), Tick::ZERO);
     for expected in 1..=10 {
-        let _ = world.step(&mut enc);
+        let _ = world.step(&mut enc).unwrap();
         assert_eq!(world.tick(), Tick::new(expected));
     }
 }
@@ -1024,11 +1024,16 @@ fn an_edit_moves_only_its_own_chunk_digest() {
     let before_hash = world.state_hash();
 
     let (at, chunk) = a_solid_voxel(&world, 100, 100);
-    assert!(world.request_voxel_edit(VoxelEdit::Set {
-        at,
-        material: Material::AIR
-    }));
-    let _ = world.step(&mut enc);
+    assert!(
+        world
+            .request_voxel_edit(VoxelEdit::Set {
+                at,
+                material: Material::AIR,
+                by: None,
+            })
+            .is_ok()
+    );
+    let _ = world.step(&mut enc).unwrap();
 
     let after_digests = world.chunks().as_slice().to_vec();
     let moved: Vec<u32> = before_digests
@@ -1062,11 +1067,16 @@ fn an_edit_moves_only_its_own_chunk_digest() {
     // An edit that changes nothing marks nothing: a no-op must not grow a
     // snapshot or move a digest.
     let steady = world.chunks().as_slice().to_vec();
-    assert!(world.request_voxel_edit(VoxelEdit::Set {
-        at,
-        material: Material::AIR
-    }));
-    let _ = world.step(&mut enc);
+    assert!(
+        world
+            .request_voxel_edit(VoxelEdit::Set {
+                at,
+                material: Material::AIR,
+                by: None,
+            })
+            .is_ok()
+    );
+    let _ = world.step(&mut enc).unwrap();
     assert_eq!(world.chunks().as_slice(), steady.as_slice());
     assert!(world.voxels().settled().is_empty());
 }
@@ -1083,11 +1093,16 @@ fn a_craters_touched_chunks_are_ordered_and_complete() {
 
     // On a chunk corner, so the ball spans several chunks in all three axes.
     let (at, _) = a_solid_voxel(&world, 128, 128);
-    assert!(world.request_voxel_edit(VoxelEdit::Crater {
-        centre: at,
-        radius: 6
-    }));
-    let _ = world.step(&mut enc);
+    assert!(
+        world
+            .request_voxel_edit(VoxelEdit::Crater {
+                centre: at,
+                radius: 6,
+                by: None,
+            })
+            .is_ok()
+    );
+    let _ = world.step(&mut enc).unwrap();
 
     let after = snapshot_chunks(&world);
     let expected = changed_chunks(&before, &after);
@@ -1191,7 +1206,7 @@ fn a_restore_refuses_a_route_digest_that_does_not_describe_its_nodes() {
     let mut enc = Enc::with_capacity(64 * 1024);
     let mut tick = 0;
     while tick < 8 {
-        let _ = world.step(&mut enc);
+        let _ = world.step(&mut enc).unwrap();
         tick += 1;
     }
 
@@ -1245,11 +1260,16 @@ fn a_restore_refuses_a_digest_column_that_does_not_describe_its_store() {
     let mut world = world_with(rules());
     let mut enc = Enc::with_capacity(64 * 1024);
     let (at, _) = a_solid_voxel(&world, 96, 96);
-    assert!(world.request_voxel_edit(VoxelEdit::Crater {
-        centre: at,
-        radius: 5
-    }));
-    let _ = world.step(&mut enc);
+    assert!(
+        world
+            .request_voxel_edit(VoxelEdit::Crater {
+                centre: at,
+                radius: 5,
+                by: None,
+            })
+            .is_ok()
+    );
+    let _ = world.step(&mut enc).unwrap();
 
     let good = Snapshot::capture(&world);
     let mut fresh = world_with(rules());
@@ -1296,11 +1316,16 @@ fn save_and_restore_round_trips_with_modified_chunks() {
     let mut craters: u32 = 0;
     for step in 0..6 {
         let (at, _) = a_solid_voxel(&world, 40 + step * 37, 60 + step * 29);
-        assert!(world.request_voxel_edit(VoxelEdit::Crater {
-            centre: at,
-            radius: 5
-        }));
-        let _ = world.step(&mut enc);
+        assert!(
+            world
+                .request_voxel_edit(VoxelEdit::Crater {
+                    centre: at,
+                    radius: 5,
+                    by: None,
+                })
+                .is_ok()
+        );
+        let _ = world.step(&mut enc).unwrap();
         craters = craters.saturating_add(1);
     }
     assert_eq!(craters, 6);
@@ -1364,8 +1389,8 @@ fn save_and_restore_round_trips_with_modified_chunks() {
 
     let mut continued = world.clone();
     assert_eq!(
-        restored.step(&mut enc),
-        continued.step(&mut enc),
+        restored.step(&mut enc).unwrap(),
+        continued.step(&mut enc).unwrap(),
         "the restored world diverges on the next tick"
     );
 
@@ -1383,10 +1408,14 @@ fn the_voxel_edit_queue_is_bounded_and_says_so() {
     let mut world = world_with(rules());
     let mut accepted: u32 = 0;
     for _ in 0..1_000 {
-        if world.request_voxel_edit(VoxelEdit::Crater {
-            centre: [1, 1, 1],
-            radius: 0,
-        }) {
+        if world
+            .request_voxel_edit(VoxelEdit::Crater {
+                centre: [1, 1, 1],
+                radius: 0,
+                by: None,
+            })
+            .is_ok()
+        {
             accepted = accepted.saturating_add(1);
         }
     }
@@ -1401,7 +1430,7 @@ fn the_voxel_edit_queue_is_bounded_and_says_so() {
 
     // And the queue is emptied by the phase that drains it.
     let mut enc = Enc::with_capacity(64 * 1024);
-    let _ = world.step(&mut enc);
+    let _ = world.step(&mut enc).unwrap();
     assert_eq!(world.queued_voxel_edits(), 0);
 }
 
@@ -1441,7 +1470,7 @@ fn the_map_is_inside_the_hash_and_not_merely_beside_it() {
     // causal path.
     let mut enc = Enc::with_capacity(64 * 1024);
     for _ in 0..25 {
-        let _ = base.step(&mut enc);
+        let _ = base.step(&mut enc).unwrap();
     }
     for (index, position) in base.units().positions().iter().enumerate() {
         let x = position[0].floor_voxels();
@@ -1531,37 +1560,174 @@ fn the_wire_ids_of_the_new_enums_are_dense_and_unique() {
 }
 
 #[test]
-fn walkers_without_a_raider_row_are_refused_and_no_walkers_need_none() {
+fn a_table_without_a_raider_row_is_refused_before_any_world_is_built() {
     // `fill_unit_table` gives the scaffolding walkers a raider's hit points
-    // from the rules table. A table with no `units.raider` row has none to
-    // give, so a world that asks for walkers is refused with the row's name
-    // rather than built on an invented number; a world that asks for none
-    // never reads the row, and builds.
-    let no_raider = || {
-        rules_edited(|message| {
-            message
+    // from the rules table. Since S2's `base` lane every unit kind's row is
+    // read typed when the table loads (decisions-log item 136 (5)), so a table
+    // with no `units.raider` row is refused there, naming the row, and no world
+    // is ever built on an invented number.
+    let text = std::fs::read_to_string(repo_root().join("rules").join("rules.v1.json"))
+        .expect("the committed rules table exists");
+    let mut message: gp::v1::RulesTable =
+        pharmakos_proto::json::decode(&text).expect("the committed table is canonical gp.v1 JSON");
+    message
+        .units
+        .as_mut()
+        .expect("the committed table has a units block")
+        .raider = None;
+    assert_eq!(
+        RulesTable::from_message(&message),
+        Err(pharmakos_sim::rules::RulesError::MissingBlock(
+            "units.raider"
+        )),
+        "a table with no raider row is refused at load, naming the row"
+    );
+}
+
+/// The committed rules table as a message, for a test to break one row of.
+fn committed_message() -> gp::v1::RulesTable {
+    let text = std::fs::read_to_string(repo_root().join("rules").join("rules.v1.json"))
+        .expect("the committed rules table exists");
+    pharmakos_proto::json::decode(&text).expect("the committed table is canonical gp.v1 JSON")
+}
+
+#[test]
+fn a_table_missing_the_economy_block_is_refused() {
+    // Before S2's `base` lane `mandate.rs`' `backlogged` read a missing
+    // economy block's threshold as 0, which made every beacon with any work
+    // backlogged; the block is now read typed at load (decisions-log item
+    // 136 (5)).
+    let mut message = committed_message();
+    message.economy = None;
+    assert_eq!(
+        RulesTable::from_message(&message),
+        Err(pharmakos_sim::rules::RulesError::MissingBlock("economy"))
+    );
+    let mut message = committed_message();
+    message
+        .structures
+        .as_mut()
+        .expect("the committed table has a structures block")
+        .generator = None;
+    assert_eq!(
+        RulesTable::from_message(&message),
+        Err(pharmakos_sim::rules::RulesError::MissingBlock(
+            "structures.generator"
+        )),
+        "a structure row the cost and hit-point readers would have answered zero for"
+    );
+}
+
+#[test]
+fn a_row_out_of_range_is_refused_at_load() {
+    let refused = |edit: &dyn Fn(&mut gp::v1::RulesTable), field: &str| {
+        let mut message = committed_message();
+        edit(&mut message);
+        match RulesTable::from_message(&message) {
+            Err(pharmakos_sim::rules::RulesError::OutOfRange { field: named, .. }) => {
+                assert_eq!(named, field, "the refusal names the row");
+            }
+            other => panic!("{field} out of range was not refused by name: {other:?}"),
+        }
+    };
+    refused(
+        &|message| {
+            if let Some(row) = message
                 .units
                 .as_mut()
-                .expect("the committed table has a units block")
-                .raider = None;
-        })
-    };
-    let config = |units_per_seat: u32| WorldConfig {
+                .and_then(|units| units.raider.as_mut())
+            {
+                row.hp = u32::try_from(i32::MAX).expect("fits") + 1;
+            }
+        },
+        "units.raider",
+    );
+    refused(
+        &|message| {
+            if let Some(row) = message
+                .units
+                .as_mut()
+                .and_then(|units| units.scout.as_mut())
+            {
+                row.hp = 0;
+            }
+        },
+        "units.scout",
+    );
+    refused(
+        &|message| {
+            if let Some(beacon) = message.beacon.as_mut() {
+                beacon.core_hp = 0;
+            }
+        },
+        "beacon.core_hp",
+    );
+    refused(
+        &|message| {
+            if let Some(commander) = message.commander.as_mut() {
+                commander.respawn_base_ms = -1;
+            }
+        },
+        "commander.respawn_base_ms",
+    );
+}
+
+#[test]
+fn a_zero_round_limit_is_refused() {
+    // S2's plan, E7: the sim no longer clamps the lobby's settings; it refuses
+    // them where they are handed over, as the gateway does at the lobby.
+    let config = |settings: MatchSettings| WorldConfig {
         match_seed: pharmakos_sim::DETERMINISM_MATCH_SEED,
         seats: pharmakos_sim::DETERMINISM_SEATS,
-        units_per_seat,
-        rules: no_raider(),
-        match_settings: MatchSettings::default(),
+        units_per_seat: 0,
+        rules: rules_edited(|_| {}),
+        match_settings: settings,
     };
-    assert!(
-        matches!(
-            World::new(&config(1)),
-            Err(pharmakos_sim::MapError::MissingBlock("units.raider"))
-        ),
-        "walkers with no raider row are refused, naming the row"
+    assert!(matches!(
+        World::new(&config(MatchSettings {
+            segment_lengths_ms: Vec::new(),
+            round_limit: 0,
+        })),
+        Err(pharmakos_sim::MapError::Settings(
+            pharmakos_sim::runner::SettingsError::ZeroRoundLimit
+        ))
+    ));
+    assert!(matches!(
+        World::new(&config(MatchSettings {
+            segment_lengths_ms: vec![180_000, 10],
+            round_limit: 3,
+        })),
+        Err(pharmakos_sim::MapError::Settings(
+            pharmakos_sim::runner::SettingsError::ShortSegment { index: 1, ms: 10 }
+        ))
+    ));
+}
+
+#[test]
+fn a_zero_or_negative_damage_cannot_be_built() {
+    use pharmakos_sim::math::quantity::{Damage, Hp, QuantityError, Repair};
+    assert_eq!(
+        Damage::new(0),
+        Err(QuantityError::NotPositive { amount: 0 })
     );
-    assert!(
-        World::new(&config(0)).is_ok(),
-        "a world with no walkers never reads the raider row"
+    assert_eq!(
+        Damage::new(-5),
+        Err(QuantityError::NotPositive { amount: -5 })
     );
+    let past = i64::from(i32::MAX) + 1;
+    assert_eq!(
+        Damage::new(past),
+        Err(QuantityError::TooLarge { amount: past })
+    );
+    let most = Damage::new(i64::from(i32::MAX)).expect("i32::MAX is the most a count loses");
+    assert_eq!(most.raw(), i32::MAX);
+    assert_eq!(Hp::new(10).damaged_by(most), Hp::ZERO, "clamped at zero");
+    assert!(Repair::new(0).is_err() && Repair::new(past).is_err());
+    let repair = Repair::new(30).expect("a repair");
+    assert_eq!(
+        Hp::new(80).repaired_by(repair, Hp::new(100)),
+        Hp::new(100),
+        "repair stops at the maximum"
+    );
+    assert_eq!(Hp::new(50).repaired_by(repair, Hp::new(100)), Hp::new(80));
 }

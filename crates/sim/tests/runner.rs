@@ -23,7 +23,7 @@ use pharmakos_sim::encoding::Enc;
 use pharmakos_sim::events::{Event, EventKind};
 use pharmakos_sim::knowledge::Position;
 use pharmakos_sim::math::fixed::Fx;
-use pharmakos_sim::math::quantity::{Hp, MS_PER_TICK, Ms, Tick};
+use pharmakos_sim::math::quantity::{Ms, Tick};
 use pharmakos_sim::runner::{
     DEFAULT_ROUND_LIMIT, MatchEndReason, MatchPhase, MatchSettings, PHASE_CYCLE, Runner,
     SealRefused,
@@ -91,7 +91,7 @@ fn runner(seats: u32, lengths: &[i32]) -> Runner {
 fn play(runner: &mut Runner, ticks: u32) -> u32 {
     let mut ran = 0;
     while ran < ticks {
-        if runner.step().is_none() {
+        if runner.step().unwrap().is_none() {
             break;
         }
         ran += 1;
@@ -113,14 +113,18 @@ fn core_of(world: &World, seat: u8) -> BeaconId {
 /// Kill something outright.
 fn destroy(runner: &mut Runner, target: DamageTarget) {
     assert!(
-        runner.world_mut().request_damage(DamageOrder {
-            target,
-            amount: Hp::new(1_000_000),
-            // Nobody's doing: these tests kill outright to exercise the rules
-            // that follow from a death, and `NEUTRAL` is how a death with no
-            // enemy damage on the clock is written (item 17).
-            by: SeatId::NEUTRAL,
-        }),
+        runner
+            .world_mut()
+            .request_damage(DamageOrder {
+                target,
+                amount: pharmakos_sim::math::quantity::Damage::new(1_000_000).unwrap(),
+                source: None,
+                // Nobody's doing: these tests kill outright to exercise the rules
+                // that follow from a death, and `NEUTRAL` is how a death with no
+                // enemy damage on the clock is written (item 17).
+                by: SeatId::NEUTRAL,
+            })
+            .is_ok(),
         "the damage queue has room"
     );
 }
@@ -151,7 +155,10 @@ fn the_phases_run_in_their_fixed_order() {
 
     // A Lull consumes no tick: it is a state, not a duration (AGENTS.md §4.5 —
     // the Lull's timer is the host's and the sim never reads it).
-    assert!(runner.step().is_none(), "no tick runs outside a Push");
+    assert!(
+        runner.step().unwrap().is_none(),
+        "no tick runs outside a Push"
+    );
     assert_eq!(runner.tick(), Tick::ZERO);
 
     assert!(runner.begin_push());
@@ -160,7 +167,10 @@ fn the_phases_run_in_their_fixed_order() {
 
     assert_eq!(play(&mut runner, SHORT_TICKS), SHORT_TICKS);
     assert_eq!(runner.phase(), MatchPhase::Recap, "the segment ran out");
-    assert!(runner.step().is_none(), "no tick runs during a recap");
+    assert!(
+        runner.step().unwrap().is_none(),
+        "no tick runs during a recap"
+    );
 
     assert!(runner.end_recap());
     assert_eq!(runner.phase(), MatchPhase::Lull);
@@ -180,7 +190,7 @@ fn a_push_runs_exactly_the_segments_length_in_ticks() {
 
     assert_eq!(play(&mut runner, SHORT_TICKS - 1), SHORT_TICKS - 1);
     assert_eq!(runner.phase(), MatchPhase::Push, "one tick still to run");
-    assert!(runner.step().is_some());
+    assert!(runner.step().unwrap().is_some());
     assert_eq!(runner.phase(), MatchPhase::Recap);
     assert_eq!(runner.tick(), Tick::new(SHORT_TICKS));
 }
@@ -210,26 +220,33 @@ fn an_empty_host_list_plays_the_rules_tables_ladder() {
 }
 
 #[test]
-fn a_degenerate_ladder_is_clamped_rather_than_trusted() {
-    // A lobby setting is not trusted. `round_limit` was already clamped to a
-    // round; every ladder entry is clamped to a tick for the same reason, so a
-    // zero or a negative cannot describe a round that closes before anything in
-    // it runs while the editor's clock shows nothing.
-    let world = world(2, &[0, -5_000, 1]);
-    let state = world.match_state();
-    assert_eq!(
-        state.segment_lengths_ms(),
-        [MS_PER_TICK, MS_PER_TICK, MS_PER_TICK],
-        "every entry is floored at one tick"
-    );
-    assert_eq!(state.coming_segment_ms(), Ms::new(MS_PER_TICK));
+fn a_degenerate_ladder_is_refused_on_the_way_in_and_floored_on_the_way_back() {
+    // A lobby setting is not trusted. Since S2's `base` lane (E7) a zero or a
+    // negative ladder entry is refused where the world is built, rather than
+    // clamped to a tick: it would describe a round that closes before anything
+    // in it runs while the editor's clock shows nothing.
+    assert!(matches!(
+        World::new(&WorldConfig {
+            match_seed: pharmakos_sim::DETERMINISM_MATCH_SEED,
+            seats: 2,
+            units_per_seat: 0,
+            rules: rules(),
+            match_settings: MatchSettings {
+                segment_lengths_ms: vec![0, -5_000, 1],
+                round_limit: DEFAULT_ROUND_LIMIT,
+            },
+        }),
+        Err(pharmakos_sim::MapError::Settings(
+            pharmakos_sim::runner::SettingsError::ShortSegment { index: 0, ms: 0 }
+        ))
+    ));
 
     // And the same on the way back from a file. Structure is refused at the
     // door (an undefined phase is), but a length is a value and takes the same
     // clamp — refusing it would make `Snapshot::default()`, which carries no
     // ladder at all, unrestorable.
     let mut runner = runner(2, &[SHORT_MS]);
-    let mut saved = runner.capture();
+    let mut saved = runner.capture().unwrap();
     saved.match_segment_lengths_ms.clear();
     saved.coming_segment_ms = i32::MIN;
     runner
@@ -241,7 +258,7 @@ fn a_degenerate_ladder_is_clamped_rather_than_trusted() {
         1,
         "a Push runs at least one tick, whatever the file said"
     );
-    assert!(runner.step().is_some(), "and that tick runs");
+    assert!(runner.step().unwrap().is_some(), "and that tick runs");
 }
 
 #[test]
@@ -336,7 +353,7 @@ fn a_restored_match_keeps_its_phase_round_and_ladder() {
     let mut first = runner(3, &[SHORT_MS, 6_000, 7_000]);
     assert!(first.begin_push());
     play(&mut first, 40);
-    let saved = first.capture();
+    let saved = first.capture().unwrap();
     let hash = first.world().state_hash();
 
     let mut second = Runner::new(world(3, &[]));
@@ -391,7 +408,7 @@ fn the_match_end_rule_is_checked_at_the_tick_not_at_the_segment_boundary() {
 
     let core = core_of(runner.world(), 1);
     destroy(&mut runner, DamageTarget::Beacon(core));
-    let report = runner.step().expect("the tick runs");
+    let report = runner.step().unwrap().expect("the tick runs");
 
     assert_eq!(report.tick, Tick::new(6));
     assert!(report.match_ended, "the tick that decided it says so");
@@ -419,7 +436,7 @@ fn the_match_end_rule_is_checked_at_the_tick_not_at_the_segment_boundary() {
     assert!(fired.contains(&"segment_ended"), "{fired:?}");
     assert!(fired.contains(&"match_ended"), "{fired:?}");
     assert!(
-        runner.step().is_none(),
+        runner.step().unwrap().is_none(),
         "a decided match runs no more ticks"
     );
 
@@ -430,7 +447,7 @@ fn the_match_end_rule_is_checked_at_the_tick_not_at_the_segment_boundary() {
         !has(runner.events(), EventKind::MatchEnded),
         "the end was announced at the tick it happened, and is not announced twice"
     );
-    assert!(runner.step().is_none());
+    assert!(runner.step().unwrap().is_none());
 }
 
 #[test]
@@ -442,7 +459,7 @@ fn a_seat_with_no_beacons_is_eliminated_and_its_units_disband() {
 
     let core = core_of(runner.world(), 2);
     destroy(&mut runner, DamageTarget::Beacon(core));
-    runner.step().expect("the tick runs");
+    runner.step().unwrap().expect("the tick runs");
 
     assert_eq!(
         runner.phase(),
@@ -557,7 +574,7 @@ fn a_beacon_death_ruins_the_structures_homed_to_it() {
     let core = core_of(runner.world(), 2);
     let at = runner.world().beacons().positions()[0];
 
-    let mut saved = runner.capture();
+    let mut saved = runner.capture().unwrap();
     saved.structure_id.push(0);
     saved.structure_seat.push(2);
     saved.structure_kind.push(StructureKind::Generator.id());
@@ -581,7 +598,7 @@ fn a_beacon_death_ruins_the_structures_homed_to_it() {
     play(&mut runner, 2);
     runner.clear_events();
     destroy(&mut runner, DamageTarget::Beacon(core));
-    runner.step().expect("the tick runs");
+    runner.step().unwrap().expect("the tick runs");
 
     assert_eq!(
         runner.world().structures().seats()[0],
@@ -612,7 +629,7 @@ fn a_pending_respawn_always_completes_by_segment_end() {
     let commander = runner.world().commander_of(SeatId::new(0));
     assert!(commander.is_some(), "an occupied seat has a commander");
     destroy(&mut runner, DamageTarget::Unit(commander));
-    runner.step().expect("the tick runs");
+    runner.step().unwrap().expect("the tick runs");
 
     let due = runner.world().seats().respawn_due()[0];
     assert_ne!(due, NO_RESPAWN, "a death schedules a respawn");
@@ -654,12 +671,12 @@ fn the_respawn_delay_grows_with_each_death_in_the_same_push() {
     let mut delays: Vec<u32> = Vec::new();
     for _ in 0..3_u32 {
         destroy(&mut runner, DamageTarget::Unit(commander));
-        let died = runner.step().expect("the tick runs").tick;
+        let died = runner.step().unwrap().expect("the tick runs").tick;
         let due = runner.world().seats().respawn_due()[0];
         delays.push(due.saturating_sub(died.raw()));
         // Run to the respawn.
         while runner.world().seats().respawn_due()[0] != NO_RESPAWN {
-            runner.step().expect("the segment is long enough");
+            runner.step().unwrap().expect("the segment is long enough");
         }
     }
 
@@ -675,7 +692,7 @@ fn a_new_push_resets_the_per_push_death_counter() {
     assert!(runner.begin_push());
     let commander = runner.world().commander_of(SeatId::new(0));
     destroy(&mut runner, DamageTarget::Unit(commander));
-    runner.step().expect("the tick runs");
+    runner.step().unwrap().expect("the tick runs");
     assert_eq!(runner.world().seats().commander_deaths()[0], 1);
 
     play(&mut runner, SHORT_TICKS);
@@ -752,7 +769,7 @@ fn the_event_bus_is_not_in_the_state_encoding() {
     );
 
     // And it is not in the file either.
-    let saved = runner.capture();
+    let saved = runner.capture().unwrap();
     let mut other = Runner::new(world(2, &[SHORT_MS]));
     other.restore(&saved).expect("the snapshot restores");
     assert!(
@@ -773,7 +790,7 @@ fn a_restore_re_anchors_the_feed_so_two_resumes_agree() {
     let mut source = runner(2, &[SHORT_MS, 15_000]);
     assert!(source.begin_push());
     assert_eq!(play(&mut source, SHORT_TICKS), SHORT_TICKS);
-    let saved = source.capture();
+    let saved = source.capture().unwrap();
 
     let mut fresh = Runner::new(world(2, &[SHORT_MS, 15_000]));
     let mut used = Runner::new(world(2, &[SHORT_MS, 15_000]));
@@ -791,7 +808,7 @@ fn a_restore_re_anchors_the_feed_so_two_resumes_agree() {
         assert!(runner.events().is_empty(), "a restore empties the feed");
         assert!(runner.end_recap());
         assert!(runner.begin_push());
-        runner.step().expect("the next segment runs");
+        runner.step().unwrap().expect("the next segment runs");
         runner
             .events()
             .iter()
@@ -813,7 +830,7 @@ fn the_same_seed_produces_the_same_events() {
         let mut all: Vec<(u32, u32, &'static str)> = Vec::new();
         assert!(runner.begin_push());
         for _ in 0..SHORT_TICKS {
-            if runner.step().is_none() {
+            if runner.step().unwrap().is_none() {
                 break;
             }
             for event in runner.events() {
@@ -872,7 +889,7 @@ fn a_host_that_drains_never_meets_a_full_bus() {
         if tick == 10 {
             destroy(&mut runner, DamageTarget::Beacon(core));
         }
-        if runner.step().is_none() {
+        if runner.step().unwrap().is_none() {
             break;
         }
         let waiting = runner.events().len();
@@ -904,7 +921,7 @@ fn a_position_rides_with_an_event_that_happened_somewhere() {
     let core = core_of(runner.world(), 2);
     let at = runner.world().beacons().positions()[usize::try_from(core.raw()).unwrap()];
     destroy(&mut runner, DamageTarget::Beacon(core));
-    runner.step().expect("the tick runs");
+    runner.step().unwrap().expect("the tick runs");
 
     let destroyed = runner
         .events()
@@ -967,7 +984,7 @@ fn a_playbook_is_sealed_during_a_lull_and_refused_in_every_other_phase() {
         "nobody is in control during a Push"
     );
 
-    while let Some(report) = runner.step() {
+    while let Some(report) = runner.step().unwrap() {
         if report.segment_ended {
             break;
         }
@@ -1004,7 +1021,7 @@ fn a_playbook_is_sealed_during_a_lull_and_refused_in_every_other_phase() {
         .expect("a one-round match"),
     );
     assert!(last.begin_push());
-    while let Some(report) = last.step() {
+    while let Some(report) = last.step().unwrap() {
         if report.segment_ended {
             break;
         }
@@ -1071,3 +1088,148 @@ fn a_seal_reports_itself_on_the_event_bus() {
     assert_eq!(sealed[0].seat, Some(SeatId::new(1)));
     assert_eq!(sealed[0].value, 1, "one route step");
 }
+
+/// S2's #116 reviews, item 1: a phased tick dropped after its Match phase on
+/// a segment's last tick reports the recap before its hash has run. Nothing
+/// may move the match on from there until the tick is finished.
+#[test]
+fn a_tick_left_open_after_its_match_phase_blocks_every_transition() {
+    let mut runner = runner(2, &[SHORT_MS]);
+    assert!(runner.begin_push());
+    // Every tick but the segment's last, whole.
+    for _ in 1..SHORT_TICKS {
+        assert!(runner.step().unwrap().is_some());
+    }
+    {
+        let mut tick = runner
+            .phased_tick()
+            .expect("a tick opens")
+            .expect("still a Push");
+        while tick.next_phase() != Some(pharmakos_sim::world::Phase::Hash) {
+            assert!(tick.run_next_phase().expect("a phase runs").is_some());
+        }
+        // Dropped here: every phase has run, the hash has not.
+    }
+    assert!(runner.tick_is_open());
+    assert_eq!(
+        runner.phase(),
+        MatchPhase::Recap,
+        "the Match phase closed the segment"
+    );
+    assert!(!runner.end_recap(), "no recap closes over an open tick");
+    assert!(!runner.begin_push(), "and no Push opens over one");
+    assert_eq!(
+        runner.seal_playbook(SeatId::new(0), a_plan()),
+        Err(pharmakos_sim::runner::SealRefused::MidTick)
+    );
+    let saved = Snapshot::capture(runner.world());
+    assert_eq!(runner.restore(&saved), Err(SnapshotError::MidTick));
+    assert!(runner.capture().is_err());
+    // Finishing the tick lets the match move on.
+    let report = runner
+        .phased_tick()
+        .expect("the open tick")
+        .expect("resumed")
+        .finish()
+        .expect("the tick ends");
+    assert!(report.segment_ended);
+    assert!(!runner.tick_is_open());
+    assert!(
+        runner.end_recap(),
+        "the recap closes once the tick is whole"
+    );
+}
+
+/// Item 2: a layout is refused once a seat has sealed, refused when it names
+/// a commander, and a laid-out match restored at round 1 tick 0 cannot take a
+/// second one.
+#[test]
+fn a_layout_is_refused_after_a_seal_for_a_commander_and_a_second_time() {
+    use pharmakos_sim::runner::{Layout, LayoutBeacon, LayoutRefused};
+    use pharmakos_sim::seams::MandateKind;
+    use pharmakos_sim::tables::UnitKind;
+    let layout = |kind: UnitKind| Layout {
+        beacons: vec![LayoutBeacon {
+            seat: SeatId::new(0),
+            column: [200, 200],
+            mandate: MandateKind::Build,
+            units: vec![(kind, 1)],
+        }],
+    };
+    let mut sealed = runner(2, &[SHORT_MS]);
+    sealed
+        .seal_playbook(SeatId::new(0), a_plan())
+        .expect("a Lull takes a seal");
+    assert_eq!(
+        sealed.seed_layout(&layout(UnitKind::Raider)),
+        Err(LayoutRefused::AfterASeal)
+    );
+    let mut lobby = runner(2, &[SHORT_MS]);
+    assert_eq!(
+        lobby.seed_layout(&layout(UnitKind::Commander)),
+        Err(LayoutRefused::Commander)
+    );
+    assert!(
+        !lobby.world().is_laid_out(),
+        "a refused layout places nothing"
+    );
+    assert!(lobby.seed_layout(&layout(UnitKind::Raider)).is_ok());
+    assert!(lobby.world().is_laid_out());
+    let saved = lobby.capture().expect("between ticks");
+    let mut resumed = runner(2, &[SHORT_MS]);
+    resumed.restore(&saved).expect("the save restores");
+    assert_eq!(resumed.tick(), Tick::ZERO, "still round 1 tick 0");
+    assert_eq!(
+        resumed.seed_layout(&layout(UnitKind::Raider)),
+        Err(LayoutRefused::NotInTheLobby),
+        "the world says it was laid out, whatever process restored it"
+    );
+}
+
+/// Item 4: a save file's settings are refused as a lobby's are, and the
+/// default snapshot's empty ladder still restores.
+#[test]
+fn a_save_files_degenerate_settings_are_refused() {
+    let mut runner = runner(2, &[SHORT_MS]);
+    let good = runner.capture().unwrap();
+    let edits: [SnapshotEdit; 3] = [
+        ("a zero round limit", |s: &mut Snapshot| {
+            s.match_round_limit = 0;
+        }),
+        ("a ladder entry under a tick", |s: &mut Snapshot| {
+            s.match_segment_lengths_ms = vec![SHORT_MS, 10];
+        }),
+        ("a ladder past its bound", |s: &mut Snapshot| {
+            s.match_segment_lengths_ms = vec![SHORT_MS; 9];
+        }),
+    ];
+    for (name, edit) in edits {
+        let mut bad = good.clone();
+        edit(&mut bad);
+        assert!(
+            matches!(runner.restore(&bad), Err(SnapshotError::MatchState { .. })),
+            "{name} is refused"
+        );
+    }
+    let mut empty = good;
+    empty.match_segment_lengths_ms.clear();
+    assert!(runner.restore(&empty).is_ok(), "an empty ladder restores");
+}
+
+/// Item 5: the lobby's ladder is bounded as the rules table's is.
+#[test]
+fn a_ladder_past_its_bound_is_refused_on_the_way_in() {
+    let settings = MatchSettings {
+        segment_lengths_ms: vec![SHORT_MS; pharmakos_sim::rules::MAX_SEGMENT_LENGTHS + 1],
+        round_limit: DEFAULT_ROUND_LIMIT,
+    };
+    assert_eq!(
+        settings.validate(&rules()),
+        Err(pharmakos_sim::runner::SettingsError::TooManySegments {
+            found: pharmakos_sim::rules::MAX_SEGMENT_LENGTHS + 1
+        })
+    );
+}
+
+/// A named edit to a snapshot, for the refusal cases above.
+type SnapshotEdit = (&'static str, fn(&mut Snapshot));

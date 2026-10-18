@@ -194,11 +194,11 @@ impl Scratch {
     /// directed edge, which is eight per cell.
     #[must_use]
     pub fn new(nodes: u32, abstract_nodes: u32, cluster_cells: u32) -> Scratch {
-        let n = usize::try_from(nodes).unwrap_or(0);
+        let n = usize::try_from(nodes).unwrap_or(usize::MAX);
         let a = usize::try_from(abstract_nodes)
-            .unwrap_or(0)
+            .unwrap_or(usize::MAX)
             .saturating_add(2);
-        let low_heap = usize::try_from(cluster_cells.saturating_mul(8)).unwrap_or(0);
+        let low_heap = usize::try_from(cluster_cells.saturating_mul(8)).unwrap_or(usize::MAX);
         Scratch {
             epoch: 0,
             stamp: vec![0; n],
@@ -222,12 +222,14 @@ impl Scratch {
             // and not a measurement — unlike `abstract_heap` above, which is a
             // measured capacity and says so.
             abstract_path: Vec::with_capacity(a.saturating_add(2)),
-            raw: Vec::with_capacity(usize::try_from(crate::pathing::MAX_ROUTE_NODES).unwrap_or(0)),
-            leg: Vec::with_capacity(usize::try_from(cluster_cells).unwrap_or(0)),
-            line: Vec::with_capacity(usize::try_from(cluster_cells).unwrap_or(0)),
+            raw: Vec::with_capacity(
+                usize::try_from(crate::pathing::MAX_ROUTE_NODES).unwrap_or(usize::MAX),
+            ),
+            leg: Vec::with_capacity(usize::try_from(cluster_cells).unwrap_or(usize::MAX)),
+            line: Vec::with_capacity(usize::try_from(cluster_cells).unwrap_or(usize::MAX)),
             prefix: Vec::with_capacity(
                 usize::try_from(crate::pathing::MAX_ROUTE_NODES)
-                    .unwrap_or(0)
+                    .unwrap_or(usize::MAX)
                     .saturating_add(1),
             ),
             expansions: 0,

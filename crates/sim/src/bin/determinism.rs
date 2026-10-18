@@ -222,8 +222,11 @@ fn chain(runner: &mut Runner, cli: &Cli) -> Result<String, String> {
         ));
     }
 
-    let mut text =
-        String::with_capacity(usize::try_from(cli.ticks).unwrap_or(0).saturating_mul(24));
+    let mut text = String::with_capacity(
+        usize::try_from(cli.ticks)
+            .unwrap_or(usize::MAX)
+            .saturating_mul(24),
+    );
     let mut written: u32 = 0;
     while written < cli.ticks {
         let tick = first_tick.saturating_add(written);
@@ -234,7 +237,7 @@ fn chain(runner: &mut Runner, cli: &Cli) -> Result<String, String> {
             runner.world().state_hash()
         } else {
             open_a_push(runner);
-            match runner.step() {
+            match runner.step().map_err(|error| error.to_string())? {
                 Some(report) => report.hash,
                 // The match ended before the requested ticks ran out. The run
                 // stops rather than inventing lines for a match that is over.
@@ -279,6 +282,7 @@ fn open_a_push(runner: &mut Runner) {
 fn write_snapshot(runner: &Runner, path: &std::path::Path) -> Result<(), String> {
     let bytes = runner
         .capture()
+        .map_err(|error| error.to_string())?
         .to_bytes()
         .map_err(|error| error.to_string())?;
     if let Some(parent) = path.parent() {

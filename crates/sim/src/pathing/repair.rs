@@ -202,10 +202,10 @@ pub fn repair(
 
     rebuilt.extend_from_slice(&inter);
     let report = RepairReport {
-        dirty: u32::try_from(dirty.len()).unwrap_or(0),
-        transitions_rebuilt: u32::try_from(transitions.len()).unwrap_or(0),
-        intra_rebuilt: u32::try_from(transitions.len()).unwrap_or(0),
-        inter_rebuilt: u32::try_from(inter.len()).unwrap_or(0),
+        dirty: u32::try_from(dirty.len()).unwrap_or(u32::MAX),
+        transitions_rebuilt: u32::try_from(transitions.len()).unwrap_or(u32::MAX),
+        intra_rebuilt: u32::try_from(transitions.len()).unwrap_or(u32::MAX),
+        inter_rebuilt: u32::try_from(inter.len()).unwrap_or(u32::MAX),
     };
 
     for cluster in &dirty {

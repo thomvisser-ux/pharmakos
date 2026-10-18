@@ -92,9 +92,9 @@
 //! `rules_hash`, because the hash already covered the row.
 
 use crate::encoding::Enc;
-use crate::math::quantity::{Hp, Kw, TICK_HZ};
+use crate::math::quantity::{Hp, Kw, Money, TICK_HZ};
 use crate::power::{PowerRules, PowerRulesError};
-use crate::tables::UnitKind;
+use crate::tables::{StructureKind, UnitKind};
 use pharmakos_proto::gp;
 use std::fmt;
 use std::num::NonZeroU32;
@@ -183,12 +183,14 @@ pub struct RulesTable {
     segment_lengths_ms: Vec<i32>,
     /// The map extent in voxels, `[x, y, z]`. From `map.size_*`.
     ///
-    /// PLACEHOLDER: the map's size — owner, at S1's demo (item 90; the skeleton's demo kept it).
+    /// PLACEHOLDER: the map's size — owner, at S4, with the symmetric map (item 90; the skeleton's demo kept it, and ruling 6 of S1's stage demo, decisions-log item 139 (1), kept it for S1).
     map_size_voxels: [i32; 3],
+    /// [`RulesTable::map_last_voxel`].
+    map_last_voxel: [i16; 3],
     /// The commander's walking speed in cost units per second. `10` (item 90).
     /// From `commander.cost_per_second`.
     ///
-    /// PLACEHOLDER: the commander's speed — owner, at S1's demo (item 90; the skeleton's demo kept it).
+    /// PLACEHOLDER: the commander's speed — owner, at S2's demo, with `tune2`'s report of the spawn travel distance (item 90; the skeleton's demo kept it, and ruling 6 of S1's stage demo, decisions-log item 139 (1), kept it for S1).
     commander_cost_per_second: i32,
     /// The HPA\* cluster edge in voxels. `32` — one chunk footprint, a single
     /// abstract level (item 58). From `locomotion.hpa_cluster_voxels`.
@@ -227,6 +229,171 @@ pub struct RulesTable {
     /// [`PowerRules::read`] (decisions-log item 135 (2) (b)), so that no world
     /// can hold a table the phase refuses.
     power: PowerRules,
+    /// Every unit kind's and structure kind's price, hit points and walking
+    /// speed, read typed at load ([`KindRows::read`]), so that no reader
+    /// answers zero for a missing row (decisions-log item 136 (5)): a table
+    /// missing one is refused here, once.
+    kinds: KindRows,
+}
+
+/// One unit kind's row as the tick reads it: `units.<kind>.*`, or the
+/// `commander` block for the commander.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct UnitRow {
+    /// The build cost, `cost_dollars`. Zero for the commander, which is never
+    /// bought: it has no `units` row and no price (spec section 4).
+    pub cost: Money,
+    /// The hit points at full condition. Refused at load at zero, which would
+    /// be a unit dead on the tick it was made.
+    pub hp: Hp,
+    /// The power it draws, `draw_kw`. Zero for the commander, whose draw is
+    /// none of the power phase's (`crate::power`).
+    pub draw: Kw,
+    /// Its walking speed in cost units per second (item 90).
+    pub cost_per_second: i32,
+}
+
+/// One structure kind's row as the tick reads it: `structures.<kind>`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct StructureRow {
+    /// The build cost, `cost_dollars`.
+    pub cost: Money,
+    /// The hit points at full condition, refused at load at zero.
+    pub hp: Hp,
+}
+
+/// Every kind row the tick reads, typed at load.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct KindRows {
+    commander: UnitRow,
+    build_drone: UnitRow,
+    mining_drone: UnitRow,
+    repair_drone: UnitRow,
+    raider: UnitRow,
+    scout: UnitRow,
+    generator: StructureRow,
+    autocannon: StructureRow,
+    mortar: StructureRow,
+    survey_post: StructureRow,
+    resonance_spire: StructureRow,
+    /// A placed beacon's row, `structures.beacon`.
+    beacon: StructureRow,
+    /// A seat's core's hit points, `beacon.core_hp`; its price is the placed
+    /// beacon's ([`crate::world::World::beacon_cost`]).
+    core_hp: Hp,
+    /// One wall voxel's price, `structures.wall_cost_per_voxel`: a wall has no
+    /// structure row by design (`rules.proto`), and is priced by the voxel.
+    wall_cost_per_voxel: Money,
+    /// Item 22's work items per drone, `economy.backlog_threshold_per_drone`.
+    backlog_threshold_per_drone: u32,
+    /// A mining drone's time per voxel, `economy.mining_ms_per_voxel`.
+    mining_ms_per_voxel: i32,
+    /// A recycled beacon's refund, `economy.recycle_refund_percent`.
+    recycle_refund_percent: u32,
+    /// The decision cadence, `match.decision_tick_ms`.
+    decision_tick_ms: i32,
+    /// The commander's respawn curve, `commander.respawn_base_ms` and
+    /// `commander.respawn_growth_ms`, each refused at load when negative.
+    respawn_base_ms: i32,
+    respawn_growth_ms: i32,
+}
+
+impl KindRows {
+    /// Read every kind row, refusing a missing block or row, a value past the
+    /// sim's type for it, and zero hit points.
+    fn read(message: &gp::v1::RulesTable) -> Result<KindRows, RulesError> {
+        let commander = message
+            .commander
+            .as_ref()
+            .ok_or(RulesError::MissingBlock("commander"))?;
+        let units = message
+            .units
+            .as_ref()
+            .ok_or(RulesError::MissingBlock("units"))?;
+        let structures = message
+            .structures
+            .as_ref()
+            .ok_or(RulesError::MissingBlock("structures"))?;
+        let beacon = message
+            .beacon
+            .as_ref()
+            .ok_or(RulesError::MissingBlock("beacon"))?;
+        let economy = message
+            .economy
+            .as_ref()
+            .ok_or(RulesError::MissingBlock("economy"))?;
+        let unit = |name: &'static str,
+                    row: Option<gp::v1::rules_table::UnitKind>|
+         -> Result<UnitRow, RulesError> {
+            let row = row.ok_or(RulesError::MissingBlock(name))?;
+            Ok(UnitRow {
+                cost: Money::new(i64::from(row.cost_dollars)),
+                hp: hit_points(name, row.hp)?,
+                draw: Kw::new(signed(name, row.draw_kw)?),
+                cost_per_second: signed(name, row.cost_per_second)?,
+            })
+        };
+        let structure = |name: &'static str,
+                         row: Option<gp::v1::rules_table::StructureKind>|
+         -> Result<StructureRow, RulesError> {
+            let row = row.ok_or(RulesError::MissingBlock(name))?;
+            Ok(StructureRow {
+                cost: Money::new(i64::from(row.cost_dollars)),
+                hp: hit_points(name, row.hp)?,
+            })
+        };
+        let respawn = |field: &'static str, value: i32| -> Result<i32, RulesError> {
+            if value < 0 {
+                return Err(RulesError::OutOfRange {
+                    field: field.to_owned(),
+                    value: format!("{value}; a respawn delay is not negative"),
+                });
+            }
+            Ok(value)
+        };
+        Ok(KindRows {
+            commander: UnitRow {
+                cost: Money::ZERO,
+                hp: hit_points("commander.hp", commander.hp)?,
+                draw: Kw::ZERO,
+                cost_per_second: signed("commander.cost_per_second", commander.cost_per_second)?,
+            },
+            build_drone: unit("units.build_drone", units.build_drone)?,
+            mining_drone: unit("units.mining_drone", units.mining_drone)?,
+            repair_drone: unit("units.repair_drone", units.repair_drone)?,
+            raider: unit("units.raider", units.raider)?,
+            scout: unit("units.scout", units.scout)?,
+            generator: structure("structures.generator", structures.generator)?,
+            autocannon: structure("structures.autocannon", structures.autocannon)?,
+            mortar: structure("structures.mortar", structures.mortar)?,
+            survey_post: structure("structures.survey_post", structures.survey_post)?,
+            resonance_spire: structure("structures.resonance_spire", structures.resonance_spire)?,
+            beacon: structure("structures.beacon", structures.beacon)?,
+            core_hp: hit_points("beacon.core_hp", beacon.core_hp)?,
+            wall_cost_per_voxel: Money::new(i64::from(structures.wall_cost_per_voxel)),
+            backlog_threshold_per_drone: economy.backlog_threshold_per_drone,
+            mining_ms_per_voxel: economy.mining_ms_per_voxel,
+            recycle_refund_percent: economy.recycle_refund_percent,
+            decision_tick_ms: message
+                .r#match
+                .as_ref()
+                .ok_or(RulesError::MissingBlock("match"))?
+                .decision_tick_ms,
+            respawn_base_ms: respawn("commander.respawn_base_ms", commander.respawn_base_ms)?,
+            respawn_growth_ms: respawn("commander.respawn_growth_ms", commander.respawn_growth_ms)?,
+        })
+    }
+}
+
+/// A row's hit points as the tick reads them: a positive signed 32-bit count.
+fn hit_points(field: &'static str, value: u32) -> Result<Hp, RulesError> {
+    if value == 0 {
+        return Err(RulesError::OutOfRange {
+            field: field.to_owned(),
+            value: "0; an asset with no hit points is dead on the tick it is made".to_owned(),
+        });
+    }
+    signed(field, value).map(Hp::new)
 }
 
 impl RulesTable {
@@ -381,6 +548,14 @@ impl RulesTable {
         self.map_size_voxels
     }
 
+    /// The map's last voxel on each axis, `size - 1`, as the `i16` a voxel
+    /// coordinate is: refused at load when an axis is empty or wider than a
+    /// coordinate holds, so every voxel of the map is a coordinate.
+    #[must_use]
+    pub const fn map_last_voxel(&self) -> [i16; 3] {
+        self.map_last_voxel
+    }
+
     /// The commander's walking speed in cost units per second
     /// (`commander.cost_per_second`).
     #[must_use]
@@ -419,46 +594,105 @@ impl RulesTable {
     ///
     /// `None` when the `units` block or that kind's row is absent.
     #[must_use]
-    pub fn cost_per_second(&self, kind: UnitKind) -> Option<i32> {
-        if matches!(kind, UnitKind::Commander) {
-            return Some(self.commander_cost_per_second);
-        }
-        let row = self.unit_row(kind)?;
-        i32::try_from(row.cost_per_second).ok()
+    pub const fn cost_per_second(&self, kind: UnitKind) -> i32 {
+        self.unit(kind).cost_per_second
     }
 
-    /// One unit kind's hit points (`units.<kind>.hp`), or `None` when the
-    /// `units` block or that kind's row is absent.
-    ///
-    /// Read off the message rather than mirrored into the view above, because
-    /// the sim reads a *kind's* row and there are six of them: six accessors
-    /// would be six chances for one to fall out of step with the schema.
+    /// One unit kind's hit points at full condition: `units.<kind>.hp`, or
+    /// `commander.hp` for the commander. Every row is refused at load when it
+    /// is missing or out of range, so this has an answer for every kind.
     #[must_use]
-    pub fn unit_hp(&self, kind: UnitKind) -> Option<Hp> {
-        let row = self.unit_row(kind)?;
-        Some(Hp::new(i32::try_from(row.hp).unwrap_or(i32::MAX)))
+    pub const fn unit_hp(&self, kind: UnitKind) -> Hp {
+        self.unit(kind).hp
     }
 
-    /// One unit kind's power draw (`units.<kind>.draw_kw`), or `None` when the
-    /// `units` block or that kind's row is absent.
+    /// One unit kind's power draw, `units.<kind>.draw_kw` (zero for the
+    /// commander).
     #[must_use]
-    pub fn unit_draw_kw(&self, kind: UnitKind) -> Option<Kw> {
-        let row = self.unit_row(kind)?;
-        Some(Kw::new(i32::try_from(row.draw_kw).unwrap_or(i32::MAX)))
+    pub const fn unit_draw_kw(&self, kind: UnitKind) -> Kw {
+        self.unit(kind).draw
     }
 
-    /// One unit kind's row. The commander is not a unit kind in the schema —
-    /// it has a block of its own — so it has no row here.
-    fn unit_row(&self, kind: UnitKind) -> Option<gp::v1::rules_table::UnitKind> {
-        let units = self.message.units.as_ref()?;
+    /// One unit kind's whole row ([`UnitRow`]).
+    #[must_use]
+    pub const fn unit(&self, kind: UnitKind) -> UnitRow {
         match kind {
-            UnitKind::Commander => None,
-            UnitKind::BuildDrone => units.build_drone,
-            UnitKind::MiningDrone => units.mining_drone,
-            UnitKind::RepairDrone => units.repair_drone,
-            UnitKind::Raider => units.raider,
-            UnitKind::Scout => units.scout,
+            UnitKind::Commander => self.kinds.commander,
+            UnitKind::BuildDrone => self.kinds.build_drone,
+            UnitKind::MiningDrone => self.kinds.mining_drone,
+            UnitKind::RepairDrone => self.kinds.repair_drone,
+            UnitKind::Raider => self.kinds.raider,
+            UnitKind::Scout => self.kinds.scout,
         }
+    }
+
+    /// One structure kind's row, `structures.<kind>`, or `None` for the
+    /// wall, which has **no** structure row by design: it is priced by the
+    /// voxel ([`RulesTable::wall_cost_per_voxel`]) and no structure row ever
+    /// holds one (`crate::world::World::raise_structure` and the snapshot's
+    /// restore refuse it, and the compile's one blueprint is the Generator).
+    #[must_use]
+    pub const fn structure(&self, kind: StructureKind) -> Option<StructureRow> {
+        match kind {
+            StructureKind::Generator => Some(self.kinds.generator),
+            StructureKind::Autocannon => Some(self.kinds.autocannon),
+            StructureKind::Mortar => Some(self.kinds.mortar),
+            StructureKind::SurveyPost => Some(self.kinds.survey_post),
+            StructureKind::ResonanceSpire => Some(self.kinds.resonance_spire),
+            StructureKind::Wall => None,
+        }
+    }
+
+    /// A placed beacon's row, `structures.beacon`.
+    #[must_use]
+    pub const fn beacon_row(&self) -> StructureRow {
+        self.kinds.beacon
+    }
+
+    /// A seat's core's hit points, `beacon.core_hp`.
+    #[must_use]
+    pub const fn core_hp(&self) -> Hp {
+        self.kinds.core_hp
+    }
+
+    /// One wall voxel's price, `structures.wall_cost_per_voxel`.
+    #[must_use]
+    pub const fn wall_cost_per_voxel(&self) -> Money {
+        self.kinds.wall_cost_per_voxel
+    }
+
+    /// Item 22's threshold, `economy.backlog_threshold_per_drone`: work items
+    /// per available drone above which a fabricator produces.
+    #[must_use]
+    pub const fn backlog_threshold_per_drone(&self) -> u32 {
+        self.kinds.backlog_threshold_per_drone
+    }
+
+    /// A recycled beacon's refund in whole percent of its remaining value,
+    /// `economy.recycle_refund_percent`.
+    #[must_use]
+    pub const fn recycle_refund_percent(&self) -> u32 {
+        self.kinds.recycle_refund_percent
+    }
+
+    /// The decision cadence in game milliseconds, `match.decision_tick_ms`.
+    #[must_use]
+    pub const fn decision_tick_ms(&self) -> i32 {
+        self.kinds.decision_tick_ms
+    }
+
+    /// A mining drone's time per voxel in game milliseconds,
+    /// `economy.mining_ms_per_voxel`.
+    #[must_use]
+    pub const fn mining_ms_per_voxel(&self) -> i32 {
+        self.kinds.mining_ms_per_voxel
+    }
+
+    /// The commander's respawn curve in game milliseconds: the base delay and
+    /// the growth per earlier death in the same Push (item 90).
+    #[must_use]
+    pub const fn respawn_curve(&self) -> (i32, i32) {
+        (self.kinds.respawn_base_ms, self.kinds.respawn_growth_ms)
     }
 
     /// Read a rules table from canonical proto JSON.
@@ -535,6 +769,7 @@ impl RulesTable {
 
         let sphere_radius_voxels = sphere_radius_of(message)?;
         let typed = TypedRows::read(message, commander)?;
+        let kinds = KindRows::read(message)?;
 
         let segment_lengths_ms = segment_lengths_of(matched)?;
 
@@ -569,6 +804,11 @@ impl RulesTable {
                 signed("map.size_y", map.size_y)?,
                 signed("map.size_z", map.size_z)?,
             ],
+            map_last_voxel: [
+                last_voxel("map.size_x", map.size_x)?,
+                last_voxel("map.size_y", map.size_y)?,
+                last_voxel("map.size_z", map.size_z)?,
+            ],
             commander_cost_per_second: signed(
                 "commander.cost_per_second",
                 commander.cost_per_second,
@@ -591,6 +831,7 @@ impl RulesTable {
             interface_range_voxels: typed.interface_range_voxels,
             build_hp_per_tick: typed.build_hp_per_tick,
             power: typed.power,
+            kinds,
         })
     }
 
@@ -740,6 +981,20 @@ fn build_hp_per_tick_of(message: &gp::v1::RulesTable) -> Result<Hp, RulesError> 
         .and_then(|per_tick| i32::try_from(per_tick).ok())
         .map(Hp::new)
         .ok_or_else(|| refused("past a hit-point count"))
+}
+
+/// A map axis's last voxel, `size - 1`, as a voxel coordinate: an empty axis
+/// and one wider than a coordinate holds are refused.
+fn last_voxel(field: &'static str, size: u32) -> Result<i16, RulesError> {
+    size.checked_sub(1)
+        .and_then(|last| i16::try_from(last).ok())
+        .ok_or_else(|| RulesError::OutOfRange {
+            field: field.to_owned(),
+            value: format!(
+                "{size}; a map axis holds 1 to {} voxels, each a voxel coordinate",
+                i32::from(i16::MAX) + 1
+            ),
+        })
 }
 
 /// The schema spells the move costs `uint32`; the sim's path arithmetic is

@@ -216,7 +216,11 @@ impl Clusters {
             comp_offset: vec![0; clusters.saturating_add(1)],
             comp_label: vec![0; nodes],
             union_find: vec![0; nodes],
-            stack: Vec::with_capacity(usize::try_from(size.saturating_mul(size)).unwrap_or(0)),
+            // `size` is a positive edge at most `MAX_CLUSTER_EDGE` (checked above).
+            stack: Vec::with_capacity(
+                usize::try_from(size.unsigned_abs().saturating_mul(size.unsigned_abs()))
+                    .unwrap_or(usize::MAX),
+            ),
             gather: Vec::with_capacity(max_trans),
         };
 
@@ -298,7 +302,14 @@ impl Clusters {
     /// How many clusters the map holds.
     #[must_use]
     pub fn cluster_count(&self) -> usize {
-        usize::try_from(self.nx.saturating_mul(self.ny)).unwrap_or(0)
+        // Both are positive and their product was checked at construction to
+        // fit `u16::MAX + 1`, so the product cannot saturate.
+        usize::try_from(
+            self.nx
+                .unsigned_abs()
+                .saturating_mul(self.ny.unsigned_abs()),
+        )
+        .unwrap_or(usize::MAX)
     }
 
     /// The most transition nodes one cluster can hold: the stride of the
@@ -710,7 +721,7 @@ impl Clusters {
     /// The cluster and slot of an abstract node id.
     #[must_use]
     pub fn split_abstract(&self, node: u32) -> (usize, usize) {
-        let index = usize::try_from(node).unwrap_or(0);
+        let index = usize::try_from(node).unwrap_or(usize::MAX);
         let stride = self.max_trans.max(1);
         (index.div_euclid(stride), index.rem_euclid(stride))
     }
@@ -984,7 +995,7 @@ impl Clusters {
         if let Some(slot) = self.comp_offset.get_mut(clusters) {
             *slot = total;
         }
-        let count = usize::try_from(total).unwrap_or(0);
+        let count = usize::try_from(total).unwrap_or(usize::MAX);
         let mut index = 0;
         while index < count {
             if let Some(slot) = self.union_find.get_mut(index)

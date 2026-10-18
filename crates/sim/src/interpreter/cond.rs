@@ -108,14 +108,13 @@ impl View<'_> {
     }
 
     /// The commander's maximum hit points, from `commander.hp`.
+    ///
+    /// Read typed at load, so a table missing it was refused there.
     pub(crate) fn commander_max_hp(&self) -> i32 {
         self.world
             .rules()
-            .message()
-            .commander
-            .as_ref()
-            .and_then(|block| i32::try_from(block.hp).ok())
-            .unwrap_or(0)
+            .unit_hp(crate::tables::UnitKind::Commander)
+            .raw()
     }
 
     /// The commander's hit points as a whole percentage of its maximum.
@@ -141,7 +140,7 @@ impl View<'_> {
     /// A beacon's row, when the id names one.
     pub(crate) fn beacon_row(&self, beacon: BeaconId) -> Option<usize> {
         let beacons = self.world.beacons();
-        let count = usize::try_from(beacons.len()).unwrap_or(0);
+        let count = usize::try_from(beacons.len()).unwrap_or(usize::MAX);
         let index = usize::try_from(beacon.raw()).ok()?;
         // Rows are dense and in id order, so the id is the row — checked rather
         // than assumed, because a snapshot could in principle carry otherwise.
@@ -310,19 +309,13 @@ pub(crate) trait Board {
     /// A row's maximum hit points: `beacon.core_hp` for a seat's core, its
     /// `b_00` (spec section 3: the generator places it first), and
     /// `structures.beacon.hp` for any other.
+    ///
+    /// Both rows are read typed at load, so neither can be missing.
     fn row_max_hp(&self, row: usize) -> i64 {
-        let message = self.rules().message();
         if self.row_ordinal(row) == Some(0) {
-            return message
-                .beacon
-                .as_ref()
-                .map_or(0, |block| i64::from(block.core_hp));
+            return i64::from(self.rules().core_hp().raw());
         }
-        message
-            .structures
-            .as_ref()
-            .and_then(|block| block.beacon)
-            .map_or(0, |beacon| i64::from(beacon.hp))
+        i64::from(self.rules().beacon_row().hp.raw())
     }
 
     /// A row's hit points as a whole percentage of its maximum.
@@ -336,7 +329,7 @@ impl Board for View<'_> {
         self.seat
     }
     fn beacon_rows(&self) -> usize {
-        usize::try_from(self.world.beacons().len()).unwrap_or(0)
+        usize::try_from(self.world.beacons().len()).unwrap_or(usize::MAX)
     }
     fn row_id(&self, row: usize) -> Option<u32> {
         self.world.beacons().ids().get(row).copied()
@@ -578,9 +571,13 @@ fn rank<B: Board>(board: &B, filter: Filter, rank: Rank) -> Option<BeaconId> {
 /// makes it an admissible stand-in for "least travel" (see the module docs).
 fn octile(cardinal: i64, diagonal: i64, a: [Fx; 3], b: [Fx; 3]) -> i64 {
     let axis = |point: &[Fx; 3], at: usize| -> i64 {
-        point
-            .get(at)
-            .map_or(0, |value| i64::from(value.floor_voxels()))
+        let [east, north, up] = *point;
+        let value = match at {
+            0 => east,
+            1 => north,
+            _ => up,
+        };
+        i64::from(value.floor_voxels())
     };
     let dx = axis(&a, 0).saturating_sub(axis(&b, 0)).saturating_abs();
     let dy = axis(&a, 1).saturating_sub(axis(&b, 1)).saturating_abs();

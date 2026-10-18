@@ -438,19 +438,20 @@ impl Angle {
         // that range, so the predicate is monotone and the search is total.
         // `|table| <= 2^16` and `long <= 2^32`, so each product fits in `i64`
         // with room to spare.
-        let mut lo: usize = 0;
-        let mut hi: usize = 512;
+        let mut lo: u32 = 0;
+        let mut hi: u32 = 512;
         while lo < hi {
             let mid = (lo + hi).div_ceil(2);
-            let sine = i64::from(table_at(mid)).saturating_mul(long);
-            let cosine = i64::from(table_at(mid + 1024)).saturating_mul(short);
+            let at = usize::try_from(mid).unwrap_or(usize::MAX);
+            let sine = i64::from(table_at(at)).saturating_mul(long);
+            let cosine = i64::from(table_at(at + 1024)).saturating_mul(short);
             if sine <= cosine {
                 lo = mid;
             } else {
                 hi = mid - 1;
             }
         }
-        let base: u32 = u32::try_from(lo).unwrap_or(0) << 4; // -> 0..=8192
+        let base: u32 = lo << 4; // -> 0..=8192
         let quadrant = if swapped { 16_384 - base } else { base };
         let full: u32 = if east >= 0 && north >= 0 {
             quadrant
@@ -461,6 +462,8 @@ impl Angle {
         } else {
             65_536 - quadrant
         };
-        Angle(u16::try_from(full & 0xFFFF).unwrap_or(0))
+        // The low sixteen bits are the angle, wrapping a full turn to zero.
+        let [_, _, high, low] = full.to_be_bytes();
+        Angle(u16::from_be_bytes([high, low]))
     }
 }

@@ -54,7 +54,7 @@ pub(crate) fn record_sightings(world: &mut World) {
     let tick = world.tick().raw();
     let sphere = world.sphere_radius();
     let scout_vision = Fx::from_voxels(crate::programs::UNIT_VISION_RADIUS_VOXELS);
-    let seats = usize::try_from(world.seats().len()).unwrap_or(0);
+    let seats = usize::try_from(world.seats().len()).unwrap_or(usize::MAX);
     let mut index: usize = 0;
     while index < seats {
         if !world.seats().is_alive(index) {

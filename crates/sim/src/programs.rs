@@ -260,10 +260,11 @@ impl Program for BuildProgram {
             .get(at)
             .copied()
             .and_then(crate::tables::StructureKind::from_id);
-        let Some(kind) = kind else {
+        // A wall has no structure row, and no row is one
+        // ([`World::structure_max_hp`]).
+        let Some(full) = kind.and_then(|kind| world.structure_max_hp(kind)) else {
             return;
         };
-        let full = world.structure_max_hp(kind);
         let per_tick = world.rules().build_hp_per_tick();
         let grown = world
             .structures()
@@ -277,7 +278,7 @@ impl Program for BuildProgram {
         if let Some(slot) = world.structures_mut().hit_points_mut().get_mut(at) {
             *slot = Hp::new(grown);
         }
-        if grown >= full.raw() && full.raw() > 0 {
+        if grown >= full.raw() {
             world.finish_structure(StructureId::new(structure));
         }
     }
@@ -365,12 +366,7 @@ impl Program for MineProgram {
             .copied()
             .unwrap_or([Fx::ZERO; 3]);
         if within(here, stand, world.arrive_radius()) {
-            let ms = world
-                .rules()
-                .message()
-                .economy
-                .as_ref()
-                .map_or(0, |economy| economy.mining_ms_per_voxel);
+            let ms = world.rules().mining_ms_per_voxel();
             let due = tick
                 .raw()
                 .saturating_add(Ms::new(ms).to_ticks_ceil().max(1));
@@ -620,12 +616,26 @@ fn finish_dig(world: &mut World, unit: u32) {
     };
     // The voxel goes through the edit queue like every other write, so its
     // chunk is marked and its digest refreshed in the same tick (AGENTS.md
-    // §4.8's fourth place).
-    if !world.request_voxel_edit(crate::voxels::VoxelEdit::Set {
+    // §4.8's fourth place). The dig carries the mining drone's seat, because
+    // a dig is among the edits whose seat collapse credits (decisions-log item
+    // 144 (2)).
+    let seat = world.units().seats().get(row).copied().map(SeatId::new);
+    match world.file_voxel_edit(crate::voxels::VoxelEdit::Set {
         at: ore,
         material: crate::voxels::Material::AIR,
+        by: seat,
     }) {
-        return;
+        Ok(()) => {}
+        // Mining's back-off: a full queue, which the queue's sizing makes
+        // unreachable in a legal world (S2's plan, E5), leaves the voxel for
+        // the drone's next tick rather than dropping the dig.
+        Err(crate::world::FileRefused::QueueFull { .. }) => return,
+        // The dig names a voxel the store addressed, inside a tick: the
+        // other two refusals cannot reach the tick's own door, and if one
+        // did the voxel would still be there for the next tick.
+        Err(crate::world::FileRefused::OffTheMap | crate::world::FileRefused::MidTick) => {
+            return;
+        }
     }
     let carried = world
         .units()

@@ -248,18 +248,14 @@ pub struct Speed {
 impl Speed {
     /// The three rows for one unit kind.
     ///
-    /// `None` when the kind has no `cost_per_second` row, which is a rules-table
-    /// mistake rather than a game state.
+    /// Every kind has one: the rules loader refuses a table missing a row.
     #[must_use]
-    pub fn of_kind(
-        rules: &crate::rules::RulesTable,
-        kind: crate::tables::UnitKind,
-    ) -> Option<Speed> {
-        Some(Speed {
-            cost_per_second: rules.cost_per_second(kind)?,
+    pub const fn of_kind(rules: &crate::rules::RulesTable, kind: crate::tables::UnitKind) -> Speed {
+        Speed {
+            cost_per_second: rules.cost_per_second(kind),
             fog_numerator: rules.fog_cost_numerator(),
             fog_denominator: rules.fog_cost_denominator(),
-        })
+        }
     }
 
     /// The commander's speed, which is what the editor renders a route at until
