@@ -270,7 +270,7 @@ pub const fn destroyed_value(_world: &World, _seat: SeatId) -> Money {
 #[must_use]
 pub fn beacons_lost(world: &World, seat: SeatId) -> u32 {
     let beacons = world.beacons();
-    let count = usize::try_from(beacons.len()).unwrap_or(usize::MAX);
+    let count = crate::math::index::row(beacons.len());
     let mut lost: u32 = 0;
     let mut row: usize = 0;
     while row < count {
@@ -288,7 +288,7 @@ pub fn beacons_lost(world: &World, seat: SeatId) -> u32 {
 }
 
 fn seat_count(world: &World) -> usize {
-    usize::try_from(world.seats().len()).unwrap_or(usize::MAX)
+    crate::math::index::row(world.seats().len())
 }
 
 /// The tick of the most recent elimination, when no seat is still in the

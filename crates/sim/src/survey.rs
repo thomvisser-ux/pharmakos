@@ -54,13 +54,14 @@ pub(crate) fn record_sightings(world: &mut World) {
     let tick = world.tick().raw();
     let sphere = world.sphere_radius();
     let scout_vision = Fx::from_voxels(crate::programs::UNIT_VISION_RADIUS_VOXELS);
-    let seats = usize::try_from(world.seats().len()).unwrap_or(usize::MAX);
+    let seats = crate::math::index::row(world.seats().len());
     let mut index: usize = 0;
     while index < seats {
         if !world.seats().is_alive(index) {
             index = index.saturating_add(1);
             continue;
         }
+        // E7: cannot miss: `index` walks the seat table's own rows
         let raw = world.seats().seats().get(index).copied().unwrap_or(0);
         let seat = SeatId::new(raw);
         look_from_beacons(world, seat, sphere, tick);
@@ -74,7 +75,7 @@ fn look_from_beacons(world: &mut World, seat: SeatId, radius: Fx, tick: u32) {
     let count = world.beacons().len();
     let mut row: u32 = 0;
     while row < count {
-        let at = usize::try_from(row).unwrap_or(usize::MAX);
+        let at = crate::math::index::row(row);
         let mine = world.beacons().seats().get(at).copied() == Some(seat.raw());
         let live = crate::power::beacon_is_live(world, crate::tables::BeaconId::new(row));
         if mine
@@ -92,7 +93,7 @@ fn look_from_scouts(world: &mut World, seat: SeatId, radius: Fx, tick: u32) {
     let count = world.units().len();
     let mut row: u32 = 0;
     while row < count {
-        let at = usize::try_from(row).unwrap_or(usize::MAX);
+        let at = crate::math::index::row(row);
         let mine = world.units().seats().get(at).copied() == Some(seat.raw());
         let scout =
             world.units().kinds().get(at).copied() == Some(crate::tables::UnitKind::Scout.id());
@@ -123,7 +124,8 @@ fn look_around(world: &mut World, seat: SeatId, centre: [Fx; 3], radius: Fx, tic
     let units = world.units().len();
     let mut row: u32 = 0;
     while row < units {
-        let at = usize::try_from(row).unwrap_or(usize::MAX);
+        let at = crate::math::index::row(row);
+        // E7: cannot miss: `row` walks the unit table's own rows
         let owner = world.units().seats().get(at).copied().unwrap_or(0);
         let alive = world
             .units()
@@ -152,7 +154,8 @@ fn look_around(world: &mut World, seat: SeatId, centre: [Fx; 3], radius: Fx, tic
     let beacons = world.beacons().len();
     let mut row: u32 = 0;
     while row < beacons {
-        let at = usize::try_from(row).unwrap_or(usize::MAX);
+        let at = crate::math::index::row(row);
+        // E7: cannot miss: `row` walks the beacon table's own rows
         let owner = world.beacons().seats().get(at).copied().unwrap_or(0);
         let alive = world
             .beacons()
@@ -181,7 +184,8 @@ fn look_around(world: &mut World, seat: SeatId, centre: [Fx; 3], radius: Fx, tic
     let structures = world.structures().len();
     let mut row: u32 = 0;
     while row < structures {
-        let at = usize::try_from(row).unwrap_or(usize::MAX);
+        let at = crate::math::index::row(row);
+        // E7: cannot miss: `row` walks the structure table's own rows
         let owner = world.structures().seats().get(at).copied().unwrap_or(0);
         let alive = world
             .structures()

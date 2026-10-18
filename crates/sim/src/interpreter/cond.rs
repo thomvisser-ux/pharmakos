@@ -104,6 +104,7 @@ impl View<'_> {
     pub(crate) fn commander_hp(&self) -> i32 {
         self.commander()
             .and_then(|index| self.world.units().hit_points().get(index).copied())
+            // E7: rule: a seat with no commander row has no hit points
             .map_or(0, Hp::raw)
     }
 
@@ -140,7 +141,7 @@ impl View<'_> {
     /// A beacon's row, when the id names one.
     pub(crate) fn beacon_row(&self, beacon: BeaconId) -> Option<usize> {
         let beacons = self.world.beacons();
-        let count = usize::try_from(beacons.len()).unwrap_or(usize::MAX);
+        let count = crate::math::index::row(beacons.len());
         let index = usize::try_from(beacon.raw()).ok()?;
         // Rows are dense and in id order, so the id is the row — checked rather
         // than assumed, because a snapshot could in principle carry otherwise.
@@ -173,6 +174,7 @@ impl View<'_> {
             .seats()
             .treasuries()
             .get(self.seat_index)
+            // E7: cannot miss: `seat_index` is a row of the seat table the view was built for
             .map_or(0, |money| money.raw())
     }
 
@@ -183,12 +185,14 @@ impl View<'_> {
             .seats()
             .supplies()
             .get(self.seat_index)
+            // E7: cannot miss: as above
             .map_or(0, |kw| i64::from(kw.raw()));
         let draw = self
             .world
             .seats()
             .draws()
             .get(self.seat_index)
+            // E7: cannot miss: as above
             .map_or(0, |kw| i64::from(kw.raw()));
         supply.saturating_sub(draw)
     }
@@ -233,6 +237,7 @@ pub(crate) fn evaluate(view: &View<'_>, condition: &Cond) -> bool {
                     .dormant()
                     .get(row)
                     .copied()
+                    // E7: cannot miss: `row` is a row `beacon_row` found in this table
                     .unwrap_or(false);
                 dormant != *powered
             }),
@@ -242,7 +247,8 @@ pub(crate) fn evaluate(view: &View<'_>, condition: &Cond) -> bool {
             view.state.reached != super::state::NO_INDEX && *index <= view.state.reached
         }
         Cond::RuleFired(index) => {
-            let at = usize::try_from(*index).unwrap_or(usize::MAX);
+            let at = crate::math::index::row(*index);
+            // E7: rule: a handler index the plan does not hold has never fired, and the compile refuses one
             view.state.fires.get(at).copied().unwrap_or(0) > 0
         }
     }
@@ -329,7 +335,7 @@ impl Board for View<'_> {
         self.seat
     }
     fn beacon_rows(&self) -> usize {
-        usize::try_from(self.world.beacons().len()).unwrap_or(usize::MAX)
+        crate::math::index::row(self.world.beacons().len())
     }
     fn row_id(&self, row: usize) -> Option<u32> {
         self.world.beacons().ids().get(row).copied()
@@ -346,6 +352,7 @@ impl Board for View<'_> {
             .mandates()
             .get(row)
             .copied()
+            // E7: cannot miss: every caller's `row` is a row of the beacon table it read
             .unwrap_or(0)
     }
     fn row_at(&self, row: usize) -> Option<[Fx; 3]> {
@@ -356,6 +363,7 @@ impl Board for View<'_> {
             .beacons()
             .hit_points()
             .get(row)
+            // E7: cannot miss: every caller's `row` is a row of the beacon table it read
             .map_or(0, |hp| i64::from(hp.raw()))
     }
     fn rules(&self) -> &RulesTable {
@@ -395,6 +403,7 @@ impl Board for SnapshotBoard<'_> {
         self.snapshot.beacon_ordinal.get(row).copied()
     }
     fn row_mandate(&self, row: usize) -> u8 {
+        // E7: cannot miss: every caller's `row` is a row of the snapshot's beacon columns
         self.snapshot.beacon_mandate.get(row).copied().unwrap_or(0)
     }
     fn row_at(&self, row: usize) -> Option<[Fx; 3]> {
@@ -404,6 +413,7 @@ impl Board for SnapshotBoard<'_> {
         self.snapshot
             .beacon_hp
             .get(row)
+            // E7: cannot miss: every caller's `row` is a row of the snapshot's beacon columns
             .map_or(0, |hp| i64::from(*hp))
     }
     fn rules(&self) -> &RulesTable {

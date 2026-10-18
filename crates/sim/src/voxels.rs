@@ -451,6 +451,7 @@ impl VoxelStore {
     /// How many chunks the store covers.
     #[must_use]
     pub fn chunk_count(&self) -> u32 {
+        // E7: cannot miss: the store is built from a `u32` chunk count per axis whose product was checked
         u32::try_from(self.chunks.len()).unwrap_or(u32::MAX)
     }
 
@@ -643,6 +644,7 @@ impl VoxelStore {
                         .ok()
                         .and_then(|c| height.get(c))
                         .copied()
+                        // E7: rule: a column the heightmap does not cover is filled to height zero
                         .unwrap_or(0);
                     let hi = top.min(oz.saturating_add(edge));
                     let mut z = oz;
@@ -836,6 +838,7 @@ impl VoxelStore {
             .ok()
             .and_then(|index| self.modified.get(index))
             .copied()
+            // E7: rule: a chunk off the map was never modified
             .unwrap_or(false)
     }
 

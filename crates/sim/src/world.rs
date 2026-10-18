@@ -838,6 +838,7 @@ impl World {
         let [max_x, max_y, _] = config.rules.map_last_voxel();
 
         let harness_units = config.seats.saturating_mul(config.units_per_seat);
+        // E7: cannot miss: the generator places a force of `u32`-counted units for at most 255 seats
         let starting = u32::try_from(generated.starting_units.len()).unwrap_or(u32::MAX);
         let unit_count = starting.saturating_add(harness_units);
         // Every derived index that is sized per unit is sized for the room a
@@ -855,7 +856,7 @@ impl World {
         // above keeps below the neutral byte.
         let mut seats = SeatTable::with_capacity(config.seats);
         for (((raw, treasury), supply), draw) in (0..=u8::MAX)
-            .take(usize::try_from(config.seats).unwrap_or(usize::MAX))
+            .take(crate::math::index::row(config.seats))
             .zip(&generated.seat_treasury)
             .zip(&generated.seat_supply)
             .zip(&generated.seat_draw)
@@ -914,8 +915,7 @@ impl World {
         let beacon_start = beacons.len();
         let beacon_limit = beacon_limit_of(config.seats);
         beacons.reserve(beacon_limit.saturating_sub(beacons.len()));
-        let mut beacon_alive: Vec<bool> =
-            Vec::with_capacity(usize::try_from(beacon_limit).unwrap_or(usize::MAX));
+        let mut beacon_alive: Vec<bool> = Vec::with_capacity(crate::math::index::row(beacon_limit));
         beacon_alive.extend(beacons.hit_points().iter().map(|hp| hp.is_alive()));
         let commanders = commander_index(&units, config.seats);
 
@@ -954,7 +954,7 @@ impl World {
             decision_units: crate::seams::UnitTally::new(),
             decision_work: vec![
                 WorkCounter::with_budget(u32::MAX);
-                usize::try_from(config.seats).unwrap_or(usize::MAX)
+                crate::math::index::row(config.seats)
             ],
             broadphase,
             repairer: Repairer::new(clusters.cluster_count()),
@@ -964,26 +964,25 @@ impl World {
             work: WorkCounter::with_budget(HARNESS_WORK_BUDGET),
             repair_report: RepairReport::default(),
             serve_report: ServeReport::default(),
-            arrivals: Vec::with_capacity(usize::try_from(unit_ceiling).unwrap_or(usize::MAX)),
+            arrivals: Vec::with_capacity(crate::math::index::row(unit_ceiling)),
             edits: Vec::with_capacity(QueueRooms::capacity(rooms.edits, "voxel edit")?),
             rooms,
             damage_drops: DamageDrops::default(),
             open_phase: None,
-            carry: Vec::with_capacity(
-                usize::try_from(beacon_limit.saturating_mul(TARGETS_PER_BEACON))
-                    .unwrap_or(usize::MAX),
-            ),
+            carry: Vec::with_capacity(crate::math::index::row(
+                beacon_limit.saturating_mul(TARGETS_PER_BEACON),
+            )),
             // Sized to the whole map rather than to the queue: one crater can
             // touch more chunks than the queue holds edits, and a scratch
             // buffer that has to grow is an allocation inside a tick.
-            touched: Vec::with_capacity(usize::try_from(chunk_total).unwrap_or(usize::MAX)),
-            candidates: Vec::with_capacity(usize::try_from(unit_ceiling).unwrap_or(usize::MAX)),
+            touched: Vec::with_capacity(crate::math::index::row(chunk_total)),
+            candidates: Vec::with_capacity(crate::math::index::row(unit_ceiling)),
             damage: Vec::with_capacity(QueueRooms::capacity(rooms.damage, "damage")?),
-            requests: Vec::with_capacity(usize::try_from(beacon_limit).unwrap_or(usize::MAX)),
-            power_order: Vec::with_capacity(usize::try_from(beacon_limit).unwrap_or(usize::MAX)),
+            requests: Vec::with_capacity(crate::math::index::row(beacon_limit)),
+            power_order: Vec::with_capacity(crate::math::index::row(beacon_limit)),
             credit_shares: Vec::with_capacity(crate::tables::CREDIT_SLOTS),
             credit_split: Vec::with_capacity(crate::tables::CREDIT_SLOTS),
-            settlement: Vec::with_capacity(usize::try_from(config.seats).unwrap_or(usize::MAX)),
+            settlement: Vec::with_capacity(crate::math::index::row(config.seats)),
             quartermaster: SingleTreasury,
             events: EventBus::with_capacity(EVENT_BUS_CAPACITY),
             commanders,
@@ -1217,6 +1216,7 @@ impl World {
         if index >= self.interpreter.len() {
             return false;
         }
+        // E7: rule: an event's value is derived output, never hashed, and saturates
         let steps = i64::try_from(plan.route().len()).unwrap_or(i64::MAX);
         let hp = self.commander_hp_of(seat);
         self.interpreter.seal(index, plan, hp);
@@ -1237,6 +1237,7 @@ impl World {
         usize::try_from(commander.raw())
             .ok()
             .and_then(|index| self.units.hit_points().get(index).copied())
+            // E7: rule: a seat with no commander row has no hit points
             .map_or(0, Hp::raw)
     }
 
@@ -1247,7 +1248,7 @@ impl World {
     /// walls, craters and trenches — and none of it changes because a playbook
     /// rather than the harness chose the destination.
     pub(crate) fn set_unit_destination(&mut self, unit: u32, to: [Fx; 3]) {
-        let index = usize::try_from(unit).unwrap_or(usize::MAX);
+        let index = crate::math::index::row(unit);
         // **A destination that has not changed is not a new order.** Clearing
         // the route and asking for another one is what a *change* of mind
         // costs; doing it for an unchanged destination throws away the route
@@ -1540,6 +1541,7 @@ impl World {
             || self.voxels.standing_z(x, y),
             |node| self.surface.standing_z(node),
         );
+        // E7: rule: a voxel off the map stands at the origin; every voxel of the map is a coordinate (`RulesTable::map_last_voxel`)
         [x, y, z].map(|v| Fx::from_voxels(i16::try_from(v).unwrap_or(0)))
     }
 
@@ -1593,7 +1595,7 @@ impl World {
         let centre = self.beacons.positions().get(row).copied()?;
         let limit = Sq::of_radius(self.sphere_radius());
         let mut best: Option<(Sq, u32)> = None;
-        let count = usize::try_from(self.wrecks.len()).unwrap_or(usize::MAX);
+        let count = crate::math::index::row(self.wrecks.len());
         let mut at: usize = 0;
         while at < count {
             let value = self
@@ -1701,7 +1703,7 @@ impl World {
     /// units "park where they stand"), and what an idle unit at its beacon
     /// does.
     pub(crate) fn park_unit(&mut self, unit: u32) {
-        let index = usize::try_from(unit).unwrap_or(usize::MAX);
+        let index = crate::math::index::row(unit);
         let here = self.units.positions().get(index).copied();
         if let Some(here) = here
             && let Some(slot) = self.units.destinations_mut().get_mut(index)
@@ -1761,10 +1763,11 @@ impl World {
     /// How many units `seat` has fabricated this match: its rows past the ones
     /// the world was built with, dead or alive (a row is never freed).
     fn fabricated_by(&self, seat: SeatId) -> u32 {
-        let start = usize::try_from(self.unit_start).unwrap_or(usize::MAX);
+        let start = crate::math::index::row(self.unit_start);
         self.units
             .seats()
             .get(start..)
+            // E7: rule: a table holding no row past the starting force fabricated none
             .unwrap_or_default()
             .iter()
             .fold(0_u32, |sum, held| {
@@ -1850,7 +1853,7 @@ impl World {
     /// caller, the structure exists from this instant at its full build cost,
     /// and a build drone raises it (item 23).
     fn queue_target(&mut self, seat: SeatId, beacon: BeaconId, target: u32) -> bool {
-        let row = usize::try_from(target).unwrap_or(usize::MAX);
+        let row = crate::math::index::row(target);
         let Some(kind) = self
             .targets
             .blueprints()
@@ -1914,7 +1917,7 @@ impl World {
     /// A structure reached full hit points: it is finished, and starts
     /// supplying or drawing on the next tick's power phase.
     pub(crate) fn finish_structure(&mut self, structure: StructureId) {
-        let row = usize::try_from(structure.raw()).unwrap_or(usize::MAX);
+        let row = crate::math::index::row(structure.raw());
         if self.structures.building().get(row).copied() != Some(true) {
             return;
         }
@@ -2228,7 +2231,7 @@ impl World {
     /// `docs/design/targeting.md`, "Sites").
     #[must_use]
     pub fn anchor_is_claimed(&self, seat: SeatId, at: [Fx; 3]) -> bool {
-        let count = usize::try_from(self.targets.len()).unwrap_or(usize::MAX);
+        let count = crate::math::index::row(self.targets.len());
         let mut row: usize = 0;
         while row < count {
             let owned = self
@@ -2279,7 +2282,7 @@ impl World {
     /// through `on` is keyed by its feature (targeting.md, "Sites"). `false`
     /// when none is.
     pub(crate) fn remove_bound_target(&mut self, beacon: BeaconId, feature: u32) -> bool {
-        let count = usize::try_from(self.targets.len()).unwrap_or(usize::MAX);
+        let count = crate::math::index::row(self.targets.len());
         let mut row: usize = 0;
         while row < count {
             if self.targets.beacons().get(row).copied() == Some(beacon.raw())
@@ -2308,7 +2311,7 @@ impl World {
     /// one it needs yet. Run on decision ticks only, before the
     /// Quartermaster gathers, so a re-read target is the one it pays for.
     fn reread_lost_targets(&mut self) {
-        let count = usize::try_from(self.targets.len()).unwrap_or(usize::MAX);
+        let count = crate::math::index::row(self.targets.len());
         let mut row: usize = 0;
         while row < count {
             let held = self.targets.descriptions().get(row).copied()
@@ -2320,16 +2323,17 @@ impl World {
                 .get(row)
                 .copied()
                 .unwrap_or(NO_FEATURE);
-            let lost = feature != NO_FEATURE
-                && !self.feature_is_live(usize::try_from(feature).unwrap_or(usize::MAX));
+            let lost =
+                feature != NO_FEATURE && !self.feature_is_live(crate::math::index::row(feature));
             if held && lost {
                 let beacon = self
                     .targets
                     .beacons()
                     .get(row)
                     .copied()
+                    // E7: cannot miss: `row` walks the target table's own rows
                     .map_or(BeaconId::NONE, BeaconId::new);
-                let beacon_row = usize::try_from(beacon.raw()).unwrap_or(usize::MAX);
+                let beacon_row = crate::math::index::row(beacon.raw());
                 let centre = self.beacons.positions().get(beacon_row).copied();
                 let seat = self
                     .beacons
@@ -2363,6 +2367,7 @@ impl World {
                             *slot = at;
                         }
                         if let Some(slot) = self.targets.features_mut().get_mut(row) {
+                            // E7: rule: a feature index past `u32` names no feature, which is `NO_FEATURE`
                             *slot = u32::try_from(site.feature).unwrap_or(NO_FEATURE);
                         }
                     }
@@ -2553,6 +2558,7 @@ impl World {
         usize::try_from(beacon.raw())
             .ok()
             .and_then(|row| self.beacons.seats().get(row).copied())
+            // E7: rule: a row the table does not hold is nobody's, and every caller then finds no target of a seat
             .map_or(SeatId::NEUTRAL, SeatId::new)
     }
 
@@ -2575,7 +2581,7 @@ impl World {
 
     /// Write the `built` link of `beacon`'s Build target at `at`.
     fn set_built_at(&mut self, beacon: BeaconId, at: [Fx; 3], built: u32) {
-        let count = usize::try_from(self.targets.len()).unwrap_or(usize::MAX);
+        let count = crate::math::index::row(self.targets.len());
         let mut row: usize = 0;
         while row < count {
             if self.targets.beacons().get(row).copied() == Some(beacon.raw())
@@ -2596,7 +2602,7 @@ impl World {
     /// all-or-nothing (spec section 5), so the list it replaces goes first.
     pub(crate) fn clear_targets(&mut self, beacon: BeaconId, kind: TargetKind) {
         let mut row: usize = 0;
-        while row < usize::try_from(self.targets.len()).unwrap_or(usize::MAX) {
+        while row < crate::math::index::row(self.targets.len()) {
             if self.targets.beacons().get(row).copied() == Some(beacon.raw())
                 && self.targets.kinds().get(row).copied() == Some(kind.id())
             {
@@ -2614,7 +2620,7 @@ impl World {
     /// changed is not a stable reference (`playbook.proto`'s own words).
     /// `false` when no target is anchored there.
     pub(crate) fn remove_target_at(&mut self, beacon: BeaconId, at: [Fx; 3]) -> bool {
-        let count = usize::try_from(self.targets.len()).unwrap_or(usize::MAX);
+        let count = crate::math::index::row(self.targets.len());
         let mut row: usize = 0;
         while row < count {
             if self.targets.beacons().get(row).copied() == Some(beacon.raw())
@@ -2696,7 +2702,7 @@ impl World {
             .seat_row(seat)
             .and_then(|index| self.seats.treasuries().get(index).copied())
             .unwrap_or(Money::ZERO);
-        let count = usize::try_from(self.beacons.len()).unwrap_or(usize::MAX);
+        let count = crate::math::index::row(self.beacons.len());
         let mut row: usize = 0;
         while row < count {
             if self.beacons.seats().get(row).copied() == Some(seat.raw()) {
@@ -2716,7 +2722,7 @@ impl World {
             }
             row = row.saturating_add(1);
         }
-        let count = usize::try_from(self.structures.len()).unwrap_or(usize::MAX);
+        let count = crate::math::index::row(self.structures.len());
         let mut row: usize = 0;
         while row < count {
             if self.structures.seats().get(row).copied() == Some(seat.raw())
@@ -2743,7 +2749,7 @@ impl World {
             }
             row = row.saturating_add(1);
         }
-        let count = usize::try_from(self.units.len()).unwrap_or(usize::MAX);
+        let count = crate::math::index::row(self.units.len());
         let mut row: usize = 0;
         while row < count {
             if self.units.seats().get(row).copied() == Some(seat.raw())
@@ -2808,6 +2814,7 @@ impl World {
         self.commanders
             .get(index)
             .copied()
+            // E7: rule: a seat this world has not got has no commander
             .map_or(UnitId::NONE, UnitId::new)
     }
 
@@ -3336,7 +3343,7 @@ impl World {
         }
         let (asset, owner, hp) = match order.target {
             DamageTarget::Unit(unit) => {
-                let row = usize::try_from(unit.raw()).unwrap_or(usize::MAX);
+                let row = crate::math::index::row(unit.raw());
                 (
                     AssetId::of_unit(unit),
                     self.units.seats().get(row).copied(),
@@ -3344,7 +3351,7 @@ impl World {
                 )
             }
             DamageTarget::Beacon(beacon) => {
-                let row = usize::try_from(beacon.raw()).unwrap_or(usize::MAX);
+                let row = crate::math::index::row(beacon.raw());
                 (
                     AssetId::of_beacon(beacon),
                     self.beacons.seats().get(row).copied(),
@@ -3352,7 +3359,7 @@ impl World {
                 )
             }
             DamageTarget::Structure(structure) => {
-                let row = usize::try_from(structure.raw()).unwrap_or(usize::MAX);
+                let row = crate::math::index::row(structure.raw());
                 (
                     AssetId::of_structure(structure),
                     self.structures.seats().get(row).copied(),
@@ -3457,7 +3464,7 @@ impl World {
         let mut row: u32 = 0;
         while row < count {
             let id = BeaconId::new(row);
-            let at = usize::try_from(row).unwrap_or(usize::MAX);
+            let at = crate::math::index::row(row);
             let seat = self.beacons.seats().get(at).copied().unwrap_or(0);
             let alive_seat = self
                 .seat_row(SeatId::new(seat))
@@ -3479,7 +3486,7 @@ impl World {
                 // allocator decide whether an order was filled. The buffer is
                 // reserved to the same number, so this never drops a request
                 // that the reservation left room for.
-                && out.len() < usize::try_from(self.beacon_limit).unwrap_or(usize::MAX)
+                && out.len() < crate::math::index::row(self.beacon_limit)
             {
                 out.push(request);
             }
@@ -3713,7 +3720,7 @@ impl World {
                 break;
             };
             at = at.saturating_add(1);
-            let index = usize::try_from(unit).unwrap_or(usize::MAX);
+            let index = crate::math::index::row(unit);
             if self.units.kinds().get(index).copied() == Some(UnitKind::Commander.id()) {
                 continue;
             }
@@ -3837,7 +3844,7 @@ impl World {
                 break;
             };
             at = at.saturating_add(1);
-            let index = usize::try_from(unit).unwrap_or(usize::MAX);
+            let index = crate::math::index::row(unit);
             let seat = self.units.seats().get(index).copied().unwrap_or(0);
             let position = self.units.positions().get(index).copied();
             let mut emission = Emission::of(EventKind::UnitSealedIn)
@@ -3863,7 +3870,7 @@ impl World {
     /// `rehome_units`, below).
     fn settle_beacon_deaths(&mut self) {
         let tick = self.tick;
-        let count = usize::try_from(self.beacons.len()).unwrap_or(usize::MAX);
+        let count = crate::math::index::row(self.beacons.len());
         let mut index: usize = 0;
         while index < count {
             let alive = self
@@ -3907,7 +3914,7 @@ impl World {
 
     /// A beacon's writ ends with it: no mandate, no settings, no targets.
     fn end_mandate(&mut self, beacon: BeaconId) {
-        let row = usize::try_from(beacon.raw()).unwrap_or(usize::MAX);
+        let row = crate::math::index::row(beacon.raw());
         if let Some(slot) = self.beacons.mandates_mut().get_mut(row) {
             *slot = MandateKind::None.id();
         }
@@ -3930,7 +3937,7 @@ impl World {
     /// there is nowhere to re-home to and pretending otherwise would put a
     /// unit on a grid that does not exist.
     fn rehome_units(&mut self, seat: SeatId, gone: BeaconId) {
-        let count = usize::try_from(self.units.len()).unwrap_or(usize::MAX);
+        let count = crate::math::index::row(self.units.len());
         let mut row: usize = 0;
         while row < count {
             let mine = self.units.seats().get(row).copied() == Some(seat.raw());
@@ -3961,7 +3968,7 @@ impl World {
     /// (item 62's convention, the same key [`World::respawn_point`] uses).
     fn nearest_living_beacon(&self, seat: SeatId, from: [Fx; 3]) -> Option<BeaconId> {
         let mut best: Option<(Sq, u32)> = None;
-        let count = usize::try_from(self.beacons.len()).unwrap_or(usize::MAX);
+        let count = crate::math::index::row(self.beacons.len());
         let mut row: usize = 0;
         while row < count {
             if self.beacons.seats().get(row).copied() == Some(seat.raw())
@@ -3991,7 +3998,7 @@ impl World {
     /// having no seat, rather than from five flags that could disagree.
     fn ruin_structures(&mut self, home: Option<BeaconId>, seat: Option<SeatId>) {
         let tick = self.tick;
-        let count = usize::try_from(self.structures.len()).unwrap_or(usize::MAX);
+        let count = crate::math::index::row(self.structures.len());
         let mut index: usize = 0;
         while index < count {
             let owner = self.structures.seats().get(index).copied().unwrap_or(0);
@@ -4027,7 +4034,7 @@ impl World {
     /// match".
     fn settle_eliminations(&mut self) {
         let tick = self.tick;
-        let seats = usize::try_from(self.seats.len()).unwrap_or(usize::MAX);
+        let seats = crate::math::index::row(self.seats.len());
         let mut index: usize = 0;
         while index < seats {
             let raw = self.seats.seats().get(index).copied().unwrap_or(0);
@@ -4065,7 +4072,7 @@ impl World {
     /// and a disbanded unit is making none, and leaving it in the repath queue
     /// would spend the tick's cap on the dead.
     fn disband_units(&mut self, seat: SeatId) {
-        let count = usize::try_from(self.units.len()).unwrap_or(usize::MAX);
+        let count = crate::math::index::row(self.units.len());
         let mut index: usize = 0;
         while index < count {
             if self.units.seats().get(index).copied() == Some(seat.raw()) {
@@ -4093,7 +4100,7 @@ impl World {
     /// come back to and does not.
     fn settle_respawns(&mut self, force: bool) {
         let tick = self.tick;
-        let seats = usize::try_from(self.seats.len()).unwrap_or(usize::MAX);
+        let seats = crate::math::index::row(self.seats.len());
         let hp = self.commander_hp();
         let mut index: usize = 0;
         while index < seats {
@@ -4168,7 +4175,7 @@ impl World {
     fn settle_commander_deaths(&mut self) {
         let tick = self.tick;
         let (base, growth) = self.respawn_curve();
-        let seats = usize::try_from(self.seats.len()).unwrap_or(usize::MAX);
+        let seats = crate::math::index::row(self.seats.len());
         let mut index: usize = 0;
         while index < seats {
             let raw = self.seats.seats().get(index).copied().unwrap_or(0);
@@ -4192,9 +4199,12 @@ impl World {
                     .get(index)
                     .copied()
                     .unwrap_or(0);
-                let delay = Ms::new(base.saturating_add(
-                    growth.saturating_mul(i32::try_from(deaths).unwrap_or(i32::MAX)),
-                ));
+                let delay = Ms::new(
+                    // E7: rule: the respawn delay saturates, as every respawn sum does
+                    base.saturating_add(
+                        growth.saturating_mul(i32::try_from(deaths).unwrap_or(i32::MAX)),
+                    ),
+                );
                 let due = tick.raw().saturating_add(delay.to_ticks_ceil());
                 {
                     let columns = self.seats.match_columns();
@@ -4236,7 +4246,7 @@ impl World {
     fn check_match_end(&mut self) -> bool {
         let mut remaining: u32 = 0;
         let mut last: Option<SeatId> = None;
-        let seats = usize::try_from(self.seats.len()).unwrap_or(usize::MAX);
+        let seats = crate::math::index::row(self.seats.len());
         let mut index: usize = 0;
         while index < seats {
             let raw = self.seats.seats().get(index).copied().unwrap_or(0);
@@ -4360,7 +4370,7 @@ impl World {
     /// dial between the seats still playing.
     fn settle_ledger(&mut self) {
         let tick = self.tick;
-        let count = usize::try_from(self.seats.len()).unwrap_or(usize::MAX);
+        let count = crate::math::index::row(self.seats.len());
         // **The ladder is read once, before anybody is paid.** Ranking a seat
         // against treasuries that have already been credited would make the
         // band depend on the order the seats are walked in: the first seat
@@ -4451,7 +4461,7 @@ impl World {
     /// Whether a seat is standing, has fallen, or was never placed.
     fn seat_standing(&self, seat: u8) -> SeatStanding {
         let mut placed = false;
-        let count = usize::try_from(self.beacons.len()).unwrap_or(usize::MAX);
+        let count = crate::math::index::row(self.beacons.len());
         let mut index: usize = 0;
         while index < count {
             if self.beacons.seats().get(index).copied() == Some(seat) {
@@ -4479,7 +4489,7 @@ impl World {
     fn respawn_point(&self, seat: u8, from: [Fx; 3]) -> Option<[Fx; 3]> {
         let mut core: Option<(u32, [Fx; 3], bool)> = None;
         let mut nearest: Option<(Sq, u32, [Fx; 3])> = None;
-        let count = usize::try_from(self.beacons.len()).unwrap_or(usize::MAX);
+        let count = crate::math::index::row(self.beacons.len());
         let mut index: usize = 0;
         while index < count {
             if self.beacons.seats().get(index).copied() == Some(seat) {
@@ -4919,7 +4929,7 @@ impl World {
         // The interpreter's *state* is restored; its **plans** are not in the
         // file, because a playbook is an input exactly as the rules table is
         // (see `crate::interpreter::state::Interpreter::restore`).
-        let seat_width = usize::try_from(restored.seats.len()).unwrap_or(usize::MAX);
+        let seat_width = crate::math::index::row(restored.seats.len());
         if !self.interpreter.restore(&restored.plan, seat_width) {
             return false;
         }
@@ -4959,8 +4969,7 @@ impl World {
         self.beacon_limit = beacon_limit_of(self.seats.len());
         self.beacons
             .reserve(self.beacon_limit.saturating_sub(self.beacons.len()));
-        self.beacon_alive =
-            Vec::with_capacity(usize::try_from(self.beacon_limit).unwrap_or(usize::MAX));
+        self.beacon_alive = Vec::with_capacity(crate::math::index::row(self.beacon_limit));
         self.beacon_alive
             .extend(self.beacons.hit_points().iter().map(|hp| hp.is_alive()));
         self.match_state.restore(restored.match_state);
@@ -4984,7 +4993,7 @@ impl World {
         self.surface.refresh_all(&self.voxels);
         self.clusters.rebuild_all(&self.surface, &mut self.scratch);
         self.repairer = Repairer::new(self.clusters.cluster_count());
-        self.arrivals = Vec::with_capacity(usize::try_from(self.unit_limit).unwrap_or(usize::MAX));
+        self.arrivals = Vec::with_capacity(crate::math::index::row(self.unit_limit));
         self.repair_report = RepairReport::default();
         self.serve_report = ServeReport::default();
         // A restore lands between ticks: no tick is open, and the queues are
@@ -4993,10 +5002,9 @@ impl World {
         self.rooms = rooms;
         self.edits = Vec::with_capacity(edit_capacity);
         self.damage = Vec::with_capacity(damage_capacity);
-        self.carry = Vec::with_capacity(
-            usize::try_from(self.beacon_limit.saturating_mul(TARGETS_PER_BEACON))
-                .unwrap_or(usize::MAX),
-        );
+        self.carry = Vec::with_capacity(crate::math::index::row(
+            self.beacon_limit.saturating_mul(TARGETS_PER_BEACON),
+        ));
         // The event bus is derived output and is not in the file
         // ([`crate::events`]): a restored world starts with an empty feed,
         // which costs nothing because a host drains it every tick and a save is
@@ -5006,24 +5014,19 @@ impl World {
         // resumed feed a function of the restored state rather than of whatever
         // this world had been doing before.
         self.events.reset(self.tick);
-        self.touched =
-            Vec::with_capacity(usize::try_from(self.voxels.chunk_count()).unwrap_or(usize::MAX));
+        self.touched = Vec::with_capacity(crate::math::index::row(self.voxels.chunk_count()));
         // The query scratch is sized the same way, and for the same reason: a
         // query that has to grow its buffer is an allocation inside a tick.
-        self.candidates =
-            Vec::with_capacity(usize::try_from(self.unit_limit).unwrap_or(usize::MAX));
+        self.candidates = Vec::with_capacity(crate::math::index::row(self.unit_limit));
         // The three phase scratch buffers are re-reserved from the **restored**
         // counts for the same reason the tables are: they were sized at
         // construction from the config's seat count, and a snapshot of a match
         // with more seats raises `beacon_limit` and `seats.len()` past what
         // they were built for. A `power_order.push` past the reservation would
         // then allocate inside a tick, which `tests/allocations.rs` fails on.
-        self.requests =
-            Vec::with_capacity(usize::try_from(self.beacon_limit).unwrap_or(usize::MAX));
-        self.power_order =
-            Vec::with_capacity(usize::try_from(self.beacon_limit).unwrap_or(usize::MAX));
-        self.settlement =
-            Vec::with_capacity(usize::try_from(self.seats.len()).unwrap_or(usize::MAX));
+        self.requests = Vec::with_capacity(crate::math::index::row(self.beacon_limit));
+        self.power_order = Vec::with_capacity(crate::math::index::row(self.beacon_limit));
+        self.settlement = Vec::with_capacity(crate::math::index::row(self.seats.len()));
         true
     }
 }
@@ -5062,7 +5065,7 @@ enum SeatStanding {
 /// has, in unit-id order, which is the only commander a seat ever has (spec
 /// section 4: one per occupied seat).
 fn commander_index(units: &UnitTable, seats: u32) -> Vec<u32> {
-    let mut commanders = vec![UnitId::NONE.raw(); usize::try_from(seats).unwrap_or(usize::MAX)];
+    let mut commanders = vec![UnitId::NONE.raw(); crate::math::index::row(seats)];
     let commander = UnitKind::Commander.id();
     for (index, kind) in units.kinds().iter().enumerate() {
         if *kind != commander {
@@ -5181,7 +5184,7 @@ fn fill_unit_table(
 /// generator's output before a [`World`] exists to ask.
 fn core_of_generated(generated: &crate::mapgen::GeneratedMap, seat: SeatId) -> BeaconId {
     let beacons = &generated.beacons;
-    let count = usize::try_from(beacons.len()).unwrap_or(usize::MAX);
+    let count = crate::math::index::row(beacons.len());
     let mut best: Option<u32> = None;
     let mut row: usize = 0;
     while row < count {
@@ -5266,6 +5269,7 @@ fn ground_point(voxels: &VoxelStore, rng: &mut StreamRng, max_x: i16, max_y: i16
     let x = rng.range_i32(0, i32::from(max_x));
     let y = rng.range_i32(0, i32::from(max_y));
     let z = voxels.standing_z(x, y);
+    // E7: cannot miss: `x` and `y` are drawn inside the map's last voxel and `z` stands on it, all coordinates
     [x, y, z].map(|v| Fx::from_voxels(i16::try_from(v).unwrap_or(0)))
 }
 
@@ -5314,7 +5318,7 @@ mod tests {
         world
             .units()
             .hit_points()
-            .get(usize::try_from(unit).unwrap_or(usize::MAX))
+            .get(crate::math::index::row(unit))
             .map_or(i32::MIN, |hp| hp.raw())
     }
 

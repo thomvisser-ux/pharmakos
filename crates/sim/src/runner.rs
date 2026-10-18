@@ -462,6 +462,7 @@ impl MatchState {
         enc.u8(self.phase.id());
         enc.u32(self.round);
         enc.u32(self.round_limit);
+        // E7: cannot miss: every way in bounds the ladder at `MAX_SEGMENT_LENGTHS` entries (the rules loader, `MatchSettings::validate`, a snapshot's `from_parts`)
         enc.len(u32::try_from(self.segment_lengths_ms.len()).unwrap_or(u32::MAX));
         for length in &self.segment_lengths_ms {
             enc.i32(*length);
@@ -656,10 +657,8 @@ fn length_for_round(lengths: &[i32], round: u32) -> i32 {
     };
     // Rounds past the end take the last entry: item 40's rule, so the clamp
     // is the rule and the lookup cannot miss.
-    let index = usize::try_from(round.saturating_sub(1))
-        .unwrap_or(usize::MAX)
-        .min(last);
-    lengths.get(index).copied().unwrap_or(0)
+    let index = crate::math::index::row(round.saturating_sub(1)).min(last);
+    lengths.get(index).copied().unwrap_or(0) // E7: cannot miss: `index <= last`, the list's own last index
 }
 
 /// The planning snapshot, frozen at segment end (spec section 3).

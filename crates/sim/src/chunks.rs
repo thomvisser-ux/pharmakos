@@ -51,13 +51,14 @@ impl ChunkDigests {
     #[must_use]
     pub fn new(count: u32) -> ChunkDigests {
         ChunkDigests {
-            digests: vec![0; usize::try_from(count).unwrap_or(usize::MAX)],
+            digests: vec![0; crate::math::index::row(count)],
         }
     }
 
     /// How many chunks the store covers.
     #[must_use]
     pub fn len(&self) -> u32 {
+        // E7: cannot miss: the column is built from a `u32` chunk count, and a restore replaces it with one of the same store's
         u32::try_from(self.digests.len()).unwrap_or(u32::MAX)
     }
 

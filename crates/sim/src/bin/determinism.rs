@@ -222,11 +222,8 @@ fn chain(runner: &mut Runner, cli: &Cli) -> Result<String, String> {
         ));
     }
 
-    let mut text = String::with_capacity(
-        usize::try_from(cli.ticks)
-            .unwrap_or(usize::MAX)
-            .saturating_mul(24),
-    );
+    let mut text =
+        String::with_capacity(pharmakos_sim::math::index::row(cli.ticks).saturating_mul(24));
     let mut written: u32 = 0;
     while written < cli.ticks {
         let tick = first_tick.saturating_add(written);

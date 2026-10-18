@@ -202,9 +202,13 @@ pub fn repair(
 
     rebuilt.extend_from_slice(&inter);
     let report = RepairReport {
+        // E7: rule: a diagnostic count, never hashed, saturates rather than fail a tick
         dirty: u32::try_from(dirty.len()).unwrap_or(u32::MAX),
+        // E7: rule: as above
         transitions_rebuilt: u32::try_from(transitions.len()).unwrap_or(u32::MAX),
+        // E7: rule: as above
         intra_rebuilt: u32::try_from(transitions.len()).unwrap_or(u32::MAX),
+        // E7: rule: as above
         inter_rebuilt: u32::try_from(inter.len()).unwrap_or(u32::MAX),
     };
 

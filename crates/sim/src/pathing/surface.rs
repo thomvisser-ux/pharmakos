@@ -178,6 +178,7 @@ impl Surface {
     /// How many nodes the graph holds: one per column.
     #[must_use]
     pub fn node_count(&self) -> u32 {
+        // E7: cannot miss: one node per column of a map whose columns are a `u32` count
         u32::try_from(self.top.len()).unwrap_or(0)
     }
 
@@ -212,6 +213,7 @@ impl Surface {
         let Ok(index) = usize::try_from(node) else {
             return -1;
         };
+        // E7: rule: a node off the graph has no top, which is -1 everywhere in the graph
         i32::from(self.top.get(index).copied().unwrap_or(-1))
     }
 
@@ -221,6 +223,7 @@ impl Surface {
         let Ok(index) = usize::try_from(node) else {
             return false;
         };
+        // E7: rule: a node off the graph is not walkable
         self.walk.get(index).copied().unwrap_or(false)
     }
 
@@ -281,6 +284,7 @@ impl Surface {
         let [_, _, sz] = self.size;
         let walkable = top >= 0 && top.saturating_add(HEADROOM_VOXELS) < sz;
         if let Some(slot) = self.top.get_mut(index) {
+            // E7: rule: a column whose top is past a voxel coordinate is not a column of this map; -1 is "no top"
             *slot = i16::try_from(top).unwrap_or(-1);
         }
         if let Some(slot) = self.walk.get_mut(index) {
@@ -361,6 +365,7 @@ impl Surface {
     /// How many walkable columns the graph holds. Diagnostic; never in a tick.
     #[must_use]
     pub fn walkable_count(&self) -> u32 {
+        // E7: rule: a diagnostic count, never in a tick, saturates
         u32::try_from(self.walk.iter().filter(|w| **w).count()).unwrap_or(u32::MAX)
     }
 

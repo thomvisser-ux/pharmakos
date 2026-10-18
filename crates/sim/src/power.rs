@@ -693,7 +693,7 @@ fn supply_under(world: &World, seat: SeatId, rules: PowerRules, lighting: Lighti
         total = total.checked_add(rules.core_surplus)?;
     }
     let structures = world.structures();
-    let count = usize::try_from(structures.len()).unwrap_or(usize::MAX);
+    let count = crate::math::index::row(structures.len());
     let mut row: usize = 0;
     while row < count {
         if structure_counts(world, seat, row, lighting)
@@ -752,7 +752,7 @@ pub(crate) fn headroom_of(
 fn draw_under(world: &World, seat: SeatId, rules: PowerRules, lighting: Lighting) -> Option<i32> {
     let mut total: i32 = unit_draw_of(world, seat, rules, lighting)?;
     let structures = world.structures();
-    let count = usize::try_from(structures.len()).unwrap_or(usize::MAX);
+    let count = crate::math::index::row(structures.len());
     let mut row: usize = 0;
     while row < count {
         if structure_counts(world, seat, row, lighting) {
@@ -778,7 +778,7 @@ fn draw_under(world: &World, seat: SeatId, rules: PowerRules, lighting: Lighting
 fn unit_draw_of(world: &World, seat: SeatId, rules: PowerRules, lighting: Lighting) -> Option<i32> {
     let mut total: i32 = 0;
     let units = world.units();
-    let count = usize::try_from(units.len()).unwrap_or(usize::MAX);
+    let count = crate::math::index::row(units.len());
     let mut row: usize = 0;
     while row < count {
         let mine = units.seats().get(row).copied() == Some(seat.raw());
@@ -787,6 +787,7 @@ fn unit_draw_of(world: &World, seat: SeatId, rules: PowerRules, lighting: Lighti
             .homes()
             .get(row)
             .copied()
+            // E7: cannot miss: `row` walks the unit table's own rows
             .unwrap_or(BeaconId::NONE.raw());
         if mine && alive && beacon_counts(world, BeaconId::new(home), lighting) {
             total = total.checked_add(rules.per_unit)?;
@@ -804,11 +805,12 @@ fn unit_draw_of(world: &World, seat: SeatId, rules: PowerRules, lighting: Lighti
 #[must_use]
 pub(crate) fn core_of(world: &World, seat: SeatId) -> Option<BeaconId> {
     let beacons = world.beacons();
-    let count = usize::try_from(beacons.len()).unwrap_or(usize::MAX);
+    let count = crate::math::index::row(beacons.len());
     let mut best: Option<u32> = None;
     let mut row: usize = 0;
     while row < count {
         if beacons.seats().get(row).copied() == Some(seat.raw()) {
+            // E7: cannot miss: `row` walks the beacon table's own rows
             let id = beacons.ids().get(row).copied().unwrap_or(0);
             if best.is_none_or(|held| id < held) {
                 best = Some(id);
@@ -877,6 +879,7 @@ fn structure_counts(world: &World, seat: SeatId, row: usize, lighting: Lighting)
         .homes()
         .get(row)
         .copied()
+        // E7: cannot miss: `row` is a row of the unit table
         .unwrap_or(BeaconId::NONE.raw());
     beacon_counts(world, BeaconId::new(home), lighting)
 }

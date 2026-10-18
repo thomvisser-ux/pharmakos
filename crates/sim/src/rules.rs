@@ -407,6 +407,7 @@ impl RulesTable {
     pub fn encode(&self, enc: &mut Enc) {
         enc.u32(RULES_VERSION);
         let bytes = self.canonical.as_bytes();
+        // E7: cannot miss: the canonical JSON is written by the codec from a bounded message; the encoding's length field is a `u32` by format
         enc.len(u32::try_from(bytes.len()).unwrap_or(u32::MAX));
         enc.bytes(bytes);
     }

@@ -141,7 +141,7 @@ pub(crate) fn settle(world: &mut World, shares: &mut Vec<(u8, i32)>, split: &mut
     }
     let tick = world.tick();
     let mut at: usize = 0;
-    while at < usize::try_from(world.credit().len()).unwrap_or(usize::MAX) {
+    while at < crate::math::index::row(world.credit().len()) {
         let Some(asset) = world.credit().assets().get(at).copied() else {
             break;
         };

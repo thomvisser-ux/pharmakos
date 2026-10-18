@@ -103,6 +103,7 @@ impl Fog<'_> {
             Fog::Unknown(mask) => usize::try_from(node)
                 .ok()
                 .and_then(|index| mask.get(index).copied())
+                // E7: rule: a column the fog mask does not cover is not unknown
                 .unwrap_or(false),
         }
     }
@@ -180,6 +181,7 @@ pub fn fog_price(cost: i32, numerator: i32, denominator: i32) -> i32 {
         return cost;
     }
     let scaled = i64::from(cost).saturating_mul(i64::from(numerator));
+    // E7: rule: item 61's fog price saturates at the most a cost holds
     i32::try_from(scaled / i64::from(denominator)).unwrap_or(i32::MAX)
 }
 

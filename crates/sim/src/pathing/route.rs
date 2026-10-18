@@ -334,6 +334,7 @@ fn reconstruct(
         guard = guard.saturating_add(1);
     }
     path.reverse();
+    // E7: cannot miss: an abstract path holds at most the graph's nodes, a `u32` count
     let legs = u32::try_from(path.len().saturating_sub(1)).unwrap_or(0);
     let mut fogged = false;
     for node in &path {
@@ -422,7 +423,7 @@ pub fn route(
     let capacity = clusters.abstract_capacity();
     let temp_start = capacity;
     let temp_goal = capacity.saturating_add(1);
-    let limit = usize::try_from(MAX_ROUTE_NODES).unwrap_or(usize::MAX);
+    let limit = crate::math::index::row(MAX_ROUTE_NODES);
 
     let path = core::mem::take(&mut scratch.abstract_path);
     let mut raw = core::mem::take(&mut scratch.raw);
@@ -606,6 +607,7 @@ fn abstract_cost(scratch: &Scratch, node: u32) -> i32 {
     usize::try_from(node)
         .ok()
         .and_then(|index| scratch.abstract_g.get(index).copied())
+        // E7: rule: an abstract node the query never reached costs nothing yet
         .unwrap_or(0)
 }
 
@@ -613,6 +615,7 @@ fn abstract_came(scratch: &Scratch, node: u32) -> u32 {
     usize::try_from(node)
         .ok()
         .and_then(|index| scratch.abstract_came.get(index).copied())
+        // E7: rule: a node the query never reached is its own predecessor, which ends the walk back
         .unwrap_or(node)
 }
 
@@ -734,7 +737,9 @@ pub fn smooth_into(
             let budget = prefix
                 .get(ahead)
                 .copied()
+                // E7: cannot miss: `ahead` and `index` are inside the prefix array the walk built
                 .unwrap_or(0)
+                // E7: cannot miss: as above
                 .saturating_sub(prefix.get(index).copied().unwrap_or(0));
             if let Some(cost) = straight_walk(surface, from, to, line)
                 && cost <= budget

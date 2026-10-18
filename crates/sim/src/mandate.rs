@@ -228,7 +228,7 @@ fn backlogged(world: &World, work: u32, drones: u32) -> bool {
 /// How many living units of `kind` are homed to `beacon`.
 fn drones_homed(world: &World, beacon: BeaconId, kind: UnitKind) -> u32 {
     let units = world.units();
-    let count = usize::try_from(units.len()).unwrap_or(usize::MAX);
+    let count = crate::math::index::row(units.len());
     let mut total: u32 = 0;
     let mut row: usize = 0;
     while row < count {

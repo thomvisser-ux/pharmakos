@@ -409,7 +409,7 @@ impl Interpreter {
     /// Room for `seats` seats, none of which has sealed anything.
     #[must_use]
     pub fn with_seats(seats: u32) -> Interpreter {
-        let count = usize::try_from(seats).unwrap_or(usize::MAX);
+        let count = crate::math::index::row(seats);
         Interpreter {
             plans: vec![None; count],
             states: vec![PlanState::default(); count],
@@ -468,6 +468,7 @@ impl Interpreter {
     /// damage marker the reflex compares against — so sealing does not itself
     /// read as damage.
     pub fn seal(&mut self, seat: usize, plan: Plan, commander_hp: i32) {
+        // E7: rule: a seat with no state yet has died no times this match
         let deaths = self.states.get(seat).map_or(0, |state| state.deaths_match);
         let fresh = PlanState::sealed(&plan, deaths, commander_hp);
         if let Some(slot) = self.plans.get_mut(seat) {
@@ -605,16 +606,14 @@ impl Interpreter {
             let Some(stage) = parts.stage.get(at).copied().and_then(VisitState::from_id) else {
                 return false;
             };
-            let count = usize::try_from(parts.rule_count.get(at).copied().unwrap_or(0))
-                .unwrap_or(usize::MAX);
+            let count = crate::math::index::row(parts.rule_count.get(at).copied().unwrap_or(0));
             let to = rule_at.saturating_add(count);
             let (Some(fires), Some(ready)) =
                 (parts.fires.get(rule_at..to), parts.ready.get(rule_at..to))
             else {
                 return false;
             };
-            let bound = usize::try_from(parts.binding_count.get(at).copied().unwrap_or(0))
-                .unwrap_or(usize::MAX);
+            let bound = crate::math::index::row(parts.binding_count.get(at).copied().unwrap_or(0));
             let bound_to = binding_at.saturating_add(bound);
             let Some(features) = parts.binding_feature.get(binding_at..bound_to) else {
                 return false;
@@ -834,7 +833,7 @@ impl PlanParts {
         }
         let mut bound: usize = 0;
         for count in &self.binding_count {
-            bound = bound.saturating_add(usize::try_from(*count).unwrap_or(usize::MAX));
+            bound = bound.saturating_add(crate::math::index::row(*count));
         }
         if bound != self.binding_feature.len() || bound.saturating_mul(3) != self.binding_at.len() {
             return false;
@@ -853,7 +852,7 @@ impl PlanParts {
         }
         let mut packed: usize = 0;
         for count in &self.rule_count {
-            packed = packed.saturating_add(usize::try_from(*count).unwrap_or(usize::MAX));
+            packed = packed.saturating_add(crate::math::index::row(*count));
         }
         packed == self.fires.len() && packed == self.ready.len()
     }

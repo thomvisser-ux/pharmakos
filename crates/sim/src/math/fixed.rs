@@ -332,6 +332,7 @@ fn build_sin_table() -> [i32; SIN_TABLE_LEN] {
         } else {
             (4096 - j, true)
         };
+        // E7: cannot miss: `index` is at most 1 024 and the quarter wave holds 1 025 entries
         let value = quarter.get(index).copied().unwrap_or(0);
         *slot = if negate { -value } else { value };
     }
@@ -349,6 +350,7 @@ fn table_at(index: usize) -> i32 {
     sin_table()
         .get(index & (SIN_TABLE_LEN - 1))
         .copied()
+        // E7: cannot miss: the index is masked to the table's power-of-two length
         .unwrap_or(0)
 }
 
@@ -442,7 +444,7 @@ impl Angle {
         let mut hi: u32 = 512;
         while lo < hi {
             let mid = (lo + hi).div_ceil(2);
-            let at = usize::try_from(mid).unwrap_or(usize::MAX);
+            let at = crate::math::index::row(mid);
             let sine = i64::from(table_at(at)).saturating_mul(long);
             let cosine = i64::from(table_at(at + 1024)).saturating_mul(short);
             if sine <= cosine {

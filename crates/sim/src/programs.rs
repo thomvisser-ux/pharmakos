@@ -159,7 +159,7 @@ pub(crate) fn run_all(world: &mut World) {
     let count = world.units().len();
     let mut unit: u32 = 0;
     while unit < count {
-        let row = usize::try_from(unit).unwrap_or(usize::MAX);
+        let row = crate::math::index::row(unit);
         let kind = world
             .units()
             .kinds()
@@ -229,13 +229,13 @@ impl Program for BuildProgram {
     }
 
     fn run(&self, world: &mut World, unit: u32) {
-        let row = usize::try_from(unit).unwrap_or(usize::MAX);
+        let row = crate::math::index::row(unit);
         let home = home_of(world, row);
         let Some(structure) = crate::mandate::next_unfinished_target(world, home) else {
             idle_at_home(world, unit);
             return;
         };
-        let at = usize::try_from(structure).unwrap_or(usize::MAX);
+        let at = crate::math::index::row(structure);
         let Some(site) = world.structures().positions().get(at).copied() else {
             idle_at_home(world, unit);
             return;
@@ -290,7 +290,7 @@ impl Program for MineProgram {
     }
 
     fn run(&self, world: &mut World, unit: u32) {
-        let row = usize::try_from(unit).unwrap_or(usize::MAX);
+        let row = crate::math::index::row(unit);
         let tick = world.tick();
         let home = home_of(world, row);
         // 1. Finish the voxel the drone is digging, if its clock has run out.
@@ -385,7 +385,7 @@ impl Program for SalvageProgram {
     }
 
     fn run(&self, world: &mut World, unit: u32) {
-        let row = usize::try_from(unit).unwrap_or(usize::MAX);
+        let row = crate::math::index::row(unit);
         let home = home_of(world, row);
         let carried = world
             .units()
@@ -405,7 +405,7 @@ impl Program for SalvageProgram {
             idle_at_home(world, unit);
             return;
         };
-        let at = usize::try_from(wreck).unwrap_or(usize::MAX);
+        let at = crate::math::index::row(wreck);
         let Some(site) = world.wrecks().positions().get(at).copied() else {
             idle_at_home(world, unit);
             return;
@@ -441,7 +441,7 @@ impl Program for ScoutProgram {
     }
 
     fn run(&self, world: &mut World, unit: u32) {
-        let row = usize::try_from(unit).unwrap_or(usize::MAX);
+        let row = crate::math::index::row(unit);
         let home = home_of(world, row);
         let here = world
             .units()
@@ -559,7 +559,7 @@ fn home_of(world: &World, row: usize) -> BeaconId {
 
 /// Walk to the home beacon and stop there.
 fn idle_at_home(world: &mut World, unit: u32) {
-    let row = usize::try_from(unit).unwrap_or(usize::MAX);
+    let row = crate::math::index::row(unit);
     let home = home_of(world, row);
     let Ok(at) = usize::try_from(home.raw()) else {
         return;
@@ -583,7 +583,7 @@ fn idle_at_home(world: &mut World, unit: u32) {
 /// Take the ore voxel the drone has been digging and put its yield in the
 /// drone's hands.
 fn finish_dig(world: &mut World, unit: u32) {
-    let row = usize::try_from(unit).unwrap_or(usize::MAX);
+    let row = crate::math::index::row(unit);
     if let Some(slot) = world.units_mut().busy_until_mut().get_mut(row) {
         *slot = NO_WORK;
     }
@@ -650,7 +650,7 @@ fn finish_dig(world: &mut World, unit: u32) {
 
 /// Carry a load home and credit it, or keep walking.
 fn deliver(world: &mut World, unit: u32, kind: EventKind) {
-    let row = usize::try_from(unit).unwrap_or(usize::MAX);
+    let row = crate::math::index::row(unit);
     let home = home_of(world, row);
     let Ok(at) = usize::try_from(home.raw()) else {
         return;

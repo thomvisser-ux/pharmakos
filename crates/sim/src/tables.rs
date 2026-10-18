@@ -135,7 +135,7 @@ impl UnitTable {
     /// An empty table sized for `count` units. Nothing allocates after this.
     #[must_use]
     pub fn with_capacity(count: u32) -> UnitTable {
-        let n = usize::try_from(count).unwrap_or(usize::MAX);
+        let n = crate::math::index::row(count);
         UnitTable {
             count: 0,
             id: Vec::with_capacity(n),
@@ -160,7 +160,7 @@ impl UnitTable {
     /// be an allocation inside a tick — and a fabrication order that finds none
     /// is held rather than filled. Construction only.
     pub fn reserve(&mut self, extra: u32) {
-        let n = usize::try_from(extra).unwrap_or(usize::MAX);
+        let n = crate::math::index::row(extra);
         self.id.reserve(n);
         self.seat.reserve(n);
         self.kind.reserve(n);
@@ -495,7 +495,7 @@ impl SeatTable {
     /// An empty table sized for `count` seats.
     #[must_use]
     pub fn with_capacity(count: u32) -> SeatTable {
-        let n = usize::try_from(count).unwrap_or(usize::MAX);
+        let n = crate::math::index::row(count);
         SeatTable {
             count: 0,
             seat: Vec::with_capacity(n),
@@ -949,7 +949,7 @@ impl TargetTable {
     /// A table holding `capacity` rows across the whole match, never growing.
     #[must_use]
     pub fn with_capacity(capacity: u32) -> TargetTable {
-        let n = usize::try_from(capacity).unwrap_or(usize::MAX);
+        let n = crate::math::index::row(capacity);
         TargetTable {
             count: 0,
             beacon: Vec::with_capacity(n),
@@ -1331,7 +1331,7 @@ impl SightingTable {
     #[must_use]
     pub fn with_room(seats: u32, per_seat: u32) -> SightingTable {
         let capacity = seats.saturating_mul(per_seat);
-        let n = usize::try_from(capacity).unwrap_or(usize::MAX);
+        let n = crate::math::index::row(capacity);
         SightingTable {
             count: 0,
             seat: Vec::with_capacity(n),
@@ -1661,7 +1661,7 @@ impl CreditTable {
     /// never grow.
     #[must_use]
     pub fn with_capacity(capacity: u32) -> CreditTable {
-        let n = usize::try_from(capacity).unwrap_or(usize::MAX);
+        let n = crate::math::index::row(capacity);
         CreditTable {
             count: 0,
             asset: Vec::with_capacity(n),
@@ -1972,7 +1972,7 @@ impl Csr {
 
         // Pass 1: count per cell.
         for pos in positions.iter().take(capacity) {
-            let cell = usize::try_from(self.cell_of(*pos)).unwrap_or(usize::MAX);
+            let cell = crate::math::index::row(self.cell_of(*pos));
             if let Some(slot) = self.cursor.get_mut(cell) {
                 *slot = slot.saturating_add(1);
             }
@@ -1994,11 +1994,11 @@ impl Csr {
             self.cursor.copy_from_slice(heads);
         }
         for (index, pos) in positions.iter().take(capacity).enumerate() {
-            let cell = usize::try_from(self.cell_of(*pos)).unwrap_or(usize::MAX);
+            let cell = crate::math::index::row(self.cell_of(*pos));
             let Some(head) = self.cursor.get_mut(cell) else {
                 continue;
             };
-            let at = usize::try_from(*head).unwrap_or(usize::MAX);
+            let at = crate::math::index::row(*head);
             *head = head.saturating_add(1);
             let Ok(id) = u32::try_from(index) else {
                 continue;
@@ -2058,16 +2058,13 @@ impl Csr {
         while y <= hi_y {
             let mut x = lo_x;
             while x <= hi_x {
-                let c = usize::try_from(y.saturating_mul(self.cells_x).saturating_add(x))
-                    .unwrap_or(usize::MAX);
+                let c = crate::math::index::row(y.saturating_mul(self.cells_x).saturating_add(x));
                 let from = self.starts.get(c).copied().unwrap_or(0);
                 let to = self.starts.get(c.saturating_add(1)).copied().unwrap_or(0);
-                let range = usize::try_from(from).unwrap_or(usize::MAX)
-                    ..usize::try_from(to).unwrap_or(usize::MAX);
+                let range = crate::math::index::row(from)..crate::math::index::row(to);
                 if let Some(slice) = self.items.get(range) {
                     for id in slice {
-                        let Some(pos) = positions.get(usize::try_from(*id).unwrap_or(usize::MAX))
-                        else {
+                        let Some(pos) = positions.get(crate::math::index::row(*id)) else {
                             continue;
                         };
                         if Sq::between(*pos, centre) <= limit {
@@ -2481,7 +2478,7 @@ impl BeaconTable {
     /// An empty table sized for `count` beacons. Nothing allocates after this.
     #[must_use]
     pub fn with_capacity(count: u32) -> BeaconTable {
-        let n = usize::try_from(count).unwrap_or(usize::MAX);
+        let n = crate::math::index::row(count);
         BeaconTable {
             count: 0,
             id: Vec::with_capacity(n),
@@ -2574,7 +2571,7 @@ impl BeaconTable {
     /// and a deploy that finds none fails the step rather than growing a
     /// column. Construction only — never called inside a tick.
     pub fn reserve(&mut self, extra: u32) {
-        let n = usize::try_from(extra).unwrap_or(usize::MAX);
+        let n = crate::math::index::row(extra);
         self.id.reserve(n);
         self.seat.reserve(n);
         self.pos.reserve(n);
@@ -2895,7 +2892,7 @@ impl StructureTable {
     /// An empty table sized for `count` structures.
     #[must_use]
     pub fn with_capacity(count: u32) -> StructureTable {
-        let n = usize::try_from(count).unwrap_or(usize::MAX);
+        let n = crate::math::index::row(count);
         StructureTable {
             count: 0,
             id: Vec::with_capacity(n),
@@ -2912,7 +2909,7 @@ impl StructureTable {
     /// Make room for `extra` more structures without growing later. Same
     /// contract as [`BeaconTable::reserve`].
     pub fn reserve(&mut self, extra: u32) {
-        let n = usize::try_from(extra).unwrap_or(usize::MAX);
+        let n = crate::math::index::row(extra);
         self.id.reserve(n);
         self.seat.reserve(n);
         self.kind.reserve(n);
@@ -3108,7 +3105,7 @@ impl WreckTable {
     /// An empty table sized for `count` wrecks.
     #[must_use]
     pub fn with_capacity(count: u32) -> WreckTable {
-        let n = usize::try_from(count).unwrap_or(usize::MAX);
+        let n = crate::math::index::row(count);
         WreckTable {
             count: 0,
             id: Vec::with_capacity(n),
@@ -3120,7 +3117,7 @@ impl WreckTable {
     /// Make room for `extra` more wrecks without growing later. Same contract
     /// as [`BeaconTable::reserve`].
     pub fn reserve(&mut self, extra: u32) {
-        let n = usize::try_from(extra).unwrap_or(usize::MAX);
+        let n = crate::math::index::row(extra);
         self.id.reserve(n);
         self.pos.reserve(n);
         self.salvage.reserve(n);

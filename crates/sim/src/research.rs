@@ -46,7 +46,7 @@ pub fn fork_and_step(
 ) -> Result<(World, Vec<u64>), crate::world::TickError> {
     let mut child = fork(parent);
     let mut enc = Enc::with_capacity(16 * 1024);
-    let mut trace = Vec::with_capacity(usize::try_from(ticks).unwrap_or(usize::MAX));
+    let mut trace = Vec::with_capacity(crate::math::index::row(ticks));
     let mut n: u32 = 0;
     while n < ticks {
         trace.push(child.step(&mut enc)?);

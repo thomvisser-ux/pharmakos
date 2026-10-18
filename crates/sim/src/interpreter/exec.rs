@@ -694,6 +694,7 @@ fn start_step(
             seat,
             Some(beacon),
             Some(at),
+            // E7: rule: an event's value is derived output, never hashed, and saturates
             i64::try_from(rows).unwrap_or(i64::MAX),
         );
     }
@@ -969,6 +970,7 @@ fn walk_to_visit(
             seat,
             Some(beacon),
             Some(at),
+            // E7: rule: as above
             i64::try_from(rows).unwrap_or(i64::MAX),
         );
         return Outcome::Running;
@@ -1838,7 +1840,7 @@ fn world_beacon_row(world: &World, beacon: BeaconId) -> Option<usize> {
     if beacons.ids().get(index).copied() == Some(beacon.raw()) {
         return Some(index);
     }
-    let count = usize::try_from(beacons.len()).unwrap_or(usize::MAX);
+    let count = crate::math::index::row(beacons.len());
     (0..count).find(|row| beacons.ids().get(*row).copied() == Some(beacon.raw()))
 }
 

@@ -508,7 +508,7 @@ impl MapFile {
     /// Project a generated store into the flat form.
     #[must_use]
     pub fn capture(voxels: &VoxelStore, seed: u64) -> MapFile {
-        let count = usize::try_from(voxels.chunk_count()).unwrap_or(usize::MAX);
+        let count = crate::math::index::row(voxels.chunk_count());
         let mut chunks: Vec<u8> =
             Vec::with_capacity(count.saturating_mul(crate::voxels::CHUNK_VOXELS));
         let mut chunk: u32 = 0;
@@ -666,7 +666,7 @@ pub fn generate(seed: u64, rules: &RulesTable, seats: u32) -> Result<GeneratedMa
     // no force, no money, no power. The determinism harness runs four seats on
     // a three-zone map on purpose (a wider table is a wider hash), so this is a
     // state the sim has rather than an error.
-    while placed.seat_treasury.len() < usize::try_from(seats).unwrap_or(usize::MAX) {
+    while placed.seat_treasury.len() < crate::math::index::row(seats) {
         placed.seat_treasury.push(Money::ZERO);
         placed.seat_supply.push(Kw::ZERO);
         placed.seat_draw.push(Kw::ZERO);
@@ -1118,6 +1118,7 @@ const RING: [[i32; 2]; 8] = [
 fn ring_offset(slot: u32) -> [i32; 2] {
     // A ring past `i32::MAX` is a slot no starting force reaches; the
     // multiplier saturates by rule, as every ring offset below does.
+    // E7: rule: a ring past `i32::MAX` saturates, as the offsets below do
     let ring = i32::try_from(slot / 8).map_or(i32::MAX, |ring| ring.saturating_add(1));
     // `slot % 8` names one of the eight offsets, so the match is total.
     let [o0, o1, o2, o3, o4, o5, o6, o7] = RING;
@@ -1247,7 +1248,7 @@ fn terrain(seed: u64, width: i32, depth: i32, height_cap: i32) -> Vec<i32> {
     // A capacity, so a product past `u32` saturates to a smaller first
     // allocation rather than failing: the `Vec` still grows to fit.
     let mut heights: Vec<i32> =
-        Vec::with_capacity(usize::try_from(across.saturating_mul(down)).unwrap_or(usize::MAX));
+        Vec::with_capacity(crate::math::index::row(across.saturating_mul(down)));
     let mut y: i32 = 0;
     while y < depth {
         let mut x: i32 = 0;
@@ -1327,6 +1328,7 @@ fn smooth(heights: &mut [i32], width: i32, depth: i32) {
     while y < depth {
         let mut x: i32 = 0;
         while x < width {
+            // E7: cannot miss: `(x, y)` walks the heightmap's own extent
             let mut v = height_at(heights, width, depth, x, y).unwrap_or(0);
             if let Some(left) = height_at(heights, width, depth, x.saturating_sub(1), y) {
                 v = v.min(left.saturating_add(1));
@@ -1343,6 +1345,7 @@ fn smooth(heights: &mut [i32], width: i32, depth: i32) {
     while y >= 0 {
         let mut x: i32 = width.saturating_sub(1);
         while x >= 0 {
+            // E7: cannot miss: as above
             let mut v = height_at(heights, width, depth, x, y).unwrap_or(0);
             if let Some(right) = height_at(heights, width, depth, x.saturating_add(1), y) {
                 v = v.min(right.saturating_add(1));
@@ -1477,9 +1480,7 @@ fn min_occupied_separation(
     numbers: &Numbers<'_>,
 ) -> Option<i64> {
     let mut best: Option<i64> = None;
-    let limit = usize::try_from(occupied)
-        .unwrap_or(usize::MAX)
-        .min(centres.len());
+    let limit = crate::math::index::row(occupied).min(centres.len());
     let occupied = centres.iter().take(limit);
     for (a, pa) in occupied.clone().enumerate() {
         for pb in occupied.clone().skip(a.saturating_add(1)) {
