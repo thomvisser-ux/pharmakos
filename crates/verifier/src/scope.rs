@@ -58,6 +58,8 @@ use pharmakos_sim::encoding::Enc;
 use pharmakos_sim::knowledge::SeatEconomy;
 use pharmakos_sim::tables::SeatId;
 
+use crate::hash::{HashError, length};
+
 /// Whose a beacon is, from this seat's point of view.
 ///
 /// Two values, and no third. `gp.v1.BeaconFilter.Side` would fit the shape and
@@ -329,29 +331,34 @@ impl Scope {
     /// origin" never share bytes. The features and the commander widened this
     /// encoding in S1 (`REPORT_HASH_DOMAIN` moved with it), so every
     /// `report_hash` moved once, the view's content unchanged.
-    pub(crate) fn encode(&self, enc: &mut Enc) {
+    ///
+    /// # Errors
+    ///
+    /// [`HashError::TooLong`] for a list or a string past a `u32` length
+    /// prefix, which no view this game builds holds.
+    pub(crate) fn encode(&self, enc: &mut Enc) -> Result<(), HashError> {
         enc.u8(self.seat.raw());
         enc.i64(self.economy.treasury.raw());
         enc.i32(self.economy.supply.raw());
         enc.i32(self.economy.draw.raw());
-        enc.len(count(self.beacons.len()));
+        enc.len(length("the view's beacon list", self.beacons.len())?);
         for beacon in &self.beacons {
-            encode_str(enc, &beacon.beacon_id);
+            encode_str(enc, "a beacon id", &beacon.beacon_id)?;
             enc.u8(beacon.owner.raw());
             enc.i32(beacon.side.as_i32());
             enc.i32(i32::from(beacon.mandate));
-            enc.len(count(beacon.tags.len()));
+            enc.len(length("a beacon's tag list", beacon.tags.len())?);
             for tag in &beacon.tags {
-                encode_str(enc, tag);
+                encode_str(enc, "a beacon's tag", tag)?;
             }
             enc.i32(beacon.at.x);
             enc.i32(beacon.at.y);
             enc.i32(beacon.at.z);
             enc.bool(beacon.is_core);
         }
-        enc.len(count(self.features.len()));
+        enc.len(length("the view's feature list", self.features.len())?);
         for feature in &self.features {
-            encode_str(enc, &feature.feature_id);
+            encode_str(enc, "a feature id", &feature.feature_id)?;
             enc.i32(feature.kind.as_i32());
             enc.i32(i32::from(feature.grade));
             enc.i32(feature.x);
@@ -361,7 +368,7 @@ impl Scope {
                 None => enc.bool(false),
                 Some(beacon_id) => {
                     enc.bool(true);
-                    encode_str(enc, beacon_id);
+                    encode_str(enc, "a covering beacon's id", beacon_id)?;
                 }
             }
         }
@@ -374,24 +381,23 @@ impl Scope {
                 enc.i32(at.z);
             }
         }
+        Ok(())
     }
 }
 
-/// A length prefix for a string or a list.
-///
-/// Saturating rather than fallible, and for the same reason
-/// `pharmakos_sim::rules::RulesTable::encode` saturates: a scope with more than
-/// `u32::MAX` beacons in it is not a scope, and a `Result` here would put a
-/// failure path into a function that cannot fail in this game.
-fn count(len: usize) -> u32 {
-    u32::try_from(len).unwrap_or(u32::MAX)
-}
-
 /// One length-prefixed UTF-8 string.
-fn encode_str(enc: &mut Enc, text: &str) {
+///
+/// The prefix is converted, never saturated: a string or a list past
+/// `u32::MAX` has no encoding and is refused as [`HashError::TooLong`] rather
+/// than given the length of a different one ([`crate::hash`]'s
+/// [`HashError`] says why it cannot happen in a game and why it is still
+/// converted). Until S2 it saturated; no real view reached it, so no encoding
+/// moved.
+fn encode_str(enc: &mut Enc, what: &'static str, text: &str) -> Result<(), HashError> {
     let bytes = text.as_bytes();
-    enc.len(count(bytes.len()));
+    enc.len(length(what, bytes.len())?);
     enc.bytes(bytes);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -418,7 +424,9 @@ mod tests {
 
     fn digest(scope: &Scope) -> u64 {
         let mut enc = Enc::with_capacity(64);
-        scope.encode(&mut enc);
+        scope
+            .encode(&mut enc)
+            .unwrap_or_else(|error| panic!("a test view always encodes: {error}"));
         enc.finish()
     }
 

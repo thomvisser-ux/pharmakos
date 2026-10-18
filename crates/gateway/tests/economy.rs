@@ -383,10 +383,12 @@ fn many_scouts(scouts: u64) -> String {
 /// INTERNAL; its door (`seal_commitment`, decisions-log item 135 (2) (d))
 /// refused such a seal. Since S1's `build` lane the sim's own compile refuses
 /// the only route this playbook found there -- a `scout_count` past the byte a
-/// beacon's column holds, which the sim used to clamp to 255 (decisions-log
-/// item 133 (5)) -- so these seals are refused one door earlier, by the
-/// compile, still `INVALID_ARGUMENT`, and the forecast still answers. The
-/// price door stands behind it as defence in depth.
+/// beacon's column holds (decisions-log item 133 (5)) -- and since S2's `vfy1`
+/// the verifier refuses it first, by its own codes: `E0508` for the count and
+/// `E0603` for the price (the register's S2-15 and S2-14). So these seals are
+/// a report with `qualifies: false`, never a method error, and the forecast
+/// still answers. The compile and the price doors stand behind it as defence
+/// in depth.
 #[test]
 fn a_seal_that_does_not_price_is_refused_and_the_forecast_still_answers() {
     let mut surface = support::hosted(2, SEGMENT_MS, 3);
@@ -396,43 +398,25 @@ fn a_seal_that_does_not_price_is_refused_and_the_forecast_still_answers() {
     // would fit `$` and be past the forecast's int32. Both are past a byte.
     for scouts in [3_000_000_000_u64, 300_000_000] {
         let playbook = many_scouts(scouts);
-        let verified = result(
+        let submitted = result(
             &call_in_lull(
                 &mut surface,
                 &token,
                 &mut left,
-                "verify_plan",
+                "submit_plan",
                 &format!(r#"{{"playbook_jsonc":{}}}"#, quote(&playbook)),
             ),
-            "verify_plan",
-        );
-        assert_eq!(
-            verified
-                .get("report")
-                .and_then(|report| report.get("qualifies")),
-            Some(&Json::Bool(true)),
-            "{scouts} scouts qualify FULL: {verified:?}"
-        );
-        let refused = call_in_lull(
-            &mut surface,
-            &token,
-            &mut left,
             "submit_plan",
-            &format!(r#"{{"playbook_jsonc":{}}}"#, quote(&playbook)),
         );
         assert_eq!(
-            support::code(&refused),
-            "INVALID_ARGUMENT",
-            "{scouts} scouts: {refused:?}"
+            submitted.get("accepted"),
+            Some(&Json::Bool(false)),
+            "{scouts} scouts: {submitted:?}"
         );
-        let message = refused
-            .get("error")
-            .and_then(|error| error.get("message"))
-            .map(|message| format!("{message:?}"))
-            .unwrap_or_default();
+        let codes = format!("{:?}", submitted.get("report"));
         assert!(
-            message.contains("scout_count"),
-            "the sim's compile refused the count a beacon cannot hold: {message}"
+            codes.contains("E0508") && codes.contains("E0603"),
+            "{scouts} scouts: the verifier names the count and the price: {codes}"
         );
         let forecast = result(
             &call_in_lull(

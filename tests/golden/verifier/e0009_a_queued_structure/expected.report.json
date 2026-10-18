@@ -1,0 +1,19 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0009",
+      "severity": "ERROR",
+      "path": "/declarative/route/0/interface/rows/0/queue_structure",
+      "message": "a `queue_structure` row has no effect until S4, with the capability catalogue and its licences; it is refused rather than ignored.",
+      "beginner": "Queuing a capability building comes later in the game. Nothing you wrote is dropped: take the row out yourself."
+    }
+  ],
+  "report_hash": "aBBoU7nH6WI=",
+  "rules_hash": "sfLu8OdcWuQ=",
+  "plan_fingerprint": "a27Ogmh+Xl0=",
+  "verifier_version": "0.1.0-s2",
+  "size_units": 1,
+  "size_budget": 128
+}
+

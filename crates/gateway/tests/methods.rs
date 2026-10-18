@@ -2366,11 +2366,16 @@ struct Case {
     playbook: String,
     /// Which door turns it away.
     door: Door,
-    /// A fragment of the refusal that names **what** was written. Empty for a
-    /// [`Door::Verifier`] row, which never produces a method error.
+    /// A fragment of the refusal that names **what** was written. For a
+    /// [`Door::Verifier`] row, which never produces a method error, it is the
+    /// sim's name for the construct the verifier closes, or empty when the row
+    /// is not one of them.
     names: &'static str,
     /// A fragment that names the **stage** that closes the gap.
     stage: &'static str,
+    /// For a [`Door::Verifier`] row, the code the verifier refuses it by.
+    /// Empty for a [`Door::Sim`] row.
+    code: &'static str,
 }
 
 /// Every construct this lane could find that the **verifier accepts** and the
@@ -2410,6 +2415,25 @@ fn sim(what: &'static str, playbook: String, names: &'static str, stage: &'stati
         door: Door::Sim,
         names,
         stage,
+        code: "",
+    }
+}
+
+/// A construct the sim refuses that the verifier now refuses first, by its own
+/// code (S2's `vfy1`, the plan's E8): a report with `qualifies: false`, never
+/// a method error. Its row stays where the gap was, so the table still names
+/// every construct the sim refuses, and the stage words are kept for the day
+/// the construct gains its effect and the row goes.
+fn closed(what: &'static str, playbook: String, names: &'static str, _stage: &'static str) -> Case {
+    let code = pharmakos_verifier::code_for_construct(names)
+        .unwrap_or_else(|| panic!("{what}: the verifier has no code for `{names}`"));
+    Case {
+        what,
+        playbook,
+        door: Door::Verifier,
+        names,
+        stage: "",
+        code,
     }
 }
 
@@ -2433,7 +2457,7 @@ fn interface_row_gaps() -> Vec<Case> {
         // T14 closed three rows of this block: `recycle`, `add_build_target`
         // and `remove_build_target` all execute now, so they are gaps at
         // neither door and have no row here. The one that is left is S4's.
-        sim(
+        closed(
             "an interface row that queues a licensed capability structure",
             one_step(
                 "{\"label\": \"q\", \"interface\": {\"beacon\": {\"safest\": {}}, \"rows\": \
@@ -2457,7 +2481,7 @@ fn interface_row_gaps() -> Vec<Case> {
 /// the rows for them are gone rather than moved.
 fn mandate_and_rule_gaps() -> Vec<Case> {
     vec![
-        sim(
+        closed(
             "an interface row that edits a Defend beacon's settings",
             one_step(
                 "{\"label\": \"d\", \"interface\": {\"beacon\": {\"safest\": {}}, \"rows\": \
@@ -2467,7 +2491,7 @@ fn mandate_and_rule_gaps() -> Vec<Case> {
             "Defend mandate settings",
             "S2",
         ),
-        sim(
+        closed(
             "an interface row that edits an Attack beacon's settings",
             one_step(
                 "{\"label\": \"a\", \"interface\": {\"beacon\": {\"safest\": {}}, \"rows\": \
@@ -2481,7 +2505,7 @@ fn mandate_and_rule_gaps() -> Vec<Case> {
         // mandate's probe areas and a Build mandate's targets and protected
         // areas are compiled, sealed and executed now. Defend and Attack
         // settings are still S2's, above.
-        sim(
+        closed(
             "a predicate that asks whether a beacon is under attack",
             one_step(
                 "{\"label\": \"w\", \"wait_until\": {\"condition\": {\"beacon_under_attack\": \
@@ -2505,36 +2529,78 @@ fn mandate_and_rule_gaps() -> Vec<Case> {
 /// They are in the table so that a later stage moving one of the rows above
 /// down into this list shows up as a test somebody has to edit.
 fn verifier_door_cases() -> Vec<Case> {
-    let verifier = |what, playbook| Case {
+    let verifier = |what, playbook, code| Case {
         what,
         playbook,
         door: Door::Verifier,
         names: "",
         stage: "",
+        code,
     };
+    // A number an enum does not name, which the sim's compile refuses as
+    // `PlanError::UnknownEnum` and the verifier as E0018: one row per enum
+    // field the compile reads (S2's `vfy1`, its review).
+    let unknown = |what, step: &str| verifier(what, one_step(step), "E0018");
     vec![
-        verifier(
+        closed(
             "a selector filter that matches on the author's own tags",
             one_step(
-                "{\"label\": \"m\", \"move\": {\"to\": {\"beacon_anchor\": {\"nearest\": {}, \
-                 \"filter\": {\"side\": \"OWN\", \"tags\": [\"east\"]}}}, \"pace\": \"DIRECT\"}, \
-                 \"timeout_ms\": 30000}",
-            ),
-        ),
-        verifier(
-            "a selector that ranks by incoming threat, which needs combat",
-            one_step(
-                "{\"label\": \"m\", \"move\": {\"to\": {\"most_threatened\": {}}, \"pace\": \
+                "{\"label\": \"m\", \"move\": {\"to\": {\"beacon_anchor\": {\"nearest\": \
+                 {\"filter\": {\"side\": \"OWN\", \"tags\": [\"east\"]}}}}, \"pace\": \
                  \"DIRECT\"}, \"timeout_ms\": 30000}",
             ),
+            "selector filter `tags`",
+            "S3",
         ),
-        verifier(
+        closed(
+            "a selector that ranks by incoming threat, which needs combat",
+            one_step(
+                "{\"label\": \"m\", \"move\": {\"to\": {\"beacon_anchor\": \
+                 {\"most_threatened\": {}}}, \"pace\": \"DIRECT\"}, \"timeout_ms\": 30000}",
+            ),
+            "selector `most_threatened`",
+            "S2",
+        ),
+        closed(
             "a selector filter naming an enemy the knowledge store has not got",
             one_step(
-                "{\"label\": \"m\", \"move\": {\"to\": {\"beacon_anchor\": {\"nearest\": {}, \
-                 \"filter\": {\"side\": \"ENEMY_KNOWN\"}}}, \"pace\": \"DIRECT\"}, \
+                "{\"label\": \"m\", \"move\": {\"to\": {\"beacon_anchor\": {\"nearest\": \
+                 {\"filter\": {\"side\": \"ENEMY_KNOWN\"}}}}, \"pace\": \"DIRECT\"}, \
                  \"timeout_ms\": 30000}",
             ),
+            "selector filter `side: ENEMY_KNOWN`",
+            "S3",
+        ),
+        unknown(
+            "a pace this build does not name",
+            "{\"label\": \"m\", \"move\": {\"to\": {\"safest\": {}}, \"pace\": 9}, \
+             \"timeout_ms\": 30000}",
+        ),
+        unknown(
+            "an on_fail action this build does not name",
+            "{\"label\": \"m\", \"move\": {\"to\": {\"safest\": {}}, \"pace\": \"DIRECT\"}, \
+             \"timeout_ms\": 30000, \"on_fail\": {\"action\": 9}}",
+        ),
+        unknown(
+            "a Quartermaster priority this build does not name",
+            "{\"label\": \"q\", \"interface\": {\"beacon\": {\"safest\": {}}, \"rows\": \
+             [{\"set_priority\": 99}]}, \"timeout_ms\": 30000}",
+        ),
+        unknown(
+            "a seam choice this build does not name",
+            "{\"label\": \"q\", \"interface\": {\"beacon\": {\"safest\": {}}, \"rows\": \
+             [{\"set_mandate_settings\": {\"mine\": {\"seam_choice\": 9}}}]}, \
+             \"timeout_ms\": 30000}",
+        ),
+        unknown(
+            "a selector filter side this build does not name",
+            "{\"label\": \"m\", \"move\": {\"to\": {\"beacon_anchor\": {\"nearest\": \
+             {\"filter\": {\"side\": 3}}}}, \"pace\": \"DIRECT\"}, \"timeout_ms\": 30000}",
+        ),
+        unknown(
+            "a selector filter mandate this build does not name",
+            "{\"label\": \"m\", \"move\": {\"to\": {\"beacon_anchor\": {\"nearest\": \
+             {\"filter\": {\"mandate\": 9}}}}, \"pace\": \"DIRECT\"}, \"timeout_ms\": 30000}",
         ),
         verifier(
             "a voxel a long way outside the map",
@@ -2542,8 +2608,32 @@ fn verifier_door_cases() -> Vec<Case> {
                 "{\"label\": \"m\", \"move\": {\"to\": {\"voxel\": {\"x\": 40000, \"y\": 10, \
                  \"z\": 10}}, \"pace\": \"DIRECT\"}, \"timeout_ms\": 30000}",
             ),
+            "E0402",
         ),
     ]
+}
+
+/// The first door's refusal: the row is refused by the code it is about, and
+/// not by a neighbouring error (a fixture that misspells a field is E0002).
+fn assert_verifier_refusal(report: &Json, what: &str, refused_by: &str) {
+    let codes: Vec<String> = match report.get("diagnostics") {
+        Some(Json::Array(diagnostics)) => diagnostics
+            .iter()
+            .filter_map(|diagnostic| match diagnostic.get("code") {
+                Some(Json::String(code)) => Some(code.clone()),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    assert!(
+        codes.iter().any(|code| code == refused_by),
+        "{what}: the verifier refuses it by {refused_by}, and it said {codes:?}"
+    );
+    assert!(
+        !codes.iter().any(|code| code == "E0002"),
+        "{what}: the fixture names a field the schema does not have: {codes:?}"
+    );
 }
 
 /// The second door's refusal, read from the wire.
@@ -2625,6 +2715,7 @@ fn a_playbook_this_build_cannot_execute_is_a_method_error_and_keeps_the_old_seal
             door,
             names,
             stage,
+            code: refused_by,
         } = case;
         let response = call(
             &mut surface,
@@ -2641,6 +2732,9 @@ fn a_playbook_this_build_cannot_execute_is_a_method_error_and_keeps_the_old_seal
             .cloned()
             .unwrap_or_else(|| panic!("verify_plan answers a report"));
         let qualifies = report.get("qualifies") == Some(&Json::Bool(true));
+        if door == Door::Verifier {
+            assert_verifier_refusal(&report, what, refused_by);
+        }
         assert_eq!(
             qualifies,
             door == Door::Sim,
@@ -2679,11 +2773,13 @@ fn a_playbook_this_build_cannot_execute_is_a_method_error_and_keeps_the_old_seal
         );
     }
     assert_eq!(
-        gaps, 5,
-        "the pull request lists five gaps between the two doors, each with the stage that closes \
-         it. A different number here means the list is out of date -- in either direction. It \
-         was ten before T14, which closed `recycle`, `add_build_target`, `remove_build_target`, \
-         Survey probe areas, and Build targets and protected areas"
+        gaps, 1,
+        "the pull request lists {gaps} gap(s) between the two doors. A different number here \
+         means the list is out of date -- in either direction. It was ten before T14, which \
+         closed `recycle`, `add_build_target`, `remove_build_target`, Survey probe areas, and \
+         Build targets and protected areas, and five before S2's `vfy1`, whose E-codes close \
+         `queue_structure`, Defend and Attack settings and `beacon_under_attack` at the \
+         verifier"
     );
 
     // And the seal that survived all of that is still the one the match plays.

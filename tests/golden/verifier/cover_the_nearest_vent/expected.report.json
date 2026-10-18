@@ -1,10 +1,10 @@
 {
   "qualifies": true,
   "depth": "FULL",
-  "report_hash": "Aq0pHCskve4=",
+  "report_hash": "dwMXNhb8UVk=",
   "rules_hash": "sfLu8OdcWuQ=",
   "plan_fingerprint": "+TYY5OUXe70=",
-  "verifier_version": "0.1.0-s1",
+  "verifier_version": "0.1.0-s2",
   "size_units": 2,
   "size_budget": 128
 }

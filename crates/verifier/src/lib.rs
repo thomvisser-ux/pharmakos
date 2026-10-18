@@ -25,9 +25,19 @@
 //! so the API shape and the hash contract never change as S1 and S3 fill them,
 //! and `submit_plan` runs FULL exactly as spec section 12 says. A FULL report
 //! carries QUICK's diagnostics first, in the same order, and then whatever the
-//! two FULL stages add. Of that, exactly one code refuses: `E0601`, spec
-//! section 11's "adding draw beyond supply is an error unless 'allow dormant
-//! beacons' is set" — `full_finds_what_quick_finds` asserts it.
+//! two FULL stages add. Of that, two codes refuse: `E0601`, spec section 11's
+//! "adding draw beyond supply is an error unless 'allow dormant beacons' is
+//! set", and from S2 `E0603`, a seal the Ledger cannot price, which
+//! `submit_plan` refuses after the verifier (decisions-log item 135 (2) (d)) —
+//! `full_finds_what_quick_finds` asserts it.
+//!
+//! # What the sim refuses, refused here first (S2)
+//!
+//! From S2 every construct the sim's compile refuses as not at this stage has
+//! an error of its own, raised with the structure stage's checks
+//! ([`REFUSED_CONSTRUCTS`], keyed by the sim's name for each), and so does a
+//! `scout_count` past a beacon's byte (`E0508`), so the editor's verdict and
+//! the seal's agree on those (S2's plan, engineering call E8).
 //!
 //! # The arithmetic the estimate stage shares
 //!
@@ -119,9 +129,11 @@ pub mod strings;
 pub mod walking;
 
 mod decode;
+mod enums;
 mod estimate;
 mod lint;
 mod pointer;
+mod refusals;
 mod report;
 mod resolve;
 mod semantics;
@@ -134,10 +146,11 @@ use pharmakos_proto::gp::api::v1::verify_plan::Depth;
 use pharmakos_sim::rules::RulesTable;
 use pharmakos_sim::snapshot::{Snapshot, SnapshotError};
 
-pub use hash::REPORT_HASH_DOMAIN;
+pub use hash::{HashError, REPORT_HASH_DOMAIN};
 pub use interface::Rates;
 pub use limits::{CONDITION_MAX_DEPTH, CONDITION_MAX_NODES, Limits, RulesGap};
 pub use projection::{Prices, Projection, ProjectionError};
+pub use refusals::{REFUSED_CONSTRUCTS, code_for_construct};
 pub use scope::{FeatureKind, KnownBeacon, KnownFeature, Ownership, Scope};
 pub use size::size_units;
 pub use walking::Walk;
@@ -154,16 +167,22 @@ pub use walking::Walk;
 /// A version, a build identity, or both, decided with the rest of the
 /// versioning. Until then it names the stage that produced
 /// it, and the report goldens move when it moves. `0.1.0-s1` from S1's
-/// estimate stage (task `proj`): a FULL report from this build finds what the
-/// skeleton's empty stage could not, so it is not comparable with one from
-/// before, and the version says so.
-pub const VERIFIER_VERSION: &str = "0.1.0-s1";
+/// estimate stage (task `proj`): a FULL report from that build found what the
+/// skeleton's empty stage could not. `0.1.0-s2` from S2's first verifier lane
+/// (task `vfy1`): this build refuses, by a code of its own, every construct
+/// the sim refuses at the seal (`E0009` to `E0017`, the plan's E8), an
+/// enum number this build does not name (`E0018`), a
+/// `scout_count` past a beacon's byte (`E0508`) and a seal the Ledger cannot
+/// price (`E0603`), so its reports are not comparable with S1's either.
+pub const VERIFIER_VERSION: &str = "0.1.0-s2";
 
 /// Everything one verification is a function of, apart from the depth.
 ///
 /// Built once per call. [`Input::new`] is fallible because the rules table may
 /// not carry a block the checks read, and a verifier that substituted zeroes for
-/// a missing size budget would reject every playbook ever written.
+/// a missing size budget would reject every playbook ever written; and because
+/// an input with no encoding has no report hash ([`HashError`]), which is
+/// found here rather than half-way through a report.
 #[derive(Clone, Copy, Debug)]
 pub struct Input<'a> {
     playbook: &'a [u8],
@@ -175,6 +194,41 @@ pub struct Input<'a> {
     rates: Rates,
     prices: Prices,
     walk: Walk,
+    report_hashes: hash::ReportHashes,
+}
+
+/// Why an [`Input`] could not be assembled.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum InputError {
+    /// The rules table does not carry a block the checks read, or carries one
+    /// out of range.
+    Rules(RulesGap),
+    /// An input has no encoding for `report_hash`: a byte string or a list
+    /// past the encoding's `u32` length prefix.
+    Unhashable(HashError),
+}
+
+impl core::fmt::Display for InputError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            InputError::Rules(gap) => write!(formatter, "{gap}"),
+            InputError::Unhashable(error) => write!(formatter, "{error}"),
+        }
+    }
+}
+
+impl std::error::Error for InputError {}
+
+impl From<RulesGap> for InputError {
+    fn from(gap: RulesGap) -> InputError {
+        InputError::Rules(gap)
+    }
+}
+
+impl From<HashError> for InputError {
+    fn from(error: HashError) -> InputError {
+        InputError::Unhashable(error)
+    }
 }
 
 impl<'a> Input<'a> {
@@ -193,25 +247,35 @@ impl<'a> Input<'a> {
     ///
     /// # Errors
     ///
-    /// Returns [`RulesGap`] when the rules table does not carry a block the
+    /// [`InputError::Rules`] when the rules table does not carry a block the
     /// checks read — the verifier's limits, the interface rates, the prices
-    /// and the commander's walking rows — or carries one out of range.
+    /// and the commander's walking rows — or carries one out of range; and
+    /// [`InputError::Unhashable`] when the playbook, the snapshot or a list or
+    /// string in the view is past `report_hash`'s `u32` length prefix.
     pub fn new(
         playbook: &'a [u8],
         snapshot: &'a [u8],
         scope: &'a Scope,
         rules: &'a RulesTable,
-    ) -> Result<Input<'a>, RulesGap> {
+    ) -> Result<Input<'a>, InputError> {
+        let rules_hash = rules.rules_hash();
         Ok(Input {
             playbook,
             snapshot,
             scope,
             rules,
-            rules_hash: rules.rules_hash(),
+            rules_hash,
             limits: Limits::from_rules(rules)?,
             rates: Rates::from_rules(rules)?,
             prices: Prices::from_rules(rules)?,
             walk: Walk::from_rules(rules)?,
+            report_hashes: hash::ReportHashes::new(
+                playbook,
+                snapshot,
+                scope,
+                rules_hash,
+                VERIFIER_VERSION,
+            )?,
         })
     }
 
@@ -321,6 +385,7 @@ pub fn verify(input: &Input<'_>, depth: Depth) -> VerifyReport {
             fingerprint = pharmakos_proto::fingerprint::to_field(digest);
         }
         structure::run(&playbook, limits, &mut out);
+        refusals::run(&playbook, &mut out);
         let symbols = resolve::run(&playbook, input.scope, &mut out);
         semantics::run(&playbook, input.scope, limits, &symbols, &mut out);
         if depth == Depth::Full {
@@ -329,14 +394,7 @@ pub fn verify(input: &Input<'_>, depth: Depth) -> VerifyReport {
         }
     }
 
-    let report_hash = hash::report_hash(
-        input.playbook,
-        input.snapshot,
-        input.scope,
-        input.rules_hash,
-        VERIFIER_VERSION,
-        depth,
-    );
+    let report_hash = input.report_hashes.at(depth);
 
     VerifyReport {
         qualifies: !out.has_errors(),

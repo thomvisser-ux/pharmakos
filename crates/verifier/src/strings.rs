@@ -72,7 +72,7 @@ pub const VERIFIER_STRINGS: &[Text] = &[
     },
     Text {
         code: "E0004",
-        message: "schema version {found} is not supported; this build speaks {supported}.",
+        message: "the schema version is {found}, and this build speaks {supported}.",
         beginner: "The file says it was written for a different version of the game.",
     },
     Text {
@@ -97,6 +97,75 @@ pub const VERIFIER_STRINGS: &[Text] = &[
         message: "the recorded fingerprint does not match these bytes; the verifier has \
                   recomputed it.",
         beginner: "The stamp on this file was out of date. It has been worked out again for you.",
+    },
+    // E0009 to E0017: constructs in the v1 vocabulary that the sim refuses at
+    // the seal because their effect needs a later stage (S2's plan, E8). Each
+    // message says what was written and when it starts working.
+    Text {
+        code: "E0009",
+        message: "a `queue_structure` row has no effect until S4, with the capability catalogue \
+                  and its licences; it is refused rather than ignored.",
+        beginner: "Queuing a capability building comes later in the game. Nothing you wrote is \
+                   dropped: take the row out yourself.",
+    },
+    Text {
+        code: "E0010",
+        message: "a Build target names `{id}`; only `generator` can be built until S4, with the \
+                  capability catalogue and its licences.",
+        beginner: "Generators are the only buildings a Build beacon can make for now.",
+    },
+    Text {
+        code: "E0011",
+        message: "a Build target is anchored on `{arm}`; until S3 a target stands on a voxel or \
+                  `on` a vent.",
+        beginner: "A building is placed on a spot on the map, not on whichever beacon a selector \
+                   picks. Pick the spot.",
+    },
+    Text {
+        code: "E0012",
+        message: "Defend mandate settings have no effect until S2's Defend mandate lands; they \
+                  are refused rather than ignored.",
+        beginner: "A Defend beacon cannot be given settings in this build yet.",
+    },
+    Text {
+        code: "E0013",
+        message: "Attack mandate settings have no effect until S2's Attack mandate lands; they \
+                  are refused rather than ignored.",
+        beginner: "An Attack beacon cannot be given settings in this build yet.",
+    },
+    Text {
+        code: "E0014",
+        message: "selector `most_threatened` has no effect until S2's threat model, which is what \
+                  it ranks by; it is refused rather than ignored.",
+        beginner: "\"Most threatened\" needs threats to weigh, and this build has none yet. Name \
+                   the beacon, or pick it another way.",
+    },
+    Text {
+        code: "E0015",
+        message: "selector filter `side: ENEMY_KNOWN` has no effect until S3, with the seat's \
+                  knowledge store; it is refused rather than ignored.",
+        beginner: "Picking among enemy beacons comes later. For now a selector picks among your \
+                   own.",
+    },
+    Text {
+        code: "E0016",
+        message: "selector filter `tags` has no effect until S3: a beacon has no tag column to \
+                  read yet, so writing tags is legal and filtering on them is not.",
+        beginner: "Tags on a beacon are kept, but nothing can pick a beacon by its tags yet.",
+    },
+    Text {
+        code: "E0017",
+        message: "predicate `beacon_under_attack` has no effect until S2's combat gives a beacon \
+                  a damage history to ask about; it is refused rather than read as true or false.",
+        beginner: "Asking whether a beacon is under attack comes with combat. Until then the \
+                   question has no answer, so it cannot be asked.",
+    },
+    Text {
+        code: "E0018",
+        message: "`{field}` carries {value}, which is not a value this build names; it is refused \
+                  rather than read as a default.",
+        beginner: "This setting holds a number the game does not know. Nothing is guessed for \
+                   you: write one of the setting's names instead.",
     },
     // --- E01xx: limits and required blocks -----------------------------------
     Text {
@@ -347,6 +416,11 @@ pub const VERIFIER_STRINGS: &[Text] = &[
         beginner: "The seat has not earned the right to build this yet.",
     },
     Text {
+        code: "E0508",
+        message: "`scout_count` is {found}; a beacon holds at most {most} scouts.",
+        beginner: "A Survey beacon can field only so many scouts. Ask for fewer.",
+    },
+    Text {
         code: "W0501",
         message: "`seam_choice` SAFEST reads as NEAREST until S2's threat model arrives.",
         beginner: "\"Safest\" needs threats to weigh, and they come later. Until then this beacon \
@@ -363,6 +437,13 @@ pub const VERIFIER_STRINGS: &[Text] = &[
         code: "E0602",
         message: "a broadcast needs a Radio Mast, and coverage at the place it is sent from.",
         beginner: "Nothing can be sent without a mast.",
+    },
+    Text {
+        code: "E0603",
+        message: "the route orders up to {found}, past what the Ledger can price a seal at \
+                  ({most}); order less in one playbook.",
+        beginner: "This playbook asks for more than a seal can hold. The game would refuse it \
+                   when you submit, so it is refused here first.",
     },
     Text {
         code: "W0601",
@@ -510,19 +591,23 @@ pub fn text(code: &str) -> Option<&'static Text> {
 pub fn fill(template: &str, args: &[(&str, String)]) -> String {
     let mut out = String::with_capacity(template.len());
     let mut rest = template;
-    while let Some(open) = rest.find('{') {
-        let (head, tail) = rest.split_at(open);
+    // Split at the braces themselves rather than slicing by index, so there is
+    // no slice that could fall outside the text and nothing to fall back on.
+    while let Some((head, tail)) = rest.split_once('{') {
         out.push_str(head);
-        let Some(close) = tail.find('}') else {
+        let Some((name, after)) = tail.split_once('}') else {
+            out.push('{');
             out.push_str(tail);
             return out;
         };
-        let name = tail.get(1..close).unwrap_or_default();
-        match args.iter().find(|(key, _)| *key == name) {
-            Some((_, value)) => out.push_str(value),
-            None => out.push_str(tail.get(..close.saturating_add(1)).unwrap_or_default()),
+        if let Some((_, value)) = args.iter().find(|(key, _)| *key == name) {
+            out.push_str(value);
+        } else {
+            out.push('{');
+            out.push_str(name);
+            out.push('}');
         }
-        rest = tail.get(close.saturating_add(1)..).unwrap_or_default();
+        rest = after;
     }
     out.push_str(rest);
     out

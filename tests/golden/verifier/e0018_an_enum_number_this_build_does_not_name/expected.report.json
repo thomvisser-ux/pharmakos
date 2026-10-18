@@ -1,0 +1,19 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0018",
+      "severity": "ERROR",
+      "path": "/declarative/route/0/move/pace",
+      "message": "`pace` carries 9, which is not a value this build names; it is refused rather than read as a default.",
+      "beginner": "This setting holds a number the game does not know. Nothing is guessed for you: write one of the setting's names instead."
+    }
+  ],
+  "report_hash": "FNUYFB/S0Pk=",
+  "rules_hash": "sfLu8OdcWuQ=",
+  "plan_fingerprint": "eh0et2NlZZA=",
+  "verifier_version": "0.1.0-s2",
+  "size_units": 1,
+  "size_budget": 128
+}
+

@@ -12,10 +12,10 @@
       "beginner": "Two things share a name, so a reference to it would be ambiguous."
     }
   ],
-  "report_hash": "/hMRj7dkwso=",
+  "report_hash": "aKY3YEHZU6w=",
   "rules_hash": "sfLu8OdcWuQ=",
   "plan_fingerprint": "6jup2NoQHHw=",
-  "verifier_version": "0.1.0-s1",
+  "verifier_version": "0.1.0-s2",
   "size_units": 2,
   "size_budget": 128
 }

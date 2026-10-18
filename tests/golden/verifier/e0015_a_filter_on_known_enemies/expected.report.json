@@ -1,0 +1,19 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0015",
+      "severity": "ERROR",
+      "path": "/declarative/route/0/move/to/beacon_anchor/nearest/filter/side",
+      "message": "selector filter `side: ENEMY_KNOWN` has no effect until S3, with the seat's knowledge store; it is refused rather than ignored.",
+      "beginner": "Picking among enemy beacons comes later. For now a selector picks among your own."
+    }
+  ],
+  "report_hash": "ZvcFuPEmyYs=",
+  "rules_hash": "sfLu8OdcWuQ=",
+  "plan_fingerprint": "rtVeJXIK1Yg=",
+  "verifier_version": "0.1.0-s2",
+  "size_units": 1,
+  "size_budget": 128
+}
+
