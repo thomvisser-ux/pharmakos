@@ -587,12 +587,10 @@ pub struct BeaconSummary {
     #[prost(string, tag="3")]
     pub owner: ::prost::alloc::string::String,
     /// OWN beacons only: true for the seat's core, the beacon the map pre-places
-    /// for it.
-    ///
-    /// PLACEHOLDER: the core read as the lowest-numbered beacon — owner, S1, a
-    /// column the day a beacon carries a kind. True of every map the generator
-    /// makes, because it places the core first, and the same rule the verifier's
-    /// scope uses.
+    /// for it. The core is the seat's `b_00`, its beacon of per-seat ordinal 0
+    /// (the gateway's `core_beacon_of`, S1's `tgtw`, #84; the register's S1-13,
+    /// closed): the generator places the core first, so it takes ordinal 0 on
+    /// every map, and the verifier's scope reads the same rule.
     #[prost(bool, tag="4")]
     pub core: bool,
     /// OWN beacons only: the Quartermaster priority, which orders brownouts
@@ -810,14 +808,23 @@ pub struct GetEconomyForecastResponse {
     pub headroom_kw_now: i32,
     /// The BMI the seat would be credited at the next settlement, at the band
     /// it holds now, whole $ (decisions-log item 128, S1's plan's decision 12;
-    /// the register's S1-46).
-    #[prost(int32, tag="5")]
-    pub bmi_next_dollars: i32,
-    /// The `$` the seat's standing orders have committed and not yet paid,
-    /// whole $: the Quartermaster's own arithmetic over the seat's orders, never
-    /// a dry run and never a model of anybody else (spec section 11).
-    #[prost(int32, tag="6")]
-    pub committed_dollars: i32,
+    /// the register's S1-46): a prediction, since held value counts a structure
+    /// still going up at its worth so far and spending in a Push can move the
+    /// rank (item 135 (2) (g)). Absent for a seat out of the match, which is off
+    /// the ladder, and after the match ends, when no settlement is next.
+    /// `optional`, so a reader tells absent from 0 by the field's presence
+    /// (item 135 (2) (g); S2's plan, task con3).
+    #[prost(int32, optional, tag="5")]
+    pub bmi_next_dollars: ::core::option::Option<i32>,
+    /// The `$` this round's seal orders and has not yet paid, whole $, in a
+    /// Lull: an UPPER BOUND, because every step that may order something is
+    /// counted in full, by the Quartermaster's own arithmetic over the seat's
+    /// orders, never a dry run and never a model of anybody else (spec section
+    /// 11; item 135 (2) (f)). 0 when the seat has sealed nothing this round.
+    /// Absent outside a Lull: a Push pays the seal as it goes, and how much is
+    /// still unpaid is not read here. `optional`, as `bmi_next_dollars` is.
+    #[prost(int32, optional, tag="6")]
+    pub committed_dollars: ::core::option::Option<i32>,
 }
 impl ::prost::Name for GetEconomyForecastResponse {
 const NAME: &'static str = "GetEconomyForecastResponse";
@@ -1404,7 +1411,7 @@ pub struct ResolvedRef {
     #[prost(string, tag="2")]
     pub feature_id: ::prost::alloc::string::String,
     /// Travel from the origin to that feature, game milliseconds, by the
-    /// estimator "nearest" ranks with. 0 when it reads nothing.
+    /// estimator "nearest" ranks with. Meaningful only when `reachable` is true.
     #[prost(int32, tag="3")]
     pub travel_ms: i32,
     /// Every candidate that matched the reference's filters and is reachable,
@@ -1421,6 +1428,13 @@ pub struct ResolvedRef {
     /// reads a feature.
     #[prost(string, tag="6")]
     pub failure: ::prost::alloc::string::String,
+    /// True when a route reaches the feature it reads from the origin; false
+    /// when it reads nothing, or reads a named pick the origin cannot reach,
+    /// and `travel_ms` then means nothing (decisions-log item 133 (3) (i), which
+    /// retires the `travel_ms` 0 a magic value stood for). S2's `wgw` writes it
+    /// from `resolve_refs`; until then the answer lacks it.
+    #[prost(bool, tag="7")]
+    pub reachable: bool,
 }
 impl ::prost::Name for ResolvedRef {
 const NAME: &'static str = "ResolvedRef";

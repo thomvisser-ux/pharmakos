@@ -46,6 +46,11 @@ pub const RUN_BYTES: usize = 3;
 /// The longest run one triple can carry, which is a whole chunk.
 pub const MAX_RUN: usize = CHUNK_VOXELS;
 
+/// [`MAX_RUN`] as the run length a triple stores: 32 768 fits the two bytes,
+/// and `the_longest_run_fits_its_two_bytes` holds the two equal, so the
+/// encoder counts in the stored type and never converts.
+const MAX_RUN_LENGTH: u16 = 32_768;
+
 /// Why a payload is not a chunk.
 ///
 /// Four ways, and each one is a different bug in whoever produced the bytes,
@@ -117,22 +122,20 @@ pub fn encode(voxels: &[u8]) -> Vec<u8> {
         let Some(material) = voxels.get(index).copied() else {
             break;
         };
-        let mut run: usize = 1;
-        while run < MAX_RUN {
-            let next = index.saturating_add(run);
+        // Counted in the stored type, so there is no conversion to fail: the
+        // loop stops at MAX_RUN_LENGTH, below `u16::MAX`, so the increment
+        // never saturates.
+        let mut run: u16 = 1;
+        while run < MAX_RUN_LENGTH {
+            let next = index.saturating_add(usize::from(run));
             if voxels.get(next).copied() != Some(material) {
                 break;
             }
             run = run.saturating_add(1);
         }
         out.push(material);
-        // `run` is at most MAX_RUN, which is 32 768 and fits a u16; the
-        // fallback is unreachable and is a zero rather than a panic because a
-        // codec that panics on its own arithmetic is worse than one that
-        // writes a run `decode` will refuse.
-        let length = u16::try_from(run).unwrap_or(0);
-        out.extend_from_slice(&length.to_le_bytes());
-        index = index.saturating_add(run);
+        out.extend_from_slice(&run.to_le_bytes());
+        index = index.saturating_add(usize::from(run));
     }
     out
 }
@@ -144,15 +147,15 @@ pub fn encode(voxels: &[u8]) -> Vec<u8> {
 /// A [`ChunkError`] for a payload that is not a whole number of runs, holds a
 /// run of zero, or whose lengths do not sum to exactly [`CHUNK_VOXELS`].
 pub fn decode(bytes: &[u8]) -> Result<Vec<u8>, ChunkError> {
-    let trailing = bytes.len().checked_rem(RUN_BYTES).unwrap_or(0);
-    if trailing != 0 {
-        return Err(ChunkError::PartialRun { trailing });
+    // Whole triples by type, so no byte of a run is read through a default.
+    let (triples, rest) = bytes.as_chunks::<RUN_BYTES>();
+    if !rest.is_empty() {
+        return Err(ChunkError::PartialRun {
+            trailing: rest.len(),
+        });
     }
     let mut out: Vec<u8> = Vec::with_capacity(CHUNK_VOXELS);
-    for (run, triple) in bytes.chunks(RUN_BYTES).enumerate() {
-        let material = triple.first().copied().unwrap_or(0);
-        let low = triple.get(1).copied().unwrap_or(0);
-        let high = triple.get(2).copied().unwrap_or(0);
+    for (run, &[material, low, high]) in triples.iter().enumerate() {
         let length = usize::from(u16::from_le_bytes([low, high]));
         if length == 0 {
             return Err(ChunkError::EmptyRun { run });
@@ -173,6 +176,11 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<u8>, ChunkError> {
 #[cfg(test)]
 mod tests {
     use super::{CHUNK_VOXELS, ChunkError, MAX_RUN, RUN_BYTES, decode, encode};
+
+    #[test]
+    fn the_longest_run_fits_its_two_bytes() {
+        assert_eq!(usize::from(super::MAX_RUN_LENGTH), MAX_RUN);
+    }
 
     /// A chunk that is all one material: one run, three bytes.
     #[test]
@@ -196,7 +204,7 @@ mod tests {
     #[test]
     fn an_alternating_chunk_is_three_times_raw_and_still_round_trips() {
         let voxels: Vec<u8> = (0..CHUNK_VOXELS)
-            .map(|index| u8::try_from(index.checked_rem(2).unwrap_or(0)).unwrap_or(0))
+            .map(|index| u8::from(!index.is_multiple_of(2)))
             .collect();
         let encoded = encode(&voxels);
         assert_eq!(encoded.len(), CHUNK_VOXELS.saturating_mul(RUN_BYTES));
@@ -211,7 +219,7 @@ mod tests {
         for z in 0..32_usize {
             for y in 0..32_usize {
                 for x in 0..32_usize {
-                    let height = 8_usize.saturating_add(x.checked_rem(5).unwrap_or(0));
+                    let height = 8_usize.saturating_add(x.rem_euclid(5));
                     let index = x
                         .saturating_add(y.saturating_mul(32))
                         .saturating_add(z.saturating_mul(1024));

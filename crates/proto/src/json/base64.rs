@@ -26,38 +26,52 @@
 //! checks the text's shape itself before calling this, because that strictness
 //! is its rule and not the mapping's.
 
-const STANDARD: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
 /// Standard base64, padded.
 #[must_use]
 pub fn encode(bytes: &[u8]) -> String {
     let mut out = String::new();
-    for chunk in bytes.chunks(3) {
-        let first = chunk.first().copied().unwrap_or(0);
-        let second = chunk.get(1).copied().unwrap_or(0);
-        let third = chunk.get(2).copied().unwrap_or(0);
-        let packed = (u32::from(first) << 16) | (u32::from(second) << 8) | u32::from(third);
-
-        let symbol = |shift: u32| -> char {
-            let index = usize::try_from((packed >> shift) & 0x3f).unwrap_or(0);
-            char::from(STANDARD.get(index).copied().unwrap_or(b'A'))
-        };
-
-        out.push(symbol(18));
-        out.push(symbol(12));
-        match chunk.len() {
-            1 => out.push_str("=="),
-            2 => {
-                out.push(symbol(6));
-                out.push('=');
-            }
-            _ => {
-                out.push(symbol(6));
-                out.push(symbol(0));
-            }
+    let (quanta, rest) = bytes.as_chunks::<3>();
+    for &[first, second, third] in quanta {
+        let [a, b, c, d] = sextets(first, second, third);
+        out.extend([symbol(a), symbol(b), symbol(c), symbol(d)]);
+    }
+    // `as_chunks::<3>` leaves no byte, one or two over; nothing but the
+    // empty remainder reaches the last arm, and it writes no quantum.
+    match *rest {
+        [first] => {
+            let [a, b, _, _] = sextets(first, 0, 0);
+            out.extend([symbol(a), symbol(b), '=', '=']);
         }
+        [first, second] => {
+            let [a, b, c, _] = sextets(first, second, 0);
+            out.extend([symbol(a), symbol(b), symbol(c), '=']);
+        }
+        _ => {}
     }
     out
+}
+
+/// Three bytes as four six-bit values, each below 64 by its mask.
+const fn sextets(first: u8, second: u8, third: u8) -> [u8; 4] {
+    [
+        first >> 2,
+        ((first & 0x03) << 4) | (second >> 4),
+        ((second & 0x0f) << 2) | (third >> 6),
+        third & 0x3f,
+    ]
+}
+
+/// The standard alphabet's symbol for a six-bit value, by arithmetic rather
+/// than a table lookup, so no index can miss: every value a mask leaves,
+/// 0 to 63, has its arm, and the last arm is `/`'s.
+fn symbol(sextet: u8) -> char {
+    char::from(match sextet & 0x3f {
+        value @ 0..=25 => b'A' + value,
+        value @ 26..=51 => b'a' + (value - 26),
+        value @ 52..=61 => b'0' + (value - 52),
+        62 => b'+',
+        _ => b'/',
+    })
 }
 
 fn value_of(symbol: u8) -> Option<u32> {
@@ -94,11 +108,9 @@ pub fn decode(text: &str) -> Option<Vec<u8>> {
             };
             packed = (packed << 6) | value;
         }
-        let bytes = [
-            u8::try_from((packed >> 16) & 0xff).ok()?,
-            u8::try_from((packed >> 8) & 0xff).ok()?,
-            u8::try_from(packed & 0xff).ok()?,
-        ];
+        // Four sextets fill the low 24 bits; the top byte is always 0.
+        let [_, high, middle, low] = packed.to_be_bytes();
+        let bytes = [high, middle, low];
         match chunk.len() {
             2 => out.extend_from_slice(bytes.get(..1)?),
             3 => out.extend_from_slice(bytes.get(..2)?),
@@ -109,4 +121,47 @@ pub fn decode(text: &str) -> Option<Vec<u8>> {
         }
     }
     Some(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{decode, encode};
+
+    /// RFC 4648 section 10's test vectors, both ways.
+    #[test]
+    fn the_rfc_4648_vectors_round_trip() {
+        for (plain, coded) in [
+            ("", ""),
+            ("f", "Zg=="),
+            ("fo", "Zm8="),
+            ("foo", "Zm9v"),
+            ("foob", "Zm9vYg=="),
+            ("fooba", "Zm9vYmE="),
+            ("foobar", "Zm9vYmFy"),
+        ] {
+            assert_eq!(encode(plain.as_bytes()), coded, "{plain:?}");
+            assert_eq!(
+                decode(coded).as_deref(),
+                Some(plain.as_bytes()),
+                "{coded:?}"
+            );
+        }
+    }
+
+    /// Every symbol of the alphabet, in order, and every byte value.
+    #[test]
+    fn every_byte_round_trips_and_the_alphabet_is_standard() {
+        let all: Vec<u8> = (0..=u8::MAX).collect();
+        assert_eq!(decode(&encode(&all)), Some(all));
+        let ramp = [
+            0x00, 0x10, 0x83, 0x10, 0x51, 0x87, 0x20, 0x92, 0x8b, 0x30, 0xd3, 0x8f, 0x41, 0x14,
+            0x93, 0x51, 0x55, 0x97, 0x61, 0x96, 0x9b, 0x71, 0xd7, 0x9f, 0x82, 0x18, 0xa3, 0x92,
+            0x59, 0xa7, 0xa2, 0x9a, 0xab, 0xb2, 0xdb, 0xaf, 0xc3, 0x1c, 0xb3, 0xd3, 0x5d, 0xb7,
+            0xe3, 0x9e, 0xbb, 0xf3, 0xdf, 0xbf,
+        ];
+        assert_eq!(
+            encode(&ramp),
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+        );
+    }
 }

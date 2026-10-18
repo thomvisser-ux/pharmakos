@@ -1004,12 +1004,9 @@ fn the_rules_table_carries_item_90s_unit_structure_and_verifier_numbers() {
 /// carry them without moving a chain.
 #[test]
 fn the_rules_table_carries_s1s_first_contract_rows() {
+    // Revision 4's rows. The revision itself is the newest revision's test's
+    // to assert (`the_rules_table_carries_s2s_rows`).
     let table = committed_rules_table();
-    assert_eq!(
-        table.revision, 4,
-        "rules.proto: `revision` is bumped whenever a value changes, and revision 4 moved \
-         `match.lull_ms`"
-    );
 
     let matched = table.r#match.expect("the match block");
     assert_eq!(
@@ -1024,13 +1021,172 @@ fn the_rules_table_carries_s1s_first_contract_rows() {
     let structures = table.structures.expect("the structures block");
     assert_eq!(
         structures.build_hp_per_second, 60,
-        "S1-24: the sim's BUILD_HP_PER_SECOND, as a row at its own value"
+        "S1-24: the row the sim reads at load (`RulesTable::build_hp_per_tick`), at the \
+         value of the constant it replaced"
     );
 
     let economy = table.economy.expect("the economy block");
     assert_eq!(
         economy.mining_carry_voxels, 16,
-        "S1-25: the sim's MINING_LOAD_VOXELS, as a row at its own value"
+        "S1-25: the row the sim reads at load (`RulesTable::mining_carry_voxels`), at the \
+         value of the constant it replaced"
+    );
+}
+
+/// A weapon's numbers as (range, damage, cooldown).
+fn gun(weapon: Option<rules_table::Weapon>, name: &str) -> (u32, u32, i32) {
+    let weapon = weapon.unwrap_or_else(|| panic!("the {name} weapon"));
+    (weapon.range_voxels, weapon.damage_hp, weapon.cooldown_ms)
+}
+
+/// Revision 5: S2's rows (S2's plan, task `con3`). The rows that replace a
+/// constant hold the constant's value, and nothing reads the others yet, so
+/// no chain moves for them.
+#[test]
+fn the_rules_table_carries_s2s_rows() {
+    let table = committed_rules_table();
+    assert_eq!(
+        table.revision, 5,
+        "rules.proto: `revision` is bumped whenever a value changes, and revision 5 added \
+         S2's rows"
+    );
+
+    let locomotion = table.locomotion.expect("the locomotion block");
+    assert_eq!(
+        locomotion.headroom_voxels, 2,
+        "S2-05: the sim's HEADROOM_VOXELS"
+    );
+
+    let units = table.units.expect("the units block");
+    let structures = table.structures.expect("the structures block");
+    let unit_kinds = [
+        ("build_drone", units.build_drone),
+        ("mining_drone", units.mining_drone),
+        ("repair_drone", units.repair_drone),
+        ("raider", units.raider),
+        ("scout", units.scout),
+    ];
+    let structure_kinds = [
+        ("beacon", structures.beacon),
+        ("generator", structures.generator),
+        ("autocannon", structures.autocannon),
+        ("mortar", structures.mortar),
+        ("survey_post", structures.survey_post),
+        ("resonance_spire", structures.resonance_spire),
+    ];
+
+    // S1-34: every kind sees as far as the scouts' constant until `tune2`
+    // sets decision 17's proposals.
+    for (name, kind) in unit_kinds {
+        let kind = kind.unwrap_or_else(|| panic!("the {name} row"));
+        assert_eq!(kind.vision_radius_voxels, 8, "S1-34: units.{name}");
+        assert_eq!(
+            kind.weapon.is_some(),
+            name == "raider",
+            "units.{name}: only the raider is armed"
+        );
+    }
+    for (name, kind) in structure_kinds {
+        let kind = kind.unwrap_or_else(|| panic!("the {name} row"));
+        assert_eq!(kind.vision_radius_voxels, 8, "S1-34: structures.{name}");
+        assert_eq!(
+            kind.weapon.is_some(),
+            name == "autocannon" || name == "mortar",
+            "structures.{name}: only the autocannon and the mortar are armed"
+        );
+    }
+    let commander = table.commander.expect("the commander block");
+    assert_eq!(commander.vision_radius_voxels, 8, "S1-34: the commander");
+
+    // The weapons, at decision 17's proposals. Only the mortar fires a shell;
+    // the rest fire directly, landing in the tick they are dealt (E2).
+    let raider = units.raider.and_then(|kind| kind.weapon);
+    let autocannon = structures.autocannon.and_then(|kind| kind.weapon);
+    let core = table.beacon.and_then(|beacon| beacon.core_weapon);
+    assert_eq!(gun(raider, "raider"), (4, 8, 500));
+    assert_eq!(gun(autocannon, "autocannon"), (20, 12, 250));
+    assert_eq!(gun(core, "core"), (24, 12, 250));
+    for (name, weapon) in [
+        ("raider", raider),
+        ("autocannon", autocannon),
+        ("core", core),
+    ] {
+        assert_eq!(
+            weapon.and_then(|weapon| weapon.projectile),
+            None,
+            "the {name} fires directly"
+        );
+    }
+    let mortar = structures.mortar.and_then(|kind| kind.weapon);
+    assert_eq!(gun(mortar, "mortar"), (40, 60, 4_000));
+    let shell = mortar
+        .and_then(|weapon| weapon.projectile)
+        .expect("the mortar fires a shell");
+    assert_eq!(
+        (
+            shell.speed_voxels_per_second,
+            shell.splash_radius_voxels,
+            shell.crater_radius_voxels
+        ),
+        (8, 3, 2)
+    );
+}
+
+/// Revision 5's new blocks, none of which anything reads yet.
+#[test]
+fn the_rules_table_carries_s2s_new_blocks() {
+    let table = committed_rules_table();
+    let combat = table.combat.expect("the combat block");
+    assert_eq!(
+        (
+            combat.under_attack_window_ms,
+            combat.threat_step_cost_multiplier,
+            combat.charge_radius_voxels,
+            combat.charge_fuse_ms,
+            combat.repair_hp_per_second,
+            combat.terraform_ms_per_voxel,
+        ),
+        (10_000, 4, 4, 5_000, 20, 1_000),
+        "decision 17's proposals"
+    );
+    assert_eq!(
+        table.defend.expect("the defend block").picket_radius_voxels,
+        6,
+        "spec section 19's picket radius, at decision 17's proposal"
+    );
+    let collapse = table.collapse.expect("the collapse block");
+    assert_eq!(
+        (
+            collapse.max_region_voxels,
+            collapse.fall_damage_hp,
+            collapse.max_visits_per_tick
+        ),
+        (4_096, 100, 16_384),
+        "decision 11's proposals"
+    );
+
+    let materials = table.materials.expect("the materials block");
+    let blast = materials.blast_levels.expect("the blast levels");
+    assert_eq!(
+        (blast.dirt, blast.stone, blast.ore, blast.vent),
+        (1, 2, 1, 1),
+        "decision 10's proposal"
+    );
+    for (name, levels) in [
+        ("dirt", blast.dirt),
+        ("stone", blast.stone),
+        ("ore", blast.ore),
+        ("vent", blast.vent),
+    ] {
+        assert!(
+            (1..=3).contains(&levels),
+            "materials.blast_levels.{name} is outside the catalogue's 1 to 3 (E14)"
+        );
+    }
+    assert_eq!(materials.wall_min_height_voxels, 2, "decision 40");
+    assert_eq!(
+        materials.bedrock_layers_voxels, 1,
+        "E14's proposal: never 0, because the support rule needs a floor"
     );
 }
 
@@ -1446,6 +1602,7 @@ fn the_s1_status_and_resolve_refs_round_trip_in_their_documented_spellings() {
                     ],
                     matched: 2,
                     failure: String::new(),
+                    reachable: true,
                 },
                 ResolvedRef {
                     pointer: "/declarative/route/3/place_beacon/at/covering".to_owned(),
@@ -1454,6 +1611,19 @@ fn the_s1_status_and_resolve_refs_round_trip_in_their_documented_spellings() {
                     candidates: Vec::new(),
                     matched: 3,
                     failure: "no_target".to_owned(),
+                    reachable: false,
+                },
+                // A named pick the origin cannot reach (item 133 (3) (i)): it
+                // reads its feature, and `reachable` false says that its
+                // `travel_ms` means nothing, where a 0 used to stand for it.
+                ResolvedRef {
+                    pointer: "/declarative/route/4/place_beacon/at/covering".to_owned(),
+                    feature_id: "vent_300_40".to_owned(),
+                    travel_ms: 0,
+                    candidates: Vec::new(),
+                    matched: 1,
+                    failure: String::new(),
+                    reachable: false,
                 },
             ],
         },
@@ -1461,11 +1631,21 @@ fn the_s1_status_and_resolve_refs_round_trip_in_their_documented_spellings() {
             r#"{"refs":[{"pointer":"/declarative/route/0/place_beacon/at/covering","#,
             r#""feature_id":"vent_120_88","travel_ms":14000,"candidates":["#,
             r#"{"feature_id":"vent_120_88","travel_ms":14000},"#,
-            r#"{"feature_id":"vent_150_20","travel_ms":16000}],"matched":2},"#,
+            r#"{"feature_id":"vent_150_20","travel_ms":16000}],"matched":2,"#,
+            r#""reachable":true},"#,
             r#"{"pointer":"/declarative/route/3/place_beacon/at/covering","matched":3,"#,
-            r#""failure":"no_target"}]}"#
+            r#""failure":"no_target"},"#,
+            r#"{"pointer":"/declarative/route/4/place_beacon/at/covering","#,
+            r#""feature_id":"vent_300_40","matched":1}]}"#
         ),
-        &["refs", "pointer", "candidates", "matched", "failure"],
+        &[
+            "refs",
+            "pointer",
+            "candidates",
+            "matched",
+            "failure",
+            "reachable",
+        ],
     );
 }
 
@@ -1532,8 +1712,8 @@ fn the_s1_economy_wire_round_trips_in_its_documented_spellings() {
             supply_kw_now: 30,
             draw_kw_now: 22,
             headroom_kw_now: 8,
-            bmi_next_dollars: 95,
-            committed_dollars: 60,
+            bmi_next_dollars: Some(95),
+            committed_dollars: Some(60),
         },
         concat!(
             r#"{"treasury_now":140,"supply_kw_now":30,"draw_kw_now":22,"headroom_kw_now":8,"#,
@@ -1541,6 +1721,34 @@ fn the_s1_economy_wire_round_trips_in_its_documented_spellings() {
         ),
         &["bmi_next_dollars", "committed_dollars"],
     );
+}
+
+#[test]
+fn the_forecasts_next_bmi_and_committed_spend_carry_presence() {
+    // Item 135 (2) (f) and (g): both fields are absent where there is no
+    // figure (the next BMI for a seat off the ladder or after the match ends,
+    // the committed spend outside a Lull), and `optional` makes absent and 0
+    // two spellings on the wire as they are two answers in the game. A Lull
+    // seal that orders nothing commits `$` 0, and says so.
+    use gp_api::GetEconomyForecastResponse;
+
+    let sealed_nothing = GetEconomyForecastResponse {
+        treasury_now: 200,
+        bmi_next_dollars: Some(95),
+        committed_dollars: Some(0),
+        ..GetEconomyForecastResponse::default()
+    };
+    // A present 0 is written out, and survives the round trip as itself.
+    round_trips(
+        &sealed_nothing,
+        r#"{"treasury_now":200,"bmi_next_dollars":95,"committed_dollars":0}"#,
+        &["committed_dollars"],
+    );
+
+    let in_a_push: GetEconomyForecastResponse =
+        json::decode(r#"{"treasury_now":200,"bmi_next_dollars":95}"#).expect("it decodes");
+    assert_eq!(in_a_push.committed_dollars, None, "absent is not 0");
+    assert_eq!(in_a_push.bmi_next_dollars, Some(95));
 }
 
 #[test]

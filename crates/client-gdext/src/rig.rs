@@ -839,11 +839,8 @@ impl Rig {
                     .and_then(|footer| read_status(footer).ok())
                     .map_or(self.phase, |status| Phase::of(status.phase));
                 // The next BMI and the committed spend are left out of an answer that has
-                // none (item 135 (2) (g)), and an absent field is not 0, so their presence is
-                // read off the answer itself until the schema marks the two `optional`.
-                let present = |snake: &str, camel: &str| {
-                    body.get(snake).is_some() || body.get(camel).is_some()
-                };
+                // none (item 135 (2) (g)), and an absent field is not 0: the schema marks
+                // the two `optional`, so the decoded type carries their presence.
                 self.meter = Meter {
                     answers: self.meter.answers.saturating_add(1),
                     phase: served,
@@ -851,10 +848,8 @@ impl Rig {
                     supply_kw_now: forecast.supply_kw_now,
                     draw_kw_now: forecast.draw_kw_now,
                     headroom_kw_now: forecast.headroom_kw_now,
-                    bmi_next_dollars: present("bmi_next_dollars", "bmiNextDollars")
-                        .then_some(forecast.bmi_next_dollars),
-                    committed_dollars: present("committed_dollars", "committedDollars")
-                        .then_some(forecast.committed_dollars),
+                    bmi_next_dollars: forecast.bmi_next_dollars,
+                    committed_dollars: forecast.committed_dollars,
                 };
             }
             Purpose::Recap => self.take_recap(result)?,
@@ -2351,6 +2346,11 @@ mod tests {
                 r#"{"treasury_now":200,"bmi_next_dollars":95}"#,
                 Some(95),
                 None,
+            ),
+            (
+                r#"{"treasury_now":200,"committed_dollars":0}"#,
+                None,
+                Some(0),
             ),
             (r#"{"treasury_now":200}"#, None, None),
         ] {

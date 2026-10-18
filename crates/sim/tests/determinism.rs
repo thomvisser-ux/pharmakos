@@ -808,7 +808,7 @@ fn the_rules_hash_is_pinned_to_the_committed_table() {
     // balance check. No value and not `revision` moved, so the chain did not.
     assert_eq!(
         hex(rules().rules_hash()),
-        "b1f2eef0e75c5ae4",
+        "8028d41384e6de2f",
         "the rules hash moved; say in the pull request which row changed and why"
     );
 }

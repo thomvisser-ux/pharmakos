@@ -37,7 +37,7 @@ host                      serve one match to the game client over this process's
 
 ## The playbook vocabulary (gp.v1)
 
-93 messages. A field's name is the one the canonical form writes, which is
+100 messages. A field's name is the one the canonical form writes, which is
 the .proto spelling and not lowerCamelCase. A reserved number is one held on
 purpose: field numbers are added, never renumbered or reused.
 
@@ -366,13 +366,31 @@ gp.v1.RulesTable
   units                        20  gp.v1.RulesTable.Units
   structures                   21  gp.v1.RulesTable.Structures
   verifier                     22  gp.v1.RulesTable.Verifier
+  combat                       23  gp.v1.RulesTable.Combat
+  defend                       24  gp.v1.RulesTable.Defend
+  collapse                     25  gp.v1.RulesTable.Collapse
+  materials                    26  gp.v1.RulesTable.Materials
 
 gp.v1.RulesTable.Beacon
   sphere_radius_voxels         1   uint32
   core_hp                      2   uint32
+  core_weapon                  3   gp.v1.RulesTable.Weapon
 
 gp.v1.RulesTable.Broadphase
   cell_size_voxels             1   uint32
+
+gp.v1.RulesTable.Collapse
+  max_region_voxels            1   uint32
+  fall_damage_hp               2   uint32
+  max_visits_per_tick          3   uint32
+
+gp.v1.RulesTable.Combat
+  under_attack_window_ms       1   int32
+  threat_step_cost_multiplier  2   uint32
+  charge_radius_voxels         3   uint32
+  charge_fuse_ms               4   int32
+  repair_hp_per_second         5   uint32
+  terraform_ms_per_voxel       6   int32
 
 gp.v1.RulesTable.Commander
   hp                           1   uint32
@@ -382,6 +400,10 @@ gp.v1.RulesTable.Commander
   arrive_radius_voxels         5   uint32
   placement_range_voxels       6   uint32
   interface_range_voxels       7   uint32
+  vision_radius_voxels         8   uint32
+
+gp.v1.RulesTable.Defend
+  picket_radius_voxels         1   uint32
 
 gp.v1.RulesTable.Economy
   bmi_dollars                  1   uint32
@@ -423,6 +445,7 @@ gp.v1.RulesTable.Locomotion
   drone_cost_per_second        10  uint32
   raider_cost_per_second       11  uint32
   scout_cost_per_second        12  uint32
+  headroom_voxels              13  uint32
 
 gp.v1.RulesTable.Map
   size_x                       1   uint32
@@ -448,6 +471,17 @@ gp.v1.RulesTable.Match
   decision_tick_ms             3   int32
   first_lull_ms                4   int32
 
+gp.v1.RulesTable.Materials
+  blast_levels                 1   gp.v1.RulesTable.Materials.BlastLevels
+  wall_min_height_voxels       2   uint32
+  bedrock_layers_voxels        3   uint32
+
+gp.v1.RulesTable.Materials.BlastLevels
+  dirt                         1   uint32
+  stone                        2   uint32
+  ore                          3   uint32
+  vent                         4   uint32
+
 gp.v1.RulesTable.Mesher
   surfaces_per_frame           1   uint32
   bytes_per_frame              2   uint32
@@ -469,6 +503,8 @@ gp.v1.RulesTable.StructureKind
   cost_dollars                 1   uint32
   hp                           2   uint32
   draw_kw                      3   uint32
+  vision_radius_voxels         4   uint32
+  weapon                       5   gp.v1.RulesTable.Weapon
 
 gp.v1.RulesTable.Structures
   beacon                       1   gp.v1.RulesTable.StructureKind
@@ -486,6 +522,8 @@ gp.v1.RulesTable.UnitKind
   hp                           2   uint32
   draw_kw                      3   uint32
   cost_per_second              4   uint32
+  vision_radius_voxels         5   uint32
+  weapon                       6   gp.v1.RulesTable.Weapon
 
 gp.v1.RulesTable.Units
   build_drone                  1   gp.v1.RulesTable.UnitKind
@@ -502,6 +540,17 @@ gp.v1.RulesTable.Verifier
   max_fires_max                3   uint32
   notebook_max_chars           4   uint32
   reach_memory_ms              5   int32
+
+gp.v1.RulesTable.Weapon
+  range_voxels                 1   uint32
+  damage_hp                    2   uint32
+  cooldown_ms                  3   int32
+  projectile                   4   gp.v1.RulesTable.Weapon.Projectile
+
+gp.v1.RulesTable.Weapon.Projectile
+  speed_voxels_per_second      1   uint32
+  splash_radius_voxels         2   uint32
+  crater_radius_voxels         3   uint32
 
 gp.v1.Safest
 
