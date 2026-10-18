@@ -12,14 +12,13 @@
 //! and the estimate stage adds it to the route's walking to say whether the
 //! route fits the coming segment.
 //!
-//! **Until the sim prices a visit the same way, the Push can charge less.**
-//! The sim this crate ships beside still counts a list setting as one field
-//! and a Build target list as one field of the edit, and charges a
-//! `set_mandate` row the switch alone (see [`count`]'s PLACEHOLDER). So a visit
-//! that writes a list of two or more, Build targets, or a `set_mandate` with
-//! settings, stands in the Push for less time than quoted here, and `W0701`
-//! can say a route does not fit when the Push would fit it. The figure is right
-//! for the ruling; the sim catches up in its own lane.
+//! **The sim prices a visit the same way.** Since S1's `build` lane brought
+//! the sim's `Row::duration_ms` to decision 15 (the register's S1-51), a list
+//! setting counts each element as a field, a Build target is its own row at
+//! the build-target rate, and a `set_mandate` row pays the switch and the edit
+//! it carries, there as here. So the figure quoted here is what the commander
+//! stands for in the Push, and `W0701` bounds the Push rather than the ruling
+//! alone.
 //!
 //! # Why it lives in the verifier
 //!
@@ -276,22 +275,29 @@ pub fn place_beacon_ms(place: &PlaceBeaconStep, rates: &Rates) -> Visit {
     )
 }
 
-/// The initial settings of a `place_beacon`, as the rows they are.
+/// The initial settings of a `place_beacon`, as the rows they are, in the
+/// order the sim commits them: the settings, then the priority.
 ///
 /// Spec section 5: "Choosing the mandate type is free. Every other initial
 /// setting or target costs its normal interface time after the deploy." So the
 /// mandate *arm* is free here — unlike `set_mandate` on an existing beacon,
 /// which pays the switch — and what is inside it is an ordinary settings edit.
+///
+/// **The order is the sim's** (decisions-log item 136 (3) (r)): the Push plays
+/// and the chains hash the settings row before the priority row
+/// (`crates/sim/src/interpreter.rs`, the `place_beacon` arm of its compile),
+/// so the editor's tick marks follow it. The total is the same either way, so
+/// `W0701` was never affected; until S2 the marks were drawn priority first.
 fn initial_rows(initial: &InitialSettings, rates: &Rates) -> Vec<Ms> {
     let mut rows = Vec::new();
-    if initial.priority != 0 {
-        rows.push(rates.set_priority);
-    }
     if let Some(settings) = initial.mandate.as_ref() {
         let priced = settings_ms(settings, rates);
         if priced.raw() != 0 {
             rows.push(priced);
         }
+    }
+    if initial.priority != 0 {
+        rows.push(rates.set_priority);
     }
     rows
 }
@@ -326,6 +332,13 @@ fn set(written: bool) -> u32 {
 }
 
 /// The elements of a list, each one field.
+///
+/// A list past `u32::MAX` elements counts as `u32::MAX`, and the price is
+/// exact anyway: every element is a field or a target, the edit is capped
+/// (spec section 5's "max 6 s") and the targets' figure saturates upwards
+/// past every segment (the module doc, "Sums saturate, and only upwards"), so
+/// any count that large prices the same. No playbook inside the size budget
+/// comes within nine orders of magnitude of it.
 fn each<T>(list: &[T]) -> u32 {
     u32::try_from(list.len()).unwrap_or(u32::MAX)
 }
@@ -350,20 +363,10 @@ fn each<T>(list: &[T]) -> u32 {
 /// somebody decides what it costs — a new field can never silently cost
 /// nothing.
 ///
-/// The sim's own pricing does not count this way yet:
-/// `crates/sim/src/interpreter.rs`'s `mandate_fields` still counts a list as
-/// one field whatever its length and a Build target list as one field of the
-/// edit, and its `set_mandate` row charges the switch and drops the settings
-/// (decisions-log item 131 (5) asks `mine` why). So a playbook with a
-/// two-element list, with targets, or with a `set_mandate` that carries
-/// settings, stands at a beacon for less time in the Push than the one quoted
-/// here, and the estimate stage's `W0701` can fire on a route the Push fits.
-/// The owner's ruling is this function's; bringing the sim to it moves the
-/// chains of every scenario whose playbook writes such a list, so it is a
-/// `crates/sim` lane's (the `build` task, S1's Build settings, which owns that
-/// file next).
-///
-/// PLACEHOLDER: the sim's interface pricing brought to decision 15, so W0701 bounds the Push — owner of crates/sim, S1 wave 4.
+/// The sim counts the same way, field for field: its `mandate_fields` is this
+/// function's twin, and its `Row::duration_ms` charges the edit and each
+/// target as [`settings_ms`] does (S1's `build` lane, the register's S1-51), so
+/// a visit stands in the Push for exactly the time quoted here.
 #[must_use]
 pub fn count(settings: &MandateSettings) -> Counted {
     let MandateSettings {
@@ -535,9 +538,10 @@ mod tests {
         assert_eq!(row_ms(&row, &rates()), Ms::new(10000));
     }
 
-    /// The worked example's `place_east` step: 12 s of deploy, 1.5 s of
-    /// priority, and three settings fields at 2 s + 2 x 0.5 s. No handshake:
-    /// a deploy is not a visit (X-05, decision 15).
+    /// The worked example's `place_east` step: 12 s of deploy, three settings
+    /// fields at 2 s + 2 x 0.5 s, then 1.5 s of priority, in the sim's order
+    /// (item 136 (3) (r)). No handshake: a deploy is not a visit (X-05,
+    /// decision 15).
     #[test]
     fn the_worked_examples_deploy_is_sixteen_and_a_half_seconds() {
         let place = PlaceBeaconStep {
@@ -561,7 +565,7 @@ mod tests {
         assert_eq!(visit.total, Ms::new(16_500));
         assert_eq!(
             visit.commits,
-            vec![Ms::new(12_000), Ms::new(13_500), Ms::new(16_500)]
+            vec![Ms::new(12_000), Ms::new(15_000), Ms::new(16_500)]
         );
     }
 

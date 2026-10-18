@@ -16,17 +16,21 @@
 //! | `E0601` | **error** | The route's orders add draw beyond supply, and `allow_dormant_beacons` is not set |
 //! | `W0603` | warning | The same, with `allow_dormant_beacons` set: the shortfall is accepted |
 //! | `W0602` | warning | The route's committed spending outruns the treasury |
+//! | `E0603` | **error** | The seal does not price: the route's `$` or `kW` leaves the sim's types, or its spend is past the forecast's `int32`, which `submit_plan` refuses (S2-14) |
 //! | `W0701` | warning | The route cannot fit the coming segment, if every step runs |
 //! | `W0604` | warning | Only the upper bound adds draw beyond supply: an edit of a beacon that may already field what it orders |
 //! | `W0707` | warning | The snapshot does not decode, so the schedule was not checked |
 //! | `I0001` | information | How much walking the route's known legs are, at least |
 //!
-//! `E0601` is the one error FULL can add, and it is spec section 11's own
-//! rule: "Adding draw beyond supply is an error unless 'allow dormant beacons'
-//! is set." An existing shortfall is "only a warning". Everything else here is
-//! advice.
+//! `E0601` is one of the two errors FULL can add, and it is spec section 11's
+//! own rule: "Adding draw beyond supply is an error unless 'allow dormant
+//! beacons' is set." The other, from S2, is `E0603`: the seal the Ledger
+//! cannot price, which `submit_plan` refuses after the verifier (decisions-log
+//! item 135 (2) (d)), said here so the editor shows it first. An existing
+//! shortfall is "only a warning". Everything else here is advice.
 //!
-//! The order is fixed — power, then money, then the schedule — and each
+//! The order is fixed — power, then money, then the seal's price, then the
+//! schedule — and each
 //! points at the **first** step that crosses its line, so a report is the same
 //! bytes every time and the editor can underline the step where the route
 //! stops being affordable, powered or on time.
@@ -112,6 +116,7 @@ pub(crate) fn run(playbook: &Playbook, input: &Input<'_>, out: &mut Builder) {
         return;
     };
     economy(body, input, out);
+    seal_price(playbook, body, input, out);
     schedule(body, input, out);
 }
 
@@ -201,6 +206,69 @@ fn economy(body: &Declarative, input: &Input<'_>, out: &mut Builder) {
                 .arg("available", dollars(treasury)),
         );
     }
+}
+
+/// `E0603`: a seal the Ledger cannot price (S2-14; decisions-log item 135 (2)
+/// (d)).
+///
+/// `submit_plan`'s third door prices every seal with
+/// [`projection::project`] against the seat's frozen economy, and refuses one
+/// whose `$` or `kW` leaves the sim's types or whose spend is past the
+/// forecast's `int32` (`Surface::seal_commitment`). This asks the same
+/// question the same way, over the same function and the same economy, so the
+/// editor shows before submit what the door would refuse; the stage's own
+/// checks above sum in [`Tally`] and never meet the overflow, which is why
+/// this is a check of its own. The limit is the wire's, a technical one.
+///
+/// A blueprint the rules table does not price ends the question: the sim's
+/// compile, the door before this one, refuses it, and so does `E0010`.
+///
+/// It points at the first route step whose running total crosses the line,
+/// found in [`Tally`] by the same sums [`projection::project`] narrows.
+fn seal_price(playbook: &Playbook, body: &Declarative, input: &Input<'_>, out: &mut Builder) {
+    let scope = input.scope();
+    let economy = scope.economy();
+    let prices = input.prices();
+    let int32 = i128::from(i32::MAX);
+    let refused = match projection::project(playbook, economy, prices) {
+        Ok(found) => i128::from(found.spend.raw()) > int32,
+        Err(projection::ProjectionError::Overflow) => true,
+        Err(projection::ProjectionError::UnknownBlueprint(_)) => return,
+    };
+    if !refused {
+        return;
+    }
+    // The door's lines, in the projection's order: spend past `int32` (which
+    // is inside the sim's `$` type, so it is the line spend crosses first),
+    // draw past the sim's `kW` type, and the headroom left past it.
+    let headroom = i128::from(economy.supply.raw()).saturating_sub(i128::from(economy.draw.raw()));
+    let floor = i128::from(i32::MIN);
+    let mut upper = Tally::ZERO;
+    let mut first: Option<String> = None;
+    for (index, entry) in body.route.iter().enumerate() {
+        let Ok(orders) = projection::step_orders(entry, prices, scope) else {
+            break;
+        };
+        upper = upper.plus(orders.upper());
+        if upper.spend > int32 || upper.draw > int32 || headroom.saturating_sub(upper.draw) < floor
+        {
+            first = Some(pointer::at(ROUTE, index));
+            break;
+        }
+    }
+    // The running sums are the projection's own, so a refused projection has
+    // a first step; the route itself is named only if that ever stops being
+    // so, which would be a bug in this function rather than in the playbook,
+    // and the diagnostic still says the seal is refused.
+    let at = first.unwrap_or_else(|| ROUTE.to_owned());
+    out.emit(
+        Diag::new("E0603", at)
+            .arg(
+                "found",
+                format!("{} and {} kW", dollars(upper.spend), upper.draw),
+            )
+            .arg("most", format!("{} and {int32} kW", dollars(int32))),
+    );
 }
 
 /// `options.allow_dormant_beacons`, as a pointer.

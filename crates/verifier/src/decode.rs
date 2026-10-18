@@ -167,8 +167,11 @@ pub(crate) fn run(bytes: &[u8], out: &mut Builder) -> Option<Playbook> {
     let playbook: Playbook = match json::decode_json(&value) {
         Ok(playbook) => playbook,
         Err(error) => {
-            let name = pointer::last_token(&error.pointer).unwrap_or_default();
-            if names_an_unknown_field(&error.message, &name) {
+            // A pointer with no last token is the document itself, which no
+            // unknown field can be: that error is `E0001`'s.
+            let unknown = pointer::last_token(&error.pointer)
+                .filter(|name| names_an_unknown_field(&error.message, name));
+            if let Some(name) = unknown {
                 out.emit(
                     Diag::new("E0002", error.pointer.clone())
                         .arg("field", &name)
@@ -189,6 +192,7 @@ pub(crate) fn run(bytes: &[u8], out: &mut Builder) -> Option<Playbook> {
     check_kind(&playbook, out);
     check_author(&playbook, out);
     check_fingerprint(&playbook, out);
+    crate::enums::run(&playbook, out);
     Some(playbook)
 }
 
@@ -236,15 +240,22 @@ fn scan_reserved(value: &Json, at: &str, found: &mut Vec<(String, String)>) {
 /// useful sentence and "`probe_directions` is not a field" is not.
 fn check_version(playbook: &Playbook, out: &mut Builder) {
     let (major, minor) = SCHEMA_VERSION;
-    let found = playbook
-        .schema_version
-        .unwrap_or(SchemaVersion { major: 0, minor: 0 });
-    if found.major == major && found.minor <= minor {
-        return;
-    }
+    // A file that names no version is said to name none, never read as 0.0.
+    let found = match playbook.schema_version {
+        Some(SchemaVersion {
+            major: found_major,
+            minor: found_minor,
+        }) => {
+            if found_major == major && found_minor <= minor {
+                return;
+            }
+            format!("{found_major}.{found_minor}")
+        }
+        None => "missing".to_owned(),
+    };
     out.emit(
         Diag::new("E0004", "/schema_version")
-            .arg("found", format!("{}.{}", found.major, found.minor))
+            .arg("found", found)
             .arg("supported", format!("{major}.{minor}"))
             .fix(
                 format!("Set the schema version to {major}.{minor}"),
@@ -256,8 +267,10 @@ fn check_version(playbook: &Playbook, out: &mut Builder) {
 
 /// `kind` is the envelope's kind tag and an unset one is an error, never a
 /// default (decisions-log item 76).
+///
+/// Read raw: a number `Kind` does not name is `E0018`'s, not an unset tag.
 fn check_kind(playbook: &Playbook, out: &mut Builder) {
-    if playbook.kind() != Kind::Unspecified {
+    if !matches!(Kind::try_from(playbook.kind), Ok(Kind::Unspecified)) {
         return;
     }
     out.emit(Diag::new("E0005", "/kind").fix(
@@ -277,7 +290,11 @@ fn check_author(playbook: &Playbook, out: &mut Builder) {
         // A missing `meta` block is `E0101`, which the structure stage raises.
         return;
     };
-    match meta.author_kind() {
+    // Read raw: a number `AuthorKind` does not name is `E0018`'s.
+    let Ok(author) = AuthorKind::try_from(meta.author_kind) else {
+        return;
+    };
+    match author {
         AuthorKind::Script => out.emit(Diag::new("E0006", "/meta/author_kind").fix(
             "Mark the file as written by a HUMAN",
             patch_replace("/meta/author_kind", &Json::String("HUMAN".to_owned())),

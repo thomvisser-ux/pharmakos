@@ -9,10 +9,10 @@
       "beginner": "Give this a name, so the rest of the playbook can refer to it."
     }
   ],
-  "report_hash": "MoJK70f/+Zg=",
+  "report_hash": "X9KvGbCczvo=",
   "rules_hash": "sfLu8OdcWuQ=",
   "plan_fingerprint": "LNbqhPaKQ0s=",
-  "verifier_version": "0.1.0-s1",
+  "verifier_version": "0.1.0-s2",
   "size_units": 1,
   "size_budget": 128
 }

@@ -12,10 +12,10 @@
       "beginner": "Only a beacon told to build takes a build target."
     }
   ],
-  "report_hash": "QHL9FBkVZB8=",
+  "report_hash": "2NSlbbUebB0=",
   "rules_hash": "sfLu8OdcWuQ=",
   "plan_fingerprint": "153tQY0o/Lw=",
-  "verifier_version": "0.1.0-s1",
+  "verifier_version": "0.1.0-s2",
   "size_units": 2,
   "size_budget": 128
 }

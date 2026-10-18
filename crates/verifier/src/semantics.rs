@@ -191,15 +191,15 @@ impl Visit for Semantics<'_> {
         if self.in_bounds(voxel) {
             return;
         }
-        let size = self.limits.map_size();
+        let [sx, sy, sz] = self.limits.map_size();
         self.out.emit(
             Diag::new("E0402", at)
                 .arg("x", voxel.x)
                 .arg("y", voxel.y)
                 .arg("z", voxel.z)
-                .arg("sx", size.first().copied().unwrap_or(0))
-                .arg("sy", size.get(1).copied().unwrap_or(0))
-                .arg("sz", size.get(2).copied().unwrap_or(0))
+                .arg("sx", sx)
+                .arg("sy", sy)
+                .arg("sz", sz)
                 .map_ref(*voxel),
         );
     }
@@ -288,6 +288,9 @@ impl Visit for Semantics<'_> {
                 pointer::child(&pointer::child(at, "mine"), "seam_choice"),
             ));
         }
+        if let Some(mandate_settings::Mandate::Survey(survey)) = settings.mandate.as_ref() {
+            self.scouts(&pointer::child(at, "survey"), survey.scout_count);
+        }
         self.percent(at, "retreat_hp_pct", settings.retreat_hp_pct);
         if let Some(mandate_settings::Mandate::Build(build)) = settings.mandate.as_ref() {
             self.percent(
@@ -373,6 +376,29 @@ impl Semantics<'_> {
         }
     }
 
+    /// S2-15: a `scout_count` past the byte a beacon's column holds, which
+    /// the sim's compile refuses (`PlanError::ScoutsOutOfRange`). The most is
+    /// the column's type, `u8`, and not a rules row: it is the sim's storage,
+    /// a technical limit and not a balance cap, so it is read from the type
+    /// rather than written down a second time.
+    fn scouts(&mut self, at: &str, found: u32) {
+        let most = u32::from(u8::MAX);
+        if found <= most {
+            return;
+        }
+        let here = pointer::child(at, "scout_count");
+        self.out.emit(
+            Diag::new("E0508", here.clone())
+                .arg("found", found)
+                .arg("most", most)
+                .fix(
+                    "Ask for as many scouts as a beacon holds",
+                    patch_replace(&here, &number(most)),
+                    Applicability::MaybeIncorrect,
+                ),
+        );
+    }
+
     /// "Integer percent, 0-100."
     fn percent(&mut self, at: &str, field: &'static str, found: u32) {
         if found <= 100 {
@@ -411,13 +437,9 @@ impl Semantics<'_> {
 
     /// Whether a voxel is a place on this map at all.
     fn in_bounds(&self, voxel: &Voxel) -> bool {
-        let size = self.limits.map_size();
-        let within = |value: i32, extent: Option<i32>| {
-            extent.is_some_and(|extent| value >= 0 && value < extent)
-        };
-        within(voxel.x, size.first().copied())
-            && within(voxel.y, size.get(1).copied())
-            && within(voxel.z, size.get(2).copied())
+        let [sx, sy, sz] = self.limits.map_size();
+        let within = |value: i32, extent: i32| value >= 0 && value < extent;
+        within(voxel.x, sx) && within(voxel.y, sy) && within(voxel.z, sz)
     }
 }
 

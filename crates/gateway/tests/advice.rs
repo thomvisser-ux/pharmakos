@@ -915,11 +915,21 @@ fn the_advisor_leaves_the_humans_view_feed_as_it_found_it() {
 fn an_advised_safe_playbook_that_does_not_qualify_is_replaced_by_the_fallback_and_audited() {
     // A negative hold: the verifier's E0109.
     let refused = SAFE_PLAYBOOK.replace("\"ms\": 8000", "\"ms\": -1");
-    // A queued capability structure: the verifier qualifies it and this build
-    // cannot execute it (S4's).
+    // More handlers than the interpreter's ceiling: the verifier qualifies it
+    // and this build cannot execute it. (A queued capability structure was
+    // this case until S2's `vfy1` gave it a verifier code, E0009.)
+    let mut extra = String::new();
+    for index in 0..64 {
+        extra.push_str("{\"id\": \"x");
+        extra.push_str(&index.to_string());
+        extra.push_str(
+            "\", \"when\": {\"cmdr_hp_pct\": {\"cmp\": \"LE\", \"pct\": 40}}, \"body\": [], \
+             \"resume\": \"CONTINUE\", \"cooldown_ms\": 30000, \"max_fires\": 1},\n",
+        );
+    }
     let uncompilable = SAFE_PLAYBOOK.replace(
-        "{\"label\": \"to_safety\", \"move\": {\"to\": {\"safest\": {}}, \"pace\": \"AVOID_KNOWN_THREATS\"}}",
-        "{\"label\": \"q\", \"interface\": {\"beacon\": {\"safest\": {}}, \"rows\": [{\"queue_structure\": {\"blueprint_id\": \"radio_mast\"}}]}, \"timeout_ms\": 30000}",
+        "    \"handlers\": [\n",
+        &format!("    \"handlers\": [\n{extra}"),
     );
     assert_ne!(
         uncompilable, SAFE_PLAYBOOK,

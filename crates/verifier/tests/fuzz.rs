@@ -110,6 +110,13 @@ const NAMES: &[&str] = &[
     "s0", "s1", "s2", "h1", "b_01", "b_02", "e_01", "nowhere", "",
 ];
 
+/// The codes for what the sim refuses at the seal (E0009 to E0017) and for an
+/// enum number this build does not name (E0018), in code order: the ten
+/// thousand runs reach every one.
+const REFUSALS: [&str; 10] = [
+    "E0009", "E0010", "E0011", "E0012", "E0013", "E0014", "E0015", "E0016", "E0017", "E0018",
+];
+
 /// Words `gp.v1` holds back, so the never-strip path is exercised.
 const HELD: &[&str] = &["set_flag", "branch", "repeat", "dispatch", "team_id"];
 
@@ -117,7 +124,10 @@ struct Shape {
     rng: StreamRng,
     /// When set, the generator damages nothing: every required block is there,
     /// every name is unique, every duration is positive, every voxel is on the
-    /// map and every reference resolves.
+    /// map, every reference resolves, and it writes no construct the sim
+    /// refuses at the seal (E0009 to E0017: no queued structure, no Build
+    /// target but a Generator on a voxel, no S2 or S3 selector, predicate or
+    /// settings) and no enum number this build does not name (E0018).
     ///
     /// A generator that only ever produces rejected files exercises the decode
     /// stage and nothing else, and a green run over it would mean nothing — the
@@ -216,6 +226,13 @@ impl Shape {
             } else {
                 Json::Object(vec![("safest".to_owned(), Json::Object(Vec::new()))])
             };
+        }
+        // `most_threatened` (E0014) is refused until S2's threat model.
+        if self.rarely(8) {
+            return Json::Object(vec![(
+                "most_threatened".to_owned(),
+                Json::Object(Vec::new()),
+            )]);
         }
         match self.below(4) {
             0 => Json::Object(vec![("beacon_id".to_owned(), Json::String(self.name()))]),
@@ -333,7 +350,7 @@ impl Shape {
         }
         // A clean run keeps to the three predicates that need no reference to
         // resolve; the rest are what the resolve stage is for.
-        let families = if self.clean { 3 } else { 6 };
+        let families = if self.clean { 3 } else { 7 };
         match self.below(families) {
             0 => {
                 let pct = if self.clean {
@@ -369,6 +386,17 @@ impl Shape {
                 "rule_fired".to_owned(),
                 Json::Object(vec![("handler_id".to_owned(), Json::String(self.name()))]),
             )]),
+            6 => {
+                // Refused until S2's combat (E0017).
+                let beacon = self.beacon_ref();
+                Json::Object(vec![(
+                    "beacon_under_attack".to_owned(),
+                    Json::Object(vec![
+                        ("beacon".to_owned(), beacon),
+                        ("within_ms".to_owned(), Json::Number("5000".to_owned())),
+                    ]),
+                )])
+            }
             _ => {
                 let beacon = self.beacon_ref();
                 let compare = self.int_compare();
@@ -451,10 +479,12 @@ impl Shape {
         match self.below(kinds) {
             0 => {
                 let place = self.location();
-                fields.push((
-                    "move".to_owned(),
-                    Json::Object(vec![("to".to_owned(), place)]),
-                ));
+                let mut walk = vec![("to".to_owned(), place)];
+                // A number `Pace` does not name (E0018), never read as unset.
+                if self.damage(6) {
+                    walk.push(("pace".to_owned(), Json::Number("9".to_owned())));
+                }
+                fields.push(("move".to_owned(), Json::Object(walk)));
             }
             1 => {
                 // One site in three describes a feature instead, so the lint
@@ -549,6 +579,11 @@ impl Shape {
                     Json::Object(vec![("target".to_owned(), target)]),
                 )])
             }
+            // A queued structure is refused until S4 (E0009).
+            _ if self.clean => Json::Object(vec![(
+                "set_priority".to_owned(),
+                Json::String("NORMAL".to_owned()),
+            )]),
             _ => {
                 let blueprint = self.blueprint();
                 Json::Object(vec![(
@@ -563,6 +598,12 @@ impl Shape {
     /// holds: Mine with nothing set, Survey with a scout count, or Build with
     /// one to three targets.
     fn mandate(&mut self) -> (String, Json) {
+        // Defend and Attack settings (E0012, E0013) are refused until S2's
+        // mandates land, except an empty arm in a switch.
+        if self.damage(6) {
+            let arm = if self.rarely(2) { "defend" } else { "attack" };
+            return (arm.to_owned(), Json::Object(Vec::new()));
+        }
         match self.below(3) {
             0 => ("mine".to_owned(), Json::Object(Vec::new())),
             1 => {
@@ -605,6 +646,10 @@ impl Shape {
             return Json::String(UNPRICED.to_owned());
         }
         let index = usize::try_from(self.below(3)).unwrap_or(0);
+        // Only the Generator is buildable before S4 (E0010).
+        if self.clean {
+            return Json::String("generator".to_owned());
+        }
         Json::String(
             ["generator", "mortar", "survey_post"]
                 .get(index)
@@ -616,13 +661,15 @@ impl Shape {
 
     fn build_target(&mut self) -> Json {
         let blueprint = self.blueprint();
-        let anchor = self.voxel();
+        // A target anchored on a beacon selector (E0011) is refused until S3.
+        let anchor = if self.damage(6) {
+            Json::Object(vec![("beacon_anchor".to_owned(), self.beacon_ref())])
+        } else {
+            Json::Object(vec![("voxel".to_owned(), self.voxel())])
+        };
         Json::Object(vec![
             ("blueprint_id".to_owned(), blueprint),
-            (
-                "anchor".to_owned(),
-                Json::Object(vec![("voxel".to_owned(), anchor)]),
-            ),
+            ("anchor".to_owned(), anchor),
         ])
     }
 
@@ -902,10 +949,16 @@ fn check(index: u32, rules: &RulesTable, scope: &Scope, snapshot: &[u8]) -> (Ver
     // `E0601`, or `W0603` where the playbook accepts the shortfall, however
     // large the count.
     let mut applied = false;
+    // The codes after which no later stage runs: the file did not decode
+    // (E0001), named a field the schema does not have (E0002) or a word held
+    // back (E0003). The rest of the decode family (E0004 to E0008, and E0018,
+    // an enum number this build does not name) let the stages run, so the
+    // property below holds over them too; the constructs E0009 to E0017 are
+    // structure's.
     let decoded = !report
         .diagnostics
         .iter()
-        .any(|diagnostic| diagnostic.code.starts_with("E000"));
+        .any(|diagnostic| ["E0001", "E0002", "E0003"].contains(&diagnostic.code.as_str()));
     if decoded && let Ok(playbook) = json::decode::<Playbook>(&text) {
         let per_unit = i128::from(
             rules
@@ -1026,6 +1079,7 @@ fn ten_thousand_playbooks_come_back_as_reports() {
     let snapshot = snapshot();
     let mut lints: Vec<String> = Vec::new();
     let mut estimates: Vec<String> = Vec::new();
+    let mut refusals: Vec<String> = Vec::new();
     let mut applied: u32 = 0;
     for index in 0..RUNS {
         let (report, held) = check(index, &rules, &scope, &snapshot);
@@ -1034,10 +1088,14 @@ fn ten_thousand_playbooks_come_back_as_reports() {
             let code = diagnostic.code;
             let list = if ["W0704", "W0705", "W0706"].contains(&code.as_str()) {
                 &mut lints
-            } else if ["E0601", "W0602", "W0603", "W0604", "W0701", "I0001"]
-                .contains(&code.as_str())
+            } else if [
+                "E0601", "E0603", "W0602", "W0603", "W0604", "W0701", "I0001",
+            ]
+            .contains(&code.as_str())
             {
                 &mut estimates
+            } else if REFUSALS.contains(&code.as_str()) {
+                &mut refusals
             } else {
                 continue;
             };
@@ -1056,9 +1114,15 @@ fn ten_thousand_playbooks_come_back_as_reports() {
     estimates.sort();
     assert_eq!(
         estimates,
-        ["E0601", "I0001", "W0602", "W0603", "W0604", "W0701"],
+        [
+            "E0601", "E0603", "I0001", "W0602", "W0603", "W0604", "W0701"
+        ],
         "the estimate codes the run reached"
     );
+    // Every construct the sim refuses at the seal, and an enum number this
+    // build does not name, is reached (S2's `vfy1`).
+    refusals.sort();
+    assert_eq!(refusals, REFUSALS, "the refusals the run reached");
     // Every emitting branch of targeting's three lints is reached, so a green
     // run says something about each of them.
     lints.sort();

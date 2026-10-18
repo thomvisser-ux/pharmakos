@@ -1,0 +1,19 @@
+{
+  "depth": "FULL",
+  "diagnostics": [
+    {
+      "code": "E0017",
+      "severity": "ERROR",
+      "path": "/declarative/route/0/wait_until/condition/beacon_under_attack",
+      "message": "predicate `beacon_under_attack` has no effect until S2's combat gives a beacon a damage history to ask about; it is refused rather than read as true or false.",
+      "beginner": "Asking whether a beacon is under attack comes with combat. Until then the question has no answer, so it cannot be asked."
+    }
+  ],
+  "report_hash": "YLb9PU7QoCQ=",
+  "rules_hash": "sfLu8OdcWuQ=",
+  "plan_fingerprint": "uMJMQrYvGc0=",
+  "verifier_version": "0.1.0-s2",
+  "size_units": 1,
+  "size_budget": 128
+}
+

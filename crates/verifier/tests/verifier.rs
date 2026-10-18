@@ -560,13 +560,14 @@ fn nothing_outside_the_catalogue_is_ever_emitted() {
 
 #[test]
 fn full_finds_what_quick_finds() {
-    // Item 82, in its S1 form. FULL runs QUICK's four stages first and then
+    // Item 82, in its S2 form. FULL runs QUICK's four stages first and then
     // estimate and lint, and appends to the same report, so QUICK's diagnostics
     // are FULL's first ones, in the same order. What FULL adds comes only from
-    // the two FULL stages, and of it exactly one code refuses a playbook:
-    // `E0601`, added draw beyond supply without `allow_dormant_beacons` (spec
-    // section 11). So FULL qualifies a playbook exactly when QUICK does and
-    // the estimate stage added no `E0601`.
+    // the two FULL stages, and of it two codes refuse a playbook: `E0601`,
+    // added draw beyond supply without `allow_dormant_beacons` (spec section
+    // 11), and `E0603`, a seal the Ledger cannot price (item 135 (2) (d)). So
+    // FULL qualifies a playbook exactly when QUICK does and the estimate stage
+    // added neither.
     let mut full_added_something = false;
     let mut full_refused_something = false;
     for case in cases() {
@@ -588,9 +589,11 @@ fn full_finds_what_quick_finds() {
                 extra.code
             );
             if extra.severity == i32::from(Severity::Error) {
-                assert_eq!(
-                    extra.code, "E0601",
-                    "{case}: FULL added an error other than added draw beyond supply"
+                assert!(
+                    extra.code == "E0601" || extra.code == "E0603",
+                    "{case}: FULL added `{}`, an error other than added draw beyond supply or a \
+                     seal the Ledger cannot price",
+                    extra.code
                 );
                 refused = true;
             }

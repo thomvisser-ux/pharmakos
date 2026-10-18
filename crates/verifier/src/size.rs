@@ -105,6 +105,13 @@ fn build_units(build: &BuildSettings) -> u32 {
 }
 
 /// A list length as a unit count.
+///
+/// Saturating, and the verdict is exact anyway: `size_units` is compared with
+/// `verifier.size_budget_units`, a `u32` row, so a count at `u32::MAX` is past
+/// every budget the table can hold and `E0110` fires exactly as the true count
+/// would make it. Inside [`crate::verify`] it cannot be reached: a list's
+/// elements are each at least two bytes of the playbook, and an
+/// [`Input`](crate::Input) holds at most `u32::MAX` bytes.
 fn count(len: usize) -> u32 {
     u32::try_from(len).unwrap_or(u32::MAX)
 }
