@@ -61,6 +61,19 @@ use crate::Json;
 /// The suffix every scenario file carries. Also how the step finds them.
 pub(crate) const SUFFIX: &str = ".scenario.jsonc";
 
+/// Where the nightly adversarial arms live, as path components from the
+/// workspace root (S2's plan, task `night`, and its E20).
+///
+/// An arm is an ordinary scenario file read by two rules of its own, taken
+/// from where it lives because the format gains no key for the nightlies: it
+/// carries **no `hash_chain_equals`** (a nightly run replaces its map seed, so
+/// a chain for the file's own seed would pin a match the nightly never plays),
+/// and it seats exactly one `playbook` seat and one `builtin` seat. The
+/// `scenario` step validates an arm and does not play it, and the package's
+/// replay never replays one: both take [`collect_played`]. `gamectl`'s reader
+/// holds the same two rules (`crates/gamectl/src/scenario.rs`, `NIGHTLY_DIR`).
+pub(crate) const NIGHTLY_DIR: [&str; 2] = ["scenarios", "nightly"];
+
 /// The value of the mandatory `format` key. A new format is a new string, so an
 /// old runner refuses a new file rather than half-understanding it.
 pub(crate) const FORMAT: &str = "pharmakos.scenario.v1";
@@ -173,6 +186,9 @@ pub(crate) struct Scenario {
     pub(crate) seats: usize,
     /// Assertion count.
     pub(crate) assertions: usize,
+    /// Whether it is a nightly arm ([`NIGHTLY_DIR`]): validated, never played
+    /// against a golden.
+    pub(crate) nightly: bool,
 }
 
 /// One problem with one place in the file.
@@ -202,6 +218,30 @@ pub(crate) fn collect(root: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(files)
 }
 
+/// Every scenario file a run plays against its committed golden: [`collect`]
+/// less the nightly arms under [`NIGHTLY_DIR`], which carry no chain (E20).
+/// The `scenario` step plays these, and `cargo xtask package`'s replay
+/// replays these, so neither plays an arm as though it were a committed
+/// scenario.
+pub(crate) fn collect_played(root: &Path) -> Result<Vec<PathBuf>, String> {
+    let mut files = collect(root)?;
+    files.retain(|path| match path.strip_prefix(root) {
+        Ok(relative) => !is_nightly(relative),
+        Err(_) => true,
+    });
+    Ok(files)
+}
+
+/// Whether a path from the workspace root lies under [`NIGHTLY_DIR`].
+pub(crate) fn is_nightly(relative: &Path) -> bool {
+    let mut parts = relative
+        .components()
+        .filter(|part| !matches!(part, std::path::Component::CurDir));
+    NIGHTLY_DIR
+        .iter()
+        .all(|wanted| parts.next().is_some_and(|part| part.as_os_str() == *wanted))
+}
+
 /// Reads and validates one scenario file. Every problem in the file is
 /// reported, not just the first: a scenario is usually written by hand, and
 /// five round trips to fix five typos is five round trips.
@@ -223,6 +263,7 @@ pub(crate) fn validate(root: &Path, path: &Path) -> Result<Scenario, String> {
         )
     })?;
 
+    let nightly = is_nightly(&relative);
     let mut name = String::new();
     let mut rules = DEFAULT_RULES.to_owned();
     let mut seats = 0;
@@ -235,9 +276,12 @@ pub(crate) fn validate(root: &Path, path: &Path) -> Result<Scenario, String> {
         check_map(&json, &mut problems);
         rules = check_rules(root, &json, &mut problems);
         seats = check_seats(root, &json, &mut problems);
+        if nightly {
+            check_arm_seats(&json, &mut problems);
+        }
         let segments = check_segments(&json, &mut problems);
         check_match_settings(&json, segments, &mut problems);
-        assertions = check_assertions(root, &json, &mut problems);
+        assertions = check_assertions(root, &json, nightly, &mut problems);
     } else {
         problems.push(Problem::new("", "a scenario file is a JSON object"));
     }
@@ -249,6 +293,7 @@ pub(crate) fn validate(root: &Path, path: &Path) -> Result<Scenario, String> {
             rules,
             seats,
             assertions,
+            nightly,
         });
     }
 
@@ -565,7 +610,29 @@ fn check_match_settings(json: &Json, segments: usize, problems: &mut Vec<Problem
     }
 }
 
-fn check_assertions(root: &Path, json: &Json, problems: &mut Vec<Problem>) -> usize {
+/// A nightly arm seats one `playbook` seat and one `builtin` seat, in either
+/// order (E20; S2's plan, decision 29).
+fn check_arm_seats(json: &Json, problems: &mut Vec<Problem>) {
+    let Some(Json::Array(seats)) = json.get("seats") else {
+        return;
+    };
+    let kind_count = |wanted: &str| {
+        seats
+            .iter()
+            .filter(|seat| seat.get("kind").and_then(Json::as_str) == Some(wanted))
+            .count()
+    };
+    if seats.len() != 2 || kind_count("playbook") != 1 || kind_count("builtin") != 1 {
+        problems.push(Problem::new(
+            "/seats",
+            "a nightly arm seats exactly two seats: one `playbook` seat, the arm, and one \
+             `builtin` seat, Easy, which a run over a seed file alternates between seat 0 and \
+             seat 1 (S2's plan, decision 29)",
+        ));
+    }
+}
+
+fn check_assertions(root: &Path, json: &Json, nightly: bool, problems: &mut Vec<Problem>) -> usize {
     let Some(Json::Array(assertions)) = json.get("assertions") else {
         problems.push(Problem::new(
             "/assertions",
@@ -607,6 +674,12 @@ fn check_assertions(root: &Path, json: &Json, problems: &mut Vec<Problem>) -> us
                 on_events = true;
                 check_event_fired(assertion, &base, problems);
             }
+            "hash_chain_equals" if nightly => problems.push(Problem::new(
+                &format!("{base}/assert"),
+                "a nightly arm carries no hash chain: a run over a seed file replaces its map \
+                 seed, so a chain for the file's own seed would pin a match the nightly never \
+                 plays (S2's plan, E20)",
+            )),
             "hash_chain_equals" => {
                 on_hashes = true;
                 check_hash_chain_equals(root, assertion, &base, problems);
@@ -621,7 +694,14 @@ fn check_assertions(root: &Path, json: &Json, problems: &mut Vec<Problem>) -> us
         }
     }
 
-    if !assertions.is_empty() && (!on_events || !on_hashes) {
+    if nightly && !assertions.is_empty() && !on_events {
+        problems.push(Problem::new(
+            "/assertions",
+            "a nightly arm asserts on events: its run on its own seed checks them, and it carries \
+             no hash chain (S2's plan, E20)",
+        ));
+    }
+    if !nightly && !assertions.is_empty() && (!on_events || !on_hashes) {
         problems.push(Problem::new(
             "/assertions",
             "a scenario asserts on events AND on the hash chain (AGENTS.md section 10 item 4): \
@@ -1260,6 +1340,63 @@ mod tests {
         let report = validate(&dir, &path).expect_err("rejected");
         assert!(report.contains("/seats/0/seat"), "{report}");
         assert!(report.contains("lowest seat id"), "{report}");
+    }
+
+    /// A file under `scenarios/nightly/` in the scratch tree.
+    fn write_arm(dir: &Path, body: &str) -> PathBuf {
+        let arms = dir.join("scenarios").join("nightly");
+        fs::create_dir_all(&arms).expect("temp dir");
+        let path = arms.join("arm.scenario.jsonc");
+        fs::write(&path, body).expect("write arm");
+        path
+    }
+
+    /// An arm: [`GOOD`] with its `safe` seat made `builtin` and its chain
+    /// assertion dropped.
+    fn arm_body() -> String {
+        GOOD.replace("\"kind\": \"safe\"", "\"kind\": \"builtin\"")
+            .replace(
+                "    { \"assert\": \"hash_chain_equals\", \"golden\": \"tests/golden/scenarios/smoke/expected.hashes.txt\" }\n",
+                "",
+            )
+            .replace("\"by_tick\": 2400 },", "\"by_tick\": 2400 }")
+    }
+
+    #[test]
+    fn an_arm_validates_without_a_chain_and_is_not_played() {
+        let dir = scratch("arm");
+        let path = write_arm(&dir, &arm_body());
+        let arm = validate(&dir, &path).expect("an arm needs no chain");
+        assert!(arm.nightly);
+        write(&dir, GOOD);
+        let all = collect(&dir).expect("listed");
+        let played = collect_played(&dir).expect("listed");
+        assert_eq!(all.len(), 2, "{all:?}");
+        assert_eq!(
+            played,
+            vec![dir.join("scenarios").join("case.scenario.jsonc")],
+            "the arm is validated and never played against a golden"
+        );
+    }
+
+    #[test]
+    fn an_arm_with_a_chain_or_the_wrong_seats_is_refused() {
+        let dir = scratch("arm-chained");
+        let path = write_arm(
+            &dir,
+            &GOOD.replace("\"kind\": \"safe\"", "\"kind\": \"builtin\""),
+        );
+        let report = validate(&dir, &path).expect_err("an arm carries no chain");
+        assert!(report.contains("/assertions/1/assert"), "{report}");
+        assert!(report.contains("E20"), "{report}");
+
+        let dir = scratch("arm-safe");
+        let path = write_arm(
+            &dir,
+            &arm_body().replace("\"kind\": \"builtin\"", "\"kind\": \"safe\""),
+        );
+        let report = validate(&dir, &path).expect_err("an arm plays the built-in operator");
+        assert!(report.contains("decision 29"), "{report}");
     }
 
     #[test]
