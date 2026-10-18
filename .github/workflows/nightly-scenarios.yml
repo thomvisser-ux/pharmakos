@@ -55,8 +55,10 @@ on:
 permissions:
   contents: read
 
-# One run per ref at a time. A scheduled run and a manual one on `main` share the group,
-# and neither cancels the other: a night's verdict is never thrown away for a newer one.
+# On `main` each commit has a group of its own (the sha), so runs share a group only on the
+# same commit there, and none is cancelled in progress; elsewhere a newer run on a branch
+# cancels the stale one. GitHub keeps one running and one pending run per group, so a third
+# run queued on the same commit can still cancel the pending one (ci.yml's header).
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
@@ -217,11 +219,23 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p target/g4
-          # The seed file's format (scenarios/nightly/README.md): a `#` starts a comment,
-          # spaces around a seed and blank lines are skipped. gamectl's decoder is the one
-          # that refuses a malformed file; this reads the committed set, which the
-          # per-PR test decodes (crates/gamectl/tests/seeds.rs).
-          seeds=$(sed -e 's/#.*//' -e 's/^ *//' -e 's/ *$//' "$SEED_FILE" | grep -v '^$' | head -n 10)
+          # The seed file's format (scenarios/nightly/README.md), held as strictly as
+          # gamectl's typed decoder holds it, so a file the decoder refuses fails here too:
+          # a `#` starts a comment, spaces around a seed and blank lines are skipped, every
+          # other line is `0x` and exactly sixteen lowercase hex digits (a carriage return
+          # fails the match), and no seed is listed twice.
+          all=$(sed -e 's/#.*//' -e 's/^ *//' -e 's/ *$//' "$SEED_FILE" | grep -v '^$' || true)
+          bad=$(printf '%s\n' "$all" | grep -v '^$' | grep -Ev '^0x[0-9a-f]{16}$' || true)
+          if [ -n "$bad" ]; then
+            echo "::error::${SEED_FILE} holds a line that is not a seed: $(printf '%s' "$bad" | head -n 1)"
+            exit 1
+          fi
+          repeated=$(printf '%s\n' "$all" | grep -v '^$' | sort | uniq -d || true)
+          if [ -n "$repeated" ]; then
+            echo "::error::${SEED_FILE} lists a seed twice: $(printf '%s' "$repeated" | head -n 1)"
+            exit 1
+          fi
+          seeds=$(printf '%s\n' "$all" | grep -v '^$' | head -n 10 || true)
           count=$(printf '%s\n' "$seeds" | grep -c . || true)
           if [ "$count" -ne 10 ]; then
             echo "::error::G4 plays ten seeds and ${SEED_FILE} lists ${count}"
@@ -231,6 +245,8 @@ jobs:
             cargo run --locked --quiet --profile release-checked --package pharmakos-sim \
               --bin determinism -- --ticks 9600 --seed "$seed" --out "target/g4/${seed}.hashes.txt"
             lines=$(wc -l < "target/g4/${seed}.hashes.txt" | tr -d ' ')
+            # A match that ended early writes a shorter chain, which is not G4's bar.
+            [ "$lines" -eq 9600 ] || { echo "::error::${seed} wrote ${lines} ticks, not 9600"; exit 1; }
             echo "${seed}: ${lines} ticks"
           done
 
@@ -248,6 +264,7 @@ jobs:
     needs: g4
     if: ${{ !cancelled() && (vars.NIGHTLY_SCENARIOS_ENABLED == 'true' || inputs.force) }}
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Download the three legs' chains
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
