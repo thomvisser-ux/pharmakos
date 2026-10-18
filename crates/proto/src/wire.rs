@@ -76,6 +76,12 @@ pub(crate) enum WireError {
     BadWireType,
     /// Field number zero, or a number past the Protobuf maximum.
     BadFieldNumber,
+    /// A number that does not fit the type it is declared as: a descriptor
+    /// `int32` wider than 32 bits, a reserved range that ends before it
+    /// starts, or a length past 64 bits.
+    OutOfRange,
+    /// A descriptor string that is not UTF-8.
+    NotUtf8,
 }
 
 /// Reads fields out of a buffer, one at a time, in the order they appear.
@@ -172,9 +178,10 @@ impl Writer {
 
     pub(crate) fn varint(&mut self, mut value: u64) {
         loop {
-            // `value & 0x7f` is seven bits, so the conversion cannot fail; the
-            // fallback keeps the lint set happy without an unwrap.
-            let low = u8::try_from(value & 0x7f).unwrap_or(0);
+            // The low seven bits, read off the lowest byte: no conversion, so
+            // nothing can fail.
+            let [lowest, ..] = value.to_le_bytes();
+            let low = lowest & 0x7f;
             value >>= 7;
             if value == 0 {
                 self.buf.push(low);
@@ -184,8 +191,12 @@ impl Writer {
         }
     }
 
+    /// Every number written here is a field number of the parsed descriptor,
+    /// which refuses one outside 1 to 536 870 911
+    /// ([`crate::descriptor`]'s `parse_field`), so `unsigned_abs` is the
+    /// number itself: the conversion is exact, not a fallback.
     fn tag(&mut self, number: i32, wire: WireType) {
-        let number_bits = u64::try_from(number).unwrap_or(0);
+        let number_bits = u64::from(number.unsigned_abs());
         self.varint((number_bits << 3) | wire.bits());
     }
 
@@ -204,10 +215,16 @@ impl Writer {
         self.buf.extend_from_slice(&value.to_le_bytes());
     }
 
-    pub(crate) fn delimited_field(&mut self, number: i32, payload: &[u8]) {
+    /// # Errors
+    ///
+    /// [`WireError::OutOfRange`] for a payload whose length does not fit the
+    /// 64-bit length prefix, rather than a wrong prefix.
+    pub(crate) fn delimited_field(&mut self, number: i32, payload: &[u8]) -> Result<(), WireError> {
+        let length = u64::try_from(payload.len()).map_err(|_| WireError::OutOfRange)?;
         self.tag(number, WireType::Delimited);
-        self.varint(u64::try_from(payload.len()).unwrap_or(0));
+        self.varint(length);
         self.buf.extend_from_slice(payload);
+        Ok(())
     }
 }
 
