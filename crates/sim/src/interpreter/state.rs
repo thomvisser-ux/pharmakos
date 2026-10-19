@@ -371,14 +371,18 @@ impl PlanState {
         enc.u32(self.last_damage);
         enc.i32(self.last_hp);
         enc.u32(self.fallback_leg);
+        // E7: cannot miss: a plan's handlers and bindings are bounded by the playbook's size budget, far below `u32`
         enc.len(u32::try_from(self.fires.len()).unwrap_or(u32::MAX));
-        for (index, fires) in self.fires.iter().enumerate() {
+        // One cooldown per fire count, made together (`PlanState::sealed`) and
+        // restored together, so the zip covers every handler.
+        for (fires, ready) in self.fires.iter().zip(&self.ready) {
             enc.u32(*fires);
-            enc.u32(self.ready.get(index).copied().unwrap_or(0));
+            enc.u32(*ready);
         }
         // S1's targeting (snapshot version 7): the step's bindings and the
         // restarted placement's beacon and rows.
         enc.u32(self.bound_feature);
+        // E7: cannot miss: a plan's handlers and bindings are bounded by the playbook's size budget, far below `u32`
         enc.len(u32::try_from(self.bindings.len()).unwrap_or(u32::MAX));
         for binding in &self.bindings {
             enc.u32(binding.feature);
@@ -496,6 +500,7 @@ impl Interpreter {
     /// is a match-long question.
     pub fn open_push(&mut self, commander_hp: &[i32]) {
         for (seat, state) in self.states.iter_mut().enumerate() {
+            // E7: rule: a seat with no commander has no hit points to mark
             let hp = commander_hp.get(seat).copied().unwrap_or(0);
             match self.plans.get(seat).and_then(Option::as_ref) {
                 Some(plan) => *state = PlanState::sealed(plan, state.deaths_match, hp),
@@ -515,6 +520,7 @@ impl Interpreter {
     /// Determinism code: the tenth block of [`crate::world::World::encode`]'s
     /// declared order.
     pub fn encode(&self, enc: &mut Enc) {
+        // E7: cannot miss: one state per seat, at most 255 seats
         enc.len(u32::try_from(self.states.len()).unwrap_or(u32::MAX));
         for state in &self.states {
             state.encode(enc);
@@ -549,16 +555,16 @@ impl Interpreter {
             parts.fallback_leg.push(state.fallback_leg);
             parts
                 .rule_count
+                // E7: cannot miss: a plan's handlers and bindings are bounded by the playbook's size budget, far below `u32`
                 .push(u32::try_from(state.fires.len()).unwrap_or(u32::MAX));
-            for (index, fires) in state.fires.iter().enumerate() {
+            for (fires, ready) in state.fires.iter().zip(&state.ready) {
                 parts.fires.push(*fires);
-                parts
-                    .ready
-                    .push(state.ready.get(index).copied().unwrap_or(0));
+                parts.ready.push(*ready);
             }
             parts.bound_feature.push(state.bound_feature);
             parts
                 .binding_count
+                // E7: cannot miss: a plan's handlers and bindings are bounded by the playbook's size budget, far below `u32`
                 .push(u32::try_from(state.bindings.len()).unwrap_or(u32::MAX));
             for binding in &state.bindings {
                 parts.binding_feature.push(binding.feature);
@@ -606,76 +612,44 @@ impl Interpreter {
             let Some(stage) = parts.stage.get(at).copied().and_then(VisitState::from_id) else {
                 return false;
             };
-            let count = crate::math::index::row(parts.rule_count.get(at).copied().unwrap_or(0));
+            // `is_consistent` checked every per-seat column's length above, so
+            // a read that misses is a file this sim did not write: refused.
+            let (Some(count), Some(bound)) = (
+                parts.rule_count.get(at).copied(),
+                parts.binding_count.get(at).copied(),
+            ) else {
+                return false;
+            };
+            let count = crate::math::index::row(count);
             let to = rule_at.saturating_add(count);
             let (Some(fires), Some(ready)) =
                 (parts.fires.get(rule_at..to), parts.ready.get(rule_at..to))
             else {
                 return false;
             };
-            let bound = crate::math::index::row(parts.binding_count.get(at).copied().unwrap_or(0));
+            let bound = crate::math::index::row(bound);
             let bound_to = binding_at.saturating_add(bound);
-            let Some(features) = parts.binding_feature.get(binding_at..bound_to) else {
+            let (Some(features), Some(axes)) = (
+                parts.binding_feature.get(binding_at..bound_to),
+                binding_at
+                    .checked_mul(3)
+                    .zip(bound_to.checked_mul(3))
+                    .and_then(|(from, to)| parts.binding_at.get(from..to)),
+            ) else {
                 return false;
             };
-            let mut bindings: Vec<Binding> = Vec::with_capacity(bound);
-            for (slot, feature) in features.iter().enumerate() {
-                let axis = |k: usize| -> i32 {
-                    binding_at
-                        .saturating_add(slot)
-                        .checked_mul(3)
-                        .and_then(|base| base.checked_add(k))
-                        .and_then(|index| parts.binding_at.get(index).copied())
-                        .unwrap_or(0)
-                };
-                bindings.push(Binding {
+            let bindings: Vec<Binding> = features
+                .iter()
+                .zip(axes.as_chunks::<3>().0)
+                .map(|(feature, column)| Binding {
                     feature: *feature,
-                    at: [axis(0), axis(1), axis(2)],
-                });
-            }
-            let base = at.saturating_mul(3);
-            states.push(PlanState {
-                deaths_match: parts.deaths_match.get(at).copied().unwrap_or(0),
-                cursor: parts.cursor.get(at).copied().unwrap_or(NO_INDEX),
-                reached: parts.reached.get(at).copied().unwrap_or(NO_INDEX),
-                stage,
-                started: parts.started.get(at).copied().unwrap_or(NO_TICK),
-                deadline: parts.deadline.get(at).copied().unwrap_or(NO_TICK),
-                rule: parts.rule.get(at).copied().unwrap_or(NO_INDEX),
-                rule_step: parts.rule_step.get(at).copied().unwrap_or(0),
-                pinned: parts.pinned.get(at).copied().unwrap_or(0) != 0,
-                pinned_beacon: parts.pinned_beacon.get(at).copied().unwrap_or(NO_INDEX),
-                pinned_at: [
-                    parts.pinned_at.get(base).copied().unwrap_or(0),
-                    parts
-                        .pinned_at
-                        .get(base.saturating_add(1))
-                        .copied()
-                        .unwrap_or(0),
-                    parts
-                        .pinned_at
-                        .get(base.saturating_add(2))
-                        .copied()
-                        .unwrap_or(0),
-                ],
-                visit_beacon: parts.visit_beacon.get(at).copied().unwrap_or(NO_INDEX),
-                visit_row: parts.visit_row.get(at).copied().unwrap_or(0),
-                visit_due: parts.visit_due.get(at).copied().unwrap_or(NO_TICK),
-                reflex_armed: parts.reflex_armed.get(at).copied().unwrap_or(0) != 0,
-                reflex_active: parts.reflex_active.get(at).copied().unwrap_or(0) != 0,
-                last_damage: parts.last_damage.get(at).copied().unwrap_or(NO_TICK),
-                last_hp: parts.last_hp.get(at).copied().unwrap_or(0),
-                fallback_leg: parts.fallback_leg.get(at).copied().unwrap_or(0),
-                fires: fires.to_vec(),
-                ready: ready.to_vec(),
-                bound_feature: parts.bound_feature.get(at).copied().unwrap_or(NO_INDEX),
-                bindings,
-                resumed: parts.resumed.get(at).copied().unwrap_or(0) != 0,
-                restart_beacon: parts.restart_beacon.get(at).copied().unwrap_or(NO_INDEX),
-                restart_rule: parts.restart_rule.get(at).copied().unwrap_or(NO_INDEX),
-                restart_at: parts.restart_at.get(at).copied().unwrap_or(NO_INDEX),
-                restart_row: parts.restart_row.get(at).copied().unwrap_or(0),
-            });
+                    at: *column,
+                })
+                .collect();
+            let Some(restored) = restored_state(parts, at, stage, fires, ready, bindings) else {
+                return false;
+            };
+            states.push(restored);
             rule_at = to;
             binding_at = bound_to;
             at = at.saturating_add(1);
@@ -779,6 +753,53 @@ pub struct PlanParts {
     pub restart_at: Vec<u32>,
     /// The first initial row it had not committed, per seat.
     pub restart_row: Vec<u32>,
+}
+
+/// One seat's state out of the snapshot's columns, or `None` when a column is
+/// short at `at`, which `PlanParts::is_consistent` refuses first.
+fn restored_state(
+    parts: &PlanParts,
+    at: usize,
+    stage: VisitState,
+    fires: &[u32],
+    ready: &[u32],
+    bindings: Vec<Binding>,
+) -> Option<PlanState> {
+    let base = at.checked_mul(3)?;
+    let pinned_at = parts.pinned_at.get(base..base.checked_add(3)?)?;
+    let [px, py, pz] = pinned_at else {
+        return None;
+    };
+    Some(PlanState {
+        deaths_match: *parts.deaths_match.get(at)?,
+        cursor: *parts.cursor.get(at)?,
+        reached: *parts.reached.get(at)?,
+        stage,
+        started: *parts.started.get(at)?,
+        deadline: *parts.deadline.get(at)?,
+        rule: *parts.rule.get(at)?,
+        rule_step: *parts.rule_step.get(at)?,
+        pinned: *parts.pinned.get(at)? != 0,
+        pinned_beacon: *parts.pinned_beacon.get(at)?,
+        pinned_at: [*px, *py, *pz],
+        visit_beacon: *parts.visit_beacon.get(at)?,
+        visit_row: *parts.visit_row.get(at)?,
+        visit_due: *parts.visit_due.get(at)?,
+        reflex_armed: *parts.reflex_armed.get(at)? != 0,
+        reflex_active: *parts.reflex_active.get(at)? != 0,
+        last_damage: *parts.last_damage.get(at)?,
+        last_hp: *parts.last_hp.get(at)?,
+        fallback_leg: *parts.fallback_leg.get(at)?,
+        fires: fires.to_vec(),
+        ready: ready.to_vec(),
+        bound_feature: *parts.bound_feature.get(at)?,
+        bindings,
+        resumed: *parts.resumed.get(at)? != 0,
+        restart_beacon: *parts.restart_beacon.get(at)?,
+        restart_rule: *parts.restart_rule.get(at)?,
+        restart_at: *parts.restart_at.get(at)?,
+        restart_row: *parts.restart_row.get(at)?,
+    })
 }
 
 impl PlanParts {

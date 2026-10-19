@@ -127,7 +127,7 @@ fn play(world: World, route: &str, ticks: u32) -> (Runner, Vec<u32>, bool) {
     runner
         .seal_playbook(SEAT, plan)
         .expect("a Lull takes a seal");
-    assert!(runner.begin_push());
+    assert!(runner.begin_push().unwrap());
     let mut queued = Vec::new();
     let mut failed = false;
     for _ in 0..ticks {
@@ -821,7 +821,7 @@ fn a_build_list_that_cannot_be_written_whole_writes_nothing() {
     runner
         .seal_playbook(SEAT, plan)
         .expect("a Lull takes a seal");
-    assert!(runner.begin_push());
+    assert!(runner.begin_push().unwrap());
     let mut reasons = Vec::new();
     for _ in 0..400 {
         if runner.step().unwrap().is_none() {
@@ -851,7 +851,7 @@ fn a_build_list_that_cannot_be_written_whole_writes_nothing() {
         .beacons()
         .iter()
         .zip(world.targets().anchors())
-        .filter(|(beacon, _)| **beacon == core.raw())
+        .filter(|(beacon, _)| **beacon == core)
         .map(|(_, at)| *at)
         .collect();
     assert_eq!(
@@ -904,7 +904,7 @@ fn every_paid_target_survives_a_settings_edit() {
         .built()
         .iter()
         .zip(world.targets().kinds())
-        .filter(|(built, kind)| **kind == TargetKind::Build.id() && **built != BeaconId::NONE.raw())
+        .filter(|(built, kind)| **kind == TargetKind::Build.id() && built.is_some())
         .count();
     assert_eq!(
         paid, 9,
@@ -958,7 +958,8 @@ fn an_unknown_byte_in_a_coded_column_is_refused_by_name() {
     // remembers seat 1's core.
     good.sighting_seat.push(0);
     good.sighting_asset.push(
-        pharmakos_sim::knowledge::AssetId::tagged(pharmakos_sim::knowledge::AssetId::TAG_BEACON, 1)
+        pharmakos_sim::knowledge::AssetId::of_beacon(pharmakos_sim::tables::BeaconId::new(1))
+            .unwrap()
             .raw(),
     );
     good.sighting_owner.push(1);
@@ -982,10 +983,14 @@ fn an_unknown_byte_in_a_coded_column_is_refused_by_name() {
     good.structure_home.push(beacon.raw());
     good.structure_building.push(0);
     good.structure_rotation.push(0);
+    good.structure_ruined_at
+        .push(pharmakos_sim::tables::NOT_RUINED);
+    good.structure_free.push(0);
     // A kill-credit row: seat 1 has dealt 10 hit points to seat 0's core, and
     // the other two slots hold nobody.
     good.credit_asset.push(
-        pharmakos_sim::knowledge::AssetId::tagged(pharmakos_sim::knowledge::AssetId::TAG_BEACON, 0)
+        pharmakos_sim::knowledge::AssetId::of_beacon(pharmakos_sim::tables::BeaconId::new(0))
+            .unwrap()
             .raw(),
     );
     good.credit_seat
@@ -995,7 +1000,7 @@ fn an_unknown_byte_in_a_coded_column_is_refused_by_name() {
         .expect("the control restores: every column names a defined value");
     assert!(!good.unit_kind.is_empty(), "the fixture has a unit row");
 
-    let spoils: [Spoil; 20] = [
+    let spoils: [Spoil; 21] = [
         ("credit_seat", |s| {
             *s.credit_seat.first_mut().expect("a credit row") = 3;
         }),
@@ -1014,8 +1019,13 @@ fn an_unknown_byte_in_a_coded_column_is_refused_by_name() {
         ("unit_seat", |s| {
             *s.unit_seat.first_mut().expect("a unit") = 3;
         }),
+        // A ruin's seat is nobody (`SeatId::NEUTRAL`), and so is a free row's
+        // (S2's plan, E1), so the byte refused is a seat the file lacks.
         ("structure_seat", |s| {
-            *s.structure_seat.first_mut().expect("a structure") = SeatId::NEUTRAL.raw();
+            *s.structure_seat.first_mut().expect("a structure") = 3;
+        }),
+        ("beacon_seat", |s| {
+            *s.beacon_seat.first_mut().expect("a beacon") = 3;
         }),
         ("sighting_seat", |s| {
             *s.sighting_seat.first_mut().expect("a sighting") = 3;

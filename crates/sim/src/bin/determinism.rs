@@ -262,12 +262,12 @@ fn open_a_push(runner: &mut Runner) {
         match runner.phase() {
             MatchPhase::Push | MatchPhase::Ended => return,
             MatchPhase::Lull => {
-                if !runner.begin_push() {
+                if runner.begin_push() != Ok(true) {
                     return;
                 }
             }
             MatchPhase::Recap => {
-                if !runner.end_recap() {
+                if runner.end_recap() != Ok(true) {
                     return;
                 }
             }

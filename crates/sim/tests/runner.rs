@@ -161,9 +161,12 @@ fn the_phases_run_in_their_fixed_order() {
     );
     assert_eq!(runner.tick(), Tick::ZERO);
 
-    assert!(runner.begin_push());
+    assert!(runner.begin_push().unwrap());
     assert_eq!(runner.phase(), MatchPhase::Push);
-    assert!(!runner.begin_push(), "a Push cannot be opened twice");
+    assert!(
+        !runner.begin_push().unwrap(),
+        "a Push cannot be opened twice"
+    );
 
     assert_eq!(play(&mut runner, SHORT_TICKS), SHORT_TICKS);
     assert_eq!(runner.phase(), MatchPhase::Recap, "the segment ran out");
@@ -172,16 +175,19 @@ fn the_phases_run_in_their_fixed_order() {
         "no tick runs during a recap"
     );
 
-    assert!(runner.end_recap());
+    assert!(runner.end_recap().unwrap());
     assert_eq!(runner.phase(), MatchPhase::Lull);
     assert_eq!(runner.round(), 2, "the recap opened the next round");
-    assert!(!runner.end_recap(), "a recap cannot be closed twice");
+    assert!(
+        !runner.end_recap().unwrap(),
+        "a recap cannot be closed twice"
+    );
 }
 
 #[test]
 fn a_push_runs_exactly_the_segments_length_in_ticks() {
     let mut runner = runner(2, &[SHORT_MS]);
-    assert!(runner.begin_push());
+    assert!(runner.begin_push().unwrap());
     assert_eq!(
         runner.world().match_state().segment_ticks(),
         SHORT_TICKS,
@@ -252,7 +258,7 @@ fn a_degenerate_ladder_is_refused_on_the_way_in_and_floored_on_the_way_back() {
     runner
         .restore(&saved)
         .expect("a length is normalised, not refused");
-    assert!(runner.begin_push());
+    assert!(runner.begin_push().unwrap());
     assert_eq!(
         runner.world().match_state().segment_ticks(),
         1,
@@ -267,7 +273,7 @@ fn the_match_state_is_in_the_state_hash() {
     // field of the match state does, so every one of them moves the chain.
     let mut runner = runner(2, &[SHORT_MS]);
     let in_lull = runner.world().state_hash();
-    assert!(runner.begin_push());
+    assert!(runner.begin_push().unwrap());
     let in_push = runner.world().state_hash();
     assert_ne!(
         in_lull, in_push,
@@ -291,7 +297,7 @@ fn the_match_state_is_in_the_state_hash() {
 fn the_coming_segments_length_comes_from_the_snapshot_not_a_constant() {
     // Round 1 runs 5 s and round 2 is to run 15 s.
     let mut first = runner(2, &[SHORT_MS, 15_000]);
-    assert!(first.begin_push());
+    assert!(first.begin_push().unwrap());
     play(&mut first, SHORT_TICKS);
     assert_eq!(first.phase(), MatchPhase::Recap);
 
@@ -337,9 +343,9 @@ fn the_coming_segments_length_comes_from_the_snapshot_not_a_constant() {
         Ms::new(9_000),
         "a restore carries the number rather than re-deriving it"
     );
-    assert!(second.end_recap());
+    assert!(second.end_recap().unwrap());
     assert_eq!(second.round(), 2);
-    assert!(second.begin_push());
+    assert!(second.begin_push().unwrap());
     assert_eq!(
         second.world().match_state().segment_ticks(),
         180,
@@ -351,7 +357,7 @@ fn the_coming_segments_length_comes_from_the_snapshot_not_a_constant() {
 #[test]
 fn a_restored_match_keeps_its_phase_round_and_ladder() {
     let mut first = runner(3, &[SHORT_MS, 6_000, 7_000]);
-    assert!(first.begin_push());
+    assert!(first.begin_push().unwrap());
     play(&mut first, 40);
     let saved = first.capture().unwrap();
     let hash = first.world().state_hash();
@@ -402,7 +408,7 @@ fn the_match_end_rule_is_checked_at_the_tick_not_at_the_segment_boundary() {
     // Item 16: end conditions are evaluated every tick and the Push halts at
     // the **first** tick where fewer than two seats remain.
     let mut runner = runner(2, &[SHORT_MS]);
-    assert!(runner.begin_push());
+    assert!(runner.begin_push().unwrap());
     play(&mut runner, 5);
     runner.clear_events();
 
@@ -441,7 +447,7 @@ fn the_match_end_rule_is_checked_at_the_tick_not_at_the_segment_boundary() {
     );
 
     runner.clear_events();
-    assert!(runner.end_recap());
+    assert!(runner.end_recap().unwrap());
     assert_eq!(runner.phase(), MatchPhase::Ended);
     assert!(
         !has(runner.events(), EventKind::MatchEnded),
@@ -453,7 +459,7 @@ fn the_match_end_rule_is_checked_at_the_tick_not_at_the_segment_boundary() {
 #[test]
 fn a_seat_with_no_beacons_is_eliminated_and_its_units_disband() {
     let mut runner = runner(3, &[SHORT_MS]);
-    assert!(runner.begin_push());
+    assert!(runner.begin_push().unwrap());
     play(&mut runner, 3);
     runner.clear_events();
 
@@ -471,6 +477,13 @@ fn a_seat_with_no_beacons_is_eliminated_and_its_units_disband() {
     assert!(world.seats().is_alive(0) && world.seats().is_alive(1));
 
     for (index, seat) in world.units().seats().iter().enumerate() {
+        // A disbanded unit's row is freed once its death settles (S2's plan,
+        // E1): nobody's, with no hit points. The commander's row is never
+        // freed, so it stays seat 2's, dead.
+        if world.units().frees()[index] {
+            assert!(!world.units().hit_points()[index].is_alive());
+            continue;
+        }
         if *seat == 2 {
             assert!(
                 !world.units().hit_points()[index].is_alive(),
@@ -511,7 +524,7 @@ fn an_unplaced_seat_is_neither_eliminated_nor_counted() {
         "the committed table carries three spawn zones, so seat 3 is unplaced"
     );
 
-    assert!(runner.begin_push());
+    assert!(runner.begin_push().unwrap());
     play(&mut runner, 10);
     assert_eq!(runner.phase(), MatchPhase::Push);
     assert_eq!(
@@ -541,7 +554,7 @@ fn the_round_limit_is_decided_at_the_last_rounds_final_tick() {
     let mut runner = Runner::new(world);
     for round in 1..=2_u32 {
         assert_eq!(runner.round(), round);
-        assert!(runner.begin_push());
+        assert!(runner.begin_push().unwrap());
         assert_eq!(play(&mut runner, 20), 20);
         assert_eq!(runner.phase(), MatchPhase::Recap);
         assert_eq!(
@@ -549,7 +562,7 @@ fn the_round_limit_is_decided_at_the_last_rounds_final_tick() {
             round == 2,
             "the round limit is decided at the last round's final tick, and only then"
         );
-        assert!(runner.end_recap());
+        assert!(runner.end_recap().unwrap());
     }
     assert_eq!(runner.phase(), MatchPhase::Ended);
     let outcome = runner.outcome().expect("the round limit ended it");
@@ -589,12 +602,17 @@ fn a_beacon_death_ruins_the_structures_homed_to_it() {
     saved.structure_building.push(0);
     // S1's Build settings: a structure's rotation, here none.
     saved.structure_rotation.push(0);
+    // S2's ids: not a ruin, and not a free row.
+    saved
+        .structure_ruined_at
+        .push(pharmakos_sim::tables::NOT_RUINED);
+    saved.structure_free.push(0);
     runner
         .restore(&saved)
         .expect("the edited snapshot restores");
     assert_eq!(runner.world().structures().len(), 1);
 
-    assert!(runner.begin_push());
+    assert!(runner.begin_push().unwrap());
     play(&mut runner, 2);
     runner.clear_events();
     destroy(&mut runner, DamageTarget::Beacon(core));
@@ -623,10 +641,13 @@ fn a_beacon_death_ruins_the_structures_homed_to_it() {
 #[test]
 fn a_pending_respawn_always_completes_by_segment_end() {
     let mut runner = runner(2, &[SHORT_MS]);
-    assert!(runner.begin_push());
+    assert!(runner.begin_push().unwrap());
     play(&mut runner, 5);
 
-    let commander = runner.world().commander_of(SeatId::new(0));
+    let commander = runner
+        .world()
+        .commander_of(SeatId::new(0))
+        .expect("an occupied seat has a commander");
     assert!(commander.is_some(), "an occupied seat has a commander");
     destroy(&mut runner, DamageTarget::Unit(commander));
     runner.step().unwrap().expect("the tick runs");
@@ -665,8 +686,11 @@ fn a_pending_respawn_always_completes_by_segment_end() {
 #[test]
 fn the_respawn_delay_grows_with_each_death_in_the_same_push() {
     let mut runner = runner(2, &[600_000]);
-    assert!(runner.begin_push());
-    let commander = runner.world().commander_of(SeatId::new(0));
+    assert!(runner.begin_push().unwrap());
+    let commander = runner
+        .world()
+        .commander_of(SeatId::new(0))
+        .expect("an occupied seat has a commander");
 
     let mut delays: Vec<u32> = Vec::new();
     for _ in 0..3_u32 {
@@ -689,15 +713,18 @@ fn the_respawn_delay_grows_with_each_death_in_the_same_push() {
 #[test]
 fn a_new_push_resets_the_per_push_death_counter() {
     let mut runner = runner(2, &[SHORT_MS, SHORT_MS]);
-    assert!(runner.begin_push());
-    let commander = runner.world().commander_of(SeatId::new(0));
+    assert!(runner.begin_push().unwrap());
+    let commander = runner
+        .world()
+        .commander_of(SeatId::new(0))
+        .expect("an occupied seat has a commander");
     destroy(&mut runner, DamageTarget::Unit(commander));
     runner.step().unwrap().expect("the tick runs");
     assert_eq!(runner.world().seats().commander_deaths()[0], 1);
 
     play(&mut runner, SHORT_TICKS);
-    assert!(runner.end_recap());
-    assert!(runner.begin_push());
+    assert!(runner.end_recap().unwrap());
+    assert!(runner.begin_push().unwrap());
     assert_eq!(
         runner.world().seats().commander_deaths()[0],
         0,
@@ -743,7 +770,7 @@ fn the_event_bus_is_not_in_the_state_encoding() {
     // dropping one cannot change what the world does next (AGENTS.md §4.8 is
     // about fields that affect behaviour).
     let mut runner = runner(2, &[SHORT_MS]);
-    assert!(runner.begin_push());
+    assert!(runner.begin_push().unwrap());
     play(&mut runner, 10);
 
     let before = runner.world().state_hash();
@@ -788,13 +815,13 @@ fn a_restore_re_anchors_the_feed_so_two_resumes_agree() {
     // emit the same `lull_opened` under different `seq` values, because one of
     // them happens to be anchored on the very tick the file was saved at.
     let mut source = runner(2, &[SHORT_MS, 15_000]);
-    assert!(source.begin_push());
+    assert!(source.begin_push().unwrap());
     assert_eq!(play(&mut source, SHORT_TICKS), SHORT_TICKS);
     let saved = source.capture().unwrap();
 
     let mut fresh = Runner::new(world(2, &[SHORT_MS, 15_000]));
     let mut used = Runner::new(world(2, &[SHORT_MS, 15_000]));
-    assert!(used.begin_push());
+    assert!(used.begin_push().unwrap());
     assert_eq!(play(&mut used, SHORT_TICKS), SHORT_TICKS);
     used.clear_events();
     assert_eq!(
@@ -806,8 +833,8 @@ fn a_restore_re_anchors_the_feed_so_two_resumes_agree() {
     let resume = |runner: &mut Runner| -> Vec<(u32, u32, &'static str)> {
         runner.restore(&saved).expect("the snapshot restores");
         assert!(runner.events().is_empty(), "a restore empties the feed");
-        assert!(runner.end_recap());
-        assert!(runner.begin_push());
+        assert!(runner.end_recap().unwrap());
+        assert!(runner.begin_push().unwrap());
         runner.step().unwrap().expect("the next segment runs");
         runner
             .events()
@@ -828,7 +855,7 @@ fn the_same_seed_produces_the_same_events() {
     let collect = || {
         let mut runner = runner(2, &[SHORT_MS]);
         let mut all: Vec<(u32, u32, &'static str)> = Vec::new();
-        assert!(runner.begin_push());
+        assert!(runner.begin_push().unwrap());
         for _ in 0..SHORT_TICKS {
             if runner.step().unwrap().is_none() {
                 break;
@@ -880,7 +907,7 @@ fn a_host_that_drains_never_meets_a_full_bus() {
         .expect("a three-seat world at the harness's size"),
     );
     let capacity = runner.world().event_bus().capacity();
-    assert!(runner.begin_push());
+    assert!(runner.begin_push().unwrap());
 
     let core = core_of(runner.world(), 2);
     let mut peak = 0;
@@ -915,7 +942,7 @@ fn a_position_rides_with_an_event_that_happened_somewhere() {
     // The gateway's fog filter decides visibility from the position, so an
     // event about a place carries one.
     let mut runner = runner(3, &[SHORT_MS]);
-    assert!(runner.begin_push());
+    assert!(runner.begin_push().unwrap());
     play(&mut runner, 2);
     runner.clear_events();
     let core = core_of(runner.world(), 2);
@@ -977,7 +1004,7 @@ fn a_playbook_is_sealed_during_a_lull_and_refused_in_every_other_phase() {
         .seal_playbook(SeatId::new(0), a_plan())
         .expect("replacing this Lull's seal");
 
-    assert!(runner.begin_push());
+    assert!(runner.begin_push().unwrap());
     assert_eq!(
         runner.seal_playbook(SeatId::new(0), a_plan()),
         Err(SealRefused::NotInLull(MatchPhase::Push)),
@@ -997,7 +1024,7 @@ fn a_playbook_is_sealed_during_a_lull_and_refused_in_every_other_phase() {
     );
 
     // And the next Lull opens the door again.
-    assert!(runner.end_recap());
+    assert!(runner.end_recap().unwrap());
     assert_eq!(runner.phase(), MatchPhase::Lull);
     runner
         .seal_playbook(SeatId::new(1), a_plan())
@@ -1020,13 +1047,13 @@ fn a_playbook_is_sealed_during_a_lull_and_refused_in_every_other_phase() {
         })
         .expect("a one-round match"),
     );
-    assert!(last.begin_push());
+    assert!(last.begin_push().unwrap());
     while let Some(report) = last.step().unwrap() {
         if report.segment_ended {
             break;
         }
     }
-    assert!(last.end_recap());
+    assert!(last.end_recap().unwrap());
     assert_eq!(last.phase(), MatchPhase::Ended);
     assert_eq!(
         last.seal_playbook(SeatId::new(0), a_plan()),
@@ -1095,7 +1122,7 @@ fn a_seal_reports_itself_on_the_event_bus() {
 #[test]
 fn a_tick_left_open_after_its_match_phase_blocks_every_transition() {
     let mut runner = runner(2, &[SHORT_MS]);
-    assert!(runner.begin_push());
+    assert!(runner.begin_push().unwrap());
     // Every tick but the segment's last, whole.
     for _ in 1..SHORT_TICKS {
         assert!(runner.step().unwrap().is_some());
@@ -1116,8 +1143,18 @@ fn a_tick_left_open_after_its_match_phase_blocks_every_transition() {
         MatchPhase::Recap,
         "the Match phase closed the segment"
     );
-    assert!(!runner.end_recap(), "no recap closes over an open tick");
-    assert!(!runner.begin_push(), "and no Push opens over one");
+    // A typed refusal rather than a `false` the host cannot tell from the
+    // wrong phase (decisions-log item 145).
+    assert_eq!(
+        runner.end_recap(),
+        Err(pharmakos_sim::world::TickError::MidTick),
+        "no recap closes over an open tick"
+    );
+    assert_eq!(
+        runner.begin_push(),
+        Err(pharmakos_sim::world::TickError::MidTick),
+        "and no Push opens over one"
+    );
     assert_eq!(
         runner.seal_playbook(SeatId::new(0), a_plan()),
         Err(pharmakos_sim::runner::SealRefused::MidTick)
@@ -1135,7 +1172,7 @@ fn a_tick_left_open_after_its_match_phase_blocks_every_transition() {
     assert!(report.segment_ended);
     assert!(!runner.tick_is_open());
     assert!(
-        runner.end_recap(),
+        runner.end_recap().unwrap(),
         "the recap closes once the tick is whole"
     );
 }

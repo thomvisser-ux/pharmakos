@@ -65,7 +65,10 @@ fn world() -> World {
 
 /// Play the Push in progress to its end, keeping every event.
 fn play_segment(runner: &mut Runner, feed: &mut Vec<Event>) {
-    assert!(runner.begin_push(), "the Push begins");
+    assert!(
+        runner.begin_push().expect("the runner answers"),
+        "the Push begins"
+    );
     feed.extend_from_slice(runner.events());
     runner.clear_events();
     while runner
@@ -177,7 +180,7 @@ fn the_economy_reads_agree_with_the_settlement_ledgers_credit() {
             );
             credits.push((round, *seat, *credit));
         }
-        if !runner.end_recap() {
+        if !runner.end_recap().unwrap() {
             break;
         }
     }

@@ -677,7 +677,9 @@ fn own_beacon(surface: &Surface) -> String {
 fn route_params(surface: &Surface) -> String {
     let host = surface.host().expect("a hosted match");
     let world = host.world();
-    let commander = world.commander_of(SeatId::new(0));
+    let commander = world
+        .commander_of(SeatId::new(0))
+        .expect("an occupied seat has a commander");
     let row = world
         .units()
         .ids()
@@ -747,7 +749,9 @@ const FIX: &str = concat!(
 fn commander_voxel(surface: &Surface) -> (i32, i32, i32) {
     let host = surface.host().expect("a hosted match");
     let world = host.world();
-    let commander = world.commander_of(SeatId::new(0));
+    let commander = world
+        .commander_of(SeatId::new(0))
+        .expect("an occupied seat has a commander");
     let row = world
         .units()
         .ids()

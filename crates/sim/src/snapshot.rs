@@ -58,9 +58,9 @@ use crate::math::quantity::{Hp, Kw, Money, Tick};
 use crate::pathing::router::{RestoredRouter, first_route_digest_mismatch};
 use crate::runner::{DEFAULT_ROUND_LIMIT, MatchParts, MatchPhase, MatchState};
 use crate::tables::{
-    BeaconColumns, BeaconTable, CREDIT_SLOTS, ColumnBox, CreditTable, QuarterTurns, SeatColumns,
-    SeatId, SeatTable, SightingColumns, SightingTable, StructureColumns, StructureTable,
-    TargetColumns, TargetTable, UnitColumns, UnitTable, WreckTable,
+    BeaconColumns, BeaconId, BeaconTable, CREDIT_SLOTS, ColumnBox, CreditTable, QuarterTurns,
+    SeatColumns, SeatId, SeatTable, SightingColumns, SightingTable, StructureColumns, StructureId,
+    StructureTable, TargetColumns, TargetTable, UnitColumns, UnitTable, WreckTable,
 };
 use crate::voxels::{CHUNK_VOXELS, VoxelStore};
 use crate::world::{RestoredTables, World};
@@ -150,7 +150,18 @@ use serde::{Deserialize, Serialize};
 /// read: it carries no order, and a world restored from it would build its
 /// targets in list order where the unbroken run builds them by `order`. The
 /// gateway's save refuses a version-8 snapshot by its stamp first.
-pub const SNAPSHOT_VERSION: u32 = 9;
+///
+/// **Version 10 is S2's generational ids** (S2's plan, task `ids`, E1). Rows
+/// are reused, so it adds each unit, beacon, structure and wreck row's free
+/// flag, each structure's ruined-at tick (which decides the ruin the reserve
+/// buries), and two per-seat counters: the placement counter a beacon's
+/// `b_NN` is taken from, and the beacons lost. Every id now carries its row's
+/// generation in the bits above the row, which every id a version-9 file holds
+/// leaves at zero; a version-9 file is refused rather than read all the same,
+/// because it carries no placement counter, and a world restored from it would
+/// hand a dead beacon's name to the next one. The gateway's save refuses a
+/// version-9 snapshot by its stamp first.
+pub const SNAPSHOT_VERSION: u32 = 10;
 
 /// A flat, fixed-width projection of the world.
 ///
@@ -186,6 +197,10 @@ pub struct Snapshot {
     pub seat_respawn_due: Vec<u32>,
     /// The Quartermaster's round-robin cursor, per seat.
     pub seat_qm_cursor: Vec<u32>,
+    /// Each seat's placement counter ([`crate::tables::SeatTable::placed`]).
+    pub seat_placed: Vec<u32>,
+    /// Each seat's beacons lost ([`crate::tables::SeatTable::beacons_lost`]).
+    pub seat_beacons_lost: Vec<u32>,
 
     /// Unit ids.
     pub unit_id: Vec<u32>,
@@ -208,6 +223,8 @@ pub struct Snapshot {
     /// The tick each unit's timed work finishes at, or
     /// [`crate::tables::NO_WORK`].
     pub unit_busy_until: Vec<u32>,
+    /// Whether each unit row is free, `0` or `1` (S2's plan, E1).
+    pub unit_free: Vec<u8>,
 
     /// Beacon ids.
     pub beacon_id: Vec<u32>,
@@ -243,6 +260,8 @@ pub struct Snapshot {
     /// The seam each beacon holds, as an index into the map's feature table,
     /// or [`crate::targeting::NO_FEATURE`].
     pub beacon_seam: Vec<u32>,
+    /// Whether each beacon row is free, `0` or `1`.
+    pub beacon_free: Vec<u8>,
 
     /// Structure ids.
     pub structure_id: Vec<u32>,
@@ -260,6 +279,10 @@ pub struct Snapshot {
     pub structure_building: Vec<u8>,
     /// Each structure's rotation in quarter turns, 0 to 3.
     pub structure_rotation: Vec<u8>,
+    /// The tick each ruin was ruined at, or [`crate::tables::NOT_RUINED`].
+    pub structure_ruined_at: Vec<u32>,
+    /// Whether each structure row is free, `0` or `1`.
+    pub structure_free: Vec<u8>,
 
     /// Wreck ids.
     pub wreck_id: Vec<u32>,
@@ -267,6 +290,8 @@ pub struct Snapshot {
     pub wreck_pos: Vec<i32>,
     /// Salvage value per wreck, in `$`.
     pub wreck_salvage: Vec<i64>,
+    /// Whether each wreck row is free, `0` or `1`.
+    pub wreck_free: Vec<u8>,
 
     /// The beacon each list setting belongs to.
     pub target_beacon: Vec<u32>,
@@ -472,6 +497,8 @@ impl Default for Snapshot {
             seat_commander_deaths: Vec::new(),
             seat_respawn_due: Vec::new(),
             seat_qm_cursor: Vec::new(),
+            seat_placed: Vec::new(),
+            seat_beacons_lost: Vec::new(),
             unit_id: Vec::new(),
             unit_seat: Vec::new(),
             unit_kind: Vec::new(),
@@ -482,6 +509,7 @@ impl Default for Snapshot {
             unit_home: Vec::new(),
             unit_carrying: Vec::new(),
             unit_busy_until: Vec::new(),
+            unit_free: Vec::new(),
             beacon_id: Vec::new(),
             beacon_seat: Vec::new(),
             beacon_pos: Vec::new(),
@@ -497,6 +525,7 @@ impl Default for Snapshot {
             beacon_seam_choice: Vec::new(),
             beacon_flee: Vec::new(),
             beacon_seam: Vec::new(),
+            beacon_free: Vec::new(),
             structure_id: Vec::new(),
             structure_seat: Vec::new(),
             structure_kind: Vec::new(),
@@ -505,9 +534,12 @@ impl Default for Snapshot {
             structure_home: Vec::new(),
             structure_building: Vec::new(),
             structure_rotation: Vec::new(),
+            structure_ruined_at: Vec::new(),
+            structure_free: Vec::new(),
             wreck_id: Vec::new(),
             wreck_pos: Vec::new(),
             wreck_salvage: Vec::new(),
+            wreck_free: Vec::new(),
             target_beacon: Vec::new(),
             target_kind: Vec::new(),
             target_blueprint: Vec::new(),
@@ -776,6 +808,8 @@ impl Snapshot {
             seat_commander_deaths: seats.commander_deaths().to_vec(),
             seat_respawn_due: seats.respawn_due().to_vec(),
             seat_qm_cursor: seats.qm_cursors().to_vec(),
+            seat_placed: seats.placed().to_vec(),
+            seat_beacons_lost: seats.beacons_lost().to_vec(),
 
             unit_id: units.ids().to_vec(),
             unit_seat: units.seats().to_vec(),
@@ -784,9 +818,10 @@ impl Snapshot {
             unit_dest: axes_from_points(units.destinations()),
             unit_heading: units.headings().iter().map(|a| a.raw()).collect(),
             unit_hp: units.hit_points().iter().map(|h| h.raw()).collect(),
-            unit_home: units.homes().to_vec(),
+            unit_home: units.homes().iter().map(|home| home.raw()).collect(),
             unit_carrying: units.carrying().iter().map(|m| m.raw()).collect(),
             unit_busy_until: units.busy_until().to_vec(),
+            unit_free: units.frees().iter().map(|f| u8::from(*f)).collect(),
 
             beacon_id: beacons.ids().to_vec(),
             beacon_seat: beacons.seats().to_vec(),
@@ -803,26 +838,34 @@ impl Snapshot {
             beacon_seam_choice: beacons.seam_choices().to_vec(),
             beacon_flee: beacons.flees().iter().map(|f| u8::from(*f)).collect(),
             beacon_seam: beacons.seams().to_vec(),
+            beacon_free: beacons.frees().iter().map(|f| u8::from(*f)).collect(),
 
             structure_id: structures.ids().to_vec(),
             structure_seat: structures.seats().to_vec(),
             structure_kind: structures.kinds().to_vec(),
             structure_pos: axes_from_points(structures.positions()),
             structure_hp: structures.hit_points().iter().map(|h| h.raw()).collect(),
-            structure_home: structures.homes().to_vec(),
+            structure_home: structures.homes().iter().map(|home| home.raw()).collect(),
             structure_building: structures.building().iter().map(|b| u8::from(*b)).collect(),
             structure_rotation: structures.rotations().to_vec(),
+            structure_ruined_at: structures.ruined_at().to_vec(),
+            structure_free: structures.frees().iter().map(|f| u8::from(*f)).collect(),
 
             wreck_id: wrecks.ids().to_vec(),
             wreck_pos: axes_from_points(wrecks.positions()),
             wreck_salvage: wrecks.salvages().iter().map(|m| m.raw()).collect(),
+            wreck_free: wrecks.frees().iter().map(|f| u8::from(*f)).collect(),
 
-            target_beacon: targets.beacons().to_vec(),
+            target_beacon: targets
+                .beacons()
+                .iter()
+                .map(|beacon| beacon.raw())
+                .collect(),
             target_kind: targets.kinds().to_vec(),
             target_blueprint: targets.blueprints().to_vec(),
             target_at: axes_from_points(targets.anchors()),
             target_area: axes_from_boxes(targets.areas()),
-            target_built: targets.built().to_vec(),
+            target_built: targets.built().iter().map(|built| built.raw()).collect(),
             target_feature: targets.features().to_vec(),
             target_desc: targets.descriptions().to_vec(),
             target_order: targets.orders().to_vec(),
@@ -978,12 +1021,15 @@ impl Snapshot {
             commander_deaths: self.seat_commander_deaths.clone(),
             respawn_due: self.seat_respawn_due.clone(),
             qm_cursor: self.seat_qm_cursor.clone(),
+            placed: self.seat_placed.clone(),
+            beacons_lost: self.seat_beacons_lost.clone(),
         }) {
             return Err(SnapshotError::Ragged("seat"));
         }
 
         let match_state = self.restore_match()?;
         self.check_codes()?;
+        self.check_rows()?;
 
         // E7: rule: a capacity only; the unit table's restore checks the columns it is handed
         let mut units = UnitTable::with_capacity(u32::try_from(self.unit_id.len()).unwrap_or(0));
@@ -1000,9 +1046,10 @@ impl Snapshot {
                 .map(Angle::from_raw)
                 .collect(),
             hp: self.unit_hp.iter().copied().map(Hp::new).collect(),
-            home: self.unit_home.clone(),
+            home: self.unit_home.iter().copied().map(BeaconId::new).collect(),
             carrying: self.unit_carrying.iter().copied().map(Money::new).collect(),
             busy_until: self.unit_busy_until.clone(),
+            free: flags(&self.unit_free, "unit_free")?,
         }) {
             return Err(SnapshotError::Ragged("unit"));
         }
@@ -1037,8 +1084,28 @@ impl Snapshot {
             seam_choice: self.beacon_seam_choice.clone(),
             flee: flags(&self.beacon_flee, "beacon_flee")?,
             seam: self.beacon_seam.clone(),
+            free: flags(&self.beacon_free, "beacon_free")?,
         }) {
             return Err(SnapshotError::Ragged("beacon"));
+        }
+        // Every beacon a seat holds carries an ordinal below the seat's
+        // placement counter (S2's plan, E1): a name is taken from the counter
+        // when the beacon is placed, so a file holding one at or past it names a
+        // beacon no run of this sim placed.
+        let named_past_the_counter = beacons
+            .seats()
+            .iter()
+            .zip(beacons.ordinals())
+            .zip(beacons.frees())
+            .any(|((seat, ordinal), free)| {
+                !*free
+                    && self
+                        .seat_placed
+                        .get(usize::from(*seat))
+                        .is_none_or(|placed| *ordinal >= *placed)
+            });
+        if named_past_the_counter {
+            return Err(SnapshotError::OutOfRange("beacon_ordinal"));
         }
 
         let mut structures =
@@ -1051,9 +1118,16 @@ impl Snapshot {
             pos: points_from_axes(&self.structure_pos)
                 .ok_or(SnapshotError::Ragged("structure_pos"))?,
             hp: self.structure_hp.iter().copied().map(Hp::new).collect(),
-            home: self.structure_home.clone(),
+            home: self
+                .structure_home
+                .iter()
+                .copied()
+                .map(BeaconId::new)
+                .collect(),
             building: flags(&self.structure_building, "structure_building")?,
             rotation: rotations(&self.structure_rotation, "structure_rotation")?,
+            ruined_at: self.structure_ruined_at.clone(),
+            free: flags(&self.structure_free, "structure_free")?,
         }) {
             return Err(SnapshotError::Ragged("structure"));
         }
@@ -1064,6 +1138,7 @@ impl Snapshot {
             self.wreck_id.clone(),
             points_from_axes(&self.wreck_pos).ok_or(SnapshotError::Ragged("wreck_pos"))?,
             self.wreck_salvage.iter().copied().map(Money::new).collect(),
+            flags(&self.wreck_free, "wreck_free")?,
         ) {
             return Err(SnapshotError::Ragged("wreck"));
         }
@@ -1137,12 +1212,22 @@ impl Snapshot {
         if !targets.restore(
             capacity,
             TargetColumns {
-                beacon: self.target_beacon.clone(),
+                beacon: self
+                    .target_beacon
+                    .iter()
+                    .copied()
+                    .map(BeaconId::new)
+                    .collect(),
                 kind: self.target_kind.clone(),
                 blueprint: self.target_blueprint.clone(),
                 at: points_from_axes(&self.target_at).ok_or(SnapshotError::Ragged("target_at"))?,
                 area: boxes_from_axes(&self.target_area)?,
-                built: self.target_built.clone(),
+                built: self
+                    .target_built
+                    .iter()
+                    .copied()
+                    .map(StructureId::new)
+                    .collect(),
                 feature: self.target_feature.clone(),
                 desc: self.target_desc.clone(),
                 order: self.target_order.clone(),
@@ -1296,7 +1381,7 @@ impl Snapshot {
         let a_seat = |id: &u8| usize::from(*id) < seats;
         let a_seat_or_nobody = |id: &u8| *id == SeatId::NEUTRAL.raw() || a_seat(id);
         let a_flag = |byte: &u8| *byte <= 1;
-        let more: [(&'static str, bool); 10] = [
+        let more: [(&'static str, bool); 11] = [
             (
                 "seat_id",
                 self.seat_id
@@ -1304,8 +1389,13 @@ impl Snapshot {
                     .enumerate()
                     .all(|(index, id)| usize::from(*id) == index),
             ),
-            ("unit_seat", self.unit_seat.iter().all(a_seat)),
-            ("structure_seat", self.structure_seat.iter().all(a_seat)),
+            // A free row is nobody's (S2's plan, E1), and so is a ruin.
+            ("unit_seat", self.unit_seat.iter().all(a_seat_or_nobody)),
+            ("beacon_seat", self.beacon_seat.iter().all(a_seat_or_nobody)),
+            (
+                "structure_seat",
+                self.structure_seat.iter().all(a_seat_or_nobody),
+            ),
             ("sighting_seat", self.sighting_seat.iter().all(a_seat)),
             (
                 "sighting_owner",
@@ -1327,6 +1417,155 @@ impl Snapshot {
             Some((column, _)) => Err(SnapshotError::OutOfRange(column)),
             None => Ok(()),
         }
+    }
+
+    /// Every row is a row this sim writes (S2's plan, E1), beside
+    /// [`Snapshot::check_codes`], each refusal naming its column:
+    ///
+    /// * every id names its own row (`unit_id`, `beacon_id`, `structure_id`,
+    ///   `wreck_id`), and a seat's ordinals are unique among the beacons it
+    ///   holds (`beacon_ordinal`);
+    /// * a free row is nobody's, with no hit points and no home, and a free
+    ///   structure is no ruin (`unit_free`, `beacon_free`, `structure_free`,
+    ///   `wreck_free`); a live unit or beacon belongs to a real seat
+    ///   (`unit_seat`, `beacon_seat`);
+    /// * a live structure is nobody's exactly when it is a ruin, exactly when
+    ///   its ruined-at tick is set, and that tick is not after the snapshot's
+    ///   (`structure_ruined_at`);
+    /// * no commander's row is free (`unit_free`), and every seat that has
+    ///   placed a beacon still holds its core, ordinal 0 (`beacon_free`);
+    /// * the ruins fit the reserve, and the structure and wreck tables their
+    ///   rooms (`structure_ruined_at`, `structure_id`, `wreck_id`);
+    /// * each seat has lost no more beacons than it placed, and its placement
+    ///   counter has a next value (`seat_beacons_lost`, `seat_placed`).
+    ///
+    /// # Errors
+    ///
+    /// [`SnapshotError::OutOfRange`], naming the column.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one check per rule of the row layout, every one before anything is written; split, the list would be spread over functions that each hold a piece of it"
+    )]
+    fn check_rows(&self) -> Result<(), SnapshotError> {
+        use crate::tables::{NOT_RUINED, UnitKind, ids_name_their_rows};
+        let refuse = |column: &'static str| Err(SnapshotError::OutOfRange(column));
+        let nobody = SeatId::NEUTRAL.raw();
+        let none = BeaconId::NONE.raw();
+        let seats = self.seat_id.len();
+        let a_seat = |seat: u8| usize::from(seat) < seats;
+        for (column, ids) in [
+            ("unit_id", &self.unit_id),
+            ("beacon_id", &self.beacon_id),
+            ("structure_id", &self.structure_id),
+            ("wreck_id", &self.wreck_id),
+        ] {
+            if !ids_name_their_rows(ids) {
+                return refuse(column);
+            }
+        }
+        let mut held: std::collections::BTreeSet<(u8, u32)> = std::collections::BTreeSet::new();
+        for ((seat, ordinal), free) in self
+            .beacon_seat
+            .iter()
+            .zip(&self.beacon_ordinal)
+            .zip(&self.beacon_free)
+        {
+            if *free == 0 && !held.insert((*seat, *ordinal)) {
+                return refuse("beacon_ordinal");
+            }
+        }
+        // Units: a free row is nobody's, with no hit points and no home; a
+        // live one is a real seat's; a commander's row is never free.
+        for ((((seat, hp), home), kind), free) in self
+            .unit_seat
+            .iter()
+            .zip(&self.unit_hp)
+            .zip(&self.unit_home)
+            .zip(&self.unit_kind)
+            .zip(&self.unit_free)
+        {
+            if *free != 0 {
+                if *kind == UnitKind::Commander.id() {
+                    return refuse("unit_free");
+                }
+                if *seat != nobody || *hp != 0 || *home != none {
+                    return refuse("unit_free");
+                }
+            } else if !a_seat(*seat) {
+                return refuse("unit_seat");
+            }
+        }
+        for ((seat, hp), free) in self
+            .beacon_seat
+            .iter()
+            .zip(&self.beacon_hp)
+            .zip(&self.beacon_free)
+        {
+            if *free != 0 {
+                if *seat != nobody || *hp != 0 {
+                    return refuse("beacon_free");
+                }
+            } else if !a_seat(*seat) {
+                return refuse("beacon_seat");
+            }
+        }
+        // Every seat that has placed a beacon still holds its core.
+        for (index, placed) in self.seat_placed.iter().enumerate() {
+            let Ok(seat) = u8::try_from(index) else {
+                return refuse("seat_placed");
+            };
+            if *placed > 0 && !held.contains(&(seat, 0)) {
+                return refuse("beacon_free");
+            }
+        }
+        let mut ruins: u32 = 0;
+        for ((((seat, hp), home), ruined), free) in self
+            .structure_seat
+            .iter()
+            .zip(&self.structure_hp)
+            .zip(&self.structure_home)
+            .zip(&self.structure_ruined_at)
+            .zip(&self.structure_free)
+        {
+            if *free != 0 {
+                if *seat != nobody || *hp != 0 || *home != none || *ruined != NOT_RUINED {
+                    return refuse("structure_free");
+                }
+                continue;
+            }
+            let ruin = *seat == nobody;
+            if ruin != (*ruined != NOT_RUINED) || (ruin && *ruined > self.tick) {
+                return refuse("structure_ruined_at");
+            }
+            if ruin {
+                ruins = ruins.saturating_add(1);
+            } else if !a_seat(*seat) {
+                return refuse("structure_seat");
+            }
+        }
+        if ruins > crate::world::RUIN_RESERVE {
+            return refuse("structure_ruined_at");
+        }
+        if self.structure_id.len() > crate::math::index::row(crate::world::STRUCTURE_ROWS) {
+            return refuse("structure_id");
+        }
+        if self.wreck_id.len() > crate::math::index::row(crate::world::WRECK_TABLE_ROOM) {
+            return refuse("wreck_id");
+        }
+        for (salvage, free) in self.wreck_salvage.iter().zip(&self.wreck_free) {
+            if *free != 0 && *salvage != 0 {
+                return refuse("wreck_free");
+            }
+        }
+        for (placed, lost) in self.seat_placed.iter().zip(&self.seat_beacons_lost) {
+            if *placed == u32::MAX {
+                return refuse("seat_placed");
+            }
+            if lost > placed {
+                return refuse("seat_beacons_lost");
+            }
+        }
+        Ok(())
     }
 
     /// The match state, refused at the door when its phase or end reason is

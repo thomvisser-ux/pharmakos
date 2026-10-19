@@ -56,6 +56,9 @@ pub fn event_text(event: &Event) -> String {
         EventKind::StructureRuined => {
             format!("A structure of {seat} became a neutral ruin.")
         }
+        EventKind::RuinBuried => {
+            String::from("The ash buried the oldest ruin to make room for a new one.")
+        }
         EventKind::SeatEliminated => format!("{seat} was eliminated.", seat = capitalise(&seat)),
         EventKind::CommanderDied => format!(
             "The commander of {seat} died. That is death {} in this Push.",
@@ -634,6 +637,16 @@ mod tests {
         );
         let text = event_text(&event(EventKind::StructureRuined, None, 0));
         assert!(text.contains("an unclaimed asset"), "{text}");
+    }
+
+    /// S2's plan, E1: a buried ruin names no seat, because a ruin is nobody's.
+    #[test]
+    fn a_buried_ruin_names_nobody() {
+        let text = event_text(&event(EventKind::RuinBuried, None, 0));
+        assert_eq!(
+            text,
+            "The ash buried the oldest ruin to make room for a new one."
+        );
     }
 
     #[test]

@@ -79,6 +79,20 @@ pub(crate) struct View<'a> {
     pub(crate) state: &'a PlanState,
 }
 
+/// The row a beacon the interpreter holds an id of lives in, checked by
+/// generation: a beacon since freed is a stale reference, counted under
+/// [`crate::ids::StaleRef::PinnedBeacon`], and answers no row (S2's plan, E1).
+pub(crate) fn pinned_row(world: &crate::world::World, beacon: BeaconId) -> Option<usize> {
+    match world.beacons().row_of(beacon) {
+        Ok(row) => Some(row.index()),
+        Err(crate::ids::RefError::Stale) => {
+            world.stale_refs().stale(crate::ids::StaleRef::PinnedBeacon);
+            None
+        }
+        Err(crate::ids::RefError::Id(_) | crate::ids::RefError::NoSuchRow) => None,
+    }
+}
+
 impl View<'_> {
     /// The tick the decision is being taken on.
     pub(crate) fn tick(&self) -> Tick {
@@ -87,11 +101,12 @@ impl View<'_> {
 
     /// The seat's commander, when it has a living one.
     pub(crate) fn commander(&self) -> Option<usize> {
-        let commander = self.world.commander_of(self.seat);
-        if !commander.is_some() {
-            return None;
-        }
-        usize::try_from(commander.raw()).ok()
+        let commander = self.world.commander_of(self.seat)?;
+        self.world
+            .units()
+            .row_of(commander)
+            .ok()
+            .map(crate::ids::Row::index)
     }
 
     /// The commander's position, when it has one.
@@ -139,16 +154,12 @@ impl View<'_> {
     }
 
     /// A beacon's row, when the id names one.
+    ///
+    /// Checked by generation (S2's plan, E1): a pinned beacon whose row has
+    /// since been freed or reused is a stale reference, counted, and names no
+    /// row -- the beacon the step pinned is gone.
     pub(crate) fn beacon_row(&self, beacon: BeaconId) -> Option<usize> {
-        let beacons = self.world.beacons();
-        let count = crate::math::index::row(beacons.len());
-        let index = usize::try_from(beacon.raw()).ok()?;
-        // Rows are dense and in id order, so the id is the row — checked rather
-        // than assumed, because a snapshot could in principle carry otherwise.
-        if beacons.ids().get(index).copied() == Some(beacon.raw()) {
-            return Some(index);
-        }
-        (0..count).find(|row| beacons.ids().get(*row).copied() == Some(beacon.raw()))
+        pinned_row(self.world, beacon)
     }
 
     /// A beacon's hit points as a whole percentage of its maximum: the

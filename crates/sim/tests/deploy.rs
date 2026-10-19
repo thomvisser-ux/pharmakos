@@ -105,7 +105,7 @@ fn open_with(segment_ms: i32, prepare: impl FnOnce(&mut World)) -> Runner {
     runner
         .seal_playbook(SeatId::new(SEAT), plan)
         .expect("a Lull takes a seal");
-    assert!(runner.begin_push(), "a match opens in a Lull");
+    assert!(runner.begin_push().unwrap(), "a match opens in a Lull");
     runner.clear_events();
     runner
 }
@@ -234,7 +234,10 @@ fn an_aborted_deploy_refunds_the_beacon_in_full() {
             "a dead commander deploys nothing"
         );
         if tick == 100 && !killed {
-            let commander = runner.world().commander_of(SeatId::new(SEAT));
+            let commander = runner
+                .world()
+                .commander_of(SeatId::new(SEAT))
+                .expect("an occupied seat has a commander");
             assert!(
                 runner
                     .world_mut()

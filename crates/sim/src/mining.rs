@@ -272,7 +272,7 @@ pub fn settings_at(world: &World, row: usize) -> Option<MineSettings> {
 /// (item 62).
 #[must_use]
 pub fn next_dig(world: &World, beacon: BeaconId) -> Option<Dig> {
-    let row = usize::try_from(beacon.raw()).ok()?;
+    let row = world.beacons().row_of(beacon).ok()?.index();
     let seam = world.beacons().seams().get(row).copied()?;
     if seam == NO_FEATURE {
         return None;
@@ -296,9 +296,11 @@ pub fn next_dig(world: &World, beacon: BeaconId) -> Option<Dig> {
 /// later one, in unit-id order, waits for the earlier to land.
 #[must_use]
 pub fn dig_waits(world: &World, beacon: BeaconId) -> bool {
-    let Some(seam) = usize::try_from(beacon.raw())
+    let Some(seam) = world
+        .beacons()
+        .row_of(beacon)
         .ok()
-        .and_then(|row| world.beacons().seams().get(row).copied())
+        .and_then(|row| world.beacons().seams().get(row.index()).copied())
         .filter(|seam| *seam != NO_FEATURE)
         .and_then(|seam| usize::try_from(seam).ok())
     else {
@@ -756,7 +758,7 @@ fn mines(world: &World, row: usize, beacon: BeaconId) -> bool {
         .iter()
         .zip(units.kinds())
         .zip(units.hit_points())
-        .any(|((home, kind), hp)| *home == beacon.raw() && *kind == miner && hp.is_alive())
+        .any(|((home, kind), hp)| *home == beacon && *kind == miner && hp.is_alive())
 }
 
 /// Keep every mining beacon of `seat` holding a seam with work left for it.
