@@ -451,12 +451,20 @@ impl Host {
         Ok(())
     }
 
-    /// Open the Push. Returns false when the runner was not in a Lull.
+    /// Open the Push. `Ok(false)` when the runner was not in a Lull.
     ///
     /// **One of the three places this crate steps a match**, and the only one
     /// that starts one.
-    pub fn begin_push(&mut self) -> bool {
-        self.runner.begin_push()
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::Internal`] while [`Host::phased_tick`] left a tick
+    /// open (`MidTick`, S2's plan, E30; decisions-log item 145): the host's to
+    /// have avoided.
+    pub fn begin_push(&mut self) -> Result<bool, Error> {
+        self.runner.begin_push().map_err(|refused| {
+            Error::internal(format!("this match would not open its Push: {refused}"))
+        })
     }
 
     /// One tick of the Push, or `None` outside one.
@@ -567,12 +575,18 @@ impl Host {
         Ok(())
     }
 
-    /// End the recap and open the next Lull. Returns false when the runner was
+    /// End the recap and open the next Lull. `Ok(false)` when the runner was
     /// not in a recap.
     ///
     /// **One of the three places this crate steps a match.**
-    pub fn end_recap(&mut self) -> bool {
-        self.runner.end_recap()
+    ///
+    /// # Errors
+    ///
+    /// As [`Host::begin_push`], while a phased tick is open.
+    pub fn end_recap(&mut self) -> Result<bool, Error> {
+        self.runner.end_recap().map_err(|refused| {
+            Error::internal(format!("this match would not close its recap: {refused}"))
+        })
     }
 
     /// Drain the events the sim has produced since the last drain.
@@ -649,7 +663,9 @@ impl Host {
             ))
         })?;
         if self.runner.phase() == MatchPhase::Recap {
-            let _ = self.runner.end_recap();
+            self.runner.end_recap().map_err(|refused| {
+                Error::internal(format!("this save's recap would not close: {refused}"))
+            })?;
         }
         if self.runner.phase() != MatchPhase::Lull {
             return Err(Error::invalid(format!(
@@ -921,7 +937,7 @@ mod tests {
         assert!(host.world().interpreter().plan(0).is_some());
         assert!(host.world().interpreter().plan(1).is_some());
 
-        assert!(host.begin_push());
+        assert!(host.begin_push().expect("the host answers"));
         let error = host
             .seal_plans(vec![(SeatId::new(0), plan.clone())])
             .expect_err("a Push does not");
@@ -988,7 +1004,7 @@ mod tests {
         assert!(!host.drain_events().is_empty(), "the match opened");
         assert!(host.drain_events().is_empty(), "and the bus was drained");
 
-        assert!(host.begin_push());
+        assert!(host.begin_push().expect("the host answers"));
         assert_eq!(host.runner().phase(), MatchPhase::Push);
         let mut ticks = 0_u32;
         while let Some(report) = host.step().expect("a whole tick") {
@@ -999,7 +1015,7 @@ mod tests {
         }
         assert_eq!(ticks, 20, "1 000 ms at 50 ms a tick");
         assert_eq!(host.runner().phase(), MatchPhase::Recap);
-        assert!(host.end_recap());
+        assert!(host.end_recap().expect("the host answers"));
         assert_eq!(host.runner().phase(), MatchPhase::Lull);
         assert_eq!(host.runner().round(), 2);
         host.refresh_routes().expect("the graph rebuilds");
@@ -1057,7 +1073,10 @@ mod seams {
     fn stepping_by_phase_hashes_as_stepping_whole() {
         let mut whole = host();
         let mut phased = host();
-        assert!(whole.begin_push() && phased.begin_push());
+        assert!(
+            whole.begin_push().expect("the host answers")
+                && phased.begin_push().expect("the host answers")
+        );
         let mut ticks = 0_u32;
         loop {
             let a = whole.step().expect("a whole tick");
@@ -1088,7 +1107,7 @@ mod seams {
     #[test]
     fn a_half_finished_tick_cannot_be_captured_saved_or_filed() {
         let mut host = host();
-        assert!(host.begin_push());
+        assert!(host.begin_push().expect("the host answers"));
         {
             let mut tick = host.phased_tick().expect("a phased tick").expect("a Push");
             assert!(tick.run_next_phase().expect("Broadphase").is_some());
@@ -1130,7 +1149,7 @@ mod seams {
             Err(Code::Internal),
             "a save would lose the order the host filed"
         );
-        assert!(host.begin_push());
+        assert!(host.begin_push().expect("the host answers"));
         assert!(host.step().expect("a tick").is_some());
         assert!(
             host.check_savable().is_ok(),
@@ -1180,7 +1199,7 @@ mod seams {
             "once"
         );
         let mut playing = host();
-        assert!(playing.begin_push());
+        assert!(playing.begin_push().expect("the host answers"));
         assert!(playing.step().expect("a tick").is_some());
         assert_eq!(
             playing.seed_layout(&layout(0)).map_err(|error| error.code),

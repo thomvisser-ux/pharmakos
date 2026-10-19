@@ -153,7 +153,7 @@ fn play() -> (String, String) {
             "seat {seat} seals the scenario's playbook"
         );
     }
-    assert!(runner.begin_push(), "a match opens in a Lull");
+    assert!(runner.begin_push().unwrap(), "a match opens in a Lull");
 
     let mut chain = String::with_capacity(
         usize::try_from(SEGMENT_TICKS)

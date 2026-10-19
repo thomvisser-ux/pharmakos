@@ -29,7 +29,6 @@
 //! the edge relation symmetric: a route and its reverse cost the same, which is
 //! what the repair tests and the reversed-route assertions rest on.
 
-use crate::pathing::HEADROOM_VOXELS;
 use crate::voxels::{CHUNK_EDGE_I32, VoxelStore};
 
 /// A node of the search graph: one voxel column, `x + y * size_x`.
@@ -56,33 +55,45 @@ pub const NEIGHBOURS: [(i32, i32); 8] = [
 /// The default expansion order: the identity over [`NEIGHBOURS`].
 pub const DEFAULT_ORDER: [u8; 8] = [0, 1, 2, 3, 4, 5, 6, 7];
 
-/// The integer cost model, read from the rules table (item 59).
+/// The integer cost model and the walkability rule, read from the rules table
+/// (item 59; S2's plan, E26).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct StepCosts {
     cardinal: i32,
     diagonal: i32,
     climb: i32,
+    headroom: i32,
 }
 
 impl StepCosts {
-    /// Take the three rows the search reads.
+    /// Take the four rows the surface reads: the three step costs and the
+    /// headroom a walker needs above its column.
     #[must_use]
-    pub const fn new(cardinal: i32, diagonal: i32, climb: i32) -> StepCosts {
+    pub const fn new(cardinal: i32, diagonal: i32, climb: i32, headroom: i32) -> StepCosts {
         StepCosts {
             cardinal,
             diagonal,
             climb,
+            headroom,
         }
     }
 
-    /// The three rows of a rules table, in one call.
+    /// The four rows of a rules table, in one call.
     #[must_use]
     pub const fn from_rules(rules: &crate::rules::RulesTable) -> StepCosts {
         StepCosts::new(
             rules.step_cardinal(),
             rules.step_diagonal(),
             rules.climb_surcharge(),
+            rules.headroom_voxels(),
         )
+    }
+
+    /// Voxels of clear air a walker needs above the column it stands on,
+    /// `locomotion.headroom_voxels` (S2's plan, E26).
+    #[must_use]
+    pub const fn headroom(self) -> i32 {
+        self.headroom
     }
 
     /// Cost of a cardinal step on level ground.
@@ -282,7 +293,7 @@ impl Surface {
         };
         let top = store.top_solid_z(x, y).unwrap_or(-1);
         let [_, _, sz] = self.size;
-        let walkable = top >= 0 && top.saturating_add(HEADROOM_VOXELS) < sz;
+        let walkable = top >= 0 && top.saturating_add(self.costs.headroom()) < sz;
         if let Some(slot) = self.top.get_mut(index) {
             // E7: rule: a column whose top is past a voxel coordinate is not a column of this map; -1 is "no top"
             *slot = i16::try_from(top).unwrap_or(-1);

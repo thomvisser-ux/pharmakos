@@ -135,8 +135,10 @@ fn chain(world: World, ticks: u32) -> String {
             loop {
                 match runner.phase() {
                     MatchPhase::Push | MatchPhase::Ended => break,
-                    MatchPhase::Lull => assert!(runner.begin_push(), "a Lull opens a Push"),
-                    MatchPhase::Recap => assert!(runner.end_recap(), "a recap closes"),
+                    MatchPhase::Lull => {
+                        assert!(runner.begin_push().unwrap(), "a Lull opens a Push");
+                    }
+                    MatchPhase::Recap => assert!(runner.end_recap().unwrap(), "a recap closes"),
                 }
             }
             match runner.step().unwrap() {
@@ -659,7 +661,7 @@ fn the_broadphase_answer_does_not_depend_on_the_cell_size() {
     let whole_map = Fx::from_voxels(1_024);
     let centre = [Fx::from_voxels(192), Fx::from_voxels(192), Fx::ZERO];
 
-    let mut answers: Vec<Vec<u32>> = Vec::new();
+    let mut answers: Vec<Vec<pharmakos_sim::ids::Row>> = Vec::new();
     let mut everything: Vec<usize> = Vec::new();
     for cell_size in [4_u32, 16, 64] {
         let altered = rules_edited(|message| {
@@ -717,9 +719,9 @@ fn the_broadphase_answer_does_not_depend_on_the_cell_size() {
     let positions: Vec<[Fx; 3]> = world.units().positions().to_vec();
     let limit = Sq::of_radius(radius);
     for (id, pos) in positions.iter().enumerate() {
-        let id = u32::try_from(id).unwrap();
+        let row = pharmakos_sim::ids::Row::of_index(id).unwrap();
         assert_eq!(
-            near.binary_search(&id).is_ok(),
+            near.binary_search(&row).is_ok(),
             Sq::between(*pos, centre) <= limit,
             "unit {id} is on the wrong side of the radius"
         );
@@ -1491,19 +1493,28 @@ fn the_asset_id_space_widened_without_renumbering_a_unit() {
     use pharmakos_sim::knowledge::AssetId;
     use pharmakos_sim::tables::{BeaconId, StructureId, UnitId, WreckId};
 
-    assert_eq!(AssetId::of_unit(UnitId::new(7)).raw(), 7);
-    assert_eq!(AssetId::of_unit(UnitId::new(7)).tag(), AssetId::TAG_UNIT);
+    assert_eq!(AssetId::of_unit(UnitId::new(7)).unwrap().raw(), 7);
+    assert_eq!(
+        AssetId::of_unit(UnitId::new(7)).unwrap().tag(),
+        AssetId::TAG_UNIT
+    );
     for (id, tag) in [
-        (AssetId::of_beacon(BeaconId::new(7)), AssetId::TAG_BEACON),
         (
-            AssetId::of_structure(StructureId::new(7)),
+            AssetId::of_beacon(BeaconId::new(7)).unwrap(),
+            AssetId::TAG_BEACON,
+        ),
+        (
+            AssetId::of_structure(StructureId::new(7)).unwrap(),
             AssetId::TAG_STRUCTURE,
         ),
-        (AssetId::of_wreck(WreckId::new(7)), AssetId::TAG_WRECK),
+        (
+            AssetId::of_wreck(WreckId::new(7)).unwrap(),
+            AssetId::TAG_WRECK,
+        ),
     ] {
         assert_eq!(id.tag(), tag);
         assert_eq!(id.index(), 7);
-        assert_ne!(id, AssetId::of_unit(UnitId::new(7)));
+        assert_ne!(id, AssetId::of_unit(UnitId::new(7)).unwrap());
     }
 }
 

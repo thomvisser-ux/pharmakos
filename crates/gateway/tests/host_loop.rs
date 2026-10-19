@@ -1446,7 +1446,7 @@ fn the_replay_files_reproduce_the_matchs_chain() {
             ));
         }
         host.seal_plans(plans).expect("sealed in a Lull");
-        assert!(host.begin_push());
+        assert!(host.begin_push().expect("the host answers"));
         let mut chain = String::new();
         while let Some(report) = host.step().expect("a whole tick") {
             let _ = writeln!(
@@ -1467,6 +1467,6 @@ fn the_replay_files_reproduce_the_matchs_chain() {
             chain, recorded,
             "round {round}'s chain, re-hosted from its inputs"
         );
-        assert!(host.end_recap());
+        assert!(host.end_recap().expect("the host answers"));
     }
 }

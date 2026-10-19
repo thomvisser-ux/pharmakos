@@ -280,7 +280,7 @@ mod tests {
         // on the same map for the same seat, so a route between them is a
         // route the match itself depends on.
         let seat = pharmakos_sim::tables::SeatId::new(0);
-        let commander = world.commander_of(seat);
+        let commander = world.commander_of(seat).expect("seat 0 has a commander");
         let row = world
             .units()
             .ids()

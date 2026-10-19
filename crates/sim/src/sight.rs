@@ -1,9 +1,32 @@
 // SPDX-FileCopyrightText: 2026 Pharmakos contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! The one sight rule a host draws with: a seat sees inside the spheres of its
-//! own living beacons.
+//! Sight: the one sensor interface (S2's plan, E10), and the sphere rule a host
+//! draws with today.
 //!
+//! # One sensor interface, two outputs
+//!
+//! Every source of sight is a [`Sensor`]: a beacon's sphere
+//! (`beacon.sphere_radius_voxels`), a unit's vision radius from its kind's
+//! rules row (`units.<kind>.vision_radius_voxels`, the commander's
+//! `commander.vision_radius_voxels`), and a finished structure's from its row
+//! (`structures.<kind>.vision_radius_voxels`); Defend's pickets and S4's Sensor
+//! Spire join as more sensors, and radar would be one more (item 138 (4) (c)).
+//! The interface has two outputs: the **live view** the fog filter reads
+//! ([`World::sight`], an owned [`Sight`] a host asks many times), and the
+//! **knowledge store's sightings and reach** ([`crate::survey`], which walks
+//! the same sensors through [`World::sensor_at`]).
+//!
+//! A sensor sees everything within its radius (item 144 (4): unit vision is a
+//! radius, with no line of sight). The line-of-sight test is a seam,
+//! [`LineOfSight`], whose one model today, [`RadiusOnly`], answers "visible" for
+//! every point in the radius; a later model replaces the model, not its
+//! callers.
+//!
+//! # The sphere rule the live view still draws with
+//!
+//! The gateway draws the live view from the spheres alone until S2's `wgw`
+//! moves it onto [`World::sight`]:
 //! Spec section 6 states it -- **spheres give passive vision** -- and the
 //! rules table numbers it, `beacon.sphere_radius_voxels`. The owner's answer of
 //! 2026-09-21 (decisions-log item 108 (1)) is that this is the whole of the
@@ -32,20 +55,106 @@
 //!
 //! # What it does not model
 //!
-//! Nothing here is hashed state and nothing here is read by a tick: it is a
-//! question asked of the world, never an input to it. It does **not** include a
-//! scout's own vision ([`crate::programs::UNIT_VISION_RADIUS_VOXELS`]) or
-//! Survey-lite's recorded sightings ([`crate::survey`]). Item 108 (1) keeps
-//! both out of the live view, and that was **ruled at the demo** (item 126 (2)
-//! (b), register D-25): spheres only, for now. A unit's sight radius is S2's,
-//! with scouting (decision 13 of S1's plan, register S1-34), and the sightings
-//! join with S3's knowledge store.
+//! Nothing here is hashed state: a sensor is read off the hashed tables, and the
+//! sightings a tick records from them are hashed where they are kept
+//! ([`crate::tables::SightingTable`]). [`Spheres`] does **not** include a unit's
+//! or a structure's own vision, which [`Sight`] does; item 108 (1) kept the
+//! live view to the spheres, ruled at the demo (item 126 (2) (b), register
+//! D-25), and S2's `wgw` moves the gateway onto [`World::sight`] (S1-34's
+//! gateway half).
 
+use crate::ids::Row;
 use crate::math::fixed::Fx;
 use crate::math::quantity::Hp;
 use crate::programs::within;
-use crate::tables::SeatId;
+use crate::tables::{BeaconId, SeatId, StructureKind, UnitKind};
 use crate::world::World;
+
+/// What a sensor is: the source its radius comes from.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SensorKind {
+    /// A living beacon's sphere, dormant or not, `beacon.sphere_radius_voxels`.
+    Sphere,
+    /// A living unit's own vision, its kind's `vision_radius_voxels`.
+    Unit(UnitKind),
+    /// A finished structure's own vision, its kind's `vision_radius_voxels`.
+    Structure(StructureKind),
+}
+
+/// One source of sight (S2's plan, E10): whose it is, where it stands, how far
+/// it sees, and what it is.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Sensor {
+    /// The seat that sees through it.
+    pub seat: SeatId,
+    /// Where it stands.
+    pub centre: [Fx; 3],
+    /// How far it sees, in Q16.16 voxels.
+    pub radius: Fx,
+    /// What it is.
+    pub kind: SensorKind,
+}
+
+/// The line-of-sight seam (item 144 (4)): whether a sensor that reaches a point
+/// sees it.
+///
+/// A later model -- terrain masking, a 3D voxel traversal (the radar memo's
+/// section 10) -- replaces the model, not the sensors' callers.
+pub trait LineOfSight {
+    /// Whether `sensor` sees `point`, which lies within its radius.
+    fn visible(&self, sensor: &Sensor, point: [Fx; 3]) -> bool;
+}
+
+/// The one model today: everything in the radius is visible (item 144 (4):
+/// "unit vision is a radius, with no line of sight").
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct RadiusOnly;
+
+impl LineOfSight for RadiusOnly {
+    fn visible(&self, _sensor: &Sensor, _point: [Fx; 3]) -> bool {
+        true
+    }
+}
+
+impl Sensor {
+    /// Whether this sensor sees `point`: inside its radius, and visible under
+    /// the line-of-sight model.
+    #[must_use]
+    pub fn sees<L: LineOfSight>(&self, model: &L, point: [Fx; 3]) -> bool {
+        within(point, self.centre, self.radius) && model.visible(self, point)
+    }
+}
+
+/// The live view's output of the sensor interface: every seat's sensors, owned,
+/// for a host that asks many times while the world moves on ([`World::sight`]).
+///
+/// Rebuild it after anything that can move, place or lose a sensor: a stale
+/// one draws last tick's sight.
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct Sight {
+    sensors: Vec<Sensor>,
+}
+
+impl Sight {
+    /// True when `voxel` is seen by one of `seat`'s sensors. A coordinate
+    /// outside the fixed-point range is off every map and is seen by nobody.
+    #[must_use]
+    pub fn sees(&self, seat: SeatId, voxel: [i32; 3]) -> bool {
+        let Some(point) = point_of(voxel) else {
+            return false;
+        };
+        self.sensors
+            .iter()
+            .filter(|sensor| sensor.seat == seat)
+            .any(|sensor| sensor.sees(&RadiusOnly, point))
+    }
+
+    /// Every sensor, in the order [`World::sensor_at`] walks them.
+    #[must_use]
+    pub fn sensors(&self) -> &[Sensor] {
+        &self.sensors
+    }
+}
 
 /// Every living beacon's sphere, as an owned value a host can hold while the
 /// world moves on.
@@ -111,6 +220,126 @@ fn point_of(voxel: [i32; 3]) -> Option<[Fx; 3]> {
 }
 
 impl World {
+    /// The sensor at position `at` of the walk over every sensor, and the
+    /// position after it, or `None` once the walk is done (S2's plan, E10).
+    ///
+    /// The walk is a total order: every living beacon by row, then every
+    /// living unit by row, then every finished structure a seat owns by row.
+    /// Positions that hold no sensor are skipped, so a caller walks with
+    /// `while let Some((sensor, next)) = world.sensor_at(at)` and allocates
+    /// nothing.
+    #[must_use]
+    pub fn sensor_at(&self, at: usize) -> Option<(Sensor, usize)> {
+        let beacons = crate::math::index::row(self.beacons().len());
+        let units = crate::math::index::row(self.units().len());
+        let structures = crate::math::index::row(self.structures().len());
+        let mut at = at;
+        loop {
+            let sensor = if at < beacons {
+                self.beacon_sensor(at)
+            } else if at < beacons.saturating_add(units) {
+                self.unit_sensor(at.saturating_sub(beacons))
+            } else if at < beacons.saturating_add(units).saturating_add(structures) {
+                self.structure_sensor(at.saturating_sub(beacons.saturating_add(units)))
+            } else {
+                return None;
+            };
+            at = at.saturating_add(1);
+            if let Some(sensor) = sensor {
+                return Some((sensor, at));
+            }
+        }
+    }
+
+    /// The beacon in `row` as a sensor: its sphere, while it is alive,
+    /// dormant or not. A dormant beacon keeps its seal and its sphere powered
+    /// off the key-core (item 10), so its sphere still sees, as
+    /// [`World::spheres`] has it (decisions-log item 146).
+    fn beacon_sensor(&self, row: usize) -> Option<Sensor> {
+        self.beacons().id_of(Row::of_index(row)?)?;
+        if !self.beacons().hit_points().get(row)?.is_alive() {
+            return None;
+        }
+        let seat = SeatId::new(self.beacons().seats().get(row).copied()?);
+        Some(Sensor {
+            seat: seat.is_some().then_some(seat)?,
+            centre: self.beacons().positions().get(row).copied()?,
+            radius: self.sphere_radius(),
+            kind: SensorKind::Sphere,
+        })
+    }
+
+    /// The unit in `row` as a sensor: its kind's vision radius, while it is
+    /// alive and its home beacon is not dormant. A dormant beacon's units are
+    /// powered down and see nothing (decisions-log item 146); the commander is
+    /// homed to no grid's dormancy and keeps its own sight.
+    fn unit_sensor(&self, row: usize) -> Option<Sensor> {
+        let units = self.units();
+        if !units.hit_points().get(row)?.is_alive() {
+            return None;
+        }
+        let seat = SeatId::new(units.seats().get(row).copied()?);
+        let kind = UnitKind::from_id(units.kinds().get(row).copied()?)?;
+        if kind != UnitKind::Commander && self.home_is_dark(*units.homes().get(row)?) {
+            return None;
+        }
+        Some(Sensor {
+            seat: seat.is_some().then_some(seat)?,
+            centre: units.positions().get(row).copied()?,
+            radius: Fx::from_voxels(self.rules().unit(kind).vision_radius_voxels),
+            kind: SensorKind::Unit(kind),
+        })
+    }
+
+    /// The structure in `row` as a sensor: its kind's vision radius, while a
+    /// seat owns it, it stands and it is finished. A ruin is nobody's, and a
+    /// structure going up has no capability until it is finished (spec
+    /// section 7).
+    ///
+    /// A structure homed to a dormant beacon is powered down and sees nothing
+    /// (decisions-log item 146).
+    fn structure_sensor(&self, row: usize) -> Option<Sensor> {
+        let structures = self.structures();
+        if !structures.hit_points().get(row)?.is_alive()
+            || *structures.building().get(row)?
+            || self.home_is_dark(*structures.homes().get(row)?)
+        {
+            return None;
+        }
+        let seat = SeatId::new(structures.seats().get(row).copied()?);
+        let kind = StructureKind::from_id(structures.kinds().get(row).copied()?)?;
+        Some(Sensor {
+            seat: seat.is_some().then_some(seat)?,
+            centre: structures.positions().get(row).copied()?,
+            radius: Fx::from_voxels(self.rules().structure(kind)?.vision_radius_voxels),
+            kind: SensorKind::Structure(kind),
+        })
+    }
+
+    /// Whether `home` is a beacon this world still holds and it is dormant: the
+    /// one thing that powers a unit's or a structure's sight down. No home, or
+    /// a home since freed, is no grid and no dormancy.
+    fn home_is_dark(&self, home: BeaconId) -> bool {
+        self.beacons()
+            .row_of(home)
+            .ok()
+            .and_then(|row| self.beacons().dormant().get(row.index()).copied())
+            == Some(true)
+    }
+
+    /// The live view's output of the sensor interface: every sensor, owned
+    /// ([`Sight`]). Allocates; a host's question, never asked inside a tick.
+    #[must_use]
+    pub fn sight(&self) -> Sight {
+        let mut sensors = Vec::new();
+        let mut at: usize = 0;
+        while let Some((sensor, next)) = self.sensor_at(at) {
+            sensors.push(sensor);
+            at = next;
+        }
+        Sight { sensors }
+    }
+
     /// Every living beacon's sphere, owned, for a host that asks many times.
     ///
     /// Rows are read in table order, which is beacon id order, and a beacon at

@@ -235,6 +235,7 @@ impl Router {
     /// How many units the router carries.
     #[must_use]
     pub fn len(&self) -> u32 {
+        // E7: cannot miss: the router carries one row per unit-table row, at most `ids::ROOM_LIMIT`
         u32::try_from(self.state.len()).unwrap_or(0)
     }
 
@@ -293,61 +294,67 @@ impl Router {
     /// One unit's walk state.
     #[must_use]
     pub fn state(&self, unit: u32) -> WalkState {
-        let id = usize::try_from(unit)
-            .ok()
-            .and_then(|index| self.state.get(index).copied())
-            .unwrap_or(0);
-        // E7: cannot miss: a restore refuses a walk-state byte no state names (`Snapshot::check_codes`), and a unit off the table is idle by rule
-        WalkState::from_id(id).unwrap_or_default()
+        let id = self.state.get(crate::math::index::row(unit)).copied();
+        // E7: rule: a unit the router does not carry stands idle; and a restore refuses a walk-state byte no state names (`Snapshot::check_codes`)
+        id.and_then(WalkState::from_id).unwrap_or_default()
     }
 
     /// One unit's speed accumulator, in twentieths of a cost unit.
     #[must_use]
     pub fn accumulator(&self, unit: u32) -> i32 {
-        usize::try_from(unit)
-            .ok()
-            .and_then(|index| self.accumulator.get(index).copied())
+        self.accumulator
+            .get(crate::math::index::row(unit))
+            .copied()
+            // E7: rule: a unit the router does not carry has no route, no walk and nothing accumulated
             .unwrap_or(0)
     }
 
     /// One unit's route, from its start to its goal.
     #[must_use]
     pub fn route(&self, unit: u32) -> &[Node] {
-        let Ok(index) = usize::try_from(unit) else {
+        let index = crate::math::index::row(unit);
+        let stride = crate::math::index::row(MAX_ROUTE_NODES);
+        let Some(len) = self.route_len.get(index).copied() else {
             return &[];
         };
-        let stride = crate::math::index::row(MAX_ROUTE_NODES);
-        let len = crate::math::index::row(self.route_len.get(index).copied().unwrap_or(0));
         let base = index.saturating_mul(stride);
-        self.nodes
-            .get(base..base.saturating_add(len))
-            .unwrap_or(&[])
+        let end = base.saturating_add(crate::math::index::row(len));
+        match self.nodes.get(base..end) {
+            Some(nodes) => nodes,
+            // A route length is at most the stride by construction
+            // (`set_route`), and a restore checks it; a unit off the table has
+            // no route.
+            None => &[],
+        }
     }
 
     /// How far along its route a unit is.
     #[must_use]
     pub fn route_cursor(&self, unit: u32) -> u32 {
-        usize::try_from(unit)
-            .ok()
-            .and_then(|index| self.route_cursor.get(index).copied())
+        self.route_cursor
+            .get(crate::math::index::row(unit))
+            .copied()
+            // E7: rule: a unit the router does not carry has no route, no walk and nothing accumulated
             .unwrap_or(0)
     }
 
     /// The digest of one unit's route — the form the state hash sees.
     #[must_use]
     pub fn route_hash(&self, unit: u32) -> u64 {
-        usize::try_from(unit)
-            .ok()
-            .and_then(|index| self.route_hash.get(index).copied())
+        self.route_hash
+            .get(crate::math::index::row(unit))
+            .copied()
+            // E7: rule: a unit the router does not carry has no route, no walk and nothing accumulated
             .unwrap_or(0)
     }
 
     /// Whether a unit's route stops short of its goal.
     #[must_use]
     pub fn route_partial(&self, unit: u32) -> bool {
-        usize::try_from(unit)
-            .ok()
-            .and_then(|index| self.route_partial.get(index).copied())
+        self.route_partial
+            .get(crate::math::index::row(unit))
+            .copied()
+            // E7: rule: a unit the router does not carry has no route, no walk and nothing accumulated
             .unwrap_or(false)
     }
 
@@ -430,6 +437,15 @@ impl Router {
         self.set_route_len(unit, 0, 0, 0, false);
     }
 
+    /// Put a unit's row back to a fresh row's walk: idle, no route, nothing
+    /// accumulated. What a freed row and a reused one get (S2's plan, E1), so
+    /// the unit that takes a row inherits none of the walk of the unit that
+    /// held it.
+    pub fn reset(&mut self, unit: u32) {
+        self.clear(unit);
+        self.set_accumulator(unit, 0);
+    }
+
     fn set_state(&mut self, unit: u32, state: WalkState) {
         if let Ok(index) = usize::try_from(unit)
             && let Some(slot) = self.state.get_mut(index)
@@ -462,6 +478,7 @@ impl Router {
         self.speeds
             .get(usize::from(kind.id()))
             .copied()
+            // E7: cannot miss: the speed array holds a slot for every kind id, 1 to 6
             .unwrap_or(0)
     }
 
@@ -565,8 +582,10 @@ impl Router {
             }
             at = at.saturating_add(1);
         }
+        // E7: cannot miss: `take` is at most the stride, `MAX_ROUTE_NODES`, a `u32`
         let len = u32::try_from(take).unwrap_or(0);
         let mut bytes = core::mem::take(&mut self.digest_bytes);
+        // E7: cannot miss: `take` is at most `nodes.len()`
         let hash = route_digest(nodes.get(..take).unwrap_or(&[]), &mut bytes);
         bytes.clear();
         self.digest_bytes = bytes;
@@ -639,12 +658,7 @@ impl Router {
             let id = walker;
             walker = walker.saturating_add(1);
             let index = crate::math::index::row(id);
-            if !hit_points
-                .get(index)
-                .copied()
-                .unwrap_or(Hp::ZERO)
-                .is_alive()
-            {
+            if !hit_points.get(index).is_some_and(|hp| hp.is_alive()) {
                 continue;
             }
             if self.state(id) != WalkState::Walking {
@@ -678,6 +692,7 @@ impl Router {
                     ask_again = true;
                     break;
                 };
+                // E7: cannot miss: the tick rate is 20
                 let price = step.saturating_mul(i32::try_from(TICK_HZ).unwrap_or(20));
                 if accumulator < price {
                     break;
@@ -698,9 +713,15 @@ impl Router {
                     self.next_node(id, cursor),
                 );
             }
+            // A route that ends, or is asked again, banks nothing for the next
+            // one: the accumulator starts the next route at zero, which is what
+            // bounds a tick's walk to the broadphase pad (S2's plan, E11;
+            // `RulesTable::query_pad_voxels`).
             if ask_again {
                 self.set_state(id, WalkState::Waiting);
+                self.set_accumulator(id, 0);
             } else if crate::math::index::row(cursor) >= route_len.saturating_sub(1) {
+                self.set_accumulator(id, 0);
                 if self.route_partial(id) {
                     self.set_state(id, WalkState::Waiting);
                 } else {
@@ -717,7 +738,7 @@ impl Router {
             .copied()
     }
 
-    fn set_accumulator(&mut self, unit: u32, value: i32) {
+    pub(crate) fn set_accumulator(&mut self, unit: u32, value: i32) {
         if let Ok(index) = usize::try_from(unit)
             && let Some(slot) = self.accumulator.get_mut(index)
         {
@@ -736,16 +757,23 @@ impl Router {
     /// Append the router to the canonical encoding, in unit order.
     pub fn encode(&self, enc: &mut crate::encoding::Enc) {
         enc.len(self.len());
-        let mut unit: u32 = 0;
-        while unit < self.len() {
-            let index = crate::math::index::row(unit);
-            enc.u8(self.state.get(index).copied().unwrap_or(0));
-            enc.i32(self.accumulator.get(index).copied().unwrap_or(0));
-            enc.u32(self.route_len.get(index).copied().unwrap_or(0));
-            enc.u32(self.route_cursor.get(index).copied().unwrap_or(0));
-            enc.bool(self.route_partial.get(index).copied().unwrap_or(false));
-            enc.u64(self.route_hash.get(index).copied().unwrap_or(0));
-            unit = unit.saturating_add(1);
+        // The columns walked together: one length by construction, so no read
+        // can miss (S2's plan, E7).
+        let rows = self
+            .state
+            .iter()
+            .zip(&self.accumulator)
+            .zip(&self.route_len)
+            .zip(&self.route_cursor)
+            .zip(&self.route_partial)
+            .zip(&self.route_hash);
+        for (((((state, accumulator), len), cursor), partial), hash) in rows {
+            enc.u8(*state);
+            enc.i32(*accumulator);
+            enc.u32(*len);
+            enc.u32(*cursor);
+            enc.bool(*partial);
+            enc.u64(*hash);
         }
         enc.u32(self.cursor);
     }
@@ -916,13 +944,19 @@ pub fn first_route_digest_mismatch(
 ) -> Option<u32> {
     let mut buffer: Vec<u8> = Vec::new();
     let mut read: usize = 0;
-    for (unit, len) in route_len.iter().enumerate() {
+    for (unit, len) in (0_u32..).zip(route_len) {
         let len = crate::math::index::row(*len);
         let end = read.saturating_add(len);
-        let slice = nodes.get(read..end).unwrap_or(&[]);
-        let carried = route_hash.get(unit).copied().unwrap_or(0);
+        // A packing that runs short, or a hash column shorter than the
+        // lengths, is a mismatch at this unit.
+        let (Some(slice), Some(carried)) = (
+            nodes.get(read..end),
+            route_hash.get(crate::math::index::row(unit)).copied(),
+        ) else {
+            return Some(unit);
+        };
         if route_digest(slice, &mut buffer) != carried {
-            return Some(u32::try_from(unit).unwrap_or(u32::MAX));
+            return Some(unit);
         }
         read = end;
     }
@@ -974,23 +1008,144 @@ fn place(
     let (x, y) = surface.coord_of(node);
     let z = surface.standing_z(node);
     if let Some(point) = positions.get_mut(index) {
-        if let Some(slot) = point.first_mut() {
-            *slot = Fx::from_voxels(i16::try_from(x).unwrap_or(0));
-        }
-        if let Some(slot) = point.get_mut(1) {
-            *slot = Fx::from_voxels(i16::try_from(y).unwrap_or(0));
-        }
-        if let Some(slot) = point.get_mut(2) {
-            *slot = Fx::from_voxels(i16::try_from(z).unwrap_or(0));
-        }
+        let [px, py, pz] = point;
+        // E7: cannot miss: a surface column is a map coordinate, which `RulesTable::map_last_voxel` bounds to an `i16`
+        *px = Fx::from_voxels(i16::try_from(x).unwrap_or(0));
+        // E7: cannot miss: a surface column is a map coordinate, which `RulesTable::map_last_voxel` bounds to an `i16`
+        *py = Fx::from_voxels(i16::try_from(y).unwrap_or(0));
+        // E7: cannot miss: a surface column is a map coordinate, which `RulesTable::map_last_voxel` bounds to an `i16`
+        *pz = Fx::from_voxels(i16::try_from(z).unwrap_or(0));
     }
     if let Some(next) = next
         && let Some(heading) = headings.get_mut(index)
     {
         let (nx, ny) = surface.coord_of(next);
         *heading = Angle::from_delta(
+            // E7: cannot miss: a surface column is a map coordinate, which `RulesTable::map_last_voxel` bounds to an `i16`
             Fx::from_voxels(i16::try_from(nx.saturating_sub(x)).unwrap_or(0)),
+            // E7: cannot miss: a surface column is a map coordinate, which `RulesTable::map_last_voxel` bounds to an `i16`
             Fx::from_voxels(i16::try_from(ny.saturating_sub(y)).unwrap_or(0)),
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Router, WalkState};
+    use crate::math::fixed::{Angle, Fx};
+    use crate::math::quantity::Hp;
+    use crate::pathing::clusters::Clusters;
+    use crate::pathing::search::Scratch;
+    use crate::pathing::surface::{StepCosts, Surface};
+    use crate::rules::RulesTable;
+    use crate::tables::UnitKind;
+    use crate::voxels::{Material, VoxelStore};
+
+    /// The map edge, in voxels: two 32-voxel clusters a side.
+    const EDGE: i32 = 64;
+
+    /// The ground height, in solid voxels.
+    const GROUND: i32 = 12;
+
+    fn rules() -> RulesTable {
+        RulesTable::load(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("..")
+                .join("..")
+                .join("rules")
+                .join("rules.v1.json"),
+        )
+        .unwrap_or_else(|error| panic!("the committed rules table loads: {error}"))
+    }
+
+    /// Flat ground, with a wall too tall to step standing on every column
+    /// `wall` names.
+    fn ground(wall: impl Fn(i32, i32) -> bool) -> VoxelStore {
+        let size = u32::try_from(EDGE).unwrap_or_else(|error| panic!("a small edge: {error}"));
+        let mut voxels =
+            VoxelStore::new([size, size, 32]).unwrap_or_else(|| panic!("a whole number of chunks"));
+        let mut heights: Vec<i32> = Vec::new();
+        for y in 0..EDGE {
+            for x in 0..EDGE {
+                heights.push(if wall(x, y) { 28 } else { GROUND });
+            }
+        }
+        voxels.fill_from_heightmap(&heights, 3, Material::DIRT, Material::STONE);
+        voxels
+    }
+
+    fn at(x: i16, y: i16) -> [Fx; 3] {
+        [Fx::from_voxels(x), Fx::from_voxels(y), Fx::from_voxels(12)]
+    }
+
+    /// S2's plan, E11, the fix pass: the router banks no step across routes.
+    /// A walker's accumulator is zero once its route ends, and once a step
+    /// the ground no longer allows asks for the route again.
+    #[test]
+    fn the_accumulator_is_zero_after_a_route_ends_and_after_a_repath() {
+        let rules = rules();
+        let costs = StepCosts::from_rules(&rules);
+        let flat = ground(|_, _| false);
+        let surface = Surface::new(&flat, costs).unwrap_or_else(|| panic!("a surface"));
+        let mut scratch = Scratch::for_map(&surface, 32).unwrap_or_else(|| panic!("a scratch"));
+        let clusters =
+            Clusters::new(&surface, 32, &mut scratch).unwrap_or_else(|| panic!("clusters"));
+        let mut router = Router::new(1, &rules);
+        let kinds = [UnitKind::Commander.id()];
+        let hit_points = [Hp::new(100)];
+        let mut positions = [at(4, 4)];
+        let mut headings = [Angle::from_raw(0)];
+
+        // A short walk, to its end.
+        router.request(0);
+        router.serve(
+            &surface,
+            &clusters,
+            &mut scratch,
+            &positions,
+            &[at(20, 4)],
+            1,
+        );
+        assert_eq!(router.state(0), WalkState::Walking);
+        let mut banked = false;
+        for _ in 0..2_000 {
+            router.advance(&surface, &kinds, &hit_points, &mut positions, &mut headings);
+            banked |= router.accumulator(0) > 0;
+            if router.state(0) != WalkState::Walking {
+                break;
+            }
+        }
+        assert!(banked, "the walk carried part of a step between ticks");
+        assert_eq!(router.state(0), WalkState::Idle, "the walk arrives");
+        assert_eq!(
+            router.accumulator(0),
+            0,
+            "nothing carried past a route's end"
+        );
+
+        // A longer walk, and a wall raised across it after its first tick.
+        router.request(0);
+        router.serve(
+            &surface,
+            &clusters,
+            &mut scratch,
+            &positions,
+            &[at(60, 4)],
+            1,
+        );
+        assert_eq!(router.state(0), WalkState::Walking);
+        router.advance(&surface, &kinds, &hit_points, &mut positions, &mut headings);
+        assert_eq!(router.state(0), WalkState::Walking);
+        let here = positions[0][0].floor_voxels();
+        let walled = ground(|x, _| x == here + 1 || x == here + 2);
+        let moved = Surface::new(&walled, costs).unwrap_or_else(|| panic!("a surface"));
+        router.set_accumulator(0, 1_000_000);
+        router.advance(&moved, &kinds, &hit_points, &mut positions, &mut headings);
+        assert_eq!(
+            router.state(0),
+            WalkState::Waiting,
+            "the route is asked again"
+        );
+        assert_eq!(router.accumulator(0), 0, "nothing carried into the repath");
     }
 }

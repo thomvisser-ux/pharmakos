@@ -44,16 +44,23 @@ use crate::math::fixed::{Angle, Fx, Sq};
 use crate::math::quantity::{Hp, Kw, Money};
 use crate::seams::BeaconMandate;
 
-/// A unit's identity. Dense, assigned at construction, stable for the match.
+/// A unit's identity: its row in the unit table and the row's generation
+/// ([`crate::ids`], S2's plan, E1). A row is reused once its unit has died and
+/// its death has settled, under the next generation, so an id names one unit
+/// for the match and never the unit that later takes its row.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct UnitId(u32);
 
+crate::ids::generational_id!(UnitId, "unit");
+
 impl UnitId {
     /// "No unit" — the sentinel a per-seat index carries for a seat that has
-    /// none. Same reasoning as [`BeaconId::NONE`].
+    /// none. Same reasoning as [`BeaconId::NONE`]. Its [`UnitId::row`] is
+    /// [`crate::ids::IdError::Sentinel`]: it stays in storage and never names
+    /// a row.
     pub const NONE: UnitId = UnitId(u32::MAX);
 
-    /// Build from a raw id.
+    /// Build from a raw id, as the canonical encoder and a snapshot carry it.
     #[must_use]
     pub const fn new(raw: u32) -> UnitId {
         UnitId(raw)
@@ -109,13 +116,18 @@ impl SeatId {
 /// Units, structure-of-arrays.
 ///
 /// Every column has the same length and index `i` is the same unit in all of
-/// them. The count is fixed at construction: a dead unit keeps its slot.
+/// them. The columns never grow inside a tick: the room is reserved at
+/// construction and at a restore.
 ///
-/// **This is the skeleton's minimum, not the final table.** T5 adds the rest of
-/// the world's tables (beacons, structures, wrecks) and T11 adds what the
-/// interpreter needs. Every column added here must go into *three* places in
-/// the same pull request — [`crate::world::World::encode`], the snapshot round-trip
-/// and the golden files (AGENTS.md §4.8).
+/// **Rows are reused** (S2's plan, E1). A dead unit keeps its row until its
+/// death has settled; then [`UnitTable::release`] frees it, and the next unit
+/// placed takes the lowest free row under the next [`crate::ids::Generation`]
+/// ([`UnitTable::vacancy`], [`UnitTable::place`]). A freed row belongs to nobody:
+/// its seat is [`SeatId::NEUTRAL`], it has no hit points and no home, and every
+/// column is written afresh when it is reused. Every column added here must go
+/// into *three* places in the same pull request — [`crate::world::World::encode`],
+/// the snapshot round-trip and the golden files (AGENTS.md §4.8) — and into
+/// [`UnitTable::place`] and [`UnitTable::release`].
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct UnitTable {
     count: u32,
@@ -126,9 +138,161 @@ pub struct UnitTable {
     dest: Vec<[Fx; 3]>,
     heading: Vec<Angle>,
     hp: Vec<Hp>,
-    home: Vec<u32>,
+    home: Vec<BeaconId>,
     carrying: Vec<Money>,
     busy_until: Vec<u32>,
+    free: Vec<bool>,
+}
+
+/// Why a row could not be placed in a table: it holds all the rows it may,
+/// and none of them is free to reuse.
+///
+/// A typed answer, so the caller holds the order (a fabrication, a structure
+/// paid for, a deploy) rather than growing a column inside a tick.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct TableFull {
+    /// How many rows the table may hold.
+    pub room: u32,
+}
+
+impl core::fmt::Display for TableFull {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "the table holds all {} of its rows and none is free",
+            self.room
+        )
+    }
+}
+
+impl std::error::Error for TableFull {}
+
+/// Where the next row of a table goes ([`UnitTable::vacancy`] and its
+/// siblings): a free row reused under its next generation, or a fresh row on
+/// the end at generation 0.
+///
+/// Its fields are read-only outside this module: a vacancy is only ever made
+/// by the table it names a row of, so a `place` can never be handed a row past
+/// the table's end.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Vacancy {
+    row: crate::ids::Row,
+    generation: crate::ids::Generation,
+    reused: bool,
+}
+
+impl Vacancy {
+    /// The row.
+    #[must_use]
+    pub const fn row(self) -> crate::ids::Row {
+        self.row
+    }
+
+    /// The generation the asset placed in it will carry.
+    #[must_use]
+    pub const fn generation(self) -> crate::ids::Generation {
+        self.generation
+    }
+
+    /// Whether the row is reused rather than appended.
+    #[must_use]
+    pub const fn reused(self) -> bool {
+        self.reused
+    }
+}
+
+/// An asset just placed in a table: its id, and whether it took a freed row
+/// (which every derived per-row index must reset) or a fresh one on the end
+/// (which every derived per-row index must grow by).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Placed<Id> {
+    /// The new asset's id.
+    pub id: Id,
+    /// Whether the row was reused.
+    pub reused: bool,
+}
+
+/// The lowest free row of a table whose generation can still go up, or the
+/// next row on the end while the table holds fewer than `room` rows
+/// (S2's plan, E1: "the lowest free row is reused first and its generation
+/// goes up by one").
+///
+/// A free row at the last generation is never handed out again; it was
+/// counted as retired when it was freed ([`crate::ids::IdDrop::Retired`]).
+///
+/// # Errors
+///
+/// [`TableFull`] when no row is free and the table is at its room.
+fn vacancy_in(ids: &[u32], free: &[bool], room: u32) -> Result<Vacancy, TableFull> {
+    for ((id, free), row) in ids.iter().zip(free).zip(crate::ids::Row::all()) {
+        if !*free {
+            continue;
+        }
+        let Ok((_, generation)) = crate::ids::unpack(*id) else {
+            continue;
+        };
+        if let Some(next) = generation.next() {
+            return Ok(Vacancy {
+                row,
+                generation: next,
+                reused: true,
+            });
+        }
+    }
+    let full = TableFull { room };
+    let len = u32::try_from(ids.len()).map_err(|_| full)?;
+    if len >= room {
+        return Err(full);
+    }
+    let row = crate::ids::Row::new(len).ok_or(full)?;
+    Ok(Vacancy {
+        row,
+        generation: crate::ids::Generation::ZERO,
+        reused: false,
+    })
+}
+
+/// The row an id names in a table whose id and free columns are `ids` and
+/// `free`, checked by generation: the reference is answered only while the
+/// row still holds the asset it named.
+///
+/// # Errors
+///
+/// [`crate::ids::RefError`]: a sentinel, a row the table does not hold, or a
+/// row since freed or reused ([`crate::ids::RefError::Stale`]).
+fn row_of_in(
+    ids: &[u32],
+    free: &[bool],
+    raw: u32,
+) -> Result<crate::ids::Row, crate::ids::RefError> {
+    let (row, _) = crate::ids::unpack(raw)?;
+    let (Some(held), Some(freed)) = (ids.get(row.index()), free.get(row.index())) else {
+        return Err(crate::ids::RefError::NoSuchRow);
+    };
+    if *held != raw || *freed {
+        return Err(crate::ids::RefError::Stale);
+    }
+    Ok(row)
+}
+
+/// Whether every row's id names that row, as a restore checks: a file whose
+/// ids disagree with their places describes no table this sim builds.
+#[must_use]
+pub fn ids_name_their_rows(ids: &[u32]) -> bool {
+    ids.iter()
+        .enumerate()
+        .all(|(index, id)| crate::ids::unpack(*id).is_ok_and(|(row, _)| row.index() == index))
+}
+
+/// Write `value` at `row` of `column`, or append it when `row` is the
+/// column's length: the one shape every table's `place` takes, so a reused row
+/// and an appended one are written by the same line. A [`Vacancy`] names a
+/// row of the column or the one after its end, never further.
+fn put<T>(column: &mut Vec<T>, row: crate::ids::Row, value: T) {
+    match column.get_mut(row.index()) {
+        Some(slot) => *slot = value,
+        None => column.push(value),
+    }
 }
 
 impl UnitTable {
@@ -148,6 +312,7 @@ impl UnitTable {
             home: Vec::with_capacity(n),
             carrying: Vec::with_capacity(n),
             busy_until: Vec::with_capacity(n),
+            free: Vec::with_capacity(n),
         }
     }
 
@@ -171,9 +336,21 @@ impl UnitTable {
         self.home.reserve(n);
         self.carrying.reserve(n);
         self.busy_until.reserve(n);
+        self.free.reserve(n);
     }
 
-    /// Append one unit, carrying nothing and doing nothing.
+    /// Where the next unit goes ([`vacancy_in`]), within `room` rows.
+    ///
+    /// # Errors
+    ///
+    /// [`TableFull`] when no row is free and the table holds `room`.
+    pub fn vacancy(&self, room: u32) -> Result<Vacancy, TableFull> {
+        vacancy_in(&self.id, &self.free, room)
+    }
+
+    /// Place one unit in the next [`Vacancy`] within `room` rows, carrying
+    /// nothing and doing nothing, with **every column written** -- a reused row
+    /// keeps nothing of the unit that held it (S2's plan, E1).
     ///
     /// `home` is the beacon whose fabricator produced it — the one whose
     /// mandate it follows, even outside the sphere, and the one whose dormancy
@@ -181,29 +358,119 @@ impl UnitTable {
     /// scaffolding only: see [`UnitTable::homes`].
     #[allow(
         clippy::too_many_arguments,
-        reason = "one argument per column of a nine-column SoA table, named at every call site; a struct here would be `UnitColumns` with a length of one, which is the shape `restore` already has for the bulk case"
+        reason = "one argument per column of the SoA table, named at every call site; a struct here would be `UnitColumns` with a length of one, which is the shape `restore` already has for the bulk case"
     )]
-    pub fn push(
+    ///
+    /// # Errors
+    ///
+    /// [`TableFull`] when no row is free and the table holds `room`.
+    pub fn place(
         &mut self,
-        id: UnitId,
+        room: u32,
         seat: SeatId,
         kind: UnitKind,
         pos: [Fx; 3],
         dest: [Fx; 3],
         hp: Hp,
         home: BeaconId,
-    ) {
-        self.id.push(id.raw());
-        self.seat.push(seat.raw());
-        self.kind.push(kind.id());
-        self.pos.push(pos);
-        self.dest.push(dest);
-        self.heading.push(Angle::ZERO);
-        self.hp.push(hp);
-        self.home.push(home.raw());
-        self.carrying.push(Money::ZERO);
-        self.busy_until.push(NO_WORK);
-        self.count = self.count.saturating_add(1);
+    ) -> Result<Placed<UnitId>, TableFull> {
+        let at = self.vacancy(room)?;
+        let id = UnitId::of(at.row, at.generation);
+        let row = at.row;
+        put(&mut self.id, row, id.raw());
+        put(&mut self.seat, row, seat.raw());
+        put(&mut self.kind, row, kind.id());
+        put(&mut self.pos, row, pos);
+        put(&mut self.dest, row, dest);
+        put(&mut self.heading, row, Angle::ZERO);
+        put(&mut self.hp, row, hp);
+        put(&mut self.home, row, home);
+        put(&mut self.carrying, row, Money::ZERO);
+        put(&mut self.busy_until, row, NO_WORK);
+        put(&mut self.free, row, false);
+        if !at.reused {
+            // An appended row is the table's last, at most `Row::MAX`, so the
+            // count is its row plus one and cannot overflow.
+            self.count = row.raw().saturating_add(1);
+        }
+        Ok(Placed {
+            id,
+            reused: at.reused,
+        })
+    }
+
+    /// Append one unit at generation 0: what construction does, before any
+    /// row can have been freed.
+    ///
+    /// # Errors
+    ///
+    /// [`TableFull`] past [`crate::ids::ROOM_LIMIT`] rows.
+    pub fn push(
+        &mut self,
+        seat: SeatId,
+        kind: UnitKind,
+        pos: [Fx; 3],
+        dest: [Fx; 3],
+        hp: Hp,
+        home: BeaconId,
+    ) -> Result<UnitId, TableFull> {
+        self.place(crate::ids::ROOM_LIMIT, seat, kind, pos, dest, hp, home)
+            .map(|placed| placed.id)
+    }
+
+    /// Free `row`: its unit has died and its death has settled. The row
+    /// belongs to nobody until it is reused, so nothing that walks the table
+    /// by seat, hit points or home reads it as anybody's. `true` when the row's
+    /// generation is the last, so it will never be reused
+    /// ([`crate::ids::IdDrop::Retired`]).
+    pub fn release(&mut self, row: crate::ids::Row) -> bool {
+        let index = row.index();
+        let Some(free) = self.free.get_mut(index) else {
+            return false;
+        };
+        *free = true;
+        if let Some(slot) = self.seat.get_mut(index) {
+            *slot = SeatId::NEUTRAL.raw();
+        }
+        if let Some(slot) = self.hp.get_mut(index) {
+            *slot = Hp::ZERO;
+        }
+        if let Some(slot) = self.home.get_mut(index) {
+            *slot = BeaconId::NONE;
+        }
+        if let Some(slot) = self.carrying.get_mut(index) {
+            *slot = Money::ZERO;
+        }
+        if let Some(slot) = self.busy_until.get_mut(index) {
+            *slot = NO_WORK;
+        }
+        if let (Some(here), Some(slot)) = (self.pos.get(index).copied(), self.dest.get_mut(index)) {
+            *slot = here;
+        }
+        self.id
+            .get(index)
+            .and_then(|id| crate::ids::unpack(*id).ok())
+            .is_some_and(|(_, generation)| generation.next().is_none())
+    }
+
+    /// The row `unit` lives in, checked by generation.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::ids::RefError`]: a sentinel, no such row, or a row since freed
+    /// or reused.
+    pub fn row_of(&self, unit: UnitId) -> Result<crate::ids::Row, crate::ids::RefError> {
+        row_of_in(&self.id, &self.free, unit.raw())
+    }
+
+    /// The id of the unit in `row`, or `None` for a row the table does not
+    /// hold or one that is free.
+    #[must_use]
+    pub fn id_of(&self, row: crate::ids::Row) -> Option<UnitId> {
+        if self.free.get(row.index()).copied() != Some(false) {
+            return None;
+        }
+        self.id.get(row.index()).copied().map(UnitId::new)
     }
 
     /// How many units the table holds.
@@ -218,10 +485,18 @@ impl UnitTable {
         self.count == 0
     }
 
-    /// The id column.
+    /// The id column, as raw [`UnitId`]s: each row's own id, its generation
+    /// included.
     #[must_use]
     pub fn ids(&self) -> &[u32] {
         &self.id
+    }
+
+    /// The free column: `true` on a row whose unit has died, settled and been
+    /// freed, waiting to be reused (S2's plan, E1).
+    #[must_use]
+    pub fn frees(&self) -> &[bool] {
+        &self.free
     }
 
     /// The seat column.
@@ -307,7 +582,7 @@ impl UnitTable {
         &mut self.dest
     }
 
-    /// The home-beacon column, as raw [`BeaconId`]s.
+    /// The home-beacon column.
     ///
     /// Every unit a fabricator produces is bound to the beacon that produced it
     /// and follows that beacon's mandate, even outside the sphere (spec section
@@ -315,10 +590,23 @@ impl UnitTable {
     /// draws no `kW`, no mandate drives it and no dormancy parks it. Nothing in
     /// a real match produces one — the value exists for the harness walkers
     /// [`crate::world::WorldConfig::units_per_seat`] fields, which are
-    /// scaffolding rather than a seat's force.
+    /// scaffolding rather than a seat's force, and for a freed row. A home is a
+    /// reference into the beacon table, read through
+    /// [`BeaconTable::row_of`], which refuses the sentinel and a beacon since
+    /// freed.
     #[must_use]
-    pub fn homes(&self) -> &[u32] {
+    pub fn homes(&self) -> &[BeaconId] {
         &self.home
+    }
+
+    /// The home of the unit in `row`, or `None` for a unit homed to nobody
+    /// (or a row the table does not hold).
+    #[must_use]
+    pub fn home(&self, row: crate::ids::Row) -> Option<BeaconId> {
+        self.home
+            .get(row.index())
+            .copied()
+            .filter(|home| home.is_some())
     }
 
     /// The home-beacon column, to write into.
@@ -326,7 +614,7 @@ impl UnitTable {
     /// Two callers, both in the match phase: item 20's re-homing when a bound
     /// beacon dies or is recycled, and the fabricator giving a fresh unit its
     /// home.
-    pub fn homes_mut(&mut self) -> &mut [u32] {
+    pub fn homes_mut(&mut self) -> &mut [BeaconId] {
         &mut self.home
     }
 
@@ -366,7 +654,8 @@ impl UnitTable {
     /// Replace the whole table from the columns of a restored snapshot.
     ///
     /// Returns `false` and changes nothing when the columns disagree in
-    /// length, which is what a corrupt or truncated snapshot looks like.
+    /// length, or when a row's id does not name that row, which is what a
+    /// corrupt or truncated snapshot looks like.
     pub fn restore(&mut self, columns: UnitColumns) -> bool {
         let n = columns.id.len();
         if columns.seat.len() != n
@@ -378,6 +667,8 @@ impl UnitTable {
             || columns.home.len() != n
             || columns.carrying.len() != n
             || columns.busy_until.len() != n
+            || columns.free.len() != n
+            || !ids_name_their_rows(&columns.id)
         {
             return false;
         }
@@ -395,6 +686,7 @@ impl UnitTable {
         self.home = columns.home;
         self.carrying = columns.carrying;
         self.busy_until = columns.busy_until;
+        self.free = columns.free;
         true
     }
 }
@@ -421,11 +713,13 @@ pub struct UnitColumns {
     /// Hit points.
     pub hp: Vec<Hp>,
     /// Home beacons, or [`BeaconId::NONE`].
-    pub home: Vec<u32>,
+    pub home: Vec<BeaconId>,
     /// Carried but undelivered `$`.
     pub carrying: Vec<Money>,
     /// The tick each unit's timed work finishes at, or [`NO_WORK`].
     pub busy_until: Vec<u32>,
+    /// Whether each row is free (S2's plan, E1).
+    pub free: Vec<bool>,
 }
 
 /// The columns [`UnitTable::movement_columns`] hands out, borrowed together.
@@ -489,6 +783,8 @@ pub struct SeatTable {
     commander_deaths: Vec<u32>,
     respawn_due: Vec<u32>,
     qm_cursor: Vec<u32>,
+    placed: Vec<u32>,
+    beacons_lost: Vec<u32>,
 }
 
 impl SeatTable {
@@ -506,6 +802,8 @@ impl SeatTable {
             commander_deaths: Vec::with_capacity(n),
             respawn_due: Vec::with_capacity(n),
             qm_cursor: Vec::with_capacity(n),
+            placed: Vec::with_capacity(n),
+            beacons_lost: Vec::with_capacity(n),
         }
     }
 
@@ -519,7 +817,56 @@ impl SeatTable {
         self.commander_deaths.push(0);
         self.respawn_due.push(NO_RESPAWN);
         self.qm_cursor.push(BeaconId::NONE.raw());
+        self.placed.push(0);
+        self.beacons_lost.push(0);
         self.count = self.count.saturating_add(1);
+    }
+
+    /// Each seat's **placement counter**: how many beacons it has placed this
+    /// match, its core included, which is the ordinal its next beacon takes
+    /// (S2's plan, E1). Hashed and snapshotted: since rows are reused, a
+    /// beacon's `b_NN` is the counter's value when it was placed, never a
+    /// count of the rows the seat holds, so a name is never handed out twice
+    /// and a dead `b_03` stays gone rather than naming the next beacon.
+    #[must_use]
+    pub fn placed(&self) -> &[u32] {
+        &self.placed
+    }
+
+    /// Take the next ordinal of the seat at `index` and count the placement.
+    /// `None` for a seat the table does not hold, or a counter at its last
+    /// value, which no match reaches at the room the beacon table has.
+    pub fn take_ordinal(&mut self, index: usize) -> Option<u32> {
+        let slot = self.placed.get_mut(index)?;
+        let ordinal = *slot;
+        *slot = ordinal.checked_add(1)?;
+        Some(ordinal)
+    }
+
+    /// Set the seat at `index`'s placement counter: construction only, from
+    /// the beacons the generator placed.
+    pub fn set_placed(&mut self, index: usize, placed: u32) {
+        if let Some(slot) = self.placed.get_mut(index) {
+            *slot = placed;
+        }
+    }
+
+    /// How many of each seat's beacons have died this match (X-08's "beacons
+    /// lost", the final audit's third term). A per-seat hashed counter since
+    /// S2's `ids` lane: a dead beacon's row is freed and reused, so the count
+    /// can no longer be read off the beacon table.
+    #[must_use]
+    pub fn beacons_lost(&self) -> &[u32] {
+        &self.beacons_lost
+    }
+
+    /// Count one beacon of the seat at `index` lost. Saturates by rule: a
+    /// match holds at most the beacon room's worth of placements, far below
+    /// `u32::MAX`, so the cap is never met.
+    pub fn count_beacon_lost(&mut self, index: usize) {
+        if let Some(slot) = self.beacons_lost.get_mut(index) {
+            *slot = slot.saturating_add(1);
+        }
     }
 
     /// How many seats the table holds.
@@ -649,6 +996,8 @@ impl SeatTable {
             || columns.commander_deaths.len() != n
             || columns.respawn_due.len() != n
             || columns.qm_cursor.len() != n
+            || columns.placed.len() != n
+            || columns.beacons_lost.len() != n
         {
             return false;
         }
@@ -664,6 +1013,8 @@ impl SeatTable {
         self.commander_deaths = columns.commander_deaths;
         self.respawn_due = columns.respawn_due;
         self.qm_cursor = columns.qm_cursor;
+        self.placed = columns.placed;
+        self.beacons_lost = columns.beacons_lost;
         true
     }
 }
@@ -688,6 +1039,10 @@ pub struct SeatColumns {
     pub respawn_due: Vec<u32>,
     /// The Quartermaster's round-robin cursor, per seat.
     pub qm_cursor: Vec<u32>,
+    /// The placement counter, per seat ([`SeatTable::placed`]).
+    pub placed: Vec<u32>,
+    /// Beacons lost, per seat ([`SeatTable::beacons_lost`]).
+    pub beacons_lost: Vec<u32>,
 }
 
 /// The supply and draw columns, borrowed together.
@@ -924,12 +1279,12 @@ impl std::error::Error for TargetsFull {}
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct TargetTable {
     count: u32,
-    beacon: Vec<u32>,
+    beacon: Vec<BeaconId>,
     kind: Vec<u8>,
     blueprint: Vec<u8>,
     at: Vec<[Fx; 3]>,
     area: Vec<ColumnBox>,
-    built: Vec<u32>,
+    built: Vec<StructureId>,
     feature: Vec<u32>,
     desc: Vec<u8>,
     order: Vec<u32>,
@@ -984,9 +1339,11 @@ impl TargetTable {
         self.capacity
     }
 
-    /// The beacon column.
+    /// The beacon column: the beacon each row belongs to, a reference into the
+    /// beacon table. A beacon's rows are cleared when it dies (item 20), so a
+    /// row never outlives its beacon's row.
     #[must_use]
-    pub fn beacons(&self) -> &[u32] {
+    pub fn beacons(&self) -> &[BeaconId] {
         &self.beacon
     }
 
@@ -1018,16 +1375,21 @@ impl TargetTable {
         &self.area
     }
 
-    /// The structure realising each Build target, or [`BeaconId::NONE`]'s raw
-    /// value when nothing has been paid for yet.
+    /// The structure realising each Build target, or [`StructureId::NONE`]
+    /// when nothing has been paid for yet.
+    ///
+    /// A reference into the structure table, read through
+    /// [`StructureTable::row_of`], which checks the generation: a link to a
+    /// structure since freed and its row reused is stale, and the target is
+    /// read as not going up (S2's plan, E1).
     #[must_use]
-    pub fn built(&self) -> &[u32] {
+    pub fn built(&self) -> &[StructureId] {
         &self.built
     }
 
     /// The realising-structure column, to write into: the Quartermaster sets
     /// it when it pays for the target, and item 20's ruination clears it.
-    pub fn built_mut(&mut self) -> &mut [u32] {
+    pub fn built_mut(&mut self) -> &mut [StructureId] {
         &mut self.built
     }
 
@@ -1162,14 +1524,14 @@ impl TargetTable {
             .beacon
             .iter()
             .zip(&self.kind)
-            .position(|(here, of)| (*here, *of) > key)
+            .position(|(here, of)| (here.raw(), *of) > key)
             .unwrap_or(self.beacon.len());
-        self.beacon.insert(slot, beacon.raw());
+        self.beacon.insert(slot, beacon);
         self.kind.insert(slot, kind.id());
         self.blueprint.insert(slot, blueprint);
         self.at.insert(slot, at);
         self.area.insert(slot, area);
-        self.built.insert(slot, BeaconId::NONE.raw());
+        self.built.insert(slot, StructureId::NONE);
         self.feature.insert(slot, bound.0);
         self.desc.insert(slot, bound.1);
         self.order.insert(slot, build.order);
@@ -1204,7 +1566,7 @@ impl TargetTable {
     pub fn clear_beacon(&mut self, beacon: BeaconId) {
         let mut slot: usize = 0;
         while slot < self.beacon.len() {
-            if self.beacon.get(slot).copied() == Some(beacon.raw()) {
+            if self.beacon.get(slot).copied() == Some(beacon) {
                 self.remove(slot);
             } else {
                 slot = slot.saturating_add(1);
@@ -1277,7 +1639,7 @@ impl TargetTable {
 #[derive(Clone, PartialEq, Eq, Debug, Default)]
 pub struct TargetColumns {
     /// The beacon each row belongs to.
-    pub beacon: Vec<u32>,
+    pub beacon: Vec<BeaconId>,
     /// [`TargetKind::id`] per row.
     pub kind: Vec<u8>,
     /// [`StructureKind::id`] per row, or zero.
@@ -1287,7 +1649,7 @@ pub struct TargetColumns {
     /// Each area row's footprint; [`ColumnBox::default`] on a Build row.
     pub area: Vec<ColumnBox>,
     /// The structure realising each Build target.
-    pub built: Vec<u32>,
+    pub built: Vec<StructureId>,
     /// The feature each Build target is bound to.
     pub feature: Vec<u32>,
     /// How each Build target was written.
@@ -1428,11 +1790,12 @@ impl SightingTable {
         let mut hi = self.seat.len();
         while lo < hi {
             let mid = lo.saturating_add(hi.saturating_sub(lo) / 2);
-            let here = (
-                self.seat.get(mid).copied().unwrap_or(0),
-                self.asset.get(mid).copied().unwrap_or(0),
-            );
-            match here.cmp(&(seat, asset)) {
+            // `mid` is below the seat column's length, and every writer keeps
+            // the asset column the same length, so both reads find their row.
+            let (Some(held), Some(of)) = (self.seat.get(mid), self.asset.get(mid)) else {
+                return Err(lo);
+            };
+            match (*held, *of).cmp(&(seat, asset)) {
                 core::cmp::Ordering::Less => lo = mid.saturating_add(1),
                 core::cmp::Ordering::Greater => hi = mid,
                 core::cmp::Ordering::Equal => return Ok(mid),
@@ -1514,14 +1877,13 @@ impl SightingTable {
     #[must_use]
     pub fn stalest_of(&self, seat: SeatId) -> Option<usize> {
         let mut best: Option<(u32, u32, usize)> = None;
-        for (slot, who) in self.seat.iter().enumerate() {
+        let rows = self.seat.iter().zip(&self.seen_at).zip(&self.asset);
+        for (slot, ((who, when), asset)) in rows.enumerate() {
             if *who != seat.raw() {
                 continue;
             }
-            let when = self.seen_at.get(slot).copied().unwrap_or(0);
-            let asset = self.asset.get(slot).copied().unwrap_or(0);
-            if best.is_none_or(|(bw, ba, _)| (when, asset) < (bw, ba)) {
-                best = Some((when, asset, slot));
+            if best.is_none_or(|(bw, ba, _)| (*when, *asset) < (bw, ba)) {
+                best = Some((*when, *asset, slot));
             }
         }
         best.map(|(_, _, slot)| slot)
@@ -1554,21 +1916,13 @@ impl SightingTable {
         {
             return false;
         }
-        let mut slot: usize = 1;
-        while slot < n {
-            let previous = slot.saturating_sub(1);
-            let before = (
-                columns.seat.get(previous).copied().unwrap_or(0),
-                columns.asset.get(previous).copied().unwrap_or(0),
-            );
-            let here = (
-                columns.seat.get(slot).copied().unwrap_or(0),
-                columns.asset.get(slot).copied().unwrap_or(0),
-            );
-            if before >= here {
+        let mut keys = columns.seat.iter().zip(&columns.asset);
+        let mut before = keys.next();
+        for here in keys {
+            if before.is_some_and(|previous| previous >= here) {
                 return false;
             }
-            slot = slot.saturating_add(1);
+            before = Some(here);
         }
         let Ok(count) = u32::try_from(n) else {
             return false;
@@ -1739,25 +2093,16 @@ impl CreditTable {
         let (Some(seats), Some(damages)) = (self.seat.get_mut(at), self.damage.get_mut(at)) else {
             return false;
         };
-        let mut slot: usize = 0;
-        while slot < CREDIT_SLOTS {
-            let held = seats.get(slot).copied().unwrap_or(SeatId::NEUTRAL.raw());
-            if held == by.raw() {
-                if let Some(total) = damages.get_mut(slot) {
-                    *total = total.saturating_add(amount);
-                }
+        for (owner, total) in seats.iter_mut().zip(damages.iter_mut()) {
+            if *owner == by.raw() {
+                *total = total.saturating_add(amount);
                 return true;
             }
-            if held == SeatId::NEUTRAL.raw() {
-                if let Some(owner) = seats.get_mut(slot) {
-                    *owner = by.raw();
-                }
-                if let Some(total) = damages.get_mut(slot) {
-                    *total = amount;
-                }
+            if *owner == SeatId::NEUTRAL.raw() {
+                *owner = by.raw();
+                *total = amount;
                 return true;
             }
-            slot = slot.saturating_add(1);
         }
         false
     }
@@ -1774,14 +2119,10 @@ impl CreditTable {
         let (Some(seats), Some(damages)) = (self.seat.get(at), self.damage.get(at)) else {
             return;
         };
-        let mut slot: usize = 0;
-        while slot < CREDIT_SLOTS {
-            let seat = seats.get(slot).copied().unwrap_or(SeatId::NEUTRAL.raw());
-            let dealt = damages.get(slot).copied().unwrap_or(0);
-            if SeatId::new(seat).is_some() && dealt > 0 {
-                out.push((seat, dealt));
+        for (seat, dealt) in seats.iter().zip(damages) {
+            if SeatId::new(*seat).is_some() && *dealt > 0 {
+                out.push((*seat, *dealt));
             }
-            slot = slot.saturating_add(1);
         }
         // item 62: the key is the seat id, unique within a row by `credit`.
         out.sort_unstable();
@@ -1808,29 +2149,21 @@ impl CreditTable {
     /// redistributed**, so the remaining damagers keep their own numbers and
     /// the apportionment simply has less to divide.
     pub fn drop_seat(&mut self, seat: SeatId) {
-        let rows = self.seat.len();
-        let mut row: usize = 0;
-        while row < rows {
-            let mut slot: usize = 0;
-            while slot < CREDIT_SLOTS {
-                let held = self
-                    .seat
-                    .get(row)
-                    .and_then(|slots| slots.get(slot))
-                    .copied()
-                    .unwrap_or(SeatId::NEUTRAL.raw());
-                if held == seat.raw() {
-                    if let Some(owner) = self.seat.get_mut(row).and_then(|s| s.get_mut(slot)) {
-                        *owner = SeatId::NEUTRAL.raw();
-                    }
-                    if let Some(total) = self.damage.get_mut(row).and_then(|d| d.get_mut(slot)) {
-                        *total = 0;
-                    }
+        for (seats, damages) in self.seat.iter_mut().zip(self.damage.iter_mut()) {
+            for (owner, total) in seats.iter_mut().zip(damages.iter_mut()) {
+                if *owner == seat.raw() {
+                    *owner = SeatId::NEUTRAL.raw();
+                    *total = 0;
                 }
-                slot = slot.saturating_add(1);
             }
-            row = row.saturating_add(1);
         }
+    }
+
+    /// Whether any seat holds credit against `asset`: a death that has not
+    /// settled yet, so the asset's row may not be freed (S2's plan, E1).
+    #[must_use]
+    pub fn holds(&self, asset: u32) -> bool {
+        self.seek(asset).is_ok()
     }
 
     /// Replace the whole table from a restored snapshot.
@@ -1883,8 +2216,9 @@ pub struct Csr {
     /// `cells_x * cells_y + 1` entries; `starts[c]..starts[c + 1]` indexes
     /// [`Csr::items`].
     starts: Vec<u32>,
-    /// One entry per item, holding the item's id.
-    items: Vec<u32>,
+    /// One entry per item, holding the item's row in the table the grid was
+    /// built from: typed, so it is never read as an id (S2's plan, E1).
+    items: Vec<crate::ids::Row>,
     /// Scratch for the counting sort, `cells_x * cells_y` entries.
     cursor: Vec<u32>,
 }
@@ -1918,7 +2252,7 @@ impl Csr {
             origin_x: *origin.first()?,
             origin_y: *origin.get(1)?,
             starts: vec![0; cells_usize.checked_add(1)?],
-            items: vec![0; capacity_usize],
+            items: vec![crate::ids::Row::FIRST; capacity_usize],
             cursor: vec![0; cells_usize],
         })
     }
@@ -1951,14 +2285,15 @@ impl Csr {
     )]
     fn axis_cell(&self, v: i32, origin: i32, cells: u32) -> u32 {
         let offset = v.saturating_sub(origin).max(0);
-        let cell = offset / self.cell_size_voxels;
-        let cell = u32::try_from(cell).unwrap_or(0);
+        // Both operands are non-negative, so the quotient is too and its
+        // magnitude is itself.
+        let cell = (offset / self.cell_size_voxels).unsigned_abs();
         cell.min(cells.saturating_sub(1))
     }
 
-    /// Rebuild the index from the positions of `count` items whose ids are
-    /// `0..count`, by counting sort. Allocation-free and infallible (S2's
-    /// plan, E6).
+    /// Rebuild the index from the positions of the items in rows
+    /// `0..positions.len()`, by counting sort. Allocation-free and infallible
+    /// (S2's plan, E6).
     ///
     /// **The grid is built for the table's room.** Its owner sizes it, at
     /// construction, for the most rows the table can ever hold, and the table
@@ -1993,28 +2328,33 @@ impl Csr {
         if let Some(heads) = self.starts.get(..cells) {
             self.cursor.copy_from_slice(heads);
         }
-        for (index, pos) in positions.iter().take(capacity).enumerate() {
+        for (pos, row) in positions.iter().take(capacity).zip(crate::ids::Row::all()) {
             let cell = crate::math::index::row(self.cell_of(*pos));
             let Some(head) = self.cursor.get_mut(cell) else {
                 continue;
             };
             let at = crate::math::index::row(*head);
             *head = head.saturating_add(1);
-            let Ok(id) = u32::try_from(index) else {
-                continue;
-            };
             if let Some(slot) = self.items.get_mut(at) {
-                *slot = id;
+                *slot = row;
             }
         }
     }
 
     /// Collect every item within `radius` **voxels** of `centre`, sorted
-    /// ascending by id, into `out`.
+    /// ascending by row, into `out`.
     ///
-    /// `positions` must be the slice the grid was last [rebuilt](Csr::rebuild)
-    /// from: the grid stores ids, and an id is that slice's index. An id the
-    /// slice no longer covers is dropped rather than guessed at.
+    /// `positions` is the table's position column **as it is now**, which may
+    /// be later than the [rebuild](Csr::rebuild): the grid stores rows, and
+    /// each candidate's exact distance is taken from `positions` at its row. A
+    /// row the slice no longer covers is dropped rather than guessed at.
+    ///
+    /// **The grid is stale by however far an item has moved since it was
+    /// built** (S2's plan, E11): it is rebuilt in the Broadphase, before
+    /// Movement, so a unit that walked into range this tick sits in a cell the
+    /// radius alone would not touch. `pad` widens the cells asked for by the
+    /// most any item can have moved since the rebuild; the exact test is still
+    /// against `radius`, so the answer is exact over positions that moved.
     ///
     /// The radius is in voxels and not in cells **on purpose** (see the module
     /// docs). The grid is only asked for a superset — every cell within
@@ -2035,14 +2375,15 @@ impl Csr {
         positions: &[[Fx; 3]],
         centre: [Fx; 3],
         radius: Fx,
-        out: &mut Vec<u32>,
+        pad: Fx,
+        out: &mut Vec<crate::ids::Row>,
     ) {
         out.clear();
-        if radius < Fx::ZERO {
+        if radius < Fx::ZERO || pad < Fx::ZERO {
             return;
         }
         let limit = Sq::of_radius(radius);
-        let radius_cells = self.radius_in_cells(radius);
+        let radius_cells = self.radius_in_cells(radius.saturating_add(pad));
         let cell = self.cell_of(centre);
         let cx = cell % self.cells_x.max(1);
         let cy = cell / self.cells_x.max(1);
@@ -2059,16 +2400,22 @@ impl Csr {
             let mut x = lo_x;
             while x <= hi_x {
                 let c = crate::math::index::row(y.saturating_mul(self.cells_x).saturating_add(x));
-                let from = self.starts.get(c).copied().unwrap_or(0);
-                let to = self.starts.get(c.saturating_add(1)).copied().unwrap_or(0);
-                let range = crate::math::index::row(from)..crate::math::index::row(to);
-                if let Some(slice) = self.items.get(range) {
-                    for id in slice {
-                        let Some(pos) = positions.get(crate::math::index::row(*id)) else {
-                            continue;
-                        };
-                        if Sq::between(*pos, centre) <= limit {
-                            out.push(*id);
+                // `x` and `y` are clamped into the grid above, so `c` and
+                // `c + 1` are both entries of `starts`, which holds one more
+                // entry than there are cells.
+                if let (Some(from), Some(to)) = (
+                    self.starts.get(c).copied(),
+                    self.starts.get(c.saturating_add(1)).copied(),
+                ) {
+                    let range = crate::math::index::row(from)..crate::math::index::row(to);
+                    if let Some(slice) = self.items.get(range) {
+                        for row in slice {
+                            let Some(pos) = positions.get(row.index()) else {
+                                continue;
+                            };
+                            if Sq::between(*pos, centre) <= limit {
+                                out.push(*row);
+                            }
                         }
                     }
                 }
@@ -2076,7 +2423,7 @@ impl Csr {
             }
             y = y.saturating_add(1);
         }
-        // Ids are unique, so an unstable sort is a total order (item 62's
+        // Rows are unique, so an unstable sort is a total order (item 62's
         // convention: every sort key ends in a unique id).
         out.sort_unstable();
     }
@@ -2101,6 +2448,7 @@ impl Csr {
             .saturating_add(almost_one)
             .floor_voxels()
             .saturating_add(1);
+        // E7: cannot miss: `voxels` is at least one for a radius that is not negative, and the cell edge was refused at construction unless positive (`Csr::new`)
         cells_across(voxels, self.cell_size_voxels).unwrap_or(0)
     }
 }
@@ -2246,9 +2594,12 @@ impl StructureKind {
     }
 }
 
-/// A beacon's identity. Dense, assigned at construction, stable for the match.
+/// A beacon's identity: its row and the row's generation ([`crate::ids`]).
+/// A seat's core is generation 0 and its row is never freed.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct BeaconId(u32);
+
+crate::ids::generational_id!(BeaconId, "beacon");
 
 impl BeaconId {
     /// "No beacon" — the sentinel a structure with no home carries.
@@ -2352,11 +2703,24 @@ pub fn parse_beacon_name(text: &str) -> Option<BeaconName> {
     })
 }
 
-/// A structure's identity.
+/// A structure's identity: its row and the row's generation ([`crate::ids`]).
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct StructureId(u32);
 
+crate::ids::generational_id!(StructureId, "structure");
+
 impl StructureId {
+    /// "No structure" — the sentinel a Build target's `built` link carries
+    /// before anything is paid for. The same raw value as [`BeaconId::NONE`],
+    /// which is what the link held before it was typed, so no byte moves.
+    pub const NONE: StructureId = StructureId(u32::MAX);
+
+    /// Whether this is a real structure rather than [`StructureId::NONE`].
+    #[must_use]
+    pub const fn is_some(self) -> bool {
+        self.0 != StructureId::NONE.0
+    }
+
     /// Build from a raw id.
     #[must_use]
     pub const fn new(raw: u32) -> StructureId {
@@ -2370,9 +2734,11 @@ impl StructureId {
     }
 }
 
-/// A wreck's identity.
+/// A wreck's identity: its row and the row's generation ([`crate::ids`]).
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct WreckId(u32);
+
+crate::ids::generational_id!(WreckId, "wreck");
 
 impl WreckId {
     /// Build from a raw id.
@@ -2422,6 +2788,8 @@ pub struct BeaconColumns {
     pub flee: Vec<bool>,
     /// The seam each beacon holds ([`BeaconTable::seams`]).
     pub seam: Vec<u32>,
+    /// Whether each row is free (S2's plan, E1).
+    pub free: Vec<bool>,
 }
 
 /// Every column of a restored [`StructureTable`]. Same reasoning as
@@ -2439,11 +2807,15 @@ pub struct StructureColumns {
     /// Hit points.
     pub hp: Vec<Hp>,
     /// Home beacons, or [`BeaconId::NONE`].
-    pub home: Vec<u32>,
+    pub home: Vec<BeaconId>,
     /// Whether each structure is still going up.
     pub building: Vec<bool>,
     /// Each structure's rotation, 0 to 3 ([`QuarterTurns::raw`]).
     pub rotation: Vec<u8>,
+    /// The tick each ruin was ruined at, or [`NOT_RUINED`].
+    pub ruined_at: Vec<u32>,
+    /// Whether each row is free (S2's plan, E1).
+    pub free: Vec<bool>,
 }
 
 /// Beacons, structure-of-arrays.
@@ -2472,6 +2844,7 @@ pub struct BeaconTable {
     seam_choice: Vec<u8>,
     flee: Vec<bool>,
     seam: Vec<u32>,
+    free: Vec<bool>,
 }
 
 impl BeaconTable {
@@ -2496,49 +2869,171 @@ impl BeaconTable {
             seam_choice: Vec::with_capacity(n),
             flee: Vec::with_capacity(n),
             seam: Vec::with_capacity(n),
+            free: Vec::with_capacity(n),
         }
     }
 
-    /// Append one beacon. Never grows a column inside a tick: the room a Push
-    /// deploys into is reserved first ([`BeaconTable::reserve`]).
+    /// Append one beacon at generation 0, as the generator places a core.
     ///
-    /// Its ordinal is **derived here** rather than handed in: the number of
-    /// rows `seat` already holds, so a seat's first beacon -- its core, which
-    /// the generator places before anything else -- is ordinal 0 and every
-    /// later one counts up from there. Rows are never removed (a dead beacon
-    /// keeps its row), so an ordinal is never reused.
+    /// Its ordinal is the number of rows `seat` already holds, so a seat's
+    /// first beacon -- its core, which the generator places before anything
+    /// else -- is ordinal 0. A beacon placed during a match takes its ordinal
+    /// from the seat's placement counter instead ([`BeaconTable::place`],
+    /// [`SeatTable::placed`]), because rows are reused and a count of the rows a
+    /// seat holds would hand a dead beacon's name to the next one.
+    ///
+    /// # Errors
+    ///
+    /// [`TableFull`] past [`crate::ids::ROOM_LIMIT`] rows.
     pub fn push(
         &mut self,
-        id: BeaconId,
         seat: SeatId,
         pos: [Fx; 3],
         mandate: BeaconMandate,
         hp: Hp,
         dormant: bool,
-    ) {
+    ) -> Result<BeaconId, TableFull> {
         let ordinal = self.count_of(seat);
-        self.id.push(id.raw());
-        self.seat.push(seat.raw());
-        self.pos.push(pos);
-        self.mandate.push(mandate.kind.id());
-        self.program.push(mandate.program_id.raw());
-        self.hp.push(hp);
-        self.dormant.push(dormant);
-        self.priority.push(PRIORITY_NORMAL);
-        self.scouts.push(0);
-        self.ordinal.push(ordinal);
-        let mine = crate::mining::MineSettings::default();
-        self.dig_depth.push(mine.dig_max_depth);
-        self.pillars.push(mine.pillar_spacing);
-        self.seam_choice.push(mine.seam_choice.id());
-        self.flee.push(mine.flee_on_threat);
-        self.seam.push(crate::targeting::NO_FEATURE);
-        self.count = self.count.saturating_add(1);
+        self.place(
+            crate::ids::ROOM_LIMIT,
+            seat,
+            pos,
+            mandate,
+            BeaconStart {
+                hp,
+                dormant,
+                ordinal,
+            },
+        )
+        .map(|placed| placed.id)
     }
 
-    /// How many beacon rows `seat` holds, alive or dead.
+    /// Where the next beacon goes ([`vacancy_in`]), within `room` rows.
     ///
-    /// Also the ordinal its next beacon will take.
+    /// # Errors
+    ///
+    /// [`TableFull`] when no row is free and the table holds `room`.
+    pub fn vacancy(&self, room: u32) -> Result<Vacancy, TableFull> {
+        vacancy_in(&self.id, &self.free, room)
+    }
+
+    /// Place one beacon in the next [`Vacancy`] within `room` rows, with
+    /// **every column written**: a reused row keeps nothing of the beacon that
+    /// held it (S2's plan, E1). Never grows a column inside a tick: the room a
+    /// Push deploys into is reserved first ([`BeaconTable::reserve`]).
+    ///
+    /// # Errors
+    ///
+    /// [`TableFull`] when no row is free and the table holds `room`.
+    pub fn place(
+        &mut self,
+        room: u32,
+        seat: SeatId,
+        pos: [Fx; 3],
+        mandate: BeaconMandate,
+        start: BeaconStart,
+    ) -> Result<Placed<BeaconId>, TableFull> {
+        let at = self.vacancy(room)?;
+        let id = BeaconId::of(at.row, at.generation);
+        let row = at.row;
+        let mine = crate::mining::MineSettings::default();
+        put(&mut self.id, row, id.raw());
+        put(&mut self.seat, row, seat.raw());
+        put(&mut self.pos, row, pos);
+        put(&mut self.mandate, row, mandate.kind.id());
+        put(&mut self.program, row, mandate.program_id.raw());
+        put(&mut self.hp, row, start.hp);
+        put(&mut self.dormant, row, start.dormant);
+        put(&mut self.priority, row, PRIORITY_NORMAL);
+        put(&mut self.scouts, row, 0);
+        put(&mut self.ordinal, row, start.ordinal);
+        put(&mut self.dig_depth, row, mine.dig_max_depth);
+        put(&mut self.pillars, row, mine.pillar_spacing);
+        put(&mut self.seam_choice, row, mine.seam_choice.id());
+        put(&mut self.flee, row, mine.flee_on_threat);
+        put(&mut self.seam, row, crate::targeting::NO_FEATURE);
+        put(&mut self.free, row, false);
+        if !at.reused {
+            // An appended row is the table's last, at most `Row::MAX`.
+            self.count = row.raw().saturating_add(1);
+        }
+        Ok(Placed {
+            id,
+            reused: at.reused,
+        })
+    }
+
+    /// Free `row`: its beacon has died, its death has settled, and it is not a
+    /// core (a core's row is never freed: "brownout distance is measured from
+    /// the core or its former site", spec section 5). Every column goes back to
+    /// nobody's: no seat, no hit points, no writ and no settings. `true` when
+    /// the row's generation is the last, so it will never be reused.
+    pub fn release(&mut self, row: crate::ids::Row) -> bool {
+        let index = row.index();
+        let Some(free) = self.free.get_mut(index) else {
+            return false;
+        };
+        *free = true;
+        let mine = crate::mining::MineSettings::default();
+        if let Some(slot) = self.seat.get_mut(index) {
+            *slot = SeatId::NEUTRAL.raw();
+        }
+        if let Some(slot) = self.hp.get_mut(index) {
+            *slot = Hp::ZERO;
+        }
+        if let Some(slot) = self.mandate.get_mut(index) {
+            *slot = crate::seams::MandateKind::None.id();
+        }
+        if let Some(slot) = self.dormant.get_mut(index) {
+            *slot = false;
+        }
+        if let Some(slot) = self.priority.get_mut(index) {
+            *slot = PRIORITY_NORMAL;
+        }
+        if let Some(slot) = self.scouts.get_mut(index) {
+            *slot = 0;
+        }
+        if let Some(slot) = self.ordinal.get_mut(index) {
+            *slot = 0;
+        }
+        self.set_mine_settings(index, mine);
+        if let Some(slot) = self.seam.get_mut(index) {
+            *slot = crate::targeting::NO_FEATURE;
+        }
+        self.id
+            .get(index)
+            .and_then(|id| crate::ids::unpack(*id).ok())
+            .is_some_and(|(_, generation)| generation.next().is_none())
+    }
+
+    /// The row `beacon` lives in, checked by generation.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::ids::RefError`]: a sentinel, no such row, or a row since freed
+    /// or reused.
+    pub fn row_of(&self, beacon: BeaconId) -> Result<crate::ids::Row, crate::ids::RefError> {
+        row_of_in(&self.id, &self.free, beacon.raw())
+    }
+
+    /// The id of the beacon in `row`, or `None` for a row the table does not
+    /// hold or one that is free.
+    #[must_use]
+    pub fn id_of(&self, row: crate::ids::Row) -> Option<BeaconId> {
+        if self.free.get(row.index()).copied() != Some(false) {
+            return None;
+        }
+        self.id.get(row.index()).copied().map(BeaconId::new)
+    }
+
+    /// The free column ([`UnitTable::frees`]).
+    #[must_use]
+    pub fn frees(&self) -> &[bool] {
+        &self.free
+    }
+
+    /// How many beacon rows `seat` holds, alive or dead: every row it placed
+    /// that has not been freed. A seat's core is always one of them.
     #[must_use]
     pub fn count_of(&self, seat: SeatId) -> u32 {
         self.seat.iter().fold(0_u32, |sum, held| {
@@ -2551,7 +3046,9 @@ impl BeaconTable {
     }
 
     /// The row of `seat`'s beacon with this ordinal, alive or dead, or `None`
-    /// when the seat has no such beacon.
+    /// when the seat holds no such beacon -- because it was never placed, or
+    /// because it died and its row has been freed ([`BeaconTable::ordinal`]
+    /// tells the two apart).
     ///
     /// What a `b_NN` resolves through: a name counts the reader's own beacons
     /// and nothing else (`docs/design/targeting.md`, "Names").
@@ -2561,6 +3058,19 @@ impl BeaconTable {
             .iter()
             .zip(&self.ordinal)
             .position(|(held, number)| *held == seat.raw() && *number == ordinal)
+    }
+
+    /// What `seat`'s `b_NN` with this ordinal names, given the seat's
+    /// placement counter `placed` ([`SeatTable::placed`]): a row the seat
+    /// still holds, a beacon it placed that has since gone, or a number it has
+    /// never reached (S2's plan, E1).
+    #[must_use]
+    pub fn ordinal(&self, seat: SeatId, ordinal: u32, placed: u32) -> Ordinal {
+        match self.row_of_ordinal(seat, ordinal) {
+            Some(row) => Ordinal::Held(row),
+            None if ordinal < placed => Ordinal::Gone,
+            None => Ordinal::NeverPlaced,
+        }
     }
 
     /// Make room for `extra` more beacons without growing later.
@@ -2587,6 +3097,7 @@ impl BeaconTable {
         self.seam_choice.reserve(n);
         self.flee.reserve(n);
         self.seam.reserve(n);
+        self.free.reserve(n);
     }
 
     /// How many beacons the table holds.
@@ -2819,6 +3330,8 @@ impl BeaconTable {
             || columns.seam_choice.len() != n
             || columns.flee.len() != n
             || columns.seam.len() != n
+            || columns.free.len() != n
+            || !ids_name_their_rows(&columns.id)
         {
             return false;
         }
@@ -2831,20 +3344,15 @@ impl BeaconTable {
         {
             return false;
         }
-        // The ordinals are a function of the seat column, so a file whose two
-        // columns disagree describes no table this sim builds: refused rather
-        // than restored into names that resolve to the wrong beacon. One pass,
-        // with a running count per seat, so a large column read from a file
-        // costs its length and no more.
-        let mut placed = [0_u32; 256];
+        // A seat's ordinals are unique among the rows it holds, so a name
+        // resolves to one beacon or none: a file that names two describes no
+        // table this sim builds. That each is below its seat's placement
+        // counter is the snapshot's check, which holds the counters.
+        let mut held: std::collections::BTreeSet<(u8, u32)> = std::collections::BTreeSet::new();
         for (seat, ordinal) in columns.seat.iter().zip(columns.ordinal.iter()) {
-            let Some(count) = placed.get_mut(usize::from(*seat)) else {
-                return false;
-            };
-            if *count != *ordinal {
+            if SeatId::new(*seat).is_some() && !held.insert((*seat, *ordinal)) {
                 return false;
             }
-            *count = count.saturating_add(1);
         }
         let Ok(count) = u32::try_from(n) else {
             return false;
@@ -2865,8 +3373,33 @@ impl BeaconTable {
         self.seam_choice = columns.seam_choice;
         self.flee = columns.flee;
         self.seam = columns.seam;
+        self.free = columns.free;
         true
     }
+}
+
+/// What a placed beacon starts with beyond its seat, place and writ: its hit
+/// points, its dormancy and its per-seat ordinal ([`BeaconTable::place`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct BeaconStart {
+    /// Hit points at placement.
+    pub hp: Hp,
+    /// Whether it starts dormant.
+    pub dormant: bool,
+    /// Its per-seat ordinal: the seat's placement counter when it is placed.
+    pub ordinal: u32,
+}
+
+/// What a seat's `b_NN` names ([`BeaconTable::ordinal`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Ordinal {
+    /// The row of the beacon the seat holds under the name, alive or dead.
+    Held(usize),
+    /// The seat placed a beacon under the name, and it is gone: its row was
+    /// freed and may hold another asset now.
+    Gone,
+    /// The seat has placed fewer beacons than the number names.
+    NeverPlaced,
 }
 
 /// Structures, structure-of-arrays.
@@ -2883,10 +3416,17 @@ pub struct StructureTable {
     kind: Vec<u8>,
     pos: Vec<[Fx; 3]>,
     hp: Vec<Hp>,
-    home: Vec<u32>,
+    home: Vec<BeaconId>,
     building: Vec<bool>,
     rotation: Vec<u8>,
+    ruined_at: Vec<u32>,
+    free: Vec<bool>,
 }
+
+/// "This structure is not a ruin" — the value [`StructureTable::ruined_at`]
+/// carries for a structure a seat still owns. A sentinel rather than an
+/// `Option`, for the reason [`BeaconId::NONE`] is one.
+pub const NOT_RUINED: u32 = u32::MAX;
 
 impl StructureTable {
     /// An empty table sized for `count` structures.
@@ -2903,6 +3443,8 @@ impl StructureTable {
             home: Vec::with_capacity(n),
             building: Vec::with_capacity(n),
             rotation: Vec::with_capacity(n),
+            ruined_at: Vec::with_capacity(n),
+            free: Vec::with_capacity(n),
         }
     }
 
@@ -2918,9 +3460,21 @@ impl StructureTable {
         self.home.reserve(n);
         self.building.reserve(n);
         self.rotation.reserve(n);
+        self.ruined_at.reserve(n);
+        self.free.reserve(n);
     }
 
-    /// Append one structure.
+    /// Where the next structure goes ([`vacancy_in`]), within `room` rows.
+    ///
+    /// # Errors
+    ///
+    /// [`TableFull`] when no row is free and the table holds `room`.
+    pub fn vacancy(&self, room: u32) -> Result<Vacancy, TableFull> {
+        vacancy_in(&self.id, &self.free, room)
+    }
+
+    /// Place one structure in the next [`Vacancy`] within `room` rows, with
+    /// every column written.
     ///
     /// `building` is spec section 7's "construction time is HP and spectacle,
     /// not accounting": a structure the Quartermaster has paid for goes into
@@ -2935,9 +3489,13 @@ impl StructureTable {
         clippy::too_many_arguments,
         reason = "one argument per column, as `UnitTable::push` above; the same reasoning applies"
     )]
-    pub fn push(
+    ///
+    /// # Errors
+    ///
+    /// [`TableFull`] when no row is free and the table holds `room`.
+    pub fn place(
         &mut self,
-        id: StructureId,
+        room: u32,
         seat: SeatId,
         kind: StructureKind,
         pos: [Fx; 3],
@@ -2945,16 +3503,98 @@ impl StructureTable {
         home: BeaconId,
         building: bool,
         rotation: QuarterTurns,
-    ) {
-        self.id.push(id.raw());
-        self.seat.push(seat.raw());
-        self.kind.push(kind.id());
-        self.pos.push(pos);
-        self.hp.push(hp);
-        self.home.push(home.raw());
-        self.building.push(building);
-        self.rotation.push(rotation.raw());
-        self.count = self.count.saturating_add(1);
+    ) -> Result<Placed<StructureId>, TableFull> {
+        let at = self.vacancy(room)?;
+        let id = StructureId::of(at.row, at.generation);
+        let row = at.row;
+        put(&mut self.id, row, id.raw());
+        put(&mut self.seat, row, seat.raw());
+        put(&mut self.kind, row, kind.id());
+        put(&mut self.pos, row, pos);
+        put(&mut self.hp, row, hp);
+        put(&mut self.home, row, home);
+        put(&mut self.building, row, building);
+        put(&mut self.rotation, row, rotation.raw());
+        put(&mut self.ruined_at, row, NOT_RUINED);
+        put(&mut self.free, row, false);
+        if !at.reused {
+            // An appended row is the table's last, at most `Row::MAX`.
+            self.count = row.raw().saturating_add(1);
+        }
+        Ok(Placed {
+            id,
+            reused: at.reused,
+        })
+    }
+
+    /// Free `row`: its structure was destroyed and its death has settled, or a
+    /// ruin was salvaged or buried. `true` when the row's generation is the
+    /// last, so it will never be reused.
+    pub fn release(&mut self, row: crate::ids::Row) -> bool {
+        let index = row.index();
+        let Some(free) = self.free.get_mut(index) else {
+            return false;
+        };
+        *free = true;
+        if let Some(slot) = self.seat.get_mut(index) {
+            *slot = SeatId::NEUTRAL.raw();
+        }
+        if let Some(slot) = self.hp.get_mut(index) {
+            *slot = Hp::ZERO;
+        }
+        if let Some(slot) = self.home.get_mut(index) {
+            *slot = BeaconId::NONE;
+        }
+        if let Some(slot) = self.building.get_mut(index) {
+            *slot = false;
+        }
+        if let Some(slot) = self.ruined_at.get_mut(index) {
+            *slot = NOT_RUINED;
+        }
+        self.id
+            .get(index)
+            .and_then(|id| crate::ids::unpack(*id).ok())
+            .is_some_and(|(_, generation)| generation.next().is_none())
+    }
+
+    /// The row `structure` lives in, checked by generation.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::ids::RefError`]: a sentinel, no such row, or a row since freed
+    /// or reused.
+    pub fn row_of(&self, structure: StructureId) -> Result<crate::ids::Row, crate::ids::RefError> {
+        row_of_in(&self.id, &self.free, structure.raw())
+    }
+
+    /// The id of the structure in `row`, or `None` for a row the table does
+    /// not hold or one that is free.
+    #[must_use]
+    pub fn id_of(&self, row: crate::ids::Row) -> Option<StructureId> {
+        if self.free.get(row.index()).copied() != Some(false) {
+            return None;
+        }
+        self.id.get(row.index()).copied().map(StructureId::new)
+    }
+
+    /// The free column ([`UnitTable::frees`]).
+    #[must_use]
+    pub fn frees(&self) -> &[bool] {
+        &self.free
+    }
+
+    /// The tick each ruin was ruined at, or [`NOT_RUINED`]: what "the oldest
+    /// ruin" means when the ruin reserve is full (S2's plan, E1). Hashed and
+    /// snapshotted.
+    #[must_use]
+    pub fn ruined_at(&self) -> &[u32] {
+        &self.ruined_at
+    }
+
+    /// The ruined-at column, to write into: item 20's ruination is the one
+    /// writer.
+    pub fn ruined_at_mut(&mut self) -> &mut [u32] {
+        &mut self.ruined_at
     }
 
     /// How many structures the table holds.
@@ -2999,10 +3639,12 @@ impl StructureTable {
         &self.hp
     }
 
-    /// The home-beacon column, as raw [`BeaconId`]s. [`BeaconId::NONE`] means
-    /// the structure has no home beacon.
+    /// The home-beacon column. [`BeaconId::NONE`] means the structure has no
+    /// home beacon. A home is a reference into the beacon table, read through
+    /// [`BeaconTable::row_of`], which checks the generation: a ruin's home has
+    /// died and its row may hold another beacon now.
     #[must_use]
-    pub fn homes(&self) -> &[u32] {
+    pub fn homes(&self) -> &[BeaconId] {
         &self.home
     }
 
@@ -3036,7 +3678,7 @@ impl StructureTable {
     }
 
     /// The home-beacon column, to write into. Item 20's re-homing.
-    pub fn homes_mut(&mut self) -> &mut [u32] {
+    pub fn homes_mut(&mut self) -> &mut [BeaconId] {
         &mut self.home
     }
 
@@ -3062,6 +3704,9 @@ impl StructureTable {
             || columns.home.len() != n
             || columns.building.len() != n
             || columns.rotation.len() != n
+            || columns.ruined_at.len() != n
+            || columns.free.len() != n
+            || !ids_name_their_rows(&columns.id)
         {
             return false;
         }
@@ -3084,6 +3729,8 @@ impl StructureTable {
         self.home = columns.home;
         self.building = columns.building;
         self.rotation = columns.rotation;
+        self.ruined_at = columns.ruined_at;
+        self.free = columns.free;
         true
     }
 }
@@ -3099,6 +3746,7 @@ pub struct WreckTable {
     id: Vec<u32>,
     pos: Vec<[Fx; 3]>,
     salvage: Vec<Money>,
+    free: Vec<bool>,
 }
 
 impl WreckTable {
@@ -3111,6 +3759,7 @@ impl WreckTable {
             id: Vec::with_capacity(n),
             pos: Vec::with_capacity(n),
             salvage: Vec::with_capacity(n),
+            free: Vec::with_capacity(n),
         }
     }
 
@@ -3121,14 +3770,59 @@ impl WreckTable {
         self.id.reserve(n);
         self.pos.reserve(n);
         self.salvage.reserve(n);
+        self.free.reserve(n);
     }
 
-    /// Append one wreck.
-    pub fn push(&mut self, id: WreckId, pos: [Fx; 3], salvage: Money) {
-        self.id.push(id.raw());
-        self.pos.push(pos);
-        self.salvage.push(salvage);
-        self.count = self.count.saturating_add(1);
+    /// Place one wreck in the lowest free row within `room` rows, or on the
+    /// end ([`vacancy_in`]).
+    ///
+    /// # Errors
+    ///
+    /// [`TableFull`] when no row is free and the table holds `room`.
+    pub fn place(
+        &mut self,
+        room: u32,
+        pos: [Fx; 3],
+        salvage: Money,
+    ) -> Result<Placed<WreckId>, TableFull> {
+        let at = vacancy_in(&self.id, &self.free, room)?;
+        let id = WreckId::of(at.row, at.generation);
+        let row = at.row;
+        put(&mut self.id, row, id.raw());
+        put(&mut self.pos, row, pos);
+        put(&mut self.salvage, row, salvage);
+        put(&mut self.free, row, false);
+        if !at.reused {
+            // An appended row is the table's last, at most `Row::MAX`.
+            self.count = row.raw().saturating_add(1);
+        }
+        Ok(Placed {
+            id,
+            reused: at.reused,
+        })
+    }
+
+    /// Free `row`: its wreck has been picked clean. `true` when the row's
+    /// generation is the last, so it will never be reused.
+    pub fn release(&mut self, row: crate::ids::Row) -> bool {
+        let index = row.index();
+        let Some(free) = self.free.get_mut(index) else {
+            return false;
+        };
+        *free = true;
+        if let Some(slot) = self.salvage.get_mut(index) {
+            *slot = Money::ZERO;
+        }
+        self.id
+            .get(index)
+            .and_then(|id| crate::ids::unpack(*id).ok())
+            .is_some_and(|(_, generation)| generation.next().is_none())
+    }
+
+    /// The free column ([`UnitTable::frees`]).
+    #[must_use]
+    pub fn frees(&self) -> &[bool] {
+        &self.free
     }
 
     /// How many wrecks the table holds.
@@ -3169,9 +3863,15 @@ impl WreckTable {
 
     /// Replace the whole table from a restored snapshot. Same contract as
     /// [`UnitTable::restore`].
-    pub fn restore(&mut self, id: Vec<u32>, pos: Vec<[Fx; 3]>, salvage: Vec<Money>) -> bool {
+    pub fn restore(
+        &mut self,
+        id: Vec<u32>,
+        pos: Vec<[Fx; 3]>,
+        salvage: Vec<Money>,
+        free: Vec<bool>,
+    ) -> bool {
         let n = id.len();
-        if pos.len() != n || salvage.len() != n {
+        if pos.len() != n || salvage.len() != n || free.len() != n || !ids_name_their_rows(&id) {
             return false;
         }
         let Ok(count) = u32::try_from(n) else {
@@ -3181,6 +3881,7 @@ impl WreckTable {
         self.id = id;
         self.pos = pos;
         self.salvage = salvage;
+        self.free = free;
         true
     }
 }

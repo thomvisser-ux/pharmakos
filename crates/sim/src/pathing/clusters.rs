@@ -320,6 +320,7 @@ impl Clusters {
     /// How many abstract node slots the numbering spans.
     #[must_use]
     pub fn abstract_capacity(&self) -> u32 {
+        // E7: rule: a numbering past `u32` saturates, and `build_graph` refuses a scratch that disagrees with it
         u32::try_from(self.cluster_count().saturating_mul(self.max_trans)).unwrap_or(u32::MAX)
     }
 
@@ -348,6 +349,7 @@ impl Clusters {
         usize::try_from(node)
             .ok()
             .and_then(|index| self.of_node.get(index).copied())
+            // E7: cannot miss: the graph's arrays are sized at construction for every column, cluster and slot the decomposition numbers (`Clusters::new`)
             .unwrap_or(0)
     }
 
@@ -363,6 +365,7 @@ impl Clusters {
         usize::try_from(node)
             .ok()
             .and_then(|index| self.local_comp.get(index).copied())
+            // E7: cannot miss: the graph's arrays are sized at construction for every column, cluster and slot the decomposition numbers (`Clusters::new`)
             .unwrap_or(NO_COMP)
     }
 
@@ -457,20 +460,24 @@ impl Clusters {
     /// The transitions on one vertical border.
     #[must_use]
     pub fn vborder(&self, index: usize) -> &[Trans] {
+        // E7: cannot miss: the graph's arrays are sized at construction for every column, cluster and slot the decomposition numbers (`Clusters::new`)
         let len = usize::from(self.vborder_len.get(index).copied().unwrap_or(0));
         let base = index.saturating_mul(self.max_trans_per_border);
         self.vborder
             .get(base..base.saturating_add(len))
+            // E7: cannot miss: the graph's arrays are sized at construction for every column, cluster and slot the decomposition numbers (`Clusters::new`)
             .unwrap_or(&[])
     }
 
     /// The transitions on one horizontal border.
     #[must_use]
     pub fn hborder(&self, index: usize) -> &[Trans] {
+        // E7: cannot miss: the graph's arrays are sized at construction for every column, cluster and slot the decomposition numbers (`Clusters::new`)
         let len = usize::from(self.hborder_len.get(index).copied().unwrap_or(0));
         let base = index.saturating_mul(self.max_trans_per_border);
         self.hborder
             .get(base..base.saturating_add(len))
+            // E7: cannot miss: the graph's arrays are sized at construction for every column, cluster and slot the decomposition numbers (`Clusters::new`)
             .unwrap_or(&[])
     }
 
@@ -489,6 +496,7 @@ impl Clusters {
             .saturating_sub(1);
         let y0 = cy.saturating_mul(self.size);
         let base = index.saturating_mul(self.max_trans_per_border);
+        // E7: cannot miss: the graph's arrays are sized at construction for every column, cluster and slot the decomposition numbers (`Clusters::new`)
         let before_len = usize::from(self.vborder_len.get(index).copied().unwrap_or(0));
         let mut written: usize = 0;
         let mut changed = false;
@@ -549,6 +557,7 @@ impl Clusters {
             .saturating_sub(1);
         let x0 = cx.saturating_mul(self.size);
         let base = index.saturating_mul(self.max_trans_per_border);
+        // E7: cannot miss: the graph's arrays are sized at construction for every column, cluster and slot the decomposition numbers (`Clusters::new`)
         let before_len = usize::from(self.hborder_len.get(index).copied().unwrap_or(0));
         let mut written: usize = 0;
         let mut changed = false;
@@ -697,10 +706,12 @@ impl Clusters {
     /// One cluster's transition cells, ascending.
     #[must_use]
     pub fn trans_cells(&self, cluster: usize) -> &[Node] {
+        // E7: cannot miss: the graph's arrays are sized at construction for every column, cluster and slot the decomposition numbers (`Clusters::new`)
         let len = usize::from(self.trans_len.get(cluster).copied().unwrap_or(0));
         let base = cluster.saturating_mul(self.max_trans);
         self.trans_cell
             .get(base..base.saturating_add(len))
+            // E7: cannot miss: the graph's arrays are sized at construction for every column, cluster and slot the decomposition numbers (`Clusters::new`)
             .unwrap_or(&[])
     }
 
@@ -812,12 +823,14 @@ impl Clusters {
             self.intra_row
                 .get(row_base.saturating_add(slot))
                 .copied()
+                // E7: cannot miss: the graph's arrays are sized at construction for every column, cluster and slot the decomposition numbers (`Clusters::new`)
                 .unwrap_or(0),
         );
         let to = usize::from(
             self.intra_row
                 .get(row_base.saturating_add(slot).saturating_add(1))
                 .copied()
+                // E7: cannot miss: the graph's arrays are sized at construction for every column, cluster and slot the decomposition numbers (`Clusters::new`)
                 .unwrap_or(0),
         );
         if to < from {
@@ -827,9 +840,11 @@ impl Clusters {
         (
             self.intra_to
                 .get(edge_base.saturating_add(from)..edge_base.saturating_add(to))
+                // E7: cannot miss: the graph's arrays are sized at construction for every column, cluster and slot the decomposition numbers (`Clusters::new`)
                 .unwrap_or(&[]),
             self.intra_cost
                 .get(edge_base.saturating_add(from)..edge_base.saturating_add(to))
+                // E7: cannot miss: the graph's arrays are sized at construction for every column, cluster and slot the decomposition numbers (`Clusters::new`)
                 .unwrap_or(&[]),
         )
     }
@@ -949,12 +964,14 @@ impl Clusters {
             self.inter_row
                 .get(row_base.saturating_add(slot))
                 .copied()
+                // E7: cannot miss: the graph's arrays are sized at construction for every column, cluster and slot the decomposition numbers (`Clusters::new`)
                 .unwrap_or(0),
         );
         let to = usize::from(
             self.inter_row
                 .get(row_base.saturating_add(slot).saturating_add(1))
                 .copied()
+                // E7: cannot miss: the graph's arrays are sized at construction for every column, cluster and slot the decomposition numbers (`Clusters::new`)
                 .unwrap_or(0),
         );
         if to < from {
@@ -964,9 +981,11 @@ impl Clusters {
         (
             self.inter_to
                 .get(edge_base.saturating_add(from)..edge_base.saturating_add(to))
+                // E7: cannot miss: the graph's arrays are sized at construction for every column, cluster and slot the decomposition numbers (`Clusters::new`)
                 .unwrap_or(&[]),
             self.inter_cost
                 .get(edge_base.saturating_add(from)..edge_base.saturating_add(to))
+                // E7: cannot miss: the graph's arrays are sized at construction for every column, cluster and slot the decomposition numbers (`Clusters::new`)
                 .unwrap_or(&[]),
         )
     }
@@ -987,6 +1006,7 @@ impl Clusters {
             if let Some(slot) = self.comp_offset.get_mut(c) {
                 *slot = total;
             }
+            // E7: cannot miss: the graph's arrays are sized at construction for every column, cluster and slot the decomposition numbers (`Clusters::new`)
             total = total.saturating_add(u32::from(self.comp_count.get(c).copied().unwrap_or(0)));
             c = c.saturating_add(1);
         }
@@ -1050,6 +1070,7 @@ impl Clusters {
     fn find(&mut self, start: u32) -> u32 {
         let mut current = start;
         let mut guard: u32 = 0;
+        // E7: cannot miss: a count of the graph's own entries, bounded by the map's columns, fits a `u32`
         let limit = u32::try_from(self.union_find.len()).unwrap_or(u32::MAX);
         loop {
             let parent = self.parent(current);
@@ -1071,6 +1092,7 @@ impl Clusters {
         usize::try_from(node)
             .ok()
             .and_then(|index| self.union_find.get(index).copied())
+            // E7: rule: a node outside the union-find is its own root
             .unwrap_or(node)
     }
 
@@ -1103,6 +1125,7 @@ impl Clusters {
         self.comp_offset
             .get(cluster)
             .copied()
+            // E7: cannot miss: the graph's arrays are sized at construction for every column, cluster and slot the decomposition numbers (`Clusters::new`)
             .unwrap_or(u32::MAX)
             .saturating_add(u32::from(local))
     }
@@ -1114,6 +1137,7 @@ impl Clusters {
         usize::try_from(id)
             .ok()
             .and_then(|index| self.comp_label.get(index).copied())
+            // E7: cannot miss: the graph's arrays are sized at construction for every column, cluster and slot the decomposition numbers (`Clusters::new`)
             .unwrap_or(u32::MAX)
     }
 
@@ -1135,6 +1159,7 @@ impl Clusters {
         let mut total: u32 = 0;
         let mut c = 0;
         while c < self.cluster_count() {
+            // E7: cannot miss: the graph's arrays are sized at construction for every column, cluster and slot the decomposition numbers (`Clusters::new`)
             total = total.saturating_add(u32::from(self.trans_len.get(c).copied().unwrap_or(0)));
             c = c.saturating_add(1);
         }
@@ -1153,7 +1178,9 @@ impl Clusters {
                 let (to, _) = self.intra_edges(c, slot);
                 let (inter, _) = self.inter_edges(c, slot);
                 total = total
+                    // E7: cannot miss: a count of the graph's own entries, bounded by the map's columns, fits a `u32`
                     .saturating_add(u32::try_from(to.len()).unwrap_or(0))
+                    // E7: cannot miss: a count of the graph's own entries, bounded by the map's columns, fits a `u32`
                     .saturating_add(u32::try_from(inter.len()).unwrap_or(0));
                 slot = slot.saturating_add(1);
             }
@@ -1168,10 +1195,12 @@ impl Clusters {
     #[must_use]
     pub fn fingerprint(&self) -> u64 {
         let mut enc = crate::encoding::Enc::with_capacity(64 * 1024);
+        // E7: cannot miss: a count of the graph's own entries, bounded by the map's columns, fits a `u32`
         enc.u32(u32::try_from(self.cluster_count()).unwrap_or(0));
         let mut c = 0;
         while c < self.cluster_count() {
             let cells = self.trans_cells(c);
+            // E7: cannot miss: a count of the graph's own entries, bounded by the map's columns, fits a `u32`
             enc.len(u32::try_from(cells.len()).unwrap_or(0));
             for cell in cells {
                 enc.u32(*cell);
@@ -1180,12 +1209,14 @@ impl Clusters {
             let mut slot = 0;
             while slot < cells.len() {
                 let (to, cost) = self.intra_edges(c, slot);
+                // E7: cannot miss: a count of the graph's own entries, bounded by the map's columns, fits a `u32`
                 enc.len(u32::try_from(to.len()).unwrap_or(0));
                 for (target, price) in to.iter().zip(cost.iter()) {
                     enc.u16(*target);
                     enc.i32(*price);
                 }
                 let (inter, inter_cost) = self.inter_edges(c, slot);
+                // E7: cannot miss: a count of the graph's own entries, bounded by the map's columns, fits a `u32`
                 enc.len(u32::try_from(inter.len()).unwrap_or(0));
                 for (target, price) in inter.iter().zip(inter_cost.iter()) {
                     enc.u32(*target);

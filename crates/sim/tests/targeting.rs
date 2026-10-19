@@ -109,7 +109,7 @@ fn open(world: World, route: &str) -> Runner {
     runner
         .seal_playbook(SeatId::new(SEAT), plan)
         .expect("a Lull takes a seal");
-    assert!(runner.begin_push(), "a match opens in a Lull");
+    assert!(runner.begin_push().unwrap(), "a match opens in a Lull");
     runner
 }
 
@@ -444,12 +444,12 @@ fn table_room_is_the_world_total_divided_by_the_seat_count() {
 }
 
 #[test]
-fn a_seats_structure_share_counts_its_ruins() {
+fn a_seats_structure_share_counts_its_live_structures_not_its_ruins() {
     // The structure share is per seat like the beacon and unit shares, and
-    // counts every row the seat ever built, ruins included: a ruin keeps its
-    // row, so a share that freed itself when a structure fell would let one
-    // seat churn the table full and refuse another seat's build -- the leak
-    // per-seat room closes. At three seats each share is 120 / 3 = 40.
+    // since S2 (S2's plan, E1) counts the seat's live structures: a ruin is
+    // nobody's and holds a row of the ruin reserve, so one seat's churn cannot
+    // fill the table and refuse another seat's build, and a seat whose
+    // outpost fell builds again. At three seats each share is 120 / 3 = 40.
     assert_eq!(room_per_seat(120, 3), 40);
     let mut world = world_at(SEED, 3, &[180_000]);
     let zero = SeatId::new(0);
@@ -493,16 +493,17 @@ fn a_seats_structure_share_counts_its_ruins() {
         );
     }
     let mut runner = Runner::new(world);
-    assert!(runner.begin_push(), "a match opens in a Lull");
+    assert!(runner.begin_push().unwrap(), "a match opens in a Lull");
     let events = play_all(&mut runner, 200);
     assert_eq!(
         count(&events, EventKind::StructureRuined),
         40,
         "the outpost's structures are ruins"
     );
-    assert!(
-        queued_by(&events, zero).is_empty(),
-        "seat 0's ruins still fill its share"
+    assert_eq!(
+        queued_by(&events, zero).len(),
+        1,
+        "seat 0's ruins fill no share, so it builds again"
     );
     assert_eq!(
         queued_by(&events, one).len(),
@@ -538,7 +539,7 @@ fn one_structure_per_voxel_holds_across_seats() {
     let purse = |world: &World| world.seats().treasuries().get(1).expect("seat 1").raw();
     let before = purse(&world);
     let mut runner = Runner::new(world);
-    assert!(runner.begin_push(), "a match opens in a Lull");
+    assert!(runner.begin_push().unwrap(), "a match opens in a Lull");
     let events = play_all(&mut runner, 200);
     assert_eq!(
         queued_by(&events, one),
@@ -571,10 +572,10 @@ fn a_carried_covering_step_has_no_legal_site_after_round_one_on_the_golden_seed(
     let mut rounds: Vec<Vec<Event>> = Vec::new();
     loop {
         rounds.push(play(&mut runner, u32::MAX, |_, _| {}));
-        if runner.phase() != MatchPhase::Recap || !runner.end_recap() {
+        if runner.phase() != MatchPhase::Recap || !runner.end_recap().unwrap() {
             break;
         }
-        if !runner.begin_push() {
+        if !runner.begin_push().unwrap() {
             break;
         }
     }
@@ -754,7 +755,10 @@ fn a_restarted_step_resumes_at_the_beacon_it_placed() {
         z = site[2]
     );
     let mut runner = open(world, &route);
-    let commander = runner.world().commander_of(SeatId::new(SEAT));
+    let commander = runner
+        .world()
+        .commander_of(SeatId::new(SEAT))
+        .expect("an occupied seat has a commander");
     let treasury = |world: &World| world.seats().treasuries().first().expect("seat 0").raw();
     let before = treasury(runner.world());
     let mut killed = false;
@@ -900,7 +904,10 @@ fn a_bound_step_and_a_resumed_visit_round_trip_through_a_snapshot() {
     // The same step, with the commander killed once the beacon lands: the
     // step restarts and resumes as a visit to the beacon it placed.
     let mut runner = open(world_at(SEED, 2, &[180_000]), COVER);
-    let commander = runner.world().commander_of(SeatId::new(SEAT));
+    let commander = runner
+        .world()
+        .commander_of(SeatId::new(SEAT))
+        .expect("an occupied seat has a commander");
     let (mut killed, mut resumed) = (false, false);
     let events = play(&mut runner, 2_400, |world, events| {
         // Checkpoints come before the kill is filed: a damage order waits for
@@ -1055,7 +1062,7 @@ fn the_decision_tick_counts_its_evaluation_units() {
         let plan = Plan::compile(&book, &rules()).expect("compiles");
         let mut runner = Runner::new(world_at(SEED, 2, &[180_000]));
         runner.seal_playbook(SeatId::new(SEAT), plan).unwrap();
-        assert!(runner.begin_push());
+        assert!(runner.begin_push().unwrap());
         let _ = play(&mut runner, 6, |_, _| {});
         (
             runner.world().decision_work(0).expect("seat 0").spent(),

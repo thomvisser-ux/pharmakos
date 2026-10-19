@@ -38,7 +38,7 @@ use crate::economy::{Purchase, SpendRequest, Urgency};
 use crate::math::fixed::{Fx, Sq};
 use crate::math::quantity::{Kw, Money};
 use crate::seams::MandateKind;
-use crate::tables::{BeaconId, SeatId, StructureKind, TargetKind, UnitKind};
+use crate::tables::{BeaconId, SeatId, StructureId, StructureKind, TargetKind, UnitKind};
 use crate::world::World;
 
 /// The mandate seam: one writ, one question.
@@ -159,8 +159,8 @@ impl Mandate for Survey {
 
     fn request(&self, world: &World, beacon: BeaconId) -> Option<SpendRequest> {
         let seat = seat_of(world, beacon)?;
-        let row = usize::try_from(beacon.raw()).ok()?;
-        let wanted = u32::from(world.beacons().scout_counts().get(row).copied()?);
+        let row = world.beacons().row_of(beacon).ok()?;
+        let wanted = u32::from(world.beacons().scout_counts().get(row.index()).copied()?);
         let have = drones_homed(world, beacon, UnitKind::Scout);
         // A count rather than a backlog: spec section 6's Survey row names
         // "scout count" as a setting, so this is the one mandate the player
@@ -172,8 +172,8 @@ impl Mandate for Survey {
 /// The seat a beacon belongs to, or `None` when it is not a live beacon of a
 /// seat still in the match.
 fn seat_of(world: &World, beacon: BeaconId) -> Option<SeatId> {
-    let row = usize::try_from(beacon.raw()).ok()?;
-    let raw = world.beacons().seats().get(row).copied()?;
+    let row = world.beacons().row_of(beacon).ok()?;
+    let raw = world.beacons().seats().get(row.index()).copied()?;
     let seat = SeatId::new(raw);
     seat.is_some().then_some(seat)
 }
@@ -232,7 +232,7 @@ fn drones_homed(world: &World, beacon: BeaconId, kind: UnitKind) -> u32 {
     let mut total: u32 = 0;
     let mut row: usize = 0;
     while row < count {
-        let homed = units.homes().get(row).copied() == Some(beacon.raw());
+        let homed = units.homes().get(row).copied() == Some(beacon);
         let right = units.kinds().get(row).copied() == Some(kind.id());
         let alive = units.hit_points().get(row).is_some_and(|hp| hp.is_alive());
         if homed && right && alive {
@@ -282,9 +282,9 @@ pub(crate) fn next_unpaid_target(world: &World, beacon: BeaconId) -> Option<usiz
         .zip(targets.kinds())
         .zip(targets.built().iter().zip(targets.orders()));
     for (row, ((owner, kind), (built, order))) in rows.enumerate() {
-        if *owner != beacon.raw()
+        if *owner != beacon
             || *kind != TargetKind::Build.id()
-            || *built != BeaconId::NONE.raw()
+            || built.is_some()
             || !buildable(world, beacon, row)
         {
             continue;
@@ -354,7 +354,7 @@ pub(crate) fn protected(world: &World, beacon: BeaconId, at: [Fx; 3]) -> bool {
         .zip(targets.kinds())
         .zip(targets.areas())
         .any(|((owner, kind), area)| {
-            *owner == beacon.raw() && *kind == TargetKind::Protected.id() && area.contains(x, y)
+            *owner == beacon && *kind == TargetKind::Protected.id() && area.contains(x, y)
         })
 }
 
@@ -375,8 +375,13 @@ pub(crate) fn protected(world: &World, beacon: BeaconId, at: [Fx; 3]) -> bool {
 /// protects its ground is left as it stands, for as long as the area holds --
 /// nothing finishes, refunds or ruins it, and the spec does not say which
 /// (S1's `build` lane, from its review).
+///
+/// The `built` link is a reference into the structure table, checked by
+/// generation where it is read (S2's plan, E1): a link to a structure since
+/// freed is stale, counted ([`crate::ids::StaleRef::TargetBuilt`]), and read as
+/// a target not going up.
 #[must_use]
-pub(crate) fn next_unfinished_target(world: &World, beacon: BeaconId) -> Option<u32> {
+pub(crate) fn next_unfinished_target(world: &World, beacon: BeaconId) -> Option<StructureId> {
     let targets = world.targets();
     let structures = world.structures();
     let rows = targets
@@ -385,16 +390,14 @@ pub(crate) fn next_unfinished_target(world: &World, beacon: BeaconId) -> Option<
         .zip(targets.kinds())
         .zip(targets.anchors().iter().zip(targets.built()));
     for ((owner, kind), (at, built)) in rows {
-        if *owner != beacon.raw()
+        if *owner != beacon
             || *kind != TargetKind::Build.id()
-            || *built == BeaconId::NONE.raw()
+            || !built.is_some()
             || protected(world, beacon, *at)
         {
             continue;
         }
-        // The link is a structure row the Quartermaster wrote when it paid;
-        // one that names no row is not a structure going up.
-        let Ok(index) = usize::try_from(*built) else {
+        let Some(index) = built_row(world, *built) else {
             continue;
         };
         let unfinished = structures.building().get(index).copied() == Some(true);
@@ -409,6 +412,20 @@ pub(crate) fn next_unfinished_target(world: &World, beacon: BeaconId) -> Option<
     None
 }
 
+/// The row a Build target's `built` link names, or `None` for a structure
+/// since freed, which is counted as a stale reference and read as a target not
+/// going up (S2's plan, E1).
+fn built_row(world: &World, built: StructureId) -> Option<usize> {
+    match world.structures().row_of(built) {
+        Ok(row) => Some(row.index()),
+        Err(crate::ids::RefError::Stale) => {
+            world.stale_refs().stale(crate::ids::StaleRef::TargetBuilt);
+            None
+        }
+        Err(crate::ids::RefError::Id(_) | crate::ids::RefError::NoSuchRow) => None,
+    }
+}
+
 /// How many Build targets of `beacon` are outstanding: unpaid, or paid for and
 /// still going up.
 fn building_work(world: &World, beacon: BeaconId) -> u32 {
@@ -420,16 +437,16 @@ fn building_work(world: &World, beacon: BeaconId) -> u32 {
         .zip(targets.anchors().iter().zip(targets.built()));
     let mut work: u32 = 0;
     for (row, ((owner, kind), (at, built))) in rows.enumerate() {
-        if *owner != beacon.raw() || *kind != TargetKind::Build.id() {
+        if *owner != beacon || *kind != TargetKind::Build.id() {
             continue;
         }
-        let outstanding = if *built == BeaconId::NONE.raw() {
-            buildable(world, beacon, row)
-        } else {
+        let outstanding = if built.is_some() {
             !protected(world, beacon, *at)
-                && usize::try_from(*built).is_ok_and(|index| {
+                && built_row(world, *built).is_some_and(|index| {
                     world.structures().building().get(index).copied() == Some(true)
                 })
+        } else {
+            buildable(world, beacon, row)
         };
         if outstanding {
             work = work.saturating_add(1);
@@ -441,10 +458,10 @@ fn building_work(world: &World, beacon: BeaconId) -> u32 {
 /// Whether `at` lies inside `beacon`'s sphere of authority.
 #[must_use]
 pub(crate) fn inside_sphere(world: &World, beacon: BeaconId, at: [Fx; 3]) -> bool {
-    let Ok(row) = usize::try_from(beacon.raw()) else {
+    let Ok(row) = world.beacons().row_of(beacon) else {
         return false;
     };
-    let Some(centre) = world.beacons().positions().get(row).copied() else {
+    let Some(centre) = world.beacons().positions().get(row.index()).copied() else {
         return false;
     };
     let radius = world.sphere_radius();

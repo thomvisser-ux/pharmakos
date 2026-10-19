@@ -85,19 +85,6 @@ pub use router::{Router, WalkState};
 pub use search::Scratch;
 pub use surface::{NEIGHBOURS, Node, StepCosts, Surface};
 
-/// Voxels of clear air a walker needs above the column it stands on.
-///
-/// The spike's value, and it is the locomotion rule rather than a performance
-/// knob: a column whose surface is within [`HEADROOM_VOXELS`] of the world
-/// ceiling is not walkable.
-///
-/// PLACEHOLDER: the headroom's rules-table row — owner, at S2, the stage that gives unit height a meaning.
-/// No `rules/rules.v1.json` row exists for it, because nothing has
-/// needed one — the generated terrain is clamped far below the ceiling, so the
-/// test never fires on a pristine map. Proposing the row belongs to the stage
-/// that gives unit height a meaning (owner, at S2).
-pub const HEADROOM_VOXELS: i32 = 2;
-
 /// A border run longer than this gets a transition node at each end instead of
 /// one in the middle (spike G2's `LONG_RUN`).
 ///

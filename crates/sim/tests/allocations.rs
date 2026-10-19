@@ -161,7 +161,7 @@ fn a_tick_allocates_nothing() {
     let sealed = pharmakos_sim::seal_determinism_playbooks(runner.world_mut(), &playbook)
         .expect("the harness playbook compiles");
     assert_eq!(sealed, pharmakos_sim::DETERMINISM_SEATS, "every seat seals");
-    assert!(runner.begin_push(), "a match opens in a Lull");
+    assert!(runner.begin_push().unwrap(), "a match opens in a Lull");
     let mut enc = Enc::with_capacity(64 * 1024);
 
     // Warm up: the first tick may still grow the encoder's buffer, and a

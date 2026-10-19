@@ -152,6 +152,11 @@ pub struct RulesTable {
     ///
     /// PLACEHOLDER: `no gameplay evidence behind it` (item 59) — owner, at S3.
     climb_surcharge: i32,
+    /// Clear air a walker needs above its column, `locomotion.headroom_voxels`
+    /// (E26: the sim's old `HEADROOM_VOXELS` given a row at its value).
+    headroom_voxels: i32,
+    /// The broadphase pad in whole voxels ([`RulesTable::query_pad_voxels`]).
+    query_pad_voxels: i16,
     /// Path cost a unit covers per tick. `3` (item 59). From
     /// `locomotion.move_cost_per_tick`.
     ///
@@ -251,6 +256,10 @@ pub struct UnitRow {
     pub draw: Kw,
     /// Its walking speed in cost units per second (item 90).
     pub cost_per_second: i32,
+    /// How far it sees, in whole voxels: `vision_radius_voxels`, everything
+    /// within it and no line of sight (item 144 (4); S1-34). Read through the
+    /// one sensor interface ([`crate::sight::Sensor`]; S2's plan, E10).
+    pub vision_radius_voxels: i16,
 }
 
 /// One structure kind's row as the tick reads it: `structures.<kind>`.
@@ -260,6 +269,10 @@ pub struct StructureRow {
     pub cost: Money,
     /// The hit points at full condition, refused at load at zero.
     pub hp: Hp,
+    /// How far a finished structure of the kind sees, in whole voxels, as a
+    /// unit's row reads ([`UnitRow::vision_radius_voxels`]). A placed beacon
+    /// sees by its sphere and never reads its own.
+    pub vision_radius_voxels: i16,
 }
 
 /// Every kind row the tick reads, typed at load.
@@ -331,6 +344,7 @@ impl KindRows {
                 hp: hit_points(name, row.hp)?,
                 draw: Kw::new(signed(name, row.draw_kw)?),
                 cost_per_second: signed(name, row.cost_per_second)?,
+                vision_radius_voxels: voxel_length(name, row.vision_radius_voxels)?,
             })
         };
         let structure = |name: &'static str,
@@ -340,6 +354,7 @@ impl KindRows {
             Ok(StructureRow {
                 cost: Money::new(i64::from(row.cost_dollars)),
                 hp: hit_points(name, row.hp)?,
+                vision_radius_voxels: voxel_length(name, row.vision_radius_voxels)?,
             })
         };
         let respawn = |field: &'static str, value: i32| -> Result<i32, RulesError> {
@@ -357,6 +372,10 @@ impl KindRows {
                 hp: hit_points("commander.hp", commander.hp)?,
                 draw: Kw::ZERO,
                 cost_per_second: signed("commander.cost_per_second", commander.cost_per_second)?,
+                vision_radius_voxels: voxel_length(
+                    "commander.vision_radius_voxels",
+                    commander.vision_radius_voxels,
+                )?,
             },
             build_drone: unit("units.build_drone", units.build_drone)?,
             mining_drone: unit("units.mining_drone", units.mining_drone)?,
@@ -464,6 +483,22 @@ impl RulesTable {
     #[must_use]
     pub const fn climb_surcharge(&self) -> i32 {
         self.climb_surcharge
+    }
+
+    /// Voxels of clear air a walker needs above the column it stands on
+    /// (`locomotion.headroom_voxels`; S2's plan, E26): a column whose surface
+    /// is within this of the world ceiling is not walkable.
+    #[must_use]
+    pub const fn headroom_voxels(&self) -> i32 {
+        self.headroom_voxels
+    }
+
+    /// The most voxels any unit can move in one tick, rounded up: the
+    /// broadphase query's pad (S2's plan, E11), derived at load from the
+    /// locomotion rows ([`query_pad_of`]).
+    #[must_use]
+    pub const fn query_pad_voxels(&self) -> i16 {
+        self.query_pad_voxels
     }
 
     /// Path cost a unit covers per tick (`locomotion.move_cost_per_tick`).
@@ -774,6 +809,7 @@ impl RulesTable {
 
         let segment_lengths_ms = segment_lengths_of(matched)?;
 
+        let query_pad_voxels = query_pad_of(locomotion, &kinds)?;
         let canonical = pharmakos_proto::json::encode(message).map_err(RulesError::Json)?;
 
         Ok(RulesTable {
@@ -790,6 +826,8 @@ impl RulesTable {
                 locomotion.step_cost_diagonal,
             )?,
             climb_surcharge: signed("locomotion.climb_surcharge", locomotion.climb_surcharge)?,
+            headroom_voxels: signed("locomotion.headroom_voxels", locomotion.headroom_voxels)?,
+            query_pad_voxels,
             move_cost_per_tick: signed(
                 "locomotion.move_cost_per_tick",
                 locomotion.move_cost_per_tick,
@@ -849,6 +887,76 @@ impl RulesTable {
         })?;
         RulesTable::from_canonical_json(&text)
     }
+}
+
+/// The broadphase pad (S2's plan, E11): the most any unit can move in one
+/// tick, in whole voxels.
+///
+/// A walker adds its kind's `cost_per_second` to an accumulator every tick and
+/// spends `step * TICK_HZ` of it a step; the accumulator is reset when a route
+/// ends or is asked again ([`crate::pathing::router::Router::advance`]), so
+/// what it carries into a tick is less than the dearest step's price. In one
+/// tick it therefore takes at most `(fastest + dearest - 1) / cheapest` steps,
+/// and each moves one column across or diagonally and at most one voxel up or
+/// down, a distance under two voxels: the pad is twice the step count.
+///
+/// # Errors
+///
+/// [`RulesError::OutOfRange`] for a step that costs nothing, which would let a
+/// walker cross the map in a tick, and for a pad past a voxel coordinate.
+fn query_pad_of(
+    locomotion: &gp::v1::rules_table::Locomotion,
+    kinds: &KindRows,
+) -> Result<i16, RulesError> {
+    let refused = |field: &str, value: String| RulesError::OutOfRange {
+        field: field.to_owned(),
+        value,
+    };
+    let tick_hz = i64::from(TICK_HZ);
+    let cardinal = i64::from(locomotion.step_cost_cardinal);
+    let diagonal = i64::from(locomotion.step_cost_diagonal);
+    let climb = i64::from(locomotion.climb_surcharge);
+    if cardinal == 0 || diagonal == 0 {
+        return Err(refused(
+            if cardinal == 0 {
+                "locomotion.step_cost_cardinal"
+            } else {
+                "locomotion.step_cost_diagonal"
+            },
+            format!(
+                "{cardinal} cardinal, {diagonal} diagonal; a step that costs nothing lets a walker \
+                 cross the map in a tick"
+            ),
+        ));
+    }
+    let fastest = [
+        kinds.commander,
+        kinds.build_drone,
+        kinds.mining_drone,
+        kinds.repair_drone,
+        kinds.raider,
+        kinds.scout,
+    ]
+    .iter()
+    .map(|row| i64::from(row.cost_per_second))
+    .fold(0_i64, i64::max);
+    let cheapest = cardinal.min(diagonal).saturating_mul(tick_hz);
+    let dearest = diagonal
+        .max(cardinal)
+        .saturating_add(climb)
+        .saturating_mul(tick_hz);
+    let steps = fastest
+        .saturating_add(dearest)
+        .saturating_sub(1)
+        .checked_div(cheapest)
+        .ok_or_else(|| refused("locomotion.step_cost_cardinal", "0".to_owned()))?;
+    let voxels = steps.saturating_mul(2);
+    i16::try_from(voxels).map_err(|_| {
+        refused(
+            "locomotion",
+            format!("a tick's walk of {voxels} voxels; the pad is a voxel length"),
+        )
+    })
 }
 
 /// `beacon.sphere_radius_voxels` as the resolver reads it: present, and a

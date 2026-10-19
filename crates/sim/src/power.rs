@@ -778,21 +778,18 @@ fn draw_under(world: &World, seat: SeatId, rules: PowerRules, lighting: Lighting
 fn unit_draw_of(world: &World, seat: SeatId, rules: PowerRules, lighting: Lighting) -> Option<i32> {
     let mut total: i32 = 0;
     let units = world.units();
-    let count = crate::math::index::row(units.len());
-    let mut row: usize = 0;
-    while row < count {
-        let mine = units.seats().get(row).copied() == Some(seat.raw());
-        let alive = units.hit_points().get(row).is_some_and(|hp| hp.is_alive());
-        let home = units
-            .homes()
-            .get(row)
-            .copied()
-            // E7: cannot miss: `row` walks the unit table's own rows
-            .unwrap_or(BeaconId::NONE.raw());
-        if mine && alive && beacon_counts(world, BeaconId::new(home), lighting) {
+    let rows = units
+        .seats()
+        .iter()
+        .zip(units.hit_points())
+        .zip(units.homes());
+    for ((owner, hp), home) in rows {
+        if *owner == seat.raw()
+            && hp.is_alive()
+            && home_counts(world, *home, crate::ids::StaleRef::UnitHome, lighting)
+        {
             total = total.checked_add(rules.per_unit)?;
         }
-        row = row.saturating_add(1);
     }
     Some(total)
 }
@@ -800,23 +797,17 @@ fn unit_draw_of(world: &World, seat: SeatId, rules: PowerRules, lighting: Lighti
 /// The seat's core: its lowest-id beacon row, alive or not.
 ///
 /// "Brownout distance is measured from the core **or its former site**" (spec
-/// section 5), so a dead core still anchors the order — which is exactly what
-/// keeping its row gives for free.
+/// section 5), so a dead core still anchors the order: a core's row is never
+/// freed and is generation 0, so it stays its seat's lowest id (S2's plan,
+/// E1).
 #[must_use]
 pub(crate) fn core_of(world: &World, seat: SeatId) -> Option<BeaconId> {
     let beacons = world.beacons();
-    let count = crate::math::index::row(beacons.len());
     let mut best: Option<u32> = None;
-    let mut row: usize = 0;
-    while row < count {
-        if beacons.seats().get(row).copied() == Some(seat.raw()) {
-            // E7: cannot miss: `row` walks the beacon table's own rows
-            let id = beacons.ids().get(row).copied().unwrap_or(0);
-            if best.is_none_or(|held| id < held) {
-                best = Some(id);
-            }
+    for (owner, id) in beacons.seats().iter().zip(beacons.ids()) {
+        if *owner == seat.raw() && best.is_none_or(|held| *id < held) {
+            best = Some(*id);
         }
-        row = row.saturating_add(1);
     }
     best.map(BeaconId::new)
 }
@@ -830,12 +821,10 @@ pub(crate) fn beacon_is_live(world: &World, beacon: BeaconId) -> bool {
 /// Whether a beacon counts as lit under a [`Lighting`]: alive, and awake
 /// unless every living beacon is counted lit.
 fn beacon_counts(world: &World, beacon: BeaconId, lighting: Lighting) -> bool {
-    if !beacon.is_some() {
-        return false;
-    }
-    let Ok(row) = usize::try_from(beacon.raw()) else {
+    let Ok(row) = world.beacons().row_of(beacon) else {
         return false;
     };
+    let row = row.index();
     let beacons = world.beacons();
     let alive = beacons
         .hit_points()
@@ -846,6 +835,32 @@ fn beacon_counts(world: &World, beacon: BeaconId, lighting: Lighting) -> bool {
         Lighting::AllLit => beacons.dormant().get(row).is_some(),
     };
     alive && awake
+}
+
+/// Whether a unit's or a structure's home counts as lit: [`beacon_counts`],
+/// with a home since freed counted as a stale reference under `reason` and
+/// read as dark (S2's plan, E1). No home at all is no grid.
+fn home_counts(
+    world: &World,
+    home: BeaconId,
+    reason: crate::ids::StaleRef,
+    lighting: Lighting,
+) -> bool {
+    if world.beacons().row_of(home) == Err(crate::ids::RefError::Stale) {
+        world.stale_refs().stale(reason);
+        return false;
+    }
+    beacon_counts(world, home, lighting)
+}
+
+/// The row of the beacon whose raw id is `id`, checked by generation, or
+/// `None` for one the table no longer holds.
+fn beacon_row(world: &World, id: u32) -> Option<usize> {
+    world
+        .beacons()
+        .row_of(BeaconId::new(id))
+        .ok()
+        .map(crate::ids::Row::index)
 }
 
 /// Whether the beacon at `row` is alive and awake.
@@ -875,13 +890,11 @@ fn structure_counts(world: &World, seat: SeatId, row: usize, lighting: Lighting)
     if structures.building().get(row).copied() != Some(false) {
         return false;
     }
-    let home = structures
+    structures
         .homes()
         .get(row)
         .copied()
-        // E7: cannot miss: `row` is a row of the unit table
-        .unwrap_or(BeaconId::NONE.raw());
-    beacon_counts(world, BeaconId::new(home), lighting)
+        .is_some_and(|home| home_counts(world, home, crate::ids::StaleRef::StructureHome, lighting))
 }
 
 /// The grade of the heat vent a Generator stands on, or `None` when it stands
@@ -916,7 +929,7 @@ fn headroom(world: &World, seat: SeatId, rules: PowerRules) -> Result<i32, Power
 
 /// Write one beacon's dormancy flag. `false` when the id names no row.
 fn set_dark(world: &mut World, beacon: u32, dark: bool) -> bool {
-    let Ok(row) = usize::try_from(beacon) else {
+    let Some(row) = beacon_row(world, beacon) else {
         return false;
     };
     match world.beacons_mut().dormant_mut().get_mut(row) {
@@ -930,9 +943,7 @@ fn set_dark(world: &mut World, beacon: u32, dark: bool) -> bool {
 
 /// Whether one beacon is dormant now.
 fn is_dark(world: &World, beacon: u32) -> bool {
-    usize::try_from(beacon)
-        .ok()
-        .and_then(|row| world.beacons().dormant().get(row).copied())
+    beacon_row(world, beacon).and_then(|row| world.beacons().dormant().get(row).copied())
         == Some(true)
 }
 
@@ -972,12 +983,11 @@ fn shed_if_it_relieves(
 /// Report a beacon's change of state on the bus.
 fn report(world: &mut World, seat: SeatId, beacon: u32, kind: EventKind) {
     let tick = world.tick();
-    let place = usize::try_from(beacon)
-        .ok()
-        .and_then(|row| world.beacons().positions().get(row).copied());
+    let place =
+        beacon_row(world, beacon).and_then(|row| world.beacons().positions().get(row).copied());
     let mut emission = Emission::of(kind)
         .seat(seat)
-        .subject(AssetId::of_beacon(BeaconId::new(beacon)));
+        .subject_of(AssetId::of_beacon(BeaconId::new(beacon)));
     if let Some(point) = place {
         emission = emission.at(Position::from_array(point));
     }
@@ -1127,7 +1137,7 @@ fn shed_key(
     id: u32,
 ) -> Option<(bool, u8, core::cmp::Reverse<Sq>, u32)> {
     let beacons = world.beacons();
-    let row = usize::try_from(id).ok()?;
+    let row = beacon_row(world, id)?;
     let priority = beacons.priorities().get(row).copied()?;
     let distance = Sq::between(beacons.positions().get(row).copied()?, core_at?);
     let is_core = core.is_some_and(|core| core.raw() == id);
@@ -1136,7 +1146,7 @@ fn shed_key(
 
 /// Where the seat's core stands, or stood.
 fn core_site(world: &World, core: Option<BeaconId>) -> Option<[Fx; 3]> {
-    core.and_then(|id| usize::try_from(id.raw()).ok())
+    core.and_then(|id| beacon_row(world, id.raw()))
         .and_then(|row| world.beacons().positions().get(row).copied())
 }
 
@@ -1287,8 +1297,7 @@ fn revive_cost(
     beacon: BeaconId,
 ) -> Result<i32, PowerError> {
     let now = headroom(world, seat, rules)?;
-    let was = usize::try_from(beacon.raw())
-        .ok()
+    let was = beacon_row(world, beacon.raw())
         .and_then(|row| world.beacons().dormant().get(row).copied())
         .ok_or(PowerError::NoSuchBeacon(beacon.raw()))?;
     set_dark(world, beacon.raw(), false);
@@ -1307,7 +1316,7 @@ fn revive_cost(
 /// for an id with no priority row: such a beacon takes no part in a swap,
 /// rather than being read as the lowest priority.
 fn swap_rank(world: &World, core: Option<BeaconId>, id: u32) -> Option<(bool, u8)> {
-    let row = usize::try_from(id).ok()?;
+    let row = beacon_row(world, id)?;
     let priority = world.beacons().priorities().get(row).copied()?;
     Some((core.is_some_and(|core| core.raw() == id), priority))
 }

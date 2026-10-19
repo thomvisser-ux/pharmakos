@@ -224,11 +224,17 @@ pub enum EventKind {
     /// no-survivor end, once per audited seat in seat order, just before
     /// `match_ended`.
     FinalAudit,
+    /// A ruin was buried: a structure turned to ruin while the ruin reserve was
+    /// full, so the oldest ruin's row was freed for it (S2's plan, E1; decision
+    /// 25's rule for wrecks, applied to ruins: the ash buries them). `subject`
+    /// is the buried ruin and `at` where it stood; a ruin is nobody's, so the
+    /// event names no seat.
+    RuinBuried,
 }
 
 impl EventKind {
     /// Every kind, in ascending [`EventKind::id`] order.
-    pub const ALL: [EventKind; 37] = [
+    pub const ALL: [EventKind; 38] = [
         EventKind::MatchStarted,
         EventKind::LullOpened,
         EventKind::PushStarted,
@@ -266,6 +272,7 @@ impl EventKind {
         EventKind::Settled,
         EventKind::KillCredited,
         EventKind::FinalAudit,
+        EventKind::RuinBuried,
     ];
 
     /// The wire id. Additive only: never reuse, never renumber.
@@ -309,6 +316,7 @@ impl EventKind {
             EventKind::Settled => 35,
             EventKind::KillCredited => 36,
             EventKind::FinalAudit => 37,
+            EventKind::RuinBuried => 38,
         }
     }
 
@@ -353,6 +361,7 @@ impl EventKind {
             35 => Some(EventKind::Settled),
             36 => Some(EventKind::KillCredited),
             37 => Some(EventKind::FinalAudit),
+            38 => Some(EventKind::RuinBuried),
             _ => None,
         }
     }
@@ -400,6 +409,7 @@ impl EventKind {
             EventKind::Settled => "settled",
             EventKind::KillCredited => "kill_credited",
             EventKind::FinalAudit => "final_audit",
+            EventKind::RuinBuried => "ruin_buried",
         }
     }
 
@@ -451,6 +461,8 @@ pub(crate) struct Emission {
     subject: Option<AssetId>,
     at: Option<Position>,
     value: i64,
+    /// Whether [`Emission::subject_of`] was handed an id that names nothing.
+    subject_refused: bool,
 }
 
 impl Emission {
@@ -462,7 +474,14 @@ impl Emission {
             subject: None,
             at: None,
             value: 0,
+            subject_refused: false,
         }
+    }
+
+    /// Whether the event was meant to name an asset and was handed an id that
+    /// names none ([`Emission::subject_of`]).
+    pub(crate) const fn subject_refused(&self) -> bool {
+        self.subject_refused
     }
 
     /// Whose it is.
@@ -474,6 +493,24 @@ impl Emission {
     /// What it is about.
     pub(crate) const fn subject(mut self, subject: AssetId) -> Emission {
         self.subject = Some(subject);
+        self
+    }
+
+    /// The asset the event is about, from an id that may name nothing: a
+    /// sentinel or an id outside the layout leaves the event with no subject
+    /// (S2's plan, E1: `AssetId::of_*` refuses a sentinel rather than masking
+    /// it). Events are derived output, never hashed, and every emitter hands
+    /// over the id of an asset it has just read from its row, so the refusal
+    /// is not reached in a legal world.
+    pub(crate) const fn subject_of(
+        mut self,
+        subject: Result<AssetId, crate::ids::IdError>,
+    ) -> Emission {
+        match subject {
+            Ok(subject) => self.subject = Some(subject),
+            // Counted when the world emits it (`World::emit`), never silent.
+            Err(_) => self.subject_refused = true,
+        }
         self
     }
 
@@ -688,7 +725,7 @@ mod tests {
             Tick::new(7),
             Emission::of(EventKind::CommanderDied)
                 .seat(SeatId::new(2))
-                .subject(AssetId::of_unit(UnitId::new(5)))
+                .subject_of(AssetId::of_unit(UnitId::new(5)))
                 .value(3),
         );
         // `.expect()` is banned in this crate's source text by
@@ -699,7 +736,7 @@ mod tests {
         };
         assert_eq!(event.kind, EventKind::CommanderDied);
         assert_eq!(event.seat, Some(SeatId::new(2)));
-        assert_eq!(event.subject, Some(AssetId::of_unit(UnitId::new(5))));
+        assert_eq!(event.subject, AssetId::of_unit(UnitId::new(5)).ok());
         assert_eq!(event.at, None, "no place was given, so none is claimed");
         assert_eq!(event.value, 3);
     }

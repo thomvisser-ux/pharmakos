@@ -163,14 +163,17 @@ fn transcript(case: &str) -> String {
             .seal_playbook(SeatId::new(CASE_SEAT), plan),
         "the case's seat seals its playbook"
     );
-    assert!(runner.begin_push(), "a match opens in a Lull");
+    assert!(runner.begin_push().unwrap(), "a match opens in a Lull");
 
     let mut lines = String::from("# tick\tseq\tkind\tseat\tsubject\tvalue\n");
     let damage = script(case);
     for tick in 0..case_ticks(case) {
         for (at, amount) in damage {
             if *at == tick {
-                let commander = runner.world().commander_of(SeatId::new(CASE_SEAT));
+                let commander = runner
+                    .world()
+                    .commander_of(SeatId::new(CASE_SEAT))
+                    .expect("an occupied seat has a commander");
                 assert!(
                     runner
                         .world_mut()
@@ -386,7 +389,7 @@ fn a_jump_only_goes_forward() {
     runner
         .world_mut()
         .seal_playbook(SeatId::new(CASE_SEAT), plan);
-    assert!(runner.begin_push());
+    assert!(runner.begin_push().unwrap());
     let mut lowest = u32::MAX;
     let mut seen_two = false;
     let mut body = String::new();
@@ -696,12 +699,15 @@ fn rows_of_the_visit_case(damage: &[(u32, i32)]) -> Vec<u32> {
     runner
         .world_mut()
         .seal_playbook(SeatId::new(CASE_SEAT), plan);
-    assert!(runner.begin_push());
+    assert!(runner.begin_push().unwrap());
     let mut ticks: Vec<u32> = Vec::new();
     for tick in 0..300 {
         for (at, amount) in damage {
             if *at == tick {
-                let commander = runner.world().commander_of(SeatId::new(CASE_SEAT));
+                let commander = runner
+                    .world()
+                    .commander_of(SeatId::new(CASE_SEAT))
+                    .expect("an occupied seat has a commander");
                 assert!(
                     runner
                         .world_mut()
@@ -745,7 +751,9 @@ fn a_move_to_a_voxel_arrives_on_the_ground_under_it() {
     // The step below names a column three voxels away and a `z` of 63, the top
     // of the map. It completes because the ground under it is the answer.
     let world = fresh_world();
-    let commander = world.commander_of(SeatId::new(CASE_SEAT));
+    let commander = world
+        .commander_of(SeatId::new(CASE_SEAT))
+        .expect("an occupied seat has a commander");
     let index = usize::try_from(commander.raw()).expect("a unit index");
     let at = world.units().positions()[index];
     let (x, y) = (at[0].floor_voxels() + 3, at[1].floor_voxels());
@@ -776,7 +784,7 @@ fn a_move_to_a_voxel_arrives_on_the_ground_under_it() {
     runner
         .world_mut()
         .seal_playbook(SeatId::new(CASE_SEAT), plan);
-    assert!(runner.begin_push());
+    assert!(runner.begin_push().unwrap());
     let mut body = String::new();
     for _ in 0..400 {
         if runner.step().unwrap().is_none() {
@@ -839,7 +847,7 @@ fn a_move_a_commander_cannot_walk_fails_with_no_path() {
     runner
         .world_mut()
         .seal_playbook(SeatId::new(CASE_SEAT), plan);
-    assert!(runner.begin_push());
+    assert!(runner.begin_push().unwrap());
     wall_in_the_commander(runner.world_mut());
     let mut body = String::new();
     for _ in 0..200 {
@@ -866,7 +874,9 @@ fn a_move_a_commander_cannot_walk_fails_with_no_path() {
 /// The columns stay walkable; every step out of the middle one becomes a
 /// five-voxel climb, which the one-voxel rule refuses.
 fn wall_in_the_commander(world: &mut World) {
-    let commander = world.commander_of(SeatId::new(CASE_SEAT));
+    let commander = world
+        .commander_of(SeatId::new(CASE_SEAT))
+        .expect("an occupied seat has a commander");
     let index = usize::try_from(commander.raw()).expect("a unit index");
     let at = world.units().positions()[index];
     let x = at[0].floor_voxels();
@@ -935,7 +945,7 @@ fn a_playbook_reads_only_its_own_seats_beacons() {
     runner
         .world_mut()
         .seal_playbook(SeatId::new(CASE_SEAT), plan);
-    assert!(runner.begin_push());
+    assert!(runner.begin_push().unwrap());
     let mut body = String::new();
     for _ in 0..40 {
         if runner.step().unwrap().is_none() {
@@ -1048,10 +1058,13 @@ fn a_seat_with_no_playbook_leaves_its_commander_where_it_stands() {
     // (T11), so a seat that sealed nothing is a seat whose commander is still
     // exactly where the generator put it.
     let mut runner = Runner::new(fresh_world());
-    let commander = runner.world().commander_of(SeatId::new(1));
+    let commander = runner
+        .world()
+        .commander_of(SeatId::new(1))
+        .expect("an occupied seat has a commander");
     let index = usize::try_from(commander.raw()).expect("a unit index");
     let before = runner.world().units().positions()[index];
-    assert!(runner.begin_push());
+    assert!(runner.begin_push().unwrap());
     for _ in 0..100 {
         if runner.step().unwrap().is_none() {
             break;
@@ -1087,7 +1100,7 @@ fn the_interpreters_state_survives_a_save_and_a_restore() {
     runner
         .world_mut()
         .seal_playbook(SeatId::new(CASE_SEAT), plan.clone());
-    assert!(runner.begin_push());
+    assert!(runner.begin_push().unwrap());
     for _ in 0..60 {
         runner
             .step()
@@ -1167,7 +1180,7 @@ fn every_playbook_halts() {
         runner
             .world_mut()
             .seal_playbook(SeatId::new(CASE_SEAT), plan);
-        assert!(runner.begin_push());
+        assert!(runner.begin_push().unwrap());
         let mut highest: u32 = 0;
         let mut reached_tail = false;
         for _ in 0..ticks {
