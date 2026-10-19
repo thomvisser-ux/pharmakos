@@ -135,8 +135,10 @@ presses Ready to end a Lull rather than waiting it out.
    them neutral, and until the art pass the client still draws them in Easy's colour, E14), its
    units retreat and re-home to Easy's nearest beacon, and the owner's repair drones salvage the
    ruins inside their own sphere.
-8. **The recap** shows each seat's kills and losses, a "shared kill" where two seats' damage
-   finished an asset, and the value each seat destroyed.
+8. **The recap** shows the owner's own kills and losses, a "shared kill" where another seat's
+   damage helped finish an asset, and the value the owner's seat destroyed. The tally is the calling
+   seat's own, as its settlement is, so Easy's is on no wire (decision 5; decisions-log item 145
+   (4)); the headless balance report gives every seat's.
 9. **The end.** The match ends on the first tick Easy has no beacon left (`last_seat_standing`), or
    at round 6's limit, where the final audit names the winner and its destroyed-value term is now
    not zero (X-08).
@@ -152,7 +154,7 @@ report with its three-seat run's share of damage aimed at the trailing seat (dec
 | §10 item | What closes it at S2 | Task |
 |---|---|---|
 | 1. `cargo xtask ci` green on the matrix, the OSes agreeing on the chains | Every lane green on the three-OS matrix; the cross-OS guard over every chain, digest and path hash, the new S2 scenarios' chains included | all; `demo2` |
-| 2. Hashes committed, every movement explained | The re-bless ledger of section 4.2; each chain-moving PR names the rule and the first tick that moved | `east`, `ids`, `fire`, `site`, `fall`, `dfnd`, `surv`, `atk`, `oprd`, `opra`, `tune2` |
+| 2. Hashes committed, every movement explained | The re-bless ledger of section 4.2; each chain-moving PR names the rule and the first tick that moved | `base` (`expand-east-segment`, item 145 (2)), `ids`, `fire`, `site`, `fall`, `dfnd`, `surv`, `atk`, `oprd`, `opra`, `tune2` |
 | 3. Golden playbooks round-trip, verify and render identically | The two new templates under `library/` with their `demo_*` verify and render goldens; the new constructs' render and canonical goldens under `tests/golden/plan-core/` and `tests/golden/verifier/`; each nightly arm qualifying under `night`'s per-PR test (the arms carry no golden of their own, E20) | `vfy2`, `oprd`, `opra`, `night`, `arms` |
 | 4. Headless scenarios assert on events **and** hashes | Eight new scenarios under `scenarios/s2/` (section 3 names each lane's), beside the nine committed today, each one a playbook reaches on its seed: a committed scenario has no placement key and `gamectl` reaches no host seam, so `fire`'s and `fall`'s staged cases are `crates/sim/tests` integration tests asserting events and hashes, and `fire`'s two scenarios move to `atk`, the first lane that makes them playable | `site`, `dfnd`, `surv`, `atk` |
 | 5. The nightly adversarial scenarios | Rusher, Turtle and Hunter against Easy on the fixed seed set, nightly, each with its written alarm band, every band acknowledged as Easy's at S2's close and re-baselined at S5 (item 144 (6)); `NIGHTLY_SCENARIOS_ENABLED` set by the owner (decision 30) | `night`, `arms`, `demo2` |
@@ -192,7 +194,7 @@ lane's Needs line names the decisions it builds on).
 | 104 | The gateway doors for Defend settings, Attack settings and `beacon_under_attack` close at S2 | `dfnd`, `atk` (named places in `crates/gateway/tests/methods.rs`) |
 | 63, 65, 69, 91 | G3′'s world totals; the 190 kW budget, `kw_per_unit`, `reserve_percent` and `map_ceiling_kw` moving together; the repath cap re-derived once bursts are measured | `g3h`, `g3r`, `tune2` |
 | 64, 68 | Do not charge G2's CSR rebuild twice; re-measure process memory growth | `g3h` |
-| 139 (1) ruling 3 | `expand_east`'s example moves: a timeout the walk can meet or a nearer first site | `east` |
+| 139 (1) ruling 3 | `expand_east`'s example moves: a timeout the walk can meet or a nearer first site. **Amended by item 145 (2):** the example and the spec's worked example stay; `expand-east-segment` gets its own playbook with a nearer site | `base` (moved from `east`, E22) |
 | 139 (1) ruling 7 | The fielding limits (S1-37) are revisited at G3′-real | `ids` (live counts), `tune2` (totals) |
 | 139 (1) ruling 10 | The Build list's settings row is atomic, failing with a new additive `StepFailure` id | `base` |
 | 139 (6) | The ruled markers re-dated by a comment-only sweep granted here; `scenarios/` comments; `economy.rs`'s BMI expansion; `rules.proto`'s stale comments with S1-42 and ruling 14's markers; Expand & Mine's wording; S1-01's sweep and `gamectl --operator` at S2's start | `redate`, `east`, `base`, `con3`, `oprd`, `msrv`, `night` |
@@ -251,8 +253,8 @@ aimed at the trailing seat (decision 36).
 | `oper`'s wire defaults (`int_of`, `text_of`, `bool_of`, `array_of`, `voxel`, `candidates::score`'s `time_ms.max(1)`) | item 136 (5) | `oprd` |
 | Whether to narrow the estimate's `NOT_FOUND` drawing, with `editor.rs`'s doc | item 136 (5), which gives it to "the next `crates/client-gdext` lane" | `view`. The next lanes to touch the crate are `con3` and `con4`, through named places (`rig.rs`' meter read, the `ViewEntity` and `BeaconSummary` literals), then `rnds`, which edits `godot/scripts/host_link.gd` and only its pins in `crates/client-gdext/tests/godot_project.rs`; none of them owns the crate's sources, so the first lane that does, `view`, carries it, as item 136 (5) meant |
 | `crates/client-gdext/src/rules.rs`' test comment (~283), "the owner's to tune at S1's demo", ruled by item 139 (1) ruling 6 | item 139 (6) | `view` |
-| The root `Cargo.toml`'s research NOTE, which names four of the six guarded crates | handoff NEXT 3 | `msrv` |
-| `gamectl`'s `b_01`-as-core texts (`scenario/run.rs`, `seat.rs`, `strings.rs`) | handoff NEXT 3 | `night` |
+| The root `Cargo.toml`'s research NOTE, which named four of the six guarded crates | handoff NEXT 3 | `msrv`: **done by #113**, the NOTE names all six (item 145 (1)) |
+| `gamectl`'s `b_01`-as-core texts (`scenario/run.rs`, `seat.rs`, `strings.rs`) | handoff NEXT 3 | `night`: clarify, do not rename (item 145 (4)); the reference fixture's core keeps `b_01` in `gamectl`'s and the verifier's copies, which share a `report_hash` pin. **Done by #119** |
 | `crates/bench/tests/harness.rs`'s doc list of restated items | item 133 (5) | `g3h` |
 | G4's bar, 10 matches of 9 600 ticks, which "stays with the nightly workflow and S2" (`xtask/src/main.rs` ~426) | item 116 | `night` |
 | `ci.yml`'s perf-alarms comment (~986), which names the tick-minus-pathing mean as S2's | item 116 (6) (b) | `g3r` |
@@ -585,7 +587,7 @@ and names the decision that puts that reading to the owner.
   green, until they exist: the arms and the tests that pin them are therefore **always** granted to
   the sim lane that adds the kind, as a named place of a few lines, in the same PR. When a gateway
   lane is running at the same time, the two edit different lines of the same files, and the one that
-  merges second rebases over the other (E33).
+  merges second takes the other in by its merge of `main` (E33).
 - **E18. The G3′ CI job is a loose regression alarm, and the gate is certified on the owner's
   machine.** A `ci` step must be green on any machine that runs it ("green locally means green in
   CI", AGENTS.md §9), and a wall-clock budget is a property of the machine; spike G3′ found that any
@@ -617,16 +619,26 @@ and names the decision that puts that reading to the owner.
   refuses 0 (`host.rs` ~288), and nothing allocates per round ahead of time (each round's sealed
   file and hash file are written as it is played). A bound would be an artificial cap, so the
   gateway adds none and the client adds none of its own; a refused value is the gateway's refusal.
-- **E22. `expand_east` gets a nearer first site.** Ruling 3 left the choice open. The timeout cannot
-  be what moves: `tune`'s report found the walk from either seat's core is 290 s or more at the
-  commander's speed (`rules/README.md`, `commander_cost_per_second`), longer than round 1's 180 s
-  Push, so any timeout the walk meets draws W0701. `east` moves the first site to the nearest legal
-  site east of seat 0's core that `estimate_route` reaches inside 100 s on the `expand-east-segment`
-  seed, keeping the 120 s timeout and the example's shape; the spec's worked example moves with it
-  in the main session's docs PR. Both seats of `expand-east-segment` seal the same file, whose site
-  is a fixed voxel, so **seat 1 still cannot reach it**: the scenario now asserts that seat 0 places
-  its beacon and walks its tail to it, and that seat 1 still fails loudly, its move timing out and
-  its deploy refused with `illegal_site`, then taking its fallback, and its summary says so.
+- **E22. `expand-east-segment` gets a nearer first site; the example stays (amended by
+  decisions-log item 145 (2)).** Ruling 3 left the choice open. The timeout cannot be what moves:
+  `tune`'s report found the walk from either seat's core is 290 s or more at the commander's speed
+  (`rules/README.md`, `commander_cost_per_second`), longer than round 1's 180 s Push, so any timeout
+  the walk meets draws W0701. Nor can the example's site move: `east` found that no site is legal
+  both on the scenario's map (seat 0's core at (358, 24, 36) on seed `0xca5caded`) and on the
+  verifier's reference view (its core `b_01` at (80, 11, 55)), whose spheres do not overlap, and
+  that the example's site, (96, 11, 62), lies about 262 voxels **west** of seat 0's core, not east
+  of it. So `examples/playbooks/expand_east.jsonc`, the spec's worked example and their proto,
+  plan-core and verifier goldens stay unchanged, and the scenario gets its own playbook,
+  `scenarios/skeleton/expand-east-segment.playbook.jsonc`, the worked example with its first site
+  at (378, 24, 36), 20 voxels east of seat 0's core, keeping the 120 s timeout and the example's
+  shape; a sim test holds the copy to the example in everything but the site. The 100 s bound
+  never decides anything there: every legal site east of the core is under 25 s away. The work is
+  `base`'s, which owns `crates/sim/tests/scenario.rs`. Both seats of `expand-east-segment` seal the
+  same file, whose site is a fixed voxel, so **seat 1 still cannot reach it**: the scenario asserts
+  that seat 0 places its beacon and walks its tail to it, and that seat 1 still fails loudly, its
+  move timing out and its deploy refused with `illegal_site`, then taking its fallback, and its
+  summary says so. *Downside:* the spec's flagship example still cannot finish its first step on
+  the scenario's map, and `balance.rs`' `expand_east` column keeps reporting that.
 - **E23. Pathing under destruction stays 2.5D.** The search graph has one node per column
   (`pathing.rs`), so a crater lowers a column and a cave under an unchanged top is invisible to it;
   a step is legal only when the two tops differ by one voxel at most (`pathing/surface.rs` ~298,
@@ -710,9 +722,10 @@ and names the decision that puts that reading to the owner.
   and `vfy1` every `report_hash` golden, and `ids` and `vfy2` again; `vfy2`, `wgw` and `fire` the
   gateway's; `con4` and `night` `gamectl docs`' golden). Ids are never
   pre-chosen: a lane takes the next free `EventKind` and `StepFailure` ids and the next
-  `SNAPSHOT_VERSION` on the `main` it rebases onto, and the lane that merges second renumbers its
-  own in its rebase commit (its tests name kinds, not raw ids) and re-blesses after the rebase,
-  naming the re-bless in its PR. Only one lane at a time bumps `SNAPSHOT_VERSION`, because only the
+  `SNAPSHOT_VERSION` on the `main` it merges in, and the lane that merges second renumbers its
+  own in its merge of `main` (its tests name kinds, not raw ids) and re-blesses after that merge,
+  naming the re-bless in its PR. A lane takes `main` only by a signed merge, never by a rebase or a
+  force-push (decisions-log item 145 (3)). Only one lane at a time bumps `SNAPSHOT_VERSION`, because only the
   sim's one author changes the snapshot (`fall` holds no state and `surv` writes a table `dfnd` lays
   out), so the planned values (10 `ids`, 11 `fire`, 12 `site` if its drones add state, then `dfnd`
   and `atk`) hold in plan order. Each such re-bless is budgeted, about a quarter of an agent-day, in
@@ -723,8 +736,10 @@ and names the decision that puts that reading to the owner.
 ## 3. The tasks
 
 Conventions for every task, as in S1: its own worktree (`git worktree add ../pharmakos-<id> -b
-<branch> main`), target directory `D:/build/<id>`, **one crate one agent** (AGENTS.md §6), rebase on
-`main` before the PR, conventional commits, `git commit -s` with the co-author line above it, SPDX
+<branch> main`), target directory `D:/build/<id>`, **one crate one agent** (AGENTS.md §6), `main`
+taken in only by a signed merge (`git merge --no-ff --no-commit FETCH_HEAD`, then `git commit -s`),
+never by a rebase or a force-push, and no process killed that the lane did not start (decisions-log
+item 145 (3)), conventional commits, `git commit -s` with the co-author line above it, SPDX
 headers, `cargo xtask ci` green before the PR opens, and every guessed value a `// PLACEHOLDER:
 <what> — <who>, <when>` listed in the PR body. A lane opens its PR and stops; the main session
 merges (item 141). "Contract PR: yes" means an AGENTS.md §5 path; the PR body names the paths.
@@ -758,7 +773,7 @@ fingerprint caller. A sim lane that adds an `EventKind` or a `StepFailure` is **
 their arms in `crates/gateway/src/strings.rs` (`event_text`) and `crates/gateway/src/surface.rs`
 (`audience_of`) and the tests that pin them, because both matches are exhaustive and the sim lane's
 branch does not build without them (E17); a gateway lane running at the same time edits other lines
-of those files, and whichever merges second rebases (E33).
+of those files, and whichever merges second merges `main` in (E33).
 
 **Concurrent named places, listed both ways.** Wherever two lanes run in one crate at once, the
 owning lane's Owns line names the other lane's places as excepted, and the named-place lane's Owns
@@ -770,17 +785,15 @@ table entries) while `con4` is open; `ids` and `con4` in `crates/gateway` (ids' 
 reads; con4's `ViewEntity` and `BeaconSummary` literals); `fire` and `wgw` in `crates/gateway`
 (fire's `TABLE` in `tests/view.rs` and its event arms, E14 and E17; wgw owns the rest); `site` and
 `fall` in `crates/sim`; `atk` and `surv` in `crates/sim`. Lanes that would otherwise overlap are
-sequenced instead: `rnds` after `east` and after `con4` (east's client fixtures; `con3`'s
-`godot_project.rs` and `rig.rs` places and `con4`'s `ViewEntity` literals, all in
-`crates/client-gdext`, so `rnds` runs after `night` in its slot), `vfy1` after `east` (east's
-verifier case and golden),
-`night` after `east` (east's `crates/gamectl/tests`), `con4` after `vfy1` (con4's verifier places),
+sequenced instead: `rnds` after `con4` (`con3`'s `godot_project.rs` and `rig.rs` places and
+`con4`'s `ViewEntity` literal, all in `crates/client-gdext`, so `rnds` runs after `night` in its
+slot), `con4` after `vfy1` (con4's verifier places),
 and `g3h` and `view` apart in `xtask` (`view` adds the mesher stream's case to
 `crates/mesher/tests/perf_alarm.rs` only, and `g3h`, which holds `xtask` after `view` merges, adds
 its `perf_alarms` entry).
 
 **Re-blesses in the merge train (E33).** Where two running lanes re-bless the same goldens, the one
-that merges second rebases and re-blesses, its PR naming the re-bless and the lane it followed. **A
+that merges second merges `main` in and re-blesses, its PR naming the re-bless and the lane it followed. **A
 `report_hash` re-bless reaches past the verifier's own goldens.** The verifier's version and
 `report_hash` are carried by `tests/golden/gateway/demo_*_verify/`,
 `tests/golden/gateway/walkthrough/`, `tests/golden/operator/wizard/*/` and
@@ -792,6 +805,8 @@ owns one (`wgw` the gateway's), the second to merge re-blesses.
 ---
 
 ### `msrv` — the whole-tree MSRV sweep (S1-01), S2's first pull request
+
+**Merged as #113 (`200823e`), with no chain or golden moved (decisions-log item 145 (1)).**
 
 - **Owns:** the whole tree for one commit pair: `Cargo.toml` (`[workspace.package] rust-version` and
   the research NOTE), `clippy.toml` (`msrv`), and every file `cargo xtask ci --fix` rewrites,
@@ -816,6 +831,10 @@ owns one (`wgw` the gateway's), the second to merge re-blesses.
   **PLACEHOLDERs:** none. **Agent-days:** 0.5–1.
 
 ### `redate` — the comment-only re-dating sweep (item 139 (6))
+
+**Merged as #114 (`80e52f3`) (decisions-log item 145 (1)).** Its found items (`rules/README.md`'s
+prose to `con3`; the register's S1-49, S1-52, delegated-tuning and "At this demo" texts to the main
+session's docs PR) are done.
 
 - **The grant, under AGENTS.md §6 and item 141 (3).** This lane may edit **comments and nothing
   else** in these files: `crates/operator/src/easy.rs` (1, ~121), `crates/bench/src/decision.rs` (1,
@@ -847,40 +866,34 @@ owns one (`wgw` the gateway's), the second to merge re-blesses.
   (`tests/golden/package/expected.{windows,linux}.txt` list `Pharmakos/rules/README.md`).
   **Contract PR:** no (no contract path is in the grant). **Agent-days:** 0.5–1.
 
-### `east` — ruling 3: `expand_east`'s nearer first site, and the `scenarios/` comments
+### `east` — the `scenarios/` comments (ruling 3's site move went to `base`)
 
-- **Owns:** `examples/playbooks/expand_east.jsonc`,
-  `scenarios/skeleton/expand-east-segment.scenario.jsonc`, `scenarios/README.md`,
-  `scenarios/s1/unaffordable-deploy.scenario.jsonc`'s comment, and every pin of the example's
-  content as named places, granted because no other lane holds these crates in wave 0 (AGENTS.md
-  §6): `tests/golden/proto/expected.expand_east.json`, `tests/golden/plan-core/expand_east/`,
-  `tests/golden/verifier/expand_east/` with `crates/verifier/tests/cases/expand_east.json`,
-  `tests/golden/scenarios/expand-east-segment/` (chain and event log), and the tests that read the
-  site: `crates/gamectl/tests/balance.rs` (`the_expand_east_column_reads_the_first_step` and its two
-  markers), `crates/gamectl/tests/verify.rs`, `crates/client-gdext/tests/common/mod.rs` and
-  `src/editor.rs`'s test fixture, `crates/gateway/tests/methods.rs`' template case and
-  `crates/proto/tests/proto.rs` (~254–306) wherever they assert the old voxel. **Branch**
+**Merged as #115 (`ab98304`), cut down to its comment work (decisions-log item 145 (2)).** As
+planned, this lane was to move `examples/playbooks/expand_east.jsonc`'s first site into seat 0's
+sphere on the `expand-east-segment` seed, with every pin of the example re-blessed. It measured the
+move and stopped: no site is legal both on the scenario's map and on the verifier's reference view
+(E22, as amended). So the example, the spec's worked example and their proto, plan-core and verifier
+goldens stay unchanged, and the scenario's own playbook, its chain and its event log went to `base`.
+
+- **Owned:** `scenarios/README.md`, `scenarios/s1/unaffordable-deploy.scenario.jsonc`'s comment, and
+  `crates/gamectl/tests/balance.rs`' two markers as a named place. **Branch**
   `fix/scenarios-expand-east`, worktree `../pharmakos-east`, target `D:/build/east`.
-- **Builds:** E22's move: the first site becomes the nearest legal site east of seat 0's core that
-  `estimate_route` reaches inside 100 s on the scenario's seed, with the 120 s timeout kept; the
-  example and its canonical copy stay byte-identical to each other;
-  `deploy-and-visit.playbook.jsonc` is checked, and moved only if it copies the example.
-  `unaffordable-deploy`'s stale header (~18–19, "the `$` projection … not yet built", which `proj`
-  built) and `scenarios/README.md`'s walker note (~155–162, which still names S1's demo; the cap is
-  S2-16's) are reworded. Seat 1 seals the same file, so its site is still out of its reach: the
-  scenario's assertions and summary say that seat 0 places and walks its tail while seat 1 still
-  times out, is refused `illegal_site` and takes its fallback (E22).
-- **Runs beside** `base`, whose places in `crates/gateway` (section 3's preamble) are other files
-  than east's, the template case in `tests/methods.rs`. `rnds`, `vfy1` and `night` start after this
-  lane merges, because each owns a crate this lane holds a place in.
-- **Implements:** item 139 (1) ruling 3, (6). **Needs:** `msrv` merged; no decision. **Acceptance:**
-  the `expand-east-segment` chain and event log re-blessed, the first diverging tick named and the
-  step that now succeeds named; seat 1's failure asserted; the `expand_east` verifier, plan-core and
-  proto goldens re-blessed with the reason; `balance.rs`'s column reads the new site and its report
-  says the walk fits. **Contract PR:** no (golden content, not format); the main session's docs PR
-  moves the spec's worked example (section 4.4). **Agent-days:** 1–1.5.
+- **Built:** `unaffordable-deploy`'s stale header (~18–19, "the `$` projection … not yet built",
+  which `proj` built) now names the two FULL warnings the playbook draws on seat 0's own snapshot,
+  W0602 and W0701, and says that a warning does not stop a seal; `scenarios/README.md`'s walker note
+  (~155–162) names S2-16 instead of S1's demo; `balance.rs`' two markers are re-dated to "owner, at
+  S2's demo, with `tune2`'s balance report", citing item 139 (1) ruling 5. No chain or golden moved.
+- **Dropped:** `balance.rs`' `expand_east` column is not repointed. It keeps reading the example and
+  reporting that the walk does not fit, item 137 (2) (f)'s finding and E22's recorded downside.
+- **Found:** `examples/playbooks/expand_east.jsonc` and `scenarios/README.md` call themselves
+  "CONTRACT FILE" in their headers.
+- **Implements:** item 139 (6). **Contract PR:** no (`scenarios/README.md`'s prose only, its format
+  untouched). **Agent-days:** 1–1.5, as planned, most of it the measurement.
 
 ### `base` — `crates/sim`: the carries, the fallbacks, the queues and the harness's seams
+
+**Merged as #116 (`b744182`), with `expand-east-segment`'s own playbook added to it (decisions-log
+item 145 (1), (2) and (4)).**
 
 - **Owns:** `crates/sim` (except, from `con4`'s start, `con4`'s named place: the Defend and Attack
   arms of `compile_settings_row` in `interpreter.rs` and their refusal-table entries), every golden
@@ -891,7 +904,14 @@ owns one (`wgw` the gateway's), the second to merge re-blesses.
   seam), the surface's driver in `src/surface.rs` (the stepper's entry), `tests/support/mod.rs`'s
   `DamageOrder` and `VoxelEdit` literals (~467–481), and `tests/confinement.rs`' lines admitting the
   two seams; in `crates/verifier`, the new `tests/refusals.rs` (E8), as its last commit after `vfy1`
-  merges. **Branch** `feat/sim-s2-base`, worktree `../pharmakos-base`, target `D:/build/base`.
+  merges; and, from `east` (item 145 (2)), `scenarios/skeleton/expand-east-segment.playbook.jsonc`
+  (new), `scenarios/skeleton/expand-east-segment.scenario.jsonc`, `crates/sim/tests/scenario.rs`,
+  `tests/golden/scenarios/expand-east-segment/`, `scenarios/README.md`'s harness-door paragraph and
+  layout block, and the harness-door doc in `crates/gamectl/src/scenario/run.rs` (~482).
+  **Accepted at the merge, outside the grant** (item 145 (4)): `surface.rs`' `saved_match` calling
+  `Host::check_savable`, `tests/host_loop.rs`' one line, the plan-core and verifier projection tests
+  whose missing-row premise the load-time refusals removed, and `tests/control.rs`' new test.
+  **Branch** `feat/sim-s2-base`, worktree `../pharmakos-base`, target `D:/build/base`.
 - **Builds:**
   - **Ruling 10.** `set_mandate_settings`' Build list is atomic: a row that cannot write the whole
     list (the seat's target table full part-way through) writes nothing and fails its step with the
@@ -924,9 +944,14 @@ owns one (`wgw` the gateway's), the second to merge re-blesses.
     re-dated as `redate`'s grant says, comments only, shown in the register's before and after.
   - **Wording:** `economy.rs`'s two "Base Maintenance Indemnity" (~248, ~266) → "Basic Minimum
     Income"; `voxels.rs`'s "Nothing fills the queue yet" (~274).
+  - **`expand-east-segment`'s own playbook** (E22, as amended): the worked example with its first
+    site at (378, 24, 36), 20 voxels east of seat 0's core, sealed by both seats; the chain and event
+    log re-blessed once, diverging at tick 1, the walk; seat 0's walk, deploy and rows asserted, and
+    seat 1's timeout (2401), `illegal_site` (2406), `no_target` (2411) and fallback.
 - **Does not:** change what an id is or reuse a row (`ids`); fire anything (`fire`); any mandate
   behaviour beyond ruling 10.
-- **Implements:** items 136 (5), 139 (1) ruling 10, 139 (6); register S2-06, S2-07.
+- **Implements:** items 136 (5), 139 (1) ruling 10 and ruling 3 (the scenario's half), 139 (6);
+  register S2-06 (kept a constant by E27, its marker re-dated to S4), S2-07 (discharged).
 - **Needs:** `msrv` merged; **no decision** (E2's landing half is the same under either answer to
   decision 3, and the rows it once read are `ids`'). **Acceptance:**
   `a_build_list_that_cannot_be_written_whole_writes_nothing` (step fails with `targets_unwritten`);
@@ -941,11 +966,19 @@ owns one (`wgw` the gateway's), the second to merge re-blesses.
   `a_half_finished_tick_cannot_be_captured_saved_or_filed`; `a_mine_dig_carries_its_seat`;
   `the_layout_seam_is_refused_outside_the_lobby`; **no chain and no `report_hash` golden moves** (no
   hashed field and no snapshot change; a chain that moves is a behaviour change the PR names, or a
-  bug).
+  bug), except `expand-east-segment`'s, whose playbook changed; and `east`'s Acceptance, moved here
+  (item 145 (2)): that chain and event log re-blessed with the first diverging tick and the step that
+  now succeeds named (`to_site`, for seat 0), seat 1's failure asserted, and
+  `the_scenarios_playbook_is_the_example_but_its_site`. `balance.rs`' column is not repointed.
 - **Contract PR:** yes (determinism code: the tick loop's per-phase form; the event vocabulary,
-  `StepFailure`). **PLACEHOLDERs:** none new. **Agent-days:** 6.25–7.75. **Split seam:** ruling
-  10, the refusals, E3 to E6 and E8's table as commit set 1; E7's sweep as set 2; `VoxelEdit`'s
-  seat, `DamageOrder`'s source, E30's seams and the gateway places as set 3; one PR.
+  `StepFailure`). **PLACEHOLDERs:** none new. **Agent-days:** 6.25–7.75. **Split seam:** planned
+  as ruling 10, the refusals, E3 to E6 and E8's table as commit set 1; E7's sweep as set 2;
+  `VoxelEdit`'s seat, `DamageOrder`'s source, E30's seams and the gateway places as set 3; one PR.
+  **As landed** (item 145 (4)): the three sets could not each build (`world.rs`, `runner.rs` and the
+  gateway's places carry all three, and the step's `Result` breaks the gateway short of set 3), so
+  the PR is three building commits (the scenario's playbook; the hand-written behaviour; E7's
+  mechanical sweep), then E8's verifier cross-check and the verification review's fix. E7 found
+  about 552 sites, not about 450 (R14), and carried 216, in six files, to `ids`.
 
 ### `ids` — `crates/sim`: generational ids, live fielding and the sensor seam
 
@@ -969,6 +1002,10 @@ owns one (`wgw` the gateway's), the second to merge re-blesses.
     from `fire`, every weapon query uses.
   - **E26**'s reader (`HEADROOM_VOXELS` from `con3`'s row).
   - **Wording:** `knowledge.rs`' and `credit.rs`' module docs where E1 changes what a row is.
+  - **E7's carried sites** (R14; decisions-log item 145 (5)): the 216 fallback sites `base` left in
+    `world.rs` (85), `interpreter/state.rs` (37), `pathing/clusters.rs` (31), `pathing/router.rs`
+    (27), `programs.rs` (21) and `tables.rs` (15), each file capped at its count by
+    `no_silent_fallback_is_left`, so the counts only fall; the PR says how many remain.
 - **Implements:** items 138 (4) (c), 139 (1) ruling 7, 144 (4); register S1-34 (sim), S1-37 (live
   counts), S2-05.
 - **Needs:** `base` and `con3` merged; **no decision**. **Acceptance:**
@@ -994,13 +1031,17 @@ owns one (`wgw` the gateway's), the second to merge re-blesses.
 
 ### `con3` — S2's rules rows and the next `proto/**` pull request's carries
 
+**Merged as #118 (`ccb4990`) (decisions-log item 145 (1) and (4)).** Granted at the lane, as every
+rules-table lane must be: the rules-hash pin `crates/sim/tests/determinism.rs:811`, which moved
+`b1f2eef0e75c5ae4` → `8028d41384e6de2f`. Its "found" items are carried in `wgw` and `fire`.
+
 - **Owns:** `proto/gp/v1/rules.proto` and its generated tree, `proto/gp/api/v1/gateway.proto`'s and
   `playbook.proto`'s **comments and the two field changes named below**, `proto/buf.yaml`,
   `rules/rules.v1.json`, `rules/README.md` (after `redate`), the whole of `crates/proto` (its tests
   pin the rules table and the messages S1-42 names), `tests/golden/{proto,docs}`,
   `tests/golden/schema/` if `get_schema`'s answer moves for the two field changes, the re-bless of
   every `report_hash` golden under `tests/golden/verifier` (owned by `vfy1`, which merges first:
-  this lane re-blesses after its rebase, E33) and of the gateway's and the operator's that carry it
+  this lane re-blesses after its merge of `main`, E33) and of the gateway's and the operator's that carry it
   (`tests/golden/gateway/demo_*_verify/` and `walkthrough/`, `tests/golden/operator/wizard/*/`,
   `godot/fixtures/rows_report.json`; section 3's preamble), and named places for the restatements
   that hold the rules table equal: `godot/scripts/mesher_rules.gd`'s `RULES_JSON`
@@ -1054,8 +1095,8 @@ owns one (`wgw` the gateway's), the second to merge re-blesses.
 - **Implements:** items 133 (3) (i), 135 (2) (f) (g), 136 (5), 138 (3), 139 (1) ruling 14, 139 (6),
   144 (4), (8), (11) (the blast-level row); register S1-13, S1-34 (rows), S1-42, S2-05; spec §19's
   picket radius.
-- **Needs:** `msrv`, `redate` and `east` merged (`east` re-blesses `tests/golden/proto` and
-  `crates/proto`'s tests read it); the ruled decisions 10, 11, 17 and 40.
+- **Needs:** `msrv` and `redate` merged (the hold on `east` is lifted: `east` re-blessed nothing,
+  item 145 (2)); the ruled decisions 10, 11, 17 and 40.
   **Acceptance:** `buf lint`; `buf breaking` in `WIRE_JSON` mode (making fields 5 and 6 `optional`
   is wire-compatible; any break stops the lane); `the_rules_table_is_in_canonical_form`;
   `the_restated_rows_agree`; every `report_hash` golden re-blessed with the reason "`rules_hash`
@@ -1069,6 +1110,17 @@ owns one (`wgw` the gateway's), the second to merge re-blesses.
   3.75–4.75 (a quarter-day of it for decision 10's `blast_levels`).
 
 ### `con4` — S2's playbook and gateway wire
+
+**Granted at the lane** (decisions-log item 145 (4)): the named sim place below, the Defend and
+Attack arms of `compile_settings_row`, needed no edit, because `base`'s arms refuse the whole arm.
+The constructs that need sim refusals, the base kit and the wall box, live in `compile_build_target`,
+so the main session granted, mid-lane, `compile_build_target` in `crates/sim/src/interpreter.rs` with
+its `REFUSALS` entries, a new `PlanError::WallBoxOffAWall` with its `Display` arm and helper, and the
+doc table; the refusal tests in `crates/sim/tests/interpreter.rs`; and `crates/verifier/src/refusals.rs`.
+`crates/gateway` holds no `ViewEntity` or `BeaconSummary` literal (it writes those answers by hand), so
+`wgw` fills the new fields there. The lane adds E0019 (the base kit, until `site`) and E0509 (a
+`wall_box` on a target that is not a `wall`), and re-dates M-14 to "owner, S3, the next proto PR
+after S2's".
 
 - **Owns:** `proto/gp/v1/playbook.proto`, `proto/gp/api/v1/gateway.proto`, `proto/buf.yaml`, the
   whole of `crates/proto` (after `con3`), `tests/golden/{schema,docs,proto}`, and named places for
@@ -1134,15 +1186,21 @@ owns one (`wgw` the gateway's), the second to merge re-blesses.
   holding a tab or a newline, because that would change the line's framing rather than its value.
   The option is not shown in the lobby. The config line's format and `last_match.txt` are unchanged
   (AGENTS.md §5).
-- **Implements:** item 143 (5). **Needs:** `east` and `con4` merged (`east`, `con3` and `con4` hold
-  places in `crates/client-gdext`, `con3`'s in this lane's own `godot_project.rs`, so it starts
-  after `night` in its slot, on day 11); no decision. **Acceptance:** `godot_project.rs` pins the
+- **Implements:** item 143 (5). **Needs:** `con4` merged (`con3` and `con4` hold places in
+  `crates/client-gdext`, `con3`'s in this lane's own `godot_project.rs`, so it starts after `night`
+  in its slot, on day 11; the hold on `east` is lifted, item 145 (2)); no decision. **Acceptance:** `godot_project.rs` pins the
   reader and the unchanged line format; `watch_check.gd` run by hand with a refused value (`--rounds
   0`) showing the gateway's refusal; the PR names the reader for AGENTS.md §3 rule 4's list
   (section 4.4); the main session's local package run (`godot/` ships). **Contract PR:** no.
   **Agent-days:** 0.5–1.
 
 ### `vfy1` — `crates/verifier`: S2's first verifier lane, the carries
+
+**Merged as #117 (`fe33372`) (decisions-log item 145 (1) and (4)).** Beyond this section it added
+E0018 (an enum number this build does not name, refused raw), and its edits to
+`crates/gateway/tests/{methods,advice,economy}.rs` and the docs golden were accepted at the merge as
+tests that pin the verifier's output. Its "found, not fixed" items are carried in `vfy2`, `wgw` and
+`dfnd`.
 
 - **Owns:** `crates/verifier`, `tests/golden/verifier`, the named place in
   `godot/fixtures/rows_report.json` if its four goldens move, and, for the `VERIFIER_VERSION`
@@ -1161,7 +1219,8 @@ owns one (`wgw` the gateway's), the second to merge re-blesses.
   `VERIFIER_VERSION` (`lib.rs` ~160) moved from `0.1.0-s1` to `0.1.0-s2`, because it "names the
   stage that produced it" and this build's reports find what S1's could not.
 - **Implements:** items 135 (2) (d), 136 (3) (r), (5); register S1-51, S2-14, S2-15. **Needs:**
-  `msrv` and `east` merged (`east` holds a verifier case and golden); no decision. **Acceptance:** a
+  `msrv` merged (the hold on `east` is lifted: `east` moved no verifier case, item 145 (2)); no
+  decision. **Acceptance:** a
   case for each new code (`every_emitted_code_has_a_case`); the catalogue golden; the verifier's
   `no_silent_fallback_is_left`; **every `report_hash` golden re-blessed**, the gateway's and the
   operator's included, with the reason "`VERIFIER_VERSION` 0.1.0-s2" (`append_bytes`' change should
@@ -1170,16 +1229,20 @@ owns one (`wgw` the gateway's), the second to merge re-blesses.
 
 ### `night` — `crates/gamectl`, the nightly harness and its workflow (S2-01, M-01)
 
+**Merged as #119 (`c334ee0`) (decisions-log item 145 (1) and (4)).** Its edits to `xtask/src/main.rs`
+and `tests/golden/scenarios/README.md` were accepted at the merge, and its declining of the `b_00`
+rename (below) stands.
+
 - **Owns:** `crates/gamectl`, `xtask/src/scenario.rs`, `.github/workflows/nightly-scenarios.yml`,
   the new `scenarios/nightly/` (its README, `seeds.txt` and three placeholder arms that `arms`
-  replaces), `scenarios/README.md`'s layout section (after `east`), and one named place in
+  replaces), `scenarios/README.md`'s layout section (after `base`), and one named place in
   `xtask/src/package.rs`, a contract path its PR names: the package's replay step (~478–508),
   which replays every file `scenario::collect` finds, `scenarios/**/*.scenario.jsonc`, and so would
   play the arms, which carry no golden chain, as if they were committed scenarios; it calls the
   played set instead (below). It also re-blesses `tests/golden/docs/reference/expected.docs.txt` for
   its new flags, since `gamectl docs` prints the CLI's usage lines: that golden is `con3`'s and then
   `con4`'s while they are open, so this lane, which merges after both, re-blesses it after its
-  rebase (E33). **Branch** `feat/gamectl-nightly`, worktree `../pharmakos-night`, target
+  merge of `main` (E33). **Branch** `feat/gamectl-nightly`, worktree `../pharmakos-night`, target
   `D:/build/night`.
 - **Builds:**
   - **`gamectl scenario run <file> [--operator easy] [--seeds <file>] [--format json] [--out
@@ -1218,10 +1281,13 @@ owns one (`wgw` the gateway's), the second to merge re-blesses.
     arm; a `gamectl` test verifies each arm's playbook (it must qualify) and plays each arm one
     round on its own seed to the round's end with no refusal.
   - **Carried:** `gamectl`'s `b_01`-as-core texts (`scenario/run.rs` ~484, `seat.rs` ~27,
-    `strings.rs` ~293) renamed to `b_00`; E7's sweep over `crates/gamectl` (10 counted).
-- **Implements:** item 116 (6) (j); item 144 (6); register S2-01, M-01. **Needs:** `msrv` and `east`
-  merged (one `xtask`/`.github` PR at a time: none other is open; `east` holds places in
-  `crates/gamectl/tests`); the ruled decisions 18 and 29. **Acceptance:** CLI tests for every
+    `strings.rs` ~293) **clarified, not renamed** (decisions-log item 145 (4)): they describe the
+    reference fixture, whose core keeps `b_01` in `gamectl`'s and the verifier's copies, which share
+    a `report_hash` pin, so they now say which id is the fixture's and that a live core is `b_00`;
+    E7's sweep over `crates/gamectl` (10 counted).
+- **Implements:** item 116 (6) (j); item 144 (6); register S2-01, M-01. **Needs:** `msrv` merged
+  (one `xtask`/`.github` PR at a time: none other is open; the hold on `east` is lifted, item 145
+  (2)); the ruled decisions 18 and 29. **Acceptance:** CLI tests for every
   flag, its refusal elsewhere and an unknown operator; the seed decoder's property test; a result
   golden for a two-seed run of a placeholder arm (a new golden format, so a contract path);
   `win_rate_percent` rounding pinned; `collect_played` leaves the arms out, and the main session's
@@ -1295,6 +1361,12 @@ owns one (`wgw` the gateway's), the second to merge re-blesses.
 - **Does not:** Build's placement of the new blueprints (`site`), collapse (`fall`), Defend and
   Attack (`dfnd`, `atk`; the breach's choice of a wall is `atk`'s, decision 41). Its tests place
   armed structures and units through test seams.
+- **Also (decisions-log item 145 (5)):** the loader of `con3`'s rows refuses at load, with a typed
+  error, a zero `cooldown_ms`, a zero projectile `speed_voxels_per_second`, a zero `range_voxels`, a
+  blast level outside 1 to 3 and a zero `bedrock_layers_voxels` (`con3` wrote the rows and no
+  reader); and this lane defines the counters behind the recap's `Tally` (`con4`'s): a kill, a
+  shared kill (a kill whose credit was split with another seat) and a loss (an own asset destroyed,
+  whatever destroyed it), with a structure left as a ruin counted among its seat's losses.
 - **Implements:** items 17, 123, 144 (1) (the bore), (8), (11) (per-material hardness); spec §3
   (kill credit, the audit), §5 (the core), §9; register S2-08, S2-09, X-08.
 - **Needs:** `base`, `ids`, `con3` and `con4` merged; the ruled decisions 3, 4, 7, 8, 10, 12, 21,
@@ -1350,6 +1422,15 @@ owns one (`wgw` the gateway's), the second to merge re-blesses.
   the S1 pattern of `tgtw` filling what `tgtv` laid out, the layout `vfy2` set); E28's measurement:
   the bytes of a full entity list at the gate load of 300 units, recorded in the PR; E7's sweep over
   `crates/gateway` (66 counted).
+- **Also (decisions-log item 145 (5)):** the silent fallbacks `con3` found on `main`,
+  `viewfeed.rs:716` (a chunk that fails to decode drawn as zeros, air) and `schema.rs:242`
+  (`i32::MAX` for an index that does not fit), each a typed error; `con4`'s new `ViewEntity` and
+  `BeaconSummary` fields (`hp`, `max_hp`, `heading`, `sighting_age_ms`) and the recap's `Tally`
+  filled under the fog filter, the tally the calling seat's own; `Money` and `Hp` converted to the
+  wire's integers by `try_from`, with a typed error; and the stale comments: `surface/planning.rs`
+  (~760) and `surface/knowledge.rs` (~738, ~810), which say a qualifying FULL report may fail to
+  price (E0603 ended that; the door stays as defence in depth), and `surface/knowledge.rs` (~1112),
+  which says a beacon's HP and a sighting's age stay reserved.
 - **Implements:** items 104 (the gateway half), 133 (3) (i), 136 (5); register S1-34 (gateway),
   S2-02 (gateway's marker), S2-11, S2-12 (measured). **Needs:** `con4`, `ids` and `vfy2` merged; the
   ruled decisions 5 and 6. **Acceptance:**
@@ -1390,6 +1471,26 @@ owns one (`wgw` the gateway's), the second to merge re-blesses.
   `crates/plan-core` (6 counted). The
   verifier never ranks and never models enemy behaviour (AGENTS.md §3 rule 2): freshness reads ages,
   nothing else.
+- **Also (decisions-log item 145 (5)), from `vfy1` and `con4`:**
+  - the 65-handler gap, the one reachable sim refusal left with no verifier code
+    (`PlanError::TooManyHandlers`), its code reading the sim's `MAX_HANDLERS` rather than writing a
+    second number;
+  - Defend's and Attack's interface pricing (`interface.rs` names every field now, so it stops
+    compiling when another arrives) and the required-field and range checks `con4`'s comments
+    state;
+  - the wall box's checks: inside the sphere, its `min.z`, a `wall` target with no box (`con4`'s
+    E0509 refuses only a box on another target), and its height;
+  - the size budget counting `avoid_areas`;
+  - render prose for every new construct;
+  - the S1 boolean fields an edit row cannot write false (`flee_on_threat`, `rebuild_destroyed`);
+  - plan-core's `verify.rs`, which wraps every `Input::new` error as "the rules table is
+    incomplete", `InputError::Unhashable` included;
+  - the verifier's missing-row branches (`RulesGap::MissingBlock` in `Limits`, `Rates`, `Prices`
+    and `Walk`), unreachable since `base`'s load-time refusals.
+
+  **Granted:** `crates/gateway/tests/{methods,advice,economy}.rs` and
+  `tests/golden/docs/reference/expected.docs.txt`, which a lane closing a two-door gap or adding a
+  catalogue row moves.
 - **Implements:** items 13, 104 (the verifier half); spec §6, §11. **Needs:** `con4` and `vfy1`
   merged; the ruled decisions 4, 9, 10, 13, 14, 15, 38 and 40. **Acceptance:** a case per new
   code; an `I0003` case for an omitted `roe`; `full_finds_what_quick_finds`;
@@ -1453,6 +1554,9 @@ owns one (`wgw` the gateway's), the second to merge re-blesses.
     `FILL` beacon's sphere are refilled; a crater in stone cracks before it opens. The core's
     autocannon, the other damage source, fires only at units (decision 8). The lane names in its PR
     the sites it found on the seed; raiders, which only Defend and Attack field, are not needed.
+- **E0019 lifted** (decisions-log item 145 (5)): `con4`'s refusal of the base kit's blueprints, the
+  sim's `build_target_base_kit` entry and the verifier's E0019, is removed when this lane builds
+  them, after `vfy2`; `crates/verifier/tests/refusals.rs` holds the two to each other.
 - **Implements:** items 128 (d), 144 (5); spec §4, §6's Build row, §7's Repair band, §8, §9;
   register S2-10.
 - **Needs:** `fire` merged; the ruled decisions 10, 15, 26, 38, 40, 42 and 43.
@@ -1672,7 +1776,7 @@ owns one (`wgw` the gateway's), the second to merge re-blesses.
   `tests/harness.rs`' doc list of restated items extended (item 133 (5)); E7's sweep over
   `crates/bench` (4 counted).
 - **Implements:** items 63, 64, 68, 69, 116 (6) (b), 138 (3) (the worst case). **Needs:** `base` and
-  `fire` merged to start (it rebases onto `site` and `fall` before it opens its PR, and `g3r`
+  `fire` merged to start (it merges `main` in after `site` and `fall` before it opens its PR, and `g3r`
   re-points it at the finished sim); `view` merged (its `perf_alarms` entry); the ruled decision 2.
   **Acceptance:** `wall-guard` and the research guard green; the layout and the rules variant
   reproducible from the report's seed and `rules_hash`; the notices on all three runners.
@@ -1698,6 +1802,10 @@ owns one (`wgw` the gateway's), the second to merge re-blesses.
   snapshot or table line; both tables hash nothing while empty (E29), so a match with no Defend
   beacon and no explored cell hashes as before, and one snapshot bump covers both. Scenario
   `scenarios/s2/guards-escort-the-commander`.
+- **Also (decisions-log item 145 (5)):** `initial.mandate {defend: {}}` is refused
+  (`compile_settings_row`) while an empty Defend arm in a `set_mandate` is legal
+  (`compile_switch_settings`), and spec §5 makes the mandate type a free choice at deploy. This lane,
+  which makes Defend's settings real, reads the two the same way, and the verifier follows.
 - **Implements:** items 104, 138 (4) (c) (pickets); spec §6's Defend row, §4's bodyguard, §10's
   reflex; register S2-02 (the sim's half), S2-04. **Needs:** `site` and `fall` merged; the ruled
   decisions 6, 12, 13 and 21. **Acceptance:**
@@ -1741,8 +1849,10 @@ owns one (`wgw` the gateway's), the second to merge re-blesses.
   now), if `dfnd` has not done it in its named place; an I-level note where `AVOID_KNOWN_THREATS`
   has no sighting in `Scope` to avoid and so routes as `DIRECT` (a new code, the editor's
   explanation and no more); the prose and catalogue text for SAFEST and `flee_on_threat` brought to
-  decision 12; E0209 stays S3's (the enemy-knowledge predicates). **Needs:** `dfnd` and `vfy2`
-  merged; decision 12. **Acceptance:** a case per code; the catalogue golden. **Contract PR:** no.
+  decision 12; E0209 stays S3's (the enemy-knowledge predicates). **Granted** (decisions-log item
+  145 (5)): `crates/gateway/tests/{methods,advice,economy}.rs` and
+  `tests/golden/docs/reference/expected.docs.txt`, which a new catalogue row moves. **Needs:** `dfnd`
+  and `vfy2` merged; decision 12. **Acceptance:** a case per code; the catalogue golden. **Contract PR:** no.
   **Agent-days:** 1.5–2.
 
 ### `atk` — `crates/sim`: Attack, hunting, breach and the demolition charge
@@ -1792,6 +1902,9 @@ owns one (`wgw` the gateway's), the second to merge re-blesses.
     and breaks on the next, craters asserted, before the charge arrives). Each asserts events,
     hashes and no dropped event, and this lane owns their path constants, `SCENARIOS` entries and
     lines in `the_committed_list_is_the_whole_set`.
+- **For the owner, before the lane starts** (decisions-log item 145 (5)): which enemy commander an
+  Attack on "the enemy commander" (`con4`'s `AttackTarget.enemy_commander`) picks when there are
+  three seats. The lane puts the question with its options and stops for the answer.
 - **Implements:** items 13, 104; spec §4 (hunting), §6's Attack row, §9 (breach, friendly fire);
   register S2-03. **Needs:** `dfnd` merged; the ruled decisions 9, 10, 12, 14, 40 and 41.
   **Acceptance:** `an_attack_waits_for_its_force_size`; `the_target_is_pinned_at_the_seal`;
@@ -1819,7 +1932,9 @@ owns one (`wgw` the gateway's), the second to merge re-blesses.
   path: the new `library/*.jsonc` entries), `crates/gateway/tests/templates.rs`' `SHIPPED` list
   (~27), the new templates' `demo_*_verify` and `demo_*_render` goldens beside the existing ones in
   `tests/golden/gateway/`, `demo_against_easy_render` and `demo_against_easy_verify`, and the
-  `against-easy` and `against-easy-three-rounds` chains under `tests/golden/scenarios/`. No gateway
+  `against-easy` and `against-easy-three-rounds` chains under `tests/golden/scenarios/`, and the
+  nightly result golden `tests/golden/scenarios/nightly-result/`, which Easy's output moves
+  (decisions-log item 145 (5)). No gateway
   or gamectl lane is running at either PR's start. **Branches** `feat/operator-defend` then
   `feat/operator-attack`.
 - **`oprd` builds** (after `dfnd`): the Defend template in `library/` (guard the core and "my
@@ -1889,8 +2004,10 @@ owns one (`wgw` the gateway's), the second to merge re-blesses.
   the walkers; no sim lane is running), and `scenarios/README.md`'s key; and, if `g3r` moves the
   fielding totals, which are world constants and not rules rows, those constants as named places in
   `crates/sim/src/world.rs` (`UNIT_TABLE_ROOM`, `BEACON_TABLE_ROOM`, `STRUCTURE_TABLE_ROOM`,
-  ~153–192, with their markers and the ruin reserve E1 sizes from the last); every chain and
-  golden its values move. **Branch** `feat/rules-s2-numbers`, worktree `../pharmakos-tune2`.
+  ~153–192, with their markers and the ruin reserve E1 sizes from the last); the rules-hash pin
+  `crates/sim/tests/determinism.rs:811` and the nightly result golden
+  `tests/golden/scenarios/nightly-result/`, which every rules-table change moves (decisions-log item
+  145 (4) and (5)); every chain and golden its values move. **Branch** `feat/rules-s2-numbers`, worktree `../pharmakos-tune2`.
 - **Builds:** the balance check extended to combat (Easy against Easy and each template against
   Easy, 20 seeds, 3 and 6 rounds; per seat per round kills, losses, value destroyed, the time to the
   first kill, and how each match ended), with a **three-seat** run (three Easy seats, 20 seeds) that
@@ -1946,7 +2063,7 @@ fall after `msrv` merges (day 0.75) and before `con3` starts (day 2).
 
 | Wave | Days | Slot 1 — sim | Slot 2 | Slot 3 | The owner can see |
 |---|---|---|---|---|---|
-| 0 | 0–2 | **msrv** (0.75) → **base** starts | → **redate** (0.75) | → **east** (1.25) | 1.98 everywhere; `expand_east` reaches its site |
+| 0 | 0–2 | **msrv** (0.75) → **base** starts | → **redate** (0.75) | → **east** (1.25) | 1.98 everywhere; the `scenarios/` comments (`expand-east-segment`'s nearer site lands with `base`, item 145 (2)) |
 | 1 | 0.75–14 | **base** (7) → **ids** (6.25, from 7.75) | **con3** (4.25, from 2) → **con4** (3.75, from 6.25) → **vfy2** starts (10) | **vfy1** (3.75, from 2) → **night** (5.25, from 5.75) → **rnds** (0.75, from 11) | `--rounds 6`; E8's verdicts agree with the compile; live fielding; the nightly harness forced once |
 | 2 | 14–26 | **fire** (12) | **vfy2** (6, to 16) → **wgw** (6.5, from 16) | idle by dependency from 11.75 | Shells, craters, cracked stone, wrecks, kill credit |
 | 3 | 26–34.5 | **site** (8.5) | **view** (7, from 26) → **g3h** (5, from 33) | **fall** (6.75, from 26, named place) | A wall going up, levelling, repair and salvage, the support rule (staged); combat drawn |
@@ -1964,7 +2081,7 @@ which it follows in `xtask`, and builds against the combat it measures rather th
 and being re-pointed twice). A lane that slips takes from that slack first.
 
 **Totals.** 27 tasks in 26 lanes (`oprd` and `opra` are one lane in two PRs), **about 128 ad**
-(115.5–142), including about 1.5 ad of re-blesses after rebases (E33), about 1.75 ad for the
+(115.5–142), including about 1.5 ad of re-blesses after merges of `main` (E33), about 1.75 ad for the
 owner's per-material hardness (decision 10: `fire` 1.25, `con3` 0.25, `view` 0.25) and about 2 ad
 for the verification review's fixes (`ids` 0.75, `atk` 0.5, `base`, `site`, `fall` and `vfy2` a
 quarter each, `fire` a quarter less). **Critical path:** `msrv` → `base` → `ids` → `fire` →
@@ -1981,10 +2098,10 @@ planned agent-day (item 115 (2)), 128 ad is about **24–25 M** tokens; at wave 
 
 | PR | Scenario chains | Determinism chain | `report_hash` goldens |
 |---|---|---|---|
-| `east` | `expand-east-segment` and its event log | — | `expand_east`'s |
+| `east` | — (cut to comments, item 145 (2)) | — | — |
 | `vfy1` (`VERIFIER_VERSION` 0.1.0-s2) | — | — | all |
 | `con3` (rows at today's constants; `blast_levels`, which nothing reads yet) | — | — | all (`rules_hash`), after `vfy1`'s |
-| `base` | none expected (no hashed field, no snapshot change) | — | — |
+| `base` | `expand-east-segment` and its event log, for its own playbook (item 145 (2)); no other (no hashed field, no snapshot change) | — | — |
 | `ids` (the placement counter and beacons-lost columns) | all | **moved** | all (snapshot 10) |
 | `vfy2` (`Scope`'s sightings) | — | — | all, after `ids`' |
 | `wgw` (the scope's content) | — | — | the gateway's, after `vfy2`'s |
@@ -2004,7 +2121,7 @@ to six more (`site`, `dfnd`, `surv`, `atk`, `oprd`, `opra`), **the determinism c
 `ids`, `vfy2`, `fire`, `dfnd`, `atk`, `tune2`: the fixture snapshot is one of its inputs, so each
 snapshot bump moves them, AGENTS.md §4.8, and so does `VERIFIER_VERSION`) and a ninth if `site`'s
 drone state bumps the snapshot. Where two running lanes move the same set, the one merging second
-re-blesses after its rebase (E33). Each move is one behaviour change reviewable alone, and the
+re-blesses after its merge of `main` (E33). Each move is one behaviour change reviewable alone, and the
 numbers come last because the check needs the finished rules.
 
 ### 4.3 Honest size
@@ -2044,8 +2161,7 @@ fixture under `godot/`.
 - **The bulk ruling no longer gates a launch:** it fell on 2026-10-16, before wave 1 (item 144
   (11)), so every lane launches when its inputs have merged, and each lane's brief carries the
   rulings its Needs line names.
-- **The main session's docs PRs** carry, beside the rulings: the spec's worked example with `east`'s
-  site (§10); spec §3's "terrain … credits nobody" amended by item 144 (2) and decision 37; spec
+- **The main session's docs PRs** carry, beside the rulings: spec §3's "terrain … credits nobody" amended by item 144 (2) and decision 37; spec
   §6's Build row (terraform's meaning, the base kit's blueprints, repair drones on work in hand,
   decision 38's threshold), §6's Common row (decision 4's unset `roe`), §7 (decision 43's repair
   price under the Repair band), §9 (the support rule, materials and terrain's blast levels by
@@ -2058,6 +2174,9 @@ fixture under `godot/`.
   the certification on the owner's machine), §10 item 5 (the bands read against Easy until S5);
   `docs/placeholders.md`'s S2 rows; `docs/design/README.md`'s row for this plan. AGENTS.md is a
   harness doc no lane edits.
+- **The spec's worked example does not move** (§10): it stays at [96, 11, 62], as
+  `examples/playbooks/expand_east.jsonc` does, and `expand-east-segment` has its own playbook
+  (decisions-log item 145 (2)).
 - **Packaged locally before merging** (S1's decision 9): `redate` (`rules/README.md` ships), `con3`,
   `rnds`, `view`, `oprd`, `opra`, `tune2`, `night` (its named place in `xtask/src/package.rs`),
   and any lane given a named place under `godot/`, `library/` or `rules/` (`site`'s
@@ -2119,7 +2238,7 @@ bumps `SNAPSHOT_VERSION` (9 today, `crates/sim/src/snapshot.rs` ~153) and refuse
 with a clear message. `SAVE_FORMAT_VERSION` (2, `crates/gateway/src/save.rs` ~99) moves only if a
 lane changes the save container itself, which none is planned to; a save holding an older snapshot
 is refused through the snapshot's own version. Event kinds and step failures are added at the end
-with new names, their ids taken at rebase (E17, E33).
+with new names, their ids taken at the merge of `main` (E17, E33).
 
 | Order | PR | Contract paths |
 |---|---|---|
@@ -2141,6 +2260,9 @@ with new names, their ids taken at rebase (E17, E33).
 | 15 | `opra` | `tests/golden/package/`'s manifests |
 | 16 | `g3r` | `cargo xtask g3-budget`, `.github/workflows/ci.yml`'s new job |
 | 17 | `tune2` | the rules' values (`rules_hash`), the scenario format (the walkers' key removed), `xtask/src/scenario.rs` |
+
+As merged so far: `msrv`, `con3`, `base`, `night`, with `con4` open as #120 after `night`
+(decisions-log item 145 (1)).
 
 `NIGHTLY_SCENARIOS_ENABLED` is not a PR: it is a repository variable the owner sets (decision 30).
 
@@ -2787,7 +2909,7 @@ the rule that moved it, an invented rule where the spec is silent.
 | R11 | Breach on a 2.5D graph | Breach as a cost mode over wall columns (E23) | `atk` | Breach by mortar only; the charge waits |
 | R12 | Friendly-fire avoidance leaves a mortar unable to fire near its own assets | The duel report's mortar lines | `tune2` | The owner re-rules avoidance at the demo |
 | R13 | A collapse carrying an asset is unreachable in ordinary play (1-Lipschitz terrain solid from bedrock, walls filled to the ground, Mine's structure rule; only a Mine pillar's top, which carries nothing, can fall), so the row's feature is unseen in play | Said plainly; the demo's beat staged headless and said to be staged; `fall`'s `collapse_credits_the_blast` pins it through test seams (decision 39, operator item O1) | `fall`, `site`, `demo2` | A span limit, on the owner's word, or physics after v1 |
-| R14 | E7's whole-sim sweep (about 450 sites) grows `base` past its estimate | Its own commit set; the classification in the PR; the guard test | `base` | The sweep's last files carried by `ids` as a named commit, said in both PRs |
+| R14 | E7's whole-sim sweep (about 450 sites) grows `base` past its estimate | Its own commit set; the classification in the PR; the guard test | `base` | The sweep's last files carried by `ids` as a named commit, said in both PRs. **Taken** (decisions-log item 145 (5)): `base` counted about 552 sites and carried 216, in six files, to `ids` |
 | R15 | The bulk ruling comes late and holds `con3`, then `ids` | **Closed:** it fell on 2026-10-16, before wave 1 (item 144 (11)) | section 4.1 | — |
 | R17 | Per-material hardness (decision 10) makes craters in stone too shallow, or mortars too weak against dug-in ground | The duel report's dirt and stone lines at the proposed `blast_levels` | `tune2` | The owner re-tunes `blast_levels` at the demo, within the catalogue's 1 to 3 |
 | R16 | The certified figure differs between Windows and WSL2 Linux by more than the codegen's 10–20 % | Both measured, the slower deciding (spike G3′ step 7) | `g3r`, `demo2` | The budget is set by the slower, and the gap is recorded |
