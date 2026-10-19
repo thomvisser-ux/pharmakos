@@ -869,7 +869,10 @@ fn the_camera_ignores_its_keys_while_a_control_has_focus() {
 /// 1.1's Probation-shaped match. The config line carries the value in its sixth field and
 /// keeps its six tab-separated fields, so a remembered `last_match.txt` still parses; the
 /// PLACEHOLDER above the constants records the decision and keeps the settings screen and
-/// the Probation preset the owner's, deferred to S6 by decisions-log item 127 (10).
+/// the Probation preset the owner's, deferred to S6 by decisions-log item 127 (10). Since
+/// S2's `rnds` the sixth field is `round_limit()`'s text, which is `ROUND_LIMIT` unless the
+/// launch says `--rounds` (the next test), so the field is written with `%s`; the six
+/// fields, their order and the line's one newline are unchanged (AGENTS.md section 5).
 #[test]
 fn the_lobby_hosts_a_three_round_match() {
     let text = read("scripts/host_link.gd");
@@ -903,11 +906,173 @@ fn the_lobby_hosts_a_three_round_match() {
     let line = gd_function(&text, "config_line");
     assert!(
         line.iter().any(|row| row.contains(
-            "\"%s\\t%s\\t%d\\t%d\\t%s\\t%d\\n\" % [match_id, MATCH_SEED, seats, HUMAN_SEAT, \
-             ladder, ROUND_LIMIT]"
+            "\"%s\\t%s\\t%d\\t%d\\t%s\\t%s\\n\" % [match_id, MATCH_SEED, seats, HUMAN_SEAT, \
+             ladder, round_limit()]"
         )),
         "the config line keeps its six fields, the round limit last: {line:?}"
     );
+    let limit = gd_function(&text, "round_limit");
+    let code: Vec<&str> = limit
+        .iter()
+        .skip(1)
+        .map(|row| row.trim())
+        .filter(|row| !row.is_empty() && !row.starts_with('#'))
+        .collect();
+    assert_eq!(
+        code,
+        [
+            "var given := rounds_arg(OS.get_cmdline_user_args())",
+            "if given[\"given\"]:",
+            "return String(given[\"text\"])",
+            "return str(ROUND_LIMIT)",
+        ],
+        "absent `--rounds`, the line keeps ROUND_LIMIT: {limit:?}"
+    );
+}
+
+/// **`-- --rounds <n>`, the test-only round limit** (decisions-log item 143 (5); S2's
+/// `rnds`; s2-plan E21). `host_link.gd` reads it beside `--gamectl=` and `--root=`, in
+/// either spelling, and writes the argument's text into the config line's round-limit
+/// field as it was given: the client parses and bounds nothing, so a value that is not a
+/// whole number, is 0 or does not fit a `u32` reaches the gateway, whose refusal the lobby
+/// draws as it draws any host's. The client's own refusals are about the line's framing and
+/// the command line's shape only (a tab or a line break, no value, the option twice), and
+/// `start()` makes them before it spawns anything. The lobby does not show the option.
+#[test]
+fn the_rounds_option_writes_its_text_and_refuses_only_the_lines_framing() {
+    let text = read("scripts/host_link.gd");
+    assert!(
+        text.contains("const ROUNDS_ARG := \"--rounds\""),
+        "the option is spelt `--rounds`"
+    );
+    let reader = gd_function(&text, "rounds_arg");
+    let code: Vec<&str> = reader
+        .iter()
+        .map(|row| row.trim())
+        .filter(|row| !row.is_empty() && !row.starts_with('#'))
+        .collect();
+    let repeated = "return {\"given\": true, \"text\": \"\", \"refusal\": RoundsRefusal.REPEATED}";
+    let no_value = "return {\"given\": true, \"text\": \"\", \"refusal\": RoundsRefusal.NO_VALUE}";
+    assert_eq!(
+        code,
+        [
+            "static func rounds_arg(args: PackedStringArray) -> Dictionary:",
+            "var found := {\"given\": false, \"text\": \"\", \"refusal\": RoundsRefusal.NONE}",
+            "var expecting := false",
+            "for arg in args:",
+            "var text := \"\"",
+            "if expecting and (arg == ROUNDS_ARG or arg.begins_with(ROUNDS_ARG + \"=\")):",
+            repeated,
+            "elif expecting and arg.begins_with(\"--\"):",
+            no_value,
+            "elif expecting:",
+            "expecting = false",
+            "text = arg",
+            "elif arg == ROUNDS_ARG:",
+            "expecting = true",
+            "continue",
+            "elif arg.begins_with(ROUNDS_ARG + \"=\"):",
+            "text = arg.trim_prefix(ROUNDS_ARG + \"=\")",
+            "else:",
+            "continue",
+            "if found[\"given\"]:",
+            repeated,
+            "if text.contains(\"\\t\") or text.contains(\"\\n\") or text.contains(\"\\r\"):",
+            "return {\"given\": true, \"text\": \"\", \"refusal\": RoundsRefusal.BREAKS_LINE}",
+            "found = {\"given\": true, \"text\": text, \"refusal\": RoundsRefusal.NONE}",
+            "if expecting:",
+            no_value,
+            "return found",
+        ],
+        "the reader's lines, in order: an option where a value belongs is NO_VALUE, \
+         `--rounds` there is REPEATED, and nothing else is judged: {reader:?}"
+    );
+    // The client parses and bounds nothing: no number is read from the text, and nothing
+    // compares it with a bound.
+    for parse in [
+        "to_int",
+        "is_valid_int",
+        "int(text",
+        "int(arg",
+        "text.length",
+        "> 0",
+        ">= 1",
+        "== \"0\"",
+    ] {
+        assert!(
+            !code.iter().any(|row| row.contains(parse)),
+            "the reader parses or bounds nothing (`{parse}`): {reader:?}"
+        );
+    }
+    // Each refusal has its words, and start() makes them before it spawns the host.
+    let refusal = gd_function(&text, "rounds_refusal");
+    for arm in [
+        "RoundsRefusal.NONE:",
+        "RoundsRefusal.NO_VALUE:",
+        "RoundsRefusal.REPEATED:",
+        "RoundsRefusal.BREAKS_LINE:",
+    ] {
+        assert!(
+            refusal.iter().any(|row| row.trim() == arm),
+            "rounds_refusal() has its `{arm}` arm: {refusal:?}"
+        );
+    }
+    let start = gd_function(&text, "start");
+    let refused = start
+        .iter()
+        .position(|row| row.trim() == "var rounds := rounds_refusal()")
+        .expect("start() asks whether `--rounds` can go on a line");
+    let spawned = start
+        .iter()
+        .position(|row| row.contains("OS.execute_with_pipe("))
+        .expect("start() spawns the host");
+    assert!(
+        refused < spawned
+            && start.get(refused + 1).map(|row| row.trim()) == Some("if rounds != \"\":")
+            && start.get(refused + 2).map(|row| row.trim()) == Some("failed.emit(rounds)")
+            && start.get(refused + 3).map(|row| row.trim()) == Some("return false"),
+        "a refused `--rounds` starts no host and says why: {start:?}"
+    );
+    // The argument is read in host_link.gd alone, and the lobby neither shows it nor reads it.
+    for script in [
+        "scripts/lobby.gd",
+        "scripts/strings.gd",
+        "scripts/editor.gd",
+    ] {
+        assert!(
+            !read(script).contains("--rounds") && !read(script).contains("ROUNDS_ARG"),
+            "{script} neither shows nor reads `--rounds`"
+        );
+    }
+}
+
+/// **The `--rounds` reader is checked by its behaviour too** (S2's `rnds`): `watch_check.gd`
+/// runs a table of argument lists through `host_link.gd`'s `rounds_arg` before anything
+/// else and fails the check on any mismatch (ci.yml's `client extension` jobs).
+#[test]
+fn the_watch_check_runs_the_rounds_readers_table_first() {
+    let check = read("scripts/watch_check.gd");
+    let ready = gd_function(&check, "_ready");
+    assert_eq!(
+        ready.get(1).map(|row| row.trim()),
+        Some("_rounds_cases()"),
+        "the watch check runs the reader's table first: {ready:?}"
+    );
+    let table = gd_function(&check, "_rounds_cases");
+    for row in [
+        "[[\"--rounds\", \"--gamectl=x\"], true, \"\", no_value],",
+        "[[\"--rounds\", \"--rounds=4\"], true, \"\", repeated],",
+        "[[\"--rounds=4\", \"--rounds=4\"], true, \"\", repeated],",
+        "[[\"--rounds=\"], true, \"\", none],",
+        "[[\"--rounds=4\\r\"], true, \"\", breaks],",
+        "_failures.append(\"rounds_arg(%s) answered %s, not %s\" % [JSON.stringify(case[0]), \
+         JSON.stringify(got), JSON.stringify(want)])",
+    ] {
+        assert!(
+            table.iter().any(|line| line.trim() == row),
+            "the reader's table has `{row}`: {table:?}"
+        );
+    }
 }
 
 /// **The Credits button** (decisions-log item 117 (11)): in the pre-match chooser only, it

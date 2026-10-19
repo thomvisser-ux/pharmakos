@@ -74,6 +74,32 @@ const HUMAN_SEAT := 0
 const ROUND_LIMIT := 3
 const LADDER := "-"
 
+## The test-only launch option that sets the round limit in place of ROUND_LIMIT,
+## `-- --rounds <n>` (or `-- --rounds=<n>`, as the readers beside it spell theirs), so a
+## stage demo can play a match past round 3 (decisions-log item 143 (5)). The lobby does
+## not show it. Its text goes on the config line as it was given: the client parses and
+## bounds nothing, and a value that is not a whole number, is 0 or does not fit a `u32` is
+## the gateway's refusal (`serve::Config`, `Host::check_settings`), which the lobby draws
+## as it draws any host that refuses its line. There is no upper bound, because one would
+## be an artificial cap (s2-plan E21).
+const ROUNDS_ARG := "--rounds"
+
+## Why the launch's `--rounds` cannot go on the config line. Each is about the line's
+## framing or the command line's shape, never the value's meaning, which is the gateway's.
+enum RoundsRefusal {
+	## Nothing stops it: absent, or a value whose text keeps the line one line of fields.
+	NONE,
+	## `--rounds` was the last argument, or the next argument is another option (it begins
+	## with `--`), so it names no value. That is the command line's shape, not a rule
+	## about the number.
+	NO_VALUE,
+	## `--rounds` was given more than once, so which one to write is a guess.
+	REPEATED,
+	## The value holds a tab, a line feed or a carriage return, which would add a field
+	## or end the line rather than set the round limit.
+	BREAKS_LINE,
+}
+
 var bridge: Node = null
 
 var _pid := -1
@@ -131,8 +157,68 @@ static func find_root() -> String:
 ## lobby's two unless a caller names another (the headless watch check names its own
 ## `CHECK_SEATS`, also two: its other seat is the built-in operator's, which says ready at
 ## every Lull's start, so the check's own Ready completes every seat's).
+##
+## The round limit is `round_limit()`'s text: the `--rounds` argument's, or ROUND_LIMIT
+## when the launch gave none. The line's six fields and their order are unchanged, so a
+## remembered `last_match.txt` still parses (AGENTS.md section 5).
 static func config_line(match_id: String, ladder: String, seats: int = MATCH_SEATS) -> String:
-	return "%s\t%s\t%d\t%d\t%s\t%d\n" % [match_id, MATCH_SEED, seats, HUMAN_SEAT, ladder, ROUND_LIMIT]
+	return "%s\t%s\t%d\t%d\t%s\t%s\n" % [match_id, MATCH_SEED, seats, HUMAN_SEAT, ladder, round_limit()]
+
+
+## What this launch said about `--rounds`: `given` (whether it said anything), `text` (the
+## value as it was given) and `refusal` (a RoundsRefusal). `args` is the command line's
+## user arguments (OS.get_cmdline_user_args() at a launch).
+static func rounds_arg(args: PackedStringArray) -> Dictionary:
+	var found := {"given": false, "text": "", "refusal": RoundsRefusal.NONE}
+	var expecting := false
+	for arg in args:
+		var text := ""
+		if expecting and (arg == ROUNDS_ARG or arg.begins_with(ROUNDS_ARG + "=")):
+			return {"given": true, "text": "", "refusal": RoundsRefusal.REPEATED}
+		elif expecting and arg.begins_with("--"):
+			return {"given": true, "text": "", "refusal": RoundsRefusal.NO_VALUE}
+		elif expecting:
+			expecting = false
+			text = arg
+		elif arg == ROUNDS_ARG:
+			expecting = true
+			continue
+		elif arg.begins_with(ROUNDS_ARG + "="):
+			text = arg.trim_prefix(ROUNDS_ARG + "=")
+		else:
+			continue
+		if found["given"]:
+			return {"given": true, "text": "", "refusal": RoundsRefusal.REPEATED}
+		if text.contains("\t") or text.contains("\n") or text.contains("\r"):
+			return {"given": true, "text": "", "refusal": RoundsRefusal.BREAKS_LINE}
+		found = {"given": true, "text": text, "refusal": RoundsRefusal.NONE}
+	if expecting:
+		return {"given": true, "text": "", "refusal": RoundsRefusal.NO_VALUE}
+	return found
+
+
+## The config line's round-limit field: the `--rounds` argument's text when the launch
+## gave one, and otherwise ROUND_LIMIT. A refused argument writes no line at all: `start()`
+## refuses first (`rounds_refusal()`), so this text is never sent.
+static func round_limit() -> String:
+	var given := rounds_arg(OS.get_cmdline_user_args())
+	if given["given"]:
+		return String(given["text"])
+	return str(ROUND_LIMIT)
+
+
+## The words for a launch whose `--rounds` cannot go on the config line, or "" when it can.
+static func rounds_refusal() -> String:
+	match int(rounds_arg(OS.get_cmdline_user_args())["refusal"]):
+		RoundsRefusal.NONE:
+			return ""
+		RoundsRefusal.NO_VALUE:
+			return "`--rounds` names no round limit: write `-- --rounds <n>`"
+		RoundsRefusal.REPEATED:
+			return "`--rounds` is given more than once"
+		RoundsRefusal.BREAKS_LINE:
+			return "`--rounds` holds a tab or a line break, which would change the config line's fields rather than its round limit"
+	return "`--rounds` was refused for a reason this build does not name"
 
 
 ## The resume line for a remembered six-field `line`: the same six fields, a tab and
@@ -159,9 +245,19 @@ static func my_seat() -> String:
 ##
 ## `gamectl` is the path of the binary, `root` the repository root it reads the rules
 ## table from, and `config_line` the one line `pharmakos_gateway::serve::Config` reads.
+##
+## `--rounds` sets only a new match's line (`config_line`); a Resume repeats the remembered
+## line, round limit and all (decisions-log item 112 (8)). A launch whose `--rounds`
+## cannot go on a line (`rounds_refusal()`) still starts no host, for a Resume as for a new
+## match: the command line is malformed either way, and the words say how. Those are the
+## only refusals of `--rounds` the client makes; its value is the gateway's.
 func start(gamectl: String, root: String, config_line: String) -> bool:
 	if bridge == null:
 		failed.emit("the host link has no bridge")
+		return false
+	var rounds := rounds_refusal()
+	if rounds != "":
+		failed.emit(rounds)
 		return false
 	var spawned: Dictionary = OS.execute_with_pipe(gamectl, PackedStringArray(["host", "--root", root]), false)
 	if spawned.is_empty():
