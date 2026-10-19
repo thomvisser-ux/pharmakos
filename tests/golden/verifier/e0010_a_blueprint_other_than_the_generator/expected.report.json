@@ -5,13 +5,13 @@
       "code": "E0010",
       "severity": "ERROR",
       "path": "/declarative/route/0/interface/rows/0/add_build_target/target/blueprint_id",
-      "message": "a Build target names `autocannon`; only `generator` can be built until S4, with the capability catalogue and its licences.",
-      "beginner": "Generators are the only buildings a Build beacon can make for now."
+      "message": "a Build target names `relay_pylon`; beside `generator` and S2's base kit, nothing can be built until S4, with the capability catalogue and its licences.",
+      "beginner": "This building cannot be made by a Build beacon in this build."
     }
   ],
-  "report_hash": "Alwj7/EjaYc=",
+  "report_hash": "Ym4zAWLkFrc=",
   "rules_hash": "gCjUE4Tm3i8=",
-  "plan_fingerprint": "dDLQOITWNok=",
+  "plan_fingerprint": "A/rshyRcIUM=",
   "verifier_version": "0.1.0-s2",
   "size_units": 2,
   "size_budget": 128

@@ -110,9 +110,9 @@ pub const VERIFIER_STRINGS: &[Text] = &[
     },
     Text {
         code: "E0010",
-        message: "a Build target names `{id}`; only `generator` can be built until S4, with the \
-                  capability catalogue and its licences.",
-        beginner: "Generators are the only buildings a Build beacon can make for now.",
+        message: "a Build target names `{id}`; beside `generator` and S2's base kit, nothing can \
+                  be built until S4, with the capability catalogue and its licences.",
+        beginner: "This building cannot be made by a Build beacon in this build.",
     },
     Text {
         code: "E0011",
@@ -166,6 +166,12 @@ pub const VERIFIER_STRINGS: &[Text] = &[
                   rather than read as a default.",
         beginner: "This setting holds a number the game does not know. Nothing is guessed for \
                    you: write one of the setting's names instead.",
+    },
+    Text {
+        code: "E0019",
+        message: "a Build target names `{id}`, one of S2's base kit, which has no effect until \
+                  S2's base kit lands; it is refused rather than ignored.",
+        beginner: "Autocannons, mortars and walls cannot be built in this build yet.",
     },
     // --- E01xx: limits and required blocks -----------------------------------
     Text {
@@ -421,6 +427,13 @@ pub const VERIFIER_STRINGS: &[Text] = &[
         beginner: "A Survey beacon can field only so many scouts. Ask for fewer.",
     },
     Text {
+        code: "E0509",
+        message: "a `{id}` target carries a `wall_box`; only a `wall` target fills a box, and \
+                  every other structure's footprint is its blueprint's.",
+        beginner: "Only a wall is built as a box of voxels. Leave the box out, or make this \
+                   target a wall.",
+    },
+    Text {
         code: "W0501",
         message: "`seam_choice` SAFEST reads as NEAREST until S2's threat model arrives.",
         beginner: "\"Safest\" needs threats to weigh, and they come later. Until then this beacon \
@@ -572,6 +585,8 @@ pub const FIX_RANK_NEAREST: &str = "Rank it by nearest";
 pub const FIX_COVERAGE_UNCOVERED: &str = "Pick only what you do not cover yet";
 /// E0411's Fix.
 pub const FIX_DROP_COVERAGE: &str = "Leave the coverage out";
+/// `E0509`'s Fix: a box only a `wall` target fills.
+pub const FIX_DROP_WALL_BOX: &str = "Leave the box out";
 /// E0601's Fix: accept the shortfall, so the beacons past the supply stay
 /// dormant.
 pub const FIX_ALLOW_DORMANT: &str = "Allow dormant beacons";

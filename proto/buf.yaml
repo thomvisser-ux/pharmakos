@@ -68,8 +68,43 @@ breaking:
   # the next proto change that discharges nothing deletes it again, so an
   # un-reservation nobody intended never passes unnoticed (decisions-log items
   # 100 (10), 109 and 111).
-  #
-  # There is no block today. S1's targeting proto (`con2`, #75) held one for
-  # gp/v1/playbook.proto and gp/api/v1/gateway.proto; S2's rules rows (`con3`)
-  # discharge nothing, so they deleted it: every number they take comes from a
-  # range no `reserved` statement held.
+  ignore_only:
+    # S2's playbook and gateway wire (S2's plan, task con4; the register's
+    # S2-11 and S2-13). One rule, two files, five held ranges, each narrowed
+    # by exactly the numbers its new fields take; every number not filled
+    # stays held, under the name it was held for where it had one. con3 (#118)
+    # discharged nothing and had no block, so there is none to carry.
+    #
+    # gp/v1/playbook.proto, two messages held whole for S2:
+    #   * `DefendSettings`: 1-15 were held for spec section 6's Defend row. 1-4
+    #     take the protect list, the engagement radius, pursue and the picket's
+    #     scout count; 5 and 6 stay held by name for auto-fortify and unit mix
+    #     (S2's plan's decision 13), and 7-15 stay held.
+    #   * `AttackSettings`: 1-15 were held for the Attack row. 1-9 take the
+    #     target, the retarget rule, the staging point, the launch and retreat
+    #     conditions, the after-action, the avoid areas, breach_allowed and
+    #     waves (decision 14); 10-15 stay held. The go-code arm the row names
+    #     is held inside the new `AttackLaunch` (3, `broadcast_received`, S4),
+    #     which no `reserved` statement on main held, so it discharges nothing.
+    #
+    # gp/api/v1/gateway.proto, three messages whose tails were held for these
+    # fields, each under a PLACEHOLDER or a RESERVED comment that named them:
+    #   * `BeaconSummary`: 7-15 were held for an enemy beacon's detail. 7-9 take
+    #     the HP, the maximum HP and the sighting's age that decision 5 shows;
+    #     10-15 stay held.
+    #   * `ViewEntity`: 6-15 were held for HP, power state, heading, build
+    #     progress and sub-voxel position. 6-8 take the HP, the maximum HP and
+    #     the heading; 9-15 stay held for the rest.
+    #   * `GetRecapResponse`: 4-15 were held for "the rest of the recap". 4
+    #     takes the calling seat's kill and loss tally (E15) and 5 every seat's
+    #     tally once the match has ended (decisions-log item 145); 6-15 stay
+    #     held for the awards (S4) and the highlights (S7).
+    #
+    # buf sees each old range go away and cannot tell a discharge from an
+    # un-reservation; tests/golden/proto/expected.reserved.txt shows each
+    # narrowing, which is the reviewable half. Inert once this change is on
+    # main. The next proto pull request replaces this block with its own, or
+    # deletes it if it discharges nothing.
+    RESERVED_MESSAGE_NO_DELETE:
+      - gp/v1/playbook.proto
+      - gp/api/v1/gateway.proto

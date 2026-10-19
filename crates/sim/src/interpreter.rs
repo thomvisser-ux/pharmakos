@@ -1393,7 +1393,10 @@ fn compile_settings_row(
 /// which is what the plan's wk-18.5 row names. Any other id is refused rather
 /// than compiled to a structure this build cannot raise, so a playbook naming a
 /// capability structure fails loudly at the seal instead of silently building
-/// nothing (owner, at S4).
+/// nothing (owner, at S4). S2's base kit — `autocannon`, `mortar` and `wall` —
+/// is refused under an entry of its own ([`REFUSE_BUILD_BASE_KIT`]) until S2's
+/// `site` lane builds it, and a `wall_box` on any target but a `wall` is
+/// [`PlanError::WallBoxOffAWall`] (S2's wire, `con4`).
 ///
 /// Its `order` and `rotation_quarter_turns` are kept (S1's plan, decision 5):
 /// the mandate builds the lowest order first, ties by list position, and the
@@ -1405,8 +1408,19 @@ fn compile_build_target(
     names: &Names<'_>,
     covering: bool,
 ) -> Result<Target, PlanError> {
+    // A box is a `wall` target's alone (`BuildTarget.wall_box`, S2's wire):
+    // on any other blueprint nothing would read it, so it is refused rather
+    // than dropped, as the verifier's E0509 refuses it.
+    if target.wall_box.is_some() && target.blueprint_id != "wall" {
+        return Err(PlanError::WallBoxOffAWall {
+            blueprint: target.blueprint_id.clone(),
+        });
+    }
     let blueprint = match target.blueprint_id.as_str() {
         "generator" => crate::tables::StructureKind::Generator.id(),
+        "autocannon" | "mortar" | "wall" => {
+            return Err(REFUSE_BUILD_BASE_KIT.error());
+        }
         _ => {
             return Err(REFUSE_BUILD_BLUEPRINT.error());
         }
@@ -2067,6 +2081,12 @@ pub enum PlanError {
         /// What the playbook wrote.
         found: u32,
     },
+    /// A `wall_box` on a Build target whose blueprint is not `wall`: a
+    /// structure's footprint is its blueprint's (the verifier's E0509).
+    WallBoxOffAWall {
+        /// The blueprint the target names.
+        blueprint: String,
+    },
     /// An area whose `min` exceeds its `max` in x or y: a box that holds no
     /// column (the verifier's E0406 at plan time).
     AreaInsideOut,
@@ -2144,7 +2164,8 @@ pub enum PlanError {
     /// | Construct | Stage |
     /// |---|---|
     /// | `queue_structure` | S4 (capability licences) |
-    /// | a Build target naming a blueprint other than `generator` | S4 |
+    /// | a Build target naming a blueprint other than `generator` or S2's base kit | S4 |
+    /// | a Build target naming S2's base kit (`autocannon`, `mortar`, `wall`) | S2, `site` |
     /// | a Build target (or a removal) anchored on a beacon selector rather than on a voxel or `on` a vent | S3 |
     /// | Defend and Attack mandate settings | S2 |
     /// | selector `most_threatened` | S2 |
@@ -2225,6 +2246,13 @@ pub const REFUSE_BUILD_BLUEPRINT: Refusal = Refusal {
     stage: "S4 (the capability catalogue and its licences)",
 };
 
+/// A Build target naming one of S2's base kit: S2, `site` (S2's wire, `con4`).
+pub const REFUSE_BUILD_BASE_KIT: Refusal = Refusal {
+    name: "build_target_base_kit",
+    construct: "a Build target naming a blueprint of S2's base kit (`autocannon`, `mortar` or `wall`)",
+    stage: "S2, `site`",
+};
+
 /// A Build target, or a removal, anchored on a beacon selector: S3.
 pub const REFUSE_BUILD_BEACON_ANCHOR: Refusal = Refusal {
     name: "build_target_beacon_anchor",
@@ -2277,9 +2305,10 @@ pub const REFUSE_BEACON_UNDER_ATTACK: Refusal = Refusal {
 
 /// Every construct the compile refuses for its stage, in the order
 /// [`PlanError::NotAtThisStage`]'s documentation lists them (E8).
-pub const REFUSALS: [Refusal; 9] = [
+pub const REFUSALS: [Refusal; 10] = [
     REFUSE_QUEUE_STRUCTURE,
     REFUSE_BUILD_BLUEPRINT,
+    REFUSE_BUILD_BASE_KIT,
     REFUSE_BUILD_BEACON_ANCHOR,
     REFUSE_DEFEND_SETTINGS,
     REFUSE_ATTACK_SETTINGS,
@@ -2288,6 +2317,15 @@ pub const REFUSALS: [Refusal; 9] = [
     REFUSE_FILTER_TAGS,
     REFUSE_BEACON_UNDER_ATTACK,
 ];
+
+/// [`PlanError::WallBoxOffAWall`]'s words, apart so that `Display`'s match
+/// stays one line an arm.
+fn wall_box_off_a_wall(f: &mut core::fmt::Formatter<'_>, blueprint: &str) -> core::fmt::Result {
+    write!(
+        f,
+        "a `{blueprint}` target carries a `wall_box`; only a `wall` target fills a box"
+    )
+}
 
 impl core::fmt::Display for PlanError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -2343,6 +2381,7 @@ impl core::fmt::Display for PlanError {
                 f,
                 "a `rotation_quarter_turns` of {found} is past three quarter turns"
             ),
+            PlanError::WallBoxOffAWall { blueprint } => wall_box_off_a_wall(f, blueprint),
             PlanError::AreaInsideOut => {
                 write!(f, "an area's `min` exceeds its `max` in x or y")
             }

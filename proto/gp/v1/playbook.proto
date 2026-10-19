@@ -39,15 +39,20 @@
 //     ONE OTHER EXCEPTION IS RULED, BY NAME, AND IT IS THE OWNER'S: an
 //     omitted SETTING inside a mandate or a step reads as a stated default,
 //     with an I-level note saying so (decisions-log item 128, which rules S1's
-//     plan's decision 11 and the register's S1-39). Four settings, and only
-//     these four: MoveStep.pace reads as DIRECT, MineSettings.seam_choice as
-//     NEAREST, MineSettings.pillar_spacing as 0 (no pillars) and
-//     BuildSettings.terraform as NONE. The reason is the spec's own worked
+//     plan's decision 11 and the register's S1-39). Five settings, and only
+//     these five: MoveStep.pace reads as DIRECT, MineSettings.seam_choice as
+//     NEAREST, MineSettings.pillar_spacing as 0 (no pillars),
+//     BuildSettings.terraform as NONE, and MandateSettings.roe as
+//     RETURN_FIRE. The reason for the first four is the spec's own worked
 //     example, which writes {"mine":{"dig_max_depth":4,"flee_on_threat":true}}
-//     and must verify. Nothing else joins the list: targeting's new
-//     RANK_UNSPECIFIED and COVERAGE_UNSPECIFIED (FeatureRef) stay errors, as
-//     docs/design/targeting.md adopted them. S1's verifier lane implements
-//     the four.
+//     and must verify. The fifth is the owner's too (decisions-log item 144
+//     (11), S2's plan's decision 4): Hold & Build, the safe playbook and the
+//     built-in operator's playbooks all omit `roe`, and the spec's Common row
+//     says return fire is always announced. Nothing else joins the list:
+//     targeting's RANK_UNSPECIFIED and COVERAGE_UNSPECIFIED (FeatureRef), and
+//     every enum of the Defend and Attack settings, stay errors, as
+//     docs/design/targeting.md and S2's plan adopted them. S1's verifier lane
+//     implements the first four; S2's (`vfy2`) the fifth, extending I0003.
 //   * Every duration is game milliseconds, never ticks. The sim runs at
 //     20 Hz and takes decisions every 250 ms of game time, but no number in a
 //     playbook is expressed in ticks (spec section 10, "Execution").
@@ -353,7 +358,7 @@ message MoveStep {
   // stays pinned for that step.
   Location to = 1;
 
-  // Omitted, it reads as DIRECT with an I-level note: one of the four named
+  // Omitted, it reads as DIRECT with an I-level note: one of the five named
   // defaults in this file's header (decisions-log item 128, decision 11).
   Pace pace = 2;
 
@@ -491,9 +496,14 @@ message QueueStructureRow {
 // One entry in a Build mandate's target list: blueprint, anchor, rotation,
 // order (spec section 6, the Build row).
 message BuildTarget {
-  // PLACEHOLDER: the blueprint catalogue, one blueprint (the Generator) until then — owner, at S4, with its licences.
+  // PLACEHOLDER: the licensed blueprints of the catalogue, a string id until then — owner, at S4, with its licences.
   // The blueprint catalogue is spec section 8's contract.
-  // The skeleton's minimal Build mandate ships one blueprint, the Generator.
+  // The skeleton's minimal Build mandate shipped one blueprint, the
+  // Generator; S2 adds the base kit beside it (spec section 9; S2's plan,
+  // task `con4`): `generator`, `autocannon`, `mortar` and `wall`. These four
+  // are every id a Build target names before S4's licensed blueprints, and
+  // the sim refuses each of the three new ones, and the verifier with it,
+  // until S2's `site` lane gives it an effect (S2's plan, E8).
   string blueprint_id = 1;
 
   // Where it goes. Must lie inside one of your own spheres: inside the
@@ -519,10 +529,30 @@ message BuildTarget {
   // Build order. The mandate builds the highest-order affordable target that
   // is unbuilt or damaged; lowest number first, ties by list position.
   uint32 order = 4;
+
+  // A `wall` target's voxels: the box it fills, inclusive at both ends, each
+  // voxel at the rules table's `wall_cost_per_voxel` (S2's plan, decisions 10
+  // and 40, ruled by decisions-log item 144 (11)). Every column of the box is
+  // filled from the ground's top up to the box's top (`max.z`), so no wall
+  // voxel has air under it, and the box stands at least the rules table's
+  // `materials.wall_min_height_voxels` above the ground in every column; a
+  // lower one is a verifier error. `min.z` says only that the box reaches the
+  // ground: it lies at or below the ground's top in every column, and
+  // nothing below the ground is filled. Every column of the box lies inside
+  // the sphere of the beacon whose mandate holds the target, the sphere being
+  // building's only range (decisions-log item 12).
+  //
+  // Required on a `wall` target and refused on any other: a structure's
+  // footprint is its blueprint's, never the author's. A wall's `anchor` still
+  // names the target, as every target's does (a removal finds it by its
+  // anchor), and is a voxel inside the box; its `rotation_quarter_turns` is 0.
+  // Not `box`, which Rust reserves as a keyword.
+  Area wall_box = 5;
 }
 
 // An axis-aligned box of voxels, inclusive at both ends. Protected areas,
-// avoid areas and Survey probe areas are all of this shape.
+// avoid areas, Survey probe areas and a wall target's `wall_box` are all of
+// this shape.
 //
 // PLACEHOLDER: an area's shape, a box — owner, if a polygon or a sphere is wanted.
 // The spec says "areas" without fixing their shape. A box
@@ -1249,10 +1279,12 @@ message BeaconFilter {
 // The five mandates and their settings are spec section 6's contract, which
 // grows with the stages (Defend and Attack at S2, below).
 //
-// PLACEHOLDER: the move to gp/v1/mandate.proto — owner, the next proto PR
-// that adds a mandate field (the register's M-14). Not in S1 (decisions-log
-// item 128, S1's plan's decision 11): the move changes no wire or JSON name,
-// because the package stays gp.v1, and nothing in S1 needs it.
+// PLACEHOLDER: the move to gp/v1/mandate.proto — owner, S3, the next proto PR after S2's.
+// The register's M-14. Not in S1 (decisions-log item 128, S1's plan's
+// decision 11) and not in S2's wire (S2's plan, task `con4`, which added
+// Defend's and Attack's fields here; the main session's ruling on that pull
+// request): the move changes no wire or JSON name, because the package stays
+// gp.v1, and nothing in S1 or S2 needs it.
 //
 // Only the fields the spec's expand_east example uses are filled in. The
 // mandate oneof numbers (10-14) and the five names are safe: they are the
@@ -1263,18 +1295,25 @@ message BeaconFilter {
 message MandateSettings {
   // --- Common settings (spec section 6, the Common row) --------------------
 
-  // Rules of engagement. Shared across mandates that field units.
+  // Rules of engagement. Shared across mandates that field units. Omitted, it
+  // reads as RETURN_FIRE with an I-level note: one of the five named defaults
+  // in this file's header (decisions-log item 144 (11), S2's plan's decision
+  // 4).
   Roe roe = 1;
 
   // A unit below this percentage of its HP retreats, following the rules of
   // engagement, and the retreat is always announced. Integer percent, 0-100.
+  // It walks to the nearest own beacon whose sphere holds a live repair
+  // drone, else to its home beacon, firing only as its `roe` allows (spec
+  // section 6's Defend fallback, made common by S2's plan's decision 4).
   uint32 retreat_hp_pct = 2;
 
   // RESERVED — the rest of the Common row. `report_kinds` is which beacon
-  // reports reach the seat, which needs the report catalogue (S2, with combat
-  // events); `accept_broadcasts` needs radio, which needs a Radio Mast and
-  // arrives at S4. Both are named in spec section 6 and neither is invented
-  // here.
+  // reports reach the seat, which needs the report catalogue: S3, with
+  // get_reports, and S2's announcements ride the feed (S2's plan's decision
+  // 16, ruled by decisions-log item 144 (11)); `accept_broadcasts` needs
+  // radio, which needs a Radio Mast and arrives at S4. Both are named in spec
+  // section 6 and neither is invented here.
   reserved 3, 4;
   reserved "report_kinds", "accept_broadcasts";
 
@@ -1288,10 +1327,21 @@ message MandateSettings {
     MineSettings mine = 14;
   }
 
+  // The three readings are S2's plan's decision 4's (decisions-log item 144
+  // (11)). The core's autocannon, which has no mandate of its own, fires as
+  // FREE_FIRE (S2's plan's decision 8).
   enum Roe {
+    // Omitted, this reads as RETURN_FIRE (above).
     ROE_UNSPECIFIED = 0;
+
+    // Never fires.
     HOLD_FIRE = 1;
+
+    // Fires only at an enemy asset that damaged one of the seat's own assets
+    // inside the firer's range within the rules table's under-attack window.
     RETURN_FIRE = 2;
+
+    // Fires at any enemy in range.
     FREE_FIRE = 3;
   }
 }
@@ -1301,14 +1351,23 @@ message MandateSettings {
 // 5, amending item 33 (a) and spec section 17's S1 row): S1 builds `targets`
 // in full — order, rotation, `on` and `covered {}` — and `protected_areas`.
 // `repair_threshold_pct`, `rebuild_destroyed` and `terraform` are stored and
-// priced in S1 and take effect in S2; terraform's meaning beyond its enum is
-// still unruled.
+// priced in S1 and take effect in S2 (S2's `site` lane). Terraform's meaning
+// is item 144 (5)'s: before building, a drone levels the target's footprint
+// to its anchor's height — FILL raises it, DIG lowers it and BOTH does both —
+// and FILL and BOTH also refill craters and trenches inside the beacon's
+// sphere back to the generated surface, each voxel at the wall's cost per
+// voxel. There is no free-form sculpting.
 message BuildSettings {
   // Build the highest-order affordable target that is unbuilt or damaged.
   repeated BuildTarget targets = 1;
 
-  // Repair a structure of yours inside this beacon's sphere once it falls
-  // below this percentage of its HP. Integer percent, 0-100; 0 means never.
+  // Repair a structure of yours inside this beacon's sphere once its HP falls
+  // below this percentage of its maximum. Integer percent, 0-100; 0 means a
+  // structure is never repaired. Read as written (S2's plan's decision 38,
+  // ruled by decisions-log item 144 (11)): an omitted threshold is 0, so it
+  // means never, and the verifier notes it. Own units and the commander are
+  // repaired below full whatever this says (spec section 4), and so is a
+  // cracked wall voxel of yours inside the sphere (S2's plan's decision 42).
   uint32 repair_threshold_pct = 2;
 
   // Rebuild a destroyed target from the list. A destroyed CAPABILITY
@@ -1316,7 +1375,7 @@ message BuildSettings {
   bool rebuild_destroyed = 3;
 
   // Whether the mandate may reshape terrain to place a target. Omitted, it
-  // reads as NONE with an I-level note: one of the four named defaults in
+  // reads as NONE with an I-level note: one of the five named defaults in
   // this file's header (decisions-log item 128, decision 11).
   Terraform terraform = 4;
 
@@ -1324,9 +1383,11 @@ message BuildSettings {
   repeated Area protected_areas = 5;
 
   // RESERVED — the repair and reclaim drone fields of section 6's Build row.
-  // Drone fields are the unit-mix half of the mandate, and repair and reclaim
-  // drones are S2's (spec section 17), so both numbers stay held until S2
-  // (decisions-log item 128 (3) (d), S1's plan's decision 5).
+  // They stay held in S2 (S2's plan's decision 15, ruled by decisions-log
+  // item 144 (11)): repair and reclaim drones follow the work in hand, as
+  // every fabricator does ("no fixed counts", spec section 6), so there is no
+  // count to write. The numbers return only on an owner's decision; until
+  // then a player cannot turn salvage off.
   reserved 6, 7;
   reserved "repair_drones", "reclaim_drones";
 
@@ -1339,28 +1400,211 @@ message BuildSettings {
   }
 }
 
-// PLACEHOLDER: Defend's settings — owner, at S2, with destruction and combat.
-// Spec section 6's Defend
-// row names: protect list (accepts `my commander`), engagement radius as a
-// percentage of the sphere radius, pursue never / sphere edge / while in
-// reach, auto-fortify, unit mix, picket. Numbers 1-15 are held so the first
-// fifteen fields stay in the one-byte tag range.
+// Spec section 6, the Defend row: "Protect list (accepts my commander);
+// engagement radius as a % of the sphere radius; pursue never / sphere edge /
+// while in reach; auto-fortify; unit mix; picket". The shape is S2's (S2's
+// plan, task `con4`; the register's S2-13); the behaviour is S2's `dfnd`
+// lane's, and until it lands the sim refuses a Defend arm that writes any of
+// these, and the verifier with it (S2's plan, E8). A Defend beacon fields
+// raiders as guards and scouts as pickets on the work in hand, as every
+// fabricator does (S2's plan's decision 13).
 message DefendSettings {
-  reserved 1 to 15;
+  // What the beacon protects: the seat's own beacons, by name or selector,
+  // and its own commander. Guards escort the commander and intercept threats
+  // near it while it is inside this beacon's sphere (spec section 4). Every
+  // Defend beacon holds its sphere whatever this list says (spec section 6:
+  // "Hold the sphere and protect listed assets"); the list adds the assets
+  // its guards escort first. Empty, it adds none, so an empty list is not a
+  // default of its own.
+  repeated ProtectedAsset protect = 1;
+
+  // How far from the beacon its guards engage, as a whole percentage of the
+  // sphere radius, 1-100. Required: 0 is no radius, and an omitted percentage
+  // is not one of the header's named defaults, so it is a verifier error.
+  uint32 engagement_radius_pct = 2;
+
+  // How far a guard follows a threat. Required: an unset value is a verifier
+  // error.
+  Pursue pursue = 3;
+
+  // How many scouts patrol just outside the sphere edge, at the rules table's
+  // `defend.picket_radius_voxels`, for early warning. 0 fields no picket.
+  // `optional`, so that a `set_mandate_settings` row can write 0 (stand the
+  // picket down) and be told apart from a row that leaves the count alone.
+  optional uint32 picket_scouts = 4;
+
+  // RESERVED — auto-fortify and unit mix, which the spec names and gives no
+  // meaning. Deferred to S3's rule list (S2's plan's decision 13, ruled by
+  // decisions-log item 144 (11)), and held so a later meaning cannot land on
+  // a number a hand-written file already used.
+  reserved 5, 6;
+  reserved "auto_fortify", "unit_mix";
+
+  // RESERVED — the rest of the one-byte tag range, held for a further Defend
+  // setting so that none lands on a number a hand-written file already used.
+  reserved 7 to 15;
+
+  enum Pursue {
+    PURSUE_UNSPECIFIED = 0;
+
+    // A guard never leaves the engagement radius.
+    NEVER = 1;
+
+    // A guard follows a threat as far as the sphere edge.
+    SPHERE_EDGE = 2;
+
+    // A guard follows a threat until it leaves the seat's reach: its spheres,
+    // the live vision of its own units and structures, and Sensor Spire
+    // reveals (spec section 6; v1 has no relays).
+    WHILE_IN_REACH = 3;
+  }
 }
 
-// PLACEHOLDER: Attack's settings — owner, at S2, with destruction and combat.
-// Spec section 6's Attack
-// row names: target (fixed or selector, including `enemy commander`) and
-// retarget rule, staging point, launch condition (force size, segment time or
-// a broadcast go-code), retreat conditions, after-action, avoid areas,
-// breach_allowed, waves.
+// One entry of a Defend beacon's protect list.
+message ProtectedAsset {
+  oneof asset {
+    // One of the seat's own beacons, by name (`b_NN`) or selector.
+    BeaconRef beacon = 1;
+
+    // "my commander": the seat's own commander (spec section 6).
+    MyCommander my_commander = 2;
+  }
+
+  // Numbers 3-15 are free for a further arm.
+}
+
+// "my commander" — ProtectedAsset.my_commander.
+message MyCommander {}
+
+// Spec section 6, the Attack row: "Target (fixed or selector, including enemy
+// commander) and retarget rule; staging point; launch when any of force size,
+// segment time or a broadcast go-code (needs a Radio Mast) holds; retreat
+// conditions; after-action; avoid areas; breach_allowed; waves." The values
+// are S2's plan's decision 14's (ruled by decisions-log item 144 (11)). The
+// shape is S2's (task `con4`; the register's S2-13); the behaviour is S2's
+// `atk` lane's, and until it lands the sim refuses an Attack arm that writes
+// any of these, and the verifier with it (S2's plan, E8).
+//
+// The Attack beacon gathers at the staging point, launches on its condition,
+// attacks the weak point — the target beacon's lowest-HP structure inside its
+// sphere, else the beacon — then retreats or regroups (decision 14). The
+// target is pinned at the seal and launch never re-tests it, except an enemy
+// commander target, which retargets live while any of the seat's units sees
+// it (spec section 6; decisions-log item 13).
 message AttackSettings {
-  reserved 1 to 15;
+  // What to attack. Required.
+  AttackTarget target = 1;
+
+  // What the beacon does on arrival when the remembered target has moved or
+  // died. Required: an unset value is a verifier error.
+  Retarget retarget = 2;
+
+  // Where the force gathers before it launches: a voxel. Required.
+  Voxel staging = 3;
+
+  // When the force launches. Required.
+  AttackLaunch launch = 4;
+
+  // When a launched force breaks off. Optional: without it the force fights
+  // on until the attack is over and the after-action applies.
+  AttackRetreat retreat = 5;
+
+  // What the surviving force does when the attack is over. Required: an
+  // unset value is a verifier error.
+  AfterAction after_action = 6;
+
+  // Ground the force routes around, as a route cost. Areas count toward the
+  // playbook size budget.
+  repeated Area avoid_areas = 7;
+
+  // Whether the attack may spend mortar or charge time digging or demolishing
+  // a way through walls instead of stopping (spec section 9; S2's plan's
+  // decisions 9, 40 and 41). `optional`, so that an edit row can write false
+  // and be told apart from a row that leaves it alone.
+  optional bool breach_allowed = 8;
+
+  // Launches per segment, at least 1. Required: 0 is a verifier error.
+  uint32 waves = 9;
+
+  // RESERVED — the rest of the one-byte tag range, held for a further Attack
+  // setting.
+  reserved 10 to 15;
+
+  enum Retarget {
+    RETARGET_UNSPECIFIED = 0;
+
+    // Keep the pinned target: the after-action decides.
+    NONE = 1;
+
+    // Retarget the nearest enemy beacon the seat knows of.
+    NEAREST_KNOWN = 2;
+  }
+
+  enum AfterAction {
+    AFTER_ACTION_UNSPECIFIED = 0;
+
+    // The surviving force walks back to the staging point.
+    REGROUP_AT_STAGING = 1;
+
+    // The surviving force walks back to its home beacon.
+    RETURN_HOME = 2;
+  }
 }
 
-// Spec section 6, the Survey row. Survey-lite ships at the skeleton, which is
-// why this one is filled and Defend and Attack are not.
+// An Attack beacon's target.
+message AttackTarget {
+  oneof target {
+    // An enemy beacon, by name (`e_NN`) or selector.
+    BeaconRef beacon = 1;
+
+    // A fixed voxel.
+    Voxel voxel = 2;
+
+    // "enemy commander", from the seat's last sighting of it (spec section 4,
+    // hunting).
+    EnemyCommander enemy_commander = 3;
+  }
+
+  // Numbers 4-15 are free for a further arm.
+}
+
+// "enemy commander" — AttackTarget.enemy_commander. It names no seat: which
+// enemy commander it pins is a rule of S2's `atk` lane.
+message EnemyCommander {}
+
+// When an Attack force launches: as soon as ANY condition written here holds.
+// An absent field is no condition, which is why both are `optional`: a
+// written 0 is a condition, and one that holds at once.
+message AttackLaunch {
+  // Launch once at least this many of the beacon's raiders stand at the
+  // staging point.
+  optional uint32 force_size = 1;
+
+  // Launch once this many game milliseconds of the segment have passed.
+  optional int32 segment_ms = 2;
+
+  // RESERVED — the broadcast go-code, which needs a Radio Mast (S4): launch
+  // once a go-code broadcast is received. Held so the arm the spec names lands
+  // on a number and a name no file has used; the name is not `go_code`,
+  // which BroadcastStep's payload already spells, because a reserved name is
+  // refused wherever it appears (the verifier's decode stage).
+  reserved 3;
+  reserved "broadcast_received";
+}
+
+// When a launched Attack force breaks off: as soon as ANY condition written
+// here holds. As in AttackLaunch, an absent field is no condition.
+message AttackRetreat {
+  // Break off once fewer than this percentage of the launch force remain.
+  // Integer percent, 1-100.
+  optional uint32 force_below_pct = 1;
+
+  // Break off once this many game milliseconds have passed since launch.
+  optional int32 after_launch_ms = 2;
+}
+
+// Spec section 6, the Survey row. Survey-lite shipped at the skeleton, which
+// is why this one was filled before Defend and Attack were.
 message SurveySettings {
   // Where to look. Scouts scan unexplored ground inside these first, then
   // re-check the sightings closest to leaving the reach window.

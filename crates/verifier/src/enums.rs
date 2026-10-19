@@ -25,9 +25,9 @@
 
 use pharmakos_proto::gp::v1::{
     BeaconFilter, Condition, FeatureRef, IntCompare, InterfaceStep, Location, MandateSettings,
-    Playbook, Step, beacon_filter, build_settings, cmdr_hp_pct, condition, feature_ref, handler,
-    int_compare, interface_row, location, mandate_settings, meta, mine_settings, move_step,
-    on_death, on_fail, playbook, step,
+    Playbook, Step, attack_settings, beacon_filter, build_settings, cmdr_hp_pct, condition,
+    defend_settings, feature_ref, handler, int_compare, interface_row, location, mandate_settings,
+    meta, mine_settings, move_step, on_death, on_fail, playbook, step,
 };
 
 use crate::pointer;
@@ -182,7 +182,30 @@ impl Visit for Enums<'_> {
                     mine.seam_choice,
                 );
             }
-            _ => {}
+            // S2's settings (`con4`): read raw like every other enum, although
+            // the sim refuses the whole arm until S2's Defend and Attack lanes,
+            // so that the day they are read, an unknown number already is not.
+            Some(mandate_settings::Mandate::Defend(defend)) => {
+                self.raw::<defend_settings::Pursue>(
+                    &pointer::child(&pointer::child(at, "defend"), "pursue"),
+                    "pursue",
+                    defend.pursue,
+                );
+            }
+            Some(mandate_settings::Mandate::Attack(attack)) => {
+                let here = pointer::child(at, "attack");
+                self.raw::<attack_settings::Retarget>(
+                    &pointer::child(&here, "retarget"),
+                    "retarget",
+                    attack.retarget,
+                );
+                self.raw::<attack_settings::AfterAction>(
+                    &pointer::child(&here, "after_action"),
+                    "after_action",
+                    attack.after_action,
+                );
+            }
+            Some(mandate_settings::Mandate::Survey(_)) | None => {}
         }
     }
 
