@@ -43,10 +43,11 @@ should use and what almost every scenario will.
 A playbook the verifier refuses *against that seat's own snapshot* is sealed by
 the harness instead, and **every run that does so prints a `note` line naming
 the seat, the file and the diagnostic codes**. It exists because
-`expand-east-segment` needs it: the spec's worked `expand_east` names `b_01`,
-which before S1's per-seat names was seat 1's core and is now the seat's own
-first placed beacon, which it never places, and its site is far outside every
-sphere — so no client could ever have submitted it, and the chain that scenario pins was produced by a test that
+`expand-east-segment` needs it: its playbook (the spec's worked `expand_east`
+with its first site moved near seat 0's core, since S2's `base`) names `b_01`,
+the seat's own first placed beacon, which no seat has when it seals, and for
+seat 1 its site is far outside every sphere -- so no client could ever have
+submitted it, and the chain that scenario pins was produced by a test that
 compiles a plan directly. A harness is for pinning what the sim does, including
 with orders the door would refuse; what it may not do is be quiet about it.
 
@@ -56,6 +57,7 @@ with orders the door would refuse; what it may not do is be quiet about it.
 scenarios/
   README.md                        this file
   <set>/<name>.scenario.jsonc      one scenario
+  <set>/<name>.playbook.jsonc      a playbook written for one scenario's map
 tests/golden/scenarios/<name>/     the hash chains and event logs it asserts on
 ```
 

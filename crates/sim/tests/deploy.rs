@@ -26,7 +26,7 @@ use pharmakos_sim::events::{Event, EventKind};
 use pharmakos_sim::interpreter::Plan;
 use pharmakos_sim::interpreter::state::StepFailure;
 use pharmakos_sim::math::fixed::Fx;
-use pharmakos_sim::math::quantity::{Hp, Money};
+use pharmakos_sim::math::quantity::Money;
 use pharmakos_sim::runner::{MatchSettings, Runner};
 use pharmakos_sim::seams::MandateKind;
 use pharmakos_sim::tables::{BeaconId, PRIORITY_NORMAL, SeatId, StructureKind, UnitKind};
@@ -152,7 +152,7 @@ fn explained(world: &World, events: &[Event]) -> i64 {
 /// One tick, as `(tick, what the treasury did that no event explains, events)`.
 fn step(runner: &mut Runner) -> Option<(u32, i64, Vec<Event>)> {
     let before = treasury(runner.world());
-    let report = runner.step()?;
+    let report = runner.step().expect("the tick runs")?;
     let events = runner.events().to_vec();
     runner.clear_events();
     let unexplained = treasury(runner.world())
@@ -235,11 +235,18 @@ fn an_aborted_deploy_refunds_the_beacon_in_full() {
         );
         if tick == 100 && !killed {
             let commander = runner.world().commander_of(SeatId::new(SEAT));
-            assert!(runner.world_mut().request_damage(DamageOrder {
-                target: DamageTarget::Unit(commander),
-                amount: Hp::new(100_000),
-                by: SeatId::NEUTRAL,
-            }));
+            assert!(
+                runner
+                    .world_mut()
+                    .request_damage(DamageOrder {
+                        target: DamageTarget::Unit(commander),
+                        amount: pharmakos_sim::math::quantity::Damage::new(i64::from(100_000))
+                            .unwrap(),
+                        by: SeatId::NEUTRAL,
+                        source: None,
+                    })
+                    .is_ok()
+            );
             killed = true;
         }
         if tick >= 200 {
@@ -326,11 +333,18 @@ fn a_site_made_illegal_before_placement_aborts_and_refunds_the_deploy() {
             "an illegal site gets no beacon"
         );
         if tick == 100 && !destroyed {
-            assert!(runner.world_mut().request_damage(DamageOrder {
-                target: DamageTarget::Beacon(core),
-                amount: Hp::new(1_000_000),
-                by: SeatId::NEUTRAL,
-            }));
+            assert!(
+                runner
+                    .world_mut()
+                    .request_damage(DamageOrder {
+                        target: DamageTarget::Beacon(core),
+                        amount: pharmakos_sim::math::quantity::Damage::new(i64::from(1_000_000))
+                            .unwrap(),
+                        by: SeatId::NEUTRAL,
+                        source: None,
+                    })
+                    .is_ok()
+            );
             destroyed = true;
         }
         if tick >= 400 {

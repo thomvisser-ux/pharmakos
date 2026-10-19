@@ -159,7 +159,7 @@ pub(crate) fn run_all(world: &mut World) {
     let count = world.units().len();
     let mut unit: u32 = 0;
     while unit < count {
-        let row = usize::try_from(unit).unwrap_or(usize::MAX);
+        let row = crate::math::index::row(unit);
         let kind = world
             .units()
             .kinds()
@@ -229,13 +229,13 @@ impl Program for BuildProgram {
     }
 
     fn run(&self, world: &mut World, unit: u32) {
-        let row = usize::try_from(unit).unwrap_or(usize::MAX);
+        let row = crate::math::index::row(unit);
         let home = home_of(world, row);
         let Some(structure) = crate::mandate::next_unfinished_target(world, home) else {
             idle_at_home(world, unit);
             return;
         };
-        let at = usize::try_from(structure).unwrap_or(usize::MAX);
+        let at = crate::math::index::row(structure);
         let Some(site) = world.structures().positions().get(at).copied() else {
             idle_at_home(world, unit);
             return;
@@ -260,10 +260,11 @@ impl Program for BuildProgram {
             .get(at)
             .copied()
             .and_then(crate::tables::StructureKind::from_id);
-        let Some(kind) = kind else {
+        // A wall has no structure row, and no row is one
+        // ([`World::structure_max_hp`]).
+        let Some(full) = kind.and_then(|kind| world.structure_max_hp(kind)) else {
             return;
         };
-        let full = world.structure_max_hp(kind);
         let per_tick = world.rules().build_hp_per_tick();
         let grown = world
             .structures()
@@ -277,7 +278,7 @@ impl Program for BuildProgram {
         if let Some(slot) = world.structures_mut().hit_points_mut().get_mut(at) {
             *slot = Hp::new(grown);
         }
-        if grown >= full.raw() && full.raw() > 0 {
+        if grown >= full.raw() {
             world.finish_structure(StructureId::new(structure));
         }
     }
@@ -289,7 +290,7 @@ impl Program for MineProgram {
     }
 
     fn run(&self, world: &mut World, unit: u32) {
-        let row = usize::try_from(unit).unwrap_or(usize::MAX);
+        let row = crate::math::index::row(unit);
         let tick = world.tick();
         let home = home_of(world, row);
         // 1. Finish the voxel the drone is digging, if its clock has run out.
@@ -365,12 +366,7 @@ impl Program for MineProgram {
             .copied()
             .unwrap_or([Fx::ZERO; 3]);
         if within(here, stand, world.arrive_radius()) {
-            let ms = world
-                .rules()
-                .message()
-                .economy
-                .as_ref()
-                .map_or(0, |economy| economy.mining_ms_per_voxel);
+            let ms = world.rules().mining_ms_per_voxel();
             let due = tick
                 .raw()
                 .saturating_add(Ms::new(ms).to_ticks_ceil().max(1));
@@ -389,7 +385,7 @@ impl Program for SalvageProgram {
     }
 
     fn run(&self, world: &mut World, unit: u32) {
-        let row = usize::try_from(unit).unwrap_or(usize::MAX);
+        let row = crate::math::index::row(unit);
         let home = home_of(world, row);
         let carried = world
             .units()
@@ -409,7 +405,7 @@ impl Program for SalvageProgram {
             idle_at_home(world, unit);
             return;
         };
-        let at = usize::try_from(wreck).unwrap_or(usize::MAX);
+        let at = crate::math::index::row(wreck);
         let Some(site) = world.wrecks().positions().get(at).copied() else {
             idle_at_home(world, unit);
             return;
@@ -445,7 +441,7 @@ impl Program for ScoutProgram {
     }
 
     fn run(&self, world: &mut World, unit: u32) {
-        let row = usize::try_from(unit).unwrap_or(usize::MAX);
+        let row = crate::math::index::row(unit);
         let home = home_of(world, row);
         let here = world
             .units()
@@ -563,7 +559,7 @@ fn home_of(world: &World, row: usize) -> BeaconId {
 
 /// Walk to the home beacon and stop there.
 fn idle_at_home(world: &mut World, unit: u32) {
-    let row = usize::try_from(unit).unwrap_or(usize::MAX);
+    let row = crate::math::index::row(unit);
     let home = home_of(world, row);
     let Ok(at) = usize::try_from(home.raw()) else {
         return;
@@ -587,7 +583,7 @@ fn idle_at_home(world: &mut World, unit: u32) {
 /// Take the ore voxel the drone has been digging and put its yield in the
 /// drone's hands.
 fn finish_dig(world: &mut World, unit: u32) {
-    let row = usize::try_from(unit).unwrap_or(usize::MAX);
+    let row = crate::math::index::row(unit);
     if let Some(slot) = world.units_mut().busy_until_mut().get_mut(row) {
         *slot = NO_WORK;
     }
@@ -620,12 +616,26 @@ fn finish_dig(world: &mut World, unit: u32) {
     };
     // The voxel goes through the edit queue like every other write, so its
     // chunk is marked and its digest refreshed in the same tick (AGENTS.md
-    // §4.8's fourth place).
-    if !world.request_voxel_edit(crate::voxels::VoxelEdit::Set {
+    // §4.8's fourth place). The dig carries the mining drone's seat, because
+    // a dig is among the edits whose seat collapse credits (decisions-log item
+    // 144 (2)).
+    let seat = world.units().seats().get(row).copied().map(SeatId::new);
+    match world.file_voxel_edit(crate::voxels::VoxelEdit::Set {
         at: ore,
         material: crate::voxels::Material::AIR,
+        by: seat,
     }) {
-        return;
+        Ok(()) => {}
+        // Mining's back-off: a full queue, which the queue's sizing makes
+        // unreachable in a legal world (S2's plan, E5), leaves the voxel for
+        // the drone's next tick rather than dropping the dig.
+        Err(crate::world::FileRefused::QueueFull { .. }) => return,
+        // The dig names a voxel the store addressed, inside a tick: the
+        // other two refusals cannot reach the tick's own door, and if one
+        // did the voxel would still be there for the next tick.
+        Err(crate::world::FileRefused::OffTheMap | crate::world::FileRefused::MidTick) => {
+            return;
+        }
     }
     let carried = world
         .units()
@@ -640,7 +650,7 @@ fn finish_dig(world: &mut World, unit: u32) {
 
 /// Carry a load home and credit it, or keep walking.
 fn deliver(world: &mut World, unit: u32, kind: EventKind) {
-    let row = usize::try_from(unit).unwrap_or(usize::MAX);
+    let row = crate::math::index::row(unit);
     let home = home_of(world, row);
     let Ok(at) = usize::try_from(home.raw()) else {
         return;

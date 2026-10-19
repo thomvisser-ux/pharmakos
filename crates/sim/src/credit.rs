@@ -100,8 +100,10 @@ pub fn apportion(total: i64, shares: &[(u8, i32)], out: &mut Vec<(u8, i64)>) {
     let mut topped: [bool; crate::tables::CREDIT_SLOTS] = [false; crate::tables::CREDIT_SLOTS];
     while left > 0 {
         let mut best: Option<(i64, u8, usize)> = None;
-        for (slot, (seat, amount)) in shares.iter().enumerate() {
-            if topped.get(slot).copied().unwrap_or(true) {
+        // The flags walk with the shares, one per slot, so no read of them can
+        // miss (S2's plan, E7).
+        for ((slot, (seat, amount)), done) in shares.iter().enumerate().zip(topped) {
+            if done {
                 continue;
             }
             let exact = total.saturating_mul(i64::from(*amount));
@@ -139,7 +141,7 @@ pub(crate) fn settle(world: &mut World, shares: &mut Vec<(u8, i32)>, split: &mut
     }
     let tick = world.tick();
     let mut at: usize = 0;
-    while at < usize::try_from(world.credit().len()).unwrap_or(0) {
+    while at < crate::math::index::row(world.credit().len()) {
         let Some(asset) = world.credit().assets().get(at).copied() else {
             break;
         };
@@ -222,7 +224,8 @@ fn asset_state(world: &World, id: AssetId) -> Option<AssetState> {
                 .and_then(crate::tables::StructureKind::from_id)?;
             Some(AssetState {
                 hp: world.structures().hit_points().get(row)?.raw(),
-                max_hp: world.structure_max_hp(kind).raw(),
+                // A wall has no structure row, and no row is one.
+                max_hp: world.structure_max_hp(kind)?.raw(),
                 cost: world.structure_cost(kind),
                 at: world.structures().positions().get(row).copied()?,
             })

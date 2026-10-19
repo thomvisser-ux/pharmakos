@@ -209,7 +209,10 @@ fn play_segment(runner: &mut Runner, feed: &mut Vec<Event>) {
     assert!(runner.begin_push(), "the Push begins");
     feed.extend_from_slice(runner.events());
     runner.clear_events();
-    while runner.step().is_some_and(|report| !report.segment_ended) {
+    while runner
+        .play_tick()
+        .is_some_and(|report| !report.segment_ended)
+    {
         feed.extend_from_slice(runner.events());
         runner.clear_events();
     }
@@ -395,12 +398,19 @@ fn value_follows_condition_at_the_audit_and_at_the_recycle_refund() {
     let before = world.held_value(seat);
     let full = world.beacon_max_hp(core);
     let half = Hp::new(full.raw().checked_div(2).unwrap_or(0));
-    assert!(world.request_damage(DamageOrder {
-        target: DamageTarget::Beacon(core),
-        amount: half,
-        by: SeatId::new(1),
-    }));
-    world.step(&mut pharmakos_sim::Enc::with_capacity(8 * 1024));
+    assert!(
+        world
+            .request_damage(DamageOrder {
+                target: DamageTarget::Beacon(core),
+                amount: pharmakos_sim::math::quantity::Damage::new(i64::from(half.raw())).unwrap(),
+                by: SeatId::new(1),
+                source: None,
+            })
+            .is_ok()
+    );
+    world
+        .step(&mut pharmakos_sim::Enc::with_capacity(8 * 1024))
+        .unwrap();
     let after = world.held_value(seat);
     let lost = before.raw().saturating_sub(after.raw());
     let expected = value_of(world.beacon_cost(), full.raw(), full.raw()).raw()
@@ -491,7 +501,11 @@ fn paid_means_yours_survives_a_mid_build_death() {
     // Give the core a Build target one voxel along, so the drones reach it.
     world.set_writ(core, MandateKind::Build);
     let anchor = offset(at, 1);
-    assert!(world.add_target(core, StructureKind::Generator.id(), anchor));
+    assert!(
+        world
+            .add_target(core, StructureKind::Generator.id(), anchor)
+            .is_ok()
+    );
     let cost = world.structure_cost(StructureKind::Generator);
     let purse = treasury(&world, seat);
 
@@ -501,7 +515,7 @@ fn paid_means_yours_survives_a_mid_build_death() {
     // Step until the Quartermaster has paid for the target.
     let mut queued: Option<StructureId> = None;
     for _ in 0..200 {
-        if runner.step().is_none() {
+        if runner.play_tick().is_none() {
             break;
         }
         for event in runner.events() {
@@ -543,6 +557,7 @@ fn paid_means_yours_survives_a_mid_build_death() {
         runner
             .world()
             .structure_max_hp(StructureKind::Generator)
+            .unwrap()
             .raw(),
     );
     assert!(
@@ -553,12 +568,18 @@ fn paid_means_yours_survives_a_mid_build_death() {
     // Kill it mid-build. Nothing comes back: "there is no refund if it dies
     // mid-build" (item 23).
     let before = treasury(runner.world(), seat);
-    assert!(runner.world_mut().request_damage(DamageOrder {
-        target: DamageTarget::Structure(structure),
-        amount: Hp::new(1_000_000),
-        by: SeatId::new(1),
-    }));
-    runner.step();
+    assert!(
+        runner
+            .world_mut()
+            .request_damage(DamageOrder {
+                target: DamageTarget::Structure(structure),
+                amount: pharmakos_sim::math::quantity::Damage::new(i64::from(1_000_000)).unwrap(),
+                by: SeatId::new(1),
+                source: None,
+            })
+            .is_ok()
+    );
+    runner.play_tick();
     assert_eq!(
         treasury(runner.world(), seat).raw(),
         before.raw(),
@@ -615,7 +636,7 @@ fn a_dormant_beacon_powers_down_everything_homed_to_it() {
         }
     }
     runner.world_mut().set_dormant(core, true);
-    runner.step();
+    runner.play_tick();
     let world = runner.world();
     assert!(
         dormant(world, core),
@@ -734,7 +755,7 @@ fn the_brownout_order_is_priority_then_distance_then_the_core_last() {
     );
 
     assert!(runner.begin_push(), "the Push begins");
-    runner.step();
+    runner.play_tick();
     let world = runner.world();
 
     let (supply, draw) = supply_and_draw(world, seat);
@@ -797,8 +818,8 @@ fn a_placed_beacon_adds_no_draw() {
         "the Pushes begin"
     );
     for tick in 0..40 {
-        plain.step();
-        placed.step();
+        plain.play_tick();
+        placed.play_tick();
         assert_eq!(
             supply_and_draw(placed.world(), seat),
             supply_and_draw(plain.world(), seat),
@@ -824,7 +845,7 @@ fn a_placed_beacon_adds_no_draw() {
     let mut feed: Vec<Event> = Vec::new();
     assert!(runner.begin_push(), "the Push begins");
     for _ in 0..40 {
-        runner.step();
+        runner.play_tick();
         feed.extend_from_slice(runner.events());
         runner.clear_events();
     }
@@ -845,6 +866,10 @@ fn a_placed_beacon_adds_no_draw() {
 }
 
 #[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one case per construct or step, each the whole of what it checks; split, the halves would share every fixture"
+)]
 fn a_shed_core_revives_once_its_load_leaves_the_margin_spare() {
     // Item 113 (5): a shed core brings its deep-bore surplus back with it, so
     // its revival is weighed with that surplus credited. Spec section 5 loses
@@ -891,7 +916,7 @@ fn a_shed_core_revives_once_its_load_leaves_the_margin_spare() {
 
     let mut feed: Vec<Event> = Vec::new();
     assert!(runner.begin_push(), "the Push begins");
-    runner.step();
+    runner.play_tick();
     feed.extend_from_slice(runner.events());
     runner.clear_events();
     assert!(
@@ -907,13 +932,20 @@ fn a_shed_core_revives_once_its_load_leaves_the_margin_spare() {
     let mut dark_within_supply = false;
     let mut revived_at: Option<i32> = None;
     while let Some(post) = posts.pop() {
-        assert!(runner.world_mut().request_damage(DamageOrder {
-            target: DamageTarget::Structure(post),
-            amount: Hp::new(1_000_000),
-            by: seat,
-        }));
+        assert!(
+            runner
+                .world_mut()
+                .request_damage(DamageOrder {
+                    target: DamageTarget::Structure(post),
+                    amount: pharmakos_sim::math::quantity::Damage::new(i64::from(1_000_000))
+                        .unwrap(),
+                    by: seat,
+                    source: None,
+                })
+                .is_ok()
+        );
         load = load.saturating_sub(grid.post);
-        runner.step();
+        runner.play_tick();
         feed.extend_from_slice(runner.events());
         runner.clear_events();
         let spare = grid.surplus.saturating_sub(load);
@@ -944,7 +976,7 @@ fn a_shed_core_revives_once_its_load_leaves_the_margin_spare() {
 
     // And it stays lit: no shed at the next settle, nor at any after it.
     for _ in 0..40 {
-        runner.step();
+        runner.play_tick();
         feed.extend_from_slice(runner.events());
         runner.clear_events();
     }
@@ -1003,7 +1035,7 @@ fn a_beacon_whose_shed_relieves_nothing_is_skipped_and_stays_lit() {
     let mut feed: Vec<Event> = Vec::new();
     assert!(runner.begin_push(), "the Push begins");
     for _ in 0..20 {
-        runner.step();
+        runner.play_tick();
         feed.extend_from_slice(runner.events());
         runner.clear_events();
     }
@@ -1049,7 +1081,7 @@ fn a_beacon_whose_shed_relieves_nothing_is_skipped_and_stays_lit() {
     let mut feed: Vec<Event> = Vec::new();
     assert!(runner.begin_push(), "the Push begins");
     for _ in 0..20 {
-        runner.step();
+        runner.play_tick();
         feed.extend_from_slice(runner.events());
         runner.clear_events();
     }
@@ -1122,7 +1154,7 @@ fn a_beacon_whose_shed_would_deepen_the_deficit_is_skipped() {
     let mut feed: Vec<Event> = Vec::new();
     assert!(runner.begin_push(), "the Push begins");
     for tick in 0..20 {
-        runner.step();
+        runner.play_tick();
         feed.extend_from_slice(runner.events());
         runner.clear_events();
         let (supply, draw) = supply_and_draw(runner.world(), seat);
@@ -1219,7 +1251,7 @@ fn raise_fixture(raised_posts: i32, other_posts: i32) -> Raise {
     runner.clear_events();
     let mut committed: Option<u32> = None;
     for _ in 0..600 {
-        runner.step();
+        runner.play_tick();
         let events = runner.events().to_vec();
         runner.clear_events();
         if committed.is_none() {
@@ -1385,7 +1417,7 @@ fn settle_once_with_dark(world: World, dark: &[BeaconId]) -> (Runner, Vec<Event>
         runner.world_mut().set_dormant(*beacon, true);
     }
     runner.clear_events();
-    runner.step();
+    runner.play_tick();
     let feed = runner.events().to_vec();
     runner.clear_events();
     (runner, feed)
@@ -1436,7 +1468,7 @@ fn a_revival_the_swap_undoes_in_one_settle_reports_nothing() {
     let (supply, draw) = supply_and_draw(runner.world(), seat);
     assert!(draw.raw() <= supply.raw(), "{supply:?} {draw:?}");
     for _ in 0..20 {
-        runner.step();
+        runner.play_tick();
         assert!(
             !runner.events().iter().any(|event| matches!(
                 event.kind,
@@ -1582,7 +1614,7 @@ fn the_commander_walks_through_a_blackout_drawing_nothing() {
     // Lit: the commander is in the draw.
     let mut lit = Runner::new(world_with(varied(), &[20_000]));
     assert!(lit.begin_push(), "the Push begins");
-    lit.step();
+    lit.play_tick();
     let (_, draw) = supply_and_draw(lit.world(), seat);
     assert_eq!(
         draw.raw(),
@@ -1610,7 +1642,7 @@ fn the_commander_walks_through_a_blackout_drawing_nothing() {
     let row = usize::try_from(commander.raw()).unwrap_or(usize::MAX);
     let start = runner.world().units().positions().get(row).copied();
     for tick in 0..40 {
-        runner.step();
+        runner.play_tick();
         let world = runner.world();
         assert!(dormant(world, core), "tick {tick}: the core stays dark");
         assert_eq!(
@@ -1663,7 +1695,7 @@ fn a_beacons_key_core_supplies_exactly_its_base() {
     let grid = Grid::of(&rules);
     let mut runner = Runner::new(world(&[20_000]));
     assert!(runner.begin_push(), "the Push begins");
-    runner.step();
+    runner.play_tick();
     assert_eq!(
         supply_and_draw(runner.world(), SeatId::new(0)),
         (Kw::new(grid.surplus), Kw::new(grid.starting_load())),
@@ -1708,7 +1740,7 @@ fn the_dark_load_is_what_the_brownout_took_off_the_grid() {
         placed.push(beacon);
     }
     assert!(runner.begin_push(), "the Push begins");
-    runner.step();
+    runner.play_tick();
     let world = runner.world();
     let dark = placed
         .iter()
@@ -1756,7 +1788,7 @@ fn the_dark_load_is_what_the_brownout_took_off_the_grid() {
     let core = core_of(runner.world(), seat);
     assert!(runner.begin_push(), "the Push begins");
     runner.world_mut().set_dormant(core, true);
-    runner.step();
+    runner.play_tick();
     let world = runner.world();
     assert!(dormant(world, core), "the fixture held");
     let surplus = grid
@@ -1790,13 +1822,13 @@ fn the_autocannon_is_never_shed() {
     // the grid: it adds nothing to the draw, so it can never be the thing that
     // browns a grid out, and nothing ever powers it down.
     assert!(runner.begin_push(), "the Push begins");
-    runner.step();
+    runner.play_tick();
     let (_, before) = supply_and_draw(runner.world(), seat);
     runner
         .world_mut()
         .raise_structure(seat, core, StructureKind::Autocannon, offset(at, 1))
         .unwrap_or_else(|| panic!("room for a structure"));
-    runner.step();
+    runner.play_tick();
     let (_, after) = supply_and_draw(runner.world(), seat);
     assert_eq!(
         after, before,
@@ -1828,14 +1860,14 @@ fn only_one_generator_per_vent_adds_to_the_supply() {
     let (first, second) = vent_stands(runner.world(), at);
 
     assert!(runner.begin_push(), "the Push begins");
-    runner.step();
+    runner.play_tick();
     let (bare, _) = supply_and_draw(runner.world(), seat);
 
     runner
         .world_mut()
         .raise_structure(seat, core, StructureKind::Generator, first)
         .unwrap_or_else(|| panic!("room for a structure"));
-    runner.step();
+    runner.play_tick();
     let (tapped, _) = supply_and_draw(runner.world(), seat);
     assert!(
         tapped.raw() > bare.raw(),
@@ -1846,7 +1878,7 @@ fn only_one_generator_per_vent_adds_to_the_supply() {
         .world_mut()
         .raise_structure(seat, core, StructureKind::Generator, second)
         .unwrap_or_else(|| panic!("room for a structure"));
-    runner.step();
+    runner.play_tick();
     let (twice, _) = supply_and_draw(runner.world(), seat);
     assert_eq!(
         twice, tapped,
@@ -1935,7 +1967,7 @@ fn a_generator_on_a_tapped_vent_does_not_buy_its_beacon_a_revival() {
     let mut feed: Vec<Event> = Vec::new();
     assert!(runner.begin_push(), "the Push begins");
     for tick in 0..20 {
-        runner.step();
+        runner.play_tick();
         feed.extend_from_slice(runner.events());
         runner.clear_events();
         let (supply, draw) = supply_and_draw(runner.world(), seat);
@@ -1982,7 +2014,11 @@ fn one_anchor_is_one_building() {
         !world.anchor_is_claimed(seat, anchor),
         "bare ground is nobody's yet"
     );
-    assert!(world.add_target(core, StructureKind::Generator.id(), anchor));
+    assert!(
+        world
+            .add_target(core, StructureKind::Generator.id(), anchor)
+            .is_ok()
+    );
     assert!(
         world.anchor_is_claimed(seat, anchor),
         "a Build target claims the ground it names"
@@ -2146,11 +2182,15 @@ fn no_beacon_starves_another_within_a_band() {
     world.set_writ(second, MandateKind::Build);
     for (beacon, first) in [(core, 1_i16), (second, 8)] {
         for step in 0..3_i16 {
-            assert!(world.add_target(
-                beacon,
-                StructureKind::Generator.id(),
-                offset(at, first.saturating_add(step))
-            ));
+            assert!(
+                world
+                    .add_target(
+                        beacon,
+                        StructureKind::Generator.id(),
+                        offset(at, first.saturating_add(step))
+                    )
+                    .is_ok()
+            );
         }
     }
     let price = world.structure_cost(StructureKind::Generator);
@@ -2168,7 +2208,9 @@ fn no_beacon_starves_another_within_a_band() {
     let mut cursors: Vec<u32> = Vec::new();
     for _ in 0..60 {
         runner.world_mut().set_treasury(seat, price);
-        let Some(report) = runner.step() else { break };
+        let Some(report) = runner.play_tick() else {
+            break;
+        };
         for event in runner.events() {
             if event.kind == EventKind::StructureQueued
                 && let Some(subject) = event.subject
@@ -2323,7 +2365,9 @@ impl HeldOrder {
         // clears them.
         world.set_writ(core, MandateKind::Build);
         assert!(
-            world.add_target(core, StructureKind::Generator.id(), vent),
+            world
+                .add_target(core, StructureKind::Generator.id(), vent)
+                .is_ok(),
             "the Generator's target fits"
         );
         let survey = world
@@ -2370,7 +2414,7 @@ impl HeldOrder {
             first_supply: Kw::ZERO,
         };
         let mut first = true;
-        while let Some(report) = self.runner.step() {
+        while let Some(report) = self.runner.play_tick() {
             let events = self.runner.events().to_vec();
             self.runner.clear_events();
             let world = self.runner.world();
@@ -2496,7 +2540,7 @@ fn a_survey_beacon_fields_its_scout_count_and_stops_there() {
     let [cx, cy] = [column(centre[0]), column(centre[1])];
     let area = ColumnBox::new([cx - 4, cy - 4], [cx + 4, cy + 4]).expect("a box the right way out");
     assert!(
-        world.add_area(core, AreaKind::Probe, centre, area),
+        world.add_area(core, AreaKind::Probe, centre, area).is_ok(),
         "the probe area fits"
     );
 
@@ -2623,12 +2667,17 @@ fn kill_credit_counts_only_other_seats_and_clamps_to_the_hit_points_removed() {
     let mut enc = pharmakos_sim::Enc::with_capacity(8 * 1024);
 
     // A seat's own damage credits nobody.
-    assert!(world.request_damage(DamageOrder {
-        target: DamageTarget::Beacon(core),
-        amount: Hp::new(100),
-        by: owner,
-    }));
-    world.step(&mut enc);
+    assert!(
+        world
+            .request_damage(DamageOrder {
+                target: DamageTarget::Beacon(core),
+                amount: pharmakos_sim::math::quantity::Damage::new(i64::from(100)).unwrap(),
+                by: owner,
+                source: None,
+            })
+            .is_ok()
+    );
+    world.step(&mut enc).unwrap();
     assert!(
         world.credit().is_empty(),
         "a seat does not take credit for hurting its own"
@@ -2636,12 +2685,20 @@ fn kill_credit_counts_only_other_seats_and_clamps_to_the_hit_points_removed() {
 
     // Another seat's does, clamped to what was there to take.
     let full = world.beacon_max_hp(core).raw();
-    assert!(world.request_damage(DamageOrder {
-        target: DamageTarget::Beacon(core),
-        amount: Hp::new(full.saturating_mul(10)),
-        by: SeatId::new(1),
-    }));
-    world.step(&mut enc);
+    assert!(
+        world
+            .request_damage(DamageOrder {
+                target: DamageTarget::Beacon(core),
+                amount: pharmakos_sim::math::quantity::Damage::new(i64::from(
+                    full.saturating_mul(10)
+                ))
+                .unwrap(),
+                by: SeatId::new(1),
+                source: None,
+            })
+            .is_ok()
+    );
+    world.step(&mut enc).unwrap();
     // The beacon died on that tick, so the counters were settled and cleared.
     assert!(
         world.credit().is_empty(),
@@ -2930,4 +2987,17 @@ fn target_dir() -> PathBuf {
         return PathBuf::from(dir);
     }
     repo_root().join("target")
+}
+
+/// One whole tick of a Push, or `None` outside one; a refused tick is this
+/// file's failure report.
+trait PlayTick {
+    fn play_tick(&mut self) -> Option<pharmakos_sim::runner::TickReport>;
+}
+
+impl PlayTick for Runner {
+    fn play_tick(&mut self) -> Option<pharmakos_sim::runner::TickReport> {
+        self.step()
+            .unwrap_or_else(|error| panic!("the tick runs: {error}"))
+    }
 }

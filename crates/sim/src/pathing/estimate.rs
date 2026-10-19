@@ -103,6 +103,7 @@ impl Fog<'_> {
             Fog::Unknown(mask) => usize::try_from(node)
                 .ok()
                 .and_then(|index| mask.get(index).copied())
+                // E7: rule: a column the fog mask does not cover is not unknown
                 .unwrap_or(false),
         }
     }
@@ -180,6 +181,7 @@ pub fn fog_price(cost: i32, numerator: i32, denominator: i32) -> i32 {
         return cost;
     }
     let scaled = i64::from(cost).saturating_mul(i64::from(numerator));
+    // E7: rule: item 61's fog price saturates at the most a cost holds
     i32::try_from(scaled / i64::from(denominator)).unwrap_or(i32::MAX)
 }
 
@@ -248,18 +250,14 @@ pub struct Speed {
 impl Speed {
     /// The three rows for one unit kind.
     ///
-    /// `None` when the kind has no `cost_per_second` row, which is a rules-table
-    /// mistake rather than a game state.
+    /// Every kind has one: the rules loader refuses a table missing a row.
     #[must_use]
-    pub fn of_kind(
-        rules: &crate::rules::RulesTable,
-        kind: crate::tables::UnitKind,
-    ) -> Option<Speed> {
-        Some(Speed {
-            cost_per_second: rules.cost_per_second(kind)?,
+    pub const fn of_kind(rules: &crate::rules::RulesTable, kind: crate::tables::UnitKind) -> Speed {
+        Speed {
+            cost_per_second: rules.cost_per_second(kind),
             fog_numerator: rules.fog_cost_numerator(),
             fog_denominator: rules.fog_cost_denominator(),
-        })
+        }
     }
 
     /// The commander's speed, which is what the editor renders a route at until

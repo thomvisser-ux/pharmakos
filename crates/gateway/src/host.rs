@@ -48,13 +48,14 @@
 //!
 //! # A degenerate lobby setting is refused here
 //!
-//! Decisions-log item 102 (8): the sim **clamps** a zero or negative segment
-//! length and a round limit of zero, because a default snapshot must stay
-//! restorable and a restore has nobody to complain to. The gateway is where
-//! there *is* somebody to complain to, so [`Host::check_settings`] refuses one
-//! with [`crate::error::Code::InvalidArgument`] before a world is built —
-//! before, rather than after, so the refusal names the setting the lobby typed
-//! rather than the number the sim silently corrected it to.
+//! Decisions-log item 102 (8): a zero or negative segment length and a round
+//! limit of zero are refused. Since S2's `base` lane the sim refuses them too,
+//! where a world is built (`MatchSettings::validate`, S2's plan, E7), rather
+//! than clamping them; only a snapshot's restore still floors a ladder entry,
+//! so a default snapshot stays restorable. The gateway is where there *is*
+//! somebody to complain to, so [`Host::check_settings`] refuses one with
+//! [`crate::error::Code::InvalidArgument`] before a world is built, naming the
+//! setting the lobby typed.
 
 use std::path::{Path, PathBuf};
 
@@ -62,12 +63,14 @@ use pharmakos_proto::gp::v1::Voxel;
 use pharmakos_sim::interpreter::Plan;
 use pharmakos_sim::math::quantity::MS_PER_TICK;
 use pharmakos_sim::rules::RulesTable;
-use pharmakos_sim::runner::{MatchPhase, MatchSettings, Runner, TickReport};
+use pharmakos_sim::runner::{
+    Layout, LayoutRefused, MatchPhase, MatchSettings, PhasedTick, Runner, TickReport,
+};
 use pharmakos_sim::sight::Spheres;
 use pharmakos_sim::snapshot::Snapshot;
 use pharmakos_sim::tables::SeatId;
 use pharmakos_sim::voxels::VoxelEdit;
-use pharmakos_sim::world::{DamageOrder, World, WorldConfig};
+use pharmakos_sim::world::{DamageOrder, FileRefused, World, WorldConfig};
 
 use crate::error::Error;
 use crate::fog::Vision;
@@ -265,17 +268,15 @@ impl Host {
         )))
     }
 
-    /// Refuse a lobby setting the sim would silently correct.
+    /// Refuse a degenerate lobby setting, naming it, before the sim does.
     ///
     /// Item 102 (8). Three refusals, each naming what was asked for:
     ///
-    /// * a **round limit of zero** — a match with no rounds is not a match, and
-    ///   the sim floors it at one;
+    /// * a **round limit of zero** — a match with no rounds is not a match;
     /// * a **segment length at or below zero** — a Push that closes on its
     ///   first tick;
     /// * a **segment length under one tick** (50 ms) — the same thing said
-    ///   less obviously, and the case the clamp exists for. A lobby that asks
-    ///   for a 10 ms round gets told, rather than getting a 50 ms one.
+    ///   less obviously. A lobby that asks for a 10 ms round gets told.
     ///
     /// An **empty** length list is not degenerate and is not refused: item 40
     /// says an empty list means the rules table's own ladder.
@@ -289,6 +290,13 @@ impl Host {
             return Err(Error::invalid(
                 "a match runs at least one round: the round limit is 0",
             ));
+        }
+        if settings.segment_lengths_ms.len() > pharmakos_sim::rules::MAX_SEGMENT_LENGTHS {
+            return Err(Error::invalid(format!(
+                "the segment ladder has {} entries, past the {} a match carries",
+                settings.segment_lengths_ms.len(),
+                pharmakos_sim::rules::MAX_SEGMENT_LENGTHS
+            )));
         }
         for (index, length) in settings.segment_lengths_ms.iter().enumerate() {
             if *length <= 0 {
@@ -454,8 +462,109 @@ impl Host {
     /// One tick of the Push, or `None` outside one.
     ///
     /// **One of the three places this crate steps a match.**
-    pub fn step(&mut self) -> Option<TickReport> {
-        self.runner.step()
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::Internal`] while [`Host::phased_tick`] left a tick
+    /// open between phases (`MidTick`, S2's plan, E30), and when the clock
+    /// has no tick after this one: both are the host's to have avoided.
+    pub fn step(&mut self) -> Result<Option<TickReport>, Error> {
+        self.runner.step().map_err(|refused| {
+            Error::internal(format!("this match would not step a whole tick: {refused}"))
+        })
+    }
+
+    /// One tick of the Push **phase by phase**, for the walled harness that
+    /// times each phase from outside (S2's plan, E30), or `None` outside a
+    /// Push.
+    ///
+    /// The tick is the sim's own type-state, [`PhasedTick`]: it holds this
+    /// host's mutable borrow for the tick's length, runs one phase per call
+    /// and hands control back between them, so nothing holding it can reach
+    /// the host's whole-tick step, its save check or its filing seams. A
+    /// `PhasedTick` dropped mid-tick leaves the tick open: [`Host::step`],
+    /// [`Host::check_savable`] and the filing seams answer `MidTick` until a
+    /// later call to this resumes the tick and finishes it.
+    ///
+    /// **Host-side, and reached by no handler and no dispatch arm**
+    /// (`tests/confinement.rs`): only the surface's driver, for
+    /// `crates/bench`, and tests call it.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::Internal`] when the clock has no tick after this
+    /// one.
+    pub fn phased_tick(&mut self) -> Result<Option<PhasedTick<'_>>, Error> {
+        self.runner.phased_tick().map_err(|refused| {
+            Error::internal(format!("this match would not open a tick: {refused}"))
+        })
+    }
+
+    /// Place a layout of beacons, their mandates and their starting units, in
+    /// the lobby: once, before the first Lull is planned against, so the
+    /// layout is an input of the match like its seed (S2's plan, E30).
+    ///
+    /// The walled harness's gate load is reached this way, because real play
+    /// cannot reach it inside one segment; nothing else calls it, and **no
+    /// handler and no dispatch arm reaches it** (`tests/confinement.rs`).
+    ///
+    /// **A laid-out match leaves no replayable private replay.** The replay's
+    /// inputs (`match.json`'s seed, settings and rules hash, and the sealed
+    /// playbooks; [`crate::cache`]) do not carry the layout, so replaying them
+    /// plays a match without it. The harness that lays a match out writes no
+    /// cache, and a host that did would be writing a replay of a different
+    /// match.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::PhaseClosed`] outside the lobby -- a match that
+    /// has stepped, sealed or been laid out already, which the sim reads from
+    /// the world rather than a flag, so a resumed save cannot be laid out twice
+    /// -- and
+    /// [`crate::error::Code::InvalidArgument`] for a layout the world refuses
+    /// (a seat it has not got, a site off the map, no room).
+    pub fn seed_layout(&mut self, layout: &Layout) -> Result<(), Error> {
+        self.runner
+            .seed_layout(layout)
+            .map_err(|refused| match refused {
+                LayoutRefused::NotInTheLobby | LayoutRefused::AfterASeal => Error::phase_closed(format!(
+                    "a layout is placed in the lobby, before the first Lull is planned: {refused}"
+                )),
+                LayoutRefused::Commander
+                | LayoutRefused::NoSuchSeat { .. }
+                | LayoutRefused::OffTheMap { .. }
+                | LayoutRefused::NoRoom { .. } => {
+                    Error::invalid(format!("this match would not take the layout: {refused}"))
+                }
+            })
+    }
+
+    /// Whether the match can be saved now: refused while a tick is open
+    /// between phases, and while either queue holds an order a host filed
+    /// that no tick has applied, because a save holds no queue and would lose
+    /// the order (S2's plan, E2 and E30). The surface's save path asks this
+    /// before it writes a save.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::error::Code::Internal`], always: both are the host's to have
+    /// avoided.
+    pub fn check_savable(&self) -> Result<(), Error> {
+        let world = self.runner.world();
+        if world.tick_is_open() {
+            return Err(Error::internal(
+                "a match is saved between ticks, and this one has a tick open between two of its \
+                 phases",
+            ));
+        }
+        let pending = world.pending_orders();
+        if pending > 0 {
+            return Err(Error::internal(format!(
+                "a save holds no queued order, and {pending} the host filed are still waiting for \
+                 the next tick"
+            )));
+        }
+        Ok(())
     }
 
     /// End the recap and open the next Lull. Returns false when the runner was
@@ -576,8 +685,7 @@ impl Host {
     // The test seam: a host may file this tick's orders, and no wire method may
     // -----------------------------------------------------------------------
 
-    /// File a voxel edit for this tick's voxel phase. `false` when the queue
-    /// is full.
+    /// File a voxel edit for the next tick's voxel phase.
     ///
     /// **A host-side seam, reached by no wire method, and that is the whole of
     /// its design.** Three of T16a's acceptance lines are about what a seat
@@ -595,17 +703,26 @@ impl Host {
     /// dispatch arm reaches either. **`gamectl`'s scenario runner must not
     /// grow a dependency on them without the owner's word**: a scenario that
     /// edits voxels is a scenario-format question, which is T3's.
-    pub fn file_voxel_edit(&mut self, edit: VoxelEdit) -> bool {
+    ///
+    /// # Errors
+    ///
+    /// The sim's typed [`FileRefused`] (S2's plan, E5): the host's share of
+    /// the queue is full, a tick is open between phases, or the edit names no
+    /// voxel of the map.
+    pub fn file_voxel_edit(&mut self, edit: VoxelEdit) -> Result<(), FileRefused> {
         self.runner.world_mut().request_voxel_edit(edit)
     }
 
-    /// File a damage order for this tick's combat phase. `false` when the
-    /// queue is full.
+    /// File a damage order for the next tick's combat phase.
     ///
     /// As [`Host::file_voxel_edit`], and for the same reason: elimination is a
     /// consequence of something dying, and nothing on `main` kills anything in
     /// a hosted match.
-    pub fn file_damage(&mut self, order: DamageOrder) -> bool {
+    ///
+    /// # Errors
+    ///
+    /// As [`Host::file_voxel_edit`].
+    pub fn file_damage(&mut self, order: DamageOrder) -> Result<(), FileRefused> {
         self.runner.world_mut().request_damage(order)
     }
 }
@@ -697,7 +814,7 @@ mod tests {
 
     #[test]
     fn a_degenerate_lobby_setting_is_refused_here_rather_than_clamped() {
-        // Item 102 (8): the sim clamps, because a restore has nobody to tell.
+        // Item 102 (8): the sim refuses too (E7); the lobby names the setting.
         // The lobby has somebody to tell.
         for (settings, expected) in [
             (
@@ -874,7 +991,7 @@ mod tests {
         assert!(host.begin_push());
         assert_eq!(host.runner().phase(), MatchPhase::Push);
         let mut ticks = 0_u32;
-        while let Some(report) = host.step() {
+        while let Some(report) = host.step().expect("a whole tick") {
             ticks = ticks.saturating_add(1);
             if report.segment_ended {
                 break;
@@ -886,5 +1003,189 @@ mod tests {
         assert_eq!(host.runner().phase(), MatchPhase::Lull);
         assert_eq!(host.runner().round(), 2);
         host.refresh_routes().expect("the graph rebuilds");
+    }
+}
+
+/// S2's plan, E2 and E30: the two host-side seams for the walled harness, and
+/// the save refusal.
+#[cfg(test)]
+mod seams {
+    use super::Host;
+    use crate::error::Code;
+    use pharmakos_sim::math::quantity::Damage;
+    use pharmakos_sim::rules::RulesTable;
+    use pharmakos_sim::runner::{Layout, LayoutBeacon, MatchSettings};
+    use pharmakos_sim::seams::MandateKind;
+    use pharmakos_sim::tables::{SeatId, UnitId, UnitKind};
+    use pharmakos_sim::world::{DamageOrder, DamageTarget, FileRefused, WorldConfig};
+
+    fn host() -> Host {
+        let rules = RulesTable::load(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("..")
+                .join("..")
+                .join("rules")
+                .join("rules.v1.json"),
+        )
+        .expect("the shipped rules table");
+        Host::open(
+            &WorldConfig {
+                match_seed: 0x0000_0000_ca5c_aded,
+                seats: 2,
+                units_per_seat: 0,
+                rules,
+                match_settings: MatchSettings {
+                    segment_lengths_ms: vec![2_000],
+                    round_limit: 1,
+                },
+            },
+            None,
+        )
+        .expect("a match")
+    }
+
+    fn hit() -> DamageOrder {
+        DamageOrder {
+            target: DamageTarget::Unit(UnitId::new(0)),
+            amount: Damage::new(1).expect("a positive amount"),
+            by: SeatId::NEUTRAL,
+            source: None,
+        }
+    }
+
+    #[test]
+    fn stepping_by_phase_hashes_as_stepping_whole() {
+        let mut whole = host();
+        let mut phased = host();
+        assert!(whole.begin_push() && phased.begin_push());
+        let mut ticks = 0_u32;
+        loop {
+            let a = whole.step().expect("a whole tick");
+            let b = {
+                let Some(mut tick) = phased.phased_tick().expect("a phased tick") else {
+                    assert!(a.is_none(), "both runs leave the Push on the same tick");
+                    break;
+                };
+                let mut ran = 0_u32;
+                while tick.run_next_phase().expect("a phase runs").is_some() {
+                    ran = ran.saturating_add(1);
+                }
+                assert_eq!(ran, 11, "every phase but the hash, one call each");
+                Some(tick.finish().expect("the tick ends"))
+            };
+            assert_eq!(
+                a, b,
+                "tick {ticks}: one phase at a time hashes as the whole tick"
+            );
+            ticks = ticks.saturating_add(1);
+            if a.is_none_or(|report| report.segment_ended) {
+                break;
+            }
+        }
+        assert_eq!(ticks, 40, "two seconds at 20 Hz");
+    }
+
+    #[test]
+    fn a_half_finished_tick_cannot_be_captured_saved_or_filed() {
+        let mut host = host();
+        assert!(host.begin_push());
+        {
+            let mut tick = host.phased_tick().expect("a phased tick").expect("a Push");
+            assert!(tick.run_next_phase().expect("Broadphase").is_some());
+            // Dropped here, mid-tick.
+        }
+        assert!(host.runner().tick_is_open());
+        assert_eq!(
+            host.step().map_err(|error| error.code),
+            Err(Code::Internal),
+            "no whole-tick step over an open tick"
+        );
+        assert!(
+            host.runner().capture().is_err(),
+            "no capture of half a tick"
+        );
+        assert_eq!(
+            host.check_savable().map_err(|error| error.code),
+            Err(Code::Internal),
+            "no save of half a tick"
+        );
+        assert_eq!(host.file_damage(hit()), Err(FileRefused::MidTick));
+        // The next phased tick resumes the open one and finishes it.
+        let tick = host
+            .phased_tick()
+            .expect("the open tick")
+            .expect("still a Push");
+        assert!(tick.finish().is_ok());
+        assert!(!host.runner().tick_is_open());
+        assert!(host.step().is_ok(), "and whole ticks run again");
+    }
+
+    #[test]
+    fn a_save_with_a_pending_host_order_is_refused() {
+        let mut host = host();
+        assert!(host.check_savable().is_ok(), "a quiet Lull saves");
+        assert!(host.file_damage(hit()).is_ok());
+        assert_eq!(
+            host.check_savable().map_err(|error| error.code),
+            Err(Code::Internal),
+            "a save would lose the order the host filed"
+        );
+        assert!(host.begin_push());
+        assert!(host.step().expect("a tick").is_some());
+        assert!(
+            host.check_savable().is_ok(),
+            "once a tick has applied it, nothing is pending"
+        );
+    }
+
+    #[test]
+    fn a_ladder_past_its_bound_is_refused_at_the_lobby() {
+        let settings = MatchSettings {
+            segment_lengths_ms: vec![1_000; pharmakos_sim::rules::MAX_SEGMENT_LENGTHS + 1],
+            round_limit: 1,
+        };
+        assert_eq!(
+            Host::check_settings(&settings).map_err(|error| error.code),
+            Err(Code::InvalidArgument)
+        );
+    }
+
+    #[test]
+    fn the_layout_seam_is_refused_outside_the_lobby() {
+        let layout = |seat: u8| Layout {
+            beacons: vec![LayoutBeacon {
+                seat: SeatId::new(seat),
+                column: [200, 200],
+                mandate: MandateKind::Build,
+                units: vec![(UnitKind::Raider, 2)],
+            }],
+        };
+        let mut lobby = host();
+        let beacons = lobby.world().beacons().len();
+        let units = lobby.world().units().len();
+        assert_eq!(
+            lobby.seed_layout(&layout(7)).map_err(|error| error.code),
+            Err(Code::InvalidArgument),
+            "a seat the match has not got"
+        );
+        assert!(
+            lobby.seed_layout(&layout(0)).is_ok(),
+            "the lobby takes a layout"
+        );
+        assert_eq!(lobby.world().beacons().len(), beacons + 1);
+        assert_eq!(lobby.world().units().len(), units + 2);
+        assert_eq!(
+            lobby.seed_layout(&layout(0)).map_err(|error| error.code),
+            Err(Code::PhaseClosed),
+            "once"
+        );
+        let mut playing = host();
+        assert!(playing.begin_push());
+        assert!(playing.step().expect("a tick").is_some());
+        assert_eq!(
+            playing.seed_layout(&layout(0)).map_err(|error| error.code),
+            Err(Code::PhaseClosed),
+            "and never once the match has moved"
+        );
     }
 }

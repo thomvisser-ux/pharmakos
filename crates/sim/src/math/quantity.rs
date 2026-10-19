@@ -55,12 +55,115 @@ impl Hp {
 
     /// Apply damage, clamped at zero. The clamp is a game rule: nothing is
     /// more destroyed than destroyed.
+    ///
+    /// A [`Damage`] is never zero or negative, so this can only lower the hit
+    /// points; repair is [`Hp::repaired_by`], a different type, so a damage
+    /// order cannot heal (S2's plan, E3).
     #[must_use]
-    pub const fn damaged_by(self, amount: Hp) -> Hp {
+    pub const fn damaged_by(self, amount: Damage) -> Hp {
         let left = self.0.saturating_sub(amount.0);
         if left < 0 { Hp(0) } else { Hp(left) }
     }
+
+    /// Apply repair, stopped at `max`: the stated rule is that nothing is
+    /// repaired past full condition. A repair of an asset already at or past
+    /// `max` leaves it where it is.
+    #[must_use]
+    pub const fn repaired_by(self, amount: Repair, max: Hp) -> Hp {
+        if self.0 >= max.0 {
+            return self;
+        }
+        let grown = self.0.saturating_add(amount.0);
+        if grown > max.0 { max } else { Hp(grown) }
+    }
 }
+
+/// An amount of damage: **1 to `i32::MAX`** hit points, the range a hit
+/// point count can lose (S2's plan, E3).
+///
+/// Built only by [`Damage::new`], which refuses zero, a negative amount and
+/// anything past `i32::MAX` with a typed [`QuantityError`], so a zero or
+/// negative damage order cannot be built and a damage cannot heal.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct Damage(i32);
+
+impl Damage {
+    /// Build an amount of damage.
+    ///
+    /// # Errors
+    ///
+    /// [`QuantityError::NotPositive`] for zero or less, and
+    /// [`QuantityError::TooLarge`] past `i32::MAX`.
+    pub fn new(amount: i64) -> Result<Damage, QuantityError> {
+        if amount <= 0 {
+            return Err(QuantityError::NotPositive { amount });
+        }
+        match i32::try_from(amount) {
+            Ok(v) => Ok(Damage(v)),
+            Err(_) => Err(QuantityError::TooLarge { amount }),
+        }
+    }
+
+    /// The hit points it removes, at most.
+    #[must_use]
+    pub const fn raw(self) -> i32 {
+        self.0
+    }
+}
+
+/// An amount of repair: **1 to `i32::MAX`** hit points, applied by
+/// [`Hp::repaired_by`] up to the asset's maximum.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct Repair(i32);
+
+impl Repair {
+    /// Build an amount of repair.
+    ///
+    /// # Errors
+    ///
+    /// As [`Damage::new`].
+    pub fn new(amount: i64) -> Result<Repair, QuantityError> {
+        Damage::new(amount).map(|Damage(v)| Repair(v))
+    }
+
+    /// The hit points it adds, at most.
+    #[must_use]
+    pub const fn raw(self) -> i32 {
+        self.0
+    }
+}
+
+/// Why a [`Damage`] or a [`Repair`] could not be built.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum QuantityError {
+    /// The amount was zero or negative: no damage, or a heal in disguise.
+    NotPositive {
+        /// The amount asked for.
+        amount: i64,
+    },
+    /// The amount was past `i32::MAX`, more hit points than any count holds.
+    TooLarge {
+        /// The amount asked for.
+        amount: i64,
+    },
+}
+
+impl core::fmt::Display for QuantityError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            QuantityError::NotPositive { amount } => {
+                write!(f, "{amount} hit points is not a positive amount")
+            }
+            QuantityError::TooLarge { amount } => write!(
+                f,
+                "{amount} hit points is past the most a hit-point count holds ({})",
+                i32::MAX
+            ),
+        }
+    }
+}
+
+impl std::error::Error for QuantityError {}
 
 /// Money, in `$`. `i64` because a match's treasury outgrows `i32`.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Default)]
@@ -218,7 +321,7 @@ impl Ms {
         // `self.0 > 0` and `MS_PER_TICK > 0`, so the quotient is non-negative
         // and fits `u32` for every `i32` numerator.
         let ticks = self.0 / MS_PER_TICK;
-        u32::try_from(ticks).unwrap_or(0)
+        ticks.unsigned_abs()
     }
 
     /// Whole ticks, rounding **up** — the form a timeout wants, so a wait is
@@ -232,8 +335,9 @@ impl Ms {
         if self.0 <= 0 {
             return 0;
         }
+        // Positive, as above, so its magnitude is itself.
         let ticks = self.0.saturating_add(MS_PER_TICK - 1) / MS_PER_TICK;
-        u32::try_from(ticks).unwrap_or(0)
+        ticks.unsigned_abs()
     }
 
     /// The duration of `ticks` whole ticks, saturating at [`i32::MAX`].

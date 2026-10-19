@@ -20,6 +20,7 @@
 
 mod support;
 
+use pharmakos_gateway::error::Code;
 use pharmakos_gateway::scopes::{ADMIN_METHODS, Scope, ScopeSet, method_wire_name, required};
 use pharmakos_gateway::surface::Surface;
 use pharmakos_gateway::surface::control::{MAX_ADVANCE_MS, MAX_CLOCK_STEP_MS};
@@ -702,4 +703,45 @@ fn a_control_suite_never_prints_a_token() {
     let mut surface = hosted(2, SEGMENT_MS, 2);
     let admin: Token = admin_token(&mut surface);
     assert_eq!(format!("{admin:?}"), "Token(<redacted>)");
+}
+
+/// S2's #116 reviews, B: while a phased tick is open (`Surface::phased_step`,
+/// the walled harness's entry, E30), the two host transitions are refused as
+/// the gateway's own bug, `INTERNAL`, never read as "not in a Lull" or "not in
+/// a recap", and each refusal is an audit line with no subject, `open push`
+/// or `end recap` (spaced, so the confinement scan reads no stepping call).
+#[test]
+fn a_transition_mid_tick_is_refused_as_internal_and_audited() {
+    let mut surface = hosted(2, SEGMENT_MS, 1);
+    assert_eq!(surface.begin_push().map_err(|e| e.code), Ok(true));
+    {
+        let mut tick = surface
+            .phased_step()
+            .expect("the stepper opens")
+            .expect("a Push is running");
+        assert!(
+            tick.run_next_phase().expect("one phase runs").is_some(),
+            "the tick has a first phase"
+        );
+        // Dropped half-finished: the runner's tick stays open.
+    }
+    for (action, refused) in [
+        ("open push", surface.begin_push().map_err(|e| e.code)),
+        ("end recap", surface.end_recap().map_err(|e| e.code)),
+    ] {
+        assert_eq!(refused, Err(Code::Internal), "{action} is refused mid-tick");
+        let last = surface
+            .audit()
+            .entries()
+            .iter()
+            .rev()
+            .find(|entry| entry.action == action)
+            .cloned()
+            .expect("the refusal is audited");
+        assert_eq!(
+            last.outcome,
+            pharmakos_gateway::audit::Outcome::Refused(Code::Internal)
+        );
+        assert_eq!(last.subject, None, "a host-side refusal names no subject");
+    }
 }
