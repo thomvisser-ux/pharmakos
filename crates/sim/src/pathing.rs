@@ -118,5 +118,10 @@ pub const SMOOTH_LOOKAHEAD: usize = 16;
 /// 384 × 384, so a partial route is a detour-heavy route rather than an
 /// ordinary one.
 ///
-/// PLACEHOLDER: sized against the skeleton's 384-voxel map — owner, at S2, the stage that changes the map's footprint.
+/// **It stays a constant** (S2's plan, E27, register S2-06): a search bound
+/// that is technically necessary, sized to the 384 map. A route that finds no
+/// walk at all is a typed [`route::NoPath`] the router counts under its
+/// reason, never a silent stop.
+///
+/// PLACEHOLDER: sized against the skeleton's 384-voxel map — owner, at S4, the stage that changes the map's footprint (S2's plan, E27, kept it a constant for S2).
 pub const MAX_ROUTE_NODES: u32 = 1024;

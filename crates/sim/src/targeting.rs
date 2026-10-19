@@ -1156,13 +1156,17 @@ mod tests {
         world.set_treasury(seat, Money::new(0));
         let lost_id = u32::try_from(lost).unwrap_or_else(|error| panic!("{error}"));
         let kept_id = u32::try_from(kept).unwrap_or_else(|error| panic!("{error}"));
-        assert!(world.add_bound_target(
-            beacon,
-            StructureKind::Generator.id(),
-            lost_at,
-            (lost_id, desc),
-            crate::tables::BuildOrder::NONE,
-        ));
+        assert!(
+            world
+                .add_bound_target(
+                    beacon,
+                    StructureKind::Generator.id(),
+                    lost_at,
+                    (lost_id, desc),
+                    crate::tables::BuildOrder::NONE,
+                )
+                .is_ok()
+        );
         let footprint = world
             .features()
             .get(lost)
@@ -1170,15 +1174,20 @@ mod tests {
             .footprint
             .clone();
         for column in &footprint {
-            assert!(world.request_voxel_edit(VoxelEdit::Set {
-                at: [column.x, column.y, column.top],
-                material: Material::STONE,
-            }));
+            assert!(
+                world
+                    .request_voxel_edit(VoxelEdit::Set {
+                        at: [column.x, column.y, column.top],
+                        material: Material::STONE,
+                        by: None,
+                    })
+                    .is_ok()
+            );
         }
         let mut runner = Runner::new(world);
         assert!(runner.begin_push(), "a match opens in a Lull");
         for _ in 0..20 {
-            assert!(runner.step().is_some(), "the Push runs");
+            assert!(matches!(runner.step(), Ok(Some(_))), "the Push runs");
         }
         let world = runner.world();
         assert!(!world.feature_is_live(lost), "the vent is lost");

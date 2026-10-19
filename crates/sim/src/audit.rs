@@ -31,12 +31,12 @@
 //! latest elimination tick are the ones the audit decides between — the seats
 //! that were still in until the tick that ended the match.
 //!
-//! PLACEHOLDER: who the audit decides between — owner, at S1's stage demo.
+//! PLACEHOLDER: who the audit decides between — owner, at S2's demo, with `fire`'s destroyed-value term (ruling 9 of S1's stage demo, decisions-log item 139 (1), settled this reading for S1; register X-08).
 //! It decides between the seats still in (on a
 //! no-survivor end, the seats that fell on the latest elimination tick). The
 //! spec does not spell it out; this is the reading that keeps an eliminated or
-//! never-placed seat from winning a match it was not in. The owner confirms or
-//! rules otherwise at S1's stage demo.
+//! never-placed seat from winning a match it was not in. The owner confirmed it
+//! for S1 at S1's stage demo (ruling 9).
 //!
 //! # The terms, in order
 //!
@@ -270,7 +270,7 @@ pub const fn destroyed_value(_world: &World, _seat: SeatId) -> Money {
 #[must_use]
 pub fn beacons_lost(world: &World, seat: SeatId) -> u32 {
     let beacons = world.beacons();
-    let count = usize::try_from(beacons.len()).unwrap_or(0);
+    let count = crate::math::index::row(beacons.len());
     let mut lost: u32 = 0;
     let mut row: usize = 0;
     while row < count {
@@ -288,7 +288,7 @@ pub fn beacons_lost(world: &World, seat: SeatId) -> u32 {
 }
 
 fn seat_count(world: &World) -> usize {
-    usize::try_from(world.seats().len()).unwrap_or(0)
+    crate::math::index::row(world.seats().len())
 }
 
 /// The tick of the most recent elimination, when no seat is still in the

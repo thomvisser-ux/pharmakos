@@ -34,15 +34,23 @@ pub fn fork(parent: &World) -> World {
 /// The parent is taken by shared reference and cannot be perturbed — which is
 /// the property G4 asserted 20 times out of 20, with 10 of 10 parents
 /// unperturbed, and which `tests/fork.rs` re-asserts against the real world.
-#[must_use]
-pub fn fork_and_step(parent: &World, ticks: u32) -> (World, Vec<u64>) {
+///
+/// # Errors
+///
+/// As [`World::step`]: a child whose clock has no tick after its parent's
+/// last cannot be stepped, and the fork says so rather than return a short
+/// trace.
+pub fn fork_and_step(
+    parent: &World,
+    ticks: u32,
+) -> Result<(World, Vec<u64>), crate::world::TickError> {
     let mut child = fork(parent);
     let mut enc = Enc::with_capacity(16 * 1024);
-    let mut trace = Vec::with_capacity(usize::try_from(ticks).unwrap_or(0));
+    let mut trace = Vec::with_capacity(crate::math::index::row(ticks));
     let mut n: u32 = 0;
     while n < ticks {
-        trace.push(child.step(&mut enc));
+        trace.push(child.step(&mut enc)?);
         n = n.saturating_add(1);
     }
-    (child, trace)
+    Ok((child, trace))
 }

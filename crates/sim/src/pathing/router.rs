@@ -66,7 +66,7 @@ use crate::math::fixed::{Angle, Fx};
 use crate::math::quantity::{Hp, TICK_HZ};
 use crate::pathing::MAX_ROUTE_NODES;
 use crate::pathing::clusters::Clusters;
-use crate::pathing::route::{RouteOutcome, route};
+use crate::pathing::route::{NoPath, RouteOutcome, route};
 use crate::pathing::search::Scratch;
 use crate::pathing::surface::{Node, Surface};
 use crate::tables::UnitKind;
@@ -109,6 +109,40 @@ impl WalkState {
             3 => Some(WalkState::Sealed),
             _ => None,
         }
+    }
+}
+
+/// Every route that found no walk, by reason (S2's plan, E27). Diagnostic.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct NoPathCounts {
+    unplaced: u64,
+    unreachable: u64,
+    unrefinable: u64,
+    unpriced: u64,
+}
+
+impl NoPathCounts {
+    /// How many found no walk for `reason`.
+    #[must_use]
+    pub const fn of(&self, reason: NoPath) -> u64 {
+        match reason {
+            NoPath::Unplaced => self.unplaced,
+            NoPath::Unreachable => self.unreachable,
+            NoPath::Unrefinable => self.unrefinable,
+            NoPath::Unpriced => self.unpriced,
+        }
+    }
+
+    /// Count one. A `u64` of repaths, at most the cap a tick, cannot be
+    /// reached, so the add saturates by rule.
+    const fn count(&mut self, reason: NoPath) {
+        let slot = match reason {
+            NoPath::Unplaced => &mut self.unplaced,
+            NoPath::Unreachable => &mut self.unreachable,
+            NoPath::Unrefinable => &mut self.unrefinable,
+            NoPath::Unpriced => &mut self.unpriced,
+        };
+        *slot = slot.saturating_add(1);
     }
 }
 
@@ -158,6 +192,9 @@ pub struct Router {
     sealed_this_tick: Vec<u32>,
     served_total: u64,
     sealed_total: u64,
+    /// Every route that found no walk, by [`NoPath`] reason (S2's plan, E27).
+    /// Diagnostic, never hashed.
+    no_path: NoPathCounts,
     backlog_peak: u32,
 }
 
@@ -165,14 +202,12 @@ impl Router {
     /// Room for `units` units, at the walking speeds of the rules table.
     #[must_use]
     pub fn new(units: u32, rules: &crate::rules::RulesTable) -> Router {
-        let count = usize::try_from(units).unwrap_or(0);
-        let stride = usize::try_from(MAX_ROUTE_NODES).unwrap_or(0);
+        let count = crate::math::index::row(units);
+        let stride = crate::math::index::row(MAX_ROUTE_NODES);
         let mut speeds = [0_i32; 7];
         for kind in UnitKind::ALL {
-            if let Some(speed) = rules.cost_per_second(kind)
-                && let Some(slot) = speeds.get_mut(usize::from(kind.id()))
-            {
-                *slot = speed;
+            if let Some(slot) = speeds.get_mut(usize::from(kind.id())) {
+                *slot = rules.cost_per_second(kind);
             }
         }
         Router {
@@ -192,6 +227,7 @@ impl Router {
             sealed_this_tick: Vec::with_capacity(count),
             served_total: 0,
             sealed_total: 0,
+            no_path: NoPathCounts::default(),
             backlog_peak: 0,
         }
     }
@@ -217,8 +253,8 @@ impl Router {
     /// room changes no hash; the hash moves when a unit is actually fabricated,
     /// which is a unit-table row as well.
     pub fn reserve(&mut self, extra: u32) {
-        let count = usize::try_from(extra).unwrap_or(0);
-        let stride = usize::try_from(MAX_ROUTE_NODES).unwrap_or(0);
+        let count = crate::math::index::row(extra);
+        let stride = crate::math::index::row(MAX_ROUTE_NODES);
         self.state.reserve(count);
         self.accumulator.reserve(count);
         self.route_len.reserve(count);
@@ -237,7 +273,7 @@ impl Router {
     /// give the unit its first route; a fresh row is `Idle`, which is what a
     /// unit standing where it was built looks like.
     pub fn push_unit(&mut self) {
-        let stride = usize::try_from(MAX_ROUTE_NODES).unwrap_or(0);
+        let stride = crate::math::index::row(MAX_ROUTE_NODES);
         self.state.push(WalkState::Idle.id());
         self.accumulator.push(0);
         self.route_len.push(0);
@@ -261,6 +297,7 @@ impl Router {
             .ok()
             .and_then(|index| self.state.get(index).copied())
             .unwrap_or(0);
+        // E7: cannot miss: a restore refuses a walk-state byte no state names (`Snapshot::check_codes`), and a unit off the table is idle by rule
         WalkState::from_id(id).unwrap_or_default()
     }
 
@@ -279,8 +316,8 @@ impl Router {
         let Ok(index) = usize::try_from(unit) else {
             return &[];
         };
-        let stride = usize::try_from(MAX_ROUTE_NODES).unwrap_or(0);
-        let len = usize::try_from(self.route_len.get(index).copied().unwrap_or(0)).unwrap_or(0);
+        let stride = crate::math::index::row(MAX_ROUTE_NODES);
+        let len = crate::math::index::row(self.route_len.get(index).copied().unwrap_or(0));
         let base = index.saturating_mul(stride);
         self.nodes
             .get(base..base.saturating_add(len))
@@ -346,6 +383,13 @@ impl Router {
     #[must_use]
     pub const fn served_total(&self) -> u64 {
         self.served_total
+    }
+
+    /// Every route that found no walk since construction, by reason (S2's
+    /// plan, E27). Diagnostic.
+    #[must_use]
+    pub const fn no_path(&self) -> NoPathCounts {
+        self.no_path
     }
 
     /// Units parked as sealed in since construction. Diagnostic.
@@ -462,6 +506,7 @@ impl Router {
             self.served_total = self.served_total.saturating_add(1);
             self.served_this_tick.push(unit);
             let (Some(start), Some(goal)) = (start, goal) else {
+                self.no_path.count(NoPath::Unplaced);
                 self.set_state(unit, WalkState::Sealed);
                 self.set_route_len(unit, 0, 0, 0, false);
                 self.sealed_this_tick.push(unit);
@@ -472,17 +517,18 @@ impl Router {
             let mut buffer = core::mem::take(&mut self.buffer);
             let outcome = route(surface, clusters, scratch, start, goal, &mut buffer);
             match outcome {
-                Some(RouteOutcome { partial, .. }) if buffer.len() > 1 => {
+                Ok(RouteOutcome { partial, .. }) if buffer.len() > 1 => {
                     self.write_route(unit, &buffer, partial);
                     self.set_state(unit, WalkState::Walking);
                 }
-                Some(_) => {
+                Ok(_) => {
                     // Already standing on the goal: nothing to walk.
                     self.set_route_len(unit, 0, 0, 0, false);
                     self.set_state(unit, WalkState::Idle);
                     self.arrived.push(unit);
                 }
-                None => {
+                Err(reason) => {
+                    self.no_path.count(reason);
                     self.set_route_len(unit, 0, 0, 0, false);
                     self.set_state(unit, WalkState::Sealed);
                     self.sealed_this_tick.push(unit);
@@ -507,7 +553,7 @@ impl Router {
         let Ok(index) = usize::try_from(unit) else {
             return;
         };
-        let stride = usize::try_from(MAX_ROUTE_NODES).unwrap_or(0);
+        let stride = crate::math::index::row(MAX_ROUTE_NODES);
         let base = index.saturating_mul(stride);
         let take = nodes.len().min(stride);
         let mut at = 0;
@@ -592,7 +638,7 @@ impl Router {
         while walker < count {
             let id = walker;
             walker = walker.saturating_add(1);
-            let index = usize::try_from(id).unwrap_or(usize::MAX);
+            let index = crate::math::index::row(id);
             if !hit_points
                 .get(index)
                 .copied()
@@ -608,6 +654,7 @@ impl Router {
                 .get(index)
                 .copied()
                 .and_then(UnitKind::from_id)
+                // E7: cannot miss: a restore refuses a kind byte no kind names (`Snapshot::check_codes`)
                 .map_or(0, |kind| self.speed_of(kind));
             if speed <= 0 {
                 continue;
@@ -617,14 +664,11 @@ impl Router {
             let mut ask_again = false;
             loop {
                 let route = self.route(id);
-                let Some(from) = route
-                    .get(usize::try_from(cursor).unwrap_or(usize::MAX))
-                    .copied()
-                else {
+                let Some(from) = route.get(crate::math::index::row(cursor)).copied() else {
                     break;
                 };
                 let Some(to) = route
-                    .get(usize::try_from(cursor.saturating_add(1)).unwrap_or(usize::MAX))
+                    .get(crate::math::index::row(cursor.saturating_add(1)))
                     .copied()
                 else {
                     break;
@@ -644,11 +688,7 @@ impl Router {
             self.set_accumulator(id, accumulator);
             self.set_cursor(id, cursor);
             let route_len = self.route(id).len();
-            if let Some(node) = self
-                .route(id)
-                .get(usize::try_from(cursor).unwrap_or(usize::MAX))
-                .copied()
-            {
+            if let Some(node) = self.route(id).get(crate::math::index::row(cursor)).copied() {
                 place(
                     surface,
                     positions,
@@ -660,7 +700,7 @@ impl Router {
             }
             if ask_again {
                 self.set_state(id, WalkState::Waiting);
-            } else if usize::try_from(cursor).unwrap_or(usize::MAX) >= route_len.saturating_sub(1) {
+            } else if crate::math::index::row(cursor) >= route_len.saturating_sub(1) {
                 if self.route_partial(id) {
                     self.set_state(id, WalkState::Waiting);
                 } else {
@@ -673,7 +713,7 @@ impl Router {
 
     fn next_node(&self, unit: u32, cursor: u32) -> Option<Node> {
         self.route(unit)
-            .get(usize::try_from(cursor.saturating_add(1)).unwrap_or(usize::MAX))
+            .get(crate::math::index::row(cursor.saturating_add(1)))
             .copied()
     }
 
@@ -698,7 +738,7 @@ impl Router {
         enc.len(self.len());
         let mut unit: u32 = 0;
         while unit < self.len() {
-            let index = usize::try_from(unit).unwrap_or(usize::MAX);
+            let index = crate::math::index::row(unit);
             enc.u8(self.state.get(index).copied().unwrap_or(0));
             enc.i32(self.accumulator.get(index).copied().unwrap_or(0));
             enc.u32(self.route_len.get(index).copied().unwrap_or(0));
@@ -783,7 +823,7 @@ impl Router {
     /// defence for any other caller.
     pub fn restore(&mut self, restored: RestoredRouter) -> bool {
         let units = restored.state.len();
-        let stride = usize::try_from(MAX_ROUTE_NODES).unwrap_or(0);
+        let stride = crate::math::index::row(MAX_ROUTE_NODES);
         if restored.accumulator.len() != units
             || restored.route_len.len() != units
             || restored.route_cursor.len() != units
@@ -794,7 +834,7 @@ impl Router {
         }
         let mut total: usize = 0;
         for len in &restored.route_len {
-            let len = usize::try_from(*len).unwrap_or(usize::MAX);
+            let len = crate::math::index::row(*len);
             if len > stride {
                 return false;
             }
@@ -810,7 +850,7 @@ impl Router {
         let mut nodes: Vec<Node> = vec![0; units.saturating_mul(stride)];
         let mut read: usize = 0;
         for (unit, len) in restored.route_len.iter().enumerate() {
-            let len = usize::try_from(*len).unwrap_or(0);
+            let len = crate::math::index::row(*len);
             let base = unit.saturating_mul(stride);
             let mut at = 0;
             while at < len {
@@ -877,7 +917,7 @@ pub fn first_route_digest_mismatch(
     let mut buffer: Vec<u8> = Vec::new();
     let mut read: usize = 0;
     for (unit, len) in route_len.iter().enumerate() {
-        let len = usize::try_from(*len).unwrap_or(usize::MAX);
+        let len = crate::math::index::row(*len);
         let end = read.saturating_add(len);
         let slice = nodes.get(read..end).unwrap_or(&[]);
         let carried = route_hash.get(unit).copied().unwrap_or(0);

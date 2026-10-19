@@ -135,7 +135,7 @@ impl UnitTable {
     /// An empty table sized for `count` units. Nothing allocates after this.
     #[must_use]
     pub fn with_capacity(count: u32) -> UnitTable {
-        let n = usize::try_from(count).unwrap_or(0);
+        let n = crate::math::index::row(count);
         UnitTable {
             count: 0,
             id: Vec::with_capacity(n),
@@ -160,7 +160,7 @@ impl UnitTable {
     /// be an allocation inside a tick — and a fabrication order that finds none
     /// is held rather than filled. Construction only.
     pub fn reserve(&mut self, extra: u32) {
-        let n = usize::try_from(extra).unwrap_or(0);
+        let n = crate::math::index::row(extra);
         self.id.reserve(n);
         self.seat.reserve(n);
         self.kind.reserve(n);
@@ -495,7 +495,7 @@ impl SeatTable {
     /// An empty table sized for `count` seats.
     #[must_use]
     pub fn with_capacity(count: u32) -> SeatTable {
-        let n = usize::try_from(count).unwrap_or(0);
+        let n = crate::math::index::row(count);
         SeatTable {
             count: 0,
             seat: Vec::with_capacity(n),
@@ -887,6 +887,31 @@ impl AreaKind {
     }
 }
 
+/// Why a row could not go into the [`TargetTable`]: it already holds as many
+/// rows as it was built for, and it never grows a column inside a tick.
+///
+/// A typed answer rather than a `false` (decisions-log item 136 (5)), so a
+/// settings row that meets it fails its step with
+/// [`crate::interpreter::StepFailure::TargetsUnwritten`] rather than dropping
+/// the entry it could not write.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct TargetsFull {
+    /// How many rows the table holds, which is all it was built for.
+    pub capacity: u32,
+}
+
+impl core::fmt::Display for TargetsFull {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "the list-settings table is full at {} rows",
+            self.capacity
+        )
+    }
+}
+
+impl std::error::Error for TargetsFull {}
+
 /// A beacon's mandate settings that are **lists**: Build targets, protected
 /// areas and Survey probe areas.
 ///
@@ -913,10 +938,18 @@ pub struct TargetTable {
 }
 
 impl TargetTable {
+    /// How many rows the table holds, as a column index: the length of its
+    /// columns, which every writer keeps equal, so a walk over `0..row_count()`
+    /// needs no conversion and no fallback.
+    #[must_use]
+    pub fn row_count(&self) -> usize {
+        self.beacon.len()
+    }
+
     /// A table holding `capacity` rows across the whole match, never growing.
     #[must_use]
     pub fn with_capacity(capacity: u32) -> TargetTable {
-        let n = usize::try_from(capacity).unwrap_or(0);
+        let n = crate::math::index::row(capacity);
         TargetTable {
             count: 0,
             beacon: Vec::with_capacity(n),
@@ -1052,9 +1085,11 @@ impl TargetTable {
     /// Append one Build target written as a fixed voxel, keeping the table in
     /// `(beacon, kind)` order, at order 0 with no turn ([`BuildOrder::NONE`]).
     ///
-    /// `false` when the table is full: the table never grows a column inside
-    /// a tick.
-    pub fn add(&mut self, beacon: BeaconId, blueprint: u8, at: [Fx; 3]) -> bool {
+    /// # Errors
+    ///
+    /// [`TargetsFull`] when the table is full: the table never grows a column
+    /// inside a tick.
+    pub fn add(&mut self, beacon: BeaconId, blueprint: u8, at: [Fx; 3]) -> Result<(), TargetsFull> {
         self.add_bound(
             beacon,
             TargetKind::Build,
@@ -1069,15 +1104,16 @@ impl TargetTable {
     /// Append one area row -- a protected area or a probe area -- with its
     /// `centre` and its footprint, keeping the table in `(beacon, kind)` order.
     ///
-    /// `false` when the table is full, for the reason [`TargetTable::add`]
-    /// gives.
+    /// # Errors
+    ///
+    /// [`TargetsFull`], for the reason [`TargetTable::add`] gives.
     pub fn add_area(
         &mut self,
         beacon: BeaconId,
         kind: AreaKind,
         centre: [Fx; 3],
         area: ColumnBox,
-    ) -> bool {
+    ) -> Result<(), TargetsFull> {
         self.add_bound(
             beacon,
             kind.kind(),
@@ -1098,6 +1134,10 @@ impl TargetTable {
     ///
     /// A row goes after every row of its `(beacon, kind)`, so a beacon's
     /// targets keep their list position, which breaks a tie of `order`.
+    ///
+    /// # Errors
+    ///
+    /// [`TargetsFull`], for the reason [`TargetTable::add`] gives.
     #[allow(
         clippy::too_many_arguments,
         reason = "one argument per column a row writes, as `StructureTable::push`; a parameter struct would be built at its callers only to be taken apart here"
@@ -1111,9 +1151,11 @@ impl TargetTable {
         area: ColumnBox,
         bound: (u32, u8),
         build: BuildOrder,
-    ) -> bool {
+    ) -> Result<(), TargetsFull> {
         if self.count >= self.capacity {
-            return false;
+            return Err(TargetsFull {
+                capacity: self.capacity,
+            });
         }
         let key = (beacon.raw(), kind.id());
         let slot = self
@@ -1133,7 +1175,7 @@ impl TargetTable {
         self.order.insert(slot, build.order);
         self.rotation.insert(slot, build.rotation.raw());
         self.count = self.count.saturating_add(1);
-        true
+        Ok(())
     }
 
     /// Remove row `slot`.
@@ -1289,7 +1331,7 @@ impl SightingTable {
     #[must_use]
     pub fn with_room(seats: u32, per_seat: u32) -> SightingTable {
         let capacity = seats.saturating_mul(per_seat);
-        let n = usize::try_from(capacity).unwrap_or(0);
+        let n = crate::math::index::row(capacity);
         SightingTable {
             count: 0,
             seat: Vec::with_capacity(n),
@@ -1619,7 +1661,7 @@ impl CreditTable {
     /// never grow.
     #[must_use]
     pub fn with_capacity(capacity: u32) -> CreditTable {
-        let n = usize::try_from(capacity).unwrap_or(0);
+        let n = crate::math::index::row(capacity);
         CreditTable {
             count: 0,
             asset: Vec::with_capacity(n),
@@ -1896,8 +1938,8 @@ impl Csr {
     /// The cell a position falls in, clamped to the grid.
     #[must_use]
     pub fn cell_of(&self, pos: [Fx; 3]) -> u32 {
-        let x = pos.first().map_or(0, |v| v.floor_voxels());
-        let y = pos.get(1).map_or(0, |v| v.floor_voxels());
+        let [px, py, _] = pos;
+        let (x, y) = (px.floor_voxels(), py.floor_voxels());
         let cx = self.axis_cell(x, self.origin_x, self.cells_x);
         let cy = self.axis_cell(y, self.origin_y, self.cells_y);
         cy.saturating_mul(self.cells_x).saturating_add(cx)
@@ -1915,21 +1957,22 @@ impl Csr {
     }
 
     /// Rebuild the index from the positions of `count` items whose ids are
-    /// `0..count`, by counting sort. Allocation-free.
+    /// `0..count`, by counting sort. Allocation-free and infallible (S2's
+    /// plan, E6).
     ///
-    /// Returns `false` and leaves the grid empty when the table is larger than
-    /// the capacity the grid was built for, which is a construction bug rather
-    /// than a game state.
-    pub fn rebuild(&mut self, positions: &[[Fx; 3]]) -> bool {
+    /// **The grid is built for the table's room.** Its owner sizes it, at
+    /// construction, for the most rows the table can ever hold, and the table
+    /// refuses to grow past that ([`crate::world::World::fabricate`], and a
+    /// restore's `OverCeiling`), so `positions` is never longer than the grid's
+    /// capacity. It is read up to that capacity, which is all of it.
+    pub fn rebuild(&mut self, positions: &[[Fx; 3]]) {
         self.cursor.fill(0);
         self.starts.fill(0);
-        if positions.len() > self.items.len() {
-            return false;
-        }
+        let capacity = self.items.len();
 
         // Pass 1: count per cell.
-        for pos in positions {
-            let cell = usize::try_from(self.cell_of(*pos)).unwrap_or(0);
+        for pos in positions.iter().take(capacity) {
+            let cell = crate::math::index::row(self.cell_of(*pos));
             if let Some(slot) = self.cursor.get_mut(cell) {
                 *slot = slot.saturating_add(1);
             }
@@ -1950,12 +1993,12 @@ impl Csr {
         if let Some(heads) = self.starts.get(..cells) {
             self.cursor.copy_from_slice(heads);
         }
-        for (index, pos) in positions.iter().enumerate() {
-            let cell = usize::try_from(self.cell_of(*pos)).unwrap_or(0);
+        for (index, pos) in positions.iter().take(capacity).enumerate() {
+            let cell = crate::math::index::row(self.cell_of(*pos));
             let Some(head) = self.cursor.get_mut(cell) else {
                 continue;
             };
-            let at = usize::try_from(*head).unwrap_or(0);
+            let at = crate::math::index::row(*head);
             *head = head.saturating_add(1);
             let Ok(id) = u32::try_from(index) else {
                 continue;
@@ -1964,7 +2007,6 @@ impl Csr {
                 *slot = id;
             }
         }
-        true
     }
 
     /// Collect every item within `radius` **voxels** of `centre`, sorted
@@ -2016,15 +2058,13 @@ impl Csr {
         while y <= hi_y {
             let mut x = lo_x;
             while x <= hi_x {
-                let c =
-                    usize::try_from(y.saturating_mul(self.cells_x).saturating_add(x)).unwrap_or(0);
+                let c = crate::math::index::row(y.saturating_mul(self.cells_x).saturating_add(x));
                 let from = self.starts.get(c).copied().unwrap_or(0);
                 let to = self.starts.get(c.saturating_add(1)).copied().unwrap_or(0);
-                let range = usize::try_from(from).unwrap_or(0)..usize::try_from(to).unwrap_or(0);
+                let range = crate::math::index::row(from)..crate::math::index::row(to);
                 if let Some(slice) = self.items.get(range) {
                     for id in slice {
-                        let Some(pos) = positions.get(usize::try_from(*id).unwrap_or(usize::MAX))
-                        else {
+                        let Some(pos) = positions.get(crate::math::index::row(*id)) else {
                             continue;
                         };
                         if Sq::between(*pos, centre) <= limit {
@@ -2438,7 +2478,7 @@ impl BeaconTable {
     /// An empty table sized for `count` beacons. Nothing allocates after this.
     #[must_use]
     pub fn with_capacity(count: u32) -> BeaconTable {
-        let n = usize::try_from(count).unwrap_or(0);
+        let n = crate::math::index::row(count);
         BeaconTable {
             count: 0,
             id: Vec::with_capacity(n),
@@ -2531,7 +2571,7 @@ impl BeaconTable {
     /// and a deploy that finds none fails the step rather than growing a
     /// column. Construction only — never called inside a tick.
     pub fn reserve(&mut self, extra: u32) {
-        let n = usize::try_from(extra).unwrap_or(0);
+        let n = crate::math::index::row(extra);
         self.id.reserve(n);
         self.seat.reserve(n);
         self.pos.reserve(n);
@@ -2852,7 +2892,7 @@ impl StructureTable {
     /// An empty table sized for `count` structures.
     #[must_use]
     pub fn with_capacity(count: u32) -> StructureTable {
-        let n = usize::try_from(count).unwrap_or(0);
+        let n = crate::math::index::row(count);
         StructureTable {
             count: 0,
             id: Vec::with_capacity(n),
@@ -2869,7 +2909,7 @@ impl StructureTable {
     /// Make room for `extra` more structures without growing later. Same
     /// contract as [`BeaconTable::reserve`].
     pub fn reserve(&mut self, extra: u32) {
-        let n = usize::try_from(extra).unwrap_or(0);
+        let n = crate::math::index::row(extra);
         self.id.reserve(n);
         self.seat.reserve(n);
         self.kind.reserve(n);
@@ -3065,7 +3105,7 @@ impl WreckTable {
     /// An empty table sized for `count` wrecks.
     #[must_use]
     pub fn with_capacity(count: u32) -> WreckTable {
-        let n = usize::try_from(count).unwrap_or(0);
+        let n = crate::math::index::row(count);
         WreckTable {
             count: 0,
             id: Vec::with_capacity(n),
@@ -3077,7 +3117,7 @@ impl WreckTable {
     /// Make room for `extra` more wrecks without growing later. Same contract
     /// as [`BeaconTable::reserve`].
     pub fn reserve(&mut self, extra: u32) {
-        let n = usize::try_from(extra).unwrap_or(0);
+        let n = crate::math::index::row(extra);
         self.id.reserve(n);
         self.pos.reserve(n);
         self.salvage.reserve(n);

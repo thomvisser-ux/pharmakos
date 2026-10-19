@@ -237,12 +237,26 @@ costs the suggested vent from the core. `against-easy.scenario.jsonc`'s seat 1
 deadline moved with it, from 550 to 800, and every other deadline holds. The
 determinism chain did not move.
 
+**S2's `base` moved `expand-east-segment` alone, from its first line (tick 1)**
+(ruling 3 of S1's stage demo, decisions-log item 139 (1)). Its seats no longer
+seal the spec's worked example: no one first site is legal both on this map and
+on the verifier's reference view, so the scenario seals its own copy,
+`scenarios/skeleton/expand-east-segment.playbook.jsonc`, with the first site
+moved to (378, 24, 36), 20 voxels east of seat 0's core. Seat 0's walk is the
+first thing that differs: `to_site` now **succeeds** for seat 0 (`step_completed`
+at tick 381), `place_east` places its `b_01` at 626, the two initial rows commit
+at 686 and 716, and the tail's walk to `b_01` completes where the commander
+stands at 721, when seat 0's fallback engages. Seat 1, across the map, does what
+both seats did before: its walk times out at 2401, its deploy is refused
+`illegal_site` at 2406 and its tail `no_target` at 2411. The rest of `base`
+(S2's plan, E2 to E8, E27 and E30) moved no chain: the queues are never state,
+the refusals and the typed reads change nothing a committed match reaches.
+
 `expand-east-segment` carries one more thing worth knowing before its chain is
 read. The playbook it seals **does not qualify against either seat's own frozen
 snapshot** on this map: `E0401` for `b_01`, which since S1 names each seat's own
-first placed beacon and neither has one yet, and `E0403` for a site two hundred
-and sixty voxels outside every
-sphere. No client could submit it. `gamectl scenario run` therefore seals it
+first placed beacon and neither has one when it seals, and, for seat 1, `E0403`
+for a site outside every sphere of its own. No client could submit it. `gamectl scenario run` therefore seals it
 through a documented harness door and prints a `note` line saying so on every
 run; `deploy-and-visit` needs no such line. See `crates/gamectl/src/scenario/
 run.rs` and the pull request that added the runner.
