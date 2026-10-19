@@ -337,7 +337,7 @@ pub struct MoveStep {
     /// stays pinned for that step.
     #[prost(message, optional, tag="1")]
     pub to: ::core::option::Option<Location>,
-    /// Omitted, it reads as DIRECT with an I-level note: one of the four named
+    /// Omitted, it reads as DIRECT with an I-level note: one of the five named
     /// defaults in this file's header (decisions-log item 128, decision 11).
     #[prost(enumeration="move_step::Pace", tag="2")]
     pub pace: i32,
@@ -567,9 +567,14 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.QueueStructureRow".int
 /// order (spec section 6, the Build row).
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BuildTarget {
-    /// PLACEHOLDER: the blueprint catalogue, one blueprint (the Generator) until then — owner, at S4, with its licences.
+    /// PLACEHOLDER: the licensed blueprints of the catalogue, a string id until then — owner, at S4, with its licences.
     /// The blueprint catalogue is spec section 8's contract.
-    /// The skeleton's minimal Build mandate ships one blueprint, the Generator.
+    /// The skeleton's minimal Build mandate shipped one blueprint, the
+    /// Generator; S2 adds the base kit beside it (spec section 9; S2's plan,
+    /// task `con4`): `generator`, `autocannon`, `mortar` and `wall`. These four
+    /// are every id a Build target names before S4's licensed blueprints, and
+    /// the sim refuses each of the three new ones, and the verifier with it,
+    /// until S2's `site` lane gives it an effect (S2's plan, E8).
     #[prost(string, tag="1")]
     pub blueprint_id: ::prost::alloc::string::String,
     /// Where it goes. Must lie inside one of your own spheres: inside the
@@ -596,6 +601,21 @@ pub struct BuildTarget {
     /// is unbuilt or damaged; lowest number first, ties by list position.
     #[prost(uint32, tag="4")]
     pub order: u32,
+    /// A `wall` target's voxels: the box it fills, inclusive at both ends, each
+    /// voxel at the rules table's `wall_cost_per_voxel` (S2's plan, decisions 10
+    /// and 40, ruled by decisions-log item 144 (11)). Every column of the box is
+    /// filled from the ground's top up to the box's top, so no wall voxel has
+    /// air under it, and the box stands at least the rules table's
+    /// `materials.wall_min_height_voxels` above the ground in every column; a
+    /// lower one is a verifier error.
+    ///
+    /// Required on a `wall` target and refused on any other: a structure's
+    /// footprint is its blueprint's, never the author's. A wall's `anchor` still
+    /// names the target, as every target's does (a removal finds it by its
+    /// anchor), and is a voxel inside the box; its `rotation_quarter_turns` is 0.
+    /// Not `box`, which Rust reserves as a keyword.
+    #[prost(message, optional, tag="5")]
+    pub wall_box: ::core::option::Option<Area>,
 }
 impl ::prost::Name for BuildTarget {
 const NAME: &'static str = "BuildTarget";
@@ -1823,11 +1843,17 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.BeaconFilter".into() }
 /// --- Common settings (spec section 6, the Common row) --------------------
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct MandateSettings {
-    /// Rules of engagement. Shared across mandates that field units.
+    /// Rules of engagement. Shared across mandates that field units. Omitted, it
+    /// reads as RETURN_FIRE with an I-level note: one of the five named defaults
+    /// in this file's header (decisions-log item 144 (11), S2's plan's decision
+    /// 4).
     #[prost(enumeration="mandate_settings::Roe", tag="1")]
     pub roe: i32,
     /// A unit below this percentage of its HP retreats, following the rules of
     /// engagement, and the retreat is always announced. Integer percent, 0-100.
+    /// It walks to the nearest own beacon whose sphere holds a live repair
+    /// drone, else to its home beacon, firing only as its `roe` allows (spec
+    /// section 6's Defend fallback, made common by S2's plan's decision 4).
     #[prost(uint32, tag="2")]
     pub retreat_hp_pct: u32,
     /// Which writ. Choosing the type is free at place_beacon time; switching it
@@ -1837,12 +1863,20 @@ pub struct MandateSettings {
 }
 /// Nested message and enum types in `MandateSettings`.
 pub mod mandate_settings {
+    /// The three readings are S2's plan's decision 4's (decisions-log item 144
+    /// (11)). The core's autocannon, which has no mandate of its own, fires as
+    /// FREE_FIRE (S2's plan's decision 8).
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum Roe {
+        /// Omitted, this reads as RETURN_FIRE (above).
         Unspecified = 0,
+        /// Never fires.
         HoldFire = 1,
+        /// Fires only at an enemy asset that damaged one of the seat's own assets
+        /// inside the firer's range within the rules table's under-attack window.
         ReturnFire = 2,
+        /// Fires at any enemy in range.
         FreeFire = 3,
     }
     impl Roe {
@@ -1894,15 +1928,24 @@ fn full_name() -> ::prost::alloc::string::String { "gp.v1.MandateSettings".into(
 /// 5, amending item 33 (a) and spec section 17's S1 row): S1 builds `targets`
 /// in full — order, rotation, `on` and `covered {}` — and `protected_areas`.
 /// `repair_threshold_pct`, `rebuild_destroyed` and `terraform` are stored and
-/// priced in S1 and take effect in S2; terraform's meaning beyond its enum is
-/// still unruled.
+/// priced in S1 and take effect in S2 (S2's `site` lane). Terraform's meaning
+/// is item 144 (5)'s: before building, a drone levels the target's footprint
+/// to its anchor's height — FILL raises it, DIG lowers it and BOTH does both —
+/// and FILL and BOTH also refill craters and trenches inside the beacon's
+/// sphere back to the generated surface, each voxel at the wall's cost per
+/// voxel. There is no free-form sculpting.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BuildSettings {
     /// Build the highest-order affordable target that is unbuilt or damaged.
     #[prost(message, repeated, tag="1")]
     pub targets: ::prost::alloc::vec::Vec<BuildTarget>,
-    /// Repair a structure of yours inside this beacon's sphere once it falls
-    /// below this percentage of its HP. Integer percent, 0-100; 0 means never.
+    /// Repair a structure of yours inside this beacon's sphere once its HP falls
+    /// below this percentage of its maximum. Integer percent, 0-100; 0 means a
+    /// structure is never repaired. Read as written (S2's plan's decision 38,
+    /// ruled by decisions-log item 144 (11)): an omitted threshold is 0, so it
+    /// means never, and the verifier notes it. Own units and the commander are
+    /// repaired below full whatever this says (spec section 4), and so is a
+    /// cracked wall voxel of yours inside the sphere (S2's plan's decision 42).
     #[prost(uint32, tag="2")]
     pub repair_threshold_pct: u32,
     /// Rebuild a destroyed target from the list. A destroyed CAPABILITY
@@ -1910,7 +1953,7 @@ pub struct BuildSettings {
     #[prost(bool, tag="3")]
     pub rebuild_destroyed: bool,
     /// Whether the mandate may reshape terrain to place a target. Omitted, it
-    /// reads as NONE with an I-level note: one of the four named defaults in
+    /// reads as NONE with an I-level note: one of the five named defaults in
     /// this file's header (decisions-log item 128, decision 11).
     #[prost(enumeration="build_settings::Terraform", tag="4")]
     pub terraform: i32,
@@ -1960,34 +2003,309 @@ impl ::prost::Name for BuildSettings {
 const NAME: &'static str = "BuildSettings";
 const PACKAGE: &'static str = "gp.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.v1.BuildSettings".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.BuildSettings".into() }}
-/// PLACEHOLDER: Defend's settings — owner, at S2, with destruction and combat.
-/// Spec section 6's Defend
-/// row names: protect list (accepts `my commander`), engagement radius as a
-/// percentage of the sphere radius, pursue never / sphere edge / while in
-/// reach, auto-fortify, unit mix, picket. Numbers 1-15 are held so the first
-/// fifteen fields stay in the one-byte tag range.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+/// Spec section 6, the Defend row: "Protect list (accepts my commander);
+/// engagement radius as a % of the sphere radius; pursue never / sphere edge /
+/// while in reach; auto-fortify; unit mix; picket". The shape is S2's (S2's
+/// plan, task `con4`; the register's S2-13); the behaviour is S2's `dfnd`
+/// lane's, and until it lands the sim refuses a Defend arm that writes any of
+/// these, and the verifier with it (S2's plan, E8). A Defend beacon fields
+/// raiders as guards and scouts as pickets on the work in hand, as every
+/// fabricator does (S2's plan's decision 13).
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct DefendSettings {
+    /// What the beacon protects: the seat's own beacons, by name or selector,
+    /// and its own commander. Guards escort the commander and intercept threats
+    /// near it while it is inside this beacon's sphere (spec section 4). Empty,
+    /// the beacon protects itself and everything inside its sphere (the Defend
+    /// mandate's first draft, decisions-log section 1: "defaults to the beacon
+    /// and everything inside").
+    #[prost(message, repeated, tag="1")]
+    pub protect: ::prost::alloc::vec::Vec<ProtectedAsset>,
+    /// How far from the beacon its guards engage, as a whole percentage of the
+    /// sphere radius, 1-100. Required: 0 is no radius, and an omitted percentage
+    /// is not one of the header's named defaults, so it is a verifier error.
+    #[prost(uint32, tag="2")]
+    pub engagement_radius_pct: u32,
+    /// How far a guard follows a threat. Required: an unset value is a verifier
+    /// error.
+    #[prost(enumeration="defend_settings::Pursue", tag="3")]
+    pub pursue: i32,
+    /// How many scouts patrol just outside the sphere edge, at the rules table's
+    /// `defend.picket_radius_voxels`, for early warning. 0 fields no picket.
+    #[prost(uint32, tag="4")]
+    pub picket_scouts: u32,
+}
+/// Nested message and enum types in `DefendSettings`.
+pub mod defend_settings {
+    // Numbers 7-15 are free for a further Defend setting, in the one-byte tag
+    // range.
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum Pursue {
+        Unspecified = 0,
+        /// A guard never leaves the engagement radius.
+        Never = 1,
+        /// A guard follows a threat as far as the sphere edge.
+        SphereEdge = 2,
+        /// A guard follows a threat until it leaves the seat's reach: its spheres,
+        /// the live vision of its own units and structures, and Sensor Spire
+        /// reveals (spec section 6; v1 has no relays).
+        WhileInReach = 3,
+    }
+    impl Pursue {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "PURSUE_UNSPECIFIED",
+                Self::Never => "NEVER",
+                Self::SphereEdge => "SPHERE_EDGE",
+                Self::WhileInReach => "WHILE_IN_REACH",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "PURSUE_UNSPECIFIED" => Some(Self::Unspecified),
+                "NEVER" => Some(Self::Never),
+                "SPHERE_EDGE" => Some(Self::SphereEdge),
+                "WHILE_IN_REACH" => Some(Self::WhileInReach),
+                _ => None,
+            }
+        }
+    }
 }
 impl ::prost::Name for DefendSettings {
 const NAME: &'static str = "DefendSettings";
 const PACKAGE: &'static str = "gp.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.v1.DefendSettings".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.DefendSettings".into() }}
-/// PLACEHOLDER: Attack's settings — owner, at S2, with destruction and combat.
-/// Spec section 6's Attack
-/// row names: target (fixed or selector, including `enemy commander`) and
-/// retarget rule, staging point, launch condition (force size, segment time or
-/// a broadcast go-code), retreat conditions, after-action, avoid areas,
-/// breach_allowed, waves.
+/// One entry of a Defend beacon's protect list.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ProtectedAsset {
+    #[prost(oneof="protected_asset::Asset", tags="1, 2")]
+    pub asset: ::core::option::Option<protected_asset::Asset>,
+}
+/// Nested message and enum types in `ProtectedAsset`.
+pub mod protected_asset {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Asset {
+        /// One of the seat's own beacons, by name (`b_NN`) or selector.
+        #[prost(message, tag="1")]
+        Beacon(super::BeaconRef),
+        /// "my commander": the seat's own commander (spec section 6).
+        #[prost(message, tag="2")]
+        MyCommander(super::MyCommander),
+    }
+}
+impl ::prost::Name for ProtectedAsset {
+const NAME: &'static str = "ProtectedAsset";
+const PACKAGE: &'static str = "gp.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.v1.ProtectedAsset".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.ProtectedAsset".into() }}
+/// "my commander" — ProtectedAsset.my_commander.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct MyCommander {
+}
+impl ::prost::Name for MyCommander {
+const NAME: &'static str = "MyCommander";
+const PACKAGE: &'static str = "gp.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.v1.MyCommander".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.MyCommander".into() }}
+/// Spec section 6, the Attack row: "Target (fixed or selector, including enemy
+/// commander) and retarget rule; staging point; launch when any of force size,
+/// segment time or a broadcast go-code (needs a Radio Mast) holds; retreat
+/// conditions; after-action; avoid areas; breach_allowed; waves." The values
+/// are S2's plan's decision 14's (ruled by decisions-log item 144 (11)). The
+/// shape is S2's (task `con4`; the register's S2-13); the behaviour is S2's
+/// `atk` lane's, and until it lands the sim refuses an Attack arm that writes
+/// any of these, and the verifier with it (S2's plan, E8).
+///
+/// The Attack beacon gathers at the staging point, launches on its condition,
+/// attacks the weak point — the target beacon's lowest-HP structure inside its
+/// sphere, else the beacon — then retreats or regroups (decision 14). The
+/// target is pinned at the seal and launch never re-tests it, except an enemy
+/// commander target, which retargets live while any of the seat's units sees
+/// it (spec section 6; decisions-log item 13).
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AttackSettings {
+    /// What to attack. Required.
+    #[prost(message, optional, tag="1")]
+    pub target: ::core::option::Option<AttackTarget>,
+    /// What the beacon does on arrival when the remembered target has moved or
+    /// died. Required: an unset value is a verifier error.
+    #[prost(enumeration="attack_settings::Retarget", tag="2")]
+    pub retarget: i32,
+    /// Where the force gathers before it launches: a voxel inside the beacon's
+    /// sphere. Required.
+    #[prost(message, optional, tag="3")]
+    pub staging: ::core::option::Option<Voxel>,
+    /// When the force launches. Required.
+    #[prost(message, optional, tag="4")]
+    pub launch: ::core::option::Option<AttackLaunch>,
+    /// When a launched force breaks off. Optional: without it the force fights
+    /// on until the attack is over and the after-action applies.
+    #[prost(message, optional, tag="5")]
+    pub retreat: ::core::option::Option<AttackRetreat>,
+    /// What the surviving force does when the attack is over. Required: an
+    /// unset value is a verifier error.
+    #[prost(enumeration="attack_settings::AfterAction", tag="6")]
+    pub after_action: i32,
+    /// Ground the force routes around, as a route cost. Areas count toward the
+    /// playbook size budget.
+    #[prost(message, repeated, tag="7")]
+    pub avoid_areas: ::prost::alloc::vec::Vec<Area>,
+    /// Whether the attack may spend mortar or charge time digging or demolishing
+    /// a way through walls instead of stopping (spec section 9; S2's plan's
+    /// decisions 9, 40 and 41).
+    #[prost(bool, tag="8")]
+    pub breach_allowed: bool,
+    /// Launches per segment, at least 1. Required: 0 is a verifier error.
+    #[prost(uint32, tag="9")]
+    pub waves: u32,
+}
+/// Nested message and enum types in `AttackSettings`.
+pub mod attack_settings {
+    // Numbers 10-15 are free for a further Attack setting, in the one-byte tag
+    // range.
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum Retarget {
+        Unspecified = 0,
+        /// Keep the pinned target: the after-action decides.
+        None = 1,
+        /// Retarget the nearest enemy beacon the seat knows of.
+        NearestKnown = 2,
+    }
+    impl Retarget {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "RETARGET_UNSPECIFIED",
+                Self::None => "NONE",
+                Self::NearestKnown => "NEAREST_KNOWN",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "RETARGET_UNSPECIFIED" => Some(Self::Unspecified),
+                "NONE" => Some(Self::None),
+                "NEAREST_KNOWN" => Some(Self::NearestKnown),
+                _ => None,
+            }
+        }
+    }
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum AfterAction {
+        Unspecified = 0,
+        /// The surviving force walks back to the staging point.
+        RegroupAtStaging = 1,
+        /// The surviving force walks back to its home beacon.
+        ReturnHome = 2,
+    }
+    impl AfterAction {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "AFTER_ACTION_UNSPECIFIED",
+                Self::RegroupAtStaging => "REGROUP_AT_STAGING",
+                Self::ReturnHome => "RETURN_HOME",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "AFTER_ACTION_UNSPECIFIED" => Some(Self::Unspecified),
+                "REGROUP_AT_STAGING" => Some(Self::RegroupAtStaging),
+                "RETURN_HOME" => Some(Self::ReturnHome),
+                _ => None,
+            }
+        }
+    }
 }
 impl ::prost::Name for AttackSettings {
 const NAME: &'static str = "AttackSettings";
 const PACKAGE: &'static str = "gp.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.v1.AttackSettings".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.AttackSettings".into() }}
-/// Spec section 6, the Survey row. Survey-lite ships at the skeleton, which is
-/// why this one is filled and Defend and Attack are not.
+/// An Attack beacon's target.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AttackTarget {
+    #[prost(oneof="attack_target::Target", tags="1, 2, 3")]
+    pub target: ::core::option::Option<attack_target::Target>,
+}
+/// Nested message and enum types in `AttackTarget`.
+pub mod attack_target {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Target {
+        /// An enemy beacon, by name (`e_NN`) or selector.
+        #[prost(message, tag="1")]
+        Beacon(super::BeaconRef),
+        /// A fixed voxel.
+        #[prost(message, tag="2")]
+        Voxel(super::Voxel),
+        /// "enemy commander", from the seat's last sighting of it (spec section 4,
+        /// hunting).
+        #[prost(message, tag="3")]
+        EnemyCommander(super::EnemyCommander),
+    }
+}
+impl ::prost::Name for AttackTarget {
+const NAME: &'static str = "AttackTarget";
+const PACKAGE: &'static str = "gp.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.v1.AttackTarget".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.AttackTarget".into() }}
+/// "enemy commander" — AttackTarget.enemy_commander. It names no seat: which
+/// enemy commander it pins is a rule of S2's `atk` lane.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct EnemyCommander {
+}
+impl ::prost::Name for EnemyCommander {
+const NAME: &'static str = "EnemyCommander";
+const PACKAGE: &'static str = "gp.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.v1.EnemyCommander".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.EnemyCommander".into() }}
+/// When an Attack force launches: as soon as ANY condition written here holds.
+/// An absent field is no condition, which is why both are `optional`: a
+/// written 0 is a condition, and one that holds at once.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AttackLaunch {
+    /// Launch once at least this many of the beacon's raiders stand at the
+    /// staging point.
+    #[prost(uint32, optional, tag="1")]
+    pub force_size: ::core::option::Option<u32>,
+    /// Launch once this many game milliseconds of the segment have passed.
+    #[prost(int32, optional, tag="2")]
+    pub segment_ms: ::core::option::Option<i32>,
+}
+impl ::prost::Name for AttackLaunch {
+const NAME: &'static str = "AttackLaunch";
+const PACKAGE: &'static str = "gp.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.v1.AttackLaunch".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.AttackLaunch".into() }}
+/// When a launched Attack force breaks off: as soon as ANY condition written
+/// here holds. As in AttackLaunch, an absent field is no condition.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AttackRetreat {
+    /// Break off once fewer than this percentage of the launch force remain.
+    /// Integer percent, 1-100.
+    #[prost(uint32, optional, tag="1")]
+    pub force_below_pct: ::core::option::Option<u32>,
+    /// Break off once this many game milliseconds have passed since launch.
+    #[prost(int32, optional, tag="2")]
+    pub after_launch_ms: ::core::option::Option<i32>,
+}
+impl ::prost::Name for AttackRetreat {
+const NAME: &'static str = "AttackRetreat";
+const PACKAGE: &'static str = "gp.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.v1.AttackRetreat".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.v1.AttackRetreat".into() }}
+/// Spec section 6, the Survey row. Survey-lite shipped at the skeleton, which
+/// is why this one was filled before Defend and Attack were.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SurveySettings {
     /// Where to look. Scouts scan unexplored ground inside these first, then

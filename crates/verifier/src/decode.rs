@@ -99,6 +99,12 @@ const RESERVED_NAMES: &[&str] = &[
     // BuildSettings: the drone fields of the Build row.
     "repair_drones",
     "reclaim_drones",
+    // DefendSettings: auto-fortify and unit mix, deferred to S3's rule list
+    // (S2's plan's decision 13).
+    "auto_fortify",
+    "unit_mix",
+    // AttackLaunch: the broadcast go-code, at S4 with the Radio Mast.
+    "broadcast_received",
     // SurveySettings: probe directions.
     "probe_directions",
 ];

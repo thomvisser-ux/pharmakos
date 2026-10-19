@@ -688,6 +688,7 @@ mod tests {
             anchor: None,
             rotation_quarter_turns: 0,
             order: 0,
+            wall_box: None,
         }
     }
 

@@ -493,11 +493,42 @@ pub struct GetRecapResponse {
     /// The grid's shortfall at segment end. Unset when supply covered draw.
     #[prost(message, optional, tag="3")]
     pub shortfall: ::core::option::Option<Shortfall>,
+    /// The calling seat's kills and losses, S2's (spec section 3: "The recap
+    /// shows 'shared kill'"). The seat's OWN, as the settlement is.
+    #[prost(message, optional, tag="4")]
+    pub tally: ::core::option::Option<Tally>,
 }
 impl ::prost::Name for GetRecapResponse {
 const NAME: &'static str = "GetRecapResponse";
 const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.GetRecapResponse".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.GetRecapResponse".into() }}
+/// One seat's tally for the match so far, as the sim's hashed per-seat
+/// counters hold it at this recap (S2's plan, E15), never as the feed's events
+/// add up: the event bus drops past its capacity and a tally may not. Assets
+/// are beacons, structures and units; the commander is not an asset and is
+/// counted in none of these (spec section 4).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct Tally {
+    /// Enemy assets destroyed with a share of their credit going to this seat.
+    #[prost(uint32, tag="1")]
+    pub kills: u32,
+    /// Of `kills`, those whose credit was split with another seat: the recap's
+    /// "shared kill" (spec section 3).
+    #[prost(uint32, tag="2")]
+    pub shared_kills: u32,
+    /// This seat's own assets destroyed, whatever destroyed them.
+    #[prost(uint32, tag="3")]
+    pub losses: u32,
+    /// The enemy value this seat destroyed, whole $: its settled shares of the
+    /// build cost of every enemy asset destroyed, apportioned by largest
+    /// remainder, the final audit's second term (spec section 3).
+    #[prost(int32, tag="4")]
+    pub value_destroyed_dollars: i32,
+}
+impl ::prost::Name for Tally {
+const NAME: &'static str = "Tally";
+const PACKAGE: &'static str = "gp.api.v1";
+fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.Tally".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.Tally".into() }}
 /// One settlement. What the recap's settlement line says: the BMI and its
 /// band, and the award fund, which arrives at S4 (S1's plan, section 1.1).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
@@ -573,7 +604,8 @@ fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.ListBeaconsRespons
 /// Push.
 ///
 /// A seat's OWN beacon carries all four. ANOTHER seat's beacon carries `owner`
-/// and nothing more: its core flag, priority and power state are that seat's
+/// and, of the fields from 7 up, what S2's decision 5 shows (below), and
+/// nothing more: its core flag, priority and power state are that seat's
 /// business (spec section 3 names only a seat's own), and are left unset rather
 /// than zeroed — which is why `priority` is never QUARTERMASTER_PRIORITY_UNSPECIFIED
 /// on an own beacon, and a reader can tell the two apart by it.
@@ -601,6 +633,28 @@ pub struct BeaconSummary {
     /// OWN beacons only: false while the beacon is browned out (dormant).
     #[prost(bool, tag="6")]
     pub powered: bool,
+    // Fields 7 to 9 are S2's (the register's S2-11), and what they show of
+    // ANOTHER seat's beacon is S2's plan's decision 5, ruled by decisions-log
+    // item 144 (11): in live vision, its position and exact HP; from memory,
+    // its position and the sighting's age, nothing else. A beacon's mandate,
+    // power state, units by role and build progress are never shown for
+    // another seat's beacon, and this message has no field for them.
+
+    /// Hit points now, whole HP. A seat's OWN beacons always carry it; another
+    /// seat's beacon carries it only while it is in the seat's live vision, and
+    /// is left unset when the seat knows it from memory.
+    #[prost(uint32, optional, tag="7")]
+    pub hp: ::core::option::Option<u32>,
+    /// The beacon's maximum hit points, whole HP, present exactly when `hp` is,
+    /// so a reader draws a bar without a rules table of its own.
+    #[prost(uint32, optional, tag="8")]
+    pub max_hp: ::core::option::Option<u32>,
+    /// ANOTHER seat's beacon only: game milliseconds since the seat last saw
+    /// it, on match game time across Pushes (spec section 6, "Vision and
+    /// sightings"). 0 while it is in live vision now, which is the sighting's
+    /// true age; unset on the seat's own beacons, which it never sights.
+    #[prost(int32, optional, tag="9")]
+    pub sighting_age_ms: ::core::option::Option<i32>,
 }
 impl ::prost::Name for BeaconSummary {
 const NAME: &'static str = "BeaconSummary";
@@ -1713,6 +1767,44 @@ fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.GetViewResponse".i
 ///       3  scrap seam, lean       8  heat vent, rich
 ///       4  scrap seam, standard
 ///
+///     S2's materials, 9 to 33 (S2's plan, E14 and decisions 10 and 42, ruled
+///     by decisions-log item 144 (11)). They are wire values from this PR on and
+///     the sim writes them from S2's `fire` lane on; a client draws each from
+///     S2's `view` lane on, and draws nothing for one before then, as below.
+///
+///     A wall voxel names the seat that BUILT it and its level, whole or
+///     cracked (it cracks on its first blast and breaks on its second). Whose a
+///     wall is NOW is the sim's reading, not a material: a wall outside every
+///     live sphere of its seat counts as neutral, and no value says so, so a
+///     client draws a wall by its builder. The sim runs four seats (S2's plan,
+///     E19), hence four builders:
+///
+///       9  wall, seat 0, whole        13  wall, seat 2, whole
+///      10  wall, seat 0, cracked      14  wall, seat 2, cracked
+///      11  wall, seat 1, whole        15  wall, seat 3, whole
+///      12  wall, seat 1, cracked      16  wall, seat 3, cracked
+///
+///     A terrain voxel takes as many blasts as the rules table's
+///     `materials.blast_levels` gives its kind, one to three; each blast short
+///     of the last steps it down a level, so a terrain material has a cracked
+///     value for each level beyond its first. Nothing restores a cracked
+///     voxel, and an ore or vent voxel keeps its grade when it cracks:
+///
+///      17  dirt, cracked once                    25  scrap seam, rich, cracked once
+///      18  dirt, cracked twice                   26  scrap seam, rich, cracked twice
+///      19  stone, cracked once                   27  heat vent, lean, cracked once
+///      20  stone, cracked twice                  28  heat vent, lean, cracked twice
+///      21  scrap seam, lean, cracked once        29  heat vent, standard, cracked once
+///      22  scrap seam, lean, cracked twice       30  heat vent, standard, cracked twice
+///      23  scrap seam, standard, cracked once    31  heat vent, rich, cracked once
+///      24  scrap seam, standard, cracked twice   32  heat vent, rich, cracked twice
+///
+///     And the floor generation writes in the bottom
+///     `materials.bedrock_layers_voxels` layers of every column, which no blast
+///     cracks or removes:
+///
+///      33  bedrock
+///
 ///     ADDITIVE ONLY: a new material takes the next free value and nothing is
 ///     ever renumbered. A DECODER DRAWS NOTHING FOR A VALUE IT DOES NOT KNOW —
 ///     which is what lets a material be added without breaking a client built
@@ -1735,15 +1827,15 @@ impl ::prost::Name for ViewChunk {
 const NAME: &'static str = "ViewChunk";
 const PACKAGE: &'static str = "gp.api.v1";
 fn full_name() -> ::prost::alloc::string::String { "gp.api.v1.ViewChunk".into() }fn type_url() -> ::prost::alloc::string::String { "/gp.api.v1.ViewChunk".into() }}
-/// One thing standing on the terrain, as this viewer may see it.
+/// / One thing standing on the terrain, as this viewer may see it.
 ///
-/// WHERE IT IS AND WHAT IT IS, and nothing else. What a seat may know about an
-/// ENEMY asset beyond its position is a rule the spec does not state (it lists
-/// HP, power state and "under attack" for a seat's OWN beacons, and only "units
-/// near, beacon known, structure near" as enemy knowledge), so hit points,
-/// power state, heading and build progress are held at 6 to 15 for the stage
-/// that makes them matter rather than being guessed at here. Facing is derived
-/// from successive positions by whoever draws it.
+/// WHERE IT IS AND WHAT IT IS, and, from S2, its hit points and heading. What
+/// a seat sees of ANOTHER seat's asset is S2's plan's decision 5, ruled by
+/// decisions-log item 144 (11) (the register's S2-11): in live vision, its
+/// kind, position, heading and exact HP. This list is live vision only (an id
+/// absent from it is gone or no longer visible), so a remembered asset is not
+/// here: its age is BeaconSummary.sighting_age_ms. Power state and build
+/// progress are never shown for another seat's asset.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ViewEntity {
     /// OPAQUE, and scoped to the viewer this answer was built for. A beacon is
@@ -1765,17 +1857,32 @@ pub struct ViewEntity {
     #[prost(string, tag="3")]
     pub subtype: ::prost::alloc::string::String,
     /// The seat that owns it, spelt as this project spells a seat everywhere
-    /// else: `seat.0`. Empty for a thing nobody owns.
+    /// else: `seat.0`. Empty for a thing nobody owns, which a wreck and a ruin
+    /// are; a shell's is the seat that fired it.
     #[prost(string, tag="4")]
     pub owner: ::prost::alloc::string::String,
     /// Where it stands, in WHOLE voxels, floored on every axis. Finer-than-voxel
-    /// positions are a recording's concern and are held at 6 to 15 with the rest.
+    /// positions are a recording's concern and are held at 9 to 15.
     ///
     /// PLACEHOLDER: whole-voxel positions — owner, S7, with the recording
     /// format. Whole voxels are enough for a camera and are not enough for a
     /// recording that has to interpolate.
     #[prost(message, optional, tag="5")]
     pub at: ::core::option::Option<super::super::v1::Voxel>,
+    /// Hit points now, whole HP, on everything that has them: a unit, a
+    /// structure or a beacon, the viewer's own or another seat's in live vision
+    /// alike. Unset on a shell, a wreck and a ruin, which have none.
+    #[prost(uint32, optional, tag="6")]
+    pub hp: ::core::option::Option<u32>,
+    /// Its maximum hit points, whole HP, present exactly when `hp` is, so a
+    /// client draws a bar without a rules table of its own.
+    #[prost(uint32, optional, tag="7")]
+    pub max_hp: ::core::option::Option<u32>,
+    /// A unit's heading, in the sim's own units: 65 536 to the full turn, 0 is
+    /// east (+x) and 16 384 north (+y), so 0 to 65 535. Unset on anything that
+    /// has no heading of its own.
+    #[prost(uint32, optional, tag="8")]
+    pub heading: ::core::option::Option<u32>,
 }
 /// Nested message and enum types in `ViewEntity`.
 pub mod view_entity {
@@ -1786,6 +1893,16 @@ pub mod view_entity {
         Unit = 1,
         Beacon = 2,
         Structure = 3,
+        // S2's (S2's plan, task `con4`; E13, E16).
+
+        /// A mortar shell in flight. It lands where it was aimed.
+        Shell = 4,
+        /// What a dead unit or structure leaves: salvageable by any seat's repair
+        /// drones inside their sphere.
+        Wreck = 5,
+        /// A structure on a destroyed beacon, turned neutral: inert, unrepairable,
+        /// salvageable by anyone (spec section 2).
+        Ruin = 6,
     }
     impl Kind {
         /// String value of the enum field names used in the ProtoBuf definition.
@@ -1798,6 +1915,9 @@ pub mod view_entity {
                 Self::Unit => "UNIT",
                 Self::Beacon => "BEACON",
                 Self::Structure => "STRUCTURE",
+                Self::Shell => "SHELL",
+                Self::Wreck => "WRECK",
+                Self::Ruin => "RUIN",
             }
         }
         /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1807,6 +1927,9 @@ pub mod view_entity {
                 "UNIT" => Some(Self::Unit),
                 "BEACON" => Some(Self::Beacon),
                 "STRUCTURE" => Some(Self::Structure),
+                "SHELL" => Some(Self::Shell),
+                "WRECK" => Some(Self::Wreck),
+                "RUIN" => Some(Self::Ruin),
                 _ => None,
             }
         }
