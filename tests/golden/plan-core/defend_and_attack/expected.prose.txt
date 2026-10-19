@@ -1,0 +1,18 @@
+Defend and attack
+Written by hand.
+
+Route
+  1. guard: place a beacon at voxel 96, 11, 62, on a Defend mandate: protecting beacon "b_00" and your commander, engaging within 60% of the sphere, pursuing to the sphere edge and with a picket of 2 scouts (16.5 s on site).
+  2. raid: place a beacon at voxel 100, 20, 58, on a Attack mandate: attacking beacon "e_01", retargeting the nearest known enemy beacon, gathering at voxel 120, 30, 40, launching once 6 raiders stand there or 1:30 of the segment have passed, breaking off once fewer than 30% of the force remain or 1:00 after launch, then regrouping at the staging point, avoiding 1 area, breaching walls if it must and in 1 wave (18 s on site).
+  3. hold back: interface with beacon "b_00" and change its mandate settings: attacking the enemy commander and never breaching walls, switch it to a Defend mandate and add a build target: wall at voxel 90, 12, 11, filling the box from voxel 90, 12, 10 to voxel 94, 12, 13 (14.5 s on site).
+
+If the commander dies
+  On respawn, carry on from the step the route was on.
+  After 2 deaths the fallback takes over.
+
+Fallback
+  Hold at the safest own beacon.
+
+Budget
+  7 of 128 size units.
+  49 s standing at a beacon along the route.

@@ -39,6 +39,20 @@
 //! `scout_count` past a beacon's byte (`E0508`), so the editor's verdict and
 //! the seal's agree on those (S2's plan, engineering call E8).
 //!
+//! # S2's constructs (task `vfy2`)
+//!
+//! Defend's and Attack's settings are checked for what they must write and
+//! the ranges of what they write (the structure stage), for the side of the
+//! beacons they name (`E0414`, `E0415`) and, for an Attack target, for its
+//! freshness: a target named by its handle, or the enemy commander, must rest
+//! on a sighting inside the reach window when the playbook is sealed
+//! (`E0418`; spec section 6). A `wall` target's box is required, unturned,
+//! anchored inside itself, tall enough and inside its beacon's sphere
+//! (`E0101`, `E0511`, `E0417`, `E0512`, `E0416`). The sim's handler ceiling is
+//! `E0113`. All of these are refused today by the arm's or the blueprint's own
+//! refusal as well (`E0012`, `E0013`, `E0019`), until the S2 lanes that give
+//! them an effect lift those; the checks stand ready for that day.
+//!
 //! # The arithmetic the estimate stage shares
 //!
 //! [`interface`] (spec section 5's rates) and [`projection`] (the `$` and `kW`
@@ -151,7 +165,7 @@ pub use interface::Rates;
 pub use limits::{CONDITION_MAX_DEPTH, CONDITION_MAX_NODES, Limits, RulesGap};
 pub use projection::{Prices, Projection, ProjectionError};
 pub use refusals::{REFUSED_CONSTRUCTS, code_for_construct};
-pub use scope::{FeatureKind, KnownBeacon, KnownFeature, Ownership, Scope};
+pub use scope::{FeatureKind, KnownBeacon, KnownFeature, Ownership, Scope, Sighted, Sighting};
 pub use size::size_units;
 pub use walking::Walk;
 
@@ -174,7 +188,12 @@ pub use walking::Walk;
 /// enum number this build does not name (`E0018`), a
 /// `scout_count` past a beacon's byte (`E0508`) and a seal the Ledger cannot
 /// price (`E0603`), so its reports are not comparable with S1's either.
-pub const VERIFIER_VERSION: &str = "0.1.0-s2";
+/// `0.1.0-s2.2` from S2's second verifier lane (task `vfy2`): this build
+/// checks Defend's and Attack's settings, a wall's box and an Attack target's
+/// freshness, prices the new fields, refuses more handlers than the sim
+/// compiles, and notes an omitted `roe` and a repair threshold of 0, so its
+/// reports are not comparable with `0.1.0-s2`'s.
+pub const VERIFIER_VERSION: &str = "0.1.0-s2.2";
 
 /// Everything one verification is a function of, apart from the depth.
 ///

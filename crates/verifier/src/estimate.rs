@@ -233,7 +233,10 @@ fn seal_price(playbook: &Playbook, body: &Declarative, input: &Input<'_>, out: &
     let refused = match projection::project(playbook, economy, prices) {
         Ok(found) => i128::from(found.spend.raw()) > int32,
         Err(projection::ProjectionError::Overflow) => true,
-        Err(projection::ProjectionError::UnknownBlueprint(_)) => return,
+        Err(
+            projection::ProjectionError::UnknownBlueprint(_)
+            | projection::ProjectionError::UnpricedWall,
+        ) => return,
     };
     if !refused {
         return;

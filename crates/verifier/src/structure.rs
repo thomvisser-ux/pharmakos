@@ -52,7 +52,8 @@
 //!
 //! An omitted `MoveStep.pace`, `MineSettings.seam_choice`,
 //! `MineSettings.pillar_spacing` and `BuildSettings.terraform` read as named
-//! defaults, each with an `I0003` note; see [`walk_action`].
+//! defaults, each with an `I0003` note; see [`walk_action`]. From S2 so does
+//! `MandateSettings.roe`, as `RETURN_FIRE` (S2's plan, decision 4).
 //!
 //! # A wall's box (S2's wire, task `con4`)
 //!
@@ -61,19 +62,35 @@
 //! box written on a `generator` would otherwise be read by nothing, which is a
 //! silent strip. A `wall` target itself is refused for its blueprint
 //! (`E0019`, with the rest of S2's base kit) until S2's `site` lane builds
-//! walls.
+//! walls. From S2's `vfy2` a `wall` target's own shape is checked here too
+//! (`Sites::wall`): its box is required (`E0101`), it is not turned
+//! (`E0511`), its anchor is a voxel inside the box (`E0417`), and the box can
+//! stand `materials.wall_min_height_voxels` above the ground (`E0512`).
+//!
+//! # Defend and Attack (S2's `vfy2`)
+//!
+//! An empty arm is a choice of writ; an arm that writes anything in a deploy
+//! or a switch writes every required field; an edit writes what it changes,
+//! held to its range (`Sites::defend`, `Sites::attack`). An omitted `roe`
+//! reads as `RETURN_FIRE` with `I0003`, the fifth named default, and a Build
+//! beacon's repair threshold of 0 is `I0004` (S2's plan, decisions 4 and 38).
+//! The sim's handler ceiling is `E0113`.
 
 use pharmakos_proto::gp::api::v1::patch_suggestion::Applicability;
+use pharmakos_proto::gp::v1::beacon_filter::Side;
 use pharmakos_proto::gp::v1::build_settings::Terraform;
+use pharmakos_proto::gp::v1::defend_settings::Pursue;
 use pharmakos_proto::gp::v1::feature_ref::{self, Coverage, Rank};
 use pharmakos_proto::gp::v1::handler::Resume;
+use pharmakos_proto::gp::v1::mandate_settings::Roe;
 use pharmakos_proto::gp::v1::mine_settings::SeamChoice;
 use pharmakos_proto::gp::v1::move_step::Pace;
 use pharmakos_proto::gp::v1::on_death::OnRespawn;
 use pharmakos_proto::gp::v1::{
-    BeaconRef, BuildTarget, Condition, FeatureRef, Handler, IntCompare, Location, MandateSettings,
-    Playbook, Step, condition, fallback, int_compare, interface_row, location, mandate_settings,
-    step,
+    AttackSettings, BeaconFilter, BeaconRef, BuildTarget, Condition, DefendSettings, FeatureRef,
+    Handler, IntCompare, Location, MandateSettings, Playbook, ProtectedAsset, Step, attack_target,
+    beacon_ref, condition, fallback, int_compare, interface_row, location, mandate_settings,
+    protected_asset, step,
 };
 use pharmakos_proto::json::Json;
 
@@ -126,6 +143,7 @@ pub(crate) fn run(playbook: &Playbook, limits: &Limits, out: &mut Builder) {
             "id",
             out,
         );
+        handler_ceiling(declarative.handlers.len(), out);
     }
 
     if let Some(on_death) = playbook.on_death.as_ref()
@@ -172,7 +190,7 @@ pub(crate) fn run(playbook: &Playbook, limits: &Limits, out: &mut Builder) {
         }
     }
 
-    walk::walk(playbook, &mut Sites { out });
+    walk::walk(playbook, &mut Sites { limits, out });
 }
 
 /// The four blocks every playbook carries (`proto/gp/v1/playbook.proto`:
@@ -249,6 +267,25 @@ fn budget(playbook: &Playbook, limits: &Limits, out: &mut Builder) {
                 .arg("budget", limits.size_budget_units()),
         );
     }
+}
+
+/// `E0113`: more handlers than the sim compiles (decisions-log item 145 (5)).
+///
+/// The ceiling is the sim's own `MAX_HANDLERS`, read here and never written a
+/// second time, so the editor's verdict and the seal's agree on it. It is
+/// reachable inside the size budget: a handler with an empty body costs one
+/// unit, and the budget is above the ceiling. The diagnostic points at the
+/// first handler past it.
+fn handler_ceiling(found: usize, out: &mut Builder) {
+    let max = pharmakos_sim::interpreter::MAX_HANDLERS;
+    if found <= max {
+        return;
+    }
+    out.emit(
+        Diag::new("E0113", pointer::at("/declarative/handlers", max))
+            .arg("found", found)
+            .arg("max", max),
+    );
 }
 
 /// One route step.
@@ -398,6 +435,7 @@ fn check_location(place: Option<&Location>, at: &str, what: &str, out: &mut Buil
 /// version, and `on` and `covering` are v1 vocabulary (decisions-log item 130
 /// (4)).
 struct Sites<'a> {
+    limits: &'a Limits,
     out: &'a mut Builder,
 }
 
@@ -452,12 +490,13 @@ impl Visit for Sites<'_> {
     }
 
     fn build_target(&mut self, at: &str, target: &BuildTarget) {
+        if target.blueprint_id == WALL {
+            self.wall(at, target);
+            return;
+        }
         // An empty blueprint id is `E0101`'s (the refusals' check), and a box
         // under it would say nothing more.
-        if target.wall_box.is_none()
-            || target.blueprint_id == WALL
-            || target.blueprint_id.is_empty()
-        {
+        if target.wall_box.is_none() || target.blueprint_id.is_empty() {
             return;
         }
         let here = pointer::child(at, "wall_box");
@@ -479,10 +518,45 @@ impl Visit for Sites<'_> {
         // and writing the default out would add a field the sim charges for.
         // So the note, and its Fix, stand only where the beacon's settings
         // start from nothing.
+        //
+        // S2's Defend and Attack arms are checked under every carrier, for
+        // the ranges of what they write, and, outside an edit, for what they
+        // must write (`defend` and `attack` below).
+        match settings.mandate.as_ref() {
+            Some(mandate_settings::Mandate::Defend(defend)) => {
+                self.defend(&pointer::child(at, "defend"), defend, carrier);
+            }
+            Some(mandate_settings::Mandate::Attack(attack)) => {
+                self.attack(&pointer::child(at, "attack"), attack, carrier);
+            }
+            _ => {}
+        }
         if carrier == Carrier::Edit {
             return;
         }
+        // S2's plan, decision 4: an omitted `roe` reads as RETURN_FIRE, the
+        // fifth named default (`playbook.proto`'s header), said where the
+        // settings start from nothing and the block names a writ (a block
+        // with none is `E0502`'s).
+        if settings.mandate.is_some() && settings.roe == i32::from(Roe::Unspecified) {
+            self.default_note(at, "roe", "RETURN_FIRE", true);
+        }
         match settings.mandate.as_ref() {
+            Some(mandate_settings::Mandate::Build(build)) => {
+                let here = pointer::child(at, "build");
+                if build.terraform == i32::from(Terraform::Unspecified) {
+                    self.default_note(&here, "terraform", "NONE", true);
+                }
+                // S2's plan, decision 38: the threshold is read as written, and
+                // 0 (omitted or written) means a structure is never repaired.
+                // No Fix: what percentage to repair at is the author's call.
+                if build.repair_threshold_pct == 0 {
+                    self.out.emit(Diag::new(
+                        "I0004",
+                        pointer::child(&here, "repair_threshold_pct"),
+                    ));
+                }
+            }
             Some(mandate_settings::Mandate::Mine(mine)) => {
                 let here = pointer::child(at, "mine");
                 if mine.seam_choice == i32::from(SeamChoice::Unspecified) {
@@ -494,17 +568,299 @@ impl Visit for Sites<'_> {
                     self.default_note(&here, "pillar_spacing", strings::NO_PILLARS, false);
                 }
             }
-            Some(mandate_settings::Mandate::Build(build))
-                if build.terraform == i32::from(Terraform::Unspecified) =>
-            {
-                self.default_note(&pointer::child(at, "build"), "terraform", "NONE", true);
-            }
             _ => {}
         }
     }
 }
 
 impl Sites<'_> {
+    /// A `wall` target's own shape (S2's plan, decisions 10 and 40; `con4`'s
+    /// `BuildTarget.wall_box`): the box is required, the wall is not turned,
+    /// its anchor is a voxel inside the box, and the box is tall enough.
+    ///
+    /// **The height test is the half the file can decide.** A wall fills each
+    /// column from the ground's top up to `max.z`, and `min.z` lies at or below
+    /// the ground, so a column's wall is at most `max.z - min.z` voxels tall.
+    /// When that is below `materials.wall_min_height_voxels`, no column can
+    /// stand tall enough and `E0512` refuses the box. Where the ground actually
+    /// is, the view does not say, so whether `min.z` reaches it and whether
+    /// every column clears the minimum over it are the sim's to judge when it
+    /// builds the wall (S2's `site`). Whether every column lies inside the
+    /// holding beacon's sphere reads the view, and is the semantics stage's
+    /// (`E0416`).
+    fn wall(&mut self, at: &str, target: &BuildTarget) {
+        if target.rotation_quarter_turns != 0 {
+            let here = pointer::child(at, "rotation_quarter_turns");
+            self.out.emit(
+                Diag::new("E0511", here.clone())
+                    .arg("found", target.rotation_quarter_turns)
+                    .fix(
+                        strings::FIX_DROP_ROTATION,
+                        patch_remove(&here),
+                        // A wall's rotation is 0 and nothing reads another.
+                        Applicability::MachineApplicable,
+                    ),
+            );
+        }
+        let Some(wall_box) = target.wall_box.as_ref() else {
+            self.out
+                .emit(Diag::new("E0101", pointer::child(at, "wall_box")).arg("what", "`wall_box`"));
+            return;
+        };
+        let (Some(low), Some(high)) = (wall_box.min.as_ref(), wall_box.max.as_ref()) else {
+            return;
+        };
+        if low.x > high.x || low.y > high.y || low.z > high.z {
+            // `E0406`'s: an inside-out box has no height and no inside.
+            return;
+        }
+        let tall = i64::from(high.z).saturating_sub(i64::from(low.z));
+        let least = i64::from(self.limits.wall_min_height_voxels());
+        if tall < least {
+            self.out.emit(
+                Diag::new("E0512", pointer::child(at, "wall_box"))
+                    .arg("found", tall)
+                    .arg("min", least)
+                    .map_ref(*low)
+                    .map_ref(*high),
+            );
+        }
+        let anchor_at = pointer::child(at, "anchor");
+        match target
+            .anchor
+            .as_ref()
+            .and_then(|anchor| anchor.place.as_ref())
+        {
+            // A target with no anchor names nothing to remove it by, which is
+            // the same for every blueprint and is not the wall's question.
+            None => {}
+            Some(location::Place::Voxel(voxel)) => {
+                let within = |value: i32, from: i32, to: i32| value >= from && value <= to;
+                if !(within(voxel.x, low.x, high.x)
+                    && within(voxel.y, low.y, high.y)
+                    && within(voxel.z, low.z, high.z))
+                {
+                    self.out.emit(
+                        Diag::new("E0417", pointer::child(&anchor_at, "voxel"))
+                            .arg("found", strings::ANCHOR_OUTSIDE_BOX)
+                            .map_ref(*voxel),
+                    );
+                }
+            }
+            Some(_) => self
+                .out
+                .emit(Diag::new("E0417", anchor_at).arg("found", strings::ANCHOR_NOT_A_VOXEL)),
+        }
+    }
+
+    /// S2's Defend settings (`con4`; S2's plan, decision 13), as the file
+    /// alone can judge them.
+    ///
+    /// **Requiredness follows the carrier.** An empty arm is a choice of writ
+    /// and nothing more, legal in a deploy's `initial` and in a switch, as the
+    /// sim reads it (decisions-log item 145 (5), `dfnd`'s note). An arm that
+    /// writes anything in a deploy or a switch starts the beacon's settings
+    /// from nothing, so it must write every required field. An edit
+    /// (`set_mandate_settings`) writes only what it changes, so nothing is
+    /// required of it, and what it does write is still held to its range.
+    fn defend(&mut self, at: &str, defend: &DefendSettings, carrier: Carrier) {
+        if *defend == DefendSettings::default() {
+            return;
+        }
+        if carrier != Carrier::Edit {
+            if defend.engagement_radius_pct == 0 {
+                self.out.emit(
+                    Diag::new("E0101", pointer::child(at, "engagement_radius_pct"))
+                        .arg("what", "`engagement_radius_pct`"),
+                );
+            }
+            if defend.pursue == i32::from(Pursue::Unspecified) {
+                self.out
+                    .emit(Diag::new("E0111", pointer::child(at, "pursue")).arg("field", "pursue"));
+            }
+        }
+        if defend.engagement_radius_pct > 100 {
+            self.range(
+                at,
+                "engagement_radius_pct",
+                defend.engagement_radius_pct,
+                strings::RANGE_ONE_TO_HUNDRED,
+                Some(100),
+            );
+        }
+        let protect_at = pointer::child(at, "protect");
+        let mut seen: Vec<(&ProtectedAsset, usize)> = Vec::new();
+        for (index, entry) in defend.protect.iter().enumerate() {
+            let here = pointer::at(&protect_at, index);
+            match entry.asset.as_ref() {
+                None => {
+                    self.out
+                        .emit(Diag::new("E0111", here.clone()).arg("field", "asset"));
+                }
+                Some(protected_asset::Asset::Beacon(beacon)) => {
+                    let beacon_at = pointer::child(&here, "beacon");
+                    if let Some((selector, filter)) = selector_filter(beacon)
+                        && Side::try_from(filter_side(filter)) == Ok(Side::EnemyKnown)
+                    {
+                        self.out.emit(
+                            Diag::new("E0415", pointer::child(&beacon_at, selector))
+                                .arg("role", strings::ROLE_PROTECT)
+                                .arg("found", strings::RANKS_ENEMY)
+                                .arg("wanted", strings::RANKS_OWN),
+                        );
+                    }
+                }
+                Some(protected_asset::Asset::MyCommander(_)) => {}
+            }
+            if entry.asset.is_none() {
+                continue;
+            }
+            match seen.iter().find(|(earlier, _)| *earlier == entry) {
+                Some((_, first)) => self.out.emit(
+                    Diag::new("E0105", here)
+                        .arg("name", asset_name(entry))
+                        .arg("scope", strings::WITHIN_PROTECT)
+                        .related(pointer::at(&protect_at, *first)),
+                ),
+                None => seen.push((entry, index)),
+            }
+        }
+    }
+
+    /// S2's Attack settings (`con4`; S2's plan, decision 14), as the file
+    /// alone can judge them. Requiredness follows the carrier, as
+    /// [`Sites::defend`] says.
+    ///
+    /// Whether a target named by its handle is the seat's own, and whether it
+    /// was seen recently enough, read the view, and are the semantics stage's
+    /// (`E0414`, `E0418`).
+    fn attack(&mut self, at: &str, attack: &AttackSettings, carrier: Carrier) {
+        if *attack == AttackSettings::default() {
+            return;
+        }
+        if carrier != Carrier::Edit {
+            for (present, field) in [
+                (attack.target.is_some(), "target"),
+                (attack.staging.is_some(), "staging"),
+                (attack.launch.is_some(), "launch"),
+            ] {
+                if !present {
+                    self.out.emit(
+                        Diag::new("E0101", pointer::child(at, field))
+                            .arg("what", format!("`{field}`")),
+                    );
+                }
+            }
+            for (value, field) in [
+                (attack.retarget, "retarget"),
+                (attack.after_action, "after_action"),
+            ] {
+                if value == 0 {
+                    self.out
+                        .emit(Diag::new("E0111", pointer::child(at, field)).arg("field", field));
+                }
+            }
+            if attack.waves == 0 {
+                self.range(at, "waves", 0, strings::RANGE_ONE_OR_MORE, Some(1));
+            }
+        }
+        if let Some(target) = attack.target.as_ref() {
+            let target_at = pointer::child(at, "target");
+            match target.target.as_ref() {
+                None => self
+                    .out
+                    .emit(Diag::new("E0111", target_at).arg("field", "target")),
+                Some(attack_target::Target::Beacon(beacon)) => {
+                    let beacon_at = pointer::child(&target_at, "beacon");
+                    match beacon.r#ref.as_ref() {
+                        Some(beacon_ref::Ref::Safest(_)) => self.out.emit(
+                            Diag::new("E0415", pointer::child(&beacon_at, "safest"))
+                                .arg("role", strings::ROLE_ATTACK_TARGET)
+                                .arg("found", strings::RANKS_SAFEST)
+                                .arg("wanted", strings::RANKS_ENEMY),
+                        ),
+                        _ => {
+                            if let Some((selector, filter)) = selector_filter(beacon) {
+                                // Read raw: a number `Side` does not name is
+                                // `E0018`'s, and says nothing here.
+                                let side = Side::try_from(filter_side(filter));
+                                if matches!(side, Ok(Side::Unspecified | Side::Own)) {
+                                    self.out.emit(
+                                        Diag::new("E0415", pointer::child(&beacon_at, selector))
+                                            .arg("role", strings::ROLE_ATTACK_TARGET)
+                                            .arg("found", strings::RANKS_OWN)
+                                            .arg("wanted", strings::RANKS_ENEMY),
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+                Some(
+                    attack_target::Target::Voxel(_) | attack_target::Target::EnemyCommander(_),
+                ) => {}
+            }
+        }
+        if let Some(launch) = attack.launch.as_ref() {
+            let launch_at = pointer::child(at, "launch");
+            if launch.force_size.is_none() && launch.segment_ms.is_none() {
+                self.out.emit(
+                    Diag::new("E0101", launch_at.clone()).arg("what", strings::A_LAUNCH_CONDITION),
+                );
+            }
+            if let Some(ms) = launch.segment_ms
+                && ms < 0
+            {
+                negative(self.out, &launch_at, "segment_ms", ms);
+            }
+        }
+        if let Some(retreat) = attack.retreat.as_ref() {
+            let retreat_at = pointer::child(at, "retreat");
+            if let Some(pct) = retreat.force_below_pct
+                && !(1..=100).contains(&pct)
+            {
+                self.range(
+                    &retreat_at,
+                    "force_below_pct",
+                    pct,
+                    strings::RANGE_ONE_TO_HUNDRED,
+                    Some(pct.clamp(1, 100)),
+                );
+            }
+            if let Some(ms) = retreat.after_launch_ms
+                && ms < 0
+            {
+                negative(self.out, &retreat_at, "after_launch_ms", ms);
+            }
+        }
+    }
+
+    /// `E0510`: a setting outside its range, with a Fix to `fixed` where
+    /// there is an obvious nearest value.
+    fn range(
+        &mut self,
+        at: &str,
+        field: &'static str,
+        found: u32,
+        range: &str,
+        fixed: Option<u32>,
+    ) {
+        let here = pointer::child(at, field);
+        let mut diag = Diag::new("E0510", here.clone())
+            .arg("field", field)
+            .arg("found", found)
+            .arg("range", range);
+        if let Some(value) = fixed {
+            diag = diag.fix(
+                format!("Set {field} to {value}"),
+                // `add`: the out-of-range value may be the absent one.
+                patch_add(&here, &number(value)),
+                Applicability::MaybeIncorrect,
+            );
+        }
+        self.out.emit(diag);
+    }
+
     /// One `FeatureRef` under an arm it may stand under.
     fn feature(&mut self, feature: &FeatureRef, at: &str, arm: Arm<'_>) {
         let Some(chosen) = feature.r#ref.as_ref() else {
@@ -584,6 +940,43 @@ impl Sites<'_> {
             );
         }
         self.out.emit(diag);
+    }
+}
+
+/// A ranking selector's JSON name and its filter, if `beacon` is one: the
+/// three selectors that take a filter. A fixed id and `safest` are not.
+fn selector_filter(beacon: &BeaconRef) -> Option<(&'static str, Option<&BeaconFilter>)> {
+    match beacon.r#ref.as_ref()? {
+        beacon_ref::Ref::Nearest(pick) => Some(("nearest", pick.filter.as_ref())),
+        beacon_ref::Ref::Weakest(pick) => Some(("weakest", pick.filter.as_ref())),
+        beacon_ref::Ref::MostThreatened(pick) => Some(("most_threatened", pick.filter.as_ref())),
+        beacon_ref::Ref::BeaconId(_) | beacon_ref::Ref::Safest(_) => None,
+    }
+}
+
+/// A filter's side as written, raw. No filter at all writes no side, which is
+/// the side a bare selector has (`BeaconFilter`'s named exception: it reads
+/// as `OWN`), so it is the same number.
+fn filter_side(filter: Option<&BeaconFilter>) -> i32 {
+    match filter {
+        Some(found) => found.side,
+        None => i32::from(Side::Unspecified),
+    }
+}
+
+/// How `E0105` names a repeated protect-list entry.
+fn asset_name(entry: &ProtectedAsset) -> String {
+    match entry.asset.as_ref() {
+        Some(protected_asset::Asset::Beacon(beacon)) => match beacon.r#ref.as_ref() {
+            Some(beacon_ref::Ref::BeaconId(id)) => id.clone(),
+            Some(beacon_ref::Ref::Safest(_)) => "safest".to_owned(),
+            Some(beacon_ref::Ref::Nearest(_)) => "nearest".to_owned(),
+            Some(beacon_ref::Ref::Weakest(_)) => "weakest".to_owned(),
+            Some(beacon_ref::Ref::MostThreatened(_)) => "most_threatened".to_owned(),
+            None => "beacon".to_owned(),
+        },
+        Some(protected_asset::Asset::MyCommander(_)) => strings::MY_COMMANDER.to_owned(),
+        None => "asset".to_owned(),
     }
 }
 

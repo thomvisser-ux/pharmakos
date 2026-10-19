@@ -13,7 +13,8 @@
 //! and `tests/golden/verifier/README.md` tabulates. That fixture lives in an
 //! integration test, which no other crate can import, so [`fixture_scope`],
 //! [`map_scope`], [`MAP_CASES`], [`fixture_snapshot`], [`short_scope`],
-//! [`SHORT_CASES`], [`segment_snapshot`] and [`SEGMENT_CASES`] restate it, and
+//! [`SHORT_CASES`], [`segment_snapshot`], [`SEGMENT_CASES`], [`sight_scope`] and
+//! [`SIGHT_CASES`] restate it, and
 //! `tests/harness.rs` (`every_case_under_the_bench_fixture_is_its_committed_report`)
 //! holds the restatement to the committed reports: every
 //! case's report under this fixture must equal its `expected.report.json` byte
@@ -47,7 +48,9 @@ use pharmakos_sim::math::quantity::{Kw, Money};
 use pharmakos_sim::rules::RulesTable;
 use pharmakos_sim::snapshot::{SNAPSHOT_VERSION, Snapshot};
 use pharmakos_sim::tables::SeatId;
-use pharmakos_verifier::{FeatureKind, Input, KnownBeacon, KnownFeature, Ownership, Scope, verify};
+use pharmakos_verifier::{
+    FeatureKind, Input, KnownBeacon, KnownFeature, Ownership, Scope, Sighted, Sighting, verify,
+};
 
 use crate::stats::{Summary, micros};
 
@@ -339,6 +342,38 @@ pub fn map_scope() -> Scope {
         })
 }
 
+/// The cases checked against [`sight_scope`], as
+/// `crates/verifier/tests/verifier.rs` lists them in `SIGHT_CASES` (S2's `vfy2`).
+pub const SIGHT_CASES: &[&str] = &[
+    "e0418_an_attack_target_seen_too_long_ago",
+    "w0703_a_reference_resting_on_an_old_sighting",
+];
+
+/// [`fixture_scope`] with the seat's sightings, as
+/// `crates/verifier/tests/verifier.rs` writes it in `sight_scope`.
+#[must_use]
+pub fn sight_scope() -> Scope {
+    fixture_scope()
+        .with_sighting(Sighting {
+            what: Sighted::Beacon("e_01".to_owned()),
+            at: Voxel {
+                x: 300,
+                y: 300,
+                z: 40,
+            },
+            age_ms: 240_000,
+        })
+        .with_sighting(Sighting {
+            what: Sighted::Commander(SeatId::new(1)),
+            at: Voxel {
+                x: 290,
+                y: 295,
+                z: 40,
+            },
+            age_ms: 30_000,
+        })
+}
+
 /// Everything one QUICK call is a function of, apart from the playbook.
 #[derive(Debug)]
 pub struct Fixture {
@@ -346,6 +381,7 @@ pub struct Fixture {
     scope: Scope,
     map_scope: Scope,
     short_scope: Scope,
+    sight_scope: Scope,
     snapshot: Vec<u8>,
     segment_snapshot: Vec<u8>,
 }
@@ -363,6 +399,7 @@ impl Fixture {
             scope: fixture_scope(),
             map_scope: map_scope(),
             short_scope: short_scope(),
+            sight_scope: sight_scope(),
             snapshot: fixture_snapshot()?,
             segment_snapshot: segment_snapshot()?,
         })
@@ -375,6 +412,8 @@ impl Fixture {
     pub fn scope_for(&self, case: &Case) -> &Scope {
         if MAP_CASES.contains(&case.name.as_str()) {
             &self.map_scope
+        } else if SIGHT_CASES.contains(&case.name.as_str()) {
+            &self.sight_scope
         } else if SHORT_CASES.contains(&case.name.as_str()) {
             &self.short_scope
         } else {

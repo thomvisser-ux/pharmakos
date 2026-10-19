@@ -19,7 +19,7 @@
 //! | "An earlier step places a beacon; this may read differently" | `W0705` | **S1**, here |
 //! | A fixed site beside a vent the seat already covers, with a Fix that swaps in the description | `W0706` | **S1**, here |
 //! | A handler that can never fire because an earlier one always wins | `W0702` | **S3**, with the rule list at full depth |
-//! | A reference resting on a sighting older than the reach window | `W0703` | **S2/S3**, once there are sightings to be stale |
+//! | A reference to an enemy beacon resting on a sighting older than the reach window, an Attack target aside (`E0418` refuses that) | `W0703` | **S2**, here (task `vfy2`) |
 //! | Selector previews — "if this resolved now, it would pick…" | `I0002` | **S3** |
 //!
 //! A lint is **advice**, never a refusal: everything this stage can raise is a
@@ -56,14 +56,16 @@
 
 use pharmakos_proto::gp::api::v1::patch_suggestion::Applicability;
 use pharmakos_proto::gp::v1::feature_ref::{self, Coverage, Rank};
-use pharmakos_proto::gp::v1::{Location, Playbook, Step, Voxel, location, step};
+use pharmakos_proto::gp::v1::{
+    BeaconRef, Location, Playbook, Step, Voxel, beacon_ref, location, step,
+};
 use pharmakos_proto::json::Json;
 
 use crate::limits::Limits;
 use crate::pointer;
 use crate::report::{Builder, Diag, patch_replace};
 use crate::resolve::Symbols;
-use crate::scope::{FeatureKind, KnownFeature, Scope};
+use crate::scope::{FeatureKind, KnownFeature, Ownership, Scope};
 use crate::strings;
 use crate::structure::arm_name;
 use crate::walk::{self, List, Slot, Visit};
@@ -162,6 +164,10 @@ impl Visit for Lints<'_> {
         self.current = Some((list, index));
     }
 
+    fn beacon(&mut self, at: &str, reference: &BeaconRef) {
+        self.stale(at, reference);
+    }
+
     fn location(&mut self, at: &str, place: &Location, slot: Slot<'_>) {
         // Only an arm standing where it is legal: anywhere else the structure
         // stage has already refused it, and advice about it would be noise.
@@ -224,6 +230,43 @@ impl Visit for Lints<'_> {
 }
 
 impl Lints<'_> {
+    /// `W0703`: a reference to an enemy beacon by its handle, resting on a
+    /// sighting older than the reach window (spec section 10's one window).
+    ///
+    /// An Attack target is not advised here: its freshness is a qualification
+    /// test (spec section 6), so the semantics stage refuses a stale one as
+    /// `E0418` and saying it twice helps nobody. A handle the view holds no
+    /// sighting for says nothing here either: there is no age to compare, and
+    /// a name the view does not hold at all is `E0401`'s. Ages are read and
+    /// compared; nothing is ranked.
+    fn stale(&mut self, at: &str, reference: &BeaconRef) {
+        let Some(beacon_ref::Ref::BeaconId(id)) = reference.r#ref.as_ref() else {
+            return;
+        };
+        if at.ends_with("/attack/target/beacon") {
+            return;
+        }
+        let Some(known) = self.scope.beacon(id) else {
+            return;
+        };
+        if known.side != Ownership::EnemyKnown {
+            return;
+        }
+        let Some(sighting) = self.scope.beacon_sighting(id) else {
+            return;
+        };
+        let window = i64::from(self.limits.reach_memory_ms());
+        if i64::from(sighting.age_ms) <= window {
+            return;
+        }
+        self.out.emit(
+            Diag::new("W0703", pointer::child(at, "beacon_id"))
+                .arg("found", sighting.age_ms)
+                .arg("max", window)
+                .map_ref(sighting.at),
+        );
+    }
+
     /// `W0704` for a pick: nothing passes its filters.
     fn matches_nothing(&mut self, at: &str, kind: FeatureKind, uncovered: bool, what: &str) {
         let mut live = self

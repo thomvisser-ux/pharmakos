@@ -1,0 +1,880 @@
+{
+  "schema_version": {
+    "major": 1
+  },
+  "meta": {
+    "title": "case",
+    "author_kind": "HUMAN"
+  },
+  "kind": "PLAYBOOK",
+  "declarative": {
+    "route": [
+      {
+        "label": "s1",
+        "hold": {
+          "ms": 1000
+        }
+      }
+    ],
+    "handlers": [
+      {
+        "id": "h0",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h1",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h2",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h3",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h4",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h5",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h6",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h7",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h8",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h9",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h10",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h11",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h12",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h13",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h14",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h15",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h16",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h17",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h18",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h19",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h20",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h21",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h22",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h23",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h24",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h25",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h26",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h27",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h28",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h29",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h30",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h31",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h32",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h33",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h34",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h35",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h36",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h37",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h38",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h39",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h40",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h41",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h42",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h43",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h44",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h45",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h46",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h47",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h48",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h49",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h50",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h51",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h52",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h53",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h54",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h55",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h56",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h57",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h58",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h59",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h60",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h61",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h62",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h63",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      },
+      {
+        "id": "h64",
+        "when": {
+          "cmdr_hp_pct": {
+            "cmp": "LE",
+            "pct": 40
+          }
+        },
+        "body": [],
+        "resume": "CONTINUE",
+        "cooldown_ms": 30000,
+        "max_fires": 1
+      }
+    ]
+  },
+  "on_death": {
+    "on_respawn": "CONTINUE",
+    "max_deaths_before_fallback": 1
+  },
+  "fallback": {
+    "hold": {
+      "at": {
+        "beacon_anchor": {
+          "safest": {}
+        }
+      }
+    }
+  }
+}

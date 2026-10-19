@@ -64,8 +64,35 @@ impl fmt::Display for Error {
 impl std::error::Error for Error {}
 
 impl From<pharmakos_verifier::RulesGap> for Error {
+    /// Each gap says what it is: a missing block is an incomplete table, and
+    /// a value out of range is a table the verifier cannot read, which is a
+    /// different fault to fix (decisions-log item 145 (5): the wrapping used
+    /// to call every gap "incomplete").
     fn from(gap: pharmakos_verifier::RulesGap) -> Self {
-        Self::at("", format!("the rules table is incomplete: {gap}"))
+        let what = match gap {
+            pharmakos_verifier::RulesGap::MissingBlock(_) => "the rules table is incomplete",
+            pharmakos_verifier::RulesGap::OutOfRange { .. }
+            | pharmakos_verifier::RulesGap::Negative { .. }
+            | pharmakos_verifier::RulesGap::NotPositive { .. } => {
+                "the rules table holds a value the verifier cannot use"
+            }
+        };
+        Self::at("", format!("{what}: {gap}"))
+    }
+}
+
+impl From<pharmakos_verifier::InputError> for Error {
+    /// Why a verification could not start, said truthfully per cause: the
+    /// rules table's own gap, or an input with no `report_hash` encoding,
+    /// which is not a fault of the rules table at all.
+    fn from(error: pharmakos_verifier::InputError) -> Self {
+        match error {
+            pharmakos_verifier::InputError::Rules(gap) => Self::from(gap),
+            pharmakos_verifier::InputError::Unhashable(cause) => Self::at(
+                "",
+                format!("the playbook or the seat's view has no report hash: {cause}"),
+            ),
+        }
     }
 }
 
@@ -165,6 +192,44 @@ mod tests {
                 .expect_err("`a/b~c` is not a field of gp.v1.Playbook");
         assert_eq!(error.pointer, push_pointer("", "a/b~c"));
         assert_eq!(error.pointer, "/a~1b~0c");
+    }
+
+    /// Decisions-log item 145 (5): every `Input::new` error used to read "the
+    /// rules table is incomplete", an unhashable input included.
+    #[test]
+    fn each_input_error_says_what_it_is() {
+        use pharmakos_verifier::{HashError, InputError, RulesGap};
+        let missing: Error = InputError::Rules(RulesGap::MissingBlock("verifier")).into();
+        assert!(
+            missing
+                .message
+                .starts_with("the rules table is incomplete: ")
+        );
+        let range: Error = InputError::Rules(RulesGap::OutOfRange {
+            field: "map.size_x",
+            value: u32::MAX,
+        })
+        .into();
+        assert!(
+            range
+                .message
+                .starts_with("the rules table holds a value the verifier cannot use: "),
+            "{}",
+            range.message
+        );
+        let unhashable: Error = InputError::Unhashable(HashError::TooLong {
+            what: "the playbook",
+            len: 5,
+        })
+        .into();
+        assert!(
+            unhashable
+                .message
+                .starts_with("the playbook or the seat's view has no report hash"),
+            "{}",
+            unhashable.message
+        );
+        assert!(!unhashable.message.contains("rules table"));
     }
 
     #[test]

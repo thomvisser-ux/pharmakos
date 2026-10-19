@@ -76,8 +76,9 @@ use crate::scope::Scope;
 /// encoding widened to carry the map's features and the commander's position,
 /// so input 2's bytes are laid out differently from `/1`'s, and the version
 /// says so in one place rather than leaving a reader to infer it from a moved
-/// golden.
-pub const REPORT_HASH_DOMAIN: &[u8] = b"gp.api.v1/report/2";
+/// golden. `/3` from S2's second verifier lane (task `vfy2`): the view gained
+/// the seat's sightings with their ages, for an Attack target's freshness.
+pub const REPORT_HASH_DOMAIN: &[u8] = b"gp.api.v1/report/3";
 
 /// The report hash over the five inputs.
 ///

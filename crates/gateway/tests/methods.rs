@@ -2408,6 +2408,10 @@ fn two_door_cases() -> Vec<Case> {
 }
 
 /// One gap, with the two fragments its refusal has to name.
+#[expect(
+    dead_code,
+    reason = "no gap between the two doors is open since S2's `vfy2` (E0113); the next construct \n              the sim refuses before the verifier does takes its row through this, and the \n              expectation then fails, so this attribute goes with it"
+)]
 fn sim(what: &'static str, playbook: String, names: &'static str, stage: &'static str) -> Case {
     Case {
         what,
@@ -2514,12 +2518,16 @@ fn mandate_and_rule_gaps() -> Vec<Case> {
             "predicate `beacon_under_attack`",
             "S2",
         ),
-        sim(
-            "more rules than this build compiles, and well inside the size budget",
-            many_handlers(65),
-            "65 handlers",
-            "ceiling is 64",
-        ),
+        // S2's `vfy2` closed the last gap of this block: the verifier reads
+        // the sim's own `MAX_HANDLERS` and refuses the 65th handler as E0113.
+        Case {
+            what: "more rules than this build compiles, and well inside the size budget",
+            playbook: many_handlers(65),
+            door: Door::Verifier,
+            names: "",
+            stage: "",
+            code: "E0113",
+        },
     ]
 }
 
@@ -2773,7 +2781,7 @@ fn a_playbook_this_build_cannot_execute_is_a_method_error_and_keeps_the_old_seal
         );
     }
     assert_eq!(
-        gaps, 1,
+        gaps, 0,
         "the pull request lists {gaps} gap(s) between the two doors. A different number here \
          means the list is out of date -- in either direction. It was ten before T14, which \
          closed `recycle`, `add_build_target`, `remove_build_target`, Survey probe areas, and \

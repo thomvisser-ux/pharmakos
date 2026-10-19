@@ -34,7 +34,12 @@
 //! cannot price). S2's wire (task `con4`) adds `E0019`, a Build target naming
 //! one of S2's base kit before S2's `site` lane builds it, at the end of the
 //! decode family, and `E0509`, a `wall_box` on a target that is not a `wall`,
-//! at the end of the settings family.
+//! at the end of the settings family. S2's second verifier lane (task `vfy2`)
+//! adds `E0113` (more handlers than the sim compiles), `E0414` to `E0418`
+//! (Defend's and Attack's references, a wall box's place, and an Attack
+//! target's freshness), `E0510` to `E0512` (Defend's and Attack's ranges and
+//! a wall's rotation and height) and `I0004` (a repair threshold of 0), each
+//! at the end of its family, and gives `W0703` its emitter.
 //!
 //! The label an unemitted row prints, `none at the skeleton (…)`, is kept as
 //! it was spelt when the table shipped, because `gamectl docs` quotes it; the
@@ -442,6 +447,16 @@ pub const CATALOGUE: &[Entry] = &[
         // the limit is real but nothing here has the text to measure.
         emitter: Emitter::NoneYet("T9, the gateway owns the seat notebook"),
     },
+    // S2's `vfy2` (decisions-log item 145 (5)): more handlers than the sim
+    // compiles (`PlanError::TooManyHandlers`), the ceiling read from the sim's
+    // own `MAX_HANDLERS` and never written a second time. A technical limit,
+    // not a balance cap, and reachable inside the size budget.
+    Entry {
+        code: "E0113",
+        family: Family::LimitsAndRequiredBlocks,
+        severity: Severity::Error,
+        emitter: Emitter::Stage(Stage::Structure),
+    },
     // --- E02xx: conditions ---------------------------------------------------
     Entry {
         code: "E0201",
@@ -614,6 +629,41 @@ pub const CATALOGUE: &[Entry] = &[
         severity: Severity::Error,
         emitter: Emitter::Stage(Stage::Semantics),
     },
+    // E0414 to E0418: S2's Defend and Attack references and the wall box
+    // (task `vfy2`). A name's side and a wall's sphere read the seat's view,
+    // so they are the semantics stage's; a selector's side and a wall's anchor
+    // are about the file alone, so they are the structure stage's. E0418 is
+    // the Attack target's plan-time freshness (spec section 6).
+    Entry {
+        code: "E0414",
+        family: Family::ReferencesAndPlacement,
+        severity: Severity::Error,
+        emitter: Emitter::Stage(Stage::Semantics),
+    },
+    Entry {
+        code: "E0415",
+        family: Family::ReferencesAndPlacement,
+        severity: Severity::Error,
+        emitter: Emitter::Stage(Stage::Structure),
+    },
+    Entry {
+        code: "E0416",
+        family: Family::ReferencesAndPlacement,
+        severity: Severity::Error,
+        emitter: Emitter::Stage(Stage::Semantics),
+    },
+    Entry {
+        code: "E0417",
+        family: Family::ReferencesAndPlacement,
+        severity: Severity::Error,
+        emitter: Emitter::Stage(Stage::Structure),
+    },
+    Entry {
+        code: "E0418",
+        family: Family::ReferencesAndPlacement,
+        severity: Severity::Error,
+        emitter: Emitter::Stage(Stage::Semantics),
+    },
     // --- E05xx: settings and recycle -----------------------------------------
     Entry {
         code: "E0501",
@@ -658,7 +708,8 @@ pub const CATALOGUE: &[Entry] = &[
         emitter: Emitter::NoneYet("S4, with licences"),
     },
     // S2-15: a Survey `scout_count` past the byte a beacon's column holds,
-    // which the sim's compile refuses (`PlanError::ScoutsOutOfRange`).
+    // which the sim's compile refuses (`PlanError::ScoutsOutOfRange`); from
+    // S2's `vfy2` a Defend `picket_scouts` past the same byte too.
     Entry {
         code: "E0508",
         family: Family::SettingsAndRecycle,
@@ -669,6 +720,27 @@ pub const CATALOGUE: &[Entry] = &[
     // A question about the file alone, so the structure stage's.
     Entry {
         code: "E0509",
+        family: Family::SettingsAndRecycle,
+        severity: Severity::Error,
+        emitter: Emitter::Stage(Stage::Structure),
+    },
+    // S2's `vfy2`: a Defend or Attack setting outside its range, a rotated
+    // wall, and a wall box too low to stand `materials.wall_min_height_voxels`
+    // above the ground anywhere (S2's plan, decision 40's own code).
+    Entry {
+        code: "E0510",
+        family: Family::SettingsAndRecycle,
+        severity: Severity::Error,
+        emitter: Emitter::Stage(Stage::Structure),
+    },
+    Entry {
+        code: "E0511",
+        family: Family::SettingsAndRecycle,
+        severity: Severity::Error,
+        emitter: Emitter::Stage(Stage::Structure),
+    },
+    Entry {
+        code: "E0512",
         family: Family::SettingsAndRecycle,
         severity: Severity::Error,
         emitter: Emitter::Stage(Stage::Structure),
@@ -758,7 +830,10 @@ pub const CATALOGUE: &[Entry] = &[
         code: "W0703",
         family: Family::ScheduleConflictsAndStaleness,
         severity: Severity::Warning,
-        emitter: Emitter::NoneYet("S3, with the reach window"),
+        // S2's `vfy2`: a reference to an enemy beacon, other than an Attack
+        // target (which E0418 refuses), resting on a sighting older than the
+        // reach window.
+        emitter: Emitter::Stage(Stage::Lint),
     },
     // Targeting's three lints (docs/design/targeting.md, "Surfaces"), the
     // first codes the lint stage raises. Advice, never a refusal: each is a
@@ -805,9 +880,18 @@ pub const CATALOGUE: &[Entry] = &[
     },
     // S1-39, S1's plan's decision 11 (item 128): an omitted `pace`,
     // `seam_choice`, `pillar_spacing` or `terraform` reads as its named
-    // default, and the report says so.
+    // default, and the report says so; from S2 (decision 4, task `vfy2`) an
+    // omitted `roe` too, as RETURN_FIRE.
     Entry {
         code: "I0003",
+        family: Family::Information,
+        severity: Severity::Info,
+        emitter: Emitter::Stage(Stage::Structure),
+    },
+    // S2's plan, decision 38 (task `vfy2`): a Build beacon whose
+    // `repair_threshold_pct` is 0 never repairs a structure, read as written.
+    Entry {
+        code: "I0004",
         family: Family::Information,
         severity: Severity::Info,
         emitter: Emitter::Stage(Stage::Structure),

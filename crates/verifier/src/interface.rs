@@ -63,9 +63,9 @@
 //! the schedule check fire and can never make it fall silent.
 
 use pharmakos_proto::gp::v1::{
-    AttackSettings, BuildSettings, DefendSettings, InitialSettings, InterfaceRow, InterfaceStep,
-    MandateSettings, MineSettings, PlaceBeaconStep, Playbook, Step, SurveySettings, interface_row,
-    mandate_settings, step,
+    AttackLaunch, AttackRetreat, AttackSettings, BuildSettings, DefendSettings, InitialSettings,
+    InterfaceRow, InterfaceStep, MandateSettings, MineSettings, PlaceBeaconStep, Playbook, Step,
+    SurveySettings, interface_row, mandate_settings, step,
 };
 use pharmakos_sim::math::quantity::Ms;
 use pharmakos_sim::rules::RulesTable;
@@ -417,37 +417,76 @@ pub fn count(settings: &MandateSettings) -> Counted {
                 0,
             )
         }
-        // Defend's and Attack's fields arrived with S2's wire (`con4`), and an
-        // arm that writes any of them is refused, by the sim at the seal and
-        // here by E0012 and E0013, until S2's `dfnd` and `atk` give them an
-        // effect: no playbook that qualifies writes one, so there is nothing
-        // to price yet, and an empty arm writes nothing. Their pricing, one
-        // field per changed element, is S2's `vfy2`'s. The patterns name every
-        // field so that the day another arrives, this match stops compiling.
-        Some(
-            mandate_settings::Mandate::Defend(DefendSettings {
-                protect: _,
-                engagement_radius_pct: _,
-                pursue: _,
-                picket_scouts: _,
-            })
-            | mandate_settings::Mandate::Attack(AttackSettings {
-                target: _,
-                retarget: _,
-                staging: _,
-                launch: _,
-                retreat: _,
-                after_action: _,
-                avoid_areas: _,
-                breach_allowed: _,
-                waves: _,
-            }),
-        )
-        | None => (0, 0),
+        // Defend's and Attack's fields (S2's wire, `con4`), priced by decision
+        // 15's rule (S2's `vfy2`): one field per element the edit writes. A
+        // list counts each element; an `optional` field counts when it is
+        // present, a written 0 or false included, because presence is what
+        // says the author wrote it; a message field counts once when present,
+        // except a launch's and a retreat's conditions, each of which is an
+        // element of its own (an `optional` inside them, counted as above).
+        // The sim refuses both arms whole until S2's `dfnd` and `atk` (E0012,
+        // E0013), and its `mandate_fields` prices them the same way when they
+        // lift the refusals. The patterns name every field, so the day
+        // another arrives this match stops compiling.
+        Some(mandate_settings::Mandate::Defend(defend)) => (defend_fields(defend), 0),
+        Some(mandate_settings::Mandate::Attack(attack)) => (attack_fields(attack), 0),
+        None => (0, 0),
     };
     counted.fields = counted.fields.saturating_add(fields);
     counted.targets = targets;
     counted
+}
+
+/// The fields a Defend arm writes (see [`count`]).
+fn defend_fields(defend: &DefendSettings) -> u32 {
+    let DefendSettings {
+        protect,
+        engagement_radius_pct,
+        pursue,
+        picket_scouts,
+    } = defend;
+    each(protect)
+        .saturating_add(set(*engagement_radius_pct != 0))
+        .saturating_add(set(*pursue != 0))
+        .saturating_add(set(picket_scouts.is_some()))
+}
+
+/// The fields an Attack arm writes (see [`count`]).
+fn attack_fields(attack: &AttackSettings) -> u32 {
+    let AttackSettings {
+        target,
+        retarget,
+        staging,
+        launch,
+        retreat,
+        after_action,
+        avoid_areas,
+        breach_allowed,
+        waves,
+    } = attack;
+    let launch_fields = match launch {
+        Some(AttackLaunch {
+            force_size,
+            segment_ms,
+        }) => set(force_size.is_some()).saturating_add(set(segment_ms.is_some())),
+        None => 0,
+    };
+    let retreat_fields = match retreat {
+        Some(AttackRetreat {
+            force_below_pct,
+            after_launch_ms,
+        }) => set(force_below_pct.is_some()).saturating_add(set(after_launch_ms.is_some())),
+        None => 0,
+    };
+    set(target.is_some())
+        .saturating_add(set(*retarget != 0))
+        .saturating_add(set(staging.is_some()))
+        .saturating_add(launch_fields)
+        .saturating_add(retreat_fields)
+        .saturating_add(set(*after_action != 0))
+        .saturating_add(each(avoid_areas))
+        .saturating_add(set(breach_allowed.is_some()))
+        .saturating_add(set(*waves != 0))
 }
 
 /// What one route step costs on site: nothing unless it is a visit or a
@@ -651,6 +690,62 @@ mod tests {
         };
         // 2 s + 0.5 s for the two areas, then 3 x 2.5 s for the targets.
         assert_eq!(row_ms(&row, &rates()), Ms::new(10_000));
+    }
+
+    /// S2's `vfy2`: Defend's and Attack's fields at decision 15's rule. A
+    /// present `optional` counts, a written 0 or false included; each list
+    /// element counts; each launch and retreat condition counts.
+    #[test]
+    fn defend_and_attack_count_one_field_per_element_written() {
+        use pharmakos_proto::gp::v1::{
+            AttackLaunch, AttackRetreat, AttackSettings, AttackTarget, DefendSettings, MyCommander,
+            ProtectedAsset, attack_target, protected_asset,
+        };
+        let commander = || ProtectedAsset {
+            asset: Some(protected_asset::Asset::MyCommander(MyCommander {})),
+        };
+        let defend = |picket: Option<u32>| MandateSettings {
+            roe: 0,
+            retreat_hp_pct: 0,
+            mandate: Some(mandate_settings::Mandate::Defend(DefendSettings {
+                protect: vec![commander(), commander()],
+                engagement_radius_pct: 50,
+                pursue: 2,
+                picket_scouts: picket,
+            })),
+        };
+        assert_eq!(count(&defend(None)).fields, 4);
+        assert_eq!(count(&defend(Some(0))).fields, 5, "a written 0 is a field");
+        let attack = MandateSettings {
+            roe: 3,
+            retreat_hp_pct: 0,
+            mandate: Some(mandate_settings::Mandate::Attack(AttackSettings {
+                target: Some(AttackTarget {
+                    target: Some(attack_target::Target::Voxel(Voxel { x: 1, y: 2, z: 3 })),
+                }),
+                retarget: 1,
+                staging: Some(Voxel { x: 4, y: 5, z: 6 }),
+                launch: Some(AttackLaunch {
+                    force_size: Some(6),
+                    segment_ms: Some(0),
+                }),
+                retreat: Some(AttackRetreat {
+                    force_below_pct: Some(40),
+                    after_launch_ms: None,
+                }),
+                after_action: 1,
+                avoid_areas: vec![area(), area()],
+                breach_allowed: Some(false),
+                waves: 1,
+            })),
+        };
+        // roe, target, retarget, staging, two launch conditions, one retreat
+        // condition, after_action, two areas, breach_allowed and waves.
+        assert_eq!(count(&attack).fields, 12);
+        let row = InterfaceRow {
+            row: Some(interface_row::Row::SetMandateSettings(attack)),
+        };
+        assert_eq!(row_ms(&row, &rates()), Ms::new(6000), "the cap bounds it");
     }
 
     #[test]
