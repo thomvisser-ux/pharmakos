@@ -32,12 +32,17 @@
 //! here *drives* one: the guard is against driving it, and that is the claim
 //! `tests/confinement.rs` makes over the source text. Said exactly, because a
 //! review found the earlier wording stronger than the test — this file does
-//! **read** the runner, through `Host::runner()`, for three values a report
-//! needs: the tick a Lull is standing on, the phase a refused `begin_push` was
-//! in, and the round a seal belongs to. `Host::runner` hands out a `&Runner`
-//! and every stepping method on it needs `&mut`, so the reach cannot become a
-//! second way to play a match; if T16a gives `Surface` accessors for those
-//! three, this file should take them and `.runner()` should join the needles.
+//! **read** the runner, through `Host::runner()`, and the world, through
+//! `Host::world()`, for what a report needs and nothing else: the tick a Lull
+//! is standing on (`tick()`), the phase a refused `begin_push` was in and
+//! whether a match played to its end has ended (`phase()`), the round a seal
+//! belongs to, a refusal is named in and a nightly match reached (`round()`),
+//! how the match ended (`outcome()`), and on a shared win the final audit's
+//! tied seats (`audit::final_audit(host.world())`, a pure read). `Host::runner`
+//! hands out a `&Runner` and `Host::world` a `&World`, and every stepping
+//! method needs `&mut`, so the reach cannot become a second way to play a
+//! match; if `Surface` gains accessors for these, this file should take them
+//! and `.runner()` should join the needles.
 //!
 //! # The match settings a file may name
 //!
@@ -94,10 +99,11 @@ use pharmakos_gateway::token::{Subject, Token};
 use pharmakos_proto::json::Json;
 use pharmakos_sim::math::quantity::{Ms, Tick};
 use pharmakos_sim::rules::RulesTable;
-use pharmakos_sim::runner::MatchSettings;
+use pharmakos_sim::runner::{MatchPhase, MatchSettings};
 use pharmakos_sim::tables::SeatId;
 use pharmakos_sim::world::WorldConfig;
 
+use crate::cli::RunOptions;
 use crate::exit::{Exit, Failure};
 use crate::host::EasyOperators;
 use crate::scenario::{Assertion, Scenario, SeatKind, ticks_of};
@@ -114,7 +120,7 @@ use crate::strings;
 /// in `xtask/src/scenario.rs` too), so no single length asks for gigabytes
 /// any more; this bound stays for a file that lists many segments, which the
 /// format does not cap.
-const CHAIN_RESERVE_CAP: usize = 16 * 1024 * 1024;
+const CHAIN_RESERVE_CAP: u64 = 16 * 1024 * 1024;
 
 /// The match id every scenario run hosts under.
 ///
@@ -167,6 +173,28 @@ impl Played {
     }
 }
 
+/// `scenario run`, whichever options it was given: over a seed file
+/// ([`crate::scenario::nightly`]) when `--seeds` names one, and otherwise
+/// [`run`], exactly as before the options existed.
+///
+/// # Errors
+///
+/// As [`run`] and [`crate::scenario::nightly::run`], and [`Exit::Input`] for
+/// an `--operator` given for a scenario that seats no `builtin` seat, which is
+/// refused rather than ignored.
+pub fn command(root: &Path, source: &Path, options: &RunOptions) -> Result<String, Failure> {
+    if options.seeds.is_some() {
+        return crate::scenario::nightly::run(root, source, options);
+    }
+    if options.operator.is_some() {
+        let scenario = crate::scenario::load(root, source)?;
+        if builtin_seats(&scenario).is_empty() {
+            return Err(Failure::input(strings::operator_unused(&scenario.source)));
+        }
+    }
+    run(root, source)
+}
+
 /// Play one scenario, check its assertions and render the report.
 ///
 /// # Errors
@@ -198,6 +226,59 @@ pub fn run(root: &Path, source: &Path) -> Result<String, Failure> {
 /// cannot score with for a `builtin` seat), and [`Exit::Internal`] for
 /// anything the gateway refuses that no scenario could have caused.
 pub fn play(root: &Path, scenario: &Scenario) -> Result<Played, Failure> {
+    play_until(root, scenario, Until::Segments)
+}
+
+/// How a match ended, read from the sim's own outcome once it has (the
+/// nightly result's per-seed half; S2's plan, task `night`).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Ending {
+    /// The winners, ascending: the last seat standing or the final audit's
+    /// single winner, or every seat that tied on the audit's every term on a
+    /// shared win ([`pharmakos_sim::audit::final_audit`]).
+    pub winners: Vec<u8>,
+    /// Why it ended: `last_seat_standing`, `no_survivor` or `round_limit`, the
+    /// sim's own names.
+    pub reason: &'static str,
+    /// The tick it ended on.
+    pub end_tick: u32,
+    /// The rounds played, the last one included.
+    pub rounds: u32,
+}
+
+/// Play one scenario **to the match's end** and say how it ended, asserting
+/// nothing: what `--seeds` does once per seed.
+///
+/// The file's segments are the match's segment lengths, as they are for
+/// [`play`], and rounds past the last listed segment take the last length, as
+/// the sim's ladder does (`MatchSettings::segment_lengths_ms`); the match
+/// plays until the sim decides it, which its round limit bounds. Every
+/// `playbook` seat goes through `submit_plan` every round: a refusal is a
+/// broken arm, [`Exit::Failed`] naming the round and the codes, and never the
+/// harness door, because a nightly result is a claim about a match a player
+/// could have played.
+///
+/// # Errors
+///
+/// As [`play`], and [`Exit::Failed`] for a playbook `submit_plan` refused.
+pub fn play_to_end(root: &Path, scenario: &Scenario) -> Result<(Played, Ending), Failure> {
+    let mut ending = None;
+    let played = play_until(root, scenario, Until::MatchEnd(&mut ending))?;
+    let ending = ending.ok_or_else(|| {
+        Failure::internal("a match played to its end did not report how it ended")
+    })?;
+    Ok((played, ending))
+}
+
+/// How far [`play_until`] plays.
+enum Until<'a> {
+    /// The file's segments, each to its full length, or the run fails.
+    Segments,
+    /// The match's end, wherever the sim puts it; the ending goes here.
+    MatchEnd(&'a mut Option<Ending>),
+}
+
+fn play_until(root: &Path, scenario: &Scenario, mut until: Until<'_>) -> Result<Played, Failure> {
     let rules = load_rules(root, scenario)?;
     let rules_hash = rules.rules_hash();
     // Before the match is opened, so a rules table Easy cannot score with is
@@ -215,18 +296,20 @@ pub fn play(root: &Path, scenario: &Scenario) -> Result<Played, Failure> {
         None => None,
     };
 
+    // Reserved, and capped. A line is twenty-four bytes, so the reservation is
+    // the chain's real size for every scenario anybody writes, and a file that
+    // lists many segments is held to [`CHAIN_RESERVE_CAP`]. The cap is a
+    // reservation, not a limit on the run: a longer chain grows the ordinary
+    // way. Reviewed finding, wave 5. Computed in `u64` and capped there, so the
+    // conversion is from a number below the cap and the sweep of S2's E7
+    // leaves no fallback in it.
+    let reserve = u64::from(scenario.ticks())
+        .saturating_mul(24)
+        .min(CHAIN_RESERVE_CAP);
     let mut played = Played {
-        // Reserved, and capped. A line is twenty-four bytes, so the reservation
-        // is the chain's real size for every scenario anybody writes — but
-        // `length_ms` is any positive int32, and two segments of `i32::MAX`
-        // would ask for two gigabytes before the first tick. The cap is a
-        // reservation, not a limit on the run: a chain longer than
-        // [`CHAIN_RESERVE_CAP`] grows the ordinary way. Reviewed finding,
-        // wave 5.
         chain: String::with_capacity(
-            usize::try_from(scenario.ticks().saturating_mul(24))
-                .unwrap_or(CHAIN_RESERVE_CAP)
-                .min(CHAIN_RESERVE_CAP),
+            usize::try_from(reserve)
+                .map_err(|_| Failure::internal("a chain reservation this platform cannot hold"))?,
         ),
         events: Vec::new(),
         segments: Vec::with_capacity(scenario.segments.len()),
@@ -234,13 +317,14 @@ pub fn play(root: &Path, scenario: &Scenario) -> Result<Played, Failure> {
         rules_hash,
     };
     let mut seen = 0_usize;
+    let mut index = 0_usize;
 
-    for segment in &scenario.segments {
+    loop {
         // Whatever the last phase left on the feed, dated at the tick the match
         // is standing on. A Lull consumes no sim tick, so that is the tick
         // every line of it belongs to.
         let standing = surface_tick(&surface)?;
-        drain(&surface, &mut seen, standing, &mut played.events);
+        drain(&surface, &mut seen, standing, &mut played.events)?;
 
         // The `builtin` seats plan first, then the playbook seats submit: the
         // order `gamectl host` has, whose surface thread plans its in-process
@@ -252,56 +336,150 @@ pub fn play(root: &Path, scenario: &Scenario) -> Result<Played, Failure> {
             seats.plan(&mut surface);
         }
 
-        for (seat, token) in scenario.seats.iter().zip(&tokens) {
-            if let SeatKind::Playbook(relative) = &seat.kind
-                && let Door::Harness(codes) = seal(root, &mut surface, token, seat.seat, relative)?
-            {
-                let note = strings::scenario_harness_seal(seat.seat, relative, &codes);
-                if !played.notes.contains(&note) {
-                    played.notes.push(note);
-                }
-            }
-        }
+        let nightly = matches!(until, Until::MatchEnd(_));
+        seal_all(
+            root,
+            &mut surface,
+            scenario,
+            &tokens,
+            nightly,
+            &mut played.notes,
+        )?;
 
         // `begin_push` opens a fresh segment feed, so the count starts again.
         let anchor = surface_tick(&surface)?;
         let started = surface.begin_push().map_err(internal)?;
         if !started {
             return Err(Failure::internal(format!(
-                "the match would not open segment {}: it is in its {}",
-                segment.index,
+                "the match would not open segment {index}: it is in its {}",
                 phase_name(&surface)?
             )));
         }
         seen = 0;
-        drain(&surface, &mut seen, anchor, &mut played.events);
-
-        let wanted = ticks_of(segment.length_ms);
-        let mut ticks = 0_u32;
-        while let Some(report) = surface.step().map_err(internal)? {
-            let tick = report.tick.raw();
-            let _ = writeln!(played.chain, "{tick}\t{}", pharmakos_sim::hex(report.hash));
-            drain(&surface, &mut seen, tick, &mut played.events);
-            ticks = ticks.saturating_add(1);
-            if report.segment_ended {
-                break;
+        drain(&surface, &mut seen, anchor, &mut played.events)?;
+        let ticks = play_push(&mut surface, &mut seen, &mut played)?;
+        if let Until::Segments = until {
+            let wanted = scenario
+                .segments
+                .get(index)
+                .map(|segment| ticks_of(segment.length_ms))
+                .ok_or_else(|| Failure::internal("a segment played past the file's list"))?;
+            if ticks != wanted {
+                return Err(Failure::new(
+                    Exit::Failed,
+                    strings::scenario_segment_short(index, ticks, wanted),
+                ));
             }
-        }
-        played.segments.push(ticks);
-        if ticks != wanted {
-            return Err(Failure::new(
-                Exit::Failed,
-                strings::scenario_segment_short(segment.index, ticks, wanted),
-            ));
         }
 
         surface.end_recap().map_err(internal)?;
-        if segment.index.saturating_add(1) < scenario.segments.len() {
-            surface.set_phase_remaining_ms(whole_lull(&surface)?);
-            surface.open_lull().map_err(internal)?;
+        let more = match &mut until {
+            Until::Segments => index.saturating_add(1) < scenario.segments.len(),
+            Until::MatchEnd(ending) => {
+                if phase(&surface)? == MatchPhase::Ended {
+                    **ending = Some(ending_of(&surface)?);
+                    false
+                } else if round(&surface)? > scenario.round_limit {
+                    // The sim ends a match at its round limit, so this is the
+                    // sim and this runner disagreeing, not an arm's doing.
+                    return Err(Failure::internal(format!(
+                        "the match played past its round limit of {} without ending",
+                        scenario.round_limit
+                    )));
+                } else {
+                    true
+                }
+            }
+        };
+        if !more {
+            break;
         }
+        surface.set_phase_remaining_ms(whole_lull(&surface)?);
+        surface.open_lull().map_err(internal)?;
+        index = index.saturating_add(1);
     }
     Ok(played)
+}
+
+/// Seal every `playbook` seat's file for the Lull the match stands in.
+///
+/// A seat the verifier refuses goes through the harness door with a note, as
+/// [`seal`] says, except in a run to the match's end (`nightly`), where
+/// [`seal`] fails the run on a refusal instead: a broken arm.
+fn seal_all(
+    root: &Path,
+    surface: &mut Surface,
+    scenario: &Scenario,
+    tokens: &[Token],
+    nightly: bool,
+    notes: &mut Vec<String>,
+) -> Result<(), Failure> {
+    for (seat, token) in scenario.seats.iter().zip(tokens) {
+        let SeatKind::Playbook(relative) = &seat.kind else {
+            continue;
+        };
+        let Door::Harness(codes) = seal(root, surface, token, seat.seat, relative, nightly)? else {
+            continue;
+        };
+        let note = strings::scenario_harness_seal(seat.seat, relative, &codes);
+        if !notes.contains(&note) {
+            notes.push(note);
+        }
+    }
+    Ok(())
+}
+
+/// Step the open Push to its segment's end, writing the chain and the
+/// events, and say how many ticks it played.
+fn play_push(surface: &mut Surface, seen: &mut usize, played: &mut Played) -> Result<u32, Failure> {
+    let mut ticks = 0_u32;
+    while let Some(report) = surface.step().map_err(internal)? {
+        let tick = report.tick.raw();
+        let _ = writeln!(played.chain, "{tick}\t{}", pharmakos_sim::hex(report.hash));
+        drain(surface, seen, tick, &mut played.events)?;
+        ticks = ticks
+            .checked_add(1)
+            .ok_or_else(|| Failure::internal("a segment of more ticks than a u32 counts"))?;
+        if report.segment_ended {
+            break;
+        }
+    }
+    played.segments.push(ticks);
+    Ok(ticks)
+}
+
+/// How the match ended, from the sim's own outcome: the winner it recorded,
+/// or on a shared win (no single winner) the final audit's tied seats, which
+/// the sim reads again from the world rather than storing
+/// ([`pharmakos_sim::audit`]).
+fn ending_of(surface: &Surface) -> Result<Ending, Failure> {
+    let host = surface.host().map_err(internal)?;
+    let outcome = host
+        .runner()
+        .outcome()
+        .ok_or_else(|| Failure::internal("the match ended with no outcome"))?;
+    let winners = match outcome.winner {
+        Some(seat) => vec![seat.raw()],
+        None => pharmakos_sim::audit::final_audit(host.world())
+            .winners
+            .iter()
+            .map(|seat| seat.raw())
+            .collect(),
+    };
+    Ok(Ending {
+        winners,
+        reason: outcome.reason.name(),
+        end_tick: outcome.at.raw(),
+        rounds: host.runner().round(),
+    })
+}
+
+fn phase(surface: &Surface) -> Result<MatchPhase, Failure> {
+    Ok(surface.host().map_err(internal)?.runner().phase())
+}
+
+fn round(surface: &Surface) -> Result<u32, Failure> {
+    Ok(surface.host().map_err(internal)?.runner().round())
 }
 
 // ---------------------------------------------------------------------------
@@ -352,12 +530,14 @@ fn easy_for_builtin(root: &Path, scenario: &Scenario) -> Result<Option<EasyOpera
             &error.to_string(),
         ))
     })?;
+    // The first `builtin` seat's index, for the pointer: there is one,
+    // because the caller found the list non-empty above.
+    let index = scenario
+        .seats
+        .iter()
+        .position(|seat| seat.kind == SeatKind::Builtin)
+        .ok_or_else(|| Failure::internal("a scenario with a builtin seat has none"))?;
     let factory = EasyOperators::new(&text).map_err(|error| {
-        let index = scenario
-            .seats
-            .iter()
-            .position(|seat| seat.kind == SeatKind::Builtin)
-            .unwrap_or_default();
         Failure::input(strings::scenario_builtin_unseated(
             &format!("/seats/{index}/kind"),
             &scenario.rules,
@@ -524,6 +704,7 @@ fn seal(
     token: &Token,
     seat: u8,
     relative: &str,
+    nightly: bool,
 ) -> Result<Door, Failure> {
     let playbook = std::fs::read_to_string(root.join(relative)).map_err(|error| {
         Failure::input(strings::unreadable(
@@ -549,6 +730,14 @@ fn seal(
     let answer = surface.call(Some(token), &request, &Blind);
 
     if let Some(error) = answer.get("error") {
+        // In a run to the match's end, a refusal of any kind is a broken arm
+        // on this seed and round, as the module docs promise.
+        if nightly {
+            return Err(Failure::new(
+                Exit::Failed,
+                strings::nightly_arm_refused(seat, relative, round(surface)?, &message_of(error)),
+            ));
+        }
         return Err(Failure::input(strings::scenario_playbook_refused(
             seat,
             relative,
@@ -575,39 +764,16 @@ fn seal(
         }
     }
 
-    // The codes, not the count. "2 diagnostics" sends the reader back to the
-    // tool; the codes and their pointers say what is wrong on their own, and
-    // this line is read by somebody who has just watched a build go red.
-    let mut codes: Vec<String> = Vec::new();
-    if let Some(Json::Array(items)) = result
-        .and_then(|result| result.get("report"))
-        .and_then(|report| report.get("diagnostics"))
-    {
-        for item in items {
-            let code = match item.get("code") {
-                Some(Json::String(code)) => code.clone(),
-                _ => String::from("?"),
-            };
-            let path = match item.get("path") {
-                Some(Json::String(path)) => path.clone(),
-                _ => String::new(),
-            };
-            codes.push(format!("{code} at {path}"));
-        }
+    let codes = codes_of(result)?;
+    // A nightly run never takes the harness door: the refusal fails the run,
+    // naming the round, before anything is sealed.
+    if nightly {
+        return Err(Failure::new(
+            Exit::Failed,
+            strings::nightly_arm_refused(seat, relative, round(surface)?, &codes),
+        ));
     }
-    // Decoded, not stored as its own text. `Sealed::report_hash` is documented
-    // as "eight big-endian bytes" and the wire spells it base64
-    // (`surface/planning.rs`), so `text.into_bytes()` would have put twelve
-    // ASCII characters where the eight bytes go — latent today because nothing
-    // outside tests reads the field, and T17's restore path is named as the
-    // first reader. Reviewed finding, wave 5.
-    let report_hash = match result
-        .and_then(|result| result.get("report"))
-        .and_then(|report| report.get("report_hash"))
-    {
-        Some(Json::String(text)) => pharmakos_proto::json::base64::decode(text).unwrap_or_default(),
-        _ => Vec::new(),
-    };
+    let report_hash = report_hash_of(result)?;
 
     // The second door. Compiled by the route `compile_playbook` takes, so the
     // plan is the one a submission would have produced.
@@ -640,7 +806,74 @@ fn seal(
         filed_by_the_gateway: false,
         plan,
     });
-    Ok(Door::Harness(codes.join("; ")))
+    Ok(Door::Harness(codes))
+}
+
+/// The refused report's codes and pointers, `CODE at /pointer`, joined.
+fn codes_of(result: Option<&Json>) -> Result<String, Failure> {
+    // The codes, not the count. "2 diagnostics" sends the reader back to the
+    // tool; the codes and their pointers say what is wrong on their own, and
+    // this line is read by somebody who has just watched a build go red.
+    let mut codes: Vec<String> = Vec::new();
+    if let Some(Json::Array(items)) = result
+        .and_then(|result| result.get("report"))
+        .and_then(|report| report.get("diagnostics"))
+    {
+        for item in items {
+            // A diagnostic always carries its code, so one without is the
+            // wire's shape having moved, refused rather than shown as `?`.
+            let Some(Json::String(code)) = item.get("code") else {
+                return Err(Failure::internal(format!(
+                    "`submit_plan` answered with a diagnostic that has no code ({item:?})"
+                )));
+            };
+            // An absent `path` is proto3 JSON's omitted empty string: the
+            // document's root pointer, which is spelled as nothing. Present
+            // and not a string is the wire's shape having moved.
+            let path = match item.get("path") {
+                Some(Json::String(path)) => path.as_str(),
+                None => "",
+                Some(other) => {
+                    return Err(Failure::internal(format!(
+                        "`submit_plan` answered with a diagnostic path that is not a string \
+                         ({other:?})"
+                    )));
+                }
+            };
+            codes.push(format!("{code} at {path}"));
+        }
+    }
+    Ok(codes.join("; "))
+}
+
+/// The report's `report_hash`, decoded.
+fn report_hash_of(result: Option<&Json>) -> Result<Vec<u8>, Failure> {
+    // Decoded, not stored as its own text. `Sealed::report_hash` is documented
+    // as "eight big-endian bytes" and the wire spells it base64
+    // (`surface/planning.rs`), so `text.into_bytes()` would have put twelve
+    // ASCII characters where the eight bytes go — latent today because nothing
+    // outside tests reads the field, and T17's restore path is named as the
+    // first reader. Reviewed finding, wave 5.
+    match result
+        .and_then(|result| result.get("report"))
+        .and_then(|report| report.get("report_hash"))
+    {
+        // A `report_hash` that is not base64 is this build's gateway and this
+        // runner disagreeing about the wire, not a playbook a scenario got
+        // wrong, so it is refused rather than sealed as no bytes (S2's sweep,
+        // E7; the site vfy1 found).
+        Some(Json::String(text)) => pharmakos_proto::json::base64::decode(text).ok_or_else(|| {
+            Failure::internal(format!(
+                "`submit_plan` answered with a `report_hash` that is not base64 ({text:?})"
+            ))
+        }),
+        // Every report carries its hash (spec section 11), so a refused
+        // playbook's answer without one is the wire's shape having moved, and
+        // it is refused rather than sealed as empty bytes (S2's sweep, E7).
+        other => Err(Failure::internal(format!(
+            "`submit_plan` answered with no `report_hash` string ({other:?})"
+        ))),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -654,9 +887,23 @@ fn seal(
 /// rather than beside it. `SegmentFeed::events` is the unfiltered list, "for
 /// the host and for tests -- never for a client"; the fog filter is what a
 /// client's `get_segment_feed` goes through, and a scenario is not a client.
-fn drain(surface: &Surface, seen: &mut usize, tick: u32, into: &mut Vec<Fired>) {
+fn drain(
+    surface: &Surface,
+    seen: &mut usize,
+    tick: u32,
+    into: &mut Vec<Fired>,
+) -> Result<(), Failure> {
     let events = surface.feed().events();
-    let fresh = events.get(*seen..).unwrap_or_default();
+    // The feed only grows within a segment, and `seen` restarts at zero when
+    // `begin_push` opens a fresh one, so a feed shorter than what was read is
+    // the gateway and this runner disagreeing, not a quiet empty read.
+    let fresh = events.get(*seen..).ok_or_else(|| {
+        Failure::internal(format!(
+            "the segment feed holds {} events after {} were read from it",
+            events.len(),
+            *seen
+        ))
+    })?;
     for event in fresh {
         into.push(Fired {
             tick,
@@ -669,6 +916,7 @@ fn drain(surface: &Surface, seen: &mut usize, tick: u32, into: &mut Vec<Fired>) 
         });
     }
     *seen = events.len();
+    Ok(())
 }
 
 fn surface_tick(surface: &Surface) -> Result<u32, Failure> {
@@ -839,7 +1087,10 @@ fn hash_chain_equals(
     Ok(Err(strings::scenario_chain_moved(
         golden,
         at.saturating_add(1),
+        // A chain shorter than the other has no line at `at`, and
+        // the message says which side ended there.
         expected.get(at).copied().unwrap_or("<end of file>"),
+        // As above, for the run's side.
         actual.get(at).copied().unwrap_or("<end of run>"),
         expected.len(),
         actual.len(),

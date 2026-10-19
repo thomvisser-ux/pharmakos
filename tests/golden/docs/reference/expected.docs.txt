@@ -15,7 +15,7 @@ tests/golden/docs/reference/expected.docs.txt.
 verify <playbook.jsonc>   inspect a playbook and print its report and report_hash
 schema [--part <name>]    print the JSON Schema a seat authors against, generated from gp.v1
 docs                      print the generated reference: the schema's shape and every diagnostic
-scenario run <file>       play a scenario headless and check its assertions on events and hashes
+scenario run <file>       play a scenario headless and check its assertions on events and hashes; with --seeds, play an arm over a seed set and write a result instead
 seat doctor               check this installation and report what is wrong
 host                      serve one match to the game client over this process's stdio pipe; the lobby starts it, and it refuses a terminal
 
@@ -26,6 +26,10 @@ host                      serve one match to the game client over this process's
     --root <dir>          the repository root every other path is read against (default: the working directory)
     --part <name>         schema only: one message of gp.v1 by its lower_snake_case name, instead of the whole playbook
     --depth <quick|full>  verify only: how deep to run the pipeline (default: full, which is what submit_plan runs)
+    --operator <easy>     scenario only: the built-in operator a `builtin` seat plays; easy, which carries the Balanced weighting, is the one this build has (default: easy)
+    --seeds <file>        scenario only: play the scenario to its end once per seed in the file, each seed replacing its map seed and the arm alternating between seats 0 and 1, and write a result instead of checking its assertions
+    --format <text|json>  scenario only: how a run over --seeds writes its result (default: text)
+    --out <path>          scenario only: the file a run over --seeds writes its result to (default: standard output)
 
 ## Exit codes
 

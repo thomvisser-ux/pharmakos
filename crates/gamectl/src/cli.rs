@@ -73,7 +73,8 @@ pub const COMMANDS: &[CommandRow] = &[
     CommandRow {
         name: "scenario",
         usage: "scenario run <file>",
-        about: "play a scenario headless and check its assertions on events and hashes",
+        about: "play a scenario headless and check its assertions on events and hashes; with \
+                --seeds, play an arm over a seed set and write a result instead",
     },
     CommandRow {
         name: "seat",
@@ -144,7 +145,105 @@ pub const OPTIONS: &[OptionRow] = &[
         command: "verify",
         about: "how deep to run the pipeline (default: full, which is what submit_plan runs)",
     },
+    OptionRow {
+        spelling: "    --operator <easy>",
+        flag: "--operator",
+        command: "scenario",
+        about: "the built-in operator a `builtin` seat plays; easy, which carries the Balanced \
+                weighting, is the one this build has (default: easy)",
+    },
+    OptionRow {
+        spelling: "    --seeds <file>",
+        flag: "--seeds",
+        command: "scenario",
+        about: "play the scenario to its end once per seed in the file, each seed replacing its \
+                map seed and the arm alternating between seats 0 and 1, and write a result \
+                instead of checking its assertions",
+    },
+    OptionRow {
+        spelling: "    --format <text|json>",
+        flag: "--format",
+        command: "scenario",
+        about: "how a run over --seeds writes its result (default: text)",
+    },
+    OptionRow {
+        spelling: "    --out <path>",
+        flag: "--out",
+        command: "scenario",
+        about: "the file a run over --seeds writes its result to (default: standard output)",
+    },
 ];
+
+/// The built-in operator a `builtin` seat plays (`--operator`).
+///
+/// Easy is the one difficulty this build ships, and it carries the Balanced
+/// weighting (spec section 14; decisions-log item 144 (6)), so it is the only
+/// value; any other name is a usage error naming the values.
+///
+/// PLACEHOLDER: Easy the only `--operator` — owner, S5, when Normal lands and the nightly bands are re-baselined
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Operator {
+    /// Easy, with the Balanced weighting.
+    Easy,
+}
+
+impl Operator {
+    /// Every operator `--operator` accepts, in the order a refusal names them.
+    pub const ALL: &[Operator] = &[Operator::Easy];
+
+    /// How the command line and a result spell it.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Operator::Easy => "easy",
+        }
+    }
+
+    fn from_name(name: &str) -> Option<Operator> {
+        Operator::ALL
+            .iter()
+            .copied()
+            .find(|operator| operator.name() == name)
+    }
+}
+
+/// How a run over a seed file writes its result (`--format`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Format {
+    /// One line per seed and a summary, for a person.
+    Text,
+    /// One JSON document, `pharmakos.nightly-result.v1`, for the nightly
+    /// workflow's alarm band and for diffing nights.
+    Json,
+}
+
+impl Format {
+    /// Every value `--format` accepts.
+    pub const NAMES: &[&str] = &["text", "json"];
+
+    fn from_name(name: &str) -> Option<Format> {
+        match name {
+            "text" => Some(Format::Text),
+            "json" => Some(Format::Json),
+            _ => None,
+        }
+    }
+}
+
+/// `scenario run`'s own options.
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct RunOptions {
+    /// `--operator`, when given.
+    pub operator: Option<Operator>,
+    /// `--seeds`: the seed file. With it the scenario is played once per seed
+    /// to the match's end and a result is written; without it the command is
+    /// what it always was.
+    pub seeds: Option<PathBuf>,
+    /// `--format`, which only a run over `--seeds` reads.
+    pub format: Option<Format>,
+    /// `--out`, which only a run over `--seeds` reads.
+    pub out: Option<PathBuf>,
+}
 
 /// What was asked for.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -173,6 +272,8 @@ pub enum Command {
     ScenarioRun {
         /// The `.scenario.jsonc` file to play.
         path: PathBuf,
+        /// `--operator`, `--seeds`, `--format` and `--out`.
+        options: RunOptions,
     },
     /// Check this installation.
     SeatDoctor,
@@ -220,6 +321,7 @@ where
     // silently ignored on every command but `verify`, and a default cannot be
     // refused.
     let mut depth: Option<Depth> = None;
+    let mut options = RunOptions::default();
     let mut operands: Vec<OsString> = Vec::new();
 
     loop {
@@ -262,6 +364,47 @@ where
                     other => return Err(Failure::usage(strings::bad_depth(other))),
                 };
             }
+            Long("operator") => {
+                let value = parser
+                    .value()
+                    .map_err(|error| Failure::usage(strings::bad_argument(&error)))?;
+                let name = value.to_string_lossy().into_owned();
+                let Some(operator) = Operator::from_name(&name) else {
+                    let names: Vec<&str> = Operator::ALL.iter().map(|known| known.name()).collect();
+                    return Err(Failure::usage(strings::bad_value(
+                        "--operator",
+                        &name,
+                        &names,
+                    )));
+                };
+                options.operator = Some(operator);
+            }
+            Long("seeds") => {
+                let value = parser
+                    .value()
+                    .map_err(|error| Failure::usage(strings::bad_argument(&error)))?;
+                options.seeds = Some(PathBuf::from(value));
+            }
+            Long("format") => {
+                let value = parser
+                    .value()
+                    .map_err(|error| Failure::usage(strings::bad_argument(&error)))?;
+                let name = value.to_string_lossy().into_owned();
+                let Some(format) = Format::from_name(&name) else {
+                    return Err(Failure::usage(strings::bad_value(
+                        "--format",
+                        &name,
+                        Format::NAMES,
+                    )));
+                };
+                options.format = Some(format);
+            }
+            Long("out") => {
+                let value = parser
+                    .value()
+                    .map_err(|error| Failure::usage(strings::bad_argument(&error)))?;
+                options.out = Some(PathBuf::from(value));
+            }
             Value(value) => operands.push(value),
             other => {
                 return Err(Failure::usage(strings::bad_argument(&other.unexpected())));
@@ -270,7 +413,7 @@ where
     }
 
     let root = root.unwrap_or_else(|| cwd.to_path_buf());
-    let command = command_of(&operands, part, depth)?;
+    let command = command_of(&operands, part, depth, options)?;
     Ok(Invocation { root, command })
 }
 
@@ -279,19 +422,29 @@ fn command_of(
     operands: &[OsString],
     part: Option<String>,
     depth: Option<Depth>,
+    options: RunOptions,
 ) -> Result<Command, Failure> {
-    let Some(first) = operands.first() else {
+    let Some((first, rest)) = operands.split_first() else {
         return Err(Failure::usage(strings::no_command()));
     };
     let name = first.to_string_lossy().into_owned();
-    let rest = operands.get(1..).unwrap_or_default();
     // A flag that means nothing to this command is refused, not ignored — the
     // stance this crate already takes on an extra operand and on an unknown
     // key in a scenario file, applied to the third way of typing something
     // that will not happen. A review found `gamectl docs --depth quick`
     // exiting 0 having done nothing with it.
     if COMMANDS.iter().any(|row| row.name == name) {
-        flags_belong_to(&name, part.is_some(), depth.is_some())?;
+        flags_belong_to(
+            &name,
+            &[
+                ("--part", part.is_some()),
+                ("--depth", depth.is_some()),
+                ("--operator", options.operator.is_some()),
+                ("--seeds", options.seeds.is_some()),
+                ("--format", options.format.is_some()),
+                ("--out", options.out.is_some()),
+            ],
+        )?;
     }
 
     match name.as_str() {
@@ -315,7 +468,7 @@ fn command_of(
             Ok(Command::Docs)
         }
         "scenario" => {
-            let Some(sub) = rest.first() else {
+            let Some((sub, rest)) = rest.split_first() else {
                 return Err(Failure::usage(strings::missing_operand(
                     "scenario",
                     "subcommand (`run`)",
@@ -327,15 +480,26 @@ fn command_of(
                     "scenario", &sub,
                 )));
             }
-            let path = one_operand(
-                "scenario run",
-                "scenario file",
-                rest.get(1..).unwrap_or_default(),
-            )?;
-            Ok(Command::ScenarioRun { path })
+            let path = one_operand("scenario run", "scenario file", rest)?;
+            // `--format` and `--out` shape the result a run over a seed file
+            // writes; without `--seeds` there is no result, so each is refused
+            // rather than ignored, as a flag given to the wrong command is.
+            for (flag, given) in [
+                ("--format", options.format.is_some()),
+                ("--out", options.out.is_some()),
+            ] {
+                if given && options.seeds.is_none() {
+                    return Err(Failure::usage(strings::flag_needs(
+                        "scenario run",
+                        flag,
+                        "--seeds",
+                    )));
+                }
+            }
+            Ok(Command::ScenarioRun { path, options })
         }
         "seat" => {
-            let Some(sub) = rest.first() else {
+            let Some((sub, rest)) = rest.split_first() else {
                 return Err(Failure::usage(strings::missing_operand(
                     "seat",
                     "subcommand (`doctor`)",
@@ -345,7 +509,7 @@ fn command_of(
             if sub != "doctor" {
                 return Err(Failure::usage(strings::unknown_subcommand("seat", &sub)));
             }
-            no_operands("seat doctor", rest.get(1..).unwrap_or_default())?;
+            no_operands("seat doctor", rest)?;
             Ok(Command::SeatDoctor)
         }
         "host" => {
@@ -359,17 +523,22 @@ fn command_of(
 /// Every flag given belongs to the command it was given to.
 ///
 /// The general options ([`OPTIONS`] rows with an empty `command`) belong to
-/// all of them and are not checked here; the two that belong to one command
-/// each are.
-fn flags_belong_to(command: &str, part: bool, depth: bool) -> Result<(), Failure> {
-    for (flag, given) in [("--part", part), ("--depth", depth)] {
+/// all of them and are not checked here; the ones that belong to one command
+/// each are. A flag the parser read with no row in [`OPTIONS`] is the table
+/// and the parser disagreeing, which `tests/cli.rs` holds them to, and is an
+/// internal error rather than a flag that belongs nowhere.
+fn flags_belong_to(command: &str, given: &[(&str, bool)]) -> Result<(), Failure> {
+    for &(flag, given) in given {
         if !given {
             continue;
         }
         let owner = OPTIONS
             .iter()
             .find(|row| row.flag == flag)
-            .map_or("", |row| row.command);
+            .map(|row| row.command)
+            .ok_or_else(|| {
+                Failure::internal(format!("`{flag}` is parsed and has no options row"))
+            })?;
         if command != owner {
             return Err(Failure::usage(strings::flag_elsewhere(
                 command, flag, owner,
@@ -494,5 +663,71 @@ mod tests {
             parsed(&["verify", "--depth", "deep", "a.jsonc"]),
             Err(Exit::Usage)
         );
+    }
+
+    #[test]
+    fn the_nightly_flags_reach_scenario_run() {
+        use super::{Format, Operator, RunOptions};
+        assert_eq!(
+            parsed(&[
+                "scenario",
+                "run",
+                "a.scenario.jsonc",
+                "--operator",
+                "easy",
+                "--seeds",
+                "s.txt",
+                "--format",
+                "json",
+                "--out",
+                "r.json",
+            ]),
+            Ok(Command::ScenarioRun {
+                path: "a.scenario.jsonc".into(),
+                options: RunOptions {
+                    operator: Some(Operator::Easy),
+                    seeds: Some("s.txt".into()),
+                    format: Some(Format::Json),
+                    out: Some("r.json".into()),
+                },
+            })
+        );
+        assert_eq!(
+            parsed(&["scenario", "run", "a.scenario.jsonc"]),
+            Ok(Command::ScenarioRun {
+                path: "a.scenario.jsonc".into(),
+                options: RunOptions::default(),
+            }),
+            "without the flags the command is what it always was"
+        );
+    }
+
+    #[test]
+    fn an_unknown_operator_or_format_is_a_usage_error_naming_the_values() {
+        for (args, named) in [
+            (
+                &["scenario", "run", "a", "--operator", "balanced"][..],
+                "`easy`",
+            ),
+            (
+                &["scenario", "run", "a", "--seeds", "s", "--format", "xml"],
+                "`json`",
+            ),
+        ] {
+            let error = parse(args.iter().map(|arg| (*arg).to_owned()), Path::new("."))
+                .expect_err("refused");
+            assert_eq!(error.code, Exit::Usage, "{args:?}");
+            assert!(error.message.contains(named), "{}", error.message);
+        }
+    }
+
+    #[test]
+    fn format_and_out_need_seeds() {
+        for args in [
+            &["scenario", "run", "a", "--format", "json"][..],
+            &["scenario", "run", "a", "--out", "r.json"],
+        ] {
+            assert_eq!(parsed(args), Err(Exit::Usage), "{args:?}");
+        }
     }
 }

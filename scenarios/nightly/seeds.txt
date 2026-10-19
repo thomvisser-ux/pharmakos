@@ -1,0 +1,42 @@
+# SPDX-FileCopyrightText: 2026 Pharmakos contributors
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# The nightly adversarial scenarios' fixed seed set (S2's plan, task `night`;
+# decisions-log item 144 (6): "a fixed seed set of about twenty seeds").
+#
+# One seed per line: `0x` and exactly sixteen lowercase hex digits, the
+# spelling a scenario's `map.seed` takes. `#` starts a comment. Order matters:
+# a seed's position decides the arm's seat, the first, third, fifth... seed
+# putting the arm on seat 0 and the others on seat 1 (decision 29), so the
+# twenty give each arm ten matches from each seat. The first ten are also G4's
+# bar, ten seeded matches of 9 600 ticks on each of the three operating
+# systems, in the nightly workflow's `g4` job.
+#
+# They are the S1 balance check's twenty (crates/gamectl/tests/balance.rs,
+# `seeds`): the determinism harness's seed, the scenario files' seed, then
+# n x 0x9e3779b97f4a7c15 for n = 1 to 18, so the nightly and the balance
+# report play the same maps (S2's plan, task `arms`). Committed, never
+# regenerated; crates/gamectl/tests/seeds.rs holds the two lists equal.
+#
+# A seed changed here is a new night, not a re-run of an old one: say so in
+# the pull request that changes it, because every arm's win rate moves with it.
+0x0102030405060708
+0x00000000ca5caded
+0x9e3779b97f4a7c15
+0x3c6ef372fe94f82a
+0xdaa66d2c7ddf743f
+0x78dde6e5fd29f054
+0x1715609f7c746c69
+0xb54cda58fbbee87e
+0x538454127b096493
+0xf1bbcdcbfa53e0a8
+0x8ff34785799e5cbd
+0x2e2ac13ef8e8d8d2
+0xcc623af8783354e7
+0x6a99b4b1f77dd0fc
+0x08d12e6b76c84d11
+0xa708a824f612c926
+0x454021de755d453b
+0xe3779b97f4a7c150
+0x81af155173f23d65
+0x1fe68f0af33cb97a

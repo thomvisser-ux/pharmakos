@@ -15,10 +15,20 @@ use std::process::ExitCode;
 
 fn main() -> ExitCode {
     let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
-    // A working directory that cannot be read is not a reason to guess: `.`
-    // resolves against the same directory the process is already in, so the
-    // fallback changes nothing except that it cannot fail.
-    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    // A working directory that cannot be read is said, not guessed at: every
+    // relative path is read against it, and `.` in its place was a silent
+    // fallback S2's sweep (E7) removed.
+    let cwd = match std::env::current_dir() {
+        Ok(cwd) => cwd,
+        Err(error) => {
+            let _ = writeln!(
+                std::io::stderr(),
+                "{}",
+                pharmakos_gamectl::strings::no_working_directory(&error.to_string())
+            );
+            return ExitCode::from(pharmakos_gamectl::exit::Exit::Input.code());
+        }
+    };
     let outcome = pharmakos_gamectl::run(args, &cwd);
 
     // A closed pipe is not a failure of the command: `gamectl docs | head` is

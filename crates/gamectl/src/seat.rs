@@ -28,6 +28,13 @@
 //! `b_02` tagged `east`, one known enemy beacon `e_01`, a treasury of 200 `$`
 //! and 10 `kW` of supply against 4 of draw.
 //!
+//! The core's id is the skeleton's. A live seat's core has been `b_00` since
+//! S1's targeting, with its beacons numbered per seat; the fixture keeps `b_01`
+//! marked as the core (`is_core`), because the verifier reads `is_core` and
+//! never the number, and because renaming it here alone would split this copy
+//! from the verifier's (`tests/golden/verifier/README.md` says the same from
+//! its side). The footer `gamectl verify` prints says which id is which.
+//!
 //! Two copies of a fixture normally drift. This one cannot drift in silence,
 //! and that is the deal: `tests/verify.rs` reads `report_hash` **out of the
 //! committed golden** `tests/golden/verifier/expand_east/expected.report.json`

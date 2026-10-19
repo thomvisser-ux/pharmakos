@@ -1394,3 +1394,114 @@ Agenda:
   - The dry `workflow_dispatch` of `release.yml`, run 38956987170 with `sha` set to `1dec001`, was green, and its notes carried S1’s lines.
   - The annotated tag went on `1dec001e74dd077862da9611df83bf34e938fdc6`. It was pushed from a detached worktree at that commit, because the pre-push hook pushes only HEAD’s commit (item 132); no hook was skipped.
   - Release run 38957587802 was green. It left a private draft with the Linux and Windows zips and `SHA256SUMS.txt` (item 127 (4)).
+- **Item 145, S2’s first merges and the main session’s calls (2026-10-17 to 10-19).** S2’s first seven pull requests merged under the delegation item 141 renewed, each after its two adversarial reviews were applied, with `main`’s push run watched after each. This entry records them, amends the plan’s E22, states the process rules they taught, and records the main session’s rulings at the merges, what the lanes found for later ones, and the owner’s answers of 2026-10-19 (7). Each call in (2) to (5) is the main session’s, made under the owner’s standing instruction of 2026-09-14, and open to the owner’s veto; (7)’s are the owner’s. The AI reviews are not independent review.
+
+  **(1) The merges.** In merge order, with `main`’s push run on each merge commit:
+  - `msrv` #113, `200823e` (2026-10-17): `rust-version` and clippy’s `msrv` raised to 1.98 (S1-01), with one `cargo xtask ci --fix` pass and no chain or golden moved. Run 38995131216, green.
+  - `redate` #114, `80e52f3` (10-17): item 139 (6)’s comment-only re-dating sweep, under its grant. Run 39006068267, green.
+  - `east` #115, `ab98304` (10-17): cut down to its comment work by (2). Run 39011249138, green.
+  - `vfy1` #117, `fe33372` (10-18): E8’s codes E0009 to E0017, E0018, E0603 (S2-14) and E0508 (S2-15), and `VERIFIER_VERSION` 0.1.0-s2. Run 39165736917, green.
+  - `con3` #118, `ccb4990` (10-18): rules table revision 5 and the next `proto/**` pull request’s carries. Run 39177979539, green.
+  - `base` #116, `b744182` (10-19): the sim’s typed refusals, its sized queues, the phased tick and the layout seam, and `expand-east-segment`’s own playbook. Run 39189369285, green.
+  - `night` #119, `c334ee0` (10-19): `gamectl scenario run --seeds`, the three placeholder arms and G4’s nightly job. Run 39201309584, green.
+  - `night` merged before `con4`, against the plan’s order (S2’s plan, section 4.6), so `con4`, still open as #120, is the second to touch `tests/golden/docs/reference/expected.docs.txt` and re-blesses it after its merge of `main` (E33). Accepted as merged (the main session’s call, open to the owner’s veto). *Downside:* the docs golden is re-blessed twice, by `night` and again by `con4`.
+
+  **(2) E22 amended: `expand_east`’s example stays, and the scenario gets its own playbook.**
+  - **The finding.** `east` measured E22 and stopped: no `expand_east` first site is legal both on the scenario’s map and on the verifier’s reference view.
+    - On `expand-east-segment`’s seed, `0x00000000ca5caded`, seat 0’s core is at (358, 24, 36).
+    - The reference view, which `crates/verifier/tests/verifier.rs`, `crates/gamectl/src/seat.rs` and `pharmakos-bench` share, has its core `b_01` at (80, 11, 55). The two views’ spheres do not overlap.
+    - Moved to (378, 24, 36), the example failed `the_worked_example_qualifies_and_is_six_units` with E0403, `gamectl verify`’s Ok exits, and `crates/sim/tests/vectors.rs`’ pinned fingerprint.
+  - **The plan was wrong twice.** The example’s site, (96, 11, 62), is not east of seat 0’s core: it lies about 262 voxels **west** of it. And E22’s 100 s bound never decides anything: the ground east of the core is flat and the sphere’s radius is 24 voxels, so every legal site east of the core is under 25 s away.
+  - **The call** (the owner confirmed it on 2026-10-19, (7)). `examples/playbooks/expand_east.jsonc` and the spec’s worked example stay unchanged at [96, 11, 62], with every proto, plan-core and verifier golden that pins them.
+    - `expand-east-segment` gets its own playbook, `scenarios/skeleton/expand-east-segment.playbook.jsonc`: the worked example with its first site at (378, 24, 36), 20 voxels east of seat 0’s core. `crates/sim/tests/scenario.rs`’ `the_scenarios_playbook_is_the_example_but_its_site` holds the copy to the example in everything but the site’s voxels.
+    - The work moved from `east` to `base`, which owns `crates/sim` (its `tests/scenario.rs` reads the playbook), so the chain and event log were re-blessed once, there, diverging from tick 1. Seat 0 now arrives at tick 381, places its beacon at 626 and commits its rows by 716. Seat 1 still times out at 2401, is refused `illegal_site` at 2406 and `no_target` at 2411, and takes its fallback.
+  - **It departs from the letter of item 139 (1) ruling 3,** “`expand_east`’s example moves”, under which the spec’s worked example and the scenario were to get a timeout the walk can meet, or a nearer first site. The scenario gets the nearer site; the example does not.
+  - *Downside:* the spec’s flagship example still cannot finish its first step on the scenario’s map, and `crates/gamectl/tests/balance.rs`’ `expand_east` column keeps reporting that.
+  - **What moved with it.**
+    - `east`’s Acceptance moved to `base`. Repointing `balance.rs`’ column was dropped, so the column keeps reading the example, with item 137 (2) (f)’s finding.
+    - `east` kept the comment work: `scenarios/README.md`’s walker note, `unaffordable-deploy`’s header, and `balance.rs`’ two markers.
+    - `east` also found that `examples/playbooks/expand_east.jsonc` and `scenarios/README.md` call themselves “CONTRACT FILE” in their headers, which the plan had not marked.
+
+  **(3) Process rules the merges taught.**
+  - **A lane takes `main` only by a signed merge, never by a rebase or a force-push:** `git fetch origin main`, `git merge --no-ff --no-commit FETCH_HEAD`, then `git commit -s`. The desktop app’s Auto-fix needs a branch whose pushed history is never rewritten, and the DCO walk checks merge commits as it checks every other. For a pushed branch this replaces the rebase that four harness texts still describe, and the coming harness pull request (S2’s plan, section 4.6) rewords all four:
+    - AGENTS.md §6, “Rebase on `main` before opening a PR”;
+    - `scripts/merge-train.sh`, which rebase-merges each PR and rebases the next lane’s worktree with `--force-with-lease` (~19–21), and refuses a branch with merge commits (~53, ~188);
+    - CLAUDE.md’s local-verify path (~76), “green on its rebase onto `main`”;
+    - `.claude/workflows/wave-lanes.js` (~106), “when the main session’s merge train rebases it”.
+
+    Until that pull request merges, `scripts/merge-train.sh` is out of use as a whole: its default mode rebase-merges each PR and rebases and force-pushes the next lane, and `--local-verify` refuses a branch with merge commits, which every lane branch now carries. The main session merges each PR by a merge commit, once CI’s checks are green on its head after its merge of `main`. *Downside:* a lane’s history carries merge commits that a reader of the PR reads past, and the merge train’s automation is out of use until the harness pull request.
+    - **The force-pushes, recorded.** `base`’s merge of `con3`, `6b27e68`, had no sign-off. It was reworded to `34e6db7` with its tree unchanged (`9858e95`), and the branch was force-pushed once to replace it. `night` also reordered its own commits once with `--force-with-lease`, before any merge of `main`, as its fix pass.
+  - **No lane kills a process it did not start,** restating item 113’s rule, which `wave-lanes.js`’ lane brief already carries. A lane that finds a build, a test run or a Godot process in its way waits for it or says so; it never stops another lane’s or the owner’s. *Downside:* a lane can sit behind a hung process until the main session clears it.
+  - **`--no-verify` is for genuine emergencies only** (AGENTS.md §8). It was used twice: once in a local rebuild in `base`, and once on a rebase in `vfy1`, where no hook existed to skip. Nothing unchecked was pushed, and the rule is restated in every lane brief. *Downside:* none beyond the rule’s own.
+
+  **(4) The main session’s rulings at the merges.**
+  - **`vfy1`’s edits outside its grant are accepted** as tests that pin the verifier’s output (AGENTS.md §6): `crates/gateway/tests/methods.rs`, `advice.rs` and `economy.rs`, and `tests/golden/docs/reference/expected.docs.txt`, in their own commit, `db1d781`, after the review fix `2a05f67`. *Downside:* the grant was given after the fact.
+  - **`con3` was granted the rules-hash pin `crates/sim/tests/determinism.rs:811`,** which every rules-table change moves. Every lane that changes the rules table needs the same line, so `tune2`’s grant names it. *Downside:* one more cross-crate place in a crate another lane may own.
+  - **`base`’s one-line edits outside its grant are accepted:**
+    - `crates/gateway/src/surface.rs`’ `saved_match`, calling `Host::check_savable`;
+    - `crates/gateway/tests/host_loop.rs`, for the step’s `Result`;
+    - the plan-core and verifier projection tests whose missing-row premise the load-time refusals removed;
+    - `crates/gateway/tests/control.rs`’ new test, at the main session’s request.
+
+    *Downside:* as for `vfy1`.
+  - **`base`’s commits are not split into the plan’s three sets,** because those sets cannot each build: `world.rs`, `runner.rs` and the gateway’s places carry all three, and the step’s new `Result` breaks the gateway at any earlier boundary. `base` landed as three building commits instead (the scenario’s playbook; the hand-written behaviour, `feat(sim)!`; E7’s mechanical sweep, `refactor(sim)`), then, between its two merges of `main` (`a7c83db`, after `vfy1`, and `34e6db7`, after `con3`), E8’s verifier cross-check and the verification review’s fix. *Downside:* the behaviour commit is large to read.
+  - **`base`’s `begin_push` and `end_recap` answer `false` while a tick is open,** untyped. The gateway’s `Surface::begin_push` and `end_recap` turn that into an `INTERNAL` refusal written to the audit log. No wire method reaches the phase stepper (`crates/gateway/tests/confinement.rs`), so only a host bug can leave a tick open there. Accepted for the merge, and carried: `ids`, the sim’s next owner, replaces the bare `false` with a typed refusal (a `MidTick` cause, as the other doors give), with `Host`’s and `Surface`’s `begin_push` and `end_recap` in `crates/gateway` as its named places. *Downside:* until `ids` merges, the sim’s answer is a bare `bool` at that seam.
+  - **`night`’s edits outside its grant are accepted:** `xtask/src/main.rs` (`step_scenario` playing `collect_played`’s list, and the `DETERMINISM_TICKS` doc comment), and the result golden’s paragraph in `tests/golden/scenarios/README.md`. *Downside:* as for `vfy1`.
+  - **`night` declined the plan’s rename of `b_01` to `b_00` in `gamectl`’s texts, and that is accepted.** The texts describe the reference fixture, whose core keeps the id `b_01` in both copies, `gamectl`’s and the verifier’s, and the two share a `report_hash` pin (`crates/gamectl/tests/verify.rs`). Renaming one copy would split them. The texts now say which id is which, so the plan’s carry reads “clarify, do not rename”. *Downside:* a reader still meets two core ids, the fixture’s `b_01` and a live match’s `b_00`.
+  - **`vfy1` added E0018 in its own lane,** beyond the plan’s list: an enum number this build does not name, refused raw. prost’s getters read such a number as the enum’s default, so `"pace": 9` qualified while the sim’s compile refused it. *Downside:* one more code in the catalogue.
+  - **`con4` was granted, mid-lane, these places:**
+    - `compile_build_target` in `crates/sim/src/interpreter.rs`, with its `REFUSALS` entries, the new `PlanError::WallBoxOffAWall` with its `Display` arm and helper, and the doc table;
+    - the refusal tests in `crates/sim/tests/interpreter.rs`;
+    - `crates/verifier/src/refusals.rs`.
+
+    The plan’s named sim place, the Defend and Attack arms of `compile_settings_row`, needed no edit, because `base`’s arms already refuse the whole arm; the base kit and the wall box are refused in `compile_build_target`. *Downside:* two lanes held places in the sim at once.
+  - **M-14 is re-dated,** in `con4` #120, to “owner, S3, the next proto PR after S2’s”: S2’s proto pull requests do not move the mandate messages into `gp/v1/mandate.proto`. *Downside:* the move waits another stage.
+  - **The recap’s tally** is the owner’s ruling in (7): a seat’s own between rounds, and every seat’s at match end. It replaces the main session’s first reading, own-seat only throughout.
+
+  **(5) Found by the lanes, and carried, each to its lane.**
+  - **The sweep’s size.** `base` counted about 552 fallback sites in the sim, against the plan’s about 450 (R14). It leaves 216, in six files, carried to `ids` under R14 and capped per file by `no_silent_fallback_is_left` (R14’s mitigation taken, the main session’s call, open to the owner’s veto). *Downside:* `ids`, already on the critical path, carries a mechanical sweep beside its own work.
+  - **`wgw`:**
+    - the silent fallbacks still on `main` that `con3` found: `crates/gateway/src/viewfeed.rs:716`, a chunk that fails to decode drawn as zeros (air), and `crates/gateway/src/schema.rs:242`, `i32::MAX` for an index that does not fit (the third, `crates/gamectl/src/scenario/run.rs:607`’s base64 decode, `night` fixed);
+    - the new view and summary fields filled under the fog filter;
+    - `Money` and `Hp` converted to the wire’s integers by `try_from`, with a typed error;
+    - the stale comments: `surface/planning.rs` ~760 and `surface/knowledge.rs` ~738 and ~810, which say a qualifying FULL report may fail to price (E0603 ended that), and `surface/knowledge.rs` ~1112, which says a beacon’s HP and a sighting’s age stay reserved.
+  - **`fire`:** its loader refuses, with a typed error, a zero cooldown, projectile speed or range, a blast level outside 1 to 3, and zero bedrock layers (`con3` wrote the rows and no reader). It also defines the recap tally’s kills, shared kills and losses, with ruins among the losses.
+  - **`vfy2`:**
+    - the 65-handler gap, the one reachable sim refusal with no verifier code, its code reading the sim’s `MAX_HANDLERS` rather than a second number;
+    - Defend’s and Attack’s pricing, and their required-field and range checks;
+    - the wall box’s checks: inside the sphere, its `min.z`, a `wall` target with no box, and its height;
+    - the size budget counting `avoid_areas`;
+    - I0003 for an omitted `roe`, and render prose for the new constructs;
+    - the S1 boolean fields an edit row cannot write false (`flee_on_threat`, `rebuild_destroyed`);
+    - plan-core’s wrapping of every `Input::new` error as an incomplete rules table.
+  - **`site`** lifts E0019, the base kit’s refusal, after `vfy2`, when it builds the blueprints. `con4` #120’s E0019 (its `crates/verifier/src/refusals.rs` entry, its case, its catalogue row and their goldens) is a named place in `site`’s Owns line, since no verifier lane runs beside it. *Downside:* a sim lane edits verifier files.
+  - **The nightly result golden,** `tests/golden/scenarios/nightly-result/`, is a named place in `oprd`’s, `opra`’s and `tune2`’s Owns lines: Easy’s output and the rules hash both move it. *Downside:* three lanes re-bless one golden, each after the last (E33).
+  - **`vfy2`’s and `vfy3`’s grants** name `crates/gateway/tests/{methods,advice,economy}.rs` and `tests/golden/docs/reference/expected.docs.txt`, which a lane closing a two-door gap or adding a catalogue row moves. *Downside:* two verifier lanes hold places in the gateway’s tests, so a gateway lane running beside either must list them as excepted.
+  - **For `dfnd`, the sim’s Defend owner:** `initial.mandate {defend: {}}` is refused (`compile_settings_row`), while an empty Defend arm in a `set_mandate` is legal (`compile_switch_settings`). Spec §5 makes the mandate type a free choice at deploy, so `dfnd` accepts an empty Defend arm in `initial` too, and the verifier follows the sim (the main session’s call, open to the owner’s veto). The verifier mirrors the sim there and no verifier lane runs in wave 4, so `dfnd` is granted `crates/verifier/src/refusals.rs`’ E0012 entry, with its case and goldens, as named places. *Downside:* a beacon deployed with an empty Defend arm defends on every default until it is edited.
+  - **For the harness pull request, a contract change:** the workspace `[lints]` do not deny `arithmetic_side_effects` or `panic` for the crates that parse untrusted input, as the global rules ask, nor `todo` and `unimplemented` at the integration gate. The change is placed in the harness pull request’s slot (S2’s plan, section 4.6), for those crates only (the main session’s call, open to the owner’s veto). *Downside:* the first pass will turn up arithmetic to rewrite as `checked_*` in each such crate.
+  - **For `atk`, to put to the owner:** which enemy commander an Attack on “the enemy commander” picks when there are three seats.
+
+  **(6) What this entry changes.**
+  - `docs/design/s2-plan.md`:
+    - E22, and the `east` and `base` sections, as (2) amends them;
+    - section 2’s ruling-3 row, section 4.1’s wave 0, section 4.2’s ledger row and section 4.4’s docs-PR line, which no longer say the example or the spec moves;
+    - the holds “after `east`” on `con3`, `rnds`, `vfy1` and `night`, lifted, since `east` has merged;
+    - the `b_01` carry, demo step 8, and the research NOTE row, which `msrv` discharged;
+    - the carries of (4) and (5), in their lanes’ sections, and (7)’s tally in demo step 8 and `wgw`;
+    - a slot in section 4.6 for the harness pull request of (3), (5) and (7), and E33’s and the task conventions’ “rebase” brought to the merge-only rule.
+  - `docs/design/handoff.md`: §2.7 runs to item 145, and NEXT 1 says where S2 stands, with the harness pull request.
+  - `docs/placeholders.md`:
+    - S1-49, S1-52, and the delegated-tuning and “At this demo” texts, per #114;
+    - S2-07 discharged and S2-06 re-dated to S4, by `base`;
+    - S1-13 and S1-42 closed, and S2-05 and S1-34 given their rows, by `con3`;
+    - S2-11, S2-13 and M-14’s re-dating pending `con4` #120;
+    - S2-01, M-01, S2-14, S2-15 and S1-51 discharged by `night` and `vfy1`;
+    - S2’s delegated-tuning paragraph refreshed from `rules/README.md`, and `night`’s five markers added as S2-17 and S5-17.
+  - Its contract paths are this log, `docs/design/s2-plan.md` and `docs/design/handoff.md`. `docs/placeholders.md` is not one.
+
+  **(7) The owner’s interview of 2026-10-19: the owner’s answers, each the recommended option.**
+  - **The recap tally: a seat sees only its own kills and losses between rounds, and every seat’s at match end.** This amends spec §3’s fog-policy line, “Full per-seat detail comes at the recap and at match end”, to per-seat detail at match end only. On the wire, `GetRecapResponse.tally` stays the calling seat’s own, and a `seat_tallies` list carries every seat’s, filled only once the match has ended; `con4` #120 adds the field. *Downside:* between rounds a seat cannot read how the others fare from the recap; a runaway leader shows only on the map and in the settlement’s band.
+  - **`expand_east`: item 139 (1) ruling 3, amended by the owner.** The owner confirms (2): `expand-east-segment` keeps its own playbook, and `examples/playbooks/expand_east.jsonc` and the spec’s worked example stay at [96, 11, 62]. *Rejected:* moving the verifier fixture’s core near the scenario’s map, so that one site is legal on both. That would re-bless every `report_hash` golden (the fixture snapshot is one of its inputs, AGENTS.md §4.8) and the `gamectl` and bench copies that restate the fixture, for an example whose site seat 1 still could not reach. *Downside:* as (2)’s.
+  - **proptest is not approved.** Property tests stay std-only and seeded, as `crates/proto/tests/hostile_input.rs` and `crates/gamectl/tests/seeds.rs` are. *Downside:* no shrinking, so a failing case is reported as its seed and its raw input.
+  - **AGENTS.md §6’s list of the tests and goldens that pin the operator’s output gains `tests/golden/scenarios/nightly-result/`,** in the coming harness pull request (S2’s plan, section 4.6). *Downside:* one more named place a lane changing the operator carries.
+  - No owner question from this interview remains open.

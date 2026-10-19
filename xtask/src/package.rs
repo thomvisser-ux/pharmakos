@@ -475,9 +475,11 @@ pub(crate) fn run_package(ctx: &Ctx) -> Result<String, String> {
         listed.iter().filter(|entry| !entry.is_directory()).count()
     ));
 
-    // 11. The packaged gamectl replays every committed scenario.
+    // 11. The packaged gamectl replays every committed scenario: the played
+    // list, which leaves out the nightly arms, because an arm carries no
+    // golden chain to replay against (S2's plan, E20).
     let packaged = tree.join(platform.gamectl);
-    let files = scenario::collect(&ctx.root)?;
+    let files = scenario::collect_played(&ctx.root)?;
     if files.is_empty() {
         return Err("no committed scenario to replay (scenarios/**/*.scenario.jsonc)".to_owned());
     }

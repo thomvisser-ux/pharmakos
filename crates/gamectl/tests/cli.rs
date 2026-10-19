@@ -143,6 +143,16 @@ fn an_option_given_to_the_wrong_command_is_a_usage_error() {
         ],
         &["seat", "--depth", "quick", "doctor"],
         &["scenario", "--part", "step", "run", "a.scenario.jsonc"],
+        // The nightly harness's four (S2's `night`) are `scenario run`'s alone.
+        &[
+            "verify",
+            "--seeds",
+            "s.txt",
+            "examples/playbooks/expand_east.jsonc",
+        ],
+        &["docs", "--operator", "easy"],
+        &["schema", "--format", "json"],
+        &["seat", "--out", "r.json", "doctor"],
     ] {
         let outcome = gamectl(args);
         assert_eq!(outcome.code, Exit::Usage, "{args:?}: {}", outcome.out);
