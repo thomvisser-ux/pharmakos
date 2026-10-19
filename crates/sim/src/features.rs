@@ -161,11 +161,8 @@ impl Feature {
     /// Its name: `vent_<x>_<y>` or `seam_<x>_<y>`, from the anchor column.
     #[must_use]
     pub fn name(&self) -> String {
-        feature_name(
-            self.kind,
-            self.anchor.first().copied().unwrap_or(0),
-            self.anchor.get(1).copied().unwrap_or(0),
-        )
+        let [x, y] = self.anchor;
+        feature_name(self.kind, x, y)
     }
 
     /// Whether the column `(x, y)` is one of its footprint columns.
@@ -275,11 +272,8 @@ impl FeatureTable {
         // item 62: anchors are unique once the check below passes, and the
         // kind ends the key so even a refused duplicate sorts the same way.
         features.sort_unstable_by_key(|feature| {
-            (
-                feature.anchor.get(1).copied().unwrap_or(0),
-                feature.anchor.first().copied().unwrap_or(0),
-                feature.kind,
-            )
+            let [x, y] = feature.anchor;
+            (y, x, feature.kind)
         });
         for (index, first) in features.iter().enumerate() {
             for second in features.iter().skip(index.saturating_add(1)) {

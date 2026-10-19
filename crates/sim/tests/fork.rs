@@ -51,15 +51,15 @@ fn a_fork_walks_the_same_timeline_as_its_parent() {
 
     for round in 0..20 {
         for _ in 0..7 {
-            let _ = parent.step(&mut enc);
+            let _ = parent.step(&mut enc).unwrap();
         }
         let parent_hash_before = parent.state_hash();
 
         // What the parent itself would do over the next 13 ticks.
         let mut reference = parent.clone();
-        let expected: Vec<u64> = (0..13).map(|_| reference.step(&mut enc)).collect();
+        let expected: Vec<u64> = (0..13).map(|_| reference.step(&mut enc).unwrap()).collect();
 
-        let (_child, trace) = fork_and_step(&parent, 13);
+        let (_child, trace) = fork_and_step(&parent, 13).unwrap();
 
         assert_eq!(
             trace, expected,
@@ -78,13 +78,13 @@ fn a_fork_is_an_independent_timeline() {
     let mut parent = world();
     let mut enc = Enc::with_capacity(64 * 1024);
     for _ in 0..40 {
-        let _ = parent.step(&mut enc);
+        let _ = parent.step(&mut enc).unwrap();
     }
     let before = parent.state_hash();
     let mut child = fork(&parent);
     assert_eq!(child.state_hash(), before, "a fresh fork is its parent");
     for _ in 0..25 {
-        let _ = child.step(&mut enc);
+        let _ = child.step(&mut enc).unwrap();
     }
     assert_ne!(
         child.state_hash(),

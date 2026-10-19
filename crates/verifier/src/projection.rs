@@ -617,7 +617,6 @@ pub fn project(
 #[cfg(test)]
 mod tests {
     use super::{Cost, Prices, ProjectionError, Tally, project};
-    use crate::limits::RulesGap;
     use pharmakos_proto::gp::v1::{
         BuildSettings, BuildTarget, Declarative, InitialSettings, InterfaceRow, InterfaceStep,
         MandateSettings, PlaceBeaconStep, Playbook, QueueStructureRow, Step, SurveySettings,
@@ -825,10 +824,14 @@ mod tests {
         if let Some(units) = message.units.as_mut() {
             units.scout = None;
         }
-        let gapped = RulesTable::from_message(&message).expect("the sim's view still builds");
+        // Since S2's `base` lane the sim reads every unit row typed at load
+        // (decisions-log item 136 (5)), so a table without the row is refused
+        // before any reader, this one included, can price from it.
         assert_eq!(
-            Prices::from_rules(&gapped),
-            Err(RulesGap::MissingBlock("units.scout"))
+            RulesTable::from_message(&message),
+            Err(pharmakos_sim::rules::RulesError::MissingBlock(
+                "units.scout"
+            ))
         );
     }
 }

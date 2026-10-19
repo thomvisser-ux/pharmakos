@@ -104,18 +104,18 @@ impl View<'_> {
     pub(crate) fn commander_hp(&self) -> i32 {
         self.commander()
             .and_then(|index| self.world.units().hit_points().get(index).copied())
+            // E7: rule: a seat with no commander row has no hit points
             .map_or(0, Hp::raw)
     }
 
     /// The commander's maximum hit points, from `commander.hp`.
+    ///
+    /// Read typed at load, so a table missing it was refused there.
     pub(crate) fn commander_max_hp(&self) -> i32 {
         self.world
             .rules()
-            .message()
-            .commander
-            .as_ref()
-            .and_then(|block| i32::try_from(block.hp).ok())
-            .unwrap_or(0)
+            .unit_hp(crate::tables::UnitKind::Commander)
+            .raw()
     }
 
     /// The commander's hit points as a whole percentage of its maximum.
@@ -141,7 +141,7 @@ impl View<'_> {
     /// A beacon's row, when the id names one.
     pub(crate) fn beacon_row(&self, beacon: BeaconId) -> Option<usize> {
         let beacons = self.world.beacons();
-        let count = usize::try_from(beacons.len()).unwrap_or(0);
+        let count = crate::math::index::row(beacons.len());
         let index = usize::try_from(beacon.raw()).ok()?;
         // Rows are dense and in id order, so the id is the row — checked rather
         // than assumed, because a snapshot could in principle carry otherwise.
@@ -174,6 +174,7 @@ impl View<'_> {
             .seats()
             .treasuries()
             .get(self.seat_index)
+            // E7: cannot miss: `seat_index` is a row of the seat table the view was built for
             .map_or(0, |money| money.raw())
     }
 
@@ -184,12 +185,14 @@ impl View<'_> {
             .seats()
             .supplies()
             .get(self.seat_index)
+            // E7: cannot miss: as above
             .map_or(0, |kw| i64::from(kw.raw()));
         let draw = self
             .world
             .seats()
             .draws()
             .get(self.seat_index)
+            // E7: cannot miss: as above
             .map_or(0, |kw| i64::from(kw.raw()));
         supply.saturating_sub(draw)
     }
@@ -234,6 +237,7 @@ pub(crate) fn evaluate(view: &View<'_>, condition: &Cond) -> bool {
                     .dormant()
                     .get(row)
                     .copied()
+                    // E7: cannot miss: `row` is a row `beacon_row` found in this table
                     .unwrap_or(false);
                 dormant != *powered
             }),
@@ -243,7 +247,8 @@ pub(crate) fn evaluate(view: &View<'_>, condition: &Cond) -> bool {
             view.state.reached != super::state::NO_INDEX && *index <= view.state.reached
         }
         Cond::RuleFired(index) => {
-            let at = usize::try_from(*index).unwrap_or(usize::MAX);
+            let at = crate::math::index::row(*index);
+            // E7: rule: a handler index the plan does not hold has never fired, and the compile refuses one
             view.state.fires.get(at).copied().unwrap_or(0) > 0
         }
     }
@@ -310,19 +315,13 @@ pub(crate) trait Board {
     /// A row's maximum hit points: `beacon.core_hp` for a seat's core, its
     /// `b_00` (spec section 3: the generator places it first), and
     /// `structures.beacon.hp` for any other.
+    ///
+    /// Both rows are read typed at load, so neither can be missing.
     fn row_max_hp(&self, row: usize) -> i64 {
-        let message = self.rules().message();
         if self.row_ordinal(row) == Some(0) {
-            return message
-                .beacon
-                .as_ref()
-                .map_or(0, |block| i64::from(block.core_hp));
+            return i64::from(self.rules().core_hp().raw());
         }
-        message
-            .structures
-            .as_ref()
-            .and_then(|block| block.beacon)
-            .map_or(0, |beacon| i64::from(beacon.hp))
+        i64::from(self.rules().beacon_row().hp.raw())
     }
 
     /// A row's hit points as a whole percentage of its maximum.
@@ -336,7 +335,7 @@ impl Board for View<'_> {
         self.seat
     }
     fn beacon_rows(&self) -> usize {
-        usize::try_from(self.world.beacons().len()).unwrap_or(0)
+        crate::math::index::row(self.world.beacons().len())
     }
     fn row_id(&self, row: usize) -> Option<u32> {
         self.world.beacons().ids().get(row).copied()
@@ -353,6 +352,7 @@ impl Board for View<'_> {
             .mandates()
             .get(row)
             .copied()
+            // E7: cannot miss: every caller's `row` is a row of the beacon table it read
             .unwrap_or(0)
     }
     fn row_at(&self, row: usize) -> Option<[Fx; 3]> {
@@ -363,6 +363,7 @@ impl Board for View<'_> {
             .beacons()
             .hit_points()
             .get(row)
+            // E7: cannot miss: every caller's `row` is a row of the beacon table it read
             .map_or(0, |hp| i64::from(hp.raw()))
     }
     fn rules(&self) -> &RulesTable {
@@ -402,6 +403,7 @@ impl Board for SnapshotBoard<'_> {
         self.snapshot.beacon_ordinal.get(row).copied()
     }
     fn row_mandate(&self, row: usize) -> u8 {
+        // E7: cannot miss: every caller's `row` is a row of the snapshot's beacon columns
         self.snapshot.beacon_mandate.get(row).copied().unwrap_or(0)
     }
     fn row_at(&self, row: usize) -> Option<[Fx; 3]> {
@@ -411,6 +413,7 @@ impl Board for SnapshotBoard<'_> {
         self.snapshot
             .beacon_hp
             .get(row)
+            // E7: cannot miss: every caller's `row` is a row of the snapshot's beacon columns
             .map_or(0, |hp| i64::from(*hp))
     }
     fn rules(&self) -> &RulesTable {
@@ -578,9 +581,13 @@ fn rank<B: Board>(board: &B, filter: Filter, rank: Rank) -> Option<BeaconId> {
 /// makes it an admissible stand-in for "least travel" (see the module docs).
 fn octile(cardinal: i64, diagonal: i64, a: [Fx; 3], b: [Fx; 3]) -> i64 {
     let axis = |point: &[Fx; 3], at: usize| -> i64 {
-        point
-            .get(at)
-            .map_or(0, |value| i64::from(value.floor_voxels()))
+        let [east, north, up] = *point;
+        let value = match at {
+            0 => east,
+            1 => north,
+            _ => up,
+        };
+        i64::from(value.floor_voxels())
     };
     let dx = axis(&a, 0).saturating_sub(axis(&b, 0)).saturating_abs();
     let dy = axis(&a, 1).saturating_sub(axis(&b, 1)).saturating_abs();

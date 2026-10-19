@@ -652,6 +652,13 @@ pub enum SnapshotError {
         /// The unit the digests disagree at, the lowest one.
         unit: u32,
     },
+    /// A tick is open between two of its phases: a restore into it would
+    /// leave half a tick behind (S2's plan, E30).
+    MidTick,
+    /// The match settings are ones a lobby would be refused: a zero round
+    /// limit, a ladder entry under a tick, a ladder past its bound (S2's plan,
+    /// E7). Refused rather than normalised.
+    Settings(crate::runner::SettingsError),
     /// The match state names a phase or an end reason this build does not
     /// define. A file from another version or an edited one: refused rather
     /// than restored into a match that is in no phase at all, which is a world
@@ -705,6 +712,10 @@ impl core::fmt::Display for SnapshotError {
                 "the snapshot's route digest for unit {unit} is not the digest of the route \
                  nodes it carries"
             ),
+            SnapshotError::MidTick => write!(f, "a tick is open between two of its phases"),
+            SnapshotError::Settings(error) => {
+                write!(f, "the snapshot's match settings are refused: {error}")
+            }
             SnapshotError::MatchState { phase, end_reason } => write!(
                 f,
                 "the snapshot's match phase {phase} or end reason {end_reason} is not one this \
@@ -955,6 +966,7 @@ impl Snapshot {
         reason = "one block per table, and every block must run before the first assignment: a restore either applies in full or changes nothing, so the checks cannot be moved behind the writes"
     )]
     pub fn restore_into(&self, world: &mut World) -> Result<(), SnapshotError> {
+        // E7: rule: a capacity only; the seat table's restore checks the columns it is handed
         let seat_count = u32::try_from(self.seat_id.len()).unwrap_or(0);
         let mut seats = SeatTable::with_capacity(seat_count);
         if !seats.restore(SeatColumns {
@@ -971,7 +983,9 @@ impl Snapshot {
         }
 
         let match_state = self.restore_match()?;
+        self.check_codes()?;
 
+        // E7: rule: a capacity only; the unit table's restore checks the columns it is handed
         let mut units = UnitTable::with_capacity(u32::try_from(self.unit_id.len()).unwrap_or(0));
         if !units.restore(UnitColumns {
             id: self.unit_id.clone(),
@@ -998,6 +1012,7 @@ impl Snapshot {
         // this sim plays; refused before the table is built or checked, so a
         // crafted column costs nothing to turn away.
         let beacon_limit = crate::world::beacon_limit_of(seat_count);
+        // E7: rule: a column past `u32` rows is past every beacon ceiling, and is refused just below
         let beacon_count = u32::try_from(self.beacon_id.len()).unwrap_or(u32::MAX);
         if beacon_count > beacon_limit {
             return Err(SnapshotError::OverBeaconCeiling {
@@ -1027,6 +1042,7 @@ impl Snapshot {
         }
 
         let mut structures =
+            // E7: rule: a capacity only; the structure table's restore checks the columns it is handed
             StructureTable::with_capacity(u32::try_from(self.structure_id.len()).unwrap_or(0));
         if !structures.restore(StructureColumns {
             id: self.structure_id.clone(),
@@ -1042,6 +1058,7 @@ impl Snapshot {
             return Err(SnapshotError::Ragged("structure"));
         }
 
+        // E7: rule: a capacity only; the wreck table's restore checks the columns it is handed
         let mut wrecks = WreckTable::with_capacity(u32::try_from(self.wreck_id.len()).unwrap_or(0));
         if !wrecks.restore(
             self.wreck_id.clone(),
@@ -1211,14 +1228,116 @@ impl Snapshot {
         Ok(credit)
     }
 
-    /// The match state, refused at the door when its phase or end reason is
-    /// not one this build defines.
+    /// Every byte-coded column names a value this build defines (S2's #116
+    /// reviews, C): a unit's kind and walk state, a structure's kind and a
+    /// target's blueprint (a kind with a structure row, so never a wall; a
+    /// blueprint may also be zero, on a row that names none), a
+    /// beacon's mandate and priority, and a sighting's kind. The table
+    /// restores check the columns they already know (a target's kind and
+    /// description, a seam choice, a rotation, the flags, a visit's stage);
+    /// these are the rest, refused here by column -- with every seat byte
+    /// (a seat the file carries, or nobody where nobody is a value) and the
+    /// interpreter's four flag bytes (`0` or `1`; the beacon, structure and
+    /// route flags are `flags`' already). The beacon's seat is the beacon
+    /// table's own check.
     ///
     /// # Errors
     ///
-    /// Returns [`SnapshotError::MatchState`]; see
-    /// [`crate::runner::MatchState::from_parts`] for why structure is refused
-    /// while values are normalised.
+    /// [`SnapshotError::OutOfRange`], naming the column.
+    fn check_codes(&self) -> Result<(), SnapshotError> {
+        use crate::tables::{
+            PRIORITY_HIGH, PRIORITY_LOW, PRIORITY_NORMAL, StructureKind, UnitKind,
+        };
+        let row_kind =
+            |id: &u8| StructureKind::from_id(*id).is_some_and(|kind| kind != StructureKind::Wall);
+        let checks: [(&'static str, bool); 7] = [
+            (
+                "unit_kind",
+                self.unit_kind
+                    .iter()
+                    .all(|id| UnitKind::from_id(*id).is_some()),
+            ),
+            (
+                "unit_walk_state",
+                self.unit_walk_state
+                    .iter()
+                    .all(|id| crate::pathing::router::WalkState::from_id(*id).is_some()),
+            ),
+            ("structure_kind", self.structure_kind.iter().all(row_kind)),
+            (
+                "target_blueprint",
+                self.target_blueprint
+                    .iter()
+                    .all(|id| *id == 0 || row_kind(id)),
+            ),
+            (
+                "beacon_mandate",
+                self.beacon_mandate
+                    .iter()
+                    .all(|id| crate::seams::MandateKind::from_id(*id).is_some()),
+            ),
+            (
+                "beacon_priority",
+                self.beacon_priority
+                    .iter()
+                    .all(|id| [PRIORITY_LOW, PRIORITY_NORMAL, PRIORITY_HIGH].contains(id)),
+            ),
+            (
+                "sighting_kind",
+                self.sighting_kind
+                    .iter()
+                    .all(|id| crate::knowledge::AssetKind::from_id(*id).is_some()),
+            ),
+        ];
+        // A seat byte names a seat the file carries; a sighting's owner and a
+        // credit slot may also name nobody (`SeatId::NEUTRAL`), and the seat
+        // table's own ids are its rows' indices.
+        let seats = self.seat_id.len();
+        let a_seat = |id: &u8| usize::from(*id) < seats;
+        let a_seat_or_nobody = |id: &u8| *id == SeatId::NEUTRAL.raw() || a_seat(id);
+        let a_flag = |byte: &u8| *byte <= 1;
+        let more: [(&'static str, bool); 10] = [
+            (
+                "seat_id",
+                self.seat_id
+                    .iter()
+                    .enumerate()
+                    .all(|(index, id)| usize::from(*id) == index),
+            ),
+            ("unit_seat", self.unit_seat.iter().all(a_seat)),
+            ("structure_seat", self.structure_seat.iter().all(a_seat)),
+            ("sighting_seat", self.sighting_seat.iter().all(a_seat)),
+            (
+                "sighting_owner",
+                self.sighting_owner.iter().all(a_seat_or_nobody),
+            ),
+            ("credit_seat", self.credit_seat.iter().all(a_seat_or_nobody)),
+            ("plan_pinned", self.plan_pinned.iter().all(a_flag)),
+            (
+                "plan_reflex_armed",
+                self.plan_reflex_armed.iter().all(a_flag),
+            ),
+            (
+                "plan_reflex_active",
+                self.plan_reflex_active.iter().all(a_flag),
+            ),
+            ("plan_resumed", self.plan_resumed.iter().all(a_flag)),
+        ];
+        match checks.into_iter().chain(more).find(|(_, ok)| !ok) {
+            Some((column, _)) => Err(SnapshotError::OutOfRange(column)),
+            None => Ok(()),
+        }
+    }
+
+    /// The match state, refused at the door when its phase or end reason is
+    /// not one this build defines or its settings are ones a lobby refuses.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SnapshotError::MatchState`] for a phase or an end reason this
+    /// build does not define, and [`SnapshotError::Settings`] for settings a
+    /// lobby would be refused ([`crate::runner::MatchState::from_parts`]):
+    /// neither is normalised.
     fn restore_match(&self) -> Result<MatchState, SnapshotError> {
         MatchState::from_parts(MatchParts {
             phase: self.match_phase,
@@ -1232,9 +1351,12 @@ impl Snapshot {
             winner: self.match_winner,
             ended_at: self.match_ended_at,
         })
-        .ok_or(SnapshotError::MatchState {
-            phase: self.match_phase,
-            end_reason: self.match_end_reason,
+        .map_err(|refused| match refused {
+            crate::runner::PartsRefused::Structure => SnapshotError::MatchState {
+                phase: self.match_phase,
+                end_reason: self.match_end_reason,
+            },
+            crate::runner::PartsRefused::Settings(error) => SnapshotError::Settings(error),
         })
     }
 
@@ -1310,7 +1432,7 @@ impl Snapshot {
         }
         let mut packed: usize = 0;
         for len in &self.unit_route_len {
-            packed = packed.saturating_add(usize::try_from(*len).unwrap_or(usize::MAX));
+            packed = packed.saturating_add(crate::math::index::row(*len));
         }
         if packed != self.route_nodes.len() {
             return Err(SnapshotError::Ragged("route_nodes"));
@@ -1373,7 +1495,7 @@ impl Snapshot {
         // module docs: the claim there is only true if it is checked here). The
         // cost is one pass of xxh3 over 9.4 MB at a restore, a fraction of
         // regenerating the map above, and it is never paid inside a tick.
-        if self.chunk_digest.len() != usize::try_from(voxels.chunk_count()).unwrap_or(usize::MAX) {
+        if self.chunk_digest.len() != crate::math::index::row(voxels.chunk_count()) {
             return Err(SnapshotError::Ragged("chunk_digest"));
         }
         let mut chunks = ChunkDigests::new(0);

@@ -1189,7 +1189,8 @@ fn compile_action(step: &gp::v1::Step, names: &Names<'_>) -> Result<Action, Plan
                     rows.push(Row::Priority { priority });
                 }
             }
-            let tags = u32::try_from(place.tags.len()).unwrap_or(u32::MAX);
+            // A tag list past `u32` prices a deploy past any signed duration.
+            let tags = u32::try_from(place.tags.len()).map_err(|_| PlanError::RowTooLong)?;
             let durations = names.price(&rows)?;
             Ok(Action::PlaceBeacon {
                 at,
@@ -1251,10 +1252,7 @@ fn compile_row(
         gp::v1::interface_row::Row::RemoveBuildTarget(remove) => Ok(Row::RemoveTarget {
             anchor: compile_removal(remove.anchor.as_ref(), names)?,
         }),
-        gp::v1::interface_row::Row::QueueStructure(_) => Err(PlanError::NotAtThisStage {
-            construct: "interface row `queue_structure`",
-            stage: "S4 (the capability catalogue and its licences)",
-        }),
+        gp::v1::interface_row::Row::QueueStructure(_) => Err(REFUSE_QUEUE_STRUCTURE.error()),
     }
 }
 
@@ -1410,10 +1408,7 @@ fn compile_build_target(
     let blueprint = match target.blueprint_id.as_str() {
         "generator" => crate::tables::StructureKind::Generator.id(),
         _ => {
-            return Err(PlanError::NotAtThisStage {
-                construct: "a Build target naming a blueprint other than `generator`",
-                stage: "S4 (the capability catalogue and its licences)",
-            });
+            return Err(REFUSE_BUILD_BLUEPRINT.error());
         }
     };
     let rotation =
@@ -1492,10 +1487,7 @@ fn compile_anchor(
             FeatureSite::On { covering },
         )?)),
         Some(gp::v1::location::Place::BeaconAnchor(_) | gp::v1::location::Place::Safest(_)) => {
-            Err(PlanError::NotAtThisStage {
-                construct: "a Build target anchored on a beacon selector rather than on a voxel or `on` a vent",
-                stage: "S3 (the full selector work, where a pinned anchor gets a meaning)",
-            })
+            Err(REFUSE_BUILD_BEACON_ANCHOR.error())
         }
         Some(gp::v1::location::Place::Covering(_)) => Err(PlanError::MisplacedTarget(
             "`covering` is legal only in a `place_beacon`'s `at`; a Build target stands `on` a vent",
@@ -1527,10 +1519,7 @@ fn compile_removal(
             None => Err(PlanError::MissingBlock("on.ref")),
         },
         Some(gp::v1::location::Place::BeaconAnchor(_) | gp::v1::location::Place::Safest(_)) => {
-            Err(PlanError::NotAtThisStage {
-                construct: "a Build target anchored on a beacon selector rather than on a voxel or `on` a vent",
-                stage: "S3 (the full selector work, where a pinned anchor gets a meaning)",
-            })
+            Err(REFUSE_BUILD_BEACON_ANCHOR.error())
         }
         Some(gp::v1::location::Place::Covering(_)) => Err(PlanError::MisplacedTarget(
             "`covering` is legal only in a `place_beacon`'s `at`",
@@ -1675,14 +1664,8 @@ fn mandate_fields(mandate: &gp::v1::mandate_settings::Mandate) -> Result<u32, Pl
             set(mine.seam_choice != 0),
             set(mine.pillar_spacing != 0),
         ]),
-        gp::v1::mandate_settings::Mandate::Defend(_) => Err(PlanError::NotAtThisStage {
-            construct: "Defend mandate settings",
-            stage: "S2 (destruction and combat)",
-        }),
-        gp::v1::mandate_settings::Mandate::Attack(_) => Err(PlanError::NotAtThisStage {
-            construct: "Attack mandate settings",
-            stage: "S2 (destruction and combat)",
-        }),
+        gp::v1::mandate_settings::Mandate::Defend(_) => Err(REFUSE_DEFEND_SETTINGS.error()),
+        gp::v1::mandate_settings::Mandate::Attack(_) => Err(REFUSE_ATTACK_SETTINGS.error()),
     }
 }
 
@@ -1759,10 +1742,7 @@ fn compile_beacon_ref(
         Some(gp::v1::beacon_ref::Ref::Weakest(weakest)) => Ok(BeaconSpec::Weakest(compile_filter(
             weakest.filter.as_ref(),
         )?)),
-        Some(gp::v1::beacon_ref::Ref::MostThreatened(_)) => Err(PlanError::NotAtThisStage {
-            construct: "selector `most_threatened`",
-            stage: "S2 (destruction and combat: incoming threat is what it ranks by)",
-        }),
+        Some(gp::v1::beacon_ref::Ref::MostThreatened(_)) => Err(REFUSE_MOST_THREATENED.error()),
         None => Err(PlanError::MissingBlock("beacon.ref")),
     }
 }
@@ -1809,19 +1789,11 @@ fn compile_filter(filter: Option<&gp::v1::BeaconFilter>) -> Result<Filter, PlanE
             });
         }
         Ok(_) => {
-            return Err(PlanError::NotAtThisStage {
-                construct: "selector filter `side: ENEMY_KNOWN`",
-                stage: "S3 (the seat's knowledge store, which is what an enemy beacon is known \
-                        through)",
-            });
+            return Err(REFUSE_ENEMY_KNOWN.error());
         }
     }
     if !filter.tags.is_empty() {
-        return Err(PlanError::NotAtThisStage {
-            construct: "selector filter `tags`",
-            stage: "S3 (a beacon has no author-tag column yet, so a tag filter cannot be answered \
-                    — writing tags is legal, reading them is not)",
-        });
+        return Err(REFUSE_FILTER_TAGS.error());
     }
     let mandate = match gp::v1::beacon_filter::MandateKind::try_from(filter.mandate) {
         // Unspecified means "any writ" — the one documented default in the
@@ -1998,10 +1970,7 @@ fn compile_cond(
             let beacon = compile_beacon_ref(predicate.beacon.as_ref(), names)?;
             Ok(Cond::BeaconPowered(beacon, predicate.powered))
         }
-        gp::v1::condition::Node::BeaconUnderAttack(_) => Err(PlanError::NotAtThisStage {
-            construct: "predicate `beacon_under_attack`",
-            stage: "S2 (destruction and combat: a beacon has no damage history to ask about)",
-        }),
+        gp::v1::condition::Node::BeaconUnderAttack(_) => Err(REFUSE_BEACON_UNDER_ATTACK.error()),
         gp::v1::condition::Node::Treasury(predicate) => {
             let (cmp, value) = int_compare(predicate.dollars.as_ref(), "treasury.dollars")?;
             Ok(Cond::Treasury(cmp, value))
@@ -2169,8 +2138,8 @@ pub enum PlanError {
     /// build does not have.
     ///
     /// Refused at seal time and never treated as true, false or a no-op
-    /// (AGENTS.md §12: don't invent rules). The full list, each naming the task
-    /// or stage that fills it:
+    /// (AGENTS.md §12: don't invent rules). The full list is [`REFUSALS`], the
+    /// sim's refusal table, each naming the task or stage that fills it:
     ///
     /// | Construct | Stage |
     /// |---|---|
@@ -2195,6 +2164,130 @@ pub enum PlanError {
         stage: &'static str,
     },
 }
+
+/// One construct the compile refuses because its effect needs a later stage,
+/// and that stage (S2's plan, E8).
+///
+/// **The sim's refusal table**, read by the verifier: each entry has a stable
+/// `name`, which the verifier keys its E-code for the construct by, so a
+/// playbook the verifier passes is never refused by [`Plan::compile`] at
+/// `submit_plan` for a reason the editor did not show. The table and the
+/// compile's arms are one list: every arm returns [`Refusal::error`] of an
+/// entry here, and `tests/interpreter.rs`'s
+/// `the_refusal_table_and_the_arms_agree` compiles a playbook per entry and
+/// holds the two to each other in both directions. A lane that lifts a
+/// refusal removes its entry, and the verifier's E-code, in the same pull
+/// request.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Refusal {
+    /// The construct's stable key, for the verifier's E-code. Never renamed.
+    pub name: &'static str,
+    /// What was written, in words.
+    pub construct: &'static str,
+    /// The stage that gives it an effect.
+    pub stage: &'static str,
+}
+
+impl Refusal {
+    /// The compile's error for this construct.
+    #[must_use]
+    pub const fn error(self) -> PlanError {
+        PlanError::NotAtThisStage {
+            construct: self.construct,
+            stage: self.stage,
+        }
+    }
+
+    /// The entry a [`PlanError::NotAtThisStage`]'s construct names, or `None`
+    /// for any other error.
+    #[must_use]
+    pub fn of(error: &PlanError) -> Option<Refusal> {
+        let PlanError::NotAtThisStage { construct, .. } = error else {
+            return None;
+        };
+        REFUSALS
+            .into_iter()
+            .find(|refusal| refusal.construct == *construct)
+    }
+}
+
+/// `queue_structure`: S4.
+pub const REFUSE_QUEUE_STRUCTURE: Refusal = Refusal {
+    name: "queue_structure",
+    construct: "interface row `queue_structure`",
+    stage: "S4 (the capability catalogue and its licences)",
+};
+
+/// A Build target naming a blueprint other than `generator`: S4.
+pub const REFUSE_BUILD_BLUEPRINT: Refusal = Refusal {
+    name: "build_target_blueprint",
+    construct: "a Build target naming a blueprint other than `generator`",
+    stage: "S4 (the capability catalogue and its licences)",
+};
+
+/// A Build target, or a removal, anchored on a beacon selector: S3.
+pub const REFUSE_BUILD_BEACON_ANCHOR: Refusal = Refusal {
+    name: "build_target_beacon_anchor",
+    construct: "a Build target anchored on a beacon selector rather than on a voxel or `on` a vent",
+    stage: "S3 (the full selector work, where a pinned anchor gets a meaning)",
+};
+
+/// Defend mandate settings: S2.
+pub const REFUSE_DEFEND_SETTINGS: Refusal = Refusal {
+    name: "defend_settings",
+    construct: "Defend mandate settings",
+    stage: "S2 (destruction and combat)",
+};
+
+/// Attack mandate settings: S2.
+pub const REFUSE_ATTACK_SETTINGS: Refusal = Refusal {
+    name: "attack_settings",
+    construct: "Attack mandate settings",
+    stage: "S2 (destruction and combat)",
+};
+
+/// The selector `most_threatened`: S2.
+pub const REFUSE_MOST_THREATENED: Refusal = Refusal {
+    name: "most_threatened",
+    construct: "selector `most_threatened`",
+    stage: "S2 (destruction and combat: incoming threat is what it ranks by)",
+};
+
+/// The selector filter `side: ENEMY_KNOWN`: S3.
+pub const REFUSE_ENEMY_KNOWN: Refusal = Refusal {
+    name: "filter_side_enemy_known",
+    construct: "selector filter `side: ENEMY_KNOWN`",
+    stage: "S3 (the seat's knowledge store, which is what an enemy beacon is known through)",
+};
+
+/// The selector filter `tags`: S3.
+pub const REFUSE_FILTER_TAGS: Refusal = Refusal {
+    name: "filter_tags",
+    construct: "selector filter `tags`",
+    stage: "S3 (a beacon has no author-tag column yet, so a tag filter cannot be answered — \
+            writing tags is legal, reading them is not)",
+};
+
+/// The predicate `beacon_under_attack`: S2.
+pub const REFUSE_BEACON_UNDER_ATTACK: Refusal = Refusal {
+    name: "beacon_under_attack",
+    construct: "predicate `beacon_under_attack`",
+    stage: "S2 (destruction and combat: a beacon has no damage history to ask about)",
+};
+
+/// Every construct the compile refuses for its stage, in the order
+/// [`PlanError::NotAtThisStage`]'s documentation lists them (E8).
+pub const REFUSALS: [Refusal; 9] = [
+    REFUSE_QUEUE_STRUCTURE,
+    REFUSE_BUILD_BLUEPRINT,
+    REFUSE_BUILD_BEACON_ANCHOR,
+    REFUSE_DEFEND_SETTINGS,
+    REFUSE_ATTACK_SETTINGS,
+    REFUSE_MOST_THREATENED,
+    REFUSE_ENEMY_KNOWN,
+    REFUSE_FILTER_TAGS,
+    REFUSE_BEACON_UNDER_ATTACK,
+];
 
 impl core::fmt::Display for PlanError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {

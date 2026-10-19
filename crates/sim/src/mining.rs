@@ -572,6 +572,7 @@ struct Reach {
 
 impl Reach {
     fn reached(&self, cell: usize) -> bool {
+        // E7: rule: a cell outside the box is not reached
         self.reached.get(cell).copied().unwrap_or(false)
     }
 }
@@ -664,6 +665,7 @@ impl Grid {
         while cell < self.cells {
             let walk = self.column(cell, dug).is_some_and(|(_, walk)| walk);
             if walk
+                // E7: rule: a cell outside the box holds no seam that could stop a walk
                 && !self.seam.get(cell).copied().unwrap_or(true)
                 && let Some(slot) = reach.reached.get_mut(cell)
                 && let Some(top) = stack.get_mut(depth)
@@ -840,6 +842,7 @@ fn choose_seam(world: &mut World, row: usize, settings: MineSettings) -> u32 {
     };
     let (ground, scratch) = world.ground_and_scratch();
     let mut ranker = Ranker::new(&ground, origin, |index| {
+        // E7: rule: an index the work table does not hold is no work
         work.get(index).copied().unwrap_or(false)
     });
     let mut best: Option<(usize, i64)> = None;
@@ -864,5 +867,6 @@ fn choose_seam(world: &mut World, row: usize, settings: MineSettings) -> u32 {
         }
     }
     best.and_then(|(index, _)| u32::try_from(index).ok())
+        // E7: rule: no seam found is `NO_FEATURE`; a feature index past `u32` names no feature a beacon can hold
         .unwrap_or(NO_FEATURE)
 }

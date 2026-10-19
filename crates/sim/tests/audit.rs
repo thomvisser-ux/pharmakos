@@ -107,11 +107,17 @@ fn extra_beacon(world: &mut World, of: SeatId) -> BeaconId {
 }
 
 fn destroy(runner: &mut Runner, beacon: BeaconId) {
-    assert!(runner.world_mut().request_damage(DamageOrder {
-        target: DamageTarget::Beacon(beacon),
-        amount: Hp::new(1_000_000),
-        by: SeatId::NEUTRAL,
-    }));
+    assert!(
+        runner
+            .world_mut()
+            .request_damage(DamageOrder {
+                target: DamageTarget::Beacon(beacon),
+                amount: pharmakos_sim::math::quantity::Damage::new(i64::from(1_000_000)).unwrap(),
+                by: SeatId::NEUTRAL,
+                source: None,
+            })
+            .is_ok()
+    );
 }
 
 /// The ticks the one Push plays: 2 s at 20 Hz.
@@ -120,7 +126,7 @@ const TICKS: u32 = 40;
 /// Play every tick of the one Push but its last.
 fn play_to_the_last_tick(runner: &mut Runner) {
     for _ in 1..TICKS {
-        let report = runner.step().expect("a Push tick");
+        let report = runner.step().unwrap().expect("a Push tick");
         assert!(!report.segment_ended);
         runner.clear_events();
     }
@@ -133,7 +139,7 @@ fn play_to_the_last_tick(runner: &mut Runner) {
 /// Play the final tick, which decides the match, then close the recap;
 /// returns what the final tick emitted.
 fn finish(runner: &mut Runner) -> Vec<Event> {
-    let report = runner.step().expect("the final tick");
+    let report = runner.step().unwrap().expect("the final tick");
     assert!(report.segment_ended && report.match_ended, "{report:?}");
     let events = runner.events().to_vec();
     runner.clear_events();
@@ -288,7 +294,7 @@ fn a_lost_beacons_row_survives_save_and_restore() {
     assert!(runner.begin_push());
     destroy(&mut runner, lost);
     let mut stepped = 0;
-    while stepped < 5 && runner.step().is_some() {
+    while stepped < 5 && runner.step().unwrap().is_some() {
         stepped += 1;
     }
     let row = usize::try_from(lost.raw()).unwrap();
@@ -384,7 +390,7 @@ fn a_seat_that_was_never_placed_does_not_survive_a_no_survivor_end() {
     for core in cores {
         destroy(&mut runner, core);
     }
-    let report = runner.step().expect("a Push tick");
+    let report = runner.step().unwrap().expect("a Push tick");
     assert!(report.match_ended, "{report:?}");
 
     let outcome = runner

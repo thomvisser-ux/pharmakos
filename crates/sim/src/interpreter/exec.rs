@@ -254,9 +254,15 @@ fn try_fire(
     let chosen = {
         let seen = view(world, seat, seat_index, state);
         let mut found: Option<u32> = None;
-        for (index, rule) in plan.handlers().iter().enumerate() {
-            let fires = state.fires.get(index).copied().unwrap_or(0);
-            let ready = state.ready.get(index).copied().unwrap_or(0);
+        // The per-handler columns are sized from the plan at the seal, so they
+        // walk with its handlers (S2's plan, E7).
+        for (index, ((rule, fires), ready)) in plan
+            .handlers()
+            .iter()
+            .zip(state.fires.iter().copied())
+            .zip(state.ready.iter().copied())
+            .enumerate()
+        {
             if fires >= rule.max_fires || tick.raw() < ready {
                 continue;
             }
@@ -688,6 +694,7 @@ fn start_step(
             seat,
             Some(beacon),
             Some(at),
+            // E7: rule: an event's value is derived output, never hashed, and saturates
             i64::try_from(rows).unwrap_or(i64::MAX),
         );
     }
@@ -963,6 +970,7 @@ fn walk_to_visit(
             seat,
             Some(beacon),
             Some(at),
+            // E7: rule: as above
             i64::try_from(rows).unwrap_or(i64::MAX),
         );
         return Outcome::Running;
@@ -1277,10 +1285,14 @@ fn commit_row(
             // one way the settings can fail -- a lost `on` target -- is tested
             // before the switch writes anything, so a failed row leaves the
             // old writ, its settings and its held seam exactly as they were.
-            if let Some(settings) = settings
-                && !targets_live(world, settings, bindings, slot)
-            {
-                return Err(StepFailure::FeatureLost);
+            if let Some(settings) = settings {
+                if !targets_live(world, settings, bindings, slot) {
+                    return Err(StepFailure::FeatureLost);
+                }
+                // A switch clears every list the beacon holds, so the room the
+                // settings need is counted against the beacon's rows all gone
+                // (ruling 10: the whole row or none of it).
+                settings_room(world, beacon, settings, bindings, slot, &TargetKind::ALL)?;
             }
             world.set_beacon_mandate(row, *kind);
             if let Some(settings) = settings {
@@ -1309,10 +1321,14 @@ fn commit_row(
             // the seat's has already claimed would be charged for in its own
             // right and would stand a second structure in the same voxel
             // ([`World::anchor_is_claimed`]).
+            // A full table fails the step rather than dropping the target
+            // (decisions-log item 136 (5)).
             if crate::mandate::inside_sphere(world, beacon, at)
                 && !world.anchor_is_claimed(seat, at)
             {
-                world.add_bound_target(beacon, target.blueprint, at, bound, target.build);
+                world
+                    .add_bound_target(beacon, target.blueprint, at, bound, target.build)
+                    .map_err(|_| StepFailure::TargetsUnwritten)?;
             }
         }
         Row::RemoveTarget { anchor } => match anchor {
@@ -1345,59 +1361,42 @@ fn commit_row(
             // `remove_build_target` row. A list the row does not name is left
             // alone, which is what "edits settings within the current mandate"
             // means for the fields it is silent about.
+            // All-or-nothing reaches the bindings and the table's room too: a
+            // list with one lost target commits none of it, and a row the
+            // list-settings table cannot hold whole writes nothing and fails
+            // its step (ruling 10, decisions-log item 139 (1)). Both tests run
+            // before the first write, which is what makes the writes below
+            // unable to fail part-way.
+            if !targets_live(world, spec, bindings, slot) {
+                return Err(StepFailure::FeatureLost);
+            }
+            let replaced = replaced_kinds(spec);
+            settings_room(world, beacon, spec, bindings, slot, &replaced.iter())?;
             if !targets.is_empty() {
-                // All-or-nothing reaches the bindings too: a list with one lost
-                // target commits none of it.
-                if !targets_live(world, spec, bindings, slot) {
-                    return Err(StepFailure::FeatureLost);
-                }
-                // The bindings this list's `on` anchors read when the step
-                // started, in list order, and the point each one stands on;
-                // every one is checked here, before anything is written, so
-                // the iterator below reads them without a fallback.
-                let bound = bound_slice(targets, bindings, slot).ok_or(StepFailure::NoTarget)?;
-                if bound.iter().any(|binding| binding_point(binding).is_none()) {
-                    return Err(StepFailure::IllegalSite);
-                }
                 // Replacing is not abandoning: an anchor that survives the
                 // edit keeps the structure it has already been paid for, or
                 // the mandate would buy it a second time
                 // ([`World::replace_build_targets`]). The list goes over as an
-                // iterator, so nothing here allocates inside a tick; each `on`
-                // anchor takes the next binding, and the two checks above are
-                // why there always is one, standing on a point.
-                let entries = targets.iter().scan(bound.iter(), |read, target| {
-                    let (anchor, feature, desc) = match target.anchor {
-                        Anchor::Voxel(voxel) => (point_of(voxel), NO_FEATURE, DESCRIPTION_VOXEL),
-                        Anchor::On(on) => {
-                            let binding = read.next()?;
-                            (
-                                binding_point(binding)?,
-                                binding.feature,
-                                on.description_id(),
-                            )
-                        }
-                    };
-                    Some(BuildEntry {
-                        blueprint: target.blueprint,
-                        anchor,
-                        feature,
-                        desc,
-                        build: target.build,
-                    })
-                });
-                world.replace_build_targets(beacon, entries);
+                // iterator, so nothing here allocates inside a tick.
+                let entries = build_entries(targets, bindings, slot)?;
+                world
+                    .replace_build_targets(beacon, entries)
+                    .map_err(|_| StepFailure::TargetsUnwritten)?;
             }
             if !protected.is_empty() {
                 world.clear_targets(beacon, TargetKind::Protected);
                 for (centre, area) in protected {
-                    world.add_area(beacon, AreaKind::Protected, point_of(*centre), *area);
+                    world
+                        .add_area(beacon, AreaKind::Protected, point_of(*centre), *area)
+                        .map_err(|_| StepFailure::TargetsUnwritten)?;
                 }
             }
             if !probes.is_empty() {
                 world.clear_targets(beacon, TargetKind::Probe);
                 for (centre, area) in probes {
-                    world.add_area(beacon, AreaKind::Probe, point_of(*centre), *area);
+                    world
+                        .add_area(beacon, AreaKind::Probe, point_of(*centre), *area)
+                        .map_err(|_| StepFailure::TargetsUnwritten)?;
                 }
             }
             // A count past a byte is refused at the seal
@@ -1413,6 +1412,136 @@ fn commit_row(
         }
     }
     Ok(())
+}
+
+/// The Build entries a settings row's target list writes, in list order, as
+/// the cloneable iterator [`World::replace_build_targets`] and
+/// [`World::check_list_room`] walk: each `on` anchor takes the next of the
+/// step's bindings and stands on its point.
+///
+/// # Errors
+///
+/// [`StepFailure::NoTarget`] when the step holds fewer bindings than the list
+/// has `on` anchors, and [`StepFailure::IllegalSite`] when a binding stands
+/// on no point. Both are checked here, before anything is written, so the
+/// iterator reads them without a fallback.
+fn build_entries<'a>(
+    targets: &'a [crate::interpreter::Target],
+    bindings: &'a [Binding],
+    slot: usize,
+) -> Result<impl Iterator<Item = BuildEntry> + Clone + 'a, StepFailure> {
+    let bound = bound_slice(targets, bindings, slot).ok_or(StepFailure::NoTarget)?;
+    if bound.iter().any(|binding| binding_point(binding).is_none()) {
+        return Err(StepFailure::IllegalSite);
+    }
+    Ok(targets.iter().scan(bound.iter(), |read, target| {
+        let (anchor, feature, desc) = match target.anchor {
+            Anchor::Voxel(voxel) => (point_of(voxel), NO_FEATURE, DESCRIPTION_VOXEL),
+            Anchor::On(on) => {
+                let binding = read.next()?;
+                (
+                    binding_point(binding)?,
+                    binding.feature,
+                    on.description_id(),
+                )
+            }
+        };
+        Some(BuildEntry {
+            blueprint: target.blueprint,
+            anchor,
+            feature,
+            desc,
+            build: target.build,
+        })
+    }))
+}
+
+/// The list kinds a [`Row::Settings`] row replaces: each list it names. A list
+/// it is silent about is left alone.
+fn replaced_kinds(spec: &Row) -> ReplacedKinds {
+    let mut kinds = ReplacedKinds::default();
+    if let Row::Settings {
+        targets,
+        protected,
+        probes,
+        ..
+    } = spec
+    {
+        for (named, kind) in [
+            (!targets.is_empty(), TargetKind::Build),
+            (!protected.is_empty(), TargetKind::Protected),
+            (!probes.is_empty(), TargetKind::Probe),
+        ] {
+            if named {
+                kinds.push(kind);
+            }
+        }
+    }
+    kinds
+}
+
+/// Up to the three list kinds a settings row replaces, without allocating.
+#[derive(Clone, Copy, Debug, Default)]
+struct ReplacedKinds {
+    kinds: [Option<TargetKind>; 3],
+}
+
+impl ReplacedKinds {
+    /// Add a kind: at most three, one of each, which [`replaced_kinds`]'s three
+    /// tests are, so the first empty slot is always there.
+    fn push(&mut self, kind: TargetKind) {
+        if let Some(slot) = self.kinds.iter_mut().find(|slot| slot.is_none()) {
+            *slot = Some(kind);
+        }
+    }
+
+    /// The kinds, in the order they were added.
+    fn iter(&self) -> impl Iterator<Item = TargetKind> + Clone + '_ {
+        self.kinds.iter().flatten().copied()
+    }
+}
+
+/// Whether the list-settings table can hold the whole of what a settings row
+/// writes to `beacon` once the beacon's rows of the kinds `replaces` names are
+/// gone ([`World::check_list_room`]). Any other row writes no list and has
+/// room.
+///
+/// # Errors
+///
+/// [`StepFailure::TargetsUnwritten`] when it cannot (ruling 10), and the two
+/// failures of [`build_entries`].
+fn settings_room<K>(
+    world: &World,
+    beacon: BeaconId,
+    spec: &Row,
+    bindings: &[Binding],
+    slot: usize,
+    replaces: &K,
+) -> Result<(), StepFailure>
+where
+    K: IntoIterator<Item = TargetKind> + Clone,
+{
+    let Row::Settings {
+        targets,
+        protected,
+        probes,
+        ..
+    } = spec
+    else {
+        return Ok(());
+    };
+    let areas = protected
+        .len()
+        .checked_add(probes.len())
+        .ok_or(StepFailure::TargetsUnwritten)?;
+    let build = if targets.is_empty() {
+        None
+    } else {
+        Some(build_entries(targets, bindings, slot)?)
+    };
+    world
+        .check_list_room(beacon, build, areas, replaces)
+        .map_err(|_| StepFailure::TargetsUnwritten)
 }
 
 /// Whether every `on` target a [`Row::Settings`] row writes is still bound to
@@ -1711,7 +1840,7 @@ fn world_beacon_row(world: &World, beacon: BeaconId) -> Option<usize> {
     if beacons.ids().get(index).copied() == Some(beacon.raw()) {
         return Some(index);
     }
-    let count = usize::try_from(beacons.len()).unwrap_or(0);
+    let count = crate::math::index::row(beacons.len());
     (0..count).find(|row| beacons.ids().get(*row).copied() == Some(beacon.raw()))
 }
 

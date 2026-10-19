@@ -173,7 +173,10 @@ fn a_tick_allocates_nothing() {
     // capacity.
     for step in 0..50 {
         crater_at(runner.world_mut(), step);
-        runner.step().expect("the segment outlasts this test");
+        runner
+            .step()
+            .unwrap()
+            .expect("the segment outlasts this test");
         runner.clear_events();
         runner.world().encode(&mut enc);
     }
@@ -194,7 +197,10 @@ fn a_tick_allocates_nothing() {
     let units_before = runner.world().units().len();
     for step in 0..GROWTH_TICKS {
         crater_at(runner.world_mut(), step + 50);
-        runner.step().expect("the segment outlasts this test");
+        runner
+            .step()
+            .unwrap()
+            .expect("the segment outlasts this test");
         runner.clear_events();
         runner.world().encode(&mut enc);
     }
@@ -223,7 +229,10 @@ fn a_tick_allocates_nothing() {
         // empty queue would leave `settle`, `mark` and `crater` outside the
         // property this file exists to defend.
         crater_at(runner.world_mut(), step + 50 + GROWTH_TICKS);
-        runner.step().expect("the segment outlasts this test");
+        runner
+            .step()
+            .unwrap()
+            .expect("the segment outlasts this test");
         // A host drains every tick, and the bus is fixed-capacity: draining it
         // is what keeps an event emission inside the assertion instead of
         // silently overflowing past it.
@@ -264,10 +273,13 @@ fn crater_at(world: &mut World, step: u32) {
     let y = i32::try_from(step.wrapping_mul(53) % 4096).expect("a column index") % depth;
     let z = world.voxels().top_solid_z(x, y).unwrap_or(0);
     assert!(
-        world.request_voxel_edit(VoxelEdit::Crater {
-            centre: [x, y, z],
-            radius: 3,
-        }),
+        world
+            .request_voxel_edit(VoxelEdit::Crater {
+                centre: [x, y, z],
+                radius: 3,
+                by: None,
+            })
+            .is_ok(),
         "the edit queue is full at step {step}"
     );
 }

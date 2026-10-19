@@ -65,6 +65,20 @@ pub enum AssetKind {
 }
 
 impl AssetKind {
+    /// The kind a wire id names, or `None` for one this build does not define.
+    #[must_use]
+    pub const fn from_id(id: u8) -> Option<AssetKind> {
+        match id {
+            0 => Some(AssetKind::Unknown),
+            1 => Some(AssetKind::Commander),
+            2 => Some(AssetKind::Unit),
+            3 => Some(AssetKind::Beacon),
+            4 => Some(AssetKind::Structure),
+            5 => Some(AssetKind::Wreck),
+            _ => None,
+        }
+    }
+
     /// The wire id. Additive only.
     #[must_use]
     pub const fn id(self) -> u8 {
@@ -200,8 +214,9 @@ impl AssetId {
     /// Which kind this id belongs to.
     #[must_use]
     pub fn tag(self) -> u8 {
-        // The shift leaves four bits, so the narrowing cannot truncate.
-        u8::try_from(self.0 >> AssetId::TAG_SHIFT).unwrap_or(0)
+        // The shift leaves four bits, so the lowest byte is the whole of it.
+        let [low, ..] = (self.0 >> AssetId::TAG_SHIFT).to_le_bytes();
+        low
     }
 
     /// The index within the kind.

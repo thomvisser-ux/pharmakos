@@ -20,18 +20,23 @@
 //! | --- | --- |
 //! | `map.seed` `0x00000000ca5caded` | [`SEED`] |
 //! | `rules` `rules/rules.v1.json` | the committed table |
-//! | two `playbook` seats on `examples/playbooks/expand_east.jsonc` | [`PLAYBOOK`] |
+//! | two `playbook` seats on `scenarios/skeleton/expand-east-segment.playbook.jsonc` | [`PLAYBOOK`] |
 //! | `segments[0].length_ms` 180000 | [`SEGMENT_MS`], 3 600 ticks |
 //!
-//! The one indirection is the playbook. The example on disk is **JSONC** —
-//! canonical proto JSON *plus comments* — and comments are `plan-core`'s to
-//! read; the sim's only JSON reader is the proto crate's canonical codec, and
-//! the sim may not depend on `plan-core` (AGENTS.md §3's crate map). So this
-//! file reads `tests/golden/proto/expected.expand_east.json`, which is T1's
-//! committed golden of *the same playbook* in canonical form, and
-//! `the_canonical_playbook_is_the_committed_example` asserts the two are the
-//! same playbook rather than trusting it. When T15's runner loads the `.jsonc`
-//! through `plan-core`, it will load these bytes.
+//! The one indirection is the playbook. The scenario's playbook is **JSONC**
+//! -- proto JSON *plus comments* -- and comments are `plan-core`'s to read;
+//! the sim's only JSON reader is the proto crate's codec, and the sim may not
+//! depend on `plan-core` (AGENTS.md §3's crate map). So the file keeps every
+//! comment on a line of its own, and [`playbook`] drops those lines before the
+//! codec decodes the rest; `gamectl scenario run` loads the same file through
+//! `plan-core`, and the two producers' chains agree.
+//!
+//! Since S2's `base` lane the scenario's playbook is no longer the spec's
+//! worked example itself: no one first site is legal both on this map and on
+//! the verifier's reference view, so the scenario has its own copy with the
+//! site moved to where seat 0's walk can reach it inside its timeout (ruling 3
+//! of S1's stage demo). `the_scenarios_playbook_is_the_example_but_its_site`
+//! holds the copy to the example on every other line that decides the run.
 
 #![allow(
     clippy::expect_used,
@@ -63,8 +68,15 @@ const SEGMENT_TICKS: u32 = 3_600;
 /// The scenario's two seats.
 const SEATS: u32 = 2;
 
-/// The canonical form of `examples/playbooks/expand_east.jsonc`.
-const PLAYBOOK: &str = "tests/golden/proto/expected.expand_east.json";
+/// The scenario's playbook: the worked example with its first site moved.
+const PLAYBOOK: &str = "scenarios/skeleton/expand-east-segment.playbook.jsonc";
+
+/// The canonical form of `examples/playbooks/expand_east.jsonc`, T1's golden.
+const EXAMPLE: &str = "tests/golden/proto/expected.expand_east.json";
+
+/// The site the scenario's playbook moves the first step to: 20 voxels east
+/// of seat 0's core on this map.
+const SITE: [i32; 3] = [378, 24, 36];
 
 /// The scenario's name, which is also its golden directory.
 const NAME: &str = "expand-east-segment";
@@ -92,8 +104,21 @@ fn rules() -> RulesTable {
         .expect("the committed rules table loads")
 }
 
+/// The scenario's playbook, its whole-line comments dropped.
 fn playbook() -> gp::v1::Playbook {
     let text = std::fs::read_to_string(repo_root().join(PLAYBOOK))
+        .expect("the scenario's playbook is committed");
+    let body: String = text
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .collect::<Vec<&str>>()
+        .join("\n");
+    json::decode(&body).expect("it is gp.v1 JSON once its comment lines are dropped")
+}
+
+/// The worked example, in its canonical golden.
+fn example() -> gp::v1::Playbook {
+    let text = std::fs::read_to_string(repo_root().join(EXAMPLE))
         .expect("the committed canonical example exists");
     json::decode(&text).expect("it is canonical gp.v1 JSON")
 }
@@ -138,7 +163,7 @@ fn play() -> (String, String) {
     let mut log = String::from(HEADER);
     let mut tick: u32 = 0;
     while tick < SEGMENT_TICKS {
-        let Some(report) = runner.step() else {
+        let Some(report) = runner.step().unwrap() else {
             break;
         };
         for event in runner.events() {
@@ -173,37 +198,67 @@ fn play() -> (String, String) {
 }
 
 #[test]
-fn the_canonical_playbook_is_the_committed_example() {
-    // The indirection this file's header describes, asserted rather than
-    // assumed: the canonical golden holds the same route, the same handler and
-    // the same fallback as `examples/playbooks/expand_east.jsonc`. The example
-    // itself cannot be decoded here — it is JSONC and its comments are
-    // `plan-core`'s to read — so what is checked is that the golden is the
-    // playbook the scenario names, field by field on the parts that decide what
-    // the run does.
-    let example = std::fs::read_to_string(repo_root().join("examples/playbooks/expand_east.jsonc"))
-        .expect("the worked example is committed");
-    let decoded = playbook();
-    let body = decoded
-        .declarative
-        .as_ref()
-        .expect("the example has a body");
-    assert_eq!(body.route.len(), 3, "three route steps");
-    assert_eq!(body.handlers.len(), 1, "one handler, `flee`");
-    assert!(
-        example.contains("\"label\":\"to_site\"")
-            && example.contains("\"label\":\"place_east\"")
-            && example.contains("\"label\":\"back_home\""),
-        "the canonical golden and the JSONC example name the same three steps"
-    );
-    assert!(example.contains("\"id\":\"flee\""), "and the same handler");
-    assert!(
-        decoded
+fn the_scenarios_playbook_is_the_example_but_its_site() {
+    // The scenario's copy of the worked example differs from it in exactly
+    // one thing, the first site, which both the walk and the deploy name; the
+    // rest of what decides the run -- the steps, the timeout, the handler, the
+    // tail, `on_death` and the fallback -- is the example's.
+    let copy = playbook();
+    let mut original = example();
+    let site = |playbook: &gp::v1::Playbook| -> Vec<String> {
+        playbook
             .declarative
             .as_ref()
-            .and_then(|body| body.handlers.first())
-            .is_some_and(|handler| handler.id == "flee"),
-        "the canonical golden's handler is the example's"
+            .map(|body| {
+                body.route
+                    .iter()
+                    .take(2)
+                    .map(|step| format!("{step:?}"))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let moved = site(&copy);
+    assert_eq!(moved.len(), 2, "the copy keeps the walk and the deploy");
+    for step in &moved {
+        assert!(
+            step.contains(&format!("x: {}", SITE[0]))
+                && step.contains(&format!("y: {}", SITE[1]))
+                && step.contains(&format!("z: {}", SITE[2])),
+            "each of the first two steps names the moved site: {step}"
+        );
+    }
+    // Put the example's site back into the copy, voxel for voxel and nothing
+    // else, and the two are one playbook: a drift in the steps' timeout, pace
+    // or anything but the site fails here.
+    let site_of = |playbook: &gp::v1::Playbook| {
+        playbook
+            .declarative
+            .as_ref()
+            .and_then(|body| body.route.first())
+            .and_then(|step| match step.kind.as_ref() {
+                Some(gp::v1::step::Kind::Move(walk)) => walk.to.as_ref(),
+                _ => None,
+            })
+            .and_then(|to| match to.place.as_ref() {
+                Some(gp::v1::location::Place::Voxel(voxel)) => Some(*voxel),
+                _ => None,
+            })
+            .expect("the first step walks to a voxel")
+    };
+    let theirs = format!("{:?}", site_of(&original));
+    let ours = format!("{:?}", site_of(&copy));
+    let restored = format!("{copy:?}").replace(&ours, &theirs);
+    assert_eq!(
+        restored.matches(&theirs).count(),
+        2,
+        "the site appears exactly twice, in the walk and in the deploy"
+    );
+    original.meta = copy.meta.clone();
+    assert_eq!(
+        restored,
+        format!("{original:?}"),
+        "apart from its site, the scenario's playbook is the worked example"
     );
 }
 
@@ -277,8 +332,12 @@ fn the_scenarios_segment_reproduces_its_chain() {
     // committed assertions are checked by something rather than only read.
     for (kind, seat, by_tick) in [
         (EventKind::StepStarted.name(), "0", 20_u32),
-        (EventKind::StepFailed.name(), "0", 2_410),
-        (EventKind::FallbackEngaged.name(), "0", 2_411),
+        (EventKind::StepCompleted.name(), "0", 400),
+        (EventKind::BeaconPlaced.name(), "0", 640),
+        (EventKind::RowCommitted.name(), "0", 720),
+        (EventKind::FallbackEngaged.name(), "0", 725),
+        (EventKind::StepFailed.name(), "1", 2_410),
+        (EventKind::FallbackEngaged.name(), "1", 2_411),
     ] {
         assert!(
             log.lines().any(|row| {
