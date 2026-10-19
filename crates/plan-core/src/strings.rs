@@ -118,6 +118,10 @@ pub const ROW_SET_PRIORITY: &str = "set its Quartermaster priority to";
 pub const ROW_RECYCLE: &str = "recycle it";
 /// `add_build_target`.
 pub const ROW_ADD_TARGET: &str = "add a build target:";
+/// A `wall` target's box, before its first corner (`BuildTarget.wall_box`).
+pub const WALL_BOX_FROM: &str = "filling the box from";
+/// A `wall` target's box, before its second corner.
+pub const WALL_BOX_TO: &str = "to";
 /// `remove_build_target`.
 pub const ROW_REMOVE_TARGET: &str = "remove the build target at";
 /// `queue_structure`.

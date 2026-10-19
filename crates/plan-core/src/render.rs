@@ -291,7 +291,20 @@ fn row_sentence(row: &InterfaceRow) -> String {
             let target = add.target.as_ref();
             let blueprint = target.map_or_else(String::new, |target| target.blueprint_id.clone());
             let anchor = location(target.and_then(|target| target.anchor.as_ref()));
-            format!("{} {blueprint} at {anchor}", s::ROW_ADD_TARGET)
+            // A wall's box is named as the author wrote it, corner to corner
+            // (S2's plan, task `con4`); whether it is legal is the verifier's.
+            let wall_box = target
+                .and_then(|target| target.wall_box.as_ref())
+                .map_or_else(String::new, |area| {
+                    format!(
+                        ", {} {} {} {}",
+                        s::WALL_BOX_FROM,
+                        corner(area.min.as_ref()),
+                        s::WALL_BOX_TO,
+                        corner(area.max.as_ref())
+                    )
+                });
+            format!("{} {blueprint} at {anchor}{wall_box}", s::ROW_ADD_TARGET)
         }
         Some(interface_row::Row::RemoveBuildTarget(remove)) => {
             format!(
@@ -395,6 +408,11 @@ fn pick_sentence(noun: &str, rank: Rank, coverage: Coverage) -> String {
 
 fn voxel(at: &Voxel) -> String {
     format!("{} {}, {}, {}", s::PLACE_VOXEL, at.x, at.y, at.z)
+}
+
+/// One corner of an area, or the words for a corner the file leaves out.
+fn corner(at: Option<&Voxel>) -> String {
+    at.map_or_else(|| s::PLACE_NOWHERE.to_owned(), voxel)
 }
 
 fn beacon(reference: Option<&BeaconRef>) -> String {
@@ -966,5 +984,52 @@ mod tests {
         for odd in ["vent_+1_2", "vent_01_2", "vent_1_02", "seam_-0_4"] {
             assert_eq!(super::feature_name(odd), format!("feature \"{odd}\""));
         }
+    }
+
+    /// S2's base kit (S2's plan, task `con4`): a `wall` target reads as its
+    /// blueprint, its anchor and the box it fills, corner to corner, which
+    /// the sim and the verifier refuse until S2's `site` lane; the prose says
+    /// what the file says and never whether it is legal.
+    #[test]
+    fn a_wall_target_names_its_box() {
+        let wall = concat!(
+            "{\"schema_version\":{\"major\":1},",
+            "\"meta\":{\"title\":\"Wall\",\"author_kind\":\"HUMAN\"},",
+            "\"declarative\":{\"route\":[",
+            "{\"label\":\"wall\",\"interface\":{\"beacon\":{\"beacon_id\":\"b_00\"},\"rows\":[",
+            "{\"add_build_target\":{\"target\":{\"blueprint_id\":\"wall\",",
+            "\"anchor\":{\"voxel\":{\"x\":30,\"y\":40,\"z\":5}},",
+            "\"wall_box\":{\"min\":{\"x\":30,\"y\":40,\"z\":5},",
+            "\"max\":{\"x\":38,\"y\":40,\"z\":7}}}}}]}}]},",
+            "\"on_death\":{\"on_respawn\":\"CONTINUE\"},",
+            "\"fallback\":{\"hold\":{\"at\":{\"beacon_anchor\":{\"safest\":{}}}}},",
+            "\"kind\":\"PLAYBOOK\"}"
+        );
+        let text = prose(wall);
+        let phrase = format!(
+            "{} wall at {} 30, 40, 5, {} {} 30, 40, 5 {} {} 38, 40, 7",
+            s::ROW_ADD_TARGET,
+            s::PLACE_VOXEL,
+            s::WALL_BOX_FROM,
+            s::PLACE_VOXEL,
+            s::WALL_BOX_TO,
+            s::PLACE_VOXEL
+        );
+        assert!(
+            text.contains(&phrase),
+            "`{phrase}` is not in
+{text}"
+        );
+
+        // A box missing a corner says so rather than inventing one.
+        let area = pharmakos_proto::gp::v1::Area {
+            min: None,
+            max: Some(pharmakos_proto::gp::v1::Voxel { x: 1, y: 2, z: 3 }),
+        };
+        assert_eq!(super::corner(area.min.as_ref()), s::PLACE_NOWHERE);
+        assert_eq!(
+            super::corner(area.max.as_ref()),
+            format!("{} 1, 2, 3", s::PLACE_VOXEL)
+        );
     }
 }
