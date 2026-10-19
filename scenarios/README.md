@@ -58,11 +58,22 @@ scenarios/
   README.md                        this file
   <set>/<name>.scenario.jsonc      one scenario
   <set>/<name>.playbook.jsonc      a playbook written for one scenario's map
+  nightly/<arm>.scenario.jsonc     a nightly adversarial arm (nightly/README.md)
+  nightly/seeds.txt                the seed set the nightly plays the arms over
 tests/golden/scenarios/<name>/     the hash chains and event logs it asserts on
 ```
 
 The suffix `.scenario.jsonc` is how the `scenario` step finds them; a file
 without it is not a scenario and is not run.
+
+**`scenarios/nightly/` holds arms, not committed scenarios** (S2's plan, task
+`night`, and its E20). An arm is a file in this format with two rules of its
+own, read from where it lives: it carries **no `hash_chain_equals`**, so it
+is the one exception to the events-and-hashes rule below, and it seats one
+`playbook` seat and one `builtin` seat. The `scenario` step validates every
+arm and plays none (`xtask/src/scenario.rs`' `collect_played`), and
+`.github/workflows/nightly-scenarios.yml` plays them over the seed set with
+`gamectl scenario run --seeds`.
 
 ## The file
 

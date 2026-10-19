@@ -110,7 +110,7 @@ fn dispatch(invocation: &cli::Invocation) -> Result<String, Failure> {
         Command::Verify { path, depth } => verify::run(root, path, *depth),
         Command::Schema { part } => schema::run(part),
         Command::Docs => docs::run(),
-        Command::ScenarioRun { path } => scenario::run::run(root, path),
+        Command::ScenarioRun { path, options } => scenario::run::command(root, path, options),
         Command::SeatDoctor => doctor::run(root),
     };
     rendered.map(with_newline)

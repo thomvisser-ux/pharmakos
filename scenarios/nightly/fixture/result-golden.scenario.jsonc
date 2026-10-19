@@ -1,0 +1,47 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// The arm the nightly result's golden is played from
+// (tests/golden/scenarios/nightly-result/expected.result.json, produced by
+// crates/gamectl/tests/nightly.rs over fixture/two.seeds.txt). It is an arm
+// like Rusher, Turtle and Hunter, so both readers hold it to an arm's rules,
+// and it is a file of its own so that the golden pins the result's shape and
+// not whichever playbook an arm seals this week: the `arms` lane replaces the
+// three arms and leaves this one. Two one-minute rounds a seed, so the
+// golden's two matches cost a test seconds; the workflow never plays it.
+//
+// The file lists the builtin seat first on purpose: a run over a seed file
+// seats the arm by the seed's position, whatever order the file names them
+// in, and the golden shows it (the first seed's arm on seat 0).
+//
+// What the golden depends on: the placeholder playbook, Easy
+// (crates/operator), the template library (library/), the rules table and the
+// two seeds. A change to any of them may move the result, and the pull
+// request that moves it says which.
+{
+  "format": "pharmakos.scenario.v1",
+  "name": "nightly-result",
+  "summary": "Two one-minute rounds of the nightly placeholder playbook against Easy: the fixture the nightly result's golden is played from.",
+
+  "map": {
+    "seed": "0x00000000ca5caded",
+    "generator": "skeleton"
+  },
+
+  "rules": "rules/rules.v1.json",
+  "round_limit": 2,
+
+  "seats": [
+    { "seat": 0, "kind": "builtin" },
+    { "seat": 1, "kind": "playbook", "playbook": "scenarios/nightly/placeholder.playbook.jsonc" }
+  ],
+
+  "segments": [
+    { "index": 0, "length_ms": 60000, "note": "Each of the two rounds: 1 200 ticks." }
+  ],
+
+  "assertions": [
+    { "assert": "event_fired", "event": "plan_sealed", "seat": 1, "by_tick": 1,
+      "note": "The arm's playbook went through submit_plan and was sealed." }
+  ]
+}

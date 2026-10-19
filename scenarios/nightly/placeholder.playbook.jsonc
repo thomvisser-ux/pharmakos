@@ -1,0 +1,31 @@
+// SPDX-FileCopyrightText: 2026 Pharmakos contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// The three nightly arms' placeholder playbook (S2's plan, task `night`):
+// what Rusher, Turtle and Hunter seal until S2's `arms` lane writes each its
+// own. It is S1's carried "cover the nearest vent"
+// (scenarios/s1/cover-nearest-vent.playbook.jsonc), because an arm plays seat
+// 0 on some seeds and seat 1 on others, so its playbook may name nothing one
+// seat owns: a description is read again on either seat and every round,
+// where a vent's name or a beacon's id would be one seat's.
+//
+// PLACEHOLDER: the arms' one shared playbook, which attacks nobody — arms, S2, when the Rusher, Turtle and Hunter playbooks are written
+{
+  "schema_version": {"major": 1, "minor": 0},
+  "meta": {"title": "Nightly placeholder: cover the nearest vent", "author_kind": "HUMAN"},
+  "kind": "PLAYBOOK",
+  "declarative": {
+    "route": [
+      {"label": "cover",
+        "place_beacon": {
+          "at": {"covering": {"vent": {"rank": "NEAREST", "coverage": "UNCOVERED"}}},
+          "initial": {"mandate": {"build": {"targets": [
+            {"blueprint_id": "generator", "anchor": {"on": {"covered": {}}}}
+          ]}}}},
+        "timeout_ms": 120000, "on_fail": {"action": "SKIP"}}
+    ],
+    "handlers": []
+  },
+  "on_death": {"on_respawn": "CONTINUE", "max_deaths_before_fallback": 2},
+  "fallback": {"hold": {"at": {"safest": {}}}}
+}
