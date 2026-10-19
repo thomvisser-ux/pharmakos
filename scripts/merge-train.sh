@@ -46,7 +46,9 @@
 # without a commit (`git merge --no-ff --no-commit`, so nothing is signed or pushed),
 # `cargo xtask ci --locked --require-tools --check` runs on that merged tree on the lane's
 # own target (TRAIN_BUILD_ROOT/<lane>, default D:/build), and the worktree is put back on its
-# pushed head (also on any exit, by a trap). A branch that already carries merge commits of
+# pushed head (also on any exit, by a trap) — but only while HEAD is still that head and
+# MERGE_HEAD is still main, and only after what the reset would discard is saved to the
+# lane's log; otherwise the train stops and leaves the worktree as it is. A branch that already carries merge commits of
 # main is checked the same way. The lane's green checks on that head still gate the merge,
 # which is pinned to that head (--match-head-commit), so GitHub's merge commit joins the same
 # two parents the train checked; the train stops if origin/main moved by anything but prose
@@ -72,15 +74,26 @@
 # branches). A base that moved only by prose (docs/, .claude/, AGENTS.md, CLAUDE.md, a
 # top-level *.md) needs no check.
 #
+# The train runs only while each lane it names is idle: no lane session, fix pass or
+# Auto-fix fix is working in that lane's worktree or pushing its branch (the main session's
+# process rule). The train merges, resets and removes in those worktrees; its guards (a clean
+# worktree, HEAD at the checked head, MERGE_HEAD at main) catch a collision, but they do not
+# make one safe.
+#
+# Every exit before "done" prints a line beginning "== merge-train: STOP".
+#
 # The script is the owner's session merging under decisions-log items 85 and 115 (7); it
 # only does what a green PR has already earned, and it halts on anything else so a person
 # looks. Run it from the repository root or anywhere inside it. Git Bash on Windows is
 # enough: bash, git, gh (signed in), awk, grep, tr, and cargo on PATH for --local-verify
 # (and for the hooks the signed merges and their pushes run).
 
-set -euo pipefail
+set -Eeuo pipefail
 
 fail() { printf '\n== merge-train: STOP — %s\n' "$*" >&2; exit 1; }
+# A command that fails outside a checked context (set -e's exit) still prints a STOP line;
+# -E carries the trap into functions and command substitutions.
+trap 'printf "\n== merge-train: STOP — a command failed at line %s (exit %s); look before restarting\n" "$LINENO" "$?" >&2' ERR
 
 local_verify=0
 if [ "${1:-}" = "--local-verify" ]; then
@@ -95,10 +108,9 @@ parent="$(dirname "$repo_root")"
 
 [ "$#" -ge 1 ] || fail "usage: scripts/merge-train.sh [--local-verify] <lane>:<pr> [<lane>:<pr> ...]"
 for pair in "$@"; do
-  case "$pair" in
-    *:*) ;;
-    *) fail "argument '$pair' is not <lane>:<pr>" ;;
-  esac
+  # A lane name is lower-case letters, digits and hyphens, and a PR number is digits, so
+  # neither can carry a path, an option or a shell metacharacter into the commands below.
+  grep -qE '^[a-z0-9-]+:[0-9]+$' <<<"$pair" || fail "argument '$pair' is not <lane>:<pr> (lane [a-z0-9-]+, pr [0-9]+)"
 done
 
 [ "$(git branch --show-current)" = "main" ] || fail "this checkout is not on main"
@@ -139,6 +151,17 @@ wait_for_checks() {
   checks_green "$pr" || fail "checks on #$pr are not all green"
 }
 
+# Why a `git merge` in worktree <wt> failed: a conflict when the index holds unmerged paths,
+# and otherwise a merge that failed for some other reason (a dirty file in the way, a
+# missing ref), which is not a conflict and is not called one.
+merge_failure() {
+  if [ -n "$(git -C "$1" ls-files -u 2>/dev/null)" ]; then
+    printf 'the merge conflicts'
+  else
+    printf 'the merge failed (not a conflict)'
+  fi
+}
+
 # The lane last merged into main, as "<lane> #<pr>", for the next merge commit's subject.
 last_merged=""
 
@@ -147,7 +170,7 @@ last_merged=""
 # pushed, and 0 when the lane already held main.
 merged_main_into=0
 merge_main_into_lane() {
-  local lane="$1" wt="$parent/pharmakos-$1" branch fetched short msg
+  local lane="$1" wt="$parent/pharmakos-$1" branch fetched short msg why
   local -a trailer=()
   merged_main_into=0
   [ -d "$wt" ] || fail "worktree $wt does not exist"
@@ -169,8 +192,9 @@ merge_main_into_lane() {
   short="$(git rev-parse --short "$fetched")"
   printf '== %s: merging main (%s) into %s\n' "$lane" "$short" "$branch"
   if ! git -C "$wt" merge -q --no-ff --no-commit FETCH_HEAD; then
-    git -C "$wt" merge --abort || true
-    fail "merging main into $lane conflicts; resolve it by hand in a signed merge commit, push, and restart the train from $lane"
+    why="$(merge_failure "$wt")"
+    git -C "$wt" merge --abort || fail "merging main into $lane: $why, and the merge could not be aborted; look in $wt"
+    fail "merging main into $lane: $why; resolve it by hand in a signed merge commit, push, and restart the train from $lane"
   fi
   msg="Merge main ($short${last_merged:+, $last_merged}) into $branch"
   if [ -n "${TRAIN_CO_AUTHOR:-}" ]; then
@@ -181,7 +205,8 @@ merge_main_into_lane() {
   # as the local verify below does, never a cold <worktree>/target. -s writes the sign-off
   # after the trailer, so it stays the last line (AGENTS.md section 8).
   if ! CARGO_TARGET_DIR="$build_root/$lane" git -C "$wt" commit -q -s -m "$msg" "${trailer[@]}"; then
-    git -C "$wt" merge --abort || true
+    git -C "$wt" merge --abort \
+      || fail "the signed merge commit in $lane was not made (a hook refused it?), and the merge could not be aborted; look in $wt"
     fail "the signed merge commit in $lane was not made (a hook refused it?); look, then restart from $lane"
   fi
   [ "$(git -C "$wt" rev-list --parents -n 1 HEAD | awk '{ print NF }')" = 3 ] \
@@ -232,27 +257,63 @@ rematrix() {
   pushed="$(git -C "$wt" rev-parse HEAD)"
   wait_for_head "$pr" "$pushed"
   wait_for_checks "$pr"
-  wait_for_head "$pr" "$pushed"
+  # Read once after the checks: a head that is no longer the pushed one moved while they ran.
+  [ "$(gh pr view "$pr" --json headRefOid --jq .headRefOid)" = "$pushed" ] \
+    || fail "#$pr's head moved while its checks ran; restart from $lane"
   checked_head="$pushed"
   checked_main="$(git rev-parse main)"
   checked_tree=""
 }
 
-# With --local-verify: decide what the lane needs, and check it. On return, checked_head is
-# the head the merge is pinned to, checked_main the main it was checked against, and
-# checked_tree the tree a local check verified (empty when none ran).
+# Put the worktree back on the lane's pushed head after a local check, and only if nothing
+# but the train's own uncommitted merge is in it: HEAD must still be checked_head and, once
+# the merge has started, MERGE_HEAD must be main's sha. Otherwise someone else is working
+# there (the header: the train runs only while the lane is idle), and nothing is discarded.
+# What the reset would discard (the diff against the index and the untracked list) is saved
+# to <save> first. Returns non-zero, with the reason on stderr, when it refuses or fails.
+restore_checked_worktree() {
+  local wt="$1" save="$2" started="$3" merge_head
+  [ "$(git -C "$wt" rev-parse HEAD 2>/dev/null)" = "$checked_head" ] || {
+    printf 'worktree %s is no longer at %s; someone else is working there, so it was left as it is\n' "$wt" "$checked_head" >&2
+    return 1
+  }
+  if [ "$started" = 1 ]; then
+    merge_head="$(git -C "$wt" rev-parse -q --verify MERGE_HEAD 2>/dev/null || true)"
+    [ "$merge_head" = "$checked_main" ] || {
+      printf 'worktree %s holds no merge of main %s (MERGE_HEAD %s), so it was left as it is\n' "$wt" "$checked_main" "${merge_head:-absent}" >&2
+      return 1
+    }
+  fi
+  {
+    printf '== restore of %s to %s: git diff against the index\n' "$wt" "$checked_head"
+    git -C "$wt" diff
+    printf '== untracked, unignored files\n'
+    git -C "$wt" ls-files --others --exclude-standard
+  } >> "$save" 2>&1 || { printf 'cannot save what the reset discards to %s\n' "$save" >&2; return 1; }
+  if [ "$started" = 1 ]; then
+    git -C "$wt" merge --abort || { printf 'git merge --abort failed in %s\n' "$wt" >&2; return 1; }
+  fi
+  git -C "$wt" reset -q --hard "$checked_head" || { printf 'git reset --hard failed in %s\n' "$wt" >&2; return 1; }
+}
+
+# With --local-verify: decide what the lane needs, and check it. On entry, checked_head is
+# the head whose checks the main loop waited on; the lane is checked at that head or not at
+# all. On return, checked_head is the head the merge is pinned to, checked_main the main it
+# was checked against, and checked_tree the tree a local check verified (empty when none ran).
 verify_lane() {
   local lane="$1" pr="$2" branch="$3" wt="$parent/pharmakos-$1" base moved own log code dirty
+  local local_branch why changed untracked
   git fetch -q origin main "$branch" || fail "cannot fetch origin/main and origin/$branch"
   git merge -q --ff-only origin/main || fail "cannot fast-forward main to origin/main"
   checked_main="$(git rev-parse main)"
-  checked_head="$(git rev-parse "origin/$branch")"
   checked_tree=""
+  [ "$(git rev-parse "origin/$branch")" = "$checked_head" ] \
+    || fail "origin/$branch is not $checked_head, the head whose checks passed; restart from $lane"
   [ "$(gh pr view "$pr" --json headRefOid --jq .headRefOid)" = "$checked_head" ] \
-    || fail "#$pr's head is not origin/$branch; restart from $lane"
+    || fail "#$pr's head is no longer $checked_head, the head whose checks passed; restart from $lane"
   # The merge base is the last main the lane took, by its branch point or by a merge of main,
   # so a branch that carries merge commits of main is judged from the main it last merged.
-  base="$(git merge-base main "origin/$branch")"
+  base="$(git merge-base main "$checked_head")" || fail "no merge base of main and $checked_head"
   moved="$(paths_between "$base" main)"
   if [ -z "$moved" ]; then
     printf '== %s: up to date with main; its checks stand\n' "$lane"
@@ -262,42 +323,56 @@ verify_lane() {
     printf '== %s: main moved only by prose since its branch point; its checks stand\n' "$lane"
     return 0
   fi
-  own="$(paths_between "$base" "origin/$branch")"
+  own="$(paths_between "$base" "$checked_head")"
   if grep -qE "$MATRIX_ONLY" <<<"$own"; then
     printf '== %s: touches output only the three-OS matrix shows; re-running it\n' "$lane"
     rematrix "$lane" "$pr"
     return 0
   fi
   if [ ! -d "$wt" ]; then
-    git worktree add -q -B "$branch" "$wt" "origin/$branch"
+    # Never -B: a local branch that exists is used only if it is the checked head, so a
+    # worktree add never moves a branch someone left elsewhere.
+    local_branch="$(git rev-parse -q --verify "refs/heads/$branch" || true)"
+    if [ -n "$local_branch" ]; then
+      [ "$local_branch" = "$checked_head" ] \
+        || fail "local branch $branch is at $local_branch, not origin/$branch ($checked_head); look, then restart from $lane"
+      git worktree add -q "$wt" "$branch" || fail "cannot add worktree $wt on $branch"
+    else
+      git worktree add -q -b "$branch" "$wt" "$checked_head" || fail "cannot add worktree $wt on a new $branch"
+    fi
   fi
   [ -z "$(git -C "$wt" status --porcelain)" ] || fail "worktree $wt is not clean"
   [ "$(git -C "$wt" rev-parse HEAD)" = "$checked_head" ] \
     || fail "worktree $wt is not at origin/$branch; reset it with: git -C $wt reset --hard origin/$branch (never push it), then restart from $lane"
-  # Put the worktree back on its pushed head whatever happens from here.
-  trap "git -C '$wt' merge --abort >/dev/null 2>&1 || true; git -C '$wt' reset -q --hard '$checked_head' >/dev/null 2>&1 || true" EXIT
+  log="${TMPDIR:-/tmp}/merge-train-$lane-ci.log"
+  : > "$log" || fail "cannot write $log"
+  # Put the worktree back on its pushed head whatever happens from here, under the same
+  # guard as below; on a refusal the trap only says so.
+  trap "restore_checked_worktree '$wt' '$log' 1 || printf '\n== merge-train: STOP — %s left as it is; see %s\n' '$wt' '$log' >&2" EXIT
   # The tree that will merge is main merged into the lane's pushed head. It is made without a
   # commit, so nothing is signed or pushed and the branch's history is untouched; the index
   # then holds the merged tree, which `git write-tree` names.
   printf '== %s: merging main into it locally, without a commit, to check the tree that will merge\n' "$lane"
   if ! git -C "$wt" merge -q --no-ff --no-commit main; then
-    fail "merging main into $lane conflicts; resolve it by hand in a signed merge commit, push (its matrix then runs on the resolved branch), and restart from $lane"
+    why="$(merge_failure "$wt")"
+    fail "merging main into $lane: $why; resolve it by hand in a signed merge commit, push (its matrix then runs on the resolved branch), and restart from $lane"
   fi
-  checked_tree="$(git -C "$wt" write-tree)"
-  log="${TMPDIR:-/tmp}/merge-train-$lane-ci.log"
+  checked_tree="$(git -C "$wt" write-tree)" || fail "cannot write the merged tree in $wt"
   printf '== %s: cargo xtask ci on %s merged with main %s (tree %s; log %s)\n' "$lane" \
     "$(git rev-parse --short "$checked_head")" "$(git rev-parse --short main)" "$checked_tree" "$log"
   code=0
   ( cd "$wt" && CARGO_TARGET_DIR="$build_root/$lane" PHARMAKOS_REQUIRE_TOOLS=1 \
-      cargo xtask ci --locked --require-tools --check ) > "$log" 2>&1 || code=$?
+      cargo xtask ci --locked --require-tools --check ) >> "$log" 2>&1 || code=$?
   grep -A 20 '== summary' "$log" || true
-  # A file the run changed against the merged index, or one it left untracked and unignored.
-  dirty="$(git -C "$wt" diff --name-only; git -C "$wt" ls-files --others --exclude-standard)"
-  git -C "$wt" merge --abort >/dev/null 2>&1 || true
-  git -C "$wt" reset -q --hard "$checked_head"
+  # A file the run changed against the merged index, or one it left untracked and unignored;
+  # each command's exit is checked on its own.
+  changed="$(git -C "$wt" diff --name-only)" || fail "cannot list the files the run changed in $wt"
+  untracked="$(git -C "$wt" ls-files --others --exclude-standard)" || fail "cannot list the untracked files in $wt"
+  dirty="$changed${changed:+${untracked:+$'\n'}}$untracked"
   trap - EXIT
+  restore_checked_worktree "$wt" "$log" 1 || fail "the worktree was not put back on $checked_head; see $log"
   [ "$code" = 0 ] || fail "cargo xtask ci failed on $lane merged with main (exit $code); see $log"
-  [ -z "$dirty" ] || fail "cargo xtask ci changed files in $lane's merged tree: $dirty"
+  [ -z "$dirty" ] || fail "cargo xtask ci changed files in $lane's merged tree (saved to $log): $dirty"
   printf '== %s: green on main; merging on its checks\n' "$lane"
 }
 
@@ -309,15 +384,16 @@ for pair in "$@"; do
   pr="${pair##*:}"
   wt="$parent/pharmakos-$lane"
   branch="$(gh pr view "$pr" --json headRefName --jq .headRefName)" || fail "cannot read PR #$pr"
-  state="$(gh pr view "$pr" --json state --jq .state)"
+  git check-ref-format --branch "$branch" >/dev/null 2>&1 || fail "#$pr's head branch '$branch' is not a valid branch name"
+  state="$(gh pr view "$pr" --json state --jq .state)" || fail "cannot read #$pr's state"
   [ "$state" = "OPEN" ] || fail "PR #$pr is $state, not OPEN"
 
   # The merge is pinned to the head whose checks passed: it is read before and after the
   # wait and must be the same both times, so a push during the wait stops the train rather
   # than merging a head nobody checked.
-  head_before="$(gh pr view "$pr" --json headRefOid --jq .headRefOid)"
+  head_before="$(gh pr view "$pr" --json headRefOid --jq .headRefOid)" || fail "cannot read #$pr's head"
   wait_for_checks "$pr"
-  checked_head="$(gh pr view "$pr" --json headRefOid --jq .headRefOid)"
+  checked_head="$(gh pr view "$pr" --json headRefOid --jq .headRefOid)" || fail "cannot read #$pr's head"
   [ "$checked_head" = "$head_before" ] || fail "#$pr's head moved while its checks ran; restart from $lane"
   if [ "$local_verify" = 1 ]; then
     verify_lane "$lane" "$pr" "$branch"
@@ -339,12 +415,18 @@ for pair in "$@"; do
     [ -z "$(git -C "$wt" status --porcelain)" ] || fail "worktree $wt is not clean; commit or stash, then restart from $lane"
     unpushed="$(git -C "$wt" log --oneline "origin/$branch..HEAD" 2>/dev/null || true)"
     [ -z "$unpushed" ] || fail "worktree $wt has commits not on origin/$branch; push them, then restart from $lane"
-    git worktree remove "$wt"
+    git worktree remove "$wt" || fail "cannot remove worktree $wt; look, then restart from $lane"
+  fi
+  # --delete-branch deletes the local branch too, which git refuses, half-way through, while
+  # any worktree has it checked out; so no worktree may hold it when the merge runs.
+  if git worktree list --porcelain | grep -qxF "branch refs/heads/$branch"; then
+    fail "$branch is checked out in a worktree (git worktree list); remove that worktree, then restart from $lane"
   fi
 
   printf '== %s: merging #%s (%s)\n' "$lane" "$pr" "$branch"
-  gh pr merge "$pr" "${merge_args[@]}"
-  git pull --ff-only
+  gh pr merge "$pr" "${merge_args[@]}" \
+    || fail "gh pr merge #$pr failed; the merge may have landed; check #$pr (and origin/main) before restarting from $lane"
+  git pull --ff-only || fail "cannot fast-forward this checkout's main after merging #$pr; look before the next merge"
   git branch -D "$branch" >/dev/null 2>&1 || true
   printf '== %s: merged; main is %s\n' "$lane" "$(git log --oneline -1)"
   last_merged="$lane #$pr"
