@@ -1546,14 +1546,10 @@ impl Snapshot {
         if ruins > crate::world::RUIN_RESERVE {
             return refuse("structure_ruined_at");
         }
-        if u32::try_from(self.structure_id.len())
-            .map_or(true, |rows| rows > crate::world::STRUCTURE_ROWS)
-        {
+        if self.structure_id.len() > crate::math::index::row(crate::world::STRUCTURE_ROWS) {
             return refuse("structure_id");
         }
-        if u32::try_from(self.wreck_id.len())
-            .map_or(true, |rows| rows > crate::world::WRECK_TABLE_ROOM)
-        {
+        if self.wreck_id.len() > crate::math::index::row(crate::world::WRECK_TABLE_ROOM) {
             return refuse("wreck_id");
         }
         for (salvage, free) in self.wreck_salvage.iter().zip(&self.wreck_free) {

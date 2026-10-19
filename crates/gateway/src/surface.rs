@@ -4049,24 +4049,11 @@ mod tests {
         assert_eq!(scope.commander(), commander);
     }
 
-    /// S2's plan, E1, the fix pass: a destroyed beacon's freed row is no
-    /// beacon at all -- no phantom of nobody's is listed -- and the seat's
-    /// `b_NN` for it stays a name the seat placed, gone, which the verifier's
-    /// view still knows.
-    #[test]
-    #[allow(
-        clippy::too_many_lines,
-        reason = "one match laid out, played and read through two doors; split, the helpers would hand the match to each other"
-    )]
-    fn a_freed_beacon_is_no_phantom_and_its_name_stays_gone() {
+    /// A hosted match whose seat 0 holds an outpost, `b_01`, laid out in the
+    /// lobby, in its opening Lull.
+    fn hosted_with_an_outpost() -> Surface {
         use pharmakos_sim::runner::{Layout, LayoutBeacon, MatchSettings};
-        use pharmakos_sim::world::{DamageOrder, DamageTarget, WorldConfig};
-        struct Everywhere;
-        impl crate::fog::Vision for Everywhere {
-            fn sees(&self, _seat: SeatId, _at: &pharmakos_proto::gp::v1::Voxel) -> bool {
-                true
-            }
-        }
+        use pharmakos_sim::world::WorldConfig;
         let seed = 0x0000_0000_ca5c_aded;
         let mut surface = Surface::new(
             "m-0001",
@@ -4109,6 +4096,23 @@ mod tests {
         surface.attach(host).expect("attached");
         surface.set_phase_remaining_ms(Ms::new(300_000));
         surface.open_lull().expect("the opening Lull");
+        surface
+    }
+
+    /// S2's plan, E1, the fix pass: a destroyed beacon's freed row is no
+    /// beacon at all -- no phantom of nobody's is listed -- and the seat's
+    /// `b_NN` for it stays a name the seat placed, gone, which the verifier's
+    /// view still knows.
+    #[test]
+    fn a_freed_beacon_is_no_phantom_and_its_name_stays_gone() {
+        use pharmakos_sim::world::{DamageOrder, DamageTarget};
+        struct Everywhere;
+        impl crate::fog::Vision for Everywhere {
+            fn sees(&self, _seat: SeatId, _at: &pharmakos_proto::gp::v1::Voxel) -> bool {
+                true
+            }
+        }
+        let mut surface = hosted_with_an_outpost();
         assert!(surface.begin_push().expect("the Push begins"));
         let outpost = {
             let beacons = surface.host().expect("hosted").world().beacons();
